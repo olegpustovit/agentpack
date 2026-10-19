@@ -22,7 +22,7 @@ import (
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
-var Version = "0.7.3"
+var Version = "0.7.4"
 
 type Runner struct {
 	Stdout, Stderr io.Writer
@@ -44,7 +44,9 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 	if err != nil {
 		return 2, err
 	}
-	runner.Stderr = &progressWriter{Writer: runner.Stderr}
+	if invocation.Command != "hook-exec" && invocation.Command != "mcp-exec" {
+		runner.Stderr = &progressWriter{Writer: runner.Stderr}
+	}
 	if !invocation.Global.Quiet && !invocation.Global.NoProgress {
 		switch invocation.Command {
 		case "init", "lock", "add", "remove", "update", "sync", "list", "mcp", "env", "preflight", "probe", "config", "support", "extra", "eject":
@@ -497,6 +499,10 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 	launch.Command = command
 	command.Stdin, command.Stdout, command.Stderr = runner.Stdin, runner.Stdout, runner.Stderr
 	stopProgress()
+	// Give the child the original file descriptor so terminal detection still works.
+	if writer, ok := runner.Stderr.(*progressWriter); ok {
+		command.Stderr = writer.Writer
+	}
 	if invocation.Global.Proxy {
 		running, err := proxy.Start(packContext.DefinitionRoot)
 		if err != nil {
