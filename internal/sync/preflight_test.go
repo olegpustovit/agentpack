@@ -880,3 +880,25 @@ func TestEffectivePlanFollowsDeclaredPathsAndConvertedNames(t *testing.T) {
 		t.Fatalf("claude plan = %v", claude)
 	}
 }
+
+func TestFingerprintInputsDanglingSymlink(t *testing.T) {
+	root := t.TempDir()
+	link := filepath.Join(root, "skills")
+	if err := os.Symlink(".agents/skills", link); err != nil {
+		t.Skip(err)
+	}
+	before, err := fingerprintInputs([]string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".agents", "skills"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	after, err := fingerprintInputs([]string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Fatal("creating the missing target must change the fingerprint")
+	}
+}

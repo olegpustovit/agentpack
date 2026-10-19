@@ -12,7 +12,12 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
-func StageDotAgents(definitionRoot, workspaceRoot, modeName string, effective mode.Effective, codex string) error {
+func StageDotAgents(definitionRoot, workspaceRoot, modeName string, effective mode.Effective, codex string, target *harness.Target) error {
+	claudeEnabled := target == nil || *target == harness.Claude
+	codexEnabled := target == nil || *target == harness.Codex
+	if !claudeEnabled && !codexEnabled {
+		return nil
+	}
 	if workspaceRoot == "" {
 		workspaceRoot = definitionRoot
 	}
@@ -26,31 +31,45 @@ func StageDotAgents(definitionRoot, workspaceRoot, modeName string, effective mo
 	}
 	bundle := filepath.Join(plugins, paths.StagedAgentpackBundleName)
 	for _, overlay := range []struct{ source, destination string }{{"claude", bundle}, {"codex", codex}} {
+		if overlay.source == "claude" && !claudeEnabled || overlay.source == "codex" && !codexEnabled {
+			continue
+		}
 		if err := copyDotTree(dotRoot, overlay.source, overlay.destination, true, effective); err != nil {
 			return err
 		}
 	}
-	if err := mergeDotRules(dotRoot, filepath.Join(bundle, "rules"), effective); err != nil {
-		return err
-	}
-	// Codex discovers project skills directly from .agents/skills, walking from
-	// the launch directory to the repository root. Copying them into the staged
-	// CODEX_HOME would make Codex index the same skill twice.
-	if err := copyDotTree(dotRoot, "skills", bundle, false, effective); err != nil {
-		return err
+	if claudeEnabled {
+		if err := mergeDotRules(dotRoot, filepath.Join(bundle, "rules"), effective); err != nil {
+			return err
+		}
+		// Codex discovers project skills directly from .agents/skills, walking from
+		// the launch directory to the repository root. Copying them into the staged
+		// CODEX_HOME would make Codex index the same skill twice.
+		if err := copyDotTree(dotRoot, "skills", bundle, false, effective); err != nil {
+			return err
+		}
 	}
 	for _, source := range []string{"agents", "commands"} {
-		if err := copyDotTree(dotRoot, source, bundle, false, effective); err != nil {
-			return err
+		if claudeEnabled {
+			if err := copyDotTree(dotRoot, source, bundle, false, effective); err != nil {
+				return err
+			}
 		}
-		if err := renderDotAsCodexSkills(dotRoot, source, codex, effective); err != nil {
+		if codexEnabled {
+			if err := renderDotAsCodexSkills(dotRoot, source, codex, effective); err != nil {
+				return err
+			}
+		}
+	}
+	if codexEnabled {
+		if err := copyDotFile(dotRoot, "AGENTS.md", filepath.Join(codex, "AGENTS.md"), effective); err != nil {
 			return err
 		}
 	}
-	if err := copyDotFile(dotRoot, "AGENTS.md", filepath.Join(codex, "AGENTS.md"), effective); err != nil {
-		return err
+	if claudeEnabled {
+		return copyDotFile(dotRoot, "CLAUDE.md", filepath.Join(bundle, "CLAUDE.md"), effective)
 	}
-	return copyDotFile(dotRoot, "CLAUDE.md", filepath.Join(bundle, "CLAUDE.md"), effective)
+	return nil
 }
 
 func copyDotTree(dotRoot, sourceRelative, destinationRoot string, stripPrefix bool, effective mode.Effective) error {

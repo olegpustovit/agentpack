@@ -1130,6 +1130,10 @@ func fingerprintInputs(inputs []string) (string, error) {
 			}
 			fmt.Fprintf(hash, "link=%q\n", link)
 			resolved, err := filepath.EvalSymlinks(path)
+			if os.IsNotExist(err) {
+				fmt.Fprintln(hash, "target absent")
+				return nil
+			}
 			if err != nil {
 				return err
 			}

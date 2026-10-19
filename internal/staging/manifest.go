@@ -15,7 +15,6 @@ import (
 	"sync"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
@@ -110,7 +109,10 @@ func (pipeline Pipeline) StagedDrift(full bool) (changes []string, recorded bool
 	if err != nil {
 		return nil, true, err
 	}
-	for _, candidate := range registry.All() {
+	for _, candidate := range pipeline.harnesses() {
+		if _, recorded := expected[candidate.ID()]; !recorded {
+			continue
+		}
 		root, err := candidate.StagedRoot(ctx)
 		if _, statErr := os.Stat(root); err != nil || statErr != nil {
 			if full && len(expected[candidate.ID()]) != 0 {
@@ -157,7 +159,7 @@ func (pipeline Pipeline) snapshotStaged(ctx base.StageContext, hash bool) (stage
 	}
 	var files []staged
 	manifest := make(stagedManifest)
-	for _, candidate := range registry.All() {
+	for _, candidate := range pipeline.harnesses() {
 		root, err := candidate.StagedRoot(ctx)
 		if err != nil {
 			continue

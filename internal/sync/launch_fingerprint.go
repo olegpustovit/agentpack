@@ -14,7 +14,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
-const stagingLayoutVersion = "2"
+const stagingLayoutVersion = "3"
 
 type launchState struct {
 	Digest string `json:"digest"`
@@ -39,7 +39,7 @@ func ComputeLaunchDigest(projectRoot, workspace string, effective mode.Effective
 	hash.Write([]byte("mode\x00" + effective.FingerprintMaterial()))
 	name := "__none__"
 	if target != nil {
-		name = launchKey(*target)
+		name = string(*target)
 	}
 	hash.Write([]byte("target\x00" + name))
 	hash.Write([]byte("workspace\x00"))
@@ -116,31 +116,15 @@ func hashDotAgents(root string) ([]byte, error) {
 	return hash.Sum(nil), nil
 }
 
-// launchKey names the staged state a launch of target depends on. Every agent
-// is started from the same staged tree; only Cursor and Antigravity add a
-// workspace overlay of their own. Launches that share a key share one digest,
-// so starting Codex next to a running Claude Code session does not rebuild
-// the staging that session is using.
-func launchKey(target base.Target) string {
-	if target.UsesWorkspaceOverlay() {
-		return string(target)
-	}
-	return "shared"
-}
-
-// sharedLaunchTarget is any target without a workspace overlay; its digest
-// describes the staged tree alone.
-var sharedLaunchTarget = base.Claude
-
 func ReadLaunchDigest(projectRoot, modeName string, target base.Target) (string, bool, error) {
-	path, err := paths.LaunchSyncStatePath(projectRoot, modeName, launchKey(target))
+	path, err := paths.LaunchSyncStatePath(projectRoot, modeName, string(target))
 	if err != nil {
 		return "", false, err
 	}
 	return readDigestState(path)
 }
 func WriteLaunchDigest(projectRoot, modeName string, target base.Target, digest string) error {
-	path, err := paths.LaunchSyncStatePath(projectRoot, modeName, launchKey(target))
+	path, err := paths.LaunchSyncStatePath(projectRoot, modeName, string(target))
 	if err != nil {
 		return err
 	}

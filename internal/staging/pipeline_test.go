@@ -416,3 +416,65 @@ func TestPipelineDetectsAndRecoversInterruptedRebuildBeforePreReset(t *testing.T
 		t.Fatal(err)
 	}
 }
+
+func TestPipelineLaunchStagesOnlySelectedHarness(t *testing.T) {
+	for _, target := range base.AllTargets() {
+		t.Run(string(target), func(t *testing.T) {
+			project, home := t.TempDir(), t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("AGENTPACK_HOME", t.TempDir())
+			t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+			for _, name := range []string{"claude/CLAUDE.md", "codex/AGENTS.md", "commands/hello.md"} {
+				path := filepath.Join(project, ".agents", name)
+				if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("Hello"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, manifestPath := range []func(string) (string, error){paths.CursorOverlayManifestPath, paths.AgyOverlayManifestPath} {
+				tracking, err := manifestPath(project)
+				if err != nil {
+					t.Fatal(err)
+				}
+				overlay := filepath.Join(project, filepath.Base(tracking)+".overlay")
+				if err := os.WriteFile(overlay, []byte("owned"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Dir(tracking), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(tracking, []byte(overlay+"\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if _, err := os.Stat(overlay); !os.IsNotExist(err) {
+						t.Errorf("stale workspace overlay remains: %v", err)
+					}
+				})
+			}
+			pipeline := Pipeline{ProjectRoot: project, Lock: lockfile.EmptyForProject(project), Mode: mode.ImplicitEffective(), Target: &target}
+			if _, err := pipeline.Rebuild(); err != nil {
+				t.Fatal(err)
+			}
+			if err := pipeline.Verify(); err != nil {
+				t.Fatal(err)
+			}
+			for _, candidate := range registry.All() {
+				root, err := candidate.StagedRoot(pipeline.context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = os.Stat(root)
+				if candidate.ID() == target && err != nil {
+					t.Fatalf("selected %s missing: %v", target, err)
+				}
+				if candidate.ID() != target && !os.IsNotExist(err) {
+					t.Fatalf("unselected %s was staged: %s (%v)", candidate.ID(), root, err)
+				}
+			}
+		})
+	}
+}

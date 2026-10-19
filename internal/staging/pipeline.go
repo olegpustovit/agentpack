@@ -39,6 +39,18 @@ type Pipeline struct {
 	Info func(message string)
 }
 
+func (pipeline Pipeline) harnesses() []base.Harness {
+	all := registry.All()
+	if pipeline.Target == nil {
+		return all
+	}
+	return slices.DeleteFunc(all, func(candidate base.Harness) bool { return candidate.ID() != *pipeline.Target })
+}
+
+func (pipeline Pipeline) includes(target base.Target) bool {
+	return pipeline.Target == nil || *pipeline.Target == target
+}
+
 func (pipeline Pipeline) workspace() string {
 	if pipeline.WorkspaceRoot != "" {
 		return pipeline.WorkspaceRoot
@@ -48,7 +60,7 @@ func (pipeline Pipeline) workspace() string {
 
 func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 	ctx := pipeline.context()
-	harnesses := registry.All()
+	harnesses := pipeline.harnesses()
 	managed, err := pipeline.managedRebuildPaths(ctx, harnesses)
 	if err != nil {
 		return nil, err
@@ -60,7 +72,10 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 	if err := recoverRebuildJournal(journalPath, managed); err != nil {
 		return nil, fmt.Errorf("recover interrupted staging: %w", err)
 	}
-	for _, candidate := range harnesses {
+	for _, candidate := range registry.All() {
+		if !pipeline.includes(candidate.ID()) && !candidate.ID().UsesWorkspaceOverlay() {
+			continue
+		}
 		if err := candidate.PreReset(ctx); err != nil {
 			return nil, fmt.Errorf("pre-reset %s: %w", candidate.ID(), err)
 		}
@@ -109,11 +124,15 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 	if err := pipeline.stageHooks(ctx, harnesses); err != nil {
 		return nil, err
 	}
-	codexRoot, err := registryRoot(harnesses, base.Codex, ctx)
+	codexHarness, err := registry.ByTarget(base.Codex)
 	if err != nil {
 		return nil, err
 	}
-	if err := StageDotAgents(pipeline.ProjectRoot, pipeline.workspace(), pipeline.Mode.Name(), pipeline.Mode, codexRoot); err != nil {
+	codexRoot, err := codexHarness.StagedRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := StageDotAgents(pipeline.ProjectRoot, pipeline.workspace(), pipeline.Mode.Name(), pipeline.Mode, codexRoot, pipeline.Target); err != nil {
 		return nil, err
 	}
 	plugins, err := paths.StagingPluginsDirForMode(pipeline.ProjectRoot, pipeline.Mode.Name())
@@ -121,8 +140,10 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 		return nil, err
 	}
 	bundle := filepath.Join(plugins, paths.StagedAgentpackBundleName)
-	if err := OmitProjectClaudeSkillDuplicates(pipeline.workspace(), bundle); err != nil {
-		return nil, err
+	if pipeline.includes(base.Claude) {
+		if err := OmitProjectClaudeSkillDuplicates(pipeline.workspace(), bundle); err != nil {
+			return nil, err
+		}
 	}
 	merged, err := CollectMCP(pipeline.workspace(), pipeline.Lock, pipeline.Manifest, &pipeline.Mode)
 	if err != nil {
@@ -211,28 +232,12 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 	return []string{filepath.Join(plugins, paths.StagedAgentpackBundleName)}, nil
 }
 
-// FinalizeOverlay writes the launch target's workspace overlay from the
-// staged tree as published, without rebuilding it.
-func (pipeline Pipeline) FinalizeOverlay() error {
-	if pipeline.Target == nil || !pipeline.Target.UsesWorkspaceOverlay() {
-		return nil
-	}
-	if pipeline.StrictExternal {
-		return fmt.Errorf("%s requires a workspace overlay write; refuse under --strict-external (use claude/opencode, or omit --strict-external)", *pipeline.Target)
-	}
-	candidate, err := registry.ByTarget(*pipeline.Target)
-	if err != nil {
-		return err
-	}
-	return candidate.FinalizeWorkspaceOverlay(pipeline.context())
-}
-
 func (pipeline Pipeline) Verify() error {
 	return pipeline.verify(pipeline.context())
 }
 
 func (pipeline Pipeline) verify(ctx base.StageContext) error {
-	harnesses := registry.All()
+	harnesses := pipeline.harnesses()
 	for _, candidate := range harnesses {
 		if err := candidate.Verify(ctx); err != nil {
 			return fmt.Errorf("verify %s: %w", candidate.ID(), err)
@@ -247,7 +252,7 @@ func (pipeline Pipeline) verify(ctx base.StageContext) error {
 	}
 	bundle := filepath.Join(plugins, paths.StagedAgentpackBundleName)
 	entries, err := os.ReadDir(plugins)
-	if err != nil {
+	if err != nil && (pipeline.includes(base.Claude) || !os.IsNotExist(err)) {
 		return err
 	}
 	count := 0
@@ -258,7 +263,7 @@ func (pipeline Pipeline) verify(ctx base.StageContext) error {
 			}
 		}
 	}
-	if count != 1 {
+	if pipeline.includes(base.Claude) && count != 1 {
 		return fmt.Errorf("expected exactly one merged plugin dir (agentpack-bundle), got %d", count)
 	}
 	var skillRoots, markdownRoots []string
@@ -273,7 +278,11 @@ func (pipeline Pipeline) verify(ctx base.StageContext) error {
 		}
 	}
 	home, _ := os.UserHomeDir()
-	removed, err := ResolveCollisionsWithHome(bundle, skillRoots, markdownRoots, home)
+	collisionRoot := bundle
+	if len(skillRoots) == 1 {
+		collisionRoot = skillRoots[0]
+	}
+	removed, err := ResolveCollisionsWithHome(collisionRoot, skillRoots, markdownRoots, home)
 	if err != nil {
 		return err
 	}
@@ -319,15 +328,6 @@ func (pipeline Pipeline) verify(ctx base.StageContext) error {
 	return nil
 }
 
-func registryRoot(harnesses []base.Harness, target base.Target, ctx base.StageContext) (string, error) {
-	for _, candidate := range harnesses {
-		if candidate.ID() == target {
-			return candidate.StagedRoot(ctx)
-		}
-	}
-	return "", fmt.Errorf("harness %s is not registered", target)
-}
-
 func (pipeline Pipeline) context() base.StageContext {
 	return base.StageContext{
 		ProjectRoot:    pipeline.ProjectRoot,
@@ -346,7 +346,8 @@ func (pipeline Pipeline) HookDiagnostics() ([]hooks.Diagnostic, hooks.RenderSumm
 	}
 	var diagnostics []hooks.Diagnostic
 	var summary hooks.RenderSummary
-	for _, target := range base.AllTargets() {
+	for _, candidate := range pipeline.harnesses() {
+		target := candidate.ID()
 		renderer := registry.Renderer(target)
 		if renderer == nil || len(bundle.Hooks) == 0 {
 			continue

@@ -22,6 +22,9 @@ func TestStrictPreparationPreservesExistingWorkspaceOverlay(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := base.StageContext{ProjectRoot: definition, WorkspaceRoot: workspace, Mode: mode.ImplicitEffective(), StrictExternal: true}
+	if err := New().PreReset(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := New().Prepare(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -32,5 +35,12 @@ func TestStrictPreparationPreservesExistingWorkspaceOverlay(t *testing.T) {
 	entries, err := readOverlayManifest(definition)
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("cleanup tracking lost: %v %v", entries, err)
+	}
+	ctx.StrictExternal = false
+	if err := New().PreReset(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(overlay); !os.IsNotExist(err) {
+		t.Fatalf("pre-reset left the owned overlay: %v", err)
 	}
 }

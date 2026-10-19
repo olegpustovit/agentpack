@@ -156,7 +156,7 @@ agentpack support export RECEIPT_ID --output ./support-capsule.json
 
 ## Launchers
 
-Each launcher runs a fast pre-sync, stages for its harness, and execs the binary. Trailing arguments are forwarded.
+Each launcher runs a fast pre-sync, stages for its harness, and execs the binary. Trailing arguments are forwarded. Launches convert artifacts and hooks only for the selected harness and omit routine hook-rendering messages. Bare `agentpack sync` builds every harness.
 
 | Command | Launches | Mechanism |
 |---|---|---|

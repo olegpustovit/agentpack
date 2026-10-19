@@ -281,7 +281,7 @@ func TestCompiledCLIRefusesTamperedCacheUntilRepaired(t *testing.T) {
 	if err := os.Remove(launched); err != nil {
 		t.Fatalf("harness did not start before tampering: %v", err)
 	}
-	staged := filepath.Join(stagedModeRoot(t, project), "plugins", "agentpack-bundle", "skills", "local-skill", "SKILL.md")
+	staged := filepath.Join(stagedCodexHome(t, project, project), "skills", "local-skill", "SKILL.md")
 	entries, err := filepath.Glob(filepath.Join(project, "_agentpack", "cache", "*", "SKILL.md"))
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("cache entries = %v, %v", entries, err)
@@ -667,5 +667,47 @@ func TestCompiledCLIReportsHookRenderingAsInformationAndQuietOmitsIt(t *testing.
 	quiet := runCLI(t, project, "-q", "sync")
 	if quiet.err != nil || strings.Contains(quiet.stderr, "hook for ") || !strings.Contains(quiet.stderr, "skipping StopFailure hook") {
 		t.Fatalf("quiet sync: stderr=%q err=%v", quiet.stderr, quiet.err)
+	}
+}
+
+func TestCompiledCodexLaunchIgnoresDanglingClaudeLinkAndOtherHarnessHooks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake POSIX harness executable")
+	}
+	project := t.TempDir()
+	writeFile(t, filepath.Join(project, "agentpack.toml"), `name = "demo"
+version = "0.0.1"
+[dependencies]
+`)
+	writeFile(t, filepath.Join(project, "pack.lock"), `lockfile_version = 2
+[meta]
+name = "demo"
+version = "0.0.1"
+`)
+	if err := os.Mkdir(filepath.Join(project, ".claude"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(".agents/skills", filepath.Join(project, ".claude", "skills")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, ".agents", "hooks"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(project, ".agents", "hooks", "hooks.json"), `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"true"}]}]}}`)
+	fake := filepath.Join(project, "fake-codex")
+	writeFile(t, fake, "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(fake, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		result := runCLIWithEnv(t, project, []string{"codex"}, "CODEX_PATH="+fake)
+		if result.err != nil {
+			t.Fatalf("launch %d: %s: %v", i, result.stderr, result.err)
+		}
+		for _, noise := range []string{"hook for ", "OpenCode", "Cursor", "Antigravity"} {
+			if strings.Contains(result.stderr, noise) {
+				t.Fatalf("launch %d: unrelated noise: %s", i, result.stderr)
+			}
+		}
 	}
 }

@@ -115,8 +115,11 @@ func TestSyncForLaunchOfAnotherAgentWhileOneIsRunning(t *testing.T) {
 	// twice round, so that a launch after Cursor's or Antigravity's overlay is covered too
 	for _, target := range []base.Target{base.Claude, base.Codex, base.OpenCode, base.Grok, base.Cursor, base.Agy,
 		base.Claude, base.Codex, base.Agy, base.Cursor, base.Claude} {
+		if _, _, err := service.SyncForLaunch(context.Background(), project, "", target); err != nil {
+			t.Fatalf("%s while claude runs: %v", target, err)
+		}
 		if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", target); err != nil || !skipped {
-			t.Fatalf("%s while claude runs: skipped=%v err=%v", target, skipped, err)
+			t.Fatalf("%s repeat: skipped=%v err=%v", target, skipped, err)
 		}
 		if err := service.ValidateLaunchInputs(project, project, effective, target); err != nil {
 			t.Fatalf("%s: %v", target, err)
@@ -154,6 +157,9 @@ func TestChangedInputsRebuildAlongsideRunningSessionWithoutChangingItsFiles(t *t
 	}
 	if data, err := os.ReadFile(oldSkill); err != nil || string(data) != skillOne {
 		t.Fatalf("running session's skill changed: %q, %v", data, err)
+	}
+	if _, _, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", base.Claude); err != nil {
+		t.Fatal(err)
 	}
 	if fixture.staged() != skillTwo {
 		t.Fatalf("new launch did not receive updated content: %q", fixture.staged())

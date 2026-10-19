@@ -15,7 +15,7 @@ import (
 )
 
 func New() base.Harness {
-	return base.Definition{Target: base.Cursor, Root: stagedRoot, Reset: resetPaths, Setup: prepare, MCP: writeMCP, AfterStage: finalize, WorkspaceOverlay: materializeAgentsOverlay, Check: verify, Launch: launch}
+	return base.Definition{Target: base.Cursor, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, MCP: writeMCP, AfterStage: finalize, WorkspaceOverlay: materializeAgentsOverlay, Check: verify, Launch: launch}
 }
 
 func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
@@ -85,12 +85,14 @@ func resetPaths(ctx base.StageContext) ([]string, error) {
 	}
 	return []string{bundle, home}, nil
 }
-func prepare(ctx base.StageContext) error {
-	if !ctx.StrictExternal {
-		if err := cleanupOverlay(ctx.ProjectRoot); err != nil {
-			return err
-		}
+func preReset(ctx base.StageContext) error {
+	if ctx.StrictExternal {
+		return nil
 	}
+	return cleanupOverlay(ctx.ProjectRoot)
+}
+
+func prepare(ctx base.StageContext) error {
 	bundle, err := paths.StagingCursorBundleDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return err
