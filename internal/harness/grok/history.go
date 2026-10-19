@@ -85,7 +85,7 @@ func recoverCredentials(projectRoot, mode string) error {
 	if err != nil {
 		return err
 	}
-	sources := []string{filepath.Join(legacy, "grok-home"), filepath.Join(state, "grok-home")}
+	sources := []string{filepath.Join(legacy, "grok-home"), filepath.Join(state, "grok-home"), filepath.Join(state, "grok-homes", paths.ModePathComponent(mode))}
 	if override := os.Getenv("AGENTPACK_STAGING_ROOT"); override != "" {
 		sources = append(sources, filepath.Join(override, "modes", paths.ModePathComponent(mode), "grok-home"))
 	}

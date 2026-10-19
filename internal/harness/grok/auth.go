@@ -154,6 +154,17 @@ func newestCredential(name, home string) (string, error) {
 					if err := consider(filepath.Join(root, "projects", project.Name(), "grok-homes", mode.Name(), name)); err != nil {
 						return "", err
 					}
+					generations, err := os.ReadDir(filepath.Join(root, "projects", project.Name(), "grok-homes", mode.Name()))
+					if err != nil {
+						return "", err
+					}
+					for _, generation := range generations {
+						if generation.IsDir() {
+							if err := consider(filepath.Join(root, "projects", project.Name(), "grok-homes", mode.Name(), generation.Name(), name)); err != nil {
+								return "", err
+							}
+						}
+					}
 				}
 			}
 

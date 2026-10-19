@@ -28,6 +28,8 @@ type Service struct {
 	// Info receives lines that report what a command did and need no action.
 	// Nil drops them, which is what --quiet asks for.
 	Info func(message string)
+	// Progress reports work about to perform potentially slow I/O.
+	Progress func(message string)
 }
 type SyncOptions struct {
 	DryRun, VerifyOnly, UpdateLock bool
@@ -140,6 +142,7 @@ func (service Service) resolve(ctx context.Context, projectRoot string, project 
 	options := run.options
 	options.Previous = &previous
 	options.Notify = func(message string) { service.notify("%s", message) }
+	options.Progress = service.Progress
 	resolved, err := resolve.NewResolver(ctx, service.client()).Resolve(ctx, projectRoot, project, options)
 	if err != nil {
 		return lockfile.PackLock{}, err
@@ -461,10 +464,16 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 			}
 			service.notify("%d staged file(s) changed since the last sync and were replaced from the verified cache: %s", len(drift), strings.Join(shown, "; "))
 		}
-		rebuildLock, lockErr := staging.TryAcquireRebuildExclusive(projectRoot, effective.Name())
+		publisher, lockErr := staging.AcquirePublisher(ctx, projectRoot, effective.Name())
 		if lockErr != nil {
 			return result, lockErr
 		}
+		defer publisher.Unlock()
+		generation, generationErr := paths.BeginStagingGeneration(projectRoot, effective.Name())
+		if generationErr != nil {
+			return result, generationErr
+		}
+		defer generation.Abort()
 		_, err = pipeline.Rebuild()
 		if err == nil {
 			err = pipeline.Verify()
@@ -480,7 +489,9 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 				err = writeMaterializationDigest(projectRoot, effective.Name(), digest)
 			}
 		}
-		_ = rebuildLock.Unlock()
+		if err == nil {
+			err = generation.Publish()
+		}
 		if err == nil {
 			staging.RemoveOrphanedProjectDirectories(projectRoot)
 		}

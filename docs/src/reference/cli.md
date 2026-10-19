@@ -13,7 +13,7 @@
 | `--mode <name>` | Select a mode from `[modes]` (default: the reserved `default` mode) |
 | `--yolo` | Forward each harness's "skip permission prompts" / full-access flag |
 | `-q`, `--quiet` | Only print warnings and errors |
-| `--no-progress` | Disable spinners and progress bars |
+| `--no-progress` | Disable package progress and elapsed-time updates on stderr |
 | `--debug` | Print launcher diagnostics (workspace paths, env overrides, fast-sync skip reason) |
 | `--proxy` | Run `agentpack claude` through the supervised Anthropic-compatible Codex proxy |
 | `-h`, `--help` | Print help |

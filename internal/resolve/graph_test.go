@@ -24,7 +24,10 @@ func TestResolverTraversesNestedDependenciesAndMarksDirectPackages(t *testing.T)
 		"github.com/acme/root": "[dependencies]\n\"github.com/acme/child\" = \"" + shaB + "\"\n",
 	}}
 	resolver := Resolver{Materialize: fake.materialize}
-	lock, err := resolver.Resolve(context.Background(), t.TempDir(), project, ResolveOptions{})
+	var progress []string
+	lock, err := resolver.Resolve(context.Background(), t.TempDir(), project, ResolveOptions{Progress: func(message string) {
+		progress = append(progress, message)
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +39,9 @@ func TestResolverTraversesNestedDependenciesAndMarksDirectPackages(t *testing.T)
 	}
 	if lock.Packages[1].Module != "github.com/acme/root" || !lock.Packages[1].Direct {
 		t.Fatalf("root = %#v", lock.Packages[1])
+	}
+	if strings.Join(progress, ",") != "Resolving github.com/acme/root,Resolving github.com/acme/child" {
+		t.Fatalf("resolution progress = %v", progress)
 	}
 }
 

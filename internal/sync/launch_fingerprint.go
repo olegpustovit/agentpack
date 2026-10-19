@@ -31,6 +31,11 @@ func ComputeLaunchDigest(projectRoot, workspace string, effective mode.Effective
 	}
 	hash.Write(dot)
 	hash.Write([]byte("staging_root\x00" + os.Getenv("AGENTPACK_STAGING_ROOT")))
+	stagingRoot, err := paths.StagingRootForMode(projectRoot, effective.Name())
+	if err != nil {
+		return "", err
+	}
+	hash.Write([]byte("staging_generation\x00" + stagingRoot))
 	hash.Write([]byte("mode\x00" + effective.FingerprintMaterial()))
 	name := "__none__"
 	if target != nil {

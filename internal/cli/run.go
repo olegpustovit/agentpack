@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/olegpustovit/agentpack/internal/environment"
 	base "github.com/olegpustovit/agentpack/internal/harness"
@@ -21,7 +22,7 @@ import (
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
-var Version = "0.7.2"
+var Version = "0.7.3"
 
 type Runner struct {
 	Stdout, Stderr io.Writer
@@ -43,11 +44,28 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 	if err != nil {
 		return 2, err
 	}
+	runner.Stderr = &progressWriter{Writer: runner.Stderr}
+	if !invocation.Global.Quiet && !invocation.Global.NoProgress {
+		switch invocation.Command {
+		case "init", "lock", "add", "remove", "update", "sync", "list", "mcp", "env", "preflight", "probe", "config", "support", "extra", "eject":
+			defer startProgress(runner.Stderr, invocation.Command, time.Second)()
+		case "mode":
+			if len(invocation.Args) == 0 || invocation.Args[0] != "tui" {
+				defer startProgress(runner.Stderr, "mode", time.Second)()
+			}
+		}
+	}
 	if runner.Service.Notify == nil {
 		runner.Service.Notify = func(message string) { fmt.Fprintln(runner.Stderr, "warning: "+message) }
 	}
 	if runner.Service.Info == nil && !invocation.Global.Quiet {
 		runner.Service.Info = func(message string) { fmt.Fprintln(runner.Stderr, message) }
+	}
+	if runner.Service.Progress == nil && !invocation.Global.Quiet && !invocation.Global.NoProgress {
+		switch invocation.Command {
+		case "lock", "add", "remove", "update":
+			runner.Service.Progress = func(message string) { fmt.Fprintln(runner.Stderr, message) }
+		}
 	}
 	if invocation.Command != "init" && hasBeforeDoubleDash(invocation.Args, "--version", "-V") {
 		fmt.Fprintln(runner.Stdout, "agentpack "+Version)
@@ -382,6 +400,11 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (runner Runner) launch(ctx context.Context, packContext paths.Context, invocation Invocation) (int, error) {
+	stopProgress := func() {}
+	if !invocation.Global.Quiet && !invocation.Global.NoProgress {
+		stopProgress = startProgress(runner.Stderr, "preparing "+invocation.Command, time.Second)
+	}
+	defer stopProgress()
 	targetName := invocation.Command
 	if targetName == "agent" {
 		targetName = "cursor"
@@ -473,6 +496,7 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 	command.Env = withPWD(command.Env, packContext.WorkspaceRoot)
 	launch.Command = command
 	command.Stdin, command.Stdout, command.Stderr = runner.Stdin, runner.Stdout, runner.Stderr
+	stopProgress()
 	if invocation.Global.Proxy {
 		running, err := proxy.Start(packContext.DefinitionRoot)
 		if err != nil {

@@ -439,7 +439,11 @@ type rebuildJournal struct {
 }
 
 func (pipeline Pipeline) rebuildJournalPath() (string, error) {
-	return paths.ProjectStateFile(pipeline.ProjectRoot, "rebuild-"+paths.ModePathComponent(pipeline.Mode.Name())+".json")
+	root, err := paths.StagingRootForMode(pipeline.ProjectRoot, pipeline.Mode.Name())
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, ".rebuild.json"), nil
 }
 
 // RebuildPending tells launchers to restore before using staging after an interruption.

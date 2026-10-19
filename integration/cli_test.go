@@ -178,7 +178,7 @@ func TestCompiledCLIGrokInspectRegistersBundleSkill(t *testing.T) {
 	if result := runCLI(t, project, "sync"); result.err != nil {
 		t.Fatalf("sync: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
-	home, err := filepath.Glob(filepath.Join(project, "_agentpack", "projects", "*", "grok-homes", "default"))
+	home, err := filepath.Glob(filepath.Join(project, "_agentpack", "projects", "*", "grok-homes", "default", filepath.Base(stagedModeRoot(t, project))))
 	if err != nil || len(home) != 1 {
 		t.Fatalf("grok home: %v %v", home, err)
 	}
@@ -375,6 +375,8 @@ func TestCompiledCLIVerifyOnlyChecksStagedFilesAndSyncReportsReplacingThem(t *te
 	if result.err != nil || !strings.Contains(result.stderr, "warning: 2 staged file(s) changed since the last sync and were replaced from the verified cache:") || !strings.Contains(result.stderr, "modified "+staged) || !strings.Contains(result.stderr, "added "+extra) {
 		t.Fatalf("sync over a tampered tree: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
+	staged = filepath.Join(stagedModeRoot(t, project), "plugins", "agentpack-bundle", "skills", "local-skill", "SKILL.md")
+	extra = filepath.Join(filepath.Dir(staged), "extra.sh")
 	if _, err := os.Stat(extra); readFile(t, staged) != body || !os.IsNotExist(err) {
 		t.Fatalf("staging after sync: %q, extra: %v", readFile(t, staged), err)
 	}
@@ -570,7 +572,15 @@ func stagedModeRoot(t *testing.T, project string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return filepath.Join(project, "_staging", "projects", hash, "modes", "default")
+	legacy := filepath.Join(project, "_staging", "projects", hash, "modes", "default")
+	data, err := os.ReadFile(legacy + ".current")
+	if os.IsNotExist(err) {
+		return legacy
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(filepath.Dir(legacy), strings.TrimSpace(string(data)))
 }
 
 // A staged hook used to run `agentpack hook-exec …` by bare name, so it ran

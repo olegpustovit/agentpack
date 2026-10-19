@@ -269,11 +269,21 @@ func SkillIsShadowed(skill lockfile.Package, plugins []lockfile.Package) bool {
 }
 
 func copyFile(source, destination string) error {
+	info, err := os.Stat(source)
+	if err != nil {
+		return fmt.Errorf("inspect %s: %w", source, err)
+	}
 	data, err := os.ReadFile(source)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", source, err)
 	}
-	return writeFile(destination, data)
+	if err := writeFile(destination, data); err != nil {
+		return err
+	}
+	if err := os.Chmod(destination, 0o644|info.Mode().Perm()&0o111); err != nil {
+		return fmt.Errorf("set staged permissions %s: %w", destination, err)
+	}
+	return nil
 }
 
 func writeFile(path string, data []byte) error {

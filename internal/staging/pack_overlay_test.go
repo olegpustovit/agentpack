@@ -14,6 +14,34 @@ import (
 	"github.com/olegpustovit/agentpack/internal/mode"
 )
 
+func TestCopySupportPreservesExecutableScripts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits")
+	}
+	source := filepath.Join(t.TempDir(), "hook.sh")
+	destination := filepath.Join(t.TempDir(), "hooks", "hook.sh")
+	if err := os.WriteFile(source, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyFile(source, destination); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(destination)
+	if err != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("staged executable: %v, %v", info, err)
+	}
+	if err := os.Chmod(source, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyFile(source, destination); err != nil {
+		t.Fatal(err)
+	}
+	info, err = os.Stat(destination)
+	if err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatalf("staged non-executable: %v, %v", info, err)
+	}
+}
+
 func TestSkillIsShadowedByContainingPlugin(t *testing.T) {
 	skill := lockfile.Package{Owner: "o", Repo: "r", Commit: "c", Path: "plugin/skills/x"}
 	plugin := lockfile.Package{Kind: lockfile.PackagePlugin, Owner: "o", Repo: "r", Commit: "c", Path: "plugin", CacheKey: "key"}

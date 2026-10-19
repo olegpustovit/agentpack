@@ -50,7 +50,12 @@ func copyTree(source, destination string) error {
 		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 			return err
 		}
-		return os.WriteFile(destination, data, info.Mode().Perm())
+		// Staged copies are edited by the harness even when the source is read-only.
+		permissions := info.Mode().Perm() | 0o600
+		if err := os.WriteFile(destination, data, permissions); err != nil {
+			return err
+		}
+		return os.Chmod(destination, permissions)
 	}
 	if err := os.MkdirAll(destination, 0o755); err != nil {
 		return err

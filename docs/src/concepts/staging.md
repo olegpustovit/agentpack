@@ -22,17 +22,18 @@ Set `AGENTPACK_STAGING_ROOT` to pin a stable location — useful when your OS ro
 export AGENTPACK_STAGING_ROOT=/tmp/agentpack-staging
 ```
 
-Each mode gets its own subtree under `modes/<mode>/`, and each harness gets a directory there:
+Each rebuild creates a private generation under `modes/<mode>-g-<id>/`. A small `modes/<mode>.current` file selects the verified generation for new commands. Each harness gets a directory inside it:
 
 ```text
 <staging-root>/
   modes/
-    default/
+    default.current              # selected generation's directory name
+    default-g-<id>/
       plugins/agentpack-bundle/   # Claude --plugin-dir bundle
       opencode/                   # OpenCode config root (OPENCODE_CONFIG_DIR)
       codex-home/                 # legacy Codex staging path
       cursor/  cursor-home/       # Cursor plugin tree + fake HOME
-      grok/    grok-home/         # Grok bundle + home (GROK_HOME)
+      grok/                       # Grok bundle; home is durable (see Grok guide)
       agy/                        # Antigravity workspace plugin
 ```
 
@@ -59,5 +60,9 @@ A **bundle** is what one package contributes to a staging tree. Packages carry s
 ```sh
 agentpack sync
 ```
+
+The replacement is published only after verification. An active launch keeps its original paths, so another launch, `sync`, or `lock` can update the environment without replacing that session's files. Failed rebuilds leave the published generation selected. Previous staging generations are retained, including MCP support files; they use disk space until removed outside active sessions. The per-generation `.staged.json` file records the content checked by `sync --verify-only`.
+
+Commands that take longer than one second report elapsed progress on stderr. `lock` also names each package as it resolves it. Use `--no-progress` to suppress those lines, or `--quiet` to keep only warnings and errors. Progress stops before handing control to a harness or opening the mode editor.
 
 Launchers run a **fast pre-sync** when `agentpack.toml`, `pack.lock`, and `./.agents/` are unchanged since the last successful launch: they verify cache and staging integrity and skip the full lock-resolve, re-download, and rebuild. Because of that, floating pins do not advance on launch alone — run `agentpack sync` or `agentpack lock --update` when you need the lock refreshed.

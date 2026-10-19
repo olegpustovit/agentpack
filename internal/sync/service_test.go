@@ -124,6 +124,42 @@ func TestSyncForLaunchOfAnotherAgentWhileOneIsRunning(t *testing.T) {
 	}
 }
 
+func TestChangedInputsRebuildAlongsideRunningSessionWithoutChangingItsFiles(t *testing.T) {
+	fixture := newIntegrityFixture(t)
+	fixture.manifest(demoKey, commitOne)
+	fixture.lock()
+	fixture.sync(SyncOptions{})
+	previous, err := paths.StagingRootForMode(fixture.project, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldSkill := fixture.stagedPath()
+	running, err := staging.AcquireLaunchShared(fixture.project, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer running.Unlock()
+	if _, err := staging.TryAcquireRebuildExclusive(fixture.project, "default"); err == nil {
+		t.Fatal("fixture did not hold the running session's lock")
+	}
+	fixture.manifest(demoKey, commitTwo)
+	for _, target := range []base.Target{base.Codex, base.Claude, base.Grok, base.OpenCode, base.Cursor, base.Agy} {
+		if _, _, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", target); err != nil {
+			t.Fatalf("%s launch beside a running session: %v", target, err)
+		}
+	}
+	current, err := paths.StagingRootForMode(fixture.project, "default")
+	if err != nil || current == previous {
+		t.Fatalf("staging did not advance: %s, %v", current, err)
+	}
+	if data, err := os.ReadFile(oldSkill); err != nil || string(data) != skillOne {
+		t.Fatalf("running session's skill changed: %q, %v", data, err)
+	}
+	if fixture.staged() != skillTwo {
+		t.Fatalf("new launch did not receive updated content: %q", fixture.staged())
+	}
+}
+
 func TestServiceDryRunDoesNotBuildStaging(t *testing.T) {
 	project := t.TempDir()
 	t.Setenv("AGENTPACK_HOME", t.TempDir())

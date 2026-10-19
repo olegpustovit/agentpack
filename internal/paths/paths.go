@@ -201,9 +201,20 @@ func ModePathComponent(modeName string) string {
 	return name + "-" + hex.EncodeToString(sum[:4])
 }
 
-// StagedManifestPath is where a sync records what it staged for a mode, kept
-// outside the staging tree it describes.
+// StagedManifestPath records staged content per generation, with the legacy
+// project-state location used only for staging built by older releases.
 func StagedManifestPath(projectRoot, modeName string) (string, error) {
+	root, err := StagingRootForMode(projectRoot, modeName)
+	if err != nil {
+		return "", err
+	}
+	legacy, err := stagingModePath(projectRoot, modeName)
+	if err != nil {
+		return "", err
+	}
+	if root != legacy {
+		return filepath.Join(root, ".staged.json"), nil
+	}
 	return projectStateFile(projectRoot, "staged-"+ModePathComponent(modeName)+".json")
 }
 
@@ -227,11 +238,7 @@ func stagingRootBase(projectRoot string) (string, error) {
 }
 
 func StagingRootForMode(projectRoot, modeName string) (string, error) {
-	root, err := stagingRootBase(projectRoot)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(root, "modes", ModePathComponent(modeName)), nil
+	return selectedStagingRoot(projectRoot, modeName)
 }
 
 func stagingSubdir(projectRoot, modeName, segment string) (string, error) {
@@ -256,7 +263,19 @@ func StagingGrokHomeDirForMode(root, mode string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(state, "grok-homes", ModePathComponent(mode)), nil
+	home := filepath.Join(state, "grok-homes", ModePathComponent(mode))
+	selected, err := StagingRootForMode(root, mode)
+	if err != nil {
+		return "", err
+	}
+	legacy, err := stagingModePath(root, mode)
+	if err != nil {
+		return "", err
+	}
+	if selected != legacy {
+		home = filepath.Join(home, filepath.Base(selected))
+	}
+	return home, nil
 }
 func StagingGrokDirForMode(root, mode string) (string, error) {
 	return stagingSubdir(root, mode, "grok")

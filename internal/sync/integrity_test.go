@@ -739,7 +739,7 @@ func TestVerifyOnlyComparesStagingWithTheLastSyncAndSyncReportsWhatItReplaces(t 
 		t.Fatalf("verify after editing a project file = %v", err)
 	}
 
-	extra := filepath.Join(filepath.Dir(fixture.stagedPath()), "scripts", "extra.sh")
+	var extra string
 	for name, tamper := range map[string]struct {
 		apply func()
 		line  string
@@ -764,18 +764,25 @@ func TestVerifyOnlyComparesStagingWithTheLastSyncAndSyncReportsWhatItReplaces(t 
 	} {
 		t.Run(name, func(t *testing.T) {
 			fixture.sync(SyncOptions{})
+			extra = filepath.Join(filepath.Dir(fixture.stagedPath()), "scripts", "extra.sh")
+			kind, _, _ := strings.Cut(tamper.line, " ")
+			path := fixture.stagedPath()
+			if name == "added" {
+				path = extra
+			}
+			line := fmt.Sprintf("%-10s%s", kind, path)
 			fixture.notices = nil
 			tamper.apply()
 			err := verify()
 			var drift *staging.DriftError
-			if !errors.As(err, &drift) || len(drift.Changes) != 1 || drift.Changes[0] != tamper.line {
+			if !errors.As(err, &drift) || len(drift.Changes) != 1 || drift.Changes[0] != line {
 				t.Fatalf("verify error = %v", err)
 			}
 			if err := verify(); !errors.As(err, &drift) {
 				t.Fatalf("verify accepted the tree the second time: %v", err)
 			}
 			fixture.sync(SyncOptions{})
-			words := strings.Join(strings.Fields(tamper.line), " ")
+			words := strings.Join(strings.Fields(line), " ")
 			reported := fixture.noticed("1 staged file(s) changed since the last sync and were replaced from the verified cache: " + words)
 			// A sync does not hash staging before it rebuilds it, so it cannot
 			// name an edit that kept the file's size and time. It still
@@ -783,7 +790,8 @@ func TestVerifyOnlyComparesStagingWithTheLastSyncAndSyncReportsWhatItReplaces(t 
 			if reported == (name == "same size and time") {
 				t.Fatalf("sync notices = %v", fixture.notices)
 			}
-			if _, statErr := os.Stat(extra); fixture.staged() != skillOne || !os.IsNotExist(statErr) {
+			currentExtra := filepath.Join(filepath.Dir(fixture.stagedPath()), "scripts", "extra.sh")
+			if _, statErr := os.Stat(currentExtra); fixture.staged() != skillOne || !os.IsNotExist(statErr) {
 				t.Fatalf("staging after sync: %q, extra file: %v", fixture.staged(), statErr)
 			}
 			if err := verify(); err != nil {

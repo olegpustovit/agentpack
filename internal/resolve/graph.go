@@ -30,6 +30,8 @@ type ResolveOptions struct {
 	RepairCache bool
 	// Notify receives one-line reports about cache entries that were replaced.
 	Notify func(message string)
+	// Progress reports the package being resolved before potentially slow I/O.
+	Progress func(message string)
 }
 
 type MaterializeFunc func(ctx context.Context, client *http.Client, source githubsource.Source, displayURL string, forceRefresh bool) (lockfile.Package, error)
@@ -71,6 +73,9 @@ func (resolver Resolver) Resolve(ctx context.Context, projectRoot string, projec
 		if !isPath {
 			githubDependencies[key] = dependency
 			continue
+		}
+		if options.Progress != nil {
+			options.Progress("Copying " + key)
 		}
 		absolute, err := filepath.Abs(filepath.Join(projectRoot, relative))
 		if err != nil {
@@ -134,6 +139,9 @@ func (resolver Resolver) Resolve(ctx context.Context, projectRoot string, projec
 			continue
 		}
 		constraints := merged[module]
+		if options.Progress != nil {
+			options.Progress("Resolving " + string(module))
+		}
 		owner, repo, _ := module.OwnerRepoPath()
 		refresh := (options.RefreshFloating || options.RefreshModules[string(module)]) && constraints.Exact == ""
 		gitRef, err := effectiveGitRef(constraints, resolver.Tags, owner, repo, module, refresh, options.Previous)

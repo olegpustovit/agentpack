@@ -48,6 +48,8 @@ jobs:
           args: check
       - name: Test release installers
         run: go test ./integration -run 'TestRelease(Installer|Description)' -count=1
+      - name: Test package and concurrent launches
+        run: go test ./...
       - name: Snapshot release
         if: github.event_name == 'pull_request'
         uses: goreleaser/goreleaser-action@v7
