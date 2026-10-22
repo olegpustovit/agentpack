@@ -1,0 +1,406 @@
+{
+ "date": "2026-10-22",
+ "node": "v24.19.0",
+ "npm": "11.17.0",
+ "agentpack_top": "agentpack 0.6.2",
+ "agentpack_tree": "agentpack 0.7.6",
+ "agentpack_top_sha256": "b74a42b5556a1be341dfee08bc5ffaa2c0b3a60f27b09287f7b26641440f30f6",
+ "agentpack_tree_sha256": "bce3f7256dc0f59df5a9943cb1c1f68c9efe020080afec958548cb55df98b50a",
+ "runs": [
+  {
+   "scenario": "baseline",
+   "setup": "none",
+   "lock_steps": [],
+   "launch": {
+    "ran": "srv-1.0.0+dep-1.0.0"
+   },
+   "command": [
+    "npx",
+    "-y",
+    "approbe-srv-7f3c@latest"
+   ]
+  },
+  {
+   "scenario": "baseline",
+   "setup": "agentpack-top",
+   "lock_steps": [
+    {
+     "exit": 0,
+     "tail": "Initializing agentpack\u2026\nCreated /var/tmp/ap076/work-sc/baseline/agentpack-top/project/agentpack.toml and /var/tmp/ap076/work-sc/baseline/agentpack-top/project/pack.lock"
+    },
+    {
+     "exit": 0,
+     "tail": "Adding: /var/tmp/ap076/work-sc/baseline/agentpack-top/plugin\nRecorded plugin in agentpack.toml and refreshed pack.lock."
+    },
+    {
+     "exit": 0,
+     "tail": "Wrote /var/tmp/ap076/work-sc/baseline/agentpack-top/project/pack.lock (1 package(s))."
+    },
+    {
+     "exit": 0,
+     "tail": "Sync finished \u2014 0 skill(s), 1 plugin(s), 1 cache index entr(ies). One merged bundle: agentpack-bundle."
+    }
+   ],
+   "launch": {
+    "ran": "srv-1.0.0+dep-1.0.0"
+   },
+   "command": [
+    "npx",
+    "-y",
+    "approbe-srv-7f3c@1.0.0"
+   ]
+  },
+  {
+   "scenario": "baseline",
+   "setup": "agentpack-tree",
+   "lock_steps": [
+    {
+     "exit": 0,
+     "tail": "Initializing agentpack\u2026\nCreated /var/tmp/ap076/work-sc/baseline/agentpack-tree/project/agentpack.toml and /var/tmp/ap076/work-sc/baseline/agentpack-tree/project/pack.lock"
+    },
+    {
+     "exit": 0,
+     "tail": "Adding: /var/tmp/ap076/work-sc/baseline/agentpack-tree/plugin\nRecorded plugin in agentpack.toml and refreshed pack.lock."
+    },
+    {
+     "exit": 0,
+     "tail": "Wrote /var/tmp/ap076/work-sc/baseline/agentpack-tree/project/pack.lock (1 package(s))."
+    },
+    {
+     "exit": 0,
+     "tail": "Sync finished \u2014 0 skill(s), 1 plugin(s), 1 cache index entr(ies). One merged bundle: agentpack-bundle."
+    }
+   ],
+   "launch": {
+    "ran": "srv-1.0.0+dep-1.0.0"
+   },
+   "command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "<work>/baseline/agentpack-tree/staging/projects/b955136377c9deb6/modes/default-g-1569434913/plugins/agentpack-bundle/mcp-trees/srv.json",
+    "--"
+   ]
+  },
+  {
+   "scenario": "drift",
+   "setup": "none",
+   "lock_steps": [],
+   "launch": {
+    "ran": "srv-1.0.0+dep-1.0.1"
+   },
+   "command": [
+    "npx",
+    "-y",
+    "approbe-srv-7f3c@latest"
+   ]
+  },
+  {
+   "scenario": "drift",
+   "setup": "agentpack-top",
+   "lock_steps": [
+    {
+     "exit": 0,
+     "tail": "Initializing agentpack\u2026\nCreated /var/tmp/ap076/work-sc/drift/agentpack-top/project/agentpack.toml and /var/tmp/ap076/work-sc/drift/agentpack-top/project/pack.lock"
+    },
+    {
+     "exit": 0,
+     "tail": "Adding: /var/tmp/ap076/work-sc/drift/agentpack-top/plugin\nRecorded plugin in agentpack.toml and refreshed pack.lock."
+    },
+    {
+     "exit": 0,
+     "tail": "Wrote /var/tmp/ap076/work-sc/drift/agentpack-top/project/pack.lock (1 package(s))."
+    },
+    {
+     "exit": 0,
+     "tail": "Sync finished \u2014 0 skill(s), 1 plugin(s), 1 cache index entr(ies). One merged bundle: agentpack-bundle."
+    }
+   ],
+   "launch": {
+    "ran": "srv-1.0.0+dep-1.0.1"
+   },
+   "command": [
+    "npx",
+    "-y",
+    "approbe-srv-7f3c@1.0.0"
+   ]
+  },
+  {
+   "scenario": "drift",
+   "setup": "agentpack-tree",
+   "lock_steps": [
+    {
+     "exit": 0,
+     "tail": "Initializing agentpack\u2026\nCreated /var/tmp/ap076/work-sc/drift/agentpack-tree/project/agentpack.toml and /var/tmp/ap076/work-sc/drift/agentpack-tree/project/pack.lock"
+    },
+    {
+     "exit": 0,
+     "tail": "Adding: /var/tmp/ap076/work-sc/drift/agentpack-tree/plugin\nRecorded plugin in agentpack.toml and refreshed pack.lock."
+    },
+    {
+     "exit": 0,
+     "tail": "Wrote /var/tmp/ap076/work-sc/drift/agentpack-tree/project/pack.lock (1 package(s))."
+    },
+    {
+     "exit": 0,
+     "tail": "Sync finished \u2014 0 skill(s), 1 plugin(s), 1 cache index entr(ies). One merged bundle: agentpack-bundle."
+    }
+   ],
+   "launch": {
+    "ran": "srv-1.0.0+dep-1.0.0"
+   },
+   "command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "<work>/drift/agentpack-tree/staging/projects/304d9c833c3a28f9/modes/default-g-437544826/plugins/agentpack-bundle/mcp-trees/srv.json",
+    "--"
+   ]
+  },
+  {
+   "scenario": "dep-replaced",
+   "setup": "none",
+   "lock_steps": [],
+   "launch": {
+    "ran": "srv-1.0.0+dep-1.0.0-REPLACED"
+   },
+   "command": [
+    "npx",
+    "-y",
+    "approbe-srv-7f3c@latest"
+   ]
+  },
+  {
+   "scenario": "dep-replaced",
+   "setup": "agentpack-top",
+   "lock_steps": [
+    {
+     "exit": 0,
+     "tail": "Initializing agentpack\u2026\nCreated /var/tmp/ap076/work-sc/dep-replaced/agentpack-top/project/agentpack.toml and /var/tmp/ap076/work-sc/dep-replaced/agentpack-top/project/pack.lock"
+    },
+    {
+     "exit": 0,
+     "tail": "Adding: /var/tmp/ap076/work-sc/dep-replaced/agentpack-top/plugin\nRecorded plugin in agentpack.toml and refreshed pack.lock."
+    },
+    {
+     "exit": 0,
+     "tail": "Wrote /var/tmp/ap076/work-sc/dep-replaced/agentpack-top/project/pack.lock (1 package(s))."
+    },
+    {
+     "exit": 0,
+     "tail": "Sync finished \u2014 0 skill(s), 1 plugin(s), 1 cache index entr(ies). One merged bundle: agentpack-bundle."
+    }
+   ],
+   "launch": {
+    "ran": "srv-1.0.0+dep-1.0.0-REPLACED"
+   },
+   "command": [
+    "npx",
+    "-y",
+    "approbe-srv-7f3c@1.0.0"
+   ]
+  },
+  {
+   "scenario": "dep-replaced",
+   "setup": "agentpack-tree",
+   "lock_steps": [
+    {
+     "exit": 0,
+     "tail": "Initializing agentpack\u2026\nCreated /var/tmp/ap076/work-sc/dep-replaced/agentpack-tree/project/agentpack.toml and /var/tmp/ap076/work-sc/dep-replaced/agentpack-tree/project/pack.lock"
+    },
+    {
+     "exit": 0,
+     "tail": "Adding: /var/tmp/ap076/work-sc/dep-replaced/agentpack-tree/plugin\nRecorded plugin in agentpack.toml and refreshed pack.lock."
+    },
+    {
+     "exit": 0,
+     "tail": "Wrote /var/tmp/ap076/work-sc/dep-replaced/agentpack-tree/project/pack.lock (1 package(s))."
+    },
+    {
+     "exit": 0,
+     "tail": "Sync finished \u2014 0 skill(s), 1 plugin(s), 1 cache index entr(ies). One merged bundle: agentpack-bundle."
+    }
+   ],
+   "launch": {
+    "ran": null,
+    "stopped": "ERROR  \n          \n  Mcp server \"srv\": node_modules/approbe-dep-7f3c@1.0.0: the downloaded tarball has integrity sha512-                 \n  3jSVe7V3hvODG8H0M0/UE9Btj1Yte9fzATID1ykMnQe7D26+zbn0tERayH27pyNpgLlqYIDKZ4KaAH3sYJigUw==, but pack.lock records     \n  sha512-b6mVx6MAVGQIqeM2acYB1qnBDZ+0Y9EpfdvQJQNVoiJdkfnuYChMscDvSwMa006ViEO0K9t+xpYy4O7m10BVag==; nothing was run."
+   },
+   "command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "<work>/dep-replaced/agentpack-tree/staging/projects/7b0af54655f4e7ab/modes/default-g-132457468/plugins/agentpack-bundle/mcp-trees/srv.json",
+    "--"
+   ]
+  },
+  {
+   "scenario": "srv-replaced",
+   "setup": "none",
+   "lock_steps": [],
+   "launch": {
+    "ran": "srv-1.0.0-REPLACED+dep-1.0.0"
+   },
+   "command": [
+    "npx",
+    "-y",
+    "approbe-srv-7f3c@latest"
+   ]
+  },
+  {
+   "scenario": "srv-replaced",
+   "setup": "agentpack-top",
+   "lock_steps": [
+    {
+     "exit": 0,
+     "tail": "Initializing agentpack\u2026\nCreated /var/tmp/ap076/work-sc/srv-replaced/agentpack-top/project/agentpack.toml and /var/tmp/ap076/work-sc/srv-replaced/agentpack-top/project/pack.lock"
+    },
+    {
+     "exit": 0,
+     "tail": "Adding: /var/tmp/ap076/work-sc/srv-replaced/agentpack-top/plugin\nRecorded plugin in agentpack.toml and refreshed pack.lock."
+    },
+    {
+     "exit": 0,
+     "tail": "Wrote /var/tmp/ap076/work-sc/srv-replaced/agentpack-top/project/pack.lock (1 package(s))."
+    },
+    {
+     "exit": 0,
+     "tail": "Sync finished \u2014 0 skill(s), 1 plugin(s), 1 cache index entr(ies). One merged bundle: agentpack-bundle."
+    }
+   ],
+   "launch": {
+    "ran": "srv-1.0.0-REPLACED+dep-1.0.0"
+   },
+   "command": [
+    "npx",
+    "-y",
+    "approbe-srv-7f3c@1.0.0"
+   ]
+  },
+  {
+   "scenario": "srv-replaced",
+   "setup": "agentpack-tree",
+   "lock_steps": [
+    {
+     "exit": 0,
+     "tail": "Initializing agentpack\u2026\nCreated /var/tmp/ap076/work-sc/srv-replaced/agentpack-tree/project/agentpack.toml and /var/tmp/ap076/work-sc/srv-replaced/agentpack-tree/project/pack.lock"
+    },
+    {
+     "exit": 0,
+     "tail": "Adding: /var/tmp/ap076/work-sc/srv-replaced/agentpack-tree/plugin\nRecorded plugin in agentpack.toml and refreshed pack.lock."
+    },
+    {
+     "exit": 0,
+     "tail": "Wrote /var/tmp/ap076/work-sc/srv-replaced/agentpack-tree/project/pack.lock (1 package(s))."
+    },
+    {
+     "exit": 0,
+     "tail": "Sync finished \u2014 0 skill(s), 1 plugin(s), 1 cache index entr(ies). One merged bundle: agentpack-bundle."
+    }
+   ],
+   "launch": {
+    "ran": null,
+    "stopped": "ERROR  \n          \n  Mcp server \"srv\": node_modules/approbe-srv-7f3c@1.0.0: the downloaded tarball has integrity sha512-                 \n  eQvIRe+62zGQ+simkt003IsP03NaY55w6t+ZFe8JhJmXKYgzLizI1WzYrTTARcGBNC4/0Y1p68x2Y7NB3pG1dA==, but pack.lock records     \n  sha512-W4+U88xuHV+4TX8nHqi5aVyvLBpLUiyYnC17/hmY2dBg1rmLnHX8rJYAcaZ2byMIMifKLJh9933MRgpSZnZQ8g==; nothing was run."
+   },
+   "command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "<work>/srv-replaced/agentpack-tree/staging/projects/97ca7d99ba37f7fb/modes/default-g-1721614243/plugins/agentpack-bundle/mcp-trees/srv.json",
+    "--"
+   ]
+  },
+  {
+   "scenario": "cache-edited",
+   "setup": "none",
+   "lock_steps": [],
+   "first_launch": {
+    "ran": "srv-1.0.0+dep-1.0.0"
+   },
+   "edited": [
+    ".npm/_npx/a40b76953b36bc49/node_modules/approbe-dep-7f3c/index.js"
+   ],
+   "launch": {
+    "ran": "srv-1.0.0+dep-EDITED-IN-CACHE"
+   },
+   "command": [
+    "npx",
+    "-y",
+    "approbe-srv-7f3c@latest"
+   ]
+  },
+  {
+   "scenario": "cache-edited",
+   "setup": "agentpack-top",
+   "lock_steps": [
+    {
+     "exit": 0,
+     "tail": "Initializing agentpack\u2026\nCreated /var/tmp/ap076/work-sc/cache-edited/agentpack-top/project/agentpack.toml and /var/tmp/ap076/work-sc/cache-edited/agentpack-top/project/pack.lock"
+    },
+    {
+     "exit": 0,
+     "tail": "Adding: /var/tmp/ap076/work-sc/cache-edited/agentpack-top/plugin\nRecorded plugin in agentpack.toml and refreshed pack.lock."
+    },
+    {
+     "exit": 0,
+     "tail": "Wrote /var/tmp/ap076/work-sc/cache-edited/agentpack-top/project/pack.lock (1 package(s))."
+    },
+    {
+     "exit": 0,
+     "tail": "Sync finished \u2014 0 skill(s), 1 plugin(s), 1 cache index entr(ies). One merged bundle: agentpack-bundle."
+    }
+   ],
+   "first_launch": {
+    "ran": "srv-1.0.0+dep-1.0.0"
+   },
+   "edited": [
+    ".npm/_npx/95b09de7d78df74b/node_modules/approbe-dep-7f3c/index.js"
+   ],
+   "launch": {
+    "ran": "srv-1.0.0+dep-EDITED-IN-CACHE"
+   },
+   "command": [
+    "npx",
+    "-y",
+    "approbe-srv-7f3c@1.0.0"
+   ]
+  },
+  {
+   "scenario": "cache-edited",
+   "setup": "agentpack-tree",
+   "lock_steps": [
+    {
+     "exit": 0,
+     "tail": "Initializing agentpack\u2026\nCreated /var/tmp/ap076/work-sc/cache-edited/agentpack-tree/project/agentpack.toml and /var/tmp/ap076/work-sc/cache-edited/agentpack-tree/project/pack.lock"
+    },
+    {
+     "exit": 0,
+     "tail": "Adding: /var/tmp/ap076/work-sc/cache-edited/agentpack-tree/plugin\nRecorded plugin in agentpack.toml and refreshed pack.lock."
+    },
+    {
+     "exit": 0,
+     "tail": "Wrote /var/tmp/ap076/work-sc/cache-edited/agentpack-tree/project/pack.lock (1 package(s))."
+    },
+    {
+     "exit": 0,
+     "tail": "Sync finished \u2014 0 skill(s), 1 plugin(s), 1 cache index entr(ies). One merged bundle: agentpack-bundle."
+    }
+   ],
+   "first_launch": {
+    "ran": "srv-1.0.0+dep-1.0.0"
+   },
+   "edited": [
+    ".local/share/agentpack/cache/npm-trees/ed896db84357780e7e008f82f9cc1468f099e82d527ff5a33084cbf94ffb1198/node_modules/approbe-dep-7f3c/index.js"
+   ],
+   "launch": {
+    "ran": "srv-1.0.0+dep-1.0.0"
+   },
+   "command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "<work>/cache-edited/agentpack-tree/staging/projects/d92accbdb7844414/modes/default-g-3603440116/plugins/agentpack-bundle/mcp-trees/srv.json",
+    "--"
+   ]
+  }
+ ]
+}

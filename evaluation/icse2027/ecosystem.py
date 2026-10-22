@@ -906,6 +906,20 @@ def on_disk(agent, roots, exp):
     return found
 
 
+def agentpack_modes(root):
+    """Agentpack 0.7.3+ publishes staging generations (modes/default-g-N, named by modes/default.current) instead of
+    modes/default; resolve the generation current right after sync, or modes/default for older releases.
+    """
+    out = []
+    for proj in sorted((root / 'other/staging').glob('projects/*')):
+        ptr = proj / 'modes/default.current'
+        if ptr.is_file() and (proj / 'modes' / ptr.read_text().strip()).is_dir():
+            out.append(proj / 'modes' / ptr.read_text().strip())
+        elif (proj / 'modes/default').is_dir():
+            out.append(proj / 'modes/default')
+    return out
+
+
 def plugin_dirs(tool, root, home):
     """Plugin directories an agent loads: installed natively, or staged by Agentpack and passed by its launcher."""
     out = {a: [] for a in AGENTS}
@@ -916,7 +930,7 @@ def plugin_dirs(tool, root, home):
     out['grok'] += [p for p in (home / '.grok/plugins').glob('*') if p.is_dir()]
     out['agy'] += [p.parent for p in (home / '.gemini').glob('**/plugins/*/plugin.json')]
     if tool == 'agentpack':
-        for mode in (root / 'other/staging').glob('projects/*/modes/default'):
+        for mode in agentpack_modes(root):
             out['claude'].append(mode / 'plugins/agentpack-bundle')
             out['grok'].append(mode / 'grok/agentpack-bundle')
             out['agy'].append(mode / 'agy/agentpack-bundle')
@@ -1235,7 +1249,7 @@ def one(tool, inp_id, inp, args, baseline):
     if tool == 'agentpack':
         launcher = {'claude': 'claude', 'codex': 'codex', 'opencode': 'opencode', 'cursor': 'agent', 'grok': 'grok', 'agy': 'agy'}
         wrap = lambda a: [str(exe), '-q', launcher[a]]
-        mode = next(iter((root / 'other/staging').glob('projects/*/modes/default')), root / 'none')
+        mode = next(iter(agentpack_modes(root)), root / 'none')
         roots.update(codex_home=agentpack_codex_home(root) or mode / 'codex-home', opencode_config=mode / 'opencode',
                      cursor_user=mode / 'cursor-home/.cursor')
     probes, evidence = {}, {}

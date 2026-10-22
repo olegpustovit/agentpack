@@ -180,8 +180,9 @@ for rel, (s, sha_copy, sha_src) in copied.items():
         merged = json.loads(s.read_text())
         merged['claudeAiOauth'] = json.loads(data)['claudeAiOauth']
         data = json.dumps(merged).encode()
-    backup = SP / 'cred-backup'
-    backup.mkdir(exist_ok=True)
+    # Credential backups stay outside the repository.
+    backup = Path(os.environ.get('AGENTPACK_EVAL_BACKUP', Path.home() / '.cache/agentpack-eval-cred-backup'))
+    backup.mkdir(mode=0o700, parents=True, exist_ok=True)
     shutil.copy2(s, backup / (rel.replace('/', '_') + time.strftime('.%Y%m%dT%H%M%S')))
     tmp = s.with_name(s.name + '.tmp-eject')
     tmp.write_bytes(data)

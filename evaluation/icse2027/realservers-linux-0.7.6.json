@@ -1,0 +1,346 @@
+{
+ "host": "Linux-6.8.0-147-generic-aarch64-with-glibc2.39",
+ "machine": "aarch64",
+ "node": "v24.19.0",
+ "npm": "11.17.0",
+ "agentpack": "agentpack 0.7.6",
+ "agentpack_sha256": "bce3f7256dc0f59df5a9943cb1c1f68c9efe020080afec958548cb55df98b50a",
+ "pack_lock_sha256": "b3a07b5cae744a02838a524b8a9f13ffc2d7febc6ae1f96011017e7863c402cd",
+ "sync": [
+  0,
+  "Sync finished \u2014 0 skill(s), 1 plugin(s), 1 cache index entr(ies). One merged bundle: agentpack-bundle."
+ ],
+ "servers": {
+  "playwright": {
+   "staged_command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "/tmp/rs-start-7xtjoj7i/staging/projects/09740576fd055251/modes/default-g-361703330/plugins/agentpack-bundle/mcp-trees/playwright.json"
+   ],
+   "locked_tree": {
+    "ok": true,
+    "tools": 25,
+    "server": {
+     "name": "Playwright",
+     "version": "1.64.0-alpha-1790635538000"
+    },
+    "seconds": 1.5,
+    "stderr_tail": ""
+   },
+   "npm_ci": {
+    "ok": true,
+    "tools": 25,
+    "server": {
+     "name": "Playwright",
+     "version": "1.64.0-alpha-1790635538000"
+    },
+    "seconds": 0.5,
+    "stderr_tail": ""
+   }
+  },
+  "firebase": {
+   "staged_command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "/tmp/rs-start-7xtjoj7i/staging/projects/09740576fd055251/modes/default-g-361703330/plugins/agentpack-bundle/mcp-trees/firebase.json"
+   ],
+   "locked_tree": {
+    "ok": true,
+    "tools": 19,
+    "server": {
+     "name": "firebase",
+     "version": "0.3.0"
+    },
+    "seconds": 49.0,
+    "stderr_tail": ""
+   },
+   "npm_ci": {
+    "ok": true,
+    "tools": 19,
+    "server": {
+     "name": "firebase",
+     "version": "0.3.0"
+    },
+    "seconds": 2.2,
+    "stderr_tail": ""
+   }
+  },
+  "xero": {
+   "staged_command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "/tmp/rs-start-7xtjoj7i/staging/projects/09740576fd055251/modes/default-g-361703330/plugins/agentpack-bundle/mcp-trees/xero.json"
+   ],
+   "locked_tree": {
+    "ok": true,
+    "tools": 51,
+    "server": {
+     "name": "Xero MCP Server",
+     "version": "1.0.0"
+    },
+    "seconds": 9.4,
+    "stderr_tail": ""
+   },
+   "npm_ci": {
+    "ok": true,
+    "tools": 51,
+    "server": {
+     "name": "Xero MCP Server",
+     "version": "1.0.0"
+    },
+    "seconds": 0.4,
+    "stderr_tail": ""
+   }
+  },
+  "xcodebuildmcp": {
+   "staged_command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "/tmp/rs-start-7xtjoj7i/staging/projects/09740576fd055251/modes/default-g-361703330/plugins/agentpack-bundle/mcp-trees/xcodebuildmcp.json"
+   ],
+   "locked_tree": {
+    "ok": true,
+    "tools": 24,
+    "server": {
+     "name": "xcodebuildmcp",
+     "version": "2.7.0"
+    },
+    "seconds": 15.2,
+    "stderr_tail": "erationByCategory\":{},\"debuggerSessionCount\":0,\"simulatorLaunchOsLogSessionCount\":0,\"ownedSimulatorLaunchOsLogSessionCount\":0,\"videoCaptureSessionCount\":0,\"swiftPackageProcessCount\":0,\"matchingMcpProcessCount\":2,\"matchingMcpPeerSummary\":[{\"pid\":352215,\"ageSeconds\":15,\"rssKb\":22240}],\"anomalies\":[]}\n"
+   },
+   "npm_ci": {
+    "ok": true,
+    "tools": 24,
+    "server": {
+     "name": "xcodebuildmcp",
+     "version": "2.7.0"
+    },
+    "seconds": 1.2,
+    "stderr_tail": "ath\":null,\"activeOperationCount\":0,\"activeOperationByCategory\":{},\"debuggerSessionCount\":0,\"simulatorLaunchOsLogSessionCount\":0,\"ownedSimulatorLaunchOsLogSessionCount\":0,\"videoCaptureSessionCount\":0,\"swiftPackageProcessCount\":0,\"matchingMcpProcessCount\":1,\"matchingMcpPeerSummary\":[],\"anomalies\":[]}\n"
+   }
+  },
+  "context7": {
+   "staged_command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "/tmp/rs-start-7xtjoj7i/staging/projects/09740576fd055251/modes/default-g-361703330/plugins/agentpack-bundle/mcp-trees/context7.json"
+   ],
+   "locked_tree": {
+    "ok": true,
+    "tools": 2,
+    "server": {
+     "name": "Context7",
+     "title": "Context7",
+     "version": "4.4.4",
+     "websiteUrl": "https://context7.com",
+     "description": "Context7 provides up-to-date documentation and code examples for libraries and frameworks.",
+     "icons": [
+      {
+       "src": "https://context7.com/context7-icon-green.svg",
+       "mimeType": "image/svg+xml",
+       "sizes": [
+        "any"
+       ]
+      },
+      {
+       "src": "https://context7.com/context7-icon-green.png",
+       "mimeType": "image/png",
+       "sizes": [
+        "512x512"
+       ]
+      }
+     ]
+    },
+    "seconds": 10.8,
+    "stderr_tail": "Context7 Documentation MCP Server v4.4.4 running on stdio\n"
+   },
+   "npm_ci": {
+    "ok": true,
+    "tools": 2,
+    "server": {
+     "name": "Context7",
+     "title": "Context7",
+     "version": "4.4.4",
+     "websiteUrl": "https://context7.com",
+     "description": "Context7 provides up-to-date documentation and code examples for libraries and frameworks.",
+     "icons": [
+      {
+       "src": "https://context7.com/context7-icon-green.svg",
+       "mimeType": "image/svg+xml",
+       "sizes": [
+        "any"
+       ]
+      },
+      {
+       "src": "https://context7.com/context7-icon-green.png",
+       "mimeType": "image/png",
+       "sizes": [
+        "512x512"
+       ]
+      }
+     ]
+    },
+    "seconds": 1.9,
+    "stderr_tail": "Context7 Documentation MCP Server v4.4.4 running on stdio\n"
+   }
+  },
+  "filesystem": {
+   "staged_command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "/tmp/rs-start-7xtjoj7i/staging/projects/09740576fd055251/modes/default-g-361703330/plugins/agentpack-bundle/mcp-trees/filesystem.json"
+   ],
+   "locked_tree": {
+    "ok": true,
+    "tools": 14,
+    "server": {
+     "name": "secure-filesystem-server",
+     "version": "2.0.0"
+    },
+    "seconds": 2.0,
+    "stderr_tail": "Secure MCP Filesystem Server running on stdio\nClient does not support MCP Roots, using allowed directories set from server args: [ '/tmp/rs-start-7xtjoj7i/bundle/project' ]\n"
+   },
+   "npm_ci": {
+    "ok": true,
+    "tools": 14,
+    "server": {
+     "name": "secure-filesystem-server",
+     "version": "2.0.0"
+    },
+    "seconds": 0.1,
+    "stderr_tail": "Secure MCP Filesystem Server running on stdio\nClient does not support MCP Roots, using allowed directories set from server args: [ '/tmp/rs-start-7xtjoj7i/bundle/project' ]\n"
+   }
+  },
+  "memory": {
+   "staged_command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "/tmp/rs-start-7xtjoj7i/staging/projects/09740576fd055251/modes/default-g-361703330/plugins/agentpack-bundle/mcp-trees/memory.json"
+   ],
+   "locked_tree": {
+    "ok": true,
+    "tools": 9,
+    "server": {
+     "name": "memory-server",
+     "version": "2.0.0"
+    },
+    "seconds": 1.1,
+    "stderr_tail": "Knowledge Graph MCP Server running on stdio\n"
+   },
+   "npm_ci": {
+    "ok": true,
+    "tools": 9,
+    "server": {
+     "name": "memory-server",
+     "version": "2.0.0"
+    },
+    "seconds": 0.2,
+    "stderr_tail": "Knowledge Graph MCP Server running on stdio\n"
+   }
+  },
+  "everything": {
+   "staged_command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "/tmp/rs-start-7xtjoj7i/staging/projects/09740576fd055251/modes/default-g-361703330/plugins/agentpack-bundle/mcp-trees/everything.json"
+   ],
+   "locked_tree": {
+    "ok": true,
+    "tools": 16,
+    "server": {
+     "name": "mcp-servers/everything",
+     "title": "Everything Reference Server",
+     "version": "2.0.0"
+    },
+    "seconds": 7.2,
+    "stderr_tail": "Starting default (STDIO) server...\n"
+   },
+   "npm_ci": {
+    "ok": true,
+    "tools": 16,
+    "server": {
+     "name": "mcp-servers/everything",
+     "title": "Everything Reference Server",
+     "version": "2.0.0"
+    },
+    "seconds": 0.3,
+    "stderr_tail": "Starting default (STDIO) server...\n"
+   }
+  },
+  "chrome-devtools": {
+   "staged_command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "/tmp/rs-start-7xtjoj7i/staging/projects/09740576fd055251/modes/default-g-361703330/plugins/agentpack-bundle/mcp-trees/chrome-devtools.json"
+   ],
+   "locked_tree": {
+    "ok": true,
+    "tools": 32,
+    "server": {
+     "name": "chrome_devtools",
+     "title": "Chrome DevTools MCP server",
+     "version": "1.12.0"
+    },
+    "seconds": 3.1,
+    "stderr_tail": "me-devtools-mcp#usage-statistics\n[chrome-devtools-mcp] The connecting client did not negotiate the MCP roots capability. Tools that read or write local files will be restricted to the OS temp directory. To restore the previous unrestricted behavior, start the server with --allow-unrestricted-paths.\n"
+   },
+   "npm_ci": {
+    "ok": true,
+    "tools": 32,
+    "server": {
+     "name": "chrome_devtools",
+     "title": "Chrome DevTools MCP server",
+     "version": "1.12.0"
+    },
+    "seconds": 0.7,
+    "stderr_tail": "me-devtools-mcp#usage-statistics\n[chrome-devtools-mcp] The connecting client did not negotiate the MCP roots capability. Tools that read or write local files will be restricted to the OS temp directory. To restore the previous unrestricted behavior, start the server with --allow-unrestricted-paths.\n"
+   }
+  },
+  "sqlite": {
+   "staged_command": [
+    "/var/tmp/ap075/bin076/agentpack",
+    "mcp-exec",
+    "--spec",
+    "/tmp/rs-start-7xtjoj7i/staging/projects/09740576fd055251/modes/default-g-361703330/plugins/agentpack-bundle/mcp-trees/sqlite.json"
+   ],
+   "locked_tree": {
+    "ok": false,
+    "tools": null,
+    "server": null,
+    "seconds": 14.2,
+    "stderr_tail": "_modules/sqlite3/addon-build/default/install-root/node_sqlite3.node',\n    '/tmp/rs-start-7xtjoj7i/.local/share/agentpack/cache/npm-trees/e904b1cf5afed4ba5998c132e7ab9507f080a57c886a9a58ce94eae0cd369dfa/node_modules/sqlite3/lib/binding/node-v137-linux-arm64/node_sqlite3.node'\n  ]\n}\n\nNode.js v24.19.0\n"
+   },
+   "npm_ci": {
+    "ok": true,
+    "tools": 8,
+    "server": {
+     "name": "mcp-sqlite-server",
+     "version": "1.0.0"
+    },
+    "seconds": 0.2,
+    "stderr_tail": ""
+   }
+  }
+ },
+ "trees_installed": [
+  "19ee10bfeecfcc099ba32f77ffa46d079e6c07f7c67e85003a8352ac438aa6f7",
+  "69cb1876a99a9400ed7ee90d235853452bf05cf3c7578a3ecfaf460ce359cb39",
+  "8016250bae6826ceb3ea972170b409fe3e1a551830e17930f634680f5072dd84",
+  "a8567236c23fa41ae25ac6acfe7052b7a30d81e11cc8e5bbb4ffc6e34676910f",
+  "cd104cc0f5b60f61875dc98302a0051a45cde5ec09bb02fdfe30e6b4405d150d",
+  "d92324c3cff8101296389952677740ac6efe675d8f2b9c888431c4ae4eca59be",
+  "e904b1cf5afed4ba5998c132e7ab9507f080a57c886a9a58ce94eae0cd369dfa",
+  "fa3bab493ab8b304dc494fd4d038c4f18b443c1c67d1f866ccab5d59a1e205bd",
+  "fb3f5592451bb497f5d8d9397350aae833ad30ecb134fc072513c0f4ee0d134e",
+  "fdeab23fbf1e00f140ab629b3954e1b6064b22f81024e7337a77d4d922c5fa36"
+ ]
+}
