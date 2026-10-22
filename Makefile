@@ -90,7 +90,7 @@ _bump:
 	@old=$$(sed -n 's/^var Version = "\([^"]*\)"/\1/p' internal/cli/run.go); \
 	new=$$(printf '%s\n' "$$old" | awk -v part="$(PART)" 'BEGIN { FS=OFS="." } { if (part=="minor") { $$2++; $$3=0 } else { $$3++ } print }'); \
 	for file in internal/cli/run.go integration/cli_test.go integration/installer_test.go README.md scripts/agentpack-installer.sh scripts/agentpack-installer.ps1; do \
-		sed "s/$$old/$$new/g" "$$file" > "$$file.tmp"; \
+		sed "s/$$(printf '%s' "$$old" | sed 's/\./\\./g')/$$new/g" "$$file" > "$$file.tmp"; \
 		mv "$$file.tmp" "$$file"; \
 	done
 	@chmod +x scripts/agentpack-installer.sh
