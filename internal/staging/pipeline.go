@@ -378,7 +378,14 @@ func (pipeline Pipeline) stageHooks(ctx base.StageContext, harnesses []base.Harn
 	if err != nil {
 		return err
 	}
-	bundle, err := hooks.Collect(pipeline.workspace(), pipeline.Lock, filepath.Join(codexRoot, "hooks.json"), pipeline.Mode)
+	// The Codex home is seeded with the user's own hooks.json only when this
+	// rebuild resets it; otherwise it still holds what Agentpack rendered
+	// last time, which is not the user's.
+	seeded := ""
+	if pipeline.includes(base.Codex) {
+		seeded = filepath.Join(codexRoot, "hooks.json")
+	}
+	bundle, err := hooks.Collect(pipeline.workspace(), pipeline.Lock, seeded, pipeline.Mode)
 	if err != nil {
 		return err
 	}
@@ -400,6 +407,10 @@ func (pipeline Pipeline) stageHooks(ctx base.StageContext, harnesses []base.Harn
 		// Each agent gets the hooks the package published for it, or the
 		// nearest other dialect when it published none.
 		selected := bundle.ForTarget(candidate.ID())
+		if candidate.ID() != base.Codex {
+			// The user's own Codex hooks belong to Codex only.
+			selected.Hooks = slices.DeleteFunc(slices.Clone(selected.Hooks), func(hook hooks.Hook) bool { return hook.Origin.Layer == hooks.SeededNative })
+		}
 		packages, err := hooks.StageOriginPackages(selected, candidate.ID(), root, pipeline.Mode)
 		if err != nil {
 			return err

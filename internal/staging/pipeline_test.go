@@ -478,3 +478,64 @@ func TestPipelineLaunchStagesOnlySelectedHarness(t *testing.T) {
 		})
 	}
 }
+
+// A launch restages only its own agent, so the Codex home still holds the
+// hooks Agentpack rendered at the last full sync. Those must not be read back
+// as the user's own Codex hooks and rendered for the launched agent.
+func TestPipelineLaunchAfterSyncWithHooks(t *testing.T) {
+	for _, target := range base.AllTargets() {
+		t.Run(string(target), func(t *testing.T) {
+			project, home := t.TempDir(), t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("AGENTPACK_HOME", t.TempDir())
+			t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+			hooksFile := filepath.Join(project, ".agents", "hooks", "hooks.json")
+			if err := os.MkdirAll(filepath.Dir(hooksFile), 0755); err != nil {
+				t.Fatal(err)
+			}
+			hooksJSON := `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo checked"}]}]}}`
+			if err := os.WriteFile(hooksFile, []byte(hooksJSON), 0644); err != nil {
+				t.Fatal(err)
+			}
+			sync := Pipeline{ProjectRoot: project, Lock: lockfile.EmptyForProject(project), Mode: mode.ImplicitEffective()}
+			if _, err := sync.Rebuild(); err != nil {
+				t.Fatal(err)
+			}
+			launch := sync
+			launch.Target = &target
+			if _, err := launch.Rebuild(); err != nil {
+				t.Fatalf("launch %s after sync: %v", target, err)
+			}
+		})
+	}
+}
+
+// The user's own ~/.codex/hooks.json is Codex's alone: a full sync and every
+// launch succeed with it present, and only Codex gets it.
+func TestPipelineUserCodexHooksStayWithCodex(t *testing.T) {
+	project, home := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	userHooks := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(userHooks), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userHooks, []byte(`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo mine"}]}]}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	sync := Pipeline{ProjectRoot: project, Lock: lockfile.EmptyForProject(project), Mode: mode.ImplicitEffective()}
+	if _, err := sync.Rebuild(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	for _, target := range base.AllTargets() {
+		launch := sync
+		launch.Target = &target
+		if _, err := launch.Rebuild(); err != nil {
+			t.Fatalf("launch %s: %v", target, err)
+		}
+	}
+}
