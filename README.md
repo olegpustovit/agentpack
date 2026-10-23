@@ -1,278 +1,82 @@
-<p align="center">
-  <h1 align="center">agentpack</h1>
-  <p align="center">
-    <strong>The package manager for AI coding agents</strong>
-  </p>
-  <p align="center">
-    Pin, resolve, and sync skills &amp; plugins across Claude Code, Cursor, OpenCode, Codex, Grok, and Antigravity — from one manifest.
-  </p>
-</p>
+# agentpack
 
-<p align="center">
-  <a href="https://olegpustovit.github.io/agentpack"><img alt="Documentation" src="https://img.shields.io/badge/docs-olegpustovit.github.io-1f6feb.svg"></a>
-  <a href="https://olegpustovit.com/posts/agentpack/"><img alt="Writeup" src="https://img.shields.io/badge/writeup-olegpustovit.com-ff6b6b.svg"></a>
-  <a href="https://github.com/olegpustovit/agentpack/blob/dev/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="https://github.com/olegpustovit/agentpack/releases"><img alt="Version" src="https://img.shields.io/badge/version-v0.7.6-blue.svg"></a>
-  <a href="https://github.com/olegpustovit/agentpack"><img alt="Built with Go" src="https://img.shields.io/badge/built_with-Go-00ADD8.svg"></a>
-</p>
+Pin skills and plugins for coding agents in one project manifest. Agentpack resolves packages, records commits and content hashes in a lockfile, and stages supported artifacts for Claude Code, Cursor, OpenCode, Codex, Grok and Antigravity.
 
-<p align="center">
-  <a href="https://olegpustovit.github.io/agentpack"><strong>Documentation</strong></a> ·
-  <a href="https://olegpustovit.com/posts/agentpack/"><strong>Writeup</strong></a> ·
-  <a href="#quick-start">Quick Start</a> ·
-  <a href="#how-it-works">How It Works</a> ·
-  <a href="https://olegpustovit.github.io/agentpack/reference/cli.html">CLI Reference</a>
-</p>
+![Agentpack initializing a project, locking a local skill and verifying staging](docs/demo/local-skill.png)
 
-```sh
-brew install --cask olegpustovit/tap/agentpack
-```
-
-<p align="center"><sub>Prefer a prebuilt binary or source build? See <a href="#install">all install options</a>.</sub></p>
-
----
-
-## The Problem
-
-Every coding agent manages skills, plugins, commands, and rules its own way — different file layouts, config formats, and discovery rules. Run more than one agent, or share a curated toolset across a team, and you end up pasting the same files into each agent's config by hand and watching the copies drift apart. There's no lockfile to say which version everyone is actually on.
-
-## What agentpack Does
-
-Declare your agent dependencies once in `agentpack.toml`. agentpack resolves them to exact commits, pins those in a lockfile, caches the content, re-renders each artifact into the target agent's native format, and launches the agent with everything staged. Your repo stays clean: nothing is copied into it, and nothing is written to your global agent config. Portable **external environments** can keep the manifest and lock outside the checkout (`env` / `--env` / `preflight` / `probe`); see the [environments docs](https://olegpustovit.github.io/agentpack/concepts/environments.html).
-
-```text
-agentpack.toml  ──>  pack.lock  ──>  staged bundles  ──>  launch
-   (you write)        (pinned)        (per-harness)        (agent runs)
-```
+*Actual CLI output from a local skill in a disposable, network-disabled container. This checks package staging, not an agent's response to the skill.*
 
 ## Install
 
-Prebuilt binaries are published for every release. Pick whichever fits your platform.
+Download an archive for your platform from [GitHub releases](https://github.com/olegpustovit/agentpack/releases/latest), check it against the release's `checksums.txt`, extract it and put `agentpack` on your PATH. Release targets are macOS and Linux on ARM64/x86-64, plus Windows x86-64.
 
-### Installer script
+[Installer scripts, Homebrew and source-build instructions](docs/README-reference.md#install) describe the other options. The source build requires Go 1.26 or newer:
 
-macOS and Linux:
-
-```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/olegpustovit/agentpack/releases/latest/download/agentpack-installer.sh | sh
+```sh
+git clone https://github.com/olegpustovit/agentpack.git
+cd agentpack
+go build -o ./agentpack ./cmd/agentpack
+./agentpack --version
 ```
 
-Windows PowerShell:
+This is pre-release software. CLI behavior, lockfiles and staging layouts can change between versions.
 
-```powershell
-irm https://github.com/olegpustovit/agentpack/releases/latest/download/agentpack-installer.ps1 | iex
-```
+## Try a local skill
 
-Both installers write only the executable to `$HOME/.local/bin` by default. They do not edit shell profiles or the user `PATH`; use `AGENTPACK_INSTALL_DIR` to select another userspace directory.
+With agentpack on your PATH, run this in a new directory:
 
-### Homebrew — macOS & Linux (recommended)
-
-```bash
-brew install --cask olegpustovit/tap/agentpack
-```
-
-Upgrade with `brew upgrade --cask agentpack`. Served from the shared tap
-[olegpustovit/homebrew-tap](https://github.com/olegpustovit/homebrew-tap) (`brew tap olegpustovit/tap && brew install --cask agentpack` also works).
-
-### Prebuilt binaries
-
-Download an archive for your platform from the [latest release](https://github.com/olegpustovit/agentpack/releases/latest), extract it, and put `agentpack` on your `PATH`. Supported targets:
-
-| Platform | Target |
-| --- | --- |
-| macOS (Apple Silicon) | `darwin_arm64` |
-| macOS (Intel) | `darwin_amd64` |
-| Linux (x86-64) | `linux_amd64` |
-| Linux (ARM64) | `linux_arm64` |
-| Windows (x86-64) | `windows_amd64` |
-
-Each release includes a SHA-256 `checksums.txt` covering every archive.
-
-### From source
-
-```bash
-go install ./cmd/agentpack
-# or
-make install   # release build to ~/.local/bin (override: make install INSTALL_DIR=/usr/local/bin)
-```
-
-**Prerequisites (source builds only):** Go 1.26 or newer.
-
-## Quick Start
-
-```bash
-# Initialize agentpack in your project
+```sh
+mkdir agentpack-demo
+cd agentpack-demo
 agentpack init
-
-# Add a skill from GitHub (resolves, locks, and syncs in one step)
-agentpack add anthropics/skills/skills/canvas-design
-
-# Pin to a branch, tag, or commit with an @ref, or edit the entry to a table like { version = "^1.0.0" }
-agentpack add anthropics/claude-plugins-official/plugins/hookify@main
-
-# A plugin's MCP server started with npx ...@latest is pinned to the exact version in pack.lock
-agentpack add anthropics/claude-plugins-official/external_plugins/playwright
-agentpack mcp list          # playwright: npx @playwright/mcp@latest [from plugin] (pinned @playwright/mcp@0.0.83)
-agentpack codex mcp list    # Codex itself reports @playwright/mcp@0.0.83
-
-# A marketplace catalog adds every plugin it lists; --plugin adds one
-agentpack add phuryn/pm-skills
-agentpack add anthropics/claude-plugins-official --plugin pyright-lsp
-
-# Launch Claude Code with everything bundled
-agentpack claude
-
-# Or launch any other agent
-agentpack agent     # Cursor Agent (alias: cursor-agent)
-agentpack opencode  # OpenCode
-agentpack codex     # Codex
-agentpack grok      # Grok
-agentpack agy       # Antigravity
+mkdir local-skill
+cat > local-skill/SKILL.md <<'SKILL'
+---
+name: local-skill
+description: Summarize a change and explain how to verify it.
+---
+Describe the change in plain language. Include the verification command.
+SKILL
+agentpack add ./local-skill --no-sync
+agentpack sync
+agentpack sync --verify-only
 ```
 
-### Experimental Claude Proxy Mode
+You now have `agentpack.toml`, `pack.lock` and staged copies of the skill. The lock records a content hash. A local path dependency follows your directory's contents when you lock or sync; it does not freeze the source directory. [Demo commands, output and assertions](docs/demo/README.md) show the checked run.
 
-`agentpack --proxy claude` starts Claude Code through an experimental, supervised
-Anthropic-compatible proxy backed by OpenAI/Codex credentials. The proxy is started for that Claude
-session, `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` are injected into the child process, and the
-proxy is shut down when Claude exits.
+For a GitHub package, use a repository or subdirectory spec such as `agentpack add anthropics/skills/skills/canvas-design`. Review the content and lockfile changes before launching it. Commit both the manifest and lockfile if the project should share those dependencies.
 
-```bash
-agentpack --proxy claude
-```
+## Launch an installed agent
 
-Authentication is resolved from `OPENAI_API_KEY` first, then from Codex auth (`~/.codex/auth.json`,
-the Codex keychain entry, or agentpack's shared Codex auth file). The Go proxy core follows
-the Codex/OpenAI path in [raine/claude-code-proxy](https://github.com/raine/claude-code-proxy);
-thanks to [@raine](https://github.com/raine) for the original project and reference behavior.
+Run one launcher from your project. Install and authenticate the underlying agent separately.
 
-Proxy diagnostics are written as JSONL under
-`$AGENTPACK_HOME/projects/<project-hash>/proxy-logs/` by default. Set
-`AGENTPACK_PROXY_LOG_DIR` to override the directory. Logs omit request payloads unless
-`AGENTPACK_PROXY_LOG_PAYLOADS=1` is set.
+| Command | Agent |
+| --- | --- |
+| `agentpack claude` | Claude Code |
+| `agentpack agent` | Cursor Agent |
+| `agentpack opencode` | OpenCode |
+| `agentpack codex` | Codex |
+| `agentpack grok` | Grok |
+| `agentpack agy` | Antigravity |
 
-## How It Works
+Arguments after the launcher are forwarded to that agent. Staging an artifact does not establish that every agent discovers it or follows its instructions. [Harness guides](https://olegpustovit.github.io/agentpack/harnesses/claude.html) describe the adapters; the [conversion table](docs/README-reference.md#cross-harness-artifact-conversion) lists fallbacks.
 
-1. **`agentpack.toml`** — Declare dependencies (GitHub repos, subdirectories, single-plugin marketplace repos, or local paths) with version constraints.
-2. **`pack.lock`** — Deterministic lockfile pins every package to an exact commit and a content hash of its file tree, and records what each MCP server runs.
-3. **`sync`** — Downloads, caches, verifies the cache against the lock, and converts artifacts into per-harness staging directories.
-4. **Launchers** — `agentpack claude`, `agent`, `opencode`, `codex`, `grok`, `agy` each start the target agent with the staged bundle injected via that agent's native extension mechanism.
+## Files and verification limits
 
-### Cross-Harness Artifact Conversion
+Downloaded content and metadata live under `AGENTPACK_HOME`, normally `~/.local/share/agentpack` on Unix, or an XDG/Windows data location. Staging is per project. Previous generations are retained for active sessions and can consume disk space.
 
-agentpack does not just copy files — it **parses** each artifact and **re-renders** it in the target format:
+The manifest and lockfile are project files by default. Cursor and Antigravity launchers can add workspace links; `eject` deliberately writes staged content into a project. Some adapters copy or link user configuration and synchronize session or authentication state. Read the [staging guide](docs/src/concepts/staging.md) before treating this as an isolated environment.
 
-| Kind | Native form for | Converted to |
-|---|---|---|
-| **Skills** | all six agents | |
-| **Slash commands** | Claude Code, OpenCode, Cursor, Grok | Codex: skill; Antigravity: loaded as a skill |
-| **Subagents** | all six agents (Codex: custom agent file `agents/<name>.toml`) | Codex: also a skill |
-| **Rules** | Cursor, Antigravity; Codex, OpenCode (`AGENTS.md` and a skill) | Claude Code, Grok: skill |
-| **Hooks** | Claude Code, Codex, Cursor, Grok, Antigravity | OpenCode: generated plugin |
-| **MCP servers** | all six agents, each in its own MCP configuration file | |
-| **Language servers** | Claude Code, OpenCode, Grok | none (warning: no setting) |
+A full sync verifies hashed cache entries. An unchanged launch can take a metadata-based fast path; set `AGENTPACK_FULL_VERIFY=1` to hash cached content on every launch. Legacy lock entries without hashes are allowed with warnings unless `AGENTPACK_REQUIRE_VERIFIED=1` is set. `sync --verify-only` checks staged files. Hashes detect changes to locked content; they do not establish that its instructions or executable hooks are safe.
 
-Conversions are reported as warnings. Subagents a package keeps in subdirectories of `agents/` are staged at the top of `agents/` for agents that read only that level. See the [conversion guide](https://github.com/olegpustovit/agentpack/blob/dev/docs/src/harnesses/conversion.md) for the full matrix.
+MCP pinning depends on the launcher and recorded status. Complete dependency-tree locking is limited to supported npx cases. Other runners may pin only a top-level package or remain unpinned. See [MCP limits](docs/src/concepts/mcp.md#limits).
 
-## Manifest Example
+## Documentation and development
 
-```toml
-name = "my-project"
-version = "0.1.0"
+Use `agentpack --help` for the command list. The [documentation site](https://olegpustovit.github.io/agentpack), [manifest guide](docs/src/getting-started/first-manifest.md), [modes](docs/src/concepts/modes.md), [external environments](docs/src/concepts/environments.md) and [installation/reference](docs/README-reference.md) cover the detailed workflows, including the experimental proxy.
 
-[dependencies]
-"github.com/anthropics/skills/skills/canvas-design" = { branch = "main" }
-"github.com/anthropics/claude-plugins-official/plugins/hookify" = { branch = "main" }
-"github.com/my-org/internal-tools/skills/deploy" = { tag = "v2.1.0" }
-
-[modes.default]
-base = "all"
-disable = ["package-path:github.com/my-org/internal-tools/skills/deploy:commands/noise.md"]
-
-[modes.design]
-base = "all"
-disable = ["mcp:filesystem"]
-```
-
-## Key Features
-
-- **One manifest, six agents** — Write `agentpack.toml` once; launch Claude, Cursor, OpenCode, Codex, Grok, or Antigravity with the same skill set.
-- **Deterministic lockfile** — `pack.lock` pins every package, direct and transitive, to an exact commit and content hash, so resolution matches across machines and CI.
-- **Verified on every use** — The cache is re-hashed against the lock before anything is staged; a changed file stops `sync` and the launchers, and `sync --repair` re-fetches the pinned commit.
-- **MCP servers in the lock** — `npx`-style servers are resolved to an exact version; for `npx` servers every dependency is locked too, and the server starts from that tree with each tarball checked against the lock (`agentpack mcp-exec`). Other launchers are recorded with an explicit `pinned` / `unpinned` / `unpinnable` status.
-- **Whole marketplaces and language servers** — `agentpack add <marketplace>` adds every plugin a catalog lists (or one, with `--plugin`); a plugin's language servers are written for Claude Code, OpenCode and Grok.
-- **Transitive resolution** — A package can declare its own `agentpack.toml`; agentpack walks the full graph and resolves conflicts.
-- **Shared cache** — Each package is fetched once into `$AGENTPACK_HOME/cache/<cache_key>/`, keyed by repository, path and commit, and shared by every project on the machine.
-- **No workspace pollution** — Pack content stays in staging trees outside your repo, and never symlinks into your real `~/.claude` or `~/.cursor`.
-- **Resilient resolution** — Cached metadata and a `local/` mirror cut network calls; when the GitHub REST API is throttled, agentpack falls back to the Git protocol.
-- **Fast launch path** — When the manifest, lock, and `./.agents/` are unchanged, launchers verify staging and skip the full re-sync.
-- **Project-local modes** — `agentpack --mode <name>` enables or disables packages, individual files, and MCP servers per task.
-
-## Comparison
-
-| Feature | agentpack | Manual copy | Symlinks | Git submodules |
-|---|---|---|---|---|
-| Multi-agent support | Claude, Cursor, OpenCode, Codex, Grok, Antigravity | One at a time | One at a time | One at a time |
-| Version pinning | Semver, branch, tag, commit | None | None | Commit only |
-| Transitive deps | Yes | No | No | Manual |
-| Artifact conversion | Automatic per-harness | Manual | No | No |
-| Cache / dedup | Per commit, content-verified | None | N/A | Partial |
-| Workspace isolation | Full (staging dirs) | Files in repo | Symlinks in repo | Dirs in repo |
-| Lockfile | Deterministic | None | None | `.gitmodules` |
-
-## Commands
-
-| Command | Description |
-|---|---|
-| `init` | Create `agentpack.toml` and `pack.lock` in the current project |
-| `add <spec>` | Add a dependency, resolve, lock, and sync |
-| `remove <spec>` | Remove a dependency and re-sync |
-| `lock` | Resolve manifest and regenerate `pack.lock` (`--update` advances floating pins) |
-| `sync` | Download, cache, and rebuild staging for all harnesses |
-| `mode ...` | Create, inspect, edit, and manage project-local modes |
-| `mcp ...` | Add, remove, and list MCP servers |
-| `extra sync-claude` | Reconcile local skills between `.claude/skills` and `.agents/skills` |
-| `eject [AGENT...]` | Write staged content into the project for IDEs and agents started without agentpack (`--remove` undoes it) |
-| `claude` | Sync + launch Claude Code with `--plugin-dir` |
-| `agent` | Sync + launch Cursor Agent with staged `HOME` (alias: `cursor-agent`) |
-| `opencode` | Sync + launch OpenCode with `OPENCODE_CONFIG_DIR` |
-| `codex` | Sync + launch Codex with `CODEX_HOME` |
-| `grok` | Sync + launch Grok with `GROK_HOME` |
-| `agy` | Sync + launch Antigravity with the project as a workspace dir |
-| `completion <shell>` | Generate Bash, Zsh, Fish, or PowerShell completions |
-
-Redirected harness homes do not make resume history temporary: Codex history is shared with `~/.codex`, Grok sessions with `~/.grok/sessions`, and legacy temp-staging history is imported on upgrade without overwriting native files.
-
-## Documentation
-
-Full docs live at **<https://olegpustovit.github.io/agentpack>** — getting started, core concepts (manifest, lockfile, resolution, cache, staging, modes, MCP), a guide per harness, and a complete CLI / manifest / environment reference.
-
-The book source is in `docs/`. To preview changes locally, install [`mdbook`](https://rust-lang.github.io/mdBook/) and run:
-
-```bash
-mdbook serve docs   # http://localhost:3000
-```
-
-For internals, [AGENTS.md](AGENTS.md) is the contributor-facing source of truth: data layout, staging internals, per-harness mechanics, and the lockfile format.
-
-## Releasing (maintainers)
-
-Releases are automated by [GoReleaser](https://goreleaser.com): pushing a `v*` tag triggers
-`.github/workflows/release.yml`, which builds per-platform binaries (macOS arm64/x86_64, Linux
-x86_64/arm64, Windows x86_64), creates archives and checksums, publishes the GitHub Release, and
-pushes the generated Homebrew cask to [olegpustovit/homebrew-tap](https://github.com/olegpustovit/homebrew-tap).
-
-| Goal | Command |
-|---|---|
-| Bump minor + tag + push (→ CI release) | `make ship-minor` |
-| Bump patch + tag + push (→ CI release) | `make ship-patch` |
-| Bump version only (no release) | `make minor` / `make patch` |
-
-Requires a repo secret **`HOMEBREW_TAP_TOKEN`** (a PAT with write access to `olegpustovit/homebrew-tap`) so
-CI can push the cask across repos.
+Contributors should read [AGENTS.md](AGENTS.md). Run `make test` and `make lint` for Go checks. Preview the book with `mdbook serve docs`. [Evaluation notes](docs/src/guides/icse-evaluation.md) distinguish package integrity, native discovery and model behavior.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
-
-For the research artifact, see the [evaluation fixtures and demo storyboard](docs/src/guides/icse-evaluation.md) and [contract/evidence reference](docs/src/reference/contracts.md). Native discovery evidence is scoped; package integrity, generated configuration, and model behavior are separate claims.
+[MIT](LICENSE). Experimental proxy work credits [raine/claude-code-proxy](https://github.com/raine/claude-code-proxy).

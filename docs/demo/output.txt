@@ -1,0 +1,24 @@
+$ agentpack --version
+agentpack 0.7.6
+
+$ agentpack init
+Initializing agentpack…
+Created /demo/project/agentpack.toml and /demo/project/pack.lock
+
+$ agentpack add ./local-skill --no-sync
+Adding: ./local-skill
+Recorded local-skill in agentpack.toml and refreshed pack.lock.
+Skipping sync (--no-sync).
+
+$ agentpack sync
+Sync finished — 1 skill(s), 0 plugin(s), 1 cache index entr(ies). One merged bundle: agentpack-bundle.
+
+$ agentpack sync --verify-only
+Staging checks passed
+
+$ check locked content hash
+content_hash = 'sha256-tree-v1:f22e8b2248d9345b1d4956bea1a62527bea7732dc3f4831be318eec24bc6d57a'
+
+$ check staged local skill
+PASS: six staged skill files contain the fixture instruction.
+PASS: Claude, Cursor, OpenCode, Codex, Grok and Antigravity paths exist.
