@@ -240,8 +240,38 @@ func renderMCPServer(server mcp.Server) string {
 	if server.Disabled != nil {
 		fields = append(fields, "disabled = "+strconv.FormatBool(*server.Disabled))
 	}
+	if oauth := renderMCPOAuth(server.OAuth); oauth != "" {
+		fields = append(fields, "oauth = "+oauth)
+	}
 	if len(fields) == 0 {
 		return "{}"
+	}
+	return "{ " + strings.Join(fields, ", ") + " }"
+}
+
+// renderMCPOAuth keeps a server's OAuth client settings when the manifest is rewritten.
+func renderMCPOAuth(oauth *mcp.OAuth) string {
+	if oauth == nil {
+		return ""
+	}
+	fields := make([]string, 0, 5)
+	if oauth.ClientID != "" {
+		fields = append(fields, "client_id = "+quoteString(oauth.ClientID))
+	}
+	if oauth.ClientSecret != "" {
+		fields = append(fields, "client_secret = "+quoteString(oauth.ClientSecret))
+	}
+	if oauth.CallbackPort != 0 {
+		fields = append(fields, "callback_port = "+strconv.Itoa(oauth.CallbackPort))
+	}
+	if len(oauth.Scopes) != 0 {
+		fields = append(fields, "scopes = "+renderStringArray(oauth.Scopes))
+	}
+	if oauth.MetadataURL != "" {
+		fields = append(fields, "metadata_url = "+quoteString(oauth.MetadataURL))
+	}
+	if len(fields) == 0 {
+		return ""
 	}
 	return "{ " + strings.Join(fields, ", ") + " }"
 }

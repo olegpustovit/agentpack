@@ -201,3 +201,21 @@ func TestAddMCPServerWritesRemoteFields(t *testing.T) {
 		t.Fatalf("headers = %v", got.Headers)
 	}
 }
+
+func TestAddMCPServerKeepsOAuth(t *testing.T) {
+	root := t.TempDir()
+	writeManifest(t, root, "")
+	url := "https://example.com/mcp"
+	oauth := &mcp.OAuth{ClientID: "client", CallbackPort: 8765, Scopes: []string{"read", "write"}, MetadataURL: "https://example.com/.well-known/oauth"}
+	if err := AddMCPServer(root, "remote", mcp.Server{URL: &url, OAuth: oauth}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := loaded.MCP.Servers["remote"].OAuth
+	if got == nil || got.ClientID != "client" || got.CallbackPort != 8765 || len(got.Scopes) != 2 || got.MetadataURL != oauth.MetadataURL {
+		t.Fatalf("oauth = %+v", got)
+	}
+}
