@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -325,34 +326,33 @@ func effectiveGitRef(constraints ModuleConstraints, tags TagLister, owner, repo 
 	return constraints.PickGitRef(tags, owner, repo, refresh)
 }
 
+// versionTag matches tag-like refs such as v0.2.0 or 1.4; names like dev or
+// main are treated as branches.
+var versionTag = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+)+([-+].*)?$`)
+
 // previousSatisfies reports whether a locked commit still answers the
-// manifest's constraint. A branch keeps its locked commit until refreshed, but
-// a tag or version that now names another commit (the manifest moved from
-// v0.1.0 to v0.2.0) must be resolved again. When tags cannot be listed the
-// locked commit is kept, so an offline lock stays reproducible.
+// manifest's version or version-like tag. A version that now names another commit (the
+// manifest moved from v0.1.0 to v0.2.0) is resolved again; branches and other
+// refs keep their locked commit until refreshed, without a network request.
+// When tags cannot be listed the locked commit is kept, so an offline lock
+// stays reproducible.
 func previousSatisfies(constraints ModuleConstraints, tags TagLister, owner, repo, commit string) bool {
-	if len(constraints.Semver) == 0 && constraints.Tag == "" {
-		return true
-	}
-	if tags == nil {
+	if (len(constraints.Semver) == 0 && !versionTag.MatchString(constraints.Tag)) || tags == nil {
 		return true
 	}
 	listed, err := tags.ListTags(owner, repo, false)
 	if err != nil {
 		return true
 	}
-	name := constraints.Tag
-	if len(constraints.Semver) != 0 {
-		if name, err = constraints.PickGitRef(tags, owner, repo, false); err != nil {
-			return true
-		}
+	name, err := constraints.PickGitRef(tags, owner, repo, false)
+	if err != nil {
+		return true
 	}
 	for _, tag := range listed {
 		if tag.Name == name {
 			return strings.EqualFold(tag.SHA, commit)
 		}
 	}
-	// Not a tag: a branch or other ref, which floats until refreshed.
 	return true
 }
 

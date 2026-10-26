@@ -194,7 +194,7 @@ func TestResolverReresolvesWhenTagSelectorMoves(t *testing.T) {
 	for _, test := range []struct {
 		name, ref, want string
 	}{
-		{"same tag keeps lock", "v0.1.0", oldCommit},
+		{"same version keeps lock", "v0.1.0", oldCommit},
 		{"new tag re-resolves", "v0.2.0", "v0.2.0"},
 		{"semver re-resolves", "^0.2.0", "v0.2.0"},
 		{"branch keeps lock", "dev", oldCommit},
