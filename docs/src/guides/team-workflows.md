@@ -50,7 +50,7 @@ Keep team-specific skills and rules in a GitHub repo, tag releases, and depend o
 "github.com/acme/team-agent-config" = "^1.0"
 ```
 
-For a **private** repo, every machine and CI runner needs `GITHUB_TOKEN` (or `GH_TOKEN`) with read access. Projects stay aligned with `agentpack lock && agentpack sync`.
+For a **private** repo, every machine and CI runner needs read access: `GITHUB_TOKEN` (or `GH_TOKEN`), or, on a developer machine, a logged-in GitHub CLI (`gh auth login`), whose token agentpack picks up automatically. Projects stay aligned with `agentpack lock && agentpack sync`.
 
 ## A committed project overlay (`./.agents/`)
 

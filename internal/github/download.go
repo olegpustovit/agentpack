@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,6 +36,7 @@ type fetchResult struct {
 	data        []byte
 	disposition fetchDisposition
 	reason      string
+	denied      bool
 	err         error
 }
 
@@ -54,6 +56,7 @@ func DownloadTarball(ctx context.Context, client *http.Client, owner, repo, sha 
 		sources = append(sources, source{name: "codeload-auth", token: token})
 	}
 	var attempts []string
+	denied := true
 	for _, source := range sources {
 		result := fetchCodeloadWithRetry(ctx, client, owner, repo, sha, source.token)
 		if result.disposition == fetchSuccess {
@@ -63,6 +66,7 @@ func DownloadTarball(ctx context.Context, client *http.Client, owner, repo, sha 
 			return nil, result.err
 		}
 		attempts = append(attempts, source.name+": "+result.reason)
+		denied = denied && result.denied
 	}
 	data, err := fetchTarballWithGit(ctx, owner, repo, sha)
 	if err == nil {
@@ -73,7 +77,11 @@ func DownloadTarball(ctx context.Context, client *http.Client, owner, repo, sha 
 	if len(short) > 8 {
 		short = short[:8]
 	}
-	return nil, fmt.Errorf("all tarball sources failed for %s/%s@%s:\n  %s", owner, repo, short, strings.Join(attempts, "\n  "))
+	message := fmt.Sprintf("all tarball sources failed for %s/%s@%s:\n  %s", owner, repo, short, strings.Join(attempts, "\n  "))
+	if denied {
+		message += "\n  hint: " + accessHint(owner, repo, githubToken() != "")
+	}
+	return nil, errors.New(message)
 }
 
 func fetchCodeloadWithRetry(ctx context.Context, client *http.Client, owner, repo, sha, token string) fetchResult {
@@ -116,7 +124,7 @@ func fetchCodeload(ctx context.Context, client *http.Client, owner, repo, sha, t
 		}
 		return fetchResult{data: data, disposition: fetchSuccess}
 	case response.StatusCode == 401 || response.StatusCode == 403 || response.StatusCode == 404:
-		return fetchResult{disposition: fetchPermanent, reason: response.Status}
+		return fetchResult{disposition: fetchPermanent, reason: response.Status, denied: true}
 	case response.StatusCode == 429 || response.StatusCode >= 500:
 		return fetchResult{disposition: fetchTransient, reason: response.Status}
 	default:
@@ -133,8 +141,14 @@ func fetchTarballWithGit(ctx context.Context, owner, repo, sha string) ([]byte, 
 		return nil, err
 	}
 	defer os.RemoveAll(checkout)
-	remote := "https://github.com/" + owner + "/" + repo + ".git"
+	remote := gitRemoteURL(owner, repo)
 	repository, err := git.PlainCloneContext(ctx, checkout, false, &git.CloneOptions{URL: remote, NoCheckout: true})
+	if err != nil {
+		if token := githubToken(); token != "" {
+			_ = os.RemoveAll(checkout)
+			repository, err = git.PlainCloneContext(ctx, checkout, false, &git.CloneOptions{URL: remote, NoCheckout: true, Auth: gitAuth(token)})
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("git clone: %w", err)
 	}

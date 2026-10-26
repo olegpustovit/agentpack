@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -16,7 +15,14 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 )
 
-var apiRoot = "https://api.github.com"
+var (
+	apiRoot       = "https://api.github.com"
+	gitRemoteRoot = "https://github.com"
+)
+
+func gitRemoteURL(owner, repo string) string {
+	return gitRemoteRoot + "/" + owner + "/" + repo + ".git"
+}
 
 func ResolveRef(ctx context.Context, client *http.Client, owner, repo, gitRef string, forceRefresh bool) (string, error) {
 	if isFullCommit(gitRef) {
@@ -61,7 +67,7 @@ func ResolveRef(ctx context.Context, client *http.Client, owner, repo, gitRef st
 		return cached.SHA, nil
 	}
 	if restErr != nil {
-		return "", restErr
+		return "", withAccessHint(restErr, owner, repo)
 	}
 	return "", fmt.Errorf("unexpected sha length: %s", sha)
 }
@@ -101,7 +107,7 @@ func ListTags(ctx context.Context, client *http.Client, owner, repo string, forc
 	if found {
 		return append([]Tag(nil), cached.Tags...), nil
 	}
-	return nil, restErr
+	return nil, withAccessHint(restErr, owner, repo)
 }
 
 func githubJSON(ctx context.Context, client *http.Client, endpoint string, destination any) error {
@@ -123,7 +129,7 @@ func githubJSON(ctx context.Context, client *http.Client, endpoint string, desti
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 500))
-		return fmt.Errorf("GitHub API: GET %s -> %s: %s", request.URL, response.Status, body)
+		return &apiStatusError{status: response.StatusCode, message: fmt.Sprintf("GitHub API: GET %s -> %s: %s", request.URL, response.Status, body)}
 	}
 	if err := json.NewDecoder(response.Body).Decode(destination); err != nil {
 		return fmt.Errorf("GitHub API JSON: %w", err)
@@ -150,9 +156,14 @@ func listTagsWithGit(ctx context.Context, owner, repo string) ([]Tag, error) {
 func gitLSRemote(ctx context.Context, owner, repo, _ string) (string, error) {
 	remote := git.NewRemote(memory.NewStorage(), &config.RemoteConfig{
 		Name: "origin",
-		URLs: []string{"https://github.com/" + owner + "/" + repo + ".git"},
+		URLs: []string{gitRemoteURL(owner, repo)},
 	})
 	references, err := remote.ListContext(ctx, &git.ListOptions{PeelingOption: git.AppendPeeled})
+	if err != nil {
+		if token := githubToken(); token != "" {
+			references, err = remote.ListContext(ctx, &git.ListOptions{PeelingOption: git.AppendPeeled, Auth: gitAuth(token)})
+		}
+	}
 	if err != nil {
 		return "", fmt.Errorf("git protocol ls-refs: %w", err)
 	}
@@ -232,11 +243,4 @@ func isFullCommit(value string) bool {
 		}
 	}
 	return true
-}
-
-func githubToken() string {
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		return token
-	}
-	return os.Getenv("GH_TOKEN")
 }

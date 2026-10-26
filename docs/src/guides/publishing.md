@@ -82,7 +82,7 @@ Run `agentpack sync` and inspect the staged output (the [harness guides](../harn
 
 ## Private repositories and rate limits
 
-agentpack reads `GITHUB_TOKEN` (or `GH_TOKEN`) when present and sends it as a bearer token for ref/tag lookups and authenticated downloads. Set one to access private repos, and to avoid anonymous API rate limits on heavy resolution:
+agentpack reads `GITHUB_TOKEN` (or `GH_TOKEN`) when present and sends it as a bearer token for ref/tag lookups and authenticated downloads. Without either, it uses the token of an authenticated GitHub CLI (`gh auth login`, then `gh auth token`), so a private repository you can read just works on a machine where `gh` is logged in. Set a token explicitly on CI, and to avoid anonymous API rate limits on heavy resolution:
 
 ```sh
 export GITHUB_TOKEN="ghp_..."

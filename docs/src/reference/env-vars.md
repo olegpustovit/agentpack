@@ -93,7 +93,9 @@ WebSocket read/write idle timeout for proxy upstream connections.
 
 ### `GITHUB_TOKEN` / `GH_TOKEN`
 
-**Default:** unset. When set, agentpack sends it as a bearer token for GitHub ref/tag lookups and authenticated downloads. Set one to resolve private repositories or to avoid anonymous API rate limits during heavy resolution. `GITHUB_TOKEN` takes precedence over `GH_TOKEN`.
+**Default:** unset. When set, agentpack sends it as a bearer token for GitHub ref/tag lookups and authenticated downloads, and as HTTP basic auth (user `x-access-token`) for the Git-protocol fallback. Set one to resolve private repositories or to avoid anonymous API rate limits during heavy resolution. `GITHUB_TOKEN` takes precedence over `GH_TOKEN`.
+
+When neither is set and the [GitHub CLI](https://cli.github.com/) is installed and logged in, agentpack uses the token printed by `gh auth token --hostname github.com` (asked once per process, 5 second limit; any failure means anonymous access). So after `gh auth login`, private repositories you can read resolve without further setup.
 
 ## Binary paths
 
@@ -125,5 +127,5 @@ Override the path to each harness's executable when it isn't on `PATH` or you ne
 | `AGENTPACK_PROXY_UPSTREAM_URL` | auth endpoint | Override proxy upstream URL |
 | `AGENTPACK_PROXY_AUTH_JSON` | auto | Override proxy auth JSON |
 | `AGENTPACK_PROXY_BIG_MODEL` / `MIDDLE_MODEL` / `SMALL_MODEL` | built in | Override proxy model mapping |
-| `GITHUB_TOKEN` / `GH_TOKEN` | unset | GitHub auth for private repos and rate limits |
+| `GITHUB_TOKEN` / `GH_TOKEN` | unset | GitHub auth for private repos and rate limits; falls back to `gh auth token` |
 | `CLAUDE_CODE_PATH` … `AGY_PATH` | — | Override harness binary paths |
