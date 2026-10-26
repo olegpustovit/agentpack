@@ -5,12 +5,12 @@ All notable changes to `agentpack` are documented here. The format is based on
 "Pre-release" note in `AGENTS.md` — breaking changes may land between versions without a migration
 window.
 
-## Unreleased
+## [0.7.7] - 2026-10-26
 
 ### Added
 
 - Private GitHub repositories resolve through the GitHub CLI. Without `GITHUB_TOKEN` or `GH_TOKEN`, agentpack asks `gh auth token --hostname github.com` (once per process, only if `gh` is installed; a failure means anonymous access) and uses the token for API requests, authenticated downloads and the Git-protocol fallback, which now retries with basic auth after an anonymous attempt. When a repository cannot be read, the error says it may be private and suggests `gh auth login` (or, with a token, that the account may lack access).
-- `agentpack mcp add NAME --url URL [--type TYPE] [--header KEY=VALUE...]` defines a remote MCP server from the command line (`--type` defaults to `http`). Exactly one of `--command` or `--url` is required. The manifest now keeps `headers` and `cwd` when it rewrites a server.
+- `agentpack mcp add NAME --url URL [--type TYPE] [--header KEY=VALUE...]` defines a remote MCP server from the command line (`--type` defaults to `http`). Exactly one of `--command` or `--url` is required. The manifest now keeps `headers`, `cwd` and OAuth client settings when it rewrites a server.
 
 ## [0.7.2] - 2026-10-17
 
