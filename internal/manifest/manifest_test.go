@@ -180,3 +180,24 @@ func TestModeReplacementLeavesNonModeSectionsByteExact(t *testing.T) {
 		t.Fatalf("mode replacement failed:\n%s", raw)
 	}
 }
+
+func TestAddMCPServerWritesRemoteFields(t *testing.T) {
+	root := t.TempDir()
+	writeManifest(t, root, "")
+	serverType, url, cwd := "sse", "https://example.com/mcp", "tools"
+	server := mcp.Server{Type: &serverType, URL: &url, Headers: map[string]string{"X-Api-Key": "k=1", "Authorization": "Bearer ${TOKEN}"}, Cwd: &cwd}
+	if err := AddMCPServer(root, "remote", server); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := loaded.MCP.Servers["remote"]
+	if got.Type == nil || *got.Type != "sse" || got.URL == nil || *got.URL != url || got.Cwd == nil || *got.Cwd != cwd {
+		t.Fatalf("server = %+v", got)
+	}
+	if got.Headers["Authorization"] != "Bearer ${TOKEN}" || got.Headers["X-Api-Key"] != "k=1" || len(got.Headers) != 2 {
+		t.Fatalf("headers = %v", got.Headers)
+	}
+}

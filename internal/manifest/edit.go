@@ -201,6 +201,19 @@ func replaceSections(data []byte, prefix []string, replacement []byte) ([]byte, 
 	return result, nil
 }
 
+func renderStringMap(values map[string]string) string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	pairs := make([]string, 0, len(keys))
+	for _, key := range keys {
+		pairs = append(pairs, quoteKeySegment(key)+" = "+quoteString(values[key]))
+	}
+	return "{ " + strings.Join(pairs, ", ") + " }"
+}
+
 func renderMCPServer(server mcp.Server) string {
 	fields := make([]string, 0, 6)
 	if server.Type != nil {
@@ -213,19 +226,16 @@ func renderMCPServer(server mcp.Server) string {
 		fields = append(fields, "args = "+renderStringArray(server.Args))
 	}
 	if len(server.Env) != 0 {
-		keys := make([]string, 0, len(server.Env))
-		for key := range server.Env {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		values := make([]string, 0, len(keys))
-		for _, key := range keys {
-			values = append(values, quoteKeySegment(key)+" = "+quoteString(server.Env[key]))
-		}
-		fields = append(fields, "env = { "+strings.Join(values, ", ")+" }")
+		fields = append(fields, "env = "+renderStringMap(server.Env))
 	}
 	if server.URL != nil {
 		fields = append(fields, "url = "+quoteString(*server.URL))
+	}
+	if len(server.Headers) != 0 {
+		fields = append(fields, "headers = "+renderStringMap(server.Headers))
+	}
+	if server.Cwd != nil {
+		fields = append(fields, "cwd = "+quoteString(*server.Cwd))
 	}
 	if server.Disabled != nil {
 		fields = append(fields, "disabled = "+strconv.FormatBool(*server.Disabled))

@@ -210,9 +210,13 @@ Manage `[mcp.servers]` in the manifest. `add`/`remove` update the server records
 ```sh
 agentpack mcp add retrieval --command uvx --args mcp-retrieval --env API_KEY=sk-...
 agentpack mcp add playwright --command npx --args @playwright/mcp@latest --allow-unpinned
+agentpack mcp add research-foundry --url https://researcher.microapps.space/mcp
+agentpack mcp add internal --url https://mcp.example.com/mcp --type sse --header "Authorization=Bearer ${TOKEN}"
 agentpack mcp remove retrieval
 agentpack mcp list      # all servers with provenance and lock status
 ```
+
+`add` takes either `--command COMMAND [--args ARGS...] [--env KEY=VALUE...]` for a local server or `--url URL [--type TYPE] [--header KEY=VALUE...]` for a remote one (`--type` defaults to `http`); giving both, or neither, is an error. Headers may hold credentials and are never written to `pack.lock`.
 
 `add` resolves an npm server to an exact version and fails if the registry is unreachable; `--allow-unpinned` records it as unpinned instead. See [MCP Servers](../concepts/mcp.md#what-packlock-records).
 

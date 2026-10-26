@@ -24,21 +24,11 @@ func (runner Runner) runMCP(ctx context.Context, root string, arguments []string
 		}
 		name := args[0]
 		args = args[1:]
-		command, remaining, found, err := takeFlag(args, "--command")
+		server, noSync, allowUnpinned, err := parseMCPAdd(args)
 		if err != nil {
 			return err
 		}
-		if !found {
-			return fmt.Errorf("mcp add requires --command")
-		}
-		args = remaining
-		args, noSync := takeBool(args, "--no-sync")
-		args, allowUnpinned := takeBool(args, "--allow-unpinned")
-		serverArgs, environment, err := parseMCPLists(args)
-		if err != nil {
-			return err
-		}
-		if err := manifest.AddMCPServer(root, name, mcp.Server{Command: &command, Args: serverArgs, Env: environment}); err != nil {
+		if err := manifest.AddMCPServer(root, name, server); err != nil {
 			return err
 		}
 		if !quiet {
@@ -110,9 +100,56 @@ func (runner Runner) runMCP(ctx context.Context, root string, arguments []string
 	}
 }
 
-func parseMCPLists(arguments []string) ([]string, map[string]string, error) {
+// parseMCPAdd reads the flags of `mcp add NAME`: a local server (--command,
+// --args, --env) or a remote one (--url, --type, --header), never both.
+func parseMCPAdd(args []string) (server mcp.Server, noSync, allowUnpinned bool, err error) {
+	command, args, hasCommand, err := takeFlag(args, "--command")
+	if err != nil {
+		return server, false, false, err
+	}
+	url, args, hasURL, err := takeFlag(args, "--url")
+	if err != nil {
+		return server, false, false, err
+	}
+	serverType, args, hasType, err := takeFlag(args, "--type")
+	if err != nil {
+		return server, false, false, err
+	}
+	args, noSync = takeBool(args, "--no-sync")
+	args, allowUnpinned = takeBool(args, "--allow-unpinned")
+	switch {
+	case hasCommand == hasURL:
+		return server, false, false, fmt.Errorf("mcp add requires exactly one of --command or --url")
+	case hasURL && url == "":
+		return server, false, false, fmt.Errorf("--url requires a non-empty value")
+	case hasCommand && command == "":
+		return server, false, false, fmt.Errorf("--command requires a non-empty value")
+	case hasCommand && hasType:
+		return server, false, false, fmt.Errorf("--type applies to --url servers only")
+	}
+	serverArgs, environment, headers, err := parseMCPLists(args)
+	if err != nil {
+		return server, false, false, err
+	}
+	if hasURL {
+		if len(serverArgs) != 0 || len(environment) != 0 {
+			return server, false, false, fmt.Errorf("--args and --env apply to --command servers only")
+		}
+		if !hasType {
+			serverType = "http"
+		}
+		return mcp.Server{Type: &serverType, URL: &url, Headers: headers}, noSync, allowUnpinned, nil
+	}
+	if len(headers) != 0 {
+		return server, false, false, fmt.Errorf("--header applies to --url servers only")
+	}
+	return mcp.Server{Command: &command, Args: serverArgs, Env: environment}, noSync, allowUnpinned, nil
+}
+
+func parseMCPLists(arguments []string) ([]string, map[string]string, map[string]string, error) {
 	var commandArgs []string
 	environment := make(map[string]string)
+	headers := make(map[string]string)
 	section := ""
 	for index := 0; index < len(arguments); index++ {
 		switch arguments[index] {
@@ -120,23 +157,29 @@ func parseMCPLists(arguments []string) ([]string, map[string]string, error) {
 			section = "args"
 		case "--env":
 			section = "env"
+		case "--header":
+			section = "header"
 		default:
 			if section == "args" {
 				commandArgs = append(commandArgs, arguments[index])
 				continue
 			}
-			if section == "env" {
+			if section == "env" || section == "header" {
 				key, value, found := strings.Cut(arguments[index], "=")
-				if !found {
-					return nil, nil, fmt.Errorf("expected KEY=VALUE, got %q", arguments[index])
+				if !found || key == "" {
+					return nil, nil, nil, fmt.Errorf("expected KEY=VALUE, got %q", arguments[index])
 				}
-				environment[key] = value
+				if section == "env" {
+					environment[key] = value
+				} else {
+					headers[key] = value
+				}
 				continue
 			}
-			return nil, nil, fmt.Errorf("unexpected argument %q", arguments[index])
+			return nil, nil, nil, fmt.Errorf("unexpected argument %q", arguments[index])
 		}
 	}
-	return commandArgs, environment, nil
+	return commandArgs, environment, headers, nil
 }
 
 // mcpPinLabel describes what pack.lock records for a server as it is defined

@@ -151,7 +151,10 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 
 	mcp := &cobra.Command{Use: "mcp", Short: "Manage MCP servers"}
 	mcpAdd := leaf("add NAME", "Add or replace an MCP server")
-	value(mcpAdd, "command", "COMMAND", "server executable")
+	value(mcpAdd, "command", "COMMAND", "server executable (local server)")
+	value(mcpAdd, "url", "URL", "remote server URL (instead of --command)")
+	value(mcpAdd, "type", "TYPE", "remote transport, such as http or sse (default http)")
+	value(mcpAdd, "header", "KEY=VALUE...", "header sent to the remote server")
 	value(mcpAdd, "args", "ARGS...", "arguments passed to the server")
 	value(mcpAdd, "env", "KEY=VALUE...", "environment passed to the server")
 	flag(mcpAdd, "no-sync", "", "record the change without staging")

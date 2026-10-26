@@ -22,15 +22,31 @@ env     = { API_KEY = "sk-..." }
 | `command` | string | Executable to launch the server |
 | `args` | string array | Arguments passed to the command |
 | `env` | string map | Environment variables for the server process |
+| `url` | string | Remote server URL, instead of `command` |
+| `type` | string | Remote transport, such as `http` or `sse` |
+| `headers` | string map | Headers sent to a remote server; may hold credentials, never written to `pack.lock` |
+| `cwd` | string | Directory a local server is started in |
 | `disabled` | bool | Optional; skip this server when set |
+
+A server is either local (`command`) or remote (`url`). A remote server, with the Research Foundry service as an example:
+
+```toml
+[mcp.servers.research-foundry]
+type = "http"
+url = "https://researcher.microapps.space/mcp"
+```
 
 ## Managing servers from the CLI
 
 ```sh
 agentpack mcp add retrieval --command uvx --args mcp-retrieval --env API_KEY=sk-...
+agentpack mcp add research-foundry --url https://researcher.microapps.space/mcp   # remote; --type defaults to http
+agentpack mcp add internal --url https://mcp.example.com/mcp --type sse --header "Authorization=Bearer ${TOKEN}"
 agentpack mcp remove retrieval
 agentpack mcp list      # every server, with provenance (manifest / plugin / .agents) and lock status
 ```
+
+Give `add` exactly one of `--command` (with `--args` and `--env`) or `--url` (with `--type`, default `http`, and repeatable `--header KEY=VALUE`). A remote server is recorded in `pack.lock` as `unpinnable`: the host decides what runs.
 
 `add` and `remove` edit `[mcp.servers]`, update the server records in `pack.lock`, and then sync, unless you pass `--no-sync`.
 

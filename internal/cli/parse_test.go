@@ -68,7 +68,7 @@ func TestParseCursorAgentAliasAndMissingValue(t *testing.T) {
 }
 
 func TestParseMCPListsPreservesCommandArgumentOrder(t *testing.T) {
-	arguments, environment, err := parseMCPLists([]string{"--args", "-y", "server", "--env", "TOKEN=abc", "EMPTY="})
+	arguments, environment, _, err := parseMCPLists([]string{"--args", "-y", "server", "--env", "TOKEN=abc", "EMPTY="})
 	if err != nil {
 		t.Fatal(err)
 	}
