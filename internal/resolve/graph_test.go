@@ -181,3 +181,35 @@ func writeResolveFile(t *testing.T, path, body string) {
 		t.Fatal(err)
 	}
 }
+
+type fakeTags []Tag
+
+func (tags fakeTags) ListTags(string, string, bool) ([]Tag, error) { return tags, nil }
+
+func TestResolverReresolvesWhenTagSelectorMoves(t *testing.T) {
+	module := "github.com/acme/plugin"
+	oldCommit, newCommit := strings.Repeat("c", 40), strings.Repeat("d", 40)
+	tags := fakeTags{{Name: "v0.1.0", SHA: oldCommit}, {Name: "v0.2.0", SHA: newCommit}}
+	previous := &lockfile.PackLock{Packages: []lockfile.Package{{Module: module, Commit: oldCommit}}}
+	for _, test := range []struct {
+		name, ref, want string
+	}{
+		{"same tag keeps lock", "v0.1.0", oldCommit},
+		{"new tag re-resolves", "v0.2.0", "v0.2.0"},
+		{"semver re-resolves", "^0.2.0", "v0.2.0"},
+		{"branch keeps lock", "dev", oldCommit},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("AGENTPACK_HOME", t.TempDir())
+			project := &manifest.Manifest{Dependencies: map[string]manifest.Dependency{module: shortDependency(test.ref)}}
+			fake := fakeMaterializer{}
+			lock, err := (Resolver{Materialize: fake.materialize, Tags: tags}).Resolve(context.Background(), t.TempDir(), project, ResolveOptions{Previous: previous})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(lock.Packages) != 1 || lock.Packages[0].Commit != test.want {
+				t.Fatalf("commit = %q, want %q", lock.Packages[0].Commit, test.want)
+			}
+		})
+	}
+}

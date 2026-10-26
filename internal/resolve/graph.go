@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/cache"
 	githubsource "github.com/olegpustovit/agentpack/internal/github"
@@ -316,12 +317,43 @@ func effectiveGitRef(constraints ModuleConstraints, tags TagLister, owner, repo 
 	}
 	if !refresh && previous != nil {
 		for _, pkg := range previous.Packages {
-			if pkg.Module == string(module) {
+			if pkg.Module == string(module) && previousSatisfies(constraints, tags, owner, repo, pkg.Commit) {
 				return pkg.Commit, nil
 			}
 		}
 	}
 	return constraints.PickGitRef(tags, owner, repo, refresh)
+}
+
+// previousSatisfies reports whether a locked commit still answers the
+// manifest's constraint. A branch keeps its locked commit until refreshed, but
+// a tag or version that now names another commit (the manifest moved from
+// v0.1.0 to v0.2.0) must be resolved again. When tags cannot be listed the
+// locked commit is kept, so an offline lock stays reproducible.
+func previousSatisfies(constraints ModuleConstraints, tags TagLister, owner, repo, commit string) bool {
+	if len(constraints.Semver) == 0 && constraints.Tag == "" {
+		return true
+	}
+	if tags == nil {
+		return true
+	}
+	listed, err := tags.ListTags(owner, repo, false)
+	if err != nil {
+		return true
+	}
+	name := constraints.Tag
+	if len(constraints.Semver) != 0 {
+		if name, err = constraints.PickGitRef(tags, owner, repo, false); err != nil {
+			return true
+		}
+	}
+	for _, tag := range listed {
+		if tag.Name == name {
+			return strings.EqualFold(tag.SHA, commit)
+		}
+	}
+	// Not a tag: a branch or other ref, which floats until refreshed.
+	return true
 }
 
 func sortedDependencyKeys(dependencies map[string]manifest.Dependency) []string {

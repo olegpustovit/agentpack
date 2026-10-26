@@ -5,6 +5,12 @@ All notable changes to `agentpack` are documented here. The format is based on
 "Pre-release" note in `AGENTS.md` — breaking changes may land between versions without a migration
 window.
 
+## [0.7.9] - 2026-10-26
+
+### Fixed
+
+- Changing a dependency's tag or version in `agentpack.toml` (for example `"v0.1.0"` → `"v0.2.0"`) now moves its pin on the next `agentpack lock`. The lock used to keep the previously locked commit for any non-commit constraint. A locked commit is now kept only while it still answers the constraint: the same tag, a version range it satisfies, or a branch (which floats until `--refresh`). When tags cannot be listed, the locked commit is kept.
+
 ## [0.7.8] - 2026-10-26
 
 ### Fixed
