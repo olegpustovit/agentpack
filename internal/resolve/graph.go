@@ -172,13 +172,24 @@ func (resolver Resolver) Resolve(ctx context.Context, projectRoot string, projec
 				return lockfile.PackLock{}, err
 			}
 			current := merged[child]
+			floating := current.Exact == ""
 			if err := current.Merge(incoming); err != nil {
-				return lockfile.PackLock{}, err
+				return lockfile.PackLock{}, fmt.Errorf("%s (required by %s): %w", child, module, err)
 			}
 			merged[child] = current
 			if pinned, done := resolved[child]; done {
 				if current.Exact != "" && current.Exact != pinned.Commit {
-					return lockfile.PackLock{}, fmt.Errorf("transitive dependency %q must be at commit %s, but is already pinned at %s", child, current.Exact, pinned.Commit)
+					if !floating {
+						return lockfile.PackLock{}, fmt.Errorf("transitive dependency %q must be at commit %s (required by %s), but is already pinned at %s", child, current.Exact, module, pinned.Commit)
+					}
+					// The module was resolved from a floating ref before this
+					// exact pin was seen; the merged constraint now names the
+					// commit, so resolve it again there.
+					if options.Progress != nil {
+						options.Progress(fmt.Sprintf("Pinning %s at %s required by %s", child, shortCommit(current.Exact), module))
+					}
+					delete(resolved, child)
+					queue = append(queue, child)
 				}
 				continue
 			}
@@ -342,4 +353,11 @@ func (lister githubTagLister) ListTags(owner, repo string, forceRefresh bool) ([
 		result[index] = Tag{Name: tag.Name, SHA: tag.SHA}
 	}
 	return result, nil
+}
+
+func shortCommit(commit string) string {
+	if len(commit) > 12 {
+		return commit[:12]
+	}
+	return commit
 }

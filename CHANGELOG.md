@@ -5,6 +5,12 @@ All notable changes to `agentpack` are documented here. The format is based on
 "Pre-release" note in `AGENTS.md` — breaking changes may land between versions without a migration
 window.
 
+## [0.7.8] - 2026-10-26
+
+### Fixed
+
+- A fresh `agentpack lock` no longer fails with "transitive dependency … must be at commit …, but is already pinned" when a direct dependency on a branch (for example `"dev"` or `"main"`) is resolved before a package that pins the same module to an exact commit. The merged constraint already named that commit; the module is now resolved again at it, with a progress line naming the package that required the pin. Two different exact pins remain an error, which now names the requiring package.
+
 ## [0.7.7] - 2026-10-26
 
 ### Added

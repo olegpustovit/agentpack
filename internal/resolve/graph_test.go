@@ -122,6 +122,33 @@ func shortDependency(value string) manifest.Dependency {
 	return manifest.Dependency{Short: &value}
 }
 
+func TestResolverRepinsFloatingModuleWhenExactPinArrivesLater(t *testing.T) {
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	shaRoot, shaOld, shaNew := strings.Repeat("a", 40), strings.Repeat("c", 40), strings.Repeat("d", 40)
+	floating, root := "github.com/acme/b", "github.com/acme/root"
+	project := &manifest.Manifest{Dependencies: map[string]manifest.Dependency{
+		floating: shortDependency("dev"),
+		root:     shortDependency(shaRoot),
+	}}
+	previous := &lockfile.PackLock{Packages: []lockfile.Package{{Module: floating, Commit: shaOld}}}
+	fake := fakeMaterializer{nested: map[string]string{
+		root: "[dependencies]\n\"" + floating + "\" = { commit = \"" + shaNew + "\" }\n",
+	}}
+	var progress []string
+	lock, err := (Resolver{Materialize: fake.materialize}).Resolve(context.Background(), t.TempDir(), project, ResolveOptions{Previous: previous, Progress: func(message string) {
+		progress = append(progress, message)
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lock.Packages) != 2 || lock.Packages[0].Module != floating || lock.Packages[0].Commit != shaNew || !lock.Packages[0].Direct {
+		t.Fatalf("lock = %#v", lock.Packages)
+	}
+	if !strings.Contains(strings.Join(progress, "\n"), "Pinning "+floating+" at dddddddddddd required by "+root) {
+		t.Fatalf("progress = %v", progress)
+	}
+}
+
 type fakeMaterializer struct{ nested map[string]string }
 
 func (fake fakeMaterializer) materialize(_ context.Context, _ *http.Client, source githubsource.Source, _ string, _ bool) (lockfile.Package, error) {
