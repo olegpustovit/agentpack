@@ -3,7 +3,9 @@ import { FitAddon } from "@xterm/addon-fit";
 const $ = (id) => document.getElementById(id);
 const state = { authenticated: false, setup: false, sessions: [], recent: [], selected: null, socket: null, terminal: null, fit: null, attachment: 0, terminalState: null, view: "sessions", loading: false };
 state.node = "";
+state.nodes = [];
 state.restartToken = 0;
+state.retries = 0;
 const encoder = new TextEncoder();
 const pendingRestarts = new Map();
 function notice(message) {
@@ -27,9 +29,9 @@ function button(text, action, className) {
   return element;
 }
 const list = (value, key) => Array.isArray(value) ? value : Array.isArray(value?.[key]) ? value[key] : [];
-async function api(path, body, method) {
+async function api(path, body, method, target = state.node) {
   const endpoint = new URL(path, location.origin);
-  if (state.node && /^\/api\/(sessions|recent|packages)(\/|$)/.test(endpoint.pathname)) endpoint.searchParams.set("node", state.node);
+  if (target && /^\/api\/(sessions|recent|packages)(\/|$)/.test(endpoint.pathname)) endpoint.searchParams.set("node", target);
   const response = await fetch(endpoint, { method: method || (body === void 0 ? "GET" : "POST"), credentials: "same-origin", headers: body === void 0 ? {} : { "Content-Type": "application/json" }, body: body === void 0 ? void 0 : JSON.stringify(body) });
   if (response.status === 401) {
     state.authenticated = false;
@@ -115,10 +117,12 @@ async function refresh() {
   state.loading = true;
   try {
     const selectedNode = state.node;
-    const [sessions, recent] = await Promise.all([api("/api/sessions"), api("/api/recent")]);
+    const machines = [{ id: "", name: "Gateway machine" }, ...state.nodes];
+    // An unreachable remote machine drops out of the list instead of failing the whole refresh.
+    const [sessions, recent] = await Promise.all([Promise.all(machines.map((machine) => api("/api/sessions", void 0, void 0, machine.id).then((value) => list(value, "sessions").map((session) => ({ ...session, node: machine.id, machine: machine.name })), (error) => machine.id ? [] : Promise.reject(error)))), api("/api/recent")]);
     if (state.node !== selectedNode) return;
     if (!state.authenticated) return;
-    state.sessions = list(sessions, "sessions");
+    state.sessions = sessions.flat();
     state.recent = list(recent, "recent");
     renderSessions();
     renderRecent();
@@ -137,8 +141,14 @@ function renderSessions() {
   host.replaceChildren();
   $("session-count").textContent = state.sessions.filter((session) => session.state?.running).length;
   $("session-empty").hidden = state.sessions.length > 0;
+  const grouped = new Set(state.sessions.map((session) => session.node)).size > 1;
+  let machine;
   for (const session of state.sessions) {
-    const card = node("article", void 0, "session-card" + (session.id === state.selected ? " active" : ""));
+    if (grouped && session.node !== machine) {
+      machine = session.node;
+      host.append(node("p", session.machine, "group-label"));
+    }
+    const card = node("article", void 0, "session-card" + (sessionKey(session) === state.selected ? " active" : ""));
     const info = node("div", void 0, "session-info");
     const top = node("div", void 0, "card-top");
     top.append(node("span", void 0, "dot" + (session.state?.running ? " live" : "")), node("span", session.harness || "Agent", "agent-name"), node("span", `${session.mode || "default"}${session.node_name ? " \xB7 " + session.node_name : ""}`, "session-meta"), node("span", session.state?.running ? "Running" : "Stopped", "badge"));
@@ -163,16 +173,17 @@ function renderSessions() {
     host.append(card);
   }
 }
+const sessionKey = (session) => JSON.stringify([session.node || "", session.id]);
 async function changeSession(session, action) {
   if (!window.confirm(action === "stop" ? "Stop this agent? Its current conversation may end." : "Restart this agent? Its current conversation may end unless the agent supports resume.")) return;
-  const key = JSON.stringify([state.node, session.id]);
+  const key = sessionKey(session);
   let body = {};
   if (action === "restart") {
     if (!pendingRestarts.has(key)) pendingRestarts.set(key, crypto.randomUUID());
     body = {operation_id: pendingRestarts.get(key)};
   }
   try {
-    await api(`/api/sessions/${encodeURIComponent(session.id)}/${action}`, body);
+    await api(`/api/sessions/${encodeURIComponent(session.id)}/${action}`, body, void 0, session.node || "");
   } catch (error) {
     if (error.status >= 400 && error.status < 500) pendingRestarts.delete(key);
     throw error;
@@ -245,7 +256,7 @@ $("start-form").addEventListener("submit", async (event) => {
     $("start-dialog").close();
     setView("sessions");
     await refresh();
-    if (session?.id) openTerminal(session);
+    if (session?.id) openTerminal({ ...session, node: state.node });
   } catch (error) {
     $("start-error").textContent = error.message;
   } finally {
@@ -340,8 +351,8 @@ function closeTerminal() {
 }
 function openTerminal(session) {
   closeTerminal();
-  state.selected = session.id;
-  $("terminal-title").textContent = `${session.harness || "Agent"} \xB7 ${session.directory || ""}`;
+  state.selected = sessionKey(session);
+  $("terminal-title").textContent = `${session.harness || "Agent"} \xB7 ${session.directory || ""}${session.machine ? " \xB7 " + session.machine : ""}`;
   $("terminal-panel").hidden = false;
   $("terminal-status").textContent = "Connecting\u2026";
   $("take-control").disabled = true;
@@ -354,7 +365,7 @@ function openTerminal(session) {
   state.terminal.onData(sendInput);
   state.terminal.onBinary((data) => sendInput(Uint8Array.from(data, (character) => character.charCodeAt(0))));
   const url = new URL(`/api/sessions/${encodeURIComponent(session.id)}/terminal`, location.href);
-  if (state.node) url.searchParams.set("node", state.node);
+  if (session.node) url.searchParams.set("node", session.node);
   url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(url);
   state.socket = socket;
@@ -376,6 +387,10 @@ function openTerminal(session) {
     try {
       const message = JSON.parse(event.data);
       if (message.attachment) state.attachment = message.attachment;
+      if (message.type === "attached" && state.retries) {
+        state.retries = 0;
+        terminalNotice("");
+      }
       const previouslyOwned = controls();
       if (message.type === "attached" && message.offset) terminalNotice("Earlier output was truncated. Showing the available terminal history.");
       if (message.error) terminalNotice(message.error);
@@ -395,11 +410,18 @@ function openTerminal(session) {
     state.attachment = 0;
     updateTerminalState();
     if (state.terminalState?.restarting) $("terminal-status").textContent = "Restarting · waiting to reconnect";
-    else if (state.terminalState?.running !== false) $("terminal-status").textContent = "Disconnected · reconnect to attach again";
+    else if (state.terminalState?.running !== false && state.sessions.some((value) => sessionKey(value) === sessionKey(session))) {
+      // Networks drop (gateway restarts, tailnet hiccups); the worker replays output, so retry quietly.
+      state.retries++;
+      const delay = Math.min(10000, 500 * 2 ** (state.retries - 1));
+      const token = state.restartToken;
+      $("terminal-status").textContent = `Connection lost · reconnecting in ${Math.ceil(delay / 1000)}s`;
+      setTimeout(() => { if (state.restartToken === token) openTerminal(session); }, delay);
+    } else if (state.terminalState?.running !== false) $("terminal-status").textContent = "Disconnected · this session is no longer listed";
     $("take-control").disabled = true;
   };
   socket.onerror = () => {
-    if (state.socket === socket) terminalNotice("Could not connect to this terminal. Refresh the session list and try again.");
+    if (state.socket === socket && state.retries >= 2) terminalNotice("Still can\u2019t reach this terminal. Retrying automatically\u2026");
   };
   renderSessions();
   $("terminal-panel").scrollIntoView({ block: "nearest" });
@@ -412,11 +434,11 @@ async function reconnectAfterRestart(session) {
     await new Promise(resolve => setTimeout(resolve, 250));
     if (state.restartToken !== token || !state.authenticated) return;
     try {
-      const sessions = list(await api("/api/sessions"), "sessions");
+      const sessions = list(await api("/api/sessions", void 0, void 0, session.node || ""), "sessions");
       if (state.restartToken !== token) return;
       const replacement = sessions.find(value => value.id === session.id);
       if (replacement?.state && !replacement.state.restarting) {
-        openTerminal(replacement);
+        openTerminal({ ...replacement, node: session.node, machine: session.machine });
         terminalNotice("Agent restarted. This is a new process; conversation resume depends on the agent’s launch options. Reconnected as an observer.");
         return;
       }
@@ -474,10 +496,11 @@ document.addEventListener("keydown", (event) => {
 $("take-control").addEventListener("click", () => sendControl(controls() ? "release" : "take"));
 $("close-terminal").addEventListener("click", () => {
   closeTerminal();
+  state.retries = 0;
   renderSessions();
 });
 $("reconnect").addEventListener("click", () => {
-  const session = state.sessions.find((session2) => session2.id === state.selected);
+  const session = state.sessions.find((session2) => sessionKey(session2) === state.selected);
   if (session) openTerminal(session);
   else notice("This session is no longer available.");
 });
@@ -505,6 +528,8 @@ async function refreshNodes() {
   if (!state.authenticated) return;
   try {
     const nodes = list(await api("/api/nodes"), "nodes");
+    const changed = JSON.stringify(nodes.map((remote) => remote.id)) !== JSON.stringify(state.nodes.map((remote) => remote.id));
+    state.nodes = nodes.map((remote) => ({ id: remote.id, name: remote.name || remote.id }));
     const select = $("node-select");
     select.replaceChildren(node("option", "Gateway machine"));
     select.firstChild.value = "";
@@ -519,12 +544,11 @@ async function refreshNodes() {
       select.append(offline);
     }
     select.value = state.node;
+    if (changed) await refresh();
   } catch (error) { notice(error.message); }
 }
 $("node-select").addEventListener("change", async event => {
-  closeTerminal();
   state.node = event.target.value;
-  state.sessions = [];
   state.recent = [];
   $("package-directory").value = "";
   $("packages").replaceChildren();

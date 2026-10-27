@@ -90,7 +90,6 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 			return result, nil
 		}
 		options.Install = runner.installNetworkPackage
-		options.BeforeAttach = runner.reconcileSessionEnvironment
 		return 0, network.ServeGateway(ctx, options)
 	case "start":
 		if err := network.SetGatewayEnabled(home, true); err != nil {

@@ -1,15 +1,8 @@
 package cli
 
 import (
-	"context"
-	"encoding/json"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
@@ -20,87 +13,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
-
-func TestReconnectReconcilesEnvironmentOnce(t *testing.T) {
-	home, root := t.TempDir(), t.TempDir()
-	t.Setenv("AGENTPACK_HOME", home)
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
-	const id = "session-reconnect"
-	t.Setenv("AGENTPACK_SESSION_ID", id)
-	t.Setenv("AGENTPACK_SESSION_WORKER", "1")
-	if err := manifest.WriteStub(root, "test", "0.1.0"); err != nil {
-		t.Fatal(err)
-	}
-	if err := lockfile.Init(root, "test", "0.1.0"); err != nil {
-		t.Fatal(err)
-	}
-	directory := filepath.Join(home, "network", "sessions", id)
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		t.Fatal(err)
-	}
-	packContext := paths.Context{WorkspaceRoot: root, DefinitionRoot: root}
-	if err := recordLaunchEnvironment(packContext, "", harness.Claude, false); err != nil {
-		t.Fatal(err)
-	}
-	info := network.SessionInfo{ID: id, Directory: root, DefinitionRoot: root, Harness: "claude"}
-	var restarts atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/state":
-			_ = json.NewEncoder(w).Encode(network.TerminalState{Interactive: true, Running: true})
-		case "/restart":
-			restarts.Add(1)
-			digest, err := packSync.EnvironmentDigest(root, root, "", harness.Claude)
-			if err == nil {
-				err = network.RecordSessionEnvironment(home, id, digest)
-			}
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-			}
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	record := network.WorkerRecord{ID: id, Address: strings.TrimPrefix(server.URL, "http://"), Secret: strings.Repeat("a", 64), Session: info}
-	data, err := json.Marshal(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(filepath.Join(directory, "worker.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	runner := Runner{Stdout: io.Discard, Stderr: io.Discard}
-	ctx := context.Background()
-	if err := runner.reconcileSessionEnvironment(ctx, info); err != nil {
-		t.Fatal(err)
-	}
-	if restarts.Load() != 0 {
-		t.Fatal("unchanged environment restarted")
-	}
-	url := "https://example.test/mcp"
-	if err := manifest.AddMCPServer(root, "new", mcp.Server{URL: &url}); err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		if err := runner.reconcileSessionEnvironment(ctx, info); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if restarts.Load() != 1 {
-		t.Fatalf("changed environment restarted %d times", restarts.Load())
-	}
-	if err := os.WriteFile(filepath.Join(root, "agentpack.toml"), []byte("invalid = ["), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := runner.reconcileSessionEnvironment(ctx, info); err == nil {
-		t.Fatal("invalid environment accepted")
-	}
-	if restarts.Load() != 1 {
-		t.Fatal("invalid environment interrupted session")
-	}
-}
 
 func TestLaunchEnvironmentCacheUsesVerifiedSyncStamp(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()

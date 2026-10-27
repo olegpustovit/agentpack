@@ -282,3 +282,36 @@ test('sidebar hides and returns with the toolbar button and Cmd/Ctrl+Backslash',
   await expect(page.locator('.sidebar')).toBeVisible();
   await expect(page.getByRole('button',{name:'Hide sidebar'})).toBeVisible();
 });
+test('sessions list shows every machine without changing the selector', async ({page}) => {
+  await mockAPI(page);
+  await page.route('**/api/nodes', route => route.fulfill({json:[{id:'n-main',name:'main',online:true}]}));
+  await page.route('**/api/sessions?node=n-main', route => route.fulfill({json:[{...session,id:'remote-one',directory:'/home/me/immigration'}]}));
+  const sockets=[];
+  await page.routeWebSocket(/\/api\/sessions\/[^/]+\/terminal/, ws => {sockets.push(ws.url());ws.send(JSON.stringify({type:'attached',attachment:42,state:session.state}));});
+  await page.goto('/');
+  await expect(page.getByText('/home/me/immigration',{exact:true})).toBeVisible();
+  await expect(page.getByText('/work/my-project',{exact:true})).toBeVisible();
+  await expect(page.locator('.group-label')).toHaveText(['Gateway machine','main']);
+  await expect(page.locator('#node-select')).toHaveValue('');
+  await expect(page.locator('#session-count')).toHaveText('2');
+  await page.getByRole('button',{name:'Open terminal'}).nth(1).click();
+  await expect.poll(()=>sockets.length).toBe(1);
+  expect(new URL(sockets[0]).searchParams.get('node')).toBe('n-main');
+  await page.screenshot({path:`test-results/all-machines-${test.info().project.name}.png`,fullPage:true});
+});
+test('dropped terminal connections reconnect automatically while the agent runs', async ({page}) => {
+  await mockAPI(page);
+  const sockets=[];
+  await page.routeWebSocket(/\/api\/sessions\/[^/]+\/terminal/, ws => {sockets.push(ws);ws.send(JSON.stringify({type:'attached',attachment:42,state:session.state}));ws.send(Buffer.from(`ATTACH ${sockets.length}\r\n`));});
+  await page.goto('/');
+  await page.getByRole('button',{name:'Open terminal'}).click();
+  await expect(page.locator('#terminal-status')).toHaveText('Observing · control available');
+  sockets[0].close();
+  await expect(page.locator('#terminal-status')).toContainText('reconnecting');
+  await expect.poll(()=>sockets.length).toBe(2);
+  await expect(page.locator('#terminal-status')).toHaveText('Observing · control available');
+  await expect(page.locator('#terminal')).toContainText('ATTACH 2');
+  await page.getByRole('button',{name:'Close terminal attachment'}).click();
+  await page.waitForTimeout(1500);
+  expect(sockets.length).toBe(2);
+});

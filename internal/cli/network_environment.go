@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"context"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -77,41 +75,4 @@ func recordLaunchEnvironment(packContext paths.Context, selected string, target 
 		}
 	}
 	return network.RecordSessionEnvironment(home, id, state.Digest)
-}
-
-func (runner Runner) reconcileSessionEnvironment(ctx context.Context, info network.SessionInfo) error {
-	if info.DefinitionRoot == "" {
-		info.DefinitionRoot = info.Directory
-	}
-	lock, err := acquireDefinitionMutation(ctx, info.DefinitionRoot)
-	if err != nil {
-		return err
-	}
-	defer lock.Unlock()
-	if info.FolderID != "" {
-		identity, err := network.FolderIdentity(info.Directory)
-		if err != nil || identity != info.FolderID {
-			return fmt.Errorf("workspace has changed; launch the agent locally again")
-		}
-	}
-	home, err := paths.UserAgentpackHome()
-	if err != nil {
-		return err
-	}
-	digest, err := network.SessionEnvironment(home, info.ID)
-	if err != nil || digest == "" {
-		return err
-	}
-	name := info.Harness
-	if name == "agent" {
-		name = "cursor"
-	}
-	target, err := harness.ParseTarget(name)
-	if err != nil {
-		return err
-	}
-	if err := runner.restartChangedEnvironments(ctx, []runningEnvironment{{session: info, digest: digest, target: target, operationID: rand.Text()}}); err != nil {
-		return fmt.Errorf("check environment before reconnecting: %w", err)
-	}
-	return nil
 }

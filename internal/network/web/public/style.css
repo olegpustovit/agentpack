@@ -69,6 +69,7 @@ main:has(#terminal-panel:not([hidden])) #sessions-view{flex:0 1 auto;max-height:
 .session-card,.list-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px 8px 14px;min-width:0;border-bottom:1px solid var(--border)}
 .session-card:last-child,.list-row:last-child{border-bottom:0}
 .session-card.active{background:var(--accent)}
+.group-label{padding:5px 14px;font-size:11px;font-weight:500;color:var(--muted-foreground);background:var(--muted);border-bottom:1px solid var(--border)}
 .session-info,.list-row>div{min-width:0}
 .card-top{display:flex;gap:8px;align-items:center;min-width:0}
 .agent-name{font-size:13px;font-weight:600;text-transform:capitalize}

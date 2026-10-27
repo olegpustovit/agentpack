@@ -25,7 +25,6 @@ type GatewayOptions struct {
 	Start                    func(context.Context, SessionInfo) (string, error)
 	Packages                 func(context.Context, string) (any, error)
 	Install                  func(context.Context, string, string) error
-	BeforeAttach             func(context.Context, SessionInfo) error
 	Assets                   http.Handler
 }
 
@@ -293,14 +292,6 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "session unavailable", 404)
 		return
-	}
-	if g.options.BeforeAttach != nil {
-		info := record.Session
-		info.ID = record.ID
-		if err := g.options.BeforeAttach(r.Context(), info); err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return
-		}
 	}
 	worker, err := attachWorker(r.Context(), record, false)
 	if err != nil {
