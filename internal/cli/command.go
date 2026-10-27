@@ -138,6 +138,34 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	supportCmd.AddCommand(supportExport)
 
 	root.AddCommand(init, lock, add, remove, update, list, syncCommand, preflight, probe, configCmd, supportCmd)
+	worker := leaf("session-worker", "Own a private agent terminal session")
+	worker.Hidden = true
+	signal := leaf("session-signal PID", "Signal a private Windows agent console")
+	signal.Hidden = true
+	root.AddCommand(worker, signal)
+	gateway := &cobra.Command{Use: "gateway", Short: "Manage shared agent terminals and browser access"}
+	service := &cobra.Command{Use: "service", Short: "Manage optional user service persistence"}
+	for _, action := range []string{"install", "start", "stop", "status", "uninstall", "run"} {
+		command := leaf(action, "User service "+action)
+		command.Hidden = action == "run"
+		service.AddCommand(command)
+	}
+	sharing := &cobra.Command{Use: "sharing", Short: "Manage personal Tailscale access"}
+	for _, action := range []string{"on", "off", "status", "allow ID_OR_TAG", "revoke ID_OR_TAG"} {
+		sharing.AddCommand(leaf(action, "Tailnet sharing "+action))
+	}
+	gateway.AddCommand(sharing)
+	for _, action := range []string{"start", "stop", "status", "setup", "stop-agents", "serve"} {
+		command := leaf(action, "Gateway "+action)
+		if action == "serve" {
+			value(command, "listen", "ADDRESS", "listen address (default 127.0.0.1:7420)")
+		}
+		gateway.AddCommand(command)
+	}
+	deploy := leaf("deploy", "Deploy the public gateway to oracle-vm")
+	value(deploy, "binary", "PATH", "prebuilt Linux ARM64 agentpack binary")
+	flag(deploy, "dry-run", "", "validate and show deployment without changing the VM")
+	root.AddCommand(gateway, deploy, service)
 	agent := leaf("agent [ARGS...]", "Launch Cursor Agent with a staged HOME")
 	agent.Aliases = []string{"cursor-agent"}
 	root.AddCommand(

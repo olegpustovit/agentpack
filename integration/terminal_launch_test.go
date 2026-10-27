@@ -1,6 +1,8 @@
 package integration_test
 
 import (
+	"context"
+	"github.com/olegpustovit/agentpack/internal/network"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,9 @@ func TestCompiledCLIPassesStderrDescriptorDirectlyToAgent(t *testing.T) {
 		t.Skip("shell fixture uses /dev/stderr")
 	}
 	project := t.TempDir()
+	t.Cleanup(func() {
+		_, _ = network.NodeRequest(context.Background(), filepath.Join(project, "_agentpack"), "POST", "/api/node/stop")
+	})
 	if result := runCLI(t, project, "init"); result.err != nil {
 		t.Fatalf("init: %s, %v", result.stderr, result.err)
 	}

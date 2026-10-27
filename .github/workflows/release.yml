@@ -29,6 +29,11 @@ jobs:
           cache: true
       - name: Test Codex Windows credentials
         run: go test ./internal/harness/codex -count=1
+      - name: Test Windows shared terminals and PowerShell
+        shell: pwsh
+        run: |
+          go test ./internal/network ./internal/cli -count=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   goreleaser:
     needs: codex-windows
     runs-on: ubuntu-latest
@@ -46,6 +51,17 @@ jobs:
           distribution: goreleaser
           version: "~> v2"
           args: check
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: internal/network/web/package-lock.json
+      - name: Verify embedded gateway assets
+        working-directory: internal/network/web
+        run: |
+          npm ci
+          npm run build
+          git diff --exit-code -- public
       - name: Test release installers
         run: go test ./integration -run 'TestRelease(Installer|Description)' -count=1
       - name: Test package and concurrent launches

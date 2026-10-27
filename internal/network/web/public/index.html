@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark"><title>Agentpack</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/xterm.css">
+<script defer src="/static/app.js"></script>
+</head>
+<body>
+<div id="auth" class="auth-shell" hidden>
+<form id="auth-form" class="auth-card">
+<div class="brand-mark" aria-hidden="true">a</div><p class="eyebrow">Agentpack gateway</p>
+<h1 id="auth-title">Welcome back</h1><p id="auth-description" class="muted">Sign in to your sessions.</p>
+<label id="setup-field" hidden>Setup token<input id="setup-token" name="token" autocomplete="off" spellcheck="false"><span class="hint">Run <code>agentpack gateway setup</code> on the server to get this token.</span></label>
+<label>Root account password<input id="password" type="password" name="password" required autocomplete="current-password"></label>
+<button class="primary" id="auth-submit">Sign in</button><p id="auth-error" role="alert"></p>
+</form></div>
+<div id="app" class="shell" hidden>
+<aside class="sidebar">
+<div class="brand"><span class="brand-mark" aria-hidden="true">a</span><strong>Agentpack</strong><span class="badge">Gateway</span></div>
+<label class="node-label">Machine<select id="node-select"><option value="">Gateway machine</option></select></label>
+<nav aria-label="Workspace"><button class="nav-item selected" data-view="sessions" aria-current="page">Sessions <span id="session-count" class="badge">0</span></button><button class="nav-item" data-view="recent">Recent folders</button><button class="nav-item" data-view="packages">Packages</button><button class="nav-item" data-view="settings">Settings</button></nav>
+<div class="sidebar-bottom"><span class="connection" id="gateway-state">Connecting…</span><button id="logout" class="quiet">Sign out</button></div>
+</aside>
+<main>
+<header class="toolbar"><div><p class="eyebrow">Your workspace, anywhere</p><h1 id="view-title">Sessions</h1></div><div class="actions"><button id="refresh">Refresh</button><button class="primary" id="new-session">New session</button></div></header>
+<p class="notice" id="notice" role="status" hidden></p>
+<section id="sessions-view" class="view" aria-label="Sessions"><div id="sessions" class="session-grid"></div><div id="session-empty" class="empty" hidden><div class="empty-symbol" aria-hidden="true">⌘</div><h2>No sessions yet</h2><p>Launch an agent with Agentpack on a connected machine, or start one in a previously used folder on the selected machine.</p><button class="primary" id="empty-start">Start a session</button></div></section>
+<section id="recent-view" class="view" aria-label="Recent folders" hidden><p class="section-description">Start fresh in a folder you have used before.</p><div id="recent" class="list"></div></section>
+<section id="packages-view" class="view" aria-label="Packages" hidden><p class="section-description">Manage packages in a project. Installing a package restarts affected running agents.</p><form id="package-directory-form" class="inline-form"><label>Project folder<input id="package-directory" list="recent-folders" placeholder="Absolute path on the selected machine" required></label><button>Load packages</button></form><div id="packages" class="list"></div><form id="package-install-form" class="inline-form"><label>Package<input id="package-spec" placeholder="owner/repository or owner/repository/skill" required></label><button class="primary">Install package</button></form><p id="package-status" role="status"></p></section>
+<section id="settings-view" class="view" aria-label="Gateway settings" hidden>
+<p class="section-description">These controls apply to the gateway machine. Existing CLI sessions keep running when sharing or the gateway stops.</p>
+<div class="list"><div class="list-row"><div><strong>Gateway</strong><p id="settings-platform" class="muted">Loading status…</p></div><span id="settings-running" class="badge">Running</span></div>
+<div class="list-row"><div><strong>Tailscale sharing</strong><p id="settings-sharing" class="muted">Loading…</p></div><button id="toggle-sharing" disabled>Loading…</button></div>
+<div class="list-row"><div><strong>Explicitly allowed machines and tags</strong><p id="settings-allowlist" class="path">Loading…</p><p class="hint">Your personal Tailscale identity is allowed by default. Manage exceptions with <code>agentpack gateway sharing allow</code>.</p></div></div></div>
+<div class="settings-actions"><button id="stop-all-agents" class="danger">Stop all agents on gateway</button><button id="stop-gateway">Stop gateway</button></div><p id="settings-status" role="status"></p>
+</section>
+<section id="terminal-panel" class="terminal-panel" aria-label="Agent terminal" hidden>
+<div class="terminal-toolbar"><div class="terminal-heading"><strong id="terminal-title">Terminal</strong><span id="terminal-status" class="muted" role="status">Connecting…</span></div><div class="actions"><button id="take-control">Take control</button><button id="reconnect">Reconnect</button><button id="close-terminal" aria-label="Close terminal attachment">Close</button></div></div>
+<p id="terminal-notice" class="terminal-notice" role="status" hidden></p><div id="terminal"></div>
+<div class="terminal-footer"><span>Closing this view keeps the agent running.</span><div class="actions"><button data-key="escape">Esc</button><button data-key="tab">Tab</button><button data-key="interrupt">Ctrl C</button><button data-key="up" aria-label="Up arrow">↑</button><button data-key="down" aria-label="Down arrow">↓</button></div></div>
+</section>
+</main>
+</div>
+<dialog id="start-dialog"><form id="start-form"><div class="dialog-title"><h2>New session</h2><button type="button" id="cancel-start" aria-label="Close new session">✕</button></div><p class="muted">Start an agent in an previously used folder on the selected machine.</p><label>Project folder<input name="directory" id="start-directory" list="recent-folders" required placeholder="Absolute path on the selected machine"></label><div class="form-row"><label>Agent<select name="harness" id="start-harness"><option value="claude">Claude</option><option value="codex">Codex</option><option value="grok">Grok</option><option value="opencode">OpenCode</option><option value="agent">Cursor</option></select></label><label>Mode<input name="mode" id="start-mode" value="default" required></label></div><p id="start-error" role="alert"></p><button class="primary" type="submit">Start session</button></form></dialog>
+<datalist id="recent-folders"></datalist>
+<noscript><p class="empty">Enable JavaScript to use the Agentpack gateway.</p></noscript>
+</body></html>

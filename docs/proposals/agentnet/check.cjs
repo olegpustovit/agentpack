@@ -1,0 +1,23 @@
+// Run with: node docs/proposals/agentnet/check.cjs
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const html = fs.readFileSync(`${__dirname}/index.html`, 'utf8');
+const script = html.match(/<script id="prototype-logic">([\s\S]*?)<\/script>/)[1];
+const context = vm.createContext({});
+vm.runInContext(script, context);
+const state = context.newDemo();
+const result = context.installExample(state, 'laptop/api/default');
+assert.deepEqual(Array.from(result), ['api-claude', 'api-codex']);
+assert.deepEqual(Array.from(state.sessions, s => s.generation), [2, 2, 1, 1]);
+assert.equal(state.sessions[0].owner, 'local');
+assert.equal(state.sessions[1].owner, 'none');
+assert.equal(context.installExample(state, 'laptop/api/default').length, 0);
+assert.equal(context.installExample(state, 'server/worker/default').length, 0);
+state.sharing = false;
+assert.equal(context.installExample(state, 'studio/website/design').length, 0);
+assert.equal(state.sessions[0].running, true);
+state.sharing = true;
+state.sessions[2].running = false;
+assert.equal(context.installExample(state, 'studio/website/design').length, 0);
+console.log('Prototype checks passed: scoped restart, generation boundary, preserved ownership, duplicate install, offline/stopped sessions, sharing disabled.');

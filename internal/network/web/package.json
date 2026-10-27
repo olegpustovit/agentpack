@@ -1,0 +1,8 @@
+{
+  "name": "agentpack-gateway-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {"build": "node build.mjs", "test": "playwright test"},
+  "dependencies": {"@xterm/xterm": "5.5.0", "@xterm/addon-fit": "0.10.0"},
+  "devDependencies": {"esbuild": "0.25.12", "@playwright/test": "1.56.1"}
+}

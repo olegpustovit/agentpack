@@ -41,6 +41,8 @@
 
 - [Publishing Packages](./guides/publishing.md)
 - [Team Workflows](./guides/team-workflows.md)
+- [Public Gateway Deployment](./guides/gateway-deployment.md)
+- [Gateway Services and Tailscale](./guides/gateway-services.md)
 - [Overrides and Attribution](./guides/overrides.md)
 
 - [ICSE Evaluation and Demo](./guides/icse-evaluation.md)

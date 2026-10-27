@@ -22,13 +22,13 @@ import (
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
-var Version = "0.7.9"
+var Version = "0.8.0"
 
 type Runner struct {
 	Stdout, Stderr io.Writer
 	Stdin          io.Reader
 	Service        packSync.Service
-	Launch         func(*os.Process) error
+	Launch         func(*os.Process) (func(), error)
 }
 
 func NewRunner() Runner {
@@ -82,8 +82,23 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 	if invocation.Command == "mcp-exec" {
 		return runner.runMCPExec(ctx, invocation.Args)
 	}
+	if invocation.Command == "session-signal" {
+		return runner.runSessionSignal(invocation.Args)
+	}
+	if invocation.Command == "session-worker" {
+		return runner.runSessionWorker(ctx, invocation.Args)
+	}
+	if invocation.Command == "gateway" {
+		return runner.runGateway(ctx, invocation.Args)
+	}
+	if invocation.Command == "service" {
+		return runner.runNetworkService(ctx, invocation.Args)
+	}
+	if invocation.Command == "deploy" {
+		return runner.runDeploy(ctx, invocation.Args)
+	}
 	if invocation.Command == "init" {
-		if err := runner.runInit(invocation); err != nil {
+		if err := runner.runInit(ctx, invocation); err != nil {
 			return 1, err
 		}
 		return 0, nil
@@ -95,6 +110,20 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 	}
 	root := packContext.DefinitionRoot
 	workspace := packContext.WorkspaceRoot
+	var runningBefore []runningEnvironment
+	if definitionMutation(invocation) {
+		mutation, lockErr := acquireDefinitionMutation(ctx, root)
+		if lockErr != nil {
+			return 1, lockErr
+		}
+		defer mutation.Unlock()
+		if !hasBeforeDoubleDash(invocation.Args, "--no-sync") {
+			runningBefore, err = snapshotRunningEnvironments(ctx, root)
+			if err != nil {
+				return 1, runner.reportIntegrity(err)
+			}
+		}
+	}
 	switch invocation.Command {
 	case "lock":
 		args, update := takeBool(invocation.Args, "--update")
@@ -248,7 +277,7 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 	case "env":
 		err = runner.runEnv(ctx, root, workspace, invocation.Global.Mode, invocation.Args, invocation.Global.Quiet)
 	case "claude", "opencode", "codex", "grok", "agy", "agent":
-		code, err := runner.launch(ctx, packContext, invocation)
+		code, err := runner.launchManaged(ctx, packContext, invocation, arguments)
 		return code, runner.reportIntegrity(err)
 	case "mcp":
 		err = runner.runMCP(ctx, root, invocation.Args, invocation.Global.Quiet)
@@ -262,6 +291,9 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 		return 2, fmt.Errorf("unknown command %q", invocation.Command)
 	}
 	if err != nil {
+		return 1, runner.reportIntegrity(err)
+	}
+	if err = runner.restartChangedEnvironments(ctx, runningBefore); err != nil {
 		return 1, runner.reportIntegrity(err)
 	}
 	return 0, nil
@@ -314,7 +346,7 @@ func dependencySelector(project *manifest.Manifest, module string) string {
 	}
 }
 
-func (runner Runner) runInit(invocation Invocation) error {
+func (runner Runner) runInit(ctx context.Context, invocation Invocation) error {
 	root, err := paths.ResolveProjectRootOrCWD(invocation.Global.ProjectRoot)
 	if invocation.Global.ProjectRoot != "" {
 		root, err = filepath.Abs(invocation.Global.ProjectRoot)
@@ -340,6 +372,11 @@ func (runner Runner) runInit(invocation Invocation) error {
 	if version == "" {
 		version = "0.0.1"
 	}
+	mutation, err := acquireDefinitionMutation(ctx, root)
+	if err != nil {
+		return err
+	}
+	defer mutation.Unlock()
 	if !invocation.Global.Quiet {
 		fmt.Fprintln(runner.Stdout, "Initializing agentpack…")
 	}
@@ -402,6 +439,11 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (runner Runner) launch(ctx context.Context, packContext paths.Context, invocation Invocation) (int, error) {
+	mutation, err := acquireDefinitionMutation(ctx, packContext.DefinitionRoot)
+	if err != nil {
+		return 1, err
+	}
+	defer mutation.Unlock()
 	stopProgress := func() {}
 	if !invocation.Global.Quiet && !invocation.Global.NoProgress {
 		stopProgress = startProgress(runner.Stderr, "preparing "+invocation.Command, time.Second)
@@ -434,6 +476,9 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 	}
 	defer stagingLock.Unlock()
 	if err := runner.Service.ValidateLaunchInputs(packContext.DefinitionRoot, packContext.WorkspaceRoot, effective, target); err != nil {
+		return 1, err
+	}
+	if err := recordLaunchEnvironment(packContext, effective.Name(), target, skipped); err != nil {
 		return 1, err
 	}
 	if invocation.Global.StrictExternal {
@@ -496,7 +541,19 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 	// agents (OpenCode) take the project directory from PWD, which would
 	// otherwise still name the directory agentpack was started from.
 	command.Env = withPWD(command.Env, packContext.WorkspaceRoot)
+	for i := 0; i < len(command.Env); {
+		key, _, _ := strings.Cut(command.Env[i], "=")
+		if strings.EqualFold(key, "AGENTPACK_SESSION_WORKER") || strings.EqualFold(key, "AGENTPACK_SESSION_ID") {
+			command.Env = append(command.Env[:i], command.Env[i+1:]...)
+		} else {
+			i++
+		}
+	}
 	launch.Command = command
+	// Workers report restart readiness after spawning; release before the agent runs.
+	if err := mutation.Unlock(); err != nil {
+		return 1, err
+	}
 	command.Stdin, command.Stdout, command.Stderr = runner.Stdin, runner.Stdout, runner.Stderr
 	stopProgress()
 	// Give the child the original file descriptor so terminal detection still works.
@@ -512,11 +569,11 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 			fmt.Fprintf(runner.Stderr, "agentpack: Claude proxy listening on %s\n", running.Server.BaseURL())
 		}
 		running.Apply(command)
-		code, runErr := runProcess(command)
+		code, runErr := runner.runProcess(command)
 		running.Shutdown()
 		return code, errors.Join(runErr, harness.AfterLaunch(launch))
 	}
-	code, runErr := runProcess(command)
+	code, runErr := runner.runProcess(command)
 	return code, errors.Join(runErr, harness.AfterLaunch(launch))
 }
 

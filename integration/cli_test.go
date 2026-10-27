@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/cli"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
+	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
@@ -541,6 +543,7 @@ func runCLIWithEnv(t *testing.T, workingDirectory string, arguments []string, ex
 		}
 	})
 	command := exec.Command(agentpackBinary, arguments...)
+	t.Cleanup(func() { _, _ = network.NodeRequest(context.Background(), agentpackHome, "POST", "/api/node/stop") })
 	command.Dir = workingDirectory
 	overrides := []string{"HOME=" + home, "USERPROFILE=" + home, "AGENTPACK_HOME=" + agentpackHome, "AGENTPACK_STAGING_ROOT=" + stagingRoot}
 	command.Env = installerEnvironment(append(overrides, extraEnvironment...)...)

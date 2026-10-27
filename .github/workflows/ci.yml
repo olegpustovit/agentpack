@@ -10,6 +10,24 @@ permissions:
   contents: read
 
 jobs:
+  gateway-ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: internal/network/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: internal/network/web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: git diff --exit-code -- public
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+
   test:
     name: Go (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -37,11 +55,20 @@ jobs:
           go vet ./...
           echo "vet_seconds=$(($(date +%s)-start))"
       - name: Test
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           start=$(date +%s)
           go test ./...
           echo "test_seconds=$(($(date +%s)-start))"
+      - name: Test (PowerShell)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $timer = [Diagnostics.Stopwatch]::StartNew()
+          go test ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Output "test_seconds=$($timer.Elapsed.TotalSeconds)"
       - name: Build
         shell: bash
         run: |

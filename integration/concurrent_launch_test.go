@@ -3,6 +3,7 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"github.com/olegpustovit/agentpack/internal/network"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,9 @@ func TestCompiledCLILaunchesUpdatedPackWhileAnotherSessionRuns(t *testing.T) {
 		t.Skip("shell fixture; generation and publication tests also run on Windows")
 	}
 	project := t.TempDir()
+	t.Cleanup(func() {
+		_, _ = network.NodeRequest(context.Background(), filepath.Join(project, "_agentpack"), "POST", "/api/node/stop")
+	})
 	skill := filepath.Join(project, "local-skill", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
 		t.Fatal(err)
