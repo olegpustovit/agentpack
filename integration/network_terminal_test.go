@@ -17,7 +17,10 @@ import (
 )
 
 func TestCompiledCLISharedTerminalSurvivesGatewayAndRestart(t *testing.T) {
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	home := filepath.Join(root, "agentpack-home")
 	agent := filepath.Join(root, "fake-codex")
 	writeFile(t, agent, "#!/bin/sh\nprintf 'READY SHARED AGENT\\n'\nwhile IFS= read -r line; do\n case \"$line\" in exit) exit 7;; *) printf 'ECHO %s\\n' \"$line\";; esac\ndone\n")
