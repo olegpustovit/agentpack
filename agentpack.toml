@@ -7,6 +7,7 @@ version = "0.0.1"
 "github.com/mccteam/minecraft-console-client/.skills/humanizer" = {}
 "github.com/s1mplesonny/technical-writing-skill/technical-writing" = {}
 "github.com/dietrichgebert/ponytail" = {}
+"github.com/pbakaus/impeccable" = {}
 
 [modes]
 

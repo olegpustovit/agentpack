@@ -13,6 +13,7 @@ owner = 'dietrichgebert'
 repo = 'ponytail'
 commit = '9b58c1ffb790c075ca32e70a89cf1d80588f4abf'
 cache_key = '14a939838da478918aef80cab384ab47aae7d1ee873d96bff48259da31d4815e'
+content_hash = 'sha256-tree-v1:909298647b750d598538e89316c4a7f10348c8852e33da3cb590a6cabce51e97'
 
 [[packages]]
 module = 'github.com/mccteam/minecraft-console-client/.skills/humanizer'
@@ -24,6 +25,7 @@ repo = 'minecraft-console-client'
 path = '.skills/humanizer'
 commit = 'f39fe2d067844a21b2efc20976831f265c1f5f5c'
 cache_key = 'ed850325c375ee6a8556209f42e05faaa0c5e064683a50a44c5807172885fbca'
+content_hash = 'sha256-tree-v1:87bbc7a9371a117d4889cef7d6a283395f9293b943708aee0699a9f2f0ab27db'
 
 [[packages]]
 module = 'github.com/olegpustovit/agent-configs/mcps/linear'
@@ -50,6 +52,17 @@ cache_key = '8acf9b3d8c0c5ef5ca4d3ecb5d064024c664cd3d7203ac27be8c4947e1293c30'
 content_hash = 'sha256-tree-v1:08166e1e718ce8527dbb67954a069dc02f66f94ec91abed84542f324d8b49901'
 
 [[packages]]
+module = 'github.com/pbakaus/impeccable'
+direct = true
+kind = 'plugin'
+url = 'https://github.com/pbakaus/impeccable/tree/HEAD'
+owner = 'pbakaus'
+repo = 'impeccable'
+commit = 'd34c87e1a00989ae8dbdd7f6b30b70f23319e860'
+cache_key = 'f3b03acd00c63915b6face91082c60b6a12a7fed75251d5f81bf1267102106fb'
+content_hash = 'sha256-tree-v1:0f943c2286b433be583f43205df501099c37d630f6c5706f5c01f51f63123c08'
+
+[[packages]]
 module = 'github.com/s1mplesonny/technical-writing-skill/technical-writing'
 direct = true
 kind = 'skill'
@@ -59,3 +72,13 @@ repo = 'technical-writing-skill'
 path = 'technical-writing'
 commit = '7b6fea6dd290676bdafc442c324fec813a6de50e'
 cache_key = '9cbdec767473b02a0b89ebe184548ac8b36b43a7f4cc640c1f4f14ee0eb5ae84'
+content_hash = 'sha256-tree-v1:e6af292e6b28bfc4f904d4c20fdd00f385a71336e24c41f65c9b61c24356cbc2'
+
+[[mcp_servers]]
+name = 'linear'
+source = 'plugin'
+launcher = 'remote'
+status = 'unpinnable'
+definition = 'sha256:48ee499fe380979b2c8a32fa67b3fb3e7a94333315fbe4898dfb0ec9a834d201'
+host = 'mcp.linear.app'
+reason = 'remote server: the host decides what runs'
