@@ -58,8 +58,10 @@ type tailnetIdentity struct {
 	}
 }
 
+// ReadSharingConfig defaults to sharing on, like Agentnet's tailnet discovery:
+// peers still need your own untagged identity or an explicit allow entry.
 func ReadSharingConfig(home string) (SharingConfig, error) {
-	var config SharingConfig
+	config := SharingConfig{Enabled: true}
 	data, err := os.ReadFile(filepath.Join(home, "network", "sharing.json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return config, nil

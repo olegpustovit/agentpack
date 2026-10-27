@@ -39,10 +39,11 @@ macOS and Windows logs are in `$AGENTPACK_HOME/network/gateway-service.log`.
 
 ## Personal Tailscale sharing
 
-Enable sharing once on each machine you want to access:
+Sharing is on by default, like Agentnet discovery: every machine with Tailscale running
+appears in the gateway's machine selector without any setup. Turn it off or check it with:
 
 ```text
-agentpack gateway sharing on
+agentpack gateway sharing off
 agentpack gateway sharing status
 ```
 

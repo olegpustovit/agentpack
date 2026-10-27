@@ -80,8 +80,14 @@ func TestTailnetTargetsAndRoutesAreBounded(t *testing.T) {
 func TestSharingConfigPersistsAndValidates(t *testing.T) {
 	home := t.TempDir()
 	empty, err := ReadSharingConfig(home)
-	if err != nil || empty.Enabled {
-		t.Fatalf("initial config: %+v %v", empty, err)
+	if err != nil || !empty.Enabled {
+		t.Fatalf("sharing should default on: %+v %v", empty, err)
+	}
+	if err := WriteSharingConfig(home, SharingConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if off, err := ReadSharingConfig(home); err != nil || off.Enabled {
+		t.Fatalf("explicit off must persist: %+v %v", off, err)
 	}
 	want := SharingConfig{Enabled: true, Allow: []string{"tag:server", "stable-node"}}
 	if err := WriteSharingConfig(home, want); err != nil {
