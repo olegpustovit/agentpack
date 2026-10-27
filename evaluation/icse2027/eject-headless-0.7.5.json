@@ -1,0 +1,587 @@
+{
+ "date": "2026-10-22",
+ "agentpack": "agentpack 0.7.5",
+ "agentpack_sha256": "efe37704584cdb452e40873f67b632d68a7aae6b87f4bacb744e0292316b2de1",
+ "agent_versions": {
+  "claude": [
+   "2.1.299 (Claude Code)"
+  ],
+  "codex": [
+   "codex-cli 0.159.3"
+  ],
+  "cursor": [
+   "2026.08.25-3e8eec8"
+  ],
+  "agy": [
+   "1.4.0"
+  ]
+ },
+ "runs_per_cell": 2,
+ "setup": "agentpack add + agentpack eject; staging and package source then deleted; agents started without agentpack, temporary HOME with copied logins; token files outside the agent's own project locations unreadable",
+ "tokens": {
+  "skill": "SKILL-OK-282255",
+  "command": "COMMAND-OK-166838",
+  "agent": "AGENT-OK-729278",
+  "rule": "RULE-OK-510073",
+  "mcp": "MCP-OK-222678",
+  "lsp": "LSP-OK-434595"
+ },
+ "matrix": {
+  "claude": {
+   "skill": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "hook": {
+    "delivered": 10,
+    "runs": 10
+   },
+   "command": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "agent": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "rule": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "mcp": {
+    "delivered": 2,
+    "runs": 2
+   }
+  },
+  "cursor": {
+   "skill": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "hook": {
+    "delivered": 0,
+    "runs": 10
+   },
+   "command": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "agent": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "rule": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "mcp": {
+    "delivered": 2,
+    "runs": 2
+   }
+  },
+  "codex": {
+   "skill": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "hook": {
+    "delivered": 10,
+    "runs": 10
+   },
+   "command": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "agent": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "rule": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "mcp": {
+    "delivered": 2,
+    "runs": 2
+   }
+  },
+  "agy": {
+   "skill": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "hook": {
+    "delivered": 10,
+    "runs": 10
+   },
+   "command": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "agent": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "rule": {
+    "delivered": 2,
+    "runs": 2
+   },
+   "mcp": {
+    "delivered": 2,
+    "runs": 2
+   }
+  }
+ },
+ "rows": [
+  {
+   "agent": "claude",
+   "kind": "skill",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 4.3,
+   "invoked_as": "request",
+   "answer": "SKILL-OK-282255"
+  },
+  {
+   "agent": "claude",
+   "kind": "skill",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 6.2,
+   "invoked_as": "request",
+   "answer": "SKILL-OK-282255"
+  },
+  {
+   "agent": "claude",
+   "kind": "command",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 4.1,
+   "invoked_as": "slash",
+   "answer": "COMMAND-OK-166838"
+  },
+  {
+   "agent": "claude",
+   "kind": "command",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 19.1,
+   "invoked_as": "slash",
+   "answer": "COMMAND-OK-166838"
+  },
+  {
+   "agent": "claude",
+   "kind": "agent",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 9.3,
+   "invoked_as": "request",
+   "answer": "AGENT-OK-729278"
+  },
+  {
+   "agent": "claude",
+   "kind": "agent",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 12.5,
+   "invoked_as": "request",
+   "answer": "AGENT-OK-729278"
+  },
+  {
+   "agent": "claude",
+   "kind": "rule",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 3.5,
+   "invoked_as": "request",
+   "answer": "RULE-OK-510073"
+  },
+  {
+   "agent": "claude",
+   "kind": "rule",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 3.7,
+   "invoked_as": "request",
+   "answer": "RULE-OK-510073"
+  },
+  {
+   "agent": "claude",
+   "kind": "mcp",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 6.2,
+   "invoked_as": "request",
+   "answer": "MCP-OK-222678",
+   "mcp_server_recorded_call": true
+  },
+  {
+   "agent": "claude",
+   "kind": "mcp",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 6.0,
+   "invoked_as": "request",
+   "answer": "MCP-OK-222678",
+   "mcp_server_recorded_call": true
+  },
+  {
+   "agent": "cursor",
+   "kind": "skill",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": false,
+   "exit": 0,
+   "seconds": 7.6,
+   "invoked_as": "request",
+   "answer": "SKILL-OK-282255"
+  },
+  {
+   "agent": "cursor",
+   "kind": "skill",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": false,
+   "exit": 0,
+   "seconds": 7.9,
+   "invoked_as": "request",
+   "answer": "SKILL-OK-282255"
+  },
+  {
+   "agent": "cursor",
+   "kind": "command",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": false,
+   "exit": 0,
+   "seconds": 6.7,
+   "invoked_as": "slash",
+   "answer": "COMMAND-OK-166838"
+  },
+  {
+   "agent": "cursor",
+   "kind": "command",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": false,
+   "exit": 0,
+   "seconds": 5.7,
+   "invoked_as": "slash",
+   "answer": "COMMAND-OK-166838"
+  },
+  {
+   "agent": "cursor",
+   "kind": "agent",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": false,
+   "exit": 0,
+   "seconds": 17.4,
+   "invoked_as": "request",
+   "answer": "Reading the delivery-agent skill and delegating the task.\nAGENT-OK-729278"
+  },
+  {
+   "agent": "cursor",
+   "kind": "agent",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": false,
+   "exit": 0,
+   "seconds": 15.2,
+   "invoked_as": "request",
+   "answer": "Reading the delivery-agent skill and delegating to that subagent.\n\n\nAGENT-OK-729278"
+  },
+  {
+   "agent": "cursor",
+   "kind": "rule",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": false,
+   "exit": 0,
+   "seconds": 5.6,
+   "invoked_as": "request",
+   "answer": "RULE-OK-510073"
+  },
+  {
+   "agent": "cursor",
+   "kind": "rule",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": false,
+   "exit": 0,
+   "seconds": 6.8,
+   "invoked_as": "request",
+   "answer": "RULE-OK-510073"
+  },
+  {
+   "agent": "cursor",
+   "kind": "mcp",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": false,
+   "exit": 0,
+   "seconds": 8.9,
+   "invoked_as": "request",
+   "answer": "Inspecting the delivery_token tool schema, then invoking it.\nMCP-OK-222678",
+   "mcp_server_recorded_call": true
+  },
+  {
+   "agent": "cursor",
+   "kind": "mcp",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": false,
+   "exit": 0,
+   "seconds": 8.7,
+   "invoked_as": "request",
+   "answer": "Checking the delivery_token tool schema, then calling it.\nMCP-OK-222678",
+   "mcp_server_recorded_call": true
+  },
+  {
+   "agent": "codex",
+   "kind": "skill",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 7.4,
+   "invoked_as": "request",
+   "answer": "I\u2019m using the delivery-skill skill.\nSKILL-OK-282255"
+  },
+  {
+   "agent": "codex",
+   "kind": "skill",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 6.9,
+   "invoked_as": "request",
+   "answer": "SKILL-OK-282255"
+  },
+  {
+   "agent": "codex",
+   "kind": "command",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 7.9,
+   "invoked_as": "slash",
+   "answer": "I\u2019ll read and run the delivery-command instructions.\nCOMMAND-OK-166838"
+  },
+  {
+   "agent": "codex",
+   "kind": "command",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 9.1,
+   "invoked_as": "slash",
+   "answer": "I\u2019ll read and run the delivery-command instructions.\nCOMMAND-OK-166838"
+  },
+  {
+   "agent": "codex",
+   "kind": "agent",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 11.6,
+   "invoked_as": "request",
+   "answer": "AGENT-OK-729278"
+  },
+  {
+   "agent": "codex",
+   "kind": "agent",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 11.6,
+   "invoked_as": "request",
+   "answer": "AGENT-OK-729278"
+  },
+  {
+   "agent": "codex",
+   "kind": "rule",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 5.3,
+   "invoked_as": "request",
+   "answer": "RULE-OK-510073"
+  },
+  {
+   "agent": "codex",
+   "kind": "rule",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 5.6,
+   "invoked_as": "request",
+   "answer": "RULE-OK-510073"
+  },
+  {
+   "agent": "codex",
+   "kind": "mcp",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 6.8,
+   "invoked_as": "request",
+   "answer": "MCP-OK-222678",
+   "mcp_server_recorded_call": true
+  },
+  {
+   "agent": "codex",
+   "kind": "mcp",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 7.5,
+   "invoked_as": "request",
+   "answer": "MCP-OK-222678",
+   "mcp_server_recorded_call": true
+  },
+  {
+   "agent": "agy",
+   "kind": "skill",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 13.4,
+   "invoked_as": "request",
+   "answer": "SKILL-OK-282255"
+  },
+  {
+   "agent": "agy",
+   "kind": "skill",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 11.9,
+   "invoked_as": "request",
+   "answer": "SKILL-OK-282255"
+  },
+  {
+   "agent": "agy",
+   "kind": "command",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 10.7,
+   "invoked_as": "slash",
+   "answer": "COMMAND-OK-166838"
+  },
+  {
+   "agent": "agy",
+   "kind": "command",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 18.5,
+   "invoked_as": "slash",
+   "answer": "COMMAND-OK-166838"
+  },
+  {
+   "agent": "agy",
+   "kind": "agent",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 27.9,
+   "invoked_as": "request",
+   "answer": "Delegating to `delivery-agent`...\nAGENT-OK-729278"
+  },
+  {
+   "agent": "agy",
+   "kind": "agent",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 20.1,
+   "invoked_as": "request",
+   "answer": "I have delegated the task to the `delivery-agent` subagent and am awaiting its response.\nAGENT-OK-729278"
+  },
+  {
+   "agent": "agy",
+   "kind": "rule",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 9.6,
+   "invoked_as": "request",
+   "answer": "RULE-OK-510073"
+  },
+  {
+   "agent": "agy",
+   "kind": "rule",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 16.3,
+   "invoked_as": "request",
+   "answer": "RULE-OK-510073"
+  },
+  {
+   "agent": "agy",
+   "kind": "mcp",
+   "run": 0,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 28.0,
+   "invoked_as": "request",
+   "answer": "MCP-OK-222678",
+   "mcp_server_recorded_call": true
+  },
+  {
+   "agent": "agy",
+   "kind": "mcp",
+   "run": 1,
+   "delivered": true,
+   "hook_ran": true,
+   "exit": 0,
+   "seconds": 12.3,
+   "invoked_as": "request",
+   "answer": "MCP-OK-222678",
+   "mcp_server_recorded_call": true
+  }
+ ],
+ "credential_notes": [],
+ "work": "/tmp/eject-headless-w0pjxyik"
+}

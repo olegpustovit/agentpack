@@ -1,4 +1,4 @@
-lockfile_version = 2
+lockfile_version = 3
 
 [meta]
 name = 'test'
@@ -34,7 +34,8 @@ owner = 'olegpustovit'
 repo = 'agent-configs'
 path = 'mcps/linear'
 commit = '281d30f17f215d5d6cdb55cbcb7456ae4ca952f1'
-cache_key = 'af38e50122e8da8dc3fd6fdc20ea217bf94361a17d8744573b727d7efe6cf12d'
+cache_key = 'aa3e07e7fe0e8e9b738463944ab430377c38ce0bbebfbcf64f4c876b4a580383'
+content_hash = 'sha256-tree-v1:affca12d1b51b1997c18882b9d8297e5f45586330e6b8047dbbdf25b169964b1'
 
 [[packages]]
 module = 'github.com/olegpustovit/agent-configs/plugins/simplifier'
@@ -45,7 +46,8 @@ owner = 'olegpustovit'
 repo = 'agent-configs'
 path = 'plugins/simplifier'
 commit = '281d30f17f215d5d6cdb55cbcb7456ae4ca952f1'
-cache_key = '407ba1a3066c7d262edd9276e2c8ff991e47ae1a3e6f1b666cc1621ff85c742e'
+cache_key = '8acf9b3d8c0c5ef5ca4d3ecb5d064024c664cd3d7203ac27be8c4947e1293c30'
+content_hash = 'sha256-tree-v1:08166e1e718ce8527dbb67954a069dc02f66f94ec91abed84542f324d8b49901'
 
 [[packages]]
 module = 'github.com/s1mplesonny/technical-writing-skill/technical-writing'

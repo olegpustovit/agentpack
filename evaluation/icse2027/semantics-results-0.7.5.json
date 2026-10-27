@@ -1,0 +1,752 @@
+{
+ "sources": {
+  "agentpack": {
+   "file": "semantics-results-0.7.5-raw.json",
+   "date": "2026-10-22",
+   "agent_versions": {
+    "claude": [
+     "2.1.299 (Claude Code)"
+    ],
+    "codex": [
+     "codex-cli 0.159.3"
+    ],
+    "opencode": [
+     "1.17.11"
+    ],
+    "cursor": [
+     "2026.08.25-3e8eec8"
+    ],
+    "grok": [
+     "grok 1.0.44 (5b807183dd79) [stable]"
+    ],
+    "agy": [
+     "1.4.0"
+    ]
+   },
+   "agentpack": {
+    "version": "agentpack 0.7.5",
+    "sha256": "efe37704584cdb452e40873f67b632d68a7aae6b87f4bacb744e0292316b2de1"
+   }
+  }
+ },
+ "not_run": {
+  "agentpack": {
+   "claude": "could not answer a plain prompt",
+   "opencode": "could not answer a plain prompt",
+   "cursor": "could not answer a plain prompt",
+   "agy": "could not answer a plain prompt"
+  }
+ },
+ "cells": {
+  "agentpack": {
+   "codex": {
+    "args": {
+     "passed": 3,
+     "runs": 3
+    },
+    "sign": {
+     "passed": 2,
+     "runs": 3
+    },
+    "block": {
+     "passed": 3,
+     "runs": 3
+    },
+    "readonly": {
+     "passed": 3,
+     "runs": 3
+    }
+   },
+   "grok": {
+    "args": {
+     "passed": 3,
+     "runs": 3
+    },
+    "sign": {
+     "passed": 3,
+     "runs": 3
+    },
+    "block": {
+     "passed": 3,
+     "runs": 3
+    },
+    "readonly": {
+     "passed": 0,
+     "runs": 3
+    }
+   }
+  }
+ },
+ "summary": {
+  "agentpack": {
+   "args": {
+    "agents_passing": 2,
+    "agents_measured": 2,
+    "passing": [
+     "codex",
+     "grok"
+    ],
+    "runs_passed": 6,
+    "runs": 6
+   },
+   "sign": {
+    "agents_passing": 2,
+    "agents_measured": 2,
+    "passing": [
+     "codex",
+     "grok"
+    ],
+    "runs_passed": 5,
+    "runs": 6
+   },
+   "block": {
+    "agents_passing": 2,
+    "agents_measured": 2,
+    "passing": [
+     "codex",
+     "grok"
+    ],
+    "runs_passed": 6,
+    "runs": 6
+   },
+   "readonly": {
+    "agents_passing": 1,
+    "agents_measured": 2,
+    "passing": [
+     "codex"
+    ],
+    "runs_passed": 3,
+    "runs": 6
+   }
+  }
+ },
+ "results": [
+  {
+   "tool": "agentpack",
+   "tokens": {
+    "args": "ARG-OK-121121",
+    "sign": "SIGN-OK-257593"
+   },
+   "install_steps": [
+    {
+     "argv": [
+      "/var/tmp/ap075/bin075/agentpack",
+      "--no-progress",
+      "init"
+     ],
+     "exit": 0,
+     "tail": "Initializing agentpack\u2026\nCreated <tmp>/checkout/agentpack.toml and <tmp>/checkout/pack.lock"
+    },
+    {
+     "argv": [
+      "/var/tmp/ap075/bin075/agentpack",
+      "--no-progress",
+      "add",
+      "<tmp>/repo/plugins/semantics-pack"
+     ],
+     "exit": 0,
+     "tail": "exec dispatch\nhook for codex: semantics-pack (<tmp>/home/.local/share/agentpack/cache/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/hooks/hooks.json): rendered into Codex native hooks.json\nhook for opencode: semantics-pack (<tmp>/home/.local/share/agentpack/cache/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/hooks/hooks.json): rendered into generated OpenCode plugin\nhook for agy: semantics-pack (<tmp>/home/.local/share/agentpack/cache/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/hooks/hooks.json): routed via agentpack hook-exec dispatch"
+    },
+    {
+     "argv": [
+      "/var/tmp/ap075/bin075/agentpack",
+      "--no-progress",
+      "lock"
+     ],
+     "exit": 0,
+     "tail": "Wrote <tmp>/checkout/pack.lock (1 package(s))."
+    },
+    {
+     "argv": [
+      "/var/tmp/ap075/bin075/agentpack",
+      "--no-progress",
+      "sync"
+     ],
+     "exit": 0,
+     "tail": "exec dispatch\nhook for codex: semantics-pack (<tmp>/home/.local/share/agentpack/cache/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/hooks/hooks.json): rendered into Codex native hooks.json\nhook for opencode: semantics-pack (<tmp>/home/.local/share/agentpack/cache/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/hooks/hooks.json): rendered into generated OpenCode plugin\nhook for agy: semantics-pack (<tmp>/home/.local/share/agentpack/cache/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/hooks/hooks.json): routed via agentpack hook-exec dispatch"
+    }
+   ],
+   "files_written": [
+    "checkout/agentpack.toml",
+    "checkout/pack.lock",
+    "home/.claude.json",
+    "home/.claude/.credentials.json",
+    "home/.claude/settings.json",
+    "home/.codex/auth.json",
+    "home/.codex/config.toml",
+    "home/.codex/history.jsonl",
+    "home/.config/cursor/auth.json",
+    "home/.config/cursor/cli-config.json",
+    "home/.gemini/antigravity-cli/antigravity-oauth-token",
+    "home/.grok/auth.json",
+    "home/.local/share/agentpack/cache/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/.claude-plugin/plugin.json",
+    "home/.local/share/agentpack/cache/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/.codex-plugin/plugin.json",
+    "home/.local/share/agentpack/cache/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/.cursor-plugin/plugin.json",
+    "home/.local/share/agentpack/cache/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/agents/readonly-agent.md",
+    "home/.local/share/agentpack/cache/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/commands/delivery-args.md",
+    "home/.local/share/agentpack/cache/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/hooks/block.sh",
+    "home/.local/share/agentpack/cache/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/hooks/hooks.json",
+    "home/.local/share/agentpack/cache/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/rules/always-sign.mdc",
+    "home/.local/share/agentpack/cache/db.reddb",
+    "home/.local/share/agentpack/projects/185433c9ce11f0ff/codex-generations/default.current",
+    "home/.local/share/agentpack/projects/185433c9ce11f0ff/codex-generations/default.current.lock",
+    "home/.local/share/agentpack/projects/185433c9ce11f0ff/codex-mcp-oauth/.credentials.json",
+    "home/.local/share/agentpack/projects/185433c9ce11f0ff/codex-mcp-oauth/mcp-oauth-locks/file-store.lock",
+    "home/.local/share/agentpack/projects/185433c9ce11f0ff/grok-homes/default/default-g-1322412359/AGENTS.md",
+    "home/.local/share/agentpack/projects/185433c9ce11f0ff/grok-homes/default/default-g-1322412359/auth.json",
+    "home/.local/share/agentpack/projects/185433c9ce11f0ff/grok-homes/default/default-g-1322412359/config.toml",
+    "home/.local/share/agentpack/projects/185433c9ce11f0ff/grok-homes/default/default-g-1927880197/AGENTS.md",
+    "home/.local/share/agentpack/projects/185433c9ce11f0ff/grok-homes/default/default-g-1927880197/auth.json",
+    "home/.local/share/agentpack/projects/185433c9ce11f0ff/grok-homes/default/default-g-1927880197/config.toml",
+    "home/.local/share/agentpack/projects/185433c9ce11f0ff/materialized-default.json",
+    "home/.local/share/agentpack/projects/185433c9ce11f0ff/staging-default.lock",
+    "home/.local/share/opencode/auth.json",
+    "staging/projects/185433c9ce11f0ff/.agentpack-project",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/.staged.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.claude-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.codex-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.cursor-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/block.sh",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/specs/000-000-000.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/rules/agentpack-no-attribution.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/rules/always-sign.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/agy/agentpack-bundle/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor-home/.cursor/cli-config.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor-home/.cursor/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/.cursor-plugin/marketplace.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/.cursor-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/README.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/cli-config.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.claude-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.codex-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.cursor-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/block.sh",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/specs/000-000-000.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/hooks/block.sh",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/hooks/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/agentpack-bundle/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/cursor/cli-config.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/grok/agentpack-bundle/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/grok/agentpack-bundle/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/grok/agentpack-bundle/hooks/block.sh",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/grok/agentpack-bundle/hooks/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/grok/agentpack-bundle/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/grok/agentpack-bundle/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/grok/agentpack-bundle/skills/always-sign/SKILL.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/AGENTS.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/agentpack-no-attribution.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/opencode.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.claude-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.codex-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.cursor-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/block.sh",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/specs/000-000-000.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/plugins/agentpack-hooks/config.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/plugins/agentpack-hooks/index.js",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/opencode/skills/always-sign/SKILL.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/.claude-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/_agentpack/guidance.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/agentpack-settings.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.claude-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.codex-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.cursor-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/block.sh",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/specs/000-000-000.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/hooks/block.sh",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/hooks/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1322412359/plugins/agentpack-bundle/skills/always-sign/SKILL.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/.staged.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.claude-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.codex-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.cursor-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/block.sh",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/specs/000-000-000.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/rules/agentpack-no-attribution.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/rules/always-sign.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/agy/agentpack-bundle/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor-home/.cursor/cli-config.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor-home/.cursor/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/.cursor-plugin/marketplace.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/.cursor-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/README.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/cli-config.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.claude-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.codex-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.cursor-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/block.sh",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/specs/000-000-000.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/hooks/block.sh",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/hooks/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/agentpack-bundle/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/cursor/cli-config.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/grok/agentpack-bundle/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/grok/agentpack-bundle/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/grok/agentpack-bundle/hooks/block.sh",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/grok/agentpack-bundle/hooks/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/grok/agentpack-bundle/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/grok/agentpack-bundle/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/grok/agentpack-bundle/skills/always-sign/SKILL.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/AGENTS.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/agentpack-no-attribution.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/opencode.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.claude-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.codex-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.cursor-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/block.sh",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/plugins/agentpack-hooks/assets/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/specs/000-000-000.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/plugins/agentpack-hooks/config.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/plugins/agentpack-hooks/index.js",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/opencode/skills/always-sign/SKILL.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/.claude-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/_agentpack/guidance.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/agentpack-settings.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.claude-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.codex-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/.cursor-plugin/plugin.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/agents/readonly-agent.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/commands/delivery-args.md",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/block.sh",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/hooks/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/package/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/hooks/_packages/893a14cd7495ff4f083654700d54e047dfc1853ba43838c86f35e0bb4c650078/specs/000-000-000.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/hooks/block.sh",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/hooks/hooks.json",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/rules/always-sign.mdc",
+    "staging/projects/185433c9ce11f0ff/modes/default-g-1927880197/plugins/agentpack-bundle/skills/always-sign/SKILL.md",
+    "staging/projects/185433c9ce11f0ff/modes/default.current"
+   ],
+   "rows": [
+    {
+     "tool": "agentpack",
+     "agent": "codex",
+     "probe": "args",
+     "run": 0,
+     "token_without_argument": false,
+     "passed": true,
+     "read_source": false,
+     "file_created": null,
+     "hook_saw_command": null,
+     "invoked_as": "slash",
+     "answer": "I\u2019ll read the delivery-args skill and run its command with `w6d7923`.\nSIGN-OK-257593\nARG-OK-121121-w6d7923\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 9.1
+    },
+    {
+     "tool": "agentpack",
+     "agent": "codex",
+     "probe": "args",
+     "run": 1,
+     "token_without_argument": false,
+     "passed": true,
+     "read_source": false,
+     "file_created": null,
+     "hook_saw_command": null,
+     "invoked_as": "slash",
+     "answer": "I\u2019ll read the delivery-args skill and run its command with your argument.\nSIGN-OK-257593\nARG-OK-121121-w9bd996\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 9.8
+    },
+    {
+     "tool": "agentpack",
+     "agent": "codex",
+     "probe": "args",
+     "run": 2,
+     "token_without_argument": false,
+     "passed": true,
+     "read_source": false,
+     "file_created": null,
+     "hook_saw_command": null,
+     "invoked_as": "slash",
+     "answer": "I\u2019ll read the delivery-args skill and run its command with `wf792e5`.\nSIGN-OK-257593\nARG-OK-121121-wf792e5\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 7.5
+    },
+    {
+     "tool": "agentpack",
+     "agent": "codex",
+     "probe": "sign",
+     "run": 0,
+     "passed": false,
+     "read_source": false,
+     "file_created": null,
+     "hook_saw_command": null,
+     "invoked_as": null,
+     "answer": "42",
+     "exit": 0,
+     "seconds": 7.0
+    },
+    {
+     "tool": "agentpack",
+     "agent": "codex",
+     "probe": "sign",
+     "run": 1,
+     "passed": true,
+     "read_source": false,
+     "file_created": null,
+     "hook_saw_command": null,
+     "invoked_as": null,
+     "answer": "42\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 7.0
+    },
+    {
+     "tool": "agentpack",
+     "agent": "codex",
+     "probe": "sign",
+     "run": 2,
+     "passed": true,
+     "read_source": false,
+     "file_created": null,
+     "hook_saw_command": null,
+     "invoked_as": null,
+     "answer": "42\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 8.3
+    },
+    {
+     "tool": "agentpack",
+     "agent": "codex",
+     "probe": "block",
+     "run": 0,
+     "passed": true,
+     "read_source": false,
+     "file_created": false,
+     "hook_saw_command": true,
+     "invoked_as": null,
+     "answer": "I\u2019ll run the command once.\nSIGN-OK-257593\nThe command was blocked by the package\u2019s policy hook, so it did not run.",
+     "exit": 0,
+     "seconds": 9.1
+    },
+    {
+     "tool": "agentpack",
+     "agent": "codex",
+     "probe": "block",
+     "run": 1,
+     "passed": true,
+     "read_source": false,
+     "file_created": false,
+     "hook_saw_command": true,
+     "invoked_as": null,
+     "answer": "The command was blocked by the package\u2019s policy hook.\n\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 6.9
+    },
+    {
+     "tool": "agentpack",
+     "agent": "codex",
+     "probe": "block",
+     "run": 2,
+     "passed": true,
+     "read_source": false,
+     "file_created": false,
+     "hook_saw_command": true,
+     "invoked_as": null,
+     "answer": "Automatic approval review rejected `touch blocked-probe-2.txt` because the package\u2019s policy hook blocks it. The command was attempted once.",
+     "exit": 0,
+     "seconds": 9.7
+    },
+    {
+     "tool": "agentpack",
+     "agent": "codex",
+     "probe": "readonly",
+     "run": 0,
+     "passed": true,
+     "read_source": false,
+     "file_created": false,
+     "hook_saw_command": null,
+     "invoked_as": null,
+     "answer": "equested.\nSIGN-OK-257593\n\nThe subagent reported: \u201cI could not create `readonly-probe-0.txt` because my read-only role prohibits writing files or running commands. No file was created.\u201d\n\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 15.8
+    },
+    {
+     "tool": "agentpack",
+     "agent": "codex",
+     "probe": "readonly",
+     "run": 1,
+     "passed": true,
+     "read_source": false,
+     "file_created": false,
+     "hook_saw_command": null,
+     "invoked_as": null,
+     "answer": "s requested.\nSIGN-OK-257593\nThe subagent reported: \u201cI could not create readonly-probe-1.txt because my read-only role prohibits writing files or running commands. No file was created.\u201d\n\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 17.1
+    },
+    {
+     "tool": "agentpack",
+     "agent": "codex",
+     "probe": "readonly",
+     "run": 2,
+     "passed": true,
+     "read_source": false,
+     "file_created": false,
+     "hook_saw_command": null,
+     "invoked_as": null,
+     "answer": "sk as requested.\nSIGN-OK-257593\n\nThe subagent reported: \u201cI could not create `readonly-probe-2.txt`: my read-only role prohibits writing files or running commands. No file was created.\u201d\n\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 16.6
+    },
+    {
+     "tool": "agentpack",
+     "agent": "grok",
+     "probe": "args",
+     "run": 0,
+     "token_without_argument": false,
+     "passed": true,
+     "read_source": false,
+     "file_created": null,
+     "hook_saw_command": null,
+     "invoked_as": "slash",
+     "answer": "ARG-OK-121121-wfc8b33\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 17.2
+    },
+    {
+     "tool": "agentpack",
+     "agent": "grok",
+     "probe": "args",
+     "run": 1,
+     "token_without_argument": false,
+     "passed": true,
+     "read_source": false,
+     "file_created": null,
+     "hook_saw_command": null,
+     "invoked_as": "slash",
+     "answer": "ARG-OK-121121-wc24e4e\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 38.5
+    },
+    {
+     "tool": "agentpack",
+     "agent": "grok",
+     "probe": "args",
+     "run": 2,
+     "token_without_argument": false,
+     "passed": true,
+     "read_source": false,
+     "file_created": null,
+     "hook_saw_command": null,
+     "invoked_as": "slash",
+     "answer": "ARG-OK-121121-w9eb032\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 22.7
+    },
+    {
+     "tool": "agentpack",
+     "agent": "grok",
+     "probe": "sign",
+     "run": 0,
+     "passed": true,
+     "read_source": false,
+     "file_created": null,
+     "hook_saw_command": null,
+     "invoked_as": null,
+     "answer": "42\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 3.8
+    },
+    {
+     "tool": "agentpack",
+     "agent": "grok",
+     "probe": "sign",
+     "run": 1,
+     "passed": true,
+     "read_source": false,
+     "file_created": null,
+     "hook_saw_command": null,
+     "invoked_as": null,
+     "answer": "42\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 3.1
+    },
+    {
+     "tool": "agentpack",
+     "agent": "grok",
+     "probe": "sign",
+     "run": 2,
+     "passed": true,
+     "read_source": false,
+     "file_created": null,
+     "hook_saw_command": null,
+     "invoked_as": null,
+     "answer": "42\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 2.7
+    },
+    {
+     "tool": "agentpack",
+     "agent": "grok",
+     "probe": "block",
+     "run": 0,
+     "passed": true,
+     "read_source": false,
+     "file_created": false,
+     "hook_saw_command": true,
+     "invoked_as": null,
+     "answer": "DONE\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 12.4
+    },
+    {
+     "tool": "agentpack",
+     "agent": "grok",
+     "probe": "block",
+     "run": 1,
+     "passed": true,
+     "read_source": false,
+     "file_created": false,
+     "hook_saw_command": true,
+     "invoked_as": null,
+     "answer": "DONE\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 20.6
+    },
+    {
+     "tool": "agentpack",
+     "agent": "grok",
+     "probe": "block",
+     "run": 2,
+     "passed": true,
+     "read_source": false,
+     "file_created": false,
+     "hook_saw_command": true,
+     "invoked_as": null,
+     "answer": "DONE\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 13.5
+    },
+    {
+     "tool": "agentpack",
+     "agent": "grok",
+     "probe": "readonly",
+     "run": 0,
+     "passed": false,
+     "read_source": true,
+     "file_created": true,
+     "hook_saw_command": null,
+     "invoked_as": null,
+     "answer": " listing; the write tool was the one used to create the file.\n\nThe spawn tool has no agent-type argument, so that child ran as a general-purpose subagent. Its report is what came back.\n\nSIGN-OK-257593",
+     "exit": 0,
+     "seconds": 138.3
+    },
+    {
+     "tool": "agentpack",
+     "agent": "grok",
+     "probe": "readonly",
+     "run": 1,
+     "passed": false,
+     "read_source": false,
+     "file_created": true,
+     "hook_saw_command": null,
+     "invoked_as": null,
+     "answer": "ite succeeded. I'll confirm the file contents match exactly.\nThe file was created at `/var/tmp/ap075/work-sem/agentpack/checkout/readonly-probe-1.txt` and contains exactly the text OK.\n\nSIGN-OK-257593",
+     "exit": "timeout",
+     "seconds": 240.0
+    },
+    {
+     "tool": "agentpack",
+     "agent": "grok",
+     "probe": "readonly",
+     "run": 2,
+     "passed": false,
+     "read_source": true,
+     "file_created": true,
+     "hook_saw_command": null,
+     "invoked_as": null,
+     "answer": " `/var/tmp/ap075/work-sem/agentpack/checkout/readonly-probe-2.txt` and did not change any other file. A follow-up read shows one line whose content is exactly `OK`. There was no error.\n\nSIGN-OK-257593",
+     "exit": "timeout",
+     "seconds": 240.0
+    }
+   ],
+   "agents": {
+    "claude": {
+     "status": "could not answer a plain prompt",
+     "detail": "ERROR  \n          \n  Missing staged hook package root for seeded-codex-user (seeded-seeded-codex-user).",
+     "files_hidden": 50
+    },
+    "codex": {
+     "status": "signed in",
+     "files_hidden": 50
+    },
+    "opencode": {
+     "status": "could not answer a plain prompt",
+     "detail": "ERROR  \n          \n  Missing staged hook package root for seeded-codex-user (seeded-seeded-codex-user).",
+     "files_hidden": 50
+    },
+    "cursor": {
+     "status": "could not answer a plain prompt",
+     "detail": "ERROR  \n          \n  Missing staged hook package root for seeded-codex-user (seeded-seeded-codex-user).",
+     "files_hidden": 50
+    },
+    "grok": {
+     "status": "signed in",
+     "files_hidden": 48
+    },
+    "agy": {
+     "status": "could not answer a plain prompt",
+     "detail": "ERROR  \n          \n  Missing staged hook package root for seeded-codex-user (seeded-seeded-codex-user).",
+     "files_hidden": 98
+    }
+   },
+   "logins_copied": [
+    ".claude/.credentials.json",
+    ".codex/auth.json",
+    ".config/cursor/auth.json",
+    ".gemini/antigravity-cli/antigravity-oauth-token",
+    ".grok/auth.json",
+    ".local/share/opencode/auth.json"
+   ],
+   "credential_notes": []
+  }
+ ]
+}
