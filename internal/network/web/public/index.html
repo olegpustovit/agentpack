@@ -18,13 +18,13 @@
 </form></div>
 <div id="app" class="shell" hidden>
 <aside class="sidebar">
-<div class="brand"><span class="brand-mark" aria-hidden="true">a</span><strong>Agentpack</strong><span class="badge">Gateway</span></div>
+<div class="brand"><span class="brand-mark" aria-hidden="true">a</span><div><strong>Agentpack</strong><span class="brand-sub">Gateway</span></div></div>
 <label class="node-label">Machine<select id="node-select"><option value="">Gateway machine</option></select></label>
-<nav aria-label="Workspace"><button class="nav-item selected" data-view="sessions" aria-current="page">Sessions <span id="session-count" class="badge">0</span></button><button class="nav-item" data-view="recent">Recent folders</button><button class="nav-item" data-view="packages">Packages</button><button class="nav-item" data-view="settings">Settings</button></nav>
-<div class="sidebar-bottom"><span class="connection" id="gateway-state">Connecting…</span><button id="logout" class="quiet">Sign out</button></div>
+<nav aria-label="Workspace"><p class="section-label">Workspace</p><button class="nav-item selected" data-view="sessions" aria-current="page">Sessions <span id="session-count" class="badge">0</span></button><button class="nav-item" data-view="recent">Recent folders</button><button class="nav-item" data-view="packages">Packages</button><button class="nav-item" data-view="settings">Settings</button></nav>
+<div class="sidebar-bottom"><span class="connection"><span class="dot" aria-hidden="true"></span><span id="gateway-state">Connecting…</span></span><button id="logout" class="quiet">Sign out</button></div>
 </aside>
 <main>
-<header class="toolbar"><div><p class="eyebrow">Your workspace, anywhere</p><h1 id="view-title">Sessions</h1></div><div class="actions"><button id="refresh">Refresh</button><button class="primary" id="new-session">New session</button></div></header>
+<header class="toolbar"><div class="toolbar-title"><button id="toggle-sidebar" class="quiet icon" aria-label="Hide sidebar" aria-keyshortcuts="Meta+Backslash Control+Backslash" title="Hide sidebar (⌘\)"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M6 2.5v11"/></svg></button><h1 id="view-title">Sessions</h1></div><div class="actions"><button id="refresh">Refresh</button><button class="primary" id="new-session">New session</button></div></header>
 <p class="notice" id="notice" role="status" hidden></p>
 <section id="sessions-view" class="view" aria-label="Sessions"><div id="sessions" class="session-grid"></div><div id="session-empty" class="empty" hidden><div class="empty-symbol" aria-hidden="true">⌘</div><h2>No sessions yet</h2><p>Launch an agent with Agentpack on a connected machine, or start one in a previously used folder on the selected machine.</p><button class="primary" id="empty-start">Start a session</button></div></section>
 <section id="recent-view" class="view" aria-label="Recent folders" hidden><p class="section-description">Start fresh in a folder you have used before.</p><div id="recent" class="list"></div></section>
@@ -43,7 +43,7 @@
 </section>
 </main>
 </div>
-<dialog id="start-dialog"><form id="start-form"><div class="dialog-title"><h2>New session</h2><button type="button" id="cancel-start" aria-label="Close new session">✕</button></div><p class="muted">Start an agent in an previously used folder on the selected machine.</p><label>Project folder<input name="directory" id="start-directory" list="recent-folders" required placeholder="Absolute path on the selected machine"></label><div class="form-row"><label>Agent<select name="harness" id="start-harness"><option value="claude">Claude</option><option value="codex">Codex</option><option value="grok">Grok</option><option value="opencode">OpenCode</option><option value="agent">Cursor</option></select></label><label>Mode<input name="mode" id="start-mode" value="default" required></label></div><p id="start-error" role="alert"></p><button class="primary" type="submit">Start session</button></form></dialog>
+<dialog id="start-dialog"><form id="start-form"><div class="dialog-title"><h2>New session</h2><button type="button" id="cancel-start" aria-label="Close new session">✕</button></div><p class="muted">Start an agent in a previously used folder on the selected machine.</p><label>Project folder<input name="directory" id="start-directory" list="recent-folders" required placeholder="Absolute path on the selected machine"></label><div class="form-row"><label>Agent<select name="harness" id="start-harness"><option value="claude">Claude</option><option value="codex">Codex</option><option value="grok">Grok</option><option value="opencode">OpenCode</option><option value="agent">Cursor</option></select></label><label>Mode<input name="mode" id="start-mode" value="default" required></label></div><p id="start-error" role="alert"></p><button class="primary" type="submit">Start session</button></form></dialog>
 <datalist id="recent-folders"></datalist>
 <noscript><p class="empty">Enable JavaScript to use the Agentpack gateway.</p></noscript>
 </body></html>

@@ -272,3 +272,13 @@ test('recent folders show last use and disable missing or replaced directories',
   await expect(page.locator('#recent-folders option')).toHaveCount(1);
   await expect(page.locator('#recent-folders option')).toHaveAttribute('value','/work/available');
 });
+test('sidebar hides and returns with the toolbar button and Cmd/Ctrl+Backslash', async ({page}) => {
+  test.skip(test.info().project.name === 'phone', 'phone layout keeps navigation visible');
+  await mockAPI(page);
+  await page.goto('/');
+  await page.getByRole('button',{name:'Hide sidebar'}).click();
+  await expect(page.locator('.sidebar')).toBeHidden();
+  await page.keyboard.press('Control+Backslash');
+  await expect(page.locator('.sidebar')).toBeVisible();
+  await expect(page.getByRole('button',{name:'Hide sidebar'})).toBeVisible();
+});

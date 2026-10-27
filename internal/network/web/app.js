@@ -123,8 +123,10 @@ async function refresh() {
     renderSessions();
     renderRecent();
     $("gateway-state").textContent = "Gateway connected";
+    $("gateway-state").parentElement.classList.add("live");
   } catch (error) {
     $("gateway-state").textContent = "Connection interrupted";
+    $("gateway-state").parentElement.classList.remove("live");
     notice(error.message);
   } finally {
     state.loading = false;
@@ -137,9 +139,11 @@ function renderSessions() {
   $("session-empty").hidden = state.sessions.length > 0;
   for (const session of state.sessions) {
     const card = node("article", void 0, "session-card" + (session.id === state.selected ? " active" : ""));
+    const info = node("div", void 0, "session-info");
     const top = node("div", void 0, "card-top");
-    top.append(node("span", session.harness || "Agent", "agent-name"), node("span", session.state?.running ? "Running" : "Stopped", "badge"));
-    card.append(top, node("p", session.directory || "Unknown folder", "path"), node("p", `${session.mode || "default"}${session.node_name ? " \xB7 " + session.node_name : ""}`, "session-meta"));
+    top.append(node("span", void 0, "dot" + (session.state?.running ? " live" : "")), node("span", session.harness || "Agent", "agent-name"), node("span", `${session.mode || "default"}${session.node_name ? " \xB7 " + session.node_name : ""}`, "session-meta"), node("span", session.state?.running ? "Running" : "Stopped", "badge"));
+    info.append(top, node("p", session.directory || "Unknown folder", "path"));
+    card.append(info);
     const actions = node("div", void 0, "actions");
     const open = button("Open terminal", () => openTerminal(session), "primary");
     open.disabled = !session.state?.running || session.state?.interactive === false;
@@ -153,8 +157,8 @@ function renderSessions() {
       start.disabled = session.harness === "agy";
       actions.append(start);
     }
-    if (session.harness === "agy") card.append(node("p", "Desktop launcher presence · start and interact locally. Detached desktop windows are not tracked.", "session-meta"));
-    else if (session.state?.interactive === false) card.append(node("p", "Native stdio · browser input unavailable", "session-meta"));
+    if (session.harness === "agy") info.append(node("p", "Desktop launcher presence · start and interact locally. Detached desktop windows are not tracked.", "session-meta"));
+    else if (session.state?.interactive === false) info.append(node("p", "Native stdio · browser input unavailable", "session-meta"));
     card.append(actions);
     host.append(card);
   }
@@ -342,7 +346,7 @@ function openTerminal(session) {
   $("terminal-status").textContent = "Connecting\u2026";
   $("take-control").disabled = true;
   terminalNotice("");
-  state.terminal = new Terminal({ cursorBlink: true, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 13, scrollback: 5e3, allowProposedApi: false, disableStdin: true, screenReaderMode: true, theme: { background: "#191a1d", foreground: "#ececef", cursor: "#ececef" } });
+  state.terminal = new Terminal({ cursorBlink: true, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 13, scrollback: 5e3, allowProposedApi: false, disableStdin: true, screenReaderMode: true, theme: { background: "#1e1e1e", foreground: "#e9e9e9", cursor: "#e9e9e9" } });
   state.fit = new FitAddon();
   state.terminal.loadAddon(state.fit);
   state.terminal.open($("terminal"));
@@ -451,8 +455,21 @@ $("stop-all-agents").addEventListener("click",async()=>{
 });
 $("stop-gateway").addEventListener("click",async()=>{
   if(!confirm("Stop this gateway and disconnect browser access? Existing CLI sessions will keep running. Use agentpack gateway start on the machine to reconnect."))return;
-  try { await api("/api/node/stop",{}); closeTerminal(); state.authenticated=false; $("settings-running").textContent="Stopped"; $("gateway-state").textContent="Gateway stopped"; $("settings-status").textContent="Gateway stopped. CLI sessions keep running. Run agentpack gateway start on the gateway machine to reconnect."; $("toggle-sharing").disabled=true; $("stop-all-agents").disabled=true; $("stop-gateway").disabled=true; }
+  try { await api("/api/node/stop",{}); closeTerminal(); state.authenticated=false; $("settings-running").textContent="Stopped"; $("gateway-state").textContent="Gateway stopped"; $("gateway-state").parentElement.classList.remove("live"); $("settings-status").textContent="Gateway stopped. CLI sessions keep running. Run agentpack gateway start on the gateway machine to reconnect."; $("toggle-sharing").disabled=true; $("stop-all-agents").disabled=true; $("stop-gateway").disabled=true; }
   catch(error) { $("settings-status").textContent=error.message; }
+});
+function toggleSidebar() {
+  const hidden = $("app").classList.toggle("sidebar-hidden");
+  const label = hidden ? "Show sidebar" : "Hide sidebar";
+  $("toggle-sidebar").setAttribute("aria-label", label);
+  $("toggle-sidebar").title = label + " (\u2318\\)";
+}
+$("toggle-sidebar").addEventListener("click", toggleSidebar);
+document.addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === "\\" && !$("app").hidden) {
+    event.preventDefault();
+    toggleSidebar();
+  }
 });
 $("take-control").addEventListener("click", () => sendControl(controls() ? "release" : "take"));
 $("close-terminal").addEventListener("click", () => {
