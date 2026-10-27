@@ -5,8 +5,8 @@ package network
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -29,9 +29,17 @@ func TestPrivateDirectoryProtectsInheritedCredentials(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		sddl := security.String()
-		if !strings.Contains(sddl, user.User.Sid.String()) || strings.Count(sddl, "(A;") != 1 {
-			t.Fatalf("credential ACL grants more than current user: %s", sddl)
+		dacl, _, err := security.DACL()
+		if err != nil || dacl == nil || dacl.AceCount != 1 {
+			t.Fatalf("credential ACL must contain one user grant: %s (%v)", security.String(), err)
+		}
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, 0, &ace); err != nil {
+			t.Fatal(err)
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || !sid.Equals(user.User.Sid) {
+			t.Fatalf("credential ACL grants more than current user: %s", security.String())
 		}
 	}
 }

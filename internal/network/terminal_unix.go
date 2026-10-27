@@ -20,8 +20,18 @@ func startTerminal(command *exec.Cmd, rows, columns uint16) (*terminal, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = syscall.SetNonblock(int(file.Fd()), true); err == nil {
-		err = file.SetWriteDeadline(time.Time{})
+	// Darwin's PTY is opened outside Go's poller; register a nonblocking duplicate
+	// so deadlines and Close interrupt reads on both Unix platforms.
+	fd, err := unix.FcntlInt(file.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	if err == nil {
+		name := file.Name()
+		_ = file.Close()
+		if err = unix.SetNonblock(fd, true); err == nil {
+			file = os.NewFile(uintptr(fd), name)
+			err = file.SetWriteDeadline(time.Time{})
+		} else {
+			_ = unix.Close(fd)
+		}
 	}
 	if err != nil {
 		_ = file.Close()
