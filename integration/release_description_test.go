@@ -32,3 +32,30 @@ func TestReleaseDescriptionIncludesInstallCommandsAndAssets(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseGateUsesLatestInstallers(t *testing.T) {
+	t.Parallel()
+
+	contents, err := os.ReadFile("../.github/workflows/agent-config-gate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(contents)
+	for _, expected := range []string{
+		"release:\n    types: [published]",
+		"workflows: [Release]",
+		"types: [completed]",
+		"github.event.workflow_run.conclusion == 'success'",
+		"github.event.workflow_run.event == 'push'",
+		"https://github.com/olegpustovit/agentpack/releases/latest/download/agentpack-installer.sh | sh",
+		"https://github.com/olegpustovit/agentpack/releases/latest/download/agentpack-installer.ps1 | iex",
+		"run: agentpack --version",
+	} {
+		if !strings.Contains(workflow, expected) {
+			t.Errorf("release gate is missing %q", expected)
+		}
+	}
+	if strings.Contains(workflow, "releases/download/") {
+		t.Error("release gate must not pin an old installer")
+	}
+}

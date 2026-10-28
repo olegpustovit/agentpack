@@ -5,6 +5,11 @@ name: Agent configuration gate
 
 on:
   workflow_dispatch:
+  release:
+    types: [published]
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   push:
     paths:
       - evaluation/icse2027/ci_gate.py
@@ -15,6 +20,7 @@ permissions:
 
 jobs:
   gate:
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     name: Gate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -29,17 +35,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install Agentpack 0.4.8
+      - name: Install latest Agentpack
         if: runner.os != 'Windows'
         run: |
-          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/olegpustovit/agentpack/releases/download/v0.4.8/agentpack-installer.sh | sh
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/olegpustovit/agentpack/releases/latest/download/agentpack-installer.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Install Agentpack 0.4.8 (Windows)
+      - name: Install latest Agentpack (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          irm https://github.com/olegpustovit/agentpack/releases/download/v0.4.8/agentpack-installer.ps1 | iex
+          irm https://github.com/olegpustovit/agentpack/releases/latest/download/agentpack-installer.ps1 | iex
           "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Verify installed Agentpack
+        run: agentpack --version
       - name: Install the agents (no sign-in)
         run: npm install -g @anthropic-ai/claude-code@2.1.296 @openai/codex@0.159.3 opencode-ai@1.17.11
       - name: Pin, restore, observe and gate
