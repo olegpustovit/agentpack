@@ -1,6 +1,7 @@
 package network
 
 import (
+	"compress/flate"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -335,12 +336,15 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer worker.Close()
-	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool {
+	upgrader := websocket.Upgrader{EnableCompression: true, CheckOrigin: func(r *http.Request) bool {
 		return r.Header.Get("Origin") == g.origin.Scheme+"://"+g.origin.Host || (r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1)
 	}}
 	browser, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
+	}
+	if err := browser.SetCompressionLevel(flate.BestSpeed); err == nil {
+		browser.EnableWriteCompression(true)
 	}
 	defer browser.Close()
 	browser.SetReadLimit(chunkSize)

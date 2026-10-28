@@ -53,18 +53,18 @@ Goal: the gateway looks and behaves like the prototype's Sessions view, on real 
 4. **Terminal.**
    - Render at the host grid (`state.columns × state.rows`).
    - Fit is a CSS `transform: scale()` of the whole xterm screen, exactly as in `scaleTerminal()` in `src/app.js`. Also keep 1:1 and ± zoom, and a 70% legibility floor on narrow screens that switches to scrolling.
-   - Browser resizing never sends `{action:"resize"}`. Today `app.js` calls `state.fit.fit()` and then `sendControl("resize", …)`. Remove that auto-resize path, and drop `addon-fit` if nothing else uses it. Do not delete the resize action; reserve it for an explicit owner-only "Resize remote terminal" later.
-   - The status bar shows live/connecting/offline/stopped, the grid size and control ownership.
+   - Browser resizing never sends `{action:"resize"}`. Today `app.js` calls `state.fit.fit()` and then `sendControl("resize", …)`. Remove that auto-resize path, and drop `addon-fit` if nothing else uses it. The resize action belongs to the local terminal.
+   - The status bar shows live/connecting/offline/stopped, the grid size and shared-input availability.
 5. **Control and lifecycle.**
-   - "Take control" and "Release control" map to the WebSocket `take` and `release` actions with the current `epoch`. When the take is refused, show the alert sheet ("Control belongs to another terminal").
-   - The ⋯ menu holds Take/Release, Restart… (existing `operation_id` retry semantics), Stop…, Install package…, and Save agentpack…. Disable the last two until phase 3, with a tooltip.
+   - Local and browser input share the PTY. Replay must finish rendering before input is enabled. Older session workers remain view-only until a fresh launch.
+   - The ⋯ menu holds Rename…, Restart… (existing `operation_id` retry semantics), Stop…, Install package…, and Save agentpack…. Disable the last two until phase 3, with a tooltip.
 6. **New session sheet.** `POST /api/sessions?node= {directory,harness,mode}`. The Project list is that node's `available` recent folders, and offline machines are disabled.
 7. **Tests.**
    - Extend `web/tests/gateway.spec.js`, mirroring the prototype checks in `src/verify.mjs` and `src/split.mjs`. Cover:
      - the grid stays fixed across window resizes and Fit/1:1/zoom;
      - the sidebar is left, resizes and collapses;
      - arrow-key selection;
-     - a refused take shows the alert;
+     - shared input, replay query suppression, and repeated selection without reattachment;
      - phone pane switching at 390px.
    - Run in Chromium and WebKit (`npx playwright install webkit`).
 
@@ -163,7 +163,7 @@ Done when there are Go tests for:
 3. **Connection timing.**
    - Track click → socket open → attached → first frame → replay complete.
    - Cancel stale attaches when the selection changes.
-   - Keep the last frame dimmed while reconnecting, and disable input until ownership is revalidated.
+   - Keep the last frame dimmed while reconnecting, and disable input until replay completes on a worker that supports shared input.
 
 Done when:
 - Chromium reports the app installable when served by the gateway (`Page.getInstallabilityErrors` is empty in a non-incognito profile);

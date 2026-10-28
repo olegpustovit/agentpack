@@ -4,7 +4,10 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"github.com/gorilla/websocket"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,6 +75,7 @@ func TestCompiledCLISharedTerminalSurvivesGatewayAndRestart(t *testing.T) {
 		_ = command.Process.Kill()
 		terminal.Close()
 	})
+	rendered := false
 	readUntil := func(want string) {
 		t.Helper()
 		var output strings.Builder
@@ -80,6 +84,9 @@ func TestCompiledCLISharedTerminalSurvivesGatewayAndRestart(t *testing.T) {
 		for !strings.Contains(output.String(), want) {
 			select {
 			case chunk := <-chunks:
+				if rendered && strings.Contains(chunk, "agentpack:") {
+					t.Fatalf("transport message overwrote agent screen: %q", chunk)
+				}
 				output.WriteString(chunk)
 			case <-done:
 				for len(chunks) > 0 {
@@ -95,6 +102,7 @@ func TestCompiledCLISharedTerminalSurvivesGatewayAndRestart(t *testing.T) {
 		}
 	}
 	readUntil("READY SHARED AGENT")
+	rendered = true
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	sessions, err := network.Sessions(ctx, home)
@@ -102,27 +110,34 @@ func TestCompiledCLISharedTerminalSurvivesGatewayAndRestart(t *testing.T) {
 		t.Fatalf("sessions: %+v %v", sessions, err)
 	}
 	id := sessions[0].ID
-	if _, err := terminal.Write([]byte{29}); err != nil {
+	if !sessions[0].State.SharedInput {
+		t.Fatal("session does not support shared input")
+	}
+	// Use the authenticated gateway websocket while the real CLI remains attached.
+	data, err := os.ReadFile(filepath.Join(home, "network", "node.json"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		sessions, err = network.Sessions(ctx, home)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(sessions) == 1 && sessions[0].State.Owner == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("local input did not release")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if _, err := terminal.Write(append([]byte{29}, []byte("handoff input\n")...)); err != nil {
+	var node struct{ Address, Secret string }
+	if err := json.Unmarshal(data, &node); err != nil {
 		t.Fatal(err)
 	}
-	readUntil("ECHO handoff input")
+	browser, _, err := websocket.DefaultDialer.Dial("ws://"+node.Address+"/api/sessions/"+id+"/terminal", http.Header{"Authorization": {"Bearer " + node.Secret}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer browser.Close()
+	if err := browser.ReadJSON(new(map[string]any)); err != nil {
+		t.Fatal(err)
+	}
+	if err := browser.WriteMessage(websocket.BinaryMessage, []byte("browser input\n")); err != nil {
+		t.Fatal(err)
+	}
+	readUntil("ECHO browser input")
+	if _, err := terminal.Write([]byte("local input\n")); err != nil {
+		t.Fatal(err)
+	}
+	readUntil("ECHO local input")
 	if !sessions[0].State.Interactive || sessions[0].Directory != workspace || sessions[0].DefinitionRoot != root {
 		t.Fatalf("session metadata: %+v", sessions[0])
 	}

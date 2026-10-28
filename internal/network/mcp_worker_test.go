@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestMCPWorkerOutputAndInputOwnership(t *testing.T) {
+func TestMCPWorkerOutputAndSharedInput(t *testing.T) {
 	session := testSession(t)
 	local, replay := attachTest(t, session, true)
 	readUntil(t, local, string(replay.Data), "READY")
@@ -50,18 +50,24 @@ func TestMCPWorkerOutputAndInputOwnership(t *testing.T) {
 			t.Fatal("accepted bad output range", path)
 		}
 	}
-	if status, _ := request("POST", "/input", "unwanted\n"); status != 409 {
-		t.Fatal("stole input from CLI", status)
+	for range maxAttachments - 1 {
+		if _, _, err := session.Attach(false); err != nil {
+			t.Fatal("could not fill observer limit for MCP input test:", err)
+		}
 	}
-	if err := session.ReleaseControl(local, session.State().Epoch); err != nil {
-		t.Fatal(err)
+	responder := session.State().Responder
+	if responder != local.ID {
+		t.Fatalf("local should remain the query responder: %d != %d", responder, local.ID)
 	}
 	if status, data := request("POST", "/input", "from MCP\n"); status != 200 {
 		t.Fatalf("write: %d %s", status, data)
 	}
+	if got := session.State().Responder; got != responder {
+		t.Fatalf("MCP input changed terminal-query responder: %d != %d", got, responder)
+	}
 	readUntil(t, local, "", "ECHO from MCP")
-	if session.State().Owner != 0 {
-		t.Fatal("MCP retained a writer lease")
+	if !session.State().SharedInput {
+		t.Fatal("new session did not advertise shared input")
 	}
 	if status, _ := request("POST", "/input", strings.Repeat("x", chunkSize+1)); status != 400 {
 		t.Fatal("oversized input accepted")

@@ -92,57 +92,50 @@ func readUntil(t *testing.T, attachment *Attachment, prefix, want string) string
 	return prefix
 }
 
-func TestSessionSharesPTYAndArbitratesInput(t *testing.T) {
+func TestSessionSharesPTYAndAllowsInputFromEveryAttachment(t *testing.T) {
 	session := testSession(t)
 	local, replay := attachTest(t, session, true)
 	readUntil(t, local, string(replay.Data), "READY")
+	if state := session.State(); !state.SharedInput || state.Responder != local.ID {
+		t.Fatalf("local should be the initial responder: %+v", state)
+	}
 	browser, replay := attachTest(t, session, false)
 	if !bytes.Contains(replay.Data, []byte("\x1b[2JREADY")) {
 		t.Fatalf("raw ANSI replay missing: %q", replay.Data)
 	}
-	if _, err := session.TakeControl(browser); !errors.Is(err, ErrNotOwner) {
-		t.Fatalf("browser stole control: %v", err)
+	if state := session.State(); state.Responder != local.ID {
+		t.Fatalf("local did not retain responder priority: %+v", state)
 	}
-	if err := session.Resize(browser, session.State().Epoch, 30, 90); !errors.Is(err, ErrNotOwner) {
-		t.Fatalf("observer resized: %v", err)
+	if err := session.Resize(browser, 30, 90); !errors.Is(err, ErrLocalResize) {
+		t.Fatalf("browser resized local grid: %v", err)
 	}
-	old := session.State().Epoch
-	if err := session.ReleaseControl(local, old); err != nil {
-		t.Fatal(err)
+	if err := session.Resize(local, 30, 90); err != nil {
+		t.Fatalf("local could not resize host grid: %v", err)
 	}
-	state, err := session.TakeControl(browser)
-	if err != nil {
-		t.Fatal(err)
+	if err := session.WriteInput(browser, []byte("size\n")); err != nil {
+		t.Fatalf("browser input rejected: %v", err)
 	}
-	if err := session.WriteInput(local, old, []byte("lost\n")); !errors.Is(err, ErrNotOwner) {
-		t.Fatalf("old owner typed: %v", err)
-	}
-	if err := session.Resize(browser, state.Epoch, 38, 111); err != nil {
-		t.Fatal(err)
-	}
-	if err := session.WriteInput(browser, state.Epoch, []byte("size\n")); err != nil {
-		t.Fatal(err)
-	}
-	readUntil(t, local, "", "SIZE 38 111")
-	readUntil(t, browser, "", "SIZE 38 111")
-	if _, err := session.TakeControl(local); err != nil {
-		t.Fatal(err)
-	}
-	if err := session.ReleaseControl(local, session.State().Epoch); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := session.TakeControl(browser); err != nil {
-		t.Fatal(err)
-	}
-	if err := session.WriteInput(browser, state.Epoch, []byte("stale\n")); !errors.Is(err, ErrStaleControl) {
-		t.Fatalf("stale writer accepted: %v", err)
-	}
-	if err := session.WriteInput(browser, session.State().Epoch, []byte("héllo 世界\n")); err != nil {
-		t.Fatal(err)
+	readUntil(t, local, "", "SIZE 30 90")
+	readUntil(t, browser, "", "SIZE 30 90")
+	if err := session.WriteInput(local, []byte("héllo 世界\n")); err != nil {
+		t.Fatalf("local input rejected: %v", err)
 	}
 	readUntil(t, local, "", "ECHO héllo 世界")
 	readUntil(t, browser, "", "ECHO héllo 世界")
-	if err := session.WriteInput(browser, session.State().Epoch, []byte("exit\n")); err != nil {
+	if err := session.WriteInput(browser, []byte("browser line\n")); err != nil {
+		t.Fatalf("browser input rejected: %v", err)
+	}
+	readUntil(t, local, "", "ECHO browser line")
+	readUntil(t, browser, "", "ECHO browser line")
+	session.Detach(local)
+	if state := session.State(); state.Responder != browser.ID {
+		t.Fatalf("browser was not promoted when local detached: %+v", state)
+	}
+	local, _ = attachTest(t, session, true)
+	if state := session.State(); state.Responder != local.ID {
+		t.Fatalf("new local attachment was not preferred: %+v", state)
+	}
+	if err := session.WriteInput(browser, []byte("exit\n")); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -151,7 +144,7 @@ func TestSessionSharesPTYAndArbitratesInput(t *testing.T) {
 	if err != nil || code != 7 {
 		t.Fatalf("exit = %d, %v", code, err)
 	}
-	if err := session.WriteInput(browser, session.State().Epoch, []byte("x")); !errors.Is(err, ErrSessionEnded) {
+	if err := session.WriteInput(browser, []byte("x")); !errors.Is(err, ErrSessionEnded) {
 		t.Fatal(err)
 	}
 }
@@ -161,18 +154,70 @@ func TestDetachDoesNotStopSession(t *testing.T) {
 	local, replay := attachTest(t, session, true)
 	readUntil(t, local, string(replay.Data), "READY")
 	session.Detach(local)
-	if !session.State().Running || session.State().Owner != 0 {
+	if err := session.WriteInput(local, []byte("detached\n")); err == nil {
+		t.Fatal("detached attachment wrote to terminal")
+	}
+	if !session.State().Running || session.State().Responder != 0 {
 		t.Fatal(session.State())
 	}
 	browser, _ := attachTest(t, session, false)
-	state, err := session.TakeControl(browser)
-	if err != nil {
-		t.Fatal(err)
+	if session.State().Responder != browser.ID {
+		t.Fatalf("browser did not become responder: %+v", session.State())
 	}
-	if err := session.WriteInput(browser, state.Epoch, []byte("still here\n")); err != nil {
+	if err := session.WriteInput(browser, []byte("still here\n")); err != nil {
 		t.Fatal(err)
 	}
 	readUntil(t, browser, "", "ECHO still here")
+}
+
+func TestSessionSerializesConcurrentLocalAndBrowserInput(t *testing.T) {
+	session := testSession(t)
+	local, replay := attachTest(t, session, true)
+	readUntil(t, local, string(replay.Data), "READY")
+	browser, _ := attachTest(t, session, false)
+
+	errs := make(chan error, 2)
+	for _, source := range []struct {
+		attachment *Attachment
+		prefix     string
+	}{{local, "local"}, {browser, "browser"}} {
+		source := source
+		go func() {
+			for i := range 8 {
+				if err := session.WriteInput(source.attachment, []byte(fmt.Sprintf("%s-%02d\n", source.prefix, i))); err != nil {
+					errs <- err
+					return
+				}
+			}
+			errs <- nil
+		}()
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	output := ""
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for strings.Count(output, "ECHO ") < 16 {
+		select {
+		case data, ok := <-local.Output:
+			if !ok {
+				t.Fatal("terminal ended during concurrent input")
+			}
+			output += string(data)
+		case <-timer.C:
+			t.Fatalf("received %d/16 echoed lines", strings.Count(output, "ECHO "))
+		}
+	}
+	for _, prefix := range []string{"local-", "browser-"} {
+		for i := range 8 {
+			if !strings.Contains(output, fmt.Sprintf("ECHO %s%02d", prefix, i)) {
+				t.Fatalf("input line missing after concurrent writes: %s%02d", prefix, i)
+			}
+		}
+	}
 }
 
 func TestSlowObserverAndBoundedReplay(t *testing.T) {
@@ -181,8 +226,8 @@ func TestSlowObserverAndBoundedReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.TakeControl(slow); err != nil {
-		t.Fatal(err)
+	if session.State().Responder != slow.ID {
+		t.Fatal("first browser was not chosen as responder")
 	}
 	chunk := bytes.Repeat([]byte("x"), chunkSize)
 	for range replayLimit/chunkSize + 2 {
@@ -191,8 +236,8 @@ func TestSlowObserverAndBoundedReplay(t *testing.T) {
 	if !errors.Is(session.AttachmentError(slow), ErrSlowObserver) {
 		t.Fatal("lagging observer not disconnected")
 	}
-	if session.State().Owner != 0 {
-		t.Fatal("disconnected observer kept input")
+	if session.State().Responder != 0 {
+		t.Fatal("disconnected observer kept responder slot")
 	}
 	session.Detach(slow) // Idempotent even after eviction.
 	fresh, replay, err := session.Attach(false)

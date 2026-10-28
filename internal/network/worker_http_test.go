@@ -79,7 +79,7 @@ func TestWorkerAuthenticationAndStateBoundary(t *testing.T) {
 				keys = append(keys, key)
 			}
 			slices.Sort(keys)
-			if !reflect.DeepEqual(keys, []string{"columns", "epoch", "exit_code", "interactive", "owner", "restarting", "rows", "running"}) {
+			if !reflect.DeepEqual(keys, []string{"columns", "exit_code", "interactive", "restarting", "rows", "running", "shared_input"}) {
 				t.Fatal(keys)
 			}
 		}
@@ -146,67 +146,35 @@ func TestWorkerReportsReplayCompletionWatermark(t *testing.T) {
 	})
 }
 
-func TestWorkerStreamsRawPTYAndDisconnectLeavesAgent(t *testing.T) {
+func TestWorkerStreamsRawPTYAndSharesInput(t *testing.T) {
 	session := testSession(t)
 	server := testWorkerServer(t, session)
 	local, initial := dialWorker(t, server, true)
-	if initial.State.Owner != initial.Attachment {
-		t.Fatal("local did not own input")
+	if !initial.State.SharedInput || initial.State.Responder != initial.Attachment {
+		t.Fatalf("local should be the shared-input responder: %+v", initial.State)
 	}
 	readWorker(t, local, func(kind int, data []byte) bool {
 		return kind == websocket.BinaryMessage && strings.Contains(string(data), "READY")
 	})
 	browser, browserInitial := dialWorker(t, server, false)
-	if err := browser.WriteMessage(websocket.BinaryMessage, []byte("unauthorized\n")); err != nil {
-		t.Fatal(err)
-	}
-	readWorker(t, browser, func(kind int, data []byte) bool {
-		if kind != websocket.TextMessage {
-			return false
-		}
-		var notice terminalNotice
-		if err := json.Unmarshal(data, &notice); err != nil {
-			t.Fatal(err)
-		}
-		return notice.Type == "error" && notice.Error == ErrNotOwner.Error()
-	})
-	if err := local.WriteJSON(terminalControl{Action: "release", Epoch: initial.State.Epoch}); err != nil {
-		t.Fatal(err)
-	}
-	readWorker(t, local, func(kind int, data []byte) bool {
-		if kind != websocket.TextMessage {
-			return false
-		}
-		var notice terminalNotice
-		if err := json.Unmarshal(data, &notice); err != nil {
-			t.Fatal(err)
-		}
-		return notice.Type == "state" && notice.State.Owner == 0
-	})
-	if err := browser.WriteJSON(terminalControl{Action: "take"}); err != nil {
-		t.Fatal(err)
-	}
-	readWorker(t, browser, func(kind int, data []byte) bool {
-		if kind != websocket.TextMessage {
-			return false
-		}
-		var notice terminalNotice
-		if err := json.Unmarshal(data, &notice); err != nil {
-			t.Fatal(err)
-		}
-		return notice.Type == "state" && notice.State.Owner == browserInitial.Attachment
-	})
 	if err := browser.WriteMessage(websocket.BinaryMessage, []byte("browser-input\n")); err != nil {
 		t.Fatal(err)
 	}
+	if err := local.WriteMessage(websocket.BinaryMessage, []byte("local-input\n")); err != nil {
+		t.Fatal(err)
+	}
 	for _, connection := range []*websocket.Conn{local, browser} {
-		var output string
+		var browserOutput, localOutput string
 		readWorker(t, connection, func(kind int, data []byte) bool {
 			if kind == websocket.BinaryMessage {
-				output += string(data)
+				browserOutput += string(data)
+				localOutput += string(data)
 			}
-			return strings.Contains(output, "ECHO browser-input")
+			return strings.Contains(browserOutput, "ECHO browser-input") && strings.Contains(localOutput, "ECHO local-input")
 		})
+	}
+	if browserInitial.State.Responder != initial.Attachment {
+		t.Fatal("local should remain the preferred terminal-query responder")
 	}
 	browser.Close()
 	local.Close()
@@ -315,6 +283,9 @@ func TestLocalTerminalReconnectsAfterDroppedConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(func(value string) bool { return strings.Contains(value, "ECHO after") })
+	if strings.Contains(output.String(), "agentpack: reconnecting") {
+		t.Fatal("local reconnect notice was written over terminal output")
+	}
 }
 
 func TestClosingLocalTerminalStopsWorker(t *testing.T) {
@@ -331,10 +302,14 @@ func TestClosingLocalTerminalStopsWorker(t *testing.T) {
 				t.Fatal(err)
 			}
 			var unavailable atomic.Bool
+			var attachAttempts atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if unavailable.Load() && r.URL.Path == "/attach" {
-					http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
-					return
+				if r.URL.Path == "/attach" {
+					attachAttempts.Add(1)
+					if unavailable.Load() {
+						http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+						return
+					}
 				}
 				handler.ServeHTTP(w, r)
 			}))
@@ -380,7 +355,17 @@ func TestClosingLocalTerminalStopsWorker(t *testing.T) {
 					connection.Close()
 				}
 				handler.mu.Unlock()
-				waitOutput("reconnecting")
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					state := session.State()
+					if state.SharedInput && state.Responder == 0 && attachAttempts.Load() >= 2 {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("local client did not detach and retry: state=%+v attempts=%d", state, attachAttempts.Load())
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
 			}
 			master.Close()
 			select {

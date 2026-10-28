@@ -9,7 +9,7 @@ test("capture Library, Machines, install, restore, draft, and settings review st
     const req=route.request(),url=new URL(req.url()),path=url.pathname,body=req.method()==="GET"?undefined:req.postDataJSON();let data={};
     if(path==="/api/status")data={setup_required:false,authenticated:true};
     else if(path==="/api/nodes")data=[{id:"peer-1",name:"Build server",online:true}];
-    else if(path==="/api/sessions")data=[{id:"session-1",directory:"/work/app",harness:"claude",mode:"default",state:{running:true,owner:0,epoch:1,rows:24,columns:80}}];
+    else if(path==="/api/sessions")data=[{id:"session-1",directory:"/work/app",harness:"claude",mode:"default",state:{running:true,shared_input:true,responder:1,rows:24,columns:80}}];
     else if(path==="/api/recent")data=[{directory:"/work/app",folder_id:"folder-app",harness:"claude",mode:"default",available:true}];
     else if(path==="/api/packages")data=req.method()==="GET"?[{module:pkg.module,commit:pkg.commit}]:{installed:true};
     else if(path==="/api/library/packages")data=[pkg];
@@ -22,7 +22,7 @@ test("capture Library, Machines, install, restore, draft, and settings review st
     else if(path==="/api/settings")data={running:true,platform:"linux",sharing_enabled:true,allowed_peers:[]};
     await route.fulfill({json:data});
   });
-  await page.routeWebSocket("**/api/sessions/*/terminal",ws=>{ws.send(JSON.stringify({type:"attached",attachment:1,state:{running:true,owner:0,epoch:1,rows:24,columns:80}}));ws.send(Buffer.from("READY\r\n"));ws.send(JSON.stringify({type:"replay_complete"}));});
+  await page.routeWebSocket("**/api/sessions/*/terminal",ws=>{ws.send(JSON.stringify({type:"attached",attachment:1,state:{running:true,shared_input:true,responder:1,rows:24,columns:80}}));ws.send(Buffer.from("READY\r\n"));ws.send(JSON.stringify({type:"replay_complete"}));});
   await page.goto("/");
   const save=async(name)=>{await page.waitForTimeout(250);await page.screenshot({path:`test-results/review-${name}-${testInfo.project.name}.png`});};
   for(const theme of ["light","dark"]){

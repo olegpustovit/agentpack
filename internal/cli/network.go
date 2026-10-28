@@ -227,7 +227,7 @@ func (runner Runner) launchManaged(ctx context.Context, packContext paths.Contex
 	if err != nil {
 		return 1, err
 	}
-	fmt.Fprintf(runner.Stderr, "agentpack: session %s; Ctrl+] releases or reclaims input; agentpack gateway stop-agents stops agents\n", id)
+	fmt.Fprintf(runner.Stderr, "agentpack: session %s; local and browser input are shared\n", id)
 	if url, err := network.GatewayURL(home); err == nil {
 		fmt.Fprintln(runner.Stderr, "agentpack: browser "+url+" (first use: agentpack gateway setup)")
 	}

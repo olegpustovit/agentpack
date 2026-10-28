@@ -151,7 +151,6 @@ async function refresh() {
       $("terminal-status").textContent = "Offline · last-known session";
       $("connection-state").textContent = "Offline";
       $("terminal-stage").classList.add("stale");
-      $("take-control").disabled = true;
     } else if (active) $("terminal-stage").classList.remove("stale");
     renderSessions();
   };
@@ -848,22 +847,22 @@ $("package-install-form").addEventListener("submit", async (event) => {
   }
 });
 function controls() {
-  return state.socket?.readyState === WebSocket.OPEN && !!state.attachment && state.terminalState?.owner === state.attachment && state.terminalState?.running;
+  return state.socket?.readyState === WebSocket.OPEN && !!state.attachment && state.terminalState?.shared_input === true && state.terminalState?.running && state.replayComplete;
 }
 function updateTerminalState(value) {
   if (value) state.terminalState = value;
   const current = state.terminalState;
-  const owned = controls();
-  $("take-control").textContent = owned ? "Release control" : "Take control";
-  $("take-control").disabled = !current?.running;
-  $("terminal-status").textContent = !current?.running ? "Stopped" + (current?.exit_code !== void 0 ? ` (${current.exit_code})` : "") : owned ? "Control active" : current.owner ? "Control held elsewhere" : "Observing";
-  document.querySelectorAll("[data-key]").forEach((element) => element.disabled = !owned);
-  if (state.terminal) state.terminal.options.disableStdin = !owned;
+  if (value && state.terminal && current?.rows > 0 && current?.columns > 0 && (state.terminal.rows !== current.rows || state.terminal.cols !== current.columns)) {
+    state.terminal.resize(current.columns, current.rows);
+    scaleTerminal();
+  }
+  const writable = controls();
+  $("terminal-status").textContent = !current?.running ? "Stopped" + (current?.exit_code !== void 0 ? ` (${current.exit_code})` : "") : !current.shared_input ? "Read-only" : state.replayComplete ? "Shared input" : "Replaying output";
+  document.querySelectorAll("[data-key]").forEach((element) => element.disabled = !writable);
+  if (state.terminal) state.terminal.options.disableStdin = !writable;
+  if (current?.running && current.shared_input !== true && state.socket?.readyState === WebSocket.OPEN) terminalNotice("Start a new session to enable shared input.");
   $("connection-state").textContent = !current?.running ? "Stopped" : "Live";
   $("sb-session").textContent = state.selected ? (state.sessions.find(session => sessionKey(session) === state.selected)?.machine || "Gateway machine") : "";
-}
-function sendControl(action, extra = {}) {
-  if (state.socket?.readyState === WebSocket.OPEN) state.socket.send(JSON.stringify({ action, epoch: state.terminalState?.epoch || 0, ...extra }));
 }
 function scaleTerminal() {
   if (!state.terminal || state.view !== "workspace") return;
@@ -892,6 +891,17 @@ $("actual").addEventListener("click", () => { state.zoom=1; scaleTerminal(); });
 $("zoom-out").addEventListener("click", () => { state.zoom=Math.max(.2, Number($("zoom-value").dataset.scale || 1)-.1); scaleTerminal(); });
 $("zoom-in").addEventListener("click", () => { state.zoom=Math.min(2.5, Number($("zoom-value").dataset.scale || 1)+.1); scaleTerminal(); });
 new ResizeObserver(() => requestAnimationFrame(scaleTerminal)).observe($("terminal-stage"));
+function canRespond() {
+  return state.replayComplete && state.terminalState?.shared_input === true && state.terminalState?.responder === state.attachment && !!state.attachment;
+}
+function registerReplyHandlers(terminal) {
+  const consume = () => !canRespond();
+  for (const id of [{ final: "c" }, { prefix: ">", final: "c" }, { final: "n" }, { prefix: "?", final: "n" }, { intermediates: "$", final: "p" }, { prefix: "?", intermediates: "$", final: "p" }]) terminal.parser.registerCsiHandler(id, consume);
+  terminal.parser.registerCsiHandler({ final: "t" }, (params) => [14, 16, 18].includes(params[0]) && consume());
+  terminal.parser.registerOscHandler(4, (data) => data.split(";").some((part, index) => index % 2 === 1 && part === "?") && consume());
+  for (const id of [10, 11, 12]) terminal.parser.registerOscHandler(id, (data) => data.split(";").includes("?") && consume());
+  terminal.parser.registerDcsHandler({ intermediates: "$", final: "q" }, consume);
+}
 function sendInput(data) {
   if (!controls()) return;
   if (state.socket.bufferedAmount > 1024 * 1024) {
@@ -920,13 +930,22 @@ function closeTerminal() {
   $("terminal-title").textContent = "Sessions";
   $("terminal-subtitle").textContent = "Select a session";
   $("terminal-status").textContent = "Select a session to attach.";
-  $("take-control").disabled = true;
   $("connection-state").textContent = "Disconnected";
 }
-function openTerminal(session, reconnecting = false) {
-  if (!reconnecting) closeTerminal();
+function openTerminal(session, reconnecting = false, force = false) {
+  if (!force && !reconnecting && state.selected === sessionKey(session) && state.terminal) {
+    $("workspace").classList.remove("show-sessions");
+    return;
+  }
+  if (reconnecting) {
+    const previous = state.socket;
+    state.socket = null;
+    previous?.close();
+  } else closeTerminal();
   const generation = ++state.attachmentGeneration;
   state.selected = sessionKey(session);
+  state.replayComplete = false;
+  state.firstFrameMarked = false;
   $("workspace").classList.remove("show-sessions");
   if (!reconnecting) $("terminal-stage").classList.remove("stale", "reconnecting");
   $("terminal-title").textContent = sessionName(session);
@@ -939,23 +958,21 @@ function openTerminal(session, reconnecting = false) {
     $("terminal-empty").querySelector("p").textContent = message;
     $("terminal-status").textContent = session.stale ? "Offline · last-known session" : session.state?.interactive === false ? "Native stdio · input unavailable" : "Desktop session · local interaction";
     $("connection-state").textContent = session.stale ? "Offline" : "Input unavailable";
-    $("take-control").disabled = true;
     renderSessions(); $("sessions").focus({preventScroll:true});
     return;
   }
   $("terminal-empty").querySelector("p").textContent = "Select a session to view its terminal.";
   $("terminal-empty").hidden = true;
-  state.zoom = "fit";
   $("terminal-status").textContent = reconnecting ? "Replaying output" : "Connecting\u2026";
-  $("take-control").disabled = true;
   terminalNotice("");
   if (!reconnecting) {
     state.zoom = "fit";
     const rows = session.state?.rows || 24, columns = session.state?.columns || 80;
-    state.terminal = new Terminal({ cols: columns, rows, cursorBlink: true, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 13, scrollback: 5e3, allowProposedApi: false, disableStdin: true, screenReaderMode: true, theme: { background: "#171b22", foreground: "#e6e8ed", cursor: "#e6e8ed" } });
+    state.terminal = new Terminal({ cols: columns, rows, cursorBlink: true, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 13, scrollback: 5e3, allowProposedApi: true, disableStdin: true, screenReaderMode: true, theme: { background: "#171b22", foreground: "#e6e8ed", cursor: "#e6e8ed" } });
     state.terminal.open($("terminal-mount"));
     state.terminal.onData(sendInput);
     state.terminal.onBinary((data) => sendInput(Uint8Array.from(data, (character) => character.charCodeAt(0))));
+    registerReplyHandlers(state.terminal);
     state.firstFrameMarked = false;
   } else {
     state.attachment = 0;
@@ -970,17 +987,21 @@ function openTerminal(session, reconnecting = false) {
   state.socket = socket;
   socket.binaryType = "arraybuffer";
   let pendingOutput = 0;
-  let replayReceived = !reconnecting;
+  let receivedFrame = false;
+  let replayReceived = false;
   const finishReplay = () => {
-    if (!replayReceived || pendingOutput) return;
+    if (state.socket !== socket || generation !== state.attachmentGeneration || sessionKey(session) !== state.selected || !replayReceived || pendingOutput || (state.terminalState?.shared_input !== true && !receivedFrame) || state.replayComplete) return;
     state.replayComplete = true;
     $("terminal-stage").classList.remove("stale", "reconnecting");
+    updateTerminalState();
     terminalMark("replay_complete");
   };
   socket.onopen = () => { if (generation === state.attachmentGeneration && state.socket === socket) terminalMark("socketopen"); };
   socket.onmessage = (event) => {
     if (state.socket !== socket || generation !== state.attachmentGeneration || sessionKey(session) !== state.selected) return;
     if (event.data instanceof ArrayBuffer) {
+      const firstFrame = !receivedFrame;
+      receivedFrame = true;
       if (!state.firstFrameMarked) { state.firstFrameMarked = true; terminalMark("firstframe"); }
       pendingOutput += event.data.byteLength;
       if (pendingOutput > 16 * 1024 * 1024) {
@@ -989,26 +1010,33 @@ function openTerminal(session, reconnecting = false) {
         return;
       }
       const length = event.data.byteLength;
-      state.terminal.write(new Uint8Array(event.data), () => { pendingOutput -= length; finishReplay(); });
+      let frame = new Uint8Array(event.data);
+      const written = () => { pendingOutput -= length; finishReplay(); };
+      if (reconnecting && firstFrame) {
+        const reset = encoder.encode("\x1bc");
+        const ordered = new Uint8Array(reset.length + frame.length);
+        ordered.set(reset); ordered.set(frame, reset.length); frame = ordered;
+      }
+      state.terminal.write(frame, written);
       return;
     }
     try {
       const message = JSON.parse(event.data);
       if (message.attachment) state.attachment = message.attachment;
       if (message.type === "attached") terminalMark("attached");
+      if (message.type === "attached" && message.state?.shared_input !== true) replayReceived = true;
       if (message.type === "replay_complete") { replayReceived = true; finishReplay(); }
       if (message.type === "attached" && state.retries) {
         state.retries = 0;
         terminalNotice("");
       }
-      const previouslyOwned = controls();
+      const previouslyWritable = controls();
       if (message.type === "attached" && message.offset) terminalNotice("Earlier output was truncated. Showing the available terminal history.");
-      if (message.error) { terminalNotice(message.error); if (/control|owner|terminal/i.test(message.error)) $("alert-sheet").showModal(); }
+      if (message.error) terminalNotice(message.error);
       if (message.type === "ended" && message.state?.restarting) reconnectAfterRestart(session);
       if (message.state) updateTerminalState(message.state);
-      if (!previouslyOwned && controls()) {
+      if (!previouslyWritable && controls()) {
         scaleTerminal();
-        state.terminal.focus();
       }
     } catch {
       terminalNotice("The terminal sent an invalid control message.");
@@ -1030,7 +1058,6 @@ function openTerminal(session, reconnecting = false) {
       state.replayComplete = false;
       setTimeout(() => { if (state.restartToken === token && state.selected === sessionKey(session)) openTerminal(session, true); }, delay);
     } else if (state.terminalState?.running !== false) $("terminal-status").textContent = "Disconnected · this session is no longer listed";
-    $("take-control").disabled = true;
   };
   socket.onerror = () => {
     if (state.socket === socket && state.retries >= 2) terminalNotice("Still can\u2019t reach this terminal. Retrying automatically\u2026");
@@ -1050,8 +1077,8 @@ async function reconnectAfterRestart(session) {
       if (state.restartToken !== token) return;
       const replacement = sessions.find(value => value.id === session.id);
       if (replacement?.state && !replacement.state.restarting) {
-        openTerminal({ ...replacement, node: session.node, machine: session.machine });
-        terminalNotice("Agent restarted. This is a new process; conversation resume depends on the agent’s launch options. Reconnected as an observer.");
+        openTerminal({ ...replacement, node: session.node, machine: session.machine }, false, true);
+        terminalNotice("Agent restarted. This is a new process; conversation resume depends on the agent’s launch options.");
         return;
       }
     } catch {
@@ -1162,7 +1189,7 @@ function showSessionMenu(session, anchor, point) {
   menuAnchor=anchor;
   anchor.setAttribute("aria-expanded", "true");
   sessionMenu.replaceChildren();
-  const attached=!!session && sessionKey(session)===state.selected;
+  const attached=!!session && !!state.terminal && sessionKey(session)===state.selected;
   const addAction = (label, icon, action, disabled=false) => {
     const item=button("", async () => { closeSessionMenu(); await action?.(); }, "mi");
     item.innerHTML=svgIcon(icon);item.append(node("span",label));
@@ -1172,8 +1199,7 @@ function showSessionMenu(session, anchor, point) {
   addAction("Restart…", "restart", () => changeSession(session,"restart"), !session || session.state?.interactive === false || session.stale);
   addAction("Stop…", "stop", () => changeSession(session,"stop"), !session?.state?.running || session.stale);
   sessionMenu.append(node("hr"));
-  addAction(controls() && attached ? "Release control" : "Take control", "terminal", () => sendControl(controls()?"release":"take"), !attached || !session.state?.running || session.stale || session.state?.interactive === false);
-  addAction("Reconnect", "restart", () => openTerminal(session), !session || session.stale);
+  addAction("Reconnect", "restart", () => openTerminal(session, attached), !session || session.stale);
   addAction("Close terminal", "close", () => closeTerminal(), !attached);
   sessionMenu.append(node("hr"));
   addAction("Install package…", "install", () => installInto(session), !session || session.stale || session.harness === "agy");
@@ -1205,7 +1231,6 @@ $("more-tools").addEventListener("click", () => {
   const rect=$("more-tools").getBoundingClientRect(); moreMenu.style.left=`${rect.left}px`; moreMenu.style.top=`${rect.bottom+4}px`; moreMenu.hidden=false;
 });
 document.addEventListener("pointerdown", event => { if (!moreMenu.contains(event.target) && event.target !== $("more-tools")) moreMenu.hidden=true; });
-$("take-control").addEventListener("click", () => sendControl(controls() ? "release" : "take"));
 $("library-save").addEventListener("click",()=>saveAgentpack(state.sessions.find(session=>sessionKey(session)===state.selected)));
 const keys = { escape: "\x1B", tab: "	", interrupt: "", up: "\x1B[A", down: "\x1B[B" };
 document.querySelectorAll("[data-key]").forEach((element) => element.addEventListener("click", () => {

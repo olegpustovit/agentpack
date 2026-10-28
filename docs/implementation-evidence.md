@@ -27,9 +27,9 @@ Registry objects are content-addressed and checked before publication. Credentia
 
 Network tests cover enrollment, identity spoofing rejection, digest mismatch, durable acknowledgment, deletion propagation, bounded peer routes and draft review. Registry tests cover redaction, parentage, naming convergence, two heads, rollback and recovery. Browser tests use mocked HTTP/WebSockets; they test interactions and payloads, not a live multi-machine Tailscale deployment.
 
-Browser evidence: 29 desktop Chromium checks, one phone Chromium check, and 29 desktop WebKit checks passed. After the final text/CSS polish, Chromium and phone passed again and both browsers passed the complete review-capture flow. Captures cover 1440, 1024 and 390 widths in light/dark, plus Library, Machines, install, restore, drafts and replication settings. Chromium's persistent-profile `Page.getInstallabilityErrors` returned an empty list against the actual Go gateway with the latest embedded assets.
+Browser evidence: 35 desktop Chromium checks, one phone Chromium check, and 35 desktop WebKit checks passed. After the final text/CSS polish, Chromium and phone passed again and both browsers passed the complete review-capture flow. Captures cover 1440, 1024 and 390 widths in light/dark, plus Library, Machines, install, restore, drafts and replication settings. Chromium's persistent-profile `Page.getInstallabilityErrors` returned an empty list against the actual Go gateway with the latest embedded assets.
 
-The optional host-color query and server-side screen snapshot were not added. The interface labels fallback colors, tracks the actual replay watermark, retains a dim last frame during reconnect, and disables input until control ownership is revalidated.
+The optional host-color query and server-side screen snapshot were not added. The interface labels fallback colors, tracks the actual replay watermark, retains a dim last frame during reconnect, and disables input until replay has rendered and the worker supports shared input.
 
 ## Commands, formats and samples
 

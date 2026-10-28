@@ -15,7 +15,7 @@ import (
 )
 
 // RunTerminal attaches directly to the worker, so gateway shutdown cannot
-// interrupt the local terminal. Ctrl+] releases or reclaims input ownership.
+// interrupt the local terminal. Local and browser input share the same PTY.
 // Closing the launching terminal stops its worker, including during reconnect.
 func RunTerminal(ctx context.Context, home, id string, input *os.File, output io.Writer) (code int, result error) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -100,8 +100,6 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 	}()
 	var attachment uint64
 	var state TerminalState
-	taking := false
-	var pending []byte
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	write := func(kind int, data []byte) error {
@@ -112,9 +110,6 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 	// reattach and replay instead of abandoning the agent. Unsent input is lost.
 	reconnect := func() error {
 		connection.Close()
-		if _, err := fmt.Fprint(output, "\r\nagentpack: reconnecting to the agent…\r\n"); err != nil {
-			return err
-		}
 		next, err := reattach(ctx, record)
 		if err != nil {
 			return err
@@ -125,13 +120,11 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 		go read(connection, incoming)
 		state = TerminalState{}
 		attachment = 0
-		taking = false
-		pending = nil
 		_, err = fmt.Fprint(output, "\x1b[2J\x1b[H")
 		return err
 	}
 	control := func(action string, rows, columns uint16) error {
-		data, _ := json.Marshal(terminalControl{Action: action, Epoch: state.Epoch, Rows: rows, Columns: columns})
+		data, _ := json.Marshal(terminalControl{Action: action, Rows: rows, Columns: columns})
 		return write(websocket.TextMessage, data)
 	}
 	for {
@@ -139,54 +132,12 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 		case <-ctx.Done():
 			return 1, ctx.Err()
 		case key := <-keys:
-			for len(key) > 0 {
-				index := -1
-				for i, b := range key {
-					if b == 29 {
-						index = i
-						break
-					}
-				}
-				data := key
-				if index >= 0 {
-					data = key[:index]
-				}
-				if len(data) > 0 && taking {
-					if len(pending)+len(data) > chunkSize {
-						return 1, errors.New("input queued during control handoff exceeded 32 KiB")
-					}
-					pending = append(pending, data...)
-				} else if len(data) > 0 && attachment != 0 && state.Owner == attachment {
-					if err := write(websocket.BinaryMessage, data); err != nil {
-						if err := reconnect(); err != nil {
-							return 1, err
-						}
-						break
-					}
-				}
-				if index < 0 {
-					break
-				}
-				if taking {
-					key = key[index+1:]
-					continue
-				}
-				action := "take"
-				if attachment != 0 && state.Owner == attachment {
-					action = "release"
-				}
-				if err := control(action, 0, 0); err != nil {
+			if attachment != 0 && state.Running {
+				if err := write(websocket.BinaryMessage, key); err != nil {
 					if err := reconnect(); err != nil {
 						return 1, err
 					}
-					break
 				}
-				if action == "take" {
-					taking = true
-				} else {
-					state.Owner = 0
-				}
-				key = key[index+1:]
 			}
 		case message := <-incoming:
 			if message.err != nil {
@@ -210,29 +161,15 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 				attachment = notice.Attachment
 			}
 			if notice.Type == "error" {
-				if _, err := fmt.Fprintf(output, "\r\nagentpack: %s; pending input was not sent\r\n", notice.Error); err != nil {
+				// Never write transport notices over the application's terminal screen.
+				if err := reconnect(); err != nil {
 					return 1, err
 				}
-				taking = false
-				pending = nil
-			} else if taking && attachment != 0 && state.Owner == attachment {
-				taking = false
-				if len(pending) > 0 {
-					if err := write(websocket.BinaryMessage, pending); err != nil {
-						if err := reconnect(); err != nil {
-							return 1, err
-						}
-						continue
-					}
-					pending = nil
-				}
+				continue
 			}
 			if notice.Type == "ended" {
 				if state.Restarting {
 					if err := reconnect(); err != nil {
-						return 1, err
-					}
-					if _, err := fmt.Fprint(output, "agentpack: agent restarted; starting a fresh conversation\r\n"); err != nil {
 						return 1, err
 					}
 					continue
@@ -245,7 +182,7 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 			}
 		case <-ticker.C:
 			columns, rows, err := ConsoleSize(input, consoleOutput)
-			if err == nil && state.Owner == attachment && (rows != int(state.Rows) || columns != int(state.Columns)) && validSize(uint16(rows), uint16(columns)) {
+			if err == nil && attachment != 0 && state.Running && (rows != int(state.Rows) || columns != int(state.Columns)) && validSize(uint16(rows), uint16(columns)) {
 				if err := control("resize", uint16(rows), uint16(columns)); err != nil {
 					if err := reconnect(); err != nil {
 						return 1, err

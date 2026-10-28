@@ -56,19 +56,12 @@ func (worker *WorkerHTTP) registerMCP(mux *http.ServeMux) {
 			return
 		}
 		session := worker.current()
-		attachment, _, err := session.Attach(false)
-		if err != nil {
-			http.Error(w, "terminal attachment unavailable", 409)
-			return
-		}
-		defer session.Detach(attachment)
-		state, err := session.TakeControl(attachment)
-		if err == nil {
-			err = session.WriteInput(attachment, state.Epoch, data)
-		}
+		session.mu.Lock()
+		err = session.writeInputLocked(data)
+		session.mu.Unlock()
 		if err != nil {
 			message := "terminal input failed"
-			if errors.Is(err, ErrNotOwner) || errors.Is(err, ErrStaleControl) || errors.Is(err, ErrSessionEnded) {
+			if errors.Is(err, ErrSessionEnded) {
 				message = err.Error()
 			}
 			http.Error(w, message, 409)

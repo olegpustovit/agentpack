@@ -8,7 +8,7 @@ THESIS: A terminal-led desktop workspace with compact source lists and explicit 
 
 OWN-WORLD: The reference's system-font typography, light/dark surfaces, small native-style controls, subtle separators, and restrained blue selection. Status combines a word with a dot/ring. No external fonts or CDN assets.
 
-STORY: Select a session, inspect its live host grid, take control explicitly, then inspect saved configurations and choose destinations before changing them. Offline work remains a reviewable draft.
+STORY: Select a session, inspect its live host grid, type alongside the local terminal, then inspect saved configurations and choose destinations before changing them. Offline work remains a reviewable draft.
 
 FIRST VIEWPORT: A 40px toolbar, resizable left Sessions list (220–420px), edge-to-edge terminal, and 24px status bar. Library uses a 300px list and inspector; Machines uses a narrow list and package matrix. At 390px, panes switch and dialogs become bottom sheets.
 

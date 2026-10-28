@@ -109,20 +109,16 @@ while (($line = [Console]::ReadLine()) -ne $null) {
 			if !bytes.Contains(replay.Data, []byte("\x1b[")) {
 				t.Fatalf("ANSI missing: %q", replay.Data)
 			}
-			if _, err := session.TakeControl(browser); !errors.Is(err, ErrNotOwner) {
-				t.Fatalf("browser stole local input: %v", err)
+			if state := session.State(); !state.SharedInput || state.Responder != local.ID {
+				t.Fatalf("local should be the shared-input responder: %+v", state)
 			}
-			if err := session.ReleaseControl(local, session.State().Epoch); err != nil {
+			if err := session.Resize(browser, 38, 111); !errors.Is(err, ErrLocalResize) {
+				t.Fatalf("browser resized local grid: %v", err)
+			}
+			if err := session.Resize(local, 38, 111); err != nil {
 				t.Fatal(err)
 			}
-			owner, err := session.TakeControl(browser)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := session.Resize(browser, owner.Epoch, 38, 111); err != nil {
-				t.Fatal(err)
-			}
-			if err := session.WriteInput(browser, owner.Epoch, []byte("size\r")); err != nil {
+			if err := session.WriteInput(browser, []byte("size\r")); err != nil {
 				t.Fatal(err)
 			}
 			windowsReadUntil(t, browser, "", "SIZE 38 111")
@@ -135,11 +131,11 @@ while (($line = [Console]::ReadLine()) -ne $null) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := session.WriteInput(local, session.State().Epoch, []byte("héllo 世界\r")); err != nil {
+			if err := session.WriteInput(local, []byte("héllo 世界\r")); err != nil {
 				t.Fatal(err)
 			}
 			windowsReadUntil(t, local, "", "ECHO héllo 世界")
-			if err := session.WriteInput(local, session.State().Epoch, []byte("exit\r")); err != nil {
+			if err := session.WriteInput(local, []byte("exit\r")); err != nil {
 				t.Fatal(err)
 			}
 			windowsReadUntil(t, local, "", "FINAL FRAME")

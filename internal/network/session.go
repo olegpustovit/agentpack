@@ -20,8 +20,7 @@ const (
 )
 
 var (
-	ErrNotOwner            = errors.New("terminal input belongs to another attachment")
-	ErrStaleControl        = errors.New("terminal control has changed; refresh before sending input")
+	ErrLocalResize         = errors.New("only the local terminal may resize the shared grid")
 	ErrSessionEnded        = errors.New("terminal session has ended")
 	ErrSlowObserver        = errors.New("terminal observer fell behind; reconnect to recover available history")
 	ErrUnsupportedTerminal = errors.New("terminal sharing is not supported on this platform")
@@ -32,8 +31,8 @@ type TerminalState struct {
 	Interactive bool   `json:"interactive"`
 	Running     bool   `json:"running"`
 	Restarting  bool   `json:"restarting"`
-	Owner       uint64 `json:"owner"`
-	Epoch       uint64 `json:"epoch"`
+	SharedInput bool   `json:"shared_input,omitempty"`
+	Responder   uint64 `json:"responder,omitempty"`
 	Rows        uint16 `json:"rows"`
 	Columns     uint16 `json:"columns"`
 	ExitCode    int    `json:"exit_code"`
@@ -86,7 +85,7 @@ func StartSession(command *exec.Cmd, rows, columns uint16) (*Session, error) {
 	}
 	session := &Session{
 		command: command, terminal: terminal,
-		state:       TerminalState{Interactive: true, Running: true, Rows: rows, Columns: columns, ExitCode: -1},
+		state:       TerminalState{Interactive: true, Running: true, SharedInput: true, Rows: rows, Columns: columns, ExitCode: -1},
 		attachments: make(map[uint64]*Attachment), done: make(chan struct{}), readDone: make(chan struct{}),
 	}
 	go session.readOutput()
@@ -134,10 +133,7 @@ func (session *Session) Attach(local bool) (*Attachment, Replay, error) {
 	output := make(chan []byte, observerQueue)
 	attachment := &Attachment{ID: session.nextID, Output: output, output: output, local: local}
 	session.attachments[attachment.ID] = attachment
-	if local && session.state.Running {
-		session.state.Owner = attachment.ID
-		session.state.Epoch++
-	}
+	session.updateResponderLocked()
 	if !session.state.Running {
 		close(output)
 	}
@@ -152,10 +148,7 @@ func (session *Session) Detach(attachment *Attachment) {
 		if session.state.Running {
 			close(attachment.output)
 		}
-		if session.state.Owner == attachment.ID {
-			session.state.Owner = 0
-			session.state.Epoch++
-		}
+		session.updateResponderLocked()
 	}
 }
 
@@ -165,45 +158,23 @@ func (session *Session) AttachmentError(attachment *Attachment) error {
 	return attachment.err
 }
 
-// TakeControl never steals a writer lease. The local terminal may explicitly
-// reclaim control; browser attachments must wait for the current owner to release.
-func (session *Session) TakeControl(attachment *Attachment) (TerminalState, error) {
+func (session *Session) WriteInput(attachment *Attachment, data []byte) error {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	if err := session.attached(attachment); err != nil {
-		return session.state, err
-	}
-	if session.state.Owner != 0 && session.state.Owner != attachment.ID && !attachment.local {
-		return session.state, ErrNotOwner
-	}
-	if session.state.Owner != attachment.ID {
-		session.state.Owner = attachment.ID
-		session.state.Epoch++
-	}
-	return session.state, nil
-}
-
-func (session *Session) ReleaseControl(attachment *Attachment, epoch uint64) error {
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	if err := session.owns(attachment, epoch); err != nil {
 		return err
 	}
-	session.state.Owner = 0
-	session.state.Epoch++
-	return nil
+	return session.writeInputLocked(data)
 }
 
-func (session *Session) WriteInput(attachment *Attachment, epoch uint64, data []byte) error {
+func (session *Session) writeInputLocked(data []byte) error {
 	if len(data) > chunkSize {
 		return errors.New("terminal input exceeds 32 KiB")
 	}
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	if err := session.owns(attachment, epoch); err != nil {
-		return err
+	if !session.state.Running {
+		return ErrSessionEnded
 	}
-	// A child that stops reading must not hold the control lock indefinitely.
+	// Keep a child that stops reading from holding the session mutex indefinitely.
 	if err := session.terminal.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
 		return err
 	}
@@ -211,14 +182,17 @@ func (session *Session) WriteInput(attachment *Attachment, epoch uint64, data []
 	return err
 }
 
-func (session *Session) Resize(attachment *Attachment, epoch uint64, rows, columns uint16) error {
+func (session *Session) Resize(attachment *Attachment, rows, columns uint16) error {
 	if !validSize(rows, columns) {
 		return errors.New("invalid terminal size")
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	if err := session.owns(attachment, epoch); err != nil {
+	if err := session.attached(attachment); err != nil {
 		return err
+	}
+	if !attachment.local {
+		return ErrLocalResize
 	}
 	if err := resizeTerminal(session.terminal, rows, columns); err != nil {
 		return err
@@ -237,17 +211,24 @@ func (session *Session) attached(attachment *Attachment) error {
 	return nil
 }
 
-func (session *Session) owns(attachment *Attachment, epoch uint64) error {
-	if err := session.attached(attachment); err != nil {
-		return err
+func (session *Session) updateResponderLocked() {
+	var responder, local uint64
+	for id, attachment := range session.attachments {
+		if attachment.local {
+			local = id
+			break
+		}
+		if responder == 0 || id < responder {
+			responder = id
+		}
 	}
-	if session.state.Owner != attachment.ID {
-		return ErrNotOwner
+	if local != 0 {
+		responder = local
 	}
-	if session.state.Epoch != epoch {
-		return ErrStaleControl
+	if !session.state.Running {
+		responder = 0
 	}
-	return nil
+	session.state.Responder = responder
 }
 
 func (session *Session) publish(data []byte) {
@@ -265,10 +246,7 @@ func (session *Session) publish(data []byte) {
 			attachment.err = ErrSlowObserver
 			close(attachment.output)
 			delete(session.attachments, id)
-			if session.state.Owner == id {
-				session.state.Owner = 0
-				session.state.Epoch++
-			}
+			session.updateResponderLocked()
 		}
 	}
 }
@@ -296,8 +274,7 @@ func (session *Session) reap() {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	session.state.Running = false
-	session.state.Owner = 0
-	session.state.Epoch++
+	session.state.Responder = 0
 	if session.command.ProcessState != nil {
 		session.state.ExitCode = session.command.ProcessState.ExitCode()
 	}

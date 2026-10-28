@@ -27,7 +27,7 @@ private worker capabilities never appear in any response. An unauthenticated API
   `agentpack gateway setup`. Root can be created once. Minimum password length 12.
 - `POST /api/login`: `{password}`; `POST /api/logout`: `{}`.
 - `GET /api/sessions`: array (or `{sessions: [...]}`) of
-  `{id, name?, directory, harness, mode, state: {running,owner,epoch,rows,columns,exit_code}}`.
+  `{id, name?, directory, harness, mode, state: {running,shared_input,responder?,rows,columns,exit_code}}`.
 - `GET /api/recent`: array (or `{recent: [...]}`) of `{directory,harness,mode,last_used?,available,unavailable_reason?}`.
   Missing or replaced folders remain visible but cannot start until a fresh local launch.
 - `POST /api/sessions`: `{directory,harness,mode}`, returns created session including `id`.
@@ -64,11 +64,14 @@ private worker capabilities never appear in any response. An unauthenticated API
   resizing only changes its CSS scale.
 - `GET /api/sessions/{id}/terminal`: authenticated WebSocket. Binary messages carry raw
   PTY bytes in either direction. Text notices carry `{type,attachment?,state?,offset?,error?}`.
-  Browser control messages are `{action:"take"|"release"|"resize",epoch,rows?,columns?}`.
+  All live attachments may send input concurrently; each input frame is serialized into the PTY.
+  Only the local attachment may resize it with `{action:"resize",rows,columns}`.
   The first attached notice must include attachment ID and current state. After replay bytes,
   the gateway sends `{type:"replay_complete"}`; the UI keeps the last frame dimmed and input
-  disabled until the replay has rendered and current ownership is validated. State notices
-  update ownership and epoch; ownership checks happen server-side for every mutation.
+  disabled until replay has rendered and `shared_input` is true. Older workers remain
+  view-only until the session is launched again with the updated executable. The `responder`
+  attachment answers live terminal queries (local preferred, otherwise first attached browser);
+  browser replay never answers queries. Every write validates a live attachment server-side.
   The UI records `performance.mark` entries named `agentpack:terminal:click`, `socketopen`,
   `attached`, `firstframe`, and `replay_complete` and emits matching `console.debug` timing
   entries for local troubleshooting.
@@ -88,7 +91,6 @@ gateway machine even when another machine is selected for sessions. Stop-all and
 stop-gateway call `/api/node/stop-agents` and `/api/node/stop`. Forget sends
 `DELETE /api/recent` with `{directory,harness,mode}` to the selected node.
 A terminal `ended` notice with `state.restarting=true` triggers bounded reconnect,
-waits up to 90 seconds, resets the emulator, and keeps browser input as an observer
-until explicit handoff. A replacement that immediately exits still replays its output.
+waits up to 90 seconds, resets the emulator, and enables shared browser input after replay. A replacement that immediately exits still replays its output.
 Antigravity desktop launcher presence cannot be launched or controlled remotely;
 detached desktop windows are not tracked.

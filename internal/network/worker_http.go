@@ -235,7 +235,6 @@ func WorkerHandler(session *Session, secret string) (*WorkerHTTP, error) {
 
 type terminalControl struct {
 	Action  string `json:"action"`
-	Epoch   uint64 `json:"epoch,omitempty"`
 	Rows    uint16 `json:"rows,omitempty"`
 	Columns uint16 `json:"columns,omitempty"`
 }
@@ -311,7 +310,7 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 	}
 	notices := make(chan terminalNotice, 8)
 	closed := make(chan struct{})
-	go func(epoch uint64) {
+	go func() {
 		defer close(closed)
 		for {
 			kind, data, err := connection.ReadMessage()
@@ -320,7 +319,7 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 			}
 			switch kind {
 			case websocket.BinaryMessage:
-				err = session.WriteInput(attachment, epoch, data)
+				err = session.WriteInput(attachment, data)
 			case websocket.TextMessage:
 				var control terminalControl
 				decoder := json.NewDecoder(bytes.NewReader(data))
@@ -332,16 +331,8 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 					return
 				}
 				switch control.Action {
-				case "take":
-					var current TerminalState
-					current, err = session.TakeControl(attachment)
-					if err == nil {
-						epoch = current.Epoch
-					}
-				case "release":
-					err = session.ReleaseControl(attachment, control.Epoch)
 				case "resize":
-					err = session.Resize(attachment, control.Epoch, control.Rows, control.Columns)
+					err = session.Resize(attachment, control.Rows, control.Columns)
 				default:
 					return
 				}
@@ -351,7 +342,7 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 			if err != nil {
 				// Backend I/O errors may contain private paths. Publish only stable errors.
 				message := "terminal operation failed"
-				for _, safe := range []error{ErrNotOwner, ErrStaleControl, ErrSessionEnded} {
+				for _, safe := range []error{ErrLocalResize, ErrSessionEnded} {
 					if errors.Is(err, safe) {
 						message = safe.Error()
 					}
@@ -369,7 +360,7 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 				}
 			}
 		}
-	}(state.Epoch)
+	}()
 	stateTick := time.NewTicker(100 * time.Millisecond)
 	defer stateTick.Stop()
 	ping := time.NewTicker(15 * time.Second)

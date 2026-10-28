@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-const session = {id:"local-one",directory:"/work/my-project",harness:"claude",mode:"default",state:{running:true,owner:0,epoch:1,rows:24,columns:80,exit_code:0}};
+const session = {id:"local-one",directory:"/work/my-project",harness:"claude",mode:"default",state:{running:true,rows:24,columns:80,exit_code:0}};
 const second = {...session,id:"local-two",directory:"/work/another-project",harness:"codex"};
 async function mockAPI(page,{authenticated=true,setup=false}={}) {
   const requests=[]; let loggedIn=authenticated, setupNeeded=setup;
@@ -21,22 +21,18 @@ async function mockAPI(page,{authenticated=true,setup=false}={}) {
   });
   return requests;
 }
-async function attachTerminal(page,{refuseTake=false}={}) {
-  const controls=[];
+async function attachTerminal(page,{terminalState={},holdReplay=false,initialQuery=""}={}) {
+  const controls=[]; const sockets=[];
   await page.routeWebSocket("**/api/sessions/*/terminal",ws=>{
-    ws.send(JSON.stringify({type:"attached",attachment:42,state:session.state}));
-    ws.send(Buffer.from("READY\r\n"));
-    ws.send(JSON.stringify({type:"replay_complete"}));
+    sockets.push(ws);
+    ws.send(JSON.stringify({type:"attached",attachment:42,state:{...session.state,shared_input:true,responder:42,...terminalState}}));
+    ws.send(Buffer.from(`READY\r\n${initialQuery}`));
+    if(!holdReplay && terminalState.shared_input !== false) ws.send(JSON.stringify({type:"replay_complete"}));
     ws.onMessage(message=>{
       controls.push(message);
-      if(typeof message==="string") {
-        const control=JSON.parse(message);
-        if(control.action==="take"&&!refuseTake) ws.send(JSON.stringify({type:"state",state:{...session.state,owner:42,epoch:2}}));
-        if(control.action==="release") ws.send(JSON.stringify({type:"state",state:{...session.state,owner:0,epoch:3}}));
-        if(control.action==="take"&&refuseTake) ws.send(JSON.stringify({type:"error",error:"Control belongs to another terminal"}));
-      }
     });
   });
+  controls.sockets=sockets;
   return controls;
 }
 test("setup, login and settings retain their gateway behavior",async({page})=>{
@@ -130,12 +126,14 @@ test("Library keeps installed packages when an older peer has no Library API",as
   await expect(page.locator("#library-summary")).not.toContainText("unavailable");
   await expect(page.locator("#library-list")).toContainText("Update Agentpack on Build server");
 });
-test("refused terminal control opens the ownership alert",async({page})=>{
-  await mockAPI(page); await attachTerminal(page,{refuseTake:true}); await page.goto("/");
+test("legacy worker stays read-only and offers no control toggle",async({page})=>{
+  await mockAPI(page); const received=await attachTerminal(page,{terminalState:{shared_input:false,responder:0}}); await page.goto("/");
   await page.locator("[data-session=local-one]").click();
-  await page.getByRole("button",{name:"Take control"}).click();
-  await expect(page.locator("#alert-sheet")).toBeVisible();
-  await expect(page.getByRole("heading",{name:"Control belongs to another terminal"})).toBeVisible();
+  await expect(page.locator("#terminal-status")).toHaveText("Read-only");
+  await expect(page.locator("#terminal-notice")).toHaveText("Start a new session to enable shared input.");
+  await expect(page.getByRole("button",{name:/Take control|Release control/})).toHaveCount(0);
+  await page.locator(".xterm-screen").click(); await page.keyboard.press("Control+C");
+  expect(received.some(value=>typeof value!=="string"&&Buffer.from(value).equals(Buffer.from([3])))).toBeFalsy();
 });
 test("390px switches between the session list and terminal panes",async({page})=>{
   await mockAPI(page); await attachTerminal(page); await page.setViewportSize({width:390,height:844}); await page.goto("/");
@@ -195,20 +193,55 @@ test("existing package installation remains available from More",async({page})=>
   await expect(page.getByText("Package installed. Affected agents have been restarted.")).toBeVisible();
   expect(requests.some(value=>value.path==="/api/packages"&&value.body?.spec==="acme/skill")).toBeTruthy();
 });
-test("terminal input requires ownership and detaching never stops the agent",async({page})=>{
+test("shared input works without ownership and detaching never stops the agent",async({page})=>{
   const requests=await mockAPI(page); const received=await attachTerminal(page);
   await page.goto("/"); await page.locator("[data-session=local-one]").click();
-  await expect(page.locator("#terminal-status")).toHaveText("Observing");
-  await page.getByRole("button",{name:"Take control"}).click();
-  await expect(page.locator("#terminal-status")).toHaveText("Control active");
+  await expect(page.locator("#terminal-status")).toHaveText("Shared input");
   await page.locator(".xterm-screen").click(); await page.keyboard.press("Control+C");
   await expect.poll(()=>received.some(data=>typeof data!=="string"&&Buffer.from(data).equals(Buffer.from([3])))).toBeTruthy();
-  await page.getByRole("button",{name:"Release control"}).click();
-  await expect(page.locator("#terminal-status")).toHaveText("Observing");
-  await expect(page.getByRole("button",{name:"Take control"})).toBeEnabled();
   await page.getByRole("button",{name:"Session actions"}).click();
+  await expect(page.getByRole("menuitem",{name:/Take control|Release control/})).toHaveCount(0);
   await page.getByRole("menuitem",{name:"Close terminal"}).click();
   expect(requests.some(value=>value.path.endsWith("/stop"))).toBeFalsy();
+});
+test("replay blocks input and query replies until rendered, then only the responder answers",async({page})=>{
+  const received=await attachTerminal(page,{terminalState:{responder:7},holdReplay:true,initialQuery:"\x1b[6n"});
+  await mockAPI(page); await page.goto("/"); await page.locator("[data-session=local-one]").click();
+  await expect(page.locator("#terminal-status")).toHaveText("Replaying output");
+  await page.locator(".xterm-screen").click(); await page.keyboard.press("Control+C");
+  await page.waitForTimeout(50);
+  const text=value=>typeof value==="string"?value:Buffer.from(value).toString();
+  expect(received).toHaveLength(0);
+  received.sockets[0].send(JSON.stringify({type:"replay_complete"}));
+  await expect(page.locator("#terminal-status")).toHaveText("Shared input");
+  received.sockets[0].send(Buffer.from("\x1b[6n"));
+  await page.locator(".xterm-screen").click(); await page.keyboard.press("Control+C");
+  await expect.poll(()=>received.some(value=>typeof value!=="string"&&Buffer.from(value).equals(Buffer.from([3])))).toBeTruthy();
+  expect(received.some(value=>text(value).includes("\x1b[2;1R"))).toBeFalsy();
+  await page.locator(".xterm-helper-textarea").evaluate(el=>{const clipboard=new DataTransfer();clipboard.setData("text/plain","paste");el.dispatchEvent(new ClipboardEvent("paste",{clipboardData:clipboard,bubbles:true}));});
+  await expect.poll(()=>received.some(value=>text(value).includes("paste"))).toBeTruthy();
+  received.sockets[0].send(JSON.stringify({type:"state",state:{...session.state,shared_input:true,responder:42}}));
+  received.sockets[0].send(Buffer.from("\x1b[6n"));
+  await expect.poll(()=>received.some(value=>text(value).includes("\x1b[2;1R"))).toBeTruthy();
+});
+test("clicking the selected row preserves its terminal and compact menu aligns icons and labels",async({page})=>{
+  await mockAPI(page); const received=await attachTerminal(page); await page.goto("/"); const row=page.locator("[data-session=local-one]"); await row.click();
+  await expect(page.locator("#terminal-status")).toHaveText("Shared input");
+  await page.getByRole("button",{name:"1:1"}).click();
+  await page.evaluate(()=>window.savedTerminal=document.querySelector(".xterm"));
+  const scale=await page.locator("#zoom-value").textContent(); await row.click();
+  await expect.poll(()=>received.sockets.length).toBe(1);
+  expect(await page.evaluate(()=>window.savedTerminal===document.querySelector(".xterm"))).toBeTruthy();
+  await expect(page.locator("#zoom-value")).toHaveText(scale);
+  await page.getByRole("button",{name:"Session actions"}).click();
+  const item=page.getByRole("menuitem",{name:"Rename…"});
+  expect(await item.evaluate(el=>getComputedStyle(el).justifyContent)).toBe("flex-start");
+  expect(await item.locator("svg").evaluate(icon=>icon.getBoundingClientRect().left)).toBeLessThan(await item.locator("span").evaluate(label=>label.getBoundingClientRect().left));
+  await expect(page.getByRole("menuitem",{name:/Take control|Release control/})).toHaveCount(0);
+  await page.getByRole("menuitem",{name:"Reconnect"}).click(); await expect.poll(()=>received.sockets.length).toBe(2);
+  expect(await page.evaluate(()=>window.savedTerminal===document.querySelector(".xterm"))).toBeTruthy();
+  await page.getByRole("button",{name:"Actions for another-project"}).click(); await page.getByRole("menuitem",{name:"Reconnect"}).click();
+  await expect.poll(()=>received.sockets.length).toBe(3); await expect(page.locator("#terminal-title")).toHaveText("another-project");
 });
 test("backend strings are text and API failures stay visible",async({page})=>{
   await mockAPI(page);
@@ -232,7 +265,7 @@ test("native stdio and Antigravity sessions keep their local-only restrictions",
   await page.route("**/api/sessions",route=>route.fulfill({json:[{...session,state:{...session.state,interactive:false}}]}));
   await page.goto("/"); await page.locator("[data-session=local-one]").click();
   await expect(page.getByText("Native stdio · browser input unavailable")).toBeVisible();
-  await expect(page.getByRole("button",{name:"Take control"})).toBeDisabled();
+  await expect(page.getByRole("button",{name:/Take control|Release control/})).toHaveCount(0);
   await page.getByRole("button",{name:"Session actions"}).click();
   await expect(page.getByRole("menuitem",{name:"Restart…"})).toBeDisabled();
   await expect(page.getByRole("menuitem",{name:"Stop…"})).toBeEnabled();
@@ -250,7 +283,7 @@ test("peer sessions load independently and terminal links retain the node",async
   await page.route("**/api/nodes",route=>route.fulfill({json:[{id:"n-main",name:"Build server",online:true}]}));
   const urls=[];
   await page.route("**/api/sessions?node=n-main",route=>route.fulfill({json:[{...session,id:"remote-one",directory:"/srv/project"}]}));
-  await page.routeWebSocket(/\/api\/sessions\/[^/]+\/terminal/,ws=>{urls.push(ws.url());ws.send(JSON.stringify({type:"attached",attachment:42,state:session.state}));});
+  await page.routeWebSocket(/\/api\/sessions\/[^/]+\/terminal/,ws=>{urls.push(ws.url());ws.send(JSON.stringify({type:"attached",attachment:42,state:{...session.state,shared_input:true,responder:42}}));ws.send(JSON.stringify({type:"replay_complete"}));});
   await page.goto("/"); await expect(page.locator("[data-session=remote-one]")).toBeVisible();
   await page.locator("[data-session=remote-one]").click();
   await expect.poll(()=>urls.length).toBe(1);
@@ -314,8 +347,8 @@ test("gateway settings stay separate from selected remote sessions",async({page}
 });
 test("a dropped terminal reconnects and replays output",async({page})=>{
   await mockAPI(page); const sockets=[];
-  await page.routeWebSocket("**/api/sessions/*/terminal",ws=>{sockets.push(ws);ws.send(JSON.stringify({type:"attached",attachment:42,state:session.state}));ws.send(Buffer.from(`ATTACH ${sockets.length}\r\n`));ws.send(JSON.stringify({type:"replay_complete"}));});
-  await page.goto("/"); await page.locator("[data-session=local-one]").click(); await expect(page.locator("#terminal-status")).toHaveText("Observing");
+  await page.routeWebSocket("**/api/sessions/*/terminal",ws=>{sockets.push(ws);ws.send(JSON.stringify({type:"attached",attachment:42,state:{...session.state,shared_input:true,responder:42}}));ws.send(Buffer.from(`ATTACH ${sockets.length}\r\n`));ws.send(JSON.stringify({type:"replay_complete"}));});
+  await page.goto("/"); await page.locator("[data-session=local-one]").click(); await expect(page.locator("#terminal-status")).toHaveText("Shared input");
   sockets[0].close(); await expect(page.locator("#terminal-status")).toContainText("reconnecting");
   await expect.poll(()=>sockets.length).toBe(2); await expect(page.locator("#terminal-mount")).toContainText("ATTACH 2");
   await page.getByRole("button",{name:"Session actions"}).click(); await page.getByRole("menuitem",{name:"Close terminal"}).click();
@@ -326,16 +359,16 @@ test("a restarted process that exits immediately still replays its final output"
   const stopped={...session.state,running:false,restarting:false,exit_code:1};
   await page.route("**/api/sessions",route=>{const state=phase==="restarting"?{...session.state,running:false,restarting:true}:phase==="stopped"?stopped:session.state;if(phase==="restarting")phase="stopped";return route.fulfill({json:[{...session,state}]});});
   await page.routeWebSocket("**/api/sessions/*/terminal",ws=>{
-    sockets.push(ws); const current=sockets.length===1?session.state:stopped;
+    sockets.push(ws); const current={...(sockets.length===1?session.state:stopped),shared_input:true,responder:42};
     ws.send(JSON.stringify({type:"attached",attachment:42,state:current}));
-    if(sockets.length===2){ws.send(Buffer.from("REPLACEMENT FAILED: invalid configuration\r\n"));ws.send(JSON.stringify({type:"ended",state:stopped}));}
+    if(sockets.length===2){ws.send(Buffer.from("REPLACEMENT FAILED: invalid configuration\r\n"));ws.send(JSON.stringify({type:"replay_complete"}));ws.send(JSON.stringify({type:"ended",state:stopped}));}
   });
   await page.goto("/"); await page.locator("[data-session=local-one]").click();
   phase="restarting"; sockets[0].send(JSON.stringify({type:"ended",state:{...session.state,running:false,restarting:true}})); sockets[0].close();
   await expect.poll(()=>sockets.length).toBe(2);
   await expect(page.locator("#terminal-mount")).toContainText("REPLACEMENT FAILED: invalid configuration");
   await expect(page.locator("#terminal-status")).toHaveText("Stopped (1)");
-  await expect(page.getByRole("button",{name:"Take control"})).toBeDisabled();
+  await expect(page.getByRole("button",{name:/Take control|Release control/})).toHaveCount(0);
 });
 test("sessions layout renders at desktop, tablet and phone sizes in both themes",async({page})=>{
   await mockAPI(page); await attachTerminal(page); await page.goto("/"); await page.locator("[data-session=local-one]").click();
@@ -424,7 +457,7 @@ test("Machines matrix shows real package pins and project install actions",async
 test("reconnect preserves and dims the last frame until replay is rendered",async({page})=>{
   await mockAPI(page);const sockets=[];
   await page.routeWebSocket("**/api/sessions/*/terminal",ws=>{
-    sockets.push(ws);ws.send(JSON.stringify({type:"attached",attachment:40+sockets.length,state:session.state}));
+    sockets.push(ws);ws.send(JSON.stringify({type:"attached",attachment:40+sockets.length,state:{...session.state,shared_input:true,responder:40+sockets.length}}));
     if(sockets.length===1){ws.send(Buffer.from("LAST FRAME\r\n"));ws.send(JSON.stringify({type:"replay_complete"}));}
   });
   await page.goto("/");await page.locator("[data-session=local-one]").click();
@@ -435,7 +468,9 @@ test("reconnect preserves and dims the last frame until replay is rendered",asyn
   await expect(page.locator("#terminal-mount")).toContainText("LAST FRAME");
   await expect.poll(()=>sockets.length).toBe(2);
   await expect(page.locator(".terminal-stage")).toHaveClass(/stale/);
-  sockets[1].send(Buffer.from("REPLAYED FRAME\r\n"));await expect(page.locator("#terminal-mount")).toContainText("REPLAYED FRAME");
+  sockets[1].send(Buffer.from("REPLAYED FRAME\r\n"));sockets[1].send(Buffer.from("SECOND FRAME\r\n"));
+  await expect(page.locator("#terminal-mount")).toContainText("REPLAYED FRAME");await expect(page.locator("#terminal-mount")).toContainText("SECOND FRAME");
+  await expect(page.locator("#terminal-mount .xterm-rows")).not.toContainText("LAST FRAME");
   await expect(page.locator(".terminal-stage")).toHaveClass(/stale/);
   sockets[1].send(JSON.stringify({type:"replay_complete"}));await expect(page.locator(".terminal-stage")).not.toHaveClass(/stale/);
   expect(await page.evaluate(()=>performance.getEntriesByName("agentpack:terminal:socketopen").length)).toBeGreaterThan(0);

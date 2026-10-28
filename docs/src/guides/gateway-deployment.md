@@ -91,9 +91,13 @@ MCP client. Consent grants control over all machines accessible to this gateway
 identity, including terminal input and package installation.
 
 Tools list machines, sessions, recent folders and packages; start, stop and restart
-sessions; read and write terminal output/input; and install packages. Terminal input
-succeeds only while no CLI or browser holds control. Release local control with
-`Ctrl+]` first.
+sessions; read and write terminal output/input; and install packages. Local terminal,
+browser, and MCP input share the same PTY. Each write is serialized; typing in two
+places at once can mix keystrokes. The local terminal controls the grid size.
+
+Existing session workers keep the behavior of the executable that launched them.
+After upgrading, launch a new session to enable shared input. Updating the gateway
+does not interrupt existing conversations; older workers remain view-only in the browser.
 
 OAuth credentials persist privately across gateway restarts. Browser login sessions
 expire and require signing in again after a gateway restart. OAuth clients can revoke

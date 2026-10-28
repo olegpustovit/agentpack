@@ -103,7 +103,7 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 	mcp.AddTool(server, mcpTool("list_nodes", "List computers explicitly available through this personal tailnet gateway.", true), func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 		return m.callAPI(ctx, "", "GET", "/api/nodes", nil)
 	})
-	mcp.AddTool(server, mcpTool("list_sessions", "List running agent sessions and their terminal input ownership.", true), func(ctx context.Context, _ *mcp.CallToolRequest, in mcpNodeInput) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(server, mcpTool("list_sessions", "List running agent sessions and their terminal state.", true), func(ctx context.Context, _ *mcp.CallToolRequest, in mcpNodeInput) (*mcp.CallToolResult, any, error) {
 		return m.callAPI(ctx, in.Node, "GET", "/api/sessions", nil)
 	})
 	mcp.AddTool(server, mcpTool("list_recent_folders", "List folders previously used for agent sessions; these can be started again.", true), func(ctx context.Context, _ *mcp.CallToolRequest, in mcpNodeInput) (*mcp.CallToolResult, any, error) {
@@ -128,7 +128,7 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 		}
 		return m.callAPI(ctx, in.Node, "GET", fmt.Sprintf("/api/sessions/%s/output?offset=%d&limit=%d", url.PathEscape(in.SessionID), in.Offset, in.Limit), nil)
 	})
-	mcp.AddTool(server, mcpTool("write_terminal", "Send raw input to an agent terminal only when no CLI or browser owns input. The current owner must release control first. Returns accepted bytes; use read_terminal to see the response.", false), func(ctx context.Context, _ *mcp.CallToolRequest, in mcpWriteInput) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(server, mcpTool("write_terminal", "Send raw input to an agent terminal, sharing input with its local terminal and browsers. Returns accepted bytes; use read_terminal to see the response.", false), func(ctx context.Context, _ *mcp.CallToolRequest, in mcpWriteInput) (*mcp.CallToolResult, any, error) {
 		if len(in.Input) == 0 || len(in.Input) > chunkSize {
 			return nil, nil, errors.New("input must contain 1 to 32768 bytes")
 		}
@@ -146,7 +146,7 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 }
 
 // Tools call the same authenticated REST operations as the UI, including remote
-// node policy, folder allowlisting, package restarts, and terminal ownership.
+// node policy, folder allowlisting, package restarts, and terminal attachment validation.
 func (m *GatewayMCP) callAPI(ctx context.Context, node, method, path string, body any) (*mcp.CallToolResult, any, error) {
 	u, err := url.Parse("http://" + m.gateway.local.Address + path)
 	if err != nil {
