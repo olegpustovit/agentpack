@@ -25,6 +25,7 @@ type SavedAgentpack struct {
 
 type LibraryOptions struct {
 	Store      *registry.Store
+	Bootstrap  func() error
 	Save       func(context.Context, SaveAgentpackInput) (SavedAgentpack, error)
 	Preview    func(context.Context, string, string, string) (registry.DiffResult, error)
 	Restore    func(context.Context, string, string, string, bool) error
@@ -40,10 +41,18 @@ func (g *Gateway) registerLibrary(mux *http.ServeMux) {
 		return
 	}
 	mux.HandleFunc("GET /api/library/packages", func(w http.ResponseWriter, r *http.Request) {
+		if err := bootstrapLibrary(library); err != nil {
+			libraryResponse(w, nil, err)
+			return
+		}
 		value, err := library.Store.ListPackages()
 		libraryResponse(w, value, err)
 	})
 	mux.HandleFunc("GET /api/library/agentpacks", func(w http.ResponseWriter, r *http.Request) {
+		if err := bootstrapLibrary(library); err != nil {
+			libraryResponse(w, nil, err)
+			return
+		}
 		value, err := library.Store.ListAgentpacks()
 		libraryResponse(w, value, err)
 	})
@@ -105,6 +114,13 @@ func (g *Gateway) registerLibrary(mux *http.ServeMux) {
 		err := library.Restore(r.Context(), r.PathValue("id"), r.PathValue("revision"), input.Directory, input.Restart == nil || *input.Restart)
 		libraryResponse(w, map[string]bool{"restored": err == nil}, err)
 	})
+}
+
+func bootstrapLibrary(library LibraryOptions) error {
+	if library.Bootstrap != nil {
+		return library.Bootstrap()
+	}
+	return nil
 }
 
 func libraryResponse(w http.ResponseWriter, value any, err error) {

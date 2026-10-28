@@ -245,6 +245,9 @@ func peerRoute(method, path string) bool {
 		return true
 	}
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	if len(parts) == 3 && parts[0] == "api" && parts[1] == "sessions" && parts[2] != "" && parts[2] != "." && parts[2] != ".." {
+		return method == "PATCH"
+	}
 	if len(parts) != 4 || parts[0] != "api" || parts[1] != "sessions" || parts[2] == "" || parts[2] == "." || parts[2] == ".." {
 		return false
 	}
@@ -297,7 +300,7 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 		request.Header.Del("X-Forwarded-Proto")
 	}
 	proxy.Transport = tailnetTransport
-	if r.Method == http.MethodPost {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		proxy.Transport = tailnetMutationTransport
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {

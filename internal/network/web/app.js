@@ -7,6 +7,7 @@ state.nodes = [];
 state.sessionCache = new Map();
 state.recentByNode = new Map();
 state.grouping = "machine";
+state.collapsedGroups = new Set();
 state.zoom = "fit";
 state.sidebarWidth = 264;
 state.refreshGeneration = 0;
@@ -182,47 +183,76 @@ async function refresh() {
   }
 }
 const basename = path => String(path || "Unknown project").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
+const sessionName = session => session.name || basename(session.directory);
 function renderSessions() {
   const host = $("sessions");
   const query = $("session-search").value.trim().toLowerCase();
-  const rows = state.sessions.filter(session => [session.directory, session.harness, session.mode, session.machine].join(" ").toLowerCase().includes(query));
+  const rows = state.sessions.filter(session => [session.name, session.directory, session.harness, session.mode, session.machine].join(" ").toLowerCase().includes(query));
   const projectKey = session => `${session.node || ""}\0${session.directory || "Unknown project"}`;
   const groupKey = session => state.grouping === "machine" ? session.node || "" : projectKey(session);
   const group = (values, key) => values.reduce((map, value) => map.set(key(value), [...(map.get(key(value)) || []), value]), new Map());
   document.querySelectorAll("[data-group]").forEach(button => button.classList.toggle("on", button.dataset.group === state.grouping));
   host.replaceChildren();
   for (const [key, items] of group(rows, groupKey)) {
-    const heading = node("p", void 0, "group-label");
+    const section = node("details", void 0, "group");
+    const collapseKey = `${state.grouping}\0${key}`;
+    section.open = !!query || !state.collapsedGroups.has(collapseKey);
+    section.addEventListener("toggle", () => {
+      if (!section.isConnected || query) return;
+      if (section.open) state.collapsedGroups.delete(collapseKey); else state.collapsedGroups.add(collapseKey);
+    });
+    const heading = node("summary", void 0, "group-label");
     heading.title = state.grouping === "machine" ? (items[0].machine || "Gateway machine") : items[0].directory || key;
-    heading.append(node("span", state.grouping === "machine" ? (items[0].machine || "Gateway machine") : basename(items[0].directory)));
+    heading.innerHTML = svgIcon("chevron").replace('<svg ', '<svg class="chev" ') + svgIcon(state.grouping === "machine" ? "laptop" : "folder");
+    heading.append(node("span", state.grouping === "machine" ? (items[0].machine || "Gateway machine") : basename(items[0].directory), "grow"));
     if (state.grouping === "machine") heading.append(node("span", items[0].stale ? "Offline" : "Online", "group-state"));
-    host.append(heading);
+    section.append(heading);
+    host.append(section);
     const projects = group(items, state.grouping === "machine" ? projectKey : session => session.node || "");
     for (const [project, sessions] of projects) {
-      const subhead = node("p", state.grouping === "machine" ? basename(sessions[0].directory) : sessions[0].machine || "Gateway machine", "subhead");
+      const subhead = node("div", void 0, "subhead");
+      subhead.innerHTML = svgIcon(state.grouping === "machine" ? "folder" : "laptop");
+      subhead.append(node("span", state.grouping === "machine" ? basename(sessions[0].directory) : sessions[0].machine || "Gateway machine"));
       subhead.title = sessions[0].directory || "Unknown project";
-      host.append(subhead);
+      section.append(subhead);
       for (const session of sessions) {
         const running = session.state?.running;
         const status = session.stale ? "Offline" : running ? "Running" : "Stopped";
         const row = node("button", void 0, `row srow${sessionKey(session) === state.selected ? " sel" : ""}${!running || session.stale ? " offline" : ""}`);
         row.type = "button";
         row.dataset.session = session.id;
-        row.title = `${session.directory || ""} · ${session.machine || "Gateway machine"} · ${status}`;
-        row.append(node("span", void 0, `dot ${running && !session.stale ? "ok" : "off"}`), node("span", basename(session.directory), "label"), node("span", session.harness || "Agent", "agent"));
+        row.setAttribute("aria-current", String(sessionKey(session) === state.selected));
+        row.title = `${sessionName(session)} · ${session.directory || ""} · ${session.machine || "Gateway machine"} · ${status}`;
+        const dot = node("span", void 0, `dot ${running && !session.stale ? "ok" : "off"}`);
+        dot.setAttribute("role", "img"); dot.setAttribute("aria-label", status);
+        row.append(dot, node("span", sessionName(session), "label"), node("span", session.harness || "Agent", "agent"));
         row.addEventListener("click", () => { terminalMark("click"); openTerminal(session); });
-        host.append(row);
+        row.addEventListener("contextmenu", event => { event.preventDefault(); showSessionMenu(session, row, event); });
+        row.addEventListener("keydown", event => {
+          if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); showSessionMenu(session, row); }
+          if (event.key === "F2" && !session.stale) { event.preventDefault(); renameSession(session); }
+        });
+        const more = button("", () => showSessionMenu(session, more), "session-more");
+        more.innerHTML = svgIcon("more");
+        more.setAttribute("aria-label", `Actions for ${sessionName(session)}`);
+        more.setAttribute("aria-haspopup", "menu");
+        more.title = "Session actions";
+        const entry = node("div", void 0, "session-entry");
+        entry.append(row, more); section.append(entry);
       }
     }
   }
   $("session-empty").hidden = rows.length > 0;
+  $("session-empty").querySelector("p").textContent = query ? "No sessions match your filter." : "No sessions yet.";
+  const active = state.sessions.find(session => sessionKey(session) === state.selected);
+  if (active) $("terminal-title").textContent = sessionName(active);
 }
 $("session-search").addEventListener("input", renderSessions);
 document.querySelectorAll("[data-group]").forEach(button => button.addEventListener("click", () => { state.grouping = button.dataset.group; renderSessions(); }));
 $("sessions").addEventListener("keydown", event => {
   if (!['ArrowDown','ArrowUp'].includes(event.key)) return;
-  const rows = [...$("sessions").querySelectorAll("[data-session]")];
-  const current = rows.findIndex(row => row.classList.contains("sel"));
+  const rows = [...$("sessions").querySelectorAll("details[open] [data-session]")];
+  const current = rows.findIndex(row => row === event.target || row.classList.contains("sel"));
   const next = rows[Math.max(0, Math.min(rows.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)))];
   if (next) { event.preventDefault(); next.click(); requestAnimationFrame(() => $("sessions").querySelector("[data-session].sel")?.focus()); }
 });
@@ -330,16 +360,17 @@ async function loadLibrary(force=false) {
   const generation=++state.libraryGeneration;state.libraryBusy=true;
   await Promise.all(machines().map(async machine=>{
     if(machine.online===false)return;
-    try{
-      const [packages,packs]=await Promise.all([api("/api/library/packages",void 0,"GET",machine.id),api("/api/library/agentpacks",void 0,"GET",machine.id)]);
-      const details=await Promise.all(list(packs,"agentpacks").map(async pack=>{
-        try{
-          const result=await api(`/api/library/agentpacks/${encodeURIComponent(pack.id)}`,void 0,"GET",machine.id);
-          return {...result.agentpack,_node:machine.id,_machine:machine.name,_revisions:list(result.revisions,"revisions").slice().sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at))};
-        }catch(error){return {...pack,_node:machine.id,_machine:machine.name,_revisions:[],_error:error.message};}
-      }));
-      if(generation===state.libraryGeneration)state.libraryByNode.set(machine.id,{packages:list(packages,"packages").map(item=>({...item,_node:machine.id,_machine:machine.name,_key:`${machine.id}\0${item.id}`})),agentpacks:details,error:""});
-    }catch(error){if(generation===state.libraryGeneration){const cached=state.libraryByNode.get(machine.id)||{packages:[],agentpacks:[]};state.libraryByNode.set(machine.id,{...cached,error:error.message});}}
+    const cached=state.libraryByNode.get(machine.id)||{packages:[],agentpacks:[]};
+    const [packages,packs]=await Promise.allSettled([api("/api/library/packages",void 0,"GET",machine.id),api("/api/library/agentpacks",void 0,"GET",machine.id)]);
+    const details=packs.status==="fulfilled"?await Promise.all(list(packs.value,"agentpacks").map(async pack=>{
+      try{
+        const result=await api(`/api/library/agentpacks/${encodeURIComponent(pack.id)}`,void 0,"GET",machine.id);
+        return {...result.agentpack,_node:machine.id,_machine:machine.name,_revisions:list(result.revisions,"revisions").slice().sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at))};
+      }catch(error){return {...pack,_node:machine.id,_machine:machine.name,_revisions:[],_error:error.message};}
+    })):cached.agentpacks;
+    const failure=[packages,packs].find(result=>result.status==="rejected")?.reason;
+    const error=failure?(failure.status===404?`Update Agentpack on ${machine.name} to load saved agentpacks. Installed packages are still shown.`:`${machine.name}: ${failure.message}`):"";
+    if(generation===state.libraryGeneration)state.libraryByNode.set(machine.id,{packages:packages.status==="fulfilled"?list(packages.value,"packages").map(item=>({...item,_node:machine.id,_machine:machine.name,_key:`${machine.id}\0${item.id}`})):cached.packages,agentpacks:details,error});
   }));
   if(generation===state.libraryGeneration){state.libraryBusy=false;if(state.view==="library")renderLibrary();if(state.view==="machines")renderMachines();}
 }
@@ -359,6 +390,13 @@ function registryPackages(){
   for(const item of [...state.libraryByNode.values()].flatMap(value=>value.packages||[])){
     const previous=byID.get(item.id);if(!previous)byID.set(item.id,{...item,_nodes:[item._node]});else previous._nodes.push(item._node);
   }
+  const pins=new Set([...byID.values()].map(item=>`${item.module}@${item.commit}`));
+  for(const target of destinations())for(const pin of target.packages){
+    const key=`${pin.module}@${pin.commit}`;
+    if(!pin.module||!pin.commit||pins.has(key))continue;
+    pins.add(key);
+    byID.set(key,{...pin,_node:target.node,_machine:target.machine,_key:key,_installed:true,project:target.directory,name:pin.name||pin.module,kind:pin.kind||"package"});
+  }
   return [...byID.values()];
 }
 function registryAgentpacks(){
@@ -375,6 +413,7 @@ function registryAgentpacks(){
   return [...byID.values()].map(pack=>({...pack,_revisions:pack._revisions.slice().sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at))}));
 }
 function verifiedCopies(id){
+  if(!id)return [];
   const copies=[];
   const local=state.libraryByNode.get("");
   if(local?.packages?.some(item=>item.id===id)||local?.agentpacks?.some(pack=>pack._revisions?.some(revision=>revision.id===id)))copies.push({id:"",name:"Gateway machine",online:true});
@@ -405,7 +444,7 @@ function knownPackages(){
 function inventoryPin(target,module){return target.packages.find(item=>item.module===module);}
 const libraryItemKey=item=>item._key||`${item._node}\0${item.id}`;
 function svgIcon(name){
-  const paths={package:'<path d="m12 2 9 4.5v11L12 22l-9-4.5v-11L12 2Zm9 4.5L12 11 3 6.5M12 11v11"/>',folder:'<path d="M3 7V5a2 2 0 0 1 2-2h4l3 4h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',laptop:'<rect x="4" y="4" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',server:'<rect x="4" y="3" width="16" height="8" rx="2"/><rect x="4" y="13" width="16" height="8" rx="2"/><path d="M8 7h.01M8 17h.01"/>',check:'<path d="m5 12 4 4L19 6"/>',install:'<path d="M12 3v12m-5-5 5 5 5-5M5 21h14"/>',back:'<path d="m15 6-6 6 6 6"/>',chevron:'<path d="m6 9 6 6 6-6"/>'};
+  const paths={package:'<path d="m12 2 9 4.5v11L12 22l-9-4.5v-11L12 2Zm9 4.5L12 11 3 6.5M12 11v11"/>',folder:'<path d="M3 7V5a2 2 0 0 1 2-2h4l3 4h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',laptop:'<rect x="4" y="4" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',server:'<rect x="4" y="3" width="16" height="8" rx="2"/><rect x="4" y="13" width="16" height="8" rx="2"/><path d="M8 7h.01M8 17h.01"/>',check:'<path d="m5 12 4 4L19 6"/>',install:'<path d="M12 3v12m-5-5 5 5 5-5M5 21h14"/>',back:'<path d="m15 6-6 6 6 6"/>',chevron:'<path d="m6 9 6 6 6-6"/>',more:'<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',rename:'<path d="m15 4 5 5M4 20l5-1L21 7l-5-5L4 14v6Z"/>',stop:'<rect x="5" y="5" width="14" height="14" rx="2"/>',restart:'<path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/>',close:'<path d="m6 6 12 12M6 18 18 6"/>',terminal:'<path d="m5 6 5 5-5 5m8 1h6"/>'};
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]||paths.package}</svg>`;
 }
 function renderLibrary(){
@@ -416,7 +455,7 @@ function renderLibrary(){
   const filtered=items.filter(item=>[item.name,item.module,item.kind,item.commit,item.project,item._machine].join(" ").toLowerCase().includes(query));
   if(!filtered.some(item=>libraryItemKey(item)===state.librarySelection))state.librarySelection=libraryItemKey(filtered[0]||{});
   const listHost=$("library-list");listHost.replaceChildren();
-  if(!filtered.length){const error=[...state.libraryByNode.values()].find(value=>value.error)?.error;const empty=node("div",error?`Library unavailable: ${error}`:kind==="packages"?"No packages have been captured yet.":"No agentpacks saved yet.","empty");listHost.append(empty);}
+  if(!filtered.length){const error=[...state.libraryByNode.values()].find(value=>value.error)?.error;const empty=node("div",error?`Library unavailable: ${error}`:kind==="packages"?"No installed or saved packages found.":"No agentpacks saved yet.","empty");listHost.append(empty);}
   for(const item of filtered){
     const selected=libraryItemKey(item)===state.librarySelection;
     const row=node("button",void 0,`row two${selected?" sel":""}`);row.type="button";row.dataset.item=libraryItemKey(item);row.setAttribute("aria-current",selected?"true":"false");
@@ -427,7 +466,8 @@ function renderLibrary(){
     row.append(glyph,label);row.addEventListener("click",()=>pickLibrary(item,true));listHost.append(row);
   }
   const errors=[...state.libraryByNode.entries()].filter(([,value])=>value.error);
-  $("library-summary").textContent=errors.length?`${items.length} saved · ${errors.length} machine${errors.length===1?"":"s"} unavailable`:`${packages.length} ${packages.length===1?"package":"packages"} · ${packs.length} ${packs.length===1?"agentpack":"agentpacks"}`;
+  $("library-summary").textContent=`${packages.length} ${packages.length===1?"package":"packages"} · ${packs.length} ${packs.length===1?"agentpack":"agentpacks"}${errors.length?" · Partial library":""}`;
+  if(filtered.length)for(const [,value] of errors)listHost.append(node("p",value.error,"note library-error"));
   renderLibraryDetail(items.find(item=>libraryItemKey(item)===state.librarySelection));renderDrafts();
 }
 function pickLibrary(item,show=true){
@@ -482,7 +522,7 @@ function renderLibraryDetail(item){
     const installed=destinations().flatMap(target=>{const pin=inventoryPin(target,item.module);return pin?[{target,pin}]:[];});
     const packUses=registryAgentpacks().filter(pack=>pack._revisions?.some(rev=>rev.package_ids?.includes(item.id)));
     const rows=installed.map(({target,pin})=>`<tr><td>${esc(target.machine)}</td><td title="${esc(target.directory)}">${esc(target.directory.split(/[\\/]/).filter(Boolean).pop()||target.directory)}</td><td><code>${esc(pin.commit||"")}</code>${pin.commit!==item.commit?` <span class="faint">→ ${esc(item.commit)}</span>`:""}</td><td>${verifiedCopies(item.id).some(copy=>copy.id===target.node)?`<span class="cell">${svgIcon("check")}Verified</span>`:"—"}</td><td class="act">${pin.commit===item.commit?"Current":`<button data-update-target="${encodeURIComponent(destinationKey(target.node,target.directory))}" ${target.online&&target.available||target.folder_id?"":"disabled"}>Update</button>`}</td></tr>`).join("");
-    host.innerHTML=`${back}<div class="insp wide"><div class="insp-head"><span class="glyph">${svgIcon("package")}</span><div class="title"><h1>${esc(item.name||item.path||item.module)}</h1><p>${esc(item.kind||"Package")} · pinned <code>${esc(item.commit)}</code> · saved on ${esc(item._machine)}</p></div><div class="actions"><button class="primary" id="install-item">${svgIcon("install")}Install…</button></div></div><dl class="kv"><dt>Module</dt><dd><code>${esc(item.module)}</code></dd><dt>Repository</dt><dd>${esc(item.url||`${item.owner}/${item.repo}`)}</dd><dt>Content</dt><dd><code>${esc(item.content_hash||"No content hash recorded")}</code></dd><dt>Source project</dt><dd>${esc(item.project||"Unknown project")}</dd><dt>Verified copies</dt><dd>${esc(copiesLabel(item.id))}</dd><dt>In agentpacks</dt><dd>${packUses.length?packUses.map(pack=>`<button class="link-btn" data-pack-key="${encodeURIComponent(libraryItemKey(pack))}">${esc(pack.name)}</button>`).join(", "):"—"}</dd></dl><section class="sect"><header><h2>Installed in</h2><span class="meta">${installed.length} ${installed.length===1?"project":"projects"}</span></header>${installed.length?`<div class="hscroll"><table class="grid compact installed"><thead><tr><th>Machine</th><th>Project</th><th>Pin</th><th>Copy</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:"<p class=note>Not installed in a trusted project folder yet.</p>"}</section></div>`;
+    host.innerHTML=`${back}<div class="insp wide"><div class="insp-head"><span class="glyph">${svgIcon("package")}</span><div class="title"><h1>${esc(item.name||item.path||item.module)}</h1><p>${esc(item.kind||"Package")} · pinned <code>${esc(item.commit)}</code> · ${item._installed?"installed":"saved"} on ${esc(item._machine)}</p></div><div class="actions"><button class="primary" id="install-item">${svgIcon("install")}Install…</button></div></div><dl class="kv"><dt>Module</dt><dd><code>${esc(item.module)}</code></dd><dt>Repository</dt><dd>${esc(item.url||item.module)}</dd><dt>Content</dt><dd><code>${esc(item.content_hash||"No content hash recorded")}</code></dd><dt>Source project</dt><dd>${esc(item.project||"Unknown project")}</dd><dt>Verified copies</dt><dd>${esc(copiesLabel(item.id))}</dd><dt>In agentpacks</dt><dd>${packUses.length?packUses.map(pack=>`<button class="link-btn" data-pack-key="${encodeURIComponent(libraryItemKey(pack))}">${esc(pack.name)}</button>`).join(", "):"—"}</dd></dl><section class="sect"><header><h2>Installed in</h2><span class="meta">${installed.length} ${installed.length===1?"project":"projects"}</span></header>${installed.length?`<div class="hscroll"><table class="grid compact installed"><thead><tr><th>Machine</th><th>Project</th><th>Pin</th><th>Copy</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:"<p class=note>Not installed in a trusted project folder yet.</p>"}</section></div>`;
     host.querySelector("#install-item").onclick=()=>installPackageDestinations(item);
     host.querySelectorAll("[data-update-target]").forEach(button=>button.addEventListener("click",()=>{const key=decodeURIComponent(button.dataset.updateTarget),target=destinations().find(row=>destinationKey(row.node,row.directory)===key);if(target)installPackageDestinations(item,[key]);}));
     host.querySelectorAll("[data-pack-key]").forEach(button=>button.addEventListener("click",()=>{const key=decodeURIComponent(button.dataset.packKey),pack=registryAgentpacks().find(value=>libraryItemKey(value)===key);if(pack){state.libraryKind="agentpacks";pickLibrary(pack);}}));
@@ -655,11 +695,31 @@ function saveAgentpack(session){
   };
 }
 function renameAgentpack(pack){
-  showSheet("Rename agentpack",`<p>Rename the Library label. The agentpack identity and revisions stay the same.</p><div class="form"><label for="rename-name">Name</label><div class="with-btn"><input id="rename-name" maxlength="80" value="${esc(pack.name)}"><button type="button" id="rename-suggest">Suggest</button></div><span></span><p id="rename-error" class="err" role="alert"></p></div>`,`<button type="button" id="rename-cancel">Cancel</button><button type="button" id="rename-confirm" class="primary">Rename</button>`,false);
+  showSheet("Rename agentpack",`<p>Rename the Library label. The agentpack identity and revisions stay the same.</p><div class="form"><label for="rename-name">Name</label><div class="with-btn"><input id="rename-name" maxlength="80" value="${esc(pack.name)}"><button type="button" id="rename-suggest">Suggest</button></div><span></span><p id="rename-error" class="err" role="alert"></p></div>`,`<button type="button" id="rename-cancel">Cancel</button><button type="submit" id="rename-confirm" class="primary">Rename</button>`,false);
   $("rename-name").select();$("rename-suggest").onclick=()=>{$("rename-name").value=`${pack.name} setup`;};$("rename-cancel").onclick=closeSheet;
-  $("rename-confirm").onclick=async()=>{const name=$("rename-name").value.trim();if(!name){$("rename-error").textContent="Enter a name.";return;}const button=$("rename-confirm");button.disabled=true;
+  $("sheet-form").onsubmit=async event=>{event.preventDefault();if($("rename-confirm").disabled)return;const name=$("rename-name").value.trim();if(!name){$("rename-error").textContent="Enter a name.";return;}const button=$("rename-confirm");button.disabled=true;
     try{await api(`/api/library/agentpacks/${encodeURIComponent(pack.id)}`,{name},"PATCH",pack._node);closeSheet();state.librarySelection=libraryItemKey(pack);await loadLibrary(true);}
     catch(error){$("rename-error").textContent=error.message;button.disabled=false;}
+  };
+}
+function renameSession(session){
+  showSheet("Rename session",`<p>${esc(session.directory)} · ${esc(session.machine||"Gateway machine")}</p><div class="form"><label for="session-name">Name</label><input id="session-name" maxlength="80" required value="${esc(sessionName(session))}"><span></span><p id="session-name-error" class="err" role="alert"></p></div>`,`<button type="button" id="session-rename-cancel">Cancel</button><button type="submit" id="session-rename-confirm" class="primary">Rename</button>`,false);
+  $("session-name").select();
+  $("session-rename-cancel").onclick=closeSheet;
+  $("sheet-form").onsubmit=async event=>{
+    event.preventDefault();
+    const name=$("session-name").value.trim();
+    if(!name){$("session-name-error").textContent="Enter a name.";return;}
+    const submit=$("session-rename-confirm");
+    if(submit.disabled)return;
+    submit.disabled=true;
+    try{
+      const updated=await api(`/api/sessions/${encodeURIComponent(session.id)}`,{name},"PATCH",session.node||"");
+      const cached=state.sessionCache.get(session.node||"")||[];
+      state.sessionCache.set(session.node||"",cached.map(item=>item.id===session.id?{...item,name:updated.name}:item));
+      state.sessions=state.sessions.map(item=>sessionKey(item)===sessionKey(session)?{...item,name:updated.name}:item);
+      closeSheet();renderSessions();notice("Session renamed.");
+    }catch(error){$("session-name-error").textContent=error.message;submit.disabled=false;}
   };
 }
 function restoreAgentpack(pack,revision){
@@ -869,7 +929,7 @@ function openTerminal(session, reconnecting = false) {
   state.selected = sessionKey(session);
   $("workspace").classList.remove("show-sessions");
   if (!reconnecting) $("terminal-stage").classList.remove("stale", "reconnecting");
-  $("terminal-title").textContent = basename(session.directory);
+  $("terminal-title").textContent = sessionName(session);
   $("terminal-subtitle").textContent = `${session.harness || "Agent"} · ${basename(session.directory)} · ${session.machine || "Gateway machine"}`;
   $("terminal-title").title = session.directory || "Unknown project";
   const terminalUnavailable = session.harness === "agy" || session.state?.interactive === false || session.stale;
@@ -1089,24 +1149,55 @@ splitter.addEventListener("dblclick", () => resizeSidebar(264));
 splitter.addEventListener("keydown", event => { if (["ArrowLeft","ArrowRight"].includes(event.key)) { event.preventDefault(); resizeSidebar(state.sidebarWidth + (event.key === "ArrowRight" ? 16 : -16)); } });
 const sessionMenu = node("div", void 0, "menu-popup");
 sessionMenu.id = "session-menu"; sessionMenu.hidden = true; document.body.append(sessionMenu);
-$("session-actions").addEventListener("click", () => {
-  const rect = $("session-actions").getBoundingClientRect();
-  const session = state.sessions.find(value => sessionKey(value) === state.selected);
+sessionMenu.setAttribute("role", "menu");
+sessionMenu.setAttribute("aria-label", "Session actions");
+let menuAnchor;
+function closeSessionMenu(restoreFocus=false) {
+  sessionMenu.hidden=true;
+  menuAnchor?.setAttribute("aria-expanded", "false");
+  if(restoreFocus)menuAnchor?.focus();
+}
+function showSessionMenu(session, anchor, point) {
+  closeSessionMenu();
+  menuAnchor=anchor;
+  anchor.setAttribute("aria-expanded", "true");
   sessionMenu.replaceChildren();
-  const addAction = (label, action, disabled=false, title="") => { const item=button(label, async () => { sessionMenu.hidden=true; await action?.(); }, "mi"); item.disabled=disabled; item.title=title; sessionMenu.append(item); };
-  addAction(controls() ? "Release control" : "Take control", () => sendControl(controls()?"release":"take"), !session);
-  addAction("Restart…", () => session && changeSession(session,"restart"), !session || session.state?.interactive === false || session.stale);
-  addAction("Stop…", () => session && changeSession(session,"stop"), !session || session.stale);
-  addAction("Reconnect", () => session && openTerminal(session), !session);
-  addAction("Close terminal", () => closeTerminal(), !session);
-  const divider=node("hr"); sessionMenu.append(divider);
-  addAction("Install package…", () => session && installInto(session), !session || session.stale || session.harness === "agy");
-  addAction("Save agentpack…", () => session && saveAgentpack(session), !session || session.stale);
-  sessionMenu.style.left=`${Math.max(8,Math.min(innerWidth-250,rect.right-230))}px`;
-  sessionMenu.style.top=`${Math.min(innerHeight-190,rect.bottom+4)}px`;
+  const attached=!!session && sessionKey(session)===state.selected;
+  const addAction = (label, icon, action, disabled=false) => {
+    const item=button("", async () => { closeSessionMenu(); await action?.(); }, "mi");
+    item.innerHTML=svgIcon(icon);item.append(node("span",label));
+    item.setAttribute("role","menuitem");item.disabled=disabled;sessionMenu.append(item);
+  };
+  addAction("Rename…", "rename", () => renameSession(session), !session || session.stale);
+  addAction("Restart…", "restart", () => changeSession(session,"restart"), !session || session.state?.interactive === false || session.stale);
+  addAction("Stop…", "stop", () => changeSession(session,"stop"), !session?.state?.running || session.stale);
+  sessionMenu.append(node("hr"));
+  addAction(controls() && attached ? "Release control" : "Take control", "terminal", () => sendControl(controls()?"release":"take"), !attached || !session.state?.running || session.stale || session.state?.interactive === false);
+  addAction("Reconnect", "restart", () => openTerminal(session), !session || session.stale);
+  addAction("Close terminal", "close", () => closeTerminal(), !attached);
+  sessionMenu.append(node("hr"));
+  addAction("Install package…", "install", () => installInto(session), !session || session.stale || session.harness === "agy");
+  addAction("Save agentpack…", "package", () => saveAgentpack(session), !session || session.stale);
   sessionMenu.hidden=false;
+  const rect=anchor.getBoundingClientRect();
+  sessionMenu.style.left=`${Math.max(8,Math.min(innerWidth-sessionMenu.offsetWidth-8,point?.clientX ?? rect.left))}px`;
+  sessionMenu.style.top=`${Math.max(8,Math.min(innerHeight-sessionMenu.offsetHeight-8,point?.clientY ?? rect.bottom+4))}px`;
+  sessionMenu.querySelector("button:not(:disabled)")?.focus();
+}
+$("session-actions").setAttribute("aria-haspopup","menu");
+$("session-actions").addEventListener("click", () => showSessionMenu(state.sessions.find(value => sessionKey(value) === state.selected), $("session-actions")));
+sessionMenu.addEventListener("keydown", event => {
+  const items=[...sessionMenu.querySelectorAll("button:not(:disabled)")];
+  const current=items.indexOf(document.activeElement);
+  if(["ArrowDown","ArrowUp","Home","End"].includes(event.key)){
+    event.preventDefault();
+    const next=event.key==="Home"?0:event.key==="End"?items.length-1:(current+(event.key==="ArrowDown"?1:-1)+items.length)%items.length;
+    items[next]?.focus();
+  }
+  if(event.key==="Escape"){event.preventDefault();closeSessionMenu(true);}
+  if(event.key==="Tab")closeSessionMenu();
 });
-document.addEventListener("pointerdown", event => { if (!sessionMenu.contains(event.target) && event.target !== $("session-actions")) sessionMenu.hidden=true; });
+document.addEventListener("pointerdown", event => { if (!sessionMenu.contains(event.target) && !menuAnchor?.contains(event.target)) closeSessionMenu(); });
 const moreMenu=node("div", void 0, "menu-popup"); moreMenu.hidden=true; document.body.append(moreMenu);
 $("more-tools").addEventListener("click", () => {
   moreMenu.replaceChildren();

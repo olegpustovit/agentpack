@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -24,6 +23,7 @@ type SessionInfo struct {
 	LastUsed       time.Time     `json:"last_used,omitzero"`
 	FolderID       string        `json:"folder_id,omitempty"`
 	ID             string        `json:"id"`
+	Name           string        `json:"name,omitempty"`
 	Directory      string        `json:"directory"`
 	DefinitionRoot string        `json:"definition_root,omitempty"`
 	Harness        string        `json:"harness"`
@@ -85,19 +85,18 @@ func Sessions(ctx context.Context, home string) ([]SessionInfo, error) {
 		if err != nil {
 			continue
 		}
-		response, err := workerRequest(ctx, record, http.MethodGet, "/state", "")
+		state, err := sessionState(ctx, record)
 		if err != nil {
-			continue
-		}
-		var state TerminalState
-		err = json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&state)
-		response.Body.Close()
-		if err != nil || response.StatusCode != 200 {
 			continue
 		}
 		info := record.Session
 		info.ID = record.ID
 		info.State = state
+		name, err := readSessionName(home, record.ID)
+		if err != nil {
+			return nil, fmt.Errorf("read session name: %w", err)
+		}
+		info.Name = name
 		result = append(result, info)
 	}
 	return result, nil

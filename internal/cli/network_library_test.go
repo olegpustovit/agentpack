@@ -2,12 +2,16 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/olegpustovit/agentpack/internal/cache"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
@@ -84,6 +88,175 @@ func TestGatewayLibrarySaveCaptureRestore(t *testing.T) {
 	entries, err := os.ReadDir(workspace)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("external restore wrote checkout: %v %v", entries, err)
+	}
+}
+
+func TestGatewayLibraryBootstrapsRecentProjectsAndCachedPackages(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENTPACK_HOME", home)
+	t.Setenv("HOME", t.TempDir())
+	firstRoot, firstWorkspace := t.TempDir(), t.TempDir()
+	if err := manifest.WriteStub(firstRoot, "first", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(firstRoot, "first", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	writeRecent := func(entries ...network.SessionInfo) {
+		t.Helper()
+		data, err := json.Marshal(entries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(home, "network"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(home, "network", "recent.json"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recent := func(root, workspace string) network.SessionInfo {
+		t.Helper()
+		identity, err := network.FolderIdentity(workspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return network.SessionInfo{Directory: workspace, DefinitionRoot: root, FolderID: identity, Harness: "claude", Mode: "default"}
+	}
+	first := recent(firstRoot, firstWorkspace)
+	manualWorkspace := t.TempDir()
+	if err := manifest.WriteStub(manualWorkspace, "manual", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(manualWorkspace, "manual", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	manual := recent(manualWorkspace, manualWorkspace)
+	writeRecent(first, manual)
+
+	key := cache.ComputeKey("github:acme/tool@" + strings.Repeat("a", 40))
+	cacheRoot, err := cache.EntryDir(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cacheRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheRoot, "SKILL.md"), []byte("---\nname: Tool\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commit := strings.Repeat("a", 40)
+	if err := cache.UpsertEntry(key, cache.EntryRecord{Kind: lockfile.PackageSkill, SourceURL: "https://github.com/acme/tool", Owner: "acme", Repo: "tool", Commit: commit}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := NewRunner()
+	library, err := runner.networkLibrary(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := library.Save(context.Background(), network.SaveAgentpackInput{Directory: manualWorkspace, Name: "Existing manual pack"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := library.Bootstrap(); err != nil {
+		t.Fatal(err)
+	}
+	packs, err := library.Store.ListAgentpacks()
+	if err != nil || len(packs) != 2 {
+		t.Fatalf("bootstrapped agentpacks: %+v %v", packs, err)
+	}
+	seededID := ""
+	for _, pack := range packs {
+		if pack.Name == filepath.Base(firstWorkspace) {
+			seededID = pack.ID
+		}
+	}
+	if seededID == "" {
+		t.Fatalf("recent project was not bootstrapped: %+v", packs)
+	}
+	revisions := 1
+	var wait sync.WaitGroup
+	bootstrapErrors := make(chan error, 2)
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			bootstrapErrors <- library.Bootstrap()
+		}()
+	}
+	wait.Wait()
+	close(bootstrapErrors)
+	for err := range bootstrapErrors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	packs, err = library.Store.ListAgentpacks()
+	if err != nil || len(packs) != 2 {
+		t.Fatalf("repeated bootstrap created duplicate project revisions: %+v %v", packs, err)
+	}
+	seeded, _, err := library.Store.Get(seededID)
+	if err != nil || len(seeded.Revisions) != revisions {
+		t.Fatalf("repeated bootstrap created duplicate project revisions: %+v %v", seeded, err)
+	}
+	if _, err := library.Store.Rename(seededID, "Manually named"); err != nil {
+		t.Fatal(err)
+	}
+	secondRoot, secondWorkspace := t.TempDir(), t.TempDir()
+	if err := manifest.WriteStub(secondRoot, "second", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(secondRoot, "second", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	writeRecent(recent(secondRoot, secondWorkspace), first)
+	if err := library.Bootstrap(); err != nil {
+		t.Fatal(err)
+	}
+	packs, err = library.Store.ListAgentpacks()
+	if err != nil || len(packs) != 3 {
+		t.Fatalf("newly recent project was not imported: %+v %v", packs, err)
+	}
+	foundRename := false
+	for _, pack := range packs {
+		foundRename = foundRename || pack.Name == "Manually named"
+	}
+	if !foundRename {
+		t.Fatalf("bootstrap overwrote a user rename: %+v", packs)
+	}
+	var renamedID string
+	for _, pack := range packs {
+		if pack.Name == "Manually named" {
+			renamedID = pack.ID
+		}
+	}
+	if renamedID == "" {
+		t.Fatal("renamed pack disappeared")
+	}
+	if _, err := library.Store.DeleteAgentpack(renamedID); err != nil {
+		t.Fatal(err)
+	}
+	if err := library.Bootstrap(); err != nil {
+		t.Fatal(err)
+	}
+	packs, err = library.Store.ListAgentpacks()
+	if err != nil || len(packs) != 2 || slices.ContainsFunc(packs, func(pack registry.Agentpack) bool { return pack.ID == renamedID }) {
+		t.Fatalf("bootstrap recreated a deleted project: %+v %v", packs, err)
+	}
+	if !slices.ContainsFunc(packs, func(pack registry.Agentpack) bool { return pack.ID == saved.Agentpack.ID }) {
+		t.Fatalf("bootstrap duplicated an existing manually saved pack: %+v", packs)
+	}
+	packages, err := library.Store.ListPackages()
+	if err != nil || len(packages) != 1 || packages[0].Module != "github.com/acme/tool" || packages[0].Commit != commit || packages[0].ContentHash != "" {
+		t.Fatalf("bootstrapped cached packages: %+v %v", packages, err)
+	}
+	if err := os.Remove(filepath.Join(home, "registry", "index.json")); err != nil {
+		t.Fatal(err)
+	}
+	packages, err = library.Store.ListPackages()
+	if err != nil || len(packages) != 1 || packages[0].Module != "github.com/acme/tool" {
+		t.Fatalf("cache package was not recovered from public objects: %+v %v", packages, err)
 	}
 }
 

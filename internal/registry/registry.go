@@ -298,6 +298,15 @@ func (s *Store) ListAgentpacks() ([]Agentpack, error) {
 	return out, nil
 }
 
+// AgentpackDeleted reports whether a stable agentpack ID has a local tombstone.
+func (s *Store) AgentpackDeleted(id string) (bool, error) {
+	if !validID(id) {
+		return false, fmt.Errorf("invalid agentpack id")
+	}
+	_, deleted, err := s.tombstoneFor(id)
+	return deleted, err
+}
+
 // ListPackages loads and verifies every indexed package object.
 func (s *Store) ListPackages() ([]Package, error) {
 	idx, err := s.readIndex()
@@ -319,6 +328,67 @@ func (s *Store) ListPackages() ([]Package, error) {
 		return out[i].Module < out[j].Module
 	})
 	return out, nil
+}
+
+// ImportPackages adds indexed cache package records to the Library without
+// associating it with a synthetic agentpack revision.
+func (s *Store) ImportPackages(packages []Package) error {
+	for i := range packages {
+		p := &packages[i]
+		if strings.TrimSpace(p.Module) == "" || credentialShaped(p.Module) || strings.TrimSpace(p.Commit) == "" || !validCacheKey(p.CacheKey) ||
+			(p.Kind != string(lockfile.PackageSkill) && p.Kind != string(lockfile.PackagePlugin)) ||
+			(p.ContentHash != "" && !lockfile.ValidContentHash(p.ContentHash)) {
+			return fmt.Errorf("invalid package registry record")
+		}
+		p.Schema = objectSchema
+		p.ID = ""
+		p.URL = redactMetadata(p.URL)
+		p.Name = redactMetadata(p.Name)
+		p.Owner = redactMetadata(p.Owner)
+		p.Repo = redactMetadata(p.Repo)
+		p.Path = redactMetadata(p.Path)
+	}
+	return s.withLock(func() error {
+		idx, err := s.readIndexUnlocked()
+		if err != nil {
+			return err
+		}
+		pins := map[string]bool{}
+		for _, id := range idx.Packages {
+			existing, err := s.readPackage(id)
+			if err != nil {
+				return err
+			}
+			pins[packagePinKey(existing)] = true
+			pins[packagePinWithoutHash(existing)] = true
+		}
+		changed := false
+		for _, p := range packages {
+			if pins[packagePinKey(p)] || p.ContentHash == "" && pins[packagePinWithoutHash(p)] {
+				continue
+			}
+			id, err := s.writeObject(p)
+			if err != nil {
+				return err
+			}
+			idx.Packages = appendUnique(idx.Packages, id)
+			pins[packagePinKey(p)] = true
+			pins[packagePinWithoutHash(p)] = true
+			changed = true
+		}
+		if changed {
+			return s.writeIndexUnlocked(idx)
+		}
+		return nil
+	})
+}
+
+func packagePinKey(p Package) string {
+	return strings.Join([]string{p.Module, p.Commit, p.CacheKey, p.ContentHash}, "\x00")
+}
+
+func packagePinWithoutHash(p Package) string {
+	return strings.Join([]string{p.Module, p.Commit, p.CacheKey}, "\x00")
 }
 
 func (s *Store) Get(id string) (Agentpack, []Revision, error) {

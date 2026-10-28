@@ -117,6 +117,7 @@ func (s *Store) Inventory() (Inventory, error) {
 	}
 	activeRevisions := map[string]bool{}
 	activePackages := map[string]bool{}
+	referencedPackages := map[string]bool{}
 	activeAgentpacks := map[string]bool{}
 	publicObjects := map[string]importedObject{}
 	for _, entry := range objects {
@@ -133,12 +134,22 @@ func (s *Store) Inventory() (Inventory, error) {
 			return Inventory{}, err
 		}
 		publicObjects[id] = obj
+		if obj.revision != nil {
+			for _, packageID := range obj.revision.PackageIDs {
+				referencedPackages[packageID] = true
+			}
+		}
 		if obj.revision != nil && !tombstoned[obj.revision.AgentpackID] {
 			activeRevisions[id] = true
 			activeAgentpacks[obj.revision.AgentpackID] = true
 			for _, packageID := range obj.revision.PackageIDs {
 				activePackages[packageID] = true
 			}
+		}
+	}
+	for id, obj := range publicObjects {
+		if obj.packageRecord != nil && !referencedPackages[id] {
+			activePackages[id] = true
 		}
 	}
 	for id, obj := range publicObjects {

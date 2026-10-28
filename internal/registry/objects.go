@@ -240,6 +240,15 @@ func (s *Store) indexStale(idx index) (bool, error) {
 			}
 			continue
 		}
+		if obj.packageRecord != nil {
+			if _, err := s.readPackage(id); err != nil {
+				return false, err
+			}
+			if !packages[id] {
+				return true, nil
+			}
+			continue
+		}
 		if obj.revision == nil {
 			continue
 		}
@@ -371,6 +380,10 @@ func (s *Store) rebuildIndex() (index, error) {
 			continue
 		}
 		if obj.packageRecord != nil {
+			if _, err := s.readPackage(id); err != nil {
+				return index{}, err
+			}
+			result.Packages = appendUnique(result.Packages, id)
 			continue
 		}
 		return index{}, fmt.Errorf("decode registry object")

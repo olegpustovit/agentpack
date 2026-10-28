@@ -27,10 +27,13 @@ private worker capabilities never appear in any response. An unauthenticated API
   `agentpack gateway setup`. Root can be created once. Minimum password length 12.
 - `POST /api/login`: `{password}`; `POST /api/logout`: `{}`.
 - `GET /api/sessions`: array (or `{sessions: [...]}`) of
-  `{id, directory, harness, mode, node_name?, state: {running,owner,epoch,rows,columns,exit_code}}`.
+  `{id, name?, directory, harness, mode, state: {running,owner,epoch,rows,columns,exit_code}}`.
 - `GET /api/recent`: array (or `{recent: [...]}`) of `{directory,harness,mode,last_used?,available,unavailable_reason?}`.
   Missing or replaced folders remain visible but cannot start until a fresh local launch.
 - `POST /api/sessions`: `{directory,harness,mode}`, returns created session including `id`.
+- `PATCH /api/sessions/{id}`: `{name}` renames the session display label and returns the
+  updated session. Names are trimmed and limited to 80 characters; an empty name clears
+  the label. The label survives gateway restarts without changing the session ID or folder.
 - `POST /api/sessions/{id}/stop`: `{}`. Stop is explicit; detach is separate.
 - `POST /api/sessions/{id}/restart`: `{operation_id}`. Each user intent gets a UUID;
   transport failures and 5xx retry the same UUID, while success or 4xx ends that intent.

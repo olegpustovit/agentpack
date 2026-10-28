@@ -138,6 +138,14 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	renamed, err := RenameSession(ctx, home, id, "Long-running review")
+	if err != nil || renamed.ID != id || renamed.Name != "Long-running review" {
+		t.Fatalf("rename running worker: %+v %v", renamed, err)
+	}
+	renamedRecord, err := workerRecord(home, id)
+	if err != nil || renamedRecord.ID != record.ID || renamedRecord.Address != record.Address || renamedRecord.Secret != record.Secret || renamedRecord.Session.Name != "" {
+		t.Fatalf("rename changed worker identity: %+v %v", renamedRecord, err)
+	}
 	attach := func() *websocket.Conn {
 		t.Helper()
 		connection, err := attachWorker(ctx, record, true)
@@ -171,6 +179,10 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 			t.Fatalf("worker identity changed: %v", err)
 		}
 		connection = attach()
+		sessions, err := Sessions(ctx, home)
+		if err != nil || len(sessions) != 1 || sessions[0].Name != "Long-running review" {
+			t.Fatalf("session name did not survive restart: %+v %v", sessions, err)
+		}
 		if err := connection.WriteMessage(websocket.BinaryMessage, []byte("size\n")); err != nil {
 			t.Fatal(err)
 		}

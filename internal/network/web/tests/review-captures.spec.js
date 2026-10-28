@@ -31,6 +31,8 @@ test("capture Library, Machines, install, restore, draft, and settings review st
     await expect(page.locator("#workspace")).toBeVisible();
     await page.locator("[data-session=session-1]").first().click();await expect(page.locator(".xterm-screen")).toBeVisible();
     await save(`sessions-${theme}`);
+    await page.locator("[data-session=session-1]").first().click({button:"right"});await save(`session-menu-${theme}`);
+    await page.getByRole("menuitem",{name:"Rename…"}).click();await save(`session-rename-${theme}`);await page.getByRole("button",{name:"Cancel",exact:true}).click();
     await page.getByRole("button",{name:"Library",exact:true}).click();
     await page.locator("#library-list button").first().click();await save(`library-package-${theme}`);
     await page.getByRole("button",{name:"Install…"}).click();await expect(page.locator("#install-destinations")).toBeVisible();await save(`install-destinations-${theme}`);await page.getByRole("button",{name:"Cancel"}).click();

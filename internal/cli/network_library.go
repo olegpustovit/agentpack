@@ -2,15 +2,19 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/olegpustovit/agentpack/internal/cache"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/registry"
@@ -26,8 +30,30 @@ func (runner Runner) networkLibrary(home string) (network.LibraryOptions, error)
 	if err != nil {
 		return network.LibraryOptions{}, err
 	}
+	var bootstrapMu sync.Mutex
+	lastCacheIndex := ""
 	return network.LibraryOptions{
 		Store: store,
+		Bootstrap: func() error {
+			bootstrapMu.Lock()
+			defer bootstrapMu.Unlock()
+			if err := bootstrapLibraryProjects(home, store, node); err != nil {
+				return err
+			}
+			stamp := ""
+			if info, err := os.Stat(filepath.Join(home, "cache", "db.reddb")); err == nil {
+				stamp = fmt.Sprintf("%d:%d", info.ModTime().UnixNano(), info.Size())
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+			if stamp != lastCacheIndex {
+				if err := importCachedPackages(store); err != nil {
+					return err
+				}
+				lastCacheIndex = stamp
+			}
+			return nil
+		},
 		DraftState: func(ctx context.Context, draft registry.Draft) (registry.DraftState, error) {
 			return registryDraftState(store, draft)
 		},
@@ -97,6 +123,163 @@ func (runner Runner) networkLibrary(home string) (network.LibraryOptions, error)
 			return runner.restartChangedEnvironments(ctx, before)
 		},
 	}, nil
+}
+
+func bootstrapLibraryProjects(home string, store *registry.Store, node string) error {
+	recent, err := network.Recent(home)
+	if err != nil {
+		return fmt.Errorf("read recent projects for Library: %w", err)
+	}
+	packs, err := store.ListAgentpacks()
+	if err != nil {
+		return err
+	}
+	knownIDs, knownProjects := map[string]bool{}, map[string]bool{}
+	for _, pack := range packs {
+		knownIDs[pack.ID] = true
+		_, revisions, err := store.Get(pack.ID)
+		if err != nil {
+			return fmt.Errorf("read existing agentpack project associations: %w", err)
+		}
+		for _, revision := range revisions {
+			if revision.SourceNode != "" && revision.SourceNode != node {
+				continue
+			}
+			if key := libraryProjectKey(revision.Project); key != "" {
+				knownProjects[key] = true
+			}
+		}
+	}
+	seenRoots := map[string]bool{}
+	for _, entry := range recent {
+		if !filepath.IsAbs(entry.Directory) {
+			continue
+		}
+		if info, err := os.Stat(entry.Directory); err != nil || !info.IsDir() {
+			continue
+		}
+		packContext, err := resolveInvocationContext(Invocation{Global: Global{WorkspaceRoot: entry.Directory, DefinitionRoot: entry.DefinitionRoot}}, true)
+		if err != nil {
+			continue
+		}
+		definition := packContext.DefinitionRoot
+		if seenRoots[definition] {
+			continue
+		}
+		seenRoots[definition] = true
+		if knownIDs[libraryProjectID(node, definition)] || knownProjects[libraryProjectKey(entry.Directory)] || knownProjects[libraryProjectKey(definition)] {
+			continue
+		}
+		deleted, err := store.AgentpackDeleted(libraryProjectID(node, definition))
+		if err != nil {
+			return fmt.Errorf("check deleted project in Library: %w", err)
+		}
+		if deleted {
+			continue
+		}
+		if _, err := manifest.Load(definition); err != nil {
+			continue
+		}
+		if _, err := lockfile.Load(definition); err != nil {
+			continue
+		}
+		capture, err := registryCapture(definition, entry.Directory, node, entry.Mode)
+		if err != nil {
+			continue
+		}
+		capture.ID = libraryProjectID(node, definition)
+		if _, _, err := store.Capture(capture); err != nil {
+			return fmt.Errorf("capture existing project in Library: %w", err)
+		}
+		knownIDs[capture.ID] = true
+		knownProjects[libraryProjectKey(entry.Directory)] = true
+		knownProjects[libraryProjectKey(definition)] = true
+	}
+	return nil
+}
+
+func libraryProjectKey(directory string) string {
+	if directory == "" {
+		return ""
+	}
+	if canonical, err := filepath.EvalSymlinks(directory); err == nil {
+		return filepath.Clean(canonical)
+	}
+	if absolute, err := filepath.Abs(directory); err == nil {
+		return filepath.Clean(absolute)
+	}
+	return filepath.Clean(directory)
+}
+
+func libraryProjectID(node, definition string) string {
+	sum := sha256.Sum256([]byte("agentpack-library-project-v1\x00" + node + "\x00" + libraryProjectKey(definition)))
+	return hex.EncodeToString(sum[:16])
+}
+
+func importCachedPackages(store *registry.Store) error {
+	keys, err := cache.ListKeys()
+	if err != nil {
+		return fmt.Errorf("list cached packages for Library: %w", err)
+	}
+	packages := []registry.Package{}
+	for _, key := range keys {
+		if key == "" || !filepath.IsLocal(key) || filepath.Base(key) != key || strings.ContainsAny(key, `/\\`) {
+			continue
+		}
+		record, ok, err := cache.GetEntry(key)
+		if err != nil {
+			continue
+		}
+		if !ok || record.Owner == "" || record.Repo == "" || record.Owner == "path" || record.Owner == "local" || record.Commit == "" ||
+			(record.Kind != lockfile.PackageSkill && record.Kind != lockfile.PackagePlugin) {
+			continue
+		}
+		module, ok := cachedModule(record.Owner, record.Repo, record.Path)
+		if !ok {
+			continue
+		}
+		root, err := cache.EntryDir(key)
+		if err != nil {
+			continue
+		}
+		info, err := os.Lstat(root)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !cache.IsPackageRoot(root) {
+			continue
+		}
+		name := filepath.Base(filepath.FromSlash(record.Path))
+		if record.Path == "" {
+			name = record.Repo
+		}
+		packages = append(packages, registry.Package{
+			Module: module, Commit: record.Commit, Kind: string(record.Kind),
+			URL: record.SourceURL, Owner: record.Owner, Repo: record.Repo, Path: record.Path,
+			CacheKey: key, Name: name,
+		})
+	}
+	if err := store.ImportPackages(packages); err != nil {
+		return fmt.Errorf("add cached packages to Library: %w", err)
+	}
+	return nil
+}
+
+func cachedModule(owner, repo, inRepoPath string) (string, bool) {
+	validPart := func(value string) bool {
+		return value != "" && value != "." && value != ".." && !strings.ContainsAny(value, "/\\")
+	}
+	if !validPart(owner) || !validPart(repo) {
+		return "", false
+	}
+	module := "github.com/" + strings.ToLower(owner) + "/" + strings.ToLower(repo)
+	if inRepoPath == "" {
+		return module, true
+	}
+	inRepoPath = strings.ReplaceAll(inRepoPath, "\\", "/")
+	for _, part := range strings.Split(inRepoPath, "/") {
+		if !validPart(part) {
+			return "", false
+		}
+	}
+	return cache.DependencyKey("", owner, repo, inRepoPath), true
 }
 
 func registryDraftState(store *registry.Store, draft registry.Draft) (registry.DraftState, error) {

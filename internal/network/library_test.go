@@ -28,8 +28,10 @@ func TestLibraryRoutesPreserveTrustAndPersistRename(t *testing.T) {
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
 	called := 0
+	bootstrapped := 0
 	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Library: LibraryOptions{
-		Store: store,
+		Store:     store,
+		Bootstrap: func() error { bootstrapped++; return nil },
 		Save: func(_ context.Context, input SaveAgentpackInput) (SavedAgentpack, error) {
 			called++
 			pack, revision, err := store.Capture(registry.CaptureInput{Project: input.Directory, Name: input.Name,
@@ -80,9 +82,16 @@ func TestLibraryRoutesPreserveTrustAndPersistRename(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Team review") || !strings.Contains(w.Body.String(), saved.Revision.ID) {
 		t.Fatal(w.Code, w.Body.String())
 	}
+	w = request("GET", "/api/library/packages", nil, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Library package route: %d %s", w.Code, w.Body.String())
+	}
 	w = request("GET", "/api/library/agentpacks", nil, true)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), saved.Agentpack.ID) {
 		t.Fatal(w.Code, w.Body.String())
+	}
+	if bootstrapped != 2 {
+		t.Fatalf("Library list routes did not bootstrap: %d", bootstrapped)
 	}
 	identity, err := FolderIdentity(directory)
 	if err != nil {

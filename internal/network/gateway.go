@@ -169,6 +169,34 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, map[string]bool{"stopped": true}, StopWorker(r.Context(), g.options.Home, r.PathValue("id")))
 	})
+	mux.HandleFunc("PATCH /api/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Name *string `json:"name"`
+		}
+		if !readJSON(w, r, &input) {
+			return
+		}
+		if input.Name == nil {
+			http.Error(w, "name is required", http.StatusBadRequest)
+			return
+		}
+		name, err := normalizeSessionName(*input.Name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		info, err := RenameSession(r.Context(), g.options.Home, r.PathValue("id"), name)
+		switch {
+		case errors.Is(err, errSessionNotFound):
+			http.Error(w, "session not found", http.StatusNotFound)
+		case errors.Is(err, errSessionUnavailable):
+			http.Error(w, "session unavailable", http.StatusBadGateway)
+		case err != nil:
+			http.Error(w, "could not save session name", http.StatusInternalServerError)
+		default:
+			writeJSON(w, info)
+		}
+	})
 	mux.HandleFunc("POST /api/sessions/{id}/restart", func(w http.ResponseWriter, r *http.Request) {
 		var input restartOperation
 		if !readJSON(w, r, &input) {

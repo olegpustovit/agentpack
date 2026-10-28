@@ -73,6 +73,63 @@ test("sidebar stays left, resizes, collapses and selection follows arrow keys",a
   await page.getByRole("button",{name:"Hide sessions"}).click();
   await expect(page.locator(".workspace")).toHaveClass(/no-sidebar/);
 });
+test("session hierarchy has icons and keeps collapsed groups through refresh",async({page})=>{
+  await mockAPI(page);await page.goto("/");
+  const group=page.locator("#sessions details.group").first();
+  await expect(group.locator("summary svg")).toHaveCount(2);
+  await expect(group.locator(".subhead svg")).toHaveCount(2);
+  await expect(group.locator(".srow").first()).toBeVisible();
+  await expect.poll(()=>group.evaluate(el=>el.querySelector(".srow .label").getBoundingClientRect().left-el.querySelector(".subhead span").getBoundingClientRect().left)).toBeGreaterThan(0);
+  await group.locator("summary").click();await expect(page.locator("[data-session=local-one]")).toBeHidden();
+  await page.locator("#refresh").click();await expect(group).not.toHaveAttribute("open");
+  await group.locator("summary").click();await expect(page.locator("[data-session=local-one]")).toBeVisible();
+});
+test("context rename saves on the correct host and survives refresh and reload",async({page})=>{
+  await mockAPI(page);await attachTerminal(page);
+  let name="",renamed;
+  await page.route("**/api/nodes",route=>route.fulfill({json:[{id:"peer-1",name:"Build server",online:true}]}));
+  await page.route("**/api/sessions?node=peer-1",route=>route.fulfill({json:[{...session,id:"remote-one",name}]}));
+  await page.route("**/api/sessions/remote-one?node=peer-1",route=>{renamed=route.request().postDataJSON();name=renamed.name;return route.fulfill({json:{...session,id:"remote-one",name}});});
+  await page.goto("/");
+  const row=page.locator("[data-session=remote-one]");await row.click();
+  await row.click({button:"right"});await page.getByRole("menuitem",{name:"Rename…"}).click();
+  await page.getByLabel("Name",{exact:true}).fill("Fix sidebar");await page.getByLabel("Name",{exact:true}).press("Enter");
+  await expect(page.locator("#sheet")).toBeHidden();await expect(row).toContainText("Fix sidebar");await expect(page.locator("#terminal-title")).toHaveText("Fix sidebar");
+  expect(renamed).toEqual({name:"Fix sidebar"});
+  await page.locator("#refresh").click();await expect(row).toContainText("Fix sidebar");
+  await page.reload();await expect(row).toContainText("Fix sidebar");
+  await page.getByLabel("Filter sessions").fill("Fix sidebar");await expect(page.locator(".srow")).toHaveCount(1);
+});
+test("row actions rename without attaching, preserve errors, cancel, and stop the chosen session",async({page})=>{
+  const requests=await mockAPI(page);let attempts=0;
+  await page.route("**/api/sessions/local-two",route=>{attempts++;return route.fulfill({status:500,body:"Could not save the name"});});
+  await page.goto("/");
+  await page.getByRole("button",{name:"Actions for another-project"}).click();
+  await page.getByRole("menuitem",{name:"Rename…"}).click();await page.getByLabel("Name",{exact:true}).fill("Keep this draft");
+  await page.getByRole("button",{name:"Rename",exact:true}).click();
+  await expect(page.locator("#session-name-error")).toHaveText("Could not save the name");await expect(page.getByLabel("Name",{exact:true})).toHaveValue("Keep this draft");
+  await page.keyboard.press("Escape");await expect(page.locator("#sheet")).toBeHidden();expect(attempts).toBe(1);
+  const row=page.locator("[data-session=local-two]");await row.focus();await page.keyboard.press("Shift+F10");await expect(page.getByRole("menuitem",{name:"Rename…"})).toBeFocused();
+  await page.keyboard.press("Escape");await expect(page.locator("#session-menu")).toBeHidden();await expect(row).toBeFocused();
+  await row.click({button:"right"});page.once("dialog",dialog=>dialog.accept());await page.getByRole("menuitem",{name:"Stop…"}).click();
+  await expect.poll(()=>requests.some(item=>item.path==="/api/sessions/local-two/stop")).toBeTruthy();
+  expect(requests.some(item=>item.path==="/api/sessions/local-one/stop")).toBeFalsy();await expect(page.locator("#terminal-title")).toHaveText("Sessions");
+});
+test("Library keeps installed packages when an older peer has no Library API",async({page})=>{
+  await mockAPI(page);
+  await page.route("**/api/nodes",route=>route.fulfill({json:[{id:"peer-1",name:"Build server",online:true}]}));
+  await page.route("**/api/recent?node=peer-1",route=>route.fulfill({json:[{directory:"/srv/app",available:true}]}));
+  await page.route("**/api/packages?**",route=>route.fulfill({json:[{module:"github.com/acme/installed",commit:"abc123",kind:"plugin",name:"Installed tools"}]}));
+  await page.route("**/api/library/packages**",route=>route.fulfill({json:[{id:"saved-one",module:"github.com/acme/saved",commit:"def456",name:"Saved tools"}]}));
+  await page.route("**/api/library/agentpacks**",route=>route.fulfill({status:404,body:"404 page not found"}));
+  await page.goto("/");await page.getByRole("button",{name:"Library",exact:true}).click();
+  await expect(page.locator("#library-list")).toContainText("Installed tools");await expect(page.locator("#library-list")).toContainText("Saved tools");
+  await page.locator("#library-list button").filter({hasText:"Installed tools"}).click();
+  await expect(page.locator("#library-detail")).toContainText("github.com/acme/installed");await expect(page.locator("#library-detail .installed")).toContainText("Build server");
+  await expect(page.locator("#library-list")).not.toContainText("404 page not found");
+  await expect(page.locator("#library-summary")).not.toContainText("unavailable");
+  await expect(page.locator("#library-list")).toContainText("Update Agentpack on Build server");
+});
 test("refused terminal control opens the ownership alert",async({page})=>{
   await mockAPI(page); await attachTerminal(page,{refuseTake:true}); await page.goto("/");
   await page.locator("[data-session=local-one]").click();
@@ -87,6 +144,10 @@ test("390px switches between the session list and terminal panes",async({page})=
   await expect(page.locator(".workspace")).not.toHaveClass(/show-sessions/);
   await expect(page.locator(".term-col")).toBeVisible();
   await page.getByRole("button",{name:"Show sessions"}).click();
+  await page.getByRole("button",{name:"Actions for my-project"}).click();
+  await page.getByRole("menuitem",{name:"Rename…"}).click();
+  await expect(page.getByLabel("Name",{exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"Cancel",exact:true}).click();
   await page.locator("[data-session=local-one]").click();
   await expect(page.locator(".term-col")).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
@@ -146,7 +207,7 @@ test("terminal input requires ownership and detaching never stops the agent",asy
   await expect(page.locator("#terminal-status")).toHaveText("Observing");
   await expect(page.getByRole("button",{name:"Take control"})).toBeEnabled();
   await page.getByRole("button",{name:"Session actions"}).click();
-  await page.getByRole("button",{name:"Close terminal"}).click();
+  await page.getByRole("menuitem",{name:"Close terminal"}).click();
   expect(requests.some(value=>value.path.endsWith("/stop"))).toBeFalsy();
 });
 test("backend strings are text and API failures stay visible",async({page})=>{
@@ -173,9 +234,9 @@ test("native stdio and Antigravity sessions keep their local-only restrictions",
   await expect(page.getByText("Native stdio · browser input unavailable")).toBeVisible();
   await expect(page.getByRole("button",{name:"Take control"})).toBeDisabled();
   await page.getByRole("button",{name:"Session actions"}).click();
-  await expect(page.getByRole("button",{name:"Restart…"})).toBeDisabled();
-  await expect(page.getByRole("button",{name:"Stop…"})).toBeEnabled();
-  page.on("dialog",dialog=>dialog.accept()); await page.getByRole("button",{name:"Stop…"}).click();
+  await expect(page.getByRole("menuitem",{name:"Restart…"})).toBeDisabled();
+  await expect(page.getByRole("menuitem",{name:"Stop…"})).toBeEnabled();
+  page.on("dialog",dialog=>dialog.accept()); await page.getByRole("menuitem",{name:"Stop…"}).click();
   await expect(page.locator("#notice")).toHaveText("Agent stopped.");
   await page.route("**/api/sessions",route=>route.fulfill({json:[{...session,harness:"agy",state:{...session.state,interactive:false}}]}));
   await page.getByRole("button",{name:"Refresh status"}).click(); await page.locator("[data-session=local-one]").click();
@@ -217,7 +278,7 @@ test("restarting keeps the same operation ID after ambiguous failures",async({pa
     return route.fulfill({json:{restarted:true}});
   });
   page.on("dialog",dialog=>dialog.accept()); await page.goto("/"); await page.locator("[data-session=local-one]").click();
-  const restart=async()=>{await page.getByRole("button",{name:"Session actions"}).click();await page.getByRole("button",{name:"Restart…"}).click();};
+  const restart=async()=>{await page.getByRole("button",{name:"Session actions"}).click();await page.getByRole("menuitem",{name:"Restart…"}).click();};
   await restart(); await expect(page.locator("#notice")).toContainText(/Failed to fetch|Load failed/);
   await restart(); await expect(page.locator("#notice")).toHaveText("Worker response unavailable");
   await restart(); await expect(page.locator("#notice")).toHaveText("Agent restart requested."); expect(ids[1]).toBe(ids[0]);expect(ids[2]).toBe(ids[0]);
@@ -257,7 +318,7 @@ test("a dropped terminal reconnects and replays output",async({page})=>{
   await page.goto("/"); await page.locator("[data-session=local-one]").click(); await expect(page.locator("#terminal-status")).toHaveText("Observing");
   sockets[0].close(); await expect(page.locator("#terminal-status")).toContainText("reconnecting");
   await expect.poll(()=>sockets.length).toBe(2); await expect(page.locator("#terminal-mount")).toContainText("ATTACH 2");
-  await page.getByRole("button",{name:"Session actions"}).click(); await page.getByRole("button",{name:"Close terminal"}).click();
+  await page.getByRole("button",{name:"Session actions"}).click(); await page.getByRole("menuitem",{name:"Close terminal"}).click();
   await page.waitForTimeout(1200); expect(sockets.length).toBe(2);
 });
 test("a restarted process that exits immediately still replays its final output",async({page})=>{
