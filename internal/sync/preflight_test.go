@@ -1045,6 +1045,11 @@ func TestPreflightDotAgentsUsesStagingPlanAndMarksNativeCodexSkill(t *testing.T)
 func TestPreflightMCPUsesHarnessProjectionWithoutExposingValues(t *testing.T) {
 	home, stagingRoot := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("AGENTPACK_STAGING_ROOT", stagingRoot)
 	cacheKey := strings.Repeat("b", 64)
@@ -1073,7 +1078,7 @@ func TestPreflightMCPUsesHarnessProjectionWithoutExposingValues(t *testing.T) {
 		".grok/config.toml":              "[plugins]\nenabled = [\"other\"]\n\n[mcp_servers.lookup]\ncommand = \"user\"\n",
 		".cursor/mcp.json":               `{"mcpServers":{"lookup":{"command":"user"}}}`,
 	} {
-		path := filepath.Join(home, relative)
+		path := filepath.Join(userHome, relative)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}

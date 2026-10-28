@@ -577,7 +577,7 @@ func sourceMCPServerFrom(server mcp.Server) sourceMCPServer {
 		clean := redactCredentialURL(*server.URL)
 		item.URL = &clean
 	}
-	if server.Cwd != nil && !filepath.IsAbs(*server.Cwd) && !isWindowsAbsolutePath(*server.Cwd) {
+	if server.Cwd != nil && !isHostAbsolutePath(*server.Cwd) {
 		item.Cwd = filepath.ToSlash(filepath.Clean(*server.Cwd))
 	}
 	if server.OAuth != nil {
@@ -610,10 +610,14 @@ func redactCredentialArgs(args []string) []string {
 }
 
 func portablePathValue(value string) string {
-	if filepath.IsAbs(value) || isWindowsAbsolutePath(value) {
+	if isHostAbsolutePath(value) {
 		return filepath.Base(filepath.FromSlash(strings.ReplaceAll(value, `\`, "/")))
 	}
 	return value
+}
+
+func isHostAbsolutePath(value string) bool {
+	return filepath.IsAbs(value) || strings.HasPrefix(value, "/") || isWindowsAbsolutePath(value)
 }
 
 func isWindowsAbsolutePath(value string) bool {

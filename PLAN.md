@@ -1,6 +1,6 @@
 ## Implementation delivery (2026-10-28)
 
-This work starts from `7004652234cbd73e0d7f656a024c947a79af2d67` (v0.8.7), preserving the existing terminal-close cleanup changes. The delivery is v0.9.0. The original specification below remains the acceptance contract; the supplied gateway reference is preserved in [docs/gateway-workspace-plan.md](docs/gateway-workspace-plan.md).
+This work starts from `7004652234cbd73e0d7f656a024c947a79af2d67` (v0.8.7), preserving the existing terminal-close cleanup changes. The delivery is v0.9.1, including Windows CI corrections to v0.9.0. The original specification below remains the acceptance contract; the supplied gateway reference is preserved in [docs/gateway-workspace-plan.md](docs/gateway-workspace-plan.md).
 
 See [implementation evidence](docs/implementation-evidence.md) for the R01–R12 mapping, implemented commands, browser and native coverage, reports, reproduction steps, and limits. Earlier progress tables and completion claims have been removed because they described older intermediate implementations.
 

@@ -25,6 +25,10 @@ func TestMCPPluginPlanCapturesBytesAndRejectsChangedSource(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho ready\n"), 0o751); err != nil {
 		t.Fatal(err)
 	}
+	sourceInfo, err := os.Stat(script)
+	if err != nil {
+		t.Fatal(err)
+	}
 	command := "node"
 	entry := mcp.Entry{Module: "github.com/acme/plugin", CacheKey: key, Source: mcp.Plugin, Server: mcp.Server{Command: &command, Args: []string{"${CLAUDE_PLUGIN_ROOT}/scripts/run.sh"}}}
 	effective := mode.ImplicitEffective()
@@ -32,7 +36,7 @@ func TestMCPPluginPlanCapturesBytesAndRejectsChangedSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Files) != 1 || string(plan.Files[0].Contents) != "#!/bin/sh\necho ready\n" || plan.Files[0].Mode.Perm() != 0o751 {
+	if len(plan.Files) != 1 || string(plan.Files[0].Contents) != "#!/bin/sh\necho ready\n" || plan.Files[0].Mode != sourceInfo.Mode() {
 		t.Fatalf("plan did not capture exact plugin file: %#v", plan.Files)
 	}
 	if !strings.Contains(strings.Join(plan.Entries["run"].Server.Args, " "), filepath.Join("plugin-roots", key[:16], "scripts", "run.sh")) {

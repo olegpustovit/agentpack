@@ -29,10 +29,10 @@ jobs:
           cache: true
       - name: Test Codex Windows credentials
         run: go test ./internal/harness/codex -count=1
-      - name: Test Windows launch context, shared terminals and PowerShell
+      - name: Test full Windows package, launch and PowerShell suite
         shell: pwsh
         run: |
-          go test ./internal/paths ./internal/network ./internal/cli -count=1
+          go test ./... -count=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   goreleaser:
     needs: codex-windows

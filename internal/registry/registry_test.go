@@ -309,13 +309,35 @@ func TestRecoverInterruptedRestoreAndPreserveFileModes(t *testing.T) {
 	}
 	manifestPath, lockPath := filepath.Join(project, "agentpack.toml"), filepath.Join(project, "pack.lock")
 	oldManifest, oldLock := []byte("name = \"before\"\n"), lockWithCommit("old123")
+	originalModes := make(map[string]os.FileMode, 2)
 	for path, data := range map[string][]byte{manifestPath: oldManifest, lockPath: oldLock} {
 		if err := os.WriteFile(path, data, 0o600); err != nil {
 			t.Fatal(err)
 		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		originalModes[path] = info.Mode().Perm()
 	}
-	journal := restoreJournal{Project: project, Manifest: oldManifest, Lock: oldLock, HadManifest: true, HadLock: true, ManifestMode: 0o600, LockMode: 0o600}
+	// Exercise restoration of the portable read-only state as well as the
+	// filesystem's actual permission bits (Windows exposes fewer permission bits).
+	if err := os.Chmod(manifestPath, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalModes[manifestPath] = info.Mode().Perm()
+	journal := restoreJournal{Project: project, Manifest: oldManifest, Lock: oldLock, HadManifest: true, HadLock: true, ManifestMode: originalModes[manifestPath], LockMode: originalModes[lockPath]}
 	if _, err := store.writeJournal(project, journal); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(manifestPath, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lockPath, 0o666); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(manifestPath, []byte("name = \"mixed\"\n"), 0o644); err != nil {
@@ -328,9 +350,18 @@ func TestRecoverInterruptedRestoreAndPreserveFileModes(t *testing.T) {
 	if err != nil || string(got) != string(oldManifest) {
 		t.Fatalf("recovery manifest: %q %v", got, err)
 	}
-	info, err := os.Stat(manifestPath)
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("recovery mode: %v %v", info, err)
+	got, err = os.ReadFile(lockPath)
+	if err != nil || string(got) != string(oldLock) {
+		t.Fatalf("recovery lock: %q %v", got, err)
+	}
+	for path, wantMode := range originalModes {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != wantMode {
+			t.Fatalf("recovery mode for %s: got %v want %v (stat error %v)", path, info, wantMode, err)
+		}
+	}
+	if info, err := os.Stat(manifestPath); err != nil || info.Mode().Perm()&0o222 != 0 {
+		t.Fatalf("recovery did not restore manifest read-only state: %v %v", info, err)
 	}
 }
 
