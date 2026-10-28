@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"time"
 
@@ -96,9 +97,10 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 	// reattach and replay instead of abandoning the agent. Unsent input is lost.
 	reconnect := func() error {
 		connection.Close()
-		wait, cancel := context.WithTimeout(ctx, 90*time.Second)
-		next, err := reattach(wait, record)
-		cancel()
+		if _, err := fmt.Fprint(output, "\r\nagentpack: reconnecting to the agent…\r\n"); err != nil {
+			return err
+		}
+		next, err := reattach(ctx, record)
 		if err != nil {
 			return err
 		}
@@ -241,35 +243,55 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 	}
 }
 
-// reattach waits out restarts and a not-yet-released previous attachment; it
-// fails only when the worker is gone or its session has ended.
+// reattach waits out restarts, a busy worker, and a not-yet-released previous
+// attachment. It fails only when the session ended or the worker stopped
+// answering at all (refused connections for several seconds), never on a timeout.
 func reattach(ctx context.Context, record WorkerRecord) (*websocket.Conn, error) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	failures := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-ticker.C:
-			response, err := workerRequest(ctx, record, "GET", "/state", "")
-			if err != nil {
-				return nil, err
-			}
-			var state TerminalState
-			err = json.NewDecoder(response.Body).Decode(&state)
-			response.Body.Close()
-			if err != nil {
-				return nil, err
-			}
-			if !state.Running && !state.Restarting {
-				return nil, ErrSessionEnded
-			}
-			if state.Restarting {
-				continue
-			}
-			if connection, err := attachWorker(ctx, record, true); err == nil {
-				return connection, nil
-			}
+		}
+		connection, err := tryReattach(ctx, record)
+		if err == nil {
+			return connection, nil
+		}
+		if errors.Is(err, ErrSessionEnded) {
+			return nil, err
+		}
+		var netErr net.Error
+		if errors.Is(err, errWorkerBusy) || errors.Is(err, websocket.ErrBadHandshake) || errors.As(err, &netErr) && netErr.Timeout() {
+			failures = 0
+			continue
+		}
+		if failures++; failures >= 50 {
+			return nil, fmt.Errorf("agent session is no longer reachable: %w", err)
 		}
 	}
+}
+
+var errWorkerBusy = errors.New("agent is restarting")
+
+func tryReattach(ctx context.Context, record WorkerRecord) (*websocket.Conn, error) {
+	response, err := workerRequest(ctx, record, "GET", "/state", "")
+	if err != nil {
+		return nil, err
+	}
+	var state TerminalState
+	err = json.NewDecoder(response.Body).Decode(&state)
+	response.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	if !state.Running && !state.Restarting {
+		return nil, ErrSessionEnded
+	}
+	if state.Restarting {
+		return nil, errWorkerBusy
+	}
+	return attachWorker(ctx, record, true)
 }
