@@ -262,6 +262,7 @@ func TestRelocatedDefinitionsShareSourceIdentity(t *testing.T) {
 }
 
 func TestPreflightFlagsAmbientUserSkill(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	home := t.TempDir()
 	t.Setenv("AGENTPACK_HOME", home)
 	t.Setenv("HOME", home)
@@ -316,6 +317,9 @@ func TestPreflightFlagsAmbientUserSkill(t *testing.T) {
 				for _, finding := range report.Findings {
 					if finding.Code == "CONFIG_SHADOWED" && finding.Source == "helper" {
 						found = true
+						if finding.Severity != environment.SeverityViolation {
+							t.Errorf("collision must violate CI policy: %#v", finding)
+						}
 						if finding.Target != string(base.Grok) && !(native == ".claude" && finding.Target == string(base.Claude)) {
 							t.Errorf("collision reported for unrelated target: %#v", finding)
 						}
@@ -336,7 +340,7 @@ func TestPreflightFlagsAmbientUserSkill(t *testing.T) {
 				if !foundArtifact {
 					t.Fatal("pack skill absent from report")
 				}
-				if found && report.OverallStatus != "violated" {
+				if target == "" && report.OverallStatus != "violated" {
 					t.Fatalf("status=%s findings=%#v", report.OverallStatus, report.Findings)
 				}
 			})
