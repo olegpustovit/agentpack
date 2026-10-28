@@ -25,7 +25,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: git diff --exit-code -- public
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium webkit
       - run: npm test
 
   test:
@@ -103,4 +103,7 @@ jobs:
       - name: Build real CLI
         run: go build -o /tmp/agentpack-fixtures ./cmd/agentpack
       - name: Offline preflight and relocation evidence
-        run: python3 evaluation/icse/run.py --binary /tmp/agentpack-fixtures
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y strace
+          python3 evaluation/icse/run.py --binary /tmp/agentpack-fixtures --trace

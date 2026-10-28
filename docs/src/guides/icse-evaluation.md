@@ -12,6 +12,14 @@ python3 evaluation/icse/run.py --binary ./agentpack
 go test ./internal/harness ./internal/harness/claude ./internal/harness/codex
 ```
 
+On Linux with `strace`, add `--trace` to instrument process and network system calls. The runner rejects child execution, non-thread process creation and socket operations during every preflight case. File content, mode and symlink snapshots remain a separate check. This measurement covers the exercised fixtures on Linux; it does not imply measurements on other platforms.
+
+Add `--output evaluation/icse/reports` to save sanitized clean, violated, unknown,
+stale-receipt and support-export examples. The last two deliberately use a
+synthetic receipt with no observed properties. The runnable external examples in
+`evaluation/icse/environments` demonstrate a frozen empty environment and a local
+review skill whose contract fails when its mode omits it.
+
 The Python runner creates disposable external definitions and two relocated checkout directories. It invokes the actual built CLI, not a native agent. Its independent oracles assert:
 
 - equal portable source identities across relocated workspaces;
@@ -19,7 +27,8 @@ The Python runner creates disposable external definitions and two relocated chec
 - observed skill presence without a receipt stays unknown and returns exit 4;
 - a strict Cursor workspace overlay requirement fails and returns exit 3;
 - lock/definition, checkout, native-home and agentpack state contents, permissions, directories and symlink targets stay unchanged during preflight;
-- authored inherited user settings, a mismatched named skill, and an incomplete receipt are rejected while the lock hash stays unchanged.
+- authored inherited user settings and a project-native skill are rejected under controlled policy; removing those fixture inputs restores a clean result without changing the lock;
+- a mismatched named skill and an incomplete receipt are rejected while the lock hash stays unchanged.
 
 Static fixture binary-presence checks point at the built Agentpack executable for Claude and Cursor; those paths are never invoked as native agents. Real native discovery uses the separate opt-in tests below. The suite prints its actual outcomes. This is deterministic regression evidence on synthetic fixtures, not a developer study, native discovery experiment or competition benchmark. The temporary workspaces disappear after the run. The initial definition is intentionally empty to keep the offline control independent of network and package registries.
 
@@ -27,9 +36,9 @@ Probe tests use synthetic executable fixtures for invalid outputs, nonzero nativ
 
 ## Native evidence gate
 
-The current Claude parser covers the recorded 2.1.295 and validated 2.1.296 inventory shape. Plugin presence and names discovered in plugin details can be observed; source bytes/digests, ambient user skills and model use remain unknown. A malformed or truncated inventory cannot become an empty successful inventory. Skill inventory coverage remains partial, so it cannot prove complete skill absence.
+The Claude parser covers the recorded 2.1.295 inventory shape, with native runs on 2.1.296 and 2.1.312. Its accepted patch-version range is broader than those tested binaries. Plugin presence and names discovered in plugin details can be observed; source bytes/digests, ambient user skills and model use remain unknown. A malformed or truncated inventory cannot become an empty successful inventory. Skill inventory coverage remains partial, so it cannot prove complete skill absence.
 
-The Codex 0.159.2 adapter uses `debug prompt-input` with a disposable HOME/CODEX_HOME, cloud skills disabled, file credential store, and a regular-file copy of staged skills. It does not copy raw user config, credentials, history or hooks. It observes positive names in native developer skill instructions; this is a **controlled projection**, not proof of the full interactive launch configuration. Symlinked skill inputs are refused. Codex 0.159.3 remains version-only support. Neither adapter can prove model use or complete ambient-skill absence.
+The Codex 0.159.2/0.159.3 adapter uses `debug prompt-input` with a disposable HOME/CODEX_HOME, cloud skills disabled, file credential store, and a regular-file copy of staged skills. It does not copy raw user config, credentials, history or hooks. It observes positive names in native developer skill instructions; this is a **controlled projection**, not proof of the full interactive launch configuration. Symlinked skill inputs are refused. Neither adapter can prove model use or complete ambient-skill absence.
 
 Controlled real-native positive/removed-sentinel tests passed on macOS arm64 with Claude 2.1.296 and Codex 0.159.2. Run them explicitly:
 
@@ -37,6 +46,8 @@ Controlled real-native positive/removed-sentinel tests passed on macOS arm64 wit
 AGENTPACK_NATIVE_PROBES=1 go test -v ./internal/harness/claude ./internal/harness/codex -run '^TestNative.*Sentinel$'
 AGENTPACK_NATIVE_PROBES=1 go test -v ./internal/cli -run '^TestNativeRestoredPackConformance$'
 ```
+
+On 2026-10-28, both commands also passed on Linux arm64 with Claude Code 2.1.312 and Codex 0.159.3. Both adapters observed the restored sentinel; the held-out empty mode removed its positive observation and the required observed contract stayed unknown. The frozen lock and checkout remained unchanged. Exact executable hashes and coverage limits are recorded in `evaluation/icse/native-evidence-linux-arm64.json`. This is a run summary; the temporary raw evidence was removed by test cleanup.
 
 These tests create benign disposable inputs and isolate native homes. They request no model inference or production MCP/hook execution. They check that the known-positive sentinel appears, that its observation disappears after the authored fixture is removed, and that the fixture workspace stays unchanged. Missing observations remain unknown; this is not a general negative-discovery guarantee. A second integration test freezes an independently authored, content-hashed local skill package, restores it through the actual materialization pipeline for both targets, and confirms the native positive sentinel in both generated configurations. It exercises the full CLI probe, private receipt save and latest-receipt validation. An independently defined empty mode removes the locked skill: neither adapter emits a positive removed-sentinel observation, and a required observed contract stays unknown under partial coverage. It checks equal source identity, unchanged lock bytes and no checkout files. This passed on the same native versions. Native network/global effects are unmeasured. Native writes observed in the spike include Claude config/backups and Codex installation/migration/temp/system-skill files inside diagnostic homes. Sanitized run metadata is in `evaluation/icse/native-evidence-macos-arm64.json`; bounded stdout/stderr and process status are retained as 0600 JSON evidence under 0700 managed receipt directories, with paths on the local receipt. Support export omits these diagnostic references and raw files.
 

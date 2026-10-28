@@ -136,10 +136,11 @@ func TestStageSourceTreeFollowsDeclaredComponentPathsInsideThePackage(t *testing
 	}
 	logged := captureLog(t)
 	roots := []HarnessRoot{{harness.Claude, claudeRoot}, {harness.Codex, codexRoot}}
-	if err := copyRawSupport(source, roots, "github.com/o/skills", mode.ImplicitEffective()); err != nil {
+	plan, err := PlanPackageTree(source, "github.com/o/skills", "", mode.ImplicitEffective(), roots, true)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stageSourceTree(source, roots, "", "github.com/o/skills", mode.ImplicitEffective()); err != nil {
+	if err := ApplyPackageTreePlan(plan, roots); err != nil {
 		t.Fatal(err)
 	}
 	for _, root := range []string{claudeRoot, codexRoot} {

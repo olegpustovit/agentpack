@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -119,6 +120,30 @@ func readWorker(t *testing.T, connection *websocket.Conn, matches func(int, []by
 			return
 		}
 	}
+}
+
+func TestWorkerReportsReplayCompletionWatermark(t *testing.T) {
+	session := testSession(t)
+	server := testWorkerServer(t, session)
+	connection, attached := dialWorker(t, server, false)
+	var replayed uint64
+	readWorker(t, connection, func(kind int, data []byte) bool {
+		if kind == websocket.BinaryMessage {
+			replayed += uint64(len(data))
+			return false
+		}
+		var notice terminalNotice
+		if err := json.Unmarshal(data, &notice); err != nil {
+			t.Fatal(err)
+		}
+		if notice.Type != "replay_complete" {
+			return false
+		}
+		if notice.Attachment != attached.Attachment || notice.Offset != attached.Offset+replayed {
+			t.Fatalf("invalid replay watermark: %+v (%d bytes)", notice, replayed)
+		}
+		return true
+	})
 }
 
 func TestWorkerStreamsRawPTYAndDisconnectLeavesAgent(t *testing.T) {
@@ -290,4 +315,82 @@ func TestLocalTerminalReconnectsAfterDroppedConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(func(value string) bool { return strings.Contains(value, "ECHO after") })
+}
+
+func TestClosingLocalTerminalStopsWorker(t *testing.T) {
+	for _, reconnecting := range []bool{false, true} {
+		name := "connected"
+		if reconnecting {
+			name = "reconnecting"
+		}
+		t.Run(name, func(t *testing.T) {
+			session := testSession(t)
+			secret := strings.Repeat("s", 64)
+			handler, err := WorkerHandler(session, secret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var unavailable atomic.Bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if unavailable.Load() && r.URL.Path == "/attach" {
+					http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				handler.ServeHTTP(w, r)
+			}))
+			t.Cleanup(server.Close)
+			home := t.TempDir()
+			record := WorkerRecord{ID: "session-test", Address: server.Listener.Addr().String(), Secret: secret}
+			data, _ := json.Marshal(record)
+			directory := filepath.Join(home, "network", "sessions", record.ID)
+			if err := os.MkdirAll(directory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(directory, "worker.json"), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			master, slave, err := pty.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { master.Close(); slave.Close() })
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			output := &lockedBuffer{}
+			done := make(chan struct{})
+			go func() {
+				RunTerminal(ctx, home, record.ID, slave, output)
+				close(done)
+			}()
+			waitOutput := func(want string) {
+				t.Helper()
+				for !strings.Contains(output.String(), want) {
+					select {
+					case <-ctx.Done():
+						t.Fatalf("waiting for %q; got %q", want, output.String())
+					case <-time.After(10 * time.Millisecond):
+					}
+				}
+			}
+			waitOutput("READY")
+			if reconnecting {
+				unavailable.Store(true)
+				handler.mu.Lock()
+				for connection := range handler.connections {
+					connection.Close()
+				}
+				handler.mu.Unlock()
+				waitOutput("reconnecting")
+			}
+			master.Close()
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("closing the terminal left the local client waiting")
+			}
+			if session.State().Running {
+				t.Fatal("closing the terminal left the agent running")
+			}
+		})
+	}
 }

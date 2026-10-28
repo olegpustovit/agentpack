@@ -3,8 +3,12 @@
 Static frontend embedded by the Go gateway. `public/` is the only served directory:
 `index.html` at `/`, other assets at `/static/`. It uses Agentnet's macOS system font,
 OKLCH color and spacing tokens, with light/dark modes and responsive navigation.
-Terminal bytes are rendered by the locally bundled MIT-licensed xterm.js and fit addon.
-No external script, CDN, font, analytics, localStorage credentials, or runtime Node server.
+Terminal bytes are rendered by locally bundled MIT-licensed xterm.js; the terminal grid stays
+at the remote host dimensions while CSS scales the view.
+The installable PWA manifest is `/static/manifest.webmanifest`; its SVG and PNG icons are
+served from `/static/icon.svg`, `/static/icon-192.png`, and `/static/icon-512.png`. There is
+no service worker, so API responses and registry data are never cached by the UI. No
+external script, CDN, font, analytics, localStorage credentials, or runtime Node server.
 
 Build with `npm ci && npm run build`; commit the generated public assets. Run browser
 checks with `npx playwright install chromium && npm test`. Node/npm are build tools only.
@@ -31,12 +35,40 @@ private worker capabilities never appear in any response. An unauthenticated API
 - `POST /api/sessions/{id}/restart`: `{operation_id}`. Each user intent gets a UUID;
   transport failures and 5xx retry the same UUID, while success or 4xx ends that intent.
 - `GET /api/packages?directory=...`: array (or `{packages: [...]}`) of `{module,commit?}`.
-- `POST /api/packages`: `{directory,spec}`. Returns after install and affected-agent restart.
+- `POST /api/packages`: `{directory,spec,restart?}`. `restart` defaults to `true`.
+- `GET /api/library/packages`: registry package records, including exact module/commit,
+  cache key, content hash, and package identity where available. `GET /api/library/agentpacks`
+  returns saved agentpack identities; `GET /api/library/agentpacks/{id}` returns the identity
+  and its revision history. Agentpack revisions expose their manifest, package pins, diff,
+  mode, project, and creation metadata. `POST /api/library/agentpacks` captures the selected
+  session/project; `PATCH /api/library/agentpacks/{id}` renames its Library label.
+- Restore preview is `GET /api/library/agentpacks/{id}/revisions/{revision}/restore-preview?directory=...`;
+  apply is `POST /api/library/agentpacks/{id}/revisions/{revision}/restore` with
+  `{directory,restart?}`. Restore is limited to one trusted project per confirmation.
+- `GET /api/library/drafts` returns locally held pending installs/restores. `POST` accepts a
+  `DraftInput` containing the exact package pin or agentpack revision, destination node and
+  directory, folder identity, reason, and expected pins. `POST /api/library/drafts/{id}/review`
+  with `{}` rechecks destination reachability, authorization, folder identity, pins, and the
+  current diff; it never applies changes. Only a ready review can be explicitly applied via
+  the regular package install or agentpack restore endpoint. Successful apply or explicit
+  discard removes the local draft; `DELETE /api/library/drafts/{id}` discards it.
+- `GET /api/library/replication/peers` returns enrolled peers and their verified object
+  digests, plus contact results. `POST /api/library/replication/peers` with `{peer}` enrolls
+  a stable peer ID; `DELETE /api/library/replication/peers/{id}` removes enrollment;
+  `POST /api/library/replication/sync` with `{peer}` syncs verified registry objects.
+  Replication is opt-in, requires Tailscale sharing, and both gateways must enroll each other.
+- The terminal grid is fixed to the host-reported `state.columns × state.rows`; browser
+  resizing only changes its CSS scale.
 - `GET /api/sessions/{id}/terminal`: authenticated WebSocket. Binary messages carry raw
   PTY bytes in either direction. Text notices carry `{type,attachment?,state?,offset?,error?}`.
   Browser control messages are `{action:"take"|"release"|"resize",epoch,rows?,columns?}`.
-  The first attached notice must include attachment ID and current state. State notices
+  The first attached notice must include attachment ID and current state. After replay bytes,
+  the gateway sends `{type:"replay_complete"}`; the UI keeps the last frame dimmed and input
+  disabled until the replay has rendered and current ownership is validated. State notices
   update ownership and epoch; ownership checks happen server-side for every mutation.
+  The UI records `performance.mark` entries named `agentpack:terminal:click`, `socketopen`,
+  `attached`, `firstframe`, and `replay_complete` and emits matching `console.debug` timing
+  entries for local troubleshooting.
 
 Remote nodes use Tailscale identity and require sharing enabled on both sides. The machine selector lists live allowed peers from `GET /api/nodes`. Requests and
 WebSocket connections for the selected peer append `?node=<stable-id>`. Start-folder

@@ -18,40 +18,82 @@ import (
 // lsp_tools = true (its README, "LSP"), which Claude Code does unasked, so
 // that is set too unless the user's configuration says otherwise.
 func writeLSP(servers map[string]json.RawMessage, ctx base.StageContext) error {
-	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	projection, err := planLSP(servers, ctx)
 	if err != nil {
 		return err
 	}
-	if err := base.WriteLSPFile(filepath.Join(home, "lsp.json"), servers); err != nil {
-		return err
+	return base.WriteLSPProjection(projection)
+}
+
+func planLSP(servers map[string]json.RawMessage, ctx base.StageContext) (base.LSPProjection, error) {
+	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	if err != nil {
+		return base.LSPProjection{}, err
 	}
-	return enableLSPTools(filepath.Join(home, "config.toml"))
+	data, err := json.MarshalIndent(servers, "", "  ")
+	if err != nil {
+		return base.LSPProjection{}, err
+	}
+	data = append(data, '\n')
+	configPath := filepath.Join(home, "config.toml")
+	seedPath := configPath
+	if ctx.StagedRoots == nil {
+		if userHome, err := os.UserHomeDir(); err == nil {
+			seedPath = filepath.Join(userHome, ".grok", "config.toml")
+		}
+	}
+	seed := append([]byte(nil), ctx.SeedConfig...)
+	if len(seed) == 0 {
+		seed, err = base.ReadMCPSeed(seedPath)
+		if err != nil {
+			return base.LSPProjection{}, err
+		}
+	}
+	config, warning, err := EnableLSPToolsData(seed)
+	if err != nil {
+		return base.LSPProjection{}, err
+	}
+	projection := base.LSPProjection{Files: []base.MCPProjectedFile{{Path: filepath.Join(home, "lsp.json"), Contents: data, Scope: "lsp"}, {Path: configPath, Contents: config, Scope: "features"}}}
+	if warning {
+		projection.Warnings = append(projection.Warnings, "Grok user config already disables LSP tools")
+	}
+	return projection, nil
 }
 
 func enableLSPTools(path string) error {
-	root := make(map[string]any)
+	var seed []byte
 	if data, err := os.ReadFile(path); err == nil {
-		if err := toml.Unmarshal(data, &root); err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
+		seed = data
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
+	data, _, err := EnableLSPToolsData(seed)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func EnableLSPToolsData(seed []byte) ([]byte, bool, error) {
+	root := make(map[string]any)
+	if len(seed) != 0 {
+		if err := toml.Unmarshal(seed, &root); err != nil {
+			return nil, false, err
+		}
+	}
 	features, ok := root["features"].(map[string]any)
 	if root["features"] != nil && !ok {
-		return fmt.Errorf("%s: features must be a TOML table", path)
+		return nil, false, fmt.Errorf("features must be a TOML table")
 	}
 	if features == nil {
 		features = make(map[string]any)
 		root["features"] = features
 	}
-	if _, set := features["lsp_tools"]; set {
-		return nil
+	if value, set := features["lsp_tools"]; set {
+		data, err := toml.Marshal(root)
+		return data, value == false, err
 	}
 	features["lsp_tools"] = true
 	data, err := toml.Marshal(root)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o644)
+	return data, false, err
 }

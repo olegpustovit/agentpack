@@ -11,24 +11,43 @@ import (
 
 // MergeMCP is deliberately harness-owned even though Codex currently uses the same wire format.
 func MergeMCP(path string, entries mcp.Entries) error {
-	root := make(map[string]any)
-	if data, err := os.ReadFile(path); err == nil {
-		if err := toml.Unmarshal(data, &root); err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-	} else if !os.IsNotExist(err) {
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read %s: %w", path, err)
+	}
+	output, warnings, _, err := MergeMCPData(data, entries)
+	if err != nil {
+		return err
+	}
+	for _, warning := range warnings {
+		log.Printf("warning: %s", warning)
+	}
+	if err := os.WriteFile(path, output, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
+func MergeMCPData(data []byte, entries mcp.Entries) ([]byte, []string, []string, error) {
+	root := make(map[string]any)
+	if len(data) != 0 {
+		if err := toml.Unmarshal(data, &root); err != nil {
+			return nil, nil, nil, fmt.Errorf("parse MCP seed: %w", err)
+		}
 	}
 	servers, ok := root["mcp_servers"].(map[string]any)
 	if root["mcp_servers"] != nil && !ok {
-		return fmt.Errorf("%s: mcp_servers must be a TOML table", path)
+		return nil, nil, nil, fmt.Errorf("MCP seed: mcp_servers must be a TOML table")
 	}
 	if servers == nil {
 		servers = make(map[string]any)
 		root["mcp_servers"] = servers
 	}
+	var warnings []string
+	var shadowed []string
 	for _, name := range entries.Names() {
 		if _, exists := servers[name]; exists {
+			shadowed = append(shadowed, name)
 			continue
 		}
 		server := entries[name].Server
@@ -62,16 +81,13 @@ func MergeMCP(path string, entries mcp.Entries) error {
 			value["enabled"] = false
 		}
 		if len(missing) != 0 {
-			log.Printf("warning: %s", mcp.NotCarried("Grok", name, missing...))
+			warnings = append(warnings, mcp.NotCarried("Grok", name, missing...))
 		}
 		servers[name] = value
 	}
 	data, err := toml.Marshal(root)
 	if err != nil {
-		return fmt.Errorf("encode %s: %w", path, err)
+		return nil, warnings, nil, fmt.Errorf("encode MCP config: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return nil
+	return data, warnings, shadowed, nil
 }

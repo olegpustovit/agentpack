@@ -1,43 +1,8 @@
-## Current reconciliation (Phase 0)
+## Implementation delivery (2026-10-28)
 
-**Start commit:** `89f63b2801e3f907ee1b010a3a61407aab155075` (matches reference audit).
+This work starts from `7004652234cbd73e0d7f656a024c947a79af2d67` (v0.8.7), preserving the existing terminal-close cleanup changes. The delivery is v0.9.0. The original specification below remains the acceptance contract; the supplied gateway reference is preserved in [docs/gateway-workspace-plan.md](docs/gateway-workspace-plan.md).
 
-| Area | Status | Notes |
-| - | - | - |
-| Context roots (`DefinitionRoot` / `WorkspaceRoot`) | **completed** | `internal/paths/context.go`; legacy `--project-root` unchanged |
-| Env store / bind / export / import / restore CLI | **completed** | `env use`/`bind`; `--env`; frozen restore publishes staging |
-| Pure preflight | **partial** | Artifacts + winners + ambient; LookPath only; not full IR merge graph |
-| Strict external overlays | **completed** | Cursor/Agy refused under `--strict-external` |
-| Frozen restore | **completed** | Lock-byte + missing-input fail; staging rebuild via `Frozen` sync |
-| Contracts + graded evidence | **partial** | schema/examples; observed predicates stay unknown without receipt |
-| Native probe / receipts | **partial** | Claude plugin/skill presence; Codex version; receipts + freshness |
-| Compare / support capsule | **completed** | `config compare` + redacted `support export` |
-| Ambient/precedence faults | **completed** | CONFIG_SHADOWED + AMBIENT_ARTIFACT with artifact winners |
-| Exit codes 0/2/3/4/5 | **completed** | Preflight/probe map overall_status → exit codes |
-| R12 legacy workflows | **completed** | Existing launchers/sync preserved |
-
-**Command mapping (reuse, do not rename):** `env use`→`env bind`; `--definition-root`/`--env`→selector; `env restore`→`restore --frozen`; `preflight` stays top-level.
-
-**Ultra scope cut:** skip inventing native observations and advertising observed discovery for Cursor/Agy/Grok.
-
-### R01–R12 progress (working tree)
-
-| ID | Status | Evidence |
-| - | - | - |
-| R01 | **completed** | Integration + unit: init/bind/preflight leave checkout empty |
-| R02 | **completed** | Lock-byte unchanged; missing locked input fails without lock rewrite |
-| R03 | **completed** | Preflight mutates neither lock nor checkout; no child processes |
-| R04 | **completed** | Artifact winners + planned writes; strict planned writes match sync refusal |
-| R05 | **completed** | Declared/generated/observed/unknown; contracts do not forge digests |
-| R06 | **completed** | Absent+observed without coverage → unknown |
-| R07 | **completed** | Strict-external + invalid `--env` fail explicitly |
-| R08 | **completed** | Shared Report; exit codes 0/2/3/4/5 |
-| R09 | **completed** | Continuity reused; capsule/bundle exclude credentials; no new token copies |
-| R10 | **completed** | Frozen staging publish; shared launch / exclusive rebuild flock; Codex generation leases retained |
-| R11 | **completed** | Bundle + redacted support capsule; no secrets by default |
-| R12 | **completed** | Legacy workflow preserved; suite green |
-
----
+See [implementation evidence](docs/implementation-evidence.md) for the R01–R12 mapping, implemented commands, browser and native coverage, reports, reproduction steps, and limits. Earlier progress tables and completion claims have been removed because they described older intermediate implementations.
 
 ## Objective and implementation handoff
 
@@ -650,27 +615,8 @@ Return actual start/end commits; changed modules; mapping of every R01–R12 req
 
 Include one clean report, one violation, one unknown/partial observation, one stale receipt, and one sanitized support export. Identify the strongest real fault caught beyond the package lock. Do not report the specification itself as implemented functionality.
 
-#### Working completion notes (uncommitted; start `89f63b2`)
-
-**Narrowed release claim:** Strict external (no checkout config writes) advertised for Claude + OpenCode. Native *observed* discovery: Claude plugin/skill **presence** via `plugin list --json` + `plugin details` (2.1.295). Codex: **version only** (0.159.3); skill catalog unknown. Source digests and ambient `~/.claude/skills` remain unknown unless covered by a fresh receipt’s completeness.
-
-**Commands:** `--env` / `--definition-root` / `--workspace` / `--strict-external`; `env init|use|bind|unuse|list|status|export|import|restore`; `preflight [--json|--agent|--policy|--contract|--receipt|--strict-external]`; `probe --agent claude|codex`; `config compare A B`; `support export ID --output PATH`.
-
-**Modules:** `internal/environment`, `internal/paths/context.go`, `internal/sync/{preflight,service}`, `internal/cli/{env,preflight,probe,compare,support,parse,run,command}`, `internal/harness/{probe.go,claude/probe.go,codex/probe.go}`, `internal/staging/collision.go`, docs/schemas.
-
-**Tests:** `go test ./...` green. Key: `TestCompiledCLIExternalEnvDoesNotWriteCheckout`, `TestRestoreFrozenFailsMissingInputWithoutLockChange`, `TestRelocatedDefinitionsShareSourceIdentity`, `TestPreflightFlagsAmbient*`, `TestPreflightReceiptStale*`, `TestPreflightPlannedWritesMatchStrictSyncRefusal`, capsule redact, contract eval.
-
-**Gate demo (manual):** two relocated workspaces same `source_identity`; empty checkouts; Claude+Codex probes; support capsule; strict cursor → `WORKSPACE_WRITE_REQUIRED` exit 3.
-
-**Strongest fault beyond package lock:** user/project skill name collision (`CONFIG_SHADOWED` / `AMBIENT_ARTIFACT`) that package-only lock checks miss.
-
-**Still open (non-blocking under narrowed claim):** R09 dedicated auth-continuity fixtures beyond existing harness bridging; full settings-array merge IR.
-
-**R10 note:** Launch holds shared `staging/.rebuild.lock`; sync/restore exclusive rebuild fails while a launch is active. Codex generation homes still rotate under their own leases.
-
 ### Research and naming boundaries
 
 Credit existing external locks, temporary skills, mixed configuration compilation, native flags, and environment managers. Relevant comparisons include [Vercel skills](https://github.com/vercel-labs/skills), [Ruler](https://github.com/intellectronica/ruler), [Skilldex](https://arxiv.org/abs/2604.16911), [Rel AI Build control-plane preprint](https://arxiv.org/abs/2606.26924), and [Nix](https://nix.dev/manual/nix/2.28/command-ref/new-cli/nix3-flake.html).
 
 Motivating reports include [Codex concurrent profiles](https://github.com/openai/codex/issues/30967), [skill restoration](https://github.com/vercel-labs/skills/issues/283), [installed-content drift](https://github.com/vercel-labs/skills/issues/1812), and [configuration composition](https://github.com/intellectronica/ruler/issues/319). Treat them as reported motivations, not current reproduced defects. Native interfaces must be checked against the actual version and official documentation.
-

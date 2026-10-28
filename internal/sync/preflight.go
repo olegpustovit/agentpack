@@ -4,16 +4,20 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/olegpustovit/agentpack/internal/artifacts"
 	"github.com/olegpustovit/agentpack/internal/harness/claude"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
+	"github.com/olegpustovit/agentpack/internal/harness/grok"
 	"github.com/olegpustovit/agentpack/internal/harness/opencode"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -24,9 +28,12 @@ import (
 	"github.com/olegpustovit/agentpack/internal/hooks"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
+	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	library "github.com/olegpustovit/agentpack/internal/registry"
 	"github.com/olegpustovit/agentpack/internal/staging"
+	"github.com/pelletier/go-toml/v2"
 )
 
 // PreflightOptions selects the pure offline check surface.
@@ -38,6 +45,22 @@ type PreflightOptions struct {
 	WorkspaceRoot  string
 	ContractPath   string // optional; empty loads <definition>/contract.json when present
 	ReceiptID      string // optional; compare a prior native probe receipt (read-only)
+}
+
+// PreflightInputError marks malformed or inconsistent definition inputs.
+// Filesystem failures remain their original errors so callers can keep them
+// classified as operational failures.
+type PreflightInputError struct{ Err error }
+
+func (err *PreflightInputError) Error() string { return err.Err.Error() }
+func (err *PreflightInputError) Unwrap() error { return err.Err }
+
+func inputError(err error) error {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return err
+	}
+	return &PreflightInputError{Err: err}
 }
 
 // Preflight inspects an already-available definition without repairing cache,
@@ -71,17 +94,28 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 		report.Capabilities[string(target)] = status + ": " + note
 	}
 
-	project, err := manifest.Load(definitionRoot)
+	home, err := paths.UserAgentpackHome()
 	if err != nil {
 		return report, err
+	}
+	pending, err := library.PendingRestore(home, definitionRoot)
+	if err != nil {
+		return report, fmt.Errorf("check interrupted library restore: %w", err)
+	}
+	if pending {
+		return report, fmt.Errorf("library restore was interrupted; run agentpack sync to recover the definition before preflight")
+	}
+	project, err := manifest.Load(definitionRoot)
+	if err != nil {
+		return report, inputError(err)
 	}
 	lock, err := loadCheckedLock(definitionRoot)
 	if err != nil {
-		return report, err
+		return report, inputError(err)
 	}
 	effective, err := resolveMode(definitionRoot, project, &lock, options.Mode)
 	if err != nil {
-		return report, err
+		return report, inputError(err)
 	}
 	report.Mode = effective.Name()
 	report.Skills = lock.SkillCount()
@@ -92,16 +126,36 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 			report.Shadowed++
 		}
 	}
-	if identity, err := sourceIdentity(definitionRoot, lock); err == nil {
-		report.SourceIdentity = identity
+	identity, err := sourceIdentity(definitionRoot, lock)
+	if err != nil {
+		return report, fmt.Errorf("identify source: %w", inputError(err))
 	}
+	report.SourceIdentity = identity
 	if digest, err := lockDigest(definitionRoot); err == nil {
 		report.LockDigest = digest
 	}
 	if binding, found, _ := environment.LoadBinding(workspace); found {
 		report.Environment = binding.Environment
 	}
-	report.Artifacts, err = plannedArtifacts(lock, effective, workspace, options.Target)
+	cacheReady := true
+	if err := cache.VerifyLockCacheIntegrity(lock); err != nil {
+		cacheReady = false
+		report.Findings = append(report.Findings, environment.Finding{
+			Code:     "CACHE_INTEGRITY",
+			Severity: environment.SeverityError,
+			Message:  err.Error(),
+			Remedy:   "run `agentpack sync --repair` (mutates cache) then re-run preflight",
+		})
+	} else if err := cache.VerifyLockCacheLayout(lock); err != nil {
+		cacheReady = false
+		report.Findings = append(report.Findings, environment.Finding{
+			Code:     "CACHE_MISSING",
+			Severity: environment.SeverityError,
+			Message:  err.Error(),
+			Remedy:   "run `agentpack sync` or `agentpack env restore` to fetch locked inputs, then re-run preflight offline",
+		})
+	}
+	report.Artifacts, err = plannedArtifacts(lock, effective, definitionRoot, workspace, options.Target, cacheReady)
 	if err != nil {
 		return report, fmt.Errorf("plan effective artifacts: %w", err)
 	}
@@ -124,15 +178,24 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 		if artifact.Omitted {
 			continue
 		}
+		artifactTarget := report.Target
+		if target, ok := artifact.Properties["target"].(string); ok {
+			artifactTarget = target
+		}
 		severity := environment.SeverityWarning
 		if options.Policy == environment.PolicyCI {
 			severity = environment.SeverityViolation
 		}
 		if preserved, ok := artifact.Properties["scope_preserved"].(bool); ok && !preserved {
-			report.Findings = append(report.Findings, environment.Finding{Code: "RULE_SCOPE_DEGRADED", Severity: severity, Source: artifact.ID, Target: report.Target, Message: "scoped rule rendered as an unscoped skill; native glob enforcement is not preserved", Evidence: environment.EvidenceGenerated, Remedy: "choose a native rule target, disable this rule in the selected mode, or explicitly accept conversion under policy local"})
+			report.Findings = append(report.Findings, environment.Finding{Code: "RULE_SCOPE_DEGRADED", Severity: severity, Source: artifact.ID, Target: artifactTarget, Message: "scoped rule rendered as an unscoped skill; native glob enforcement is not preserved", Evidence: environment.EvidenceGenerated, Remedy: "choose a native rule target, disable this rule in the selected mode, or explicitly accept conversion under policy local"})
 		}
 		if fields, ok := artifact.Properties["dropped_fields"].([]string); ok && len(fields) > 0 {
-			report.Findings = append(report.Findings, environment.Finding{Code: "ARTIFACT_FIELDS_DROPPED", Severity: severity, Source: artifact.ID, Target: report.Target, Message: "native rendering drops fields: " + strings.Join(fields, ", "), Evidence: environment.EvidenceGenerated, Remedy: "remove unsupported fields or choose a target that preserves them"})
+			report.Findings = append(report.Findings, environment.Finding{Code: "ARTIFACT_FIELDS_DROPPED", Severity: severity, Source: artifact.ID, Target: artifactTarget, Message: "native rendering drops fields: " + strings.Join(fields, ", "), Evidence: environment.EvidenceGenerated, Remedy: "remove unsupported fields or choose a target that preserves them"})
+		}
+		if warnings, ok := artifact.Properties["warnings"].([]string); ok {
+			for _, warning := range warnings {
+				report.Findings = append(report.Findings, environment.Finding{Code: "MCP_RENDER_WARNING", Severity: severity, Source: artifact.ID, Target: artifactTarget, Message: warning, Evidence: environment.EvidenceGenerated, Remedy: "remove unsupported MCP fields or choose a target that preserves them"})
+			}
 		}
 	}
 
@@ -174,22 +237,6 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 				Remedy:   "add the path to .gitignore, or use --strict-external with claude/opencode",
 			})
 		}
-	}
-
-	if err := cache.VerifyLockCacheIntegrity(lock); err != nil {
-		report.Findings = append(report.Findings, environment.Finding{
-			Code:     "CACHE_INTEGRITY",
-			Severity: environment.SeverityError,
-			Message:  err.Error(),
-			Remedy:   "run `agentpack sync --repair` (mutates cache) then re-run preflight",
-		})
-	} else if err := cache.VerifyLockCacheLayout(lock); err != nil {
-		report.Findings = append(report.Findings, environment.Finding{
-			Code:     "CACHE_MISSING",
-			Severity: environment.SeverityError,
-			Message:  err.Error(),
-			Remedy:   "run `agentpack sync` or `agentpack env restore` to fetch locked inputs, then re-run preflight offline",
-		})
 	}
 
 	for _, server := range lock.MCPServers {
@@ -245,7 +292,10 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 				Message:  "native CLI located",
 			})
 		}
-		hookFindings, err := collectHookFindings(workspace, definitionRoot, lock, effective, *options.Target)
+		var hookFindings []environment.Finding
+		if cacheReady {
+			hookFindings, err = collectHookFindings(workspace, definitionRoot, lock, effective, *options.Target)
+		}
 		if err != nil {
 			report.Findings = append(report.Findings, environment.Finding{
 				Code:     "HOOK_COLLECT_FAILED",
@@ -268,15 +318,19 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 		Target:         options.Target,
 		StrictExternal: options.StrictExternal,
 	}
+	materializeRemedy := "run `agentpack sync` to materialize current inputs before probing"
+	if filepath.Clean(definitionRoot) != filepath.Clean(workspace) {
+		materializeRemedy = "run `agentpack env restore` to publish the selected frozen environment before probing"
+	}
 	materialized, materializedFound, materializedErr := readMaterializationDigest(definitionRoot, effective.Name())
 	if materializedErr != nil {
-		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_UNREADABLE", Severity: environment.SeverityError, Message: materializedErr.Error(), Evidence: environment.EvidenceUnknown, Remedy: "run sync to restore materialization metadata"})
+		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_UNREADABLE", Severity: environment.SeverityError, Message: materializedErr.Error(), Evidence: environment.EvidenceUnknown, Remedy: materializeRemedy})
 	} else if !materializedFound {
-		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_INPUTS_UNKNOWN", Severity: environment.SeverityWarning, Message: "no materialization input identity is recorded", Evidence: environment.EvidenceUnknown, Remedy: "run sync before probing native configuration"})
+		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_INPUTS_UNKNOWN", Severity: environment.SeverityWarning, Message: "no materialization input identity is recorded", Evidence: environment.EvidenceUnknown, Remedy: materializeRemedy})
 	} else if current, err := computeMaterializationDigest(definitionRoot, workspace, effective); err != nil {
 		return report, err
 	} else if materialized != current {
-		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_INPUTS_STALE", Severity: environment.SeverityViolation, Message: "staged configuration was built from different definition, mode, workspace, or inherited inputs", Evidence: environment.EvidenceGenerated, Remedy: "run sync to materialize current inputs before probing"})
+		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_INPUTS_STALE", Severity: environment.SeverityViolation, Message: "staged configuration was built from different definition, mode, workspace, or inherited inputs", Evidence: environment.EvidenceGenerated, Remedy: materializeRemedy})
 	}
 	drift, recorded, driftErr := pipeline.StagedDrift(true)
 	if driftErr != nil {
@@ -284,14 +338,14 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 			Code:     "STAGING_UNREADABLE",
 			Severity: environment.SeverityError,
 			Message:  driftErr.Error(),
-			Remedy:   "run `agentpack sync` to materialize staging, then re-run preflight",
+			Remedy:   materializeRemedy,
 		})
 	} else if !recorded {
 		report.Findings = append(report.Findings, environment.Finding{
 			Code:     "STAGING_NOT_RECORDED",
 			Severity: environment.SeverityWarning,
 			Message:  fmt.Sprintf("no staged record for mode %q", effective.Name()),
-			Remedy:   "run `agentpack sync` once to materialize, then preflight compares without rewriting",
+			Remedy:   materializeRemedy,
 		})
 	} else if len(drift) != 0 {
 		limit := min(len(drift), 5)
@@ -300,7 +354,7 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 			Severity: environment.SeverityError,
 			Message:  fmt.Sprintf("%d staged file(s) differ from the last recorded sync", len(drift)),
 			Source:   strings.Join(drift[:limit], "; "),
-			Remedy:   "run `agentpack sync` to rebuild staging from the verified cache",
+			Remedy:   materializeRemedy,
 		})
 	}
 
@@ -311,13 +365,13 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 	if options.ContractPath != "" {
 		contract, err := environment.LoadContract(options.ContractPath)
 		if err != nil {
-			return report, fmt.Errorf("load contract: %w", err)
+			return report, fmt.Errorf("load contract: %w", inputError(err))
 		}
 		applyContract(&report, contract)
 	} else if path := filepath.Join(definitionRoot, "contract.json"); regularFile(path) {
 		contract, err := environment.LoadContract(path)
 		if err != nil {
-			return report, fmt.Errorf("load contract: %w", err)
+			return report, fmt.Errorf("load contract: %w", inputError(err))
 		}
 		applyContract(&report, contract)
 	}
@@ -345,21 +399,261 @@ func (service Service) RestoreFrozenOptions(ctx context.Context, definitionRoot 
 }
 
 func sourceIdentity(definitionRoot string, lock lockfile.PackLock) (string, error) {
-	hash := sha256.New()
-	for _, path := range []string{paths.ManifestPath(definitionRoot), paths.LockPath(definitionRoot)} {
-		data, err := os.ReadFile(path)
+	manifestPath := paths.ManifestPath(definitionRoot)
+	manifestBytes, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return "", err
+	}
+	project, err := manifest.Load(definitionRoot)
+	if err != nil {
+		return "", err
+	}
+	if project == nil {
+		return "", fmt.Errorf("source identity requires %s", paths.ManifestName)
+	}
+	var rawManifest map[string]any
+	if err := toml.Unmarshal(manifestBytes, &rawManifest); err != nil {
+		return "", fmt.Errorf("parse manifest for source identity: %w", err)
+	}
+
+	semanticManifest := sourceManifest{
+		Name: project.Name, Version: project.Version, Description: project.Description,
+		Dependencies: make(map[string]sourceDependency, len(project.Dependencies)),
+		MCPServers:   make(map[string]sourceMCPServer, len(project.MCP.Servers)),
+		Modes:        project.Modes,
+	}
+	// manifest.Load defaults an omitted name from DefinitionRoot, which is a host path.
+	if _, declared := rawManifest["name"]; !declared {
+		semanticManifest.Name = ""
+	}
+	for module, dependency := range project.Dependencies {
+		item := sourceDependency{}
+		if dependency.Short != nil {
+			item.Short = *dependency.Short
+		}
+		if dependency.Table != nil {
+			item.Commit, item.Tag, item.Branch, item.Version = dependency.Table.Commit, dependency.Table.Tag, dependency.Table.Branch, dependency.Table.Version
+			// A local path is deliberately omitted; its actual package bytes are in the lock.
+			item.Local = dependency.Table.Path != nil
+		}
+		semanticManifest.Dependencies[module] = item
+	}
+	for name, server := range project.MCP.Servers {
+		semanticManifest.MCPServers[name] = sourceMCPServerFrom(server)
+	}
+	contract := json.RawMessage(nil)
+	contractPath := filepath.Join(definitionRoot, "contract.json")
+	if _, err := os.Stat(contractPath); err == nil {
+		validated, err := environment.LoadContract(contractPath)
+		if err != nil {
+			return "", fmt.Errorf("load contract for source identity: %w", err)
+		}
+		contract, err = json.Marshal(validated)
 		if err != nil {
 			return "", err
 		}
-		_, _ = hash.Write([]byte(filepath.Base(path)))
-		_, _ = hash.Write([]byte{0})
-		_, _ = hash.Write(data)
-		_, _ = hash.Write([]byte{0})
+	} else if !os.IsNotExist(err) {
+		return "", err
 	}
+
+	packages := make([]sourcePackage, 0, len(lock.Packages))
 	for _, pkg := range lock.Packages {
-		_, _ = fmt.Fprintf(hash, "%s\x00%s\x00%s\x00", pkg.Module, pkg.Commit, pkg.ContentHash)
+		packages = append(packages, sourcePackage{Module: pkg.Module, Kind: pkg.Kind, Direct: pkg.Direct, Commit: pkg.Commit, ContentHash: pkg.ContentHash})
 	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	slices.SortFunc(packages, func(a, b sourcePackage) int { return strings.Compare(a.Module, b.Module) })
+	disabled := slices.Clone(lock.Config.DisabledPlugins)
+	slices.Sort(disabled)
+	servers := make([]sourceLockedMCP, 0, len(lock.MCPServers))
+	for _, server := range lock.MCPServers {
+		item := sourceLockedMCP{Name: server.Name, Source: server.Source, Launcher: server.Launcher, Status: server.Status, Package: server.Package, Version: server.Version, Integrity: server.Integrity, AllowUnpinned: server.AllowUnpinned, Bin: server.Bin, TreeDigest: server.TreeDigest}
+		item.Tree = make([]sourceNPMTreeEntry, 0, len(server.Tree))
+		for _, entry := range server.Tree {
+			item.Tree = append(item.Tree, sourceNPMTreeEntry{Path: entry.Path, Version: entry.Version, Integrity: entry.Integrity, Optional: entry.Optional, OS: canonicalStrings(entry.OS), CPU: canonicalStrings(entry.CPU)})
+		}
+		slices.SortFunc(item.Tree, func(a, b sourceNPMTreeEntry) int { return strings.Compare(a.Path, b.Path) })
+		servers = append(servers, item)
+	}
+	slices.SortFunc(servers, func(a, b sourceLockedMCP) int { return strings.Compare(a.Name, b.Name) })
+
+	envelope := struct {
+		Version    string            `json:"version"`
+		Manifest   sourceManifest    `json:"manifest"`
+		Contract   json.RawMessage   `json:"contract,omitempty"`
+		Packages   []sourcePackage   `json:"packages"`
+		Disabled   []string          `json:"disabled_plugins,omitempty"`
+		MCPServers []sourceLockedMCP `json:"mcp_servers,omitempty"`
+	}{Version: "agentpack-source-v1", Manifest: semanticManifest, Contract: contract, Packages: packages, Disabled: disabled, MCPServers: servers}
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(data)
+	return "sha256-source-v1:" + hex.EncodeToString(digest[:]), nil
+}
+
+type sourceManifest struct {
+	Name         string                      `json:"name"`
+	Version      string                      `json:"version"`
+	Description  string                      `json:"description"`
+	Dependencies map[string]sourceDependency `json:"dependencies"`
+	MCPServers   map[string]sourceMCPServer  `json:"mcp_servers"`
+	Modes        map[string]mode.Definition  `json:"modes"`
+}
+
+type sourceDependency struct {
+	Short   string  `json:"short,omitempty"`
+	Commit  *string `json:"commit,omitempty"`
+	Tag     *string `json:"tag,omitempty"`
+	Branch  *string `json:"branch,omitempty"`
+	Version *string `json:"version,omitempty"`
+	Local   bool    `json:"local,omitempty"`
+}
+
+type sourceMCPServer struct {
+	Type       *string      `json:"type,omitempty"`
+	Command    *string      `json:"command,omitempty"`
+	Args       []string     `json:"args,omitempty"`
+	EnvNames   []string     `json:"env_names,omitempty"`
+	URL        *string      `json:"url,omitempty"`
+	Disabled   *bool        `json:"disabled,omitempty"`
+	HeaderKeys []string     `json:"header_keys,omitempty"`
+	Cwd        string       `json:"cwd,omitempty"`
+	OAuth      *sourceOAuth `json:"oauth,omitempty"`
+}
+
+type sourceOAuth struct {
+	ClientID     string   `json:"client_id,omitempty"`
+	CallbackPort int      `json:"callback_port,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
+	MetadataURL  string   `json:"metadata_url,omitempty"`
+}
+
+type sourcePackage struct {
+	Module      string               `json:"module"`
+	Kind        lockfile.PackageKind `json:"kind"`
+	Direct      bool                 `json:"direct,omitempty"`
+	Commit      string               `json:"commit,omitempty"`
+	ContentHash string               `json:"content_hash,omitempty"`
+}
+
+type sourceNPMTreeEntry struct {
+	Path      string   `json:"path"`
+	Version   string   `json:"version"`
+	Integrity string   `json:"integrity"`
+	Optional  bool     `json:"optional,omitempty"`
+	OS        []string `json:"os,omitempty"`
+	CPU       []string `json:"cpu,omitempty"`
+}
+
+type sourceLockedMCP struct {
+	Name          string               `json:"name"`
+	Source        string               `json:"source,omitempty"`
+	Launcher      string               `json:"launcher,omitempty"`
+	Status        string               `json:"status,omitempty"`
+	Package       string               `json:"package,omitempty"`
+	Version       string               `json:"version,omitempty"`
+	Integrity     string               `json:"integrity,omitempty"`
+	AllowUnpinned bool                 `json:"allow_unpinned,omitempty"`
+	Bin           string               `json:"bin,omitempty"`
+	TreeDigest    string               `json:"tree_digest,omitempty"`
+	Tree          []sourceNPMTreeEntry `json:"tree,omitempty"`
+}
+
+func sourceMCPServerFrom(server mcp.Server) sourceMCPServer {
+	item := sourceMCPServer{Type: server.Type, Args: redactCredentialArgs(server.Args), Disabled: server.Disabled}
+	if server.Command != nil {
+		command := portablePathValue(*server.Command)
+		item.Command = &command
+	}
+	for key := range server.Env {
+		item.EnvNames = append(item.EnvNames, key)
+	}
+	for key := range server.Headers {
+		item.HeaderKeys = append(item.HeaderKeys, key)
+	}
+	slices.Sort(item.EnvNames)
+	slices.Sort(item.HeaderKeys)
+	if server.URL != nil {
+		clean := redactCredentialURL(*server.URL)
+		item.URL = &clean
+	}
+	if server.Cwd != nil && !filepath.IsAbs(*server.Cwd) && !isWindowsAbsolutePath(*server.Cwd) {
+		item.Cwd = filepath.ToSlash(filepath.Clean(*server.Cwd))
+	}
+	if server.OAuth != nil {
+		item.OAuth = &sourceOAuth{ClientID: server.OAuth.ClientID, CallbackPort: server.OAuth.CallbackPort, Scopes: slices.Clone(server.OAuth.Scopes), MetadataURL: redactCredentialURL(server.OAuth.MetadataURL)}
+	}
+	return item
+}
+
+func redactCredentialArgs(args []string) []string {
+	result := slices.Clone(args)
+	redactNext := false
+	for i, arg := range result {
+		lower := strings.ToLower(arg)
+		if redactNext {
+			result[i] = "<redacted>"
+			redactNext = false
+			continue
+		}
+		if strings.HasPrefix(arg, "-") && credentialFlag(lower) {
+			if strings.Contains(arg, "=") {
+				result[i] = arg[:strings.IndexByte(arg, '=')+1] + "<redacted>"
+			} else {
+				redactNext = true
+			}
+			continue
+		}
+		result[i] = portablePathValue(arg)
+	}
+	return result
+}
+
+func portablePathValue(value string) string {
+	if filepath.IsAbs(value) || isWindowsAbsolutePath(value) {
+		return filepath.Base(filepath.FromSlash(strings.ReplaceAll(value, `\`, "/")))
+	}
+	return value
+}
+
+func isWindowsAbsolutePath(value string) bool {
+	return len(value) >= 3 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) && value[1] == ':' && (value[2] == '\\' || value[2] == '/')
+}
+
+func credentialFlag(value string) bool {
+	for _, marker := range []string{"token", "secret", "password", "passwd", "api-key", "api_key", "credential", "authorization"} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func redactCredentialURL(value string) string {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return value
+	}
+	if parsed.User != nil {
+		parsed.User = url.UserPassword("<redacted>", "<redacted>")
+	}
+	if parsed.RawQuery != "" {
+		parts := strings.Split(parsed.RawQuery, "&")
+		for i, part := range parts {
+			key, _, found := strings.Cut(part, "=")
+			if found && credentialFlag(strings.ToLower(key)) {
+				parts[i] = key + "=<redacted>"
+			}
+		}
+		parsed.RawQuery = strings.Join(parts, "&")
+	}
+	return parsed.String()
+}
+
+func canonicalStrings(values []string) []string {
+	result := slices.Clone(values)
+	slices.Sort(result)
+	return result
 }
 
 func lockDigest(definitionRoot string) (string, error) {
@@ -371,43 +665,146 @@ func lockDigest(definitionRoot string) (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-func plannedArtifacts(lock lockfile.PackLock, effective mode.Effective, workspace string, target *base.Target) ([]environment.ArtifactRecord, error) {
+func plannedArtifacts(lock lockfile.PackLock, effective mode.Effective, definitionRoot, workspace string, target *base.Target, cacheReady bool) ([]environment.ArtifactRecord, error) {
 	var records []environment.ArtifactRecord
 	plugins := lock.Plugins()
 	sort.Slice(plugins, func(i, j int) bool { return plugins[i].CacheKey < plugins[j].CacheKey })
 	skills := lock.Skills()
 	sort.Slice(skills, func(i, j int) bool { return skills[i].CacheKey < skills[j].CacheKey })
 	appendTree := func(root, module, bareName string, enabled bool, dot bool) error {
+		appendRecord := func(record environment.ArtifactRecord) {
+			if !record.Omitted {
+				for index := range records {
+					prior := &records[index]
+					if recordTarget, ok := record.Properties["target"].(string); ok {
+						if priorTarget, priorHasTarget := prior.Properties["target"].(string); priorHasTarget && priorTarget != recordTarget {
+							continue
+						}
+					}
+					same := prior.Kind == record.Kind && prior.Name == record.Name
+					if record.OutputPath != "" {
+						same = prior.OutputPath == record.OutputPath
+					}
+					if same && !prior.Omitted {
+						prior.Omitted = true
+						prior.Winner = record.Winner
+						prior.Reason = "overridden by " + record.ID
+					}
+					for _, output := range recordOutputPaths(record) {
+						for _, priorOutput := range recordOutputPaths(*prior) {
+							if output == priorOutput {
+								if output == record.OutputPath && output == prior.OutputPath {
+									continue
+								}
+								appendArtifactPropertyString(prior, "overwritten_outputs", output)
+								appendArtifactPropertyString(&record, "overrides_outputs", output)
+							}
+						}
+					}
+				}
+			}
+			records = append(records, record)
+		}
 		if _, err := os.Stat(root); os.IsNotExist(err) {
 			return nil
 		} else if err != nil {
 			return err
 		}
-		// A package is read the way staging reads it: its tree, the links
-		// under its component directories, and the component paths its
-		// manifests declare. Each file has its real path, which modes and
-		// record ids use, and the path it takes in the canonical layout.
-		var files []staging.PackageFile
 		if dot {
-			err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-				if walkErr != nil || entry.IsDir() {
-					return walkErr
-				}
-				relative, err := filepath.Rel(root, path)
-				if err != nil {
-					return err
-				}
-				files = append(files, staging.PackageFile{Path: path, Real: filepath.ToSlash(relative), Virtual: filepath.ToSlash(relative)})
-				return nil
-			})
+			plan, err := staging.PlanDotAgents(root, effective, target)
 			if err != nil {
 				return err
 			}
-		} else {
-			var err error
-			if files, err = staging.PackageFiles(root, module, bareName == ""); err != nil {
+			for _, item := range plan.Artifacts {
+				kind := map[artifacts.Kind]string{artifacts.Skill: "skill", artifacts.Command: "command", artifacts.Agent: "agent", artifacts.Rule: "rule"}[item.Kind]
+				targetName := string(item.Target)
+				record := environment.ArtifactRecord{
+					ID: module + ":" + item.SourceRelative + ":" + targetName, Kind: kind, Name: item.Name,
+					Module: module, Winner: "project", Evidence: environment.EvidenceGenerated,
+					Properties: map[string]any{"source_digest": digestBytes(item.Source), "source_kind": kind, "target": targetName},
+				}
+				if item.NativeSource != "" {
+					record.Evidence = environment.EvidenceDeclared
+					record.Properties["native_source_path"] = filepath.ToSlash(filepath.Join(".agents", item.NativeSource))
+				} else if item.Omitted {
+					record.Omitted, record.Reason = true, item.Reason
+				} else if item.OutputPath != "" {
+					record.OutputPath = item.OutputPath
+					record.Properties["output_path"] = item.OutputPath
+					record.Properties["rendered_digest"] = digestBytes(item.Output)
+				}
+				if strings.HasPrefix(record.OutputPath, "skills/") {
+					record.Kind = "skill"
+				}
+				appendRecord(record)
+			}
+			return nil
+		}
+		if !dot {
+			if bareName == "" && !cache.HasPluginManifest(root) {
+				return nil
+			}
+			if bareName != "" {
+				if info, err := os.Stat(filepath.Join(root, "SKILL.md")); err != nil || !info.Mode().IsRegular() {
+					return nil
+				}
+			}
+			var roots []staging.HarnessRoot
+			if target != nil {
+				roots = append(roots, staging.HarnessRoot{Target: *target})
+			}
+			plan, err := staging.PlanPackageTree(root, module, bareName, effective, roots, bareName == "")
+			if err != nil {
 				return err
 			}
+			for _, planned := range plan.Artifacts {
+				kind := map[artifacts.Kind]string{artifacts.Skill: "skill", artifacts.Command: "command", artifacts.Agent: "agent", artifacts.Rule: "rule"}[planned.Kind]
+				record := environment.ArtifactRecord{ID: module + ":" + planned.SourceRelative, Kind: kind, Name: planned.Parsed.StorageName, Module: module, Winner: "package", Evidence: environment.EvidenceGenerated, Properties: map[string]any{"source_digest": digestBytes(planned.Source), "source_kind": kind}}
+				if len(planned.AdditionalOutputs) > 0 {
+					record.Properties["additional_outputs"] = slices.Clone(planned.AdditionalOutputs)
+				}
+				if !enabled || planned.Omitted {
+					record.Omitted = true
+					record.Reason = planned.Reason
+					if record.Reason == "" {
+						record.Reason = "disabled by mode or lock"
+					}
+				}
+				if target != nil && !record.Omitted {
+					record.OutputPath = planned.OutputPath
+					record.Properties["output_path"] = planned.OutputPath
+					record.Properties["rendered_digest"] = digestBytes(planned.Output)
+					if planned.Kind == artifacts.Rule && strings.HasPrefix(planned.OutputPath, "skills/") && len(planned.Parsed.Globs) > 0 {
+						record.Properties["scope_preserved"] = false
+					}
+					projected, parseErr := artifacts.Parse(planned.OutputPath, string(planned.Output), "")
+					if parseErr != nil {
+						return parseErr
+					}
+					var dropped []string
+					for key := range planned.Parsed.ExtraFrontmatter {
+						if projected == nil {
+							dropped = append(dropped, key)
+						} else if _, ok := projected.ExtraFrontmatter[key]; !ok {
+							dropped = append(dropped, key)
+						}
+					}
+					sort.Strings(dropped)
+					if len(dropped) > 0 {
+						record.Properties["dropped_fields"] = dropped
+					}
+				}
+				if strings.HasPrefix(record.OutputPath, "skills/") {
+					record.Kind = "skill"
+				}
+				appendRecord(record)
+			}
+			return nil
+		}
+		// PackageFiles exposes the same normalized source tree used by staging.
+		files, err := staging.PackageFiles(root, module, bareName == "")
+		if err != nil {
+			return err
 		}
 		markdown := func(file staging.PackageFile) bool {
 			extension := strings.ToLower(filepath.Ext(file.Virtual))
@@ -416,33 +813,25 @@ func plannedArtifacts(lock lockfile.PackLock, effective mode.Effective, workspac
 		// The package's own skills decide what a converted command, agent or
 		// rule of the same name is called, exactly as in staging.
 		skillNames := make(map[string]string)
-		if !dot {
-			for _, file := range files {
-				if !markdown(file) {
-					continue
-				}
-				if allowed, err := effective.AllowsPackagePath(module, file.Real); err != nil || !allowed {
-					continue
-				}
-				contents, err := os.ReadFile(file.Path)
-				if err != nil {
-					return err
-				}
-				if parsed, err := artifacts.Parse(file.Virtual, string(contents), bareName); err == nil && parsed != nil && parsed.Kind == artifacts.Skill {
-					skillNames[parsed.StorageName] = file.Real
-				}
+		for _, file := range files {
+			if !markdown(file) {
+				continue
+			}
+			if allowed, err := effective.AllowsPackagePath(module, file.Real); err != nil || !allowed {
+				continue
+			}
+			contents, err := os.ReadFile(file.Path)
+			if err != nil {
+				return err
+			}
+			if parsed, err := artifacts.Parse(file.Virtual, string(contents), bareName); err == nil && parsed != nil && parsed.Kind == artifacts.Skill {
+				skillNames[parsed.StorageName] = file.Real
 			}
 		}
 		converted := staging.NewConvertedNames(skillNames)
 		visit := func(file staging.PackageFile) error {
 			path, relative := file.Path, file.Real
-			var err error
-			allowed := false
-			if dot {
-				allowed, err = effective.AllowsDotAgentsPath(relative)
-			} else {
-				allowed, err = effective.AllowsPackagePath(module, relative)
-			}
+			allowed, err := effective.AllowsPackagePath(module, relative)
 			if err != nil {
 				return err
 			}
@@ -454,20 +843,6 @@ func plannedArtifacts(lock lockfile.PackLock, effective mode.Effective, workspac
 				return err
 			}
 			parseRelative := file.Virtual
-			if dot {
-				if strings.HasPrefix(relative, "claude/") {
-					if target != nil && *target != base.Claude {
-						return nil
-					}
-					parseRelative = strings.TrimPrefix(relative, "claude/")
-				}
-				if strings.HasPrefix(relative, "codex/") {
-					if target != nil && *target != base.Codex {
-						return nil
-					}
-					parseRelative = strings.TrimPrefix(relative, "codex/")
-				}
-			}
 			parsed, err := artifacts.Parse(parseRelative, string(contents), bareName)
 			if err != nil {
 				return fmt.Errorf("parse %s artifact: %w", module, err)
@@ -477,46 +852,17 @@ func plannedArtifacts(lock lockfile.PackLock, effective mode.Effective, workspac
 			}
 			kind := map[artifacts.Kind]string{artifacts.Skill: "skill", artifacts.Command: "command", artifacts.Agent: "agent", artifacts.Rule: "rule"}[parsed.Kind]
 			record := environment.ArtifactRecord{ID: module + ":" + relative, Kind: kind, Name: parsed.StorageName, Module: module, Winner: "package", Evidence: environment.EvidenceGenerated, Properties: map[string]any{"source_digest": digestBytes(contents)}}
-			if dot {
-				record.Winner = "project"
-			}
 			if !enabled || !allowed {
 				record.Omitted = true
 				record.Reason = "disabled by mode or lock"
 			}
 			if target != nil {
 				staged := *parsed
-				if !dot && !record.Omitted {
+				if !record.Omitted {
 					staged = converted.For(parsed, *target)
 					record.Name = staged.StorageName
 				}
 				rendered := staged.Render(*target)
-				if dot {
-					switch *target {
-					case base.Claude:
-						rendered.RelativePath = parseRelative
-						rendered.Contents = string(contents)
-						if parsed.Kind == artifacts.Rule {
-							rendered.RelativePath = "rules/dot-agents--" + strings.ReplaceAll(strings.TrimPrefix(parseRelative, "rules/"), "/", "--")
-						}
-					case base.Codex:
-						if parsed.Kind == artifacts.Skill {
-							rendered.RelativePath = parseRelative
-							rendered.Contents = string(contents)
-						}
-						if parsed.Kind == artifacts.Rule {
-							record.Evidence = environment.EvidenceDeclared
-							rendered.RelativePath = ""
-							rendered.Contents = ""
-						}
-					default:
-						// shortcut: adapter-specific .agents seeding has no shared renderer, leave its projection unknown until modeled.
-						record.Evidence = environment.EvidenceDeclared
-						rendered.RelativePath = ""
-						rendered.Contents = ""
-					}
-				}
-
 				record.OutputPath = rendered.RelativePath
 				record.Properties["output_path"] = rendered.RelativePath
 				if rendered.RelativePath != "" {
@@ -550,22 +896,7 @@ func plannedArtifacts(lock lockfile.PackLock, effective mode.Effective, workspac
 					record.Kind = "skill"
 				}
 			}
-			// Later sources overwrite the same native output, just as materialization does.
-			if !record.Omitted {
-				for index := range records {
-					prior := &records[index]
-					same := prior.Kind == record.Kind && prior.Name == record.Name
-					if record.OutputPath != "" {
-						same = prior.OutputPath == record.OutputPath
-					}
-					if same && !prior.Omitted {
-						prior.Omitted = true
-						prior.Winner = record.Winner
-						prior.Reason = "overridden by " + record.ID
-					}
-				}
-			}
-			records = append(records, record)
+			appendRecord(record)
 			return nil
 		}
 		for _, file := range files {
@@ -584,6 +915,10 @@ func plannedArtifacts(lock lockfile.PackLock, effective mode.Effective, workspac
 		return false
 	}
 	for _, plugin := range plugins {
+		if !cacheReady {
+			records = append(records, environment.ArtifactRecord{ID: plugin.Module, Kind: "plugin", Name: plugin.Name, Module: plugin.Module, Winner: "package", Evidence: environment.EvidenceDeclared, Omitted: true, Reason: "locked cache unavailable", Properties: map[string]any{"source_digest": plugin.ContentHash}})
+			continue
+		}
 		root, err := cache.EntryDir(plugin.CacheKey)
 		if err != nil {
 			return nil, err
@@ -603,6 +938,11 @@ func plannedArtifacts(lock lockfile.PackLock, effective mode.Effective, workspac
 		}
 	}
 	for _, skill := range skills {
+		if !cacheReady {
+			name := staging.SkillFolderName(skill)
+			records = append(records, environment.ArtifactRecord{ID: skill.Module, Kind: "skill", Name: name, Module: skill.Module, Winner: "package", Evidence: environment.EvidenceDeclared, Omitted: true, Reason: "locked cache unavailable", Properties: map[string]any{"source_digest": skill.ContentHash}})
+			continue
+		}
 		root, err := cache.EntryDir(skill.CacheKey)
 		if err != nil {
 			return nil, err
@@ -614,7 +954,362 @@ func plannedArtifacts(lock lockfile.PackLock, effective mode.Effective, workspac
 	if err := appendTree(paths.ProjectDotAgentsDir(workspace), ".agents", "", true, true); err != nil {
 		return nil, err
 	}
+	if cacheReady {
+		hookRecords, err := plannedHookArtifacts(lock, effective, definitionRoot, workspace, target)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, hookRecords...)
+		mcpRecords, err := plannedMCPArtifacts(lock, effective, definitionRoot, workspace, target)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, mcpRecords...)
+	}
 	return records, nil
+}
+
+func plannedMCPArtifacts(lock lockfile.PackLock, effective mode.Effective, definitionRoot, workspace string, target *base.Target) ([]environment.ArtifactRecord, error) {
+	project, err := manifest.Load(definitionRoot)
+	if err != nil {
+		return nil, err
+	}
+	collection, err := staging.CollectMCPPlan(workspace, lock, project, &effective)
+	if err != nil {
+		return nil, err
+	}
+	entries := collection.Entries
+	bundle, err := paths.StagingPluginsDirForMode(definitionRoot, effective.Name())
+	if err != nil {
+		return nil, err
+	}
+	entries, treeFiles, err := mcp.PlanTrees(entries, lock.MCPServers, hooks.Executable(), filepath.Join(bundle, paths.StagedAgentpackBundleName, "mcp-trees"))
+	if err != nil {
+		return nil, err
+	}
+	entries = mcp.ApplyPins(entries, lock.MCPServers)
+	pluginPlan, err := staging.PlanMCPPluginRoots(definitionRoot, effective.Name(), effective, entries)
+	if err != nil {
+		return nil, err
+	}
+	entries = pluginPlan.Entries
+	var records []environment.ArtifactRecord
+	for index, warning := range collection.Warnings {
+		records = append(records, environment.ArtifactRecord{ID: fmt.Sprintf("mcp-omission:%d", index), Kind: "mcp_omission", Name: warning.Source, Winner: "omitted", Omitted: true, Reason: warning.Message, Evidence: environment.EvidenceGenerated})
+	}
+	for _, source := range pluginPlan.Sources {
+		records = append(records, environment.ArtifactRecord{ID: "mcp-plugin-root:" + source.Module, Kind: "mcp_plugin_root", Name: source.Module, Module: source.Module, Winner: "package", Evidence: environment.EvidenceGenerated, Properties: map[string]any{"source_digest": source.Digest}})
+	}
+	for _, file := range pluginPlan.Files {
+		path := filepath.ToSlash(filepath.Join("plugin-roots", filepath.Base(filepath.Dir(file.Path)), filepath.Base(file.Path)))
+		for _, root := range pluginPlan.Roots {
+			if relative, err := filepath.Rel(root, file.Path); err == nil && !strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+				path = filepath.ToSlash(filepath.Join("plugin-roots", filepath.Base(root), relative))
+				break
+			}
+		}
+		properties := map[string]any{"target": "mcp_plugin_root", "mode": file.Mode.Perm()}
+		if file.LinkTarget != "" {
+			properties["link_target"] = file.LinkTarget
+		} else {
+			properties["rendered_digest"] = digestBytes(file.Contents)
+		}
+		records = append(records, environment.ArtifactRecord{ID: "mcp-plugin-file:" + file.Module + ":" + path, Kind: "mcp_plugin_file", Name: filepath.Base(path), Module: file.Module, Winner: "package", OutputPath: path, Evidence: environment.EvidenceGenerated, Properties: properties})
+	}
+	for _, directory := range pluginPlan.DataDirs {
+		records = append(records, environment.ArtifactRecord{ID: "mcp-plugin-data:" + filepath.Base(directory), Kind: "mcp_plugin_data_dir", Name: filepath.Base(directory), Winner: "plugin", OutputPath: filepath.ToSlash(filepath.Join("plugin-data", filepath.Base(directory))), Evidence: environment.EvidenceGenerated})
+	}
+	for _, file := range treeFiles {
+		relative, err := filepath.Rel(filepath.Join(bundle, paths.StagedAgentpackBundleName), file.Path)
+		if err != nil || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+			return nil, fmt.Errorf("planned MCP tree output escapes bundle: %s", file.Path)
+		}
+		relative = filepath.ToSlash(relative)
+		records = append(records, environment.ArtifactRecord{ID: "mcp-tree:" + relative, Kind: "mcp_tree", Name: filepath.Base(relative), Winner: "lock", OutputPath: relative, Evidence: environment.EvidenceGenerated, Properties: map[string]any{"rendered_digest": digestBytes(file.Contents)}})
+	}
+	targets := base.AllTargets()
+	if target != nil {
+		targets = []base.Target{*target}
+	}
+	targetSeedConfigs := make(map[base.Target][]byte)
+	for _, current := range targets {
+		candidate, err := registry.ByTarget(current)
+		if err != nil {
+			return nil, err
+		}
+		ctx := base.StageContext{ProjectRoot: definitionRoot, WorkspaceRoot: workspace, Mode: effective}
+		if seedPath, label := inheritedConfigSeed(current); seedPath != "" {
+			seed, err := os.ReadFile(seedPath)
+			if err != nil && !os.IsNotExist(err) {
+				return nil, err
+			}
+			properties := map[string]any{"source": label, "exists": err == nil, "merge_order": []string{"native user seed retained", "agentpack-owned sections overlaid"}}
+			if err == nil {
+				properties["source_digest"] = digestBytes(seed)
+				shape, err := redactedSeedShape(seedPath, seed)
+				if err != nil {
+					return nil, err
+				}
+				properties["ordered_values"] = shape
+			}
+			records = append(records, environment.ArtifactRecord{ID: "settings-seed:" + string(current), Kind: "settings_seed", Name: label, Winner: "user_seed", Evidence: environment.EvidenceGenerated, Properties: properties})
+		}
+		if current == base.Grok {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return nil, err
+			}
+			seed, err := base.ReadMCPSeed(filepath.Join(home, ".grok", "config.toml"))
+			if err != nil {
+				return nil, err
+			}
+			contents, err := grok.EnableBundleData(seed)
+			if err != nil {
+				return nil, fmt.Errorf("plan Grok plugin settings: %w", err)
+			}
+			digest, err := base.MCPTOMLScopeDigest(contents, "plugins")
+			if err != nil {
+				return nil, err
+			}
+			records = append(records, environment.ArtifactRecord{ID: "settings:grok:plugins", Kind: "settings_section", Name: "plugins", Winner: "agentpack_overlay", OutputPath: "config.toml", Evidence: environment.EvidenceGenerated, Properties: map[string]any{"target": string(current), "scope": "plugins", "scope_digest": digest, "merge_order": []string{"user ~/.grok/config.toml", "enable agentpack-bundle while retaining enabled plugins"}}})
+		}
+		projection := base.MCPProjection{}
+		if len(entries) != 0 {
+			projection, err = candidate.PlanMCP(entries, ctx)
+			if err != nil {
+				return nil, fmt.Errorf("plan MCP %s: %w", current, err)
+			}
+		}
+		for _, file := range projection.Files {
+			targetSeedConfigs[current] = append([]byte(nil), file.Contents...)
+		}
+		if current == base.Claude {
+			names := make([]string, 0, len(entries))
+			for _, name := range entries.Names() {
+				server := entries[name].Server
+				if server.Disabled == nil || !*server.Disabled {
+					names = append(names, name)
+				}
+			}
+			contents, err := claude.SettingsContents(names, claude.KeepAttribution())
+			if err != nil {
+				return nil, err
+			}
+			settingsPath, err := claude.SettingsPath(ctx)
+			if err != nil {
+				return nil, err
+			}
+			relative, err := filepath.Rel(filepath.Join(bundle, paths.StagedAgentpackBundleName), settingsPath)
+			if err != nil || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+				return nil, fmt.Errorf("planned Claude settings escape bundle: %s", settingsPath)
+			}
+			records = append(records, environment.ArtifactRecord{ID: "settings:claude:agentpack-overlay", Kind: "settings_file", Name: "agentpack-settings.json", Winner: "agentpack_overlay", OutputPath: filepath.ToSlash(relative), Evidence: environment.EvidenceGenerated, Properties: map[string]any{"target": string(current), "rendered_digest": digestBytes(contents), "merge_order": []string{"agentpack_attribution_policy", "merged_mcp_allowlist"}}})
+		}
+		for _, server := range projection.Servers {
+			properties := map[string]any{"target": string(current), "source": server.Source}
+			if len(server.Dropped) != 0 {
+				properties["dropped_fields"] = slices.Clone(server.Dropped)
+			}
+			var warnings []string
+			for _, warning := range projection.Warnings {
+				if strings.HasPrefix(warning, "MCP server "+server.Name+": ") {
+					warnings = append(warnings, warning)
+				}
+			}
+			if len(warnings) != 0 {
+				properties["warnings"] = warnings
+			}
+			records = append(records, environment.ArtifactRecord{ID: "mcp:" + server.Name + ":" + string(current), Kind: "mcp_server", Name: server.Name, Module: server.Module, Winner: server.Winner, Evidence: environment.EvidenceGenerated, Properties: properties})
+		}
+		for _, file := range projection.Files {
+			name := filepath.Base(file.Path)
+			if strings.Contains(filepath.ToSlash(file.Path), "/.cursor/") {
+				name = "fake-home/.cursor/" + name
+			}
+			records = append(records, environment.ArtifactRecord{ID: "mcp-file:" + string(current) + ":" + name, Kind: "mcp_file", Name: name, Winner: "merged", OutputPath: name, Evidence: environment.EvidenceGenerated, Properties: map[string]any{"target": string(current), "scope": file.Scope, "scope_digest": file.ScopeDigest, "merge_order": slices.Clone(file.MergeOrder)}})
+		}
+	}
+	lspPlan, err := staging.CollectLSPPlan(lock, &effective)
+	if err != nil {
+		return nil, err
+	}
+	for index, warning := range lspPlan.Warnings {
+		records = append(records, environment.ArtifactRecord{ID: fmt.Sprintf("lsp-source-omission:%d", index), Kind: "lsp_omission", Name: warning.Source, Winner: "omitted", Omitted: true, Reason: warning.Message, Evidence: environment.EvidenceGenerated})
+	}
+	lspServers, err := staging.PlanLSPRoots(definitionRoot, effective.Name(), lspPlan.Entries)
+	if err != nil {
+		return nil, err
+	}
+	for _, current := range targets {
+		candidate, err := registry.ByTarget(current)
+		if err != nil {
+			return nil, err
+		}
+		projection, err := candidate.PlanLSP(lspServers, base.StageContext{ProjectRoot: definitionRoot, WorkspaceRoot: workspace, Mode: effective, SeedConfig: targetSeedConfigs[current]})
+		if errors.Is(err, base.ErrNoLSP) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("plan LSP %s: %w", current, err)
+		}
+		for index, warning := range projection.Warnings {
+			records = append(records, environment.ArtifactRecord{ID: fmt.Sprintf("lsp-warning:%s:%d", current, index), Kind: "lsp_omission", Name: string(current), Winner: "omitted", Omitted: true, Reason: warning, Evidence: environment.EvidenceGenerated})
+		}
+		for _, name := range projection.Omitted {
+			records = append(records, environment.ArtifactRecord{ID: "lsp:" + string(current) + ":" + name, Kind: "lsp_server", Name: name, Winner: "user", Omitted: true, Reason: "existing target configuration wins", Evidence: environment.EvidenceGenerated})
+		}
+		for _, file := range projection.Files {
+			records = append(records, environment.ArtifactRecord{ID: "lsp-file:" + string(current) + ":" + filepath.Base(file.Path), Kind: "lsp_file", Name: filepath.Base(file.Path), Winner: "merged", OutputPath: filepath.Base(file.Path), Evidence: environment.EvidenceGenerated, Properties: map[string]any{"target": string(current), "scope": file.Scope, "rendered_digest": digestBytes(file.Contents)}})
+		}
+	}
+	return records, nil
+}
+
+func inheritedConfigSeed(target base.Target) (string, string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", ""
+	}
+	switch target {
+	case base.Codex:
+		return filepath.Join(home, ".codex", "config.toml"), "~/.codex/config.toml"
+	case base.OpenCode:
+		return filepath.Join(home, ".config", "opencode", "opencode.json"), "~/.config/opencode/opencode.json"
+	case base.Grok:
+		return filepath.Join(home, ".grok", "config.toml"), "~/.grok/config.toml"
+	case base.Cursor:
+		return filepath.Join(home, ".cursor", "cli-config.json"), "~/.cursor/cli-config.json"
+	default:
+		return "", ""
+	}
+}
+
+func redactedSeedShape(path string, data []byte) (any, error) {
+	var value any
+	if strings.EqualFold(filepath.Ext(path), ".toml") {
+		if err := toml.Unmarshal(data, &value); err != nil {
+			return nil, err
+		}
+	} else if len(data) != 0 {
+		if err := json.Unmarshal(data, &value); err != nil {
+			return nil, err
+		}
+	}
+	return redactSeedValue(value), nil
+}
+
+func redactSeedValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		result := make(map[string]any, len(value))
+		for key, child := range value {
+			result[key] = redactSeedValue(child)
+		}
+		return result
+	case []any:
+		result := make([]any, len(value))
+		for index, child := range value {
+			result[index] = redactSeedValue(child)
+		}
+		return result
+	case string:
+		return "<redacted:string>"
+	case bool:
+		return "<redacted:bool>"
+	case int64, int, float64:
+		return "<redacted:number>"
+	case nil:
+		return "<redacted:null>"
+	default:
+		return "<redacted>"
+	}
+}
+
+func plannedHookArtifacts(lock lockfile.PackLock, effective mode.Effective, definitionRoot, workspace string, target *base.Target) ([]environment.ArtifactRecord, error) {
+	seeded := ""
+	if target == nil || *target == base.Codex {
+		seeded = seededCodexHooksPath()
+	}
+	bundle, err := hooks.Collect(workspace, lock, seeded, effective)
+	if err != nil {
+		return nil, err
+	}
+	targets := base.AllTargets()
+	if target != nil {
+		targets = []base.Target{*target}
+	}
+	var records []environment.ArtifactRecord
+	for _, current := range targets {
+		renderer := registry.Renderer(current)
+		if renderer == nil {
+			continue
+		}
+		candidate, err := registry.ByTarget(current)
+		if err != nil {
+			return nil, err
+		}
+		ctx := base.StageContext{ProjectRoot: definitionRoot, WorkspaceRoot: workspace, Mode: effective}
+		root, err := candidate.StagedRoot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		plan, err := hooks.PlanTarget(bundle, current, renderer, hooks.RenderContext{ProjectRoot: definitionRoot, TargetRoot: root}, effective)
+		if err != nil {
+			return nil, err
+		}
+		seen := make(map[string]int)
+		for _, file := range plan.Files {
+			relative, err := filepath.Rel(root, file.Path)
+			if err != nil || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+				return nil, fmt.Errorf("planned hook output escapes %s: %s", root, file.Path)
+			}
+			relative = filepath.ToSlash(relative)
+			record := environment.ArtifactRecord{
+				ID: "hook-file:" + string(current) + ":" + relative, Kind: "hook_file", Name: filepath.Base(relative), Module: file.Module, Winner: "hook", OutputPath: relative, Evidence: environment.EvidenceGenerated,
+				Properties: map[string]any{"target": string(current), "source_path": file.Source, "rendered_digest": digestBytes(file.Contents)},
+			}
+			if prior, found := seen[relative]; found {
+				record.Winner = "hook"
+				record.Properties["overrides"] = records[prior].ID
+				records[prior].Omitted = true
+				records[prior].Winner = record.ID
+				records[prior].Reason = "overridden by later hook output"
+			}
+			seen[relative] = len(records)
+			records = append(records, record)
+		}
+		for _, hook := range plan.Hooks {
+			id := fmt.Sprintf("hook:%s:%s:%s:%d:%d:%d", current, hook.Origin.Module, hook.Origin.SourceRelative, hook.Origin.EventIndex, hook.Origin.MatcherGroupIndex, hook.Origin.HookIndex)
+			records = append(records, environment.ArtifactRecord{ID: id, Kind: "hook", Name: string(hook.Event), Module: hook.Origin.Module, Winner: "hook", Evidence: environment.EvidenceGenerated, Properties: map[string]any{"target": string(current), "source_path": hook.Origin.SourceFile, "handler": string(hook.Handler.Kind)}})
+		}
+	}
+	return records, nil
+}
+
+func seededCodexHooksPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".codex", "hooks.json")
+}
+
+func recordOutputPaths(record environment.ArtifactRecord) []string {
+	paths := []string{}
+	if record.OutputPath != "" {
+		paths = append(paths, record.OutputPath)
+	}
+	if additional, ok := record.Properties["additional_outputs"].([]string); ok {
+		paths = append(paths, additional...)
+	}
+	return paths
+}
+
+func appendArtifactPropertyString(record *environment.ArtifactRecord, key, value string) {
+	values, _ := record.Properties[key].([]string)
+	if !slices.Contains(values, value) {
+		record.Properties[key] = append(values, value)
+	}
 }
 
 func markArtifactWinner(report *environment.Report, name, winner, reason string) {
@@ -957,24 +1652,36 @@ func plannedOverlayWrite(target base.Target, workspace string) []string {
 }
 
 func collectHookFindings(workspace, definitionRoot string, lock lockfile.PackLock, effective mode.Effective, target base.Target) ([]environment.Finding, error) {
-	bundle, err := hooks.Collect(workspace, lock, "", effective)
+	seeded := ""
+	if target == base.Codex {
+		seeded = seededCodexHooksPath()
+	}
+	bundle, err := hooks.Collect(workspace, lock, seeded, effective)
 	if err != nil {
 		return nil, err
 	}
 	renderer := registry.Renderer(target)
-	if renderer == nil || len(bundle.Hooks) == 0 {
+	if renderer == nil {
 		return nil, nil
 	}
-	root, err := paths.StagingRootForMode(definitionRoot, effective.Name())
+	candidate, err := registry.ByTarget(target)
 	if err != nil {
 		return nil, err
 	}
-	output, err := renderer.Render(bundle.ForTarget(target), hooks.RenderContext{ProjectRoot: definitionRoot, TargetRoot: root})
+	ctx := base.StageContext{ProjectRoot: definitionRoot, WorkspaceRoot: workspace, Mode: effective}
+	root, err := candidate.StagedRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := hooks.PlanTarget(bundle, target, renderer, hooks.RenderContext{ProjectRoot: definitionRoot, TargetRoot: root}, effective)
 	if err != nil {
 		return nil, err
 	}
 	var findings []environment.Finding
-	for _, diagnostic := range output.Diagnostics {
+	for _, diagnostic := range plan.Skipped {
+		findings = append(findings, environment.Finding{Code: "HOOK_SKIPPED", Severity: environment.SeverityWarning, Source: diagnostic.Source, Target: string(target), Message: diagnostic.Message, Remedy: "correct the hook definition or remove the unsupported event/handler"})
+	}
+	for _, diagnostic := range plan.Diagnostics {
 		severity := environment.SeverityWarning
 		code := "HOOK_DIAGNOSTIC"
 		switch strings.ToLower(diagnostic.Level) {
@@ -995,12 +1702,12 @@ func collectHookFindings(workspace, definitionRoot string, lock lockfile.PackLoc
 			Remedy:   "disable the hook, choose a target with native support, or accept the finding under policy local",
 		})
 	}
-	if output.Summary.Omitted != 0 || output.Summary.Degraded != 0 || output.Summary.Emulated != 0 {
+	if plan.Summary.Omitted != 0 || plan.Summary.Degraded != 0 || plan.Summary.Emulated != 0 {
 		findings = append(findings, environment.Finding{
 			Code:     "HOOK_SUMMARY",
 			Severity: environment.SeverityInfo,
 			Target:   string(target),
-			Message:  fmt.Sprintf("hooks: native=%d emulated=%d degraded=%d omitted=%d", output.Summary.Native, output.Summary.Emulated, output.Summary.Degraded, output.Summary.Omitted),
+			Message:  fmt.Sprintf("hooks: native=%d emulated=%d degraded=%d omitted=%d", plan.Summary.Native, plan.Summary.Emulated, plan.Summary.Degraded, plan.Summary.Omitted),
 		})
 	}
 	return findings, nil

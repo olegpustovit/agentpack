@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/olegpustovit/agentpack/internal/environment"
@@ -13,7 +14,7 @@ func (runner Runner) runPreflight(definitionRoot, workspaceRoot, mode string, ar
 	written := false
 	defer func() {
 		if jsonOut && !written && resultErr != nil {
-			report := environment.Report{SchemaVersion: 1, Phase: "preflight", DefinitionRoot: definitionRoot, WorkspaceRoot: workspaceRoot, Mode: mode, OverallStatus: "error", Findings: []environment.Finding{{Code: "PREFLIGHT_ERROR", Severity: environment.SeverityError, Message: resultErr.Error(), Evidence: environment.EvidenceUnknown}}}
+			report := environment.NormalizeReport(environment.Report{SchemaVersion: 1, Phase: "preflight", DefinitionRoot: definitionRoot, WorkspaceRoot: workspaceRoot, Mode: mode, OverallStatus: "error", Findings: []environment.Finding{{Code: "PREFLIGHT_ERROR", Severity: environment.SeverityError, Message: resultErr.Error(), Evidence: environment.EvidenceUnknown}}})
 			if err := writeJSON(runner.Stdout, report); err != nil {
 				resultErr = fmt.Errorf("%w; write JSON: %v", resultErr, err)
 			}
@@ -71,8 +72,13 @@ func (runner Runner) runPreflight(definitionRoot, workspaceRoot, mode string, ar
 		ReceiptID:      receiptID,
 	})
 	if err != nil {
+		var inputErr *packSync.PreflightInputError
+		if errors.As(err, &inputErr) {
+			return 2, err
+		}
 		return 5, err
 	}
+	report = environment.NormalizeReport(report)
 	if jsonOut {
 		written = true
 		if err := writeJSON(runner.Stdout, report); err != nil {
@@ -96,6 +102,7 @@ func (runner Runner) runPreflight(definitionRoot, workspaceRoot, mode string, ar
 }
 
 func printPreflight(runner Runner, report environment.Report) {
+	report = environment.NormalizeReport(report)
 	fmt.Fprintf(runner.Stdout, "preflight status=%s mode=%s policy=%s\n", report.OverallStatus, report.Mode, report.Policy)
 	fmt.Fprintf(runner.Stdout, "definition\t%s\n", report.DefinitionRoot)
 	fmt.Fprintf(runner.Stdout, "workspace\t%s\n", report.WorkspaceRoot)
@@ -129,7 +136,9 @@ func printPreflight(runner Runner, report environment.Report) {
 		if finding.Evidence != "" {
 			line += "\tevidence=" + string(finding.Evidence)
 		}
-		if finding.Remedy != "" {
+		if finding.Remediation != nil && finding.Remediation.Message != "" {
+			line += "\tremedy=" + finding.Remediation.Message
+		} else if finding.Remedy != "" {
 			line += "\tremedy=" + finding.Remedy
 		}
 		fmt.Fprintln(runner.Stdout, line)

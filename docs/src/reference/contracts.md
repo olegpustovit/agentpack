@@ -13,7 +13,7 @@ A `contract.json` beside an external definition expresses checks over its effect
 
 Names are exact storage names or full artifact IDs; globs are unsupported. Omitted artifacts do not count as present. Package Markdown is parsed and rendered using the same parser, renderer and mode selectors as staging. `source_digest` hashes source bytes; `rendered_digest` hashes generated native Markdown bytes. Neither proves that a native CLI discovered those bytes. Logical plugin records describe locked packages, so select `minimum_evidence: "declared"` for locked plugin identity. Agentpack merges those packages into one native bundle.
 
-Workspace `.agents` content follows its existing adapter routes. Claude raw overlay bytes and Codex skill/command projections are modeled. Other adapter-specific `.agents` seeding, and Codex rule guidance aggregation, remain declared rather than reporting an invented generated digest. A generated requirement for such a property stays unknown.
+Workspace `.agents` content follows its existing adapter routes through the same pure plan used by staging. Claude receives the shared overlay; Codex receives its converted commands/agents, guidance and optional `codex/` subtree. Codex discovers project skills natively, so their records have source provenance and no staged skill output. Other adapters keep their existing native workspace discovery. Generated digests describe only files agentpack actually materializes; native discovery remains unknown without matching observations.
 
 ## Predicates
 
@@ -55,7 +55,7 @@ A controlled positive observation does not require complete ambient catalog cove
 
 ### Session scope
 
-`scope: "workspace_session"` describes a session started in the checkout with the staged configuration and an empty user home. The probe reads the agent's own catalog and sends no model request: the print-mode init event for Claude Code 2.1.296, `debug prompt-input` for Codex 0.159.2 and 0.159.3. Unlike the controlled projection it includes skills the checkout itself provides. It still excludes user-level configuration, so absence stays unknown.
+`scope: "workspace_session"` describes a session started in the checkout with the staged configuration and an empty user home. The probe reads the agent's own catalog and sends no model request: the print-mode init event for Claude Code, `debug prompt-input` for Codex. Recorded runs cover Claude 2.1.296/2.1.312 and Codex 0.159.2/0.159.3; see the [evaluation guide](../guides/icse-evaluation.md) for platform and coverage limits. Unlike the controlled projection it includes skills the checkout itself provides. It still excludes user-level configuration, so absence stays unknown.
 
 For each packaged skill the receipt carries an observed `winner`:
 

@@ -1,16 +1,41 @@
 import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
 const $ = (id) => document.getElementById(id);
-const state = { authenticated: false, setup: false, sessions: [], recent: [], selected: null, socket: null, terminal: null, fit: null, attachment: 0, terminalState: null, view: "sessions", loading: false };
+const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]);
+const state = { authenticated: false, setup: false, sessions: [], recent: [], selected: null, socket: null, terminal: null, attachment: 0, terminalState: null, view: "workspace", loading: false };
 state.node = "";
 state.nodes = [];
+state.sessionCache = new Map();
+state.recentByNode = new Map();
+state.grouping = "machine";
+state.zoom = "fit";
+state.sidebarWidth = 264;
+state.refreshGeneration = 0;
 state.restartToken = 0;
+state.inventory = new Map();
+state.inventoryAt = 0;
+state.libraryByNode = new Map();
+state.libraryBusy = false;
+state.libraryGeneration = 0;
+state.libraryKind = "packages";
+state.librarySelection = "";
+state.revisionSelection = "";
+state.machineSelection = "";
+state.inventoryGeneration = 0;
 state.retries = 0;
+state.drafts = [];
+state.replication = {peers:[],contacts:{}};
+state.attachmentGeneration = 0;
+state.replayComplete = true;
+state.firstFrameMarked = false;
 const encoder = new TextEncoder();
 const pendingRestarts = new Map();
 function notice(message) {
   $("notice").textContent = message;
   $("notice").hidden = !message;
+}
+function terminalMark(name) {
+  if (globalThis.performance?.mark) performance.mark(`agentpack:terminal:${name}`);
+  globalThis.console?.debug?.("agentpack terminal timing",name,Math.round(performance.now()));
 }
 function terminalNotice(message) {
   $("terminal-notice").textContent = message;
@@ -31,7 +56,7 @@ function button(text, action, className) {
 const list = (value, key) => Array.isArray(value) ? value : Array.isArray(value?.[key]) ? value[key] : [];
 async function api(path, body, method, target = state.node) {
   const endpoint = new URL(path, location.origin);
-  if (target && /^\/api\/(sessions|recent|packages)(\/|$)/.test(endpoint.pathname)) endpoint.searchParams.set("node", target);
+  if (target && /^\/api\/(sessions|recent|packages|library)(\/|$)/.test(endpoint.pathname)) endpoint.searchParams.set("node", target);
   const response = await fetch(endpoint, { method: method || (body === void 0 ? "GET" : "POST"), credentials: "same-origin", headers: body === void 0 ? {} : { "Content-Type": "application/json" }, body: body === void 0 ? void 0 : JSON.stringify(body) });
   if (response.status === 401) {
     state.authenticated = false;
@@ -113,66 +138,94 @@ $("logout").addEventListener("click", async () => {
   }
 });
 async function refresh() {
-  if (!state.authenticated || state.loading) return;
-  state.loading = true;
-  try {
-    const selectedNode = state.node;
-    const machines = [{ id: "", name: "Gateway machine" }, ...state.nodes];
-    // An unreachable remote machine drops out of the list instead of failing the whole refresh.
-    const [sessions, recent] = await Promise.all([Promise.all(machines.map((machine) => api("/api/sessions", void 0, void 0, machine.id).then((value) => list(value, "sessions").map((session) => ({ ...session, node: machine.id, machine: machine.name })), (error) => machine.id ? [] : Promise.reject(error)))), api("/api/recent")]);
-    if (state.node !== selectedNode) return;
-    if (!state.authenticated) return;
-    state.sessions = sessions.flat();
-    state.recent = list(recent, "recent");
+  if (!state.authenticated) return;
+  const generation = ++state.refreshGeneration;
+  const machines = [{id:"", name:"Gateway machine", online:true}, ...state.nodes];
+  const merge = () => {
+    const values = machines.flatMap(machine => state.sessionCache.get(machine.id) || []);
+    if (generation !== state.refreshGeneration) return;
+    state.sessions = values;
+    const active = values.find(session => sessionKey(session) === state.selected);
+    if (active?.stale) {
+      $("terminal-status").textContent = "Offline · last-known session";
+      $("connection-state").textContent = "Offline";
+      $("terminal-stage").classList.add("stale");
+      $("take-control").disabled = true;
+    } else if (active) $("terminal-stage").classList.remove("stale");
     renderSessions();
-    renderRecent();
+  };
+  await Promise.all(machines.filter(machine => machine.online !== false).map(async machine => {
+    try {
+      const sessions = await api("/api/sessions", void 0, void 0, machine.id);
+      if (generation !== state.refreshGeneration) return;
+      const rows = list(sessions, "sessions").map(session => ({...session, node:machine.id, machine:machine.name, stale:false}));
+      state.sessionCache.set(machine.id, rows);
+      merge();
+      try {
+        const recent = await api("/api/recent", void 0, void 0, machine.id);
+        if (generation !== state.refreshGeneration) return;
+        state.recentByNode.set(machine.id, list(recent, "recent"));
+        if (!machine.id) state.recent = list(recent, "recent");
+        renderRecent();
+        if (machine.id === state.node) renderStartFolders();
+      } catch (error) { if (!machine.id) notice(error.message); }
+    } catch (error) {
+      if (!machine.id) { notice(error.message); return; }
+      const cached = state.sessionCache.get(machine.id) || [];
+      state.sessionCache.set(machine.id, cached.map(session => ({...session, stale:true})));
+      merge();
+    }
+  }));
+  if (generation === state.refreshGeneration) {
     $("gateway-state").textContent = "Gateway connected";
-    $("gateway-state").parentElement.classList.add("live");
-  } catch (error) {
-    $("gateway-state").textContent = "Connection interrupted";
-    $("gateway-state").parentElement.classList.remove("live");
-    notice(error.message);
-  } finally {
-    state.loading = false;
+    $("mesh-state").textContent = `${machines.filter(machine => machine.online !== false).length} of ${machines.length} machines online`;
   }
 }
+const basename = path => String(path || "Unknown project").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
 function renderSessions() {
   const host = $("sessions");
+  const query = $("session-search").value.trim().toLowerCase();
+  const rows = state.sessions.filter(session => [session.directory, session.harness, session.mode, session.machine].join(" ").toLowerCase().includes(query));
+  const projectKey = session => `${session.node || ""}\0${session.directory || "Unknown project"}`;
+  const groupKey = session => state.grouping === "machine" ? session.node || "" : projectKey(session);
+  const group = (values, key) => values.reduce((map, value) => map.set(key(value), [...(map.get(key(value)) || []), value]), new Map());
+  document.querySelectorAll("[data-group]").forEach(button => button.classList.toggle("on", button.dataset.group === state.grouping));
   host.replaceChildren();
-  $("session-count").textContent = state.sessions.filter((session) => session.state?.running).length;
-  $("session-empty").hidden = state.sessions.length > 0;
-  const grouped = new Set(state.sessions.map((session) => session.node)).size > 1;
-  let machine;
-  for (const session of state.sessions) {
-    if (grouped && session.node !== machine) {
-      machine = session.node;
-      host.append(node("p", session.machine, "group-label"));
+  for (const [key, items] of group(rows, groupKey)) {
+    const heading = node("p", void 0, "group-label");
+    heading.title = state.grouping === "machine" ? (items[0].machine || "Gateway machine") : items[0].directory || key;
+    heading.append(node("span", state.grouping === "machine" ? (items[0].machine || "Gateway machine") : basename(items[0].directory)));
+    if (state.grouping === "machine") heading.append(node("span", items[0].stale ? "Offline" : "Online", "group-state"));
+    host.append(heading);
+    const projects = group(items, state.grouping === "machine" ? projectKey : session => session.node || "");
+    for (const [project, sessions] of projects) {
+      const subhead = node("p", state.grouping === "machine" ? basename(sessions[0].directory) : sessions[0].machine || "Gateway machine", "subhead");
+      subhead.title = sessions[0].directory || "Unknown project";
+      host.append(subhead);
+      for (const session of sessions) {
+        const running = session.state?.running;
+        const status = session.stale ? "Offline" : running ? "Running" : "Stopped";
+        const row = node("button", void 0, `row srow${sessionKey(session) === state.selected ? " sel" : ""}${!running || session.stale ? " offline" : ""}`);
+        row.type = "button";
+        row.dataset.session = session.id;
+        row.title = `${session.directory || ""} · ${session.machine || "Gateway machine"} · ${status}`;
+        row.append(node("span", void 0, `dot ${running && !session.stale ? "ok" : "off"}`), node("span", basename(session.directory), "label"), node("span", session.harness || "Agent", "agent"));
+        row.addEventListener("click", () => { terminalMark("click"); openTerminal(session); });
+        host.append(row);
+      }
     }
-    const card = node("article", void 0, "session-card" + (sessionKey(session) === state.selected ? " active" : ""));
-    const info = node("div", void 0, "session-info");
-    const top = node("div", void 0, "card-top");
-    top.append(node("span", void 0, "dot" + (session.state?.running ? " live" : "")), node("span", session.harness || "Agent", "agent-name"), node("span", `${session.mode || "default"}${session.node_name ? " \xB7 " + session.node_name : ""}`, "session-meta"), node("span", session.state?.running ? "Running" : "Stopped", "badge"));
-    info.append(top, node("p", session.directory || "Unknown folder", "path"));
-    card.append(info);
-    const actions = node("div", void 0, "actions");
-    const open = button("Open terminal", () => openTerminal(session), "primary");
-    open.disabled = !session.state?.running || session.state?.interactive === false;
-    actions.append(open);
-    if (session.state?.running) {
-      const restart = button("Restart", () => changeSession(session, "restart"));
-      restart.disabled = session.state?.interactive === false;
-      actions.append(restart, button("Stop", () => changeSession(session, "stop"), "danger"));
-    } else {
-      const start = button("Start fresh", () => startDialog(session));
-      start.disabled = session.harness === "agy";
-      actions.append(start);
-    }
-    if (session.harness === "agy") info.append(node("p", "Desktop launcher presence · start and interact locally. Detached desktop windows are not tracked.", "session-meta"));
-    else if (session.state?.interactive === false) info.append(node("p", "Native stdio · browser input unavailable", "session-meta"));
-    card.append(actions);
-    host.append(card);
   }
+  $("session-empty").hidden = rows.length > 0;
 }
+$("session-search").addEventListener("input", renderSessions);
+document.querySelectorAll("[data-group]").forEach(button => button.addEventListener("click", () => { state.grouping = button.dataset.group; renderSessions(); }));
+$("sessions").addEventListener("keydown", event => {
+  if (!['ArrowDown','ArrowUp'].includes(event.key)) return;
+  const rows = [...$("sessions").querySelectorAll("[data-session]")];
+  const current = rows.findIndex(row => row.classList.contains("sel"));
+  const next = rows[Math.max(0, Math.min(rows.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)))];
+  if (next) { event.preventDefault(); next.click(); requestAnimationFrame(() => $("sessions").querySelector("[data-session].sel")?.focus()); }
+});
 const sessionKey = (session) => JSON.stringify([session.node || "", session.id]);
 async function changeSession(session, action) {
   if (!window.confirm(action === "stop" ? "Stop this agent? Its current conversation may end." : "Restart this agent? Its current conversation may end unless the agent supports resume.")) return;
@@ -224,44 +277,472 @@ function renderRecent() {
   }
 }
 function setView(view) {
-  state.view = view;
-  if (view === "settings") loadSettings();
-  for (const name of ["sessions", "recent", "packages", "settings"]) $(`${name}-view`).hidden = name !== view;
-  document.querySelectorAll("[data-view]").forEach((element) => {
-    const active = element.dataset.view === view;
-    element.classList.toggle("selected", active);
-    if (active) element.setAttribute("aria-current", "page");
-    else element.removeAttribute("aria-current");
+  if (!["workspace","sessions","library","machines","settings","recent","packages"].includes(view)) return;
+  state.view = view === "sessions" ? "workspace" : view;
+  $("app").dataset.current = view === "sessions" ? "workspace" : view;
+  $("workspace").hidden = !["workspace","sessions"].includes(view);
+  $("library").hidden = view !== "library"; $("machines").hidden = view !== "machines";
+  $("recent-view").hidden = view !== "recent"; $("packages-view").hidden = view !== "packages"; $("settings-view").hidden = view !== "settings";
+  if (view === "settings") { loadSettings(); void loadReplication(); }
+  if (view === "recent") renderRecent();
+  if (view === "library") { renderLibrary(); void loadWorkspaceData(); }
+  if (view === "machines") { renderMachines(); void loadWorkspaceData(); }
+  if (view === "packages") { const selected=state.sessions.find(session => sessionKey(session) === state.selected); $("package-directory").value=selected?.directory || ""; if(selected) state.node=selected.node || ""; }
+  document.querySelectorAll("[data-view]").forEach(element => {
+    const active = element.dataset.view === view || element.dataset.view === "workspace" && view === "sessions";
+    element.classList.toggle("on", active);
+    if (active) element.setAttribute("aria-current", "page"); else element.removeAttribute("aria-current");
   });
-  $("view-title").textContent = { sessions: "Sessions", recent: "Recent folders", packages: "Packages", settings: "Gateway settings" }[view];
+  if (state.view === "workspace") requestAnimationFrame(scaleTerminal);
 }
-document.querySelectorAll("[data-view]").forEach((element) => element.addEventListener("click", () => setView(element.dataset.view)));
+document.querySelectorAll("[data-view]").forEach(element => element.addEventListener("click", () => setView(element.dataset.view)));
+const machines = () => [{id:"",name:"Gateway machine",online:true},...state.nodes];
+const machineName = id => machines().find(machine => machine.id === id)?.name || (id ? id : "Gateway machine");
+const destinationKey = (nodeId,directory) => `${nodeId}\0${directory}`;
+async function mapLimit(items, limit, work) {
+  let next=0;
+  await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{
+    while(next<items.length){const index=next++;await work(items[index]);}
+  }));
+}
+async function loadInventory(force=false) {
+  if(!force&&Date.now()-state.inventoryAt<10000)return;
+  const generation=(state.inventoryGeneration||0)+1;state.inventoryGeneration=generation;
+  await Promise.all(machines().map(async machine=>{
+    const folders=state.recentByNode.get(machine.id)||[];
+    const targets=folders.map(folder=>({machine,folder}));
+    await mapLimit(targets,2,async({machine,folder})=>{
+      const key=destinationKey(machine.id,folder.directory),previous=state.inventory.get(key);
+      if(machine.online===false||folder.available===false){state.inventory.set(key,{node:machine.id,machine:machine.name,directory:folder.directory,folder_id:folder.folder_id||"",packages:previous?.packages||[],error:folder.unavailable_reason||previous?.error||"Folder unavailable",online:machine.online!==false,available:folder.available!==false,last_used:folder.last_used||"",harness:folder.harness||"",mode:folder.mode||""});return;}
+      try{
+        const response=await api(`/api/packages?directory=${encodeURIComponent(folder.directory)}`,void 0,"GET",machine.id);
+        if(generation!==state.inventoryGeneration)return;
+        state.inventory.set(key,{node:machine.id,machine:machine.name,directory:folder.directory,folder_id:folder.folder_id||"",packages:list(response,"packages"),error:"",online:true,available:true,last_used:folder.last_used||"",harness:folder.harness||"",mode:folder.mode||""});
+      }catch(error){if(generation===state.inventoryGeneration)state.inventory.set(key,{node:machine.id,machine:machine.name,directory:folder.directory,folder_id:folder.folder_id||"",packages:previous?.packages||[],error:error.message,online:true,available:true,last_used:folder.last_used||"",harness:folder.harness||"",mode:folder.mode||""});}
+    });
+  }));
+  if(generation!==state.inventoryGeneration)return;
+  state.inventoryAt=Date.now();
+  if(state.view==="library")renderLibrary();if(state.view==="machines")renderMachines();
+}
+async function loadLibrary(force=false) {
+  if(state.libraryBusy&&!force)return;
+  const generation=++state.libraryGeneration;state.libraryBusy=true;
+  await Promise.all(machines().map(async machine=>{
+    if(machine.online===false)return;
+    try{
+      const [packages,packs]=await Promise.all([api("/api/library/packages",void 0,"GET",machine.id),api("/api/library/agentpacks",void 0,"GET",machine.id)]);
+      const details=await Promise.all(list(packs,"agentpacks").map(async pack=>{
+        try{
+          const result=await api(`/api/library/agentpacks/${encodeURIComponent(pack.id)}`,void 0,"GET",machine.id);
+          return {...result.agentpack,_node:machine.id,_machine:machine.name,_revisions:list(result.revisions,"revisions").slice().sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at))};
+        }catch(error){return {...pack,_node:machine.id,_machine:machine.name,_revisions:[],_error:error.message};}
+      }));
+      if(generation===state.libraryGeneration)state.libraryByNode.set(machine.id,{packages:list(packages,"packages").map(item=>({...item,_node:machine.id,_machine:machine.name,_key:`${machine.id}\0${item.id}`})),agentpacks:details,error:""});
+    }catch(error){if(generation===state.libraryGeneration){const cached=state.libraryByNode.get(machine.id)||{packages:[],agentpacks:[]};state.libraryByNode.set(machine.id,{...cached,error:error.message});}}
+  }));
+  if(generation===state.libraryGeneration){state.libraryBusy=false;if(state.view==="library")renderLibrary();if(state.view==="machines")renderMachines();}
+}
+async function loadWorkspaceData(force=false){await Promise.all([loadInventory(force),loadLibrary(force),loadDrafts(),loadReplication()]);}
+async function loadDrafts(){
+  try{state.drafts=list(await api("/api/library/drafts",void 0,"GET",""),"drafts");}
+  catch(error){state.draftError=error.message;}
+  if(state.view==="library")renderDrafts();
+}
+async function loadReplication(){
+  try{state.replication=await api("/api/library/replication/peers",void 0,"GET","")||{peers:[],contacts:{}};state.replicationError="";}
+  catch(error){state.replicationError=error.message;}
+  renderReplication();
+}
+function registryPackages(){
+  const byID=new Map();
+  for(const item of [...state.libraryByNode.values()].flatMap(value=>value.packages||[])){
+    const previous=byID.get(item.id);if(!previous)byID.set(item.id,{...item,_nodes:[item._node]});else previous._nodes.push(item._node);
+  }
+  return [...byID.values()];
+}
+function registryAgentpacks(){
+  const byID=new Map();
+  for(const pack of [...state.libraryByNode.values()].flatMap(value=>value.agentpacks||[])){
+    const previous=byID.get(pack.id);
+    if(!previous)byID.set(pack.id,{...pack,_nodes:[pack._node],_revisions:[...(pack._revisions||[])]});
+    else{
+      previous._nodes.push(pack._node);
+      for(const revision of pack._revisions||[])if(!previous._revisions.some(item=>item.id===revision.id))previous._revisions.push(revision);
+      previous.heads=[...new Set([...(previous.heads||[]),...(pack.heads||[])])];
+    }
+  }
+  return [...byID.values()].map(pack=>({...pack,_revisions:pack._revisions.slice().sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at))}));
+}
+function verifiedCopies(id){
+  const copies=[];
+  const local=state.libraryByNode.get("");
+  if(local?.packages?.some(item=>item.id===id)||local?.agentpacks?.some(pack=>pack._revisions?.some(revision=>revision.id===id)))copies.push({id:"",name:"Gateway machine",online:true});
+  for(const peer of state.replication.peers||[])if(peer.digests?.includes(id)){const machine=machines().find(value=>value.id===peer.node);copies.push({id:peer.node,name:machine?.name||peer.node,online:machine?.online!==false});}
+  return copies;
+}
+function copiesLabel(id){const copies=verifiedCopies(id);return copies.length?`Verified on ${copies.map(copy=>copy.name+(copy.online?"":" (offline)")).join(", ")}`:"No verified copies yet";}
+function destinations(){
+  const out=[];
+  for(const machine of machines())for(const folder of state.recentByNode.get(machine.id)||[]){
+    const cached=state.inventory.get(destinationKey(machine.id,folder.directory));
+    out.push(cached||{node:machine.id,machine:machine.name,directory:folder.directory,folder_id:folder.folder_id||"",packages:[],error:folder.unavailable_reason||"",online:machine.online!==false,available:folder.available!==false,last_used:folder.last_used||"",harness:folder.harness||"",mode:folder.mode||""});
+  }
+  return out.sort((a,b)=>a.machine.localeCompare(b.machine)||a.directory.localeCompare(b.directory));
+}
+function knownPackages(){
+  const meta=registryPackages(),latest=new Map();
+  for(const target of destinations())for(const pin of target.packages){
+    if(!pin.module||!pin.commit)continue;
+    const found=meta.find(item=>item.module===pin.module&&item.commit===pin.commit);
+    const item={...(found||{}),...pin,module:pin.module,commit:pin.commit,_node:found?._node??target.node,_machine:found?._machine??target.machine,_key:found?._key??`${target.node}\0${pin.module}@${pin.commit}`,name:found?.name||pin.name||pin.module,kind:found?.kind||pin.kind||"package",_seen:target.last_used||""};
+    const previous=latest.get(item.module);
+    if(!previous||Date.parse(item._seen||0)>=Date.parse(previous._seen||0))latest.set(item.module,item);
+  }
+  for(const item of meta)if(!latest.has(item.module))latest.set(item.module,{...item,name:item.name||item.path||item.module,kind:item.kind||"package"});
+  return [...latest.values()].sort((a,b)=>a.name.localeCompare(b.name));
+}
+function inventoryPin(target,module){return target.packages.find(item=>item.module===module);}
+const libraryItemKey=item=>item._key||`${item._node}\0${item.id}`;
+function svgIcon(name){
+  const paths={package:'<path d="m12 2 9 4.5v11L12 22l-9-4.5v-11L12 2Zm9 4.5L12 11 3 6.5M12 11v11"/>',folder:'<path d="M3 7V5a2 2 0 0 1 2-2h4l3 4h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',laptop:'<rect x="4" y="4" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',server:'<rect x="4" y="3" width="16" height="8" rx="2"/><rect x="4" y="13" width="16" height="8" rx="2"/><path d="M8 7h.01M8 17h.01"/>',check:'<path d="m5 12 4 4L19 6"/>',install:'<path d="M12 3v12m-5-5 5 5 5-5M5 21h14"/>',back:'<path d="m15 6-6 6 6 6"/>',chevron:'<path d="m6 9 6 6 6-6"/>'};
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]||paths.package}</svg>`;
+}
+function renderLibrary(){
+  const packages=registryPackages(),packs=registryAgentpacks(),kind=state.libraryKind;
+  $("packages-tab").textContent=`Packages ${packages.length}`;$("setups-tab").textContent=`Agentpacks ${packs.length}`;
+  $("packages-tab").classList.toggle("on",kind==="packages");$("setups-tab").classList.toggle("on",kind==="agentpacks");
+  const items=kind==="packages"?packages:packs,query=$("library-search").value.trim().toLowerCase();
+  const filtered=items.filter(item=>[item.name,item.module,item.kind,item.commit,item.project,item._machine].join(" ").toLowerCase().includes(query));
+  if(!filtered.some(item=>libraryItemKey(item)===state.librarySelection))state.librarySelection=libraryItemKey(filtered[0]||{});
+  const listHost=$("library-list");listHost.replaceChildren();
+  if(!filtered.length){const error=[...state.libraryByNode.values()].find(value=>value.error)?.error;const empty=node("div",error?`Library unavailable: ${error}`:kind==="packages"?"No packages have been captured yet.":"No agentpacks saved yet.","empty");listHost.append(empty);}
+  for(const item of filtered){
+    const selected=libraryItemKey(item)===state.librarySelection;
+    const row=node("button",void 0,`row two${selected?" sel":""}`);row.type="button";row.dataset.item=libraryItemKey(item);row.setAttribute("aria-current",selected?"true":"false");
+    const glyph=node("span",void 0,"glyph small-glyph");glyph.innerHTML=svgIcon(kind==="packages"?"package":"folder");
+    const label=node("span",void 0,"label");label.append(node("span",item.name||item.path||item.module||"Unnamed package"));
+    const heads=item.heads?.length||0;
+    label.append(node("small",kind==="packages"?`${item.kind||"Package"} · ${String(item.commit||"").slice(0,12)} · ${item._machine} · ${verifiedCopies(item.id).length} copies`:`${item._revisions?.length||0} ${(item._revisions?.length||0)===1?"revision":"revisions"} · ${heads>1?"Two versions to review · ":""}${item._machine}`));
+    row.append(glyph,label);row.addEventListener("click",()=>pickLibrary(item,true));listHost.append(row);
+  }
+  const errors=[...state.libraryByNode.entries()].filter(([,value])=>value.error);
+  $("library-summary").textContent=errors.length?`${items.length} saved · ${errors.length} machine${errors.length===1?"":"s"} unavailable`:`${packages.length} ${packages.length===1?"package":"packages"} · ${packs.length} ${packs.length===1?"agentpack":"agentpacks"}`;
+  renderLibraryDetail(items.find(item=>libraryItemKey(item)===state.librarySelection));renderDrafts();
+}
+function pickLibrary(item,show=true){
+  state.librarySelection=libraryItemKey(item);
+  if(state.libraryKind==="agentpacks")state.revisionSelection=item._revisions?.[0]?.id||"";
+  renderLibrary();if(show)$("library").classList.add("show-detail");
+}
+function renderDrafts(){
+  const host=$("install-drafts");host.replaceChildren();
+  if(!state.drafts.length)return;
+  const caption=node("div",void 0,"list-caption");caption.append(node("span","Pending installs"),node("span",String(state.drafts.length)));host.append(caption);
+  for(const draft of state.drafts){
+    const machine=machines().find(item=>item.id===(draft.node==="local"?"":draft.node)),row=node("div",void 0,"draft");
+    row.append(node("span",void 0,`dot ${machine?.online===false?"off":"ok"}`));
+    const label=node("div",void 0,"label");label.append(node("span",draft.pack_id?`Restore ${draft.pack_id}`:draft.item),node("small",`${machine?.name||draft.node} / ${draft.directory} · ${draft.reason}`));row.append(label);
+    row.append(button("Review…",()=>reviewDraft(draft)));
+    row.append(button("Discard",()=>discardDraft(draft),"icon-btn"));host.append(row);
+  }
+}
+async function discardDraft(draft){
+  try{await api(`/api/library/drafts/${encodeURIComponent(draft.id)}`,void 0,"DELETE","");await loadDrafts();}
+  catch(error){notice(error.message);}
+}
+function draftDiff(diff){
+  if(!diff)return "<p class=note>No current diff is available.</p>";
+  return [...(diff.add||[]).map(item=>["add","+","Add",item]),...(diff.update||[]).map(item=>["upd","~","Update",item]),...(diff.remove||[]).map(item=>["del","−","Remove",item])].map(([kind,sign,label,item])=>`<div class="diffline ${kind}"><span class="sign">${sign}</span>${label} <code>${esc(item)}</code></div>`).join("")||'<div class="diffline same"><span class="sign">=</span>No package changes</div>';
+}
+async function reviewDraft(draft){
+  let review;
+  try{review=await api(`/api/library/drafts/${encodeURIComponent(draft.id)}/review`,{},"POST","");}
+  catch(error){notice(error.message);return;}
+  const unavailable=!review.ready;
+  showSheet(unavailable?"Draft needs attention":"Review pending change",`<p><strong>${esc(draft.item)}</strong> · ${esc(draft.directory)} on ${esc(machines().find(item=>item.id===(draft.node==="local"?"":draft.node))?.name||draft.node)}</p><p class="${unavailable?"err":"note"}" role="status">${esc(review.reason||draft.reason||"Ready to apply.")}</p>${review.diff?`<section class="sect"><header><h2>Current diff</h2></header>${draftDiff(review.diff)}</section>`:""}${unavailable?"":'<label class="check"><input id="draft-restart" type="checkbox" checked>Restart affected agents after apply</label>'}<p id="draft-error" class="err" role="alert"></p>`,unavailable?`<button type="button" id="draft-discard">Discard draft</button><button type="button" id="draft-close" class="primary">Keep draft</button>`:`<button type="button" id="draft-close">Cancel</button><button type="button" id="draft-apply" class="primary">${draft.pack_id?"Restore":"Install"}</button>`);
+  $("draft-close").onclick=closeSheet;$("draft-discard")?.addEventListener("click",async()=>{await discardDraft(draft);closeSheet();});
+  $("draft-apply")?.addEventListener("click",async()=>{
+    const button=$("draft-apply");button.disabled=true;button.textContent=draft.pack_id?"Restoring…":"Installing…";
+    const target=draft.node==="local"?"":draft.node;
+    try{
+      const restart=$("draft-restart").checked;
+      if(draft.pack_id)await api(`/api/library/agentpacks/${encodeURIComponent(draft.pack_id)}/revisions/${encodeURIComponent(draft.revision)}/restore`,{directory:draft.directory,restart},"POST",target);
+      else await api("/api/packages",{directory:draft.directory,spec:draft.item,restart},"POST",target);
+      await api(`/api/library/drafts/${encodeURIComponent(draft.id)}`,void 0,"DELETE","");closeSheet();await loadDrafts();await loadWorkspaceData(true);
+      notice(draft.pack_id?"Agentpack restored.":"Package installed.");
+    }catch(error){$("draft-error").textContent=error.message;button.disabled=false;button.textContent=draft.pack_id?"Restore":"Install";}
+  });
+}
+function renderLibraryDetail(item){
+  const host=$("library-detail");
+  if(!item){const error=[...state.libraryByNode.values()].find(value=>value.error)?.error;host.innerHTML=`<div class="empty">${esc(error?`Library data unavailable: ${error}`:"Select a saved package or agentpack.")}</div>`;return;}
+  const back=`<button class="tb-btn back" id="lib-back">${svgIcon("back")}Library</button>`;
+  if(state.libraryKind==="packages"){
+    const installed=destinations().flatMap(target=>{const pin=inventoryPin(target,item.module);return pin?[{target,pin}]:[];});
+    const packUses=registryAgentpacks().filter(pack=>pack._revisions?.some(rev=>rev.package_ids?.includes(item.id)));
+    const rows=installed.map(({target,pin})=>`<tr><td>${esc(target.machine)}</td><td title="${esc(target.directory)}">${esc(target.directory.split(/[\\/]/).filter(Boolean).pop()||target.directory)}</td><td><code>${esc(pin.commit||"")}</code>${pin.commit!==item.commit?` <span class="faint">→ ${esc(item.commit)}</span>`:""}</td><td>${verifiedCopies(item.id).some(copy=>copy.id===target.node)?`<span class="cell">${svgIcon("check")}Verified</span>`:"—"}</td><td class="act">${pin.commit===item.commit?"Current":`<button data-update-target="${encodeURIComponent(destinationKey(target.node,target.directory))}" ${target.online&&target.available||target.folder_id?"":"disabled"}>Update</button>`}</td></tr>`).join("");
+    host.innerHTML=`${back}<div class="insp wide"><div class="insp-head"><span class="glyph">${svgIcon("package")}</span><div class="title"><h1>${esc(item.name||item.path||item.module)}</h1><p>${esc(item.kind||"Package")} · pinned <code>${esc(item.commit)}</code> · saved on ${esc(item._machine)}</p></div><div class="actions"><button class="primary" id="install-item">${svgIcon("install")}Install…</button></div></div><dl class="kv"><dt>Module</dt><dd><code>${esc(item.module)}</code></dd><dt>Repository</dt><dd>${esc(item.url||`${item.owner}/${item.repo}`)}</dd><dt>Content</dt><dd><code>${esc(item.content_hash||"No content hash recorded")}</code></dd><dt>Source project</dt><dd>${esc(item.project||"Unknown project")}</dd><dt>Verified copies</dt><dd>${esc(copiesLabel(item.id))}</dd><dt>In agentpacks</dt><dd>${packUses.length?packUses.map(pack=>`<button class="link-btn" data-pack-key="${encodeURIComponent(libraryItemKey(pack))}">${esc(pack.name)}</button>`).join(", "):"—"}</dd></dl><section class="sect"><header><h2>Installed in</h2><span class="meta">${installed.length} ${installed.length===1?"project":"projects"}</span></header>${installed.length?`<div class="hscroll"><table class="grid compact installed"><thead><tr><th>Machine</th><th>Project</th><th>Pin</th><th>Copy</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:"<p class=note>Not installed in a trusted project folder yet.</p>"}</section></div>`;
+    host.querySelector("#install-item").onclick=()=>installPackageDestinations(item);
+    host.querySelectorAll("[data-update-target]").forEach(button=>button.addEventListener("click",()=>{const key=decodeURIComponent(button.dataset.updateTarget),target=destinations().find(row=>destinationKey(row.node,row.directory)===key);if(target)installPackageDestinations(item,[key]);}));
+    host.querySelectorAll("[data-pack-key]").forEach(button=>button.addEventListener("click",()=>{const key=decodeURIComponent(button.dataset.packKey),pack=registryAgentpacks().find(value=>libraryItemKey(value)===key);if(pack){state.libraryKind="agentpacks";pickLibrary(pack);}}));
+  }else{
+    const revisions=item._revisions||[],selected=revisions.find(rev=>rev.id===state.revisionSelection)||revisions[0];
+    if(selected)state.revisionSelection=selected.id;
+    if(!selected){host.innerHTML=`${back}<div class="empty">${esc(item._error||"Revision details are unavailable.")}</div>`;host.querySelector("#lib-back").onclick=()=>$("library").classList.remove("show-detail");return;}
+    const index=revisions.indexOf(selected),previous=revisions[index+1],packageItems=(selected.package_ids||[]).map(id=>registryPackages().find(pkg=>pkg._node===item._node&&pkg.id===id)).filter(Boolean);
+    const previousItems=(previous?.package_ids||[]).map(id=>registryPackages().find(pkg=>pkg._node===item._node&&pkg.id===id)).filter(Boolean);
+    const moduleSet=new Set(packageItems.map(pkg=>pkg.module)),previousMap=new Map(previousItems.map(pkg=>[pkg.module,pkg]));
+    const changes=[...packageItems.filter(pkg=>!previousMap.has(pkg.module)).map(pkg=>["add","+",pkg.name||pkg.module]),...packageItems.filter(pkg=>previousMap.has(pkg.module)&&previousMap.get(pkg.module).commit!==pkg.commit).map(pkg=>["upd","~",pkg.name||pkg.module]),...previousItems.filter(pkg=>!moduleSet.has(pkg.module)).map(pkg=>["del","−",pkg.name||pkg.module])];
+    const history=revisions.map((rev,i)=>`<button class="hrow ${rev.id===selected.id?"sel":""}" data-revision="${esc(rev.id)}" aria-pressed="${rev.id===selected.id}"><span class="tick"></span><span class="label"><b>${esc(rev.label||"Saved revision")}</b><small>${esc(new Date(rev.created_at).toLocaleString())} · ${esc(rev.source_node||item._machine)}</small></span><span class="meta">${i===0?'<span class="badge accent">Latest</span> ':""}${(rev.package_ids||[]).length} packages</span></button>`).join("");
+    const packageRows=packageItems.map(pkg=>`<tr><td>${esc(pkg.name||pkg.module)}</td><td><code>${esc(pkg.module)}</code></td><td><code>${esc(pkg.commit)}</code></td></tr>`).join("");
+    const diff=previous?(changes.map(([kind,sign,name])=>`<div class="diffline ${kind}"><span class="sign">${sign}</span>${esc(name)}</div>`).join("")||'<div class="diffline same"><span class="sign">=</span>Same packages as previous revision</div>'):"<p class=note>First saved revision.</p>";
+    host.innerHTML=`${back}<div class="insp wide"><div class="insp-head"><span class="glyph">${svgIcon("folder")}</span><div class="title"><h1>${esc(item.name)}</h1><p>${esc(selected.project)} · saved on ${esc(item._machine)} · ${revisions.length} ${revisions.length===1?"revision":"revisions"}${item.heads?.length>1?" · Two versions to review":""}</p></div><div class="actions"><button id="rename-pack">Rename…</button><button class="primary" id="restore-pack">${svgIcon("install")}Restore…</button></div></div><dl class="kv"><dt>Source</dt><dd><code>${esc(selected.project)}</code> on ${esc(item._machine)}</dd><dt>Configuration</dt><dd>${selected.needs_local_configuration?'<span class="badge warn">Needs local configuration</span>':"Complete on this machine"}</dd><dt>Verified copies</dt><dd>${esc(copiesLabel(selected.id))}</dd></dl><div class="cols"><section class="sect"><header><h2>History</h2><span class="meta">Newest first</span></header><div class="history">${history}</div></section><section class="sect"><header><h2>${esc(selected.label||"Saved revision")}</h2><span class="meta">${esc(selected.mode||"default")} mode</span></header>${diff}<table class="grid compact"><thead><tr><th>Package</th><th>Module</th><th>Commit</th></tr></thead><tbody>${packageRows||'<tr><td colspan="3">No package pins</td></tr>'}</tbody></table><details class="disclose"><summary>${svgIcon("chevron")}agentpack.toml</summary><pre class="code">${esc(selected.manifest||"")}</pre></details></section></div></div>`;
+    host.querySelector("#rename-pack").onclick=()=>renameAgentpack(item);
+    host.querySelector("#restore-pack").onclick=()=>restoreAgentpack(item,selected);
+    host.querySelectorAll("[data-revision]").forEach(button=>button.addEventListener("click",()=>{state.revisionSelection=button.dataset.revision;renderLibrary();}));
+  }
+  host.querySelector("#lib-back")?.addEventListener("click",()=>$("library").classList.remove("show-detail"));
+}
+function renderMachines(){
+  const query=$("machine-search").value.trim().toLowerCase(),all=machines(),filtered=all.filter(machine=>[machine.name,machine.id].join(" ").toLowerCase().includes(query));
+  if(!all.some(machine=>machine.id===state.machineSelection))state.machineSelection="";
+  $("machines-summary").textContent=`${all.filter(machine=>machine.online!==false).length} online · ${all.filter(machine=>machine.online===false).length} offline`;
+  const rows=$("machine-rows");rows.replaceChildren();
+  for(const machine of filtered){const tr=document.createElement("tr");tr.dataset.machine=machine.id;tr.tabIndex=machine.id===state.machineSelection?0:-1;tr.className=machine.id===state.machineSelection?"sel":"";tr.innerHTML=`<td><span class="cell">${svgIcon(machine.id?"server":"laptop")}<span class="stack">${esc(machine.name)}</span></span></td><td><span class="cell"><span class="dot ${machine.online===false?"off":"ok"}"></span>${machine.online===false?"Offline":"Online"}</span></td>`;tr.addEventListener("click",()=>pickMachine(machine.id,true));rows.append(tr);}
+  if(!filtered.length)rows.innerHTML='<tr><td colspan="2" class="empty">No machines match.</td></tr>';
+  renderMachineDetail(all.find(machine=>machine.id===state.machineSelection)||all[0]);
+}
+function pickMachine(id,show=true){state.machineSelection=id;renderMachines();if(show)$("machines").classList.add("show-detail");}
+function renderMachineDetail(machine){
+  const host=$("machine-detail");if(!machine){host.innerHTML='<div class="empty">No machines are available.</div>';return;}
+  const targets=destinations().filter(target=>target.node===machine.id),packages=knownPackages();
+  const live=state.sessions.filter(session=>session.node===machine.id).length;
+  const rows=targets.map(target=>{
+    const sessionCount=state.sessions.filter(session=>session.node===machine.id&&session.directory===target.directory).length;
+    const cells=packages.map(pkg=>{const pin=inventoryPin(target,pkg.module);if(!pin)return '<td class="pin"><span class="faint">—</span></td>';return pin.commit===pkg.commit?`<td class="pin"><code>${esc(pin.commit)}</code></td>`:`<td class="pin"><button class="link-btn mono" data-update-module="${esc(pkg.module)}" data-update-target="${esc(destinationKey(target.node,target.directory))}" title="Update to ${esc(pkg.commit)}">${esc(pin.commit)} ↑</button></td>`;}).join("");
+    return `<tr><td title="${esc(target.directory)}"><span class="cell">${svgIcon("folder")}${esc(target.directory.split(/[\\/]/).filter(Boolean).pop()||target.directory)}</span></td><td class="c-sessions">${sessionCount||"—"}</td>${cells}<td class="act"><button class="icon-btn" data-install-target="${encodeURIComponent(destinationKey(target.node,target.directory))}" aria-label="Install into ${esc(target.directory)}" title="Install into this project" ${!target.online&&!target.folder_id||!target.available&&!target.folder_id?"disabled":""}>${svgIcon("install")}</button></td></tr>`;
+  }).join("");
+  const packageHead=packages.map(pkg=>`<th class="pin" title="${esc(pkg.module)}">${esc(pkg.name)}</th>`).join("");
+  host.innerHTML=`<button class="tb-btn back" id="machine-back">${svgIcon("back")}Machines</button><div class="insp wide"><div class="insp-head"><span class="glyph">${svgIcon(machine.id?"server":"laptop")}</span><div class="title"><h1>${esc(machine.name)}</h1><p><span class="dot ${machine.online===false?"off":"ok"}" style="display:inline-block"></span> ${machine.online===false?"Offline":"Online"} · ${live} ${live===1?"session":"sessions"} · agentpack registry</p></div><div class="actions"><button id="machine-sessions">Sessions</button></div></div><section class="sect"><header><h2>Projects and pinned packages</h2><span class="meta">${targets.length} trusted folders</span></header><div class="hscroll"><table class="grid compact matrix"><thead><tr><th class="c-project">Project</th><th class="c-sessions">Sessions</th>${packageHead}<th></th></tr></thead><tbody>${rows||'<tr><td colspan="3" class="empty">No recent project folders on this machine.</td></tr>'}</tbody></table></div><p class="note">↑ marks a pin that differs from the current captured version. — means not installed. Offline installs are saved as drafts.</p></section></div>`;
+  host.querySelector("#machine-back").onclick=()=>$("machines").classList.remove("show-detail");
+  host.querySelector("#machine-sessions").onclick=()=>{state.node=machine.id;$("session-search").value=machine.name;renderSessions();setView("workspace");};
+  host.querySelectorAll("[data-install-target]").forEach(button=>button.addEventListener("click",()=>{const key=decodeURIComponent(button.dataset.installTarget),target=targets.find(row=>destinationKey(row.node,row.directory)===key);if(target)installIntoTarget(target);}));
+  host.querySelectorAll("[data-update-module]").forEach(button=>button.addEventListener("click",()=>{const key=decodeURIComponent(button.dataset.updateTarget),target=targets.find(row=>destinationKey(row.node,row.directory)===key),pkg=packages.find(value=>value.module===button.dataset.updateModule);if(target&&pkg)installPackageDestinations(pkg,[key]);}));
+}
+$("packages-tab").addEventListener("click",()=>{state.libraryKind="packages";state.librarySelection="";renderLibrary();});
+$("setups-tab").addEventListener("click",()=>{state.libraryKind="agentpacks";state.librarySelection="";state.revisionSelection="";renderLibrary();});
+$("library-search").addEventListener("input",renderLibrary);
+$("machine-search").addEventListener("input",renderMachines);
+$("refresh-machines").addEventListener("click",()=>{void refreshNodes();void loadWorkspaceData(true);});
+function showSheet(title,body,actions,wide=true){
+  const dialog=$("sheet");dialog.className=wide?"wide":"";$("sheet-title").textContent=title;$("sheet-body").innerHTML=body;$("sheet-actions").innerHTML=actions;
+  $("sheet-form").onsubmit=event=>event.preventDefault();if(!dialog.open)dialog.showModal();
+}
+function closeSheet(){$("sheet").close();}
+function packageLabel(item){return item.name||item.path||item.module;}
+function packageState(item,target){
+  const pin=inventoryPin(target,item.module);
+  if(!target.online)return target.folder_id&&item.cache_key?{disabled:false,draft:true,text:"Offline · install as draft"}:{disabled:true,text:"Offline · exact package identity unavailable"};
+  if(!target.available)return target.folder_id&&item.cache_key?{disabled:false,draft:true,text:`Folder unavailable · ${target.error||"install as draft"}`}:{disabled:true,text:target.error||"Folder unavailable"};
+  if(target.error)return {disabled:true,text:`Could not check pins · ${target.error}`};
+  if(pin?.commit===item.commit)return {disabled:true,text:"Installed"};
+  return {disabled:false,text:pin?.commit?`Update ${pin.commit.slice(0,12)} → ${item.commit.slice(0,12)}`:"Not installed"};
+}
+function affectedCount(target){return state.sessions.filter(session=>session.node===target.node&&session.directory===target.directory&&session.state?.running&&session.state?.interactive!==false&&!session.stale).length;}
+function draftExpectedPins(packages){
+  const pins={};
+  for(const pkg of packages){if(!pkg?.module||!pkg.commit||!pkg.cache_key)throw new Error(`Exact package identity is unavailable for ${pkg?.module||"this revision"}.`);pins[pkg.module]={commit:pkg.commit,cache_key:pkg.cache_key,...(pkg.content_hash?{content_hash:pkg.content_hash}:{})};}
+  return pins;
+}
+async function saveDraft(input){await api("/api/library/drafts",input,"POST","");}
+async function applyInstalls(jobs,restart,paint,done){
+  const drafts=jobs.filter(job=>job.draftReason||!job.target.online),installs=jobs.filter(job=>!job.draftReason&&job.target.online);
+  await mapLimit(drafts,2,async job=>{
+    job.progress="Saving draft…";paint();
+    try{await saveDraft({item:`${job.item.module}@${job.item.commit}`,node:job.target.node||"local",directory:job.target.directory,reason:job.draftReason||"Machine offline",folder_identity:job.target.folder_id,expected_pins:draftExpectedPins([job.item])});job.progress="Draft saved";job.drafted=true;}
+    catch(error){job.progress=error.message;job.failed=true;}paint();
+  });
+  const perNode=new Map();for(const job of installs){const group=perNode.get(job.target.node)||[];group.push(job);perNode.set(job.target.node,group);}
+  await Promise.all([...perNode.values()].map(group=>mapLimit(group,2,async job=>{
+    job.progress="Installing…";paint();
+    try{await api("/api/packages",{directory:job.target.directory,spec:`${job.item.module}@${job.item.commit}`,restart},"POST",job.target.node);job.progress="Installed";}
+    catch(error){job.progress=error.message||"Install failed";job.failed=true;}
+    paint();
+  })));
+  await loadDrafts();await loadInventory(true);await loadLibrary(true);done();
+}
+function installPackageDestinations(item,chosen=[]){
+  const rows=destinations().map(target=>({target,state:packageState(item,target)}));
+  let picked=new Set(chosen.filter(key=>rows.some(row=>destinationKey(row.target.node,row.target.directory)===key&&!row.state.disabled))),phase="pick",restart=true;
+  const label=()=>{const jobs=[...picked].map(key=>rows.find(row=>destinationKey(row.target.node,row.target.directory)===key)).filter(Boolean),drafts=jobs.filter(job=>job.state.draft).length,installs=jobs.length-drafts;if(phase==="run")return "Installing…";if(phase==="done")return "Done";if(!jobs.length)return "Select projects to install into:";if(!installs)return `Save ${drafts} ${drafts===1?"draft":"drafts"}`;return drafts?`Install ${installs} · Draft ${drafts}`:`Install in ${installs} ${installs===1?"project":"projects"}`;};
+  showSheet(`Install “${packageLabel(item)}”`,`<p>Pinned to <code>${esc(item.module)}@${esc(item.commit)}</code>. Choose every trusted destination and review its current pin.</p><div class="pick-head"><span class="seg-label">Destinations</span><span class="grow"></span><button id="install-all-online" class="tb-btn" type="button">Select all online</button></div><div class="picker" id="install-destinations"></div><div class="summary"><span id="install-summary"></span><span class="grow"></span><label><input id="install-restart" type="checkbox" checked>Restart affected agents</label></div><p class="note" id="install-note">Nothing changes until you confirm.</p>`,`<button type="button" id="sheet-cancel">Cancel</button><button type="button" class="primary" id="sheet-apply" disabled>Install</button>`);
+  const paint=()=>{
+    const host=$("install-destinations");host.replaceChildren();
+    for(const machine of machines()){
+      const group=rows.filter(row=>row.target.node===machine.id);if(!group.length)continue;
+      const heading=node("div",void 0,"mhead");heading.innerHTML=`${svgIcon(machine.id?"server":"laptop")}${esc(machine.name)}<span class="meta"><span class="dot ${machine.online===false?"off":"ok"}"></span>${machine.online===false?"Offline":"Online"}</span>`;host.append(heading);
+      for(const {target,state:status} of group){
+        const key=destinationKey(target.node,target.directory),checked=picked.has(key),row=node("label",void 0,`dest${checked?" chosen":""}${status.disabled?" disabled":""}`);
+        const input=document.createElement("input");input.type="checkbox";input.value=key;input.checked=checked;input.disabled=status.disabled||phase!=="pick";
+        const name=node("span",void 0,"label");name.append(node("span",target.directory.split(/[\\/]/).filter(Boolean).pop()||target.directory));
+        const statusCell=node("span",status.disabled?status.text:jobByKey.get(key)?.progress||status.text,`state${jobByKey.get(key)?.failed?" err":""}`);statusCell.title=target.directory;
+        row.append(input,name,statusCell);input.addEventListener("change",()=>{input.checked?picked.add(key):picked.delete(key);paint();});host.append(row);
+      }
+    }
+    const jobs=[...picked].map(key=>{const row=rows.find(row=>destinationKey(row.target.node,row.target.directory)===key);return {key,item,target:row?.target,draftReason:row?.state.draft?row.state.text:""};}).filter(job=>job.target);
+    $("install-summary").textContent=`${jobs.reduce((sum,job)=>sum+affectedCount(job.target),0)} affected agents`;
+    $("sheet-apply").textContent=phase==="run"?"Installing…":phase==="done"?"Done":label();
+    $("sheet-apply").disabled=phase==="run"||phase==="pick"&&!picked.size;
+    $("sheet-cancel").hidden=phase!=="pick";$("install-all-online").disabled=phase!=="pick";
+    $("install-note").textContent=phase==="pick"?"Nothing changes until you confirm.":phase==="run"?"Each machine runs at most two installs at a time.":"Successful rows are installed or saved as drafts. Failed rows keep their error visible.";
+  };
+  const jobByKey=new Map();paint();
+  $("install-all-online").onclick=()=>{for(const row of rows)if(row.target.online&&!row.state.disabled)picked.add(destinationKey(row.target.node,row.target.directory));paint();};
+  $("install-restart").onchange=event=>{restart=event.target.checked;};$("sheet-cancel").onclick=closeSheet;
+  $("sheet-apply").onclick=async()=>{
+    if(phase==="done"){closeSheet();return;}
+    phase="run";const jobs=[...picked].map(key=>{const row=rows.find(row=>destinationKey(row.target.node,row.target.directory)===key),target=row?.target;const job={key,target,item,draftReason:row?.state.draft?row.state.text:"",progress:"Queued"};jobByKey.set(key,job);return job;}).filter(job=>job.target);paint();
+    await applyInstalls(jobs,restart,paint,()=>{phase="done";paint();});
+  };
+}
+function installInto(session){
+  const machine=machines().find(item=>item.id===(session.node||""))||machines()[0];
+  const folders=destinations().filter(target=>target.node===machine.id&&(target.online&&target.available&&!target.error||target.folder_id));
+  if(!folders.length){notice(`No available recent project folders on ${machine.name}.`);return;}
+  let target=folders.find(row=>row.directory===session.directory)||folders[0],picked=new Set(),restart=true,phase="pick";
+  const packages=knownPackages(),jobs=new Map();
+  const paint=()=>{
+    const folder=$("into-project").value;target=folders.find(row=>row.directory===folder)||folders[0];const host=$("package-choices");host.replaceChildren();
+    for(const item of packages){const status=packageState(item,target),key=item.module;
+      const row=node("label",void 0,`dest${picked.has(key)?" chosen":""}${status.disabled?" disabled":""}`),input=document.createElement("input");input.type="checkbox";input.value=key;input.checked=picked.has(key);input.disabled=status.disabled||phase!=="pick";
+      const label=node("span",void 0,"label");label.append(node("span",packageLabel(item)),node("code",`${item.kind||"Package"} · ${item.commit.slice(0,12)}`));
+      const job=jobs.get(key);row.append(input,label,node("span",job?.progress||status.text,`state${job?.failed?" err":""}`));input.onchange=()=>{input.checked?picked.add(key):picked.delete(key);paint();};host.append(row);
+    }
+    $("into-summary").textContent=`${affectedCount(target)} affected agents`;
+    const chosen=packages.filter(item=>picked.has(item.module)).map(item=>packageState(item,target)),draftCount=chosen.filter(status=>status.draft).length,installCount=chosen.length-draftCount;
+    $("into-apply").textContent=phase==="run"?"Installing…":phase==="done"?"Done":!picked.size?"Choose packages":!installCount?`Save ${draftCount} ${draftCount===1?"draft":"drafts"}`:draftCount?`Install ${installCount} · Draft ${draftCount}`:`Install ${installCount} ${installCount===1?"package":"packages"}`;
+    $("into-apply").disabled=phase==="run"||phase==="pick"&&!picked.size;$("into-cancel").hidden=phase!=="pick";
+  };
+  showSheet(`Install into ${machine.name}`,`<p>Choose a recent project and package pins known to this gateway mesh.</p><div class="form into"><label for="into-project">Project</label><select id="into-project">${folders.map(folder=>`<option value="${esc(folder.directory)}" ${folder.directory===target.directory?"selected":""}>${esc(folder.directory)}</option>`).join("")}</select></div><div class="picker pkg-pick" id="package-choices"></div><div class="summary"><span id="into-summary"></span><span class="grow"></span><label><input id="into-restart" type="checkbox" checked>Restart affected agents</label></div><p class="note">An install error is shown on its package row; successful installs continue.</p>`,`<button type="button" id="into-cancel">Cancel</button><button type="button" class="primary" id="into-apply" disabled>Install</button>`);
+  $("into-project").onchange=()=>{picked.clear();paint();};$("into-restart").onchange=event=>{restart=event.target.checked;};$("into-cancel").onclick=closeSheet;
+  $("into-apply").onclick=async()=>{if(phase==="done"){closeSheet();return;}phase="run";const selected=packages.filter(item=>picked.has(item.module)).map(item=>{const status=packageState(item,target),job={key:item.module,item,target,draftReason:status.draft?status.text:"",progress:"Queued"};jobs.set(item.module,job);return job;});paint();await applyInstalls(selected,restart,paint,()=>{phase="done";paint();});};
+  paint();
+}
+function installIntoTarget(target){
+  const session={node:target.node,directory:target.directory};installInto(session);
+}
+function saveAgentpack(session){
+  if(!session){notice("Select a session before saving an agentpack.");return;}
+  const machine=machines().find(value=>value.id===(session.node||""))||machines()[0];
+  if(machine.online===false){notice(`${machine.name} is offline. Save from this project when it reconnects.`);return;}
+  const recent=(state.recentByNode.get(machine.id)||[]).find(folder=>folder.directory===session.directory&&folder.available!==false);
+  if(!recent){notice("This project is not an available recent folder on its machine.");return;}
+  const existing=registryAgentpacks().filter(pack=>pack._nodes?.includes(machine.id)&&pack._revisions?.some(revision=>revision.project===session.directory));
+  const first=existing[0],suggested=first?.name||session.directory.split(/[\\/]/).filter(Boolean).pop()||"Agentpack";
+  showSheet("Save agentpack",`<p>Capture <strong>${esc(session.directory)}</strong> on ${esc(machine.name)} as a new immutable revision.</p><div class="form"><label for="save-name">Name</label><div class="with-btn"><input id="save-name" maxlength="80" value="${esc(suggested)}"><button type="button" id="suggest-name">Suggest</button></div><label for="save-agentpack">Agentpack</label><select id="save-agentpack"><option value="">Create a new agentpack</option>${existing.map(pack=>`<option value="${esc(pack.id)}">${esc(pack.name)} · new revision</option>`).join("")}</select><label for="save-label">Revision note</label><input id="save-label" maxlength="80" placeholder="What changed?"><label>Mode</label><span class="static">${esc(session.mode||"default")}</span><span class="check"><input id="auto-capture" type="checkbox" checked><label for="auto-capture" style="text-align:left">Capture successful Agentpack changes automatically</label></span><span></span><p id="save-error" class="err" role="alert"></p></div><div class="callout">${svgIcon("package")}<span>Credential values and MCP secrets are kept as machine-local configuration.</span></div>`,`<button type="button" id="save-cancel">Cancel</button><button type="button" id="save-confirm" class="primary">Save to Library</button>`);
+  $("save-agentpack").onchange=()=>{const pack=existing.find(value=>value.id===$("save-agentpack").value);if(pack)$("save-name").value=pack.name;};
+  $("suggest-name").onclick=()=>{$("save-name").value=`${session.directory.split(/[\\/]/).filter(Boolean).pop()||"Project"} setup`;};
+  $("save-cancel").onclick=closeSheet;
+  $("save-confirm").onclick=async()=>{
+    const name=$("save-name").value.trim();if(!name){$("save-error").textContent="Enter a name.";$("save-name").focus();return;}
+    const button=$("save-confirm");button.disabled=true;button.textContent="Saving…";
+    try{
+      const saved=await api("/api/library/agentpacks",{directory:session.directory,name,agentpack_id:$("save-agentpack").value||undefined,label:$("save-label").value.trim()||undefined,mode:session.mode||"default",auto_capture:$("auto-capture").checked},"POST",machine.id);
+      closeSheet();state.libraryKind="agentpacks";state.revisionSelection=saved.revision.id;
+      await loadLibrary(true);const savedPack=registryAgentpacks().find(pack=>pack.id===saved.agentpack.id);state.librarySelection=savedPack?libraryItemKey(savedPack):`${machine.id}\0${saved.agentpack.id}`;setView("library");$("library").classList.add("show-detail");
+    }catch(error){$("save-error").textContent=error.message;button.disabled=false;button.textContent="Save to Library";}
+  };
+}
+function renameAgentpack(pack){
+  showSheet("Rename agentpack",`<p>Rename the Library label. The agentpack identity and revisions stay the same.</p><div class="form"><label for="rename-name">Name</label><div class="with-btn"><input id="rename-name" maxlength="80" value="${esc(pack.name)}"><button type="button" id="rename-suggest">Suggest</button></div><span></span><p id="rename-error" class="err" role="alert"></p></div>`,`<button type="button" id="rename-cancel">Cancel</button><button type="button" id="rename-confirm" class="primary">Rename</button>`,false);
+  $("rename-name").select();$("rename-suggest").onclick=()=>{$("rename-name").value=`${pack.name} setup`;};$("rename-cancel").onclick=closeSheet;
+  $("rename-confirm").onclick=async()=>{const name=$("rename-name").value.trim();if(!name){$("rename-error").textContent="Enter a name.";return;}const button=$("rename-confirm");button.disabled=true;
+    try{await api(`/api/library/agentpacks/${encodeURIComponent(pack.id)}`,{name},"PATCH",pack._node);closeSheet();state.librarySelection=libraryItemKey(pack);await loadLibrary(true);}
+    catch(error){$("rename-error").textContent=error.message;button.disabled=false;}
+  };
+}
+function restoreAgentpack(pack,revision){
+  const targets=destinations();let chosen="",restart=true,phase="preview",previews=new Map(),pending=new Set();
+  const valid=target=>target.online&&target.available&&!target.error;
+  const draftPackages=(revision.package_ids||[]).map(id=>registryPackages().find(item=>item.id===id));
+  const draftable=target=>!!target.folder_id&&(!target.online||!target.available||!!target.error)&&draftPackages.every(item=>item?.cache_key);
+  const render=()=>{
+    const host=$("restore-targets");host.replaceChildren();
+    for(const machine of machines()){
+      const group=targets.filter(target=>target.node===machine.id);if(!group.length)continue;
+      const heading=node("div",void 0,"mhead");heading.innerHTML=`${svgIcon(machine.id?"server":"laptop")}${esc(machine.name)}<span class="meta"><span class="dot ${machine.online===false?"off":"ok"}"></span>${machine.online===false?"Offline":"Online"}</span>`;host.append(heading);
+      for(const target of group){const key=destinationKey(target.node,target.directory),preview=previews.get(key),loading=pending.has(key),canDraft=draftable(target),row=node("label",void 0,`dest${chosen===key?" chosen":""}${!valid(target)&&!canDraft?" disabled":""}`);
+        const input=document.createElement("input");input.type="radio";input.name="restore-target";input.checked=chosen===key;input.disabled=!valid(target)&&!canDraft||loading||phase!=="preview";input.onchange=()=>{chosen=key;render();};
+        const label=node("span",void 0,"label");label.append(node("span",target.directory));
+    const stateText=preview?.error||(canDraft?`${!target.online?"Offline":!target.available?"Folder unavailable":"Pins unavailable"} · save as draft`:loading?"Checking…":preview?`${preview.diff.add.length} add · ${preview.diff.update.length} update · ${preview.diff.remove.length} remove`:target.error||"Preview unavailable");
+        row.append(input,label,node("span",stateText,`state${preview?.error?" err":""}`));host.append(row);
+      }
+    }
+    const active=previews.get(chosen),diff=$("restore-diff");
+    const selectedTarget=targets.find(row=>destinationKey(row.node,row.directory)===chosen),willDraft=selectedTarget&&draftable(selectedTarget);
+    if(willDraft)diff.innerHTML=`<p class="${active?.error?"err":"note"}">${esc(active?.error||"This destination cannot be checked now. Save a draft, then review the exact diff after the machine and project are available.")}</p>`;
+    else if(!chosen||!active)diff.innerHTML='<p class="note">Choose an available destination to preview the changes.</p>';
+    else if(active.error)diff.innerHTML=`<p class="err">${esc(active.error)}</p>`;
+    else{const d=active.diff;diff.innerHTML=`${[...d.add.map(module=>["add","+","Add",module]),...d.update.map(module=>["upd","~","Update",module]),...d.remove.map(module=>["del","−","Remove",module])].map(([kind,sign,action,module])=>`<div class="diffline ${kind}"><span class="sign">${sign}</span>${action} <code>${esc(module)}</code></div>`).join("")||'<div class="diffline same"><span class="sign">=</span>No package changes</div>'}<div class="diffline same"><span class="sign">·</span>Restore mode <code>${esc(d.mode||revision.mode||"default")}</code>; manifest and lock are backed up before apply.</div>`;}
+    $("restore-apply").textContent=phase==="run"?(willDraft?"Saving draft…":"Restoring…"):phase==="done"?"Done":willDraft?"Save draft":"Restore";
+    const unavailable=!chosen||(!willDraft&&(!active||!!active.error));
+    $("restore-apply").disabled=phase==="run"||phase==="preview"&&unavailable;
+    $("restore-cancel").hidden=phase!=="preview";$("restore-status").textContent=phase==="preview"?"Nothing changes until you confirm.":phase==="run"?willDraft?"Saving a pending restore for explicit review.":"Applying this revision and restarting affected agents…":willDraft?"Draft saved. It will be re-checked before anything is applied.":"Restore completed.";
+  };
+  showSheet(`Restore “${pack.name}”`,`<p>Revision <strong>${esc(revision.label||"Saved revision")}</strong> · ${esc(new Date(revision.created_at).toLocaleString())}. Select one trusted project and review its current pins.</p><div class="picker" id="restore-targets"></div><section class="sect"><header><h2>Preview</h2><span class="meta">${esc(revision.mode||"default")} mode</span></header><div id="restore-diff"></div></section><label class="check"><input id="restore-restart" type="checkbox" checked>Restart affected agents after restore</label><p id="restore-status" class="note"></p>`,`<button type="button" id="restore-cancel">Cancel</button><button type="button" id="restore-apply" class="primary" disabled>Restore</button>`);
+  $("restore-cancel").onclick=closeSheet;$("restore-restart").onchange=event=>{restart=event.target.checked;};
+  const groups=machines().map(machine=>({machine,targets:targets.filter(target=>target.node===machine.id&&valid(target))}));
+  void Promise.all(groups.map(({machine,targets:rows})=>mapLimit(rows,2,async target=>{
+    const key=destinationKey(target.node,target.directory);pending.add(key);render();
+    try{const diff=await api(`/api/library/agentpacks/${encodeURIComponent(pack.id)}/revisions/${encodeURIComponent(revision.id)}/restore-preview?directory=${encodeURIComponent(target.directory)}`,void 0,"GET",target.node);previews.set(key,{diff});if(!chosen)chosen=key;}
+    catch(error){previews.set(key,{error:error.message});}
+    pending.delete(key);render();
+  })));
+  $("restore-apply").onclick=async()=>{if(phase==="done"){closeSheet();return;}const target=targets.find(row=>destinationKey(row.node,row.directory)===chosen);if(!target)return;phase="run";render();
+    try{if(draftable(target)){await saveDraft({item:pack.id,pack_id:pack.id,revision:revision.id,node:target.node||"local",directory:target.directory,reason:!target.online?"Machine offline":target.error||"Project could not be checked",folder_identity:target.folder_id,expected_pins:draftExpectedPins(draftPackages)});await loadDrafts();}
+      else await api(`/api/library/agentpacks/${encodeURIComponent(pack.id)}/revisions/${encodeURIComponent(revision.id)}/restore`,{directory:target.directory,restart},"POST",target.node);await loadInventory(true);await loadLibrary(true);phase="done";render();}
+    catch(error){previews.set(chosen,{error:error.message});phase="preview";render();}
+  };
+  render();
+}
+function renderStartFolders(preferred = "") {
+  const machine = $("start-machine")?.value ?? state.node;
+  const rows = state.recentByNode.get(machine) || [];
+  const select = $("start-directory");
+  if (!select) return;
+  select.replaceChildren(...(rows.length ? rows.map(recent => { const option=node("option", recent.directory); option.value=recent.directory; option.disabled=recent.available === false; option.title=recent.unavailable_reason || recent.directory; return option; }) : [node("option", "No recent projects available")]));
+  if (preferred) select.value = preferred;
+}
 function startDialog(recent = {}) {
-  $("start-directory").value = recent.directory || "";
+  const machineSelect = $("start-machine");
+  const machines = [{id:"",name:"Gateway machine",online:true}, ...state.nodes];
+  machineSelect.replaceChildren(...machines.map(machine => { const option=node("option", `${machine.name}${machine.online === false ? " — offline" : ""}`); option.value=machine.id; option.disabled=machine.online === false; return option; }));
+  machineSelect.value = recent.node || state.node || "";
+  machineSelect.onchange = () => { renderStartFolders(); $("start-form").querySelector("[type=submit]").disabled = machineSelect.selectedOptions[0]?.disabled || !$("start-directory").value; };
+  renderStartFolders(recent.directory || "");
+  $("start-directory").onchange = () => { $("start-form").querySelector("[type=submit]").disabled = !$("start-directory").value || machineSelect.selectedOptions[0]?.disabled; };
   $("start-harness").value = recent.harness || "claude";
   $("start-mode").value = recent.mode || "default";
+  $("start-form").querySelector("[type=submit]").disabled = machineSelect.selectedOptions[0]?.disabled || !$("start-directory").value || recent.harness === "agy";
   $("start-error").textContent = "";
   $("start-dialog").showModal();
   $("start-directory").focus();
 }
 $("new-session").addEventListener("click", () => startDialog());
-$("empty-start").addEventListener("click", () => startDialog());
 $("cancel-start").addEventListener("click", () => $("start-dialog").close());
-$("start-form").addEventListener("submit", async (event) => {
+$("start-form").addEventListener("submit", async event => {
   event.preventDefault();
   const submit = event.target.querySelector("[type=submit]");
+  if (!$("start-directory").value) { $("start-error").textContent = "Choose a recent project on an online machine."; return; }
   submit.disabled = true;
+  const target = $("start-machine").value;
   try {
-    const session = await api("/api/sessions", { directory: $("start-directory").value.trim(), harness: $("start-harness").value, mode: $("start-mode").value.trim() });
-    $("start-dialog").close();
-    setView("sessions");
-    await refresh();
-    if (session?.id) openTerminal({ ...session, node: state.node });
-  } catch (error) {
-    $("start-error").textContent = error.message;
-  } finally {
-    submit.disabled = false;
-  }
+    const session = await api("/api/sessions", {directory:$("start-directory").value, harness:$("start-harness").value, mode:$("start-mode").value.trim()}, void 0, target);
+    $("start-dialog").close(); setView("workspace"); await refresh();
+    if (session?.id) openTerminal({...session,node:target,machine:state.nodes.find(item=>item.id===target)?.name || "Gateway machine"});
+  } catch (error) { $("start-error").textContent=error.message; }
+  finally { submit.disabled=false; }
 });
 async function loadPackages() {
   const directory = $("package-directory").value.trim();
@@ -314,19 +795,43 @@ function updateTerminalState(value) {
   const current = state.terminalState;
   const owned = controls();
   $("take-control").textContent = owned ? "Release control" : "Take control";
-  $("take-control").disabled = !current?.running || !owned && !!current.owner;
-  $("terminal-status").textContent = !current?.running ? "Agent exited" + (current?.exit_code !== void 0 ? ` (${current.exit_code})` : "") : owned ? "You have control" : current.owner ? "Observing \xB7 another terminal has control" : "Observing \xB7 control available";
+  $("take-control").disabled = !current?.running;
+  $("terminal-status").textContent = !current?.running ? "Stopped" + (current?.exit_code !== void 0 ? ` (${current.exit_code})` : "") : owned ? "Control active" : current.owner ? "Control held elsewhere" : "Observing";
   document.querySelectorAll("[data-key]").forEach((element) => element.disabled = !owned);
   if (state.terminal) state.terminal.options.disableStdin = !owned;
+  $("connection-state").textContent = !current?.running ? "Stopped" : "Live";
+  $("sb-session").textContent = state.selected ? (state.sessions.find(session => sessionKey(session) === state.selected)?.machine || "Gateway machine") : "";
 }
 function sendControl(action, extra = {}) {
   if (state.socket?.readyState === WebSocket.OPEN) state.socket.send(JSON.stringify({ action, epoch: state.terminalState?.epoch || 0, ...extra }));
 }
-function fit() {
-  if (!state.terminal || !state.fit || $("terminal-panel").hidden) return;
-  state.fit.fit();
-  if (controls()) sendControl("resize", { rows: state.terminal.rows, columns: state.terminal.cols });
+function scaleTerminal() {
+  if (!state.terminal || state.view !== "workspace") return;
+  const screen = $("terminal-mount").querySelector(".xterm-screen");
+  const stage = $("terminal-stage");
+  if (!screen?.offsetWidth || !stage) return;
+  const style = getComputedStyle(stage);
+  const availableW = stage.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  const availableH = stage.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+  const fitScale = Math.min(availableW / screen.offsetWidth, availableH / screen.offsetHeight);
+  const scale = state.zoom === "fit" ? Math.max(innerWidth <= 760 ? .7 : .05, fitScale) : state.zoom;
+  $("terminal-mount").style.width = `${screen.offsetWidth}px`;
+  $("terminal-mount").style.height = `${screen.offsetHeight}px`;
+  $("terminal-mount").style.transform = `scale(${scale})`;
+  $("terminal-space").style.width = `${screen.offsetWidth * scale}px`;
+  $("terminal-space").style.height = `${screen.offsetHeight * scale}px`;
+  $("zoom-value").textContent = `${Math.round(scale * 100)}%`;
+  $("zoom-value").dataset.scale = scale;
+  $("grid-label").textContent = state.terminal.cols && state.terminal.rows ? `${state.terminal.cols} × ${state.terminal.rows}` : "—";
+  $("fit").classList.toggle("on", state.zoom === "fit");
+  $("actual").classList.toggle("on", state.zoom === 1);
+  $("terminal-stage").dataset.clamped = state.zoom === "fit" && scale > fitScale + .001;
 }
+$("fit").addEventListener("click", () => { state.zoom="fit"; scaleTerminal(); });
+$("actual").addEventListener("click", () => { state.zoom=1; scaleTerminal(); });
+$("zoom-out").addEventListener("click", () => { state.zoom=Math.max(.2, Number($("zoom-value").dataset.scale || 1)-.1); scaleTerminal(); });
+$("zoom-in").addEventListener("click", () => { state.zoom=Math.min(2.5, Number($("zoom-value").dataset.scale || 1)+.1); scaleTerminal(); });
+new ResizeObserver(() => requestAnimationFrame(scaleTerminal)).observe($("terminal-stage"));
 function sendInput(data) {
   if (!controls()) return;
   if (state.socket.bufferedAmount > 1024 * 1024) {
@@ -338,32 +843,66 @@ function sendInput(data) {
 }
 function closeTerminal() {
   state.restartToken++;
+  state.attachmentGeneration++;
   const socket = state.socket;
   state.socket = null;
   socket?.close();
   state.terminal?.dispose();
   state.terminal = null;
-  state.fit = null;
   state.selected = null;
   state.attachment = 0;
   state.terminalState = null;
-  $("terminal-panel").hidden = true;
+  state.replayComplete = true;
+  state.firstFrameMarked = false;
+  $("terminal-empty").hidden = false;
+  $("terminal-mount").replaceChildren();
+  $("grid-label").textContent = "—";
+  $("terminal-title").textContent = "Sessions";
+  $("terminal-subtitle").textContent = "Select a session";
+  $("terminal-status").textContent = "Select a session to attach.";
+  $("take-control").disabled = true;
+  $("connection-state").textContent = "Disconnected";
 }
-function openTerminal(session) {
-  closeTerminal();
+function openTerminal(session, reconnecting = false) {
+  if (!reconnecting) closeTerminal();
+  const generation = ++state.attachmentGeneration;
   state.selected = sessionKey(session);
-  $("terminal-title").textContent = `${session.harness || "Agent"} \xB7 ${session.directory || ""}${session.machine ? " \xB7 " + session.machine : ""}`;
-  $("terminal-panel").hidden = false;
-  $("terminal-status").textContent = "Connecting\u2026";
+  $("workspace").classList.remove("show-sessions");
+  if (!reconnecting) $("terminal-stage").classList.remove("stale", "reconnecting");
+  $("terminal-title").textContent = basename(session.directory);
+  $("terminal-subtitle").textContent = `${session.harness || "Agent"} · ${basename(session.directory)} · ${session.machine || "Gateway machine"}`;
+  $("terminal-title").title = session.directory || "Unknown project";
+  const terminalUnavailable = session.harness === "agy" || session.state?.interactive === false || session.stale;
+  if (terminalUnavailable) {
+    $("terminal-empty").hidden = false;
+    const message = session.harness === "agy" ? "Desktop launcher presence · start and interact locally. Detached desktop windows are not tracked." : session.state?.interactive === false ? "Native stdio · browser input unavailable" : "Offline · showing last-known session metadata";
+    $("terminal-empty").querySelector("p").textContent = message;
+    $("terminal-status").textContent = session.stale ? "Offline · last-known session" : session.state?.interactive === false ? "Native stdio · input unavailable" : "Desktop session · local interaction";
+    $("connection-state").textContent = session.stale ? "Offline" : "Input unavailable";
+    $("take-control").disabled = true;
+    renderSessions(); $("sessions").focus({preventScroll:true});
+    return;
+  }
+  $("terminal-empty").querySelector("p").textContent = "Select a session to view its terminal.";
+  $("terminal-empty").hidden = true;
+  state.zoom = "fit";
+  $("terminal-status").textContent = reconnecting ? "Replaying output" : "Connecting\u2026";
   $("take-control").disabled = true;
   terminalNotice("");
-  state.terminal = new Terminal({ cursorBlink: true, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 13, scrollback: 5e3, allowProposedApi: false, disableStdin: true, screenReaderMode: true, theme: { background: "#1e1e1e", foreground: "#e9e9e9", cursor: "#e9e9e9" } });
-  state.fit = new FitAddon();
-  state.terminal.loadAddon(state.fit);
-  state.terminal.open($("terminal"));
-  fit();
-  state.terminal.onData(sendInput);
-  state.terminal.onBinary((data) => sendInput(Uint8Array.from(data, (character) => character.charCodeAt(0))));
+  if (!reconnecting) {
+    state.zoom = "fit";
+    const rows = session.state?.rows || 24, columns = session.state?.columns || 80;
+    state.terminal = new Terminal({ cols: columns, rows, cursorBlink: true, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 13, scrollback: 5e3, allowProposedApi: false, disableStdin: true, screenReaderMode: true, theme: { background: "#171b22", foreground: "#e6e8ed", cursor: "#e6e8ed" } });
+    state.terminal.open($("terminal-mount"));
+    state.terminal.onData(sendInput);
+    state.terminal.onBinary((data) => sendInput(Uint8Array.from(data, (character) => character.charCodeAt(0))));
+    state.firstFrameMarked = false;
+  } else {
+    state.attachment = 0;
+    state.replayComplete = false;
+    $("terminal-stage").classList.add("stale", "reconnecting");
+  }
+  scaleTerminal();
   const url = new URL(`/api/sessions/${encodeURIComponent(session.id)}/terminal`, location.href);
   if (session.node) url.searchParams.set("node", session.node);
   url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -371,9 +910,18 @@ function openTerminal(session) {
   state.socket = socket;
   socket.binaryType = "arraybuffer";
   let pendingOutput = 0;
+  let replayReceived = !reconnecting;
+  const finishReplay = () => {
+    if (!replayReceived || pendingOutput) return;
+    state.replayComplete = true;
+    $("terminal-stage").classList.remove("stale", "reconnecting");
+    terminalMark("replay_complete");
+  };
+  socket.onopen = () => { if (generation === state.attachmentGeneration && state.socket === socket) terminalMark("socketopen"); };
   socket.onmessage = (event) => {
-    if (state.socket !== socket) return;
+    if (state.socket !== socket || generation !== state.attachmentGeneration || sessionKey(session) !== state.selected) return;
     if (event.data instanceof ArrayBuffer) {
+      if (!state.firstFrameMarked) { state.firstFrameMarked = true; terminalMark("firstframe"); }
       pendingOutput += event.data.byteLength;
       if (pendingOutput > 16 * 1024 * 1024) {
         socket.close();
@@ -381,23 +929,25 @@ function openTerminal(session) {
         return;
       }
       const length = event.data.byteLength;
-      state.terminal.write(new Uint8Array(event.data), () => pendingOutput -= length);
+      state.terminal.write(new Uint8Array(event.data), () => { pendingOutput -= length; finishReplay(); });
       return;
     }
     try {
       const message = JSON.parse(event.data);
       if (message.attachment) state.attachment = message.attachment;
+      if (message.type === "attached") terminalMark("attached");
+      if (message.type === "replay_complete") { replayReceived = true; finishReplay(); }
       if (message.type === "attached" && state.retries) {
         state.retries = 0;
         terminalNotice("");
       }
       const previouslyOwned = controls();
       if (message.type === "attached" && message.offset) terminalNotice("Earlier output was truncated. Showing the available terminal history.");
-      if (message.error) terminalNotice(message.error);
+      if (message.error) { terminalNotice(message.error); if (/control|owner|terminal/i.test(message.error)) $("alert-sheet").showModal(); }
       if (message.type === "ended" && message.state?.restarting) reconnectAfterRestart(session);
       if (message.state) updateTerminalState(message.state);
       if (!previouslyOwned && controls()) {
-        fit();
+        scaleTerminal();
         state.terminal.focus();
       }
     } catch {
@@ -416,7 +966,9 @@ function openTerminal(session) {
       const delay = Math.min(10000, 500 * 2 ** (state.retries - 1));
       const token = state.restartToken;
       $("terminal-status").textContent = `Connection lost · reconnecting in ${Math.ceil(delay / 1000)}s`;
-      setTimeout(() => { if (state.restartToken === token) openTerminal(session); }, delay);
+      $("terminal-stage").classList.add("stale", "reconnecting");
+      state.replayComplete = false;
+      setTimeout(() => { if (state.restartToken === token && state.selected === sessionKey(session)) openTerminal(session, true); }, delay);
     } else if (state.terminalState?.running !== false) $("terminal-status").textContent = "Disconnected · this session is no longer listed";
     $("take-control").disabled = true;
   };
@@ -424,7 +976,7 @@ function openTerminal(session) {
     if (state.socket === socket && state.retries >= 2) terminalNotice("Still can\u2019t reach this terminal. Retrying automatically\u2026");
   };
   renderSessions();
-  $("terminal-panel").scrollIntoView({ block: "nearest" });
+  $("sessions").focus({preventScroll:true});
 }
 async function reconnectAfterRestart(session) {
   const token = state.restartToken;
@@ -450,6 +1002,27 @@ async function reconnectAfterRestart(session) {
 }
 
 let sharingEnabled=false;
+const replicationMessages=new Map();
+function renderReplication(){
+  const host=$("replication-peers");if(!host)return;host.replaceChildren();
+  if(state.replicationError){$("replication-status").textContent=state.replicationError;return;}
+  $("replication-status").textContent=sharingEnabled?"Both machines must enroll each other before registry objects replicate.":"Enable Tailscale sharing before enrolling a machine.";
+  const enrolled=new Map((state.replication.peers||[]).map(peer=>[peer.node,peer]));
+  const peers=state.nodes;
+  if(!peers.length){host.append(node("p","No allowed Tailscale peers are currently discovered.","muted"));return;}
+  for(const peer of peers){
+    const replica=enrolled.get(peer.id),contact=state.replication.contacts?.[peer.id],row=node("article",void 0,"list-row"),details=node("div"),actions=node("div",void 0,"actions");
+    details.append(node("strong",peer.name),node("p",replica?`${replica.receipt_count||0} verified object receipts · ${peer.online?"online":"offline"}`:peer.online?"Not enrolled":"Offline · enrollment unavailable","muted"));
+    if(contact?.error)details.append(node("p",contact.error,"hint"));else if(contact?.at)details.append(node("p",`Last contact ${new Date(contact.at).toLocaleString()}`,"hint"));
+    const result=replicationMessages.get(peer.id);if(result)details.append(node("p",result,"hint"));
+    if(replica){
+      actions.append(button("Sync now",async()=>{const button=actions.querySelector("button");button.disabled=true;replicationMessages.set(peer.id,"Syncing verified objects…");renderReplication();try{await api("/api/library/replication/sync",{peer:peer.id},"POST","");replicationMessages.set(peer.id,"Sync complete.");await loadReplication();}catch(error){replicationMessages.set(peer.id,error.message);renderReplication();}}));
+      actions.append(button("Remove",async()=>{try{await api(`/api/library/replication/peers/${encodeURIComponent(peer.id)}`,void 0,"DELETE","");replicationMessages.set(peer.id,"Enrollment removed.");await loadReplication();}catch(error){replicationMessages.set(peer.id,error.message);renderReplication();}}));
+    }else actions.append(button("Enroll",async()=>{const button=actions.querySelector("button");button.disabled=true;replicationMessages.set(peer.id,"Enrolling…");renderReplication();try{await api("/api/library/replication/peers",{peer:peer.id},"POST","");replicationMessages.set(peer.id,"Enrolled. The other machine must enroll this gateway too.");await loadReplication();}catch(error){replicationMessages.set(peer.id,error.message);renderReplication();}}));
+    for(const action of actions.querySelectorAll("button"))action.disabled||=!peer.online||!sharingEnabled;
+    row.append(details,actions);host.append(row);
+  }
+}
 async function loadSettings() {
   try {
     const settings=await api("/api/settings");
@@ -460,6 +1033,7 @@ async function loadSettings() {
     $("settings-allowlist").textContent=settings.allowed_peers?.length?settings.allowed_peers.join(", "):"No additional machines or tags";
     $("toggle-sharing").textContent=sharingEnabled?"Stop sharing":"Enable sharing";
     $("toggle-sharing").disabled=false;
+    renderReplication();
   } catch(error) { $("settings-status").textContent=error.message; }
 }
 $("toggle-sharing").addEventListener("click",async()=>{
@@ -481,42 +1055,75 @@ $("stop-gateway").addEventListener("click",async()=>{
   catch(error) { $("settings-status").textContent=error.message; }
 });
 function toggleSidebar() {
-  const hidden = $("app").classList.toggle("sidebar-hidden");
-  const label = hidden ? "Show sidebar" : "Hide sidebar";
-  $("toggle-sidebar").setAttribute("aria-label", label);
-  $("toggle-sidebar").title = label + " (\u2318\\)";
+  const workspace = $("workspace");
+  const mobile = matchMedia("(max-width:760px)").matches;
+  const collapsed = mobile ? workspace.classList.toggle("show-sessions") : workspace.classList.toggle("no-sidebar");
+  const visible = mobile ? collapsed : !collapsed;
+  $("toggle-sessions").setAttribute("aria-pressed", String(visible));
+  $("toggle-sessions").setAttribute("aria-label", visible ? "Hide sessions" : "Show sessions");
+  requestAnimationFrame(scaleTerminal);
 }
-$("toggle-sidebar").addEventListener("click", toggleSidebar);
-document.addEventListener("keydown", (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key === "\\" && !$("app").hidden) {
-    event.preventDefault();
-    toggleSidebar();
+function syncMobileWorkspace() {
+  const workspace = $("workspace");
+  if (innerWidth <= 760 && !state.selected) workspace.classList.add("show-sessions");
+  if (innerWidth > 760) workspace.classList.remove("show-sessions");
+  if (innerWidth <= 760) {
+    const visible = workspace.classList.contains("show-sessions");
+    $("toggle-sessions").setAttribute("aria-pressed", String(visible));
+    $("toggle-sessions").setAttribute("aria-label", visible ? "Hide sessions" : "Show sessions");
   }
+}
+window.addEventListener("resize", syncMobileWorkspace);
+syncMobileWorkspace();
+$("toggle-sessions").addEventListener("click", toggleSidebar);
+document.addEventListener("keydown", event => {
+  if ((event.metaKey || event.ctrlKey) && event.key === "\\" && !$("app").hidden) { event.preventDefault(); toggleSidebar(); }
+  if ((event.metaKey || event.ctrlKey) && ["1","2","3"].includes(event.key)) { event.preventDefault(); setView(({1:"workspace",2:"library",3:"machines"})[event.key]); }
 });
+const splitter = $("splitter");
+function resizeSidebar(width) { state.sidebarWidth=Math.round(Math.max(220,Math.min(420,width))); document.documentElement.style.setProperty("--sidebar-w", `${state.sidebarWidth}px`); splitter.setAttribute("aria-valuenow", state.sidebarWidth); }
+splitter.addEventListener("pointerdown", event => splitter.setPointerCapture(event.pointerId));
+splitter.addEventListener("pointermove", event => { if (splitter.hasPointerCapture(event.pointerId)) resizeSidebar(event.clientX); });
+splitter.addEventListener("pointerup", event => splitter.releasePointerCapture(event.pointerId));
+splitter.addEventListener("dblclick", () => resizeSidebar(264));
+splitter.addEventListener("keydown", event => { if (["ArrowLeft","ArrowRight"].includes(event.key)) { event.preventDefault(); resizeSidebar(state.sidebarWidth + (event.key === "ArrowRight" ? 16 : -16)); } });
+const sessionMenu = node("div", void 0, "menu-popup");
+sessionMenu.id = "session-menu"; sessionMenu.hidden = true; document.body.append(sessionMenu);
+$("session-actions").addEventListener("click", () => {
+  const rect = $("session-actions").getBoundingClientRect();
+  const session = state.sessions.find(value => sessionKey(value) === state.selected);
+  sessionMenu.replaceChildren();
+  const addAction = (label, action, disabled=false, title="") => { const item=button(label, async () => { sessionMenu.hidden=true; await action?.(); }, "mi"); item.disabled=disabled; item.title=title; sessionMenu.append(item); };
+  addAction(controls() ? "Release control" : "Take control", () => sendControl(controls()?"release":"take"), !session);
+  addAction("Restart…", () => session && changeSession(session,"restart"), !session || session.state?.interactive === false || session.stale);
+  addAction("Stop…", () => session && changeSession(session,"stop"), !session || session.stale);
+  addAction("Reconnect", () => session && openTerminal(session), !session);
+  addAction("Close terminal", () => closeTerminal(), !session);
+  const divider=node("hr"); sessionMenu.append(divider);
+  addAction("Install package…", () => session && installInto(session), !session || session.stale || session.harness === "agy");
+  addAction("Save agentpack…", () => session && saveAgentpack(session), !session || session.stale);
+  sessionMenu.style.left=`${Math.max(8,Math.min(innerWidth-250,rect.right-230))}px`;
+  sessionMenu.style.top=`${Math.min(innerHeight-190,rect.bottom+4)}px`;
+  sessionMenu.hidden=false;
+});
+document.addEventListener("pointerdown", event => { if (!sessionMenu.contains(event.target) && event.target !== $("session-actions")) sessionMenu.hidden=true; });
+const moreMenu=node("div", void 0, "menu-popup"); moreMenu.hidden=true; document.body.append(moreMenu);
+$("more-tools").addEventListener("click", () => {
+  moreMenu.replaceChildren();
+  for (const [label,view] of [["Recent folders","recent"],["Packages","packages"],["Gateway settings","settings"]]) moreMenu.append(button(label, () => { moreMenu.hidden=true; setView(view); }, "mi"));
+  const rect=$("more-tools").getBoundingClientRect(); moreMenu.style.left=`${rect.left}px`; moreMenu.style.top=`${rect.bottom+4}px`; moreMenu.hidden=false;
+});
+document.addEventListener("pointerdown", event => { if (!moreMenu.contains(event.target) && event.target !== $("more-tools")) moreMenu.hidden=true; });
 $("take-control").addEventListener("click", () => sendControl(controls() ? "release" : "take"));
-$("close-terminal").addEventListener("click", () => {
-  closeTerminal();
-  state.retries = 0;
-  renderSessions();
-});
-$("reconnect").addEventListener("click", () => {
-  const session = state.sessions.find((session2) => sessionKey(session2) === state.selected);
-  if (session) openTerminal(session);
-  else notice("This session is no longer available.");
-});
+$("library-save").addEventListener("click",()=>saveAgentpack(state.sessions.find(session=>sessionKey(session)===state.selected)));
 const keys = { escape: "\x1B", tab: "	", interrupt: "", up: "\x1B[A", down: "\x1B[B" };
 document.querySelectorAll("[data-key]").forEach((element) => element.addEventListener("click", () => {
   sendInput(keys[element.dataset.key]);
   state.terminal?.focus();
 }));
-let resizeTimer;
-new ResizeObserver(() => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(fit, 100);
-}).observe($("terminal"));
 $("refresh").addEventListener("click", () => {
   notice("");
-  refresh();
+  refreshNodes();
 });
 setInterval(() => {
   if (!document.hidden) refresh();
@@ -527,35 +1134,15 @@ document.addEventListener("visibilitychange", () => {
 async function refreshNodes() {
   if (!state.authenticated) return;
   try {
-    const nodes = list(await api("/api/nodes"), "nodes");
-    const changed = JSON.stringify(nodes.map((remote) => remote.id)) !== JSON.stringify(state.nodes.map((remote) => remote.id));
-    state.nodes = nodes.map((remote) => ({ id: remote.id, name: remote.name || remote.id }));
-    const select = $("node-select");
-    select.replaceChildren(node("option", "Gateway machine"));
-    select.firstChild.value = "";
-    for (const remote of nodes) {
-      const option = node("option", remote.name || remote.id);
-      option.value = remote.id;
-      select.append(option);
+    const found = list(await api("/api/nodes"), "nodes").map(remote => ({id:remote.id,name:remote.name || remote.id,online:remote.online !== false}));
+    const current = new Set(found.map(remote => remote.id));
+    state.nodes = [...found, ...state.nodes.filter(remote => !current.has(remote.id)).map(remote => ({...remote,online:false}))];
+    for (const machine of state.nodes.filter(remote => remote.online === false)) {
+      state.sessionCache.set(machine.id, (state.sessionCache.get(machine.id)||[]).map(session => ({...session,stale:true})));
     }
-    if (state.node && !nodes.some(remote => remote.id === state.node)) {
-      const offline = node("option", "Selected machine is unavailable");
-      offline.value = state.node;
-      select.append(offline);
-    }
-    select.value = state.node;
-    if (changed) await refresh();
+    renderSessions(); await refresh(); renderStartFolders();
+    if (state.view === "library" || state.view === "machines") await loadWorkspaceData(true);
   } catch (error) { notice(error.message); }
 }
-$("node-select").addEventListener("change", async event => {
-  state.node = event.target.value;
-  state.recent = [];
-  $("package-directory").value = "";
-  $("packages").replaceChildren();
-  $("package-status").textContent = "";
-  renderSessions(); renderRecent();
-  while (state.loading) await new Promise(resolve => setTimeout(resolve, 50));
-  await refresh();
-});
 setInterval(() => { if (!document.hidden) refreshNodes(); }, 15000);
 bootstrap().then(refreshNodes);

@@ -10,7 +10,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/cache"
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/paths"
-	"github.com/olegpustovit/agentpack/internal/slug"
 )
 
 // The names the plugin formats give a plugin's own directory, and its data
@@ -22,65 +21,6 @@ var (
 	pluginRootVariables = []string{"${CLAUDE_PLUGIN_ROOT}", "${CURSOR_PLUGIN_ROOT}", "${PLUGIN_ROOT}"}
 	pluginDataVariables = []string{"${CLAUDE_PLUGIN_DATA}", "${PLUGIN_DATA}"}
 )
-
-// stagePluginRoots replaces the plugin directory variables in the MCP servers
-// that plugins define. A server such as
-//
-//	bun run --cwd ${CLAUDE_PLUGIN_ROOT} start
-//
-// runs from the plugin's own files and may write next to them, so each such
-// package gets one whole copy under the mode's plugin-roots directory, and
-// every harness's configuration names that copy. The verified cache entry is
-// never handed to a server.
-func (pipeline Pipeline) stagePluginRoots(entries mcp.Entries) (mcp.Entries, error) {
-	roots, err := paths.StagingPluginRootsDirForMode(pipeline.ProjectRoot, pipeline.Mode.Name())
-	if err != nil {
-		return nil, err
-	}
-	staged := make(map[string]string)
-	resolved := make(mcp.Entries, len(entries))
-	for _, name := range entries.Names() {
-		entry := entries[name]
-		resolved[name] = entry
-		entry = withPluginCwd(entry)
-		if entry.CacheKey == "" || !referencesAny(entry.Server, append(pluginRootVariables, pluginDataVariables...)) {
-			continue
-		}
-		replacements := make(map[string]string)
-		if referencesAny(entry.Server, pluginRootVariables) {
-			root, found := staged[entry.CacheKey]
-			if !found {
-				root = filepath.Join(roots, pluginRootName(entry.CacheKey))
-				source, err := cache.EntryDir(entry.CacheKey)
-				if err != nil {
-					return nil, err
-				}
-				if err := pipeline.copyPluginRoot(source, root, entry.Module); err != nil {
-					return nil, fmt.Errorf("stage plugin directory of %s for MCP server %s: %w", entry.Module, name, err)
-				}
-				staged[entry.CacheKey] = root
-			}
-			for _, variable := range pluginRootVariables {
-				replacements[variable] = root
-			}
-		}
-		if referencesAny(entry.Server, pluginDataVariables) {
-			data, err := paths.PluginDataDir(pipeline.ProjectRoot, slug.DashedLower(entry.Module))
-			if err != nil {
-				return nil, err
-			}
-			if err := os.MkdirAll(data, 0o755); err != nil {
-				return nil, err
-			}
-			for _, variable := range pluginDataVariables {
-				replacements[variable] = data
-			}
-		}
-		entry.Server = substituteServer(entry.Server, replacements)
-		resolved[name] = entry
-	}
-	return resolved, nil
-}
 
 // verifyPluginRoots checks that every plugin directory the staged MCP
 // configuration names is still there, so a launch does not reuse staging
@@ -193,8 +133,8 @@ func substituteServer(server mcp.Server, replacements map[string]string) mcp.Ser
 	return server
 }
 
-// copyPluginRoot copies a package out of the cache as it is: every file the
-// mode allows, with its permission bits, and the links that stay inside it.
+// copyPluginRoot remains the LSP staging copy path; MCP copies use the shared
+// byte plan so preflight can describe them without writing.
 func (pipeline Pipeline) copyPluginRoot(source, destination, module string) error {
 	if err := os.RemoveAll(destination); err != nil {
 		return err

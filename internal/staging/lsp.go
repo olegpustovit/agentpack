@@ -24,12 +24,30 @@ type LSPEntry struct {
 	CacheKey string
 }
 
+type LSPCollectionWarning struct{ Source, Message string }
+type LSPCollectionPlan struct {
+	Entries  map[string]LSPEntry
+	Warnings []LSPCollectionWarning
+}
+
 // CollectLSP gathers the language servers that plugins declare, in Claude
 // Code's format (name -> {command, args, extensionToLanguage, ...}): a
 // .lsp.json at the plugin root, then each plugin.json's lspServers, as a path
 // or inline. A later definition of the same server name wins, as for MCP.
 func CollectLSP(lock lockfile.PackLock, effective *mode.Effective) (map[string]LSPEntry, error) {
+	plan, err := CollectLSPPlan(lock, effective)
+	if err != nil {
+		return nil, err
+	}
+	for _, warning := range plan.Warnings {
+		log.Printf("warning: %s: %s", warning.Source, warning.Message)
+	}
+	return plan.Entries, nil
+}
+
+func CollectLSPPlan(lock lockfile.PackLock, effective *mode.Effective) (LSPCollectionPlan, error) {
 	merged := make(map[string]LSPEntry)
+	var warnings []LSPCollectionWarning
 	plugins := lock.Plugins()
 	sort.Slice(plugins, func(i, j int) bool { return plugins[i].CacheKey < plugins[j].CacheKey })
 	for _, plugin := range plugins {
@@ -39,7 +57,7 @@ func CollectLSP(lock lockfile.PackLock, effective *mode.Effective) (map[string]L
 		if effective != nil {
 			allowed, err := effective.AllowsPackagePath(plugin.Module, ".lsp.json")
 			if err != nil {
-				return nil, err
+				return LSPCollectionPlan{}, err
 			}
 			if !allowed {
 				continue
@@ -49,25 +67,29 @@ func CollectLSP(lock lockfile.PackLock, effective *mode.Effective) (map[string]L
 		if err != nil {
 			continue
 		}
-		mergePluginLSP(root, plugin, merged)
+		mergePluginLSP(root, plugin, merged, &warnings)
 	}
-	return merged, nil
+	return LSPCollectionPlan{Entries: merged, Warnings: warnings}, nil
 }
 
-func mergePluginLSP(root string, plugin lockfile.Package, merged map[string]LSPEntry) {
+func mergePluginLSP(root string, plugin lockfile.Package, merged map[string]LSPEntry, warnings *[]LSPCollectionWarning) {
 	read := make(map[string]bool)
 	file := func(path, label string) {
 		resolved, err := filepath.EvalSymlinks(path)
-		if err != nil || read[resolved] {
+		if os.IsNotExist(err) || read[resolved] {
+			return
+		}
+		if err != nil {
+			*warnings = append(*warnings, LSPCollectionWarning{Source: plugin.Module + " " + label, Message: "unreadable language server source"})
 			return
 		}
 		read[resolved] = true
 		data, err := os.ReadFile(resolved)
 		if err != nil {
-			log.Printf("warning: skipping language servers in %s: %v", label, err)
+			*warnings = append(*warnings, LSPCollectionWarning{Source: plugin.Module + " " + label, Message: "unreadable language server source"})
 			return
 		}
-		mergeLSPObject(data, plugin, plugin.Module+" "+label, merged)
+		mergeLSPObject(data, plugin, plugin.Module+" "+label, merged, warnings)
 	}
 	file(filepath.Join(root, ".lsp.json"), ".lsp.json")
 	for _, pluginManifest := range cache.ReadPluginManifests(root) {
@@ -76,25 +98,25 @@ func mergePluginLSP(root string, plugin lockfile.Package, merged map[string]LSPE
 		for _, path := range declared {
 			resolved, err := cache.ResolveInside(root, path)
 			if err != nil {
-				log.Printf("warning: skipping %s %s: %v", plugin.Module, label, err)
+				*warnings = append(*warnings, LSPCollectionWarning{Source: plugin.Module + " " + label, Message: "language server path escapes package or cannot be resolved"})
 				continue
 			}
 			file(resolved, strings.TrimPrefix(path, "./"))
 		}
 		for _, value := range inline {
-			mergeLSPObject(value, plugin, plugin.Module+" "+label, merged)
+			mergeLSPObject(value, plugin, plugin.Module+" "+label, merged, warnings)
 		}
 	}
 }
 
-func mergeLSPObject(data []byte, plugin lockfile.Package, label string, merged map[string]LSPEntry) {
+func mergeLSPObject(data []byte, plugin lockfile.Package, label string, merged map[string]LSPEntry, warnings *[]LSPCollectionWarning) {
 	standard, err := hujson.Standardize(append([]byte(nil), data...))
 	var servers map[string]json.RawMessage
 	if err == nil {
 		err = json.Unmarshal(standard, &servers)
 	}
 	if err != nil {
-		log.Printf("warning: skipping language servers in %s: not an object of servers", label)
+		*warnings = append(*warnings, LSPCollectionWarning{Source: label, Message: "language server source is not an object"})
 		return
 	}
 	for name, server := range servers {
@@ -103,7 +125,7 @@ func mergeLSPObject(data []byte, plugin lockfile.Package, label string, merged m
 			ExtensionToLanguage map[string]string `json:"extensionToLanguage"`
 		}
 		if json.Unmarshal(server, &fields) != nil || fields.Command == "" || len(fields.ExtensionToLanguage) == 0 {
-			log.Printf("warning: %s: skipping language server %q: it needs a command and extensionToLanguage", label, name)
+			*warnings = append(*warnings, LSPCollectionWarning{Source: label, Message: "skipping invalid language server " + name + ": command and extensionToLanguage are required"})
 			continue
 		}
 		merged[name] = LSPEntry{Server: server, Module: plugin.Module, CacheKey: plugin.CacheKey}
@@ -165,4 +187,44 @@ func (pipeline Pipeline) stageLSPRoots(entries map[string]LSPEntry) (map[string]
 		resolved[name] = json.RawMessage(text)
 	}
 	return resolved, nil
+}
+
+// PlanLSPRoots performs the path substitutions without copying files or
+// creating data directories, so preflight can render the same target config.
+func PlanLSPRoots(projectRoot, modeName string, entries map[string]LSPEntry) (map[string]json.RawMessage, error) {
+	roots, err := paths.StagingPluginRootsDirForMode(projectRoot, modeName)
+	if err != nil {
+		return nil, err
+	}
+	quote := func(path string) string { data, _ := json.Marshal(path); return strings.Trim(string(data), `"`) }
+	resolved := make(map[string]json.RawMessage, len(entries))
+	for name, entry := range entries {
+		text := string(entry.Server)
+		if entry.CacheKey != "" && referencesLSPVariable(text, pluginRootVariables) {
+			root := filepath.Join(roots, pluginRootName(entry.CacheKey))
+			for _, variable := range pluginRootVariables {
+				text = strings.ReplaceAll(text, variable, quote(root))
+			}
+		}
+		if entry.CacheKey != "" && referencesLSPVariable(text, pluginDataVariables) {
+			data, err := paths.PluginDataDir(projectRoot, slug.DashedLower(entry.Module))
+			if err != nil {
+				return nil, err
+			}
+			for _, variable := range pluginDataVariables {
+				text = strings.ReplaceAll(text, variable, quote(data))
+			}
+		}
+		resolved[name] = json.RawMessage(text)
+	}
+	return resolved, nil
+}
+
+func referencesLSPVariable(text string, variables []string) bool {
+	for _, variable := range variables {
+		if strings.Contains(text, variable) {
+			return true
+		}
+	}
+	return false
 }

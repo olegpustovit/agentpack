@@ -135,31 +135,68 @@ type mcpFile struct {
 }
 
 func mergeMCPFiles(pack, user, destination string) error {
-	_, packErr := os.Stat(pack)
-	_, userErr := os.Stat(user)
-	if packErr != nil && userErr != nil {
+	packData, packErr := os.ReadFile(pack)
+	if os.IsNotExist(packErr) {
+		packData = nil
+	} else if packErr != nil {
+		return packErr
+	}
+	userData, userErr := os.ReadFile(user)
+	if os.IsNotExist(userErr) {
+		userData = nil
+	} else if userErr != nil {
+		return userErr
+	}
+	data, err := MergeMCPFilesData(packData, userData)
+	if err != nil {
+		return err
+	}
+	if data == nil {
 		return nil
 	}
+	return os.WriteFile(destination, data, 0o644)
+}
+
+func MergeMCPFilesData(packData, userData []byte) ([]byte, error) {
+	if len(packData) == 0 && len(userData) == 0 {
+		return nil, nil
+	}
 	config := mcpFile{Servers: map[string]json.RawMessage{}}
-	if packErr == nil {
-		value, err := readMCP(pack)
+	if len(packData) != 0 {
+		value, err := readMCPBytes(packData)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for name, server := range value.Servers {
 			config.Servers[name] = server
 		}
 	}
-	if userErr == nil {
-		value, err := readMCP(user)
+	if len(userData) != 0 {
+		value, err := readMCPBytes(userData)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for name, server := range value.Servers {
 			config.Servers[name] = server
 		}
 	}
-	return writeJSON(destination, config)
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+func readMCPBytes(data []byte) (mcpFile, error) {
+	standard, err := hujson.Standardize(append(data, '\n'))
+	if err != nil {
+		return mcpFile{}, err
+	}
+	var config mcpFile
+	if err := json.Unmarshal(standard, &config); err != nil {
+		return mcpFile{}, err
+	}
+	return config, nil
 }
 func mergeHookFiles(pack, user, destination string) error {
 	merged := make(map[string][]any)

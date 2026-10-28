@@ -17,7 +17,7 @@ import (
 const workspaceOverlay = ".agents/plugins/agentpack-bundle"
 
 func New() base.Harness {
-	return base.Definition{Target: base.Agy, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, MCP: writeMCP, WorkspaceOverlay: finalizeWorkspace, Check: verify, Launch: launch}
+	return base.Definition{Target: base.Agy, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, WorkspaceOverlay: finalizeWorkspace, Check: verify, Launch: launch}
 }
 
 func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
@@ -78,11 +78,28 @@ func prepare(ctx base.StageContext) error {
 	return os.WriteFile(path, []byte(rule), 0o644)
 }
 func writeMCP(entries mcp.Entries, ctx base.StageContext) error {
-	root, err := stagedRoot(ctx)
+	projection, err := planMCP(entries, ctx)
 	if err != nil {
 		return err
 	}
-	return WriteMCP(filepath.Join(root, "mcp_config.json"), entries)
+	return base.WriteMCPProjection(projection)
+}
+func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
+	root, err := stagedRoot(ctx)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	data, warnings, err := RenderMCP(entries)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	servers := base.ProjectedMCPServers(entries)
+	base.MarkMCPWarnings(servers, warnings)
+	digest, err := base.MCPJSONScopeDigest(data, "mcpServers")
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	return base.MCPProjection{Files: []base.MCPProjectedFile{{Path: filepath.Join(root, "mcp_config.json"), Contents: data, Scope: "mcpServers", ScopeDigest: digest, MergeOrder: []string{"plugin definitions", "agentpack.toml", ".agents/mcp.json", "Antigravity target projection"}}}, Servers: servers, Warnings: warnings}, nil
 }
 func verify(ctx base.StageContext) error {
 	root, err := stagedRoot(ctx)

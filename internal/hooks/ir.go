@@ -250,6 +250,7 @@ type Origin struct {
 	SourceRelative    string `json:"source_rel"`
 	SourceRoot        string `json:"source_root"`
 	SourceFile        string `json:"source_file"`
+	SourceDigest      string `json:"source_digest,omitempty"`
 	PackageKey        string `json:"package_key"`
 	EventIndex        int    `json:"event_index"`
 	MatcherGroupIndex int    `json:"matcher_group_index"`

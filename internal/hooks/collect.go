@@ -1,6 +1,8 @@
 package hooks
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -95,7 +97,7 @@ func collectPackages(packages []lockfile.Package, layer Layer, effective mode.Ef
 			if !allowed {
 				continue
 			}
-			origin := Origin{Layer: layer, Module: pkg.Module, CacheKey: pkg.CacheKey, SourceRelative: source.relative, SourceRoot: root, SourceFile: source.file, PackageKey: packageKey(pkg.CacheKey, pkg.Module, layer)}
+			origin := Origin{Layer: layer, Module: pkg.Module, CacheKey: pkg.CacheKey, SourceRelative: source.relative, SourceRoot: root, SourceFile: source.file, SourceDigest: source.digest, PackageKey: packageKey(pkg.CacheKey, pkg.Module, layer)}
 			var parsed Bundle
 			if source.dialect == CursorDialect {
 				parsed, err = ParseCursor(source.file, source.value, origin)
@@ -134,6 +136,7 @@ type hookSource struct {
 	gate     string
 	file     string
 	value    any
+	digest   string
 }
 
 // packageSources lists a package's hook definitions as the plugin formats
@@ -166,7 +169,8 @@ func packageSources(root string, pkg lockfile.Package, layer Layer, bundle *Bund
 				dialect = CursorDialect
 			}
 		}
-		sources = append(sources, hookSource{dialect: dialect, relative: relative, gate: relative, file: resolved, value: value})
+		digest := sha256.Sum256(data)
+		sources = append(sources, hookSource{dialect: dialect, relative: relative, gate: relative, file: resolved, value: value, digest: hex.EncodeToString(digest[:])})
 	}
 	file(filepath.Join(root, "hooks", "hooks.json"), "hooks/hooks.json", "")
 	dialects := map[string]Dialect{"claude": ClaudeDialect, "cursor": CursorDialect, "codex": CodexDialect}
@@ -197,7 +201,14 @@ func packageSources(root string, pkg lockfile.Package, layer Layer, bundle *Bund
 					events = map[string]any{"hooks": object}
 				}
 			}
-			sources = append(sources, hookSource{dialect: dialect, relative: fmt.Sprintf("%s#hooks[%d]", manifest.Relative, index), gate: manifest.Relative, file: filepath.Join(root, filepath.FromSlash(manifest.Relative)), value: events})
+			manifestPath := filepath.Join(root, filepath.FromSlash(manifest.Relative))
+			data, err := os.ReadFile(manifestPath)
+			if err != nil {
+				bundle.skip(origin, manifestPath, "skipping its hooks: %v", err)
+				continue
+			}
+			digest := sha256.Sum256(data)
+			sources = append(sources, hookSource{dialect: dialect, relative: fmt.Sprintf("%s#hooks[%d]", manifest.Relative, index), gate: manifest.Relative, file: manifestPath, value: events, digest: hex.EncodeToString(digest[:])})
 		}
 	}
 	return sources
@@ -212,7 +223,8 @@ func parseSource(layer Layer, module, cacheKey, sourceRoot, sourceFile, sourceRe
 	if err := json.Unmarshal(data, &value); err != nil {
 		return Bundle{}, fmt.Errorf("parse %s: %w", sourceFile, err)
 	}
-	origin := Origin{Layer: layer, Module: module, CacheKey: cacheKey, SourceRelative: sourceRelative, SourceRoot: sourceRoot, SourceFile: sourceFile, PackageKey: packageKey(cacheKey, module, layer)}
+	digest := sha256.Sum256(data)
+	origin := Origin{Layer: layer, Module: module, CacheKey: cacheKey, SourceRelative: sourceRelative, SourceRoot: sourceRoot, SourceFile: sourceFile, SourceDigest: hex.EncodeToString(digest[:]), PackageKey: packageKey(cacheKey, module, layer)}
 	if layer == SeededNative {
 		return ParseCodex(sourceFile, value, origin)
 	}

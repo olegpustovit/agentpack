@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "phase": "preflight",
+  "definition_root": "<fixture>/definition",
+  "workspace_root": "<fixture>/checkout-a",
+  "mode": "default",
+  "target": "cursor",
+  "policy": "local",
+  "strict_external": true,
+  "workspace_digest": "sha256:b3beb0428a509d6c9ae4b098f79c47d63d7cbe22bab4f6a83abf4e028d938824",
+  "generation_id": "sha256:9dc6cf2ee0c3f099fe1c1149a6fc8e63f6263b5a5f05f7c700d62d2078c90b4c",
+  "policy_digest": "sha256:b8389f49bcc7dbada441a3a865a4c02743af422e23e1466eec781a222f52a81f",
+  "expected_target": {
+    "adapter": "cursor",
+    "executable_identity": "sha256:f52a8eb546011d41180c4838ec85e2a1e15ef32616f97b01bc91342c6df9d965"
+  },
+  "source_identity": "sha256-source-v1:30e4756e9ffa8f107c328a7204e7cad9c3638b3894946bdd25625dae68059f7c",
+  "lock_digest": "sha256:edecd8c8b920932e3036f69886b1e76e6a9289fa15221d9f5e05faacb135a48d",
+  "skills": 0,
+  "plugins": 0,
+  "shadowed": 0,
+  "inheritance": [
+    "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+    "Cursor fake HOME bridges user cli-config/mcp and may write .cursor/agents in the workspace"
+  ],
+  "capabilities": {
+    "agy": "workspace-write: writes .agents/plugins/agentpack-bundle",
+    "claude": "external: uses --plugin-dir and --settings; no workspace overlay",
+    "codex": "external-home: uses CODEX_HOME; native project instructions may still apply",
+    "cursor": "workspace-write: writes .cursor/agents when agent artifacts exist",
+    "grok": "external-home: uses GROK_HOME; also reads real ~/.claude and ~/.grok",
+    "opencode": "external: uses OPENCODE_CONFIG_DIR; no workspace overlay"
+  },
+  "planned_writes": [
+    "<fixture>/checkout-a/.cursor/agents"
+  ],
+  "artifacts": [
+    {
+      "properties": {
+        "exists": false,
+        "merge_order": [
+          "native user seed retained",
+          "agentpack-owned sections overlaid"
+        ],
+        "source": "~/.cursor/cli-config.json"
+      },
+      "id": "settings-seed:cursor",
+      "kind": "settings_seed",
+      "name": "~/.cursor/cli-config.json",
+      "winner": "user_seed",
+      "evidence": "generated"
+    }
+  ],
+  "coverage": [
+    {
+      "category": "skill",
+      "scope": "native_catalog",
+      "completeness": "none",
+      "reason": "pure preflight does not execute native CLI discovery"
+    }
+  ],
+  "contract_results": [
+    {
+      "requirement_id": "no-checkout-config",
+      "result": "violated",
+      "finding_code": "WORKSPACE_WRITE_REQUIRED",
+      "message": "planned workspace writes: <fixture>/checkout-a/.cursor/agents"
+    }
+  ],
+  "findings": [
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "Cursor fake HOME bridges user cli-config/mcp and may write .cursor/agents in the workspace",
+      "evidence": "declared"
+    },
+    {
+      "code": "STRICT_EXTERNAL",
+      "severity": "info",
+      "message": "strict external mode refuses workspace overlay writes",
+      "remedy": "launch claude or opencode, or omit --strict-external for compatibility mode",
+      "remediation": {
+        "message": "launch claude or opencode, or omit --strict-external for compatibility mode"
+      }
+    },
+    {
+      "code": "WORKSPACE_WRITE_REQUIRED",
+      "severity": "violation",
+      "target": "cursor",
+      "winner": "workspace-write",
+      "message": "cursor requires a workspace write (writes .cursor/agents when agent artifacts exist)",
+      "remedy": "choose claude/opencode, or run without --strict-external (compatibility mode)",
+      "consequence": "The selected target cannot run under strict external policy.",
+      "remediation": {
+        "message": "choose claude/opencode, or run without --strict-external (compatibility mode)"
+      },
+      "related_refs": [
+        "contract:no-checkout-config"
+      ]
+    },
+    {
+      "code": "BINARY_FOUND",
+      "severity": "info",
+      "source": "<agentpack>",
+      "target": "cursor",
+      "message": "native CLI located"
+    },
+    {
+      "code": "STAGING_INPUTS_UNKNOWN",
+      "severity": "warning",
+      "message": "no materialization input identity is recorded",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing",
+      "remediation": {
+        "message": "run `agentpack env restore` to publish the selected frozen environment before probing",
+        "argv": [
+          "agentpack",
+          "--definition-root",
+          "<fixture>/definition",
+          "--workspace",
+          "<fixture>/checkout-a",
+          "--mode",
+          "default",
+          "env",
+          "restore"
+        ]
+      },
+      "evidence": "unknown"
+    },
+    {
+      "code": "STAGING_NOT_RECORDED",
+      "severity": "warning",
+      "message": "no staged record for mode \"default\"",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing",
+      "remediation": {
+        "message": "run `agentpack env restore` to publish the selected frozen environment before probing",
+        "argv": [
+          "agentpack",
+          "--definition-root",
+          "<fixture>/definition",
+          "--workspace",
+          "<fixture>/checkout-a",
+          "--mode",
+          "default",
+          "env",
+          "restore"
+        ]
+      }
+    },
+    {
+      "code": "WORKSPACE_WRITE_REQUIRED",
+      "severity": "violation",
+      "message": "planned workspace writes: <fixture>/checkout-a/.cursor/agents",
+      "remedy": "adjust the environment or add a scoped allowance with rationale",
+      "consequence": "The selected target cannot run under strict external policy.",
+      "remediation": {
+        "message": "adjust the environment or add a scoped allowance with rationale"
+      },
+      "related_refs": [
+        "contract:no-checkout-config"
+      ],
+      "evidence": "generated"
+    }
+  ],
+  "overall_status": "violated",
+  "ok": false
+}

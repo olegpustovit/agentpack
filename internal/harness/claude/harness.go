@@ -13,7 +13,7 @@ import (
 )
 
 func New() base.Harness {
-	return base.Definition{Target: base.Claude, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, MCP: writeMCP, LSP: writeLSP, Guidance: injectGuidance, AfterStage: finalize, Check: verify, Launch: launch}
+	return base.Definition{Target: base.Claude, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, LSP: writeLSP, Guidance: injectGuidance, AfterStage: finalize, Check: verify, Launch: launch}
 }
 
 func nativeUserRoots(home string) []string {
@@ -91,11 +91,28 @@ func prepare(ctx base.StageContext) error {
 }
 
 func writeMCP(entries mcp.Entries, ctx base.StageContext) error {
-	root, err := stagedRoot(ctx)
+	projection, err := planMCP(entries, ctx)
 	if err != nil {
 		return err
 	}
-	return WriteMCP(filepath.Join(root, ".mcp.json"), entries)
+	return base.WriteMCPProjection(projection)
+}
+func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
+	root, err := stagedRoot(ctx)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	data, warnings, err := RenderMCP(entries)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	servers := base.ProjectedMCPServers(entries)
+	base.MarkMCPWarnings(servers, warnings)
+	digest, err := base.MCPJSONScopeDigest(data, "mcpServers")
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	return base.MCPProjection{Files: []base.MCPProjectedFile{{Path: filepath.Join(root, ".mcp.json"), Contents: data, Scope: "mcpServers", ScopeDigest: digest, MergeOrder: []string{"plugin definitions", "agentpack.toml", ".agents/mcp.json"}}}, Servers: servers, Warnings: warnings}, nil
 }
 func injectGuidance(blob string, ctx base.StageContext) error {
 	root, err := stagedRoot(ctx)
@@ -105,14 +122,18 @@ func injectGuidance(blob string, ctx base.StageContext) error {
 	return InjectGuidance(root, blob)
 }
 func finalize(entries mcp.Entries, ctx base.StageContext) error {
-	var names []string
+	names := make([]string, 0, len(entries))
 	for _, name := range entries.Names() {
 		disabled := entries[name].Server.Disabled
 		if disabled == nil || !*disabled {
 			names = append(names, name)
 		}
 	}
-	return SetMCPAllowlist(ctx, names)
+	data, err := SettingsContents(names, KeepAttribution())
+	if err != nil {
+		return err
+	}
+	return WriteSettingsContents(ctx, data)
 }
 func verify(ctx base.StageContext) error {
 	bundle, err := stagedRoot(ctx)

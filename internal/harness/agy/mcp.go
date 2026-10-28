@@ -15,7 +15,22 @@ import (
 // Antigravity's OAuth callback is fixed and it documents no scopes or
 // metadata URL, so those are left out with a warning.
 func WriteMCP(path string, entries mcp.Entries) error {
+	data, warnings, err := RenderMCP(entries)
+	if err != nil {
+		return err
+	}
+	for _, warning := range warnings {
+		log.Printf("warning: %s", warning)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
+func RenderMCP(entries mcp.Entries) ([]byte, []string, error) {
 	servers := make(map[string]map[string]any, len(entries))
+	var warnings []string
 	for _, name := range entries.Names() {
 		server, value := entries[name].Server, make(map[string]any)
 		var missing []string
@@ -60,16 +75,13 @@ func WriteMCP(path string, entries mcp.Entries) error {
 			value["disabled"] = *server.Disabled
 		}
 		if len(missing) != 0 {
-			log.Printf("warning: %s", mcp.NotCarried("Antigravity", name, missing...))
+			warnings = append(warnings, mcp.NotCarried("Antigravity", name, missing...))
 		}
 		servers[name] = value
 	}
 	data, err := json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode %s: %w", path, err)
+		return nil, warnings, fmt.Errorf("encode MCP servers: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return nil
+	return data, warnings, nil
 }

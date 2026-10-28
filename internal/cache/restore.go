@@ -69,7 +69,7 @@ func VerifyLockCacheIntegrity(lock lockfile.PackLock) error {
 }
 
 // VerifyLockCacheLayout checks only that every cache entry still looks like
-// a package. It reads no file contents and proves nothing about them.
+// a package. It is read-only and proves nothing about file contents.
 func VerifyLockCacheLayout(lock lockfile.PackLock) error {
 	for _, pkg := range lock.Packages {
 		if pkg.CacheKey == "" {
@@ -80,9 +80,6 @@ func VerifyLockCacheLayout(lock lockfile.PackLock) error {
 			return err
 		}
 		if pkg.Kind == lockfile.PackagePlugin {
-			if err := NormalizePluginLayout(out); err != nil {
-				return err
-			}
 			if !HasPluginManifest(out) {
 				return fmt.Errorf("plugin cache not ready for %s", pkg.CacheKey)
 			}

@@ -2,18 +2,24 @@ package sync
 
 import (
 	"context"
-	"github.com/olegpustovit/agentpack/internal/mode"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/cache"
 	"github.com/olegpustovit/agentpack/internal/environment"
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/claude"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
+	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/staging"
 )
 
 func TestPreflightDoesNotMutateLockOrCheckout(t *testing.T) {
@@ -66,6 +72,62 @@ func TestPreflightDoesNotMutateLockOrCheckout(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Name() != "untouched.txt" {
 		t.Fatalf("workspace changed: %#v", entries)
+	}
+}
+
+func TestPreflightDoesNotNormalizeCachedMarketplace(t *testing.T) {
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	if _, err := paths.EnsureUserAgentpackLayout(); err != nil {
+		t.Fatal(err)
+	}
+	definition := t.TempDir()
+	if err := manifest.WriteStub(definition, "demo", "0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	root, err := cache.EntryDir("marketplace-cache")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, body string) {
+		t.Helper()
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".agents/plugins/marketplace.json", `{"plugins":[{"name":"demo","source":{"source":"local","path":"./plugins/demo"}}]}`)
+	write("plugins/demo/.claude-plugin/plugin.json", `{"name":"demo"}`)
+	lock := lockfile.PackLock{Packages: []lockfile.Package{{
+		Module: "github.com/acme/demo", Kind: lockfile.PackagePlugin, Owner: "acme", Repo: "demo", Commit: strings.Repeat("a", 40), CacheKey: "marketplace-cache",
+	}}}
+	if err := lock.Save(definition); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(root, ".agents", "plugins", "marketplace.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := base.Claude
+	report, err := NewService().Preflight(definition, PreflightOptions{Target: &target, WorkspaceRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cacheFinding bool
+	for _, finding := range report.Findings {
+		cacheFinding = cacheFinding || finding.Code == "CACHE_MISSING" || finding.Code == "CACHE_INTEGRITY"
+	}
+	if !cacheFinding {
+		t.Fatalf("missing cache finding: %#v", report.Findings)
+	}
+	after, err := os.ReadFile(filepath.Join(root, ".agents", "plugins", "marketplace.json"))
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("preflight changed marketplace input: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".claude-plugin", "plugin.json")); !os.IsNotExist(err) {
+		t.Fatalf("preflight materialized a cache manifest: %v", err)
 	}
 }
 
@@ -386,6 +448,211 @@ func TestSourceIdentityStableAcrossRelocation(t *testing.T) {
 	if id1 == "" || id1 != id2 {
 		t.Fatalf("identity not portable: %q vs %q", id1, id2)
 	}
+	if !strings.HasPrefix(id1, "sha256-source-v1:") {
+		t.Fatalf("source identity has no versioned digest prefix: %q", id1)
+	}
+}
+
+func TestSourceIdentityCanonicalizesSemanticDefinition(t *testing.T) {
+	first := sourceIdentityForTest(t, `name = "demo"
+version = "1.0.0"
+description = "portable pack"
+
+[dependencies]
+"github.com/team/skills" = { tag = "v1" }
+
+[modes.review]
+base = "none"
+enable = ["package:github.com/team/skills", "mcp:search"]
+`)
+	formatted := sourceIdentityForTest(t, `# Same parsed definition, different formatting and table order.
+description="portable pack"
+version="1.0.0"
+name="demo"
+
+[modes.review]
+enable=["package:github.com/team/skills", "mcp:search"]
+base="none"
+
+[dependencies]
+"github.com/team/skills"={tag="v1"}
+`)
+	if first != formatted {
+		t.Fatalf("semantic TOML formatting changed source identity: %q != %q", first, formatted)
+	}
+
+	ordered := sourceIdentityForTest(t, `name = "demo"
+version = "1.0.0"
+[mcp.servers.search]
+command = "runner"
+args = ["--first", "one", "--second", "two"]
+`)
+	reordered := sourceIdentityForTest(t, `name = "demo"
+version = "1.0.0"
+[mcp.servers.search]
+command = "runner"
+args = ["--second", "two", "--first", "one"]
+`)
+	if ordered == reordered {
+		t.Fatal("source identity ignored semantically significant MCP argument order")
+	}
+	pathOne := sourceIdentityForTest(t, `name = "demo"
+version = "1.0.0"
+[mcp.servers.search]
+command = "/private/one/bin/runner"
+args = ["--config", "/private/one/search.toml"]
+cwd = "/private/one"
+`)
+	pathTwo := sourceIdentityForTest(t, `name = "demo"
+version = "1.0.0"
+[mcp.servers.search]
+command = "/private/two/bin/runner"
+args = ["--config", "/private/two/search.toml"]
+cwd = "/private/two"
+`)
+	if pathOne != pathTwo {
+		t.Fatalf("host-local paths changed source identity: %q != %q", pathOne, pathTwo)
+	}
+}
+
+func TestSourceIdentityExcludesMCPSecretsButKeepsPublicArguments(t *testing.T) {
+	definition := func(secret, token string, label string) string {
+		return fmt.Sprintf(`name = "demo"
+version = "1.0.0"
+[mcp.servers.search]
+command = "runner"
+args = ["--token", %q, "--label", %q]
+env = { API_TOKEN = %q }
+headers = { Authorization = %q }
+[mcp.servers.search.oauth]
+client_id = "public-client"
+client_secret = %q
+scopes = ["read", "write"]
+`, token, label, secret, secret, secret)
+	}
+	first := sourceIdentityForTest(t, definition("secret-one", "token-one", "stable"))
+	changedSecrets := sourceIdentityForTest(t, definition("secret-two", "token-two", "stable"))
+	changedPublicArgument := sourceIdentityForTest(t, definition("secret-two", "token-two", "changed"))
+	if first != changedSecrets {
+		t.Fatalf("MCP secret values affected source identity: %q != %q", first, changedSecrets)
+	}
+	if first == changedPublicArgument {
+		t.Fatal("source identity ignored a non-secret MCP argument change")
+	}
+}
+
+func TestSourceIdentityCanonicalizesContractMapsAndPreservesArrayOrder(t *testing.T) {
+	contract := func(requirements string) string {
+		return `{"schema_version":1,"unknown_required":"fail","requirements":[` + requirements + `]}`
+	}
+	one := `{"id":"first","target":"*","selector":{"category":"skill","name":"review","property":"presence"},"predicate":"present","minimum_evidence":"generated","severity":"error"}`
+	two := `{"id":"second","target":"*","selector":{"category":"skill","name":"test","property":"presence"},"predicate":"present","minimum_evidence":"generated","severity":"error"}`
+	first := sourceIdentityWithContract(t, contract(one+","+two))
+	mapReordered := sourceIdentityWithContract(t, ` { "requirements" : [ `+one+`, `+two+` ], "unknown_required" : "fail", "schema_version" : 1 } `)
+	if first != mapReordered {
+		t.Fatalf("contract JSON formatting/map order changed source identity: %q != %q", first, mapReordered)
+	}
+	arrayReordered := sourceIdentityWithContract(t, contract(two+","+one))
+	if first == arrayReordered {
+		t.Fatal("source identity ignored contract requirement order")
+	}
+}
+
+func TestSourceIdentityIncludesLockedMCPDependencyTree(t *testing.T) {
+	root := t.TempDir()
+	if err := manifest.WriteStub(root, "demo", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(root, "demo", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := lockfile.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.MCPServers = []lockfile.MCPServer{{Name: "search", Launcher: "npm", Status: lockfile.MCPPinned, Package: "@team/search", Version: "1.2.3", TreeDigest: "sha256:tree-a", Tree: []lockfile.NPMTreeEntry{{Path: "node_modules/@team/search", Version: "1.2.3", Integrity: "sha512:package-a"}}}}
+	one, err := sourceIdentity(root, lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.MCPServers[0].Tree[0].Integrity = "sha512:package-b"
+	two, err := sourceIdentity(root, lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one == two {
+		t.Fatal("source identity ignored locked MCP dependency integrity")
+	}
+}
+
+func TestSourceIdentityIncludesLockedPackageContentHash(t *testing.T) {
+	root := t.TempDir()
+	if err := manifest.WriteStub(root, "demo", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(root, "demo", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := lockfile.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.Packages = []lockfile.Package{{Module: "github.com/team/skills", Kind: lockfile.PackageSkill, Direct: true, Commit: "abc123", ContentHash: "sha256-tree-v1:first"}}
+	one, err := sourceIdentity(root, lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.Packages[0].ContentHash = "sha256-tree-v1:second"
+	two, err := sourceIdentity(root, lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one == two {
+		t.Fatal("source identity ignored the locked package content hash")
+	}
+}
+
+func sourceIdentityForTest(t *testing.T, manifestText string) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.WriteFile(paths.ManifestPath(root), []byte(manifestText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(root, "demo", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := lockfile.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := sourceIdentity(root, lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity
+}
+
+func sourceIdentityWithContract(t *testing.T, contract string) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.WriteFile(paths.ManifestPath(root), []byte("name = \"demo\"\nversion = \"1.0.0\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "contract.json"), []byte(contract), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(root, "demo", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := lockfile.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := sourceIdentity(root, lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity
 }
 
 func TestPreflightFlagsProjectAmbientSkill(t *testing.T) {
@@ -653,6 +920,12 @@ func TestEffectivePlanFiltersModesAndUsesNativeRenderedProperties(t *testing.T) 
 	t.Setenv("AGENTPACK_HOME", home)
 	key := strings.Repeat("a", 64)
 	root := filepath.Join(home, "cache", key)
+	if err := os.MkdirAll(filepath.Join(root, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".claude-plugin", "plugin.json"), []byte(`{"name":"pack"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(root, "skills", "review"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -666,17 +939,29 @@ func TestEffectivePlanFiltersModesAndUsesNativeRenderedProperties(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(root, "commands", "check.md"), []byte("Check code"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(root, "agents", "team"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "agents", "team", "reviewer.md"), []byte("---\ndescription: Review\n---\nReview changes."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "agents", "ops"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "agents", "ops", "reviewer.md"), []byte("---\ndescription: Ops review\n---\nReview operations."), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	lock := lockfile.PackLock{Packages: []lockfile.Package{{Module: "github.com/team/pack", Kind: lockfile.PackagePlugin, CacheKey: key, Name: "pack"}}}
 	selected, err := mode.NewEffective("review", mode.Definition{Base: mode.BaseAll, Disable: []string{"package-path:github.com/team/pack:skills/review/SKILL.md"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	target := base.Codex
-	records, err := plannedArtifacts(lock, selected, t.TempDir(), &target)
+	records, err := plannedArtifacts(lock, selected, t.TempDir(), t.TempDir(), &target, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	disabled, converted := false, false
+	disabled, converted, nativeAgentOutput, nativeAgentOverride, nativeAgentOverwritten := false, false, false, false, false
 	for _, record := range records {
 		if record.Name == "review" {
 			disabled = record.Omitted
@@ -684,10 +969,365 @@ func TestEffectivePlanFiltersModesAndUsesNativeRenderedProperties(t *testing.T) 
 		if record.Name == "check" {
 			converted = record.Kind == "skill" && record.OutputPath == "skills/check/SKILL.md" && record.Properties["rendered_digest"] != nil && record.Properties["source_digest"] != record.Properties["rendered_digest"]
 		}
+		if record.Name == "reviewer" && strings.HasPrefix(record.ID, "github.com/team/pack:agents/") {
+			outputs, _ := record.Properties["additional_outputs"].([]string)
+			nativeAgentOutput = nativeAgentOutput || len(outputs) == 1 && outputs[0] == "agents/reviewer.toml"
+			overrides, _ := record.Properties["overrides_outputs"].([]string)
+			overwritten, _ := record.Properties["overwritten_outputs"].([]string)
+			nativeAgentOverride = nativeAgentOverride || strings.Contains(strings.Join(overrides, ","), "agents/reviewer.toml")
+			nativeAgentOverwritten = nativeAgentOverwritten || strings.Contains(strings.Join(overwritten, ","), "agents/reviewer.toml")
+		}
 	}
-	if !disabled || !converted {
+	if !disabled || !converted || !nativeAgentOutput || !nativeAgentOverride || !nativeAgentOverwritten {
 		t.Fatalf("mode/render plan mismatch: %#v", records)
 	}
+}
+
+func TestPreflightDotAgentsUsesStagingPlanAndMarksNativeCodexSkill(t *testing.T) {
+	workspace := t.TempDir()
+	dot := filepath.Join(workspace, ".agents")
+	for relative, contents := range map[string]string{
+		"skills/local/SKILL.md": "---\nname: local\n---\nNative skill\n",
+		"agents/review.md":      "---\ndescription: Review agent\n---\nAgent\n",
+		"commands/review.md":    "---\ndescription: Review command\n---\nCommand\n",
+		"commands/disabled.md":  "---\ndescription: Disabled\n---\nDisabled\n",
+	} {
+		path := filepath.Join(dot, relative)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	effective, err := mode.NewEffective("dot", mode.Definition{Base: mode.BaseAll, Disable: []string{".agents:commands/disabled.md"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := base.Codex
+	records, err := plannedArtifacts(lockfile.PackLock{}, effective, t.TempDir(), workspace, &target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var native, converted, omitted bool
+	for _, record := range records {
+		switch record.ID {
+		case ".agents:skills/local/SKILL.md:codex":
+			native = record.OutputPath == "" && record.Properties["native_source_path"] == ".agents/skills/local/SKILL.md" && record.Evidence == environment.EvidenceDeclared
+		case ".agents:commands/review.md:codex":
+			converted = record.OutputPath == "skills/review/SKILL.md" && record.Properties["rendered_digest"] != nil
+		case ".agents:commands/disabled.md:codex":
+			omitted = record.Omitted && record.OutputPath == ""
+		}
+	}
+	if !native || !converted || !omitted {
+		t.Fatalf("dot-agent plan mismatch: %#v", records)
+	}
+	t.Setenv("AGENTPACK_DOT_AGENTS", "0")
+	records, err = plannedArtifacts(lockfile.PackLock{}, effective, t.TempDir(), workspace, &target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native, converted = false, false
+	for _, record := range records {
+		if record.ID == ".agents:skills/local/SKILL.md:codex" {
+			native = record.Properties["native_source_path"] == ".agents/skills/local/SKILL.md" && !record.Omitted
+		}
+		if record.ID == ".agents:commands/review.md:codex" {
+			converted = record.Omitted && record.Reason == "disabled by AGENTPACK_DOT_AGENTS"
+		}
+	}
+	if !native || !converted {
+		t.Fatalf("disabled overlay/native Codex report mismatch: %#v", records)
+	}
+}
+
+func TestPreflightMCPUsesHarnessProjectionWithoutExposingValues(t *testing.T) {
+	home, stagingRoot := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	t.Setenv("AGENTPACK_STAGING_ROOT", stagingRoot)
+	cacheKey := strings.Repeat("b", 64)
+	pluginRoot, err := cache.EntryDir(cacheKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for relative, content := range map[string]string{
+		".claude-plugin/plugin.json": `{"name":"demo-plugin"}`,
+		"mcp.json":                   `{"mcpServers":{"lookup":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/scripts/run.js"]},"plugin_path":{"command":"node","args":["${PLUGIN_ROOT}/scripts/run.js"]}}}`,
+		".lsp.json":                  `{"gopls":{"command":"gopls","extensionToLanguage":{".go":"go"}}}`,
+		"scripts/run.js":             "console.log('ready')\n",
+	} {
+		path := filepath.Join(pluginRoot, relative)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lock := lockfile.PackLock{Packages: []lockfile.Package{{Module: "github.com/acme/plugin", Kind: lockfile.PackagePlugin, CacheKey: cacheKey, Name: "demo-plugin"}}}
+	for relative, content := range map[string]string{
+		".config/opencode/opencode.json": `{"mcp":{"lookup":{"type":"local","command":["user"],"enabled":true}}}`,
+		".codex/config.toml":             "[mcp_servers.lookup]\ncommand = \"user\"\n",
+		".grok/config.toml":              "[plugins]\nenabled = [\"other\"]\n\n[mcp_servers.lookup]\ncommand = \"user\"\n",
+		".cursor/mcp.json":               `{"mcpServers":{"lookup":{"command":"user"}}}`,
+	} {
+		path := filepath.Join(home, relative)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, target := range base.AllTargets() {
+		definition := t.TempDir()
+		if err := manifest.WriteStub(definition, "demo", "0.1.0"); err != nil {
+			t.Fatal(err)
+		}
+		manifestText := "[mcp.servers.manifest_secret]\ncommand = \"node\"\nargs = [\"--secret-argument\"]\n[mcp.servers.manifest_secret.env]\nTOKEN = \"top-secret-value\"\n"
+		if err := os.WriteFile(paths.ManifestPath(definition), []byte(manifestText), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		dotPath := filepath.Join(definition, ".agents", "mcp.json")
+		if err := os.MkdirAll(filepath.Dir(dotPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dotPath, []byte(`{"mcpServers":{"codex_overlay":{"command":"dot"}}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		project, err := manifest.Load(definition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		effective := mode.ImplicitEffective()
+		entries, err := staging.CollectMCP(definition, lock, project, &effective)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := (staging.Pipeline{ProjectRoot: definition, Lock: lock, Manifest: project, Mode: effective, Target: &target}).Rebuild(); err != nil {
+			t.Fatalf("stage %s: %v", target, err)
+		}
+		records, err := plannedMCPArtifacts(lock, effective, definition, definition, &target)
+		if err != nil {
+			t.Fatalf("preflight %s: %v", target, err)
+		}
+		candidate, err := registry.ByTarget(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		projection, err := candidate.PlanMCP(entries, base.StageContext{ProjectRoot: definition, WorkspaceRoot: definition, Mode: effective})
+		if err != nil {
+			t.Fatalf("materialization plan %s: %v", target, err)
+		}
+		serverFound, dotFound := false, false
+		for _, record := range records {
+			if record.ID == "mcp:lookup:"+string(target) {
+				wantWinner := "plugin"
+				if target == base.OpenCode || target == base.Codex || target == base.Grok || target == base.Cursor {
+					wantWinner = "user"
+				}
+				if record.Winner == wantWinner {
+					serverFound = true
+				}
+			}
+			if target == base.Codex && record.ID == "mcp:codex_overlay:codex" && record.Winner == ".agents" {
+				dotFound = true
+			}
+			if record.Kind != "mcp_file" {
+				continue
+			}
+			matched := false
+			for _, file := range projection.Files {
+				fileName := filepath.Base(file.Path)
+				if strings.Contains(filepath.ToSlash(file.Path), "/.cursor/") {
+					fileName = "fake-home/.cursor/" + fileName
+				}
+				if record.Name == fileName && record.Properties["scope"] == file.Scope {
+					actual, err := os.ReadFile(file.Path)
+					if err != nil {
+						t.Fatalf("read staged %s MCP output %s: %v", target, file.Path, err)
+					}
+					var digest string
+					if file.Scope == "mcp_servers" {
+						digest, err = base.MCPTOMLScopeDigest(actual, file.Scope)
+					} else {
+						digest, err = base.MCPJSONScopeDigest(actual, file.Scope)
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					matched = digest == record.Properties["scope_digest"]
+				}
+			}
+			if !matched {
+				t.Fatalf("preflight %s digest differs from materialization projection: %#v vs %#v", target, record, projection.Files)
+			}
+		}
+		if !serverFound {
+			t.Fatalf("preflight %s did not report expected lookup winner", target)
+		}
+		if target == base.Codex && !dotFound {
+			t.Fatal("Codex preflight did not report the .agents MCP overlay")
+		}
+		if target == base.Claude {
+			settingsPath, err := claude.SettingsPath(base.StageContext{ProjectRoot: definition, WorkspaceRoot: definition, Mode: effective})
+			if err != nil {
+				t.Fatal(err)
+			}
+			settings, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, record := range records {
+				if record.Kind == "settings_file" && record.ID == "settings:claude:agentpack-overlay" {
+					found = digestBytes(settings) == record.Properties["rendered_digest"]
+				}
+			}
+			if !found {
+				t.Fatal("Claude settings report does not match staged overlay bytes")
+			}
+		}
+		if target == base.Grok {
+			grokHome, err := paths.StagingGrokHomeDirForMode(definition, effective.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			config, err := os.ReadFile(filepath.Join(grokHome, "config.toml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest, err := base.MCPTOMLScopeDigest(config, "plugins")
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, record := range records {
+				if record.ID == "settings:grok:plugins" {
+					found = digest == record.Properties["scope_digest"]
+				}
+			}
+			if !found {
+				t.Fatal("Grok settings report does not match staged plugin settings")
+			}
+		}
+		if target == base.Claude || target == base.OpenCode || target == base.Grok {
+			lspEntries, err := staging.CollectLSP(lock, &effective)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lspEntriesResolved, err := staging.PlanLSPRoots(definition, effective.Name(), lspEntries)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lspProjection, err := candidate.PlanLSP(lspEntriesResolved, base.StageContext{ProjectRoot: definition, WorkspaceRoot: definition, Mode: effective})
+			if err != nil {
+				t.Fatalf("plan %s LSP: %v", target, err)
+			}
+			for _, file := range lspProjection.Files {
+				actual, err := os.ReadFile(file.Path)
+				if err != nil {
+					t.Fatalf("read staged %s LSP %s: %v", target, file.Path, err)
+				}
+				found := false
+				for _, record := range records {
+					if record.Kind == "lsp_file" && record.Properties["target"] == string(target) && record.Name == filepath.Base(file.Path) {
+						found = digestBytes(actual) == record.Properties["rendered_digest"]
+					}
+				}
+				if !found {
+					t.Fatalf("preflight %s LSP report differs from staged bytes: %#v", target, file.Path)
+				}
+			}
+		}
+		encoded, err := json.Marshal(records)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "top-secret-value") || strings.Contains(string(encoded), "--secret-argument") {
+			t.Fatalf("MCP report for %s exposed a configured value: %s", target, encoded)
+		}
+		if target == base.Claude {
+			prior := make(map[string]any)
+			for _, record := range records {
+				if record.Kind == "mcp_file" {
+					prior[record.ID] = record.Properties["scope_digest"]
+				}
+			}
+			if _, err := (staging.Pipeline{ProjectRoot: definition, Lock: lock, Manifest: project, Mode: effective, Target: &target}).Rebuild(); err != nil {
+				t.Fatalf("rebuild %s after generation rotation: %v", target, err)
+			}
+			next, err := plannedMCPArtifacts(lock, effective, definition, definition, &target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, record := range next {
+				if record.Kind == "mcp_file" && prior[record.ID] != record.Properties["scope_digest"] {
+					t.Fatalf("MCP scope digest changed across generation rotation for %s: %v -> %v", record.ID, prior[record.ID], record.Properties["scope_digest"])
+				}
+			}
+		}
+	}
+}
+
+func TestPreflightReportsStructuredMCPCollectionOmission(t *testing.T) {
+	definition := t.TempDir()
+	if err := manifest.WriteStub(definition, "demo", "0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(definition, ".agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(definition, ".agents", "mcp.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	records, err := plannedMCPArtifacts(lockfile.PackLock{}, mode.ImplicitEffective(), definition, definition, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if record.Kind == "mcp_omission" && record.Name == ".agents/mcp.json" && record.Reason == "invalid MCP definition" {
+			return
+		}
+	}
+	t.Fatalf("preflight omitted the MCP collection warning: %#v", records)
+}
+
+func TestPreflightReportsMalformedLSPSourceWithoutRawContents(t *testing.T) {
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	key := strings.Repeat("c", 64)
+	root, err := cache.EntryDir(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".lsp.json"), []byte(`{"token":"private-value"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	definition := t.TempDir()
+	if err := manifest.WriteStub(definition, "demo", "0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	lock := lockfile.PackLock{Packages: []lockfile.Package{{Module: "github.com/acme/plugin", Kind: lockfile.PackagePlugin, CacheKey: key}}}
+	target := base.Claude
+	records, err := plannedMCPArtifacts(lock, mode.ImplicitEffective(), definition, definition, &target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if record.Kind == "lsp_omission" && strings.Contains(record.Name, "github.com/acme/plugin") {
+			if strings.Contains(record.Reason, "private-value") {
+				t.Fatal("raw malformed LSP contents leaked")
+			}
+			return
+		}
+	}
+	t.Fatalf("preflight omitted malformed LSP source diagnostic: %#v", records)
 }
 
 func TestContractWarningSeverityIsNonBlocking(t *testing.T) {
@@ -884,7 +1524,7 @@ func TestEffectivePlanFollowsDeclaredPathsAndConvertedNames(t *testing.T) {
 	}
 	lock := lockfile.PackLock{Packages: []lockfile.Package{{Module: "github.com/team/pack", Kind: lockfile.PackagePlugin, CacheKey: key, Name: "pack"}}}
 	outputs := func(target base.Target) map[string]string {
-		records, err := plannedArtifacts(lock, mode.ImplicitEffective(), t.TempDir(), &target)
+		records, err := plannedArtifacts(lock, mode.ImplicitEffective(), t.TempDir(), t.TempDir(), &target, true)
 		if err != nil {
 			t.Fatal(err)
 		}

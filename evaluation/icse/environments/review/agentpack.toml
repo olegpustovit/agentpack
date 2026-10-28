@@ -1,0 +1,8 @@
+name = "review-external"
+version = "1.0.0"
+
+[dependencies]
+review = { path = "../../skills/review" }
+
+[modes.quiet]
+base = "none"

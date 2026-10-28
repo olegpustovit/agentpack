@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "exported_at": "2026-10-28T16:45:59.021076358Z",
+  "scope": "local-diagnostic; no credentials; paths pseudonymized",
+  "receipt_id": "<receipt>",
+  "adapter": "claude",
+  "source_id_prefix": "sha256-source-v1:30e4756e9ffa8f10\u2026",
+  "lock_digest_prefix": "sha256:edecd8c8b920932e3036f698\u2026",
+  "mode": "<mode>",
+  "overall_status": "unknown",
+  "notes": [
+    "Private names and absolute paths are redacted.",
+    "This is not a signed attestation.",
+    "Do not upload automatically; review before sharing."
+  ]
+}

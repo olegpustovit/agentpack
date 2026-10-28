@@ -16,9 +16,32 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
+type MCPCollectionPlan struct {
+	Entries  mcp.Entries
+	Warnings []MCPCollectionWarning
+}
+
+type MCPCollectionWarning struct{ Source, Message string }
+
+func warnMCP(warnings *[]MCPCollectionWarning, source, message string) {
+	*warnings = append(*warnings, MCPCollectionWarning{Source: source, Message: message})
+}
+
 // CollectMCP applies the canonical precedence: plugins, manifest, then .agents.
 func CollectMCP(projectRoot string, lock lockfile.PackLock, projectManifest *manifest.Manifest, effective *mode.Effective) (mcp.Entries, error) {
+	plan, err := CollectMCPPlan(projectRoot, lock, projectManifest, effective)
+	if err != nil {
+		return nil, err
+	}
+	for _, warning := range plan.Warnings {
+		log.Printf("warning: %s: %s", warning.Source, warning.Message)
+	}
+	return plan.Entries, nil
+}
+
+func CollectMCPPlan(projectRoot string, lock lockfile.PackLock, projectManifest *manifest.Manifest, effective *mode.Effective) (MCPCollectionPlan, error) {
 	merged := make(mcp.Entries)
+	var warnings []MCPCollectionWarning
 	plugins := lock.Plugins()
 	sort.Slice(plugins, func(i, j int) bool { return plugins[i].CacheKey < plugins[j].CacheKey })
 	for _, plugin := range plugins {
@@ -28,7 +51,7 @@ func CollectMCP(projectRoot string, lock lockfile.PackLock, projectManifest *man
 		if effective != nil {
 			allowed, err := effective.AllowsPackagePath(plugin.Module, "mcp.json")
 			if err != nil {
-				return nil, err
+				return MCPCollectionPlan{}, err
 			}
 			if !allowed {
 				continue
@@ -38,7 +61,7 @@ func CollectMCP(projectRoot string, lock lockfile.PackLock, projectManifest *man
 		if err != nil {
 			continue
 		}
-		mergePluginMCP(root, plugin, effective, merged)
+		mergePluginMCP(root, plugin, effective, merged, &warnings)
 	}
 	if projectManifest != nil {
 		for name, server := range projectManifest.MCP.Servers {
@@ -51,14 +74,14 @@ func CollectMCP(projectRoot string, lock lockfile.PackLock, projectManifest *man
 	if effective != nil {
 		allowed, err := effective.AllowsDotAgentsPath("mcp.json")
 		if err != nil {
-			return nil, err
+			return MCPCollectionPlan{}, err
 		}
 		if !allowed {
-			return merged, nil
+			return MCPCollectionPlan{Entries: merged, Warnings: warnings}, nil
 		}
 	}
-	mergeMCPFile(dotPath, mcp.Entry{Source: mcp.DotAgents}, dotPath, effective, merged)
-	return merged, nil
+	mergeMCPFile(dotPath, mcp.Entry{Source: mcp.DotAgents}, ".agents/mcp.json", effective, merged, &warnings)
+	return MCPCollectionPlan{Entries: merged, Warnings: warnings}, nil
 }
 
 func disabledPlugin(lock lockfile.PackLock, key string) bool {
@@ -76,22 +99,22 @@ func disabledPlugin(lock lockfile.PackLock, key string) bool {
 
 // mergeMCPFile reads one MCP definition file, in the wrapped or the bare form.
 // A file or a server that cannot be read is skipped with a warning naming it.
-func mergeMCPFile(path string, origin mcp.Entry, label string, effective *mode.Effective, merged mcp.Entries) {
+func mergeMCPFile(path string, origin mcp.Entry, label string, effective *mode.Effective, merged mcp.Entries, warnings *[]MCPCollectionWarning) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return
 	}
 	if err != nil {
-		log.Printf("warning: skipping MCP servers in %s: %v", label, err)
+		warnMCP(warnings, label, "unreadable MCP definition")
 		return
 	}
-	servers, warnings, err := mcp.ParseServers(data)
+	servers, parseWarnings, err := mcp.ParseServers(data)
 	if err != nil {
-		log.Printf("warning: skipping MCP servers in %s: %v", label, err)
+		warnMCP(warnings, label, "invalid MCP definition")
 		return
 	}
-	for _, warning := range warnings {
-		log.Printf("warning: %s: skipping %s", label, warning)
+	for _, warning := range parseWarnings {
+		warnMCP(warnings, label, "invalid server entry: "+warning)
 	}
 	mergeServers(servers, origin, effective, merged)
 }
@@ -110,7 +133,7 @@ func mergeServers(servers map[string]mcp.Server, origin mcp.Entry, effective *mo
 // (Claude Code, Codex), then what each plugin.json declares under mcpServers,
 // as a path or inline. Codex is read first, then Cursor, then Claude Code; a
 // later definition of the same server name wins.
-func mergePluginMCP(root string, plugin lockfile.Package, effective *mode.Effective, merged mcp.Entries) {
+func mergePluginMCP(root string, plugin lockfile.Package, effective *mode.Effective, merged mcp.Entries, warnings *[]MCPCollectionWarning) {
 	origin := mcp.Entry{Source: mcp.Plugin, Module: plugin.Module, CacheKey: plugin.CacheKey}
 	read := make(map[string]bool)
 	file := func(path, relative string) {
@@ -119,7 +142,7 @@ func mergePluginMCP(root string, plugin lockfile.Package, effective *mode.Effect
 			return
 		}
 		read[resolved] = true
-		mergeMCPFile(resolved, origin, plugin.Module+" "+relative, effective, merged)
+		mergeMCPFile(resolved, origin, plugin.Module+" "+relative, effective, merged, warnings)
 	}
 	// The cache keeps a copy of .mcp.json as mcp.json; reading the original
 	// last lets the Claude Code and Codex file win where a package has both.
@@ -130,12 +153,12 @@ func mergePluginMCP(root string, plugin lockfile.Package, effective *mode.Effect
 		declared, inline := pluginManifest.Declared("mcpServers")
 		for _, path := range declared {
 			if strings.Contains(path, "://") || !strings.EqualFold(filepath.Ext(path), ".json") {
-				log.Printf("warning: skipping %s %q: only .json definitions inside the package are read, not bundles or URLs", label, path)
+				warnMCP(warnings, label, "unsupported MCP definition source; only in-package .json files are read")
 				continue
 			}
 			resolved, err := cache.ResolveInside(root, path)
 			if err != nil {
-				log.Printf("warning: skipping %s: %v", label, err)
+				warnMCP(warnings, label, "MCP definition path escapes package or cannot be resolved")
 				continue
 			}
 			file(resolved, strings.TrimPrefix(path, "./"))
@@ -143,12 +166,12 @@ func mergePluginMCP(root string, plugin lockfile.Package, effective *mode.Effect
 		for _, value := range inline {
 			var raw map[string]json.RawMessage
 			if err := json.Unmarshal(value, &raw); err != nil {
-				log.Printf("warning: skipping %s: it is not an object of servers", label)
+				warnMCP(warnings, label, "inline MCP definition is not an object")
 				continue
 			}
-			servers, warnings := mcp.DecodeServers(raw)
-			for _, warning := range warnings {
-				log.Printf("warning: %s: skipping %s", label, warning)
+			servers, parseWarnings := mcp.DecodeServers(raw)
+			for _, warning := range parseWarnings {
+				warnMCP(warnings, label, "invalid server entry: "+warning)
 			}
 			mergeServers(servers, origin, effective, merged)
 		}

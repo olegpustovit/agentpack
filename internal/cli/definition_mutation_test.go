@@ -118,7 +118,7 @@ func TestGatewayInstallWaitsForCLIMutationAndCancels(t *testing.T) {
 	defer cancel()
 	runner := NewRunner()
 	runner.Stdout, runner.Stderr = io.Discard, io.Discard
-	err = runner.installNetworkPackage(ctx, root, "must-not-resolve")
+	err = runner.installNetworkPackage(ctx, root, "must-not-resolve", true)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("gateway did not wait for CLI transaction: %v", err)
 	}

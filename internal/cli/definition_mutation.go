@@ -9,6 +9,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/registry"
 )
 
 // Mutations hold this through restart; launches release it after preparation,
@@ -30,6 +31,14 @@ func acquireDefinitionMutation(ctx context.Context, root string) (*flock.Flock, 
 	if !acquired {
 		_ = lock.Close()
 		return nil, fmt.Errorf("wait for project mutation: %w", ctx.Err())
+	}
+	home, err := paths.UserAgentpackHome()
+	if err == nil {
+		err = registry.RecoverDefinition(home, root)
+	}
+	if err != nil {
+		_ = lock.Close()
+		return nil, fmt.Errorf("recover interrupted library restore: %w", err)
 	}
 	return lock, nil
 }

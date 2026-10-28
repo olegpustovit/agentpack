@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -24,7 +25,8 @@ type GatewayOptions struct {
 	Home, Address, PublicURL string
 	Start                    func(context.Context, SessionInfo) (string, error)
 	Packages                 func(context.Context, string) (any, error)
-	Install                  func(context.Context, string, string) error
+	Install                  func(context.Context, string, string, bool) error
+	Library                  LibraryOptions
 	Assets                   http.Handler
 }
 
@@ -34,13 +36,15 @@ type nodeRecord struct {
 }
 
 type Gateway struct {
-	options GatewayOptions
-	auth    *gatewayAuth
-	mcp     *GatewayMCP
-	local   nodeRecord
-	origin  *url.URL
-	stop    context.CancelFunc
-	done    <-chan struct{}
+	options       GatewayOptions
+	auth          *gatewayAuth
+	mcp           *GatewayMCP
+	local         nodeRecord
+	origin        *url.URL
+	stop          context.CancelFunc
+	done          <-chan struct{}
+	replicaMu     sync.Mutex
+	replicaStatus sync.Map
 }
 
 func ServeGateway(ctx context.Context, options GatewayOptions) error {
@@ -87,6 +91,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) error {
 	}
 	defer gateway.mcp.Close()
 	go gateway.runTailnetSharing(ctx)
+	go gateway.runRegistryReplication(ctx)
 	data, _ := json.Marshal(gateway.local)
 	record := filepath.Join(options.Home, "network", "node.json")
 	if err = os.WriteFile(record, data, 0600); err != nil {
@@ -113,6 +118,8 @@ func ServeGateway(ctx context.Context, options GatewayOptions) error {
 func (g *Gateway) Handler() http.Handler {
 	mux := http.NewServeMux()
 	g.registerSettings(mux)
+	g.registerLibrary(mux)
+	g.registerRegistryReplication(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, map[string]bool{"ok": true}) })
 	mux.HandleFunc("GET /api/status", g.auth.status)
 	mux.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) { g.auth.login(w, r, true, g.origin.Scheme == "https") })
@@ -197,6 +204,7 @@ func (g *Gateway) Handler() http.Handler {
 		var input struct {
 			Directory string `json:"directory"`
 			Spec      string `json:"spec"`
+			Restart   *bool  `json:"restart"`
 		}
 		if !readJSON(w, r, &input) {
 			return
@@ -205,7 +213,7 @@ func (g *Gateway) Handler() http.Handler {
 			http.Error(w, "choose a recent folder and package", 400)
 			return
 		}
-		respond(w, map[string]bool{"installed": true}, g.options.Install(r.Context(), input.Directory, input.Spec))
+		respond(w, map[string]bool{"installed": true}, g.options.Install(r.Context(), input.Directory, input.Spec, input.Restart == nil || *input.Restart))
 	})
 	mux.HandleFunc("POST /api/node/stop", func(w http.ResponseWriter, r *http.Request) {
 		if err := SetGatewayEnabled(g.options.Home, false); err != nil {
@@ -231,7 +239,7 @@ func (g *Gateway) Handler() http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		local := r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1
 		if !local && r.Host != g.origin.Host {
 			http.Error(w, "unrecognized gateway host", 403)

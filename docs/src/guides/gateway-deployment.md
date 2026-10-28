@@ -39,7 +39,44 @@ ssh oracle-vm systemctl --user stop agentpack-gateway
 
 Stopping this gateway closes remote access. The unit uses `KillMode=process` so independent session workers survive service stops and restarts. Use the application's separate stop-agents action to end sessions.
 
+Closing the terminal or tmux pane that launched an interactive agent stops that session and lets its cleanup finish. Closing a browser tab or temporarily losing its connection leaves the agent running. Detaching a tmux client keeps the pane and its agent running.
+
 Package changes automatically restart interactive sessions whose selected mode inputs changed. Restarting launches a fresh conversation unless the original agent command explicitly requested resume. Headless commands retain their pipes and continue running; they are not restarted because replaying a batch operation could duplicate work.
+
+## Library, installs, and offline work
+
+Save an agentpack from a session's menu to record its manifest, exact package pins,
+mode, and revision history under `$AGENTPACK_HOME/registry`. Enable automatic capture
+for that project to append a revision after successful lock, add, remove, update,
+or sync commands when its normalized content changes. MCP credentials stay in
+private local bindings; snapshots that depend on them show “Needs local configuration”.
+
+Install and restore sheets show the current pins before confirmation. Install can
+target several trusted recent folders, with at most two requests running per machine.
+Clear the restart checkbox to leave current agents running with their existing
+configuration. Restore previews additions, changes, and removals, backs up both
+definition files, and rolls them back if preparation fails. An interrupted restore
+is recovered under the definition lock on the next mutation or launch; preflight
+reports it without changing files.
+
+Library replication requires explicit enrollment on both peers as well as the
+existing Tailscale sharing policy. The gateway checks enrolled peers every 30 seconds
+and exposes the last contact/error and durable object receipts. It transfers only
+validated registry objects, never local credential bindings, terminal output, or
+arbitrary project files. Transfers currently accept up to 64 MiB of metadata per
+batch. Deletion creates a retained tombstone; physical collection waits for every
+enrolled peer to acknowledge it. Concurrent revisions remain separate heads.
+
+Offline installs are local drafts. Review rechecks the destination's identity,
+pins, and current diff before showing a confirmation; reconnect never installs
+automatically. If exact local-only package bytes are unavailable, the draft names
+their recorded holder. Registry replication carries records, not cache file trees.
+An imported revision that needs credentials must be configured locally before restore.
+
+The browser app can be installed as a PWA. Its API responses are never cached.
+Fit and zoom scale the host terminal grid; browser resizing does not resize the
+remote PTY. Terminal colors use the labeled fallback palette. Reconnect replays
+retained terminal bytes, which may be truncated; it is not a server screen snapshot.
 
 ## Connect an MCP client
 

@@ -1,7 +1,6 @@
 package hooks
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -193,24 +192,11 @@ func StrictMappingError(target harness.Target, hook Hook, reason string) error {
 }
 
 func WriteRenderedFiles(output RenderOutput) error {
-	for _, file := range output.Files {
-		if err := os.MkdirAll(filepath.Dir(file.Path), 0o755); err != nil {
-			return err
-		}
-		if file.JSON != nil {
-			data, err := json.MarshalIndent(file.JSON, "", "  ")
-			if err != nil {
-				return err
-			}
-			data = append(data, '\n')
-			if err := os.WriteFile(file.Path, data, 0o644); err != nil {
-				return err
-			}
-		} else if err := os.WriteFile(file.Path, []byte(file.Text), 0o644); err != nil {
-			return err
-		}
+	files, err := SerializeRenderedFiles(output)
+	if err != nil {
+		return err
 	}
-	return nil
+	return ApplyTargetPlan(TargetPlan{Files: files})
 }
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)

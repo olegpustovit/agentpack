@@ -85,11 +85,15 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 			}
 			result := make([]map[string]string, 0, len(locked.Packages))
 			for _, pkg := range locked.Packages {
-				result = append(result, map[string]string{"module": pkg.Module, "commit": pkg.Commit})
+				result = append(result, map[string]string{"module": pkg.Module, "commit": pkg.Commit, "content_hash": pkg.ContentHash, "cache_key": pkg.CacheKey})
 			}
 			return result, nil
 		}
 		options.Install = runner.installNetworkPackage
+		options.Library, err = runner.networkLibrary(home)
+		if err != nil {
+			return 1, err
+		}
 		return 0, network.ServeGateway(ctx, options)
 	case "start":
 		if err := network.SetGatewayEnabled(home, true); err != nil {
@@ -216,6 +220,9 @@ func (runner Runner) launchManaged(ctx context.Context, packContext paths.Contex
 		return 1, err
 	}
 	info := network.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode}
+	// tmux pane closure sends SIGHUP; let the local attachment stop its worker.
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGHUP, syscall.SIGTERM)
+	defer stop()
 	id, err := network.StartWorker(ctx, home, executable, network.WorkerLaunch{Program: executable, Arguments: arguments, Directory: directory, Environment: append(os.Environ(), "AGENTPACK_SESSION_WORKER=1"), Rows: uint16(rows), Columns: uint16(columns), Session: info})
 	if err != nil {
 		return 1, err

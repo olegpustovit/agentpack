@@ -22,7 +22,7 @@ import (
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
-var Version = "0.8.7"
+var Version = "0.9.0"
 
 type Runner struct {
 	Stdout, Stderr io.Writer
@@ -292,6 +292,11 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 	}
 	if err != nil {
 		return 1, runner.reportIntegrity(err)
+	}
+	if invocation.Command == "lock" || invocation.Command == "add" || invocation.Command == "remove" || invocation.Command == "update" || invocation.Command == "sync" && definitionMutation(invocation) {
+		if err := captureNetworkEnvironment(root, workspace, invocation.Global.Mode); err != nil {
+			return 1, fmt.Errorf("environment saved, but library capture failed: %w", err)
+		}
 	}
 	if err = runner.restartChangedEnvironments(ctx, runningBefore); err != nil {
 		return 1, runner.reportIntegrity(err)

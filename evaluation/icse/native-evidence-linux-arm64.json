@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "kind": "recorded_controlled_conformance_run",
+  "date": "2026-10-28",
+  "platform": "linux_arm64",
+  "base_revision": "7004652",
+  "working_tree_changes": true,
+  "command": "AGENTPACK_NATIVE_PROBES=1 go test -v ./internal/harness/claude ./internal/harness/codex -run '^TestNative.*Sentinel$'",
+  "cases": [
+    {
+      "adapter": "claude",
+      "native_version": "2.1.312 (Claude Code)",
+      "executable_identity": "sha256:dc4af28917455e009d26704b82a438353a06149e825b6cdf782908b2d28661f5",
+      "known_positive_sentinel_observed": true,
+      "removed_sentinel_no_longer_observed": true,
+      "fixture_workspace_unchanged": true,
+      "scope": "controlled_projection",
+      "coverage": "partial",
+      "model_inference_requested": false,
+      "network_effects": "not_measured",
+      "native_other_effects": "not_measured"
+    },
+    {
+      "adapter": "codex",
+      "native_version": "codex-cli 0.159.3",
+      "executable_identity": "sha256:54a834b6b16d8a01ff80f7f9cee4aedec35a61c90379e088792623bf1b4c1e3d",
+      "known_positive_sentinel_observed": true,
+      "removed_sentinel_no_longer_observed": true,
+      "fixture_workspace_unchanged": true,
+      "scope": "controlled_projection",
+      "coverage": "partial",
+      "model_inference_requested": false,
+      "network_effects": "not_measured",
+      "native_other_effects": "not_measured"
+    }
+  ],
+  "restored_pack_run": {
+    "command": "AGENTPACK_NATIVE_PROBES=1 go test -v ./internal/cli -run '^TestNativeRestoredPackConformance$'",
+    "passed": true,
+    "same_source_identity": true,
+    "source_identity": "sha256-source-v1:703302300cd90f920f3d2f6f7d77aed2b1ff03e6285d8ed41914a51415939718",
+    "frozen_lock_bytes_unchanged": true,
+    "fixture_workspace_unchanged": true,
+    "full_cli_receipt_saved_and_validated": true,
+    "held_out_empty_mode": {
+      "positive_removed_skill_observation": false,
+      "required_observed_contract_result": "unknown",
+      "complete_absence_claim": false
+    }
+  },
+  "limitations": [
+    "Controlled sentinel fixtures do not establish complete native discovery or model use",
+    "Native network and global runtime effects were not measured",
+    "Temporary diagnostic evidence was removed by Go test cleanup; this file is a run summary",
+    "Synthetic auth/history continuity is tested separately; production OAuth refresh races were not exercised",
+    "The native run covers controlled sentinel presence and removal, not the entire static fault matrix"
+  ]
+}

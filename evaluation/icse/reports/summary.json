@@ -1,0 +1,57 @@
+{
+  "suite": "icse-offline-contribution-fixtures-v4",
+  "agentpack_binary_sha256": "f52a8eb546011d41180c4838ec85e2a1e15ef32616f97b01bc91342c6df9d965",
+  "platform": "linux",
+  "native_agents_invoked": false,
+  "preflight_syscall_checks": 12,
+  "portable_source_id_equal": true,
+  "cases": [
+    {
+      "workspace": "original",
+      "clean_exit": 0,
+      "unknown_exit": 4,
+      "unsupported_overlay_exit": 3,
+      "state_unchanged": true
+    },
+    {
+      "workspace": "relocated",
+      "clean_exit": 0,
+      "unknown_exit": 4,
+      "unsupported_overlay_exit": 3,
+      "state_unchanged": true
+    }
+  ],
+  "held_out_faults": [
+    {
+      "fault": "held_out_user_settings",
+      "exit": 3,
+      "detected": true
+    },
+    {
+      "fault": "held_out_project_skill",
+      "exit": 3,
+      "detected": true
+    },
+    {
+      "fault": "remove_authored_ambient_inputs",
+      "exit": 0,
+      "recovered": true
+    },
+    {
+      "fault": "different_skill_cannot_satisfy_named_requirement",
+      "exit": 3,
+      "detected": true
+    },
+    {
+      "fault": "incomplete_receipt_claims_complete_coverage",
+      "exit": 5,
+      "detected": true
+    },
+    {
+      "fault": "synthetic_receipt_wrong_freshness_identities",
+      "exit": 4,
+      "detected": true
+    }
+  ],
+  "lock_hash_control_unchanged": true
+}

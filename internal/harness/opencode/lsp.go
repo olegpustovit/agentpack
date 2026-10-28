@@ -19,29 +19,81 @@ import (
 // timeouts or restart policy, so those are left out with a warning. A server
 // already named in the user's opencode.json is kept as the user wrote it.
 func writeLSP(servers map[string]json.RawMessage, ctx base.StageContext) error {
-	root, err := stagedRoot(ctx)
+	projection, err := planLSP(servers, ctx)
 	if err != nil {
 		return err
 	}
-	return MergeLSP(filepath.Join(root, "opencode.json"), servers)
+	return base.WriteLSPProjection(projection)
+}
+
+func planLSP(servers map[string]json.RawMessage, ctx base.StageContext) (base.LSPProjection, error) {
+	root, err := stagedRoot(ctx)
+	if err != nil {
+		return base.LSPProjection{}, err
+	}
+	path := filepath.Join(root, "opencode.json")
+	seedPath := path
+	if ctx.StagedRoots == nil {
+		if home, err := os.UserHomeDir(); err == nil {
+			seedPath = filepath.Join(home, ".config", "opencode", "opencode.json")
+		}
+	}
+	seed := append([]byte(nil), ctx.SeedConfig...)
+	if len(seed) == 0 {
+		seed, err = base.ReadMCPSeed(seedPath)
+		if err != nil {
+			return base.LSPProjection{}, err
+		}
+	}
+	if !keepAttribution() {
+		seed, err = AttributionData(seed)
+		if err != nil {
+			return base.LSPProjection{}, err
+		}
+	}
+	data, warnings, omitted, err := MergeLSPData(seed, servers)
+	if err != nil {
+		return base.LSPProjection{}, err
+	}
+	return base.LSPProjection{Files: []base.MCPProjectedFile{{Path: path, Contents: data, Scope: "lsp"}}, Warnings: warnings, Omitted: omitted}, nil
 }
 
 func MergeLSP(path string, servers map[string]json.RawMessage) error {
-	config := map[string]any{"$schema": "https://opencode.ai/config.json"}
-	if data, err := os.ReadFile(path); err == nil {
-		standard, err := hujson.Standardize(append(data, '\n'))
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-		if err := json.Unmarshal(standard, &config); err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-	} else if !os.IsNotExist(err) {
+	seed, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
-	if enabled, isBool := config["lsp"].(bool); isBool && !enabled {
-		log.Printf("warning: OpenCode: opencode.json turns language servers off (\"lsp\": false); skipping %d language server(s)", len(servers))
+	data, warnings, _, err := MergeLSPData(seed, servers)
+	if err != nil {
+		return fmt.Errorf("merge %s: %w", path, err)
+	}
+	for _, warning := range warnings {
+		log.Printf("warning: %s", warning)
+	}
+	if len(data) == 0 {
 		return nil
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func MergeLSPData(seed []byte, servers map[string]json.RawMessage) ([]byte, []string, []string, error) {
+	config := map[string]any{"$schema": "https://opencode.ai/config.json"}
+	if len(seed) != 0 {
+		standard, err := hujson.Standardize(append(seed, '\n'))
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("parse seed: %w", err)
+		}
+		if err := json.Unmarshal(standard, &config); err != nil {
+			return nil, nil, nil, fmt.Errorf("parse seed: %w", err)
+		}
+	}
+	if enabled, isBool := config["lsp"].(bool); isBool && !enabled {
+		names := make([]string, 0, len(servers))
+		for name := range servers {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return nil, []string{fmt.Sprintf("OpenCode config disables LSP; skipped %d language servers", len(names))}, names, nil
 	}
 	existing, _ := config["lsp"].(map[string]any)
 	if existing == nil {
@@ -52,8 +104,11 @@ func MergeLSP(path string, servers map[string]json.RawMessage) error {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	var warnings []string
+	var omitted []string
 	for _, name := range names {
 		if _, found := existing[name]; found {
+			omitted = append(omitted, name)
 			continue
 		}
 		var server struct {
@@ -64,7 +119,7 @@ func MergeLSP(path string, servers map[string]json.RawMessage) error {
 			InitializationOptions json.RawMessage   `json:"initializationOptions"`
 		}
 		if err := json.Unmarshal(servers[name], &server); err != nil {
-			return fmt.Errorf("language server %q: %w", name, err)
+			return nil, warnings, omitted, fmt.Errorf("language server %q: %w", name, err)
 		}
 		var all map[string]json.RawMessage
 		_ = json.Unmarshal(servers[name], &all)
@@ -78,7 +133,7 @@ func MergeLSP(path string, servers map[string]json.RawMessage) error {
 		}
 		if len(dropped) != 0 {
 			sort.Strings(dropped)
-			log.Printf("warning: OpenCode: language server %q: leaving out %v, which OpenCode has no setting for", name, dropped)
+			warnings = append(warnings, fmt.Sprintf("OpenCode: language server %q: leaving out %v, which OpenCode has no setting for", name, dropped))
 		}
 		extensions := make([]string, 0, len(server.ExtensionToLanguage))
 		for extension := range server.ExtensionToLanguage {
@@ -95,5 +150,6 @@ func MergeLSP(path string, servers map[string]json.RawMessage) error {
 		existing[name] = value
 	}
 	config["lsp"] = existing
-	return writeConfig(path, config)
+	data, err := json.MarshalIndent(config, "", "  ")
+	return append(data, '\n'), warnings, omitted, err
 }

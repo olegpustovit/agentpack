@@ -10,7 +10,7 @@ import (
 func TestExportSupportCapsuleRedactsPaths(t *testing.T) {
 	t.Parallel()
 	receipt := Receipt{
-		DiagnosticRefs: []string{"/private/diagnostics/SENTINEL-PRIVATE"}, SchemaVersion: 1, ReceiptID: "r1", SourceIdentity: strings.Repeat("a", 64),
+		DiagnosticRefs: []string{"/private/diagnostics/SENTINEL-PRIVATE"}, SchemaVersion: 1, ReceiptID: "r1", SourceIdentity: "sha256-source-v1:" + strings.Repeat("a", 64),
 		LockDigest: "sha256:" + strings.Repeat("b", 64),
 		Target:     ReceiptTarget{Adapter: "claude", NativeVersion: "2.1.295"},
 		Findings: []Finding{{
@@ -23,6 +23,9 @@ func TestExportSupportCapsuleRedactsPaths(t *testing.T) {
 		}},
 	}
 	capsule := ExportSupportCapsule(receipt)
+	if capsule.SourceID != "sha256-source-v1:"+strings.Repeat("a", 16)+"…" {
+		t.Fatalf("source identity prefix lost: %q", capsule.SourceID)
+	}
 	path := filepath.Join(t.TempDir(), "capsule.json")
 	if err := WriteSupportCapsule(path, capsule); err != nil {
 		t.Fatal(err)

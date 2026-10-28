@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentpack.dev/schemas/report.v1.schema.json",
+  "title": "agentpack preflight report v1",
+  "type": "object",
+  "required": ["schema_version", "phase", "definition_root", "workspace_root", "mode", "policy", "strict_external", "expected_target", "skills", "plugins", "shadowed", "findings", "overall_status", "ok"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "phase": {"const": "preflight"},
+    "environment": {"type": "string"},
+    "definition_root": {"type": "string"},
+    "workspace_root": {"type": "string"},
+    "mode": {"type": "string"},
+    "target": {"type": "string"},
+    "policy": {"enum": ["", "local", "ci"]},
+    "strict_external": {"type": "boolean"},
+    "source_identity": {"type": "string", "minLength": 1},
+    "lock_digest": {"type": "string", "minLength": 1},
+    "workspace_digest": {"type": "string", "minLength": 1},
+    "generation_id": {"type": "string", "minLength": 1},
+    "policy_digest": {"type": "string", "minLength": 1},
+    "expected_target": {
+      "type": "object",
+      "required": ["adapter"],
+      "properties": {
+        "adapter": {"type": "string"},
+        "adapter_revision": {"type": "string"},
+        "capability_revision": {"type": "string"},
+        "executable_identity": {"type": "string"},
+        "native_version": {"type": "string"}
+      }
+    },
+    "skills": {"type": "integer", "minimum": 0},
+    "plugins": {"type": "integer", "minimum": 0},
+    "shadowed": {"type": "integer", "minimum": 0},
+    "inheritance": {"type": "array", "items": {"type": "string"}},
+    "capabilities": {"type": "object", "additionalProperties": {"type": "string"}},
+    "planned_writes": {"type": "array", "items": {"type": "string"}},
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "name"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "kind": {"type": "string", "minLength": 1},
+          "name": {"type": "string"},
+          "module": {"type": "string"},
+          "output_path": {"type": "string"},
+          "winner": {"type": "string"},
+          "omitted": {"type": "boolean"},
+          "reason": {"type": "string"},
+          "evidence": {"$ref": "#/$defs/evidence"},
+          "properties": {"type": "object"}
+        }
+      }
+    },
+    "properties": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["property", "value", "evidence"],
+        "properties": {
+          "property": {"type": "string", "minLength": 1},
+          "value": {},
+          "category": {"type": "string"},
+          "scope": {"type": "string"},
+          "artifact_id": {"type": "string"},
+          "evidence": {"$ref": "#/$defs/evidence"},
+          "method": {"type": "string"},
+          "evidence_ref": {"type": "string"},
+          "evidence_digest": {"type": "string"},
+          "reason": {"type": "string"}
+        },
+        "allOf": [{
+          "if": {"properties": {"evidence": {"const": "observed"}}},
+          "then": {
+            "required": ["method"],
+            "properties": {"method": {"type": "string", "minLength": 1}, "value": {"not": {"type": "null"}}}
+          }
+        }]
+      }
+    },
+    "coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["category", "scope", "completeness"],
+        "properties": {
+          "category": {"type": "string", "minLength": 1},
+          "scope": {"type": "string", "minLength": 1},
+          "completeness": {"enum": ["complete", "partial", "none"]},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "contract_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["requirement_id", "result"],
+        "properties": {
+          "requirement_id": {"type": "string", "minLength": 1},
+          "result": {"enum": ["satisfied", "violated", "unknown", "not_applicable"]},
+          "finding_code": {"type": "string"},
+          "message": {"type": "string"}
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "severity", "message"],
+        "properties": {
+          "code": {"type": "string", "minLength": 1},
+          "severity": {"enum": ["info", "warning", "error", "violation"]},
+          "message": {"type": "string"},
+          "consequence": {"type": "string"},
+          "artifact_id": {"type": "string"},
+          "property": {"type": "string"},
+          "related_refs": {"type": "array", "items": {"type": "string"}},
+          "remediation": {
+            "type": "object",
+            "required": ["message"],
+            "properties": {
+              "message": {"type": "string"},
+              "argv": {"type": "array", "items": {"type": "string"}}
+            }
+          },
+          "source": {"type": "string"},
+          "target": {"type": "string"},
+          "winner": {"type": "string"},
+          "remedy": {"type": "string"},
+          "evidence": {"$ref": "#/$defs/evidence"},
+          "accepted": {"type": "boolean"}
+        }
+      }
+    },
+    "overall_status": {"enum": ["ready", "ready_with_warnings", "violated", "unknown", "error"]},
+    "ok": {"type": "boolean"}
+  },
+  "allOf": [{
+    "if": {"properties": {"overall_status": {"not": {"const": "error"}}}},
+    "then": {"properties": {"mode": {"minLength": 1}, "policy": {"enum": ["local", "ci"]}}}
+  }],
+  "$defs": {
+    "evidence": {"enum": ["declared", "generated", "observed", "unknown"]}
+  }
+}

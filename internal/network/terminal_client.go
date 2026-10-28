@@ -16,7 +16,22 @@ import (
 
 // RunTerminal attaches directly to the worker, so gateway shutdown cannot
 // interrupt the local terminal. Ctrl+] releases or reclaims input ownership.
-func RunTerminal(ctx context.Context, home, id string, input *os.File, output io.Writer) (int, error) {
+// Closing the launching terminal stops its worker, including during reconnect.
+func RunTerminal(ctx context.Context, home, id string, input *os.File, output io.Writer) (code int, result error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ended := false
+	defer func() {
+		if ended || errors.Is(result, ErrSessionEnded) {
+			return
+		}
+		stop, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
+		defer cancel()
+		if err := StopWorker(stop, home, id); err != nil {
+			code = 1
+			result = errors.Join(result, fmt.Errorf("stop local terminal session: %w", err))
+		}
+	}()
 	record, err := workerRecord(home, id)
 	if err != nil {
 		return 1, err
@@ -78,7 +93,7 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 				}
 			}
 			if err != nil {
-				close(keys)
+				cancel()
 				return
 			}
 		}
@@ -123,10 +138,7 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 		select {
 		case <-ctx.Done():
 			return 1, ctx.Err()
-		case key, ok := <-keys:
-			if !ok {
-				return 0, nil
-			}
+		case key := <-keys:
 			for len(key) > 0 {
 				index := -1
 				for i, b := range key {
@@ -225,6 +237,7 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 					}
 					continue
 				}
+				ended = true
 				if notice.Error != "" {
 					return 1, errors.New(notice.Error)
 				}

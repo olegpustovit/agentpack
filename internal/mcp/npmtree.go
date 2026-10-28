@@ -463,7 +463,30 @@ func lastLines(text string, n int) string {
 // spec of each server is written under specDir. Servers without a tree are
 // left to ApplyPins.
 func ApplyTrees(entries Entries, records []lockfile.MCPServer, executable, specDir string) (Entries, error) {
+	resolved, files, err := PlanTrees(entries, records, executable, specDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range files {
+		if err := os.MkdirAll(filepath.Dir(file.Path), 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(file.Path, file.Contents, 0o644); err != nil {
+			return nil, err
+		}
+	}
+	return resolved, nil
+}
+
+type PlannedTreeFile struct {
+	Path     string
+	Contents []byte
+}
+
+// PlanTrees computes exact pinned-tree spec files without writing them.
+func PlanTrees(entries Entries, records []lockfile.MCPServer, executable, specDir string) (Entries, []PlannedTreeFile, error) {
 	out := make(Entries, len(entries))
+	var files []PlannedTreeFile
 	for name, entry := range entries {
 		out[name] = entry
 		record, found := recordFor(records, name)
@@ -480,21 +503,16 @@ func ApplyTrees(entries Entries, records []lockfile.MCPServer, executable, specD
 		}
 		data, err := json.MarshalIndent(spec, "", " ")
 		if err != nil {
-			return nil, err
-		}
-		if err := os.MkdirAll(specDir, 0o755); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		specPath := filepath.Join(specDir, safeFileName(name)+".json")
-		if err := os.WriteFile(specPath, append(data, '\n'), 0o644); err != nil {
-			return nil, err
-		}
+		files = append(files, PlannedTreeFile{Path: specPath, Contents: append(data, '\n')})
 		command := executable
 		entry.Server.Command = &command
 		entry.Server.Args = append([]string{"mcp-exec", "--spec", specPath, "--"}, entry.Server.Args[index+1:]...)
 		out[name] = entry
 	}
-	return out, nil
+	return out, files, nil
 }
 
 // StartsWithNPX reports whether a server is started by npx, the only npm

@@ -16,7 +16,22 @@ import (
 // for a stdio server and takes an OAuth client secret from the keychain, not
 // from the file, so those two are left out with a warning.
 func WriteMCP(path string, entries mcp.Entries) error {
+	data, warnings, err := RenderMCP(entries)
+	if err != nil {
+		return err
+	}
+	for _, warning := range warnings {
+		log.Printf("warning: %s", warning)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
+func RenderMCP(entries mcp.Entries) ([]byte, []string, error) {
 	servers := make(map[string]map[string]any)
+	var warnings []string
 	for _, name := range entries.Names() {
 		server := entries[name].Server
 		if server.Disabled != nil && *server.Disabled {
@@ -54,11 +69,15 @@ func WriteMCP(path string, entries mcp.Entries) error {
 			}
 		}
 		if len(missing) != 0 {
-			log.Printf("warning: %s", mcp.NotCarried("Claude Code", name, missing...))
+			warnings = append(warnings, mcp.NotCarried("Claude Code", name, missing...))
 		}
 		servers[name] = object
 	}
-	return writeJSON(path, map[string]any{"mcpServers": servers})
+	data, err := json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
+	if err != nil {
+		return nil, warnings, fmt.Errorf("encode MCP servers: %w", err)
+	}
+	return data, warnings, nil
 }
 
 func writeJSON(path string, value any) error {

@@ -15,7 +15,7 @@ import (
 )
 
 func New() base.Harness {
-	return base.Definition{Target: base.Grok, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, MCP: writeMCP, LSP: writeLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchFinished: persistCredentials}
+	return base.Definition{Target: base.Grok, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, LSP: writeLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchFinished: persistCredentials}
 }
 
 func nativeUserRoots(home string) []string {
@@ -131,17 +131,29 @@ func seedHome(staged, bundle string) error {
 	return linkTrustedPlugin(staged, bundle)
 }
 func enableBundle(path string) error {
-	root := make(map[string]any)
+	var seed []byte
 	if data, err := os.ReadFile(path); err == nil {
-		if err := toml.Unmarshal(data, &root); err != nil {
-			return err
-		}
+		seed = data
 	} else if !os.IsNotExist(err) {
 		return err
 	}
+	data, err := EnableBundleData(seed)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func EnableBundleData(seed []byte) ([]byte, error) {
+	root := make(map[string]any)
+	if len(seed) != 0 {
+		if err := toml.Unmarshal(seed, &root); err != nil {
+			return nil, err
+		}
+	}
 	plugins, ok := root["plugins"].(map[string]any)
 	if root["plugins"] != nil && !ok {
-		return fmt.Errorf("%s: plugins must be a TOML table", path)
+		return nil, fmt.Errorf("plugins must be a TOML table")
 	}
 	if plugins == nil {
 		plugins = make(map[string]any)
@@ -154,14 +166,14 @@ func enableBundle(path string) error {
 		for _, value := range raw {
 			text, ok := value.(string)
 			if !ok {
-				return fmt.Errorf("%s: plugins.enabled must be an array of strings", path)
+				return nil, fmt.Errorf("plugins.enabled must be an array of strings")
 			}
 			enabled = append(enabled, text)
 		}
 	case []string:
 		enabled = append(enabled, raw...)
 	default:
-		return fmt.Errorf("%s: plugins.enabled must be an array of strings", path)
+		return nil, fmt.Errorf("plugins.enabled must be an array of strings")
 	}
 	if !slices.Contains(enabled, "agentpack-bundle") {
 		enabled = append(enabled, "agentpack-bundle")
@@ -169,9 +181,9 @@ func enableBundle(path string) error {
 	plugins["enabled"] = enabled
 	data, err := toml.Marshal(root)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return data, nil
 }
 func linkTrustedPlugin(home, bundle string) error {
 	dir := filepath.Join(home, "plugins")
@@ -205,11 +217,61 @@ func writeAttribution(home string) error {
 	return os.WriteFile(path, []byte(output), 0o644)
 }
 func writeMCP(entries mcp.Entries, ctx base.StageContext) error {
-	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	projection, err := planMCP(entries, ctx)
 	if err != nil {
 		return err
 	}
-	return MergeMCP(filepath.Join(home, "config.toml"), entries)
+	return base.WriteMCPProjection(projection)
+}
+func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
+	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	seedPath := ""
+	if ctx.StagedRoots == nil {
+		if userHome, err := os.UserHomeDir(); err == nil {
+			seedPath = filepath.Join(userHome, ".grok", "config.toml")
+		}
+	} else {
+		seedPath = filepath.Join(home, "config.toml")
+	}
+	seed, err := base.ReadMCPSeed(seedPath)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	if ctx.StagedRoots == nil {
+		seed, err = EnableBundleData(seed)
+		if err != nil {
+			return base.MCPProjection{}, err
+		}
+	}
+	inputPath := seedPath
+	if ctx.StagedRoots != nil {
+		if userHome, err := os.UserHomeDir(); err == nil {
+			inputPath = filepath.Join(userHome, ".grok", "config.toml")
+		}
+	}
+	input, err := base.ReadMCPInput(inputPath)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	data, warnings, shadowed, err := MergeMCPData(seed, entries)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	servers := base.ProjectedMCPServers(entries)
+	for index := range servers {
+		if slices.Contains(shadowed, servers[index].Name) {
+			servers[index].Winner = "user"
+		}
+	}
+	base.MarkMCPWarnings(servers, warnings)
+	digest, err := base.MCPTOMLScopeDigest(data, "mcp_servers")
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	return base.MCPProjection{Files: []base.MCPProjectedFile{{Path: filepath.Join(home, "config.toml"), Contents: data, Scope: "mcp_servers", ScopeDigest: digest, MergeOrder: []string{"user config (existing names win)", "plugin definitions", "agentpack.toml", ".agents/mcp.json"}}}, Servers: servers, Warnings: warnings, Inputs: []base.MCPProjectedInput{input}}, nil
 }
 func injectGuidance(blob string, ctx base.StageContext) error {
 	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())

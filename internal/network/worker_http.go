@@ -306,6 +306,9 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 	if len(replay.Data) > 0 && write(websocket.BinaryMessage, replay.Data) != nil {
 		return
 	}
+	if notice(terminalNotice{Type: "replay_complete", Attachment: attachment.ID, State: state, Offset: replay.Offset + uint64(len(replay.Data))}) != nil {
+		return
+	}
 	notices := make(chan terminalNotice, 8)
 	closed := make(chan struct{})
 	go func(epoch uint64) {

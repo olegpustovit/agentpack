@@ -44,12 +44,15 @@ func TestCollectMCPSkipsMalformedDotAgentsFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(project, ".agents", "mcp.json"), []byte("{"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	entries, err := CollectMCP(project, lockfile.PackLock{}, nil, nil)
+	plan, err := CollectMCPPlan(project, lockfile.PackLock{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
-		t.Fatalf("entries = %#v", entries)
+	if len(plan.Entries) != 0 {
+		t.Fatalf("entries = %#v", plan.Entries)
+	}
+	if len(plan.Warnings) != 1 || plan.Warnings[0].Source != ".agents/mcp.json" || plan.Warnings[0].Message != "invalid MCP definition" {
+		t.Fatalf("omissions = %#v", plan.Warnings)
 	}
 }
 

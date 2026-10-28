@@ -1,340 +1,459 @@
 import { test, expect } from "@playwright/test";
-const session = { id: "local-one", directory: "/work/my-project", harness: "claude", mode: "default", state: { running: true, owner: 0, epoch: 1, rows: 24, columns: 80, exit_code: 0 } };
-async function mockAPI(page, { setup = false, authenticated = true } = {}) {
-  const requests = [];
-  await page.route("**/api/**", async (route) => {
-    const url = new URL(route.request().url());
-    const body = route.request().postDataJSON();
-    requests.push({ path: url.pathname, body });
-    let data;
-    if (url.pathname === "/api/status") data = { setup_required: setup, authenticated };
-    else if (url.pathname === "/api/setup") {
-      expect(body.token).toBe("private-token");
-      expect(body.password).toBe("a-long-test-password");
-      setup = false;
-      authenticated = true;
-      data = {};
-    } else if (url.pathname === "/api/login") {
-      authenticated = true;
-      data = {};
-    } else if (url.pathname === "/api/logout") {
-      authenticated = false;
-      data = {};
-    } else if (url.pathname === "/api/sessions") data = route.request().method() === "POST" ? { ...session, ...body } : [session];
-    else if (url.pathname === "/api/recent") data = [{ directory: "/work/previous", harness: "codex", mode: "default" }];
-    else if (url.pathname === "/api/packages") data = route.request().method() === "POST" ? {} : [{ module: "github.com/acme/tools", commit: "abcd1234" }];
-    else data = {};
-    await route.fulfill({ json: data });
+const session = {id:"local-one",directory:"/work/my-project",harness:"claude",mode:"default",state:{running:true,owner:0,epoch:1,rows:24,columns:80,exit_code:0}};
+const second = {...session,id:"local-two",directory:"/work/another-project",harness:"codex"};
+async function mockAPI(page,{authenticated=true,setup=false}={}) {
+  const requests=[]; let loggedIn=authenticated, setupNeeded=setup;
+  await page.route("**/api/**",async route=>{
+    const req=route.request(),url=new URL(req.url()),body=req.method()==="GET"?undefined:req.postDataJSON();
+    requests.push({path:url.pathname,query:url.searchParams,body});
+    let data={};
+    if(url.pathname==="/api/status") data={setup_required:setupNeeded,authenticated:loggedIn};
+    else if(url.pathname==="/api/login") {loggedIn=true;data={};}
+    else if(url.pathname==="/api/setup") {expect(body).toMatchObject({token:"private-token",password:"a-long-test-password"});setupNeeded=false;loggedIn=true;data={};}
+    else if(url.pathname==="/api/logout") data={};
+    else if(url.pathname==="/api/nodes") data=[];
+    else if(url.pathname==="/api/sessions") data=req.method()==="POST"?{...session,...body,id:"created"}:[session,second];
+    else if(url.pathname==="/api/recent") data=[{directory:"/work/previous",harness:"codex",mode:"default",available:true}];
+    else if(url.pathname==="/api/packages") data=req.method()==="POST"?{}:[{module:"github.com/acme/tools",commit:"abcd1234"}];
+    else if(url.pathname==="/api/settings") data={running:true,platform:"linux",sharing_enabled:true,allowed_peers:["tag:server"]};
+    else if(url.pathname==="/api/settings/sharing") data={sharing_enabled:body.enabled};
+    await route.fulfill({json:data});
   });
   return requests;
 }
-test("private setup, recent folders, package install and responsive layout", async ({ page }) => {
-  const requests = await mockAPI(page, { setup: true, authenticated: false });
-  await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Set up your gateway" })).toBeVisible();
-  await page.getByLabel("Setup token").fill("private-token");
-  await page.getByLabel("Root account password").fill("a-long-test-password");
-  await page.getByRole("button", { name: "Create root account" }).click();
-  await expect(page.getByRole("heading", { name: "Sessions", exact: true })).toBeVisible();
-  await expect(page.getByText("/work/my-project", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Recent folders" }).click();
-  await page.getByRole("button", { name: "Start fresh" }).click();
-  await expect(page.locator("#start-directory")).toHaveValue("/work/previous");
-  await expect(page.locator("#start-harness")).toHaveValue("codex");
-  await page.getByRole("button", { name: "Close new session" }).click();
-  await page.getByRole("button", { name: "Packages", exact: true }).click();
-  await page.locator("#package-directory").fill("/work/my-project");
-  await page.getByRole("button", { name: "Load packages" }).click();
-  await expect(page.getByText("github.com/acme/tools")).toBeVisible();
-  await page.locator("#package-spec").fill("acme/skill");
-  await page.getByRole("button", { name: "Install package" }).click();
-  await expect(page.getByText("Package installed. Affected agents have been restarted.")).toBeVisible();
-  expect(requests.some((request) => request.path === "/api/packages" && request.body?.spec === "acme/skill")).toBeTruthy();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
-  await page.screenshot({ path: `test-results/gateway-${test.info().project.name}.png`, fullPage: true });
-});
-test("terminal renders bytes, arbitrates input and detaches without stopping", async ({ page }) => {
-  const requests = await mockAPI(page);
-  let websocket;
-  const received = [];
-  await page.routeWebSocket("**/api/sessions/*/terminal", (ws) => {
-    websocket = ws;
-    ws.send(JSON.stringify({ type: "attached", attachment: 42, state: session.state }));
-    ws.send(Buffer.from("\x1B[32mREADY \u96EA\x1B[0m\r\n"));
-    ws.onMessage((message) => {
-      received.push(message);
-      if (typeof message === "string") {
-        const control = JSON.parse(message);
-        if (control.action === "take") ws.send(JSON.stringify({ type: "state", state: { ...session.state, owner: 42, epoch: 2 } }));
-        if (control.action === "release") ws.send(JSON.stringify({ type: "state", state: { ...session.state, owner: 0, epoch: 3 } }));
+async function attachTerminal(page,{refuseTake=false}={}) {
+  const controls=[];
+  await page.routeWebSocket("**/api/sessions/*/terminal",ws=>{
+    ws.send(JSON.stringify({type:"attached",attachment:42,state:session.state}));
+    ws.send(Buffer.from("READY\r\n"));
+    ws.send(JSON.stringify({type:"replay_complete"}));
+    ws.onMessage(message=>{
+      controls.push(message);
+      if(typeof message==="string") {
+        const control=JSON.parse(message);
+        if(control.action==="take"&&!refuseTake) ws.send(JSON.stringify({type:"state",state:{...session.state,owner:42,epoch:2}}));
+        if(control.action==="release") ws.send(JSON.stringify({type:"state",state:{...session.state,owner:0,epoch:3}}));
+        if(control.action==="take"&&refuseTake) ws.send(JSON.stringify({type:"error",error:"Control belongs to another terminal"}));
       }
     });
   });
+  return controls;
+}
+test("setup, login and settings retain their gateway behavior",async({page})=>{
+  await mockAPI(page,{authenticated:false,setup:true});
   await page.goto("/");
-  await page.getByRole("button", { name: "Open terminal" }).click();
-  await expect(page.locator("#terminal-status")).toHaveText("Observing \xB7 control available");
+  await expect(page.getByRole("heading",{name:"Set up your gateway"})).toBeVisible();
+  await page.getByLabel("Setup token").fill("private-token");
+  await page.getByLabel("Root account password").fill("a-long-test-password");
+  await page.getByRole("button",{name:"Create root account"}).click();
+  await expect(page.locator("[data-session=local-one]")).toBeVisible();
+  await page.getByRole("button",{name:"Gateway menu"}).click(); await page.getByRole("button",{name:"Gateway settings"}).click();
+  await expect(page.getByText("tag:server",{exact:true})).toBeVisible();
+});
+test("host grid stays fixed while fit, zoom and browser size change",async({page})=>{
+  const requests=await mockAPI(page); const controls=await attachTerminal(page);
+  await page.goto("/"); await page.locator("[data-session=local-one]").click();
   await expect(page.locator(".xterm-screen")).toBeVisible();
-  await page.getByRole("button", { name: "Take control" }).click();
-  await expect(page.locator("#terminal-status")).toHaveText("You have control");
-  await page.getByRole("button", { name: "Ctrl C", exact: true }).click();
-  await expect.poll(() => received.some((data) => typeof data !== "string" && Buffer.from(data).equals(Buffer.from([3])))).toBeTruthy();
-  await page.getByRole("button", { name: "Release control" }).click();
-  await expect(page.locator("#terminal-status")).toHaveText("Observing \xB7 control available");
-  await expect(page.getByRole("button", { name: "Ctrl C", exact: true })).toBeDisabled();
-  await page.getByRole("button", { name: "Close terminal attachment" }).click();
-  await expect(page.locator("#terminal-panel")).toBeHidden();
-  expect(requests.some((request) => request.path.endsWith("/stop"))).toBeFalsy();
+  await expect(page.locator("#grid-label")).toHaveText("80 × 24");
+  await page.setViewportSize({width:1024,height:700}); await page.getByRole("button",{name:"1:1"}).click();
+  await page.getByRole("button",{name:"Zoom in"}).click(); await page.getByRole("button",{name:"Fit"}).click();
+  await page.setViewportSize({width:1440,height:1000}); await page.waitForTimeout(100);
+  await expect(page.locator("#grid-label")).toHaveText("80 × 24");
+  expect(controls.some(value=>value.action==="resize")).toBeFalsy();
+  expect(requests.some(value=>value.path==="/api/sessions"&&value.query.has("node"))).toBeFalsy();
 });
-test("shared definitions keep project folders in sessions and fresh launches", async ({ page }) => {
-  const requests = await mockAPI(page);
-  const projects = ["project1", "project2"].map(name => ({ ...session, id: name, directory: `/work/${name}`, definition_root: "/work" }));
-  await page.route("**/api/sessions", route => {
-    if (route.request().method() === "POST") return route.fallback();
-    return route.fulfill({ json: projects });
-  });
-  await page.route("**/api/recent", route => route.fulfill({ json: projects }));
-  await page.routeWebSocket("**/api/sessions/*/terminal", ws => {
-    ws.send(JSON.stringify({ type: "attached", attachment: 42, state: session.state }));
-  });
-  await page.goto("/");
-  for (const project of projects) await expect(page.locator("#sessions").getByText(project.directory, { exact: true })).toBeVisible();
-  await expect(page.getByText("/work", { exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "Open terminal" }).first().click();
-  await expect(page.locator("#terminal-title")).toContainText("/work/project1");
-  await page.getByRole("button", { name: "Close terminal attachment" }).click();
-  await page.getByRole("button", { name: "Recent folders" }).click();
-  await page.getByRole("button", { name: "Start fresh" }).last().click();
-  await expect(page.locator("#start-directory")).toHaveValue("/work/project2");
-  await page.locator("#start-form button[type=submit]").click();
-  await expect.poll(() => requests.find(request => request.path === "/api/sessions" && request.body)?.body).toEqual({ directory: "/work/project2", harness: "claude", mode: "default" });
+test("sidebar stays left, resizes, collapses and selection follows arrow keys",async({page})=>{
+  await mockAPI(page); await attachTerminal(page); await page.goto("/");
+  const sidebar=page.locator(".sessions"),splitter=page.locator("#splitter");
+  expect(await sidebar.evaluate(el=>el.getBoundingClientRect().left)).toBeLessThan(await page.locator(".term-col").evaluate(el=>el.getBoundingClientRect().left));
+  const box=await splitter.boundingBox(); await page.mouse.move(box.x+1,box.y+20); await page.mouse.down(); await page.mouse.move(340,box.y+20); await page.mouse.up();
+  await expect.poll(()=>page.locator(".workspace").evaluate(el=>getComputedStyle(el).gridTemplateColumns)).toContain("340px");
+  await page.locator("[data-session=local-one]").click(); await page.keyboard.press("ArrowDown");
+  await expect(page.locator("#terminal-title")).toHaveText("another-project");
+  await page.getByRole("button",{name:"Hide sessions"}).click();
+  await expect(page.locator(".workspace")).toHaveClass(/no-sidebar/);
 });
-test("backend strings render as text and failures are visible", async ({ page }) => {
+test("refused terminal control opens the ownership alert",async({page})=>{
+  await mockAPI(page); await attachTerminal(page,{refuseTake:true}); await page.goto("/");
+  await page.locator("[data-session=local-one]").click();
+  await page.getByRole("button",{name:"Take control"}).click();
+  await expect(page.locator("#alert-sheet")).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Control belongs to another terminal"})).toBeVisible();
+});
+test("390px switches between the session list and terminal panes",async({page})=>{
+  await mockAPI(page); await attachTerminal(page); await page.setViewportSize({width:390,height:844}); await page.goto("/");
+  await expect(page.locator(".sessions")).toBeVisible();
+  await page.getByRole("button",{name:"Hide sessions"}).click();
+  await expect(page.locator(".workspace")).not.toHaveClass(/show-sessions/);
+  await expect(page.locator(".term-col")).toBeVisible();
+  await page.getByRole("button",{name:"Show sessions"}).click();
+  await page.locator("[data-session=local-one]").click();
+  await expect(page.locator(".term-col")).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+});
+test("sessions render per machine as results arrive and preserve rows after a peer goes offline",async({page})=>{
   await mockAPI(page);
-  await page.route("**/api/sessions", (route) => route.fulfill({ json: [{ ...session, directory: "<img src=x onerror=alert(1)>" }] }));
+  let online=true;
+  await page.route("**/api/nodes",route=>route.fulfill({json:[{id:"peer-1",name:"Build server",online}]}));
+  await page.route("**/api/sessions?node=peer-1",async route=>{
+    await new Promise(resolve=>setTimeout(resolve,online?700:100));
+    await route.fulfill({json:[{...session,id:"remote-one",directory:"/srv/release",state:{...session.state,columns:120,rows:36}}]});
+  });
+  await page.route("**/api/recent?node=peer-1",route=>route.fulfill({json:[]}));
   await page.goto("/");
-  await expect(page.getByText("<img src=x onerror=alert(1)>")).toBeVisible();
-  expect(await page.locator("img").count()).toBe(0);
-  await page.route("**/api/packages?**", (route) => route.fulfill({ status: 500, json: { error: "Project is not available" } }));
-  await page.getByRole("button", { name: "Packages", exact: true }).click();
-  await page.locator("#package-directory").fill("/missing");
-  await page.getByRole("button", { name: "Load packages" }).click();
+  await expect(page.locator("[data-session=local-one]")).toBeVisible();
+  await expect(page.locator("[data-session=remote-one]")).toHaveCount(0);
+  await expect(page.locator("[data-session=remote-one]")).toBeVisible();
+  online=false; await page.getByRole("button",{name:"Refresh"}).click();
+  await expect(page.locator("[data-session=remote-one]")).toHaveClass(/offline/);
+  await expect(page.locator("[data-session=remote-one]")).toHaveAttribute("title",/Offline/);
+});
+test("project grouping keeps identical folder names on different machines distinct",async({page})=>{
+  await mockAPI(page);
+  await page.route("**/api/nodes",route=>route.fulfill({json:[{id:"peer-1",name:"Build server",online:true}]}));
+  await page.route("**/api/sessions?node=peer-1",route=>route.fulfill({json:[{...session,id:"remote-one",directory:"/srv/my-project"}]}));
+  await page.goto("/"); await page.getByRole("button",{name:"Project",exact:true}).click();
+  await expect(page.locator(".group-label")).toHaveCount(3);
+  expect(await page.locator(".group-label").allTextContents()).toContain("my-project");
+  expect(await page.locator(".group-label").evaluateAll(rows=>rows.map(row=>row.title))).toContain("/srv/my-project");
+});
+test("new session only offers recent folders and routes start to the chosen machine",async({page})=>{
+  const requests=await mockAPI(page); await page.goto("/");
+  await page.getByRole("button",{name:"New session"}).click();
+  await expect(page.locator("#start-directory option")).toHaveText(["/work/previous"]);
+  await page.locator("#start-form button[type=submit]").click();
+  await expect(page.locator("#start-dialog")).toBeHidden();
+  expect(requests.some(value=>value.path==="/api/sessions"&&value.body?.directory==="/work/previous")).toBeTruthy();
+});
+test("existing package installation remains available from More",async({page})=>{
+  const requests=await mockAPI(page); await page.goto("/");
+  await page.getByRole("button",{name:"Gateway menu"}).click(); await page.getByRole("button",{name:"Packages",exact:true}).click();
+  await page.locator("#package-directory").fill("/work/my-project"); await page.getByRole("button",{name:"Load packages"}).click();
+  await expect(page.getByText("github.com/acme/tools")).toBeVisible();
+  await page.locator("#package-spec").fill("acme/skill"); await page.getByRole("button",{name:"Install package",exact:true}).click();
+  await expect(page.getByText("Package installed. Affected agents have been restarted.")).toBeVisible();
+  expect(requests.some(value=>value.path==="/api/packages"&&value.body?.spec==="acme/skill")).toBeTruthy();
+});
+test("terminal input requires ownership and detaching never stops the agent",async({page})=>{
+  const requests=await mockAPI(page); const received=await attachTerminal(page);
+  await page.goto("/"); await page.locator("[data-session=local-one]").click();
+  await expect(page.locator("#terminal-status")).toHaveText("Observing");
+  await page.getByRole("button",{name:"Take control"}).click();
+  await expect(page.locator("#terminal-status")).toHaveText("Control active");
+  await page.locator(".xterm-screen").click(); await page.keyboard.press("Control+C");
+  await expect.poll(()=>received.some(data=>typeof data!=="string"&&Buffer.from(data).equals(Buffer.from([3])))).toBeTruthy();
+  await page.getByRole("button",{name:"Release control"}).click();
+  await expect(page.locator("#terminal-status")).toHaveText("Observing");
+  await expect(page.getByRole("button",{name:"Take control"})).toBeEnabled();
+  await page.getByRole("button",{name:"Session actions"}).click();
+  await page.getByRole("button",{name:"Close terminal"}).click();
+  expect(requests.some(value=>value.path.endsWith("/stop"))).toBeFalsy();
+});
+test("backend strings are text and API failures stay visible",async({page})=>{
+  await mockAPI(page);
+  await page.route("**/api/sessions",route=>route.fulfill({json:[{...session,directory:"/work/<img src=x onerror=alert(1)>"}]}));
+  await page.goto("/");
+  await expect(page.locator(".srow")).toContainText("<img src=x onerror=alert(1)>");
+  await expect(page.locator("img")).toHaveCount(0);
+  await page.getByRole("button",{name:"Gateway menu"}).click(); await page.getByRole("button",{name:"Packages",exact:true}).click();
+  await page.route("**/api/packages?**",route=>route.fulfill({status:500,json:{error:"Project is not available"}}));
+  await page.locator("#package-directory").fill("/missing"); await page.getByRole("button",{name:"Load packages"}).click();
   await expect(page.getByText("Project is not available")).toBeVisible();
 });
-test('node selection scopes requests and clears the previous folder', async ({page}) => {
+test("external login return URLs are rejected",async({page})=>{
+  await mockAPI(page,{authenticated:false}); await page.goto("/?return_to=%2F%2Fevil.example%2F");
+  await page.getByLabel("Root account password").fill("a-long-test-password"); await page.getByRole("button",{name:"Sign in",exact:true}).click();
+  await expect(page.locator("[data-session=local-one]")).toBeVisible();
+  expect(new URL(page.url()).hostname).toBe("127.0.0.1");
+});
+test("native stdio and Antigravity sessions keep their local-only restrictions",async({page})=>{
   await mockAPI(page);
-  await page.route('**/api/nodes', route => route.fulfill({json:[{id:'n-remote',name:'Oracle VM',online:true}]}));
-  const remoteRequests=[];
-  await page.route('**/api/sessions?node=*', route => {remoteRequests.push(route.request().url());return route.fulfill({json:[{...session,directory:'/remote/project'}]});});
-  await page.goto('/');
-  await expect(page.locator('#node-select option')).toHaveCount(2);
-  await page.locator('#node-select').selectOption('n-remote');
-  await expect(page.getByText('/remote/project',{exact:true})).toBeVisible();
-  expect(remoteRequests.every(value=>new URL(value).searchParams.get('node')==='n-remote')).toBeTruthy();
-  await page.getByRole('button',{name:'Packages',exact:true}).click();
-  await page.locator('#package-directory').fill('/remote/project');
-  await page.locator('#node-select').selectOption('');
-  await expect(page.locator('#package-directory')).toHaveValue('');
+  await page.route("**/api/sessions",route=>route.fulfill({json:[{...session,state:{...session.state,interactive:false}}]}));
+  await page.goto("/"); await page.locator("[data-session=local-one]").click();
+  await expect(page.getByText("Native stdio · browser input unavailable")).toBeVisible();
+  await expect(page.getByRole("button",{name:"Take control"})).toBeDisabled();
+  await page.getByRole("button",{name:"Session actions"}).click();
+  await expect(page.getByRole("button",{name:"Restart…"})).toBeDisabled();
+  await expect(page.getByRole("button",{name:"Stop…"})).toBeEnabled();
+  page.on("dialog",dialog=>dialog.accept()); await page.getByRole("button",{name:"Stop…"}).click();
+  await expect(page.locator("#notice")).toHaveText("Agent stopped.");
+  await page.route("**/api/sessions",route=>route.fulfill({json:[{...session,harness:"agy",state:{...session.state,interactive:false}}]}));
+  await page.getByRole("button",{name:"Refresh status"}).click(); await page.locator("[data-session=local-one]").click();
+  await expect(page.getByText("Desktop launcher presence · start and interact locally. Detached desktop windows are not tracked.")).toBeVisible();
+  await page.getByRole("button",{name:"New session"}).click();
+  await expect(page.locator("#start-harness option[value=agy]")).toHaveCount(0);
+  await page.getByRole("button",{name:"Close new session"}).click();
 });
-test('login cannot redirect to an external origin', async ({page}) => {
-  await mockAPI(page,{authenticated:false});
-  await page.goto('/?return_to=%2F%2Fevil.example%2F');
-  await page.getByLabel('Root account password').fill('a-long-test-password');
-  await page.getByRole('button',{name:'Sign in',exact:true}).click();
-  await expect(page.getByRole('heading',{name:'Sessions',exact:true})).toBeVisible();
-  expect(new URL(page.url()).hostname).toBe('127.0.0.1');
-});
-test('native stdio sessions expose metadata without terminal controls', async ({page}) => {
+test("peer sessions load independently and terminal links retain the node",async({page})=>{
   await mockAPI(page);
-  await page.route('**/api/sessions', route=>route.fulfill({json:[{...session,state:{...session.state,interactive:false}}]}));
-  await page.goto('/');
-  await expect(page.getByText('Native stdio · browser input unavailable')).toBeVisible();
-  await expect(page.getByRole('button',{name:'Open terminal'})).toBeDisabled();
-  await expect(page.getByRole('button',{name:'Restart',exact:true})).toBeDisabled();
-  await expect(page.getByRole('button',{name:'Stop',exact:true})).toBeEnabled();
+  await page.route("**/api/nodes",route=>route.fulfill({json:[{id:"n-main",name:"Build server",online:true}]}));
+  const urls=[];
+  await page.route("**/api/sessions?node=n-main",route=>route.fulfill({json:[{...session,id:"remote-one",directory:"/srv/project"}]}));
+  await page.routeWebSocket(/\/api\/sessions\/[^/]+\/terminal/,ws=>{urls.push(ws.url());ws.send(JSON.stringify({type:"attached",attachment:42,state:session.state}));});
+  await page.goto("/"); await expect(page.locator("[data-session=remote-one]")).toBeVisible();
+  await page.locator("[data-session=remote-one]").click();
+  await expect.poll(()=>urls.length).toBe(1);
+  expect(new URL(urls[0]).searchParams.get("node")).toBe("n-main");
+  expect((await page.locator(".group-label").allTextContents()).join(" ")).toContain("Build server");
 });
-test('restart reconnects to a clean terminal as an observer',async({page})=>{
-  await mockAPI(page);
-  const sockets=[];
-  await page.routeWebSocket('**/api/sessions/*/terminal',ws=>{sockets.push(ws);ws.send(JSON.stringify({type:'attached',attachment:42,state:session.state}));ws.send(Buffer.from(sockets.length===1?'OLD PROCESS\r\n':'NEW PROCESS\r\n'));});
-  await page.goto('/');
-  await page.getByRole('button',{name:'Open terminal'}).click();
-  await expect(page.locator('#terminal-status')).toHaveText('Observing · control available');
-  sockets[0].send(JSON.stringify({type:'ended',state:{...session.state,running:false,restarting:true}}));
-  sockets[0].close();
-  await expect.poll(()=>sockets.length).toBe(2);
-  await expect(page.locator('#terminal-notice')).toContainText('new process');
-  await expect(page.locator('#terminal-status')).toHaveText('Observing · control available');
-  await page.screenshot({path:`test-results/terminal-${test.info().project.name}.png`,fullPage:true});
-});
-test('settings controls gateway sharing separately from sessions',async({page})=>{
-  const requests=await mockAPI(page);
-  let enabled=true;
-  await page.route('**/api/settings',route=>route.fulfill({json:{running:true,platform:'linux',sharing_enabled:enabled,allowed_peers:['tag:server']}}));
-  await page.route('**/api/settings/sharing',route=>{enabled=route.request().postDataJSON().enabled;return route.fulfill({json:{sharing_enabled:enabled}});});
-  await page.goto('/');
-  await page.getByRole('button',{name:'Settings',exact:true}).click();
-  await expect(page.getByText('tag:server',{exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'Stop sharing',exact:true}).click();
-  await expect(page.getByRole('button',{name:'Enable sharing',exact:true})).toBeEnabled();
-  expect(requests.some(request=>request.path.endsWith('/stop'))).toBeFalsy();
-  page.on('dialog',dialog=>dialog.accept());
-  await page.getByRole('button',{name:'Stop all agents on gateway'}).click();
-  await expect(page.locator('#settings-status')).toHaveText('Agents on the gateway machine have been stopped.');
-  expect(requests.some(request=>request.path==='/api/node/stop-agents')).toBeTruthy();
-});
-test('forget removes recent history without stopping a session',async({page})=>{
-  const requests=await mockAPI(page);
-  let recent=[{directory:'/work/previous',harness:'codex',mode:'default'}];
-  await page.route('**/api/recent',route=>{if(route.request().method()==='DELETE'){expect(route.request().postDataJSON()).toEqual(recent[0]);recent=[];return route.fulfill({json:{forgotten:true}});}return route.fulfill({json:recent});});
-  await page.goto('/');
-  await page.getByRole('button',{name:'Recent folders'}).click();
-  await page.getByRole('button',{name:'Forget',exact:true}).click();
-  await expect(page.getByText('Folders will appear here after you launch an agent.')).toBeVisible();
-  expect(requests.some(request=>request.path.endsWith('/stop'))).toBeFalsy();
-});
-test('restart waits through shutdown grace and replays a replacement that already exited', async ({page}) => {
-  await mockAPI(page);
-  let phase='initial';
-  let polls=0;
-  const failedState={...session.state,running:false,restarting:false,exit_code:1};
-  await page.route('**/api/sessions', route => {
-    if (phase==='restarting') polls++;
-    const current=phase==='failed'?failedState:phase==='restarting'?{...session.state,running:false,restarting:true}:session.state;
-    return route.fulfill({json:[{...session,state:current}]});
+test("forgetting a recent folder does not stop a session",async({page})=>{
+  const requests=await mockAPI(page); let recent=[{directory:"/work/previous",harness:"codex",mode:"default",available:true}];
+  await page.route("**/api/recent",route=>{
+    if(route.request().method()==="DELETE"){expect(route.request().postDataJSON()).toEqual({directory:"/work/previous",harness:"codex",mode:"default"});recent=[];return route.fulfill({json:{forgotten:true}});}
+    return route.fulfill({json:recent});
   });
-  const sockets=[];
-  await page.routeWebSocket('**/api/sessions/*/terminal', ws => {
-    sockets.push(ws);
-    const current=sockets.length===1?session.state:failedState;
-    ws.send(JSON.stringify({type:'attached',attachment:42,state:current}));
-    if(sockets.length>1) {
-      ws.send(Buffer.from('REPLACEMENT FAILED: invalid configuration\r\n'));
-      ws.send(JSON.stringify({type:'ended',state:failedState}));
-    }
-  });
-  await page.goto('/');
-  await page.getByRole('button',{name:'Open terminal'}).click();
-  await expect(page.locator('#terminal-status')).toHaveText('Observing · control available');
-  phase='restarting';
-  sockets[0].send(JSON.stringify({type:'ended',state:{...session.state,running:false,restarting:true}}));
-  sockets[0].close();
-  await expect.poll(()=>polls).toBeGreaterThan(0);
-  // Advance wall time without delaying the test or skipping its network callbacks.
-  await page.clock.setFixedTime(new Date(Date.now()+76000));
-  await expect.poll(()=>polls).toBeGreaterThan(1);
-  phase='failed';
-  await expect.poll(()=>sockets.length).toBe(2);
-  await expect(page.locator('#terminal')).toContainText('REPLACEMENT FAILED: invalid configuration');
-  await expect(page.locator('#terminal-status')).toHaveText('Agent exited (1)');
-  sockets[1].close();
-  await expect(page.locator('#terminal-status')).toHaveText('Agent exited (1)');
-  await expect(page.getByRole('button',{name:'Take control',exact:true})).toBeDisabled();
+  await page.goto("/"); await page.getByRole("button",{name:"Gateway menu"}).click(); await page.getByRole("button",{name:"Recent folders"}).click();
+  await page.getByRole("button",{name:"Forget",exact:true}).click();
+  await expect(page.getByText("Folders will appear here after you launch an agent.")).toBeVisible();
+  expect(requests.some(value=>value.path.endsWith("/stop"))).toBeFalsy();
 });
-test('Antigravity presence does not offer remote desktop launches', async ({page}) => {
-  await mockAPI(page);
-  await page.route('**/api/sessions',route=>route.fulfill({json:[{...session,harness:'agy',state:{...session.state,interactive:false}}]}));
-  await page.route('**/api/recent',route=>route.fulfill({json:[{directory:'/work/desktop',harness:'agy',mode:'default'}]}));
-  await page.goto('/');
-  await expect(page.getByText('Desktop launcher presence · start and interact locally. Detached desktop windows are not tracked.')).toBeVisible();
-  await expect(page.getByRole('button',{name:'Open terminal'})).toBeDisabled();
-  await expect(page.locator('#start-harness option[value="agy"]')).toHaveCount(0);
-  await page.getByRole('button',{name:'Recent folders'}).click();
-  await expect(page.getByText('Desktop launches must start locally.')).toBeVisible();
-  await expect(page.getByRole('button',{name:'Start fresh',exact:true})).toBeDisabled();
-});
-
-test('restart retries retain intent after ambiguous errors and renew after definitive outcomes', async ({page}) => {
-  await mockAPI(page);
-  const ids=[];
-  await page.route('**/api/sessions/*/restart', async route => {
-    const body=route.request().postDataJSON();
-    expect(Object.keys(body)).toEqual(['operation_id']);
-    expect(body.operation_id).toMatch(/^[0-9a-f-]{36}$/);
-    ids.push(body.operation_id);
-    if(ids.length===1) return route.abort('failed');
-    if(ids.length===2) return route.fulfill({status:502,json:{error:'Worker response unavailable'}});
-    if(ids.length===4) return route.fulfill({status:409,json:{error:'Restart rejected'}});
+test("restarting keeps the same operation ID after ambiguous failures",async({page})=>{
+  await mockAPI(page); const ids=[];
+  await page.route("**/api/sessions/*/restart",async route=>{
+    const id=route.request().postDataJSON().operation_id; ids.push(id);
+    if(ids.length===1)return route.abort("failed");
+    if(ids.length===2)return route.fulfill({status:502,json:{error:"Worker response unavailable"}});
+    if(ids.length===4)return route.fulfill({status:409,json:{error:"Restart rejected"}});
     return route.fulfill({json:{restarted:true}});
   });
-  page.on('dialog',dialog=>dialog.accept());
-  await page.goto('/');
-  const restart=page.getByRole('button',{name:'Restart',exact:true});
-  await restart.click();
-  await expect(page.locator('#notice')).toContainText('Failed to fetch');
-  await restart.click();
-  await expect(page.locator('#notice')).toHaveText('Worker response unavailable');
-  await restart.click();
-  await expect(page.locator('#notice')).toHaveText('Agent restart requested.');
-  expect(ids[1]).toBe(ids[0]);
-  expect(ids[2]).toBe(ids[0]);
-  await restart.click();
-  await expect(page.locator('#notice')).toHaveText('Restart rejected');
-  expect(ids[3]).not.toBe(ids[2]);
-  await restart.click();
-  await expect(page.locator('#notice')).toHaveText('Agent restart requested.');
-  expect(ids[4]).not.toBe(ids[3]);
+  page.on("dialog",dialog=>dialog.accept()); await page.goto("/"); await page.locator("[data-session=local-one]").click();
+  const restart=async()=>{await page.getByRole("button",{name:"Session actions"}).click();await page.getByRole("button",{name:"Restart…"}).click();};
+  await restart(); await expect(page.locator("#notice")).toContainText(/Failed to fetch|Load failed/);
+  await restart(); await expect(page.locator("#notice")).toHaveText("Worker response unavailable");
+  await restart(); await expect(page.locator("#notice")).toHaveText("Agent restart requested."); expect(ids[1]).toBe(ids[0]);expect(ids[2]).toBe(ids[0]);
+  await restart(); await expect(page.locator("#notice")).toHaveText("Restart rejected"); expect(ids[3]).not.toBe(ids[2]);
+  await restart(); await expect(page.locator("#notice")).toHaveText("Agent restart requested."); expect(ids[4]).not.toBe(ids[3]);
 });
-test('recent folders show last use and disable missing or replaced directories', async ({page}) => {
+test("recent folders retain unavailable reasons and only available paths can start",async({page})=>{
   await mockAPI(page);
-  const lastUsed='2026-10-26T10:30:00Z';
-  await page.route('**/api/recent', route=>route.fulfill({json:[
-    {directory:'/work/available',harness:'codex',mode:'default',available:true,last_used:lastUsed},
-    {directory:'/work/missing',harness:'codex',mode:'default',available:false,last_used:lastUsed,unavailable_reason:'Folder is missing or inaccessible'},
-    {directory:'/work/replaced',harness:'claude',mode:'default',available:false,unavailable_reason:'Folder changed since its last local launch'}
+  const lastUsed="2026-10-26T10:30:00Z";
+  await page.route("**/api/recent",route=>route.fulfill({json:[
+    {directory:"/work/available",harness:"codex",mode:"default",available:true,last_used:lastUsed},
+    {directory:"/work/missing",harness:"codex",mode:"default",available:false,last_used:lastUsed,unavailable_reason:"Folder is missing or inaccessible"},
+    {directory:"/work/replaced",harness:"claude",mode:"default",available:false,unavailable_reason:"Folder changed since its last local launch"}
   ]}));
-  await page.goto('/');
-  await page.getByRole('button',{name:'Recent folders'}).click();
-  const starts=page.getByRole('button',{name:'Start fresh',exact:true});
-  await expect(starts.nth(0)).toBeEnabled();
-  await expect(starts.nth(1)).toBeDisabled();
-  await expect(starts.nth(2)).toBeDisabled();
-  await expect(page.getByText('Unavailable · Folder is missing or inaccessible')).toBeVisible();
-  await expect(page.getByText('Unavailable · Folder changed since its last local launch')).toBeVisible();
-  await expect(page.locator('#recent time').first()).toHaveAttribute('datetime',new Date(lastUsed).toISOString());
-  await expect(page.locator('#recent time').first()).toContainText('Last used');
-  await expect(page.locator('#recent-folders option')).toHaveCount(1);
-  await expect(page.locator('#recent-folders option')).toHaveAttribute('value','/work/available');
+  await page.goto("/"); await page.getByRole("button",{name:"Gateway menu"}).click(); await page.getByRole("button",{name:"Recent folders"}).click();
+  const starts=page.getByRole("button",{name:"Start fresh",exact:true}); await expect(starts.nth(0)).toBeEnabled(); await expect(starts.nth(1)).toBeDisabled(); await expect(starts.nth(2)).toBeDisabled();
+  await expect(page.getByText("Unavailable · Folder is missing or inaccessible")).toBeVisible();
+  await expect(page.getByText("Unavailable · Folder changed since its last local launch")).toBeVisible();
+  await expect(page.locator("#recent time").first()).toHaveAttribute("datetime",new Date(lastUsed).toISOString());
 });
-test('sidebar hides and returns with the toolbar button and Cmd/Ctrl+Backslash', async ({page}) => {
-  test.skip(test.info().project.name === 'phone', 'phone layout keeps navigation visible');
-  await mockAPI(page);
-  await page.goto('/');
-  await page.getByRole('button',{name:'Hide sidebar'}).click();
-  await expect(page.locator('.sidebar')).toBeHidden();
-  await page.keyboard.press('Control+Backslash');
-  await expect(page.locator('.sidebar')).toBeVisible();
-  await expect(page.getByRole('button',{name:'Hide sidebar'})).toBeVisible();
+test("gateway settings stay separate from selected remote sessions",async({page})=>{
+  const requests=await mockAPI(page); let enabled=true;
+  const settingsQueries=[]; await page.route("**/api/settings",route=>{settingsQueries.push(new URL(route.request().url()).search);return route.fulfill({json:{running:true,platform:"linux",sharing_enabled:enabled,allowed_peers:["tag:server"]}});});
+  await page.route("**/api/settings/sharing",route=>{enabled=route.request().postDataJSON().enabled;return route.fulfill({json:{sharing_enabled:enabled}});});
+  await page.goto("/"); await page.locator("[data-session=local-one]").click();
+  await page.getByRole("button",{name:"Gateway menu"}).click(); await page.getByRole("button",{name:"Gateway settings"}).click();
+  await expect(page.getByText("tag:server",{exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"Stop sharing",exact:true}).click(); await expect(page.getByRole("button",{name:"Enable sharing",exact:true})).toBeEnabled();
+  expect(settingsQueries.every(value=>!value.includes("node="))).toBeTruthy();
+  page.on("dialog",dialog=>dialog.accept()); await page.getByRole("button",{name:"Stop all agents on gateway"}).click();
+  await expect(page.locator("#settings-status")).toHaveText("Agents on the gateway machine have been stopped.");
+  expect(requests.some(value=>value.path==="/api/node/stop-agents")).toBeTruthy();
 });
-test('sessions list shows every machine without changing the selector', async ({page}) => {
-  await mockAPI(page);
-  await page.route('**/api/nodes', route => route.fulfill({json:[{id:'n-main',name:'main',online:true}]}));
-  await page.route('**/api/sessions?node=n-main', route => route.fulfill({json:[{...session,id:'remote-one',directory:'/home/me/immigration'}]}));
-  const sockets=[];
-  await page.routeWebSocket(/\/api\/sessions\/[^/]+\/terminal/, ws => {sockets.push(ws.url());ws.send(JSON.stringify({type:'attached',attachment:42,state:session.state}));});
-  await page.goto('/');
-  await expect(page.getByText('/home/me/immigration',{exact:true})).toBeVisible();
-  await expect(page.getByText('/work/my-project',{exact:true})).toBeVisible();
-  await expect(page.locator('.group-label')).toHaveText(['Gateway machine','main']);
-  await expect(page.locator('#node-select')).toHaveValue('');
-  await expect(page.locator('#session-count')).toHaveText('2');
-  await page.getByRole('button',{name:'Open terminal'}).nth(1).click();
-  await expect.poll(()=>sockets.length).toBe(1);
-  expect(new URL(sockets[0]).searchParams.get('node')).toBe('n-main');
-  await page.screenshot({path:`test-results/all-machines-${test.info().project.name}.png`,fullPage:true});
+test("a dropped terminal reconnects and replays output",async({page})=>{
+  await mockAPI(page); const sockets=[];
+  await page.routeWebSocket("**/api/sessions/*/terminal",ws=>{sockets.push(ws);ws.send(JSON.stringify({type:"attached",attachment:42,state:session.state}));ws.send(Buffer.from(`ATTACH ${sockets.length}\r\n`));ws.send(JSON.stringify({type:"replay_complete"}));});
+  await page.goto("/"); await page.locator("[data-session=local-one]").click(); await expect(page.locator("#terminal-status")).toHaveText("Observing");
+  sockets[0].close(); await expect(page.locator("#terminal-status")).toContainText("reconnecting");
+  await expect.poll(()=>sockets.length).toBe(2); await expect(page.locator("#terminal-mount")).toContainText("ATTACH 2");
+  await page.getByRole("button",{name:"Session actions"}).click(); await page.getByRole("button",{name:"Close terminal"}).click();
+  await page.waitForTimeout(1200); expect(sockets.length).toBe(2);
 });
-test('dropped terminal connections reconnect automatically while the agent runs', async ({page}) => {
-  await mockAPI(page);
-  const sockets=[];
-  await page.routeWebSocket(/\/api\/sessions\/[^/]+\/terminal/, ws => {sockets.push(ws);ws.send(JSON.stringify({type:'attached',attachment:42,state:session.state}));ws.send(Buffer.from(`ATTACH ${sockets.length}\r\n`));});
-  await page.goto('/');
-  await page.getByRole('button',{name:'Open terminal'}).click();
-  await expect(page.locator('#terminal-status')).toHaveText('Observing · control available');
-  sockets[0].close();
-  await expect(page.locator('#terminal-status')).toContainText('reconnecting');
+test("a restarted process that exits immediately still replays its final output",async({page})=>{
+  await mockAPI(page); let phase="running"; const sockets=[];
+  const stopped={...session.state,running:false,restarting:false,exit_code:1};
+  await page.route("**/api/sessions",route=>{const state=phase==="restarting"?{...session.state,running:false,restarting:true}:phase==="stopped"?stopped:session.state;if(phase==="restarting")phase="stopped";return route.fulfill({json:[{...session,state}]});});
+  await page.routeWebSocket("**/api/sessions/*/terminal",ws=>{
+    sockets.push(ws); const current=sockets.length===1?session.state:stopped;
+    ws.send(JSON.stringify({type:"attached",attachment:42,state:current}));
+    if(sockets.length===2){ws.send(Buffer.from("REPLACEMENT FAILED: invalid configuration\r\n"));ws.send(JSON.stringify({type:"ended",state:stopped}));}
+  });
+  await page.goto("/"); await page.locator("[data-session=local-one]").click();
+  phase="restarting"; sockets[0].send(JSON.stringify({type:"ended",state:{...session.state,running:false,restarting:true}})); sockets[0].close();
   await expect.poll(()=>sockets.length).toBe(2);
-  await expect(page.locator('#terminal-status')).toHaveText('Observing · control available');
-  await expect(page.locator('#terminal')).toContainText('ATTACH 2');
-  await page.getByRole('button',{name:'Close terminal attachment'}).click();
-  await page.waitForTimeout(1500);
-  expect(sockets.length).toBe(2);
+  await expect(page.locator("#terminal-mount")).toContainText("REPLACEMENT FAILED: invalid configuration");
+  await expect(page.locator("#terminal-status")).toHaveText("Stopped (1)");
+  await expect(page.getByRole("button",{name:"Take control"})).toBeDisabled();
+});
+test("sessions layout renders at desktop, tablet and phone sizes in both themes",async({page})=>{
+  await mockAPI(page); await attachTerminal(page); await page.goto("/"); await page.locator("[data-session=local-one]").click();
+  for(const [width,height,theme] of [[1440,1000,"light"],[1440,1000,"dark"],[1024,768,"light"],[1024,768,"dark"],[390,844,"light"],[390,844,"dark"]]){
+    await page.emulateMedia({colorScheme:theme}); await page.setViewportSize({width,height}); await page.waitForTimeout(100);
+    await page.screenshot({path:`test-results/sessions-${width}-${theme}-${test.info().project.name}.png`});
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+  }
+});
+
+test("Library install routes exact pins, limits concurrency per machine, and keeps row errors",async({page})=>{
+  await mockAPI(page);
+  const requests=[];let active=0,maximum=0;
+  const item={id:"package-1",module:"github.com/acme/tools",commit:"deadbeef1234567890",content_hash:"sha256-tree-v1:abc",kind:"plugin",name:"Tools",url:"https://github.com/acme/tools",owner:"acme",repo:"tools",cache_key:"cache-key"};
+  await page.route("**/api/nodes",route=>route.fulfill({json:[{id:"peer-1",name:"Build server",online:true}]}));
+  await page.route("**/api/recent**",route=>route.fulfill({json:route.request().url().includes("node=peer-1")?[]:[
+    {directory:"/work/one",harness:"claude",mode:"default",available:true},
+    {directory:"/work/two",harness:"claude",mode:"default",available:true},
+    {directory:"/work/three",harness:"claude",mode:"default",available:true}
+  ]}));
+  await page.route("**/api/packages**",async route=>{
+    const url=new URL(route.request().url());
+    if(route.request().method()==="GET")return route.fulfill({json:url.searchParams.get("directory")==="/work/one"?[{module:item.module,commit:item.commit}]:[]});
+    const body=route.request().postDataJSON();requests.push({body,node:url.searchParams.get("node")});active++;maximum=Math.max(maximum,active);
+    await new Promise(resolve=>setTimeout(resolve,80));active--;
+    if(body.directory==="/work/three")return route.fulfill({status:500,json:{error:"Repository is unavailable"}});
+    return route.fulfill({json:{installed:true}});
+  });
+  await page.route("**/api/library/packages**",route=>route.fulfill({json:[item]}));
+  await page.route("**/api/library/agentpacks**",route=>route.fulfill({json:[]}));
+  await page.goto("/");await page.getByRole("button",{name:"Library",exact:true}).click();
+  await page.locator("#library-list button").first().click();await page.locator("#install-item").click();
+  await page.getByRole("button",{name:"Select all online"}).click();
+  await expect(page.locator("#install-destinations")).toContainText("Installed");
+  await page.getByLabel("Restart affected agents").uncheck();
+  await page.getByRole("button",{name:/Install in 2 projects/}).click();
+  await expect(page.locator("#sheet-apply")).toHaveText("Done");
+  await expect(page.locator("#install-destinations")).toContainText("Installed");
+  await expect(page.locator("#install-destinations")).toContainText("Repository is unavailable");
+  expect(maximum).toBe(2);expect(requests).toHaveLength(2);
+  expect(requests.every(({body,node})=>body.spec===`${item.module}@${item.commit}`&&body.restart===false&&!node)).toBeTruthy();
+});
+
+test("save, rename, preview and restore an agentpack from an attached session",async({page})=>{
+  await mockAPI(page);
+  const pack={id:"pack-1",name:"Project setup",revisions:["rev-1"],heads:["rev-1"]};
+  const revision={id:"rev-1",agentpack_id:pack.id,manifest:'name = "project"\n',lock:"",package_ids:[],project:"/work/my-project",created_at:"2026-10-20T10:00:00Z",label:"Initial",mode:"default"};
+  let renameBody,saveBody,restoreBody,previewCount=0;
+  await page.route("**/api/recent",route=>route.fulfill({json:[{directory:"/work/my-project",harness:"claude",mode:"default",available:true}]}));
+  await page.route("**/api/library/agentpacks",async route=>route.fulfill({json:route.request().method()==="POST"?[pack]:[pack]}));
+  await page.route("**/api/library/agentpacks/pack-1",async route=>{
+    if(route.request().method()==="PATCH"){renameBody=route.request().postDataJSON();pack.name=renameBody.name;return route.fulfill({json:pack});}
+    return route.fulfill({json:{agentpack:pack,revisions:[revision]}});
+  });
+  await page.route("**/api/library/agentpacks",async route=>{
+    if(route.request().method()==="POST"){saveBody=route.request().postDataJSON();return route.fulfill({json:{agentpack:pack,revision}});}
+    return route.fulfill({json:[pack]});
+  });
+  await page.route("**/api/library/agentpacks/pack-1/revisions/rev-1/restore-preview**",route=>{previewCount++;return route.fulfill({json:{add:["github.com/acme/new"],update:[],remove:[],mode:"default"}});});
+  await page.route("**/api/library/agentpacks/pack-1/revisions/rev-1/restore",route=>{restoreBody=route.request().postDataJSON();return route.fulfill({json:{restored:true}});});
+  await page.goto("/");await page.locator("[data-session=local-one]").click();
+  await page.getByRole("button",{name:"Library",exact:true}).click();await page.getByRole("button",{name:"Save agentpack…"}).click();
+  await page.getByLabel("Revision note").fill("Initial");await page.getByRole("button",{name:"Save to Library"}).click();
+  await expect(page.getByRole("heading",{name:"Project setup"})).toBeVisible();
+  expect(saveBody).toMatchObject({directory:"/work/my-project",name:"Project setup",label:"Initial",mode:"default",auto_capture:true});
+  await page.getByRole("button",{name:"Rename…"}).click();await page.getByLabel("Name",{exact:true}).fill("Renamed setup");await page.getByRole("button",{name:"Rename",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"Renamed setup"})).toBeVisible();expect(renameBody).toEqual({name:"Renamed setup"});
+  await page.getByRole("button",{name:/Restore/}).click();await expect(page.getByText("Add github.com/acme/new")).toBeVisible();
+  await page.getByLabel("Restart affected agents after restore").uncheck();await page.getByRole("button",{name:"Restore",exact:true}).click();
+  await expect(page.locator("#restore-apply")).toHaveText("Done");expect(previewCount).toBeGreaterThan(0);expect(restoreBody).toEqual({directory:"/work/my-project",restart:false});
+});
+
+test("Machines matrix shows real package pins and project install actions",async({page})=>{
+  await mockAPI(page);
+  const item={id:"package-1",module:"github.com/acme/tools",commit:"abcd1234",kind:"plugin",name:"Tools"};
+  await page.route("**/api/recent",route=>route.fulfill({json:[{directory:"/work/previous",harness:"codex",mode:"default",available:true}]}));
+  await page.route("**/api/packages?**",route=>route.fulfill({json:[{module:item.module,commit:item.commit}]}));
+  await page.route("**/api/library/packages**",route=>route.fulfill({json:[item]}));
+  await page.route("**/api/library/agentpacks**",route=>route.fulfill({json:[]}));
+  await page.goto("/");await page.getByRole("button",{name:"Machines",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"Gateway machine"})).toBeVisible();
+  await expect(page.locator(".matrix")).toContainText("previous");await expect(page.locator(".matrix")).toContainText("abcd1234");
+  await expect(page.getByRole("button",{name:"Install into /work/previous"})).toBeEnabled();
+});
+
+test("reconnect preserves and dims the last frame until replay is rendered",async({page})=>{
+  await mockAPI(page);const sockets=[];
+  await page.routeWebSocket("**/api/sessions/*/terminal",ws=>{
+    sockets.push(ws);ws.send(JSON.stringify({type:"attached",attachment:40+sockets.length,state:session.state}));
+    if(sockets.length===1){ws.send(Buffer.from("LAST FRAME\r\n"));ws.send(JSON.stringify({type:"replay_complete"}));}
+  });
+  await page.goto("/");await page.locator("[data-session=local-one]").click();
+  await expect(page.locator("#terminal-mount")).toContainText("LAST FRAME");
+  expect(await page.evaluate(()=>performance.getEntriesByName("agentpack:terminal:click").length)).toBeGreaterThan(0);
+  expect(await page.evaluate(()=>performance.getEntriesByName("agentpack:terminal:firstframe").length)).toBeGreaterThan(0);
+  sockets[0].close();await expect(page.locator(".terminal-stage")).toHaveClass(/stale/);
+  await expect(page.locator("#terminal-mount")).toContainText("LAST FRAME");
+  await expect.poll(()=>sockets.length).toBe(2);
+  await expect(page.locator(".terminal-stage")).toHaveClass(/stale/);
+  sockets[1].send(Buffer.from("REPLAYED FRAME\r\n"));await expect(page.locator("#terminal-mount")).toContainText("REPLAYED FRAME");
+  await expect(page.locator(".terminal-stage")).toHaveClass(/stale/);
+  sockets[1].send(JSON.stringify({type:"replay_complete"}));await expect(page.locator(".terminal-stage")).not.toHaveClass(/stale/);
+  expect(await page.evaluate(()=>performance.getEntriesByName("agentpack:terminal:socketopen").length)).toBeGreaterThan(0);
+  expect(await page.evaluate(()=>performance.getEntriesByName("agentpack:terminal:attached").length)).toBeGreaterThan(0);
+  expect(await page.evaluate(()=>performance.getEntriesByName("agentpack:terminal:replay_complete").length)).toBeGreaterThan(0);
+});
+
+test("offline package rows save drafts and require a fresh review before apply",async({page})=>{
+  await mockAPI(page);let online=true,recentLoaded=0;const packageRequests=[];let drafts=[];let ready=false;
+  const item={id:"package-1",module:"github.com/acme/tools",commit:"abcd1234",content_hash:"sha256-tree-v1:abc",kind:"plugin",name:"Tools",cache_key:"cache-key"};
+  await page.route("**/api/nodes",route=>route.fulfill({json:[{id:"peer-1",name:"Build server",online}]}));
+  await page.route("**/api/recent?node=peer-1",route=>{recentLoaded++;return route.fulfill({json:[{directory:"/srv/project",folder_id:"folder-fingerprint",harness:"claude",mode:"default",available:true}]});});
+  await page.route("**/api/library/packages**",route=>route.fulfill({json:[item]}));
+  await page.route("**/api/library/agentpacks**",route=>route.fulfill({json:[]}));
+  await page.route("**/api/library/drafts**",async route=>{
+    if(route.request().method()==="POST"){const input=route.request().postDataJSON();drafts=[{...input,id:"draft-1",created_at:"2026-10-28T12:00:00Z"}];return route.fulfill({json:drafts[0]});}
+    return route.fulfill({json:drafts});
+  });
+  await page.route("**/api/library/drafts/draft-1/review",route=>route.fulfill({json:{draft:drafts[0],ready,pins_match:true,folder_match:true,reason:ready?"Ready to install the exact pin.":"Build server is offline.",diff:{add:[],update:[item.module],remove:[],mode:"default"}}}));
+  await page.route("**/api/library/drafts/draft-1",route=>{drafts=[];return route.fulfill({json:{discarded:true}});});
+  await page.route("**/api/packages**",async route=>{
+    const url=new URL(route.request().url());if(route.request().method()==="GET")return route.fulfill({json:[]});
+    packageRequests.push({body:route.request().postDataJSON(),node:url.searchParams.get("node")});return route.fulfill({json:{installed:true}});
+  });
+  await page.route("**/api/library/replication/peers",route=>route.fulfill({json:{peers:[],contacts:{}}}));
+  await page.goto("/");await expect(page.getByRole("button",{name:"Gateway menu"})).toBeVisible();
+  await page.getByRole("button",{name:"Refresh status"}).click();await expect.poll(()=>recentLoaded).toBeGreaterThan(0);online=false;await page.getByRole("button",{name:"Refresh status"}).click();
+  await page.getByRole("button",{name:"Library",exact:true}).click();await page.locator("#library-list button").first().click();await page.locator("#install-item").click();
+  const offline=page.locator("#install-destinations .dest").filter({hasText:"Offline"});await offline.locator("input").check();
+  await expect(page.getByRole("button",{name:"Save 1 draft"})).toBeEnabled();await page.getByRole("button",{name:"Save 1 draft"}).click();
+  await expect(page.locator("#install-drafts")).toContainText("Pending installs");await page.locator("#sheet-apply").click();
+  expect(drafts[0]).toMatchObject({item:`${item.module}@${item.commit}`,node:"peer-1",directory:"/srv/project",folder_identity:"folder-fingerprint",expected_pins:{[item.module]:{commit:item.commit,cache_key:"cache-key",content_hash:item.content_hash}}});
+  await page.getByRole("button",{name:"Review…"}).click();await expect(page.getByText("Build server is offline.")).toBeVisible();
+  await page.getByRole("button",{name:"Keep draft"}).click();online=true;ready=true;await page.getByRole("button",{name:"Refresh status"}).click();
+  await page.getByRole("button",{name:"Review…"}).click();await expect(page.getByText("Ready to install the exact pin.")).toBeVisible();
+  await page.getByLabel("Restart affected agents after apply").uncheck();await page.getByRole("button",{name:"Install",exact:true}).click();
+  await expect(page.locator("#install-drafts")).toBeEmpty();expect(packageRequests).toHaveLength(1);
+  expect(packageRequests[0]).toMatchObject({node:"peer-1",body:{directory:"/srv/project",spec:`${item.module}@${item.commit}`,restart:false}});
+});
+
+test("replication requires opt-in and reports receipts per peer",async({page})=>{
+  await mockAPI(page);let enrolled=false,synced=false;
+  const item={id:"package-1",module:"github.com/acme/tools",commit:"abcd1234",kind:"plugin",name:"Tools"};
+  await page.route("**/api/nodes",route=>route.fulfill({json:[{id:"peer-1",name:"Build server",online:true}]}));
+  await page.route("**/api/settings",route=>route.fulfill({json:{running:true,platform:"linux",sharing_enabled:true,allowed_peers:[]}}));
+  await page.route("**/api/library/replication/peers",async route=>{
+    if(route.request().method()==="POST")enrolled=true;
+    return route.fulfill({json:{peers:enrolled?[{node:"peer-1",receipt_count:synced?1:0,digests:synced?[item.id]:[]}]:[],contacts:{}}});
+  });
+  await page.route("**/api/library/replication/sync",route=>{synced=true;return route.fulfill({json:{synced:true}});});
+  await page.route("**/api/library/packages**",route=>route.fulfill({json:[item]}));
+  await page.route("**/api/library/agentpacks**",route=>route.fulfill({json:[]}));
+  await page.goto("/");await page.getByRole("button",{name:"Gateway menu"}).click();await page.getByRole("button",{name:"Gateway settings"}).click();
+  await expect(page.getByText("Both machines must enroll each other before registry objects replicate.")).toBeVisible();
+  await page.getByRole("button",{name:"Enroll",exact:true}).click();await expect(page.getByText("The other machine must enroll this gateway too.")).toBeVisible();
+  await page.getByRole("button",{name:"Sync now"}).click();await expect(page.getByText("Sync complete.")).toBeVisible();
+  await page.getByRole("button",{name:"Library",exact:true}).click();await page.locator("#library-list button").first().click();
+  await expect(page.getByText(/Verified on .*Build server/)).toBeVisible();
+});
+
+test("offline restore saves the exact agentpack revision as a draft",async({page})=>{
+  await mockAPI(page);let online=true,recentLoaded=0;let draftInput;
+  const pack={id:"pack-1",name:"Project setup",revisions:["rev-1"],heads:["rev-1"]};
+  const revision={id:"rev-1",agentpack_id:pack.id,manifest:'name = "project"\n',lock:"",package_ids:[],project:"/work/project",created_at:"2026-10-20T10:00:00Z",label:"Stable",mode:"default"};
+  let drafts=[];
+  await page.route("**/api/nodes",route=>route.fulfill({json:[{id:"peer-1",name:"Build server",online}]}));
+  await page.route("**/api/recent?node=peer-1",route=>{recentLoaded++;return route.fulfill({json:[{directory:"/srv/project",folder_id:"folder-fingerprint",harness:"claude",mode:"default",available:true}]});});
+  await page.route("**/api/library/packages**",route=>route.fulfill({json:[]}));
+  await page.route("**/api/library/agentpacks",route=>route.fulfill({json:[pack]}));
+  await page.route("**/api/library/agentpacks/pack-1",route=>route.fulfill({json:{agentpack:pack,revisions:[revision]}}));
+  await page.route("**/api/library/agentpacks/pack-1/revisions/rev-1/restore-preview**",route=>route.fulfill({json:{add:[],update:[],remove:[],mode:"default"}}));
+  await page.route("**/api/library/drafts**",async route=>{
+    if(route.request().method()==="POST"){draftInput=route.request().postDataJSON();drafts=[{...draftInput,id:"draft-restore"}];return route.fulfill({json:drafts[0]});}
+    return route.fulfill({json:drafts});
+  });
+  await page.route("**/api/library/replication/peers",route=>route.fulfill({json:{peers:[],contacts:{}}}));
+  await page.goto("/");await page.getByRole("button",{name:"Refresh status"}).click();await expect.poll(()=>recentLoaded).toBeGreaterThan(0);
+  online=false;await page.getByRole("button",{name:"Refresh status"}).click();await page.getByRole("button",{name:"Library",exact:true}).click();
+  await page.getByRole("button",{name:"Agentpacks"}).click();await page.locator("#library-list button").first().click();await page.getByRole("button",{name:/Restore/}).click();
+  await page.getByLabel("/srv/project").check();await expect(page.getByRole("button",{name:"Save draft"})).toBeEnabled();await page.getByRole("button",{name:"Save draft"}).click();
+  expect(draftInput).toMatchObject({item:pack.id,pack_id:pack.id,revision:revision.id,node:"peer-1",directory:"/srv/project",folder_identity:"folder-fingerprint",expected_pins:{}});
 });

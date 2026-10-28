@@ -3,6 +3,7 @@ package network
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -71,5 +72,45 @@ func TestGatewayRestrictsRemoteFolders(t *testing.T) {
 	g.Handler().ServeHTTP(w, r)
 	if w.Code != http.StatusBadRequest || called {
 		t.Fatal("unregistered folder launched", w.Code)
+	}
+}
+
+func TestGatewayPackageRestartChoice(t *testing.T) {
+	home, directory := t.TempDir(), t.TempDir()
+	auth, err := newGatewayAuth(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remember(home, SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
+		t.Fatal(err)
+	}
+	origin, _ := url.Parse("http://127.0.0.1:7420")
+	var restarts []bool
+	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{
+		Home: home,
+		Install: func(_ context.Context, gotDirectory, spec string, restart bool) error {
+			if gotDirectory != directory || spec != "github.com/example/pack@abcdef" {
+				t.Fatalf("unexpected install: %s %s", gotDirectory, spec)
+			}
+			restarts = append(restarts, restart)
+			return nil
+		},
+	}}
+	for _, choice := range []struct {
+		value any
+		want  bool
+	}{{nil, true}, {true, true}, {false, false}} {
+		body := map[string]any{"directory": directory, "spec": "github.com/example/pack@abcdef"}
+		if choice.value != nil {
+			body["restart"] = choice.value
+		}
+		data, _ := json.Marshal(body)
+		r := httptest.NewRequest("POST", origin.String()+"/api/packages", bytes.NewReader(data))
+		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
+		w := httptest.NewRecorder()
+		g.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusOK || len(restarts) == 0 || restarts[len(restarts)-1] != choice.want {
+			t.Fatalf("restart %v: status=%d calls=%v body=%s", choice.value, w.Code, restarts, w.Body.String())
+		}
 	}
 }

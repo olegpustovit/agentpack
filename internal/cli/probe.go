@@ -182,6 +182,7 @@ func (runner Runner) runProbe(ctx context.Context, definitionRoot, workspaceRoot
 	receipt.WorkspaceDigest = report.WorkspaceDigest
 	receipt.GenerationID = report.GenerationID
 	receipt.PolicyDigest = report.PolicyDigest
+	receipt = environment.NormalizeReceipt(receipt)
 	path, err := environment.SaveReceipt(workspaceRoot, receipt)
 	if err != nil {
 		return 1, err

@@ -1,0 +1,7 @@
+name = "minimal-external"
+version = "1.0.0"
+
+[dependencies]
+
+[modes.quiet]
+base = "none"

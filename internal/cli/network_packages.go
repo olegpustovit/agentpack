@@ -130,7 +130,7 @@ func (runner Runner) restartChangedEnvironments(ctx context.Context, snapshots [
 	return errors.Join(failures...)
 }
 
-func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec string) error {
+func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec string, restart bool) error {
 	packContext, err := resolveInvocationContext(Invocation{Global: Global{WorkspaceRoot: directory}}, true)
 	if err != nil {
 		return err
@@ -140,12 +140,18 @@ func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec 
 		return err
 	}
 	defer mutation.Unlock()
-	before, err := snapshotRunningEnvironments(ctx, packContext.DefinitionRoot)
-	if err != nil {
-		return err
+	var before []runningEnvironment
+	if restart {
+		before, err = snapshotRunningEnvironments(ctx, packContext.DefinitionRoot)
+		if err != nil {
+			return err
+		}
 	}
 	if _, err := runner.Service.AddAll(ctx, packContext.DefinitionRoot, spec, false); err != nil {
 		return err
+	}
+	if err := captureNetworkEnvironment(packContext.DefinitionRoot, directory, ""); err != nil {
+		return fmt.Errorf("package installed, but library capture failed: %w", err)
 	}
 	return runner.restartChangedEnvironments(ctx, before)
 }

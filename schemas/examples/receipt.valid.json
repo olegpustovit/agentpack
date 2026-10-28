@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "phase": "probe",
+  "receipt_id": "illustrative-partial-receipt",
+  "source_id": "sha256-source-v1:illustrative",
+  "lock_digest": "sha256:illustrative-lock",
+  "generation_id": "sha256:illustrative-generation",
+  "workspace_digest": "sha256:illustrative-workspace",
+  "policy_digest": "sha256:illustrative-policy",
+  "mode": "default",
+  "target": {
+    "adapter": "claude",
+    "adapter_revision": "illustrative-adapter",
+    "capability_revision": "illustrative-capability",
+    "executable_identity": "sha256:illustrative-binary"
+  },
+  "created_at": "2026-10-28T12:00:00Z",
+  "coverage": [{
+    "category": "skill",
+    "scope": "controlled_projection",
+    "completeness": "partial",
+    "reason": "Illustrative shape only; this example records no real native execution."
+  }],
+  "properties": [{
+    "category": "skill",
+    "scope": "controlled_projection",
+    "artifact_id": "example/review",
+    "property": "source_digest",
+    "value": null,
+    "evidence": "unknown",
+    "reason": "Native source bytes were not observed."
+  }],
+  "findings": [],
+  "effects": {"model_calls": false, "network": "not_measured", "write_scope": "illustrative_only"},
+  "termination": {"status": "completed", "native_exit_code": 0},
+  "overall_status": "unknown"
+}

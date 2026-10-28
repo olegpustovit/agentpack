@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mcp"
@@ -16,7 +17,7 @@ import (
 const instructionsFile = "agentpack-no-attribution.md"
 
 func New() base.Harness {
-	return base.Definition{Target: base.OpenCode, Root: stagedRoot, Setup: prepare, MCP: writeMCP, LSP: writeLSP, Guidance: injectGuidance, Check: verify, Launch: launch}
+	return base.Definition{Target: base.OpenCode, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, LSP: writeLSP, Guidance: injectGuidance, Check: verify, Launch: launch}
 }
 
 func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
@@ -90,11 +91,26 @@ func forceAttributionOff(root string) error {
 		return err
 	}
 	path := filepath.Join(root, "opencode.json")
+	seed, err := base.ReadMCPSeed(path)
+	if err != nil {
+		return err
+	}
+	data, err := AttributionData(seed)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func AttributionData(seed []byte) ([]byte, error) {
 	value := make(map[string]any)
-	if data, err := os.ReadFile(path); err == nil {
-		standard, standardErr := hujson.Standardize(append(data, '\n'))
-		if standardErr != nil || json.Unmarshal(standard, &value) != nil {
-			value = make(map[string]any)
+	if len(seed) != 0 {
+		standard, err := hujson.Standardize(append(seed, '\n'))
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(standard, &value); err != nil {
+			return nil, err
 		}
 	}
 	instructions, _ := value["instructions"].([]any)
@@ -108,15 +124,64 @@ func forceAttributionOff(root string) error {
 		instructions = append(instructions, instructionsFile)
 	}
 	value["instructions"] = instructions
-	return writeConfig(path, value)
+	data, err := json.MarshalIndent(value, "", "  ")
+	return append(data, '\n'), err
 }
 
 func writeMCP(entries mcp.Entries, ctx base.StageContext) error {
-	root, err := stagedRoot(ctx)
+	projection, err := planMCP(entries, ctx)
 	if err != nil {
 		return err
 	}
-	return MergeMCP(filepath.Join(root, "opencode.json"), entries)
+	return base.WriteMCPProjection(projection)
+}
+func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
+	root, err := stagedRoot(ctx)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	seedPath := filepath.Join(root, "opencode.json")
+	if ctx.StagedRoots[base.OpenCode] == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			seedPath = filepath.Join(home, ".config", "opencode", "opencode.json")
+		}
+	}
+	seed, err := base.ReadMCPSeed(seedPath)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	if ctx.StagedRoots == nil && !keepAttribution() {
+		seed, err = AttributionData(seed)
+		if err != nil {
+			return base.MCPProjection{}, err
+		}
+	}
+	inputPath := seedPath
+	if ctx.StagedRoots[base.OpenCode] != "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			inputPath = filepath.Join(home, ".config", "opencode", "opencode.json")
+		}
+	}
+	input, err := base.ReadMCPInput(inputPath)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	data, warnings, shadowed, err := MergeMCPData(seed, entries)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	servers := base.ProjectedMCPServers(entries)
+	for index := range servers {
+		if slices.Contains(shadowed, servers[index].Name) {
+			servers[index].Winner = "user"
+		}
+	}
+	base.MarkMCPWarnings(servers, warnings)
+	digest, err := base.MCPJSONScopeDigest(data, "mcp")
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	return base.MCPProjection{Files: []base.MCPProjectedFile{{Path: filepath.Join(root, "opencode.json"), Contents: data, Scope: "mcp", ScopeDigest: digest, MergeOrder: []string{"user config (existing names win)", "plugin definitions", "agentpack.toml", ".agents/mcp.json"}}}, Servers: servers, Warnings: warnings, Inputs: []base.MCPProjectedInput{input}}, nil
 }
 func injectGuidance(blob string, ctx base.StageContext) error {
 	root, err := stagedRoot(ctx)

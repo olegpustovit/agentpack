@@ -92,7 +92,11 @@ func WriteSupportCapsule(destination string, capsule SupportCapsule) error {
 }
 
 func prefixDigest(value string, n int) string {
-	value = strings.TrimPrefix(value, "sha256:")
+	prefix := "sha256:"
+	if strings.HasPrefix(value, "sha256-source-v1:") {
+		prefix = "sha256-source-v1:"
+	}
+	value = strings.TrimPrefix(value, prefix)
 	if len(value) != 64 {
 		return ""
 	}
@@ -107,7 +111,7 @@ func prefixDigest(value string, n int) string {
 	if len(value) > n {
 		value = value[:n]
 	}
-	return "sha256:" + value + "…"
+	return prefix + value + "…"
 }
 
 // Free-form native diagnostics can contain arbitrary secrets, not just recognizable paths.

@@ -118,12 +118,15 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 		}
 		roots = append(roots, HarnessRoot{candidate.ID(), root})
 	}
-	if err := StagePackOverlay(pipeline.Lock, roots, pipeline.Mode); err != nil {
+	packagePlans, err := StagePackOverlay(pipeline.Lock, roots, pipeline.Mode)
+	if err != nil {
 		return nil, err
 	}
-	if err := pipeline.stageHooks(ctx, harnesses); err != nil {
+	hookPlans, err := pipeline.stageHooks(ctx, harnesses)
+	if err != nil {
 		return nil, err
 	}
+	var mcpPluginPlan MCPPluginPlan
 	codexHarness, err := registry.ByTarget(base.Codex)
 	if err != nil {
 		return nil, err
@@ -132,11 +135,15 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := StageDotAgents(pipeline.ProjectRoot, pipeline.workspace(), pipeline.Mode.Name(), pipeline.Mode, codexRoot, pipeline.Target); err != nil {
+	dotPlan, err := PlanDotAgents(paths.ProjectDotAgentsDir(pipeline.workspace()), pipeline.Mode, pipeline.Target)
+	if err != nil {
 		return nil, err
 	}
 	plugins, err := paths.StagingPluginsDirForMode(pipeline.ProjectRoot, pipeline.Mode.Name())
 	if err != nil {
+		return nil, err
+	}
+	if err := ApplyDotAgentsPlan(dotPlan, filepath.Join(plugins, paths.StagedAgentpackBundleName), codexRoot); err != nil {
 		return nil, err
 	}
 	bundle := filepath.Join(plugins, paths.StagedAgentpackBundleName)
@@ -145,22 +152,37 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 			return nil, err
 		}
 	}
-	merged, err := CollectMCP(pipeline.workspace(), pipeline.Lock, pipeline.Manifest, &pipeline.Mode)
+	mcpPlan, err := CollectMCPPlan(pipeline.workspace(), pipeline.Lock, pipeline.Manifest, &pipeline.Mode)
 	if err != nil {
 		return nil, err
 	}
+	for _, warning := range mcpPlan.Warnings {
+		log.Printf("warning: %s", warning)
+	}
+	merged := mcpPlan.Entries
 	if merged, err = mcp.ApplyTrees(merged, pipeline.Lock.MCPServers, hooks.Executable(), filepath.Join(bundle, "mcp-trees")); err != nil {
 		return nil, err
 	}
 	merged = mcp.ApplyPins(merged, pipeline.Lock.MCPServers)
-	if merged, err = pipeline.stagePluginRoots(merged); err != nil {
+	mcpPluginPlan, err = PlanMCPPluginRoots(pipeline.ProjectRoot, pipeline.Mode.Name(), pipeline.Mode, merged)
+	if err != nil {
 		return nil, err
 	}
+	if err := ApplyMCPPluginPlan(mcpPluginPlan); err != nil {
+		return nil, err
+	}
+	merged = mcpPluginPlan.Entries
+	var mcpProjections []base.MCPProjection
 	if len(merged) != 0 {
 		for _, candidate := range harnesses {
-			if err := candidate.WriteMCP(merged, ctx); err != nil {
+			projection, err := candidate.PlanMCP(merged, ctx)
+			if err != nil {
+				return nil, fmt.Errorf("plan MCP %s: %w", candidate.ID(), err)
+			}
+			if err := base.WriteMCPProjection(projection); err != nil {
 				return nil, fmt.Errorf("write MCP %s: %w", candidate.ID(), err)
 			}
+			mcpProjections = append(mcpProjections, projection)
 		}
 	}
 	declaredServers, err := CollectLSP(pipeline.Lock, &pipeline.Mode)
@@ -178,12 +200,18 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 		}
 		sort.Strings(names)
 		for _, candidate := range harnesses {
-			err := candidate.WriteLSP(languageServers, ctx)
+			projection, err := candidate.PlanLSP(languageServers, ctx)
 			if errors.Is(err, base.ErrNoLSP) {
 				log.Printf("warning: skipping language server(s) %s for %s: it has no language server setting", strings.Join(names, ", "), base.DisplayName(candidate.ID()))
 				continue
 			}
 			if err != nil {
+				return nil, fmt.Errorf("plan language servers %s: %w", candidate.ID(), err)
+			}
+			for _, warning := range projection.Warnings {
+				log.Printf("warning: %s", warning)
+			}
+			if err := base.WriteLSPProjection(projection); err != nil {
 				return nil, fmt.Errorf("write language servers %s: %w", candidate.ID(), err)
 			}
 		}
@@ -212,6 +240,9 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := dotPlan.Validate(); err != nil {
+			return nil, err
+		}
 		if err := candidate.FinalizeWorkspaceOverlay(ctx); err != nil {
 			return nil, err
 		}
@@ -221,6 +252,29 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 	}
 	if err := pipeline.recordStaged(ctx); err != nil {
 		return nil, fmt.Errorf("record staged content: %w", err)
+	}
+	for _, plan := range packagePlans {
+		if err := plan.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	// Antigravity's final workspace overlay adds its own symlink under
+	// .agents/plugins; validate its source plan immediately before that write.
+	if pipeline.Target == nil || *pipeline.Target != base.Agy {
+		if err := dotPlan.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	if err := mcpPluginPlan.Validate(); err != nil {
+		return nil, err
+	}
+	if err := base.ValidateMCPProjectionInputs(mcpProjections); err != nil {
+		return nil, err
+	}
+	for _, plan := range hookPlans {
+		if err := plan.Validate(); err != nil {
+			return nil, err
+		}
 	}
 	for _, transaction := range transactions {
 		if err := transaction.Commit(); err != nil {
@@ -343,52 +397,46 @@ func (pipeline Pipeline) HookDiagnostics() ([]hooks.Diagnostic, hooks.RenderSumm
 	for _, candidate := range pipeline.harnesses() {
 		target := candidate.ID()
 		renderer := registry.Renderer(target)
-		if renderer == nil || len(bundle.Hooks) == 0 {
+		if renderer == nil {
 			continue
 		}
-		root, err := paths.StagingRootForMode(pipeline.ProjectRoot, pipeline.Mode.Name())
+		root, err := candidate.StagedRoot(pipeline.context())
 		if err != nil {
 			return nil, hooks.RenderSummary{}, err
 		}
-		output, err := renderer.Render(bundle.ForTarget(target), hooks.RenderContext{ProjectRoot: pipeline.ProjectRoot, TargetRoot: filepath.Join(root, string(target)), StagedPackages: map[string]string{}})
+		plan, err := hooks.PlanTarget(bundle, target, renderer, hooks.RenderContext{ProjectRoot: pipeline.ProjectRoot, TargetRoot: root}, pipeline.Mode)
 		if err != nil {
 			return nil, hooks.RenderSummary{}, err
 		}
-		diagnostics = append(diagnostics, output.Diagnostics...)
-		summary.Native += output.Summary.Native
-		summary.Emulated += output.Summary.Emulated
-		summary.Degraded += output.Summary.Degraded
-		summary.Omitted += output.Summary.Omitted
+		diagnostics = append(diagnostics, plan.Diagnostics...)
+		summary.Native += plan.Summary.Native
+		summary.Emulated += plan.Summary.Emulated
+		summary.Degraded += plan.Summary.Degraded
+		summary.Omitted += plan.Summary.Omitted
 	}
 	return diagnostics, summary, nil
 }
 
-func (pipeline Pipeline) stageHooks(ctx base.StageContext, harnesses []base.Harness) error {
-	codexHarness, err := registry.ByTarget(base.Codex)
-	if err != nil {
-		return err
-	}
-	codexRoot, err := codexHarness.StagedRoot(ctx)
-	if err != nil {
-		return err
-	}
-	// The Codex home is seeded with the user's own hooks.json only when this
-	// rebuild resets it; otherwise it still holds what Agentpack rendered
-	// last time, which is not the user's.
+func (pipeline Pipeline) stageHooks(ctx base.StageContext, harnesses []base.Harness) ([]hooks.TargetPlan, error) {
 	seeded := ""
 	if pipeline.includes(base.Codex) {
-		seeded = filepath.Join(codexRoot, "hooks.json")
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		seeded = filepath.Join(home, ".codex", "hooks.json")
 	}
 	bundle, err := hooks.Collect(pipeline.workspace(), pipeline.Lock, seeded, pipeline.Mode)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, diagnostic := range bundle.Skipped {
 		fmt.Fprintf(os.Stderr, "warning: %s: %s\n", diagnostic.Source, diagnostic.Message)
 	}
 	if len(bundle.Hooks) == 0 {
-		return nil
+		return nil, nil
 	}
+	var plans []hooks.TargetPlan
 	for _, candidate := range harnesses {
 		renderer := registry.Renderer(candidate.ID())
 		if renderer == nil {
@@ -396,24 +444,14 @@ func (pipeline Pipeline) stageHooks(ctx base.StageContext, harnesses []base.Harn
 		}
 		root, err := candidate.StagedRoot(ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		// Each agent gets the hooks the package published for it, or the
-		// nearest other dialect when it published none.
-		selected := bundle.ForTarget(candidate.ID())
-		if candidate.ID() != base.Codex {
-			// The user's own Codex hooks belong to Codex only.
-			selected.Hooks = slices.DeleteFunc(slices.Clone(selected.Hooks), func(hook hooks.Hook) bool { return hook.Origin.Layer == hooks.SeededNative })
-		}
-		packages, err := hooks.StageOriginPackages(selected, candidate.ID(), root, pipeline.Mode)
+		plan, err := hooks.PlanTarget(bundle, candidate.ID(), renderer, hooks.RenderContext{ProjectRoot: pipeline.ProjectRoot, TargetRoot: root}, pipeline.Mode)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		output, err := renderer.Render(selected, hooks.RenderContext{ProjectRoot: pipeline.ProjectRoot, TargetRoot: root, StagedPackages: packages})
-		if err != nil {
-			return err
-		}
-		for _, diagnostic := range output.Diagnostics {
+		plans = append(plans, plan)
+		for _, diagnostic := range plan.Diagnostics {
 			// A hook rendered as intended is information; one that was
 			// left out or lost something is a warning.
 			if diagnostic.Level == "native" || diagnostic.Level == "emulated" {
@@ -424,11 +462,11 @@ func (pipeline Pipeline) stageHooks(ctx base.StageContext, harnesses []base.Harn
 			}
 			fmt.Fprintf(os.Stderr, "warning: %s: %s\n", diagnostic.Source, diagnostic.Message)
 		}
-		if err := hooks.WriteRenderedFiles(output); err != nil {
-			return err
+		if err := hooks.ApplyTargetPlan(plan); err != nil {
+			return nil, err
 		}
 	}
-	return nil
+	return plans, nil
 }
 
 // A durable journal records original paths before any rename. Production callers

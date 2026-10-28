@@ -81,6 +81,7 @@ func ReceiptsRoot(workspaceRoot string) (string, error) {
 
 // SaveReceipt writes a receipt JSON file and returns its path.
 func SaveReceipt(workspaceRoot string, receipt Receipt) (string, error) {
+	receipt = NormalizeReceipt(receipt)
 	if receipt.Coverage == nil {
 		receipt.Coverage = []CoverageNote{}
 	}
@@ -193,7 +194,7 @@ func LoadReceipt(workspaceRoot, idOrPath string) (Receipt, error) {
 	if err := ValidateReceipt(receipt); err != nil {
 		return Receipt{}, err
 	}
-	return receipt, nil
+	return NormalizeReceipt(receipt), nil
 }
 
 // ValidateReceipt checks record shape; unsuccessful records remain loadable for diagnostics.

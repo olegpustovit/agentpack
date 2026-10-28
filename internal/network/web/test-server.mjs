@@ -10,7 +10,7 @@ createServer(async (req, res) => {
       res.writeHead(403).end();
       return;
     }
-    const type = file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html";
+    const type = file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : file.endsWith(".webmanifest") ? "application/manifest+json" : file.endsWith(".png") ? "image/png" : file.endsWith(".svg") ? "image/svg+xml" : "text/html";
     res.writeHead(200, { "Content-Type": type });
     res.end(await readFile(file));
   } catch {

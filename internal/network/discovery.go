@@ -229,6 +229,12 @@ func TailnetNodes(ctx context.Context, home string) ([]TailnetNode, error) {
 	return nodes, nil
 }
 func peerRoute(method, path string) bool {
+	if replicationPeerRoute(method, path) {
+		return true
+	}
+	if libraryPeerRoute(method, path) {
+		return true
+	}
 	if method == "DELETE" && path == "/api/recent" {
 		return true
 	}
@@ -381,7 +387,7 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			writeJSON(w, TailnetNode{ID: self.ID, Name: self.HostName, Online: true})
 			return
 		}
-		request := r.Clone(r.Context())
+		request := r.Clone(context.WithValue(r.Context(), replicaPeerKey{}, identity.Node.StableID))
 		request.Header = r.Header.Clone()
 		request.Header.Del("Cookie")
 		request.Header.Set("Authorization", "Bearer "+g.local.Secret)

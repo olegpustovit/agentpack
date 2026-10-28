@@ -29,16 +29,32 @@ func SettingsPath(ctx base.StageContext) (string, error) {
 }
 
 func MaterializeSettings(ctx base.StageContext) error {
+	data, err := SettingsContents(nil, KeepAttribution())
+	if err != nil {
+		return err
+	}
+	return WriteSettingsContents(ctx, data)
+}
+
+// SettingsContents is the ordered agentpack-owned Claude settings overlay.
+func SettingsContents(names []string, keepAttribution bool) ([]byte, error) {
+	settings := map[string]any{}
+	if !keepAttribution {
+		settings["includeCoAuthoredBy"] = false
+		settings["attribution"] = map[string]any{"commit": "", "pr": ""}
+	}
+	if names != nil {
+		settings["enabledMcpjsonServers"] = names
+	}
+	return json.MarshalIndent(settings, "", "  ")
+}
+
+func WriteSettingsContents(ctx base.StageContext, data []byte) error {
 	path, err := SettingsPath(ctx)
 	if err != nil {
 		return err
 	}
-	settings := map[string]any{}
-	if !KeepAttribution() {
-		settings["includeCoAuthoredBy"] = false
-		settings["attribution"] = map[string]any{"commit": "", "pr": ""}
-	}
-	return writeSettings(path, settings)
+	return writeSettingsBytes(path, data)
 }
 
 func SetMCPAllowlist(ctx base.StageContext, names []string) error {
@@ -67,6 +83,13 @@ func writeSettings(path string, settings map[string]any) error {
 	}
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
+		return err
+	}
+	return writeSettingsBytes(path, data)
+}
+
+func writeSettingsBytes(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {

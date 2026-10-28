@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-28T16:41:05Z",
+  "title": "Design System: Agentpack gateway",
+  "extensions": {
+    "colorMeta": {
+      "accent-light": { "role": "primary", "displayName": "Restrained Workspace Blue · Light", "canonical": "oklch(.57 .19 255)", "tonalRamp": ["oklch(.2 .08 255)", "oklch(.3 .12 255)", "oklch(.4 .16 255)", "oklch(.5 .18 255)", "oklch(.57 .19 255)", "oklch(.68 .15 255)", "oklch(.8 .09 255)", "oklch(.95 .02 255)"] },
+      "accent-dark": { "role": "primary", "displayName": "Restrained Workspace Blue · Dark", "canonical": "oklch(.64 .17 255)", "tonalRamp": ["oklch(.2 .08 255)", "oklch(.3 .12 255)", "oklch(.4 .15 255)", "oklch(.52 .17 255)", "oklch(.64 .17 255)", "oklch(.74 .13 255)", "oklch(.85 .08 255)", "oklch(.96 .02 255)"] },
+      "window-light": { "role": "neutral", "displayName": "Cool Window · Light", "canonical": "oklch(.992 .001 260)", "tonalRamp": ["oklch(.2 .001 260)", "oklch(.3 .001 260)", "oklch(.4 .001 260)", "oklch(.5 .001 260)", "oklch(.6 .001 260)", "oklch(.7 .001 260)", "oklch(.8 .001 260)", "oklch(.992 .001 260)"] },
+      "chrome-light": { "role": "neutral", "displayName": "Cool Chrome · Light", "canonical": "oklch(.952 .003 260)", "tonalRamp": ["oklch(.2 .002 260)", "oklch(.3 .002 260)", "oklch(.4 .002 260)", "oklch(.5 .003 260)", "oklch(.6 .003 260)", "oklch(.7 .003 260)", "oklch(.8 .003 260)", "oklch(.952 .003 260)"] },
+      "sidebar-light": { "role": "neutral", "displayName": "Cool Sidebar · Light", "canonical": "oklch(.968 .003 260)", "tonalRamp": ["oklch(.2 .002 260)", "oklch(.3 .002 260)", "oklch(.4 .002 260)", "oklch(.5 .003 260)", "oklch(.6 .003 260)", "oklch(.7 .003 260)", "oklch(.8 .003 260)", "oklch(.968 .003 260)"] },
+      "foreground-light": { "role": "neutral", "displayName": "Primary Ink · Light", "canonical": "oklch(.2 .004 260)", "tonalRamp": ["oklch(.2 .004 260)", "oklch(.3 .004 260)", "oklch(.4 .004 260)", "oklch(.5 .004 260)", "oklch(.6 .004 260)", "oklch(.7 .004 260)", "oklch(.8 .004 260)", "oklch(.96 .004 260)"] },
+      "window-dark": { "role": "neutral", "displayName": "Cool Window · Dark", "canonical": "oklch(.2 0 0)", "tonalRamp": ["oklch(.2 0 0)", "oklch(.3 0 0)", "oklch(.4 0 0)", "oklch(.5 0 0)", "oklch(.6 0 0)", "oklch(.7 0 0)", "oklch(.8 0 0)", "oklch(.96 0 0)"] },
+      "chrome-dark": { "role": "neutral", "displayName": "Cool Chrome · Dark", "canonical": "oklch(.255 .002 260)", "tonalRamp": ["oklch(.2 .002 260)", "oklch(.3 .002 260)", "oklch(.4 .002 260)", "oklch(.5 .002 260)", "oklch(.6 .002 260)", "oklch(.7 .002 260)", "oklch(.8 .002 260)", "oklch(.96 .002 260)"] },
+      "sidebar-dark": { "role": "neutral", "displayName": "Cool Sidebar · Dark", "canonical": "oklch(.225 .002 260)", "tonalRamp": ["oklch(.2 .002 260)", "oklch(.3 .002 260)", "oklch(.4 .002 260)", "oklch(.5 .002 260)", "oklch(.6 .002 260)", "oklch(.7 .002 260)", "oklch(.8 .002 260)", "oklch(.96 .002 260)"] },
+      "terminal-background": { "role": "neutral", "displayName": "Terminal Background", "canonical": "#171b22", "tonalRamp": ["#08090b", "#0c0e11", "#101317", "#14181f", "#171b22", "#272b32", "#3d4148", "#f0f1f3"] },
+      "terminal-foreground": { "role": "neutral", "displayName": "Terminal Foreground", "canonical": "#e6e8ed", "tonalRamp": ["#090a0c", "#17191c", "#303237", "#55585e", "#80838a", "#aeb1b8", "#d1d3d9", "#e6e8ed"] }
+    },
+    "typographyMeta": {
+      "body": { "displayName": "System UI", "purpose": "Default interface copy and controls." },
+      "small": { "displayName": "Supporting UI", "purpose": "Secondary forms and supporting content." },
+      "meta": { "displayName": "Metadata", "purpose": "Captions, subtitles, and status labels." },
+      "inspector-title": { "displayName": "Inspector Title", "purpose": "Selected object titles." },
+      "code": { "displayName": "System Mono", "purpose": "Technical values and code blocks." }
+    },
+    "shadows": [
+      { "name": "control-edge", "value": "0 .5px 1px oklch(0 0 0 / 18%), 0 0 0 .5px oklch(0 0 0 / 10%)", "purpose": "Subtle native-style control edge." },
+      { "name": "popover", "value": "0 10px 30px oklch(0 0 0 / 18%), 0 0 0 .5px oklch(0 0 0 / 14%)", "purpose": "Separate transient menus and sheets from the workspace." }
+    ],
+    "breakpoints": [
+      { "name": "compact", "value": "760px" },
+      { "name": "wide-inspector", "value": "1260px" }
+    ]
+  },
+  "components": [
+    { "name": "Primary Button", "kind": "button", "refersTo": "button-primary", "description": "Compact filled action for the primary operation.", "html": "<button class=\"ds-primary\">Apply</button>", "css": ".ds-primary{height:24px;padding:0 8px;border:0;border-radius:5px;background:oklch(.57 .19 255);color:white;font:13px -apple-system,BlinkMacSystemFont,system-ui,sans-serif;box-shadow:0 .5px 1px oklch(0 0 0 / 18%)}.ds-primary:hover{filter:brightness(.96)}.ds-primary:focus-visible{outline:2px solid oklch(.57 .19 255);outline-offset:2px}.ds-primary:active{filter:brightness(.94)}" },
+    { "name": "Neutral Button", "kind": "button", "refersTo": "button-neutral", "description": "Standard compact content action.", "html": "<button class=\"ds-neutral\">Refresh</button>", "css": ".ds-neutral{height:24px;padding:0 8px;border:0;border-radius:5px;background:oklch(.952 .003 260);color:oklch(.2 .004 260);font:13px -apple-system,BlinkMacSystemFont,system-ui,sans-serif;box-shadow:0 .5px 1px oklch(0 0 0 / 18%),0 0 0 .5px oklch(0 0 0 / 10%)}.ds-neutral:hover{filter:brightness(.98)}.ds-neutral:focus-visible{outline:2px solid oklch(.57 .19 255);outline-offset:2px}.ds-neutral:active{filter:brightness(.94)}" },
+    { "name": "Text Field", "kind": "input", "refersTo": "input", "description": "Inset search or form field with a clear focus state.", "html": "<input class=\"ds-input\" placeholder=\"Search\" />", "css": ".ds-input{height:24px;width:220px;padding:0 6px;border:0;border-radius:5px;background:white;color:oklch(.2 .004 260);font:13px -apple-system,BlinkMacSystemFont,system-ui,sans-serif;box-shadow:inset 0 0 0 .5px oklch(.885 .003 260)}.ds-input:focus-visible{outline:0;box-shadow:inset 0 0 0 1px oklch(.57 .19 255),0 0 0 3px oklch(.57 .19 255 / 12%)}" },
+    { "name": "Selected Source Row", "kind": "nav", "refersTo": "source-row-selected", "description": "Focused item in a keyboard-active source list.", "html": "<button class=\"ds-row\">Sessions</button>", "css": ".ds-row{display:flex;align-items:center;width:220px;height:26px;padding:0 6px;border:0;border-radius:5px;background:oklch(.57 .19 255);color:white;text-align:left;font:13px -apple-system,BlinkMacSystemFont,system-ui,sans-serif}.ds-row:hover{filter:brightness(.97)}.ds-row:focus-visible{outline:2px solid oklch(.57 .19 255);outline-offset:1px}" },
+    { "name": "Status Chip", "kind": "chip", "refersTo": "chip", "description": "Compact secondary status or category label.", "html": "<span class=\"ds-chip\">Ready</span>", "css": ".ds-chip{display:inline-flex;align-items:center;height:22px;padding:0 6px;border-radius:11px;background:oklch(.915 .004 260);color:oklch(.47 .006 260);font:11px -apple-system,BlinkMacSystemFont,system-ui,sans-serif}" }
+  ],
+  "narrative": {
+    "northStar": "The Terminal-Led Native Workspace",
+    "overview": "The gateway follows the approved compact desktop reference: a quiet utility window organized around the host terminal, with source lists, inspectors, and install review kept close at hand. System typography, small controls, restrained blue selection, and subtle separators keep the interface familiar and information-dense without making it feel like a web dashboard.\n\nLight and dark appearances share the same hierarchy. The host terminal keeps its own colors; application chrome adapts to the chosen appearance. On narrow screens, panes switch instead of compressing into unreadable columns, and install sheets rise from the bottom.",
+    "keyCharacteristics": ["Terminal-led workspace with compact, native-style chrome.", "Selection uses restrained blue; status always pairs a word with a dot or ring.", "Host terminal colors remain independent from application appearance."],
+    "rules": [{ "name": "The Labeled State Rule", "body": "Never communicate status by color alone; pair the colored dot or ring with a readable state label.", "section": "colors" }],
+    "dos": ["Do preserve the 13px system-font body and compact 2–20px spacing rhythm.", "Do use hairline separators and quiet surface changes to organize panes.", "Do keep host terminal colors independent from the application theme.", "Do switch panes on narrow screens and allow sheets to become bottom sheets.", "Do pair every status color with text or a distinct shape."],
+    "donts": ["Don't add an external display font or CDN-loaded visual asset.", "Don't use color alone to communicate state.", "Don't turn the terminal-led workspace into a page-scroll dashboard or add persistent page headers and footers."]
+  }
+}

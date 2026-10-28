@@ -31,7 +31,7 @@ func New() base.Harness {
 		BeforeReset:    preReset,
 		Begin:          beginGeneration,
 		Setup:          prepare,
-		MCP:            writeMCP,
+		ProjectMCP:     planMCP,
 		Guidance:       injectGuidance,
 		Check:          verify,
 		Launch:         launch,
@@ -416,11 +416,53 @@ func ensureSymlink(target, link string) error {
 }
 
 func writeMCP(entries mcp.Entries, ctx base.StageContext) error {
-	root, err := stagedRoot(ctx)
+	projection, err := planMCP(entries, ctx)
 	if err != nil {
 		return err
 	}
-	return MergeMCP(filepath.Join(root, "config.toml"), entries)
+	return base.WriteMCPProjection(projection)
+}
+func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
+	root, err := stagedRoot(ctx)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	seedPath := filepath.Join(root, "config.toml")
+	if ctx.StagedRoots[base.Codex] == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			seedPath = filepath.Join(home, ".codex", "config.toml")
+		}
+	}
+	seed, err := base.ReadMCPSeed(seedPath)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	inputPath := seedPath
+	if ctx.StagedRoots[base.Codex] != "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			inputPath = filepath.Join(home, ".codex", "config.toml")
+		}
+	}
+	input, err := base.ReadMCPInput(inputPath)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	data, warnings, shadowed, err := MergeMCPData(seed, entries)
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	servers := base.ProjectedMCPServers(entries)
+	for index := range servers {
+		if slices.Contains(shadowed, servers[index].Name) {
+			servers[index].Winner = "user"
+		}
+	}
+	base.MarkMCPWarnings(servers, warnings)
+	digest, err := base.MCPTOMLScopeDigest(data, "mcp_servers")
+	if err != nil {
+		return base.MCPProjection{}, err
+	}
+	return base.MCPProjection{Files: []base.MCPProjectedFile{{Path: filepath.Join(root, "config.toml"), Contents: data, Scope: "mcp_servers", ScopeDigest: digest, MergeOrder: []string{"user config (existing names win)", "plugin definitions", "agentpack.toml", ".agents/mcp.json"}}}, Servers: servers, Warnings: warnings, Inputs: []base.MCPProjectedInput{input}}, nil
 }
 
 func injectGuidance(blob string, ctx base.StageContext) error {

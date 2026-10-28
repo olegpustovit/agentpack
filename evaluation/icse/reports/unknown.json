@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "phase": "preflight",
+  "definition_root": "<fixture>/definition",
+  "workspace_root": "<fixture>/checkout-a",
+  "mode": "default",
+  "target": "claude",
+  "policy": "local",
+  "strict_external": true,
+  "workspace_digest": "sha256:b3beb0428a509d6c9ae4b098f79c47d63d7cbe22bab4f6a83abf4e028d938824",
+  "generation_id": "sha256:28360939d3b1348b94ae3c98284c5fff6460eedac813fae0fcd3f27571e591d0",
+  "policy_digest": "sha256:402c50bf91d202ec4f72c8c88169a40cc1546a66d63872a1e928f18996635641",
+  "expected_target": {
+    "adapter": "claude",
+    "adapter_revision": "claude-observe-2026-10",
+    "executable_identity": "sha256:f52a8eb546011d41180c4838ec85e2a1e15ef32616f97b01bc91342c6df9d965",
+    "capability_revision": "claude-probe-v4"
+  },
+  "source_identity": "sha256-source-v1:30e4756e9ffa8f107c328a7204e7cad9c3638b3894946bdd25625dae68059f7c",
+  "lock_digest": "sha256:edecd8c8b920932e3036f69886b1e76e6a9289fa15221d9f5e05faacb135a48d",
+  "skills": 0,
+  "plugins": 0,
+  "shadowed": 0,
+  "inheritance": [
+    "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+    "Claude still reads real ~/.claude.json and ~/.claude/settings.json; agentpack only adds --plugin-dir/--settings"
+  ],
+  "capabilities": {
+    "agy": "workspace-write: writes .agents/plugins/agentpack-bundle",
+    "claude": "external: uses --plugin-dir and --settings; no workspace overlay",
+    "codex": "external-home: uses CODEX_HOME; native project instructions may still apply",
+    "cursor": "workspace-write: writes .cursor/agents when agent artifacts exist",
+    "grok": "external-home: uses GROK_HOME; also reads real ~/.claude and ~/.grok",
+    "opencode": "external: uses OPENCODE_CONFIG_DIR; no workspace overlay"
+  },
+  "artifacts": [
+    {
+      "properties": {
+        "merge_order": [
+          "agentpack_attribution_policy",
+          "merged_mcp_allowlist"
+        ],
+        "rendered_digest": "sha256:9ffc0ba2466e5bc26461f5eba5b1b111595d09bcf23390f5abf0e4f79a5f2482",
+        "target": "claude"
+      },
+      "output_path": "agentpack-settings.json",
+      "id": "settings:claude:agentpack-overlay",
+      "kind": "settings_file",
+      "name": "agentpack-settings.json",
+      "winner": "agentpack_overlay",
+      "evidence": "generated"
+    },
+    {
+      "properties": {
+        "rendered_digest": "sha256:ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+        "scope": "lsp",
+        "target": "claude"
+      },
+      "output_path": ".lsp.json",
+      "id": "lsp-file:claude:.lsp.json",
+      "kind": "lsp_file",
+      "name": ".lsp.json",
+      "winner": "merged",
+      "evidence": "generated"
+    }
+  ],
+  "coverage": [
+    {
+      "category": "skill",
+      "scope": "native_catalog",
+      "completeness": "none",
+      "reason": "pure preflight does not execute native CLI discovery"
+    }
+  ],
+  "contract_results": [
+    {
+      "requirement_id": "native-sentinel",
+      "result": "unknown",
+      "finding_code": "OBSERVATION_UNAVAILABLE",
+      "message": "required property evidence is unavailable or incomplete"
+    }
+  ],
+  "findings": [
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "Claude still reads real ~/.claude.json and ~/.claude/settings.json; agentpack only adds --plugin-dir/--settings",
+      "evidence": "declared"
+    },
+    {
+      "code": "STRICT_EXTERNAL",
+      "severity": "info",
+      "message": "strict external mode refuses workspace overlay writes",
+      "remedy": "launch claude or opencode, or omit --strict-external for compatibility mode",
+      "remediation": {
+        "message": "launch claude or opencode, or omit --strict-external for compatibility mode"
+      }
+    },
+    {
+      "code": "BINARY_FOUND",
+      "severity": "info",
+      "source": "<agentpack>",
+      "target": "claude",
+      "message": "native CLI located"
+    },
+    {
+      "code": "STAGING_INPUTS_UNKNOWN",
+      "severity": "warning",
+      "message": "no materialization input identity is recorded",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing",
+      "remediation": {
+        "message": "run `agentpack env restore` to publish the selected frozen environment before probing",
+        "argv": [
+          "agentpack",
+          "--definition-root",
+          "<fixture>/definition",
+          "--workspace",
+          "<fixture>/checkout-a",
+          "--mode",
+          "default",
+          "env",
+          "restore"
+        ]
+      },
+      "evidence": "unknown"
+    },
+    {
+      "code": "STAGING_NOT_RECORDED",
+      "severity": "warning",
+      "message": "no staged record for mode \"default\"",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing",
+      "remediation": {
+        "message": "run `agentpack env restore` to publish the selected frozen environment before probing",
+        "argv": [
+          "agentpack",
+          "--definition-root",
+          "<fixture>/definition",
+          "--workspace",
+          "<fixture>/checkout-a",
+          "--mode",
+          "default",
+          "env",
+          "restore"
+        ]
+      }
+    },
+    {
+      "code": "OBSERVATION_UNAVAILABLE",
+      "severity": "violation",
+      "message": "required property evidence is unavailable or incomplete",
+      "remedy": "run an explicit native probe, or narrow the contract to generated evidence",
+      "consequence": "The required native evidence is unavailable or changed.",
+      "remediation": {
+        "message": "run an explicit native probe, or narrow the contract to generated evidence",
+        "argv": [
+          "agentpack",
+          "--definition-root",
+          "<fixture>/definition",
+          "--workspace",
+          "<fixture>/checkout-a",
+          "--mode",
+          "default",
+          "probe",
+          "--agent",
+          "claude"
+        ]
+      },
+      "property": "evidence",
+      "related_refs": [
+        "contract:native-sentinel"
+      ],
+      "evidence": "unknown"
+    }
+  ],
+  "overall_status": "unknown",
+  "ok": false
+}
