@@ -92,6 +92,27 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 		_ = connection.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		return connection.WriteMessage(kind, data)
 	}
+	// A stalled or dropped worker connection is transient while the agent runs:
+	// reattach and replay instead of abandoning the agent. Unsent input is lost.
+	reconnect := func() error {
+		connection.Close()
+		wait, cancel := context.WithTimeout(ctx, 90*time.Second)
+		next, err := reattach(wait, record)
+		cancel()
+		if err != nil {
+			return err
+		}
+		connection = next
+		connection.SetReadLimit(replayLimit + 4096)
+		incoming = make(chan terminalMessage, 1)
+		go read(connection, incoming)
+		state = TerminalState{}
+		attachment = 0
+		taking = false
+		pending = nil
+		_, err = fmt.Fprint(output, "\x1b[2J\x1b[H")
+		return err
+	}
 	control := func(action string, rows, columns uint16) error {
 		data, _ := json.Marshal(terminalControl{Action: action, Epoch: state.Epoch, Rows: rows, Columns: columns})
 		return write(websocket.TextMessage, data)
@@ -123,7 +144,10 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 					pending = append(pending, data...)
 				} else if len(data) > 0 && attachment != 0 && state.Owner == attachment {
 					if err := write(websocket.BinaryMessage, data); err != nil {
-						return 1, err
+						if err := reconnect(); err != nil {
+							return 1, err
+						}
+						break
 					}
 				}
 				if index < 0 {
@@ -138,7 +162,10 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 					action = "release"
 				}
 				if err := control(action, 0, 0); err != nil {
-					return 1, err
+					if err := reconnect(); err != nil {
+						return 1, err
+					}
+					break
 				}
 				if action == "take" {
 					taking = true
@@ -149,7 +176,10 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 			}
 		case message := <-incoming:
 			if message.err != nil {
-				return 1, message.err
+				if err := reconnect(); err != nil {
+					return 1, err
+				}
+				continue
 			}
 			if message.kind == websocket.BinaryMessage {
 				if _, err := output.Write(message.data); err != nil {
@@ -175,28 +205,20 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 				taking = false
 				if len(pending) > 0 {
 					if err := write(websocket.BinaryMessage, pending); err != nil {
-						return 1, err
+						if err := reconnect(); err != nil {
+							return 1, err
+						}
+						continue
 					}
 					pending = nil
 				}
 			}
 			if notice.Type == "ended" {
 				if state.Restarting {
-					connection.Close()
-					wait, cancel := context.WithTimeout(ctx, 90*time.Second)
-					connection, err = reattachRestart(wait, record)
-					cancel()
-					if err != nil {
+					if err := reconnect(); err != nil {
 						return 1, err
 					}
-					connection.SetReadLimit(replayLimit + 4096)
-					incoming = make(chan terminalMessage, 1)
-					go read(connection, incoming)
-					state = TerminalState{}
-					attachment = 0
-					taking = false
-					pending = nil
-					if _, err := fmt.Fprint(output, "\x1b[2J\x1b[Hagentpack: agent restarted; starting a fresh conversation\r\n"); err != nil {
+					if _, err := fmt.Fprint(output, "agentpack: agent restarted; starting a fresh conversation\r\n"); err != nil {
 						return 1, err
 					}
 					continue
@@ -210,14 +232,18 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 			columns, rows, err := ConsoleSize(input, consoleOutput)
 			if err == nil && state.Owner == attachment && (rows != int(state.Rows) || columns != int(state.Columns)) && validSize(uint16(rows), uint16(columns)) {
 				if err := control("resize", uint16(rows), uint16(columns)); err != nil {
-					return 1, err
+					if err := reconnect(); err != nil {
+						return 1, err
+					}
 				}
 			}
 		}
 	}
 }
 
-func reattachRestart(ctx context.Context, record WorkerRecord) (*websocket.Conn, error) {
+// reattach waits out restarts and a not-yet-released previous attachment; it
+// fails only when the worker is gone or its session has ended.
+func reattach(ctx context.Context, record WorkerRecord) (*websocket.Conn, error) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -235,8 +261,14 @@ func reattachRestart(ctx context.Context, record WorkerRecord) (*websocket.Conn,
 			if err != nil {
 				return nil, err
 			}
-			if !state.Restarting {
-				return attachWorker(ctx, record, true)
+			if !state.Running && !state.Restarting {
+				return nil, ErrSessionEnded
+			}
+			if state.Restarting {
+				continue
+			}
+			if connection, err := attachWorker(ctx, record, true); err == nil {
+				return connection, nil
 			}
 		}
 	}

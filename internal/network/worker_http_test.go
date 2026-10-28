@@ -3,16 +3,22 @@
 package network
 
 import (
+	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 )
 
@@ -187,4 +193,101 @@ func TestWorkerStreamsRawPTYAndDisconnectLeavesAgent(t *testing.T) {
 	readWorker(t, observer, func(kind int, data []byte) bool {
 		return kind == websocket.BinaryMessage && strings.Contains(string(data), "ECHO browser-input")
 	})
+}
+
+type lockedBuffer struct {
+	mu   sync.Mutex
+	data strings.Builder
+}
+
+func (buffer *lockedBuffer) Write(data []byte) (int, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.data.Write(data)
+}
+
+func (buffer *lockedBuffer) String() string {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.data.String()
+}
+
+func TestLocalTerminalReconnectsAfterDroppedConnection(t *testing.T) {
+	session := testSession(t)
+	secret := strings.Repeat("s", 64)
+	handler, err := WorkerHandler(session, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	// A proxy lets the test cut the live attachment the way a stalled socket does.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	accepted := make(chan net.Conn, 64)
+	go func() {
+		for {
+			client, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			upstream, err := net.Dial("tcp", server.Listener.Addr().String())
+			if err != nil {
+				client.Close()
+				continue
+			}
+			accepted <- client
+			go func() { io.Copy(upstream, client); upstream.Close() }()
+			go func() { io.Copy(client, upstream); client.Close() }()
+		}
+	}()
+	home := t.TempDir()
+	record := WorkerRecord{ID: "session-test", Address: listener.Addr().String(), Secret: secret}
+	data, _ := json.Marshal(record)
+	directory := filepath.Join(home, "network", "sessions", record.ID)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "worker.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	master, slave, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { master.Close(); slave.Close() })
+	go io.Copy(io.Discard, master)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	output := &lockedBuffer{}
+	result := make(chan error, 1)
+	go func() {
+		_, err := RunTerminal(ctx, home, record.ID, slave, output)
+		result <- err
+	}()
+	waitFor := func(condition func(string) bool) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for !condition(output.String()) {
+			select {
+			case err := <-result:
+				t.Fatalf("terminal exited: %v", err)
+			default:
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out; output %q", output.String())
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	waitFor(func(value string) bool { return strings.Contains(value, "READY") })
+	(<-accepted).Close()
+	waitFor(func(value string) bool { return strings.Count(value, "READY") >= 2 })
+	if _, err := master.Write([]byte("after\n")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(func(value string) bool { return strings.Contains(value, "ECHO after") })
 }
