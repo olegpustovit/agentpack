@@ -85,6 +85,29 @@ test("terminal renders bytes, arbitrates input and detaches without stopping", a
   await expect(page.locator("#terminal-panel")).toBeHidden();
   expect(requests.some((request) => request.path.endsWith("/stop"))).toBeFalsy();
 });
+test("shared definitions keep project folders in sessions and fresh launches", async ({ page }) => {
+  const requests = await mockAPI(page);
+  const projects = ["project1", "project2"].map(name => ({ ...session, id: name, directory: `/work/${name}`, definition_root: "/work" }));
+  await page.route("**/api/sessions", route => {
+    if (route.request().method() === "POST") return route.fallback();
+    return route.fulfill({ json: projects });
+  });
+  await page.route("**/api/recent", route => route.fulfill({ json: projects }));
+  await page.routeWebSocket("**/api/sessions/*/terminal", ws => {
+    ws.send(JSON.stringify({ type: "attached", attachment: 42, state: session.state }));
+  });
+  await page.goto("/");
+  for (const project of projects) await expect(page.locator("#sessions").getByText(project.directory, { exact: true })).toBeVisible();
+  await expect(page.getByText("/work", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Open terminal" }).first().click();
+  await expect(page.locator("#terminal-title")).toContainText("/work/project1");
+  await page.getByRole("button", { name: "Close terminal attachment" }).click();
+  await page.getByRole("button", { name: "Recent folders" }).click();
+  await page.getByRole("button", { name: "Start fresh" }).last().click();
+  await expect(page.locator("#start-directory")).toHaveValue("/work/project2");
+  await page.locator("#start-form button[type=submit]").click();
+  await expect.poll(() => requests.find(request => request.path === "/api/sessions" && request.body)?.body).toEqual({ directory: "/work/project2", harness: "claude", mode: "default" });
+});
 test("backend strings render as text and failures are visible", async ({ page }) => {
   await mockAPI(page);
   await page.route("**/api/sessions", (route) => route.fulfill({ json: [{ ...session, directory: "<img src=x onerror=alert(1)>" }] }));

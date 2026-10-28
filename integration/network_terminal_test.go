@@ -22,14 +22,18 @@ func TestCompiledCLISharedTerminalSurvivesGatewayAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	home := filepath.Join(root, "agentpack-home")
+	workspace := filepath.Join(root, "project1")
+	if err := os.Mkdir(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	agent := filepath.Join(root, "fake-codex")
-	writeFile(t, agent, "#!/bin/sh\nprintf 'READY SHARED AGENT\\n'\nwhile IFS= read -r line; do\n case \"$line\" in exit) exit 7;; *) printf 'ECHO %s\\n' \"$line\";; esac\ndone\n")
+	writeFile(t, agent, "#!/bin/sh\n[ \"$(pwd -P)\" = \"$TEST_WORKSPACE\" ] && [ \"$PWD\" = \"$TEST_WORKSPACE\" ] || exit 19\nprintf 'READY SHARED AGENT\\n'\nwhile IFS= read -r line; do\n case \"$line\" in exit) exit 7;; *) printf 'ECHO %s\\n' \"$line\";; esac\ndone\n")
 	if err := os.Chmod(agent, 0755); err != nil {
 		t.Fatal(err)
 	}
 	command := exec.Command(agentpackBinary, "codex")
-	command.Dir = root
-	command.Env = installerEnvironment("HOME="+filepath.Join(root, "user"), "USERPROFILE="+filepath.Join(root, "user"), "AGENTPACK_HOME="+home, "AGENTPACK_STAGING_ROOT="+filepath.Join(root, "staging"), "CODEX_PATH="+agent, "AGENTPACK_PUBLIC_URL=", "AGENTPACK_SESSION_WORKER=")
+	command.Dir = workspace
+	command.Env = installerEnvironment("HOME="+filepath.Join(root, "user"), "USERPROFILE="+filepath.Join(root, "user"), "AGENTPACK_HOME="+home, "AGENTPACK_STAGING_ROOT="+filepath.Join(root, "staging"), "CODEX_PATH="+agent, "TEST_WORKSPACE="+workspace, "AGENTPACK_PUBLIC_URL=", "AGENTPACK_SESSION_WORKER=")
 	init := exec.Command(agentpackBinary, "init")
 	init.Dir = root
 	init.Env = command.Env
@@ -119,7 +123,7 @@ func TestCompiledCLISharedTerminalSurvivesGatewayAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	readUntil("ECHO handoff input")
-	if !sessions[0].State.Interactive || sessions[0].Directory != root {
+	if !sessions[0].State.Interactive || sessions[0].Directory != workspace || sessions[0].DefinitionRoot != root {
 		t.Fatalf("session metadata: %+v", sessions[0])
 	}
 	if _, err := network.NodeRequest(ctx, home, "POST", "/api/node/stop"); err != nil {

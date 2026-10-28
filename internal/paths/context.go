@@ -6,8 +6,7 @@ import (
 )
 
 // Context separates where the portable definition lives from the checkout the
-// agent uses as cwd. When both roots are empty after Resolve, callers still
-// use a single project root (legacy workflow).
+// agent uses as cwd.
 type Context struct {
 	// DefinitionRoot holds agentpack.toml and pack.lock.
 	DefinitionRoot string
@@ -25,18 +24,6 @@ func (ctx Context) SameRoot() bool {
 func ResolveContext(projectRoot, definitionRoot, workspaceRoot string, boundDefinition string) (Context, error) {
 	workspace := firstNonEmpty(workspaceRoot, projectRoot)
 	definition := firstNonEmpty(definitionRoot, boundDefinition, projectRoot)
-
-	if definition == "" && workspace == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return Context{}, fmt.Errorf("get current directory: %w", err)
-		}
-		root, err := FindProjectRoot(cwd)
-		if err != nil {
-			return Context{}, err
-		}
-		return Context{DefinitionRoot: root, WorkspaceRoot: root}, nil
-	}
 
 	if workspace == "" {
 		cwd, err := os.Getwd()

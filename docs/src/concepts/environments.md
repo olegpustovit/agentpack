@@ -10,7 +10,9 @@ Agentpack can keep `agentpack.toml` and `pack.lock` **outside** a git checkout s
 | **DefinitionRoot** | Directory holding `agentpack.toml` and `pack.lock` (and definition-relative path deps). |
 | **Binding** | Machine-local map from a workspace path to a definition root, stored under `$AGENTPACK_HOME/projects/<hash>/environment.toml`. |
 
-Legacy `--project-root` alone keeps today's single-root workflow (definition = workspace). Prefer `--definition-root` and `--workspace` (or `agentpack env use`) when they differ.
+By default, the workspace is the directory where you run `agentpack`. The definition is discovered by searching that directory and its parents for `agentpack.toml` or `pack.lock`. For example, running `agentpack claude` in `/work/project1` uses `/work/agentpack.toml` when present and launches Claude in `/work/project1`. Gateway sessions, recent folders, and fresh launches use that same project directory.
+
+`--workspace` overrides the working directory. Legacy `--project-root` alone sets both roots to the supplied path. Use `--definition-root` or `agentpack env use` to select a definition outside the workspace's parent directories.
 
 ## Commands
 

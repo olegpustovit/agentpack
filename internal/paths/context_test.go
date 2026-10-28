@@ -39,3 +39,44 @@ func TestResolveContextLegacyProjectRoot(t *testing.T) {
 		t.Fatalf("context = %#v", ctx)
 	}
 }
+
+func TestResolveContextKeepsWorkingDirectory(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "project1")
+	if err := os.Mkdir(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ManifestPath(root), []byte("name = \"workspace\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
+	root, _ = filepath.EvalSymlinks(root)
+	workspace, _ = filepath.EvalSymlinks(workspace)
+	for _, test := range []struct {
+		name, project, definition, workspace, bound string
+		want                                        Context
+	}{
+		{"discover parent", "", "", "", "", Context{root, workspace}},
+		{"explicit workspace", "", "", workspace, "", Context{root, workspace}},
+		{"explicit definition", "", root, "", "", Context{root, workspace}},
+		{"bound definition", "", "", "", root, Context{root, workspace}},
+		{"legacy root", root, "", "", "", Context{root, root}},
+		{"workspace overrides legacy root", root, "", workspace, "", Context{root, workspace}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, resolve := range []func(string, string, string, string) (Context, error){ResolveContext, ResolveContextOrCWD} {
+				got, err := resolve(test.project, test.definition, test.workspace, test.bound)
+				if err != nil || got != test.want {
+					t.Fatalf("context = %+v, %v; want %+v", got, err, test.want)
+				}
+			}
+		})
+	}
+	if err := os.Remove(ManifestPath(root)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ResolveContextOrCWD("", "", "", "")
+	if err != nil || got != (Context{workspace, workspace}) {
+		t.Fatalf("without a manifest: %+v, %v", got, err)
+	}
+}
