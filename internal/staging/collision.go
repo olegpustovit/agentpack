@@ -9,69 +9,58 @@ import (
 	"strings"
 )
 
-type CollisionRemoval struct{ SkillSlugs map[string]struct{} }
-
-func ResolveCollisionsWithHome(bundle string, skillRoots, markdownRoots []string, home string) (CollisionRemoval, error) {
-	removed := CollisionRemoval{SkillSlugs: make(map[string]struct{})}
-	if home == "" {
-		return removed, nil
-	}
-	userSkills, err := directoryNames(filepath.Join(home, ".claude", "skills"), filepath.Join(home, ".grok", "skills"))
+// ResolveCollisions removes duplicates only from this target's staged bundle.
+// The returned native names also allow verification after a prior collision pass.
+func ResolveCollisions(bundle, target string, userRoots []string) (map[string]struct{}, error) {
+	userSkills, err := UserSkillNames(userRoots)
 	if err != nil {
-		return removed, err
+		return nil, err
 	}
-	userCommands, err := markdownStems(filepath.Join(home, ".claude", "commands"), filepath.Join(home, ".grok", "commands"))
-	if err != nil {
-		return removed, err
+	if len(userRoots) == 0 {
+		return userSkills, nil
 	}
-	userAgents, err := markdownStems(filepath.Join(home, ".claude", "agents"), filepath.Join(home, ".grok", "agents"))
-	if err != nil {
-		return removed, err
-	}
-	bundleSkills, err := directoryNames(filepath.Join(bundle, "skills"))
-	if err != nil {
-		return removed, err
-	}
-	bundleCommands, err := markdownStems(filepath.Join(bundle, "commands"))
-	if err != nil {
-		return removed, err
-	}
-	bundleAgents, err := markdownStems(filepath.Join(bundle, "agents"))
-	if err != nil {
-		return removed, err
-	}
-	for _, slug := range intersection(userSkills, bundleSkills) {
-		removed.SkillSlugs[slug] = struct{}{}
-		fmt.Fprintf(os.Stderr, "warning: Using user-installed skill `%s`; omitted pack duplicate from staged bundle (and other harness trees)\n", slug)
-		for _, root := range skillRoots {
-			if err := removeNamedDirectory(filepath.Join(root, "skills"), slug); err != nil {
-				return removed, err
+	for _, kind := range []struct{ directory, label string }{{"skills", "skill"}, {"commands", "command"}, {"agents", "agent"}} {
+		var user, pack map[string]struct{}
+		if kind.directory == "skills" {
+			user = userSkills
+			pack, err = directoryNames(filepath.Join(bundle, kind.directory))
+		} else {
+			user, err = markdownStems(componentRoots(userRoots, kind.directory)...)
+			if err != nil {
+				return nil, err
 			}
+			pack, err = markdownStems(filepath.Join(bundle, kind.directory))
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range intersection(user, pack) {
+			root := filepath.Join(bundle, kind.directory)
+			if kind.directory == "skills" {
+				err = removeNamedDirectory(root, name)
+			} else {
+				err = removeMarkdownStem(root, name)
+			}
+			if err != nil {
+				return nil, err
+			}
+			fmt.Fprintf(os.Stderr, "warning: Using user-installed %s `%s`; omitted pack duplicate from %s staged bundle\n", kind.label, name, target)
 		}
 	}
-	for _, collision := range []struct {
-		user, pack       map[string]struct{}
-		directory, label string
-	}{{userCommands, bundleCommands, "commands", "command"}, {userAgents, bundleAgents, "agents", "agent"}} {
-		for _, stem := range intersection(collision.user, collision.pack) {
-			fmt.Fprintf(os.Stderr, "warning: Using user-installed %s `%s`; omitted pack duplicate from staged bundle (and other harness trees)\n", collision.label, stem)
-			for _, root := range markdownRoots {
-				if err := removeMarkdownStem(filepath.Join(root, collision.directory), stem); err != nil {
-					return removed, err
-				}
-			}
-		}
-	}
-	return removed, nil
+	return userSkills, nil
 }
 
-// UserHomeSkillNames lists skill directory names under the user's Claude/Grok homes.
-// Read-only; suitable for pure preflight ambient checks.
-func UserHomeSkillNames(home string) (map[string]struct{}, error) {
-	if home == "" {
-		return map[string]struct{}{}, nil
+// UserSkillNames lists skills in the supplied native user artifact roots.
+func UserSkillNames(userRoots []string) (map[string]struct{}, error) {
+	return directoryNames(componentRoots(userRoots, "skills")...)
+}
+
+func componentRoots(roots []string, component string) []string {
+	paths := make([]string, 0, len(roots))
+	for _, root := range roots {
+		paths = append(paths, filepath.Join(root, component))
 	}
-	return directoryNames(filepath.Join(home, ".claude", "skills"), filepath.Join(home, ".grok", "skills"))
+	return paths
 }
 
 func directoryNames(roots ...string) (map[string]struct{}, error) {

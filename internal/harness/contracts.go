@@ -39,6 +39,8 @@ type RebuildTransaction interface {
 
 type Harness interface {
 	ID() Target
+	// NativeUserRoots returns user artifact roots available outside the staged bundle.
+	NativeUserRoots(home string) []string
 	StagedRoot(StageContext) (string, error)
 	ResetPaths(StageContext) ([]string, error)
 	PreReset(StageContext) error
@@ -58,6 +60,7 @@ type Harness interface {
 
 type Definition struct {
 	Target           Target
+	UserRoots        func(home string) []string
 	Root             func(StageContext) (string, error)
 	Reset            func(StageContext) ([]string, error)
 	BeforeReset      func(StageContext) error
@@ -74,6 +77,12 @@ type Definition struct {
 }
 
 func (definition Definition) ID() Target { return definition.Target }
+func (definition Definition) NativeUserRoots(home string) []string {
+	if home == "" || definition.UserRoots == nil {
+		return nil
+	}
+	return definition.UserRoots(home)
+}
 func (definition Definition) StagedRoot(ctx StageContext) (string, error) {
 	return definition.Root(ctx)
 }

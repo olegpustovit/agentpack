@@ -14,7 +14,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
-const stagingLayoutVersion = "3"
+const stagingLayoutVersion = "4"
 
 type launchState struct {
 	Digest string `json:"digest"`
@@ -22,6 +22,7 @@ type launchState struct {
 
 func ComputeLaunchDigest(projectRoot, workspace string, effective mode.Effective, target *base.Target) (string, error) {
 	hash := sha256.New()
+	hash.Write([]byte("staging_layout_version\x00" + stagingLayoutVersion))
 	writeDigestFile(hash, "manifest", paths.ManifestPath(projectRoot))
 	writeDigestFile(hash, "lock", paths.LockPath(projectRoot))
 	hash.Write([]byte("dot_agents\x00"))
@@ -92,7 +93,6 @@ func hashDotAgents(root string) ([]byte, error) {
 	}
 	sort.Strings(files)
 	hash := sha256.New()
-	hash.Write([]byte("staging_layout_version\x00" + stagingLayoutVersion))
 	for _, path := range files {
 		relative, err := filepath.Rel(root, path)
 		if err != nil {

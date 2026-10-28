@@ -13,7 +13,11 @@ import (
 )
 
 func New() base.Harness {
-	return base.Definition{Target: base.Claude, Root: stagedRoot, Reset: resetPaths, Setup: prepare, MCP: writeMCP, LSP: writeLSP, Guidance: injectGuidance, AfterStage: finalize, Check: verify, Launch: launch}
+	return base.Definition{Target: base.Claude, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, MCP: writeMCP, LSP: writeLSP, Guidance: injectGuidance, AfterStage: finalize, Check: verify, Launch: launch}
+}
+
+func nativeUserRoots(home string) []string {
+	return []string{filepath.Join(home, ".claude")}
 }
 
 func launch(ctx base.LaunchContext) (*exec.Cmd, error) {

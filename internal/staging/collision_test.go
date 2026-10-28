@@ -3,33 +3,48 @@ package staging
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 )
 
-func TestResolveCollisionsRemovesAllStagedCopies(t *testing.T) {
-	root := t.TempDir()
-	home, bundle, other := filepath.Join(root, "home"), filepath.Join(root, "bundle"), filepath.Join(root, "other")
-	for _, path := range []string{filepath.Join(home, ".claude/skills/Code-Tutor/SKILL.md"), filepath.Join(home, ".grok/commands/deploy.md"), filepath.Join(bundle, "skills/code-tutor/SKILL.md"), filepath.Join(other, "skills/CODE-TUTOR/SKILL.md"), filepath.Join(bundle, "commands/deploy.md"), filepath.Join(other, "commands/nested/Deploy.md")} {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	removed, err := ResolveCollisionsWithHome(bundle, []string{bundle, other}, []string{bundle, other}, home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, exists := removed.SkillSlugs["code-tutor"]; !exists {
-		t.Fatalf("removed = %#v", removed)
-	}
-	for _, path := range []string{filepath.Join(bundle, "skills/code-tutor"), filepath.Join(other, "skills/CODE-TUTOR"), filepath.Join(bundle, "commands/deploy.md"), filepath.Join(other, "commands/nested/Deploy.md")} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("still exists: %s", path)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(home, ".claude/skills/Code-Tutor/SKILL.md")); err != nil {
-		t.Fatal("user copy removed")
+func TestResolveCollisionsUsesOnlyTargetNativeRoots(t *testing.T) {
+	for _, candidate := range registry.All() {
+		t.Run(string(candidate.ID()), func(t *testing.T) {
+			home, bundle := t.TempDir(), t.TempDir()
+			files := []string{"skills/Code-Tutor/SKILL.md", "commands/nested/Deploy.md", "agents/nested/Reviewer.md"}
+			for _, native := range []string{".claude", ".grok"} {
+				t.Run(native, func(t *testing.T) {
+					for _, file := range files {
+						writeTree(t, filepath.Join(home, native), map[string]string{file: "user"})
+						writeTree(t, bundle, map[string]string{strings.ToLower(file): "pack"})
+					}
+					names, err := ResolveCollisions(bundle, string(candidate.ID()), candidate.NativeUserRoots(home))
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantRemoved := candidate.ID() == base.Grok || candidate.ID() == base.Claude && native == ".claude"
+					_, removed := names["code-tutor"]
+					if removed != wantRemoved {
+						t.Fatalf("native skills = %v", names)
+					}
+					for _, file := range files {
+						_, err := os.Stat(filepath.Join(bundle, strings.ToLower(file)))
+						if wantRemoved && !os.IsNotExist(err) || !wantRemoved && err != nil {
+							t.Errorf("%s: removed=%v, stat=%v", file, wantRemoved, err)
+						}
+						data, err := os.ReadFile(filepath.Join(home, native, file))
+						if err != nil || string(data) != "user" {
+							t.Fatalf("user file changed: %q, %v", data, err)
+						}
+					}
+					if err := os.RemoveAll(filepath.Join(home, native)); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
+		})
 	}
 }

@@ -638,19 +638,34 @@ func appendAmbientFindings(report *environment.Report, workspace string, lock lo
 		}
 	}
 	home, _ := os.UserHomeDir()
-	userSkills, err := staging.UserHomeSkillNames(home)
-	if err != nil {
-		report.Findings = append(report.Findings, environment.Finding{
-			Code: "AMBIENT_SCAN_FAILED", Severity: environment.SeverityWarning,
-			Message: err.Error(), Evidence: environment.EvidenceUnknown,
-			Remedy: "fix permissions on ~/.claude/skills or ~/.grok/skills",
-		})
-		return
+	userSkills := make(map[string]struct{})
+	userTargets := make(map[string][]string)
+	for _, candidate := range registry.All() {
+		if options.Target != nil && candidate.ID() != *options.Target {
+			continue
+		}
+		names, err := staging.UserSkillNames(candidate.NativeUserRoots(home))
+		if err != nil {
+			report.Findings = append(report.Findings, environment.Finding{
+				Code: "AMBIENT_SCAN_FAILED", Severity: environment.SeverityWarning,
+				Target: string(candidate.ID()), Message: err.Error(), Evidence: environment.EvidenceUnknown,
+				Remedy: "fix permissions on the target's native user skill directories",
+			})
+			return
+		}
+		for name := range names {
+			userSkills[name] = struct{}{}
+			userTargets[name] = append(userTargets[name], string(candidate.ID()))
+		}
 	}
-	projectSkills, projectErr := staging.ProjectClaudeSkillNames(workspace)
-	if projectErr != nil {
-		report.Findings = append(report.Findings, environment.Finding{Code: "AMBIENT_SCAN_FAILED", Severity: environment.SeverityError, Message: projectErr.Error(), Evidence: environment.EvidenceUnknown})
-		return
+	var projectSkills map[string]struct{}
+	if options.Target == nil || *options.Target == base.Claude {
+		var err error
+		projectSkills, err = staging.ProjectClaudeSkillNames(workspace)
+		if err != nil {
+			report.Findings = append(report.Findings, environment.Finding{Code: "AMBIENT_SCAN_FAILED", Severity: environment.SeverityError, Message: err.Error(), Evidence: environment.EvidenceUnknown})
+			return
+		}
 	}
 	for _, layer := range []struct {
 		names  map[string]struct{}
@@ -733,13 +748,17 @@ func appendAmbientFindings(report *environment.Report, workspace string, lock lo
 			if options.Policy == environment.PolicyCI || options.StrictExternal {
 				severity = environment.SeverityViolation
 			}
-			markArtifactWinner(report, display, "user", "user skill wins over packaged skill")
-			report.Findings = append(report.Findings, environment.Finding{
-				Code: "CONFIG_SHADOWED", Severity: severity, Source: display, Winner: "user",
-				Message:  fmt.Sprintf("user skill %q overrides the packaged skill", display),
-				Remedy:   "rename/remove the user skill, or accept under --policy local without --strict-external",
-				Evidence: environment.EvidenceGenerated,
-			})
+			if options.Target != nil {
+				markArtifactWinner(report, display, "user", "user skill wins over packaged skill")
+			}
+			for _, target := range userTargets[lower] {
+				report.Findings = append(report.Findings, environment.Finding{
+					Code: "CONFIG_SHADOWED", Severity: severity, Source: display, Winner: "user", Target: target,
+					Message:  fmt.Sprintf("user skill %q overrides the packaged skill for %s", display, target),
+					Remedy:   "rename/remove the user skill, or accept under --policy local without --strict-external",
+					Evidence: environment.EvidenceGenerated,
+				})
+			}
 		}
 		if _, hit := projectSkills[lower]; hit {
 			severity := environment.SeverityWarning

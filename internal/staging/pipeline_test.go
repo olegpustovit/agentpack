@@ -3,6 +3,7 @@ package staging
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gofrs/flock"
@@ -537,5 +538,81 @@ func TestPipelineUserCodexHooksStayWithCodex(t *testing.T) {
 		if _, err := launch.Rebuild(); err != nil {
 			t.Fatalf("launch %s: %v", target, err)
 		}
+	}
+}
+
+func TestPipelineUserCollisionsAreHarnessScoped(t *testing.T) {
+	for _, selected := range []base.Target{"", base.Codex} {
+		t.Run(string(selected), func(t *testing.T) {
+			home, project, store := t.TempDir(), t.TempDir(), t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("AGENTPACK_HOME", store)
+			t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+			writeTree(t, home, map[string]string{".codex/auth.json": "{}", ".grok/auth.json": "{}"})
+			lock := lockfile.EmptyForProject(project)
+			names := []string{"artifact-capabilities", "artifact-design", "artifact-diagramming", "microapps-artifacts"}
+			for i, name := range names {
+				native := ".claude"
+				if i%2 == 1 {
+					native = ".grok"
+				}
+				writeTree(t, home, map[string]string{native + "/skills/" + name + "/SKILL.md": "user copy"})
+				key := strings.Repeat(string(rune('a'+i)), 64)
+				pkg := lockfile.Package{Module: "github.com/example/" + name, Kind: lockfile.PackageSkill, CacheKey: key, Path: name}
+				files := map[string]string{"SKILL.md": "---\nname: " + name + "\ndescription: Test skill\n---\nPack copy\n"}
+				if i >= 2 {
+					pkg.Kind = lockfile.PackagePlugin
+					files = map[string]string{".claude-plugin/plugin.json": `{"name":"test"}`, "skills/" + name + "/SKILL.md": files["SKILL.md"]}
+				}
+				writeTree(t, filepath.Join(store, "cache", key), files)
+				lock.Packages = append(lock.Packages, pkg)
+			}
+			pipeline := Pipeline{ProjectRoot: project, Lock: lock, Mode: mode.ImplicitEffective()}
+			if selected != "" {
+				pipeline.Target = &selected
+			}
+			if _, err := pipeline.Rebuild(); err != nil {
+				t.Fatal(err)
+			}
+			for _, candidate := range pipeline.harnesses() {
+				root, err := candidate.StagedRoot(pipeline.context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i, name := range names {
+					_, err := os.Stat(filepath.Join(root, "skills", name, "SKILL.md"))
+					omitted := candidate.ID() == base.Grok || candidate.ID() == base.Claude && i%2 == 0
+					if omitted && !os.IsNotExist(err) || !omitted && err != nil {
+						t.Errorf("%s skill %s: omitted=%v, stat=%v", candidate.ID(), name, omitted, err)
+					}
+					native := ".claude"
+					if i%2 == 1 {
+						native = ".grok"
+					}
+					data, err := os.ReadFile(filepath.Join(home, native, "skills", name, "SKILL.md"))
+					if err != nil || string(data) != "user copy" {
+						t.Fatalf("user skill changed: %q, %v", data, err)
+					}
+				}
+			}
+			if err := pipeline.Verify(); err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := registry.ByTarget(base.Codex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, err := candidate.StagedRoot(pipeline.context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.RemoveAll(filepath.Join(root, "skills", names[0])); err != nil {
+				t.Fatal(err)
+			}
+			if err := pipeline.Verify(); err == nil || !strings.Contains(err.Error(), "codex staging missing skill") {
+				t.Fatalf("missing Codex skill must fail verification: %v", err)
+			}
+		})
 	}
 }

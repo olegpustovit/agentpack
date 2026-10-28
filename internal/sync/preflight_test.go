@@ -289,30 +289,58 @@ func TestPreflightFlagsAmbientUserSkill(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cacheSkill, "SKILL.md"), []byte("---\nname: helper\n---\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	skillDir := filepath.Join(home, ".claude", "skills", "helper")
-	if err := os.MkdirAll(skillDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# helper\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	report, err := NewService().Preflight(definition, PreflightOptions{
-		Policy: environment.PolicyCI, StrictExternal: true, WorkspaceRoot: t.TempDir(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, finding := range report.Findings {
-		if finding.Code == "CONFIG_SHADOWED" && finding.Source == "helper" {
-			found = true
+	for _, native := range []string{".claude", ".grok"} {
+		if err := os.RemoveAll(filepath.Join(home, ".claude")); err != nil {
+			t.Fatal(err)
 		}
-	}
-	if !found {
-		t.Fatalf("missing CONFIG_SHADOWED: %#v", report.Findings)
-	}
-	if report.OverallStatus != "violated" {
-		t.Fatalf("status=%s findings=%#v", report.OverallStatus, report.Findings)
+		nativeSkill := filepath.Join(home, native, "skills", "helper")
+		if err := os.MkdirAll(nativeSkill, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(nativeSkill, "SKILL.md"), []byte("# helper\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		targets := append([]base.Target{""}, base.AllTargets()...)
+		for _, target := range targets {
+			t.Run(native+"/"+string(target), func(t *testing.T) {
+				options := PreflightOptions{Policy: environment.PolicyCI, StrictExternal: true, WorkspaceRoot: t.TempDir()}
+				if target != "" {
+					options.Target = &target
+				}
+				report, err := NewService().Preflight(definition, options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantOmitted := target == base.Grok || target == base.Claude && native == ".claude"
+				found := false
+				for _, finding := range report.Findings {
+					if finding.Code == "CONFIG_SHADOWED" && finding.Source == "helper" {
+						found = true
+						if finding.Target != string(base.Grok) && !(native == ".claude" && finding.Target == string(base.Claude)) {
+							t.Errorf("collision reported for unrelated target: %#v", finding)
+						}
+					}
+				}
+				if found != (wantOmitted || target == "") {
+					t.Errorf("collision findings: %#v", report.Findings)
+				}
+				foundArtifact := false
+				for _, artifact := range report.Artifacts {
+					if artifact.Name == "helper" && artifact.Module == "github.com/example/skills/helper" {
+						foundArtifact = true
+						if artifact.Omitted != wantOmitted {
+							t.Errorf("incorrect omission: %#v", artifact)
+						}
+					}
+				}
+				if !foundArtifact {
+					t.Fatal("pack skill absent from report")
+				}
+				if found && report.OverallStatus != "violated" {
+					t.Fatalf("status=%s findings=%#v", report.OverallStatus, report.Findings)
+				}
+			})
+		}
 	}
 }
 

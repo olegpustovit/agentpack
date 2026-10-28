@@ -250,7 +250,6 @@ func (pipeline Pipeline) verify(ctx base.StageContext) error {
 	if err != nil {
 		return err
 	}
-	bundle := filepath.Join(plugins, paths.StagedAgentpackBundleName)
 	entries, err := os.ReadDir(plugins)
 	if err != nil && (pipeline.includes(base.Claude) || !os.IsNotExist(err)) {
 		return err
@@ -266,25 +265,20 @@ func (pipeline Pipeline) verify(ctx base.StageContext) error {
 	if pipeline.includes(base.Claude) && count != 1 {
 		return fmt.Errorf("expected exactly one merged plugin dir (agentpack-bundle), got %d", count)
 	}
-	var skillRoots, markdownRoots []string
+	var skillRoots []string
+	nativeSkills := make(map[base.Target]map[string]struct{})
+	home, _ := os.UserHomeDir()
 	for _, candidate := range harnesses {
 		root, err := candidate.StagedRoot(ctx)
 		if err != nil {
 			return err
 		}
 		skillRoots = append(skillRoots, root)
-		if candidate.ID() != base.Codex {
-			markdownRoots = append(markdownRoots, root)
+		names, err := ResolveCollisions(root, string(candidate.ID()), candidate.NativeUserRoots(home))
+		if err != nil {
+			return err
 		}
-	}
-	home, _ := os.UserHomeDir()
-	collisionRoot := bundle
-	if len(skillRoots) == 1 {
-		collisionRoot = skillRoots[0]
-	}
-	removed, err := ResolveCollisionsWithHome(collisionRoot, skillRoots, markdownRoots, home)
-	if err != nil {
-		return err
+		nativeSkills[candidate.ID()] = names
 	}
 	projectClaudeSkills, err := ProjectClaudeSkillNames(pipeline.workspace())
 	if err != nil {
@@ -310,10 +304,10 @@ func (pipeline Pipeline) verify(ctx base.StageContext) error {
 			continue
 		}
 		name := SkillFolderName(skill)
-		if _, collided := removed.SkillSlugs[strings.ToLower(name)]; collided {
-			continue
-		}
 		for index, root := range skillRoots {
+			if _, native := nativeSkills[harnesses[index].ID()][strings.ToLower(name)]; native {
+				continue
+			}
 			if harnesses[index].ID() == base.Claude {
 				if _, omitted := projectClaudeSkills[strings.ToLower(name)]; omitted {
 					continue
