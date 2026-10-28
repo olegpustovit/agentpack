@@ -1,6 +1,6 @@
-# v0.9.1 implementation evidence
+# v0.9.2 implementation evidence
 
-Starting commit: `7004652234cbd73e0d7f656a024c947a79af2d67` (v0.8.7). The main implementation is `6ace12b5ed83edb461eb0f168c10d452272aa55b` (v0.9.0); the release endpoint is the commit identified by tag `v0.9.1`, including Windows CI corrections. Existing terminal-close cleanup changes were preserved. This delivery covers [PLAN.md](../PLAN.md) and the [gateway reference](gateway-workspace-plan.md).
+Starting commit: `7004652234cbd73e0d7f656a024c947a79af2d67` (v0.8.7). The main implementation is `6ace12b5ed83edb461eb0f168c10d452272aa55b` (v0.9.0); the release endpoint is the commit identified by tag `v0.9.2`, including Windows CI corrections. Existing terminal-close cleanup changes were preserved. This delivery covers [PLAN.md](../PLAN.md) and the [gateway reference](gateway-workspace-plan.md).
 
 ## Required invariants
 
@@ -81,4 +81,4 @@ The [two external examples](../evaluation/icse/environments/README.md) provide a
 
 Release validation uses the existing GoReleaser workflow, including Windows credentials/launch checks, package tests, generated frontend verification, installer tests, archives and checksums. Live cross-machine replication and Windows power-loss durability were not exercised locally. Registry transfer batches currently have a 64 MiB limit; previous staging generations are retained rather than automatically collected.
 
-The broader Windows CI run for v0.9.0 caught platform-specific path and fixture assumptions after the narrower release checks had passed. v0.9.1 corrects those cases, and release publication now depends on the full Windows Go suite. The published samples above retain their measured v0.9.0 build identity.
+The broader Windows CI run for v0.9.0 caught platform-specific path and fixture assumptions after the narrower release checks had passed. v0.9.2 corrects those cases, and release publication now depends on the full Windows Go suite. The published samples above retain their measured v0.9.0 build identity.

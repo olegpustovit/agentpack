@@ -39,7 +39,7 @@ func TestMCPPluginPlanCapturesBytesAndRejectsChangedSource(t *testing.T) {
 	if len(plan.Files) != 1 || string(plan.Files[0].Contents) != "#!/bin/sh\necho ready\n" || plan.Files[0].Mode != sourceInfo.Mode() {
 		t.Fatalf("plan did not capture exact plugin file: %#v", plan.Files)
 	}
-	if !strings.Contains(strings.Join(plan.Entries["run"].Server.Args, " "), filepath.Join("plugin-roots", key[:16], "scripts", "run.sh")) {
+	if args := plan.Entries["run"].Server.Args; len(args) != 1 || filepath.Clean(args[0]) != plan.Files[0].Path {
 		t.Fatalf("plugin root was not substituted: %#v", plan.Entries["run"].Server.Args)
 	}
 	if _, err := os.Stat(plan.Files[0].Path); !os.IsNotExist(err) {
