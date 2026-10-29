@@ -62,7 +62,7 @@ agentpack support export RECEIPT_ID --output ./support-capsule.json
 
 Support capsules retain diagnostic codes, evidence grades, coverage, status, and public binary versions. They omit free-form native messages, remedies, arbitrary property values, evidence paths, and private artifact names because these can contain credentials. Review before sharing; nothing uploads automatically.
 
-Supported **strict external** launch targets (no checkout configuration writes): **Claude** (`--plugin-dir` / `--settings`) and **OpenCode** (`OPENCODE_CONFIG_DIR`). Cursor and Antigravity still require workspace overlays in compatibility mode; `--strict-external` refuses them before writing.
+Supported **strict external** launch targets (no checkout configuration writes): **Claude** (`--plugin-dir` / `--settings`) and **OpenCode** (native configuration plus launch settings). Cursor and Antigravity still require workspace overlays in compatibility mode; `--strict-external` refuses them before writing.
 
 ## Preflight vs `sync --verify-only`
 

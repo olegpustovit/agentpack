@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/opencode"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
@@ -54,9 +55,113 @@ func ComputeLaunchDigest(projectRoot, workspace string, effective mode.Effective
 		}
 		hash.Write([]byte("cursor_user_skills\x00" + skills))
 	}
+	if target == nil || *target == base.OpenCode {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		globalConfig := os.Getenv("XDG_CONFIG_HOME")
+		if globalConfig == "" {
+			globalConfig = filepath.Join(home, ".config")
+		}
+		globalConfig = filepath.Join(globalConfig, "opencode")
+		configDir := os.Getenv("OPENCODE_CONFIG_DIR")
+		if configDir == "" {
+			configDir = globalConfig
+		}
+		configDir, err = filepath.Abs(configDir)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(hash, "opencode_config_dir\x00%s", configDir)
+		entries, readErr := os.ReadDir(configDir)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return "", readErr
+		}
+		for _, entry := range entries {
+			fmt.Fprintf(hash, "\x00custom_entry\x00%s\x00%s", entry.Name(), entry.Type())
+		}
+		for _, name := range []string{"config.json", "opencode.json", "opencode.jsonc"} {
+			writeDigestFile(hash, "opencode_user_"+name, filepath.Join(configDir, name))
+			writeDigestFile(hash, "opencode_global_"+name, filepath.Join(globalConfig, name))
+			writeDigestFile(hash, "opencode_seed_"+name, filepath.Join(home, ".config", "opencode", name))
+		}
+		writeDigestFile(hash, "opencode_cli_config", filepath.Join(configDir, "cli.json"))
+		for _, name := range []string{"opencode.json", "opencode.jsonc"} {
+			writeDigestFile(hash, "opencode_home_"+name, filepath.Join(home, ".opencode", name))
+		}
+		if explicit := os.Getenv("OPENCODE_CONFIG"); explicit != "" {
+			if !filepath.IsAbs(explicit) {
+				explicit = filepath.Join(workspace, explicit)
+			}
+			writeDigestFile(hash, "opencode_explicit_config\x00"+explicit, explicit)
+		}
+		hash.Write([]byte("opencode_inline_config\x00" + os.Getenv("OPENCODE_CONFIG_CONTENT")))
+		hash.Write([]byte("opencode_disable_project_config\x00" + os.Getenv("OPENCODE_DISABLE_PROJECT_CONFIG")))
+		for directory := workspace; ; directory = filepath.Dir(directory) {
+			for _, name := range []string{"opencode.json", "opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc"} {
+				writeDigestFile(hash, "opencode_project\x00"+directory+"\x00"+name, filepath.Join(directory, filepath.FromSlash(name)))
+			}
+			if _, statErr := os.Stat(filepath.Join(directory, ".git")); statErr == nil || filepath.Dir(directory) == directory {
+				break
+			}
+		}
+		for _, name := range []string{"plugin", "plugins"} {
+			info, statErr := os.Stat(filepath.Join(configDir, name))
+			fmt.Fprintf(hash, "\x00%s\x00%t", name, statErr == nil && info.IsDir())
+		}
+		for _, name := range []string{"skill", "skills", "agent", "agents", "command", "commands", "mode", "modes"} {
+			if err := writeAssetNames(hash, filepath.Join(configDir, name)); err != nil {
+				return "", err
+			}
+		}
+		if target != nil {
+			nativeInputs, err := opencode.NativeConfigFingerprint(projectRoot, workspace)
+			if err != nil {
+				return "", err
+			}
+			hash.Write([]byte("opencode_native_inputs\x00" + nativeInputs))
+		}
+		binary, err := base.ResolveBinary("OPENCODE_PATH", "opencode")
+		if err == nil {
+			if resolved, resolveErr := filepath.EvalSymlinks(binary); resolveErr == nil {
+				binary = resolved
+			}
+			if info, statErr := os.Stat(binary); statErr == nil {
+				fmt.Fprintf(hash, "opencode_binary\x00%s\x00%d\x00%d", binary, info.Size(), info.ModTime().UnixNano())
+			}
+		}
+	}
 	hash.Write([]byte("workspace\x00"))
 	hash.Write([]byte(workspace))
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func writeAssetNames(hash interface{ Write([]byte) (int, error) }, root string) error {
+	resolved, err := filepath.EvalSymlinks(root)
+	if os.IsNotExist(err) {
+		fmt.Fprintf(hash, "custom_assets\x00%s\x00absent", root)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(hash, "custom_assets\x00%s\x00%s", root, resolved)
+	return filepath.WalkDir(resolved, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(resolved, path)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(hash, "\x00%s\x00%s\x00%d\x00%d", relative, info.Mode(), info.Size(), info.ModTime().UnixNano())
+		return nil
+	})
 }
 func writeDigestFile(hash interface{ Write([]byte) (int, error) }, label, path string) {
 	hash.Write([]byte(label + "\x00"))
@@ -166,7 +271,7 @@ func computeMaterializationDigest(definition, workspace string, effective mode.E
 	}
 	roots := []string{filepath.Join(workspace, ".agents"), filepath.Join(workspace, ".claude"), filepath.Join(workspace, ".cursor"), filepath.Join(workspace, "AGENTS.md"), filepath.Join(workspace, "CLAUDE.md"), filepath.Join(home, ".claude", "skills"), filepath.Join(home, ".grok", "skills")}
 	for _, target := range base.AllTargets() {
-		roots = append(roots, inheritedConfigPaths(&target)...)
+		roots = append(roots, inheritedConfigPaths(&target, workspace)...)
 	}
 	ambient, err := fingerprintInputs(roots)
 	if err != nil {

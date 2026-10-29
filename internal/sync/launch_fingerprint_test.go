@@ -47,6 +47,120 @@ func TestLaunchStateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestOpenCodeLaunchDigestTracksSelectedBinary(t *testing.T) {
+	root := t.TempDir()
+	first, second := filepath.Join(root, "first"), filepath.Join(root, "second")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("fixture"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := base.OpenCode
+	effective := mode.ImplicitEffective()
+	t.Setenv("OPENCODE_PATH", first)
+	before, err := ComputeLaunchDigest(root, root, effective, &target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENCODE_PATH", second)
+	after, err := ComputeLaunchDigest(root, root, effective, &target)
+	if err != nil || before == after {
+		t.Fatalf("selected executable change ignored: %v", err)
+	}
+}
+
+func TestOpenCodeLaunchDigestTracksPluginDirectoryCreation(t *testing.T) {
+	root, config := t.TempDir(), t.TempDir()
+	t.Setenv("OPENCODE_CONFIG_DIR", config)
+	target := base.OpenCode
+	effective := mode.ImplicitEffective()
+	before, err := ComputeLaunchDigest(root, root, effective, &target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(config, "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	after, err := ComputeLaunchDigest(root, root, effective, &target)
+	if err != nil || before == after {
+		t.Fatalf("plugin directory creation ignored: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(config, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	withCommands, err := ComputeLaunchDigest(root, root, effective, &target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "commands", "new.md"), []byte("fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withCommand, err := ComputeLaunchDigest(root, root, effective, &target)
+	if err != nil || withCommands == withCommand {
+		t.Fatalf("custom command creation ignored: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "commands", "new.md"), []byte("updated fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := ComputeLaunchDigest(root, root, effective, &target)
+	if err != nil || updated == withCommand {
+		t.Fatalf("custom command edit ignored: %v", err)
+	}
+}
+
+func TestOpenCodeLaunchDigestTracksNativeConfiguration(t *testing.T) {
+	root, config := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	t.Setenv("XDG_CONFIG_HOME", config)
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	t.Setenv("OPENCODE_CONFIG", "")
+	t.Setenv("OPENCODE_CONFIG_CONTENT", "")
+	target := base.OpenCode
+	effective := mode.ImplicitEffective()
+	digest := func() string {
+		t.Helper()
+		value, err := ComputeLaunchDigest(root, root, effective, &target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	before := digest()
+	if err := os.MkdirAll(filepath.Join(config, "opencode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "opencode", "opencode.jsonc"), []byte(`{"username":"one"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	global := digest()
+	if global == before {
+		t.Fatal("global JSONC change ignored")
+	}
+	cli := filepath.Join(config, "opencode", "cli.json")
+	if err := os.WriteFile(cli, []byte(`{"theme":"one"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	firstCLI := digest()
+	if err := os.WriteFile(cli, []byte(`{"theme":"two"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if digest() == firstCLI {
+		t.Fatal("CLI preference edit ignored")
+	}
+	if err := os.WriteFile(filepath.Join(root, "opencode.json"), []byte(`{"username":"project"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	project := digest()
+	if project == global {
+		t.Fatal("project config change ignored")
+	}
+	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"username":"inline"}`)
+	if digest() == project {
+		t.Fatal("inline config change ignored")
+	}
+}
+
 func TestLaunchDigestTracksExternalWorkspace(t *testing.T) {
 	definition, first, second := t.TempDir(), t.TempDir(), t.TempDir()
 	target := base.Claude

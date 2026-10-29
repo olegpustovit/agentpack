@@ -30,14 +30,14 @@ Each rebuild creates a private generation under `modes/<mode>-g-<id>/`. A small 
     default.current              # selected generation's directory name
     default-g-<id>/
       plugins/agentpack-bundle/   # Claude --plugin-dir bundle
-      opencode/                   # OpenCode config root (OPENCODE_CONFIG_DIR)
+      opencode/                   # OpenCode pack content and launch settings
       codex-home/                 # legacy Codex staging path
       cursor/  cursor-home/       # Cursor plugin tree + fake HOME
       grok/                       # Grok bundle; home is durable (see Grok guide)
       agy/                        # Antigravity workspace plugin
 ```
 
-A launcher points its harness at the right staged tree by setting an environment variable or CLI flag before running the binary — `claude --plugin-dir …`, `OPENCODE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`, a fake `HOME` for Cursor, a workspace `--add-dir` for Antigravity. Codex uses a separate published home generation per project and mode so running daemon sessions keep their original tree. The [harness guides](../harnesses/claude.md) cover each one.
+A launcher points its harness at the right staged tree using a CLI flag or environment setting before running the binary — `claude --plugin-dir …`, OpenCode launch settings, `CODEX_HOME`, `GROK_HOME`, a fake `HOME` for Cursor, a workspace `--add-dir` for Antigravity. Codex uses a separate published home generation per project and mode so running daemon sessions keep their original tree. The [harness guides](../harnesses/claude.md) cover each one.
 
 Mutable state is kept outside disposable staging. Codex session directories, prompt history, and SQLite indexes resolve to `~/.codex`, while project-scoped MCP OAuth credentials resolve under `$AGENTPACK_HOME/projects/<hash>/codex-mcp-oauth/`; Grok sessions resolve to `~/.grok/sessions`; Cursor state resolves through its real data directory. Claude, OpenCode, and Antigravity already keep session data in their native user locations because agentpack does not redirect those data roots.
 

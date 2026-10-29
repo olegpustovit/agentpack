@@ -31,11 +31,18 @@ func planLSP(servers map[string]json.RawMessage, ctx base.StageContext) (base.LS
 	if err != nil {
 		return base.LSPProjection{}, err
 	}
+	if nativeMajor() == 1 || nativeMajor() == 2 {
+		return planNativeLSP(servers, ctx, root)
+	}
 	path := filepath.Join(root, "opencode.json")
 	seedPath := path
 	if ctx.StagedRoots == nil {
 		if home, err := os.UserHomeDir(); err == nil {
-			seedPath = filepath.Join(home, ".config", "opencode", "opencode.json")
+			userRoot, err := userConfigRoot(home, nativeMajor())
+			if err != nil {
+				return base.LSPProjection{}, err
+			}
+			seedPath = filepath.Join(userRoot, "opencode.json")
 		}
 	}
 	seed := append([]byte(nil), ctx.SeedConfig...)

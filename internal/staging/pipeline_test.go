@@ -18,6 +18,7 @@ import (
 func TestPipelineRebuildAndVerifyEmptyPack(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
 	for _, path := range []string{filepath.Join(home, ".codex", "auth.json"), filepath.Join(home, ".grok", "auth.json")} {
@@ -44,6 +45,7 @@ func TestPipelineRebuildAndVerifyEmptyPack(t *testing.T) {
 func TestCodexGenerationSwitchPreservesRunningHome(t *testing.T) {
 	project, userHome := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", userHome)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(userHome, ".config"))
 	t.Setenv("USERPROFILE", userHome)
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
@@ -129,6 +131,7 @@ func TestCodexGenerationSwitchPreservesRunningHome(t *testing.T) {
 func TestFailedCodexRebuildKeepsPublishedGeneration(t *testing.T) {
 	project, userHome := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", userHome)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(userHome, ".config"))
 	t.Setenv("USERPROFILE", userHome)
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
@@ -173,6 +176,7 @@ func TestFailedCodexRebuildKeepsPublishedGeneration(t *testing.T) {
 func TestFailedMCPRebuildRestoresEveryPublishedRoot(t *testing.T) {
 	project, userHome := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", userHome)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(userHome, ".config"))
 	t.Setenv("USERPROFILE", userHome)
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
@@ -386,6 +390,7 @@ func TestRebuildRecoveryRejectsUnknownPathsAndSymlinkBackupDirectories(t *testin
 func TestPipelineDetectsAndRecoversInterruptedRebuildBeforePreReset(t *testing.T) {
 	project, userHome := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", userHome)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(userHome, ".config"))
 	t.Setenv("USERPROFILE", userHome)
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
@@ -423,6 +428,7 @@ func TestPipelineLaunchStagesOnlySelectedHarness(t *testing.T) {
 		t.Run(string(target), func(t *testing.T) {
 			project, home := t.TempDir(), t.TempDir()
 			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 			t.Setenv("USERPROFILE", home)
 			t.Setenv("AGENTPACK_HOME", t.TempDir())
 			t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
@@ -488,6 +494,7 @@ func TestPipelineLaunchAfterSyncWithHooks(t *testing.T) {
 		t.Run(string(target), func(t *testing.T) {
 			project, home := t.TempDir(), t.TempDir()
 			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 			t.Setenv("USERPROFILE", home)
 			t.Setenv("AGENTPACK_HOME", t.TempDir())
 			t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
@@ -517,6 +524,7 @@ func TestPipelineLaunchAfterSyncWithHooks(t *testing.T) {
 func TestPipelineUserCodexHooksStayWithCodex(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("CODEX_HOME", "")
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
@@ -546,6 +554,7 @@ func TestPipelineUserCollisionsAreHarnessScoped(t *testing.T) {
 		t.Run(string(selected), func(t *testing.T) {
 			home, project, store := t.TempDir(), t.TempDir(), t.TempDir()
 			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 			t.Setenv("USERPROFILE", home)
 			t.Setenv("AGENTPACK_HOME", store)
 			t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())

@@ -328,6 +328,7 @@ func TestPreflightFlagsAmbientUserSkill(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("AGENTPACK_HOME", home)
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 	if _, err := paths.EnsureUserAgentpackLayout(); err != nil {
 		t.Fatal(err)
@@ -659,6 +660,7 @@ func TestPreflightFlagsProjectAmbientSkill(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("AGENTPACK_HOME", home)
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 	if _, err := paths.EnsureUserAgentpackLayout(); err != nil {
 		t.Fatal(err)
@@ -793,6 +795,7 @@ func TestPreflightContractNoWorkspaceWrite(t *testing.T) {
 func TestReceiptFreshnessRejectsInputsPolicyBinaryAndFailure(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 	t.Setenv("AGENTPACK_HOME", filepath.Join(home, "state"))
 	definition, workspace := t.TempDir(), t.TempDir()
@@ -880,6 +883,7 @@ func TestReceiptFreshnessRejectsInputsPolicyBinaryAndFailure(t *testing.T) {
 func TestStrictCICleanHomeDoesNotViolateInheritanceBoilerplate(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 	t.Setenv("AGENTPACK_HOME", filepath.Join(home, "state"))
 	definition := t.TempDir()
@@ -1045,6 +1049,7 @@ func TestPreflightDotAgentsUsesStagingPlanAndMarksNativeCodexSkill(t *testing.T)
 func TestPreflightMCPUsesHarnessProjectionWithoutExposingValues(t *testing.T) {
 	home, stagingRoot := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("USERPROFILE", home)
 	userHome, err := os.UserHomeDir()
 	if err != nil {
@@ -1303,6 +1308,7 @@ func TestPreflightReportsStructuredMCPCollectionOmission(t *testing.T) {
 func TestPreflightReportsMalformedLSPSourceWithoutRawContents(t *testing.T) {
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(os.Getenv("HOME"), ".config"))
 	key := strings.Repeat("c", 64)
 	root, err := cache.EntryDir(key)
 	if err != nil {
@@ -1346,6 +1352,7 @@ func TestContractWarningSeverityIsNonBlocking(t *testing.T) {
 func TestPreflightDetectsMaterializationInputsChangedAfterSync(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 	t.Setenv("AGENTPACK_HOME", filepath.Join(home, "state"))
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
@@ -1411,6 +1418,7 @@ func TestPreflightReportsOnlySameNamedAgentsSkills(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("AGENTPACK_HOME", home)
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 	if _, err := paths.EnsureUserAgentpackLayout(); err != nil {
 		t.Fatal(err)
@@ -1577,5 +1585,46 @@ func TestFingerprintInputsDanglingSymlink(t *testing.T) {
 	}
 	if before == after {
 		t.Fatal("creating the missing target must change the fingerprint")
+	}
+}
+
+func TestOpenCodeInheritedConfigPathsRespectOverrides(t *testing.T) {
+	t.Setenv("OPENCODE_PATH", os.Args[0])
+	home, xdg, custom := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	t.Setenv("OPENCODE_CONFIG_DIR", custom)
+	explicit := filepath.Join(t.TempDir(), "explicit.jsonc")
+	t.Setenv("OPENCODE_CONFIG", explicit)
+	target := base.OpenCode
+	paths := inheritedConfigPaths(&target, t.TempDir())
+	for _, want := range []string{filepath.Join(xdg, "opencode", "opencode.jsonc"), filepath.Join(custom, "opencode.json"), explicit} {
+		found := false
+		for _, path := range paths {
+			if path == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing %s from %v", want, paths)
+		}
+	}
+	workspace := t.TempDir()
+	t.Setenv("OPENCODE_CONFIG", "nested/explicit.json")
+	paths = inheritedConfigPaths(&target, workspace)
+	foundRelative := false
+	for _, path := range paths {
+		if path == filepath.Join(workspace, "nested", "explicit.json") {
+			foundRelative = true
+		}
+	}
+	if !foundRelative {
+		t.Fatalf("relative config missing from %v", paths)
+	}
+	seed, _ := inheritedConfigSeed(target)
+	if seed != filepath.Join(xdg, "opencode", "opencode.json") {
+		t.Fatalf("seed = %s", seed)
 	}
 }

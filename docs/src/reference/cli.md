@@ -162,7 +162,7 @@ Each launcher runs a fast pre-sync, stages for its harness, and execs the binary
 |---|---|---|
 | `agentpack claude` | Claude Code | `--plugin-dir` + `--settings` |
 | `agentpack agent` (alias `cursor-agent`) | Cursor Agent | synthetic `HOME` |
-| `agentpack opencode` | OpenCode | `OPENCODE_CONFIG_DIR` |
+| `agentpack opencode` | OpenCode | native config + `OPENCODE_CONFIG_CONTENT` |
 | `agentpack codex` | Codex | `CODEX_HOME` |
 | `agentpack grok` | Grok | `GROK_HOME` (+ injected `--cwd`) |
 | `agentpack agy` | Antigravity | injected `--add-dir` |

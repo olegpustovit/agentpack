@@ -77,7 +77,7 @@ func SpecPath(target harness.Target, root string, hook Hook) string {
 
 func HookAssetRoot(target harness.Target, root string) string {
 	if target == harness.OpenCode {
-		return filepath.Join(root, "plugins", "agentpack-hooks", "assets")
+		return filepath.Join(root, "agentpack-hooks", "assets")
 	}
 	return filepath.Join(root, "hooks", "_packages")
 }

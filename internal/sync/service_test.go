@@ -17,6 +17,7 @@ import (
 func TestServiceAddsPathDependencyAndStagesIt(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
 	source := filepath.Join(project, "demo")
@@ -57,6 +58,7 @@ func TestServiceAddsPathDependencyAndStagesIt(t *testing.T) {
 func TestSyncForLaunchUsesVerifiedFastPath(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
 	if err := manifest.WriteStub(project, "demo", "0.0.1"); err != nil {
@@ -86,6 +88,7 @@ func TestSyncForLaunchUsesVerifiedFastPath(t *testing.T) {
 func TestSyncForLaunchOfAnotherAgentWhileOneIsRunning(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
 	if err := manifest.WriteStub(project, "demo", "0.0.1"); err != nil {
@@ -208,6 +211,7 @@ func TestServiceRejectsModeSelectorsMissingFromCapabilityCatalog(t *testing.T) {
 func TestCursorUserSkillsRefreshOnLaunch(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())

@@ -110,6 +110,23 @@ func TestPluginWithNewHookEventsAndLooseFrontmatterStagesWhole(t *testing.T) {
 	}
 }
 
+func TestOpenCodeHookBridgeIsCoveredByStagingVerification(t *testing.T) {
+	fixture := newIntegrityFixture(t)
+	fixture.upstream.tarballs[commitTwo] = map[string]string{
+		"modern/.claude-plugin/plugin.json": `{"name":"modern","version":"1.0.0"}`,
+		"modern/hooks/hooks.json":           `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"true"}]}]}}`,
+	}
+	fixture.manifest(modernizationKey, commitTwo)
+	fixture.lock()
+	fixture.sync(SyncOptions{})
+	path := fixture.stagedDir("opencode/agentpack-hooks/index.js")
+	appendFile(t, path, "\n// changed\n")
+	_, err := fixture.service.Sync(context.Background(), fixture.project, SyncOptions{VerifyOnly: true})
+	if err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("hook bridge modification not detected: %v", err)
+	}
+}
+
 // cursor/plugins advisor: a Cursor hooks file, with events only Cursor has.
 func TestCursorPluginHooksAreStagedForCursorAndSkippedElsewhereByName(t *testing.T) {
 	fixture := newIntegrityFixture(t)

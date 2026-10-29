@@ -2,6 +2,7 @@ package cursor
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -61,12 +62,41 @@ func materializeFakeHome(ctx base.StageContext) error {
 		return err
 	}
 	if homeErr == nil {
+		if err := shareArtLogin(home, fake); err != nil {
+			return err
+		}
 		if err := materializeUserStorage(fake, fakeCursor, home, realCursor); err != nil {
 			return err
 		}
 		if err := materializePlatformData(fake, home); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func shareArtLogin(home, fake string) error {
+	source, destination := filepath.Join(home, ".artifacts"), filepath.Join(fake, ".artifacts")
+	info, err := os.Stat(source)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect Art CLI login: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("Art CLI login is not a directory: %s", source)
+	}
+	if base.DurablePathMatches(source, destination) {
+		return nil
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return fmt.Errorf("Art CLI login conflicts with %s", destination)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := base.LinkDurableDirectory(source, destination); err != nil {
+		return fmt.Errorf("share Art CLI login with Cursor: %w", err)
 	}
 	return nil
 }

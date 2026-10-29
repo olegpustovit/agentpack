@@ -87,9 +87,8 @@ func TestHarnessLaunchCommandsOwnArgumentsAndEnvironment(t *testing.T) {
 	if !containsEnvironment(command.Env, "OPENCODE_CONFIG_DIR=") {
 		t.Fatal("missing OpenCode config env")
 	}
-	data, _ := os.ReadFile(filepath.Join(root, "opencode.json"))
-	if !strings.Contains(string(data), `"permission": "allow"`) {
-		t.Fatalf("config=%s", data)
+	if !containsEnvironment(command.Env, `OPENCODE_CONFIG_CONTENT={"permission":"allow"}`) {
+		t.Fatal("missing launch-scoped OpenCode permission override")
 	}
 }
 func containsEnvironment(environment []string, prefix string) bool {

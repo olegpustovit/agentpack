@@ -1,32 +1,31 @@
 # OpenCode
 
-`agentpack opencode` launches [OpenCode](https://github.com/sst/opencode) with a redirected config root. Unlike Claude's additive plugin dir, OpenCode is configured by pointing it at a different config directory entirely.
+`agentpack opencode` launches [OpenCode](https://github.com/sst/opencode) with your native settings and the selected pack.
 
 ## What the launcher does
 
-OpenCode searches its config root — `opencode.json` plus `agents/`, `commands/`, `modes/`, `plugins/`, `skills/` — like the standard `.opencode` / `~/.config/opencode` locations. agentpack stages a complete root and runs:
-
-```sh
-OPENCODE_CONFIG_DIR="<staging>/modes/<mode>/opencode" opencode
-```
+Agentpack stages converted pack content. Both OpenCode 1 and 2 keep their native config root and receive pack content through launch settings; OpenCode 1 also uses a generated plugin.
 
 Extra arguments are forwarded:
 
 ```sh
 agentpack opencode --model anthropic/claude-sonnet-4-6
-agentpack --yolo opencode      # stages opencode.json with "permission": "allow"
+agentpack --yolo opencode      # permits actions for this launch only
 ```
 
 ## What the root contains
 
 ```text
 opencode/
-  opencode.json          # seeded config + merged MCP + attribution instruction
+  opencode.json          # generated settings for OpenCode 1
+  agentpack-config.json  # generated settings for OpenCode 2 or a custom OpenCode 1 root
   agents/   commands/   skills/    # converted pack artifacts
-  plugins/  modes/
+  agentpack-hooks/       # bridge and generated support files
 ```
 
-The root is **seeded** from your real `~/.config/opencode/` (`opencode.json`, `agents`, `commands`, `modes`, `plugins`, `skills`) so provider and auth configuration keep working even though the config root is redirected. Converted pack content is then overlaid into OpenCode's native markdown locations.
+Global, project and custom settings, plugins and assets are read from their original locations. Agentpack inspects native MCP and LSP names to avoid replacing them with pack servers. User settings and CLI preferences remain in their native locations.
+
+Native compatibility fixtures have been run on Linux with OpenCode 1.17.11, 1.19.5 and 2.2.2. The isolated skill probe still validates only the 1.17 series and uses a staged config root with `--pure`; it does not observe the normal launch's plugin bridge or external plugins.
 
 ## Artifact handling
 
@@ -36,11 +35,11 @@ The root is **seeded** from your real `~/.config/opencode/` (`opencode.json`, `a
 | Agents | OpenCode agent markdown |
 | Skills | OpenCode skill |
 | Rules | Best-effort skill fallback |
-| MCP | Merged into `opencode.json` |
+| MCP | Merged into generated OpenCode settings |
 
 ## Attribution
 
-OpenCode has no first-class attribution setting. agentpack writes an `agentpack-no-attribution.md` system-prompt file and adds it to `instructions[]` in the staged `opencode.json` — prompt-level guidance, the best available lever. Set `AGENTPACK_KEEP_ATTRIBUTION=1` to skip it.
+OpenCode has no first-class attribution setting. agentpack writes an `agentpack-no-attribution.md` system-prompt file and adds it to `instructions[]` in the generated OpenCode settings — prompt-level guidance, the best available lever. Set `AGENTPACK_KEEP_ATTRIBUTION=1` to skip it.
 
 ## Inspecting the staged root
 

@@ -563,6 +563,8 @@ def compare(inv, roots):
             # Antigravity's plugin page names hooks.json at the plugin root (hooks/hooks.json is not read there).
             where = {'claude': 'hooks/hooks.json', 'cursor': 'hooks/hooks.json', 'codex': 'hooks.json',
                      'opencode': 'plugins/agentpack-hooks/index.js', 'grok': 'hooks/hooks.json', 'agy': 'hooks.json'}[agent]
+            if agent == 'opencode' and root and (root / 'agentpack-hooks/index.js').is_file():
+                where = 'agentpack-hooks/index.js'
             f = root / where if root else None
             cls = 'dropped'
             if f and f.is_file():

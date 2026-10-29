@@ -15,6 +15,7 @@ It also sets a few environment variables on the child process:
 - `CURSOR_CONFIG_DIR` → the fake home's `.cursor`.
 - `CURSOR_DATA_DIR` → your **real** `~/.cursor` when unset, so workspace-trust state survives staging rebuilds.
 - `CARGO_HOME`, `RUSTUP_HOME`, `DOCKER_CONFIG` → bridged from your real home (unless you already set them) so shell tooling keeps working inside the staged `HOME`.
+- An existing `~/.artifacts` directory is linked into the synthetic home so the Art CLI shares its login and logout state. Creating this link requires filesystem symlink support.
 
 On Linux, agentpack also links both Cursor's uppercase Electron profile (`$XDG_CONFIG_HOME/Cursor`) and the CLI's lowercase authentication profile (`$XDG_CONFIG_HOME/cursor`) into the synthetic home. This keeps `auth.json` durable across projects and staging rebuilds.
 

@@ -1178,7 +1178,12 @@ func inheritedConfigSeed(target base.Target) (string, string) {
 	case base.Codex:
 		return filepath.Join(home, ".codex", "config.toml"), "~/.codex/config.toml"
 	case base.OpenCode:
-		return filepath.Join(home, ".config", "opencode", "opencode.json"), "~/.config/opencode/opencode.json"
+		roots, err := opencode.NativeUserConfigRoots()
+		if err != nil || len(roots) == 0 {
+			return "", ""
+		}
+		path := filepath.Join(roots[0], "opencode.json")
+		return path, path
 	case base.Grok:
 		return filepath.Join(home, ".grok", "config.toml"), "~/.grok/config.toml"
 	case base.Cursor:
@@ -1766,7 +1771,7 @@ func populateFreshness(report *environment.Report, options PreflightOptions, eff
 	// Project skill roots that Codex and OpenCode discover on their own: a skill added there
 	// changes what the agent lists, so it must retire earlier observations.
 	inputs = append(inputs, filepath.Join(report.WorkspaceRoot, ".codex", "skills"), filepath.Join(report.WorkspaceRoot, ".opencode", "skills"))
-	inputs = append(inputs, inheritedConfigPaths(options.Target)...)
+	inputs = append(inputs, inheritedConfigPaths(options.Target, report.WorkspaceRoot)...)
 	report.WorkspaceDigest, err = fingerprintInputs(inputs)
 	if err != nil {
 		return err
@@ -1910,7 +1915,7 @@ func fingerprintInputs(inputs []string) (string, error) {
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func inheritedConfigPaths(target *base.Target) []string {
+func inheritedConfigPaths(target *base.Target, workspace string) []string {
 	if target == nil {
 		return nil
 	}
@@ -1920,7 +1925,30 @@ func inheritedConfigPaths(target *base.Target) []string {
 	case base.Claude:
 		names = []string{".claude.json", ".claude/settings.json"}
 	case base.OpenCode:
-		names = []string{".config/opencode/opencode.json", ".config/opencode/opencode.jsonc"}
+		roots, err := opencode.NativeUserConfigRoots()
+		if err != nil {
+			return nil
+		}
+		var result []string
+		seen := make(map[string]bool)
+		for _, root := range roots {
+			for _, name := range []string{"opencode.json", "opencode.jsonc"} {
+				path := filepath.Join(root, name)
+				if !seen[path] {
+					result = append(result, path)
+					seen[path] = true
+				}
+			}
+		}
+		if explicit := os.Getenv("OPENCODE_CONFIG"); explicit != "" {
+			if !filepath.IsAbs(explicit) {
+				explicit = filepath.Join(workspace, explicit)
+			}
+			if !seen[explicit] {
+				result = append(result, explicit)
+			}
+		}
+		return result
 	case base.Codex:
 		names = []string{".codex/config.toml", ".codex/AGENTS.md"}
 	case base.Grok:
@@ -1938,7 +1966,7 @@ func inheritedConfigPaths(target *base.Target) []string {
 }
 
 func appendDetectedInheritance(report *environment.Report, options PreflightOptions) {
-	for _, path := range inheritedConfigPaths(options.Target) {
+	for _, path := range inheritedConfigPaths(options.Target, report.WorkspaceRoot) {
 		info, err := os.Stat(path)
 		if os.IsNotExist(err) {
 			continue

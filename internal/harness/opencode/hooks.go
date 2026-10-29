@@ -9,6 +9,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/hooks"
+	"github.com/tailscale/hujson"
 )
 
 //go:embed hooks_plugin.js
@@ -55,15 +56,19 @@ func (HookRenderer) Render(bundle hooks.Bundle, context hooks.RenderContext) (ho
 	if len(entries) == 0 {
 		return output, nil
 	}
-	pluginRoot := filepath.Join(context.TargetRoot, "plugins", "agentpack-hooks")
-	config, err := mergedConfig(context.TargetRoot)
+	pluginRoot := filepath.Join(context.TargetRoot, "agentpack-hooks")
+	reference := "./agentpack-hooks/index.js"
+	if nativeMajor() == 2 {
+		reference = "./agentpack-hooks"
+	}
+	config, err := mergedConfig(context.TargetRoot, reference)
 	if err != nil {
 		return hooks.RenderOutput{}, err
 	}
 	output.Files = append(output.Files,
 		hooks.RenderedFile{Path: filepath.Join(pluginRoot, "config.json"), JSON: map[string]any{"agentpack": hooks.Executable(), "hooks": entries}},
 		hooks.RenderedFile{Path: filepath.Join(pluginRoot, "index.js"), Text: pluginSource},
-		hooks.RenderedFile{Path: filepath.Join(context.TargetRoot, "opencode.json"), JSON: config},
+		hooks.RenderedFile{Path: packConfigPath(context.TargetRoot), JSON: config},
 	)
 	return output, nil
 }
@@ -99,12 +104,19 @@ func mappedEvent(event hooks.Event) (string, bool) {
 	}
 }
 
-func mergedConfig(root string) (map[string]any, error) {
-	path := filepath.Join(root, "opencode.json")
+func mergedConfig(root, reference string) (map[string]any, error) {
+	path := packConfigPath(root)
 	config := map[string]any{"$schema": "https://opencode.ai/config.json"}
 	if data, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(data, &config); err != nil {
+		standard, err := hujson.Standardize(append(data, '\n'))
+		if err != nil {
 			return nil, fmt.Errorf("parse opencode.json: %w", err)
+		}
+		if err := json.Unmarshal(standard, &config); err != nil {
+			return nil, fmt.Errorf("parse opencode.json: %w", err)
+		}
+		if config == nil {
+			return nil, fmt.Errorf("opencode.json must be an object")
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, err
@@ -113,7 +125,6 @@ func mergedConfig(root string) (map[string]any, error) {
 	if config["plugin"] != nil && !found {
 		return nil, fmt.Errorf("opencode.json plugin must be an array")
 	}
-	reference := "./plugins/agentpack-hooks/index.js"
 	for _, plugin := range plugins {
 		if plugin == reference {
 			return config, nil

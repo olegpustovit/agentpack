@@ -49,6 +49,9 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 		environment = append(environment, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"), "XDG_DATA_HOME="+filepath.Join(home, ".local", "share"))
 	}
 	if realHome, err := os.UserHomeDir(); err == nil {
+		if err := shareArtLogin(realHome, home); err != nil {
+			return nil, err
+		}
 		for _, entry := range []struct{ key, value string }{
 			{"CARGO_HOME", filepath.Join(realHome, ".cargo")},
 			{"RUSTUP_HOME", filepath.Join(realHome, ".rustup")},
