@@ -167,7 +167,7 @@ async function refresh() {
       $("terminal-status").textContent = "Offline · last-known session";
       $("connection-state").textContent = "Offline";
       $("terminal-stage").classList.add("stale");
-    } else if (active) $("terminal-stage").classList.remove("stale");
+    } else if (active && state.replayComplete) $("terminal-stage").classList.remove("stale");
     renderSessions();
   };
   await Promise.all(machines.filter(machine => machine.online !== false).map(async machine => {
@@ -941,7 +941,14 @@ function sendInput(data) {
   const bytes = typeof data === "string" ? encoder.encode(data) : data;
   for (let offset = 0; offset < bytes.length; offset += 32768) state.socket.send(bytes.subarray(offset, offset + 32768));
 }
+function terminalLoading(message = "") {
+  $("terminal-loading").textContent = message;
+  $("terminal-loading").hidden = !message;
+  $("terminal-panel").setAttribute("aria-busy", String(!!message));
+}
 function closeTerminal() {
+  terminalLoading();
+  state.retries = 0;
   state.restartToken++;
   state.attachmentGeneration++;
   const socket = state.socket;
@@ -994,7 +1001,14 @@ function openTerminal(session, reconnecting = false, force = false) {
   $("terminal-empty").querySelector("p").textContent = "Select a session to view its terminal.";
   $("terminal-empty").hidden = true;
   $("terminal-status").textContent = reconnecting ? "Replaying output" : "Connecting\u2026";
+  terminalLoading(reconnecting ? "Reconnecting to terminal…" : "Loading terminal…");
   terminalNotice("");
+  const url = new URL(`/api/sessions/${encodeURIComponent(session.id)}/terminal`, location.href);
+  if (session.node) url.searchParams.set("node", session.node);
+  url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  const socket = new WebSocket(url);
+  state.socket = socket;
+  socket.binaryType = "arraybuffer";
   if (!reconnecting) {
     state.zoom = "fit";
     const rows = session.state?.rows || 24, columns = session.state?.columns || 80;
@@ -1010,18 +1024,18 @@ function openTerminal(session, reconnecting = false, force = false) {
     $("terminal-stage").classList.add("stale", "reconnecting");
   }
   scaleTerminal();
-  const url = new URL(`/api/sessions/${encodeURIComponent(session.id)}/terminal`, location.href);
-  if (session.node) url.searchParams.set("node", session.node);
-  url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  const socket = new WebSocket(url);
-  state.socket = socket;
-  socket.binaryType = "arraybuffer";
+  // A socket can open without the worker ever completing its attachment.
+  const replayDeadline = setTimeout(() => {
+    if (state.socket === socket && !state.replayComplete) socket.close();
+  }, 30000);
   let pendingOutput = 0;
   let receivedFrame = false;
   let replayReceived = false;
   const finishReplay = () => {
     if (state.socket !== socket || generation !== state.attachmentGeneration || sessionKey(session) !== state.selected || !replayReceived || pendingOutput || (state.terminalState?.shared_input !== true && !receivedFrame) || state.replayComplete) return;
     state.replayComplete = true;
+    clearTimeout(replayDeadline);
+    terminalLoading();
     $("terminal-stage").classList.remove("stale", "reconnecting");
     updateTerminalState();
     terminalMark("replay_complete");
@@ -1074,9 +1088,11 @@ function openTerminal(session, reconnecting = false, force = false) {
     }
   };
   socket.onclose = () => {
+    clearTimeout(replayDeadline);
     if (state.socket !== socket) return;
     state.attachment = 0;
     updateTerminalState();
+    if (state.terminalState?.running === false) terminalLoading();
     if (state.terminalState?.restarting) $("terminal-status").textContent = "Restarting · waiting to reconnect";
     else if (state.terminalState?.running !== false && state.sessions.some((value) => sessionKey(value) === sessionKey(session))) {
       // Networks drop (gateway restarts, tailnet hiccups); the worker replays output, so retry quietly.
@@ -1085,9 +1101,14 @@ function openTerminal(session, reconnecting = false, force = false) {
       const token = state.restartToken;
       $("terminal-status").textContent = `Connection lost · reconnecting in ${Math.ceil(delay / 1000)}s`;
       $("terminal-stage").classList.add("stale", "reconnecting");
+      terminalLoading("Connection lost · reconnecting…");
+      $("connection-state").textContent = "Reconnecting";
       state.replayComplete = false;
       setTimeout(() => { if (state.restartToken === token && state.selected === sessionKey(session)) openTerminal(session, true); }, delay);
-    } else if (state.terminalState?.running !== false) $("terminal-status").textContent = "Disconnected · this session is no longer listed";
+    } else if (state.terminalState?.running !== false) {
+      terminalLoading();
+      $("terminal-status").textContent = "Disconnected · this session is no longer listed";
+    }
   };
   socket.onerror = () => {
     if (state.socket === socket && state.retries >= 2) terminalNotice("Still can\u2019t reach this terminal. Retrying automatically\u2026");

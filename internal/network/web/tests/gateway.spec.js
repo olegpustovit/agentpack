@@ -468,6 +468,9 @@ test("reconnect preserves and dims the last frame until replay is rendered",asyn
   await expect(page.locator("#terminal-mount")).toContainText("LAST FRAME");
   await expect.poll(()=>sockets.length).toBe(2);
   await expect(page.locator(".terminal-stage")).toHaveClass(/stale/);
+  await expect(page.locator("#terminal-loading")).toBeVisible();
+  await page.getByRole("button",{name:"Refresh status"}).click();
+  await expect(page.locator(".terminal-stage")).toHaveClass(/stale/);
   sockets[1].send(Buffer.from("REPLAYED FRAME\r\n"));sockets[1].send(Buffer.from("SECOND FRAME\r\n"));
   await expect(page.locator("#terminal-mount")).toContainText("REPLAYED FRAME");await expect(page.locator("#terminal-mount")).toContainText("SECOND FRAME");
   await expect(page.locator("#terminal-mount .xterm-rows")).not.toContainText("LAST FRAME");
@@ -475,6 +478,7 @@ test("reconnect preserves and dims the last frame until replay is rendered",asyn
   sockets[1].send(JSON.stringify({type:"replay_complete"}));await expect(page.locator(".terminal-stage")).not.toHaveClass(/stale/);
   expect(await page.evaluate(()=>performance.getEntriesByName("agentpack:terminal:socketopen").length)).toBeGreaterThan(0);
   expect(await page.evaluate(()=>performance.getEntriesByName("agentpack:terminal:attached").length)).toBeGreaterThan(0);
+  await expect(page.locator("#terminal-loading")).toBeHidden();
   expect(await page.evaluate(()=>performance.getEntriesByName("agentpack:terminal:replay_complete").length)).toBeGreaterThan(0);
 });
 
@@ -591,4 +595,29 @@ test("Library deduplicates identical pins with different saved record IDs",async
   await expect(page.locator("#library-list button")).toHaveCount(1);
   await page.getByLabel("Package version").selectOption("1");
   await expect(page.locator("#library-detail .title")).toContainText("older123");
+});
+
+
+test("a stalled terminal replay retries and clears its loader",async({page})=>{
+  await mockAPI(page);const sockets=[];
+  await page.routeWebSocket("**/api/sessions/*/terminal",ws=>{
+    sockets.push(ws);
+    if(sockets.length>1){
+      ws.send(JSON.stringify({type:"attached",attachment:42,state:{...session.state,shared_input:true,responder:42}}));
+      ws.send(Buffer.from("RECOVERED\r\n"));
+      ws.send(JSON.stringify({type:"replay_complete"}));
+    }
+  });
+  await page.clock.install();
+  await page.goto("/");await page.locator("[data-session=local-one]").click();
+  await expect(page.locator("#terminal-loading")).toHaveText("Loading terminal…");
+  await expect(page.locator("#terminal-panel")).toHaveAttribute("aria-busy","true");
+  await page.screenshot({path:"test-results/terminal-loading-desktop.png"});
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:"test-results/terminal-loading-phone.png"});
+  await page.clock.runFor(31000);
+  await expect.poll(()=>sockets.length).toBe(2);
+  await expect(page.locator("#terminal-mount")).toContainText("RECOVERED");
+  await expect(page.locator("#terminal-loading")).toBeHidden();
+  await expect(page.locator("#terminal-panel")).toHaveAttribute("aria-busy","false");
 });

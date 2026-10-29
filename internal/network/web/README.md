@@ -96,3 +96,5 @@ Antigravity desktop launcher presence cannot be launched or controlled remotely;
 detached desktop windows are not tracked.
 
 The Library shows each module once; select a version in its inspector when several pins are saved. Sessions is the initial active view. Gateway menu → Appearance settings selects System, Light, or Dark for this browser across views and reloads; the terminal background, default text, cursor, and fallback ANSI palette follow the choice. Explicit RGB colors emitted by agents remain intact.
+
+Terminal attachment shows an accessible loading indicator until replay finishes. A socket that fails to complete replay within 30 seconds is closed and retried with the existing backoff. Session polling preserves the dimmed last frame throughout reconnect. The WebSocket handshake starts before emulator initialization and layout.
