@@ -89,3 +89,50 @@ func TestMergeHooksUserBeforePack(t *testing.T) {
 		t.Fatalf("hooks=%#v", entries)
 	}
 }
+
+func TestUserSkillsSeedFakeHomeBeforePackOverlay(t *testing.T) {
+	project, home := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	user := filepath.Join(home, ".cursor", "skills")
+	for name, body := range map[string]string{"personal/SKILL.md": "personal skill", "personal/scripts/run.sh": "#!/bin/sh\n", "shared/SKILL.md": "user version"} {
+		path := filepath.Join(user, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}
+	h := New()
+	if err := h.Prepare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pack, err := h.StagedRoot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pack, "skills", "shared", "SKILL.md"), []byte("pack version"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Finalize(nil, ctx); err != nil {
+		t.Fatal(err)
+	}
+	fake, err := paths.StagingCursorHomeDirForMode(project, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, expected := range map[string]string{"personal/SKILL.md": "personal skill", "personal/scripts/run.sh": "#!/bin/sh\n", "shared/SKILL.md": "pack version"} {
+		data, err := os.ReadFile(filepath.Join(fake, ".cursor", "skills", name))
+		if err != nil || string(data) != expected {
+			t.Fatalf("fake skill %s = %q, %v", name, data, err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(user, "shared", "SKILL.md"))
+	if err != nil || string(data) != "user version" {
+		t.Fatalf("user skill modified: %q, %v", data, err)
+	}
+}

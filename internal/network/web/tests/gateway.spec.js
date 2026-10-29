@@ -621,3 +621,50 @@ test("a stalled terminal replay retries and clears its loader",async({page})=>{
   await expect(page.locator("#terminal-loading")).toBeHidden();
   await expect(page.locator("#terminal-panel")).toHaveAttribute("aria-busy","false");
 });
+
+test("sessions and library show loaders until their requests finish",async({page})=>{
+  await mockAPI(page);
+  let releaseSessions,releaseLibrary;
+  const sessionsReady=new Promise(resolve=>releaseSessions=resolve);
+  const libraryReady=new Promise(resolve=>releaseLibrary=resolve);
+  await page.route("**/api/packages?*",route=>route.fulfill({json:[]}));
+  await page.route("**/api/sessions",async route=>{await sessionsReady;await route.fulfill({json:[session]});});
+  await page.route("**/api/library/packages",async route=>{await libraryReady;await route.fulfill({json:[]});});
+  await page.goto("/");
+  await expect(page.locator("#session-empty")).toHaveText("Loading sessions…");
+  await expect(page.locator("#sessions")).toHaveAttribute("aria-busy","true");
+  releaseSessions();
+  await expect(page.locator("[data-session=local-one]")).toBeVisible();
+  await expect(page.locator("#sessions")).toHaveAttribute("aria-busy","false");
+  await page.getByRole("button",{name:"Library",exact:true}).click();
+  await expect(page.locator("#library-list")).toContainText("Loading library…");
+  await expect(page.locator("#library-list")).toHaveAttribute("aria-busy","true");
+  await page.emulateMedia({colorScheme:"dark"});
+  await page.screenshot({path:"test-results/library-loading-dark.png"});
+  releaseLibrary();
+  await expect(page.locator("#library-list")).not.toContainText("Loading library…");
+  await expect(page.locator("#library-list")).toHaveAttribute("aria-busy","false");
+});
+
+test("terminal renders a large replay promptly and accepts live output afterwards",async({page})=>{
+  await mockAPI(page);let socket;
+  const replay=Buffer.from("history line\r\n".repeat(75000)+"\x1b[2J\x1b[HREPLAY READY\r\n");
+  await page.routeWebSocket("**/api/sessions/*/terminal",ws=>{
+    socket=ws;
+    ws.send(JSON.stringify({type:"attached",attachment:42,state:{...session.state,shared_input:true,responder:42}}));
+    for(let offset=0;offset<replay.length;offset+=32768)ws.send(replay.subarray(offset,offset+32768));
+    ws.send(JSON.stringify({type:"replay_complete"}));
+  });
+  await page.goto("/");await page.locator("[data-session=local-one]").click();
+  await expect(page.locator("#terminal-loading")).toBeHidden();
+  await expect(page.locator("#terminal-mount")).toContainText("REPLAY READY");
+  const timing=await page.evaluate(()=>{
+    const mark=name=>performance.getEntriesByName(`agentpack:terminal:${name}`).at(-1).startTime;
+    return {firstFrame:mark("firstframe")-mark("click"),replayComplete:mark("replay_complete")-mark("click")};
+  });
+  console.info(`Terminal ${replay.length} byte replay: first frame ${Math.round(timing.firstFrame)}ms, ready ${Math.round(timing.replayComplete)}ms`);
+  expect(timing.firstFrame).toBeLessThan(1500);
+  expect(timing.replayComplete).toBeLessThan(5000);
+  socket.send(Buffer.from("LIVE AFTER REPLAY\r\n"));
+  await expect(page.locator("#terminal-mount")).toContainText("LIVE AFTER REPLAY");
+});

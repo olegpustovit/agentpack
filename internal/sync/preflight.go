@@ -1634,7 +1634,7 @@ func inheritanceNotes(target *base.Target, policy environment.Policy) []string {
 	case base.Grok:
 		notes = append(notes, "Grok reads real ~/.grok and ~/.claude in addition to GROK_HOME")
 	case base.Cursor:
-		notes = append(notes, "Cursor fake HOME bridges user cli-config/mcp and may write .cursor/agents in the workspace")
+		notes = append(notes, "Cursor fake HOME bridges user cli-config/mcp, seeds ~/.cursor/skills, and may write .cursor/agents in the workspace")
 	case base.Agy:
 		notes = append(notes, "Antigravity leaves HOME untouched and writes a workspace plugin overlay")
 	}
@@ -1926,7 +1926,7 @@ func inheritedConfigPaths(target *base.Target) []string {
 	case base.Grok:
 		names = []string{".grok/config.toml", ".grok/hooks", ".claude/settings.json"}
 	case base.Cursor:
-		names = []string{".cursor/cli-config.json", ".cursor/mcp.json"}
+		names = []string{".cursor/cli-config.json", ".cursor/mcp.json", ".cursor/skills"}
 	case base.Agy:
 		names = []string{".gemini/settings.json", ".gemini/GEMINI.md"}
 	}

@@ -112,6 +112,11 @@ func prepare(ctx base.StageContext) error {
 	if err != nil {
 		return err
 	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if err := base.CopySelectedEntries(filepath.Join(home, ".cursor"), pack, []string{"skills"}); err != nil {
+			return err
+		}
+	}
 	if !keepAttribution() {
 		if err := forceAttribution(bundle); err != nil {
 			return err

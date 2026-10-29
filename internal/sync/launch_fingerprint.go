@@ -43,6 +43,17 @@ func ComputeLaunchDigest(projectRoot, workspace string, effective mode.Effective
 		name = string(*target)
 	}
 	hash.Write([]byte("target\x00" + name))
+	if target != nil && *target == base.Cursor {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		skills, err := fingerprintInputs([]string{filepath.Join(home, ".cursor", "skills")})
+		if err != nil {
+			return "", err
+		}
+		hash.Write([]byte("cursor_user_skills\x00" + skills))
+	}
 	hash.Write([]byte("workspace\x00"))
 	hash.Write([]byte(workspace))
 	return hex.EncodeToString(hash.Sum(nil)), nil

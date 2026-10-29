@@ -28,7 +28,7 @@ func (c *countedConn) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func TestGatewayCompressesTerminalReplayWithoutChangingBytes(t *testing.T) {
+func TestGatewayCompressesReplayAndKeepsBrowserConnectionAlive(t *testing.T) {
 	const id = "session-compression"
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, "network", "sessions", id), 0o700); err != nil {
@@ -103,6 +103,22 @@ func TestGatewayCompressesTerminalReplayWithoutChangingBytes(t *testing.T) {
 	}
 	if got := counted.read.Load(); got >= int64(len(session.replay))/10 {
 		t.Fatalf("replay was not compressed: wire bytes=%d replay bytes=%d", got, len(session.replay))
+	}
+	// Worker pings terminate at the gateway; the browser needs its own heartbeat.
+	if err := connection.SetReadDeadline(time.Now().Add(20 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	pong := connection.PingHandler()
+	connection.SetPingHandler(func(data string) error {
+		if err := pong(data); err != nil {
+			return err
+		}
+		session.publish([]byte("after browser heartbeat"))
+		return nil
+	})
+	kind, data, err := connection.ReadMessage()
+	if err != nil || kind != websocket.BinaryMessage || string(data) != "after browser heartbeat" {
+		t.Fatalf("browser heartbeat did not preserve live output: kind=%d data=%q err=%v", kind, data, err)
 	}
 	if err := connection.Close(); err != nil {
 		t.Fatal(err)

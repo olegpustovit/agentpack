@@ -8,6 +8,8 @@
 
 Cursor resolves user-scoped skills, commands, and agents from a `HOME`-backed `.cursor` tree. So agentpack runs `cursor-agent` with a **synthetic `HOME`** at `<staging>/modes/<mode>/cursor-home`, whose `.cursor/` symlinks the staged pack assets alongside your real Cursor login and session paths.
 
+Your real `~/.cursor/skills/` is copied into the staged skill tree before pack content is applied. Pack files win on collisions; your originals remain untouched. Adding, editing, or removing user skills triggers a rebuild on the next launch.
+
 It also sets a few environment variables on the child process:
 
 - `CURSOR_CONFIG_DIR` → the fake home's `.cursor`.

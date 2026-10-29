@@ -537,6 +537,8 @@ dialog[open]{animation:sheet .18s ease-out}dialog::backdrop{background:var(--scr
 .app[data-current=recent] [data-for=workspace],.app[data-current=packages] [data-for=workspace],.app[data-current=settings] [data-for=workspace]{display:none!important}
 
 .terminal-loading{display:flex;align-items:center;gap:8px;padding:8px 12px;margin:0;color:var(--terminal-fg);background:var(--terminal-bg);font-size:12px}
-.terminal-loading::before{content:"";width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:terminal-spin .8s linear infinite}
+.terminal-loading::before,.loading-indicator::before{content:"";width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:terminal-spin .8s linear infinite}
 @keyframes terminal-spin{to{transform:rotate(360deg)}}
-@media(prefers-reduced-motion:reduce){.terminal-loading::before{animation:none}}
+@media(prefers-reduced-motion:reduce){.terminal-loading::before,.loading-indicator::before{animation:none}}
+
+.loading-indicator{color:var(--fg2);display:flex;align-items:center;justify-content:center;gap:8px}

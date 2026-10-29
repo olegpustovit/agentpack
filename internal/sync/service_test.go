@@ -204,3 +204,49 @@ func TestServiceRejectsModeSelectorsMissingFromCapabilityCatalog(t *testing.T) {
 		t.Fatalf("Sync() error = %v", err)
 	}
 }
+
+func TestCursorUserSkillsRefreshOnLaunch(t *testing.T) {
+	project, home := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	if err := manifest.WriteStub(project, "demo", "0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(project, "demo", "0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	skill := filepath.Join(home, ".cursor", "skills", "personal", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService()
+	for _, body := range []string{"first", "edited", ""} {
+		if body == "" {
+			if err := os.RemoveAll(filepath.Dir(skill)); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.WriteFile(skill, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", base.Cursor); err != nil || skipped {
+			t.Fatalf("changed user skill %q: skipped=%v err=%v", body, skipped, err)
+		}
+		fake, err := paths.StagingCursorHomeDirForMode(project, "default")
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(fake, ".cursor", "skills", "personal", "SKILL.md"))
+		if body == "" {
+			if !os.IsNotExist(err) {
+				t.Fatalf("removed user skill still staged: %q, %v", data, err)
+			}
+		} else if err != nil || string(data) != body {
+			t.Fatalf("staged user skill = %q, %v", data, err)
+		}
+		if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", base.Cursor); err != nil || !skipped {
+			t.Fatalf("unchanged user skill: skipped=%v err=%v", skipped, err)
+		}
+	}
+}

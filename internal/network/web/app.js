@@ -157,6 +157,8 @@ $("logout").addEventListener("click", async () => {
 async function refresh() {
   if (!state.authenticated) return;
   const generation = ++state.refreshGeneration;
+  state.loading = !state.sessionsLoaded;
+  if (state.loading) renderSessions();
   const machines = [{id:"", name:"Gateway machine", online:true}, ...state.nodes];
   const merge = () => {
     const values = machines.flatMap(machine => state.sessionCache.get(machine.id) || []);
@@ -193,6 +195,9 @@ async function refresh() {
     }
   }));
   if (generation === state.refreshGeneration) {
+    state.sessionsLoaded = true;
+    state.loading = false;
+    renderSessions();
     $("gateway-state").textContent = "Gateway connected";
     $("mesh-state").textContent = `${machines.filter(machine => machine.online !== false).length} of ${machines.length} machines online`;
   }
@@ -258,7 +263,10 @@ function renderSessions() {
     }
   }
   $("session-empty").hidden = rows.length > 0;
-  $("session-empty").querySelector("p").textContent = query ? "No sessions match your filter." : "No sessions yet.";
+  $("sessions").setAttribute("aria-busy", String(state.loading));
+  const empty = $("session-empty").querySelector("p");
+  empty.classList.toggle("loading-indicator", state.loading);
+  empty.textContent = state.loading ? "Loading sessions…" : query ? "No sessions match your filter." : "No sessions yet.";
   const active = state.sessions.find(session => sessionKey(session) === state.selected);
   if (active) $("terminal-title").textContent = sessionName(active);
 }
@@ -373,6 +381,7 @@ async function loadInventory(force=false) {
 async function loadLibrary(force=false) {
   if(state.libraryBusy&&!force)return;
   const generation=++state.libraryGeneration;state.libraryBusy=true;
+  if(state.view==="library")renderLibrary();
   await Promise.all(machines().map(async machine=>{
     if(machine.online===false)return;
     const cached=state.libraryByNode.get(machine.id)||{packages:[],agentpacks:[]};
@@ -478,7 +487,8 @@ function renderLibrary(){
   const filtered=items.filter(item=>[item.name,item.module,item.kind,item.commit,...(item._versions||[]).map(version=>version.commit),item.project,item._machine].join(" ").toLowerCase().includes(query));
   if(!filtered.some(item=>libraryItemKey(item)===state.librarySelection))state.librarySelection=libraryItemKey(filtered[0]||{});
   const listHost=$("library-list");listHost.replaceChildren();
-  if(!filtered.length){const error=[...state.libraryByNode.values()].find(value=>value.error)?.error;const empty=node("div",error?`Library unavailable: ${error}`:kind==="packages"?"No installed or saved packages found.":"No agentpacks saved yet.","empty");listHost.append(empty);}
+  listHost.setAttribute("aria-busy",String(state.libraryBusy));
+  if(!filtered.length){const error=[...state.libraryByNode.values()].find(value=>value.error)?.error;const empty=node("div",state.libraryBusy?"Loading library…":error?`Library unavailable: ${error}`:kind==="packages"?"No installed or saved packages found.":"No agentpacks saved yet.",state.libraryBusy?"empty loading-indicator":"empty");empty.setAttribute("role","status");listHost.append(empty);}
   for(const item of filtered){
     const selected=libraryItemKey(item)===state.librarySelection;
     const row=node("button",void 0,`row two${selected?" sel":""}`);row.type="button";row.dataset.item=libraryItemKey(item);row.setAttribute("aria-current",selected?"true":"false");

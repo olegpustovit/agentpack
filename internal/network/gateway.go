@@ -348,6 +348,8 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer browser.Close()
 	browser.SetReadLimit(chunkSize)
+	_ = browser.SetReadDeadline(time.Now().Add(45 * time.Second))
+	browser.SetPongHandler(func(string) error { return browser.SetReadDeadline(time.Now().Add(45 * time.Second)) })
 	worker.SetReadLimit(replayLimit + 4096)
 	done := make(chan struct{}, 1)
 	copyFrames := func(dst, src *websocket.Conn) {
@@ -374,6 +376,8 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 	go copyFrames(browser, worker)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	ping := time.NewTicker(15 * time.Second)
+	defer ping.Stop()
 	private := r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1
 	for {
 		select {
@@ -383,6 +387,10 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-g.done:
 			return
+		case <-ping.C:
+			if browser.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)) != nil {
+				return
+			}
 		case <-ticker.C:
 			if !private && !g.auth.authenticated(r) {
 				return
