@@ -98,12 +98,12 @@ components:
 
 The gateway follows the approved compact desktop reference: a quiet utility window organized around the host terminal, with source lists, inspectors, and install review kept close at hand. System typography, small controls, restrained blue selection, and subtle separators keep the interface familiar and information-dense without making it feel like a web dashboard.
 
-Light and dark appearances share the same hierarchy. The host terminal keeps its own colors; application chrome adapts to the chosen appearance. On narrow screens, panes switch instead of compressing into unreadable columns, and install sheets rise from the bottom.
+Light and dark appearances share the same hierarchy. Terminal defaults and application chrome adapt to the chosen appearance; explicit colors emitted by the host remain intact. On narrow screens, panes switch instead of compressing into unreadable columns, and install sheets rise from the bottom.
 
 **Key Characteristics:**
 - Terminal-led workspace with compact, native-style chrome.
 - Selection uses restrained blue; status always pairs a word with a dot or ring.
-- Host terminal colors remain independent from application appearance.
+- Terminal defaults follow application appearance; host-emitted explicit colors remain intact.
 
 ## Colors
 
@@ -116,7 +116,7 @@ The interface uses cool, near-neutral surfaces in both appearances, with blue re
 - **Cool window, chrome, and sidebar surfaces:** separate the working canvas, toolbar/status chrome, and source-list regions in light and dark appearances.
 - **Foreground and secondary foreground:** carry primary content and supporting metadata with clear contrast.
 - **Hairline separators:** divide panes and sections without heavy framing.
-- **Host terminal ink:** terminal background and text are host-reported and independent of application theme.
+- **Host terminal ink:** terminal default background and text follow application appearance.
 - **Status colors:** green, amber, red, and neutral gray distinguish success, warning, danger, and idle; each state also has a word or shape.
 
 **The Labeled State Rule.** Never communicate status by color alone; pair the colored dot or ring with a readable state label.
@@ -187,7 +187,7 @@ Controls and rows use gently rounded 5px corners. Popovers and code blocks use 8
 ### Do:
 - **Do** preserve the 13px system-font body and compact 2–20px spacing rhythm.
 - **Do** use hairline separators and quiet surface changes to organize panes.
-- **Do** keep host terminal colors independent from the application theme.
+- **Do** apply the chosen appearance to terminal defaults while preserving explicit host colors.
 - **Do** switch panes on narrow screens and allow sheets to become bottom sheets.
 - **Do** pair every status color with text or a distinct shape.
 

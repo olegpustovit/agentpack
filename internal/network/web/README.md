@@ -94,3 +94,5 @@ A terminal `ended` notice with `state.restarting=true` triggers bounded reconnec
 waits up to 90 seconds, resets the emulator, and enables shared browser input after replay. A replacement that immediately exits still replays its output.
 Antigravity desktop launcher presence cannot be launched or controlled remotely;
 detached desktop windows are not tracked.
+
+The Library shows each module once; select a version in its inspector when several pins are saved. Sessions is the initial active view. Gateway menu → Appearance settings selects System, Light, or Dark for this browser across views and reloads; the terminal background, default text, cursor, and fallback ANSI palette follow the choice. Explicit RGB colors emitted by agents remain intact.

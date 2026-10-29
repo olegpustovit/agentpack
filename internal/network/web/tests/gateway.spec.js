@@ -553,3 +553,42 @@ test("offline restore saves the exact agentpack revision as a draft",async({page
   await page.getByLabel("/srv/project").check();await expect(page.getByRole("button",{name:"Save draft"})).toBeEnabled();await page.getByRole("button",{name:"Save draft"}).click();
   expect(draftInput).toMatchObject({item:pack.id,pack_id:pack.id,revision:revision.id,node:"peer-1",directory:"/srv/project",folder_identity:"folder-fingerprint",expected_pins:{}});
 });
+
+test("Sessions starts active and appearance settings persist across views and reload",async({page})=>{
+  await mockAPI(page); await attachTerminal(page);
+  await page.goto("/");
+  await page.locator("[data-session=local-one]").click();
+  await expect(page.getByRole("button",{name:"Sessions",exact:true})).toHaveAttribute("aria-current","page");
+  await page.getByRole("button",{name:"Terminal appearance",exact:true}).click();
+  await expect(page.locator("#sheet")).toBeVisible();
+  for(const theme of ["dark","light"]){
+    await page.getByLabel("Theme",{exact:true}).selectOption(theme);
+    await expect(page.locator("html")).toHaveAttribute("data-theme",theme);
+    await expect(page.locator(".terminal-stage")).toHaveCSS("background-color",theme==="dark"?"rgb(23, 27, 34)":"rgb(255, 255, 255)");
+    await expect(page.locator(".xterm-screen")).toBeVisible();
+    await page.screenshot({path:`test-results/appearance-${theme}.png`,animations:"disabled"});
+  }
+  await page.getByRole("button",{name:"Done",exact:true}).click();
+  await page.getByRole("button",{name:"Library",exact:true}).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme","light");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme","light");
+  await page.getByRole("button",{name:"Gateway menu"}).click();
+  await page.getByRole("button",{name:"Appearance settings",exact:true}).click();
+  await page.getByLabel("Theme",{exact:true}).selectOption("system");
+  await expect(page.locator("html")).not.toHaveAttribute("data-theme",/./);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#sheet")).not.toBeVisible();
+});
+
+test("Library deduplicates identical pins with different saved record IDs",async({page})=>{
+  await mockAPI(page);
+  const pkg={id:"first-record",module:"github.com/acme/tools",commit:"abcd1234",name:"Tools",kind:"plugin"};
+  await page.route("**/api/library/packages**",route=>route.fulfill({json:[pkg,{...pkg,id:"another-record"},{...pkg,id:"older-version",commit:"older123"}]}));
+  await page.goto("/");
+  await page.getByRole("button",{name:"Library",exact:true}).click();
+  await expect(page.locator("#packages-tab")).toHaveText("Packages 1");
+  await expect(page.locator("#library-list button")).toHaveCount(1);
+  await page.getByLabel("Package version").selectOption("1");
+  await expect(page.locator("#library-detail .title")).toContainText("older123");
+});

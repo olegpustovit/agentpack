@@ -80,13 +80,26 @@ func TestGatewayCompressesTerminalReplayWithoutChangingBytes(t *testing.T) {
 	if err := connection.ReadJSON(&attached); err != nil || attached.Type != "attached" {
 		t.Fatalf("attached notice: %+v, %v", attached, err)
 	}
-	kind, replay, err := connection.ReadMessage()
-	if err != nil || kind != websocket.BinaryMessage || !bytes.Equal(replay, session.replay) {
-		t.Fatalf("replay changed: kind=%d bytes=%d expected=%d err=%v", kind, len(replay), len(session.replay), err)
+	var replay []byte
+	for {
+		kind, data, err := connection.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if kind == websocket.TextMessage {
+			var complete terminalNotice
+			if err := json.Unmarshal(data, &complete); err != nil || complete.Type != "replay_complete" {
+				t.Fatalf("replay completion: %+v, %v", complete, err)
+			}
+			break
+		}
+		if kind != websocket.BinaryMessage || len(data) > chunkSize {
+			t.Fatalf("unbounded replay frame: kind=%d bytes=%d", kind, len(data))
+		}
+		replay = append(replay, data...)
 	}
-	var complete terminalNotice
-	if err := connection.ReadJSON(&complete); err != nil || complete.Type != "replay_complete" {
-		t.Fatalf("replay completion: %+v, %v", complete, err)
+	if !bytes.Equal(replay, session.replay) {
+		t.Fatalf("replay changed: bytes=%d expected=%d", len(replay), len(session.replay))
 	}
 	if got := counted.read.Load(); got >= int64(len(session.replay))/10 {
 		t.Fatalf("replay was not compressed: wire bytes=%d replay bytes=%d", got, len(session.replay))

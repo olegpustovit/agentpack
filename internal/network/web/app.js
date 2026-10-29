@@ -28,6 +28,22 @@ state.replication = {peers:[],contacts:{}};
 state.attachmentGeneration = 0;
 state.replayComplete = true;
 state.firstFrameMarked = false;
+const systemAppearance=matchMedia("(prefers-color-scheme: dark)");
+function terminalTheme(){
+  const dark=document.documentElement.dataset.theme==="dark"||(!document.documentElement.dataset.theme&&systemAppearance.matches);
+  return dark?{background:"#171b22",foreground:"#e6e8ed",cursor:"#e6e8ed",selectionBackground:"#ffffff40"}:{
+    background:"#ffffff",foreground:"#202124",cursor:"#202124",selectionBackground:"#0969da40",
+    black:"#202124",red:"#a31515",green:"#116329",yellow:"#7d4e00",blue:"#0550ae",magenta:"#8250df",cyan:"#006b75",white:"#d0d7de",
+    brightBlack:"#57606a",brightRed:"#cf222e",brightGreen:"#1a7f37",brightYellow:"#9a6700",brightBlue:"#0969da",brightMagenta:"#a475f9",brightCyan:"#007c8a",brightWhite:"#ffffff"
+  };
+}
+function applyTerminalTheme(){
+  const theme=terminalTheme();
+  document.documentElement.style.setProperty("--terminal-bg",theme.background);
+  document.documentElement.style.setProperty("--terminal-fg",theme.foreground);
+  if(state.terminal)state.terminal.options.theme=theme;
+}
+systemAppearance.addEventListener("change",applyTerminalTheme);
 const encoder = new TextEncoder();
 const pendingRestarts = new Map();
 function notice(message) {
@@ -387,7 +403,8 @@ async function loadReplication(){
 function registryPackages(){
   const byID=new Map();
   for(const item of [...state.libraryByNode.values()].flatMap(value=>value.packages||[])){
-    const previous=byID.get(item.id);if(!previous)byID.set(item.id,{...item,_nodes:[item._node]});else previous._nodes.push(item._node);
+    const key=item.module&&item.commit?`${item.module.toLowerCase()}@${item.commit}`:item.id;
+    const previous=byID.get(key);if(!previous)byID.set(key,{...item,_key:key,_nodes:[item._node]});else if(!previous._nodes.includes(item._node))previous._nodes.push(item._node);
   }
   const pins=new Set([...byID.values()].map(item=>`${item.module}@${item.commit}`));
   for(const target of destinations())for(const pin of target.packages){
@@ -447,11 +464,18 @@ function svgIcon(name){
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]||paths.package}</svg>`;
 }
 function renderLibrary(){
-  const packages=registryPackages(),packs=registryAgentpacks(),kind=state.libraryKind;
+  const byModule=new Map();
+  for(const item of registryPackages()){
+    const key=item.module?.toLowerCase()||item.id;
+    const previous=byModule.get(key);
+    if(previous)previous._versions.push(item);
+    else byModule.set(key,{...item,_key:key,_versions:[item]});
+  }
+  const packages=[...byModule.values()],packs=registryAgentpacks(),kind=state.libraryKind;
   $("packages-tab").textContent=`Packages ${packages.length}`;$("setups-tab").textContent=`Agentpacks ${packs.length}`;
   $("packages-tab").classList.toggle("on",kind==="packages");$("setups-tab").classList.toggle("on",kind==="agentpacks");
   const items=kind==="packages"?packages:packs,query=$("library-search").value.trim().toLowerCase();
-  const filtered=items.filter(item=>[item.name,item.module,item.kind,item.commit,item.project,item._machine].join(" ").toLowerCase().includes(query));
+  const filtered=items.filter(item=>[item.name,item.module,item.kind,item.commit,...(item._versions||[]).map(version=>version.commit),item.project,item._machine].join(" ").toLowerCase().includes(query));
   if(!filtered.some(item=>libraryItemKey(item)===state.librarySelection))state.librarySelection=libraryItemKey(filtered[0]||{});
   const listHost=$("library-list");listHost.replaceChildren();
   if(!filtered.length){const error=[...state.libraryByNode.values()].find(value=>value.error)?.error;const empty=node("div",error?`Library unavailable: ${error}`:kind==="packages"?"No installed or saved packages found.":"No agentpacks saved yet.","empty");listHost.append(empty);}
@@ -461,7 +485,7 @@ function renderLibrary(){
     const glyph=node("span",void 0,"glyph small-glyph");glyph.innerHTML=svgIcon(kind==="packages"?"package":"folder");
     const label=node("span",void 0,"label");label.append(node("span",item.name||item.path||item.module||"Unnamed package"));
     const heads=item.heads?.length||0;
-    label.append(node("small",kind==="packages"?`${item.kind||"Package"} · ${String(item.commit||"").slice(0,12)} · ${item._machine} · ${verifiedCopies(item.id).length} copies`:`${item._revisions?.length||0} ${(item._revisions?.length||0)===1?"revision":"revisions"} · ${heads>1?"Two versions to review · ":""}${item._machine}`));
+    label.append(node("small",kind==="packages"?`${item.kind||"Package"} · ${item._versions?.length>1?`${item._versions.length} versions`:String(item.commit||"").slice(0,12)} · ${item._machine} · ${verifiedCopies(item.id).length} copies`:`${item._revisions?.length||0} ${(item._revisions?.length||0)===1?"revision":"revisions"} · ${heads>1?"Two versions to review · ":""}${item._machine}`));
     row.append(glyph,label);row.addEventListener("click",()=>pickLibrary(item,true));listHost.append(row);
   }
   const errors=[...state.libraryByNode.entries()].filter(([,value])=>value.error);
@@ -522,6 +546,12 @@ function renderLibraryDetail(item){
     const packUses=registryAgentpacks().filter(pack=>pack._revisions?.some(rev=>rev.package_ids?.includes(item.id)));
     const rows=installed.map(({target,pin})=>`<tr><td>${esc(target.machine)}</td><td title="${esc(target.directory)}">${esc(target.directory.split(/[\\/]/).filter(Boolean).pop()||target.directory)}</td><td><code>${esc(pin.commit||"")}</code>${pin.commit!==item.commit?` <span class="faint">→ ${esc(item.commit)}</span>`:""}</td><td>${verifiedCopies(item.id).some(copy=>copy.id===target.node)?`<span class="cell">${svgIcon("check")}Verified</span>`:"—"}</td><td class="act">${pin.commit===item.commit?"Current":`<button data-update-target="${encodeURIComponent(destinationKey(target.node,target.directory))}" ${target.online&&target.available||target.folder_id?"":"disabled"}>Update</button>`}</td></tr>`).join("");
     host.innerHTML=`${back}<div class="insp wide"><div class="insp-head"><span class="glyph">${svgIcon("package")}</span><div class="title"><h1>${esc(item.name||item.path||item.module)}</h1><p>${esc(item.kind||"Package")} · pinned <code>${esc(item.commit)}</code> · ${item._installed?"installed":"saved"} on ${esc(item._machine)}</p></div><div class="actions"><button class="primary" id="install-item">${svgIcon("install")}Install…</button></div></div><dl class="kv"><dt>Module</dt><dd><code>${esc(item.module)}</code></dd><dt>Repository</dt><dd>${esc(item.url||item.module)}</dd><dt>Content</dt><dd><code>${esc(item.content_hash||"No content hash recorded")}</code></dd><dt>Source project</dt><dd>${esc(item.project||"Unknown project")}</dd><dt>Verified copies</dt><dd>${esc(copiesLabel(item.id))}</dd><dt>In agentpacks</dt><dd>${packUses.length?packUses.map(pack=>`<button class="link-btn" data-pack-key="${encodeURIComponent(libraryItemKey(pack))}">${esc(pack.name)}</button>`).join(", "):"—"}</dd></dl><section class="sect"><header><h2>Installed in</h2><span class="meta">${installed.length} ${installed.length===1?"project":"projects"}</span></header>${installed.length?`<div class="hscroll"><table class="grid compact installed"><thead><tr><th>Machine</th><th>Project</th><th>Pin</th><th>Copy</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:"<p class=note>Not installed in a trusted project folder yet.</p>"}</section></div>`;
+    if(item._versions?.length>1){
+      const label=node("label","Version"),select=node("select");select.setAttribute("aria-label","Package version");
+      item._versions.forEach((version,index)=>{const option=node("option",version.commit);option.value=String(index);option.selected=version.commit===item.commit;select.append(option);});
+      select.onchange=()=>renderLibraryDetail({...item._versions[Number(select.value)],_versions:item._versions});
+      label.append(select);host.querySelector(".insp-head").after(label);
+    }
     host.querySelector("#install-item").onclick=()=>installPackageDestinations(item);
     host.querySelectorAll("[data-update-target]").forEach(button=>button.addEventListener("click",()=>{const key=decodeURIComponent(button.dataset.updateTarget),target=destinations().find(row=>destinationKey(row.node,row.directory)===key);if(target)installPackageDestinations(item,[key]);}));
     host.querySelectorAll("[data-pack-key]").forEach(button=>button.addEventListener("click",()=>{const key=decodeURIComponent(button.dataset.packKey),pack=registryAgentpacks().find(value=>libraryItemKey(value)===key);if(pack){state.libraryKind="agentpacks";pickLibrary(pack);}}));
@@ -529,8 +559,8 @@ function renderLibraryDetail(item){
     const revisions=item._revisions||[],selected=revisions.find(rev=>rev.id===state.revisionSelection)||revisions[0];
     if(selected)state.revisionSelection=selected.id;
     if(!selected){host.innerHTML=`${back}<div class="empty">${esc(item._error||"Revision details are unavailable.")}</div>`;host.querySelector("#lib-back").onclick=()=>$("library").classList.remove("show-detail");return;}
-    const index=revisions.indexOf(selected),previous=revisions[index+1],packageItems=(selected.package_ids||[]).map(id=>registryPackages().find(pkg=>pkg._node===item._node&&pkg.id===id)).filter(Boolean);
-    const previousItems=(previous?.package_ids||[]).map(id=>registryPackages().find(pkg=>pkg._node===item._node&&pkg.id===id)).filter(Boolean);
+    const index=revisions.indexOf(selected),previous=revisions[index+1],packageItems=(selected.package_ids||[]).map(id=>[...state.libraryByNode.values()].flatMap(value=>value.packages||[]).find(pkg=>pkg._node===item._node&&pkg.id===id)).filter(Boolean);
+    const previousItems=(previous?.package_ids||[]).map(id=>[...state.libraryByNode.values()].flatMap(value=>value.packages||[]).find(pkg=>pkg._node===item._node&&pkg.id===id)).filter(Boolean);
     const moduleSet=new Set(packageItems.map(pkg=>pkg.module)),previousMap=new Map(previousItems.map(pkg=>[pkg.module,pkg]));
     const changes=[...packageItems.filter(pkg=>!previousMap.has(pkg.module)).map(pkg=>["add","+",pkg.name||pkg.module]),...packageItems.filter(pkg=>previousMap.has(pkg.module)&&previousMap.get(pkg.module).commit!==pkg.commit).map(pkg=>["upd","~",pkg.name||pkg.module]),...previousItems.filter(pkg=>!moduleSet.has(pkg.module)).map(pkg=>["del","−",pkg.name||pkg.module])];
     const history=revisions.map((rev,i)=>`<button class="hrow ${rev.id===selected.id?"sel":""}" data-revision="${esc(rev.id)}" aria-pressed="${rev.id===selected.id}"><span class="tick"></span><span class="label"><b>${esc(rev.label||"Saved revision")}</b><small>${esc(new Date(rev.created_at).toLocaleString())} · ${esc(rev.source_node||item._machine)}</small></span><span class="meta">${i===0?'<span class="badge accent">Latest</span> ':""}${(rev.package_ids||[]).length} packages</span></button>`).join("");
@@ -724,7 +754,7 @@ function renameSession(session){
 function restoreAgentpack(pack,revision){
   const targets=destinations();let chosen="",restart=true,phase="preview",previews=new Map(),pending=new Set();
   const valid=target=>target.online&&target.available&&!target.error;
-  const draftPackages=(revision.package_ids||[]).map(id=>registryPackages().find(item=>item.id===id));
+  const draftPackages=(revision.package_ids||[]).map(id=>[...state.libraryByNode.values()].flatMap(value=>value.packages||[]).find(item=>item.id===id));
   const draftable=target=>!!target.folder_id&&(!target.online||!target.available||!!target.error)&&draftPackages.every(item=>item?.cache_key);
   const render=()=>{
     const host=$("restore-targets");host.replaceChildren();
@@ -968,7 +998,7 @@ function openTerminal(session, reconnecting = false, force = false) {
   if (!reconnecting) {
     state.zoom = "fit";
     const rows = session.state?.rows || 24, columns = session.state?.columns || 80;
-    state.terminal = new Terminal({ cols: columns, rows, cursorBlink: true, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 13, scrollback: 5e3, allowProposedApi: true, disableStdin: true, screenReaderMode: true, theme: { background: "#171b22", foreground: "#e6e8ed", cursor: "#e6e8ed" } });
+    state.terminal = new Terminal({ cols: columns, rows, cursorBlink: true, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 13, scrollback: 5e3, allowProposedApi: true, disableStdin: true, screenReaderMode: true, theme: terminalTheme() });
     state.terminal.open($("terminal-mount"));
     state.terminal.onData(sendInput);
     state.terminal.onBinary((data) => sendInput(Uint8Array.from(data, (character) => character.charCodeAt(0))));
@@ -1224,9 +1254,27 @@ sessionMenu.addEventListener("keydown", event => {
   if(event.key==="Tab")closeSessionMenu();
 });
 document.addEventListener("pointerdown", event => { if (!sessionMenu.contains(event.target) && !menuAnchor?.contains(event.target)) closeSessionMenu(); });
+function openAppearance(){
+    moreMenu.hidden=true;
+    showSheet("Appearance settings", '<label for="appearance-theme">Theme</label><select id="appearance-theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select><p class="note">Applies across this app on this browser. Includes the terminal background, text, and ANSI palette.</p><p id="appearance-status" role="status"></p>', '<button type="button" id="appearance-done">Done</button>', false);
+    $("appearance-theme").value=document.documentElement.dataset.theme||"system";
+    $("appearance-theme").onchange=event=>{
+      const theme=event.target.value;
+      if(theme==="system")delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=theme;
+      applyTerminalTheme();
+      try{localStorage.setItem("agentpack-theme",theme);}catch{$("appearance-status").textContent="Theme applied. This browser could not save your preference.";}
+    };
+    $("appearance-done").onclick=closeSheet;
+ }
+const appearanceButton=button("",openAppearance,"tb-btn icon");
+appearanceButton.setAttribute("aria-label","Terminal appearance");
+appearanceButton.title="Terminal appearance settings";
+appearanceButton.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16Z" fill="currentColor" stroke="none"/></svg>';
+$("more-tools").before(appearanceButton);
 const moreMenu=node("div", void 0, "menu-popup"); moreMenu.hidden=true; document.body.append(moreMenu);
 $("more-tools").addEventListener("click", () => {
   moreMenu.replaceChildren();
+  moreMenu.append(button("Appearance settings", openAppearance, "mi"));
   for (const [label,view] of [["Recent folders","recent"],["Packages","packages"],["Gateway settings","settings"]]) moreMenu.append(button(label, () => { moreMenu.hidden=true; setView(view); }, "mi"));
   const rect=$("more-tools").getBoundingClientRect(); moreMenu.style.left=`${rect.left}px`; moreMenu.style.top=`${rect.bottom+4}px`; moreMenu.hidden=false;
 });
@@ -1261,4 +1309,7 @@ async function refreshNodes() {
   } catch (error) { notice(error.message); }
 }
 setInterval(() => { if (!document.hidden) refreshNodes(); }, 15000);
+setView("workspace");
+try { const theme=localStorage.getItem("agentpack-theme"); if(["light","dark"].includes(theme))document.documentElement.dataset.theme=theme; } catch {}
+applyTerminalTheme();
 bootstrap().then(refreshNodes);

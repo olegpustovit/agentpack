@@ -358,6 +358,13 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			_ = dst.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			// Stream replay in bounded messages so browsers can render before the full history arrives.
+			for len(data) > chunkSize && kind == websocket.BinaryMessage {
+				if err = dst.WriteMessage(kind, data[:chunkSize]); err != nil {
+					return
+				}
+				data = data[chunkSize:]
+			}
 			if err = dst.WriteMessage(kind, data); err != nil {
 				return
 			}
