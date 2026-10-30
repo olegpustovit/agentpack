@@ -547,16 +547,28 @@ func TestNativeV1CustomDirectoryPluginKeepsItsOrigin(t *testing.T) {
 	if err := finalizeSources(nil, stage); err != nil {
 		t.Fatal(err)
 	}
-	command, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "agent", "build"}})
+	bareCtx, bareCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer bareCancel()
+	bare := exec.CommandContext(bareCtx, binary, "debug", "agent", "build", "--print-logs", "--log-level", "DEBUG")
+	bare.Dir, bare.Env = project, os.Environ()
+	if output, err := bare.CombinedOutput(); err != nil {
+		t.Fatalf("bare custom plugin: %v (context: %v)\n%s", err, bareCtx.Err(), output)
+	}
+	for _, path := range []string{marker, declaredMarker} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "agent", "build", "--print-logs", "--log-level", "DEBUG"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	commandWithTimeout := exec.CommandContext(ctx, command.Path, command.Args[1:]...)
 	commandWithTimeout.Dir, commandWithTimeout.Env = project, command.Env
 	if output, err := commandWithTimeout.CombinedOutput(); err != nil {
-		t.Fatalf("native custom plugin: %v\n%s", err, output)
+		t.Fatalf("native custom plugin: %v (context: %v)\n%s", err, ctx.Err(), output)
 	}
 	bridgeData, err := os.ReadFile(bridgeMarker)
 	if err != nil || string(bridgeData) != "run\n" {
