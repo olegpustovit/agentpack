@@ -678,3 +678,13 @@ test("limits view shows each harness with partial failures and no raw CLI output
   await expect(page.locator("#limits-body")).toContainText("grok billing: authentication required");
   await expect(page.locator("#limits-body")).toContainText("codex");
 });
+test("limits shortcut opens the view and a passed reset is labelled rechecking",async({page})=>{
+  const past=new Date(Date.now()-60000).toISOString();
+  await mockAPI(page);
+  await page.route("**/api/limits*",route=>route.fulfill({json:{limits:[{harness:"claude",state:"available",windows:[{id:"claude/session",label:"Session",remaining_percent:0,reset_at:past}]}]}}));
+  await page.goto("/");
+  await page.keyboard.press(process.platform==="darwin"?"Meta+4":"Control+4");
+  await expect(page.locator("#limits-view")).toBeVisible();
+  await expect(page.locator("#limits-body")).toContainText("reset due · rechecking");
+  await expect(page.locator(".limit-window.dim")).toHaveCount(1);
+});

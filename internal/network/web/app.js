@@ -332,12 +332,9 @@ function renderRecent() {
 async function loadLimits(refresh = false) {
   const body = $("limits-body");
   body.replaceChildren(textNode("p", refresh ? "Refreshing…" : "Loading limits…"));
-  try {
-    const result = refresh ? await api("/api/limits/refresh", {}, "POST", state.node) : await api("/api/limits", void 0, "GET", state.node);
-    renderLimits(list(result, "limits"));
-  } catch (error) {
-    body.replaceChildren(textNode("p", error.message));
-  }
+  const online = machines().filter(machine => machine.online !== false);
+  const results = await Promise.allSettled(online.map(machine => refresh ? api("/api/limits/refresh", {}, "POST", machine.id) : api("/api/limits", void 0, "GET", machine.id)));
+  renderLimits(results.map((result, index) => ({ node: online[index].name, snapshots: result.status === "fulfilled" ? list(result.value, "limits") : [], error: result.status === "rejected" ? result.reason.message : "" })));
 }
 function textNode(tag, text, className) {
   const element = document.createElement(tag);
@@ -345,39 +342,63 @@ function textNode(tag, text, className) {
   if (className) element.className = className;
   return element;
 }
-function renderLimits(snapshots) {
+function relativeUntil(ms) {
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) return `in ${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 48 ? `in ${hours}h ${minutes % 60}m` : `in ${Math.round(hours / 24)}d`;
+}
+function resetLabel(window) {
+  if (!window.reset_at) return { text: window.reset_text || "reset not exposed", due: false };
+  const at = new Date(window.reset_at);
+  const absolute = at.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
+  const remaining = at.getTime() - Date.now();
+  if (remaining <= 0) return { text: `reset due · rechecking · was ${absolute}`, due: true };
+  return { text: `resets ${relativeUntil(remaining)} · ${absolute}`, due: false };
+}
+function renderLimits(groups) {
   const body = $("limits-body");
   body.replaceChildren();
-  if (!snapshots.length) body.append(textNode("p", "No harness limits reported."));
-  for (const snapshot of snapshots) {
-    const section = document.createElement("section");
-    section.className = "limit-harness";
-    const head = document.createElement("div");
-    head.className = "limit-head";
-    head.append(textNode("strong", snapshot.harness), textNode("span", snapshot.plan ? `${snapshot.state} · ${snapshot.plan}` : snapshot.state, "muted"));
-    section.append(head);
-    if (snapshot.source) section.append(textNode("small", snapshot.source, "muted"));
-    for (const window of snapshot.windows || []) {
-      const row = document.createElement("div");
-      row.className = "limit-window";
-      const meter = document.createElement("div");
-      meter.className = "limit-meter";
-      meter.setAttribute("role", "meter");
-      meter.setAttribute("aria-label", `${window.label} remaining`);
-      meter.setAttribute("aria-valuemin", "0");
-      meter.setAttribute("aria-valuemax", "100");
-      meter.setAttribute("aria-valuenow", String(window.remaining_percent ?? 0));
-      const fill = document.createElement("i");
-      fill.style.width = `${window.remaining_percent ?? 0}%`;
-      meter.append(fill);
-      const reset = window.reset_at ? new Date(window.reset_at).toUTCString() : window.reset_text || "reset not exposed";
-      row.append(textNode("span", window.label), meter, textNode("span", window.remaining_percent == null ? "unknown" : `${Math.round(window.remaining_percent)}% left`), textNode("small", reset, "muted"));
-      section.append(row);
+  if (!groups.length) body.append(textNode("p", "No connected nodes to read limits from."));
+  for (const group of groups) {
+    const node = document.createElement("section");
+    node.className = "limit-node";
+    node.append(textNode("h2", group.node));
+    if (group.error) node.append(textNode("p", group.error, "muted"));
+    if (!group.snapshots.length && !group.error) node.append(textNode("p", "No harness limits reported.", "muted"));
+    for (const snapshot of group.snapshots) {
+      const section = document.createElement("div");
+      section.className = "limit-harness";
+      const head = document.createElement("div");
+      head.className = "limit-head";
+      head.append(textNode("strong", snapshot.harness), textNode("span", snapshot.plan ? `${snapshot.state} · ${snapshot.plan}` : snapshot.state, "muted"));
+      section.append(head);
+      if (snapshot.source) section.append(textNode("small", snapshot.source, "muted"));
+      if (snapshot.observed_at) section.append(textNode("small", `observed ${new Date(snapshot.observed_at).toLocaleString()}`, "muted"));
+      for (const window of snapshot.windows || []) {
+        const reset = resetLabel(window);
+        const row = document.createElement("div");
+        row.className = reset.due ? "limit-window dim" : "limit-window";
+        const meter = document.createElement("div");
+        meter.className = "limit-meter";
+        meter.setAttribute("role", "meter");
+        meter.setAttribute("aria-label", `${window.label} remaining`);
+        meter.setAttribute("aria-valuemin", "0");
+        meter.setAttribute("aria-valuemax", "100");
+        meter.setAttribute("aria-valuenow", String(window.remaining_percent ?? 0));
+        const fill = document.createElement("i");
+        fill.style.width = `${window.remaining_percent ?? 0}%`;
+        meter.append(fill);
+        row.append(textNode("span", window.label), meter, textNode("span", window.remaining_percent == null ? "unknown" : `${Math.round(window.remaining_percent)}% left`), textNode("small", reset.text, "muted"));
+        section.append(row);
+      }
+      if (snapshot.error) section.append(textNode("p", snapshot.error, "muted"));
+      node.append(section);
     }
-    if (snapshot.error) section.append(textNode("p", snapshot.error, "muted"));
-    body.append(section);
+    body.append(node);
   }
 }
+let limitsTimer;
 function setView(view) {
   if (!["workspace","sessions","library","machines","settings","recent","packages","limits"].includes(view)) return;
   state.view = view === "sessions" ? "workspace" : view;
@@ -386,7 +407,8 @@ function setView(view) {
   $("library").hidden = view !== "library"; $("machines").hidden = view !== "machines";
   $("recent-view").hidden = view !== "recent"; $("packages-view").hidden = view !== "packages"; $("settings-view").hidden = view !== "settings";
   $("limits-view").hidden = view !== "limits";
-  if (view === "limits") void loadLimits();
+  clearInterval(limitsTimer);
+  if (view === "limits") { void loadLimits(); limitsTimer = setInterval(() => loadLimits(), 60000); }
   if (view === "settings") { loadSettings(); void loadReplication(); }
   if (view === "recent") renderRecent();
   if (view === "library") { renderLibrary(); void loadWorkspaceData(); }
@@ -1278,7 +1300,7 @@ syncMobileWorkspace();
 $("toggle-sessions").addEventListener("click", toggleSidebar);
 document.addEventListener("keydown", event => {
   if ((event.metaKey || event.ctrlKey) && event.key === "\\" && !$("app").hidden) { event.preventDefault(); toggleSidebar(); }
-  if ((event.metaKey || event.ctrlKey) && ["1","2","3"].includes(event.key)) { event.preventDefault(); setView(({1:"workspace",2:"library",3:"machines"})[event.key]); }
+  if ((event.metaKey || event.ctrlKey) && ["1","2","3","4"].includes(event.key)) { event.preventDefault(); setView(({1:"workspace",2:"library",3:"machines",4:"limits"})[event.key]); }
 });
 const splitter = $("splitter");
 function resizeSidebar(width) { state.sidebarWidth=Math.round(Math.max(220,Math.min(420,width))); document.documentElement.style.setProperty("--sidebar-w", `${state.sidebarWidth}px`); splitter.setAttribute("aria-valuenow", state.sidebarWidth); }

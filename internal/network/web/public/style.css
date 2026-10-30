@@ -542,3 +542,14 @@ dialog[open]{animation:sheet .18s ease-out}dialog::backdrop{background:var(--scr
 @media(prefers-reduced-motion:reduce){.terminal-loading::before,.loading-indicator::before{animation:none}}
 
 .loading-indicator{color:var(--fg2);display:flex;align-items:center;justify-content:center;gap:8px}
+.limits{overflow:auto;padding:var(--s5) var(--s7) var(--s7)}
+.limit-node{max-width:760px;padding-bottom:var(--s5)}
+.limit-node>h2{margin:0 0 var(--s3);font-size:var(--fs);font-weight:600}
+.limit-harness{border-top:.5px solid var(--sep);padding:var(--s4) 0}
+.limit-head{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s4)}
+.limit-window{display:grid;grid-template-columns:minmax(120px,200px) minmax(120px,1fr) auto;gap:var(--s2) var(--s4);align-items:center;padding:var(--s2) 0}
+.limit-window>small{grid-column:1/-1}
+.limit-window.dim{opacity:.55}
+.limit-meter{height:8px;border-radius:4px;background:var(--track);overflow:hidden}
+.limit-meter>i{display:block;height:100%;background:var(--accent)}
+@media(max-width:760px){.limits{padding:var(--s4)}.limit-window{grid-template-columns:1fr auto}.limit-meter{grid-column:1/-1;grid-row:2}.limit-window>span:last-of-type{grid-column:2;grid-row:1}}
