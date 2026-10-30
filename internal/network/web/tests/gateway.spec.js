@@ -16,6 +16,7 @@ async function mockAPI(page,{authenticated=true,setup=false}={}) {
     else if(url.pathname==="/api/recent") data=[{directory:"/work/previous",harness:"codex",mode:"default",available:true}];
     else if(url.pathname==="/api/packages") data=req.method()==="POST"?{}:[{module:"github.com/acme/tools",commit:"abcd1234"}];
     else if(url.pathname==="/api/settings") data={running:true,platform:"linux",sharing_enabled:true,allowed_peers:["tag:server"]};
+    else if(url.pathname==="/api/limits") data={limits:[{harness:"codex",state:"available",source:"codex app-server account/rateLimits/read",windows:[{id:"codex/primary",label:"Codex 5h",used_percent:28,remaining_percent:72,reset_at:"2026-10-30T16:10:00Z"}]},{harness:"grok",state:"error",source:"grok agent stdio _x.ai/billing",error:"grok billing: authentication required",windows:[]}]};
     else if(url.pathname==="/api/settings/sharing") data={sharing_enabled:body.enabled};
     await route.fulfill({json:data});
   });
@@ -667,4 +668,13 @@ test("terminal renders a large replay promptly and accepts live output afterward
   expect(timing.replayComplete).toBeLessThan(5000);
   socket.send(Buffer.from("LIVE AFTER REPLAY\r\n"));
   await expect(page.locator("#terminal-mount")).toContainText("LIVE AFTER REPLAY");
+});
+test("limits view shows each harness with partial failures and no raw CLI output",async({page})=>{
+  await mockAPI(page);
+  await page.goto("/");
+  await page.locator('[data-view="limits"]').first().click();
+  await expect(page.locator("#limits-view")).toBeVisible();
+  await expect(page.getByRole("meter",{name:"Codex 5h remaining"})).toHaveAttribute("aria-valuenow","72");
+  await expect(page.locator("#limits-body")).toContainText("grok billing: authentication required");
+  await expect(page.locator("#limits-body")).toContainText("codex");
 });

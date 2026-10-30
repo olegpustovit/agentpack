@@ -73,7 +73,7 @@ function button(text, action, className) {
 const list = (value, key) => Array.isArray(value) ? value : Array.isArray(value?.[key]) ? value[key] : [];
 async function api(path, body, method, target = state.node) {
   const endpoint = new URL(path, location.origin);
-  if (target && /^\/api\/(sessions|recent|packages|library)(\/|$)/.test(endpoint.pathname)) endpoint.searchParams.set("node", target);
+  if (target && /^\/api\/(sessions|recent|packages|library|limits)(\/|$)/.test(endpoint.pathname)) endpoint.searchParams.set("node", target);
   const response = await fetch(endpoint, { method: method || (body === void 0 ? "GET" : "POST"), credentials: "same-origin", headers: body === void 0 ? {} : { "Content-Type": "application/json" }, body: body === void 0 ? void 0 : JSON.stringify(body) });
   if (response.status === 401) {
     state.authenticated = false;
@@ -329,13 +329,64 @@ function renderRecent() {
     host.append(row);
   }
 }
+async function loadLimits(refresh = false) {
+  const body = $("limits-body");
+  body.replaceChildren(textNode("p", refresh ? "Refreshing…" : "Loading limits…"));
+  try {
+    const result = refresh ? await api("/api/limits/refresh", {}, "POST", state.node) : await api("/api/limits", void 0, "GET", state.node);
+    renderLimits(list(result, "limits"));
+  } catch (error) {
+    body.replaceChildren(textNode("p", error.message));
+  }
+}
+function textNode(tag, text, className) {
+  const element = document.createElement(tag);
+  element.textContent = text;
+  if (className) element.className = className;
+  return element;
+}
+function renderLimits(snapshots) {
+  const body = $("limits-body");
+  body.replaceChildren();
+  if (!snapshots.length) body.append(textNode("p", "No harness limits reported."));
+  for (const snapshot of snapshots) {
+    const section = document.createElement("section");
+    section.className = "limit-harness";
+    const head = document.createElement("div");
+    head.className = "limit-head";
+    head.append(textNode("strong", snapshot.harness), textNode("span", snapshot.plan ? `${snapshot.state} · ${snapshot.plan}` : snapshot.state, "muted"));
+    section.append(head);
+    if (snapshot.source) section.append(textNode("small", snapshot.source, "muted"));
+    for (const window of snapshot.windows || []) {
+      const row = document.createElement("div");
+      row.className = "limit-window";
+      const meter = document.createElement("div");
+      meter.className = "limit-meter";
+      meter.setAttribute("role", "meter");
+      meter.setAttribute("aria-label", `${window.label} remaining`);
+      meter.setAttribute("aria-valuemin", "0");
+      meter.setAttribute("aria-valuemax", "100");
+      meter.setAttribute("aria-valuenow", String(window.remaining_percent ?? 0));
+      const fill = document.createElement("i");
+      fill.style.width = `${window.remaining_percent ?? 0}%`;
+      meter.append(fill);
+      const reset = window.reset_at ? new Date(window.reset_at).toUTCString() : window.reset_text || "reset not exposed";
+      row.append(textNode("span", window.label), meter, textNode("span", window.remaining_percent == null ? "unknown" : `${Math.round(window.remaining_percent)}% left`), textNode("small", reset, "muted"));
+      section.append(row);
+    }
+    if (snapshot.error) section.append(textNode("p", snapshot.error, "muted"));
+    body.append(section);
+  }
+}
 function setView(view) {
-  if (!["workspace","sessions","library","machines","settings","recent","packages"].includes(view)) return;
+  if (!["workspace","sessions","library","machines","settings","recent","packages","limits"].includes(view)) return;
   state.view = view === "sessions" ? "workspace" : view;
   $("app").dataset.current = view === "sessions" ? "workspace" : view;
   $("workspace").hidden = !["workspace","sessions"].includes(view);
   $("library").hidden = view !== "library"; $("machines").hidden = view !== "machines";
   $("recent-view").hidden = view !== "recent"; $("packages-view").hidden = view !== "packages"; $("settings-view").hidden = view !== "settings";
+  $("limits-view").hidden = view !== "limits";
+  if (view === "limits") void loadLimits();
   if (view === "settings") { loadSettings(); void loadReplication(); }
   if (view === "recent") renderRecent();
   if (view === "library") { renderLibrary(); void loadWorkspaceData(); }
@@ -349,6 +400,7 @@ function setView(view) {
   if (state.view === "workspace") requestAnimationFrame(scaleTerminal);
 }
 document.querySelectorAll("[data-view]").forEach(element => element.addEventListener("click", () => setView(element.dataset.view)));
+$("limits-refresh").addEventListener("click", () => loadLimits(true));
 const machines = () => [{id:"",name:"Gateway machine",online:true},...state.nodes];
 const machineName = id => machines().find(machine => machine.id === id)?.name || (id ? id : "Gateway machine");
 const destinationKey = (nodeId,directory) => `${nodeId}\0${directory}`;
