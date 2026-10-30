@@ -53,15 +53,17 @@ func (g *Gateway) registerLibrary(mux *http.ServeMux) {
 			libraryResponse(w, nil, err)
 			return
 		}
+		if r.URL.Query().Get("include") == "revisions" {
+			value, err := agentpacksWithRevisions(library.Store)
+			libraryResponse(w, value, err)
+			return
+		}
 		value, err := library.Store.ListAgentpacks()
 		libraryResponse(w, value, err)
 	})
 	mux.HandleFunc("GET /api/library/agentpacks/{id}", func(w http.ResponseWriter, r *http.Request) {
 		pack, revisions, err := library.Store.Get(r.PathValue("id"))
-		libraryResponse(w, struct {
-			Agentpack registry.Agentpack  `json:"agentpack"`
-			Revisions []registry.Revision `json:"revisions"`
-		}{pack, revisions}, err)
+		libraryResponse(w, agentpackWithRevisions{pack, revisions}, err)
 	})
 	mux.HandleFunc("POST /api/library/agentpacks", func(w http.ResponseWriter, r *http.Request) {
 		var input SaveAgentpackInput
@@ -114,6 +116,28 @@ func (g *Gateway) registerLibrary(mux *http.ServeMux) {
 		err := library.Restore(r.Context(), r.PathValue("id"), r.PathValue("revision"), input.Directory, input.Restart == nil || *input.Restart)
 		libraryResponse(w, map[string]bool{"restored": err == nil}, err)
 	})
+}
+
+// agentpackWithRevisions is one library row with its revisions, returned by ?include=revisions.
+type agentpackWithRevisions struct {
+	Agentpack registry.Agentpack  `json:"agentpack"`
+	Revisions []registry.Revision `json:"revisions"`
+}
+
+func agentpacksWithRevisions(store *registry.Store) ([]agentpackWithRevisions, error) {
+	packs, err := store.ListAgentpacks()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agentpackWithRevisions, 0, len(packs))
+	for _, pack := range packs {
+		_, revisions, err := store.Get(pack.ID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, agentpackWithRevisions{pack, revisions})
+	}
+	return out, nil
 }
 
 func bootstrapLibrary(library LibraryOptions) error {

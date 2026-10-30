@@ -128,12 +128,58 @@ func TestLibraryRoutesPreserveTrustAndPersistRename(t *testing.T) {
 	}
 }
 
+func TestLibraryAgentpacksIncludeRevisionsInOneCall(t *testing.T) {
+	home := t.TempDir()
+	auth, err := newGatewayAuth(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := registry.New(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisions := map[string]string{}
+	for _, name := range []string{"Review", "Ops"} {
+		pack, revision, err := store.Capture(registry.CaptureInput{Name: name, Project: t.TempDir(), Manifest: []byte("name = 'fixture'\n[dependencies]\n"), Lock: []byte("lockfile_version = 2\n")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		revisions[pack.ID] = revision.ID
+	}
+	origin, _ := url.Parse("http://127.0.0.1:7420")
+	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Library: LibraryOptions{Store: store, Bootstrap: func() error { return nil }}}}
+	r := httptest.NewRequest("GET", origin.String()+"/api/library/agentpacks?include=revisions", nil)
+	r.Header.Set("Authorization", "Bearer "+g.local.Secret)
+	w := httptest.NewRecorder()
+	g.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var rows []agentpackWithRevisions
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows: %d %s", len(rows), w.Body.String())
+	}
+	for _, row := range rows {
+		found := false
+		for _, rev := range row.Revisions {
+			found = found || rev.ID == revisions[row.Agentpack.ID]
+		}
+		if !found {
+			t.Fatalf("pack %s missing its revision: %s", row.Agentpack.ID, w.Body.String())
+		}
+	}
+}
+
 func TestLibraryPeerRoutesAreBounded(t *testing.T) {
 	for _, test := range []struct {
 		method, path string
 		want         bool
 	}{
 		{"GET", "/api/library/packages", true},
+		{"GET", "/api/library/agentpacks", true},
 		{"POST", "/api/library/agentpacks", true},
 		{"PATCH", "/api/library/agentpacks/pack-id", true},
 		{"GET", "/api/library/agentpacks/pack-id/revisions/rev/restore-preview", true},
