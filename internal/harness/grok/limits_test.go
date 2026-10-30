@@ -33,3 +33,14 @@ func TestParseBillingWalletWithoutUtilizationIsNotZeroUsage(t *testing.T) {
 		t.Fatalf("balance-only must not become a window: %+v err=%v", windows, err)
 	}
 }
+
+func TestParseBillingLiveShape(t *testing.T) {
+	raw := json.RawMessage(`{"config":{"creditUsagePercent":86.0,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-10-26T18:01:54.666+00:00","end":"2026-11-02T18:01:54.666+00:00"},"prepaidBalance":{"val":0},"billingPeriodEnd":"2026-11-02T18:01:54.666+00:00"},"subscription_tier":"SuperGrok"}`)
+	windows, tier, err := parseBilling(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tier != "SuperGrok" || *windows[0].UsedPercent != 86 || *windows[0].RemainingPercent != 14 || windows[0].ResetAt == nil {
+		t.Fatalf("tier=%q window=%+v", tier, windows[0])
+	}
+}
