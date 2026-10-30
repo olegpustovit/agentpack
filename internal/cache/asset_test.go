@@ -59,3 +59,28 @@ func writeTestFile(t *testing.T, path, body string) {
 		t.Fatal(err)
 	}
 }
+
+func TestOMPPluginClassificationPreservesTree(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, ".omp-plugin", "plugin.json"), `{"name":"native-omp","skills":"./custom-skills"}`)
+	writeTestFile(t, filepath.Join(root, "custom-skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: Demo\n---\nUse demo")
+	before, err := TreeDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := ClassifyMaterialized(root, "local", githubsource.Source{}, "commit", "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := TreeDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after || pkg.Kind != lockfile.PackagePlugin {
+		t.Fatalf("classification changed tree: %s %s %#v", before, after, pkg)
+	}
+	manifests := ReadPluginManifests(root)
+	if len(manifests) != 1 || manifests[0].Vendor != "omp" {
+		t.Fatalf("manifests: %#v", manifests)
+	}
+}

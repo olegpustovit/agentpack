@@ -24,7 +24,7 @@ import (
 // is written by the harness while it runs and is not recorded.
 var (
 	stagedContentDirs  = []string{"skills", "commands", "agents", "rules", "hooks", "agentpack-hooks"}
-	stagedContentFiles = []string{".mcp.json", "mcp.json", "mcp_config.json", "opencode.json", "agentpack-config.json", "agentpack-no-attribution.md", "AGENTS.md"}
+	stagedContentFiles = []string{".lsp.json", ".claude-plugin/plugin.json", ".omp-plugin/plugin.json", ".mcp.json", "mcp.json", "mcp_config.json", "opencode.json", "agentpack-config.json", "agentpack-no-attribution.md", "AGENTS.md"}
 )
 
 // stagedEntry is one staged file as the last sync left it. Project marks a

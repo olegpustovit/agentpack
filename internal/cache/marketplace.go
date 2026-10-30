@@ -11,6 +11,7 @@ import (
 )
 
 var pluginManifestPaths = []string{
+	filepath.Join(".omp-plugin", "plugin.json"),
 	filepath.Join(".claude-plugin", "plugin.json"),
 	filepath.Join(".cursor-plugin", "plugin.json"),
 	filepath.Join(".codex-plugin", "plugin.json"),
@@ -66,7 +67,12 @@ func materializeSinglePluginMarketplace(root string) (bool, error) {
 	}
 	pluginNames := make(map[string]struct{})
 	localSources := make(map[string]uint8)
-	for _, spec := range marketplaceSpecs {
+	specs := marketplaceSpecs
+	// Existing catalogs keep their normalization; OMP-only catalogs add a new format.
+	if !hasAnyRelativeFile(root, marketplaceManifestPaths) {
+		specs = []marketplaceSpec{{relativePath: filepath.Join(".omp-plugin", "marketplace.json")}}
+	}
+	for _, spec := range specs {
 		manifestPath := filepath.Join(root, spec.relativePath)
 		if !regularFile(manifestPath) {
 			continue
@@ -261,7 +267,7 @@ func validatePluginSource(source, expectedName, marketplace string) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("marketplace plugin %q in %s points to %s, which has no .claude-plugin, .cursor-plugin, or .codex-plugin manifest", expectedName, marketplace, source)
+		return fmt.Errorf("marketplace plugin %q in %s points to %s, which has no .claude-plugin, .cursor-plugin, .codex-plugin, or .omp-plugin manifest", expectedName, marketplace, source)
 	}
 	return nil
 }

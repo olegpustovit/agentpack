@@ -22,7 +22,7 @@ import (
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
-var Version = "0.10.0"
+var Version = "0.11.0"
 
 type Runner struct {
 	Stdout, Stderr io.Writer
@@ -103,7 +103,7 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 		}
 		return 0, nil
 	}
-	allowsMissing := map[string]bool{"add": true, "claude": true, "opencode": true, "codex": true, "grok": true, "agy": true, "agent": true, "env": true, "config": true, "support": true}
+	allowsMissing := map[string]bool{"add": true, "claude": true, "opencode": true, "codex": true, "grok": true, "omp": true, "agy": true, "agent": true, "env": true, "config": true, "support": true}
 	packContext, err := resolveInvocationContext(invocation, allowsMissing[invocation.Command])
 	if err != nil {
 		return 1, err
@@ -276,7 +276,7 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 		return code, runner.reportIntegrity(supportErr)
 	case "env":
 		err = runner.runEnv(ctx, root, workspace, invocation.Global.Mode, invocation.Args, invocation.Global.Quiet)
-	case "claude", "opencode", "codex", "grok", "agy", "agent":
+	case "claude", "opencode", "codex", "grok", "omp", "agy", "agent":
 		code, err := runner.launchManaged(ctx, packContext, invocation, arguments)
 		return code, runner.reportIntegrity(err)
 	case "mcp":

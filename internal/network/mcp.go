@@ -29,7 +29,7 @@ type mcpRestartInput struct {
 type mcpStartInput struct {
 	mcpNodeInput
 	Directory string `json:"directory" jsonschema:"Exact absolute folder from list_recent_folders on the selected node."`
-	Harness   string `json:"harness" jsonschema:"Terminal harness: claude, codex, grok, opencode, or agent. Antigravity desktop launches require local access."`
+	Harness   string `json:"harness" jsonschema:"Terminal harness: claude, codex, grok, omp, opencode, or agent. Antigravity desktop launches require local access."`
 	Mode      string `json:"mode,omitempty" jsonschema:"Project mode; omit for default."`
 }
 type mcpReadInput struct {

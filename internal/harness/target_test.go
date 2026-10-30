@@ -4,8 +4,11 @@ import "testing"
 
 func TestTargetsHaveStableOrderAndWorkspaceOverlay(t *testing.T) {
 	t.Parallel()
-	want := []Target{Claude, Cursor, Codex, OpenCode, Grok, Agy}
+	want := []Target{Claude, Cursor, Codex, OpenCode, Grok, Agy, OMP}
 	got := AllTargets()
+	if len(got) != len(want) {
+		t.Fatalf("AllTargets() = %v", got)
+	}
 	for index := range want {
 		if got[index] != want[index] {
 			t.Fatalf("AllTargets() = %v", got)

@@ -165,6 +165,7 @@ Each launcher runs a fast pre-sync, stages for its harness, and execs the binary
 | `agentpack opencode` | OpenCode | native config + `OPENCODE_CONFIG_CONTENT` |
 | `agentpack codex` | Codex | `CODEX_HOME` |
 | `agentpack grok` | Grok | `GROK_HOME` (+ injected `--cwd`) |
+| `agentpack omp` | Oh My Pi | Additive `--plugin-dir`; native settings and profile |
 | `agentpack agy` | Antigravity | injected `--add-dir` |
 
 ```sh

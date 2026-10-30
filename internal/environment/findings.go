@@ -291,6 +291,8 @@ func ExternalCapability(target base.Target) (status, note string) {
 		return "external", "uses OPENCODE_CONFIG_DIR; no workspace overlay"
 	case base.Codex:
 		return "external-home", "uses CODEX_HOME; native project instructions may still apply"
+	case base.OMP:
+		return "external", "uses --plugin-dir; native profile, settings and credentials remain in place"
 	case base.Grok:
 		return "external-home", "uses GROK_HOME; also reads real ~/.claude and ~/.grok"
 	case base.Cursor:

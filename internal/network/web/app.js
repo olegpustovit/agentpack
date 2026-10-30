@@ -453,7 +453,7 @@ function renderLimits(groups) {
       providers.get(snapshot.harness).push({snapshot, node:group.node});
     }
   }
-  const names = {cursor:"Cursor CLI", codex:"Codex", claude:"Claude", agy:"Antigravity", grok:"Grok", opencode:"OpenCode"};
+  const names = {cursor:"Cursor CLI", codex:"Codex", claude:"Claude", agy:"Antigravity", grok:"Grok", omp:"Oh My Pi", opencode:"OpenCode"};
   for (const [provider, reports] of providers) {
     // Prefer a machine with usable windows; never combine allowances across accounts.
     const selected = reports.find(report => report.snapshot.state === "available" && report.snapshot.windows?.length) || reports.find(report => report.snapshot.state === "error") || reports[0];

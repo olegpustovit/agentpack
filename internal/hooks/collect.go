@@ -173,7 +173,7 @@ func packageSources(root string, pkg lockfile.Package, layer Layer, bundle *Bund
 		sources = append(sources, hookSource{dialect: dialect, relative: relative, gate: relative, file: resolved, value: value, digest: hex.EncodeToString(digest[:])})
 	}
 	file(filepath.Join(root, "hooks", "hooks.json"), "hooks/hooks.json", "")
-	dialects := map[string]Dialect{"claude": ClaudeDialect, "cursor": CursorDialect, "codex": CodexDialect}
+	dialects := map[string]Dialect{"omp": ClaudeDialect, "claude": ClaudeDialect, "cursor": CursorDialect, "codex": CodexDialect}
 	for _, manifest := range cache.ReadPluginManifests(root) {
 		dialect := dialects[manifest.Vendor]
 		paths, inline := manifest.Declared("hooks")

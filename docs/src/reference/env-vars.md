@@ -108,6 +108,7 @@ Override the path to each harness's executable when it isn't on `PATH` or you ne
 | `CODEX_PATH` | `codex` |
 | `CURSOR_AGENT_PATH` | `cursor-agent` |
 | `GROK_PATH` | `grok` |
+| `OMP_PATH` | `omp` |
 | `AGY_PATH` | `agy` |
 
 ## Summary

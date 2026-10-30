@@ -140,7 +140,7 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 	switch info.Harness {
 	case "agy":
 		return "", errors.New("Antigravity uses a desktop window; launch it locally (remote desktop is unavailable)")
-	case "claude", "codex", "grok", "opencode", "agent":
+	case "claude", "codex", "grok", "omp", "opencode", "agent":
 	default:
 		return "", errors.New("unknown harness")
 	}

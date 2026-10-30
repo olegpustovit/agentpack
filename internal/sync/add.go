@@ -189,7 +189,7 @@ func localMirror(spec string) (string, bool) {
 }
 
 func pluginName(root string) string {
-	for _, manifestPath := range []string{cache.ClaudePluginManifestPath(root), cache.CursorPluginManifestPath(root), cache.CodexPluginManifestPath(root)} {
+	for _, manifestPath := range []string{filepath.Join(root, ".omp-plugin", "plugin.json"), cache.ClaudePluginManifestPath(root), cache.CursorPluginManifestPath(root), cache.CodexPluginManifestPath(root)} {
 		data, err := os.ReadFile(manifestPath)
 		if err != nil {
 			continue

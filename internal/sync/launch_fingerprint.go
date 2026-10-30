@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/omp"
 	"github.com/olegpustovit/agentpack/internal/harness/opencode"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -44,6 +45,14 @@ func ComputeLaunchDigest(projectRoot, workspace string, effective mode.Effective
 		name = string(*target)
 	}
 	hash.Write([]byte("target\x00" + name))
+	if target == nil || *target == base.OMP {
+		inputs, err := fingerprintInputs(omp.ConfigInputs(workspace))
+		if err != nil {
+			return "", err
+		}
+		hash.Write([]byte("omp_native_inputs\x00" + inputs))
+	}
+
 	if target != nil && *target == base.Cursor {
 		home, err := os.UserHomeDir()
 		if err != nil {

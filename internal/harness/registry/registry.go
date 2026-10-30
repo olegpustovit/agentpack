@@ -9,12 +9,13 @@ import (
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
 	"github.com/olegpustovit/agentpack/internal/harness/cursor"
 	"github.com/olegpustovit/agentpack/internal/harness/grok"
+	"github.com/olegpustovit/agentpack/internal/harness/omp"
 	"github.com/olegpustovit/agentpack/internal/harness/opencode"
 	"github.com/olegpustovit/agentpack/internal/hooks"
 )
 
 func All() []base.Harness {
-	return []base.Harness{claude.New(), cursor.New(), codex.New(), opencode.New(), grok.New(), agy.New()}
+	return []base.Harness{claude.New(), cursor.New(), codex.New(), opencode.New(), grok.New(), agy.New(), omp.New()}
 }
 func ByTarget(target base.Target) (base.Harness, error) {
 	for _, candidate := range All() {
@@ -34,6 +35,8 @@ func Renderer(target base.Target) hooks.Renderer {
 		return codex.HookRenderer{}
 	case base.OpenCode:
 		return opencode.HookRenderer{}
+	case base.OMP:
+		return omp.HookRenderer{}
 	case base.Agy:
 		return agy.HookRenderer{}
 	default:

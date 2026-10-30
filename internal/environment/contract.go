@@ -80,7 +80,7 @@ func ValidateContract(contract Contract) error {
 		seen[req.ID] = true
 		if req.Target != "" && req.Target != "*" {
 			switch req.Target {
-			case "claude", "codex", "opencode", "grok", "cursor", "agy":
+			case "claude", "codex", "opencode", "grok", "omp", "cursor", "agy":
 			default:
 				return fmt.Errorf("requirement %q: unknown target %q", req.ID, req.Target)
 			}

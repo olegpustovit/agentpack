@@ -12,7 +12,7 @@ import (
 
 // PluginManifest is one vendor's plugin.json as published in a package.
 type PluginManifest struct {
-	// Vendor is "codex", "cursor", or "claude".
+	// Vendor names the harness that owns this manifest.
 	Vendor string
 	// Relative is the manifest path inside the package, slash-separated.
 	Relative string
@@ -20,11 +20,12 @@ type PluginManifest struct {
 }
 
 // ReadPluginManifests returns the plugin manifests of a package in merge
-// order: Codex, Cursor, then Claude, so that a later one wins where two
+// order: OMP, Codex, Cursor, then Claude, so that a later one wins where two
 // vendors declare the same thing. An unreadable manifest is left out.
 func ReadPluginManifests(root string) []PluginManifest {
 	var manifests []PluginManifest
 	for _, candidate := range []PluginManifest{
+		{Vendor: "omp", Relative: ".omp-plugin/plugin.json"},
 		{Vendor: "codex", Relative: ".codex-plugin/plugin.json"},
 		{Vendor: "cursor", Relative: ".cursor-plugin/plugin.json"},
 		{Vendor: "claude", Relative: ".claude-plugin/plugin.json"},

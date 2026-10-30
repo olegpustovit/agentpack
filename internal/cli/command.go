@@ -172,6 +172,7 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 		leaf("claude [ARGS...]", "Launch Claude Code with staged plugins"),
 		leaf("opencode [ARGS...]", "Launch OpenCode with staged configuration"),
 		leaf("codex [ARGS...]", "Launch Codex with a staged CODEX_HOME"),
+		leaf("omp [ARGS...]", "Launch Oh My Pi with staged plugins"),
 		leaf("grok [ARGS...]", "Launch Grok with a staged GROK_HOME"),
 		leaf("agy [ARGS...]", "Launch Antigravity with the project workspace"),
 		agent,

@@ -11,9 +11,10 @@ const (
 	OpenCode Target = "opencode"
 	Grok     Target = "grok"
 	Agy      Target = "agy"
+	OMP      Target = "omp"
 )
 
-func AllTargets() []Target { return []Target{Claude, Cursor, Codex, OpenCode, Grok, Agy} }
+func AllTargets() []Target { return []Target{Claude, Cursor, Codex, OpenCode, Grok, Agy, OMP} }
 
 func ParseTarget(value string) (Target, error) {
 	for _, target := range AllTargets() {
@@ -28,6 +29,8 @@ func (target Target) UsesWorkspaceOverlay() bool { return target == Cursor || ta
 
 func (target Target) RawPluginSubdirs() []string {
 	switch target {
+	case OMP:
+		return []string{"hooks", "matchers", "core", "examples", "utils", "assets", "scripts", "tools", "commands", "agents", "rules", "skills"}
 	case Claude, Grok:
 		return []string{"hooks", "matchers", "core", "examples", "utils", "commands", "agents", "rules", "skills"}
 	case Cursor:
@@ -52,6 +55,8 @@ func DisplayName(target Target) string {
 		return "Codex"
 	case OpenCode:
 		return "OpenCode"
+	case OMP:
+		return "Oh My Pi"
 	case Grok:
 		return "Grok"
 	case Agy:

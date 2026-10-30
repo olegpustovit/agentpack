@@ -27,6 +27,7 @@
 - [OpenCode](./harnesses/opencode.md)
 - [Codex](./harnesses/codex.md)
 - [Grok](./harnesses/grok.md)
+- [Oh My Pi](./harnesses/omp.md)
 - [Antigravity](./harnesses/antigravity.md)
 - [Cross-Harness Conversion](./harnesses/conversion.md)
 

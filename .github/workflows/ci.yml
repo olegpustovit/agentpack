@@ -76,6 +76,30 @@ jobs:
           go build ./cmd/agentpack
           echo "build_seconds=$(($(date +%s)-start))"
 
+  omp-runtime:
+    name: OMP native runtime
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.4'
+      - name: Install the validated OMP release
+        run: |
+          mkdir -p "$RUNNER_TEMP/omp-runtime"
+          cd "$RUNNER_TEMP/omp-runtime"
+          bun add @oh-my-pi/pi-coding-agent@18.14.0
+      - name: Verify native discovery, hooks, MCP, LSP, and resume
+        env:
+          AGENTPACK_TEST_OMP: ${{ runner.temp }}/omp-runtime/node_modules/.bin/omp
+        run: |
+          go test ./internal/harness/omp
+          go test ./integration -run '^TestOMPRealRuntimeWithPackHooksMCPAndLSP$'
+
   race:
     name: Race detector
     runs-on: ubuntu-latest

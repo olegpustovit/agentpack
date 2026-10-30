@@ -45,6 +45,7 @@ Commit `agentpack.toml` and `pack.lock` to share the same pins with your team. I
 | `agentpack opencode` | OpenCode |
 | `agentpack codex` | Codex |
 | `agentpack grok` | Grok |
+| `agentpack omp` | Oh My Pi |
 | `agentpack agy` | Antigravity |
 
 Arguments after the launcher are passed to the agent. See the [quick start](docs/src/getting-started/quick-start.md) and [harness guides](docs/src/harnesses/claude.md) for details.

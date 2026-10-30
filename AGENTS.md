@@ -35,7 +35,7 @@ All agentpack-owned terminal rendering is monochrome and terminal-agnostic: use 
 - **No single-file folders, no tiny orphans.** Keep a helper in its natural package or caller unless it has enough internal structure to justify a package. The uniform harness folders are the deliberate exception.
 - **One canonical home per type; no forwarding aliases.** `Target` is defined only in `internal/harness/target.go` and imported as `harness.Target`. Don't add an alias merely to preserve an obsolete package path; repoint callers.
 - **No orphaned glue packages.** Shared launch helpers live in `internal/harness/launch.go`; CLI launch dispatch lives in `internal/cli`. If a package exists only to forward to another, remove it and call the owner directly.
-- The harness interface owns *per-harness divergence*; genuinely cross-harness passes that take all roots at once stay shared loops. Adding a seventh harness should mean one new `internal/harness/<name>/`, one registry entry, one `Target` value, and one CLI command.
+- The harness interface owns *per-harness divergence*; genuinely cross-harness passes that take all roots at once stay shared loops. Adding an eighth harness should mean one new `internal/harness/<name>/`, one registry entry, one `Target` value, and one CLI command.
 
 ### User data layout (`AGENTPACK_HOME`)
 
@@ -136,6 +136,8 @@ Claude reads those directories **from home** for normal user scope. **`agentpack
 OpenCode uses **`OPENCODE_CONFIG_DIR`**. Version 1 searches it in addition to native global and project scopes; version 2 uses it as its global config root. Agentpack preserves that setting, detects the selected major version and composes pack assets with native config and plugins. See the [OpenCode guide](docs/src/harnesses/opencode.md) for tested behavior.
 
 Codex uses a **home root override** instead of an additive plugin dir. Official docs and source use **`CODEX_HOME`** for the user config root (default **`~/.codex`**) and still auto-discover user skills from **`$CODEX_HOME/skills`**. Codex plugin marketplaces are repo- or home-rooted **`.agents/plugins/marketplace.json`** files, so this is **not** equivalent to Claude’s additive **`--plugin-dir`** model.
+
+OMP (`agentpack omp`, validated with Oh My Pi 18.14.0) uses additive **`--plugin-dir`**. Its staged plugin contains converted skills, commands, agents, native rules, MCP/LSP files and a generated hook extension. Leave `HOME`, `PI_CONFIG_DIR`, `PI_CODING_AGENT_DIR` and profile selection untouched: native credentials, settings and sessions stay owned by OMP. The normal launcher must retain native project discovery without copying `.agents/skills`. See [the OMP guide](docs/src/harnesses/omp.md) for hook timing, native device tools and conversion limits.
 
 Grok uses a **home root override** via **`GROK_HOME`**. The installed `grok 0.2.14` rejects **`--plugin-dir`** and **`--settings`**, even after login, so agentpack uses a durable per-project **`$AGENTPACK_HOME/projects/<hash>/grok-homes/<mode>/<generation>`**, writes pack plugin paths into its **`config.toml`** under **`[plugins].paths`**, and launches with **`GROK_HOME`** pointed there. Credentials are synchronized through **`$AGENTPACK_HOME/shared/grok/`** across projects. Grok still reads Claude-compatible user sources from the real **`~/.claude`**, so duplicate handling must account for both **`~/.grok`** and **`~/.claude`**.
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/goccy/go-yaml"
 	"github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/omp"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -46,7 +47,7 @@ func RenderedKind(target harness.Target, source Kind) Kind {
 	if target == harness.Codex {
 		return Skill
 	}
-	if source == Rule && target != harness.Cursor && target != harness.Agy {
+	if source == Rule && target != harness.Cursor && target != harness.Agy && target != harness.OMP {
 		return Skill
 	}
 	return source
@@ -108,6 +109,12 @@ func (artifact Markdown) renderAgent(target harness.Target) Rendered {
 		for _, note := range notes {
 			warnings = append(warnings, "OpenCode agent "+artifact.Name+": "+note)
 		}
+	} else if target == harness.OMP {
+		extras, notes := omp.AgentExtras(artifact.ExtraFrontmatter)
+		fields = mergeExtra(fields, extras, []string{"tools", "model", "spawns", "output", "thinkingLevel", "autoloadSkills", "readSummarize", "blocking", "structured", "prewalk", "advisor"})
+		for _, note := range notes {
+			warnings = append(warnings, "OMP agent "+artifact.Name+": "+note)
+		}
 	} else if target != harness.Agy {
 		fields = mergeExtra(fields, artifact.ExtraFrontmatter, agentExtraKeys)
 		if target == harness.Cursor && cursorReadonly(artifact.ExtraFrontmatter) {
@@ -166,7 +173,7 @@ var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 // for subagents; its one restriction is readonly: true ("no file edits, no
 // state-changing shell commands"), which such a subagent gets.
 func cursorReadonly(source map[string]any) bool {
-	allowed, hasAllowed := claudeToolList(source["tools"])
+	allowed, hasAllowed := harness.ToolNames(source["tools"])
 	if !hasAllowed || len(allowed) == 0 {
 		return false
 	}
@@ -206,8 +213,8 @@ func openCodeAgentExtras(source map[string]any) (map[string]any, []string) {
 			notes = append(notes, fmt.Sprintf("model %v is not an OpenCode provider/model id; the agent uses the session's model", value))
 		}
 	}
-	allowed, hasAllowed := claudeToolList(source["tools"])
-	denied, hasDenied := claudeToolList(source["disallowedTools"])
+	allowed, hasAllowed := harness.ToolNames(source["tools"])
+	denied, hasDenied := harness.ToolNames(source["disallowedTools"])
 	delete(extras, "disallowedTools")
 	if _, native := source["tools"].(map[string]any); native || !hasAllowed && !hasDenied {
 		if !native {
@@ -240,48 +247,6 @@ func openCodeAgentExtras(source map[string]any) (map[string]any, []string) {
 		notes = append(notes, fmt.Sprintf("tool(s) %s have no OpenCode equivalent and are left out of its tools map", strings.Join(dropped, ", ")))
 	}
 	return extras, notes
-}
-
-// claudeToolList reads `tools: Read, Grep, Bash(git:*)` or the YAML list form
-// and returns the bare tool names.
-func claudeToolList(value any) ([]string, bool) {
-	var items []string
-	switch typed := value.(type) {
-	case string:
-		depth, start := 0, 0
-		for index, character := range typed {
-			switch character {
-			case '(':
-				depth++
-			case ')':
-				depth--
-			case ',':
-				if depth == 0 {
-					items = append(items, typed[start:index])
-					start = index + 1
-				}
-			}
-		}
-		items = append(items, typed[start:])
-	case []any:
-		for _, item := range typed {
-			if text, ok := item.(string); ok {
-				items = append(items, text)
-			}
-		}
-	case []string:
-		items = typed
-	default:
-		return nil, false
-	}
-	var names []string
-	for _, item := range items {
-		name, _, _ := strings.Cut(strings.TrimSpace(item), "(")
-		if name = strings.TrimSpace(name); name != "" {
-			names = append(names, name)
-		}
-	}
-	return names, true
 }
 
 func (artifact Markdown) renderRule(target harness.Target) Rendered {

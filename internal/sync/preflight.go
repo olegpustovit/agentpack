@@ -11,6 +11,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/harness/claude"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
 	"github.com/olegpustovit/agentpack/internal/harness/grok"
+	"github.com/olegpustovit/agentpack/internal/harness/omp"
 	"github.com/olegpustovit/agentpack/internal/harness/opencode"
 	"io"
 	"net/url"
@@ -1636,6 +1637,8 @@ func inheritanceNotes(target *base.Target, policy environment.Policy) []string {
 		notes = append(notes, "OpenCode config root is redirected; user files may be seeded into the staged root when present")
 	case base.Codex:
 		notes = append(notes, "Codex keeps native history/auth continuity under CODEX_HOME bridging")
+	case base.OMP:
+		notes = append(notes, "OMP uses an additive --plugin-dir and keeps native profile settings, credentials, sessions and project discovery")
 	case base.Grok:
 		notes = append(notes, "Grok reads real ~/.grok and ~/.claude in addition to GROK_HOME")
 	case base.Cursor:
@@ -1731,6 +1734,8 @@ func lookPathForTarget(target base.Target) (string, error) {
 		envName, binary = "OPENCODE_PATH", "opencode"
 	case base.Codex:
 		envName, binary = "CODEX_PATH", "codex"
+	case base.OMP:
+		envName, binary = "OMP_PATH", "omp"
 	case base.Grok:
 		envName, binary = "GROK_PATH", "grok"
 	case base.Cursor:
@@ -1949,6 +1954,8 @@ func inheritedConfigPaths(target *base.Target, workspace string) []string {
 			}
 		}
 		return result
+	case base.OMP:
+		return omp.ConfigInputs(workspace)
 	case base.Codex:
 		names = []string{".codex/config.toml", ".codex/AGENTS.md"}
 	case base.Grok:

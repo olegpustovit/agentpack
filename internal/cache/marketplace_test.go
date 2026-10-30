@@ -157,3 +157,22 @@ func TestCopyPackageDirToCacheUsesContentAddressedDestination(t *testing.T) {
 		t.Fatal("cached SKILL.md missing")
 	}
 }
+
+func TestOMPOnlyMarketplaceNormalizesWithoutSynthesizingLegacyManifests(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, ".omp-plugin", "marketplace.json"), `{"name":"omp-market","plugins":[{"name":"demo","source":"./plugins/demo"}]}`)
+	writeTestFile(t, filepath.Join(root, "plugins", "demo", ".omp-plugin", "plugin.json"), `{"name":"demo"}`)
+	writeTestFile(t, filepath.Join(root, "plugins", "demo", "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: Demo\n---\nDemo")
+	if err := NormalizePluginLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	if !HasPluginManifest(root) {
+		t.Fatal("OMP plugin not materialized")
+	}
+	if _, err := os.Stat(filepath.Join(root, "skills", "demo", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ClaudePluginManifestPath(root)); !os.IsNotExist(err) {
+		t.Fatalf("legacy manifest synthesized: %v", err)
+	}
+}

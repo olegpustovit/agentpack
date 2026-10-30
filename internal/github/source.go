@@ -74,7 +74,7 @@ func ParseURL(raw string) (Source, error) {
 			source.Path = cleanRepoParent(parent)
 		} else if base == "plugin.json" {
 			manifestDir := path.Base(parent)
-			if manifestDir == ".claude-plugin" || manifestDir == ".cursor-plugin" || manifestDir == ".codex-plugin" {
+			if manifestDir == ".claude-plugin" || manifestDir == ".cursor-plugin" || manifestDir == ".codex-plugin" || manifestDir == ".omp-plugin" {
 				source.Path = cleanRepoParent(path.Dir(parent))
 			}
 		}

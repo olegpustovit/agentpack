@@ -174,7 +174,7 @@ func descriptionOrInfer(description, body, name string, kind Kind) string {
 // StripHarnessPrefix removes the per-agent directory a package may keep its
 // components under (.claude/skills, .cursor/rules, …).
 func StripHarnessPrefix(path string) string {
-	for _, prefix := range []string{".claude/", ".cursor/", ".opencode/", ".agents/", ".grok/"} {
+	for _, prefix := range []string{".claude/", ".cursor/", ".opencode/", ".agents/", ".grok/", ".omp/"} {
 		if strings.HasPrefix(path, prefix) {
 			return strings.TrimPrefix(path, prefix)
 		}

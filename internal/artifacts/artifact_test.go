@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/omp"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -39,6 +40,9 @@ func TestRuleFallsBackToScopedSkillExceptNativeTargets(t *testing.T) {
 	}
 	if cursor := artifact.Render(harness.Cursor); cursor.RelativePath != "rules/typescript.mdc" || !strings.Contains(cursor.Contents, "alwaysApply: true") {
 		t.Fatalf("cursor = %#v", cursor)
+	}
+	if omp := artifact.Render(harness.OMP); omp.RelativePath != "rules/typescript.mdc" || !strings.Contains(omp.Contents, "alwaysApply: true") {
+		t.Fatalf("omp = %#v", omp)
 	}
 	// Antigravity discards a rule file without a trigger, and reads .md files
 	if agy := artifact.Render(harness.Agy); agy.RelativePath != "rules/typescript.md" || !strings.Contains(agy.Contents, "trigger: always_on") || strings.Contains(agy.Contents, "alwaysApply") {
@@ -295,6 +299,42 @@ func TestCursorSubagentWithoutWriteToolsIsReadonly(t *testing.T) {
 		}
 		if got := strings.Contains(artifact.Render(harness.Cursor).Contents, "readonly: true"); got != want {
 			t.Errorf("%q: readonly %v", source, got)
+		}
+	}
+}
+
+func TestOMPAgentPreservesModelsAndToolRestrictions(t *testing.T) {
+	parsed, err := Parse("agents/reviewer.md", "---\nname: reviewer\ndescription: Review changes\nmodel: openai/gpt-5.2\ntools: Read, Bash, WebSearch\ndisallowedTools: Bash\nthinkingLevel: high\nblocking: true\n---\nReview.\n", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := parsed.Render(harness.OMP)
+	for _, wanted := range []string{"model: openai/gpt-5.2", "thinkingLevel: high", "blocking: true", "read", "web_search"} {
+		if !strings.Contains(output.Contents, wanted) {
+			t.Fatalf("missing %s: %s", wanted, output.Contents)
+		}
+	}
+	if strings.Contains(output.Contents, "bash") || strings.Contains(output.Contents, "disallowedTools") {
+		t.Fatalf("tool restrictions lost: %s", output.Contents)
+	}
+	fields, warnings := omp.AgentExtras(map[string]any{"disallowedTools": "Write, Edit"})
+	if strings.Contains(strings.Join(fields["tools"].([]string), ","), "write") || len(warnings) != 1 {
+		t.Fatalf("deny-only agent: %v %v", fields, warnings)
+	}
+	fields, warnings = omp.AgentExtras(map[string]any{"tools": "Bash(git:*), Read"})
+	if len(fields["tools"].([]string)) != 0 || len(warnings) != 1 {
+		t.Fatalf("scoped permissions widened: %v %v", fields, warnings)
+	}
+}
+
+func TestOMPInvalidToolRestrictionsCannotEnableSpawning(t *testing.T) {
+	for _, fields := range []map[string]any{
+		{"tools": 123, "spawns": "*"},
+		{"disallowedTools": []any{123}, "spawns": "*"},
+	} {
+		extras, warnings := omp.AgentExtras(fields)
+		if len(extras["tools"].([]string)) != 0 || extras["spawns"] != nil || len(warnings) == 0 {
+			t.Fatalf("invalid restrictions widened: %v %v", extras, warnings)
 		}
 	}
 }

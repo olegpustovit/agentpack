@@ -48,6 +48,7 @@ func writeCatalogManifest(archive []byte, source githubsource.Source, out string
 	for _, relative := range marketplaceManifestPaths {
 		catalogs = append(catalogs, filepath.ToSlash(relative))
 	}
+	catalogs = append(catalogs, ".omp-plugin/marketplace.json")
 	files, err := githubsource.ReadRepoFiles(bytes.NewReader(archive), catalogs...)
 	if err != nil {
 		return false, nil
@@ -150,6 +151,7 @@ func ResolveCatalogPlugin(archive []byte, directory, name string) (CatalogPlugin
 		}
 		catalogs = append(catalogs, relative)
 	}
+	catalogs = append(catalogs, filepath.ToSlash(filepath.Join(directory, ".omp-plugin", "marketplace.json")))
 	files, err := githubsource.ReadRepoFiles(bytes.NewReader(archive), catalogs...)
 	if err != nil {
 		return CatalogPlugin{}, err

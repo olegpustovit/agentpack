@@ -104,3 +104,45 @@ func stripGuidance(text string) string {
 	end := begin + relativeEnd + len(guidanceEnd)
 	return strings.TrimRight(text[:begin], "\n") + strings.TrimLeft(text[end:], "\n")
 }
+
+// ToolNames reads `tools: Read, Grep, Bash(git:*)` or the YAML list form
+// and returns the bare tool names.
+func ToolNames(value any) ([]string, bool) {
+	var items []string
+	switch typed := value.(type) {
+	case string:
+		depth, start := 0, 0
+		for index, character := range typed {
+			switch character {
+			case '(':
+				depth++
+			case ')':
+				depth--
+			case ',':
+				if depth == 0 {
+					items = append(items, typed[start:index])
+					start = index + 1
+				}
+			}
+		}
+		items = append(items, typed[start:])
+	case []any:
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				items = append(items, text)
+			}
+		}
+	case []string:
+		items = typed
+	default:
+		return nil, false
+	}
+	var names []string
+	for _, item := range items {
+		name, _, _ := strings.Cut(strings.TrimSpace(item), "(")
+		if name = strings.TrimSpace(name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names, true
+}

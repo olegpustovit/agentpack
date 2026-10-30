@@ -49,6 +49,10 @@ func CodexPluginManifestPath(root string) string {
 }
 
 func HasPluginManifest(root string) bool {
+	return hasNormalizedPluginManifest(root) || regularFile(filepath.Join(root, ".omp-plugin", "plugin.json"))
+}
+
+func hasNormalizedPluginManifest(root string) bool {
 	return regularFile(ClaudePluginManifestPath(root)) ||
 		regularFile(CursorPluginManifestPath(root)) ||
 		regularFile(CodexPluginManifestPath(root))
@@ -71,9 +75,9 @@ func RepoDirIsPackageRoot(relativePaths map[string]struct{}, directory string) b
 		return directory + "/" + leaf
 	}
 	for _, leaf := range []string{
-		".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".codex-plugin/plugin.json",
+		".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".codex-plugin/plugin.json", ".omp-plugin/plugin.json",
 		"SKILL.md", paths.ManifestName,
-		".claude-plugin/marketplace.json", ".cursor-plugin/marketplace.json", ".agents/plugins/marketplace.json",
+		".claude-plugin/marketplace.json", ".cursor-plugin/marketplace.json", ".agents/plugins/marketplace.json", ".omp-plugin/marketplace.json",
 	} {
 		if _, exists := relativePaths[join(leaf)]; exists {
 			return true
@@ -269,6 +273,9 @@ func isExitCode(err error, code int) bool {
 }
 
 func hasMarketplaceManifest(root string) bool {
+	if regularFile(filepath.Join(root, ".omp-plugin", "marketplace.json")) {
+		return true
+	}
 	for _, relative := range marketplaceManifestPaths {
 		if regularFile(filepath.Join(root, relative)) {
 			return true

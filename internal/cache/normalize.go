@@ -24,7 +24,7 @@ func NormalizePluginLayout(root string) error {
 		{directory: ".cursor-plugin", path: CursorPluginManifestPath(root)},
 		{directory: ".codex-plugin", path: CodexPluginManifestPath(root)},
 	}
-	if !HasPluginManifest(root) {
+	if !hasNormalizedPluginManifest(root) {
 		if err := synthesizeManifestsFromAgentpack(root); err != nil {
 			return err
 		}
