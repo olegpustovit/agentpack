@@ -1,7 +1,7 @@
 import type { ComponentProps, ReactNode } from "react";
-import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { shortHash } from "@/lib/format";
+import { hud } from "@/lib/hud";
 import { cn } from "@/lib/utils";
 
 // Inspector is capped at 1180 px. Two columns from the viewport breakpoint 1260 px.
@@ -128,8 +128,8 @@ export function Hash({ value, className }: { value: string; className?: string }
         render={<button type="button" className={cn("rounded-(--r-row) text-left", className)} />}
         onClick={() => {
           navigator.clipboard.writeText(value).then(
-            () => toast("Copied"),
-            () => toast("Couldn't copy. Select the value and copy it manually."),
+            () => hud.success("Copied"),
+            () => hud.error("Couldn't copy. Select the value and copy it manually."),
           );
         }}
       >

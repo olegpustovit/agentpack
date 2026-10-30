@@ -1,6 +1,8 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router"
 import { statusQuery } from "@/features/status/queries"
 import { EventsProvider } from "@/features/events/use-events"
+import { AppShell } from "@/features/shell/shell"
+import { SidebarProvider } from "@/features/shell/sidebar"
 
 export const Route = createFileRoute("/_app")({
   beforeLoad: async ({ context }) => {
@@ -9,9 +11,11 @@ export const Route = createFileRoute("/_app")({
   },
   component: () => (
     <EventsProvider>
-      <div>
-        <Outlet />
-      </div>
+      <SidebarProvider>
+        <AppShell>
+          <Outlet />
+        </AppShell>
+      </SidebarProvider>
     </EventsProvider>
   ),
 })
