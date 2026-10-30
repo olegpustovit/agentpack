@@ -5,7 +5,7 @@ export const Route = createFileRoute("/_app/sessions/")({
   validateSearch: z.object({
     q: z.string().optional().catch(undefined),
     group: z.string().optional().catch(undefined),
-    new: z.string().optional().catch(undefined),
+    new: z.coerce.string().optional().catch(undefined),
   }),
   component: () => <p>sessions</p>,
 })

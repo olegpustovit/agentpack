@@ -1,0 +1,219 @@
+import { useEffect, useRef, useState, type KeyboardEvent } from "react"
+import { Link, useNavigate, useParams, useRouterState, useSearch } from "@tanstack/react-router"
+import { Plus } from "lucide-react"
+import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
+import { GroupHeader, SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
+import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
+import { buttonVariants } from "@/components/ui/button"
+import { useMachineQueries, useMachines } from "@/features/machines/queries"
+import { basename } from "@/lib/format"
+import { cn } from "@/lib/utils"
+import { useSessionCommands } from "./actions"
+import { groupSessions, rowKey, sessionLabel, type GroupMode, type ListedSession } from "./group"
+import { NewSessionSheet } from "./new-session-sheet"
+import { sessionRules } from "./rules"
+import { sessionsQuery } from "./queries"
+import { SessionRow, type RowActions } from "./session-row"
+import { RowSheet, type SheetState } from "./session-sheets"
+
+// Selection follows the arrow keys at once. The route follows 150 ms after the last press, so
+// holding a key opens one terminal. `from` is the route the cursor was set under; a route change
+// drops it without an effect.
+type Cursor = { key: string; from: string | undefined }
+type Confirm = { kind: "stop" | "restart"; row: ListedSession }
+
+// Rewrites query keys on a full href and keeps the path, hash and every other key.
+function withSearch(href: string, patch: Record<string, string | undefined>): string {
+  const url = new URL(href, "http://gateway.local")
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) url.searchParams.delete(key)
+    else url.searchParams.set(key, value)
+  }
+  return `${url.pathname}${url.search}${url.hash}`
+}
+
+export function SessionList() {
+  const machines = useMachines()
+  const queries = useMachineQueries(sessionsQuery)
+  const search = useSearch({ from: "/_app/sessions" })
+  const params = useParams({ strict: false })
+  const navigate = useNavigate()
+  // Search-only changes keep the current path (a session may be open), so they are built as hrefs.
+  const href = useRouterState({ select: (state) => state.location.href })
+  const commands = useSessionCommands()
+  const [sheet, setSheet] = useState<SheetState | null>(null)
+  const [confirm, setConfirm] = useState<Confirm | null>(null)
+  const [cursor, setCursor] = useState<Cursor | null>(null)
+  const pending = useRef<number | undefined>(undefined)
+
+  const groupMode: GroupMode = search.group === "project" ? "project" : "machine"
+  const routeKey = params.machine && params.sessionId ? `${params.machine}:${params.sessionId}` : undefined
+  const selectedKey = cursor?.from === routeKey ? cursor?.key : routeKey
+
+  const sessions: ListedSession[] = machines.flatMap((machine) =>
+    (queries.byMachine[machine.id]?.data ?? []).map((session) => ({
+      ...session,
+      machine: machine.id,
+      machineName: machine.name,
+      offline: !machine.online,
+    })),
+  )
+  const groups = groupSessions(sessions, groupMode)
+  // Flat order matches the DOM order, so keyboard index and element index agree.
+  const rows = groups.flatMap((group) => group.subheads.flatMap((head) => head.sessions))
+  const first = rows[0]
+  const tabStop = selectedKey ?? (first ? rowKey(first) : undefined)
+  const offlineWithData = machines.filter((machine) => !machine.online && queries.byMachine[machine.id]?.data)
+  const loading = queries.firstLoadPending
+
+  useEffect(() => () => window.clearTimeout(pending.current), [])
+
+  function openRow(row: ListedSession) {
+    void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: row.machine, sessionId: row.id } })
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLElement>) {
+    const elements = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[data-source-row]"))
+    const current = elements.indexOf(event.target as HTMLElement)
+    if (event.key === "F2") {
+      const row = rows[current]
+      if (row && sessionRules(row).rename) setSheet({ kind: "rename", row })
+      return
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return
+    event.preventDefault()
+    const next = Math.min(Math.max(current + (event.key === "ArrowDown" ? 1 : -1), 0), elements.length - 1)
+    const row = rows[next]
+    const element = elements[next]
+    if (!row || !element) return
+    element.focus()
+    setCursor({ key: rowKey(row), from: routeKey })
+    window.clearTimeout(pending.current)
+    pending.current = window.setTimeout(() => openRow(row), 150)
+  }
+
+  function actionsFor(row: ListedSession, selected: boolean): RowActions {
+    return {
+      rename: () => setSheet({ kind: "rename", row }),
+      restart: () => setConfirm({ kind: "restart", row }),
+      stop: () => setConfirm({ kind: "stop", row }),
+      reconnect: () => openRow(row),
+      closeTerminal: () => {
+        if (selected) void navigate({ to: "/sessions" })
+      },
+      install: () => setSheet({ kind: "install", row }),
+      save: () => setSheet({ kind: "save", row }),
+    }
+  }
+
+  function chooseGroup(value: unknown[]) {
+    const next = value[0]
+    if (next !== "machine" && next !== "project") return
+    void navigate({ href: withSearch(href, { group: next }), replace: true })
+  }
+
+  function closeNewSession(open: boolean) {
+    if (!open) void navigate({ href: withSearch(href, { new: undefined }), replace: true })
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center gap-(--s2) px-(--s3) py-(--s2)">
+        <SegmentedControl value={[groupMode]} onValueChange={chooseGroup}>
+          <SegmentedControlItem value="machine">Machine</SegmentedControlItem>
+          <SegmentedControlItem value="project">Project</SegmentedControlItem>
+        </SegmentedControl>
+        <span className="flex-1" />
+        <Link
+          to="/sessions"
+          search={(prev) => ({ ...prev, new: "1" })}
+          aria-label="New session"
+          title="New session"
+          className={cn(buttonVariants({ variant: "ghost", size: "icon" }))}
+        >
+          <Plus className="size-(--fs)" aria-hidden />
+        </Link>
+      </div>
+
+      <nav
+        aria-label="Sessions"
+        className="group/list flex min-h-0 flex-1 flex-col overflow-y-auto"
+        onKeyDown={onKeyDown}
+      >
+        {machines.map((machine) => {
+          const entry = queries.byMachine[machine.id]
+          if (entry?.needsUpdate) {
+            return <Banner key={machine.id} tone="warn">{`${machine.name} needs an update to show its sessions.`}</Banner>
+          }
+          const error = queries.errors[machine.id]
+          if (error) {
+            return <Banner key={machine.id} tone="danger">{`Couldn't load sessions from ${machine.name}: ${error.message}`}</Banner>
+          }
+          return null
+        })}
+        {offlineWithData.length > 0 && (
+          <Banner>
+            {`${offlineWithData.map((machine) => machine.name).join(", ")} ${offlineWithData.length === 1 ? "is" : "are"} offline. Showing last known sessions.`}
+          </Banner>
+        )}
+        {loading && [0, 1, 2].map((index) => <RowSkeleton key={index} />)}
+        {!loading && rows.length === 0 && (
+          <Empty title="No sessions yet">
+            Start an agent with New session, or from the CLI on a machine.
+          </Empty>
+        )}
+        {groups.map((group) => (
+          <div key={group.key}>
+            <GroupHeader>
+              <span className="min-w-0 flex-1 truncate">{group.label}</span>
+              {groupMode === "machine" && group.offline && <span className="shrink-0 font-normal text-(--fg3)">Offline</span>}
+            </GroupHeader>
+            {group.subheads.map((head) => (
+              <div key={head.key}>
+                <GroupHeader className="ps-(--s6) font-normal text-(--fg2)">
+                  <span className="min-w-0 truncate">{head.label}</span>
+                  {head.parent && <span className="ms-(--s2) shrink-0 text-(--fg3)">{head.parent}</span>}
+                </GroupHeader>
+                {head.sessions.map((session) => {
+                  const key = rowKey(session)
+                  const selected = key === selectedKey
+                  return (
+                    <SessionRow
+                      key={key}
+                      session={session}
+                      selected={selected}
+                      tabStop={key === tabStop}
+                      actions={actionsFor(session, selected)}
+                    />
+                  )
+                })}
+              </div>
+            ))}
+          </div>
+        ))}
+      </nav>
+
+      <RowSheet sheet={sheet} onClose={() => setSheet(null)} />
+      <ConfirmAlert open={confirm !== null} onOpenChange={(open) => { if (!open) setConfirm(null) }}>
+        {confirm && (
+          <ConfirmAlertContent
+            title={`${confirm.kind === "stop" ? "Stop" : "Restart"} ${sessionLabel(confirm.row)} in ${basename(confirm.row.directory) || "this folder"}?`}
+            description={
+              confirm.kind === "stop"
+                ? `On ${confirm.row.machineName}. Its current conversation may end.`
+                : `On ${confirm.row.machineName}. Its current conversation may end unless the agent supports resume.`
+            }
+            destructiveLabel={confirm.kind === "stop" ? "Stop agent" : "Restart agent"}
+            onConfirm={() => {
+              const { kind, row } = confirm
+              setConfirm(null)
+              if (kind === "stop") void commands.stop(row)
+              else void commands.restart(row)
+            }}
+          />
+        )}
+      </ConfirmAlert>
+      <NewSessionSheet open={search.new === "1"} machines={machines} onOpenChange={closeNewSession} />
+    </div>
+  )
+}
