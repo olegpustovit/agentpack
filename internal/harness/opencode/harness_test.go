@@ -35,6 +35,7 @@ func TestPrepareSeedsConfigAndAttributionIdempotently(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	t.Setenv("OPENCODE_PATH", filepath.Join(home, "no-opencode"))
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("AGENTPACK_KEEP_ATTRIBUTION", "")
 	userRoot := filepath.Join(home, ".config", "opencode")

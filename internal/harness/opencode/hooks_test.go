@@ -11,7 +11,7 @@ import (
 )
 
 func TestRendererGeneratesBridgeAndMergesConfig(t *testing.T) {
-	t.Parallel()
+	t.Setenv("OPENCODE_PATH", filepath.Join(t.TempDir(), "no-opencode"))
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "opencode.json"), []byte(`{"plugin":["existing.js"],"theme":"dark"}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -42,6 +42,7 @@ func TestRendererGeneratesBridgeAndMergesConfig(t *testing.T) {
 }
 
 func TestMergedConfigPreservesPluginOptionsAndJSONC(t *testing.T) {
+	t.Setenv("OPENCODE_PATH", filepath.Join(t.TempDir(), "no-opencode"))
 	root := t.TempDir()
 	input := `{"plugin": [["local-plugin", {"enabled": true}], "./agentpack-hooks/index.js"], // keep options
 	"provider": {"example": {"options": {"baseURL": "http://localhost"}}},}`

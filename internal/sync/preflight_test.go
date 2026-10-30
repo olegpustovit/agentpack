@@ -1049,6 +1049,7 @@ func TestPreflightDotAgentsUsesStagingPlanAndMarksNativeCodexSkill(t *testing.T)
 func TestPreflightMCPUsesHarnessProjectionWithoutExposingValues(t *testing.T) {
 	home, stagingRoot := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("OPENCODE_PATH", filepath.Join(home, "no-opencode"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("USERPROFILE", home)
 	userHome, err := os.UserHomeDir()

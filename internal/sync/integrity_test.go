@@ -821,6 +821,7 @@ func newIntegrityFixture(t *testing.T) *integrityFixture {
 	t.Helper()
 	project, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("OPENCODE_PATH", filepath.Join(home, "no-opencode"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("OPENCODE_CONFIG_DIR", "")
 	t.Setenv("OPENCODE_CONFIG", "")
