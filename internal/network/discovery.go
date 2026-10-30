@@ -39,10 +39,17 @@ type tailnetPeer struct {
 	ID           string
 	HostName     string
 	DNSName      string
+	OS           string
 	UserID       int64
 	TailscaleIPs []string
 	Tags         []string
 	Online       bool
+	CurAddr      string
+	Relay        string
+	PeerRelay    string
+	LastSeen     time.Time
+	RxBytes      int64
+	TxBytes      int64
 }
 type tailnetStatus struct {
 	BackendState string
@@ -175,6 +182,86 @@ var tailnetMutationTransport = func() *http.Transport {
 }()
 var tailnetHTTP = &http.Client{Transport: tailnetTransport, Timeout: 4 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
+// peerProbe is one successful /peer answer and the round trip it took.
+type peerProbe struct {
+	Node TailnetNode
+	RTT  time.Duration
+}
+type probeFunc func(context.Context, *tailnetPeer) (peerProbe, bool)
+
+// probeTailnetPeer asks one peer's gateway who it is; a failed or mismatched answer is not reachable.
+func probeTailnetPeer(ctx context.Context, peer *tailnetPeer) (peerProbe, bool) {
+	request, err := http.NewRequestWithContext(ctx, "GET", "http://"+tailnetAddress(peer)+"/peer", nil)
+	if err != nil {
+		return peerProbe{}, false
+	}
+	start := time.Now()
+	response, err := tailnetHTTP.Do(request)
+	if err != nil {
+		return peerProbe{}, false
+	}
+	defer response.Body.Close()
+	if response.StatusCode != 200 {
+		return peerProbe{}, false
+	}
+	var remote TailnetNode
+	if json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&remote) != nil || remote.ID != peer.ID {
+		return peerProbe{}, false
+	}
+	remote.Address = tailnetAddress(peer)
+	remote.Name = peer.HostName
+	remote.Online = true
+	return peerProbe{Node: remote, RTT: time.Since(start)}, true
+}
+
+// probeTailnetPeers probes peers concurrently, eight at a time, and returns successful answers by peer ID.
+func probeTailnetPeers(ctx context.Context, peers []*tailnetPeer, probe probeFunc) (map[string]peerProbe, error) {
+	results := map[string]peerProbe{}
+	var mu sync.Mutex
+	var wait sync.WaitGroup
+	slots := make(chan struct{}, 8)
+	for _, peer := range peers {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			wait.Wait()
+			return results, ctx.Err()
+		}
+		wait.Add(1)
+		go func(peer *tailnetPeer) {
+			defer wait.Done()
+			defer func() { <-slots }()
+			if result, ok := probe(ctx, peer); ok {
+				mu.Lock()
+				results[peer.ID] = result
+				mu.Unlock()
+			}
+		}(peer)
+	}
+	wait.Wait()
+	return results, nil
+}
+
+// tailnetNodesFrom returns the allowed, online peers that answer their gateway probe.
+func tailnetNodesFrom(ctx context.Context, status tailnetStatus, config SharingConfig, probe probeFunc) ([]TailnetNode, error) {
+	nodes := []TailnetNode{}
+	if !config.Enabled {
+		return nodes, nil
+	}
+	var peers []*tailnetPeer
+	for _, peer := range status.Peer {
+		if peer != nil && peer.Online && allowedTailnetPeer(status.Self, peer, config) && tailnetAddress(peer) != "" {
+			peers = append(peers, peer)
+		}
+	}
+	probed, err := probeTailnetPeers(ctx, peers, probe)
+	for _, result := range probed {
+		nodes = append(nodes, result.Node)
+	}
+	slices.SortFunc(nodes, func(a, b TailnetNode) int { return strings.Compare(a.Name, b.Name) })
+	return nodes, err
+}
+
 // TailnetNodes probes only allowed, online peers learned from the local daemon.
 func TailnetNodes(ctx context.Context, home string) ([]TailnetNode, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -183,58 +270,14 @@ func TailnetNodes(ctx context.Context, home string) ([]TailnetNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	nodes := []TailnetNode{}
 	if !config.Enabled {
-		return nodes, nil
+		return []TailnetNode{}, nil
 	}
 	status, err := tailnetSnapshot(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var mu sync.Mutex
-	var wait sync.WaitGroup
-	slots := make(chan struct{}, 8)
-	for _, peer := range status.Peer {
-		if peer == nil || !peer.Online || !allowedTailnetPeer(status.Self, peer, config) || tailnetAddress(peer) == "" {
-			continue
-		}
-		select {
-		case slots <- struct{}{}:
-		case <-ctx.Done():
-			wait.Wait()
-			return nodes, ctx.Err()
-		}
-		wait.Add(1)
-		go func(peer *tailnetPeer) {
-			defer wait.Done()
-			defer func() { <-slots }()
-			request, err := http.NewRequestWithContext(ctx, "GET", "http://"+tailnetAddress(peer)+"/peer", nil)
-			if err != nil {
-				return
-			}
-			response, err := tailnetHTTP.Do(request)
-			if err != nil {
-				return
-			}
-			defer response.Body.Close()
-			if response.StatusCode != 200 {
-				return
-			}
-			var remote TailnetNode
-			if json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&remote) != nil || remote.ID != peer.ID {
-				return
-			}
-			remote.Address = tailnetAddress(peer)
-			remote.Name = peer.HostName
-			remote.Online = true
-			mu.Lock()
-			nodes = append(nodes, remote)
-			mu.Unlock()
-		}(peer)
-	}
-	wait.Wait()
-	slices.SortFunc(nodes, func(a, b TailnetNode) int { return strings.Compare(a.Name, b.Name) })
-	return nodes, nil
+	return tailnetNodesFrom(ctx, status, config, probeTailnetPeer)
 }
 func peerRoute(method, path string) bool {
 	if replicationPeerRoute(method, path) {

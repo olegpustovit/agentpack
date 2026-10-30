@@ -136,6 +136,10 @@ func (g *Gateway) Handler() http.Handler {
 		value, err := TailnetNodes(r.Context(), g.options.Home)
 		respond(w, value, err)
 	})
+	mux.HandleFunc("GET /api/topology", func(w http.ResponseWriter, r *http.Request) {
+		value, err := tailnetTopology(r.Context(), g.options.Home)
+		respond(w, value, err)
+	})
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		value, err := Sessions(r.Context(), g.options.Home)
 		respond(w, value, err)
