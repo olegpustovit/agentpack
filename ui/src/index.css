@@ -1,0 +1,110 @@
+@import "tailwindcss";
+
+:root{
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  /* type */
+  --fs:13px;--fs-sm:12px;--fs-xs:11px;--lh:1.38;
+  /* metrics */
+  --bar-h:40px;--status-h:24px;--ctl-h:24px;--ctl-h-sm:20px;--row-h:26px;--row-h-2:38px;--head-h:22px;
+  --s1:2px;--s2:4px;--s3:6px;--s4:8px;--s5:12px;--s6:16px;--s7:20px;
+  --r-ctl:5px;--r-row:5px;--r-pop:8px;--r-sheet:10px;
+  --sidebar-w:264px;--list-w:300px;
+  /* surfaces (light) */
+  --window:oklch(.992 .001 260);
+  --chrome:oklch(.952 .003 260);
+  --sidebar:oklch(.968 .003 260);
+  --control:oklch(1 0 0);
+  --field:oklch(1 0 0);
+  --track:oklch(.915 .004 260);
+  --fg:oklch(.2 .004 260);
+  --fg2:oklch(.47 .006 260);
+  --fg3:oklch(.62 .005 260);
+  --sep:oklch(.885 .003 260);
+  --sep-soft:oklch(.93 .003 260);
+  --hover:oklch(.2 .01 260 / 6%);
+  --press:oklch(.2 .01 260 / 11%);
+  --accent:oklch(.57 .19 255);
+  --accent-fg:oklch(1 0 0);
+  --accent-soft:oklch(.57 .19 255 / 12%);
+  --sel-inactive:oklch(.9 .006 260);
+  --ok:oklch(.6 .15 150);--warn:oklch(.72 .15 70);--danger:oklch(.58 .21 27);--idle:oklch(.7 .004 260);
+  --shadow-ctl:0 .5px 1px oklch(0 0 0 / 18%),0 0 0 .5px oklch(0 0 0 / 10%);
+  --shadow-pop:0 10px 30px oklch(0 0 0 / 18%),0 0 0 .5px oklch(0 0 0 / 14%);
+  --scrim:oklch(0 0 0 / 22%);
+  --terminal-bg:#171b22;--terminal-fg:#e6e8ed;
+  color-scheme:light;
+}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){
+  --window:oklch(.2 0 0);--chrome:oklch(.255 .002 260);--sidebar:oklch(.225 .002 260);--control:oklch(.43 .002 260);--field:oklch(.27 .002 260);--track:oklch(.3 .002 260);
+  --fg:oklch(.96 0 0);--fg2:oklch(.74 .004 260);--fg3:oklch(.58 .004 260);--sep:oklch(1 0 0 / 11%);--sep-soft:oklch(1 0 0 / 7%);
+  --hover:oklch(1 0 0 / 7%);--press:oklch(1 0 0 / 12%);--accent:oklch(.64 .17 255);--accent-soft:oklch(.64 .17 255 / 22%);--sel-inactive:oklch(1 0 0 / 11%);
+  --ok:oklch(.72 .15 150);--warn:oklch(.8 .14 75);--danger:oklch(.7 .18 25);--idle:oklch(.55 0 0);
+  --shadow-ctl:0 .5px 1px oklch(0 0 0 / 40%),inset 0 .5px 0 oklch(1 0 0 / 10%);--shadow-pop:0 12px 36px oklch(0 0 0 / 50%),0 0 0 .5px oklch(1 0 0 / 14%);--scrim:oklch(0 0 0 / 40%);
+  color-scheme:dark}}
+:root[data-theme=dark]{
+  --window:oklch(.2 0 0);--chrome:oklch(.255 .002 260);--sidebar:oklch(.225 .002 260);--control:oklch(.43 .002 260);--field:oklch(.27 .002 260);--track:oklch(.3 .002 260);
+  --fg:oklch(.96 0 0);--fg2:oklch(.74 .004 260);--fg3:oklch(.58 .004 260);--sep:oklch(1 0 0 / 11%);--sep-soft:oklch(1 0 0 / 7%);
+  --hover:oklch(1 0 0 / 7%);--press:oklch(1 0 0 / 12%);--accent:oklch(.64 .17 255);--accent-soft:oklch(.64 .17 255 / 22%);--sel-inactive:oklch(1 0 0 / 11%);
+  --ok:oklch(.72 .15 150);--warn:oklch(.8 .14 75);--danger:oklch(.7 .18 25);--idle:oklch(.55 0 0);
+  --shadow-ctl:0 .5px 1px oklch(0 0 0 / 40%),inset 0 .5px 0 oklch(1 0 0 / 10%);--shadow-pop:0 12px 36px oklch(0 0 0 / 50%),0 0 0 .5px oklch(1 0 0 / 14%);--scrim:oklch(0 0 0 / 40%);
+  color-scheme:dark}
+
+:root {
+  --tab-h: 49px; /* phone tab bar */
+  --hud: oklch(.2 .004 260 / 92%);
+  --hud-fg: oklch(.98 0 0);
+  --ok-word: oklch(.42 .13 150);
+  --warn-word: oklch(.47 .11 70);
+  --danger-word: oklch(.5 .2 27);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme=light]) {
+    --hud: oklch(.32 .002 260 / 94%);
+    --ok-word: oklch(.78 .15 150);
+    --warn-word: oklch(.83 .13 75);
+    --danger-word: oklch(.76 .16 25);
+  }
+}
+:root[data-theme=dark] {
+  --hud: oklch(.32 .002 260 / 94%);
+  --ok-word: oklch(.78 .15 150);
+  --warn-word: oklch(.83 .13 75);
+  --danger-word: oklch(.76 .16 25);
+}
+:root {
+  --background: var(--window); --foreground: var(--fg);
+  --card: var(--window); --card-foreground: var(--fg);
+  --popover: var(--chrome); --popover-foreground: var(--fg);
+  --primary: var(--accent); --primary-foreground: var(--accent-fg);
+  --secondary: var(--control); --secondary-foreground: var(--fg);
+  --muted: var(--track); --muted-foreground: var(--fg2);
+  --accent-ui: var(--accent-soft);
+  --destructive: var(--danger);
+  --border: var(--sep); --input: var(--sep); --ring: var(--accent);
+  --radius: var(--r-ctl);
+}
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent-ui);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+/* chrome selection and scrollbars */
+/* Desktop chrome: arrow cursor, unselectable labels. Content (terminal, notes, code) stays selectable. */
+.titlebar,.statusbar,.sidebar,.pane-head,button,label,th,.list-caption,.sheet-actions{user-select:none;-webkit-user-select:none;cursor:default}
+* {scrollbar-width:thin;scrollbar-color:var(--sep) transparent}
