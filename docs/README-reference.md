@@ -47,15 +47,16 @@ Each release includes a SHA-256 `checksums.txt` covering every archive.
 
 ### From source
 
-From a clone of this repository, with Go 1.26 or newer:
+From a clone of this repository, with Go 1.26 or newer and Bun 1.4.4 (for the gateway web UI):
 
 ```bash
+make ui-stage   # builds ui/ and embeds it; without this the gateway serves a placeholder page
 go install ./cmd/agentpack
 # or
 make install   # release build to ~/.local/bin (override: make install INSTALL_DIR=/usr/local/bin)
 ```
 
-**Prerequisites (source builds only):** Go 1.26 or newer.
+**Prerequisites (source builds only):** Go 1.26 or newer; Bun 1.4.4 for `make ui-stage`.
 
 ## Experimental Claude proxy mode
 

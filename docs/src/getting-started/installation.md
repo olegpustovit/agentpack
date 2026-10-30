@@ -53,8 +53,11 @@ You need Go 1.26 or newer, then:
 ```sh
 git clone https://github.com/olegpustovit/agentpack.git
 cd agentpack
+make ui-stage        # needs Bun 1.4.4; builds the gateway web UI
 go install ./cmd/agentpack
 ```
+
+Run `make ui-stage` before building: without it the gateway serves a placeholder page instead of the UI. `make build` and `make install` warn when the placeholder is still in place.
 
 This installs `agentpack` under `GOBIN` (or the default Go bin directory); make sure that directory is on your `PATH`. The repo's `Makefile` also offers `make install`, which builds a stripped binary and copies it to `~/.local/bin` (override with `make install INSTALL_DIR=/usr/local/bin`).
 

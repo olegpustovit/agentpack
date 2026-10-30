@@ -8,7 +8,7 @@ RELEASE_BIN := $(BUILD_DIR)/$(BINARY)
 RELEASE_BRANCH ?= dev
 VERSION := $(shell sed -n 's/^var Version = "\([^"]*\)"/\1/p' internal/cli/run.go)
 
-.PHONY: help all build release install uninstall minor patch ship-minor ship-patch _ship check-clean fmt fmt-check lint test race ci hooks release-check
+.PHONY: help all build release install uninstall minor patch ship-minor ship-patch _ship check-clean fmt fmt-check lint test race ci hooks release-check ui-install ui-lint ui-typecheck ui-test ui-build ui-stage ui-e2e artifact
 
 .DEFAULT_GOAL := help
 
@@ -28,6 +28,10 @@ help:
 	@echo "  release-check   validate and snapshot-build GoReleaser artifacts"
 	@echo "  hooks           install tracked git hooks"
 	@echo ""
+	@echo "Gateway UI (Bun; not part of build, test or ci):"
+	@echo "  ui-stage        build ui/ and publish it to internal/network/webdist"
+	@echo "  artifact        ui-stage, build, then smoke-test the gateway"
+	@echo ""
 	@echo "Release — GoReleaser publishes archives, checksums, GitHub release, and Homebrew cask:"
 	@echo "  minor / patch   bump the embedded semantic version"
 	@echo "  ship-minor      bump minor, commit, tag, push $(RELEASE_BRANCH) + tag"
@@ -37,6 +41,7 @@ help:
 all: release
 
 build:
+	@if grep -q 'Agentpack UI was not built' internal/network/webdist/index.html; then echo "warning: gateway UI is the placeholder; run make ui-stage first" >&2; fi
 	$(GO) build -o "$(RELEASE_BIN)" ./cmd/agentpack
 
 release:
@@ -66,6 +71,30 @@ release-check:
 hooks:
 	git config core.hooksPath .githooks
 	@echo "git hooks installed (core.hooksPath -> .githooks)"
+
+ui-install:
+	cd ui && bun install --frozen-lockfile
+
+ui-lint: ui-install
+	cd ui && bun run lint
+
+ui-typecheck: ui-install
+	cd ui && bun run typecheck
+
+ui-test: ui-install
+	cd ui && bun run test
+
+ui-build: ui-install
+	cd ui && bun run build
+
+ui-stage: ui-build
+	cd ui && bun scripts/stage.ts
+
+ui-e2e: ui-install
+	cd ui && bun run e2e
+
+artifact: ui-stage build
+	./scripts/ui-smoke.sh
 
 install: release
 	mkdir -p "$(INSTALL_DIR)"

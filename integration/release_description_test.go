@@ -59,3 +59,15 @@ func TestReleaseGateUsesLatestInstallers(t *testing.T) {
 		t.Error("release gate must not pin an old installer")
 	}
 }
+
+func TestReleaseBuildsGatewayUIBeforeEmbedding(t *testing.T) {
+	t.Parallel()
+
+	contents, err := os.ReadFile("../.goreleaser.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), "hooks:\n    - make ui-stage\n") {
+		t.Error("GoReleaser must run make ui-stage before building the embedded gateway UI")
+	}
+}

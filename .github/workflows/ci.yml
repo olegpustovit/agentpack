@@ -14,19 +14,17 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: internal/network/web
+        working-directory: ui
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: internal/network/web/package-lock.json
-      - run: npm ci
-      - run: npm run build
-      - run: git diff --exit-code -- public
-      - run: npx playwright install --with-deps chromium webkit
-      - run: npm test
+          bun-version: '1.4.4'
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run build
+      - run: bunx playwright install --with-deps chromium webkit
+      - run: bun run e2e
 
   test:
     name: Go (${{ matrix.os }})

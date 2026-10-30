@@ -4,6 +4,7 @@ project_name: agentpack
 
 before:
   hooks:
+    - make ui-stage
     - go mod verify
     - go test ./...
     - ./scripts/render-installers.sh {{ .Version }} ./.release-assets/installers
