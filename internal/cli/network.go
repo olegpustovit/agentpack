@@ -70,7 +70,7 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 	case "serve":
 		ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		options := network.GatewayOptions{Home: home, Address: address, PublicURL: os.Getenv("AGENTPACK_PUBLIC_URL"), Assets: network.WebAssets()}
+		options := network.GatewayOptions{Home: home, Address: address, PublicURL: os.Getenv("AGENTPACK_PUBLIC_URL"), Assets: network.WebAssets(), Version: Version}
 		options.Start = func(ctx context.Context, info network.SessionInfo) (string, error) {
 			return runner.startRemoteSession(ctx, home, executable, info)
 		}
@@ -215,7 +215,8 @@ func (runner Runner) launchManaged(ctx context.Context, packContext paths.Contex
 	if err != nil {
 		return 1, err
 	}
-	info := network.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode}
+	cliActor := network.LocalActor("cli")
+	info := network.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode, StartedBy: &cliActor}
 	// tmux pane closure sends SIGHUP; let the local attachment stop its worker.
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGHUP, syscall.SIGTERM)
 	defer stop()

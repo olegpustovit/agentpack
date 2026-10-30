@@ -29,6 +29,7 @@ type GatewayOptions struct {
 	Install                  func(context.Context, string, string, bool) error
 	Library                  LibraryOptions
 	Assets                   http.Handler
+	Version                  string
 }
 
 type nodeRecord struct {
@@ -46,6 +47,9 @@ type Gateway struct {
 	done          <-chan struct{}
 	replicaMu     sync.Mutex
 	replicaStatus sync.Map
+	identityMu    sync.Mutex
+	identityAt    time.Time
+	identitySelf  tailnetSelf
 }
 
 func ServeGateway(ctx context.Context, options GatewayOptions) error {
@@ -124,6 +128,7 @@ func (g *Gateway) Handler() http.Handler {
 	g.registerLimits(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, map[string]bool{"ok": true}) })
 	mux.HandleFunc("GET /api/status", g.auth.status)
+	mux.HandleFunc("GET /api/identity", g.identity)
 	mux.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) { g.auth.login(w, r, true, g.origin.Scheme == "https") })
 	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) { g.auth.login(w, r, false, g.origin.Scheme == "https") })
 	mux.HandleFunc("POST /api/logout", g.auth.logout)
@@ -159,13 +164,11 @@ func (g *Gateway) Handler() http.Handler {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		info := SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode}
-		if !g.knownDirectory(info.Directory) {
-			http.Error(w, "choose a recent folder from this node", 400)
-			return
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			actor = browserActor()
 		}
-		id, err := g.options.Start(r.Context(), info)
-		info.ID = id
+		info, err := g.startSession(r.Context(), actor, SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode})
 		respond(w, info, err)
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
@@ -321,6 +324,18 @@ func respond(w http.ResponseWriter, value any, err error) {
 	}
 	writeJSON(w, value)
 }
+
+// startSession records the actor that started the session, then starts its worker.
+func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInfo) (SessionInfo, error) {
+	if !g.knownDirectory(info.Directory) {
+		return SessionInfo{}, errors.New("choose a recent folder from this node")
+	}
+	info.StartedBy = &actor
+	id, err := g.options.Start(ctx, info)
+	info.ID = id
+	return info, err
+}
+
 func (g *Gateway) knownDirectory(directory string) bool {
 	if !filepath.IsAbs(directory) {
 		return false

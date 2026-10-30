@@ -29,6 +29,8 @@ type SessionInfo struct {
 	Harness        string        `json:"harness"`
 	Mode           string        `json:"mode"`
 	State          TerminalState `json:"state"`
+	StartedAt      time.Time     `json:"started_at,omitzero"`
+	StartedBy      *Actor        `json:"started_by,omitempty"`
 }
 
 func workerRecord(home, id string) (WorkerRecord, error) {
@@ -103,6 +105,9 @@ func Sessions(ctx context.Context, home string) ([]SessionInfo, error) {
 }
 
 func StartWorker(ctx context.Context, home, executable string, launch WorkerLaunch) (string, error) {
+	if launch.Session.StartedAt.IsZero() {
+		launch.Session.StartedAt = time.Now()
+	}
 	directory := filepath.Join(home, "network")
 	if err := EnsurePrivateDirectory(directory); err != nil {
 		return "", err

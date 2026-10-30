@@ -110,11 +110,23 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 		return m.callAPI(ctx, in.Node, "GET", "/api/recent", nil)
 	})
 	mcp.AddTool(server, mcpTool("start_session", "Start a fresh agent session in a previously used folder.", false), func(ctx context.Context, _ *mcp.CallToolRequest, in mcpStartInput) (*mcp.CallToolResult, any, error) {
-		return m.callAPI(ctx, in.Node, "POST", "/api/sessions", struct {
-			Directory string `json:"directory"`
-			Harness   string `json:"harness"`
-			Mode      string `json:"mode"`
-		}{in.Directory, in.Harness, in.Mode})
+		if in.Node != "" {
+			return m.callAPI(ctx, in.Node, "POST", "/api/sessions", struct {
+				Directory string `json:"directory"`
+				Harness   string `json:"harness"`
+				Mode      string `json:"mode"`
+			}{in.Directory, in.Harness, in.Mode})
+		}
+		// In-process so the actor is "mcp", not the loopback browser actor.
+		info, err := m.gateway.startSession(ctx, LocalActor("mcp"), SessionInfo{Directory: in.Directory, Harness: in.Harness, Mode: in.Mode})
+		if err != nil {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, nil, nil
+		}
+		data, err := json.Marshal(info)
+		if err != nil {
+			return nil, nil, err
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(data)}}}, nil, nil
 	})
 	mcp.AddTool(server, mcpTool("stop_session", "Terminate an agent session. Native-stdio sessions stop only their directly owned process. Unsaved conversation state may be lost.", false), func(ctx context.Context, _ *mcp.CallToolRequest, in mcpSessionInput) (*mcp.CallToolResult, any, error) {
 		return m.callAPI(ctx, in.Node, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/stop", nil)

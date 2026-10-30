@@ -48,13 +48,21 @@ type tailnetStatus struct {
 	BackendState string
 	Self         *tailnetPeer
 	Peer         map[string]*tailnetPeer
+	User         map[string]tailnetUser
+}
+type tailnetUser struct {
+	LoginName string
 }
 type tailnetIdentity struct {
 	Node struct {
-		StableID  string
-		User      int64
-		Tags      []string
-		Addresses []string
+		StableID     string
+		ComputedName string
+		User         int64
+		Tags         []string
+		Addresses    []string
+	}
+	UserProfile struct {
+		LoginName string
 	}
 }
 
@@ -238,6 +246,9 @@ func peerRoute(method, path string) bool {
 	if method == "DELETE" && path == "/api/recent" {
 		return true
 	}
+	if method == "GET" && path == "/api/identity" {
+		return true
+	}
 	if method == "GET" && (path == "/api/sessions" || path == "/api/recent" || path == "/api/packages" || path == "/api/projects" || path == "/api/limits") {
 		return true
 	}
@@ -395,7 +406,8 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			writeJSON(w, TailnetNode{ID: self.ID, Name: self.HostName, Online: true})
 			return
 		}
-		request := r.Clone(context.WithValue(r.Context(), replicaPeerKey{}, identity.Node.StableID))
+		actor := Actor{Kind: "peer", User: identity.UserProfile.LoginName, Node: identity.Node.ComputedName}
+		request := r.Clone(withActor(context.WithValue(r.Context(), replicaPeerKey{}, identity.Node.StableID), actor))
 		request.Header = r.Header.Clone()
 		request.Header.Del("Cookie")
 		request.Header.Set("Authorization", "Bearer "+g.local.Secret)
