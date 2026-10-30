@@ -80,6 +80,9 @@ func TestReadLimitsUsesSharedAgentpackCredentials(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "codex")
 	if err := os.WriteFile(script, []byte(`#!/bin/sh
 [ -f "$CODEX_HOME/auth.json" ] || exit 1
+IFS= read -r fixture_initialize || exit 1
+IFS= read -r fixture_initialized || exit 1
+IFS= read -r fixture_limits || exit 1
 printf '%s\n' '{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":25}}}}'
 `), 0700); err != nil {
 		t.Fatal(err)
