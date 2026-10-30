@@ -1772,7 +1772,7 @@ func populateFreshness(report *environment.Report, options PreflightOptions, eff
 	if err != nil {
 		return err
 	}
-	inputs := []string{filepath.Join(report.WorkspaceRoot, ".agents"), filepath.Join(report.WorkspaceRoot, ".claude"), filepath.Join(report.WorkspaceRoot, ".cursor"), filepath.Join(report.WorkspaceRoot, "AGENTS.md"), filepath.Join(report.WorkspaceRoot, "CLAUDE.md"), filepath.Join(home, ".claude", "skills"), filepath.Join(home, ".grok", "skills")}
+	inputs := workspaceConfigInputs(report.WorkspaceRoot, home)
 	// Project skill roots that Codex and OpenCode discover on their own: a skill added there
 	// changes what the agent lists, so it must retire earlier observations.
 	inputs = append(inputs, filepath.Join(report.WorkspaceRoot, ".codex", "skills"), filepath.Join(report.WorkspaceRoot, ".opencode", "skills"))
@@ -1846,6 +1846,17 @@ func populateFreshness(report *environment.Report, options PreflightOptions, eff
 		}
 	}
 	return nil
+}
+
+// Select configuration explicitly: a home workspace also contains global runtime state.
+func workspaceConfigInputs(workspace, home string) []string {
+	inputs := []string{filepath.Join(workspace, ".agents"), filepath.Join(workspace, "AGENTS.md"), filepath.Join(workspace, "CLAUDE.md"), filepath.Join(home, ".claude", "skills"), filepath.Join(home, ".grok", "skills")}
+	for _, directory := range []string{".claude", ".cursor"} {
+		for _, name := range []string{"settings.json", "settings.local.json", "cli-config.json", "mcp.json", ".mcp.json", "CLAUDE.md", "AGENTS.md", "skills", "commands", "agents", "rules", "hooks", "hooks.json", "plugins/marketplace.json"} {
+			inputs = append(inputs, filepath.Join(workspace, directory, filepath.FromSlash(name)))
+		}
+	}
+	return inputs
 }
 
 // Fingerprints include absence and file bytes; absolute paths stay local to this identity.

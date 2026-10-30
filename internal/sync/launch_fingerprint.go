@@ -16,7 +16,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
-const stagingLayoutVersion = "4"
+const stagingLayoutVersion = "5"
 
 type launchState struct {
 	Digest string `json:"digest"`
@@ -278,7 +278,7 @@ func computeMaterializationDigest(definition, workspace string, effective mode.E
 	if err != nil {
 		return "", err
 	}
-	roots := []string{filepath.Join(workspace, ".agents"), filepath.Join(workspace, ".claude"), filepath.Join(workspace, ".cursor"), filepath.Join(workspace, "AGENTS.md"), filepath.Join(workspace, "CLAUDE.md"), filepath.Join(home, ".claude", "skills"), filepath.Join(home, ".grok", "skills")}
+	roots := workspaceConfigInputs(workspace, home)
 	for _, target := range base.AllTargets() {
 		roots = append(roots, inheritedConfigPaths(&target, workspace)...)
 	}

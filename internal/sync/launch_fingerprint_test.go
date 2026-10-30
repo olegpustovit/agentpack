@@ -3,6 +3,7 @@ package sync
 import (
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mode"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -189,5 +190,52 @@ func TestLaunchDigestTracksExternalWorkspace(t *testing.T) {
 	}
 	if changed == a {
 		t.Fatal("workspace .agents change ignored")
+	}
+}
+
+func TestHomeWorkspaceIgnoresRuntimeState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	digest := func() string {
+		t.Helper()
+		value, err := computeMaterializationDigest(home, home, mode.ImplicitEffective())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	before := digest()
+	runtimeDir := filepath.Join(home, ".cursor", "projects")
+	if err := os.MkdirAll(runtimeDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", filepath.Join(runtimeDir, "worker.sock"))
+	if err != nil {
+		t.Skipf("Unix sockets unavailable: %v", err)
+	}
+	defer listener.Close()
+	history := filepath.Join(home, ".claude", "projects", "history.jsonl")
+	if err := os.MkdirAll(filepath.Dir(history), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(history, []byte("runtime history"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if digest() != before {
+		t.Fatal("runtime state changed configuration digest")
+	}
+	config := filepath.Join(home, ".cursor", "settings.json")
+	if err := os.WriteFile(config, []byte(`{"editor.tabSize":4}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if digest() == before {
+		t.Fatal("configuration change ignored")
+	}
+	if _, err := fingerprintInputs([]string{filepath.Join(runtimeDir, "worker.sock")}); err == nil {
+		t.Fatal("nonregular configuration input accepted")
 	}
 }

@@ -15,7 +15,7 @@ import (
 const (
 	replayLimit    = 8 << 20
 	chunkSize      = 32 << 10
-	observerQueue  = 32
+	observerLimit  = 1 << 20
 	maxAttachments = 16
 )
 
@@ -46,11 +46,23 @@ type Replay struct {
 }
 
 type Attachment struct {
-	ID     uint64
-	Output <-chan []byte
-	output chan []byte
-	local  bool
-	err    error
+	ID      uint64
+	Ready   <-chan struct{}
+	ready   chan struct{}
+	pending []byte
+	session *Session
+	local   bool
+	err     error
+}
+
+// ReadOutput drains queued bytes after Ready is signaled, preserving order across bursts.
+func (attachment *Attachment) ReadOutput() ([]byte, bool) {
+	session := attachment.session
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	data := attachment.pending
+	attachment.pending = nil
+	return data, len(data) > 0 || session.state.Running && session.attachments[attachment.ID] == attachment
 }
 
 // Session owns a single child and PTY. Gateway handlers only attach to it;
@@ -130,8 +142,8 @@ func (session *Session) Attach(local bool) (*Attachment, Replay, error) {
 		}
 	}
 	session.nextID++
-	output := make(chan []byte, observerQueue)
-	attachment := &Attachment{ID: session.nextID, Output: output, output: output, local: local}
+	output := make(chan struct{}, 1)
+	attachment := &Attachment{ID: session.nextID, Ready: output, ready: output, session: session, local: local}
 	session.attachments[attachment.ID] = attachment
 	session.updateResponderLocked()
 	if !session.state.Running {
@@ -146,7 +158,7 @@ func (session *Session) Detach(attachment *Attachment) {
 	if current, ok := session.attachments[attachment.ID]; ok && current == attachment {
 		delete(session.attachments, attachment.ID)
 		if session.state.Running {
-			close(attachment.output)
+			close(attachment.ready)
 		}
 		session.updateResponderLocked()
 	}
@@ -240,13 +252,17 @@ func (session *Session) publish(data []byte) {
 		session.offset += uint64(extra)
 	}
 	for id, attachment := range session.attachments {
-		select {
-		case attachment.output <- data:
-		default:
+		if len(attachment.pending)+len(data) > observerLimit {
 			attachment.err = ErrSlowObserver
-			close(attachment.output)
+			close(attachment.ready)
 			delete(session.attachments, id)
 			session.updateResponderLocked()
+			continue
+		}
+		attachment.pending = append(attachment.pending, data...)
+		select {
+		case attachment.ready <- struct{}{}:
+		default:
 		}
 	}
 }
@@ -284,7 +300,7 @@ func (session *Session) reap() {
 	}
 	session.waitErr = errors.Join(session.waitErr, session.readErr)
 	for _, attachment := range session.attachments {
-		close(attachment.output)
+		close(attachment.ready)
 	}
 	close(session.done)
 }

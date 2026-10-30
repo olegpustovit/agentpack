@@ -367,7 +367,8 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 	defer ping.Stop()
 	for {
 		select {
-		case data, ok := <-attachment.Output:
+		case <-attachment.Ready:
+			data, ok := attachment.ReadOutput()
 			if !ok {
 				message := ""
 				if err := session.AttachmentError(attachment); err != nil {
@@ -376,7 +377,7 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 				_ = notice(terminalNotice{Type: "ended", State: session.State(), Error: message})
 				return
 			}
-			if write(websocket.BinaryMessage, data) != nil {
+			if len(data) > 0 && write(websocket.BinaryMessage, data) != nil {
 				return
 			}
 		case message := <-notices:

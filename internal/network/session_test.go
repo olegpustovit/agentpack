@@ -80,7 +80,8 @@ func readUntil(t *testing.T, attachment *Attachment, prefix, want string) string
 	defer timer.Stop()
 	for !strings.Contains(prefix, want) {
 		select {
-		case data, ok := <-attachment.Output:
+		case <-attachment.Ready:
+			data, ok := attachment.ReadOutput()
 			if !ok {
 				t.Fatalf("stream ended before %q: %q", want, prefix)
 			}
@@ -202,7 +203,8 @@ func TestSessionSerializesConcurrentLocalAndBrowserInput(t *testing.T) {
 	defer timer.Stop()
 	for strings.Count(output, "ECHO ") < 16 {
 		select {
-		case data, ok := <-local.Output:
+		case <-local.Ready:
+			data, ok := local.ReadOutput()
 			if !ok {
 				t.Fatal("terminal ended during concurrent input")
 			}
@@ -252,7 +254,9 @@ func TestSlowObserverAndBoundedReplay(t *testing.T) {
 		t.Fatal("replay exposes mutable session storage")
 	}
 	session.publish([]byte("next"))
-	if got := string(<-fresh.Output); got != "next" {
+	<-fresh.Ready
+	data, _ := fresh.ReadOutput()
+	if got := string(data); got != "next" {
 		t.Fatal(got)
 	}
 }
@@ -271,5 +275,30 @@ func TestSessionValidatesBeforeSpawn(t *testing.T) {
 	}
 	if _, err := StartSession(exec.Command("does-not-exist"), 24, 80); err == nil {
 		t.Fatal("spawn failure hidden")
+	}
+}
+
+func TestObserverRetainsTinyOutputBursts(t *testing.T) {
+	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment)}
+	for _, local := range []bool{false, true} {
+		attachment, _, err := session.Attach(local)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var want bytes.Buffer
+		for i := range 4096 {
+			chunk := []byte(fmt.Sprintf("%d\r", i))
+			want.Write(chunk)
+			session.publish(chunk)
+		}
+		if err := session.AttachmentError(attachment); err != nil {
+			t.Fatal(err)
+		}
+		<-attachment.Ready
+		data, ok := attachment.ReadOutput()
+		if !ok || !bytes.Equal(data, want.Bytes()) {
+			t.Fatal("burst was disconnected, dropped, or reordered")
+		}
+		session.Detach(attachment)
 	}
 }

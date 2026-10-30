@@ -56,7 +56,8 @@ func windowsReadUntil(t *testing.T, attachment *Attachment, prefix, want string)
 	defer timer.Stop()
 	for !strings.Contains(prefix, want) {
 		select {
-		case data, ok := <-attachment.Output:
+		case <-attachment.Ready:
+			data, ok := attachment.ReadOutput()
 			if !ok {
 				t.Fatalf("stream ended before %q: %q", want, prefix)
 			}

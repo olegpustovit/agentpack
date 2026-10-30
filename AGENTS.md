@@ -20,6 +20,14 @@ Headless model prompts and exact-response launch checks are optional local check
 
 The mode editor is a responsive Bubble Tea/Lip Gloss TUI, with the Rust `v0.3.12` Ratatui editor as its behavioral baseline: modes, capability tree, details, effective-state glyphs, tri-state and subtree edits, prompts, help, scrolling, terminal-native monochrome rendering, dirty confirmation, and atomic save must remain covered. At narrow terminal widths, prioritize readable panes over preserving three crushed columns.
 
+### Startup performance is a release requirement
+
+Benchmark cold setup and verified warm launches before and after changing launch, staging, or fingerprint code. Keep reproducible benchmarks and measured results in the repository. On the Linux ARM64 reference host, `BenchmarkMaterializationHome` must stay below 1 ms, `BenchmarkCodexSetup/cold` below 20 ms, and `BenchmarkCodexSetup/warm` below 1 ms (medians of five repeated runs; 32 MiB history fixture). Investigate regressions before release; these are setup budgets, excluding harness startup and downloads.
+
+Fingerprint only configuration and authored resources. Never recursively scan global chat histories, sessions, project runtime state, sockets, or logs merely because the launch workspace is the user's home. Preserve cache integrity checks, symlink validation, nonregular configuration rejection, and concurrent-launch validation when optimizing. See `docs/research/startup-performance.md` for the baseline and reproduction commands.
+
+Terminal output buffers must be bounded by bytes rather than PTY read count. Keep a regression for thousands of tiny redraw chunks without loss or disconnection, plus a stalled-viewer test that enforces the memory bound.
+
 ### Code structure (contributor rule)
 
 **Per-harness code lives in `internal/harness/<name>/`. Shared code lives in its subsystem. No forwarding aliases, no orphaned glue, and no tiny single-purpose packages.**
