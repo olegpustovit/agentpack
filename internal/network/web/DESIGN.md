@@ -195,3 +195,7 @@ Controls and rows use gently rounded 5px corners. Popovers and code blocks use 8
 - **Don't** add an external display font or CDN-loaded visual asset.
 - **Don't** use color alone to communicate state.
 - **Don't** turn the terminal-led workspace into a page-scroll dashboard or add persistent page headers and footers.
+
+### Provider limits
+
+Limits uses a single 960px-wide list of providers with hairline dividers and the existing system typography. Each provider leads with the connected machine reporting usable windows, followed by plan and observation time. Remaining meters align with used/remaining text and reset details; unknown percentages have no meter. Other machine reports and connection failures use native disclosure controls. The 390px layout places meters below their labels and preserves source metadata. Refresh keeps the current reports visible while new observations arrive.

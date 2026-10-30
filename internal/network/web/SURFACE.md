@@ -10,7 +10,7 @@ OWN-WORLD: The reference's system-font typography, light/dark surfaces, small na
 
 STORY: Select a session, inspect its live host grid, type alongside the local terminal, then inspect saved configurations and choose destinations before changing them. Offline work remains a reviewable draft.
 
-FIRST VIEWPORT: A 40px toolbar, resizable left Sessions list (220–420px), edge-to-edge terminal, and 24px status bar. Library uses a 300px list and inspector; Machines uses a narrow list and package matrix; Limits is a single list with one section per harness, each window shown as a text-labelled meter with its reset time. At 390px, panes switch and dialogs become bottom sheets.
+FIRST VIEWPORT: A 40px toolbar, resizable left Sessions list (220–420px), edge-to-edge terminal, and 24px status bar. Library uses a 300px list and inspector; Machines uses a narrow list and package matrix; Limits is a compact provider list with automatic selection of a machine reporting usable windows. Each window shows remaining and used percentages and its reset time; plan, source machine, observation time, and expandable reports from other machines preserve provenance. Unknown values have no meter. At 390px, panes switch and dialogs become bottom sheets.
 
 FORM: User-pinned reference implementation; code-led reproduction of the supplied HTML/CSS/behavior. No direction roll applies: the user's explicit 1:1 reference fixes the design.
 

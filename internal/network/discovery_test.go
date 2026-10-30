@@ -107,3 +107,21 @@ func TestSharingConfigPersistsAndValidates(t *testing.T) {
 		t.Fatal("silently ignored invalid config")
 	}
 }
+
+func TestLimitsPeerRoutes(t *testing.T) {
+	for _, tc := range []struct {
+		method, path string
+		want         bool
+	}{
+		{"GET", "/api/limits", true},
+		{"POST", "/api/limits/refresh", true},
+		{"POST", "/api/limits", false},
+		{"GET", "/api/limits/refresh", false},
+		{"DELETE", "/api/limits", false},
+		{"GET", "/api/limits/extra", false},
+	} {
+		if got := peerRoute(tc.method, tc.path); got != tc.want {
+			t.Errorf("%s %s allowed=%v, want %v", tc.method, tc.path, got, tc.want)
+		}
+	}
+}

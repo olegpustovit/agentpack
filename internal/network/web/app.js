@@ -329,18 +329,21 @@ function renderRecent() {
     host.append(row);
   }
 }
+let limitsLoading = false;
 async function loadLimits(refresh = false) {
-  const body = $("limits-body");
-  body.replaceChildren(textNode("p", refresh ? "Refreshing…" : "Loading limits…"));
+  if (limitsLoading) return;
+  limitsLoading = true;
+  const button = $("limits-refresh");
+  button.disabled = true;
+  $("limits-body").setAttribute("aria-busy", "true");
+  $("limits-status").textContent = refresh ? "Refreshing all connected machines…" : "Checking connected machines…";
   const online = machines().filter(machine => machine.online !== false);
   const results = await Promise.allSettled(online.map(machine => refresh ? api("/api/limits/refresh", {}, "POST", machine.id) : api("/api/limits", void 0, "GET", machine.id)));
   renderLimits(results.map((result, index) => ({ node: online[index].name, snapshots: result.status === "fulfilled" ? list(result.value, "limits") : [], error: result.status === "rejected" ? result.reason.message : "" })));
-}
-function textNode(tag, text, className) {
-  const element = document.createElement(tag);
-  element.textContent = text;
-  if (className) element.className = className;
-  return element;
+  $("limits-status").textContent = `Checked ${online.length} ${online.length === 1 ? "machine" : "machines"} · Updates every minute`;
+  $("limits-body").setAttribute("aria-busy", "false");
+  button.disabled = false;
+  limitsLoading = false;
 }
 function relativeUntil(ms) {
   const minutes = Math.round(ms / 60000);
@@ -356,46 +359,81 @@ function resetLabel(window) {
   if (remaining <= 0) return { text: `reset due · rechecking · was ${absolute}`, due: true };
   return { text: `resets ${relativeUntil(remaining)} · ${absolute}`, due: false };
 }
+function renderLimitReport(snapshot, machine) {
+  const report = node("div", "", "limit-report");
+  const meta = node("div", "", "limit-meta");
+  meta.append(node("span", machine));
+  if (snapshot.plan) meta.append(node("span", snapshot.plan));
+  if (snapshot.observed_at) meta.append(node("span", `Updated ${new Date(snapshot.observed_at).toLocaleTimeString(undefined, {hour:"2-digit", minute:"2-digit"})}`));
+  report.append(meta);
+  for (const window of snapshot.windows || []) {
+    const reset = resetLabel(window);
+    const row = node("div", "", reset.due ? "limit-window dim" : "limit-window");
+    const remaining = window.remaining_percent ?? (window.used_percent == null ? null : 100 - window.used_percent);
+    const label = node("div", "", "limit-window-label");
+    label.append(node("strong", window.label), node("small", reset.text, "muted"));
+    if (window.duration_seconds != null) label.append(node("small", `${window.duration_seconds / 3600}h window`, "muted"));
+    row.append(label);
+    if (remaining != null) {
+      const meter = document.createElement("meter");
+      meter.className = "limit-meter";
+      meter.min = 0;
+      meter.max = 100;
+      meter.value = Math.min(100, Math.max(0, remaining));
+      meter.setAttribute("role", "meter");
+      meter.setAttribute("aria-label", `${window.label} remaining`);
+      meter.setAttribute("aria-valuenow", String(meter.value));
+      row.append(meter);
+    } else row.append(node("span", "Not reported", "muted"));
+    const value = node("div", "", "limit-value");
+    value.append(node("strong", remaining == null ? "Unknown" : `${Math.round(remaining)}% left`));
+    if (window.used_percent != null) value.append(node("small", `${Math.round(window.used_percent)}% used`, "muted"));
+    row.append(value);
+    report.append(row);
+  }
+  if (snapshot.error) report.append(node("p", snapshot.error, "limit-error"));
+  if (!snapshot.windows?.length && !snapshot.error) report.append(node("p", "No usage windows reported by this machine.", "muted"));
+  if (snapshot.source) report.append(node("small", `Source: ${snapshot.source}`, "limit-source muted"));
+  return report;
+}
 function renderLimits(groups) {
   const body = $("limits-body");
   body.replaceChildren();
-  if (!groups.length) body.append(textNode("p", "No connected nodes to read limits from."));
+  const providers = new Map();
   for (const group of groups) {
-    const node = document.createElement("section");
-    node.className = "limit-node";
-    node.append(textNode("h2", group.node));
-    if (group.error) node.append(textNode("p", group.error, "muted"));
-    if (!group.snapshots.length && !group.error) node.append(textNode("p", "No harness limits reported.", "muted"));
     for (const snapshot of group.snapshots) {
-      const section = document.createElement("div");
-      section.className = "limit-harness";
-      const head = document.createElement("div");
-      head.className = "limit-head";
-      head.append(textNode("strong", snapshot.harness), textNode("span", snapshot.plan ? `${snapshot.state} · ${snapshot.plan}` : snapshot.state, "muted"));
-      section.append(head);
-      if (snapshot.source) section.append(textNode("small", snapshot.source, "muted"));
-      if (snapshot.observed_at) section.append(textNode("small", `observed ${new Date(snapshot.observed_at).toLocaleString()}`, "muted"));
-      for (const window of snapshot.windows || []) {
-        const reset = resetLabel(window);
-        const row = document.createElement("div");
-        row.className = reset.due ? "limit-window dim" : "limit-window";
-        const meter = document.createElement("div");
-        meter.className = "limit-meter";
-        meter.setAttribute("role", "meter");
-        meter.setAttribute("aria-label", `${window.label} remaining`);
-        meter.setAttribute("aria-valuemin", "0");
-        meter.setAttribute("aria-valuemax", "100");
-        meter.setAttribute("aria-valuenow", String(window.remaining_percent ?? 0));
-        const fill = document.createElement("i");
-        fill.style.width = `${window.remaining_percent ?? 0}%`;
-        meter.append(fill);
-        row.append(textNode("span", window.label), meter, textNode("span", window.remaining_percent == null ? "unknown" : `${Math.round(window.remaining_percent)}% left`), textNode("small", reset.text, "muted"));
-        section.append(row);
-      }
-      if (snapshot.error) section.append(textNode("p", snapshot.error, "muted"));
-      node.append(section);
+      if (!providers.has(snapshot.harness)) providers.set(snapshot.harness, []);
+      providers.get(snapshot.harness).push({snapshot, node:group.node});
     }
-    body.append(node);
+  }
+  const names = {codex:"Codex", claude:"Claude", agy:"Antigravity", grok:"Grok", opencode:"OpenCode"};
+  for (const [provider, reports] of providers) {
+    // Prefer a machine with usable windows; never combine allowances across accounts.
+    const selected = reports.find(report => report.snapshot.state === "available" && report.snapshot.windows?.length) || reports.find(report => report.snapshot.state === "error") || reports[0];
+    const available = selected.snapshot.state === "available" && selected.snapshot.windows?.length;
+    const section = node("section", "", "limit-provider");
+    section.dataset.provider = provider;
+    const head = node("div", "", "limit-head");
+    head.append(node("h2", names[provider] || provider), node("span", available ? "Live limits" : "Limits unavailable", "limit-state"));
+    section.append(head, renderLimitReport(selected.snapshot, selected.node));
+    const others = reports.filter(report => report !== selected);
+    if (others.length) {
+      const details = document.createElement("details");
+      details.className = "limit-machines";
+      details.append(node("summary", `Other machines (${others.length})`));
+      for (const report of others) details.append(renderLimitReport(report.snapshot, report.node));
+      section.append(details);
+    }
+    body.append(section);
+  }
+  if (!providers.size) body.append(node("p", "No limits available. Check that a connected machine has a signed-in provider CLI.", "muted"));
+  const failed = groups.filter(group => group.error);
+  if (failed.length) {
+    const details = document.createElement("details");
+    details.className = "limit-failures";
+    details.append(node("summary", `${failed.length} ${failed.length === 1 ? "machine" : "machines"} could not be checked`));
+    for (const group of failed) details.append(node("p", `${group.node}: ${group.error}`));
+    body.append(details);
   }
 }
 let limitsTimer;

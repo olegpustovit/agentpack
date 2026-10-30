@@ -37,7 +37,7 @@ private worker capabilities never appear in any response. An unauthenticated API
 - `POST /api/sessions/{id}/stop`: `{}`. Stop is explicit; detach is separate.
 - `POST /api/sessions/{id}/restart`: `{operation_id}`. Each user intent gets a UUID;
   transport failures and 5xx retry the same UUID, while success or 4xx ends that intent.
-- `GET /api/limits`: `{limits: [...]}` with one snapshot per harness (`codex`, `claude`, `agy`, `grok`, `opencode`) of `{harness,state,source,observed_at,plan?,error?,windows: [{id,label,used_percent?,remaining_percent?,reset_at?,reset_text?}]}`. Results are cached for 60 seconds; a failing harness reports its own `error` and does not hide the others.
+- `GET /api/limits`: `{limits: [...]}` with one snapshot per harness (`codex`, `claude`, `agy`, `grok`, `opencode`) of `{harness,state,source,observed_at,plan?,error?,windows: [{id,label,used_percent?,remaining_percent?,reset_at?,reset_text?}]}`. Both limits routes support `?node=<stable-id>` over the authenticated peer channel, including cold probes longer than five seconds. The Limits view checks online machines automatically, shows a usable report first for each provider, and keeps other machine reports expandable without combining account allowances. Unknown percentages stay unknown. Results are cached for 60 seconds; a failing harness reports its own `error` and does not hide the others.
 - `POST /api/limits/refresh`: `{}`, returns the same shape. Refresh is throttled to one collection per 10 seconds.
 - `GET /api/packages?directory=...`: array (or `{packages: [...]}`) of `{module,commit?}`.
 - `POST /api/packages`: `{directory,spec,restart?}`. `restart` defaults to `true`.

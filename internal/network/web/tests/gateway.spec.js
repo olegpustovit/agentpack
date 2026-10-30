@@ -676,7 +676,7 @@ test("limits view shows each harness with partial failures and no raw CLI output
   await expect(page.locator("#limits-view")).toBeVisible();
   await expect(page.getByRole("meter",{name:"Codex 5h remaining"})).toHaveAttribute("aria-valuenow","72");
   await expect(page.locator("#limits-body")).toContainText("grok billing: authentication required");
-  await expect(page.locator("#limits-body")).toContainText("codex");
+  await expect(page.locator("#limits-body")).toContainText("Codex");
 });
 test("limits shortcut opens the view and a passed reset is labelled rechecking",async({page})=>{
   const past=new Date(Date.now()-60000).toISOString();
@@ -687,4 +687,50 @@ test("limits shortcut opens the view and a passed reset is labelled rechecking",
   await expect(page.locator("#limits-view")).toBeVisible();
   await expect(page.locator("#limits-body")).toContainText("reset due · rechecking");
   await expect(page.locator(".limit-window.dim")).toHaveCount(1);
+});
+
+
+test("limits automatically prefers capable nodes and refreshes every source",async({page},testInfo)=>{
+  await mockAPI(page);
+  await page.route("**/api/nodes",route=>route.fulfill({json:[{id:"peer-1",name:"Mac Studio",online:true},{id:"peer-2",name:"Offline Mac",online:false},{id:"peer-3",name:"Unavailable node",online:true}]}));
+  const calls=[];
+  await page.route("**/api/limits**",async route=>{
+    const url=new URL(route.request().url());calls.push({node:url.searchParams.get("node"),method:route.request().method()});
+    if(url.searchParams.get("node")==="peer-3")return route.fulfill({status:502,body:"Node is unreachable"});
+    const remote=url.searchParams.get("node")==="peer-1";
+    await route.fulfill({json:{limits:[
+      {harness:"codex",state:remote?"available":"unsupported",plan:remote?"Pro":undefined,source:"codex app-server account/rateLimits/read",observed_at:new Date().toISOString(),error:remote?undefined:"codex CLI not found",windows:remote?[
+        {id:"primary",label:"Session",used_percent:28,remaining_percent:72,duration_seconds:18000,reset_at:new Date(Date.now()+7200000).toISOString()},
+        {id:"weekly",label:"Weekly",used_percent:64,remaining_percent:36,reset_text:"Monday at 09:00"},
+        {id:"unknown",label:"Additional usage",reset_text:"Not reported"}
+      ]:[]},
+      {harness:"claude",state:remote?"error":"available",source:"claude -p /usage",error:remote?"Sign in required":undefined,windows:remote?[]:[{id:"session",label:"Current session",remaining_percent:81,used_percent:19}]}
+    ]}});
+  });
+  await page.goto("/");
+  await expect(page.locator("#sessions")).toContainText("Mac Studio");
+  await page.getByRole("button",{name:"Limits",exact:true}).click();
+  const codex=page.locator('[data-provider="codex"]');
+  await expect(codex.locator(".limit-report").first()).toContainText("Mac Studio");
+  await expect(codex.locator(".limit-report").first()).toContainText("Pro");
+  await expect(page.getByRole("meter",{name:"Session remaining",exact:true})).toHaveAttribute("aria-valuenow","72");
+  await expect(page.getByRole("meter",{name:"Weekly remaining"})).toHaveAttribute("aria-valuenow","36");
+  await expect(codex.getByText("Unknown",{exact:true})).toBeVisible();
+  await expect(page.getByRole("meter")).toHaveCount(3);
+  await expect(page.locator('[data-provider="claude"] .limit-report').first()).toContainText("Gateway machine");
+  expect(calls.some(call=>call.node==="peer-2")).toBeFalsy();
+  await codex.locator("summary").click();
+  await expect(codex.getByText("codex CLI not found")).toBeVisible();
+  await page.locator(".limit-failures summary").click();
+  await expect(page.getByText("Unavailable node: Node is unreachable")).toBeVisible();
+  await page.getByRole("button",{name:"Refresh all"}).click();
+  await expect(page.getByRole("button",{name:"Refresh all"})).toBeEnabled();
+  expect(calls.filter(call=>call.method==="POST").map(call=>call.node).sort()).toEqual([null,"peer-1","peer-3"].sort());
+  for(const theme of ["light","dark"]){
+    await page.emulateMedia({colorScheme:theme});
+    await page.screenshot({path:`test-results/limits-${theme}-${testInfo.project.name}.png`});
+  }
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:`test-results/limits-mobile-${testInfo.project.name}.png`});
+  expect(await page.locator("#limits-body").evaluate(el=>el.scrollWidth<=el.clientWidth)).toBeTruthy();
 });

@@ -238,10 +238,10 @@ func peerRoute(method, path string) bool {
 	if method == "DELETE" && path == "/api/recent" {
 		return true
 	}
-	if method == "GET" && (path == "/api/sessions" || path == "/api/recent" || path == "/api/packages") {
+	if method == "GET" && (path == "/api/sessions" || path == "/api/recent" || path == "/api/packages" || path == "/api/limits") {
 		return true
 	}
-	if method == "POST" && (path == "/api/sessions" || path == "/api/packages") {
+	if method == "POST" && (path == "/api/sessions" || path == "/api/packages" || path == "/api/limits/refresh") {
 		return true
 	}
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
@@ -300,7 +300,8 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 		request.Header.Del("X-Forwarded-Proto")
 	}
 	proxy.Transport = tailnetTransport
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+	// Cold limits probes can take longer than the ordinary five-second read timeout.
+	if r.URL.Path == "/api/limits" || r.Method != http.MethodGet && r.Method != http.MethodHead {
 		proxy.Transport = tailnetMutationTransport
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
