@@ -1,5 +1,3 @@
-import { queryOptions } from "@tanstack/react-query"
-
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -47,11 +45,3 @@ export async function api<T>(
   }
   return data as T
 }
-
-export type Status = { setup_required: boolean; authenticated: boolean }
-
-export const statusQuery = queryOptions({
-  queryKey: ["status"],
-  queryFn: () => api<Status>("/api/status"),
-  staleTime: 0,
-})

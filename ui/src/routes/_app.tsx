@@ -1,5 +1,5 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router"
-import { statusQuery } from "../lib/api"
+import { statusQuery } from "@/features/status/queries"
 
 export const Route = createFileRoute("/_app")({
   beforeLoad: async ({ context }) => {
