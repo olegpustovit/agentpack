@@ -17,7 +17,7 @@ export type TerminalState = {
   running: boolean
   restarting: boolean
   shared_input?: boolean
-  responder?: string
+  responder?: number
   rows: number
   columns: number
   exit_code: number
