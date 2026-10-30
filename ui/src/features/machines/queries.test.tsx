@@ -1,6 +1,6 @@
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query"
 import { act } from "react"
-import { createRoot } from "react-dom/client"
+import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ApiError } from "@/lib/api"
 import { createQueryClient } from "@/lib/query-client"
@@ -24,7 +24,7 @@ function Probe({ out }: { out: { current?: MachineQueries<unknown> } }) {
 
 let container: HTMLDivElement
 let client: QueryClient
-let root: ReturnType<typeof createRoot>
+let root: Root
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

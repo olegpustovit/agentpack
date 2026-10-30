@@ -3,6 +3,7 @@ import { useEffect } from "react"
 import { Link, useNavigate } from "@tanstack/react-router"
 import { ChevronLeft, PanelLeft, Settings } from "lucide-react"
 import { Hud } from "@/components/kit/feedback"
+import { StatusBar, StatusProvider } from "@/features/status/status-bar"
 import { AppWindow, Toolbar, ToolbarButton } from "@/components/kit/window"
 import { buttonVariants } from "@/components/ui/button"
 import { useIsPhone } from "./use-is-phone"
@@ -12,12 +13,15 @@ import { listDetailViews, tabs, useRoutePosition, views } from "./views"
 export function AppShell({ children }: { children: ReactNode }) {
   useShellShortcuts()
   return (
-    <AppWindow>
-      <AppToolbar />
-      {children}
-      <TabBar />
-      <Hud />
-    </AppWindow>
+    <StatusProvider>
+      <AppWindow>
+        <AppToolbar />
+        {children}
+        <TabBar />
+        <StatusBar />
+        <Hud />
+      </AppWindow>
+    </StatusProvider>
   )
 }
 
