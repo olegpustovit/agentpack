@@ -32,4 +32,5 @@ type LimitWindow struct {
 	RemainingPercent *float64   `json:"remaining_percent,omitempty"`
 	DurationSeconds  *int64     `json:"duration_seconds,omitempty"`
 	ResetAt          *time.Time `json:"reset_at,omitempty"`
+	ResetText        string     `json:"reset_text,omitempty"`
 }
