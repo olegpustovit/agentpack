@@ -97,13 +97,13 @@ while (($line = [Console]::ReadLine()) -ne $null) {
 			}
 			command.Env = append(os.Environ(), "AGENTPACK_TEST_VALUE=héllo")
 			session := windowsSession(t, command)
-			local, replay, err := session.Attach(true)
+			local, replay, err := session.Attach(true, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
 			initial := windowsReadUntil(t, local, string(replay.Data), "READY héllo")
 			windowsReadUntil(t, local, initial, filepath.Base(command.Dir))
-			browser, replay, err := session.Attach(false)
+			browser, replay, err := session.Attach(false, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -128,7 +128,7 @@ while (($line = [Console]::ReadLine()) -ne $null) {
 			if !session.State().Running {
 				t.Fatal("disconnect killed PowerShell")
 			}
-			local, _, err = session.Attach(true)
+			local, _, err = session.Attach(true, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -174,7 +174,7 @@ Start-Sleep 120
 `)
 	command.Env = append(os.Environ(), "AGENTPACK_TEST_PID_FILE="+pidPath)
 	session := windowsSession(t, command)
-	observer, replay, err := session.Attach(false)
+	observer, replay, err := session.Attach(false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestMain(m *testing.M) {
 func TestWindowsSessionStopPreservesWrapperCleanup(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "credentials-synchronized")
 	session := windowsSession(t, exec.Command(os.Args[0], "session-test-wrapper", marker))
-	observer, replay, err := session.Attach(false)
+	observer, replay, err := session.Attach(false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestWindowsSessionStopPreservesWrapperCleanup(t *testing.T) {
 
 func TestWindowsConsoleOutputModeAndSize(t *testing.T) {
 	session := windowsSession(t, exec.Command(os.Args[0], "session-test-output"))
-	observer, replay, err := session.Attach(false)
+	observer, replay, err := session.Attach(false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

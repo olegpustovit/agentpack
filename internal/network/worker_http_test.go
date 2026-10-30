@@ -392,3 +392,45 @@ func TestClosingLocalTerminalStopsWorker(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkerAttachResumesFromSince(t *testing.T) {
+	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment), offset: 100, replay: []byte("abcdefgh")}
+	server := testWorkerServer(t, session)
+	headers := http.Header{"Authorization": []string{"Bearer " + workerTestSecret}}
+	for _, test := range []struct {
+		query  string
+		offset uint64
+		data   string
+	}{
+		{"?since=103", 103, "defgh"},
+		{"?since=50", 100, "abcdefgh"},
+		{"?since=bogus", 100, "abcdefgh"},
+	} {
+		connection, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/attach"+test.query, headers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var attached, complete terminalNotice
+		_, notice, err := connection.ReadMessage()
+		if err == nil {
+			err = json.Unmarshal(notice, &attached)
+		}
+		_, replay, readErr := connection.ReadMessage()
+		if readErr == nil {
+			_, notice, readErr = connection.ReadMessage()
+		}
+		if readErr == nil {
+			readErr = json.Unmarshal(notice, &complete)
+		}
+		connection.Close()
+		if err != nil || readErr != nil {
+			t.Fatalf("%s: %v %v", test.query, err, readErr)
+		}
+		if attached.Type != "attached" || attached.Offset != test.offset || string(replay) != test.data {
+			t.Fatalf("%s: attached offset %d data %q, want offset %d data %q", test.query, attached.Offset, replay, test.offset, test.data)
+		}
+		if complete.Type != "replay_complete" || complete.Offset != test.offset+uint64(len(test.data)) {
+			t.Fatalf("%s: replay_complete %+v", test.query, complete)
+		}
+	}
+}

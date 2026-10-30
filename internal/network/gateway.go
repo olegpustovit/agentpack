@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -365,7 +366,11 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session unavailable", 404)
 		return
 	}
-	worker, err := attachWorker(r.Context(), record, false)
+	since, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
+	if err != nil {
+		since = 0
+	}
+	worker, err := attachWorker(r.Context(), record, false, since)
 	if err != nil {
 		http.Error(w, "session unavailable", 502)
 		return

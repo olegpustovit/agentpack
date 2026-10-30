@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -248,7 +249,9 @@ type terminalNotice struct {
 }
 
 func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *http.Request) {
-	attachment, replay, err := session.Attach(r.Header.Get("X-Agentpack-Local-Terminal") == "1")
+	// A missing or malformed resume point replays the whole buffer.
+	since, _ := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
+	attachment, replay, err := session.Attach(r.Header.Get("X-Agentpack-Local-Terminal") == "1", since)
 	if err != nil {
 		http.Error(w, "terminal cannot accept another attachment", http.StatusConflict)
 		return

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -186,13 +187,13 @@ func StartWorker(ctx context.Context, home, executable string, launch WorkerLaun
 	}
 }
 
-func attachWorker(ctx context.Context, record WorkerRecord, local bool) (*websocket.Conn, error) {
+func attachWorker(ctx context.Context, record WorkerRecord, local bool, since uint64) (*websocket.Conn, error) {
 	headers := http.Header{"Authorization": []string{"Bearer " + record.Secret}}
 	if local {
 		headers.Set("X-Agentpack-Local-Terminal", "1")
 	}
 	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
-	connection, response, err := dialer.DialContext(ctx, "ws://"+record.Address+"/attach", headers)
+	connection, response, err := dialer.DialContext(ctx, "ws://"+record.Address+"/attach?since="+strconv.FormatUint(since, 10), headers)
 	if response != nil && response.Body != nil {
 		response.Body.Close()
 	}

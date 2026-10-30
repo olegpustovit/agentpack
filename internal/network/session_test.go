@@ -66,7 +66,7 @@ func testSession(t *testing.T) *Session {
 
 func attachTest(t *testing.T, session *Session, local bool) (*Attachment, Replay) {
 	t.Helper()
-	attachment, replay, err := session.Attach(local)
+	attachment, replay, err := session.Attach(local, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestSessionSerializesConcurrentLocalAndBrowserInput(t *testing.T) {
 
 func TestSlowObserverAndBoundedReplay(t *testing.T) {
 	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment)}
-	slow, _, err := session.Attach(false)
+	slow, _, err := session.Attach(false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestSlowObserverAndBoundedReplay(t *testing.T) {
 		t.Fatal("disconnected observer kept responder slot")
 	}
 	session.Detach(slow) // Idempotent even after eviction.
-	fresh, replay, err := session.Attach(false)
+	fresh, replay, err := session.Attach(false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestSessionValidatesBeforeSpawn(t *testing.T) {
 func TestObserverRetainsTinyOutputBursts(t *testing.T) {
 	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment)}
 	for _, local := range []bool{false, true} {
-		attachment, _, err := session.Attach(local)
+		attachment, _, err := session.Attach(local, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -300,5 +300,27 @@ func TestObserverRetainsTinyOutputBursts(t *testing.T) {
 			t.Fatal("burst was disconnected, dropped, or reordered")
 		}
 		session.Detach(attachment)
+	}
+}
+
+func TestAttachReplayResumesWithinWindow(t *testing.T) {
+	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment), offset: 100, replay: []byte("abcdefgh")}
+	for _, test := range []struct {
+		since, offset uint64
+		data          string
+	}{
+		{103, 103, "defgh"},    // inside the window: only newer bytes
+		{108, 108, ""},         // at the live edge: nothing to replay
+		{50, 100, "abcdefgh"},  // evicted: whole buffer at its real offset
+		{200, 100, "abcdefgh"}, // ahead of the stream: whole buffer
+	} {
+		attachment, replay, err := session.Attach(false, test.since)
+		if err != nil {
+			t.Fatal(err)
+		}
+		session.Detach(attachment)
+		if replay.Offset != test.offset || string(replay.Data) != test.data {
+			t.Fatalf("since %d: got offset %d data %q, want offset %d data %q", test.since, replay.Offset, replay.Data, test.offset, test.data)
+		}
 	}
 }

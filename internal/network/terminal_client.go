@@ -36,7 +36,7 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 	if err != nil {
 		return 1, err
 	}
-	connection, err := attachWorker(ctx, record, true)
+	connection, err := attachWorker(ctx, record, true, 0)
 	if err != nil {
 		return 1, err
 	}
@@ -243,5 +243,5 @@ func tryReattach(ctx context.Context, record WorkerRecord) (*websocket.Conn, err
 	if state.Restarting {
 		return nil, errWorkerBusy
 	}
-	return attachWorker(ctx, record, true)
+	return attachWorker(ctx, record, true, 0)
 }

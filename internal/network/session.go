@@ -128,7 +128,8 @@ func (session *Session) MarkRestarting() error {
 
 // Attach atomically captures history and subscribes to all subsequent bytes.
 // Only the private local transport may identify an attachment as local.
-func (session *Session) Attach(local bool) (*Attachment, Replay, error) {
+// Replay starts at since while that byte is still buffered; otherwise it is the whole buffer.
+func (session *Session) Attach(local bool, since uint64) (*Attachment, Replay, error) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	if len(session.attachments) >= maxAttachments {
@@ -149,7 +150,11 @@ func (session *Session) Attach(local bool) (*Attachment, Replay, error) {
 	if !session.state.Running {
 		close(output)
 	}
-	return attachment, Replay{Offset: session.offset, Data: bytes.Clone(session.replay)}, nil
+	replay := Replay{Offset: session.offset, Data: bytes.Clone(session.replay)}
+	if end := session.offset + uint64(len(session.replay)); since >= session.offset && since <= end {
+		replay = Replay{Offset: since, Data: bytes.Clone(session.replay[since-session.offset:])}
+	}
+	return attachment, replay, nil
 }
 
 func (session *Session) Detach(attachment *Attachment) {

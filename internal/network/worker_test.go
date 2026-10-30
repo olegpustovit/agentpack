@@ -81,7 +81,7 @@ func TestRunWorkerCancellationDrainsCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	connection, err := attachWorker(context.Background(), record, true)
+	connection, err := attachWorker(context.Background(), record, true, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 	}
 	attach := func() *websocket.Conn {
 		t.Helper()
-		connection, err := attachWorker(ctx, record, true)
+		connection, err := attachWorker(ctx, record, true, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -253,7 +253,7 @@ func runFastExitWorker(t *testing.T, restart bool) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		connection, err := attachWorker(ctx, record, true)
+		connection, err := attachWorker(ctx, record, true, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -295,7 +295,7 @@ func runFastExitWorker(t *testing.T, restart bool) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	connection, err := attachWorker(ctx, record, true)
+	connection, err := attachWorker(ctx, record, true, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

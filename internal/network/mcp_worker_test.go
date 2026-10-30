@@ -51,7 +51,7 @@ func TestMCPWorkerOutputAndSharedInput(t *testing.T) {
 		}
 	}
 	for range maxAttachments - 1 {
-		if _, _, err := session.Attach(false); err != nil {
+		if _, _, err := session.Attach(false, 0); err != nil {
 			t.Fatal("could not fill observer limit for MCP input test:", err)
 		}
 	}
