@@ -305,10 +305,14 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 		proxy.Transport = tailnetMutationTransport
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+		w.Header().Set("Cache-Control", "no-store")
 		http.Error(w, "remote node connection failed", 502)
 	}
 	proxy.ModifyResponse = func(response *http.Response) error {
 		response.Header.Del("Set-Cookie")
+		if response.Header.Get("Cache-Control") == "" {
+			response.Header.Set("Cache-Control", "no-store")
+		}
 		if response.StatusCode == http.StatusSwitchingProtocols {
 			private := r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1
 			go func() {

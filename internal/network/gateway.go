@@ -270,6 +270,7 @@ func (g *Gateway) Handler() http.Handler {
 	if g.options.Assets != nil {
 		mux.Handle("/", g.options.Assets)
 	}
+	api := conditionalAPI(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if p := r.URL.Path; strings.HasPrefix(p, "/api/") || isMCPPath(p) {
 			w.Header().Set("Cache-Control", "no-store")
@@ -301,10 +302,11 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 		if nodeID := r.URL.Query().Get("node"); nodeID != "" && strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Del("Cache-Control") // the peer's Cache-Control passes through unchanged
 			g.proxyTailnet(w, r, nodeID)
 			return
 		}
-		mux.ServeHTTP(w, r)
+		api.ServeHTTP(w, r)
 	})
 }
 
