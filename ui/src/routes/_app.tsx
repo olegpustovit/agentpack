@@ -1,5 +1,6 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router"
 import { statusQuery } from "@/features/status/queries"
+import { EventsProvider } from "@/features/events/use-events"
 
 export const Route = createFileRoute("/_app")({
   beforeLoad: async ({ context }) => {
@@ -7,8 +8,10 @@ export const Route = createFileRoute("/_app")({
     if (!status.authenticated) throw redirect({ to: "/login", search: { return_to: undefined } })
   },
   component: () => (
-    <div>
-      <Outlet />
-    </div>
+    <EventsProvider>
+      <div>
+        <Outlet />
+      </div>
+    </EventsProvider>
   ),
 })

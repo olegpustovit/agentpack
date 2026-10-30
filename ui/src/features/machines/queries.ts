@@ -3,6 +3,7 @@ import { queryOptions, useQueries, useQuery, type UseQueryOptions } from "@tanst
 import { z } from "zod"
 import { ApiError, LOCAL, api } from "@/lib/api"
 import type { Identity, TailnetNode, Topology } from "@/lib/api-types"
+import { useEventsConnected } from "@/features/events/use-events"
 
 export type Machine = { id: string; name: string; online: boolean }
 
@@ -12,12 +13,13 @@ export const identityQuery = queryOptions({
   staleTime: 60 * 60 * 1000,
 })
 
-export const nodesQuery = queryOptions({
-  queryKey: ["nodes"],
-  queryFn: () => api<TailnetNode[]>("/api/nodes"),
-  staleTime: 30 * 1000,
-  refetchInterval: 30 * 1000,
-})
+export const nodesQuery = (live: boolean) =>
+  queryOptions({
+    queryKey: ["nodes"],
+    queryFn: () => api<TailnetNode[]>("/api/nodes"),
+    staleTime: 30 * 1000,
+    refetchInterval: live ? false : 30 * 1000,
+  })
 
 const topologySchema = z.object({
   self: z.object({ id: z.string(), name: z.string(), os: z.string(), relay: z.string() }),
@@ -36,34 +38,36 @@ const topologySchema = z.object({
   ),
 })
 
-export const topologyQuery = queryOptions({
-  queryKey: ["topology"],
-  queryFn: async (): Promise<Topology> => topologySchema.parse(await api<unknown>("/api/topology")),
-  staleTime: 15 * 1000,
-  refetchInterval: 15 * 1000,
-})
+export const topologyQuery = (live: boolean) =>
+  queryOptions({
+    queryKey: ["topology"],
+    queryFn: async (): Promise<Topology> => topologySchema.parse(await api<unknown>("/api/topology")),
+    staleTime: 15 * 1000,
+    refetchInterval: live ? false : 15 * 1000,
+  })
 
 // Machines seen in this tab. Module state is per tab and resets on reload.
 // shortcut: no persistence across reloads, upgrade if offline machines must survive a reload.
 const seen = new Map<string, Machine>()
 
 export function useMachines(): Machine[] {
+  const live = useEventsConnected()
   const identity = useQuery(identityQuery).data
-  const nodes = useQuery(nodesQuery).data
-  const live: Machine[] = []
-  if (identity) live.push({ id: LOCAL, name: identity.node.name, online: true })
+  const nodes = useQuery(nodesQuery(live)).data
+  const found: Machine[] = []
+  if (identity) found.push({ id: LOCAL, name: identity.node.name, online: true })
   for (const node of nodes ?? []) {
     if (identity && node.id === identity.node.id) continue
-    live.push({ id: node.id, name: node.name, online: node.online })
+    found.push({ id: node.id, name: node.name, online: node.online })
   }
   useEffect(() => {
-    for (const machine of live) seen.set(machine.id, machine)
+    for (const machine of found) seen.set(machine.id, machine)
   })
-  const liveIds = new Set(live.map((machine) => machine.id))
+  const foundIds = new Set(found.map((machine) => machine.id))
   const offline = [...seen.values()]
-    .filter((machine) => !liveIds.has(machine.id))
+    .filter((machine) => !foundIds.has(machine.id))
     .map((machine) => ({ ...machine, online: false }))
-  return [...live, ...offline]
+  return [...found, ...offline]
 }
 
 export type MachineQuery<T> = {
@@ -85,11 +89,12 @@ export type MachineQueries<T> = {
 
 // One query per machine, built from a section-2 factory. Offline machines are disabled.
 export function useMachineQueries<T>(
-  factory: (machine: string) => UseQueryOptions<T, Error, T, string[]>,
+  factory: (machine: string, live: boolean) => UseQueryOptions<T, Error, T, string[]>,
 ): MachineQueries<T> {
+  const live = useEventsConnected()
   const machines = useMachines()
   return useQueries({
-    queries: machines.map((machine) => ({ ...factory(machine.id), enabled: machine.online })),
+    queries: machines.map((machine) => ({ ...factory(machine.id, live), enabled: machine.online })),
     combine: (results): MachineQueries<T> => {
       const byMachine: Record<string, MachineQuery<T>> = {}
       const errors: Record<string, Error> = {}

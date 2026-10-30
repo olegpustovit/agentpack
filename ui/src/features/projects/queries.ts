@@ -49,11 +49,11 @@ const projectRowSchema = z.object({
   error: z.string(),
 })
 
-export const projectsQuery = (machine: string) =>
+export const projectsQuery = (machine: string, live: boolean) =>
   queryOptions({
     queryKey: ["m", machine, "projects"],
     queryFn: async (): Promise<ProjectRow[]> =>
       z.array(projectRowSchema).parse(await api<unknown>("/api/projects", { machine })),
     staleTime: 5 * 60 * 1000,
-    refetchInterval: 60 * 1000,
+    refetchInterval: live ? false : 60 * 1000,
   })
