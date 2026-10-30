@@ -90,7 +90,7 @@ ui-build: ui-install
 ui-stage: ui-build
 	cd ui && bun scripts/stage.ts
 
-ui-e2e: ui-install
+ui-e2e: ui-build
 	cd ui && bun run e2e
 
 artifact: ui-stage build

@@ -9,27 +9,353 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as IndexRouteImport } from './routes/index'
+import { Route as AppRouteImport } from './routes/_app'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as AppLimitsRouteImport } from './routes/_app/limits'
+import { Route as AppLibraryIndexRouteImport } from './routes/_app/library/index'
+import { Route as AppMachinesIndexRouteImport } from './routes/_app/machines/index'
+import { Route as AppMachinesMachineRouteImport } from './routes/_app/machines/$machine'
+import { Route as AppMachinesTopologyRouteImport } from './routes/_app/machines/topology'
+import { Route as AppSessionsIndexRouteImport } from './routes/_app/sessions/index'
+import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/index'
+import { Route as AppSettingsPaneRouteImport } from './routes/_app/settings/$pane'
+import { Route as AppLibraryAgentpackIdRouteImport } from './routes/_app/library/agentpack/$id'
+import { Route as AppLibraryMcpNameRouteImport } from './routes/_app/library/mcp/$name'
+import { Route as AppLibraryPackageSplatRouteImport } from './routes/_app/library/package/$'
+import { Route as AppSessionsMachineSessionIdRouteImport } from './routes/_app/sessions/$machine/$sessionId'
 
-export interface FileRoutesByFullPath {}
-export interface FileRoutesByTo {}
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppRoute = AppRouteImport.update({
+  id: '/_app',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppLimitsRoute = AppLimitsRouteImport.update({
+  id: '/limits',
+  path: '/limits',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppLibraryIndexRoute = AppLibraryIndexRouteImport.update({
+  id: '/library/',
+  path: '/library/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppMachinesIndexRoute = AppMachinesIndexRouteImport.update({
+  id: '/machines/',
+  path: '/machines/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppMachinesMachineRoute = AppMachinesMachineRouteImport.update({
+  id: '/machines/$machine',
+  path: '/machines/$machine',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppMachinesTopologyRoute = AppMachinesTopologyRouteImport.update({
+  id: '/machines/topology',
+  path: '/machines/topology',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSessionsIndexRoute = AppSessionsIndexRouteImport.update({
+  id: '/sessions/',
+  path: '/sessions/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
+  id: '/settings/',
+  path: '/settings/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsPaneRoute = AppSettingsPaneRouteImport.update({
+  id: '/settings/$pane',
+  path: '/settings/$pane',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppLibraryAgentpackIdRoute = AppLibraryAgentpackIdRouteImport.update({
+  id: '/library/agentpack/$id',
+  path: '/library/agentpack/$id',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppLibraryMcpNameRoute = AppLibraryMcpNameRouteImport.update({
+  id: '/library/mcp/$name',
+  path: '/library/mcp/$name',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppLibraryPackageSplatRoute = AppLibraryPackageSplatRouteImport.update({
+  id: '/library/package/$',
+  path: '/library/package/$',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSessionsMachineSessionIdRoute =
+  AppSessionsMachineSessionIdRouteImport.update({
+    id: '/sessions/$machine/$sessionId',
+    path: '/sessions/$machine/$sessionId',
+    getParentRoute: () => AppRoute,
+  } as any)
+
+export interface FileRoutesByFullPath {
+  '/': typeof IndexRoute
+  '/login': typeof LoginRoute
+  '/limits': typeof AppLimitsRoute
+  '/machines/$machine': typeof AppMachinesMachineRoute
+  '/machines/topology': typeof AppMachinesTopologyRoute
+  '/settings/$pane': typeof AppSettingsPaneRoute
+  '/library/': typeof AppLibraryIndexRoute
+  '/machines/': typeof AppMachinesIndexRoute
+  '/sessions/': typeof AppSessionsIndexRoute
+  '/settings/': typeof AppSettingsIndexRoute
+  '/library/agentpack/$id': typeof AppLibraryAgentpackIdRoute
+  '/library/mcp/$name': typeof AppLibraryMcpNameRoute
+  '/library/package/$': typeof AppLibraryPackageSplatRoute
+  '/sessions/$machine/$sessionId': typeof AppSessionsMachineSessionIdRoute
+}
+export interface FileRoutesByTo {
+  '/': typeof IndexRoute
+  '/login': typeof LoginRoute
+  '/limits': typeof AppLimitsRoute
+  '/machines/$machine': typeof AppMachinesMachineRoute
+  '/machines/topology': typeof AppMachinesTopologyRoute
+  '/settings/$pane': typeof AppSettingsPaneRoute
+  '/library': typeof AppLibraryIndexRoute
+  '/machines': typeof AppMachinesIndexRoute
+  '/sessions': typeof AppSessionsIndexRoute
+  '/settings': typeof AppSettingsIndexRoute
+  '/library/agentpack/$id': typeof AppLibraryAgentpackIdRoute
+  '/library/mcp/$name': typeof AppLibraryMcpNameRoute
+  '/library/package/$': typeof AppLibraryPackageSplatRoute
+  '/sessions/$machine/$sessionId': typeof AppSessionsMachineSessionIdRoute
+}
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
+  '/': typeof IndexRoute
+  '/_app': typeof AppRouteWithChildren
+  '/login': typeof LoginRoute
+  '/_app/limits': typeof AppLimitsRoute
+  '/_app/machines/$machine': typeof AppMachinesMachineRoute
+  '/_app/machines/topology': typeof AppMachinesTopologyRoute
+  '/_app/settings/$pane': typeof AppSettingsPaneRoute
+  '/_app/library/': typeof AppLibraryIndexRoute
+  '/_app/machines/': typeof AppMachinesIndexRoute
+  '/_app/sessions/': typeof AppSessionsIndexRoute
+  '/_app/settings/': typeof AppSettingsIndexRoute
+  '/_app/library/agentpack/$id': typeof AppLibraryAgentpackIdRoute
+  '/_app/library/mcp/$name': typeof AppLibraryMcpNameRoute
+  '/_app/library/package/$': typeof AppLibraryPackageSplatRoute
+  '/_app/sessions/$machine/$sessionId': typeof AppSessionsMachineSessionIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: never
+  fullPaths:
+    | '/'
+    | '/login'
+    | '/limits'
+    | '/machines/$machine'
+    | '/machines/topology'
+    | '/settings/$pane'
+    | '/library/'
+    | '/machines/'
+    | '/sessions/'
+    | '/settings/'
+    | '/library/agentpack/$id'
+    | '/library/mcp/$name'
+    | '/library/package/$'
+    | '/sessions/$machine/$sessionId'
   fileRoutesByTo: FileRoutesByTo
-  to: never
-  id: '__root__'
+  to:
+    | '/'
+    | '/login'
+    | '/limits'
+    | '/machines/$machine'
+    | '/machines/topology'
+    | '/settings/$pane'
+    | '/library'
+    | '/machines'
+    | '/sessions'
+    | '/settings'
+    | '/library/agentpack/$id'
+    | '/library/mcp/$name'
+    | '/library/package/$'
+    | '/sessions/$machine/$sessionId'
+  id:
+    | '__root__'
+    | '/'
+    | '/_app'
+    | '/login'
+    | '/_app/limits'
+    | '/_app/machines/$machine'
+    | '/_app/machines/topology'
+    | '/_app/settings/$pane'
+    | '/_app/library/'
+    | '/_app/machines/'
+    | '/_app/sessions/'
+    | '/_app/settings/'
+    | '/_app/library/agentpack/$id'
+    | '/_app/library/mcp/$name'
+    | '/_app/library/package/$'
+    | '/_app/sessions/$machine/$sessionId'
   fileRoutesById: FileRoutesById
 }
-export interface RootRouteChildren {}
-
-declare module '@tanstack/react-router' {
-  interface FileRoutesByPath {}
+export interface RootRouteChildren {
+  IndexRoute: typeof IndexRoute
+  AppRoute: typeof AppRouteWithChildren
+  LoginRoute: typeof LoginRoute
 }
 
-const rootRouteChildren: RootRouteChildren = {}
+declare module '@tanstack/react-router' {
+  interface FileRoutesByPath {
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_app': {
+      id: '/_app'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_app/limits': {
+      id: '/_app/limits'
+      path: '/limits'
+      fullPath: '/limits'
+      preLoaderRoute: typeof AppLimitsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/library/': {
+      id: '/_app/library/'
+      path: '/library'
+      fullPath: '/library/'
+      preLoaderRoute: typeof AppLibraryIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/machines/': {
+      id: '/_app/machines/'
+      path: '/machines'
+      fullPath: '/machines/'
+      preLoaderRoute: typeof AppMachinesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/machines/$machine': {
+      id: '/_app/machines/$machine'
+      path: '/machines/$machine'
+      fullPath: '/machines/$machine'
+      preLoaderRoute: typeof AppMachinesMachineRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/machines/topology': {
+      id: '/_app/machines/topology'
+      path: '/machines/topology'
+      fullPath: '/machines/topology'
+      preLoaderRoute: typeof AppMachinesTopologyRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/sessions/': {
+      id: '/_app/sessions/'
+      path: '/sessions'
+      fullPath: '/sessions/'
+      preLoaderRoute: typeof AppSessionsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings/': {
+      id: '/_app/settings/'
+      path: '/settings'
+      fullPath: '/settings/'
+      preLoaderRoute: typeof AppSettingsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings/$pane': {
+      id: '/_app/settings/$pane'
+      path: '/settings/$pane'
+      fullPath: '/settings/$pane'
+      preLoaderRoute: typeof AppSettingsPaneRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/library/agentpack/$id': {
+      id: '/_app/library/agentpack/$id'
+      path: '/library/agentpack/$id'
+      fullPath: '/library/agentpack/$id'
+      preLoaderRoute: typeof AppLibraryAgentpackIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/library/mcp/$name': {
+      id: '/_app/library/mcp/$name'
+      path: '/library/mcp/$name'
+      fullPath: '/library/mcp/$name'
+      preLoaderRoute: typeof AppLibraryMcpNameRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/library/package/$': {
+      id: '/_app/library/package/$'
+      path: '/library/package/$'
+      fullPath: '/library/package/$'
+      preLoaderRoute: typeof AppLibraryPackageSplatRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/sessions/$machine/$sessionId': {
+      id: '/_app/sessions/$machine/$sessionId'
+      path: '/sessions/$machine/$sessionId'
+      fullPath: '/sessions/$machine/$sessionId'
+      preLoaderRoute: typeof AppSessionsMachineSessionIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+  }
+}
+
+interface AppRouteChildren {
+  AppLimitsRoute: typeof AppLimitsRoute
+  AppMachinesMachineRoute: typeof AppMachinesMachineRoute
+  AppMachinesTopologyRoute: typeof AppMachinesTopologyRoute
+  AppSettingsPaneRoute: typeof AppSettingsPaneRoute
+  AppLibraryIndexRoute: typeof AppLibraryIndexRoute
+  AppMachinesIndexRoute: typeof AppMachinesIndexRoute
+  AppSessionsIndexRoute: typeof AppSessionsIndexRoute
+  AppSettingsIndexRoute: typeof AppSettingsIndexRoute
+  AppLibraryAgentpackIdRoute: typeof AppLibraryAgentpackIdRoute
+  AppLibraryMcpNameRoute: typeof AppLibraryMcpNameRoute
+  AppLibraryPackageSplatRoute: typeof AppLibraryPackageSplatRoute
+  AppSessionsMachineSessionIdRoute: typeof AppSessionsMachineSessionIdRoute
+}
+
+const AppRouteChildren: AppRouteChildren = {
+  AppLimitsRoute: AppLimitsRoute,
+  AppMachinesMachineRoute: AppMachinesMachineRoute,
+  AppMachinesTopologyRoute: AppMachinesTopologyRoute,
+  AppSettingsPaneRoute: AppSettingsPaneRoute,
+  AppLibraryIndexRoute: AppLibraryIndexRoute,
+  AppMachinesIndexRoute: AppMachinesIndexRoute,
+  AppSessionsIndexRoute: AppSessionsIndexRoute,
+  AppSettingsIndexRoute: AppSettingsIndexRoute,
+  AppLibraryAgentpackIdRoute: AppLibraryAgentpackIdRoute,
+  AppLibraryMcpNameRoute: AppLibraryMcpNameRoute,
+  AppLibraryPackageSplatRoute: AppLibraryPackageSplatRoute,
+  AppSessionsMachineSessionIdRoute: AppSessionsMachineSessionIdRoute,
+}
+
+const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
+
+const rootRouteChildren: RootRouteChildren = {
+  IndexRoute: IndexRoute,
+  AppRoute: AppRouteWithChildren,
+  LoginRoute: LoginRoute,
+}
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
