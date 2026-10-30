@@ -262,6 +262,11 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		respond(w, map[string]bool{"stopped": err == nil}, err)
 	})
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"not found"}` + "\n"))
+	})
 	if g.options.Assets != nil {
 		mux.Handle("/", g.options.Assets)
 	}
@@ -295,7 +300,7 @@ func (g *Gateway) Handler() http.Handler {
 			http.Error(w, "login required", 401)
 			return
 		}
-		if nodeID := r.URL.Query().Get("node"); nodeID != "" {
+		if nodeID := r.URL.Query().Get("node"); nodeID != "" && strings.HasPrefix(r.URL.Path, "/api/") {
 			g.proxyTailnet(w, r, nodeID)
 			return
 		}

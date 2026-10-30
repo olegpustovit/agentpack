@@ -114,3 +114,31 @@ func TestGatewayPackageRestartChoice(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewayPeerProxyOnlyForAPIAndUnknownAPIIsJSON404(t *testing.T) {
+	auth, err := newGatewayAuth(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin, _ := url.Parse("https://agentpack.example")
+	local := nodeRecord{Secret: strings.Repeat("x", 64)}
+	gateway := &Gateway{auth: auth, origin: origin, local: local, options: GatewayOptions{Home: t.TempDir(), Assets: webAssets(testWebFiles())}, stop: func() {}}
+	handler := gateway.Handler()
+	serve := func(path string, withSecret bool) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest("GET", "https://agentpack.example"+path, nil)
+		if withSecret {
+			r.Header.Set("Authorization", "Bearer "+local.Secret)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	if w := serve("/sessions?node=x", false); w.Code != 200 || w.Body.String() != "<html>app</html>" {
+		t.Fatalf("/sessions?node=x: %d %q", w.Code, w.Body.String())
+	}
+	w := serve("/api/nope", true)
+	if w.Code != 404 || w.Header().Get("Content-Type") != "application/json" || w.Body.String() != "{\"error\":\"not found\"}\n" {
+		t.Fatalf("/api/nope: %d %q %q", w.Code, w.Header().Get("Content-Type"), w.Body.String())
+	}
+}
