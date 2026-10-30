@@ -337,13 +337,19 @@ async function loadLimits(refresh = false) {
   button.disabled = true;
   $("limits-body").setAttribute("aria-busy", "true");
   $("limits-status").textContent = refresh ? "Refreshing all connected machines…" : "Checking connected machines…";
-  const online = machines().filter(machine => machine.online !== false);
-  const results = await Promise.allSettled(online.map(machine => refresh ? api("/api/limits/refresh", {}, "POST", machine.id) : api("/api/limits", void 0, "GET", machine.id)));
-  renderLimits(results.map((result, index) => ({ node: online[index].name, snapshots: result.status === "fulfilled" ? list(result.value, "limits") : [], error: result.status === "rejected" ? result.reason.message : "" })));
-  $("limits-status").textContent = `Checked ${online.length} ${online.length === 1 ? "machine" : "machines"} · Updates every minute`;
-  $("limits-body").setAttribute("aria-busy", "false");
-  button.disabled = false;
-  limitsLoading = false;
+  try {
+    const peers = list(await api("/api/nodes", void 0, "GET", ""), "nodes");
+    const online = [{id:"", name:"Gateway machine", online:true}, ...peers].filter(machine => machine.online !== false);
+    const results = await Promise.allSettled(online.map(machine => refresh ? api("/api/limits/refresh", {}, "POST", machine.id) : api("/api/limits", void 0, "GET", machine.id)));
+    renderLimits(results.map((result, index) => ({ node: online[index].name, snapshots: result.status === "fulfilled" ? list(result.value, "limits") : [], error: result.status === "rejected" ? result.reason.message : "" })));
+    $("limits-status").textContent = `Checked ${online.length} ${online.length === 1 ? "machine" : "machines"} · Updates every minute`;
+  } catch (error) {
+    $("limits-status").textContent = `Machine discovery failed: ${error.message}. Refresh to retry.`;
+  } finally {
+    $("limits-body").setAttribute("aria-busy", "false");
+    button.disabled = false;
+    limitsLoading = false;
+  }
 }
 function relativeUntil(ms) {
   const minutes = Math.round(ms / 60000);

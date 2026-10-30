@@ -1,7 +1,11 @@
 package grok
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -42,5 +46,34 @@ func TestParseBillingLiveShape(t *testing.T) {
 	}
 	if tier != "SuperGrok" || *windows[0].UsedPercent != 86 || *windows[0].RemainingPercent != 14 || windows[0].ResetAt == nil {
 		t.Fatalf("tier=%q window=%+v", tier, windows[0])
+	}
+}
+
+func TestReadLimitsUsesSharedAgentpackCredentials(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("AGENTPACK_HOME", home)
+	t.Setenv("GROK_HOME", "")
+	shared := filepath.Join(home, "shared", "grok")
+	if err := os.MkdirAll(shared, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, "auth.json"), []byte(`{"token":"fixture"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "grok")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+[ -f "$GROK_HOME/auth.json" ] || exit 1
+printf '%s\n' '{"id":2,"result":{"config":{"creditUsagePercent":25}}}'
+`), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GROK_PATH", script)
+	snapshot := ReadLimits(context.Background())
+	if snapshot.State != "available" || len(snapshot.Windows) != 1 {
+		t.Fatalf("snapshot=%+v", snapshot)
 	}
 }

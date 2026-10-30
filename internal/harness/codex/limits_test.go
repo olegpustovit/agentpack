@@ -1,7 +1,11 @@
 package codex
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -55,5 +59,34 @@ func TestLimitWindowsFallsBackToSingleBucket(t *testing.T) {
 	windows, _ := limitWindows(usage)
 	if len(windows) != 1 || *windows[0].UsedPercent != 100 || *windows[0].RemainingPercent != 0 {
 		t.Fatalf("windows = %+v", windows)
+	}
+}
+
+func TestReadLimitsUsesSharedAgentpackCredentials(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("AGENTPACK_HOME", home)
+	t.Setenv("CODEX_HOME", "")
+	shared := filepath.Join(home, "shared", "codex")
+	if err := os.MkdirAll(shared, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, "auth.json"), []byte(`{"access_token":"fixture"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+[ -f "$CODEX_HOME/auth.json" ] || exit 1
+printf '%s\n' '{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":25}}}}'
+`), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_PATH", script)
+	snapshot := ReadLimits(context.Background(), "")
+	if snapshot.State != "available" || len(snapshot.Windows) != 1 {
+		t.Fatalf("snapshot=%+v", snapshot)
 	}
 }

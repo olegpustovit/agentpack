@@ -48,6 +48,19 @@ func ReadLimits(ctx context.Context) base.LimitSnapshot {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, exe, "agent", "stdio")
 	cmd.Env = os.Environ()
+	if os.Getenv("GROK_HOME") == "" {
+		home, err := os.MkdirTemp("", "agentpack-grok-limits-")
+		if err != nil {
+			snapshot.Error = "create limits home: " + err.Error()
+			return snapshot
+		}
+		defer os.RemoveAll(home)
+		if err := loadSharedCredentials(home); err != nil {
+			snapshot.Error = "prepare limits credentials: " + err.Error()
+			return snapshot
+		}
+		cmd.Env = append(cmd.Env, "GROK_HOME="+home)
+	}
 	cmd.Stderr = io.Discard
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

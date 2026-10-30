@@ -49,7 +49,7 @@ type rateLimitsResponse struct {
 }
 
 // ReadLimits asks the authenticated Codex app-server for account rate limits. It uses the
-// user's existing login (CODEX_HOME or ~/.codex) and sends no inference turns.
+// user's existing login, including Agentpack's shared auth store, and sends no inference turns.
 func ReadLimits(ctx context.Context, codexHome string) base.LimitSnapshot {
 	snapshot := base.LimitSnapshot{Harness: "codex", State: base.LimitStateError, Source: limitsSource, ObservedAt: time.Now().UTC()}
 	exe, err := base.LookPathEnv("CODEX_PATH", "codex")
@@ -57,6 +57,28 @@ func ReadLimits(ctx context.Context, codexHome string) base.LimitSnapshot {
 		snapshot.State = base.LimitStateUnsupported
 		snapshot.Error = "codex CLI not found"
 		return snapshot
+	}
+	if codexHome == "" && os.Getenv("CODEX_HOME") == "" {
+		var err error
+		codexHome, err = os.MkdirTemp("", "agentpack-codex-limits-")
+		if err != nil {
+			snapshot.Error = "create limits home: " + err.Error()
+			return snapshot
+		}
+		defer os.RemoveAll(codexHome)
+		native, ok := nativeHome()
+		if !ok {
+			snapshot.Error = "cannot locate Codex credentials"
+			return snapshot
+		}
+		if err := prepareAuth(native, codexHome); err != nil {
+			snapshot.Error = "prepare limits credentials: " + err.Error()
+			return snapshot
+		}
+		if err := forceAuthFileStore(codexHome); err != nil {
+			snapshot.Error = "configure limits credentials: " + err.Error()
+			return snapshot
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()

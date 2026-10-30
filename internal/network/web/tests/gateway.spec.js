@@ -734,3 +734,21 @@ test("limits automatically prefers capable nodes and refreshes every source",asy
   await page.screenshot({path:`test-results/limits-mobile-${testInfo.project.name}.png`});
   expect(await page.locator("#limits-body").evaluate(el=>el.scrollWidth<=el.clientWidth)).toBeTruthy();
 });
+
+
+test("limits waits for mesh discovery when opened immediately",async({page})=>{
+  await mockAPI(page);
+  await page.route("**/api/nodes",async route=>{
+    await new Promise(resolve=>setTimeout(resolve,800));
+    await route.fulfill({json:[{id:"peer-1",name:"Kyiv grid",online:true}]});
+  });
+  await page.route("**/api/limits**",route=>{
+    const remote=new URL(route.request().url()).searchParams.get("node")==="peer-1";
+    return route.fulfill({json:{limits:[{harness:"codex",state:remote?"available":"unsupported",error:remote?undefined:"codex CLI not found",windows:remote?[{id:"weekly",label:"Weekly",remaining_percent:63}]:[]}]}});
+  });
+  await page.goto("/");
+  await page.getByRole("button",{name:"Limits",exact:true}).click();
+  await expect(page.locator("#limits-status")).toContainText("Checked 2 machines");
+  await expect(page.getByRole("meter",{name:"Weekly remaining"})).toHaveAttribute("aria-valuenow","63");
+  await expect(page.locator('[data-provider="codex"] .limit-report').first()).toContainText("Kyiv grid");
+});
