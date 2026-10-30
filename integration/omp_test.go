@@ -116,6 +116,9 @@ func TestOMPRealRuntimeWithPackHooksMCPAndLSP(t *testing.T) {
 	var hooks map[string]any = make(map[string]any)
 	for event, mode := range map[string]string{"SessionStart": "start", "UserPromptSubmit": "input", "PreToolUse": "pre", "PostToolUse": "post"} {
 		matcher := ""
+		if event == "SessionStart" {
+			matcher = "startup|resume"
+		}
 		if event == "PreToolUse" || event == "PostToolUse" {
 			matcher = "Bash"
 		}

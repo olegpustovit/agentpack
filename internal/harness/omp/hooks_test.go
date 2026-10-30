@@ -24,6 +24,12 @@ func TestHookRendererMapsLifecycleAndReportsPermissionDegradation(t *testing.T) 
 	if err != nil || output.Summary.Degraded != 1 {
 		t.Fatalf("permission hook: %#v %v", output, err)
 	}
+	hook.Event, hook.Matcher = hooks.PreCompact, "auto"
+	output, err = (HookRenderer{}).Render(hooks.Bundle{Hooks: []hooks.Hook{hook}}, hooks.RenderContext{})
+	if err != nil || output.Summary.Omitted != 1 || len(output.Files) != 0 {
+		t.Fatalf("unavailable lifecycle matcher must be omitted: %#v %v", output, err)
+	}
+
 }
 
 func TestHookBridgeExecutesResults(t *testing.T) {

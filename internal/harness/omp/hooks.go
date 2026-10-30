@@ -54,7 +54,11 @@ func (HookRenderer) Render(bundle hooks.Bundle, ctx hooks.RenderContext) (hooks.
 	var output hooks.RenderOutput
 	var entries []any
 	for _, hook := range bundle.Hooks {
-		keep, err := hooks.CheckSupport(base.OMP, hook, Support(hook.Event, hook.Handler), &output, "", "executed through an OMP extension")
+		support := Support(hook.Event, hook.Handler)
+		if (hook.Event == hooks.PreCompact || hook.Event == hooks.SessionEnd) && hook.Matcher != "" && hook.Matcher != "*" {
+			support = hooks.Support{Kind: hooks.Unsupported, Reason: "OMP does not expose the source/reason required by this lifecycle matcher"}
+		}
+		keep, err := hooks.CheckSupport(base.OMP, hook, support, &output, "", "executed through an OMP extension")
 		if err != nil {
 			return hooks.RenderOutput{}, err
 		}

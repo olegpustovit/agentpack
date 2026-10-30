@@ -54,10 +54,16 @@ Commands inherit the launch working directory. Native OMP hook modules in packag
 | PermissionRequest | `tool_call`: runs before every tool; allow preserves native approval, ask blocks |
 | PostToolUse / PostToolUseFailure | `tool_result`: success/failure filtering, output replacement, context |
 | UserPromptSubmit | `input` in TUI/RPC; `before_agent_start` in print/JSON: block or append context |
-| SessionStart | `session_start`: run commands and deliver context before the first agent turn |
+| SessionStart | `session_start`, session switches and compaction: run commands and deliver context before the next agent turn |
 | SessionEnd | `session_shutdown`: notification only |
 | Stop | `session_stop`: blocking requests a continuation |
 | PreCompact | `session.compacting`: add summary context; cannot cancel compaction |
+
+Session-start sources are inferred from native history (`startup`/`resume`) or
+session switches (`clear`/`resume`), with `compact` after compaction. An empty
+resumed history is treated as startup. OMP exposes no compaction source or
+shutdown reason, so filtered PreCompact/SessionEnd hooks are omitted with a
+warning rather than running outside their requested scope.
 
 Other canonical events produce omission diagnostics. Session notifications,
 permission timing and compaction cancellation differences produce degradation

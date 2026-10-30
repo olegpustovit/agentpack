@@ -38,7 +38,15 @@ assert.equal(invocations, count);
 response = {decision: "block", reason: "finish work"};
 assert.deepEqual(await handlers.get("session_stop")({}, ctx), {continue: true, additionalContext: "finish work"});
 response = "Startup guidance";
-await handlers.get("session_start")({source: "startup"}, ctx);
+await handlers.get("session_start")({type: "session_start"}, ctx);
+assert.equal(payload.source, "startup");
+ctx.sessionManager.getBranch = () => [{type: "message"}];
+await handlers.get("session_start")({type: "session_start"}, ctx);
+assert.equal(payload.source, "resume");
+await handlers.get("session_switch")({type: "session_switch", reason: "new"}, ctx);
+assert.equal(payload.source, "clear");
+await handlers.get("session_compact")({type: "session_compact"}, ctx);
+assert.equal(payload.source, "compact");
 assert.equal((await handlers.get("before_agent_start")({reason: "prompt"}, ctx)).message.content, "Startup guidance");
 assert.equal(await handlers.get("before_agent_start")({reason: "prompt"}, ctx), undefined);
 

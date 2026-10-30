@@ -52,7 +52,12 @@ async function run(entry, event, ctx, deadline) {
 export default function (pi) {
   let startupContext = "";
   for (const name of new Set(config.hooks.map(entry => entry.event))) {
-    pi.on(name, async (event, ctx) => {
+    const handle = async (event, ctx) => {
+      if (name === "session_start") {
+        const branch = ctx.sessionManager?.getBranch?.() ?? [];
+        const source = branch.some(entry => entry.type === "message") ? "resume" : "startup";
+        event = {...event, source: event.source ?? source};
+      }
       const output = {};
       const deadline = Date.now() + 25000;
       const context = [];
@@ -99,7 +104,12 @@ export default function (pi) {
         startupContext = additional;
       }
       return output;
-    });
+    };
+    pi.on(name, handle);
+    if (name === "session_start") {
+      pi.on("session_switch", (event, ctx) => handle({...event, reason: undefined, source: event.reason === "new" ? "clear" : "resume"}, ctx));
+      pi.on("session_compact", (event, ctx) => handle({...event, source: "compact"}, ctx));
+    }
   }
   pi.on("before_agent_start", async (event, ctx) => {
     if (event.reason === "revive") return;
