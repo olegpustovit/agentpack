@@ -25,7 +25,7 @@ import (
 type GatewayOptions struct {
 	Home, Address, PublicURL string
 	Start                    func(context.Context, SessionInfo) (string, error)
-	Packages                 func(context.Context, string) (any, error)
+	Packages                 func(context.Context, string) (ProjectContents, error)
 	Install                  func(context.Context, string, string, bool) error
 	Library                  LibraryOptions
 	Assets                   http.Handler
@@ -227,7 +227,11 @@ func (g *Gateway) Handler() http.Handler {
 			http.Error(w, "choose a recent folder from this node", 400)
 			return
 		}
-		value, err := g.options.Packages(r.Context(), directory)
+		contents, err := g.options.Packages(r.Context(), directory)
+		respond(w, contents.Packages, err)
+	})
+	mux.HandleFunc("GET /api/projects", func(w http.ResponseWriter, r *http.Request) {
+		value, err := Projects(r.Context(), g.options.Home, g.options.Packages)
 		respond(w, value, err)
 	})
 	mux.HandleFunc("POST /api/packages", func(w http.ResponseWriter, r *http.Request) {

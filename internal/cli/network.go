@@ -74,20 +74,16 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 		options.Start = func(ctx context.Context, info network.SessionInfo) (string, error) {
 			return runner.startRemoteSession(ctx, home, executable, info)
 		}
-		options.Packages = func(ctx context.Context, directory string) (any, error) {
+		options.Packages = func(ctx context.Context, directory string) (network.ProjectContents, error) {
 			packContext, err := resolveInvocationContext(Invocation{Global: Global{WorkspaceRoot: directory}}, true)
 			if err != nil {
-				return nil, err
+				return network.ProjectContents{}, err
 			}
 			locked, err := lockfile.Load(packContext.DefinitionRoot)
 			if err != nil {
-				return nil, err
+				return network.ProjectContents{}, err
 			}
-			result := make([]map[string]string, 0, len(locked.Packages))
-			for _, pkg := range locked.Packages {
-				result = append(result, map[string]string{"module": pkg.Module, "commit": pkg.Commit, "content_hash": pkg.ContentHash, "cache_key": pkg.CacheKey})
-			}
-			return result, nil
+			return projectContents(locked), nil
 		}
 		options.Install = runner.installNetworkPackage
 		options.Library, err = runner.networkLibrary(home)

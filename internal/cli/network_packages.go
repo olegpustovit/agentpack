@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
@@ -154,4 +155,24 @@ func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec 
 		return fmt.Errorf("package installed, but library capture failed: %w", err)
 	}
 	return runner.restartChangedEnvironments(ctx, before)
+}
+
+// projectContents converts pack.lock into the node's project view. Commands, arguments,
+// environment and headers never leave the node.
+// shortcut: lists only servers recorded in pack.lock, extend when mcp list provenance moves out of cli
+func projectContents(locked lockfile.PackLock) network.ProjectContents {
+	contents := network.ProjectContents{Packages: []network.ProjectPackage{}, MCP: []network.ProjectMCP{}}
+	for _, pkg := range locked.Packages {
+		contents.Packages = append(contents.Packages, network.ProjectPackage{
+			Module: pkg.Module, Commit: pkg.Commit, ContentHash: pkg.ContentHash, CacheKey: pkg.CacheKey,
+			Kind: string(pkg.Kind), Name: pkg.Name, URL: pkg.URL, Direct: pkg.Direct,
+		})
+	}
+	for _, server := range locked.MCPServers {
+		contents.MCP = append(contents.MCP, network.ProjectMCP{
+			Name: server.Name, Source: server.Source, Launcher: server.Launcher, Status: server.Status,
+			Package: server.Package, Version: server.Version, Integrity: server.Integrity, Host: server.Host, Reason: server.Reason,
+		})
+	}
+	return contents
 }

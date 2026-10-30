@@ -238,7 +238,7 @@ func peerRoute(method, path string) bool {
 	if method == "DELETE" && path == "/api/recent" {
 		return true
 	}
-	if method == "GET" && (path == "/api/sessions" || path == "/api/recent" || path == "/api/packages" || path == "/api/limits") {
+	if method == "GET" && (path == "/api/sessions" || path == "/api/recent" || path == "/api/packages" || path == "/api/projects" || path == "/api/limits") {
 		return true
 	}
 	if method == "POST" && (path == "/api/sessions" || path == "/api/packages" || path == "/api/limits/refresh") {

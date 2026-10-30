@@ -57,6 +57,7 @@ func remember(home string, info SessionInfo) error { return updateRecent(home, i
 func ForgetRecent(home string, info SessionInfo) error { return updateRecent(home, info, true) }
 
 func updateRecent(home string, info SessionInfo, forget bool) error {
+	info.Directory = filepath.Clean(info.Directory)
 	if !forget {
 		var err error
 		info.LastUsed = time.Now().UTC()
@@ -75,7 +76,13 @@ func updateRecent(home string, info SessionInfo, forget bool) error {
 		return err
 	}
 	recent = slices.DeleteFunc(recent, func(old SessionInfo) bool {
-		return old.Directory == info.Directory && old.Harness == info.Harness && old.Mode == info.Mode
+		if filepath.Clean(old.Directory) != info.Directory {
+			return false
+		}
+		if forget {
+			return (info.Harness == "" || old.Harness == info.Harness) && (info.Mode == "" || old.Mode == info.Mode)
+		}
+		return old.Harness == info.Harness && old.Mode == info.Mode
 	})
 	info.ID = ""
 	info.State = TerminalState{}
