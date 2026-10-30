@@ -343,3 +343,12 @@ func TestOAuthRegisteredClientDoesNotExpire(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestOAuthAuthorizeWithoutSessionRedirectsToLogin(t *testing.T) {
+	h := newOAuthHarness(t)
+	path := h.authorizePath()
+	response, data := h.request(t, "GET", path, "", "", nil, false)
+	if want := "/login?return_to=" + url.QueryEscape(path); response.StatusCode != 303 || response.Header.Get("Location") != want {
+		t.Fatalf("redirect: want 303 %s got %d %q %s", want, response.StatusCode, response.Header.Get("Location"), data)
+	}
+}

@@ -12,3 +12,6 @@
 .claude
 .codex
 .envrc
+
+internal/network/webdist/*
+!internal/network/webdist/index.html

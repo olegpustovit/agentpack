@@ -161,7 +161,7 @@ func (m *GatewayMCP) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !m.gateway.auth.authenticated(r) {
-		http.Redirect(w, r, "/?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
+		http.Redirect(w, r, "/login?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
 		return
 	}
 	cookie, _ := r.Cookie("agentpack_session")
