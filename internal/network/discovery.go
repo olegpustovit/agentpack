@@ -292,6 +292,9 @@ func peerRoute(method, path string) bool {
 	if method == "GET" && path == "/api/identity" {
 		return true
 	}
+	if method == "GET" && path == "/api/events" {
+		return true
+	}
 	if method == "GET" && (path == "/api/sessions" || path == "/api/recent" || path == "/api/packages" || path == "/api/projects" || path == "/api/limits") {
 		return true
 	}

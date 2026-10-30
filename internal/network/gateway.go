@@ -50,6 +50,7 @@ type Gateway struct {
 	identityMu    sync.Mutex
 	identityAt    time.Time
 	identitySelf  tailnetSelf
+	events        eventHub
 }
 
 func ServeGateway(ctx context.Context, options GatewayOptions) error {
@@ -132,6 +133,7 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) { g.auth.login(w, r, true, g.origin.Scheme == "https") })
 	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) { g.auth.login(w, r, false, g.origin.Scheme == "https") })
 	mux.HandleFunc("POST /api/logout", g.auth.logout)
+	mux.HandleFunc("GET /api/events", g.serveEvents)
 	mux.HandleFunc("GET /api/nodes", func(w http.ResponseWriter, r *http.Request) {
 		value, err := TailnetNodes(r.Context(), g.options.Home)
 		respond(w, value, err)
