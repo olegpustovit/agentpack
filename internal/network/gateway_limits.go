@@ -10,6 +10,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/harness/agy"
 	"github.com/olegpustovit/agentpack/internal/harness/claude"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
+	"github.com/olegpustovit/agentpack/internal/harness/cursor"
 	"github.com/olegpustovit/agentpack/internal/harness/grok"
 	"github.com/olegpustovit/agentpack/internal/harness/opencode"
 )
@@ -45,6 +46,7 @@ func collectLimits(ctx context.Context) []harness.LimitSnapshot {
 		agy.ReadLimits,
 		grok.ReadLimits,
 		opencode.ReadLimits,
+		cursor.ReadLimits,
 	}
 	snapshots := make([]harness.LimitSnapshot, len(probes))
 	var wg sync.WaitGroup

@@ -571,3 +571,11 @@ dialog[open]{animation:sheet .18s ease-out}dialog::backdrop{background:var(--scr
 .limit-failures{border-top:.5px solid var(--sep);padding:var(--s5) 0}
 .limit-failures p{padding-top:var(--s4);overflow-wrap:anywhere}
 @media(max-width:760px){.limits{padding:var(--s5)}.limits-toolbar{align-items:flex-start}.limit-window{grid-template-columns:1fr 84px;gap:var(--s3)}.limit-meter{grid-column:1/-1;grid-row:2}.limit-value{grid-column:2;grid-row:1}}
+
+.startup-status{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:var(--s4);color:var(--fg2)}
+.workspace-load-status{padding:var(--s4) var(--s5);margin:0;font-size:var(--fs-sm);color:var(--fg2);border-bottom:.5px solid var(--sep);overflow-wrap:anywhere}
+.loading-indicator{display:flex;align-items:center;justify-content:flex-start;gap:var(--s4)}
+.empty.loading-indicator,.empty .loading-indicator,.startup-status.loading-indicator{justify-content:center}
+.loading-indicator::before{display:inline-block;flex:none}
+.limits-progress{list-style:none;margin:0 0 var(--s5);padding:0;max-width:960px;color:var(--fg2);font-size:var(--fs-sm)}
+.limits-progress li{padding:var(--s2) 0;overflow-wrap:anywhere}

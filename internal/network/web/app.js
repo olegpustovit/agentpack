@@ -6,6 +6,8 @@ state.node = "";
 state.nodes = [];
 state.sessionCache = new Map();
 state.recentByNode = new Map();
+state.recentErrors = new Map();
+state.sessionErrors = new Map();
 state.grouping = "machine";
 state.collapsedGroups = new Set();
 state.zoom = "fit";
@@ -67,7 +69,13 @@ function node(tag, text, className) {
 function button(text, action, className) {
   const element = node("button", text, className);
   element.type = "button";
-  element.addEventListener("click", () => Promise.resolve(action()).catch((error) => notice(error.message)));
+  element.addEventListener("click", async () => {
+    try {
+      const pending=action();
+      if(pending?.then){element.disabled=true;element.setAttribute("aria-busy","true");element.classList.add("loading-indicator");await pending;}
+    } catch(error) {notice(error.message);}
+    finally {element.disabled=false;element.removeAttribute("aria-busy");element.classList.remove("loading-indicator");}
+  });
   return element;
 }
 const list = (value, key) => Array.isArray(value) ? value : Array.isArray(value?.[key]) ? value[key] : [];
@@ -94,6 +102,7 @@ async function api(path, body, method, target = state.node) {
   return data;
 }
 function showAuth() {
+  $("startup-status").hidden = true;
   closeTerminal();
   $("app").hidden = true;
   $("auth").hidden = false;
@@ -113,6 +122,7 @@ async function bootstrap() {
     if (state.authenticated) {
       $("auth").hidden = true;
       $("app").hidden = false;
+      $("startup-status").hidden = true;
       await refresh();
     } else showAuth();
   } catch (error) {
@@ -125,6 +135,7 @@ $("auth-form").addEventListener("submit", async (event) => {
   const submit = $("auth-submit");
   submit.disabled = true;
   $("auth-error").textContent = "";
+  submit.textContent=state.setup?"Creating account…":"Signing in…";
   try {
     await api(state.setup ? "/api/setup" : "/api/login", { password: $("password").value, ...state.setup ? { token: $("setup-token").value.trim() } : {} });
     $("password").value = "";
@@ -143,6 +154,7 @@ $("auth-form").addEventListener("submit", async (event) => {
     $("auth-error").textContent = error.message;
   } finally {
     submit.disabled = false;
+    submit.textContent=state.setup?"Create root account":"Sign in";
   }
 });
 $("logout").addEventListener("click", async () => {
@@ -158,6 +170,7 @@ async function refresh() {
   if (!state.authenticated) return;
   const generation = ++state.refreshGeneration;
   state.loading = !state.sessionsLoaded;
+  renderWorkspaceStatus();
   if (state.loading) renderSessions();
   const machines = [{id:"", name:"Gateway machine", online:true}, ...state.nodes];
   const merge = () => {
@@ -177,17 +190,20 @@ async function refresh() {
       const sessions = await api("/api/sessions", void 0, void 0, machine.id);
       if (generation !== state.refreshGeneration) return;
       const rows = list(sessions, "sessions").map(session => ({...session, node:machine.id, machine:machine.name, stale:false}));
+      state.sessionErrors.delete(machine.id);
       state.sessionCache.set(machine.id, rows);
       merge();
       try {
         const recent = await api("/api/recent", void 0, void 0, machine.id);
         if (generation !== state.refreshGeneration) return;
+        state.recentErrors.delete(machine.id);
         state.recentByNode.set(machine.id, list(recent, "recent"));
         if (!machine.id) state.recent = list(recent, "recent");
         renderRecent();
         if (machine.id === state.node) renderStartFolders();
-      } catch (error) { if (!machine.id) notice(error.message); }
+      } catch (error) { state.recentErrors.set(machine.id,error.message); if (!machine.id) notice(error.message); }
     } catch (error) {
+      state.sessionErrors.set(machine.id, `${machine.name}: ${error.message}`);
       if (!machine.id) { notice(error.message); return; }
       const cached = state.sessionCache.get(machine.id) || [];
       state.sessionCache.set(machine.id, cached.map(session => ({...session, stale:true})));
@@ -197,8 +213,8 @@ async function refresh() {
   if (generation === state.refreshGeneration) {
     state.sessionsLoaded = true;
     state.loading = false;
-    renderSessions();
-    $("gateway-state").textContent = "Gateway connected";
+    renderSessions(); renderRecent(); renderStartFolders(); renderWorkspaceStatus();
+    $("gateway-state").textContent = state.sessionErrors.has("") ? "Gateway data unavailable" : "Gateway connected";
     $("mesh-state").textContent = `${machines.filter(machine => machine.online !== false).length} of ${machines.length} machines online`;
   }
 }
@@ -263,10 +279,11 @@ function renderSessions() {
     }
   }
   $("session-empty").hidden = rows.length > 0;
-  $("sessions").setAttribute("aria-busy", String(state.loading));
+  const loading = state.loading || state.discoveryBusy;
+  $("sessions").setAttribute("aria-busy", String(!!loading));
   const empty = $("session-empty").querySelector("p");
-  empty.classList.toggle("loading-indicator", state.loading);
-  empty.textContent = state.loading ? "Loading sessions…" : query ? "No sessions match your filter." : "No sessions yet.";
+  empty.classList.toggle("loading-indicator", !!loading);
+  empty.textContent = loading ? state.discoveryBusy ? "Discovering machines…" : "Loading sessions…" : state.sessionErrors.size ? `Sessions unavailable: ${[...state.sessionErrors.values()].join("; ")}` : query ? "No sessions match your filter." : "No sessions yet.";
   const active = state.sessions.find(session => sessionKey(session) === state.selected);
   if (active) $("terminal-title").textContent = sessionName(active);
 }
@@ -288,6 +305,7 @@ async function changeSession(session, action) {
     if (!pendingRestarts.has(key)) pendingRestarts.set(key, crypto.randomUUID());
     body = {operation_id: pendingRestarts.get(key)};
   }
+  notice(action === "stop" ? "Stopping agent…" : "Requesting agent restart…");
   try {
     await api(`/api/sessions/${encodeURIComponent(session.id)}/${action}`, body, void 0, session.node || "");
   } catch (error) {
@@ -303,7 +321,7 @@ function renderRecent() {
   const host = $("recent");
   host.replaceChildren();
   if (!state.recent.length) {
-    host.append(node("p", "Folders will appear here after you launch an agent.", "muted"));
+    host.append(node("p", state.loading ? "Loading recent folders…" : state.recentErrors.get("") ? `Recent folders unavailable: ${state.recentErrors.get("")}` : "Folders will appear here after you launch an agent.", state.loading ? "loading-indicator" : "muted"));
     return;
   }
   for (const recent of state.recent) {
@@ -330,22 +348,45 @@ function renderRecent() {
   }
 }
 let limitsLoading = false;
+let limitsReports = new Map();
 async function loadLimits(refresh = false) {
   if (limitsLoading) return;
   limitsLoading = true;
-  const button = $("limits-refresh");
+  const button = $("limits-refresh"), status = $("limits-status"), progress = $("limits-progress");
   button.disabled = true;
   $("limits-body").setAttribute("aria-busy", "true");
-  $("limits-status").textContent = refresh ? "Refreshing all connected machines…" : "Checking connected machines…";
+  status.classList.add("loading-indicator");
+  status.textContent = "Discovering connected machines…";
+  progress.replaceChildren();
   try {
     const peers = list(await api("/api/nodes", void 0, "GET", ""), "nodes");
     const online = [{id:"", name:"Gateway machine", online:true}, ...peers].filter(machine => machine.online !== false);
-    const results = await Promise.allSettled(online.map(machine => refresh ? api("/api/limits/refresh", {}, "POST", machine.id) : api("/api/limits", void 0, "GET", machine.id)));
-    renderLimits(results.map((result, index) => ({ node: online[index].name, snapshots: result.status === "fulfilled" ? list(result.value, "limits") : [], error: result.status === "rejected" ? result.reason.message : "" })));
-    $("limits-status").textContent = `Checked ${online.length} ${online.length === 1 ? "machine" : "machines"} · Updates every minute`;
+    const ids = new Set(online.map(machine => machine.id));
+    limitsReports = new Map([...limitsReports].filter(([id]) => ids.has(id)));
+    let completed = 0;
+    status.textContent = `Reading provider limits · 0 of ${online.length} machines`;
+    await Promise.all(online.map(async machine => {
+      const row = node("li", `${machine.name} · Reading provider limits…`, "loading-indicator");
+      progress.append(row);
+      try {
+        const result = await (refresh ? api("/api/limits/refresh", {}, "POST", machine.id) : api("/api/limits", void 0, "GET", machine.id));
+        const snapshots = list(result, "limits");
+        limitsReports.set(machine.id, {node:machine.name, snapshots});
+        row.textContent = `${machine.name} · ${snapshots.filter(snapshot => snapshot.state === "available").length} providers reporting`;
+      } catch (error) {
+        limitsReports.set(machine.id, {node:machine.name, snapshots:[], error:error.message});
+        row.textContent = `${machine.name} · Could not read limits: ${error.message}`;
+      }
+      row.classList.remove("loading-indicator");
+      completed++;
+      status.textContent = `Reading provider limits · ${completed} of ${online.length} machines`;
+      renderLimits([...limitsReports.values()]);
+    }));
+    status.textContent = `Checked ${online.length} ${online.length === 1 ? "machine" : "machines"} · Updates every minute`;
   } catch (error) {
-    $("limits-status").textContent = `Machine discovery failed: ${error.message}. Refresh to retry.`;
+    status.textContent = `Machine discovery failed: ${error.message}. Refresh to retry.`;
   } finally {
+    status.classList.remove("loading-indicator");
     $("limits-body").setAttribute("aria-busy", "false");
     button.disabled = false;
     limitsLoading = false;
@@ -369,8 +410,8 @@ function renderLimitReport(snapshot, machine) {
   const report = node("div", "", "limit-report");
   const meta = node("div", "", "limit-meta");
   meta.append(node("span", machine));
-  if (snapshot.plan) meta.append(node("span", snapshot.plan));
-  if (snapshot.observed_at) meta.append(node("span", `Updated ${new Date(snapshot.observed_at).toLocaleTimeString(undefined, {hour:"2-digit", minute:"2-digit"})}`));
+  if (snapshot.plan) meta.append(node("span", ` · ${snapshot.plan}`));
+  if (snapshot.observed_at) meta.append(node("span", ` · Updated ${new Date(snapshot.observed_at).toLocaleTimeString(undefined, {hour:"2-digit", minute:"2-digit"})}`));
   report.append(meta);
   for (const window of snapshot.windows || []) {
     const reset = resetLabel(window);
@@ -412,7 +453,7 @@ function renderLimits(groups) {
       providers.get(snapshot.harness).push({snapshot, node:group.node});
     }
   }
-  const names = {codex:"Codex", claude:"Claude", agy:"Antigravity", grok:"Grok", opencode:"OpenCode"};
+  const names = {cursor:"Cursor CLI", codex:"Codex", claude:"Claude", agy:"Antigravity", grok:"Grok", opencode:"OpenCode"};
   for (const [provider, reports] of providers) {
     // Prefer a machine with usable windows; never combine allowances across accounts.
     const selected = reports.find(report => report.snapshot.state === "available" && report.snapshot.windows?.length) || reports.find(report => report.snapshot.state === "error") || reports[0];
@@ -476,9 +517,19 @@ async function mapLimit(items, limit, work) {
     while(next<items.length){const index=next++;await work(items[index]);}
   }));
 }
+function renderWorkspaceStatus() {
+  const message = state.discoveryBusy ? "Discovering connected machines…" : state.loading ? "Loading sessions and recent folders…" : state.inventoryBusy ? `Reading project packages · ${state.inventoryDone || 0} projects checked` : state.libraryBusy ? "Loading saved packages and agentpacks…" : state.discoveryError ? `Machine discovery failed: ${state.discoveryError}. Use Refresh status to retry.` : "";
+  for (const id of ["library-load-status", "machines-load-status"]) {
+    const element = $(id);
+    element.textContent = message;
+    element.hidden = !message;
+    element.classList.toggle("loading-indicator", !!message && !state.discoveryError);
+  }
+}
 async function loadInventory(force=false) {
   if(!force&&Date.now()-state.inventoryAt<10000)return;
   const generation=(state.inventoryGeneration||0)+1;state.inventoryGeneration=generation;
+  state.inventoryBusy=true;state.inventoryDone=0;renderWorkspaceStatus();
   await Promise.all(machines().map(async machine=>{
     const folders=state.recentByNode.get(machine.id)||[];
     const targets=folders.map(folder=>({machine,folder}));
@@ -490,15 +541,17 @@ async function loadInventory(force=false) {
         if(generation!==state.inventoryGeneration)return;
         state.inventory.set(key,{node:machine.id,machine:machine.name,directory:folder.directory,folder_id:folder.folder_id||"",packages:list(response,"packages"),error:"",online:true,available:true,last_used:folder.last_used||"",harness:folder.harness||"",mode:folder.mode||""});
       }catch(error){if(generation===state.inventoryGeneration)state.inventory.set(key,{node:machine.id,machine:machine.name,directory:folder.directory,folder_id:folder.folder_id||"",packages:previous?.packages||[],error:error.message,online:true,available:true,last_used:folder.last_used||"",harness:folder.harness||"",mode:folder.mode||""});}
+      if(generation===state.inventoryGeneration){state.inventoryDone++;renderWorkspaceStatus();}
     });
   }));
   if(generation!==state.inventoryGeneration)return;
+  state.inventoryBusy=false;renderWorkspaceStatus();
   state.inventoryAt=Date.now();
   if(state.view==="library")renderLibrary();if(state.view==="machines")renderMachines();
 }
 async function loadLibrary(force=false) {
   if(state.libraryBusy&&!force)return;
-  const generation=++state.libraryGeneration;state.libraryBusy=true;
+  const generation=++state.libraryGeneration;state.libraryBusy=true;renderWorkspaceStatus();
   if(state.view==="library")renderLibrary();
   await Promise.all(machines().map(async machine=>{
     if(machine.online===false)return;
@@ -514,18 +567,24 @@ async function loadLibrary(force=false) {
     const error=failure?(failure.status===404?`Update Agentpack on ${machine.name} to load saved agentpacks. Installed packages are still shown.`:`${machine.name}: ${failure.message}`):"";
     if(generation===state.libraryGeneration)state.libraryByNode.set(machine.id,{packages:packages.status==="fulfilled"?list(packages.value,"packages").map(item=>({...item,_node:machine.id,_machine:machine.name,_key:`${machine.id}\0${item.id}`})):cached.packages,agentpacks:details,error});
   }));
-  if(generation===state.libraryGeneration){state.libraryBusy=false;if(state.view==="library")renderLibrary();if(state.view==="machines")renderMachines();}
+  if(generation===state.libraryGeneration){state.libraryBusy=false;renderWorkspaceStatus();if(state.view==="library")renderLibrary();if(state.view==="machines")renderMachines();}
 }
-async function loadWorkspaceData(force=false){await Promise.all([loadInventory(force),loadLibrary(force),loadDrafts(),loadReplication()]);}
+async function loadWorkspaceData(force=false){
+  if(!state.sessionsLoaded)await refresh();
+  await Promise.all([loadInventory(force),loadLibrary(force),loadDrafts(),loadReplication()]);
+}
 async function loadDrafts(){
-  try{state.drafts=list(await api("/api/library/drafts",void 0,"GET",""),"drafts");}
+  state.draftsBusy=true;renderDrafts();
+  try{state.draftError="";state.drafts=list(await api("/api/library/drafts",void 0,"GET",""),"drafts");}
   catch(error){state.draftError=error.message;}
+  state.draftsBusy=false;
   if(state.view==="library")renderDrafts();
 }
 async function loadReplication(){
+  state.replicationBusy=true;renderReplication();
   try{state.replication=await api("/api/library/replication/peers",void 0,"GET","")||{peers:[],contacts:{}};state.replicationError="";}
   catch(error){state.replicationError=error.message;}
-  renderReplication();
+  state.replicationBusy=false;renderReplication();
 }
 function registryPackages(){
   const byID=new Map();
@@ -591,6 +650,7 @@ function svgIcon(name){
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]||paths.package}</svg>`;
 }
 function renderLibrary(){
+  const busy=state.libraryBusy||state.inventoryBusy||state.discoveryBusy||!state.sessionsLoaded;
   const byModule=new Map();
   for(const item of registryPackages()){
     const key=item.module?.toLowerCase()||item.id;
@@ -605,8 +665,8 @@ function renderLibrary(){
   const filtered=items.filter(item=>[item.name,item.module,item.kind,item.commit,...(item._versions||[]).map(version=>version.commit),item.project,item._machine].join(" ").toLowerCase().includes(query));
   if(!filtered.some(item=>libraryItemKey(item)===state.librarySelection))state.librarySelection=libraryItemKey(filtered[0]||{});
   const listHost=$("library-list");listHost.replaceChildren();
-  listHost.setAttribute("aria-busy",String(state.libraryBusy));
-  if(!filtered.length){const error=[...state.libraryByNode.values()].find(value=>value.error)?.error;const empty=node("div",state.libraryBusy?"Loading library…":error?`Library unavailable: ${error}`:kind==="packages"?"No installed or saved packages found.":"No agentpacks saved yet.",state.libraryBusy?"empty loading-indicator":"empty");empty.setAttribute("role","status");listHost.append(empty);}
+  listHost.setAttribute("aria-busy",String(!!busy));
+  if(!filtered.length){const error=[...state.libraryByNode.values()].find(value=>value.error)?.error;const empty=node("div",busy?"Loading library…":error?`Library unavailable: ${error}`:kind==="packages"?"No installed or saved packages found.":"No agentpacks saved yet.",busy?"empty loading-indicator":"empty");empty.setAttribute("role","status");listHost.append(empty);}
   for(const item of filtered){
     const selected=libraryItemKey(item)===state.librarySelection;
     const row=node("button",void 0,`row two${selected?" sel":""}`);row.type="button";row.dataset.item=libraryItemKey(item);row.setAttribute("aria-current",selected?"true":"false");
@@ -628,6 +688,7 @@ function pickLibrary(item,show=true){
 }
 function renderDrafts(){
   const host=$("install-drafts");host.replaceChildren();
+  if(state.draftsBusy||state.draftError){const status=node("p",state.draftsBusy?"Loading pending installs…":`Pending installs unavailable: ${state.draftError}`,state.draftsBusy?"note loading-indicator":"note err");status.setAttribute("role","status");host.append(status);}
   if(!state.drafts.length)return;
   const caption=node("div",void 0,"list-caption");caption.append(node("span","Pending installs"),node("span",String(state.drafts.length)));host.append(caption);
   for(const draft of state.drafts){
@@ -648,8 +709,10 @@ function draftDiff(diff){
 }
 async function reviewDraft(draft){
   let review;
+  notice("Checking pending install against its destination…");
   try{review=await api(`/api/library/drafts/${encodeURIComponent(draft.id)}/review`,{},"POST","");}
   catch(error){notice(error.message);return;}
+  notice("");
   const unavailable=!review.ready;
   showSheet(unavailable?"Draft needs attention":"Review pending change",`<p><strong>${esc(draft.item)}</strong> · ${esc(draft.directory)} on ${esc(machines().find(item=>item.id===(draft.node==="local"?"":draft.node))?.name||draft.node)}</p><p class="${unavailable?"err":"note"}" role="status">${esc(review.reason||draft.reason||"Ready to apply.")}</p>${review.diff?`<section class="sect"><header><h2>Current diff</h2></header>${draftDiff(review.diff)}</section>`:""}${unavailable?"":'<label class="check"><input id="draft-restart" type="checkbox" checked>Restart affected agents after apply</label>'}<p id="draft-error" class="err" role="alert"></p>`,unavailable?`<button type="button" id="draft-discard">Discard draft</button><button type="button" id="draft-close" class="primary">Keep draft</button>`:`<button type="button" id="draft-close">Cancel</button><button type="button" id="draft-apply" class="primary">${draft.pack_id?"Restore":"Install"}</button>`);
   $("draft-close").onclick=closeSheet;$("draft-discard")?.addEventListener("click",async()=>{await discardDraft(draft);closeSheet();});
@@ -667,7 +730,7 @@ async function reviewDraft(draft){
 }
 function renderLibraryDetail(item){
   const host=$("library-detail");
-  if(!item){const error=[...state.libraryByNode.values()].find(value=>value.error)?.error;host.innerHTML=`<div class="empty">${esc(error?`Library data unavailable: ${error}`:"Select a saved package or agentpack.")}</div>`;return;}
+  if(!item){const error=[...state.libraryByNode.values()].find(value=>value.error)?.error;host.innerHTML=`<div class="empty">${esc(error?`Library data unavailable: ${error}`:state.libraryBusy||state.inventoryBusy||!state.sessionsLoaded?"Loading library details…":"Select a saved package or agentpack.")}</div>`;return;}
   const back=`<button class="tb-btn back" id="lib-back">${svgIcon("back")}Library</button>`;
   if(state.libraryKind==="packages"){
     const installed=destinations().flatMap(target=>{const pin=inventoryPin(target,item.module);return pin?[{target,pin}]:[];});
@@ -704,6 +767,8 @@ function renderLibraryDetail(item){
 function renderMachines(){
   const query=$("machine-search").value.trim().toLowerCase(),all=machines(),filtered=all.filter(machine=>[machine.name,machine.id].join(" ").toLowerCase().includes(query));
   if(!all.some(machine=>machine.id===state.machineSelection))state.machineSelection="";
+  renderWorkspaceStatus();
+  $("machine-rows").setAttribute("aria-busy",String(!!(state.discoveryBusy||state.inventoryBusy)));
   $("machines-summary").textContent=`${all.filter(machine=>machine.online!==false).length} online · ${all.filter(machine=>machine.online===false).length} offline`;
   const rows=$("machine-rows");rows.replaceChildren();
   for(const machine of filtered){const tr=document.createElement("tr");tr.dataset.machine=machine.id;tr.tabIndex=machine.id===state.machineSelection?0:-1;tr.className=machine.id===state.machineSelection?"sel":"";tr.innerHTML=`<td><span class="cell">${svgIcon(machine.id?"server":"laptop")}<span class="stack">${esc(machine.name)}</span></span></td><td><span class="cell"><span class="dot ${machine.online===false?"off":"ok"}"></span>${machine.online===false?"Offline":"Online"}</span></td>`;tr.addEventListener("click",()=>pickMachine(machine.id,true));rows.append(tr);}
@@ -721,7 +786,7 @@ function renderMachineDetail(machine){
     return `<tr><td title="${esc(target.directory)}"><span class="cell">${svgIcon("folder")}${esc(target.directory.split(/[\\/]/).filter(Boolean).pop()||target.directory)}</span></td><td class="c-sessions">${sessionCount||"—"}</td>${cells}<td class="act"><button class="icon-btn" data-install-target="${encodeURIComponent(destinationKey(target.node,target.directory))}" aria-label="Install into ${esc(target.directory)}" title="Install into this project" ${!target.online&&!target.folder_id||!target.available&&!target.folder_id?"disabled":""}>${svgIcon("install")}</button></td></tr>`;
   }).join("");
   const packageHead=packages.map(pkg=>`<th class="pin" title="${esc(pkg.module)}">${esc(pkg.name)}</th>`).join("");
-  host.innerHTML=`<button class="tb-btn back" id="machine-back">${svgIcon("back")}Machines</button><div class="insp wide"><div class="insp-head"><span class="glyph">${svgIcon(machine.id?"server":"laptop")}</span><div class="title"><h1>${esc(machine.name)}</h1><p><span class="dot ${machine.online===false?"off":"ok"}" style="display:inline-block"></span> ${machine.online===false?"Offline":"Online"} · ${live} ${live===1?"session":"sessions"} · agentpack registry</p></div><div class="actions"><button id="machine-sessions">Sessions</button></div></div><section class="sect"><header><h2>Projects and pinned packages</h2><span class="meta">${targets.length} trusted folders</span></header><div class="hscroll"><table class="grid compact matrix"><thead><tr><th class="c-project">Project</th><th class="c-sessions">Sessions</th>${packageHead}<th></th></tr></thead><tbody>${rows||'<tr><td colspan="3" class="empty">No recent project folders on this machine.</td></tr>'}</tbody></table></div><p class="note">↑ marks a pin that differs from the current captured version. — means not installed. Offline installs are saved as drafts.</p></section></div>`;
+  host.innerHTML=`<button class="tb-btn back" id="machine-back">${svgIcon("back")}Machines</button><div class="insp wide"><div class="insp-head"><span class="glyph">${svgIcon(machine.id?"server":"laptop")}</span><div class="title"><h1>${esc(machine.name)}</h1><p><span class="dot ${machine.online===false?"off":"ok"}" style="display:inline-block"></span> ${machine.online===false?"Offline":"Online"} · ${live} ${live===1?"session":"sessions"} · agentpack registry</p></div><div class="actions"><button id="machine-sessions">Sessions</button></div></div><section class="sect"><header><h2>Projects and pinned packages</h2><span class="meta">${targets.length} trusted folders</span></header><div class="hscroll"><table class="grid compact matrix"><thead><tr><th class="c-project">Project</th><th class="c-sessions">Sessions</th>${packageHead}<th></th></tr></thead><tbody>${rows||`<tr><td colspan="3" class="empty">${state.loading||state.discoveryBusy||!state.sessionsLoaded?"Loading project folders…":state.recentErrors.get(machine.id)?`Project folders unavailable: ${esc(state.recentErrors.get(machine.id))}`:state.inventoryBusy?"Reading project packages…":"No recent project folders on this machine."}</td></tr>`}</tbody></table></div><p class="note">↑ marks a pin that differs from the current captured version. — means not installed. Offline installs are saved as drafts.</p></section></div>`;
   host.querySelector("#machine-back").onclick=()=>$("machines").classList.remove("show-detail");
   host.querySelector("#machine-sessions").onclick=()=>{state.node=machine.id;$("session-search").value=machine.name;renderSessions();setView("workspace");};
   host.querySelectorAll("[data-install-target]").forEach(button=>button.addEventListener("click",()=>{const key=decodeURIComponent(button.dataset.installTarget),target=targets.find(row=>destinationKey(row.node,row.directory)===key);if(target)installIntoTarget(target);}));
@@ -731,7 +796,7 @@ $("packages-tab").addEventListener("click",()=>{state.libraryKind="packages";sta
 $("setups-tab").addEventListener("click",()=>{state.libraryKind="agentpacks";state.librarySelection="";state.revisionSelection="";renderLibrary();});
 $("library-search").addEventListener("input",renderLibrary);
 $("machine-search").addEventListener("input",renderMachines);
-$("refresh-machines").addEventListener("click",()=>{void refreshNodes();void loadWorkspaceData(true);});
+$("refresh-machines").addEventListener("click",()=>refreshNodes());
 function showSheet(title,body,actions,wide=true){
   const dialog=$("sheet");dialog.className=wide?"wide":"";$("sheet-title").textContent=title;$("sheet-body").innerHTML=body;$("sheet-actions").innerHTML=actions;
   $("sheet-form").onsubmit=event=>event.preventDefault();if(!dialog.open)dialog.showModal();
@@ -854,9 +919,9 @@ function saveAgentpack(session){
 function renameAgentpack(pack){
   showSheet("Rename agentpack",`<p>Rename the Library label. The agentpack identity and revisions stay the same.</p><div class="form"><label for="rename-name">Name</label><div class="with-btn"><input id="rename-name" maxlength="80" value="${esc(pack.name)}"><button type="button" id="rename-suggest">Suggest</button></div><span></span><p id="rename-error" class="err" role="alert"></p></div>`,`<button type="button" id="rename-cancel">Cancel</button><button type="submit" id="rename-confirm" class="primary">Rename</button>`,false);
   $("rename-name").select();$("rename-suggest").onclick=()=>{$("rename-name").value=`${pack.name} setup`;};$("rename-cancel").onclick=closeSheet;
-  $("sheet-form").onsubmit=async event=>{event.preventDefault();if($("rename-confirm").disabled)return;const name=$("rename-name").value.trim();if(!name){$("rename-error").textContent="Enter a name.";return;}const button=$("rename-confirm");button.disabled=true;
+  $("sheet-form").onsubmit=async event=>{event.preventDefault();if($("rename-confirm").disabled)return;const name=$("rename-name").value.trim();if(!name){$("rename-error").textContent="Enter a name.";return;}const button=$("rename-confirm");button.disabled=true;button.textContent="Renaming…";
     try{await api(`/api/library/agentpacks/${encodeURIComponent(pack.id)}`,{name},"PATCH",pack._node);closeSheet();state.librarySelection=libraryItemKey(pack);await loadLibrary(true);}
-    catch(error){$("rename-error").textContent=error.message;button.disabled=false;}
+    catch(error){$("rename-error").textContent=error.message;button.disabled=false;button.textContent="Rename";}
   };
 }
 function renameSession(session){
@@ -869,14 +934,14 @@ function renameSession(session){
     if(!name){$("session-name-error").textContent="Enter a name.";return;}
     const submit=$("session-rename-confirm");
     if(submit.disabled)return;
-    submit.disabled=true;
+    submit.disabled=true;submit.textContent="Renaming…";
     try{
       const updated=await api(`/api/sessions/${encodeURIComponent(session.id)}`,{name},"PATCH",session.node||"");
       const cached=state.sessionCache.get(session.node||"")||[];
       state.sessionCache.set(session.node||"",cached.map(item=>item.id===session.id?{...item,name:updated.name}:item));
       state.sessions=state.sessions.map(item=>sessionKey(item)===sessionKey(session)?{...item,name:updated.name}:item);
       closeSheet();renderSessions();notice("Session renamed.");
-    }catch(error){$("session-name-error").textContent=error.message;submit.disabled=false;}
+    }catch(error){$("session-name-error").textContent=error.message;submit.disabled=false;submit.textContent="Rename";}
   };
 }
 function restoreAgentpack(pack,revision){
@@ -927,9 +992,12 @@ function renderStartFolders(preferred = "") {
   const machine = $("start-machine")?.value ?? state.node;
   const rows = state.recentByNode.get(machine) || [];
   const select = $("start-directory");
+  const selected=preferred||select?.value;
   if (!select) return;
-  select.replaceChildren(...(rows.length ? rows.map(recent => { const option=node("option", recent.directory); option.value=recent.directory; option.disabled=recent.available === false; option.title=recent.unavailable_reason || recent.directory; return option; }) : [node("option", "No recent projects available")]));
-  if (preferred) select.value = preferred;
+  select.replaceChildren(...(rows.length ? rows.map(recent => { const option=node("option", recent.directory); option.value=recent.directory; option.disabled=recent.available === false; option.title=recent.unavailable_reason || recent.directory; return option; }) : [Object.assign(node("option", state.loading||!state.sessionsLoaded ? "Loading recent projects…" : state.recentErrors.has(machine) ? "Recent projects unavailable" : "No recent projects available"),{value:"",disabled:true})]));
+  if (selected && rows.some(row=>row.directory===selected)) select.value = selected;
+  select.setAttribute("aria-busy",String(!!state.loading));
+  $("start-form").querySelector("[type=submit]").disabled=!!state.startPending||!select.value||select.selectedOptions[0]?.disabled||$("start-machine").selectedOptions[0]?.disabled;
 }
 function startDialog(recent = {}) {
   const machineSelect = $("start-machine");
@@ -952,20 +1020,27 @@ $("start-form").addEventListener("submit", async event => {
   event.preventDefault();
   const submit = event.target.querySelector("[type=submit]");
   if (!$("start-directory").value) { $("start-error").textContent = "Choose a recent project on an online machine."; return; }
-  submit.disabled = true;
+  state.startPending=true;
+  submit.disabled = true;submit.textContent="Starting session…";
+  $("start-error").textContent="Starting the agent on the selected machine…";
   const target = $("start-machine").value;
   try {
     const session = await api("/api/sessions", {directory:$("start-directory").value, harness:$("start-harness").value, mode:$("start-mode").value.trim()}, void 0, target);
     $("start-dialog").close(); setView("workspace"); await refresh();
     if (session?.id) openTerminal({...session,node:target,machine:state.nodes.find(item=>item.id===target)?.name || "Gateway machine"});
   } catch (error) { $("start-error").textContent=error.message; }
-  finally { submit.disabled=false; }
+  finally { state.startPending=false;submit.disabled=false;submit.textContent="Start session"; }
 });
 async function loadPackages() {
   const directory = $("package-directory").value.trim();
   if (!directory) return;
-  const packages = list(await api("/api/packages?directory=" + encodeURIComponent(directory)), "packages");
-  const host = $("packages");
+  const host = $("packages"), submit=$("package-directory-form").querySelector("button");
+  host.setAttribute("aria-busy","true");submit.disabled=true;
+  $("package-status").textContent="Loading project packages…";
+  let packages;
+  try {packages=list(await api("/api/packages?directory=" + encodeURIComponent(directory)), "packages");}
+  finally {host.setAttribute("aria-busy","false");submit.disabled=false;}
+  $("package-status").textContent=`Loaded ${packages.length} packages.`;
   host.replaceChildren();
   if (!packages.length) host.append(node("p", "No packages installed in this project.", "muted"));
   for (const pkg of packages) {
@@ -978,7 +1053,6 @@ $("package-directory-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
     await loadPackages();
-    $("package-status").textContent = "";
   } catch (error) {
     $("package-status").textContent = error.message;
   }
@@ -996,8 +1070,8 @@ $("package-install-form").addEventListener("submit", async (event) => {
   try {
     await api("/api/packages", { directory, spec: $("package-spec").value.trim() });
     $("package-spec").value = "";
-    $("package-status").textContent = "Package installed. Affected agents have been restarted.";
     await Promise.all([loadPackages(), refresh()]);
+    $("package-status").textContent = "Package installed. Affected agents have been restarted.";
   } catch (error) {
     $("package-status").textContent = error.message;
   } finally {
@@ -1275,7 +1349,7 @@ function renderReplication(){
   $("replication-status").textContent=sharingEnabled?"Both machines must enroll each other before registry objects replicate.":"Enable Tailscale sharing before enrolling a machine.";
   const enrolled=new Map((state.replication.peers||[]).map(peer=>[peer.node,peer]));
   const peers=state.nodes;
-  if(!peers.length){host.append(node("p","No allowed Tailscale peers are currently discovered.","muted"));return;}
+  if(!peers.length){host.append(node("p",state.discoveryBusy?"Discovering machines…":state.replicationBusy?"Loading replication status…":"No allowed Tailscale peers are currently discovered.",state.discoveryBusy||state.replicationBusy?"loading-indicator":"muted"));return;}
   for(const peer of peers){
     const replica=enrolled.get(peer.id),contact=state.replication.contacts?.[peer.id],row=node("article",void 0,"list-row"),details=node("div"),actions=node("div",void 0,"actions");
     details.append(node("strong",peer.name),node("p",replica?`${replica.receipt_count||0} verified object receipts · ${peer.online?"online":"offline"}`:peer.online?"Not enrolled":"Offline · enrollment unavailable","muted"));
@@ -1290,6 +1364,11 @@ function renderReplication(){
   }
 }
 async function loadSettings() {
+  $("settings-status").textContent="Loading gateway settings…";
+  $("settings-status").classList.add("loading-indicator");
+  $("settings-view").setAttribute("aria-busy","true");
+  $("settings-retry").hidden=true;
+  $("toggle-sharing").disabled=true;
   try {
     const settings=await api("/api/settings");
     sharingEnabled=!!settings.sharing_enabled;
@@ -1299,15 +1378,21 @@ async function loadSettings() {
     $("settings-allowlist").textContent=settings.allowed_peers?.length?settings.allowed_peers.join(", "):"No additional machines or tags";
     $("toggle-sharing").textContent=sharingEnabled?"Stop sharing":"Enable sharing";
     $("toggle-sharing").disabled=false;
+    $("settings-status").textContent="";
     renderReplication();
-  } catch(error) { $("settings-status").textContent=error.message; }
+  } catch(error) {
+    $("settings-status").textContent=`Settings unavailable: ${error.message}`;$("settings-retry").hidden=false;$("toggle-sharing").textContent="Sharing unavailable";
+    for(const id of ["settings-platform","settings-running","settings-sharing","settings-allowlist"])if($(id).textContent.includes("Loading"))$(id).textContent="Unavailable";
+  } finally {$("settings-status").classList.remove("loading-indicator");$("settings-view").setAttribute("aria-busy","false");}
+
 }
+$("settings-retry").addEventListener("click",loadSettings);
 $("toggle-sharing").addEventListener("click",async()=>{
   $("toggle-sharing").disabled=true;
   try {
     await api("/api/settings/sharing",{enabled:!sharingEnabled});
-    $("settings-status").textContent="Sharing change applies within five seconds. Local CLI sessions keep running.";
-    await loadSettings(); await refreshNodes();
+    await loadSettings();
+    $("settings-status").textContent="Sharing change applies within five seconds. Local CLI sessions keep running."; await refreshNodes();
   } catch(error) { $("settings-status").textContent=error.message; $("toggle-sharing").disabled=false; }
 });
 $("stop-all-agents").addEventListener("click",async()=>{
@@ -1445,7 +1530,12 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refresh();
 });
 async function refreshNodes() {
-  if (!state.authenticated) return;
+  if (!state.authenticated || state.discoveryBusy) return;
+  state.discoveryBusy=true;state.discoveryError="";
+  $("mesh-state").textContent="Discovering machines…";
+  $("refresh-machines").disabled=true;$("refresh").disabled=true;
+  renderWorkspaceStatus();renderSessions();
+  if(state.view==="machines")renderMachines();
   try {
     const found = list(await api("/api/nodes"), "nodes").map(remote => ({id:remote.id,name:remote.name || remote.id,online:remote.online !== false}));
     const current = new Set(found.map(remote => remote.id));
@@ -1453,9 +1543,11 @@ async function refreshNodes() {
     for (const machine of state.nodes.filter(remote => remote.online === false)) {
       state.sessionCache.set(machine.id, (state.sessionCache.get(machine.id)||[]).map(session => ({...session,stale:true})));
     }
+    state.discoveryBusy=false;renderWorkspaceStatus();
     renderSessions(); await refresh(); renderStartFolders();
     if (state.view === "library" || state.view === "machines") await loadWorkspaceData(true);
-  } catch (error) { notice(error.message); }
+  } catch (error) { state.discoveryError=error.message; $("mesh-state").textContent="Machine discovery failed"; notice(`Machine discovery failed: ${error.message}`); }
+  finally {state.discoveryBusy=false;$("refresh-machines").disabled=false;$("refresh").disabled=false;renderWorkspaceStatus();renderSessions();}
 }
 setInterval(() => { if (!document.hidden) refreshNodes(); }, 15000);
 setView("workspace");

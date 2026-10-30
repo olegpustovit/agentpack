@@ -752,3 +752,100 @@ test("limits waits for mesh discovery when opened immediately",async({page})=>{
   await expect(page.getByRole("meter",{name:"Weekly remaining"})).toHaveAttribute("aria-valuenow","63");
   await expect(page.locator('[data-provider="codex"] .limit-report').first()).toContainText("Kyiv grid");
 });
+
+test("startup and machine discovery announce pending work",async({page})=>{
+  await mockAPI(page);
+  let releaseStatus,releaseNodes;
+  const statusReady=new Promise(resolve=>releaseStatus=resolve),nodesReady=new Promise(resolve=>releaseNodes=resolve);
+  await page.route("**/api/status",async route=>{await statusReady;await route.fulfill({json:{authenticated:true}});});
+  await page.route("**/api/nodes",async route=>{await nodesReady;await route.fulfill({json:[]});});
+  await page.goto("/");
+  await expect(page.locator("#startup-status")).toHaveText("Connecting to gateway…");
+  releaseStatus();
+  await expect(page.locator("#startup-status")).toBeHidden();
+  await expect(page.locator("#mesh-state")).toHaveText("Discovering machines…");
+  await page.getByRole("button",{name:"Machines",exact:true}).click();
+  await expect(page.locator("#machines-load-status")).toContainText("Discovering connected machines");
+  await expect(page.locator("#machine-rows")).toHaveAttribute("aria-busy","true");
+  releaseNodes();
+  await expect(page.locator("#machines-load-status")).toBeHidden();
+  await expect(page.locator("#machine-rows")).toHaveAttribute("aria-busy","false");
+});
+
+test("limits streams per-machine progress and preserves reports during refresh",async({page})=>{
+  await mockAPI(page);
+  await page.route("**/api/nodes",route=>route.fulfill({json:[{id:"slow",name:"Slow Mac",online:true}]}));
+  let releasePeer,releaseRefresh;
+  const peerReady=new Promise(resolve=>releasePeer=resolve),refreshReady=new Promise(resolve=>releaseRefresh=resolve);
+  await page.route("**/api/limits**",async route=>{
+    const url=new URL(route.request().url());
+    if(route.request().method()==="POST")await refreshReady;
+    if(url.searchParams.get("node")==="slow")await peerReady;
+    await route.fulfill({json:{limits:[{harness:"codex",state:"available",windows:[{id:"weekly",label:"Weekly",remaining_percent:63}]}]}});
+  });
+  await page.goto("/");await page.getByRole("button",{name:"Limits",exact:true}).click();
+  await expect(page.locator("#limits-status")).toContainText("1 of 2 machines");
+  await expect(page.locator("#limits-progress")).toContainText("Slow Mac · Reading provider limits…");
+  await expect(page.getByRole("meter",{name:"Weekly remaining"}).first()).toBeVisible();
+  await expect(page.locator("#limits-body")).toHaveAttribute("aria-busy","true");
+  await page.screenshot({path:"test-results/limits-pending.png"});
+  releasePeer();
+  await expect(page.locator("#limits-status")).toContainText("Checked 2 machines");
+  await page.getByRole("button",{name:"Refresh all"}).click();
+  await expect(page.locator("#limits-status")).toContainText("Reading provider limits");
+  await expect(page.getByRole("meter",{name:"Weekly remaining"}).first()).toBeVisible();
+  releaseRefresh();
+  await expect(page.getByRole("button",{name:"Refresh all"})).toBeEnabled();
+});
+
+test("inventory loading is visible without claiming that project data is empty",async({page})=>{
+  await mockAPI(page);
+  let releasePackages;
+  const ready=new Promise(resolve=>releasePackages=resolve);
+  await page.route("**/api/packages?*",async route=>{await ready;await route.fulfill({json:[]});});
+  await page.goto("/");
+  await expect(page.locator("[data-session=local-one]")).toBeVisible();
+  await page.getByRole("button",{name:"Machines",exact:true}).click();
+  await expect(page.locator("#machines-load-status")).toContainText("Reading project packages");
+  await expect(page.locator("#machine-detail")).not.toContainText("No recent project folders");
+  releasePackages();
+  await expect(page.locator("#machines-load-status")).toBeHidden();
+});
+
+test("settings errors finish loading and offer a working retry",async({page})=>{
+  await mockAPI(page);
+  let releaseSettings,fail=true;
+  const ready=new Promise(resolve=>releaseSettings=resolve);
+  await page.route("**/api/settings",async route=>{
+    await ready;
+    return fail?route.fulfill({status:502,body:"Gateway is unavailable"}):route.fulfill({json:{running:true,platform:"macOS",sharing_enabled:true}});
+  });
+  await page.goto("/");await page.getByRole("button",{name:"Gateway menu"}).click();await page.getByRole("button",{name:"Gateway settings",exact:true}).click();
+  await expect(page.locator("#settings-status")).toHaveText("Loading gateway settings…");
+  await expect(page.locator("#settings-view")).toHaveAttribute("aria-busy","true");
+  releaseSettings();
+  await expect(page.locator("#settings-status")).toContainText("Settings unavailable");
+  await expect(page.locator("#settings-view")).toHaveAttribute("aria-busy","false");
+  await expect(page.locator("#settings-view")).not.toContainText("Loading…");
+  fail=false;await page.getByRole("button",{name:"Retry settings"}).click();
+  await expect(page.locator("#settings-platform")).toHaveText("macOS");
+  await expect(page.locator("#settings-retry")).toBeHidden();
+});
+
+test("failed session reads stay distinct from an empty session list",async({page})=>{
+  await mockAPI(page);
+  await page.route("**/api/sessions**",route=>route.fulfill({status:502,body:"Session service unavailable"}));
+  await page.goto("/");
+  await expect(page.locator("#session-empty")).toContainText("Sessions unavailable:");
+  await expect(page.locator("#session-empty")).not.toContainText("No sessions yet");
+});
+
+test("Cursor CLI is included with separate usage buckets",async({page})=>{
+  await mockAPI(page);
+  await page.route("**/api/limits**",route=>route.fulfill({json:{limits:[{harness:"cursor",state:"available",source:"Cursor DashboardService/GetCurrentPeriodUsage",windows:[{id:"cursor/included",label:"Included usage",used_percent:25,remaining_percent:75},{id:"cursor/auto",label:"Auto models",used_percent:40,remaining_percent:60},{id:"cursor/api",label:"API models",used_percent:0,remaining_percent:100},{id:"cursor/on-demand",label:"On-demand spending limit",used_percent:0,remaining_percent:100}]}]}}));
+  await page.goto("/");await page.getByRole("button",{name:"Limits",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"Cursor CLI",exact:true})).toBeVisible();
+  await expect(page.getByRole("meter",{name:"Auto models remaining"})).toHaveAttribute("aria-valuenow","60");
+  await expect(page.getByRole("meter",{name:"API models remaining"})).toHaveAttribute("aria-valuenow","100");
+  await expect(page.getByRole("meter")).toHaveCount(4);
+});
