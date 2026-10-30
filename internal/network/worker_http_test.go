@@ -279,6 +279,19 @@ func TestLocalTerminalReconnectsAfterDroppedConnection(t *testing.T) {
 	waitFor(func(value string) bool { return strings.Contains(value, "READY") })
 	(<-accepted).Close()
 	waitFor(func(value string) bool { return strings.Count(value, "READY") >= 2 })
+	// A slow attachment ends while the underlying agent remains alive.
+	session.mu.Lock()
+	for id, attachment := range session.attachments {
+		if attachment.local {
+			attachment.err = ErrSlowObserver
+			close(attachment.ready)
+			delete(session.attachments, id)
+		}
+	}
+	session.updateResponderLocked()
+	session.mu.Unlock()
+	waitFor(func(value string) bool { return strings.Count(value, "READY") >= 3 })
+
 	if _, err := master.Write([]byte("after\n")); err != nil {
 		t.Fatal(err)
 	}

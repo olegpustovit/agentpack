@@ -168,7 +168,7 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 				continue
 			}
 			if notice.Type == "ended" {
-				if state.Restarting {
+				if state.Restarting || state.Running {
 					if err := reconnect(); err != nil {
 						return 1, err
 					}
