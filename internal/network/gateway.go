@@ -121,6 +121,7 @@ func (g *Gateway) Handler() http.Handler {
 	g.registerSettings(mux)
 	g.registerLibrary(mux)
 	g.registerRegistryReplication(mux)
+	g.registerLimits(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, map[string]bool{"ok": true}) })
 	mux.HandleFunc("GET /api/status", g.auth.status)
 	mux.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) { g.auth.login(w, r, true, g.origin.Scheme == "https") })
