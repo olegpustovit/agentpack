@@ -13,6 +13,14 @@ export const identityQuery = queryOptions({
   staleTime: 60 * 60 * 1000,
 })
 
+// A peer's identity is proxied through the gateway, so OS and version come from the machine itself.
+export const machineIdentityQuery = (machine: string) =>
+  queryOptions({
+    queryKey: ["m", machine, "identity"],
+    queryFn: () => api<Identity>("/api/identity", { machine }),
+    staleTime: 60 * 60 * 1000,
+  })
+
 export const nodesQuery = (live: boolean) =>
   queryOptions({
     queryKey: ["nodes"],

@@ -22,30 +22,34 @@ const agents = ["claude", "codex", "grok", "omp", "opencode", "agent", "agy"].ma
 export function NewSessionSheet({
   open,
   machines,
+  initialMachine,
+  initialDirectory,
   onOpenChange,
 }: {
   open: boolean
   machines: Machine[]
+  initialMachine?: string
+  initialDirectory?: string
   onOpenChange: (open: boolean) => void
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       {open && (
         <SheetContent>
-          <NewSessionForm machines={machines} />
+          <NewSessionForm machines={machines} initialMachine={initialMachine} initialDirectory={initialDirectory} />
         </SheetContent>
       )}
     </Sheet>
   )
 }
 
-function NewSessionForm({ machines }: { machines: Machine[] }) {
+function NewSessionForm({ machines, initialMachine, initialDirectory }: { machines: Machine[]; initialMachine?: string; initialDirectory?: string }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const online = machines.filter((machine) => machine.online)
   // Nulls mean "use the default": the first online machine, its newest folder, and that folder's newest launch.
-  const [machine, setMachine] = useState<string | null>(null)
-  const [directory, setDirectory] = useState<string | null>(null)
+  const [machine, setMachine] = useState<string | null>(initialMachine ?? null)
+  const [directory, setDirectory] = useState<string | null>(initialDirectory ?? null)
   const [harness, setHarness] = useState<string | null>(null)
   const [mode, setMode] = useState<string | null>(null)
 

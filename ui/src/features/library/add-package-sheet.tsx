@@ -11,23 +11,33 @@ import { basename } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { errorText, installPackage } from "./mutations"
 
-// Opened from ?add=1 on the Library. Installs one spec into one project the user picks.
-export function AddPackageSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+// Opened from ?add=1 on the Library, or from a project row with that project preselected.
+export function AddPackageSheet({
+  open,
+  initialMachine,
+  initialDirectory,
+  onOpenChange,
+}: {
+  open: boolean
+  initialMachine?: string
+  initialDirectory?: string
+  onOpenChange: (open: boolean) => void
+}) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent>
-        <AddPackageForm onDone={() => onOpenChange(false)} />
+        <AddPackageForm onDone={() => onOpenChange(false)} initialMachine={initialMachine} initialDirectory={initialDirectory} />
       </SheetContent>
     </Sheet>
   )
 }
 
-function AddPackageForm({ onDone }: { onDone: () => void }) {
+function AddPackageForm({ onDone, initialMachine, initialDirectory }: { onDone: () => void; initialMachine?: string; initialDirectory?: string }) {
   const queryClient = useQueryClient()
   const machines = useMachines()
   const projects = useMachineQueries(projectsQuery)
   const [spec, setSpec] = useState("")
-  const [choice, setChoice] = useState<string>()
+  const [choice, setChoice] = useState<string | undefined>(initialMachine && initialDirectory ? `${initialMachine}\0${initialDirectory}` : undefined)
   const [blank, setBlank] = useState(false)
 
   const eligible = machines
