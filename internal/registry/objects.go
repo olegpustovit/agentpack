@@ -109,11 +109,11 @@ func (s *Store) readRevision(id string) (Revision, error) {
 		return r, fmt.Errorf("unsupported agentpack revision schema")
 	}
 	manifestData, manifestSecrets, err := normalizeTOML([]byte(r.Manifest))
-	if err != nil || !bytes.Equal(manifestData, []byte(r.Manifest)) {
+	if err != nil || !sameTOML(manifestData, []byte(r.Manifest)) {
 		return r, fmt.Errorf("agentpack revision manifest is not normalized and redacted")
 	}
 	lockData, lockSecrets, err := normalizeTOML([]byte(r.Lock))
-	if err != nil || !bytes.Equal(lockData, []byte(r.Lock)) {
+	if err != nil || !sameTOML(lockData, []byte(r.Lock)) {
 		return r, fmt.Errorf("agentpack revision lock is not normalized and redacted")
 	}
 	if _, err := validateSnapshot(manifestData, lockData); err != nil {

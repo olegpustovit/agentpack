@@ -11,6 +11,7 @@ import { nodesQuery, topologyQuery, useMachineQueries, useMachines } from "@/fea
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { terminalPool } from "@/features/terminal/pool"
+import { rememberSession } from "@/features/shell/views"
 import { LOCAL } from "@/lib/api"
 import { basename, plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -136,7 +137,10 @@ export function SessionList() {
       },
       closeTerminal: () => {
         // The socket stays open for a pooled session, so closing must also end it.
-        if (selected) void navigate({ to: "/sessions", search: true }).then(() => terminalPool.dispose(row.machine, row.id))
+        if (selected) void navigate({ to: "/sessions", search: true }).then(() => {
+          rememberSession(undefined)
+          terminalPool.dispose(row.machine, row.id)
+        })
       },
       install: () => setSheet({ kind: "install", row }),
       save: () => setSheet({ kind: "save", row }),

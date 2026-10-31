@@ -228,7 +228,7 @@ func (s *Store) captureUnlocked(input CaptureInput) (Agentpack, Revision, error)
 			if err != nil {
 				return pack, revision, err
 			}
-			if latest.Manifest == string(cleanManifest) && latest.Lock == string(cleanLock) && latest.Mode == input.Mode {
+			if sameTOML([]byte(latest.Manifest), cleanManifest) && sameTOML([]byte(latest.Lock), cleanLock) && latest.Mode == input.Mode {
 				allBindings := bindings{Values: mergeBindings(manifestBindings, lockBindings, "manifest:", "lock:")}
 				if len(allBindings.Values) > 0 {
 					if err := s.writeBindings(latest.ID, allBindings); err != nil {

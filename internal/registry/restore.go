@@ -1,7 +1,6 @@
 package registry
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -191,11 +190,11 @@ func (s *Store) restoreBytes(revision Revision) ([]byte, []byte, error) {
 		return nil, nil, fmt.Errorf("restore local lock bindings: %w", err)
 	}
 	cleanManifest, _, err := normalizeTOML(manifestData)
-	if err != nil || !bytes.Equal(cleanManifest, []byte(revision.Manifest)) {
+	if err != nil || !sameTOML(cleanManifest, []byte(revision.Manifest)) {
 		return nil, nil, fmt.Errorf("restored manifest does not match revision")
 	}
 	cleanLock, _, err := normalizeTOML(lockData)
-	if err != nil || !bytes.Equal(cleanLock, []byte(revision.Lock)) {
+	if err != nil || !sameTOML(cleanLock, []byte(revision.Lock)) {
 		return nil, nil, fmt.Errorf("restored lock does not match revision")
 	}
 	return manifestData, lockData, nil

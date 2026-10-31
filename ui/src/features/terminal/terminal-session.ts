@@ -4,6 +4,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links"
 import { api, LOCAL } from "@/lib/api"
 import type { SessionInfo, TerminalState } from "@/lib/api-types"
 import { BASE_FONT, fitFont, MIN_FONT, nudgeFont } from "./fit"
+import { screenReaderEnabled } from "./screen-reader"
 
 declare global {
   interface Window {
@@ -326,7 +327,9 @@ export class TerminalSession {
       fontSize: stored ?? BASE_FONT,
       scrollback: 5000,
       allowProposedApi: true,
-      screenReaderMode: true,
+      // Off unless asked for: in this mode xterm leaves typed text in its input element until Enter, and any
+      // IME, autocorrect or dictation event then resends that whole line to the agent.
+      screenReaderMode: screenReaderEnabled(),
       disableStdin: true,
       macOptionClickForcesSelection: true,
       theme: terminalTheme(this.#appearance.matches),

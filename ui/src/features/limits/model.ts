@@ -14,6 +14,12 @@ export function windowsOf(snapshot: LimitSnapshot): LimitWindow[] {
   return snapshot.windows ?? []
 }
 
+// When the machine last measured these, in ms since epoch. Older peers may not say.
+export function observedAt(snapshots: LimitSnapshot[], fallback: number): number {
+  const times = snapshots.map((snapshot) => Date.parse(snapshot.observed_at ?? "")).filter((time) => time > 0)
+  return times.length ? Math.max(...times) : fallback
+}
+
 export function usable(snapshot: LimitSnapshot): boolean {
   return snapshot.state === "available" && windowsOf(snapshot).length > 0
 }

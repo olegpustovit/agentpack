@@ -62,6 +62,32 @@ for (const viewport of viewports) {
   })
 }
 
+test("an IME event after typing sends only its own text, never the whole line again", async ({ page }) => {
+  const worker = await stubWorker(page)
+  await openRoute(page, "/sessions/local/s1")
+  await page.keyboard.type("hello")
+  await expect.poll(() => worker.conns[0]?.sent.join("")).toContain("hello")
+  // keyCode 229 is how browsers announce IME, dictation and autocorrect edits.
+  await page.evaluate(async () => {
+    const input = document.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")!
+    input.dispatchEvent(new KeyboardEvent("keydown", { keyCode: 229, bubbles: true } as KeyboardEventInit))
+    input.value = input.value.slice(0, -1) + "X"
+    await new Promise((resolve) => setTimeout(resolve))
+  })
+  await expect.poll(() => worker.conns[0]?.sent.join("")).toContain("X")
+  expect(worker.conns[0]?.sent.join("")).toBe("helloX")
+})
+
+test("the Sessions view reopens the terminal it left, with its grouping", async ({ page }) => {
+  await stubWorker(page)
+  await openRoute(page, "/sessions/local/s1?group=machine")
+  await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Limits", exact: true }).click()
+  await expect(page).toHaveURL(/\/limits/)
+  await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Sessions", exact: true }).click()
+  await expect(page).toHaveURL(/\/sessions\/local\/s1\?group=machine/)
+  await expect(page.locator(".xterm-helper-textarea")).toBeFocused()
+})
+
 test("a non-interactive session shows native stdio copy and never opens a socket", async ({ page }) => {
   await stubApi(page, () => [session("n1", "stdio", { state: { ...shared, interactive: false } })])
   const worker = await stubWorker(page)

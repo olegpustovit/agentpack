@@ -13,8 +13,8 @@ import type { LimitSnapshot, LimitsResponse } from "@/lib/api-types"
 import { harnessName, plural, relativeTime } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
-import { limitsQuery } from "./queries"
-import { providerGroups, remainingPercent, resetLabel, windowsOf, type LimitReport, type ProviderGroup } from "./model"
+import { limitsQuery, rememberLimits } from "./queries"
+import { observedAt, providerGroups, remainingPercent, resetLabel, windowsOf, type LimitReport, type ProviderGroup } from "./model"
 
 export function LimitsView() {
   const machines = useMachines()
@@ -28,8 +28,12 @@ export function LimitsView() {
   const groups = providerGroups(reports)
   const pending = machines.filter((machine) => queries.byMachine[machine.id]?.pending)
   const offline = machines.filter((machine) => !machine.online && queries.byMachine[machine.id]?.data)
-  // Newest successful update across machines; 0 when none has data yet. The minute tick can lag a fresh fetch, so `now` is clamped below.
-  const latest = Math.max(0, ...machines.map((machine) => queries.byMachine[machine.id]?.updatedAt ?? 0))
+  // Newest measurement across machines; 0 when none has data yet. A gateway can answer from its saved copy, so
+  // the fetch time would overstate freshness. The minute tick can lag a fresh fetch, so `now` is clamped below.
+  const latest = Math.max(0, ...machines.map((machine) => {
+    const entry = queries.byMachine[machine.id]
+    return entry?.data ? observedAt(entry.data, entry.updatedAt) : 0
+  }))
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -193,6 +197,7 @@ function RefreshButton({ machines }: { machines: Machine[] }) {
     try {
       const { limits } = await api<LimitsResponse>("/api/limits/refresh", { machine: machine.id, method: "POST" })
       queryClient.setQueryData<LimitSnapshot[]>(["m", machine.id, "limits"], limits)
+      rememberLimits(machine.id, limits)
     } catch (error) {
       hud.error(`Couldn't refresh limits on ${machine.name}: ${(error as Error).message}`, () => void refreshOne(machine))
     }

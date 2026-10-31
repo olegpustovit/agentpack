@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -33,6 +34,13 @@ func normalizeTOML(input []byte) ([]byte, map[string]string, error) {
 	redact(value, "", "", secrets)
 	data, err := toml.Marshal(value)
 	return data, secrets, err
+}
+
+// sameTOML compares values, not bytes: revisions are immutable, and the encoder's layout changes
+// between go-toml releases.
+func sameTOML(a, b []byte) bool {
+	var left, right map[string]any
+	return toml.Unmarshal(a, &left) == nil && toml.Unmarshal(b, &right) == nil && reflect.DeepEqual(left, right)
 }
 
 func redact(value any, path, parent string, secrets map[string]string) {

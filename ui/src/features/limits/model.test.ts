@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { LimitSnapshot, LimitWindow } from "@/lib/api-types"
-import { providerGroups, relativeUntil, remainingPercent, resetLabel, selectReport, type LimitReport } from "./model"
+import { observedAt, providerGroups, relativeUntil, remainingPercent, resetLabel, selectReport, type LimitReport } from "./model"
 
 const snapshot = (over: Partial<LimitSnapshot>): LimitSnapshot => ({
   harness: "codex",
@@ -106,5 +106,14 @@ describe("machines without the CLI", () => {
 
   it("still show when no machine has it", () => {
     expect(providerGroups([absent])[0]?.selected.id).toBe("vm")
+  })
+})
+
+describe("observedAt", () => {
+  it("is the newest measurement, and the fallback when a peer reports none", () => {
+    const older = snapshot({ observed_at: "2026-10-30T09:00:00Z" })
+    expect(observedAt([older, snapshot({})], 1)).toBe(Date.parse("2026-10-30T10:00:00Z"))
+    expect(observedAt([], 1)).toBe(1)
+    expect(observedAt([snapshot({ observed_at: "0001-01-01T00:00:00Z" })], 1)).toBe(1)
   })
 })

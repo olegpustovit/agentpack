@@ -10,7 +10,7 @@ import { buttonVariants } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useIsPhone } from "./use-is-phone"
 import { useSidebar } from "./sidebar"
-import { listDetailViews, tabs, useRoutePosition, views } from "./views"
+import { listDetailViews, tabs, useRoutePosition, viewLink, views } from "./views"
 import { ToolbarProvider, ToolbarTarget, ToolbarTitleTarget } from "./toolbar-slot"
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -46,7 +46,7 @@ function useShellShortcuts() {
       const view = views[Number(event.key) - 1]
       if (view) {
         event.preventDefault()
-        void navigate({ to: view.to })
+        void navigate(viewLink(view))
       }
     }
     window.addEventListener("keydown", onKeyDown)
@@ -88,7 +88,7 @@ function AppToolbar() {
         {views.map((item, index) => (
           <Link
             key={item.id}
-            to={item.to}
+            {...viewLink(item)}
             title={`⌘${index + 1}`}
             className={cn(
               "flex h-(--ctl-h-sm) cursor-default items-center rounded-(--r-row) px-(--s4) text-(length:--fs-sm) text-(--fg2)",

@@ -5,12 +5,14 @@ import { QueryClientProvider } from "@tanstack/react-query"
 import { RouterProvider } from "@tanstack/react-router"
 import { setUnauthorizedHandler } from "./lib/api"
 import { terminalPool } from "./features/terminal/pool"
+import { forgetLimits } from "./features/limits/queries"
 import { queryClient, router } from "./router"
 
 // A 401 ends the session: close every terminal socket before the login screen takes over.
 setUnauthorizedHandler(() => {
   terminalPool.disposeAll()
   queryClient.clear()
+  forgetLimits()
   void router.navigate({ to: "/login" })
 })
 

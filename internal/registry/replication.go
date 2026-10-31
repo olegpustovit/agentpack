@@ -327,11 +327,11 @@ func decodeImported(data []byte) (importedObject, error) {
 			return obj, fmt.Errorf("invalid registry revision schema or owner")
 		}
 		cleanManifest, manifestSecrets, err := normalizeTOML([]byte(revision.Manifest))
-		if err != nil || !bytes.Equal(cleanManifest, []byte(revision.Manifest)) {
+		if err != nil || !sameTOML(cleanManifest, []byte(revision.Manifest)) {
 			return obj, fmt.Errorf("registry revision contains unredacted or invalid manifest data")
 		}
 		cleanLock, lockSecrets, err := normalizeTOML([]byte(revision.Lock))
-		if err != nil || !bytes.Equal(cleanLock, []byte(revision.Lock)) {
+		if err != nil || !sameTOML(cleanLock, []byte(revision.Lock)) {
 			return obj, fmt.Errorf("registry revision contains unredacted or invalid lock data")
 		}
 		if revision.NeedsLocalConfiguration != (len(manifestSecrets)+len(lockSecrets) > 0) {

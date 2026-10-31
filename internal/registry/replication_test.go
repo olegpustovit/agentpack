@@ -1,6 +1,8 @@
 package registry
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -359,4 +361,62 @@ func mustStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	return store
+}
+
+// Stored revisions outlive the encoder that wrote them: go-toml 2.4 lays out empty sub-tables without
+// the blank lines 2.3 wrote, and that made every older revision unreadable.
+func TestRevisionLoadsAcrossEncoderLayoutsButNotUnredacted(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack, revision, err := store.Capture(CaptureInput{Name: "Shared", Project: "/workspace/shared", Manifest: []byte(manifestTemplate), Lock: lockWithCommit("abc123")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	older := revision
+	older.Manifest = strings.ReplaceAll(revision.Manifest, "\n[", "\n\n[")
+	if older.Manifest == revision.Manifest {
+		t.Fatal("fixture did not change the layout")
+	}
+	data, err := marshalObject(older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeImported(data); err != nil {
+		t.Fatalf("older layout rejected: %v", err)
+	}
+	// A store whose only revision has the older layout, as on a machine that just upgraded.
+	upgraded, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := store.Inventory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects := exportInventory(t, store, inventory)
+	delete(objects, revision.ID)
+	sum := sha256.Sum256(data)
+	id := hex.EncodeToString(sum[:])
+	objects[id] = data
+	if _, err := upgraded.ImportObjects(objects); err != nil {
+		t.Fatal(err)
+	}
+	if read, err := upgraded.readRevision(id); err != nil || read.Manifest != older.Manifest {
+		t.Fatalf("older layout unreadable: %#v %v", read, err)
+	}
+	if _, again, err := upgraded.Capture(CaptureInput{ID: pack.ID, Project: "/workspace/shared", Manifest: []byte(older.Manifest), Lock: []byte(older.Lock)}); err != nil || again.ID != id {
+		t.Fatalf("a layout difference must not create a revision: %#v %v", again, err)
+	}
+
+	leaked := revision
+	leaked.Manifest += "\n[mcp.servers.leak.env]\nKEY = 'plain'\n"
+	data, err = marshalObject(leaked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeImported(data); err == nil || !strings.Contains(err.Error(), "unredacted") {
+		t.Fatalf("unredacted manifest accepted: %v", err)
+	}
 }

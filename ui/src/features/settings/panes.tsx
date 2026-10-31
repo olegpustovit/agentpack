@@ -7,6 +7,8 @@ import { StatusDot } from "@/components/kit/status-dot"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { identityQuery } from "@/features/machines/queries"
+import { terminalPool } from "@/features/terminal/pool"
+import { screenReaderEnabled, setScreenReaderEnabled } from "@/features/terminal/screen-reader"
 import { allowListLabel, sharingLabel } from "./model"
 import { settingsQuery } from "./queries"
 import { useGatewayActions } from "./actions"
@@ -101,6 +103,7 @@ const themeLabels: Record<Theme, string> = { system: "System", light: "Light", d
 
 export function AppearancePane() {
   const [theme, setTheme] = useState<Theme>(currentTheme)
+  const [screenReader, setScreenReader] = useState(screenReaderEnabled)
   function choose(value: unknown[]) {
     const next = themes.find((item) => item === value[0])
     if (!next) return
@@ -118,6 +121,18 @@ export function AppearancePane() {
               </SegmentedControlItem>
             ))}
           </SegmentedControl>
+        </Row>
+        <Row label="Terminal screen reader support">
+          <Switch
+            aria-label="Terminal screen reader support"
+            checked={screenReader}
+            onCheckedChange={(checked) => {
+              setScreenReaderEnabled(checked)
+              setScreenReader(checked)
+              // The mode is chosen when a terminal opens; open sessions reconnect with it on return.
+              terminalPool.disposeAll()
+            }}
+          />
         </Row>
       </FieldGrid>
     </Pane>
