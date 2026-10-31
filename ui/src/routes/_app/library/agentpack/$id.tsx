@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
+import { AgentpackInspector } from "@/features/library/agentpack-inspector"
 
 export const Route = createFileRoute("/_app/library/agentpack/$id")({
   validateSearch: z.object({
@@ -10,5 +11,19 @@ export const Route = createFileRoute("/_app/library/agentpack/$id")({
     revision: z.string().optional().catch(undefined),
     restore: z.string().optional().catch(undefined),
   }),
-  component: () => <p>agentpack</p>,
+  component: AgentpackRoute,
 })
+
+function AgentpackRoute() {
+  const { id } = Route.useParams()
+  const { revision } = Route.useSearch()
+  const navigate = Route.useNavigate()
+  // Replace, so moving through history does not stack entries.
+  return (
+    <AgentpackInspector
+      id={id}
+      revision={revision}
+      onRevision={(next) => void navigate({ search: (prev) => ({ ...prev, revision: next }), replace: true })}
+    />
+  )
+}
