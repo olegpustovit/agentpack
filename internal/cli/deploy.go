@@ -53,6 +53,10 @@ func (runner Runner) runDeploy(ctx context.Context, arguments []string) (int, er
 		if err != nil || !strings.Contains(string(manifest), "module github.com/olegpustovit/agentpack\n") {
 			return 2, errors.New("run deploy from the Agentpack source checkout, or pass --binary with a Linux ARM64 build")
 		}
+		// go build embeds webdist as it stands, so an unstaged checkout would ship the placeholder page.
+		if err := requireStagedUI("."); err != nil {
+			return 2, err
+		}
 		directory, err := os.MkdirTemp("", "agentpack-deploy-")
 		if err != nil {
 			return 1, fmt.Errorf("create deployment build directory: %w", err)
@@ -73,6 +77,13 @@ func (runner Runner) runDeploy(ctx context.Context, arguments []string) (int, er
 	fmt.Fprintln(runner.Stdout, "First login: retrieve the one-time administrator setup link with:")
 	fmt.Fprintln(runner.Stdout, "ssh oracle-vm 'env AGENTPACK_HOME=$HOME/.local/share/agentpack-gateway AGENTPACK_PUBLIC_URL=https://agentpack.microapps.space $HOME/.local/lib/agentpack/agentpack gateway setup'")
 	return 0, nil
+}
+
+func requireStagedUI(root string) error {
+	if _, err := os.Stat(filepath.Join(root, "internal", "network", "webdist", "index.html")); err != nil {
+		return errors.New("gateway UI is not built; run make ui-stage before deploying")
+	}
+	return nil
 }
 
 func deployRemote(ctx context.Context, binary string, run func(*exec.Cmd) error) error {

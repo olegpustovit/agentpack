@@ -110,12 +110,12 @@ function InstallForm({ item, onDone }: { item: InstallItem; onDone: () => void }
         <div className="flex max-h-96 flex-col gap-(--s4) overflow-y-auto" role="group" aria-label="Destinations">
           {destinationsByMachine.map(({ machine, rows: group }) => (
             <section key={machine.id} className="flex flex-col gap-(--s2)">
-              <h3 className="text-(--fs-sm) font-medium text-(--fg2)">{`${machine.name} · ${machine.online ? "Online" : "Offline"}`}</h3>
+              <h3 className="text-(length:--fs-sm) font-medium text-(--fg2)">{`${machine.name} · ${machine.online ? "Online" : "Offline"}`}</h3>
               {group.map((row) => {
                 const current = status[row.key]
                 const checked = picked.includes(row.key)
                 return (
-                  <label key={row.key} className="flex min-w-0 items-center gap-(--s3) text-(--fs)">
+                  <label key={row.key} className="flex min-w-0 items-center gap-(--s3) text-(length:--fs)">
                     <Checkbox
                       checked={checked}
                       disabled={row.disabled || busy}
@@ -132,13 +132,13 @@ function InstallForm({ item, onDone }: { item: InstallItem; onDone: () => void }
           ))}
         </div>
       )}
-      <label className="flex items-center gap-(--s3) text-(--fs-sm)">
+      <label className="flex items-center gap-(--s3) text-(length:--fs-sm)">
         <Checkbox checked={restart} disabled={busy} onCheckedChange={setRestart} />
         Restart affected agents
         {restart && affected > 0 && <span className="text-(--fg2)">{restartCopy(affected)}</span>}
       </label>
       <SheetActions>
-        {phase === "pick" && chosen.length === 0 && <span className="self-center text-(--fs-sm) text-(--fg2)">Choose at least one project</span>}
+        {phase === "pick" && chosen.length === 0 && <span className="self-center text-(length:--fs-sm) text-(--fg2)">Choose at least one project</span>}
         {phase === "done" ? (
           <Button type="button" variant="primary" onClick={onDone}>
             Done

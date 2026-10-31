@@ -5,6 +5,18 @@ All notable changes to `agentpack` are documented here. The format is based on
 "Pre-release" note in `AGENTS.md` — breaking changes may land between versions without a migration
 window.
 
+## [0.12.0] - 2026-10-31
+
+### Changed
+
+- The gateway UI is rebuilt in React with client routing, deep links, per-machine queries that refresh from a server-sent event stream, a macOS-density kit, and a terminal that fits by font size, so clicks and selection land on the right cells. Terminals stay connected while you move between recent sessions and resume where they stopped.
+- New: session filter, network topology view, MCP servers in the Library, who started each session, machine hostnames, and an install picker that shows each known package's state in a project.
+
+### Fixed
+
+- `make ui-stage` no longer modifies a tracked file, so it cannot leave the checkout dirty or fail a tagged release.
+- `agentpack deploy` refuses to build from a checkout whose gateway UI was not staged, rather than shipping the placeholder page.
+
 ## [0.7.9] - 2026-10-26
 
 ### Fixed

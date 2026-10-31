@@ -5,7 +5,7 @@ import { relativeTime } from "@/lib/format"
 export const ROW_H = 44
 export const NODE_H = 40
 export const GATEWAY_W = 180
-export const PEER_X = 320
+export const PEER_X = 420
 export const PEER_W = 200
 export const DIAGRAM_W = PEER_X + PEER_W
 
@@ -61,14 +61,14 @@ export type Diagram = { height: number; hubY: number; nodes: { peer: TopologyPee
 export function layoutDiagram(peers: TopologyPeer[]): Diagram {
   const height = Math.max(peers.length, 1) * ROW_H
   const hubY = height / 2
-  const labelX = (GATEWAY_W + PEER_X) / 2
+  const midX = (GATEWAY_W + PEER_X) / 2
   const nodes = peers.map((peer, i) => ({ peer, y: i * ROW_H + (ROW_H - NODE_H) / 2 }))
   const edges = peers.flatMap((peer, i): DiagramEdge[] => {
     if (peer.state !== "reachable") return []
     const cy = i * ROW_H + ROW_H / 2
     const { label, dashed } = edgeOf(peer)
-    const d = `M${GATEWAY_W} ${hubY}C${labelX} ${hubY} ${labelX} ${cy} ${PEER_X} ${cy}`
-    return [{ peer, d, label, dashed, labelX, labelY: (hubY + cy) / 2 }]
+    const d = `M${GATEWAY_W} ${hubY}C${midX} ${hubY} ${midX} ${cy} ${PEER_X} ${cy}`
+    return [{ peer, d, label, dashed, labelX: PEER_X - 8, labelY: cy - 8 }]
   })
   return { height, hubY, nodes, edges }
 }

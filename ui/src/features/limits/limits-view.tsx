@@ -1,15 +1,16 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { getRouteApi } from "@tanstack/react-router"
 import { RefreshCw } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHeaderCell, DataGridHead, DataGridRow, Meter } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
 import { useMachineQueries, useMachines, type Machine } from "@/features/machines/queries"
 import { StatusSlot } from "@/features/status/status-bar"
-import { ToolbarSlot } from "@/features/shell/toolbar-slot"
+import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { api } from "@/lib/api"
 import type { LimitSnapshot, LimitsResponse } from "@/lib/api-types"
-import { harnessName, relativeTime } from "@/lib/format"
+import { harnessName, plural, relativeTime } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { limitsQuery } from "./queries"
@@ -20,7 +21,8 @@ export function LimitsView() {
   const queries = useMachineQueries(limitsQuery)
   const now = useMinuteTick()
 
-  const reports: LimitReport[] = machines.flatMap((machine) =>
+  const { machine: only } = getRouteApi("/_app/limits").useSearch()
+  const reports: LimitReport[] = machines.filter((machine) => !only || machine.id === only).flatMap((machine) =>
     (queries.byMachine[machine.id]?.data ?? []).map((snapshot) => ({ id: machine.id, name: machine.name, snapshot })),
   )
   const groups = providerGroups(reports)
@@ -31,6 +33,7 @@ export function LimitsView() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <ToolbarTitle title="Provider limits" subtitle={`Best report per provider, across ${plural(machines.length, "machine")}`} />
       <RefreshButton machines={machines} />
       {latest > 0 && (
         <StatusSlot>{`Updated ${relativeTime(new Date(latest), Math.max(now, latest))}`}</StatusSlot>
@@ -54,14 +57,15 @@ export function LimitsView() {
           Limits appear when a connected machine has a signed-in provider CLI. Refresh to check again.
         </Empty>
       ) : (
-        <DataGrid aria-label="Provider limits">
+        <div className="flex min-h-0 flex-1 flex-col px-(--s6)">
+        <DataGrid aria-label="Provider limits" className="min-w-225">
           <DataGridHead>
             <tr>
               <DataGridHeaderCell className="w-32">Provider</DataGridHeaderCell>
-              <DataGridHeaderCell className="w-44">Window</DataGridHeaderCell>
-              <DataGridHeaderCell className="w-40">Usage</DataGridHeaderCell>
-              <DataGridHeaderCell className="w-24">% left</DataGridHeaderCell>
-              <DataGridHeaderCell className="w-48">Resets</DataGridHeaderCell>
+              <DataGridHeaderCell className="w-32">Window</DataGridHeaderCell>
+              <DataGridHeaderCell className="w-40">Remaining</DataGridHeaderCell>
+              <DataGridHeaderCell className="w-24 text-right">% left</DataGridHeaderCell>
+              <DataGridHeaderCell>Resets</DataGridHeaderCell>
               <DataGridHeaderCell className="w-36">Machine</DataGridHeaderCell>
               <DataGridHeaderCell className="w-24">Plan</DataGridHeaderCell>
             </tr>
@@ -82,6 +86,7 @@ export function LimitsView() {
             <ProviderRows key={group.provider} group={group} now={now} dim />
           ))}
         </DataGrid>
+        </div>
       )}
     </div>
   )
@@ -104,11 +109,11 @@ function ProviderRows({ group, now, dim = false }: { group: ProviderGroup; now: 
   const others = open ? group.others.flatMap((report) => reportLines(report, now)) : []
   const span = selected.length + (group.others.length > 0 ? 1 + others.length : 0)
   return (
-    <tbody data-provider={group.provider} className={cn(dim && "text-(--fg3)")}>
+    <tbody data-provider={group.provider} className={cn("border-b-[0.5px] border-(--sep)", dim && "text-(--fg3)")}>
       {selected.map((line, index) => (
         <DataGridRow key={line.key}>
           {index === 0 && (
-            <DataGridCell rowSpan={span} className="align-top font-medium">
+            <DataGridCell rowSpan={span} className="align-top leading-(--row-h) font-medium">
               {harnessName(group.provider)}
             </DataGridCell>
           )}
@@ -148,10 +153,7 @@ function reportLines(report: LimitReport, now: number): Line[] {
         key: `${report.id}:none`,
         cells: (
           <>
-            <DataGridCell />
-            <DataGridCell />
-            <DataGridCell />
-            <DataGridCell className="text-(--fg2)" title={snapshot.error}>
+            <DataGridCell colSpan={4} className="text-(--fg2)" title={snapshot.error}>
               {snapshot.error || "No usage windows reported by this machine."}
             </DataGridCell>
             <DataGridCell>{report.name}</DataGridCell>
@@ -172,9 +174,9 @@ function reportLines(report: LimitReport, now: number): Line[] {
           <DataGridCell>
             <Meter value={left} label={`${window.label} remaining`} />
           </DataGridCell>
-          <DataGridCell>{left === undefined ? "Unknown" : `${Math.round(left)}% left`}</DataGridCell>
+          <DataGridCell className="text-right tabular-nums">{left === undefined ? "Unknown" : `${Math.round(left)}% left`}</DataGridCell>
           <DataGridCell className={cn(reset.due && "text-(--fg3)")} title={reset.text}>
-            {reset.text}
+            {reset.due ? reset.text : reset.text.split(" · ")[0]}
           </DataGridCell>
           <DataGridCell>{report.name}</DataGridCell>
           <DataGridCell>{snapshot.plan}</DataGridCell>
@@ -200,7 +202,7 @@ function RefreshButton({ machines }: { machines: Machine[] }) {
   })
   return (
     <ToolbarSlot>
-      <Button variant="ghost" size="sm" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
+      <Button disabled={refresh.isPending} onClick={() => refresh.mutate()}>
         <RefreshCw aria-hidden className={cn(refresh.isPending && "animate-spin motion-reduce:animate-none")} />
         Refresh
       </Button>

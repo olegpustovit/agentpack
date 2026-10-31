@@ -1,6 +1,7 @@
 package network
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"testing/fstest"
@@ -68,5 +69,16 @@ func TestWebAssetsDecisionTable(t *testing.T) {
 				t.Fatalf("body: want %q got %q", tc.body, got)
 			}
 		})
+	}
+}
+
+func TestWebAssetsServesPlaceholderWithoutBuild(t *testing.T) {
+	files := fstest.MapFS{"placeholder.html": {Data: []byte("not built")}}
+	for _, target := range []string{"/", "/sessions/local/x"} {
+		rec := httptest.NewRecorder()
+		webAssets(files).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		if rec.Code != http.StatusOK || rec.Body.String() != "not built" {
+			t.Fatalf("%s: got %d %q", target, rec.Code, rec.Body.String())
+		}
 	}
 }

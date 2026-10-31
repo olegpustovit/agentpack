@@ -1,10 +1,10 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Laptop, Package, Server, SquareTerminal, Trash2 } from "lucide-react"
-import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Hash, Inspector, InspectorHead, Section } from "@/components/kit/data"
+import { Package, SquareTerminal, Trash2 } from "lucide-react"
+import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Hash, Inspector, Section } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { ConfirmAlert, ConfirmAlertContent, RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
-import { StatusDot } from "@/components/kit/status-dot"
+import { ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useEventsConnected } from "@/features/events/use-events"
 import { AddPackageSheet } from "@/features/library/add-package-sheet"
@@ -53,6 +53,7 @@ function MachineView({ machine }: { machine: Machine }) {
 
   const peer = topology.data?.peers.find((item) => item.id === machine.id)
   const facts = [
+    machine.online ? "Online" : "Offline",
     identity.data?.node.os,
     machine.id === LOCAL ? "local" : peer?.connection,
     identity.data ? `version ${identity.data.node.version}` : undefined,
@@ -77,18 +78,13 @@ function MachineView({ machine }: { machine: Machine }) {
             {`Couldn't load projects from ${machine.name}: ${projects.error.message}`}
           </Banner>
         )}
-        <InspectorHead
-          icon={machine.id === LOCAL ? <Laptop aria-hidden className="size-(--s6)" /> : <Server aria-hidden className="size-(--s6)" />}
-          title={machine.name}
-          subtitle={facts.filter(Boolean).join(" · ")}
-        >
-          <StatusDot state={machine.online ? "running" : "offline"} />
-        </InspectorHead>
-        <Section title="Projects and pinned packages" className="col-span-full">
+        <ToolbarTitle title={machine.name} subtitle={facts.filter(Boolean).join(" · ")} />
+        <h1 className="sr-only">{machine.name}</h1>
+        <Section title="Projects and pinned packages" className="col-span-full border-t-0 pt-0">
           {machine.online && projects.isPending && <RowSkeleton lines={2} />}
           {projects.data?.length === 0 && <Empty title="No projects yet">Folders appear here after an agent runs in them.</Empty>}
           {matrix.rows.length > 0 && (
-            <DataGrid aria-label="Projects and pinned packages">
+            <DataGrid aria-label="Projects and pinned packages" style={{ minWidth: 200 + matrix.columns.length * 160 }}>
               <DataGridHead>
                 <DataGridRow>
                   <DataGridHeaderCell>Project</DataGridHeaderCell>
@@ -110,7 +106,7 @@ function MachineView({ machine }: { machine: Machine }) {
                           <Tooltip>
                             <TooltipTrigger render={<button type="button" className="flex max-w-full min-w-0 flex-col text-left" />}>
                               <span className="truncate">{projectLabel(project)}</span>
-                              {note && <span className="truncate text-(--fs-sm) text-(--fg2)">{note}</span>}
+                              {note && <span className="truncate text-(length:--fs-sm) text-(--fg2)">{note}</span>}
                             </TooltipTrigger>
                             <TooltipContent>
                               <span className="block">{project.directory}</span>

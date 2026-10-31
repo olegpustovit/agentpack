@@ -11,6 +11,7 @@ on:
       - internal/**
       - integration/**
       - scripts/**
+      - ui/**
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+*"

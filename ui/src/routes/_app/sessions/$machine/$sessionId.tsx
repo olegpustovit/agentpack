@@ -4,6 +4,7 @@ import { lazy, Suspense } from "react"
 import { z } from "zod"
 import { useEventsConnected } from "@/features/events/use-events"
 import { useMachines } from "@/features/machines/queries"
+import { sessionDetail, sessionLabel } from "@/features/sessions/group"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { unavailableMessage, UnavailableTerminal } from "@/features/terminal/unavailable"
 
@@ -14,15 +15,17 @@ function SessionRoute() {
   const { machine, sessionId } = Route.useParams()
   const live = useEventsConnected()
   // Fetch only once the machine is known online, as the sidebar does; an offline one shows its cache.
-  const online = useMachines().find((item) => item.id === machine)?.online
+  const host = useMachines().find((item) => item.id === machine)
+  const online = host?.online
   const stale = online === false
   const { data } = useQuery({ ...sessionsQuery(machine, live), enabled: online === true })
   const info = data?.find((session) => session.id === sessionId)
   const message = unavailableMessage(info, stale)
+  const listed = info && host ? { ...info, machine, machineName: host.name, offline: !host.online } : undefined
   if (message) return <UnavailableTerminal message={message} />
   return (
     <Suspense fallback={<p className="p-(--s4) text-(--fg2)">Loading terminal…</p>}>
-      <TerminalPane key={`${machine}/${sessionId}`} machine={machine} sessionId={sessionId} info={info} listed={!data || !!info} />
+      <TerminalPane key={`${machine}/${sessionId}`} machine={machine} sessionId={sessionId} info={info} title={listed && sessionLabel(listed)} subtitle={listed && sessionDetail(listed).split(" · ").slice(listed.name ? 0 : 1).join(" · ")} listed={!data || !!info} />
     </Suspense>
   )
 }

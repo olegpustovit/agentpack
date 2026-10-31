@@ -3,7 +3,7 @@ import type { TerminalSession } from "./terminal-session"
 // Live terminals kept per tab. A fifth one evicts the least recently used.
 const CAPACITY = 4
 
-export type PoolEntry = { dispose(): void; reconnect(): void }
+export type PoolEntry = { dispose(): void; reconnect(): void; focus(): void }
 
 // Generic, and imports only a type, so the root bundle can import the pool without xterm.
 // `create` runs only on a miss; the session itself is built by the lazily loaded pane.
@@ -33,6 +33,16 @@ export class TerminalPool<T extends PoolEntry = TerminalSession> {
     const entries = [...this.#entries.values()]
     this.#entries.clear()
     for (const entry of entries) entry.dispose()
+  }
+
+  focus(machine: string, sessionId: string) {
+    this.#entries.get(`${machine}\0${sessionId}`)?.focus()
+  }
+
+  dispose(machine: string, sessionId: string) {
+    const key = `${machine}\0${sessionId}`
+    this.#entries.get(key)?.dispose()
+    this.#entries.delete(key)
   }
 
   // A row's Reconnect on a pooled session opens a new socket; a session not pooled opens one when it attaches.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { basename, harnessName, plural, relativeTime, shortHash } from "./format";
+import { basename, harnessName, plural, relativeTime, shortHash, shortAge } from "./format";
 
 describe("format", () => {
   it("shortens hashes to seven characters", () => {
@@ -29,3 +29,15 @@ describe("format", () => {
     expect(harnessName("unknown")).toBe("unknown");
   });
 });
+
+describe("compact values", () => {
+  it("keeps a content hash's algorithm prefix", () => {
+    expect(shortHash("sha256-tree-v1:abcdef0123")).toBe("sha256-tree-v1:abcdef0")
+  })
+  it("formats ages for row trailers", () => {
+    const now = Date.UTC(2026, 0, 3)
+    expect(shortAge(new Date(now - 12 * 60_000), now)).toBe("12 m")
+    expect(shortAge(new Date(now - 120 * 60_000), now)).toBe("2 h")
+    expect(shortAge(new Date(now - 72 * 3_600_000), now)).toBe("3 d")
+  })
+})

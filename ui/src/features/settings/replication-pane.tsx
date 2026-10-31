@@ -84,11 +84,11 @@ function PeerRow({
     <div className="flex min-w-0 items-center gap-(--s4) border-b-[0.5px] border-(--sep) py-(--s3)">
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium">{peer.name}</p>
-        <p className="text-(--fs-sm) text-(--fg2)">{replicationStatus(peer, replica)}</p>
+        <p className="text-(length:--fs-sm) text-(--fg2)">{replicationStatus(peer, replica)}</p>
         {contact?.error ? (
-          <p className="text-(--fs-sm) text-(--danger)">{contact.error}</p>
+          <p className="text-(length:--fs-sm) text-(--danger)">{contact.error}</p>
         ) : (
-          contact?.at && <p className="text-(--fs-xs) text-(--fg3)">{`Last contact ${new Date(contact.at).toLocaleString()}`}</p>
+          contact?.at && <p className="text-(length:--fs-xs) text-(--fg3)">{`Last contact ${new Date(contact.at).toLocaleString()}`}</p>
         )}
       </div>
       {replica ? (

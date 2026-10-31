@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Field, FieldError, FieldGrid, FieldLabel } from "@/components/kit/forms"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Field, FieldError, FieldGrid, FieldLabel, PopupSelect } from "@/components/kit/forms"
 import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
+import { AddPackageSheet } from "@/features/library/add-package-sheet"
+import { agentpacksQuery } from "@/features/library/queries"
 import { api } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { basename } from "@/lib/format"
@@ -16,12 +17,14 @@ export type SheetState = { kind: "rename" | "install" | "save"; row: ListedSessi
 
 // One Sheet for the three row dialogs. Each body mounts only while open, so its form starts clean.
 export function RowSheet({ sheet, onClose }: { sheet: SheetState | null; onClose: () => void }) {
+  if (sheet?.kind === "install") {
+    return <AddPackageSheet open initialMachine={sheet.row.machine} initialDirectory={sheet.row.directory} onOpenChange={(open) => { if (!open) onClose() }} />
+  }
   return (
     <Sheet open={sheet !== null} onOpenChange={(open) => { if (!open) onClose() }}>
       {sheet && (
         <SheetContent>
           {sheet.kind === "rename" && <RenameForm row={sheet.row} onDone={onClose} />}
-          {sheet.kind === "install" && <InstallForm row={sheet.row} onDone={onClose} />}
           {sheet.kind === "save" && <SaveForm row={sheet.row} onDone={onClose} />}
         </SheetContent>
       )}
@@ -73,60 +76,14 @@ function RenameForm({ row, onDone }: { row: ListedSession; onDone: () => void })
   )
 }
 
-// The gateway's install takes one module@commit spec. Picking from known packages is not in this sheet.
-function InstallForm({ row, onDone }: { row: ListedSession; onDone: () => void }) {
-  const [spec, setSpec] = useState("")
-  const [restart, setRestart] = useState(true)
-  const [blank, setBlank] = useState(false)
-  const install = useMutation({
-    mutationFn: (value: string) =>
-      api<unknown>("/api/packages", { machine: row.machine, method: "POST", body: { directory: row.directory, spec: value, restart } }),
-    onSuccess: (_result, value) => {
-      hud.success(`Installed ${value}`)
-      onDone()
-    },
-  })
-
-  function submit(event: FormEvent) {
-    event.preventDefault()
-    const next = spec.trim()
-    setBlank(next === "")
-    if (next) install.mutate(next)
-  }
-
-  const message = blank ? "Enter a package, like module@commit." : install.error?.message
-  return (
-    <form onSubmit={submit} className="contents">
-      <SheetTitle>Install package</SheetTitle>
-      <SheetDescription>{`${row.directory} · ${row.machineName}`}</SheetDescription>
-      <FieldGrid>
-        <Field>
-          <FieldLabel htmlFor="package-spec">Package</FieldLabel>
-          <Input id="package-spec" placeholder="module@commit" value={spec} onChange={(event) => setSpec(event.target.value)} autoFocus />
-        </Field>
-        <Field>
-          <span aria-hidden className="w-30 shrink-0" />
-          <label className="flex items-center gap-(--s3) text-(--fs-sm)">
-            <Checkbox checked={restart} onCheckedChange={setRestart} />
-            Restart affected agents
-          </label>
-        </Field>
-      </FieldGrid>
-      {message && <FieldError>{message}</FieldError>}
-      <SheetActions>
-        <Button type="submit" variant="primary" disabled={install.isPending}>
-          {install.isPending ? "Installing…" : "Install"}
-        </Button>
-      </SheetActions>
-    </form>
-  )
-}
-
-// Creates a new agentpack from the folder. Adding a revision to an existing agentpack is not in this sheet.
+// Captures the folder as a new agentpack, or as a new revision of one this machine holds.
 function SaveForm({ row, onDone }: { row: ListedSession; onDone: () => void }) {
   const [name, setName] = useState(basename(row.directory))
   const [note, setNote] = useState("")
   const [blank, setBlank] = useState(false)
+  const [target, setTarget] = useState("new")
+  const packs = useQuery(agentpacksQuery(row.machine)).data ?? []
+  const existing = packs.find((pack) => pack.agentpack.id === target)?.agentpack
   const save = useMutation({
     mutationFn: (value: { name: string; label: string }) =>
       api<unknown>("/api/library/agentpacks", {
@@ -135,6 +92,7 @@ function SaveForm({ row, onDone }: { row: ListedSession; onDone: () => void }) {
         body: {
           directory: row.directory,
           name: value.name,
+          agentpack_id: existing?.id,
           label: value.label || undefined,
           mode: row.mode || "default",
           auto_capture: false,
@@ -148,7 +106,7 @@ function SaveForm({ row, onDone }: { row: ListedSession; onDone: () => void }) {
 
   function submit(event: FormEvent) {
     event.preventDefault()
-    const next = name.trim()
+    const next = existing?.name ?? name.trim()
     setBlank(next === "")
     if (next) save.mutate({ name: next, label: note.trim() })
   }
@@ -157,12 +115,25 @@ function SaveForm({ row, onDone }: { row: ListedSession; onDone: () => void }) {
   return (
     <form onSubmit={submit} className="contents">
       <SheetTitle>Save agentpack</SheetTitle>
-      <SheetDescription>{`Capture ${row.directory} on ${row.machineName} as a new agentpack.`}</SheetDescription>
+      <SheetDescription>{`Capture ${row.directory} on ${row.machineName}.`}</SheetDescription>
       <FieldGrid>
-        <Field>
-          <FieldLabel htmlFor="save-name">Name</FieldLabel>
-          <Input id="save-name" maxLength={80} value={name} onChange={(event) => setName(event.target.value)} autoFocus />
-        </Field>
+        {packs.length > 0 && (
+          <Field>
+            <FieldLabel>Save to</FieldLabel>
+            <PopupSelect
+              label="Save to"
+              value={target}
+              items={[{ value: "new", label: "New agentpack" }, ...packs.map((pack) => ({ value: pack.agentpack.id, label: pack.agentpack.name }))]}
+              onValueChange={setTarget}
+            />
+          </Field>
+        )}
+        {!existing && (
+          <Field>
+            <FieldLabel htmlFor="save-name">Name</FieldLabel>
+            <Input id="save-name" maxLength={80} value={name} onChange={(event) => setName(event.target.value)} autoFocus />
+          </Field>
+        )}
         <Field>
           <FieldLabel htmlFor="save-note">Revision note</FieldLabel>
           <Input id="save-note" maxLength={80} placeholder="What changed?" value={note} onChange={(event) => setNote(event.target.value)} />

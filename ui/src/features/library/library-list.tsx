@@ -4,6 +4,7 @@ import { Boxes, Plug, Puzzle, Sparkles, type LucideIcon } from "lucide-react"
 import { PopupSelect } from "@/components/kit/forms"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
+import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
 import { projectsQuery } from "@/features/sessions/queries"
@@ -74,10 +75,10 @@ function LibraryRow({ item }: { item: LibraryItem }) {
 
   return (
     <SourceRow render={link} selected={Boolean(selected)} className="h-(--row-h-2) max-[760px]:h-11">
-      <Glyph aria-hidden className="size-(--s4) shrink-0 text-(--fg2) group-data-selected/row:text-(--accent-fg)" />
+      <Glyph aria-hidden className="shrink-0 text-(--fg2) sel:text-(--accent-fg)" />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate">{item.name}</span>
-        <span className="truncate text-(--fs-sm) text-(--fg2) group-data-selected/row:text-(--accent-fg)">{detailLine(item)}</span>
+        <span className="truncate text-(length:--fs-sm) text-(--fg2) sel:text-(--accent-fg)">{detailLine(item)}</span>
       </span>
     </SourceRow>
   )
@@ -135,17 +136,14 @@ export function LibraryList() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <StatusSlot>{`${plural(totals.all, "item")} · ${plural(totals.skill, "skill")} · ${plural(totals.plugin, "plugin")} · ${totals.mcp} MCP`}</StatusSlot>
-      <div className="flex shrink-0 flex-col gap-(--s2) px-(--s3) pt-(--s2) pb-(--s1)">
-        <SegmentedControl value={[filter]} onValueChange={chooseFilter} aria-label="Type" className="w-full">
-          {filterTabs.map((tab) => (
-            <SegmentedControlItem key={tab.value} value={tab.value} className="min-w-0 flex-1 px-(--s2)">
-              {tab.label}
-              <span className="ms-(--s1) text-(--fg3)">{view.counts[tab.value]}</span>
-            </SegmentedControlItem>
-          ))}
-        </SegmentedControl>
-        <div className="flex min-w-0 items-center gap-(--s2)">
-          <SearchField
+      <ToolbarTitle title="Library" subtitle={`${plural(totals.all, "item")} on ${plural(machines.length, "machine")}`} />
+      <ToolbarSlot>
+        <Button type="button" onClick={() => void navigate({ search: (prev) => ({ ...prev, add: "1" }) })}>
+          Add package…
+        </Button>
+      </ToolbarSlot>
+      <div className="flex shrink-0 flex-col gap-(--s3) p-(--s3)">
+        <SearchField
             aria-label="Search library"
             placeholder="Search"
             value={draft}
@@ -159,19 +157,23 @@ export function LibraryList() {
               setDraft(event.target.value)
               patch({ q: event.target.value || undefined })
             }}
-            className="min-w-0 flex-1"
           />
+        <SegmentedControl value={[filter]} onValueChange={chooseFilter} aria-label="Type" className="w-full">
+          {filterTabs.map((tab) => (
+            <SegmentedControlItem key={tab.value} value={tab.value} className="min-w-0 flex-1 gap-(--s1) px-(--s1)">
+              {tab.label}
+              <span className="text-(length:--fs-xs) text-(--fg3)">{view.counts[tab.value]}</span>
+            </SegmentedControlItem>
+          ))}
+        </SegmentedControl>
+        <div className="flex min-w-0 items-center justify-between gap-(--s3) text-(length:--fs-xs) text-(--fg2)">
+          <span aria-hidden>Sort</span>
           <PopupSelect
             label="Sort"
             value={sort}
             items={sortItems}
             onValueChange={(next) => patch({ sort: next === "type" ? undefined : next })}
           />
-        </div>
-        <div className="flex justify-end">
-          <Button type="button" variant="ghost" size="sm" onClick={() => void navigate({ search: (prev) => ({ ...prev, add: "1" }) })}>
-            Add package…
-          </Button>
         </div>
       </div>
 

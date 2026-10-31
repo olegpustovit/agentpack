@@ -35,21 +35,21 @@ export function LoginView({ returnTo }: { returnTo?: string }) {
     login.error instanceof ApiError ? login.error.message : login.error && "Couldn't reach the gateway. Check the connection and try again."
 
   return (
-    <main className="grid min-h-dvh place-items-center bg-(--window) p-(--s6) text-(--fs) text-(--fg)">
+    <main className="grid min-h-dvh place-items-center bg-(--window) p-(--s6) text-(length:--fs) text-(--fg)">
       <form
         onSubmit={submit}
         className="flex w-85 max-w-full flex-col gap-(--s5) rounded-(--r-sheet) bg-(--chrome) p-(--s7) shadow-(--shadow-pop)"
       >
         <div className="flex flex-col gap-(--s2)">
-          <p className="text-(--fs-xs) font-medium text-(--fg3)">Agentpack gateway</p>
-          <h1 className="text-(--fs) font-semibold">{setup ? "Set up your gateway" : "Welcome back"}</h1>
-          <p className="text-(--fs-sm) text-(--fg2)">
+          <p className="text-(length:--fs-xs) font-medium text-(--fg3)">Agentpack gateway</p>
+          <h1 className="text-(length:--fs) font-semibold">{setup ? "Set up your gateway" : "Welcome back"}</h1>
+          <p className="text-(length:--fs-sm) text-(--fg2)">
             {setup ? "Create the root account for this gateway." : "Sign in to your sessions."}
           </p>
         </div>
         {setup && (
           <div className="flex flex-col gap-(--s2)">
-            <label htmlFor="setup-token" className="text-(--fs-sm) text-(--fg2)">
+            <label htmlFor="setup-token" className="text-(length:--fs-sm) text-(--fg2)">
               Setup token
             </label>
             <Input
@@ -60,13 +60,13 @@ export function LoginView({ returnTo }: { returnTo?: string }) {
               spellCheck={false}
               required
             />
-            <p className="text-(--fs-xs) text-(--fg3)">
+            <p className="text-(length:--fs-xs) text-(--fg3)">
               Run <code>agentpack gateway setup</code> on the server to get this token.
             </p>
           </div>
         )}
         <div className="flex flex-col gap-(--s2)">
-          <label htmlFor="password" className="text-(--fs-sm) text-(--fg2)">
+          <label htmlFor="password" className="text-(length:--fs-sm) text-(--fg2)">
             Root account password
           </label>
           <Input

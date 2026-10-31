@@ -47,6 +47,26 @@ export function reconnectDelay(retries: number): number {
 }
 
 // Timing marks that the browser performance tooling reads.
+const ZOOM_KEY = "agentpack-terminal-zoom"
+
+// A chosen zoom survives reloads and applies to every terminal; absent means Fit.
+function storedZoom(): number | undefined {
+  try {
+    return Number(localStorage.getItem(ZOOM_KEY)) || undefined
+  } catch {
+    return undefined
+  }
+}
+
+function storeZoom(size: number | undefined) {
+  try {
+    if (size) localStorage.setItem(ZOOM_KEY, String(size))
+    else localStorage.removeItem(ZOOM_KEY)
+  } catch {
+    // Private windows may refuse storage; the zoom then lasts for this tab.
+  }
+}
+
 function terminalMark(name: string) {
   performance.mark(`agentpack:terminal:${name}`)
   console.debug("agentpack terminal timing", name, Math.round(performance.now()))
@@ -162,7 +182,8 @@ export class TerminalSession {
     this.#onAppearance()
     this.#expose()
     this.#refit()
-    this.#term?.focus()
+    // Arrow keys walk the list and open rows on the way. Taking focus here would send the next arrow to the agent.
+    if (!document.activeElement?.matches("[data-source-row]:focus-visible")) this.#term?.focus()
     this.#publish()
   }
 
@@ -189,13 +210,13 @@ export class TerminalSession {
 
   copy() {
     const text = this.#term?.getSelection()
-    if (text) void navigator.clipboard.writeText(text).catch(() => this.#notice("Copy was blocked by the browser."))
+    if (text) void (navigator.clipboard?.writeText(text) ?? Promise.reject()).catch(() => this.#notice("Copy was blocked by the browser. Clipboard access needs HTTPS."))
   }
 
   paste() {
-    void navigator.clipboard.readText().then(
+    void (navigator.clipboard?.readText() ?? Promise.reject()).then(
       (text) => this.#term?.paste(text),
-      () => this.#notice("Paste was blocked by the browser."),
+      () => this.#notice("Paste was blocked by the browser. Clipboard access needs HTTPS."),
     )
   }
 
@@ -217,6 +238,7 @@ export class TerminalSession {
 
   fitToStage() {
     this.#fit = true
+    storeZoom(undefined)
     this.#refit()
     this.#publish()
   }
@@ -252,6 +274,7 @@ export class TerminalSession {
     if (!this.#term) return
     this.#fit = false
     this.#term.options.fontSize = size
+    storeZoom(size)
     this.#publish()
   }
 
@@ -293,12 +316,14 @@ export class TerminalSession {
   #openFresh() {
     this.#element.replaceChildren()
     this.#fit = true
+    const stored = storedZoom()
+    this.#fit = stored === undefined
     const term = new Terminal({
       cols: 80,
       rows: 24,
       cursorBlink: true,
       fontFamily: MONO,
-      fontSize: BASE_FONT,
+      fontSize: stored ?? BASE_FONT,
       scrollback: 5000,
       allowProposedApi: true,
       screenReaderMode: true,
@@ -327,6 +352,8 @@ export class TerminalSession {
 
   // The DOM renderer stays if WebGL is missing, fails to start, or the context is lost.
   async #loadWebgl(term: Terminal) {
+    // Software GL costs browser tests most of a terminal's start-up, and input and selection do not depend on the renderer.
+    if (navigator.webdriver) return
     try {
       // Dynamic so the WebGL addon ships as its own chunk; the lazy terminal budget excludes it.
       const { WebglAddon } = await import("@xterm/addon-webgl")
@@ -478,7 +505,7 @@ export class TerminalSession {
           this.#banner = ""
         }
         const previouslyWritable = this.#controls()
-        if (message.type === "attached" && message.offset) this.#banner = "Earlier output was truncated. Showing the available terminal history."
+        if (message.type === "attached" && message.offset && !(reconnecting && message.offset === since)) this.#banner = "Earlier output was truncated. Showing the available terminal history."
         if (message.error) this.#banner = message.error
         if (message.type === "ended" && message.state?.restarting) void this.#reconnectAfterRestart()
         if (message.state) this.#updateState(message.state)

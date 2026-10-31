@@ -1,13 +1,14 @@
 import type { KeyboardEvent } from "react"
 import { Link } from "@tanstack/react-router"
-import { Package, Pencil, Plug, RefreshCw, RotateCw, Save, Square, X, type LucideIcon } from "lucide-react"
+import { Package, Pencil, Plug, RotateCw, Save, Square, X, type LucideIcon } from "lucide-react"
 import { SourceRow } from "@/components/kit/list"
+import { StatusGlyph } from "@/components/kit/status-dot"
 import { Menu, MenuContent, MenuItem, MenuTrigger, RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger, RowMoreButton } from "@/components/kit/overlays"
 import { ContextMenuSeparator } from "@/components/ui/context-menu"
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
-import { basename, harnessName, relativeTime } from "@/lib/format"
+import { shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { rowKey, sessionLabel, type ListedSession } from "./group"
+import { rowKey, sessionDetail, sessionLabel, type ListedSession } from "./group"
 import { sessionRules } from "./rules"
 
 export type RowActions = {
@@ -23,35 +24,6 @@ export type RowActions = {
 type Entry = { label: string; icon: LucideIcon; shortcut?: string; disabled: boolean; run: () => void } | "separator"
 
 type RowState = "running" | "stopped" | "offline" | "restarting"
-
-const glyphs: Record<Exclude<RowState, "restarting">, string> = {
-  running: "border-(--ok) bg-(--ok) group-data-selected/row:border-(--accent-fg) group-data-selected/row:bg-(--accent-fg)",
-  stopped: "border-(--fg2) group-data-selected/row:border-(--accent-fg)",
-  offline: "border-dashed border-(--fg3) group-data-selected/row:border-(--accent-fg)",
-}
-
-// Hover: tooltip and subtitle. Order follows the spec: harness, folder, machine, who started it, when.
-function sessionDetail(session: ListedSession): string {
-  const actor = session.started_by
-  const started = actor?.user ? `started by ${actor.user} from ${actor.kind}` : undefined
-  const when = session.last_used ?? session.started_at
-  return [
-    harnessName(session.harness),
-    basename(session.directory) || "Unknown project",
-    session.machineName,
-    started,
-    when ? relativeTime(new Date(when)) : undefined,
-  ]
-    .filter(Boolean)
-    .join(" · ")
-}
-
-function Glyph({ state }: { state: RowState }) {
-  if (state === "restarting") {
-    return <RefreshCw aria-hidden className="size-(--s4) shrink-0 animate-spin motion-reduce:animate-none group-data-selected/row:text-(--accent-fg)" />
-  }
-  return <span aria-hidden className={cn("inline-block size-(--s4) shrink-0 rounded-full border", glyphs[state])} />
-}
 
 function menuEntries(session: ListedSession, selected: boolean, actions: RowActions): Entry[] {
   const rules = sessionRules(session)
@@ -87,7 +59,7 @@ function renderEntries(entries: Entry[], context: boolean) {
   })
 }
 
-const dimWord = "shrink-0 text-(--fs-sm) text-(--fg3) group-data-selected/row:text-(--accent-fg)"
+const dimWord = "shrink-0 text-(length:--fs-sm) text-(--fg3) sel:text-(--accent-fg)"
 
 // WebKit sends no contextmenu event for Shift+F10 or the context-menu key, so the key opens the menu itself.
 function openFromKeyboard(event: KeyboardEvent<HTMLElement>) {
@@ -115,15 +87,18 @@ export function SessionRow({
   const word = session.offline ? "Offline" : state.restarting ? "Restarting" : state.running ? undefined : "Stopped"
   const mode = session.mode && session.mode !== "default" ? session.mode : undefined
   const entries = menuEntries(session, selected, actions)
+  const since = session.last_used ?? session.started_at
+  const age = since ? shortAge(new Date(since)) : undefined
 
   return (
     <RowContextMenu>
-      <RowContextMenuTrigger render={<div className="group/row relative" data-selected={selected ? "" : undefined} onKeyDown={openFromKeyboard} />}>
+      <RowContextMenuTrigger render={<div className="group/row relative" data-selected={selected ? "true" : undefined} onKeyDown={openFromKeyboard} />}>
         <SourceRow
           render={
             <Link
               to="/sessions/$machine/$sessionId"
               params={{ machine: session.machine, sessionId: session.id }}
+              search={true}
               title={sessionDetail(session)}
             />
           }
@@ -132,10 +107,11 @@ export function SessionRow({
           data-row-key={rowKey(session)}
           className={cn("pe-(--head-h)", session.offline && "text-(--fg3)")}
         >
-          <Glyph state={rowState} />
+          <StatusGlyph state={rowState} className="ms-(--s7)" />
           <span className="min-w-0 flex-1 truncate">{sessionLabel(session)}</span>
           {mode && <span className={dimWord}>{mode}</span>}
-          {word && <span className={dimWord}>{word}</span>}
+          {/* The age is decoration: the row's title has it, and it must not churn the row's accessible name. */}
+          <span aria-hidden={!word} className={dimWord}>{word ?? age}</span>
         </SourceRow>
         <Menu>
           <MenuTrigger render={<RowMoreButton className="absolute top-1/2 right-(--s1) -translate-y-1/2" />} />

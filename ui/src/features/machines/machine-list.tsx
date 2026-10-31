@@ -1,26 +1,26 @@
-import { Link, useMatchRoute } from "@tanstack/react-router"
-import { Laptop, Network, Server } from "lucide-react"
-import { SourceList, SourceRow } from "@/components/kit/list"
-import { StatusDot } from "@/components/kit/status-dot"
+import { Link, useMatchRoute, useNavigate, useSearch } from "@tanstack/react-router"
+import { Network } from "lucide-react"
+import { GroupHeader, SearchField, SourceList, SourceRow } from "@/components/kit/list"
+import { StatusGlyph } from "@/components/kit/status-dot"
 import { sessionsQuery, projectsQuery } from "@/features/sessions/queries"
 import { StatusSlot } from "@/features/status/status-bar"
 import { LOCAL } from "@/lib/api"
 import { plural } from "@/lib/format"
 import { useDiscovering, useMachineQueries, useMachines, type Machine, type MachineQuery } from "./queries"
 
-function MachineRow({ machine }: { machine: Machine }) {
+function MachineRow({ machine, sessions }: { machine: Machine; sessions?: number }) {
   const matchRoute = useMatchRoute()
   const selected = matchRoute({ to: "/machines/$machine", params: { machine: machine.id } })
-  const Glyph = machine.id === LOCAL ? Laptop : Server
   return (
     <SourceRow
       render={<Link to="/machines/$machine" params={{ machine: machine.id }} />}
       selected={Boolean(selected)}
-      className="h-(--row-h-2) max-[760px]:h-11"
     >
-      <Glyph aria-hidden className="size-(--s4) shrink-0 text-(--fg2) group-data-selected/row:text-(--accent-fg)" />
+      <StatusGlyph state={machine.online ? "running" : "offline"} />
       <span className="min-w-0 flex-1 truncate">{machine.name}</span>
-      <StatusDot state={machine.online ? "running" : "offline"} />
+      <span className="shrink-0 text-(length:--fs-sm) text-(--fg3) sel:text-(--accent-fg)">
+        {machine.online ? (machine.id === LOCAL ? "gateway" : sessions) : "Offline"}
+      </span>
     </SourceRow>
   )
 }
@@ -36,17 +36,29 @@ export function MachineList() {
   const matchRoute = useMatchRoute()
   const topology = matchRoute({ to: "/machines/topology" })
   const discovering = useDiscovering()
+  const q = useSearch({ strict: false, select: (search: { q?: string }) => search.q })
+  const navigate = useNavigate()
+  const needle = (q ?? "").toLowerCase()
   return (
     <div className="flex h-full min-h-0 flex-col">
       <StatusSlot>{`${plural(countRows(projects.byMachine), "project")} · ${plural(countRows(sessions.byMachine), "session")}`}</StatusSlot>
+      <div className="flex shrink-0 p-(--s3) pb-0">
+        <SearchField
+          aria-label="Filter machines"
+          placeholder="Filter machines"
+          defaultValue={q ?? ""}
+          onChange={(event) => void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, q: event.target.value || undefined }), replace: true })}
+        />
+      </div>
       <SourceList aria-label="Machines" aria-busy={discovering} className="min-h-0 flex-1">
-        <SourceRow render={<Link to="/machines/topology" />} selected={Boolean(topology)} className="h-(--row-h-2) max-[760px]:h-11">
-          <Network aria-hidden className="size-(--s4) shrink-0 text-(--fg2) group-data-selected/row:text-(--accent-fg)" />
+        <SourceRow render={<Link to="/machines/topology" />} selected={Boolean(topology)} className="mt-(--s3)">
+          <Network aria-hidden className="shrink-0 text-(--fg2) sel:text-(--accent-fg)" />
           <span className="min-w-0 flex-1 truncate">Topology</span>
         </SourceRow>
-        {discovering && <p className="px-(--s3) py-(--s2) text-(--fs-sm) text-(--fg2)">Discovering connected machines</p>}
-        {machines.map((machine) => (
-          <MachineRow key={machine.id} machine={machine} />
+        <GroupHeader className="mt-(--s3)">Machines</GroupHeader>
+        {discovering && <p className="px-(--s3) py-(--s2) text-(length:--fs-sm) text-(--fg2)">Discovering connected machines</p>}
+        {machines.filter((machine) => machine.name.toLowerCase().includes(needle)).map((machine) => (
+          <MachineRow key={machine.id} machine={machine} sessions={sessions.byMachine[machine.id]?.data?.length} />
         ))}
       </SourceList>
     </div>

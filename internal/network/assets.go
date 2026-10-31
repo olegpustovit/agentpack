@@ -30,9 +30,13 @@ func webAssets(files fs.FS) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		index := "index.html"
+		if _, err := fs.Stat(files, index); err != nil {
+			index = "placeholder.html"
+		}
 		name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 		if name == "" {
-			name = "index.html"
+			name = index
 		}
 		if info, err := fs.Stat(files, name); err == nil && !info.IsDir() {
 			serveAsset(w, r, files, name)
@@ -42,11 +46,11 @@ func webAssets(files fs.FS) http.Handler {
 		case strings.HasPrefix("/"+name, "/assets/"):
 			http.NotFound(w, r)
 		case isSPARoute("/" + name):
-			serveAsset(w, r, files, "index.html")
+			serveAsset(w, r, files, index)
 		case path.Ext(name) != "":
 			http.NotFound(w, r)
 		default:
-			serveAsset(w, r, files, "index.html")
+			serveAsset(w, r, files, index)
 		}
 	})
 }

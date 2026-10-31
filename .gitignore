@@ -14,4 +14,4 @@
 .envrc
 
 internal/network/webdist/*
-!internal/network/webdist/index.html
+!internal/network/webdist/placeholder.html

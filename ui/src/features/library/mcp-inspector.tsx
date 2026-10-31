@@ -28,11 +28,11 @@ export function McpInspector({ name }: { name: string }) {
     <Inspector>
       <Failures failures={failures} />
       <InspectorHead
-        icon={<Plug className="size-(--s6)" />}
+        icon={<Plug aria-hidden />}
         title={server.name}
         subtitle={`${server.launcher} · ${plural(server.projects.length, "project")} · ${server.machines.join(", ")}`}
       />
-      <Section title="Server">
+      <Section title="Server" className="col-span-full">
         <dl className="flex flex-col gap-(--s3)">
           <KeyValue label="Launcher">{server.launcher || "—"}</KeyValue>
           <KeyValue label="Status">{statuses.join(", ") || "—"}</KeyValue>
@@ -40,7 +40,7 @@ export function McpInspector({ name }: { name: string }) {
         </dl>
       </Section>
       <Section title="Used in" className="col-span-full">
-        <p className="mb-(--s2) text-(--fs-sm) text-(--fg2)">{plural(uses.length, "project")}</p>
+        <p className="mb-(--s2) text-(length:--fs-sm) text-(--fg2)">{plural(uses.length, "project")}</p>
         <DataGrid>
           <DataGridHead>
             <tr>

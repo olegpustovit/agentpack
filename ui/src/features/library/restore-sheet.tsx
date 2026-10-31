@@ -139,7 +139,7 @@ function RestoreForm({
       ) : (
         <div role="radiogroup" aria-label="Destinations" className="flex flex-col gap-(--s2)">
           {rows.map((row) => (
-            <label key={row.key} className="flex min-w-0 items-center gap-(--s3) text-(--fs)">
+            <label key={row.key} className="flex min-w-0 items-center gap-(--s3) text-(length:--fs)">
               <input
                 type="radio"
                 name="restore-target"
@@ -154,7 +154,7 @@ function RestoreForm({
           ))}
         </div>
       )}
-      <section aria-label="Preview" className="flex flex-col gap-(--s2) text-(--fs-sm)">
+      <section aria-label="Preview" className="flex flex-col gap-(--s2) text-(length:--fs-sm)">
         <div className="flex items-center justify-between text-(--fg2)">
           <span>Preview</span>
           <span>{`${revision.mode || "default"} mode`}</span>
@@ -190,7 +190,7 @@ function RestoreForm({
         )}
       </section>
       {!draft && (
-        <label className="flex items-center gap-(--s3) text-(--fs-sm)">
+        <label className="flex items-center gap-(--s3) text-(length:--fs-sm)">
           <Checkbox checked={restart} disabled={apply.isPending} onCheckedChange={setRestart} />
           Restart affected agents after restore
         </label>

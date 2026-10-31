@@ -19,7 +19,7 @@ export function StatusBar() {
   return (
     <StatusBarFrame>
       <ConnectionItem />
-      <StatusItem ref={target?.setElement} className="flex-1" />
+      <StatusItem ref={target?.setElement} className="flex-1 border-(--sep) not-empty:border-l-[0.5px] not-empty:ps-(--s4)" />
       <ActivityItem />
     </StatusBarFrame>
   )

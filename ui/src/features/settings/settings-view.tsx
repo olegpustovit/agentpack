@@ -1,5 +1,8 @@
+import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { Empty } from "@/components/kit/feedback"
+import { identityQuery } from "@/features/machines/queries"
+import { ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { SourceList, SourceRow } from "@/components/kit/list"
 import { AccountPane } from "./account-pane"
 import { AppearancePane, GeneralPane, SharingPane } from "./panes"
@@ -16,11 +19,13 @@ const sections = [
 // A 180 px source list beside one pane. On phones the list stacks above the pane.
 export function SettingsView({ pane }: { pane: string }) {
   const current = sections.find((item) => item.id === pane)
+  const identity = useQuery(identityQuery)
   return (
     <div className="flex h-full min-h-0 min-w-0 max-[760px]:flex-col">
+      <ToolbarTitle title="Settings" subtitle={identity.data?.node.name} />
       <SourceList
         aria-label="Settings sections"
-        className="w-45 shrink-0 border-r-[0.5px] border-(--sep) bg-(--chrome) p-(--s2) max-[760px]:w-full max-[760px]:border-r-0 max-[760px]:border-b-[0.5px]"
+        className="w-45 shrink-0 border-r-[0.5px] border-(--sep) bg-(--sidebar) pt-(--s3) max-[760px]:w-full max-[760px]:border-r-0 max-[760px]:border-b-[0.5px]"
       >
         {sections.map((item) => (
           <SourceRow
@@ -32,7 +37,7 @@ export function SettingsView({ pane }: { pane: string }) {
           </SourceRow>
         ))}
       </SourceList>
-      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-(--s6)">
+      <div className="flex min-h-0 max-w-160 min-w-0 flex-1 flex-col gap-(--s6) overflow-y-auto p-(--s6)">
         {current ? (
           <current.view />
         ) : (

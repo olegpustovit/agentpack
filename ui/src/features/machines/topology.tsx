@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query"
-import { Network } from "lucide-react"
-import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Inspector, InspectorHead, Section } from "@/components/kit/data"
+import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Inspector, Section } from "@/components/kit/data"
 import { Banner, RowSkeleton } from "@/components/kit/feedback"
 import { useEventsConnected } from "@/features/events/use-events"
+import { replicationQuery } from "@/features/library/queries"
+import { ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { LOCAL } from "@/lib/api"
 import { plural } from "@/lib/format"
@@ -21,15 +22,18 @@ import {
   stateWord,
 } from "./topology-model"
 
-function Node({ x, y, width, name, parts, sessions, dashed }: { x: number; y: number; width: number; name: string; parts: string[]; sessions?: number; dashed?: boolean }) {
+const dotFill: Record<string, string> = { reachable: "var(--ok)", offline: "none" }
+
+function Node({ x, y, width, name, parts, sessions, state, dashed }: { x: number; y: number; width: number; name: string; parts: string[]; sessions?: number; state?: string; dashed?: boolean }) {
   const detail = [...parts, sessions === undefined ? undefined : plural(sessions, "session")].filter(Boolean).join(" · ")
   return (
     <g>
-      <rect x={x} y={y} width={width} height={NODE_H} rx={7} fill="var(--window)" stroke="var(--sep)" strokeDasharray={dashed ? "4 3" : undefined} />
-      <text x={x + 12} y={y + 17} fill="var(--fg)" fontSize={13} fontWeight={600}>
+      <rect x={x} y={y} width={width} height={NODE_H} rx={7} fill={state ? "var(--window)" : "var(--chrome)"} stroke="var(--sep)" strokeDasharray={dashed ? "4 3" : undefined} />
+      {state && <circle cx={x + 14} cy={y + NODE_H / 2} r={3.5} fill={dotFill[state] ?? "var(--warn)"} stroke={state === "offline" ? "var(--fg3)" : "none"} strokeDasharray={state === "offline" ? "2 1.5" : undefined} />}
+      <text x={x + (state ? 26 : 12)} y={y + 17} fill="var(--fg)" fontSize={13} fontWeight={state ? 500 : 600}>
         {name}
       </text>
-      <text x={x + 12} y={y + 32} fill="var(--fg2)" fontSize={11}>
+      <text x={x + (state ? 26 : 12)} y={y + 32} fill="var(--fg2)" fontSize={11}>
         {detail}
       </text>
     </g>
@@ -41,6 +45,9 @@ export function TopologyView() {
   const topology = useQuery(topologyQuery(live))
   const sessions = useMachineQueries(sessionsQuery)
   const data = topology.data
+  // Replication enrolment is known locally, so the edge marks it without another peer probe.
+  const replication = useQuery(replicationQuery)
+  const enrolled = new Set((replication.data?.peers ?? []).map((peer) => peer.node))
 
   if (!data) {
     return (
@@ -78,23 +85,20 @@ export function TopologyView() {
             {`Couldn't refresh topology: ${topology.error.message}`}
           </Banner>
         )}
-        <InspectorHead
-          icon={<Network aria-hidden className="size-(--s6)" />}
-          title="Topology"
-          subtitle={`${reachable} reachable · ${offline} offline · ${unreachable.length} not reachable by Agentpack`}
-        />
+        <ToolbarTitle title="Topology" subtitle={`${reachable} reachable · ${offline} offline · ${unreachable.length} not reachable by Agentpack`} />
+        <h1 className="sr-only">Topology</h1>
         {/* The diagram repeats the grid below, so assistive tech skips it, and phones show only the grid. */}
         <div className="col-span-full max-[760px]:hidden">
           <svg data-slot="topology-diagram" viewBox={`0 0 ${DIAGRAM_W} ${layout.height}`} width={DIAGRAM_W} height={layout.height} className="block h-auto max-w-full" aria-hidden="true" focusable="false">
-            <g fill="none" stroke="var(--fg3)" strokeWidth={1.2}>
+            <g fill="none" strokeWidth={1.2}>
               {layout.edges.map((edge) => (
-                <path key={edge.peer.id} d={edge.d} strokeDasharray={edge.dashed ? "5 4" : undefined} />
+                <path key={edge.peer.id} d={edge.d} stroke={edge.dashed ? "var(--fg3)" : "var(--accent)"} strokeDasharray={edge.dashed ? "5 4" : undefined} />
               ))}
             </g>
-            <g fill="var(--fg2)" fontSize={12} textAnchor="middle" dy="0.35em" stroke="var(--window)" strokeWidth={5} strokeLinejoin="round" paintOrder="stroke">
+            <g fill="var(--fg2)" fontSize={11} textAnchor="end" dominantBaseline="middle" stroke="var(--window)" strokeWidth={5} strokeLinejoin="round" paintOrder="stroke">
               {layout.edges.map((edge) => (
                 <text key={edge.peer.id} x={edge.labelX} y={edge.labelY}>
-                  {edge.label}
+                  {[edge.label, edge.peer.rtt_ms && `${edge.peer.rtt_ms} ms`, enrolled.has(edge.peer.id) && "⇄"].filter(Boolean).join(" · ")}
                 </text>
               ))}
             </g>
@@ -108,6 +112,7 @@ export function TopologyView() {
                 name={peer.name}
                 parts={[peer.os, stateWord(peer.state)]}
                 sessions={count(peer.id, peer.sessions)}
+                state={peer.state}
                 dashed={peer.state === "offline"}
               />
             ))}
@@ -115,17 +120,18 @@ export function TopologyView() {
         </div>
         {unreachable.length > 0 && (
           <Section title="Not reachable by Agentpack" className="col-span-full">
-            <ul className="flex flex-col gap-(--s2) text-(--fs-sm)">
+            <ul className="flex flex-col">
               {unreachable.map((peer) => (
-                <li key={peer.id}>
-                  <span className="font-medium">{peer.name}</span> <span className="text-(--fg2)">{reasonOf(peer)}</span>
+                <li key={peer.id} className="flex h-(--row-h) items-center gap-(--s4) border-b-[0.5px] border-(--sep-soft) last:border-b-0">
+                  <span className="w-40 shrink-0 truncate">{peer.name}</span>
+                  <span className="min-w-0 truncate text-(--fg2)">{reasonOf(peer)}</span>
                 </li>
               ))}
             </ul>
           </Section>
         )}
         <Section title="Machines" className="col-span-full">
-          <DataGrid aria-label="Machines and connections">
+          <DataGrid aria-label="Machines and connections" className="min-w-180">
             <DataGridHead>
               <DataGridRow>
                 <DataGridHeaderCell className="w-44">Machine</DataGridHeaderCell>

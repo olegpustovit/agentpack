@@ -126,7 +126,7 @@ function NewSessionForm({ machines, initialMachine, initialDirectory }: { machin
           <Input id="new-session-mode" value={modeValue} onChange={(event) => setMode(event.target.value)} />
         </Field>
       </FieldGrid>
-      {hint && <p className="text-(--fs-sm) text-(--fg2)">{hint}</p>}
+      {hint && <p className="text-(length:--fs-sm) text-(--fg2)">{hint}</p>}
       {start.error && <FieldError>{start.error.message}</FieldError>}
       <SheetActions>
         <Button type="submit" variant="primary" disabled={!project || harnessId === "agy" || start.isPending}>

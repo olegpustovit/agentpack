@@ -39,17 +39,17 @@ function SidebarListDetail({ list, children }: { list: ReactNode; children: Reac
         aria-label="Sidebar"
         panelRef={sidebar.panelRef}
         defaultSize={sidebarWidth}
-        minSize={180}
-        maxSize={480}
+        minSize={220}
+        maxSize={420}
         collapsible
         collapsedSize={0}
         onResize={sync}
-        className="min-w-0 bg-(--chrome)"
+        className="min-w-0 bg-(--sidebar)"
       >
         {list}
       </ResizablePanel>
       <ResizableHandle
-        className="w-[7px] cursor-col-resize bg-transparent after:left-1/2 after:w-px after:bg-(--sep)"
+        className="w-0 cursor-col-resize border-l-[0.5px] border-(--sep) bg-transparent after:w-[7px]"
         onDoubleClick={() => sidebar.panelRef.current?.resize(sidebarWidth)}
       />
       <ResizablePanel id="content" className="min-w-0">

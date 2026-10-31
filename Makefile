@@ -41,7 +41,7 @@ help:
 all: release
 
 build:
-	@if grep -q 'Agentpack UI was not built' internal/network/webdist/index.html; then echo "warning: gateway UI is the placeholder; run make ui-stage first" >&2; fi
+	@if [ ! -f internal/network/webdist/index.html ]; then echo "warning: gateway UI is the placeholder; run make ui-stage first" >&2; fi
 	$(GO) build -o "$(RELEASE_BIN)" ./cmd/agentpack
 
 release:

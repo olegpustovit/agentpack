@@ -11,10 +11,11 @@ export const sessionsQuery = (machine: string, live: boolean) =>
     refetchInterval: live ? 60 * 1000 : 15 * 1000,
   })
 
-// One machine's recent folders. Only the New session sheet reads it, so it does not poll.
-export const projectsQuery = (machine: string) =>
+// One machine's project folders. Events invalidate it; the poll covers only a dropped stream.
+export const projectsQuery = (machine: string, live = true) =>
   queryOptions({
     queryKey: ["m", machine, "projects"],
     queryFn: () => api<ProjectRow[]>("/api/projects", { machine }),
-    staleTime: 15 * 1000,
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: live ? false : 60 * 1000,
   })

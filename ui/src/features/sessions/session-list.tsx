@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react"
 import { Link, useNavigate, useParams, useRouterState, useSearch } from "@tanstack/react-router"
-import { Plus } from "lucide-react"
+import { Folder, Laptop, Plus, Server } from "lucide-react"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
-import { GroupHeader, SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
+import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
 import { buttonVariants } from "@/components/ui/button"
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
+import { useIsPhone } from "@/features/shell/use-is-phone"
+import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { terminalPool } from "@/features/terminal/pool"
-import { basename } from "@/lib/format"
+import { LOCAL } from "@/lib/api"
+import { basename, plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useSessionCommands } from "./actions"
-import { groupSessions, rowKey, sessionLabel, type GroupMode, type ListedSession } from "./group"
+import { groupSessions, matchesSession, rowKey, sessionLabel, type GroupMode, type ListedSession } from "./group"
 import { NewSessionSheet } from "./new-session-sheet"
 import { sessionRules } from "./rules"
 import { sessionsQuery } from "./queries"
@@ -59,7 +62,9 @@ export function SessionList() {
       offline: !machine.online,
     })),
   )
-  const groups = groupSessions(sessions, groupMode)
+  const query = search.q ?? ""
+  const groups = groupSessions(sessions.filter((session) => matchesSession(session, query)), groupMode)
+  const isPhone = useIsPhone()
   // Flat order matches the DOM order, so keyboard index and element index agree.
   const rows = groups.flatMap((group) => group.subheads.flatMap((head) => head.sessions))
   const first = rows[0]
@@ -72,12 +77,22 @@ export function SessionList() {
   useEffect(() => () => window.clearTimeout(pending.current), [])
 
   function openRow(row: ListedSession) {
-    void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: row.machine, sessionId: row.id } })
+    void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: row.machine, sessionId: row.id }, search: true })
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLElement>) {
     const elements = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[data-source-row]"))
     const current = elements.indexOf(event.target as HTMLElement)
+    if (event.key === "Enter" && rows[current]) {
+      // Enter is the deliberate move into the terminal: blur first, so attaching takes focus too.
+      const row = rows[current]
+      event.preventDefault()
+      window.clearTimeout(pending.current)
+      ;(event.target as HTMLElement).blur()
+      openRow(row)
+      terminalPool.focus(row.machine, row.id)
+      return
+    }
     if (event.key === "F2") {
       const row = rows[current]
       if (row && sessionRules(row).rename) setSheet({ kind: "rename", row })
@@ -106,7 +121,8 @@ export function SessionList() {
         if (!selected) openRow(row)
       },
       closeTerminal: () => {
-        if (selected) void navigate({ to: "/sessions" })
+        // The socket stays open for a pooled session, so closing must also end it.
+        if (selected) void navigate({ to: "/sessions", search: true }).then(() => terminalPool.dispose(row.machine, row.id))
       },
       install: () => setSheet({ kind: "install", row }),
       save: () => setSheet({ kind: "save", row }),
@@ -123,28 +139,41 @@ export function SessionList() {
     if (!open) void navigate({ href: withSearch(href, { new: undefined }), replace: true })
   }
 
+  const newSession = (
+    <Link
+      to="."
+      search={(prev: Record<string, unknown>) => ({ ...prev, new: "1" })}
+      aria-label="New session"
+      title="New session"
+      className={cn(buttonVariants({ variant: "ghost", size: "icon" }))}
+    >
+      <Plus aria-hidden />
+    </Link>
+  )
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-(--s2) px-(--s3) py-(--s2)">
-        <SegmentedControl value={[groupMode]} onValueChange={chooseGroup}>
-          <SegmentedControlItem value="machine">Machine</SegmentedControlItem>
-          <SegmentedControlItem value="project">Project</SegmentedControlItem>
+      {!routeKey && <ToolbarTitle title="Sessions" subtitle={`${plural(sessions.length, "session")} on ${plural(machines.length, "machine")}`} />}
+      {isPhone && <ToolbarSlot>{newSession}</ToolbarSlot>}
+      <div className="flex shrink-0 flex-col gap-(--s3) p-(--s3)">
+        <div className="flex items-center gap-(--s2)">
+          <SearchField
+            aria-label="Filter sessions"
+            placeholder="Filter sessions"
+            defaultValue={query}
+            onChange={(event) => void navigate({ href: withSearch(href, { q: event.target.value || undefined }), replace: true })}
+          />
+          {!isPhone && newSession}
+        </div>
+        <SegmentedControl value={[groupMode]} onValueChange={chooseGroup} aria-label="Group sessions by" className="w-full">
+          <SegmentedControlItem value="machine" className="flex-1">Machine</SegmentedControlItem>
+          <SegmentedControlItem value="project" className="flex-1">Project</SegmentedControlItem>
         </SegmentedControl>
-        <span className="flex-1" />
-        <Link
-          to="/sessions"
-          search={(prev) => ({ ...prev, new: "1" })}
-          aria-label="New session"
-          title="New session"
-          className={cn(buttonVariants({ variant: "ghost", size: "icon" }))}
-        >
-          <Plus className="size-(--fs)" aria-hidden />
-        </Link>
       </div>
 
       <nav
         aria-label="Sessions"
-        className="group/list flex min-h-0 flex-1 flex-col overflow-y-auto"
+        className="group/list flex min-h-0 flex-1 flex-col overflow-y-auto px-(--s2) pb-(--s2)"
         onKeyDown={onKeyDown}
       >
         {machines.map((machine) => {
@@ -164,20 +193,24 @@ export function SessionList() {
           </Banner>
         )}
         {loading && [0, 1, 2].map((index) => <RowSkeleton key={index} />)}
-        {!loading && !failed && rows.length === 0 && (
+        {!loading && !failed && rows.length === 0 && (query ? (
+          <Empty title="No matches">Try another name, folder or machine.</Empty>
+        ) : (
           <Empty title="No sessions yet">
             Start an agent with New session, or from the CLI on a machine.
           </Empty>
-        )}
+        ))}
         {groups.map((group) => (
           <div key={group.key}>
             <GroupHeader>
+              {groupMode === "machine" ? group.key === LOCAL ? <Laptop aria-hidden /> : <Server aria-hidden /> : <Folder aria-hidden />}
               <span className="min-w-0 flex-1 truncate">{group.label}</span>
-              {groupMode === "machine" && group.offline && <span className="shrink-0 font-normal text-(--fg3)">Offline</span>}
+              {groupMode === "machine" && <span className="shrink-0 font-normal text-(--fg3)">{group.offline ? "Offline" : "Online"}</span>}
             </GroupHeader>
             {group.subheads.map((head) => (
               <div key={head.key}>
-                <GroupHeader className="ps-(--s6) font-normal text-(--fg2)">
+                <GroupHeader className="ps-(--s5) font-normal">
+                  {groupMode === "machine" ? <Folder aria-hidden /> : <Server aria-hidden />}
                   <span className="min-w-0 truncate">{head.label}</span>
                   {head.parent && <span className="ms-(--s2) shrink-0 text-(--fg3)">{head.parent}</span>}
                 </GroupHeader>

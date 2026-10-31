@@ -32,7 +32,8 @@ export function useSessionCommands() {
 
   async function restart(session: ListedSession): Promise<void> {
     const key = rowKey(session)
-    const operationId = operations.current.get(key) ?? crypto.randomUUID()
+    // crypto.randomUUID does not exist on plain-HTTP gateway origins; getRandomValues does.
+    const operationId = operations.current.get(key) ?? Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("")
     operations.current.set(key, operationId)
     try {
       await api(`/api/sessions/${encodeURIComponent(session.id)}/restart`, {

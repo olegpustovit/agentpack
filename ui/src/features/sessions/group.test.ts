@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { groupSessions, type ListedSession } from "./group"
+import { groupSessions, matchesSession, type ListedSession } from "./group"
 
 function session(id: string, machine: string, machineName: string, directory: string, offline = false): ListedSession {
   return {
@@ -79,5 +79,15 @@ describe("groupSessions", () => {
     const groups = groupSessions([session("a", vm, "vm", "/srv/agentpack", true)], "machine")
     expect(groups[0]?.offline).toBe(true)
     expect(groups[0]?.subheads[0]?.sessions[0]?.id).toBe("a")
+  })
+})
+
+describe("matchesSession", () => {
+  const row = { name: "feed-parser", harness: "claude", mode: "review", directory: "/home/o/rssdude", machineName: "oracle-vm" } as ListedSession
+  it.each(["", "FEED", "claude", "review", "rssdude", "oracle"])("matches %j", (query) => {
+    expect(matchesSession(row, query)).toBe(true)
+  })
+  it("rejects anything else", () => {
+    expect(matchesSession(row, "grok")).toBe(false)
   })
 })

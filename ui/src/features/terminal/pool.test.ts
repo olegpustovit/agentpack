@@ -4,11 +4,20 @@ import { TerminalPool, type PoolEntry } from "./pool"
 type Fake = PoolEntry & { id: string; disposed: number }
 
 function fake(id: string): Fake {
-  const entry: Fake = { id, disposed: 0, dispose: () => entry.disposed++, reconnect: () => {} }
+  const entry: Fake = { id, disposed: 0, dispose: () => entry.disposed++, focus: () => {},
+    reconnect: () => {} }
   return entry
 }
 
 describe("TerminalPool", () => {
+  it("dispose ends one session, so a later open starts fresh", () => {
+    const pool = new TerminalPool<Fake>()
+    const first = pool.get("local", "s1", () => fake("s1"))
+    pool.dispose("local", "s1")
+    expect(first.disposed).toBe(1)
+    expect(pool.get("local", "s1", () => fake("again")).id).toBe("again")
+  })
+
   it("returns the live entry on a hit without creating another", () => {
     const pool = new TerminalPool<Fake>()
     const first = pool.get("local", "s1", () => fake("s1"))

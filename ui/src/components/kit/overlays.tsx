@@ -39,6 +39,7 @@ export function SheetContent({ className, children, ...props }: ComponentProps<t
   return (
     <DialogContent
       showCloseButton={false}
+      finalFocus={() => document.querySelector<HTMLElement>(".xterm-helper-textarea") ?? true}
       className={cn(
         "top-(--bar-h) w-96 max-w-full translate-y-0 gap-(--s5) rounded-(--r-sheet) p-(--s6) max-[760px]:top-auto max-[760px]:bottom-0 max-[760px]:w-full max-[760px]:translate-x-0 max-[760px]:translate-y-0 max-[760px]:rounded-b-none",
         className,
@@ -51,11 +52,11 @@ export function SheetContent({ className, children, ...props }: ComponentProps<t
 }
 
 export function SheetTitle({ className, ...props }: ComponentProps<typeof DialogTitle>) {
-  return <DialogTitle className={cn("text-(--fs) font-semibold", className)} {...props} />;
+  return <DialogTitle className={cn("text-(length:--fs) font-semibold", className)} {...props} />;
 }
 
 export function SheetDescription({ className, ...props }: ComponentProps<typeof DialogDescription>) {
-  return <DialogDescription className={cn("text-(--fs-sm) text-(--fg2)", className)} {...props} />;
+  return <DialogDescription className={cn("text-(length:--fs-sm) text-(--fg2)", className)} {...props} />;
 }
 
 // Cancel first, primary action bottom-right. No close ✕.
@@ -87,8 +88,8 @@ export function ConfirmAlertContent({
   const cancelRef = useRef<HTMLButtonElement>(null);
   return (
     <AlertDialogContent className="w-70 gap-(--s4) rounded-(--r-sheet) p-(--s6)" initialFocus={cancelRef}>
-      <AlertDialogTitle className="text-(--fs) font-semibold">{title}</AlertDialogTitle>
-      <AlertDialogDescription className="text-(--fs-sm) text-(--fg2)">{description}</AlertDialogDescription>
+      <AlertDialogTitle className="text-(length:--fs) font-semibold">{title}</AlertDialogTitle>
+      <AlertDialogDescription className="text-(length:--fs-sm) text-(--fg2)">{description}</AlertDialogDescription>
       <AlertDialogFooter className="flex-col gap-(--s3)">
         <Button variant="destructive" onClick={onConfirm} className="w-full">
           {destructiveLabel}
@@ -107,7 +108,7 @@ export const MenuTrigger = DropdownMenuTrigger;
 export function MenuContent({ className, ...props }: ComponentProps<typeof DropdownMenuContent>) {
   return (
     <DropdownMenuContent
-      className={cn("min-w-44 rounded-(--r-pop) p-(--s1) text-(--fs) shadow-(--shadow-pop)", className)}
+      className={cn("min-w-44 rounded-(--r-pop) p-(--s1) text-(length:--fs) shadow-(--shadow-pop)", className)}
       {...props}
     />
   );
@@ -123,7 +124,7 @@ export function MenuItem({
 }: ComponentProps<typeof DropdownMenuItem> & { icon?: ReactNode; shortcut?: string }) {
   return (
     <DropdownMenuItem
-      className={cn("h-(--head-h) gap-(--s3) rounded-(--r-row) px-(--s3) text-(--fs) focus:bg-(--accent) focus:text-(--accent-fg)", className)}
+      className={cn("h-(--head-h) gap-(--s3) rounded-(--r-row) px-(--s3) text-(length:--fs) focus:bg-(--accent) focus:text-(--accent-fg)", className)}
       {...props}
     >
       {icon}
@@ -150,7 +151,7 @@ export const RowContextMenuTrigger = ContextMenuTrigger;
 export function RowContextMenuContent({ className, ...props }: ComponentProps<typeof ContextMenuContent>) {
   return (
     <ContextMenuContent
-      className={cn("min-w-44 rounded-(--r-pop) p-(--s1) text-(--fs) shadow-(--shadow-pop)", className)}
+      className={cn("min-w-44 rounded-(--r-pop) p-(--s1) text-(length:--fs) shadow-(--shadow-pop)", className)}
       {...props}
     />
   );
@@ -165,7 +166,7 @@ export function RowContextMenuItem({
 }: ComponentProps<typeof ContextMenuItem> & { icon?: ReactNode; shortcut?: string }) {
   return (
     <ContextMenuItem
-      className={cn("h-(--head-h) gap-(--s3) rounded-(--r-row) px-(--s3) text-(--fs) focus:bg-(--accent) focus:text-(--accent-fg)", className)}
+      className={cn("h-(--head-h) gap-(--s3) rounded-(--r-row) px-(--s3) text-(length:--fs) focus:bg-(--accent) focus:text-(--accent-fg)", className)}
       {...props}
     >
       {icon}

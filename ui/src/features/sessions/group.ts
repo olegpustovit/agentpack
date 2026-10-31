@@ -1,5 +1,5 @@
 import type { SessionInfo } from "@/lib/api-types"
-import { basename, harnessName } from "@/lib/format"
+import { basename, harnessName, relativeTime } from "@/lib/format"
 
 export type GroupMode = "machine" | "project"
 
@@ -31,6 +31,28 @@ export function sessionLabel(session: ListedSession): string {
 }
 
 const UNKNOWN_PROJECT = "Unknown project"
+
+// Row tooltip and terminal subtitle: harness, folder, machine, who started it, when.
+export function sessionDetail(session: ListedSession): string {
+  const actor = session.started_by
+  const started = actor?.user ? `started by ${actor.user} from ${actor.kind}` : undefined
+  const when = session.last_used ?? session.started_at
+  return [
+    harnessName(session.harness),
+    basename(session.directory) || UNKNOWN_PROJECT,
+    session.machineName,
+    started,
+    when ? relativeTime(new Date(when)) : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ")
+}
+
+// What the filter field matches: everything the row and its tooltip show.
+export function matchesSession(session: ListedSession, query: string): boolean {
+  const needle = query.trim().toLowerCase()
+  return !needle || [session.name, harnessName(session.harness), session.harness, session.mode, session.directory, session.machineName].some((part) => part?.toLowerCase().includes(needle))
+}
 
 // A trailing separator would otherwise make "/a/x/" and "/a/x" two folders.
 function trimSlashes(path: string): string {

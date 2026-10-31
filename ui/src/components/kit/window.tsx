@@ -9,7 +9,7 @@ export function AppWindow({ className, ...props }: ComponentProps<"div">) {
       <div
         data-slot="app-window"
         className={cn(
-          "grid h-dvh grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden bg-(--window) text-(--fs) text-(--fg)",
+          "grid h-dvh grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden bg-(--window) text-(length:--fs) text-(--fg)",
           className,
         )}
         {...props}
@@ -40,7 +40,7 @@ export function StatusBar({ className, ...props }: ComponentProps<"footer">) {
     <footer
       data-slot="status-bar"
       className={cn(
-        "flex h-(--status-h) min-w-0 items-center gap-(--s4) border-t-[0.5px] border-(--sep) bg-(--chrome) px-(--s4) text-(--fs-sm) text-(--fg2) max-[760px]:hidden",
+        "flex h-(--status-h) min-w-0 items-center gap-(--s4) overflow-hidden border-t-[0.5px] border-(--sep) bg-(--chrome) px-(--s4) text-(length:--fs-sm) text-(--fg2) max-[760px]:hidden",
         className,
       )}
       {...props}

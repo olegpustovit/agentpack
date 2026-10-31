@@ -6,7 +6,7 @@
   --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   /* type */
-  --fs:13px;--fs-sm:12px;--fs-xs:11px;--lh:1.38;
+  --fs:13px;--fs-sm:12px;--fs-xs:11px;--fs-lg:15px;--lh:1.38;
   /* metrics */
   --bar-h:40px;--status-h:24px;--ctl-h:24px;--ctl-h-sm:20px;--row-h:26px;--row-h-2:38px;--head-h:22px;
   --s1:2px;--s2:4px;--s3:6px;--s4:8px;--s5:12px;--s6:16px;--s7:20px;
@@ -34,21 +34,21 @@
   --shadow-ctl:0 .5px 1px oklch(0 0 0 / 18%),0 0 0 .5px oklch(0 0 0 / 10%);
   --shadow-pop:0 10px 30px oklch(0 0 0 / 18%),0 0 0 .5px oklch(0 0 0 / 14%);
   --scrim:oklch(0 0 0 / 22%);
-  --terminal-bg:#171b22;--terminal-fg:#e6e8ed;
+  --terminal-bg:#ffffff;--terminal-fg:#202124;
   color-scheme:light;
 }
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]){
   --window:oklch(.2 0 0);--chrome:oklch(.255 .002 260);--sidebar:oklch(.225 .002 260);--control:oklch(.43 .002 260);--field:oklch(.27 .002 260);--track:oklch(.3 .002 260);
   --fg:oklch(.96 0 0);--fg2:oklch(.74 .004 260);--fg3:oklch(.58 .004 260);--sep:oklch(1 0 0 / 11%);--sep-soft:oklch(1 0 0 / 7%);
   --hover:oklch(1 0 0 / 7%);--press:oklch(1 0 0 / 12%);--accent:oklch(.64 .17 255);--accent-soft:oklch(.64 .17 255 / 22%);--sel-inactive:oklch(1 0 0 / 11%);
-  --ok:oklch(.72 .15 150);--warn:oklch(.8 .14 75);--danger:oklch(.7 .18 25);--idle:oklch(.55 0 0);
+  --ok:oklch(.72 .15 150);--warn:oklch(.8 .14 75);--danger:oklch(.7 .18 25);--idle:oklch(.55 0 0);--terminal-bg:#171b22;--terminal-fg:#e6e8ed;
   --shadow-ctl:0 .5px 1px oklch(0 0 0 / 40%),inset 0 .5px 0 oklch(1 0 0 / 10%);--shadow-pop:0 12px 36px oklch(0 0 0 / 50%),0 0 0 .5px oklch(1 0 0 / 14%);--scrim:oklch(0 0 0 / 40%);
   color-scheme:dark}}
 :root[data-theme=dark]{
   --window:oklch(.2 0 0);--chrome:oklch(.255 .002 260);--sidebar:oklch(.225 .002 260);--control:oklch(.43 .002 260);--field:oklch(.27 .002 260);--track:oklch(.3 .002 260);
   --fg:oklch(.96 0 0);--fg2:oklch(.74 .004 260);--fg3:oklch(.58 .004 260);--sep:oklch(1 0 0 / 11%);--sep-soft:oklch(1 0 0 / 7%);
   --hover:oklch(1 0 0 / 7%);--press:oklch(1 0 0 / 12%);--accent:oklch(.64 .17 255);--accent-soft:oklch(.64 .17 255 / 22%);--sel-inactive:oklch(1 0 0 / 11%);
-  --ok:oklch(.72 .15 150);--warn:oklch(.8 .14 75);--danger:oklch(.7 .18 25);--idle:oklch(.55 0 0);
+  --ok:oklch(.72 .15 150);--warn:oklch(.8 .14 75);--danger:oklch(.7 .18 25);--idle:oklch(.55 0 0);--terminal-bg:#171b22;--terminal-fg:#e6e8ed;
   --shadow-ctl:0 .5px 1px oklch(0 0 0 / 40%),inset 0 .5px 0 oklch(1 0 0 / 10%);--shadow-pop:0 12px 36px oklch(0 0 0 / 50%),0 0 0 .5px oklch(1 0 0 / 14%);--scrim:oklch(0 0 0 / 40%);
   color-scheme:dark}
 
@@ -106,6 +106,11 @@
   --color-ring: var(--ring);
 }
 
+/* Layered: unlayered rules would beat every Tailwind utility. */
+/* Text and glyphs on a selected row turn white only on the accent fill, which needs list focus. */
+@custom-variant sel (&:is(.group\/list:focus-within [data-selected=true], .group\/list:focus-within [data-selected=true] *));
+
+@layer base {
 /* base */
 *{box-sizing:border-box}
 html,body{height:100%;overflow:hidden}
@@ -114,9 +119,10 @@ body{margin:0;background:var(--window);color:var(--fg);font:var(--fs)/var(--lh) 
 h1,h2,h3,p,dl,dd,ol,ul{margin:0}
 h2{font-size:var(--fs);font-weight:600}
 button,input,select{font:inherit;color:inherit;letter-spacing:inherit}
-svg{width:14px;height:14px;display:block;flex:none}
+svg{display:block;flex:none}
+.lucide{width:14px;height:14px}
 code,.mono{font-family:var(--mono);font-size:var(--fs-xs)}
-a{color:var(--accent);text-underline-offset:2px}
+a{color:inherit;text-decoration:none;text-underline-offset:2px}
 ::selection{background:var(--accent-soft)}
 :focus-visible{outline:2px solid color-mix(in oklab,var(--accent) 70%,transparent);outline-offset:-1px;border-radius:var(--r-ctl)}
 
@@ -124,3 +130,4 @@ a{color:var(--accent);text-underline-offset:2px}
 /* Desktop chrome: arrow cursor, unselectable labels. Content (terminal, notes, code) stays selectable. */
 .titlebar,.statusbar,.sidebar,.pane-head,button,label,th,.list-caption,.sheet-actions{user-select:none;-webkit-user-select:none;cursor:default}
 * {scrollbar-width:thin;scrollbar-color:var(--sep) transparent}
+}

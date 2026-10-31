@@ -29,7 +29,7 @@ export function FieldLabel({ className, ...props }: ComponentProps<"label">) {
 
 // Server rejections and validation errors show here, never in alerts.
 export function FieldError({ className, ...props }: ComponentProps<"p">) {
-  return <p role="alert" className={cn("text-(--fs-sm) text-(--danger)", className)} {...props} />;
+  return <p role="alert" className={cn("text-(length:--fs-sm) text-(--danger)", className)} {...props} />;
 }
 
 export function PopupSelect({
@@ -46,13 +46,13 @@ export function PopupSelect({
   disabled?: boolean;
 }) {
   return (
-    <Select value={value} onValueChange={(next) => next && onValueChange(next)} disabled={disabled}>
-      <SelectTrigger aria-label={label} className="h-(--ctl-h) min-w-0 rounded-(--r-ctl) text-(--fs)">
+    <Select items={items} value={value} onValueChange={(next) => next && onValueChange(next)} disabled={disabled}>
+      <SelectTrigger aria-label={label} className="h-(--ctl-h) min-w-0 rounded-(--r-ctl) text-(length:--fs)">
         <SelectValue />
       </SelectTrigger>
-      <SelectContent className="rounded-(--r-pop) text-(--fs)">
+      <SelectContent className="rounded-(--r-pop) text-(length:--fs)">
         {items.map((item) => (
-          <SelectItem key={item.value} value={item.value} className="h-(--head-h) rounded-(--r-row) text-(--fs)">
+          <SelectItem key={item.value} value={item.value} className="h-(--head-h) rounded-(--r-row) text-(length:--fs)">
             {item.label}
           </SelectItem>
         ))}

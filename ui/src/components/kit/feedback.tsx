@@ -29,7 +29,7 @@ export function Banner({
       data-slot="banner"
       data-tone={tone}
       className={cn(
-        "flex min-w-0 items-center gap-(--s3) border-b-[0.5px] px-(--s4) py-(--s3) text-(--fs-sm) text-(--fg)",
+        "flex min-w-0 items-center gap-(--s3) border-b-[0.5px] px-(--s4) py-(--s3) text-(length:--fs-sm) text-(--fg)",
         toneClass,
         className,
       )}
@@ -68,8 +68,8 @@ export function Empty({
   return (
     <div className={cn("flex flex-col items-center gap-(--s3) p-(--s7) text-center", className)}>
       {icon && <span className="text-(--fg3)">{icon}</span>}
-      <p className="text-(--fs) font-medium text-(--fg)">{title}</p>
-      <p className="text-(--fs-sm) text-(--fg2)">{children}</p>
+      <p className="text-(length:--fs) font-medium text-(--fg)">{title}</p>
+      <p className="text-(length:--fs-sm) text-(--fg2)">{children}</p>
     </div>
   );
 }
@@ -93,13 +93,13 @@ export function Spinner({ className, ...props }: ComponentProps<"span">) {
 
 // The polite status line: startup and machine discovery announce through it.
 export function Announcement({ className, children }: { className?: string; children: ReactNode }) {
-  return <p role="status" className={cn("min-w-0 truncate text-(--fs-sm) text-(--fg2)", className)}>{children}</p>;
+  return <p role="status" className={cn("min-w-0 truncate text-(length:--fs-sm) text-(--fg2)", className)}>{children}</p>;
 }
 
 export function Kbd({ className, ...props }: ComponentProps<"kbd">) {
   return (
     <kbd
-      className={cn("font-(family-name:--mono) text-(--fs-xs) text-(--fg3)", className)}
+      className={cn("font-(family-name:--mono) text-(length:--fs-xs) text-(--fg3)", className)}
       {...props}
     />
   );

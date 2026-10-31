@@ -7,10 +7,11 @@ import { useDiscovering } from "@/features/machines/queries"
 import { StatusBar, StatusProvider } from "@/features/status/status-bar"
 import { AppWindow, Toolbar, ToolbarButton } from "@/components/kit/window"
 import { buttonVariants } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import { useIsPhone } from "./use-is-phone"
 import { useSidebar } from "./sidebar"
 import { listDetailViews, tabs, useRoutePosition, views } from "./views"
-import { ToolbarProvider, ToolbarTarget } from "./toolbar-slot"
+import { ToolbarProvider, ToolbarTarget, ToolbarTitleTarget } from "./toolbar-slot"
 
 export function AppShell({ children }: { children: ReactNode }) {
   useShellShortcuts()
@@ -35,7 +36,8 @@ function useShellShortcuts() {
   const { toggle } = useSidebar()
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!event.metaKey || event.altKey || event.shiftKey) return
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
+      if (!event.metaKey && (event.target as Element | null)?.closest?.(".xterm")) return
       if (event.key === "\\") {
         event.preventDefault()
         toggle()
@@ -57,7 +59,7 @@ function AppToolbar() {
   const isPhone = useIsPhone()
   const { collapsed, toggle } = useSidebar()
   const discovering = useDiscovering()
-  const title = views.find((item) => item.id === view)?.label ?? "agentpack"
+  const title = tabs.find((item) => item.id === view)?.label ?? "Agentpack"
   const hasSidebar = listDetailViews.includes(view)
 
   return (
@@ -68,6 +70,7 @@ function AppToolbar() {
           aria-expanded={!collapsed}
           title="Toggle sidebar (⌘\)"
           onClick={toggle}
+          className="aria-expanded:text-(--accent)"
         >
           <PanelLeft />
         </ToolbarButton>
@@ -81,26 +84,30 @@ function AppToolbar() {
           <ChevronLeft />
         </Link>
       )}
-      <nav aria-label="Views" className="flex shrink-0 items-center gap-(--s1) max-[760px]:hidden">
+      <nav aria-label="Views" className="me-(--s3) flex h-(--ctl-h) shrink-0 items-center rounded-(--r-ctl) bg-(--track) p-(--s1) max-[760px]:hidden">
         {views.map((item, index) => (
           <Link
             key={item.id}
             to={item.to}
             title={`⌘${index + 1}`}
-            className={buttonVariants({ variant: item.id === view ? "default" : "ghost", size: "sm" })}
+            className={cn(
+              "flex h-(--ctl-h-sm) cursor-default items-center rounded-(--r-row) px-(--s4) text-(length:--fs-sm) text-(--fg2)",
+              item.id === view && "bg-(--control) text-(--fg) shadow-(--shadow-ctl)",
+            )}
           >
             {item.label}
           </Link>
         ))}
       </nav>
-      <span className="min-w-0 truncate text-(--fs) font-medium">{title}</span>
+      <ToolbarTitleTarget />
+      <span className="hidden min-w-0 truncate text-(length:--fs) font-semibold peer-empty:inline">{title}</span>
       <div className="flex-1" />
       {discovering && <Announcement>Discovering machines…</Announcement>}
       <ToolbarTarget />
       <Link
         to="/settings"
         aria-label="Settings"
-        className={buttonVariants({ variant: "ghost", size: "icon", className: "shrink-0" })}
+        className={buttonVariants({ variant: "ghost", size: "icon", className: cn("shrink-0 max-[760px]:hidden", view === "settings" && "text-(--accent)") })}
       >
         <Settings />
       </Link>
@@ -120,9 +127,9 @@ function TabBar() {
         <Link
           key={tab.id}
           to={tab.to}
-          className="flex min-w-0 flex-col items-center justify-center gap-0.5 text-(--fg2) aria-[current=page]:text-(--fg)"
+          className="flex min-w-0 flex-col items-center justify-center gap-0.5 text-(--fg2) aria-[current=page]:text-(--accent)"
         >
-          <tab.icon className="size-4" />
+          <tab.icon aria-hidden className="size-(--s7)" />
           <span className="text-[10px] leading-none">{tab.label}</span>
         </Link>
       ))}

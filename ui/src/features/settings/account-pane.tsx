@@ -7,7 +7,7 @@ import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
 import { identityQuery } from "@/features/machines/queries"
 import { useGatewayActions } from "./actions"
-import { LoadError, Row } from "./panes"
+import { LoadError, Pane, Row } from "./panes"
 import { settingsQuery } from "./queries"
 
 // Copy follows the legacy confirmations; the title names what will stop.
@@ -39,33 +39,35 @@ export function AccountPane() {
 
   return (
     <>
-      <Section title="Account">
+      <Pane title="Account">
         <FieldGrid>
-          <Row label="Signed in as">{identity.data.auth}</Row>
+          <Row label="Signed in as">{`${identity.data.auth}, on ${identity.data.node.name}`}</Row>
           <Row label="Tailscale user">{identity.data.tailscale_user || "None"}</Row>
+          <Row label="">
+            <p className="text-(length:--fs-sm) text-(--fg2)">
+              Sessions are attributed per machine and Tailscale user. Everyone using this root password appears as root.
+            </p>
+            <Button disabled={actions.signOut.isPending} onClick={() => actions.signOut.mutate()}>
+              Sign out
+            </Button>
+          </Row>
         </FieldGrid>
-        <p className="mt-(--s4) text-(--fs-sm) text-(--fg2)">
-          Sessions are attributed per machine and Tailscale user. Everyone using this root password appears as root.
-        </p>
-        <div className="mt-(--s4)">
-          <Button disabled={actions.signOut.isPending} onClick={() => actions.signOut.mutate()}>
-            Sign out
-          </Button>
-        </div>
-      </Section>
+      </Pane>
       <Section title="Danger zone">
-        <FieldGrid>
-          <Row label="Agents">
+        <div className="flex flex-col gap-(--s4)">
+          <div className="flex items-center justify-between gap-(--s6)">
+            <p>Stop every agent on this machine. Their conversations may end.</p>
             <Button variant="destructive" disabled={stopped} onClick={() => setConfirm("agents")}>
-              Stop all agents
+              Stop all agents…
             </Button>
-          </Row>
-          <Row label="Gateway">
+          </div>
+          <div className="flex items-center justify-between gap-(--s6)">
+            <p>Stop this gateway. CLI sessions keep running. Run <code>agentpack gateway start</code> to reconnect.</p>
             <Button variant="destructive" disabled={stopped} onClick={() => setConfirm("gateway")}>
-              Stop gateway
+              Stop gateway…
             </Button>
-          </Row>
-        </FieldGrid>
+          </div>
+        </div>
       </Section>
       <ConfirmAlert open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
         {confirm && (

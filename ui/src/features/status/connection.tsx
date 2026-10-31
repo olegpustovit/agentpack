@@ -22,7 +22,7 @@ export function ConnectionItem() {
 
   // A network failure (not an HTTP status) means the gateway itself did not answer.
   const unreachable = nodes.error !== null && !(nodes.error instanceof ApiError)
-  if (!unreachable && !nodes.data) return null
+  if (!unreachable && !nodes.data && !nodes.error) return null
 
   const offline = machines.filter((machine) => !machine.online).length
   const label = unreachable
@@ -54,7 +54,7 @@ export function ConnectionItem() {
                 <li key={machine.id} className="flex items-center justify-between gap-(--s4) py-(--s2)">
                   <span className="min-w-0 truncate">{machine.name}</span>
                   <StatusDot state={machine.online ? "running" : "offline"} />
-                  <span className="text-(--fs-sm) text-(--fg2)">
+                  <span className="text-(length:--fs-sm) text-(--fg2)">
                     {peer?.last_seen ? relativeTime(new Date(peer.last_seen)) : ""}
                   </span>
                 </li>

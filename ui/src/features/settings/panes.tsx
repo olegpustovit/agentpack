@@ -1,6 +1,5 @@
 import { useState, type ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Section } from "@/components/kit/data"
 import { Banner, RowSkeleton } from "@/components/kit/feedback"
 import { Field, FieldGrid, FieldLabel } from "@/components/kit/forms"
 import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
@@ -12,6 +11,16 @@ import { allowListLabel, sharingLabel } from "./model"
 import { settingsQuery } from "./queries"
 import { useGatewayActions } from "./actions"
 import { applyTheme, currentTheme, themes, type Theme } from "./theme"
+
+// The selected source row names the pane, so its heading is for assistive tech only.
+export function Pane({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section>
+      <h2 className="sr-only">{title}</h2>
+      {children}
+    </section>
+  )
+}
 
 export function Row({ label, htmlFor, children }: { label: string; htmlFor?: string; children: ReactNode }) {
   return (
@@ -49,7 +58,7 @@ export function GeneralPane() {
   }
   if (!settings.data || !identity.data) return <RowSkeleton lines={2} />
   return (
-    <Section title="General">
+    <Pane title="General">
       <FieldGrid>
         <Row label="Gateway">
           <StatusDot state={settings.data.running ? "running" : "stopped"} />
@@ -58,7 +67,7 @@ export function GeneralPane() {
         <Row label="Version">{identity.data.node.version}</Row>
         <Row label="Hostname">{identity.data.node.name}</Row>
       </FieldGrid>
-    </Section>
+    </Pane>
   )
 }
 
@@ -71,7 +80,7 @@ export function SharingPane() {
   if (!settings.data) return <RowSkeleton lines={2} />
   const enabled = settings.data.sharing_enabled
   return (
-    <Section title="Sharing">
+    <Pane title="Sharing">
       <FieldGrid>
         <Row label="Tailscale sharing" htmlFor="sharing">
           <Switch
@@ -80,11 +89,11 @@ export function SharingPane() {
             disabled={sharing.isPending}
             onCheckedChange={(next) => sharing.mutate(next)}
           />
-          <span className="text-(--fs-sm) text-(--fg2)">{sharingLabel(enabled)}</span>
+          <span className="text-(length:--fs-sm) text-(--fg2)">{sharingLabel(enabled)}</span>
         </Row>
         <Row label="Allow list">{allowListLabel(settings.data.allowed_peers)}</Row>
       </FieldGrid>
-    </Section>
+    </Pane>
   )
 }
 
@@ -99,7 +108,7 @@ export function AppearancePane() {
     setTheme(next)
   }
   return (
-    <Section title="Appearance">
+    <Pane title="Appearance">
       <FieldGrid>
         <Row label="Theme">
           <SegmentedControl aria-label="Theme" value={[theme]} onValueChange={choose}>
@@ -111,6 +120,6 @@ export function AppearancePane() {
           </SegmentedControl>
         </Row>
       </FieldGrid>
-    </Section>
+    </Pane>
   )
 }

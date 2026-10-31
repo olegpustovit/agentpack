@@ -42,15 +42,15 @@ export function PackageInspector({ module }: { module: string }) {
     <Inspector>
       <Failures failures={failures} />
       <InspectorHead
-        icon={<Glyph className="size-(--s6)" />}
+        icon={<Glyph aria-hidden />}
         title={item.name}
         subtitle={`${kind} · ${plural(item.projects.length, "project")} · ${item.machines.join(", ")}`}
       >
-        <Button type="button" variant="primary" size="sm" onClick={() => void navigate({ search: (prev) => ({ ...prev, install: "1" }) })}>
+        <Button type="button" variant="primary" onClick={() => void navigate({ search: (prev) => ({ ...prev, install: "1" }) })}>
           Install…
         </Button>
       </InspectorHead>
-      <Section title="Details">
+      <Section title="Details" className="col-span-full">
         <dl className="flex flex-col gap-(--s3)">
           <KeyValue label="Module">
             <code>{item.module}</code>
@@ -73,8 +73,10 @@ export function PackageInspector({ module }: { module: string }) {
               )}
             </span>
           </KeyValue>
-          <KeyValue label="Repository">{record?.url || "—"}</KeyValue>
-          <KeyValue label="Content hash">{record?.content_hash ? <code className="break-all">{record.content_hash}</code> : "—"}</KeyValue>
+          <KeyValue label="Repository">
+            {record?.url ? <a href={record.url} target="_blank" rel="noreferrer" className="text-(--accent) hover:underline">{record.url}</a> : "—"}
+          </KeyValue>
+          <KeyValue label="Content hash">{record?.content_hash ? <Hash value={record.content_hash} /> : "—"}</KeyValue>
         </dl>
       </Section>
       <Section title="Installed in" className="col-span-full">
@@ -82,7 +84,7 @@ export function PackageInspector({ module }: { module: string }) {
           <Empty title="Not installed yet">No project on any machine pins this package.</Empty>
         ) : (
           <>
-            <p className="mb-(--s2) text-(--fs-sm) text-(--fg2)">{plural(installed.length, "project")}</p>
+            <p className="mb-(--s2) text-(length:--fs-sm) text-(--fg2)">{plural(installed.length, "project")}</p>
             <DataGrid>
               <DataGridHead>
                 <tr>

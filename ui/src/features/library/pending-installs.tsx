@@ -43,7 +43,7 @@ export function PendingInstalls() {
 
   return (
     <section aria-label="Pending installs" className="flex flex-col">
-      <h2 className="flex items-center justify-between px-(--s3) py-(--s2) text-(--fs-sm) font-medium text-(--fg2)">
+      <h2 className="flex items-center justify-between px-(--s3) py-(--s2) text-(length:--fs-sm) font-medium text-(--fg2)">
         <span>Pending installs</span>
         <span className="text-(--fg3)">{list.length}</span>
       </h2>
@@ -54,7 +54,7 @@ export function PendingInstalls() {
           <div key={draft.id} className="flex items-center gap-(--s2) px-(--s3) py-(--s1)">
             <div className="flex min-w-0 flex-1 flex-col">
               <span className="truncate">{label}</span>
-              <span className="truncate text-(--fs-sm) text-(--fg2)">{`${machineName} / ${basename(draft.directory)} · ${draft.reason}`}</span>
+              <span className="truncate text-(length:--fs-sm) text-(--fg2)">{`${machineName} / ${basename(draft.directory)} · ${draft.reason}`}</span>
             </div>
             <Button type="button" variant="ghost" size="sm" onClick={() => setReviewing(draft)}>
               Review…
@@ -125,10 +125,10 @@ function DraftReviewForm({ draft, machineName, onDone }: { draft: Draft; machine
           Checking the destination…
         </div>
       )}
-      {current && <p className={ready ? "text-(--fs-sm) text-(--fg2)" : "text-(--fs-sm) text-(--danger)"}>{current.reason || draft.reason}</p>}
+      {current && <p className={ready ? "text-(length:--fs-sm) text-(--fg2)" : "text-(length:--fs-sm) text-(--danger)"}>{current.reason || draft.reason}</p>}
       {current?.diff && <DiffList diff={current.diff} />}
       {ready && (
-        <label className="flex items-center gap-(--s3) text-(--fs-sm)">
+        <label className="flex items-center gap-(--s3) text-(length:--fs-sm)">
           <Checkbox checked={restart} disabled={apply.isPending} onCheckedChange={setRestart} />
           {`Restart affected agents after ${label.toLowerCase()}`}
         </label>
@@ -146,11 +146,11 @@ function DraftReviewForm({ draft, machineName, onDone }: { draft: Draft; machine
 
 function DiffList({ diff }: { diff: PackageDiff }) {
   const changes = (["add", "update", "remove"] as const).flatMap((kind) => diff[kind].map((module) => ({ kind, module })))
-  if (changes.length === 0) return <p className="text-(--fs-sm)">No package changes</p>
+  if (changes.length === 0) return <p className="text-(length:--fs-sm)">No package changes</p>
   return (
     <>
-      <p className="text-(--fs-sm) text-(--fg2)">{plural(changes.length, "change")}</p>
-      <ul aria-label="Package changes" className="flex flex-col gap-(--s1) text-(--fs-sm)">
+      <p className="text-(length:--fs-sm) text-(--fg2)">{plural(changes.length, "change")}</p>
+      <ul aria-label="Package changes" className="flex flex-col gap-(--s1) text-(length:--fs-sm)">
         {changes.map((change) => (
           <li key={`${change.kind}\0${change.module}`}>
             <span aria-hidden className="inline-block w-4">

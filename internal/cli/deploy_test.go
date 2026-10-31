@@ -179,3 +179,20 @@ func TestDeployInstallerIdempotentAndRollback(t *testing.T) {
 		})
 	}
 }
+
+func TestRequireStagedUI(t *testing.T) {
+	root := t.TempDir()
+	if err := requireStagedUI(root); err == nil || !strings.Contains(err.Error(), "make ui-stage") {
+		t.Fatalf("unstaged checkout: got %v", err)
+	}
+	web := filepath.Join(root, "internal", "network", "webdist")
+	if err := os.MkdirAll(web, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(web, "index.html"), []byte("<html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireStagedUI(root); err != nil {
+		t.Fatalf("staged checkout: %v", err)
+	}
+}

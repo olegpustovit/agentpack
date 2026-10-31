@@ -14,12 +14,24 @@ const words: Record<MachineState, string> = {
 };
 
 const glyphs: Record<Exclude<MachineState, "restarting">, string> = {
-  running: "bg-(--ok) border-(--ok) group-data-selected/row:bg-(--accent-fg) group-data-selected/row:border-(--accent-fg)",
-  stopped: "border-(--fg2) group-data-selected/row:border-(--accent-fg)",
-  offline: "border-dashed border-(--fg3) group-data-selected/row:border-(--accent-fg)",
-  readonly: "bg-(--fg3) border-(--fg3) group-data-selected/row:bg-(--accent-fg) group-data-selected/row:border-(--accent-fg)",
-  needsUpdate: "bg-(--warn) border-(--warn) group-data-selected/row:bg-(--accent-fg) group-data-selected/row:border-(--accent-fg)",
+  running: "bg-(--ok) border-(--ok) sel:bg-(--accent-fg) sel:border-(--accent-fg)",
+  stopped: "border-(--fg2) sel:border-(--accent-fg)",
+  offline: "border-dashed border-(--fg3) sel:border-(--accent-fg)",
+  readonly: "bg-(--fg3) border-(--fg3) sel:bg-(--accent-fg) sel:border-(--accent-fg)",
+  needsUpdate: "bg-(--warn) border-(--warn) sel:bg-(--accent-fg) sel:border-(--accent-fg)",
 };
+
+// The glyph alone, for rows where the word would crowd the row. It names itself to assistive tech and on hover.
+export function StatusGlyph({ state, className }: { state: MachineState; className?: string }) {
+  if (state === "restarting") {
+    return (
+      <span role="img" aria-label={words.restarting} title={words.restarting} className={cn("shrink-0", className)}>
+        <RefreshCw aria-hidden className="size-(--s4) animate-spin motion-reduce:animate-none sel:text-(--accent-fg)" />
+      </span>
+    );
+  }
+  return <span role="img" aria-label={words[state]} title={words[state]} className={cn("inline-block size-(--s4) shrink-0 rounded-full border", glyphs[state], className)} />;
+}
 
 export function StatusDot({ state, className, ...props }: { state: MachineState } & ComponentProps<"span">) {
   return (
@@ -27,19 +39,14 @@ export function StatusDot({ state, className, ...props }: { state: MachineState 
       data-slot="status-dot"
       data-state={state}
       className={cn(
-        "inline-flex min-w-0 items-center gap-(--s3) text-(--fs-sm) text-(--fg2) group-data-selected/row:text-(--accent-fg)",
+        "inline-flex min-w-0 items-center gap-(--s3) text-(length:--fs-sm) text-(--fg2) sel:text-(--accent-fg)",
         className,
       )}
       {...props}
     >
-      {state === "restarting" ? (
-        <RefreshCw
-          aria-hidden
-          className="size-(--s4) shrink-0 animate-spin motion-reduce:animate-none group-data-selected/row:text-(--accent-fg)"
-        />
-      ) : (
-        <span aria-hidden className={cn("inline-block size-(--s4) shrink-0 rounded-full border", glyphs[state])} />
-      )}
+      <span aria-hidden className="contents">
+        <StatusGlyph state={state} />
+      </span>
       <span className="truncate">{words[state]}</span>
     </span>
   );

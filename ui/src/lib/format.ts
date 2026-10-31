@@ -21,8 +21,10 @@ const units: [Intl.RelativeTimeFormatUnit, number][] = [
   ["second", 1],
 ];
 
+// A content hash keeps its algorithm prefix, so the 7 characters are digest, not "sha256-".
 export function shortHash(value: string): string {
-  return value.slice(0, 7);
+  const prefix = value.lastIndexOf(":") + 1;
+  return value.slice(0, prefix + 7);
 }
 
 export function basename(path: string): string {
@@ -34,6 +36,14 @@ export function relativeTime(date: Date, now: number = Date.now()): string {
   const fallback: [Intl.RelativeTimeFormatUnit, number] = ["second", 1];
   const [unit, size] = units.find(([, s]) => Math.abs(seconds) >= s) ?? fallback;
   return relative.format(Math.round(seconds / size), unit);
+}
+
+// Compact age for row trailers: "12 m", "2 h", "3 d".
+export function shortAge(date: Date, now: number = Date.now()): string {
+  const minutes = Math.max(0, Math.round((now - date.getTime()) / 60_000));
+  if (minutes < 60) return `${minutes} m`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours} h` : `${Math.round(hours / 24)} d`;
 }
 
 export function plural(count: number, word: string): string {

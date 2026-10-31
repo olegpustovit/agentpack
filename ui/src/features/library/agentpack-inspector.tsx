@@ -63,7 +63,7 @@ export function AgentpackInspector({
     <Inspector>
       <Failures failures={failures} />
       <InspectorHead
-        icon={<Boxes className="size-(--s6)" />}
+        icon={<Boxes aria-hidden />}
         title={pack.name}
         subtitle={`${rev.project || "Unknown project"} · saved on ${selected.machine} · ${plural(revisions.length, "revision")}`}
       >
@@ -86,7 +86,7 @@ export function AgentpackInspector({
         </dl>
       </Section>
       <Section title="History">
-        <p className="mb-(--s2) text-(--fs-sm) text-(--fg2)">Newest first</p>
+        <p className="mb-(--s2) text-(length:--fs-sm) text-(--fg2)">Newest first</p>
         <ul className="flex flex-col">
           {revisions.map((entry, position) => (
             <li key={entry.revision.id} className="flex items-center gap-(--s3)">
@@ -100,28 +100,28 @@ export function AgentpackInspector({
                 )}
               >
                 <span className="truncate">{entry.revision.label || "Saved revision"}</span>
-                <span className="truncate text-(--fs-sm) text-(--fg2)">
+                <span className="truncate text-(length:--fs-sm) text-(--fg2)">
                   {new Date(entry.revision.created_at).toLocaleString()} · {entry.machine}
                 </span>
               </button>
-              {position === 0 && <span className="text-(--fs-sm) text-(--fg3)">Latest</span>}
-              <span className="text-(--fs-sm) text-(--fg3)">{plural((entry.revision.package_ids ?? []).length, "package")}</span>
+              {position === 0 && <span className="text-(length:--fs-sm) text-(--fg3)">Latest</span>}
+              <span className="text-(length:--fs-sm) text-(--fg3)">{plural((entry.revision.package_ids ?? []).length, "package")}</span>
               <Hash value={entry.revision.id} />
             </li>
           ))}
         </ul>
       </Section>
       <Section title={rev.label || "Saved revision"}>
-        <p className="mb-(--s2) text-(--fs-sm) text-(--fg2)">{rev.mode || "default"} mode</p>
+        <p className="mb-(--s2) text-(length:--fs-sm) text-(--fg2)">{rev.mode || "default"} mode</p>
         <Button type="button" size="sm" className="mb-(--s2)" onClick={() => void navigate({ search: (prev) => ({ ...prev, restore: rev.id }) })}>
           Restore…
         </Button>
         {!previous ? (
-          <p className="text-(--fs-sm)">First saved revision.</p>
+          <p className="text-(length:--fs-sm)">First saved revision.</p>
         ) : changes.length === 0 ? (
-          <p className="text-(--fs-sm)">Same packages as previous revision</p>
+          <p className="text-(length:--fs-sm)">Same packages as previous revision</p>
         ) : (
-          <ul aria-label="Changes from previous revision" className="mb-(--s3) flex flex-col gap-(--s1) text-(--fs-sm)">
+          <ul aria-label="Changes from previous revision" className="mb-(--s3) flex flex-col gap-(--s1) text-(length:--fs-sm)">
             {changes.map((change) => (
               <li key={`${change.kind}\0${change.name}`}>
                 <span aria-hidden className="inline-block w-4">
