@@ -11,8 +11,7 @@ import type { SessionInfo } from "@/lib/api-types"
 import { harnessName } from "@/lib/format"
 import { sessionsQuery, projectsQuery } from "./queries"
 
-// Harness ids the gateway starts. agy is listed so a folder whose newest launch was agy shows its
-// reason instead of an empty select.
+// Harness ids the gateway starts.
 const agents = ["claude", "codex", "grok", "omp", "opencode", "agent", "agy"].map((id) => ({
   value: id,
   label: harnessName(id),
@@ -95,7 +94,6 @@ function NewSessionForm({ machines, initialMachine, initialDirectory }: { machin
   else if (folders.error instanceof ApiError && folders.error.status === 404) hint = `Update Agentpack on ${machineName} to see its projects.`
   else if (folders.error) hint = `Couldn't load projects from ${machineName}: ${folders.error.message}`
   else if (folders.isSuccess && projects.length === 0) hint = `Run an agent in a folder on ${machineName} first, for example agentpack claude. It then appears here.`
-  else if (harnessId === "agy") hint = "Desktop launches must start locally."
 
   return (
     <form onSubmit={submit} className="contents">
@@ -136,7 +134,7 @@ function NewSessionForm({ machines, initialMachine, initialDirectory }: { machin
       {hint && <p className="text-(length:--fs-sm) text-(--fg2)">{hint}</p>}
       {start.error && <FieldError>{start.error.message}</FieldError>}
       <SheetActions>
-        <Button type="submit" variant="primary" disabled={!project || harnessId === "agy" || start.isPending}>
+        <Button type="submit" variant="primary" disabled={!project || start.isPending}>
           {start.isPending ? "Starting session…" : "Start session"}
         </Button>
       </SheetActions>

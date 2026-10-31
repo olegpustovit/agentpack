@@ -62,15 +62,6 @@ for (const viewport of viewports) {
   })
 }
 
-test("an agy desktop session shows its banner and never opens a socket", async ({ page }) => {
-  await stubApi(page, () => [session("a1", "desk", { harness: "agy" })])
-  const worker = await stubWorker(page)
-  await page.goto("/sessions/local/a1")
-  await expect(page.getByRole("status").filter({ hasText: "Desktop launcher presence" })).toBeVisible()
-  await expect(statusBar(page)).not.toContainText(" × ")
-  expect(worker.conns).toHaveLength(0)
-})
-
 test("a non-interactive session shows native stdio copy and never opens a socket", async ({ page }) => {
   await stubApi(page, () => [session("n1", "stdio", { state: { ...shared, interactive: false } })])
   const worker = await stubWorker(page)

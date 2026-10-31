@@ -103,8 +103,9 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 		}
 		return 0, nil
 	}
-	allowsMissing := map[string]bool{"add": true, "claude": true, "opencode": true, "codex": true, "grok": true, "omp": true, "agy": true, "agent": true, "env": true, "config": true, "support": true}
-	packContext, err := resolveInvocationContext(invocation, allowsMissing[invocation.Command])
+	_, launcher := launcherTarget(invocation.Command)
+	allowsMissing := map[string]bool{"add": true, "env": true, "config": true, "support": true}
+	packContext, err := resolveInvocationContext(invocation, launcher || allowsMissing[invocation.Command])
 	if err != nil {
 		return 1, err
 	}
@@ -123,6 +124,10 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 				return 1, runner.reportIntegrity(err)
 			}
 		}
+	}
+	if launcher {
+		code, err := runner.launchManaged(ctx, packContext, invocation, arguments)
+		return code, runner.reportIntegrity(err)
 	}
 	switch invocation.Command {
 	case "lock":
@@ -276,9 +281,6 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 		return code, runner.reportIntegrity(supportErr)
 	case "env":
 		err = runner.runEnv(ctx, root, workspace, invocation.Global.Mode, invocation.Args, invocation.Global.Quiet)
-	case "claude", "opencode", "codex", "grok", "omp", "agy", "agent":
-		code, err := runner.launchManaged(ctx, packContext, invocation, arguments)
-		return code, runner.reportIntegrity(err)
 	case "mcp":
 		err = runner.runMCP(ctx, root, invocation.Args, invocation.Global.Quiet)
 	case "mode":
@@ -454,13 +456,9 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 		stopProgress = startProgress(runner.Stderr, "preparing "+invocation.Command, time.Second)
 	}
 	defer stopProgress()
-	targetName := invocation.Command
-	if targetName == "agent" {
-		targetName = "cursor"
-	}
-	target, err := base.ParseTarget(targetName)
-	if err != nil {
-		return 1, err
+	target, ok := launcherTarget(invocation.Command)
+	if !ok {
+		return 1, fmt.Errorf("unknown harness %q", invocation.Command)
 	}
 	if invocation.Global.StrictExternal && target.UsesWorkspaceOverlay() {
 		return 1, fmt.Errorf("%s requires a workspace overlay write; refuse under --strict-external (use claude/opencode, or omit --strict-external)", target)
@@ -622,4 +620,17 @@ func writeJSON(output io.Writer, value any) error {
 	encoder := json.NewEncoder(output)
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(value)
+}
+
+// launcherTarget maps a launcher command to its harness. The Cursor launcher is `agent`, so the
+// target name `cursor` is not a command.
+func launcherTarget(command string) (base.Target, bool) {
+	if command == "cursor" {
+		return "", false
+	}
+	if command == "agent" {
+		command = "cursor"
+	}
+	target, err := base.ParseTarget(command)
+	return target, err == nil
 }

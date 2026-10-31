@@ -51,13 +51,9 @@ func snapshotRunningEnvironments(ctx context.Context, definitionRoot string) ([]
 			continue
 		}
 		session.DefinitionRoot = definitionRoot
-		name := session.Harness
-		if name == "agent" {
-			name = "cursor"
-		}
-		target, err := harness.ParseTarget(name)
-		if err != nil {
-			return nil, err
+		target, ok := launcherTarget(session.Harness)
+		if !ok {
+			return nil, fmt.Errorf("unknown harness %q", session.Harness)
 		}
 		digest, err := network.SessionEnvironment(home, session.ID)
 		if err == nil && digest == "" {

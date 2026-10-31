@@ -20,7 +20,7 @@ export type DestinationState = {
   text: string
 }
 
-// Ported from packageState (app.js:806). A row without a folder id or cache key cannot be drafted.
+// A row without a folder id or cache key cannot be drafted.
 export function destinationState(item: InstallItem, target: Destination): DestinationState {
   const { project } = target
   const draftable = project.folder_id !== "" && item.cache_key !== ""
@@ -111,7 +111,7 @@ export function destinationsOf(machines: Machine[], byMachine: Record<string, { 
 
 export type RestorePlan = { kind: "restore" | "draft" | "blocked"; text: string; reason: string }
 
-// Ported from restoreAgentpack (app.js:949-951). Only a checked destination can be previewed and restored now.
+// Only a checked destination can be previewed and restored now.
 export function restorePlan(target: Destination, items: InstallItem[]): RestorePlan {
   const { project, online } = target
   if (online && project.available && !project.error) return { kind: "restore", text: "", reason: "" }

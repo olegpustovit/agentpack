@@ -133,11 +133,7 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 }
 
 func (runner Runner) startRemoteSession(ctx context.Context, home, executable string, info network.SessionInfo) (string, error) {
-	switch info.Harness {
-	case "agy":
-		return "", errors.New("Antigravity uses a desktop window; launch it locally (remote desktop is unavailable)")
-	case "claude", "codex", "grok", "omp", "opencode", "agent":
-	default:
+	if _, ok := launcherTarget(info.Harness); !ok {
 		return "", errors.New("unknown harness")
 	}
 	if !filepath.IsAbs(info.Directory) {
@@ -196,7 +192,7 @@ func (runner Runner) launchManaged(ctx context.Context, packContext paths.Contex
 		fmt.Fprintf(runner.Stderr, "warning: shared gateway unavailable (%v); continuing with a local session\n", err)
 		return runner.launch(ctx, packContext, invocation)
 	}
-	if invocation.Command == "agy" || !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		runner.Launch = func(process *os.Process) (func(), error) {
 			cleanup, err := network.RegisterPresence(home, network.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode}, process)
 			if err != nil {

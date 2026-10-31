@@ -48,6 +48,10 @@ func (runner Runner) runNetworkService(ctx context.Context, args []string) (int,
 		if !enabled {
 			return 0, nil
 		}
+		// launchd and systemd start services with a minimal PATH, which hides the agents the gateway launches.
+		if path := loginShellPath(ctx, os.Getenv("SHELL")); path != "" {
+			os.Setenv("PATH", path+string(os.PathListSeparator)+os.Getenv("PATH"))
+		}
 		return runner.runGateway(ctx, []string{"serve", "--listen", "127.0.0.1:0"})
 	}
 	executable, err := os.Executable()
@@ -229,4 +233,24 @@ func encodedPowerShell(value string) string {
 		binary.LittleEndian.PutUint16(data[i*2:], unit)
 	}
 	return base64.StdEncoding.EncodeToString(data)
+}
+
+// loginShellPath asks the user's login shell for its PATH. The marker skips anything a profile
+// prints. An empty result means the caller keeps the PATH it has.
+func loginShellPath(ctx context.Context, shell string) string {
+	if shell == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	const marker = "__agentpack_path__"
+	output, err := exec.CommandContext(ctx, shell, "-l", "-c", `printf '`+marker+`%s' "$PATH"`).Output()
+	if err != nil {
+		return ""
+	}
+	_, path, found := strings.Cut(string(output), marker)
+	if !found {
+		return ""
+	}
+	return path
 }

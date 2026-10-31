@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/xml"
 	"io"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -107,5 +111,24 @@ func TestServiceLifecycleCommandsAndInvalidPaths(t *testing.T) {
 	}
 	if _, err := makeNetworkServicePlan("other", "install", "/bin/agentpack", "/data", "/config", "/home", "42"); err == nil {
 		t.Fatal("unknown platform accepted")
+	}
+}
+
+func TestLoginShellPathSkipsProfileOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows services have no login shell")
+	}
+	shell := filepath.Join(t.TempDir(), "shell")
+	if err := os.WriteFile(shell, []byte("#!/bin/sh\necho welcome from my profile\nexec /bin/sh -c \"$3\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "/custom/bin:/usr/bin:/bin")
+	if got := loginShellPath(context.Background(), shell); got != "/custom/bin:/usr/bin:/bin" {
+		t.Fatalf("PATH = %q", got)
+	}
+	for _, missing := range []string{"", filepath.Join(t.TempDir(), "missing")} {
+		if got := loginShellPath(context.Background(), missing); got != "" {
+			t.Fatalf("shell %q gave PATH %q", missing, got)
+		}
 	}
 }

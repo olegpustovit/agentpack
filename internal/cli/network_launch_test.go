@@ -18,7 +18,7 @@ func TestRemoteSessionRequiresRememberedFolderAndTerminalHarness(t *testing.T) {
 	for _, test := range []struct {
 		name, harness, directory, want string
 	}{
-		{"GUI", "agy", directory, "desktop window"},
+		{"unknown harness", "cursor", directory, "unknown harness"},
 		{"relative folder", "codex", "project", "absolute"},
 		{"unknown folder", "codex", directory, "not been used before"},
 	} {
@@ -57,7 +57,7 @@ func TestNativePresenceEndsWithLaunchProcess(t *testing.T) {
 	command := exec.Command(os.Args[0], "-test.run=^TestNativePresenceCLIChild$")
 	command.Env = append(os.Environ(), "AGENTPACK_TEST_NATIVE_EXIT=1")
 	runner := Runner{Launch: func(process *os.Process) (func(), error) {
-		return network.RegisterPresence(home, network.SessionInfo{Directory: directory, Harness: "agy"}, process)
+		return network.RegisterPresence(home, network.SessionInfo{Directory: directory, Harness: "codex"}, process)
 	}}
 	code, err := runner.runProcess(command)
 	if code != 23 || err != nil {
@@ -68,7 +68,7 @@ func TestNativePresenceEndsWithLaunchProcess(t *testing.T) {
 		t.Fatalf("launcher presence survived exit: %+v %v", sessions, err)
 	}
 	recent, err := network.Recent(home)
-	if err != nil || len(recent) != 1 || recent[0].Harness != "agy" {
+	if err != nil || len(recent) != 1 || recent[0].Harness != "codex" {
 		t.Fatalf("native folder history missing: %+v %v", recent, err)
 	}
 }

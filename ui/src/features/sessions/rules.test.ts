@@ -24,13 +24,6 @@ describe("sessionRules", () => {
     expect(Object.values(rules).every((allowed) => !allowed)).toBe(true)
   })
 
-  it("agy has no install and no terminal, but can still be renamed", () => {
-    const rules = sessionRules(session({ harness: "agy" }))
-    expect(rules.install).toBe(false)
-    expect(rules.reconnect).toBe(false)
-    expect(rules.rename).toBe(true)
-  })
-
   it("non-interactive sessions cannot restart or reconnect", () => {
     const rules = sessionRules(session({ interactive: false }))
     expect(rules.restart).toBe(false)

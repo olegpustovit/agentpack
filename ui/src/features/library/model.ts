@@ -69,7 +69,7 @@ function finish(key: string, name: string, g: Gather): Common {
 
 type Pin = { module: string; commit: string; name: string; kind: string; seen: string; project: [string, LibraryProject] }
 
-// Port of app.js knownPackages: one row per module. The pin used most recently wins; a module
+// One row per module. The pin used most recently wins; a module
 // with no pins shows its first stored record. Identical module@commit records are one record.
 function packageItems(inputs: LibraryInput[]): PackageItem[] {
   const stored = new Map<string, { pkg: Package; machines: Set<string> }>()
@@ -126,7 +126,7 @@ function packageItems(inputs: LibraryInput[]): PackageItem[] {
   return items
 }
 
-// Port of app.js registryAgentpacks: one item per agentpack id. Revisions merge by id.
+// One item per agentpack id. Revisions merge by id.
 function agentpackItems(inputs: LibraryInput[]): AgentpackItem[] {
   const packs = new Map<string, { name: string; revisions: Map<string, Revision>; g: Gather }>()
   for (const input of inputs) {

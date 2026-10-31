@@ -14,6 +14,7 @@ agentpack service uninstall
 Install captures the executable's current absolute path and `AGENTPACK_HOME`. Keep the
 binary there, or run install again after moving it. No command changes your shell
 profile, PATH, or requires a root account. The service runs as your current OS user.
+At startup it reads `PATH` from your login shell, so it finds the same agents your terminal does.
 
 - Linux uses `systemctl --user` and an `agentpack-gateway.service` unit under
   `$XDG_CONFIG_HOME/systemd/user` (default `~/.config/systemd/user`). It starts at user

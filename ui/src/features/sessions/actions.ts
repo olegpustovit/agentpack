@@ -11,7 +11,7 @@ function errorText(error: unknown): string {
 }
 
 // Stop and restart for session rows. A restart keeps one operation id per session until the
-// gateway accepts it or rejects it (app.js:300-318), so a retry cannot start a second restart.
+// gateway accepts it or rejects it, so a retry cannot start a second restart.
 export function useSessionCommands() {
   const queryClient = useQueryClient()
   const operations = useRef(new Map<string, string>())
