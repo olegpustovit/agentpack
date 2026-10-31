@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/environment"
@@ -446,16 +447,19 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (runner Runner) launch(ctx context.Context, packContext paths.Context, invocation Invocation) (int, error) {
+	var step atomic.Pointer[string]
+	setStep := func(name string) { step.Store(&name) }
+	setStep("waiting for another agentpack command on this project")
+	stopProgress := func() {}
+	if !invocation.Global.Quiet && !invocation.Global.NoProgress {
+		stopProgress = watchProgress(runner.Stderr, func() string { return "preparing " + invocation.Command + ": " + *step.Load() }, time.Second)
+	}
+	defer stopProgress()
 	mutation, err := acquireDefinitionMutation(ctx, packContext.DefinitionRoot)
 	if err != nil {
 		return 1, err
 	}
 	defer mutation.Unlock()
-	stopProgress := func() {}
-	if !invocation.Global.Quiet && !invocation.Global.NoProgress {
-		stopProgress = startProgress(runner.Stderr, "preparing "+invocation.Command, time.Second)
-	}
-	defer stopProgress()
 	target, ok := launcherTarget(invocation.Command)
 	if !ok {
 		return 1, fmt.Errorf("unknown harness %q", invocation.Command)
@@ -466,10 +470,12 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 	effective, skipped, err := runner.Service.SyncForLaunchOptions(ctx, packContext.DefinitionRoot, packSync.SyncOptions{
 		Mode: invocation.Global.Mode, Target: &target,
 		WorkspaceRoot: packContext.WorkspaceRoot, StrictExternal: invocation.Global.StrictExternal,
+		Progress: setStep,
 	})
 	if err != nil {
 		return 1, err
 	}
+	setStep("starting " + invocation.Command)
 	if invocation.Global.Debug {
 		fmt.Fprintf(runner.Stderr, "agentpack: target=%s mode=%s definition=%s workspace=%s fast-sync=%t\n", target, effective.Name(), packContext.DefinitionRoot, packContext.WorkspaceRoot, skipped)
 	}

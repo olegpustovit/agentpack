@@ -31,7 +31,7 @@ func validateSnapshot(manifestData, lockData []byte) (lockfile.PackLock, error) 
 	if _, err := manifest.Load(directory); err != nil {
 		return lockfile.PackLock{}, fmt.Errorf("validate normalized manifest: %w", safeParseError{cause: err})
 	}
-	lock, err := lockfile.Load(directory)
+	lock, err := lockfile.LoadUnguarded(paths.LockPath(directory))
 	if err != nil {
 		return lockfile.PackLock{}, fmt.Errorf("validate normalized lock: %w", safeParseError{cause: err})
 	}

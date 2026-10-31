@@ -43,3 +43,23 @@ func TestFastOperationHasNoProgress(t *testing.T) {
 		t.Fatalf("fast operation printed %q", output.String())
 	}
 }
+
+func TestProgressNamesTheCurrentStep(t *testing.T) {
+	var output bytes.Buffer
+	writer := &progressWriter{Writer: &output}
+	lines := make(chan struct{})
+	stop := watchProgress(writer, func() string {
+		defer func() {
+			select {
+			case lines <- struct{}{}:
+			default:
+			}
+		}()
+		return "preparing claude: staging"
+	}, time.Millisecond)
+	<-lines
+	stop()
+	if !strings.Contains(output.String(), "agentpack: preparing claude: staging… (") {
+		t.Fatalf("progress did not name the step: %q", output.String())
+	}
+}

@@ -26,6 +26,8 @@ Benchmark cold setup and verified warm launches before and after changing launch
 
 Fingerprint only configuration and authored resources. Never recursively scan global chat histories, sessions, project runtime state, sockets, or logs merely because the launch workspace is the user's home. Preserve cache integrity checks, symlink validation, nonregular configuration rejection, and concurrent-launch validation when optimizing. See `docs/research/startup-performance.md` for the baseline and reproduction commands.
 
+A launch never waits for housekeeping whose cost depends on what else is on the machine: tidying the temp directory runs beside the agent. A throwaway project path must never go through `lockfile.Load`, which leaves a guard directory per path; use `lockfile.LoadUnguarded`.
+
 Terminal output buffers must be bounded by bytes rather than PTY read count. Keep a regression for thousands of tiny redraw chunks without loss or disconnection, plus a stalled-viewer test that enforces the memory bound.
 
 ### Code structure (contributor rule)

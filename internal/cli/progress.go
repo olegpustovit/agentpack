@@ -20,6 +20,11 @@ func (writer *progressWriter) Write(data []byte) (int, error) {
 
 // Delaying the first line keeps fast commands silent; plain lines work in logs too.
 func startProgress(writer io.Writer, operation string, interval time.Duration) func() {
+	return watchProgress(writer, func() string { return operation }, interval)
+}
+
+// watchProgress asks for the operation on each line, so a line names the step running then.
+func watchProgress(writer io.Writer, operation func() string, interval time.Duration) func() {
 	stop, done := make(chan struct{}), make(chan struct{})
 	started := time.Now()
 	go func() {
@@ -31,7 +36,7 @@ func startProgress(writer io.Writer, operation string, interval time.Duration) f
 			case <-stop:
 				return
 			case <-timer.C:
-				fmt.Fprintf(writer, "agentpack: %s… (%s elapsed)\n", operation, time.Since(started).Round(time.Second))
+				fmt.Fprintf(writer, "agentpack: %s… (%s elapsed)\n", operation(), time.Since(started).Round(time.Second))
 				timer.Reset(5 * interval)
 			}
 		}

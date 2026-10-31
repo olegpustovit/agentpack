@@ -5,6 +5,13 @@ All notable changes to `agentpack` are documented here. The format is based on
 "Pre-release" note in `AGENTS.md` — breaking changes may land between versions without a migration
 window.
 
+## [0.12.7] - 2026-11-01
+
+### Fixed
+
+- Launches could spend minutes on `preparing claude…`. Since 0.12.6 a running gateway left one `agentpack-<hash>` directory in the temp directory for every library snapshot it validated (about 245,000 in a day), and each rebuild scanned and deleted them before starting the agent. Validation no longer leaves anything behind, and a launch no longer waits for tidying: it runs alongside the agent.
+- The launch progress line now names the step it is on, including waiting for another command or rebuild of the same project.
+
 ## [0.12.3] - 2026-10-31
 
 ### Fixed

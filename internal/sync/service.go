@@ -44,7 +44,18 @@ type SyncOptions struct {
 	WorkspaceRoot string
 	// StrictExternal refuses Cursor/Agy workspace overlay writes.
 	StrictExternal bool
+	// Progress, when set, names the step about to run.
+	Progress func(step string)
 }
+
+func (options SyncOptions) step(name string) {
+	if options.Progress != nil {
+		options.Progress(name)
+	}
+}
+
+// removeOrphans is a variable so a test can hold it open.
+var removeOrphans = staging.RemoveOrphanedProjectDirectories
 
 // LockOptions tunes the commands that are allowed to add records to pack.lock.
 type LockOptions struct {
@@ -336,6 +347,7 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		// sync verifies what the lock already pins. It records a content hash
 		// only for content it has to download, and adds no MCP records.
 		// --update-lock is the one way it re-resolves on purpose.
+		options.step("resolving dependencies")
 		resolveOptions := resolve.ResolveOptions{RefreshFloating: options.UpdateLock, RepairCache: options.Repair}
 		if _, err := service.resolve(ctx, projectRoot, project, resolveRun{options: resolveOptions, explicit: options.UpdateLock}); err != nil {
 			return SyncResult{}, err
@@ -397,6 +409,7 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		if pkg.CacheKey == "" {
 			continue
 		}
+		options.step("verifying " + pkg.Module)
 		restore := cache.GitHubRestore(ctx, service.client())
 		ready, err := cache.EnsureLockCached(pkg, restore)
 		var mismatch *cache.IntegrityError
@@ -467,6 +480,7 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 			}
 			service.notify("%d staged file(s) changed since the last sync and were replaced from the verified cache: %s", len(drift), strings.Join(shown, "; "))
 		}
+		options.step("waiting for another rebuild of this project")
 		publisher, lockErr := staging.AcquirePublisher(ctx, projectRoot, effective.Name())
 		if lockErr != nil {
 			return result, lockErr
@@ -477,8 +491,10 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 			return result, generationErr
 		}
 		defer generation.Abort()
+		options.step("staging skills, commands and MCP config")
 		_, err = pipeline.Rebuild()
 		if err == nil {
+			options.step("checking staged files")
 			err = pipeline.Verify()
 		}
 		if err == nil {
@@ -496,7 +512,13 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 			err = generation.Publish()
 		}
 		if err == nil {
-			staging.RemoveOrphanedProjectDirectories(projectRoot)
+			if options.Target != nil {
+				// A launch never waits for tidying: its cost grows with the temp
+				// directory. An early exit leaves the rest for a later run.
+				go removeOrphans(projectRoot)
+			} else {
+				removeOrphans(projectRoot)
+			}
 		}
 	}
 	if err != nil {
@@ -544,6 +566,7 @@ func (service Service) SyncForLaunchOptions(ctx context.Context, projectRoot str
 	if err != nil {
 		return mode.Effective{}, false, err
 	}
+	options.step("checking for changes")
 	current, err := launchDigest(projectRoot, workspace, effective, &target, lock)
 	if err != nil {
 		return mode.Effective{}, false, err
@@ -571,7 +594,7 @@ func (service Service) SyncForLaunchOptions(ctx context.Context, projectRoot str
 	}
 	result, err := service.Sync(ctx, projectRoot, SyncOptions{
 		Mode: effective.Name(), Target: &target,
-		WorkspaceRoot: workspace, StrictExternal: options.StrictExternal,
+		WorkspaceRoot: workspace, StrictExternal: options.StrictExternal, Progress: options.Progress,
 	})
 	if err != nil {
 		return mode.Effective{}, false, err

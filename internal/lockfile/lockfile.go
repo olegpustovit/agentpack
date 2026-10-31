@@ -220,6 +220,12 @@ func LoadFromPath(path string) (PackLock, error) {
 	return result, err
 }
 
+// LoadUnguarded reads a lock only the caller can reach. It leaves no guard
+// directory behind, which LoadFromPath does for every project path it sees.
+func LoadUnguarded(path string) (PackLock, error) {
+	return loadFromPath(path)
+}
+
 func loadFromPath(path string) (PackLock, error) {
 	file, err := os.Open(path)
 	if err != nil {

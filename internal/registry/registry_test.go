@@ -485,3 +485,23 @@ func TestRestoreWithoutLocalBindingsRequiresConfiguration(t *testing.T) {
 		t.Fatalf("missing bindings were ignored: %v", err)
 	}
 }
+
+// A gateway validates snapshots constantly, and launches pay for every
+// directory left in the temp directory.
+func TestValidateSnapshotLeavesNothingInTemp(t *testing.T) {
+	temp := t.TempDir()
+	t.Setenv("TMPDIR", temp)
+	t.Setenv("TMP", temp)
+	t.Setenv("TEMP", temp)
+	lock := []byte("lockfile_version = 3\n\n[meta]\nname = \"demo\"\nversion = \"0.0.1\"\n\n[config]\ndisabled_plugins = []\n")
+	if _, err := validateSnapshot([]byte("name = \"demo\"\nversion = \"0.0.1\"\n"), lock); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(temp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("validation left %d entries, first %q", len(entries), entries[0].Name())
+	}
+}

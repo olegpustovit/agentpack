@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -252,5 +253,38 @@ func TestCursorUserSkillsRefreshOnLaunch(t *testing.T) {
 		if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", base.Cursor); err != nil || !skipped {
 			t.Fatalf("unchanged user skill: skipped=%v err=%v", skipped, err)
 		}
+	}
+}
+
+// Tidying scales with the temp directory, so a launch must not wait for it.
+func TestLaunchDoesNotWaitForOrphanRemoval(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	project := t.TempDir()
+	if err := manifest.WriteStub(project, "demo", "0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(project, "demo", "0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	previous := removeOrphans
+	removeOrphans = func(string) { <-release; close(finished) }
+	t.Cleanup(func() { close(release); <-finished; removeOrphans = previous })
+	var steps []string
+	target := base.Claude
+	_, skipped, err := NewService().SyncForLaunchOptions(context.Background(), project, SyncOptions{Target: &target, Progress: func(step string) { steps = append(steps, step) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipped {
+		t.Fatal("expected the first launch to rebuild")
+	}
+	if !slices.Contains(steps, "staging skills, commands and MCP config") {
+		t.Fatalf("rebuild did not report staging: %v", steps)
 	}
 }

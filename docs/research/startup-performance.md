@@ -28,3 +28,9 @@ AGENTPACK_BENCH_HOME="$HOME" go test ./internal/sync -run '^$' -bench '^Benchmar
 ```
 
 The rebuild benchmark forces staging each iteration; warm iterations assert that the verified fast path is used. The socket regression uses a real Unix listener; platforms without Unix socket support skip that test. No extra dependencies or startup fast paths were added.
+
+## Temp-directory leak (2026-11-01)
+
+A launch in a real project spent over 4 minutes in `preparing claude…`, 51 s of it system time. A goroutine dump put it in `RemoveOrphanedProjectDirectories`, reading markers in a `/tmp` holding about 247,000 `agentpack-<hash>` directories. Each marker named a deleted `/tmp/agentpack-registry-validate-*`: `validateSnapshot` loaded its throwaway lock through the guarded loader, and a 0.12.6 gateway validated snapshots about 25 times a second.
+
+Validation now leaves nothing in the temp directory, and launches run the tidying in a goroutine beside the agent. Plain `sync` still tidies before returning.
