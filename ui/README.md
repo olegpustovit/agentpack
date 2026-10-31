@@ -26,21 +26,22 @@ from self; xterm dynamically sets style attributes) and disable HTTP caching for
 | Terminal chunk (xterm, `terminal-pane-*.js`) | — | 98,642 B | 100 KB |
 | WebGL addon chunk (`addon-webgl-*.js`) | — | 30,984 B | 100 KB |
 
-Regression budgets are enforced by `tests/budgets.spec.ts` on the same fixture as the audit (3 machines, 4 projects, 3 harnesses per project). The run on this branch passed all 13 tests on chromium (2.9 min). Only the terminal socket count was printed: 1 new socket for four moves.
+Regression budgets are enforced by `tests/budgets.spec.ts` on the same fixture as the audit (3 machines, 4 projects, 3 harnesses per project). Measured values come from the T7.1 and CloseGaps reports on that fixture. The 24 px and 90,30 "before" values were not reproduced in the current app; the tests measure the stated after values directly.
 
-| Measure | Before | Budget | After |
+| Budget | Before | Measured | Required |
 |---|---|---|---|
-| Idle Sessions requests per 60 s, events connected | 92 | ≤ 6 | pass |
-| Idle Library requests per 30 s, events connected | 146 | ≤ 3 | pass |
-| Sidebar node changes per 60 s, unchanged data | 960 | 0 | pass |
-| Return to Library within `staleTime`: requests / loader | 75 / shown | 0 / not shown | pass |
-| First Library open requests | 56 | ≤ 9 | pass |
-| Install rows for the fixture | 36 | 12 | pass |
-| New Session folder options per machine | 12 | 4 | pass |
-| Peer answering in 6 s appears | never | within 7 s | pass |
-| New sockets for 4 moves among recent sessions | 4 | ≤ 1 | 1 |
-| Click at cell 61,21 at any fit | reports 90,30 | reports 61,21 | pass (3 viewports) |
-| Content height after a notice | 24 px | unchanged | pass |
+| Idle Sessions requests per 60 s, events connected | 92 | 3 | ≤ 6 |
+| Idle Library requests per 30 s, events connected | 146 | 0 | ≤ 3 |
+| Sidebar node changes per 60 s, unchanged data | 960 | 0 | 0 |
+| Return to Library within staleTime: requests | 75 | 0 | 0 |
+| Return to Library within staleTime: loader | shown | not shown | not shown |
+| First Library open requests | 56 | 9 | ≤ 9 |
+| Install rows for the fixture | 36 | 12 | 12 |
+| New Session folder options per machine | 12 | 4 | 4 |
+| Peer answering in 6 s appears | never | about 6.05 s | within 7 s |
+| Sockets for 4 moves among recent sessions | 4 | 1 new | ≤ 1 new |
+| Click at cell 61,21 at any fit | reports 90,30 | reports 61,21 | 61,21 |
+| Content height after a notice | 24 px | 570 px before and after | unchanged |
 
 ## API contract
 
