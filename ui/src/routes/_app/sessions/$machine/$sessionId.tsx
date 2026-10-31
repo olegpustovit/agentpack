@@ -5,7 +5,7 @@ import { z } from "zod"
 import { useEventsConnected } from "@/features/events/use-events"
 import { useMachines } from "@/features/machines/queries"
 import { sessionsQuery } from "@/features/sessions/queries"
-import { unavailableTerminal, UnavailableTerminal } from "@/features/terminal/unavailable"
+import { unavailableMessage, UnavailableTerminal } from "@/features/terminal/unavailable"
 
 // Loaded on demand so xterm stays out of the initial bundle.
 const TerminalPane = lazy(() => import("@/features/terminal/terminal-pane"))
@@ -18,8 +18,8 @@ function SessionRoute() {
   const stale = online === false
   const { data } = useQuery({ ...sessionsQuery(machine, live), enabled: online === true })
   const info = data?.find((session) => session.id === sessionId)
-  const unavailable = unavailableTerminal(info, stale)
-  if (unavailable) return <UnavailableTerminal unavailable={unavailable} />
+  const message = unavailableMessage(info, stale)
+  if (message) return <UnavailableTerminal message={message} />
   return (
     <Suspense fallback={<p className="p-(--s4) text-(--fg2)">Loading terminal…</p>}>
       <TerminalPane key={`${machine}/${sessionId}`} machine={machine} sessionId={sessionId} info={info} listed={!data || !!info} />

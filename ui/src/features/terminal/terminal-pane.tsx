@@ -5,6 +5,7 @@ import { RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMe
 import { Button } from "@/components/ui/button"
 import { ContextMenuSeparator } from "@/components/ui/context-menu"
 import { StatusSlot } from "@/features/status/status-bar"
+import { harnessName } from "@/lib/format"
 import type { SessionInfo } from "@/lib/api-types"
 import { zoomPercent } from "./fit"
 import { terminalPool } from "./pool"
@@ -39,12 +40,14 @@ export default function TerminalPane({
     terminal.setListed(listed)
   }, [terminal, listed])
 
-  const parts = [info?.harness, info?.mode, snapshot.grid.cols ? `${snapshot.grid.cols} × ${snapshot.grid.rows}` : "", snapshot.status]
-  if (snapshot.mouseOwned) parts.push("Mouse: app · ⇧ drag to select")
+  // Shown only while a session is attached and its harness is known from the list.
+  const parts = info
+    ? [harnessName(info.harness), info.mode || "default", `${snapshot.grid.cols} × ${snapshot.grid.rows}`, snapshot.sharedInput && "Shared input", snapshot.mouseOwned && "Mouse: app · ⇧ drag to select"]
+    : []
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-(--terminal-bg)">
-      <StatusSlot>{parts.filter(Boolean).join(" · ")}</StatusSlot>
+      {info && <StatusSlot>{parts.filter(Boolean).join(" · ")}</StatusSlot>}
       <RowContextMenu>
         <RowContextMenuTrigger className="relative min-h-0 flex-1">
           <div ref={stageRef} aria-busy={snapshot.busy} className="absolute inset-0 overflow-auto" />

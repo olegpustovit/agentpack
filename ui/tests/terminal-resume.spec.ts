@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test"
-import { type Listed, openFromList, openRoute, rowText, screen, serve, session, shared, statusBar, stubApi, stubWorker } from "./terminal-stub"
+import { busyStage, type Listed, openFromList, openRoute, rowText, screen, serve, session, shared, statusBar, stubApi, stubWorker } from "./terminal-stub"
 
 const A = screen("A")
 const B = screen("B")
@@ -104,7 +104,7 @@ test("repeated drops back off 0.5 s, 1 s, 2 s, and an attach resets the backoff"
     await page.clock.runFor(1)
   }
   worker.conns[0]?.ws.close()
-  await expect(statusBar(page)).toContainText("reconnecting in 1s")
+  await expect(busyStage(page)).toHaveCount(1)
   await settle(page)
   await page.clock.runFor(499)
   await settle(page)
@@ -113,12 +113,11 @@ test("repeated drops back off 0.5 s, 1 s, 2 s, and an attach resets the backoff"
   await expect.poll(() => worker.conns.length).toBe(2)
   await drop(2, 1000)
   await expect.poll(() => worker.conns.length).toBe(3)
-  await expect(statusBar(page)).toContainText("reconnecting in 2s")
   await drop(3, 2000)
   await expect.poll(() => worker.conns.length).toBe(4)
   await expect(statusBar(page)).toContainText("Shared input")
   worker.conns[3]?.ws.close()
-  await expect(statusBar(page)).toContainText("reconnecting in 1s")
+  await expect(busyStage(page)).toHaveCount(1)
   await settle(page)
   await page.clock.runFor(499)
   await settle(page)
@@ -133,7 +132,7 @@ test("a socket whose replay never completes is closed after 30 s", async ({ page
   const worker = await stubWorker(page)
   worker.behave((conn) => serve(conn, { complete: false }))
   await page.goto("/sessions/local/s1")
-  await expect(statusBar(page)).toContainText("Replaying output")
+  await expect(busyStage(page)).toHaveCount(1)
   await page.waitForTimeout(29_000)
   expect(worker.conns[0]?.closed).toBe(false)
   await expect.poll(() => worker.conns[0]?.closed, { timeout: 5_000 }).toBe(true)

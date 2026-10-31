@@ -13,13 +13,13 @@ declare global {
 }
 
 export type TerminalSnapshot = {
-  status: string
   busy: boolean
   banner: string
   grid: { cols: number; rows: number }
   fontSize: number
   fit: boolean
   mouseOwned: boolean
+  sharedInput: boolean
 }
 
 type ControlMessage = {
@@ -120,7 +120,6 @@ export class TerminalSession {
   #restartToken = 0
   #fit = true
   #busy = false
-  #status = ""
   #banner = ""
   #snapshot: TerminalSnapshot
 
@@ -224,13 +223,13 @@ export class TerminalSession {
   #build(): TerminalSnapshot {
     const term = this.#term
     return {
-      status: this.#status,
       busy: this.#busy,
       banner: this.#banner,
       grid: { cols: term?.cols ?? 0, rows: term?.rows ?? 0 },
       fontSize: term?.options.fontSize ?? BASE_FONT,
       fit: this.#fit,
       mouseOwned: term ? term.modes.mouseTrackingMode !== "none" : false,
+      sharedInput: this.#state?.shared_input === true,
     }
   }
 
@@ -380,7 +379,6 @@ export class TerminalSession {
       term.resize(current.columns, current.rows)
       this.#refit()
     }
-    this.#status = !current?.running ? "Stopped" + (current ? ` (${current.exit_code})` : "") : !current.shared_input ? "Read-only" : this.#replayComplete ? "Shared input" : "Replaying output"
     if (term) term.options.disableStdin = !this.#controls()
     if (current?.running && current.shared_input !== true && this.#socket?.readyState === WebSocket.OPEN) this.#banner = "Start a new session to enable shared input."
     this.#publish()
@@ -400,7 +398,6 @@ export class TerminalSession {
     this.#replayComplete = false
     this.#firstFrameMarked = false
     this.#busy = true
-    this.#status = reconnecting ? "Replaying output" : "Connecting…"
     this.#banner = ""
 
     const url = new URL(`/api/sessions/${encodeURIComponent(this.#sessionId)}/terminal`, location.href)
@@ -488,14 +485,12 @@ export class TerminalSession {
       this.#updateState()
       const state = this.#state
       if (state?.running === false) this.#busy = false
-      if (state?.restarting) {
-        this.#status = "Restarting · waiting to reconnect"
-      } else if (state?.running !== false && this.#listed) {
+      // A restarting agent is handled by the restart poll, not by a socket reconnect.
+      if (!state?.restarting && state?.running !== false && this.#listed) {
         // Networks drop (gateway restarts, tailnet hiccups); the worker replays output, so retry quietly.
         this.#retries++
         const delay = reconnectDelay(this.#retries)
         const token = this.#restartToken
-        this.#status = `Connection lost · reconnecting in ${Math.ceil(delay / 1000)}s`
         this.#busy = true
         this.#replayComplete = false
         this.#publish()
@@ -504,7 +499,6 @@ export class TerminalSession {
         }, delay)
       } else if (state?.running !== false) {
         this.#busy = false
-        this.#status = "Disconnected · this session is no longer listed"
       }
       this.#publish()
     }

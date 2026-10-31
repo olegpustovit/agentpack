@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test"
-import { cell, dragCells, history, openRoute, screen, serve, session, shared, stubApi, stubWorker, statusBar } from "./terminal-stub"
+import { cell, dragCells, history, openRoute, screen, serve, session, shared, statusBar, stubApi, stubWorker } from "./terminal-stub"
 
 const viewports = [
   { width: 1440, height: 900 },
@@ -50,7 +50,7 @@ for (const viewport of viewports) {
     await stubWorker(page)
     await openRoute(page, "/sessions/local/s1")
     expect(await page.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea"))).toBe(true)
-    await expect(statusBar(page)).toContainText("claude · default · 100 × 30 · Shared input")
+    await expect(statusBar(page)).toContainText("Claude · default · 100 × 30 · Shared input")
   })
 
   test(`wheel scrolls back through history at ${size}`, async ({ page }) => {
@@ -71,7 +71,7 @@ test("an agy desktop session shows its banner and never opens a socket", async (
   const worker = await stubWorker(page)
   await page.goto("/sessions/local/a1")
   await expect(page.getByRole("status").filter({ hasText: "Desktop launcher presence" })).toBeVisible()
-  await expect(statusBar(page)).toContainText("Desktop session · local interaction")
+  await expect(statusBar(page)).not.toContainText(" × ")
   expect(worker.conns).toHaveLength(0)
 })
 
@@ -80,7 +80,7 @@ test("a non-interactive session shows native stdio copy and never opens a socket
   const worker = await stubWorker(page)
   await page.goto("/sessions/local/n1")
   await expect(page.getByRole("status").filter({ hasText: "Native stdio · browser input unavailable" })).toBeVisible()
-  await expect(statusBar(page)).toContainText("Native stdio · input unavailable")
+  await expect(statusBar(page)).not.toContainText(" × ")
   expect(worker.conns).toHaveLength(0)
 })
 
@@ -94,7 +94,29 @@ test("a session on an offline machine shows the last-known banner and fetches no
   const worker = await stubWorker(page)
   await page.goto("/sessions/n2/s9")
   await expect(page.getByRole("status").filter({ hasText: "Offline · showing last-known session metadata" })).toBeVisible()
-  await expect(statusBar(page)).toContainText("Offline · last-known session")
+  await expect(statusBar(page)).not.toContainText(" × ")
   expect(sessionRequests.filter((url) => url.includes("node=n2"))).toHaveLength(0)
   expect(worker.conns).toHaveLength(0)
 })
+
+test("the status slot shows the session line and the mouse hint follows app mouse tracking", async ({ page }) => {
+  const worker = await stubWorker(page)
+  await openRoute(page, "/sessions/local/s1")
+  await expect(statusBar(page)).toContainText("Claude · default · 100 × 30 · Shared input")
+  await expect(statusBar(page)).not.toContainText("Mouse: app")
+  worker.conns[0]?.ws.send(Buffer.from("\x1b[?1000h\x1b[?1006h"))
+  await expect(statusBar(page)).toContainText("Mouse: app · ⇧ drag to select")
+  worker.conns[0]?.ws.send(Buffer.from("\x1b[?1000l"))
+  await expect(statusBar(page)).not.toContainText("Mouse: app")
+})
+
+for (const path of ["/limits", "/settings"]) {
+  test(`the session slot is absent on ${path}`, async ({ page }) => {
+    await stubWorker(page)
+    await openRoute(page, "/sessions/local/s1")
+    await page.getByRole("link", { name: path === "/limits" ? "Limits" : "Settings" }).first().click()
+    await expect(page).toHaveURL(new RegExp(path))
+    await expect(statusBar(page)).not.toContainText(" × ")
+    await expect(statusBar(page)).not.toContainText("Shared input")
+  })
+}
