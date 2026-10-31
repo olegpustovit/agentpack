@@ -125,3 +125,10 @@ test("sort popup writes sort to the URL", async ({ page }) => {
   await page.getByRole("option", { name: "Recently updated" }).click()
   await expect(page).toHaveURL(/\/library\?sort=updated$/)
 })
+
+test("status bar shows library totals on /library and not on /sessions", async ({ page }) => {
+  await page.goto("/library")
+  await expect(page.getByRole("contentinfo")).toContainText("4 items · 1 skill · 0 plugins · 2 MCP")
+  await page.goto("/sessions")
+  await expect(page.getByRole("contentinfo")).not.toContainText("items ·")
+})

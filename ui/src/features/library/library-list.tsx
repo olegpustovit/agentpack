@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
 import { projectsQuery } from "@/features/sessions/queries"
+import { StatusSlot } from "@/features/status/status-bar"
 import { plural, shortHash } from "@/lib/format"
 import { agentpacksQuery, packagesQuery } from "./queries"
 import { AddPackageSheet } from "./add-package-sheet"
@@ -111,6 +112,8 @@ export function LibraryList() {
     })),
   )
   const view = arrangeLibrary(items, { filter, sort, query: deferredQuery })
+  // Status bar totals cover the whole library, so search and type do not change them.
+  const totals = arrangeLibrary(items, { filter: "all", sort: "type", query: "" }).counts
   const loading = packages.firstLoadPending || agentpacks.firstLoadPending || projects.firstLoadPending
   const queries = [packages, agentpacks, projects]
   const offlineWithData = machines.filter(
@@ -131,6 +134,7 @@ export function LibraryList() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <StatusSlot>{`${plural(totals.all, "item")} · ${plural(totals.skill, "skill")} · ${plural(totals.plugin, "plugin")} · ${totals.mcp} MCP`}</StatusSlot>
       <div className="flex shrink-0 flex-col gap-(--s2) px-(--s3) pt-(--s2) pb-(--s1)">
         <SegmentedControl value={[filter]} onValueChange={chooseFilter} aria-label="Type" className="w-full">
           {filterTabs.map((tab) => (
