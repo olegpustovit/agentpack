@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ func TestBrowserActorIgnoresForgedActorHeader(t *testing.T) {
 	dir := seedFolder(t, home)
 	var started SessionInfo
 	g, origin := identityGateway(t, home, func(_ context.Context, info SessionInfo) (string, error) { started = info; return "session-test", nil })
-	r := httptest.NewRequest("POST", origin.String()+"/api/sessions", bytes.NewBufferString(`{"directory":"`+dir+`","harness":"claude","mode":"default"}`))
+	r := httptest.NewRequest("POST", origin.String()+"/api/sessions", bytes.NewBufferString(`{"directory":`+strconv.Quote(dir)+`,"harness":"claude","mode":"default"}`))
 	r.Header.Set("Authorization", "Bearer "+g.local.Secret)
 	r.Header.Set("X-Agentpack-Actor", `{"kind":"peer","user":"mallory@example.com"}`)
 	w := httptest.NewRecorder()
@@ -92,7 +93,7 @@ func TestContextActorBecomesStartedBy(t *testing.T) {
 	dir := seedFolder(t, home)
 	var started SessionInfo
 	g, origin := identityGateway(t, home, func(_ context.Context, info SessionInfo) (string, error) { started = info; return "session-test", nil })
-	r := httptest.NewRequest("POST", origin.String()+"/api/sessions", bytes.NewBufferString(`{"directory":"`+dir+`","harness":"claude","mode":"default"}`))
+	r := httptest.NewRequest("POST", origin.String()+"/api/sessions", bytes.NewBufferString(`{"directory":`+strconv.Quote(dir)+`,"harness":"claude","mode":"default"}`))
 	r.Header.Set("Authorization", "Bearer "+g.local.Secret)
 	r = r.WithContext(withActor(r.Context(), Actor{Kind: "peer", User: "alice@example.com", Node: "laptop"}))
 	w := httptest.NewRecorder()

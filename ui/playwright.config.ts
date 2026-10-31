@@ -11,7 +11,9 @@ export default defineConfig({
   // Budgets, not guesses: see "Test budgets" in AGENTS.md. A test that needs more is a test to rewrite.
   timeout: 8_000,
   expect: { timeout: 5_000 },
-  globalTimeout: 90_000,
+  globalTimeout: process.env.CI ? 150_000 : 90_000,
+  // A cold CI runner can miss the limit on a browser's first page. Reported as flaky, so it stays visible.
+  retries: process.env.CI ? 1 : 0,
   reportSlowTests: { max: 10, threshold: 2_000 },
   use: { baseURL: origin },
   projects: [

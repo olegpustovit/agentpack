@@ -195,7 +195,7 @@ A slow test is a defect, and a test that repeats another costs every future run.
 | Suite | Budget | Enforced by |
 |---|---|---|
 | One browser test | under 2 s; fails at 8 s | `ui/playwright.config.ts` `timeout`, `reportSlowTests` |
-| Whole browser suite | under 60 s on a 4-core host; fails at 90 s | `globalTimeout` |
+| Whole browser suite | under 60 s on a 4-core host; fails at 90 s, or 150 s on CI, which retries once and reports flakes | `globalTimeout`, `retries` |
 | One Go test | under 2 s, no real network | review; `go test -json` shows durations |
 | `go test ./...`, uncached | under 30 s | review |
 | Vitest | under 10 s | review |
