@@ -92,7 +92,7 @@ export async function openRoute(page: Page, path: string) {
 
 // In-app navigation keeps the pool alive; a full page load would reset it.
 export async function openFromList(page: Page, name: string) {
-  await page.getByRole("link", { name, exact: true }).click()
+  await page.getByRole("link", { name: new RegExp(`${name}$`) }).click()
 }
 
 export async function rowText(page: Page, row: number): Promise<string> {

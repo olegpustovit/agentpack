@@ -215,7 +215,7 @@ test("Add package… from ?add=1 posts the spec to the chosen project", async ({
 
   const dialog = page.getByRole("dialog")
   await expect(dialog.getByRole("combobox", { name: "Project" })).toContainText("one")
-  await dialog.getByLabel("Package").fill("github.com/acme/new@abcd1234ef56")
+  await dialog.getByLabel("Package", { exact: true }).fill("github.com/acme/new@abcd1234ef56")
   await dialog.getByRole("combobox", { name: "Project" }).click()
   await page.getByRole("option", { name: /oracle-vm · app/ }).click()
   await dialog.getByRole("button", { name: "Add package", exact: true }).click()

@@ -86,7 +86,7 @@ test("general shows gateway state, platform, version and hostname", async ({ pag
   await expect(page.getByText("Running", { exact: true })).toBeVisible()
   await expect(page.getByText("linux", { exact: true })).toBeVisible()
   await expect(page.getByText("0.9.0", { exact: true })).toBeVisible()
-  await expect(page.getByText("host-a", { exact: true })).toBeVisible()
+  await expect(page.getByRole("main").or(page.locator("body")).getByText("host-a", { exact: true }).last()).toBeVisible()
 })
 
 test("the sharing switch sends the new state and says when it applies", async ({ page }) => {

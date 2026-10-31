@@ -4,10 +4,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "lint": "oxlint src",
+    "lint": "oxlint src && ! grep -rnE \"test\\.(setTimeout|slow)\\(\" tests",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "e2e": "playwright test",
+    "capture": "CAPTURE=1 playwright test --project=chromium review-captures",
     "build": "vite build && tsc --noEmit && bun run size",
     "size": "bun scripts/check-size.ts",
     "check:pwa": "bun scripts/check-pwa-installability.mjs"

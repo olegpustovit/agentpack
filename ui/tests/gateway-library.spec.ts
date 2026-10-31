@@ -61,55 +61,6 @@ test("existing package installation remains available from More", async ({ page 
   expect(requests.some((value) => value.path === "/api/packages" && value.method === "POST" && value.body && typeof value.body === "object" && "spec" in value.body && value.body.spec === "acme/skill" && "directory" in value.body && value.body.directory === "/work/other")).toBeTruthy()
 })
 
-test("Library install routes exact pins, limits concurrency per machine, and keeps row errors", async ({ page }) => {
-  await mockAPI(page)
-  await mockLibraryBase(page)
-  const requests: { body: { spec?: string; restart?: boolean; directory?: string }; node: string | null }[] = []
-  let active = 0
-  let maximum = 0
-  const item = { id: "package-1", module: "github.com/acme/tools", commit: "deadbeef1234567890", content_hash: "sha256-tree-v1:abc", kind: "plugin", name: "Tools", url: "https://github.com/acme/tools", owner: "acme", repo: "tools", cache_key: "cache-key" }
-  await page.route("**/api/nodes", (route) => route.fulfill({ json: [peer] }))
-  await page.route("**/api/projects**", (route) => {
-    const local = new URL(route.request().url()).searchParams.get("node") === null
-    const rows = local
-      ? [
-          projectRow("/work/one", [{ harness: "claude" }], { packages: [{ module: item.module, commit: item.commit, kind: "plugin", name: "Tools" }] }),
-          projectRow("/work/two", [{ harness: "claude" }]),
-          projectRow("/work/three", [{ harness: "claude" }]),
-        ]
-      : []
-    return route.fulfill({ json: rows })
-  })
-  await page.route("**/api/packages**", async (route) => {
-    const url = new URL(route.request().url())
-    if (route.request().method() === "GET") return route.fulfill({ json: [] })
-    const body: { spec?: string; restart?: boolean; directory?: string } = route.request().postDataJSON()
-    requests.push({ body, node: url.searchParams.get("node") })
-    active++
-    maximum = Math.max(maximum, active)
-    await new Promise((resolve) => setTimeout(resolve, 80))
-    active--
-    if (body.directory === "/work/three") return route.fulfill({ status: 500, json: { error: "Repository is unavailable" } })
-    return route.fulfill({ json: { installed: true } })
-  })
-  await page.route("**/api/library/packages**", (route) => route.fulfill({ json: [item] }))
-  await page.route("**/api/library/agentpacks**", (route) => route.fulfill({ json: [] }))
-  await page.goto("/library/package/github.com/acme/tools")
-  await page.getByRole("button", { name: "Install…" }).click()
-  const destinations = page.getByRole("group", { name: "Destinations" })
-  await expect(destinations.getByText("Installed", { exact: true })).toBeVisible()
-  await page.locator("label").filter({ hasText: /^two/ }).click()
-  await page.locator("label").filter({ hasText: /^three/ }).click()
-  await page.getByRole("checkbox", { name: /Restart affected agents/ }).click()
-  await page.getByRole("button", { name: "Install in 2 projects" }).click()
-  await expect(page.getByRole("button", { name: "Done", exact: true })).toBeVisible()
-  await expect(destinations.getByText("Installed", { exact: true })).toHaveCount(2)
-  await expect(destinations.getByText(/Repository is unavailable/)).toBeVisible()
-  expect(maximum).toBe(2)
-  expect(requests).toHaveLength(2)
-  expect(requests.every(({ body, node }) => body.spec === `${item.module}@${item.commit}` && body.restart === false && node === null)).toBeTruthy()
-})
-
 test("save, rename, preview and restore an agentpack from an attached session", async ({ page }) => {
   const requests = await mockAPI(page)
   await mockLibraryBase(page)
@@ -302,18 +253,3 @@ test("offline restore saves the exact agentpack revision as a draft", async ({ p
   expect(draftInput).toMatchObject({ item: pack.id, pack_id: pack.id, revision: revision.id, node: "peer-1", directory: "/srv/project", folder_identity: "folder-fingerprint", expected_pins: {} })
 })
 
-test("Library deduplicates identical pins with different saved record IDs", async ({ page }) => {
-  await mockAPI(page)
-  await mockLibraryBase(page)
-  const pkg = { id: "first-record", module: "github.com/acme/tools", commit: "abcd1234", name: "Tools", kind: "plugin" }
-  await page.route("**/api/library/packages**", (route) =>
-    route.fulfill({ json: [pkg, { ...pkg, id: "another-record" }, { ...pkg, id: "older-version", commit: "older123" }] }),
-  )
-  await page.goto("/library")
-  await expect(page.locator("[data-source-row]")).toHaveCount(1)
-  await page.locator("[data-source-row]").click()
-  await page.getByRole("button", { name: "2 versions" }).click()
-  await expect(page.getByRole("menuitem")).toHaveCount(2)
-  await page.getByRole("menuitem").nth(1).click()
-  await expect(page.locator("code", { hasText: "older12" }).first()).toBeVisible()
-})

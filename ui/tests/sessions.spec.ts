@@ -46,31 +46,8 @@ test.beforeEach(async ({ page }) => {
   })
 })
 
-test("the list keeps its DOM for 60 s of unchanged data", async ({ page }) => {
-  test.setTimeout(120_000)
-  await page.goto("/sessions")
-  const list = page.getByRole("navigation", { name: "Sessions" })
-  await expect(list.getByRole("link", { name: /build/ })).toBeVisible()
-
-  const polls = fetches
-  await page.evaluate(() => {
-    const nav = document.querySelector('nav[aria-label="Sessions"]')
-    if (!nav) throw new Error("sessions list not found")
-    const counter = window as Window & { churn?: number }
-    counter.churn = 0
-    new MutationObserver((records) => {
-      counter.churn = (counter.churn ?? 0) + records.length
-    }).observe(nav, { subtree: true, childList: true, attributes: true, characterData: true })
-  })
-
-  await page.waitForTimeout(60_000)
-  // The list must have polled during the window, or the zero count proves nothing.
-  expect(fetches - polls).toBeGreaterThanOrEqual(3)
-  expect(await page.evaluate(() => (window as Window & { churn?: number }).churn)).toBe(0)
-})
-
 test("focus on a row survives a refetch that changes the data", async ({ page }) => {
-  test.setTimeout(60_000)
+  await page.clock.install()
   await page.goto("/sessions")
   const rows = page.getByRole("navigation", { name: "Sessions" }).locator("[data-source-row]")
   await expect(rows).toHaveCount(2)
@@ -78,7 +55,8 @@ test("focus on a row survives a refetch that changes the data", async ({ page })
 
   reply = renamed
   const polls = fetches
-  await expect.poll(() => fetches, { timeout: 25_000 }).toBeGreaterThan(polls)
+  await page.clock.runFor(16_000)
+  await expect.poll(() => fetches).toBeGreaterThan(polls)
   await expect(page.getByRole("link", { name: /oracle main/ })).toBeVisible()
   await expect(rows.first()).toBeFocused()
 })

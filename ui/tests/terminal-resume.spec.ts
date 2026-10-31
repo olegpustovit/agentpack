@@ -5,7 +5,7 @@ import { busyStage, type Listed, openRoute, rowText, screen, serve, session, sha
 async function openFromList(page: Page, name: string) {
   const back = page.getByRole("link", { name: "Back", exact: true })
   if (await back.count()) await back.click()
-  await page.getByRole("link", { name, exact: true }).click()
+  await page.getByRole("link", { name: new RegExp(`${name}$`) }).click()
 }
 
 const A = screen("A")
@@ -75,6 +75,8 @@ test("a dropped socket reconnects with since set to the bytes already received",
   await expect(statusBar(page)).toContainText("Shared input")
   // The worker resumed where the browser was, so the screen was not reset.
   await expect.poll(() => rowText(page, 0)).toContain("AAAA")
+  // A successful resume has a non-zero offset, and that is not truncation.
+  await expect(page.getByText("Earlier output was truncated")).toHaveCount(0)
 })
 
 test("a stale since is answered with a different offset and the screen resets", async ({ page }) => {
@@ -134,15 +136,15 @@ test("repeated drops back off 0.5 s, 1 s, 2 s, and an attach resets the backoff"
 })
 
 test("a socket whose replay never completes is closed after 30 s", async ({ page }) => {
-  // Real time: the deadline starts at connect, which a fake clock cannot pin down from outside.
-  test.setTimeout(60_000)
+  await page.clock.install()
   const worker = await stubWorker(page)
   worker.behave((conn) => serve(conn, { complete: false }))
   await page.goto("/sessions/local/s1")
   await expect(busyStage(page)).toHaveCount(1)
-  await page.waitForTimeout(29_000)
+  await page.clock.runFor(29_000)
   expect(worker.conns[0]?.closed).toBe(false)
-  await expect.poll(() => worker.conns[0]?.closed, { timeout: 5_000 }).toBe(true)
+  await page.clock.runFor(2_000)
+  await expect.poll(() => worker.conns[0]?.closed).toBe(true)
 })
 
 test("unacknowledged output past 16 MiB closes the socket and says so", async ({ page }) => {
@@ -197,10 +199,11 @@ test("disposing a session stops its restart polling", async ({ page }) => {
     await openFromList(page, name)
     await expect.poll(() => worker.conns.length).toBe(index + 2)
   }
-  // Five sessions: the restarting one was the least recently used, so it is disposed.
+  // Five sessions: the restarting one was the least recently used, so it alone is disposed.
   await expect.poll(() => worker.conns[0]?.closed).toBe(true)
+  expect(worker.conns.slice(1).map((conn) => conn.closed)).toEqual([false, false, false, false])
   const after = listRequests
-  await settle(page, 600)
+  await settle(page, 300)
   expect(listRequests).toBeLessThanOrEqual(after + 1)
 })
 
@@ -213,9 +216,9 @@ test("a restart that never completes gives up after 90 s", async ({ page }) => {
   s1Restarting = true
   ended(worker.conns[0]!, true)
   const giveUp = page.getByRole("status").filter({ hasText: "The agent has not become available" })
-  // Each poll is a real round trip, so the fake clock advances in steps between them.
-  for (let step = 0; step < 300 && (await giveUp.count()) === 0; step++) {
-    await page.clock.runFor(1000)
+  // The loop checks a deadline after each poll, so jump past it and let the pending poll return.
+  for (let step = 0; step < 5 && (await giveUp.count()) === 0; step++) {
+    await page.clock.fastForward(90_000)
     await settle(page, 30)
   }
   await expect(giveUp).toBeVisible()
@@ -224,14 +227,3 @@ test("a restart that never completes gives up after 90 s", async ({ page }) => {
   expect(listRequests).toBeLessThanOrEqual(stopped + 1)
 })
 
-test("a fifth session evicts the least recently used one and leaves the rest open", async ({ page }) => {
-  const worker = await stubWorker(page)
-  await openRoute(page, "/sessions/local/s1")
-  for (const [index, name] of ["two", "three", "four", "five"].entries()) {
-    await openFromList(page, name)
-    await expect.poll(() => worker.conns.length).toBe(index + 2)
-  }
-  await expect.poll(() => worker.conns[0]?.closed).toBe(true)
-  for (const conn of worker.conns.slice(1)) expect(conn.closed).toBe(false)
-  expect(worker.conns).toHaveLength(5)
-})

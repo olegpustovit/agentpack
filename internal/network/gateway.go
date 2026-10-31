@@ -54,6 +54,9 @@ type Gateway struct {
 	events        eventHub
 }
 
+// browserPingInterval keeps idle terminal connections alive through proxies. Tests shorten it.
+var browserPingInterval = 15 * time.Second
+
 func ServeGateway(ctx context.Context, options GatewayOptions) error {
 	if options.Address == "" {
 		options.Address = "127.0.0.1:7420"
@@ -416,7 +419,7 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 	go copyFrames(browser, worker)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	ping := time.NewTicker(15 * time.Second)
+	ping := time.NewTicker(browserPingInterval)
 	defer ping.Stop()
 	private := r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1
 	for {

@@ -78,8 +78,8 @@ test("diagram labels each edge and dashes only the relay one", async ({ page }) 
     await expect(row(page, "mac-studio")).toContainText("direct")
     await expect(row(page, "fedora-laptop")).toContainText("relay fra")
   } else {
-    await expect(svg.getByText("direct", { exact: true })).toBeVisible()
-    await expect(svg.getByText("relay fra", { exact: true })).toBeVisible()
+    await expect(svg.getByText(/^direct/)).toBeVisible()
+    await expect(svg.getByText(/^relay fra/)).toBeVisible()
   }
   // Session counts come from the sessions queries, since the topology reports 0.
   if (test.info().project.name !== "phone") await expect(svg.getByText("macOS · Reachable · 3 sessions")).toBeVisible()

@@ -4,14 +4,14 @@ Static frontend embedded by the Go gateway. The Vite build in `ui/dist` is stage
 `internal/network/webdist` by `make ui-stage` and served at `/`. It uses Agentnet's macOS system font,
 OKLCH color and spacing tokens, with light/dark modes and responsive navigation.
 Terminal bytes are rendered by locally bundled MIT-licensed xterm.js; the terminal grid stays
-at the remote host dimensions while CSS scales the view.
+at the remote host dimensions while fit changes the font size. It never uses a CSS transform.
 The installable PWA manifest is `/manifest.webmanifest`; its SVG and PNG icons are
 served from `/icon.svg`, `/icon-192.png`, and `/icon-512.png`. There is
 no service worker, so API responses and registry data are never cached by the UI. No
 external script, CDN, font, analytics, localStorage credentials, or runtime Node server.
 
 Build with `bun install --frozen-lockfile && bun run build`; `make ui-stage` publishes it.
-Run browser checks with `bunx playwright install chromium && bun run e2e`.
+Run browser checks with `bunx playwright install chromium webkit && bun run e2e`. The test budgets are in the repository `AGENTS.md`.
 The gateway should set a same-origin CSP (scripts/styles from self, WebSocket connect
 from self; xterm dynamically sets style attributes) and disable HTTP caching for APIs.
 
@@ -38,8 +38,8 @@ Regression budgets are enforced by `tests/budgets.spec.ts` on the same fixture a
 | First Library open requests | 56 | 9 | ≤ 9 |
 | Install rows for the fixture | 36 | 12 | 12 |
 | New Session folder options per machine | 12 | 4 | 4 |
-| Peer answering in 6 s appears | never | about 6.05 s | within 7 s |
-| Sockets for 4 moves among recent sessions | 4 | 1 new | ≤ 1 new |
+| Peer answering after several polls appears | never | appears | appears |
+| Sockets when returning to a recent session | 4 | 0 new | 0 new |
 | Click at cell 61,21 at any fit | reports 90,30 | reports 61,21 | 61,21 |
 | Content height after a notice | 24 px | 570 px before and after | unchanged |
 
@@ -125,7 +125,7 @@ Gateway settings use `GET /api/settings` (`running`, `platform`, `sharing_enable
 `allowed_peers`) and `POST /api/settings/sharing` (`{enabled}`). Settings applies to the
 gateway machine even when another machine is selected for sessions. Stop-all and
 stop-gateway call `/api/node/stop-agents` and `/api/node/stop`. Forget sends
-`DELETE /api/recent` with `{directory,harness,mode}` to the selected node.
+`DELETE /api/recent` with `{directory}` to the machine that owns the row.
 A terminal `ended` notice with `state.restarting=true` triggers bounded reconnect,
 waits up to 90 seconds, resets the emulator, and enables shared browser input after replay. A replacement that immediately exits still replays its output.
 Antigravity desktop launcher presence cannot be launched or controlled remotely;

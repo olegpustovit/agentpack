@@ -3,7 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"image/color"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,6 +34,12 @@ func TestInitMCPAndModeCommands(t *testing.T) {
 	if err != nil || !strings.Contains(string(manifest), `name = "demo"`) {
 		t.Fatalf("manifest=%s err=%v", manifest, err)
 	}
+	// Without this, mcp add asks the real npm registry, so the test's time is the network's.
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"version":"1.0.0","dist":{"integrity":"sha512-test"}}`)
+	}))
+	t.Cleanup(registry.Close)
+	t.Setenv("NPM_CONFIG_REGISTRY", registry.URL)
 	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "mcp", "add", "docs", "--command", "npx", "--args", "-y", "server", "--env", "TOKEN=value", "--no-sync"}); err != nil || code != 0 {
 		t.Fatalf("mcp add code=%d err=%v", code, err)
 	}

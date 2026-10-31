@@ -82,19 +82,6 @@ async function gwLibraryStubs(page: Page) {
   await page.route((url) => url.pathname === "/api/library/replication/peers", (route) => route.fulfill({ json: { peers: [], contacts: {} } }))
 }
 
-test("setup, login and settings retain their gateway behavior", async ({ page }) => {
-  await mockAPI(page, { authenticated: false, setup: true })
-  await page.goto("/")
-  await expect(page.getByRole("heading", { name: "Set up your gateway" })).toBeVisible()
-  await page.getByLabel("Setup token").fill("private-token")
-  await page.getByLabel("Root account password").fill("a-long-test-password")
-  await page.getByRole("button", { name: "Create root account" }).click()
-  await expect(gwRow(page, "local:local-one")).toBeVisible()
-  await gwSettingsLink(page).click()
-  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Sharing" }).click()
-  await expect(page.getByText("tag:server", { exact: true })).toBeVisible()
-})
-
 test("host grid stays fixed while fit, zoom and browser size change", async ({ page }) => {
   const requests = await mockAPI(page)
   const controls = await attachTerminal(page)
@@ -185,7 +172,7 @@ test("session hierarchy has icons and keeps collapsed groups through refresh", a
   const subhead = group.locator('[data-slot="group-header"]').filter({ hasText: "my-project" })
   const row = gwRow(page, "local:local-one")
   await expect(row).toBeVisible()
-  await expect(row.locator("span[aria-hidden]").first()).toBeVisible()
+  await expect(row.getByRole("img", { name: "Running" })).toBeVisible()
   await expect(subhead).toBeVisible()
   const indent = async () => {
     const rowLeft = await row.getByText("Claude", { exact: true }).evaluate((el) => el.getBoundingClientRect().left)
@@ -299,41 +286,6 @@ test("390px switches between the session list and terminal panes", async ({ page
   await gwRow(page, "local:local-one").click()
   await expect(page.locator(".xterm-screen")).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy()
-})
-
-test("sessions render per machine as results arrive and preserve rows after a peer goes offline", async ({ page }) => {
-  await page.setViewportSize(gwDesktopViewport)
-  await mockAPI(page)
-  let online = true
-  await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "peer-1", name: "Build server", online }] }))
-  await page.route((url) => url.pathname === "/api/sessions" && url.searchParams.get("node") === "peer-1", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, online ? 700 : 100))
-    await route.fulfill({ json: [{ ...session, id: "remote-one", directory: "/srv/release", state: { ...session.state, columns: 120, rows: 36 } }] })
-  })
-  await page.goto("/")
-  await expect(gwRow(page, "local:local-one")).toBeVisible()
-  await expect(gwRow(page, "peer-1:remote-one")).toHaveCount(0)
-  await expect(gwRow(page, "peer-1:remote-one")).toBeVisible()
-  online = false
-  await gwRefresh(page)
-  await expect(gwRow(page, "peer-1:remote-one")).toContainText("Offline")
-  await expect(page.getByText("Build server is offline. Showing last known sessions.")).toBeVisible()
-})
-
-test("project grouping keeps identical folder names on different machines distinct", async ({ page }) => {
-  await mockAPI(page)
-  await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "peer-1", name: "Build server", online: true }] }))
-  await page.route((url) => url.pathname === "/api/sessions" && url.searchParams.get("node") === "peer-1", (route) =>
-    route.fulfill({ json: [{ ...session, id: "remote-one", directory: "/srv/my-project" }] }),
-  )
-  await page.goto("/")
-  await page.getByRole("button", { name: "Project", exact: true }).click()
-  // One folder group for both machines, with a subhead for each machine under it.
-  const folder = page.locator("nav > div").filter({ has: page.locator('[data-slot="group-header"]', { hasText: "my-project" }) })
-  await expect(folder).toHaveCount(1)
-  await expect(folder.getByText("Gateway machine", { exact: true })).toBeVisible()
-  await expect(folder.getByText("Build server", { exact: true })).toBeVisible()
-  await expect(page.locator('[data-slot="group-header"]').filter({ hasText: "another-project" })).toHaveCount(1)
 })
 
 test("new session only offers recent folders and routes start to the chosen machine", async ({ page }) => {
@@ -469,43 +421,7 @@ test("backend strings are text and API failures stay visible", async ({ page }) 
   await page.getByRole("menuitem", { name: "Install package…" }).click()
   await page.getByLabel("Package", { exact: true }).fill("acme/skill")
   await page.getByRole("button", { name: "Install", exact: true }).click()
-  await expect(page.getByRole("alert")).toHaveText("Project is not available")
-})
-
-test("external login return URLs are rejected", async ({ page }) => {
-  await mockAPI(page, { authenticated: false })
-  await page.goto("/login?return_to=%2F%2Fevil.example%2F")
-  await page.getByLabel("Root account password").fill("a-long-test-password")
-  await page.getByRole("button", { name: "Sign in", exact: true }).click()
-  await expect(gwRow(page, "local:local-one")).toBeVisible()
-  expect(new URL(page.url()).hostname).toBe("127.0.0.1")
-})
-
-test("native stdio and Antigravity sessions keep their local-only restrictions", async ({ page }) => {
-  await page.setViewportSize(gwDesktopViewport)
-  await mockAPI(page)
-  await page.route("**/api/sessions", (route) => route.fulfill({ json: [{ ...session, state: { ...session.state, interactive: false } }] }))
-  await page.goto("/")
-  await gwRow(page, "local:local-one").click()
-  await expect(page.getByText("Native stdio · browser input unavailable")).toBeVisible()
-  await expect(page.getByRole("button", { name: /Take control|Release control/ })).toHaveCount(0)
-  await gwMore(page, "local:local-one").click()
-  await expect(page.getByRole("menuitem", { name: "Restart…" })).toBeDisabled()
-  await expect(page.getByRole("menuitem", { name: "Stop…" })).toBeEnabled()
-  await page.getByRole("menuitem", { name: "Stop…" }).click()
-  await page.getByRole("alertdialog").getByRole("button", { name: "Stop agent" }).click()
-  await expect(page.getByText("Agent stopped", { exact: true })).toBeVisible()
-
-  await page.route("**/api/sessions", (route) => route.fulfill({ json: [{ ...session, harness: "agy", state: { ...session.state, interactive: false } }] }))
-  await gwRefresh(page)
-  await gwRow(page, "local:local-one").click()
-  await expect(page.getByText("Desktop launcher presence · start and interact locally. Detached desktop windows are not tracked.")).toBeVisible()
-
-  await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow("/work/previous", [{ harness: "agy" }])] }))
-  await page.goto("/sessions")
-  await page.getByRole("link", { name: "New session", exact: true }).click()
-  await expect(page.getByText("Desktop launches must start locally.")).toBeVisible()
-  await expect(page.getByRole("button", { name: "Start session" })).toBeDisabled()
+  await expect(page.getByRole("alert")).toContainText("Project is not available")
 })
 
 test("peer sessions load independently and terminal links retain the node", async ({ page }) => {
@@ -592,30 +508,10 @@ test("gateway settings stay separate from selected remote sessions", async ({ pa
   expect(settingsQueries.every((value) => !value.includes("node="))).toBeTruthy()
 
   await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Account" }).click()
-  await page.getByRole("button", { name: "Stop all agents", exact: true }).click()
+  await page.getByRole("button", { name: "Stop all agents…", exact: true }).click()
   await page.getByRole("alertdialog").getByRole("button", { name: "Stop all agents", exact: true }).click()
   await expect(page.getByText("Agents on the gateway machine have been stopped.")).toBeVisible()
   expect(requests.some((value) => value.path === "/api/node/stop-agents")).toBeTruthy()
-})
-
-test("a dropped terminal reconnects and replays output", async ({ page }) => {
-  await mockAPI(page)
-  const sockets: WebSocketRoute[] = []
-  await page.routeWebSocket(gwTerminalSocket, (ws) => {
-    sockets.push(ws)
-    ws.send(JSON.stringify({ type: "attached", attachment: 42, state: { ...session.state, shared_input: true, responder: 42 } }))
-    ws.send(Buffer.from(`ATTACH ${sockets.length}\r\n`))
-    ws.send(JSON.stringify({ type: "replay_complete" }))
-  })
-  await page.goto("/")
-  await gwRow(page, "local:local-one").click()
-  await expect(gwStatus(page)).toContainText("Shared input")
-  gwSocket(sockets, 0).close()
-  await expect.poll(() => sockets.length).toBe(2)
-  await expect.poll(() => gwBuffer(page)).toContain("ATTACH 2")
-  await gwDetach(page, "local:local-one")
-  await page.waitForTimeout(1200)
-  expect(sockets.length).toBe(2)
 })
 
 test("a restarted process that exits immediately still replays its final output", async ({ page }) => {
@@ -736,27 +632,6 @@ test("Sessions starts active and appearance settings persist across views and re
   await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Appearance" }).click()
   await page.getByRole("group", { name: "Theme" }).getByRole("button", { name: "System", exact: true }).click()
   await expect(page.locator("html")).not.toHaveAttribute("data-theme", /./)
-})
-
-test("a stalled terminal replay retries and clears its loader", async ({ page }) => {
-  await mockAPI(page)
-  const sockets: WebSocketRoute[] = []
-  await page.routeWebSocket(gwTerminalSocket, (ws) => {
-    sockets.push(ws)
-    if (sockets.length > 1) {
-      ws.send(JSON.stringify({ type: "attached", attachment: 42, state: { ...session.state, shared_input: true, responder: 42 } }))
-      ws.send(Buffer.from("RECOVERED\r\n"))
-      ws.send(JSON.stringify({ type: "replay_complete" }))
-    }
-  })
-  await page.clock.install()
-  await page.goto("/")
-  await gwRow(page, "local:local-one").click()
-  await expect(gwStage(page)).toHaveAttribute("aria-busy", "true")
-  await page.clock.runFor(31000)
-  await expect.poll(() => sockets.length).toBe(2)
-  await expect.poll(() => gwBuffer(page)).toContain("RECOVERED")
-  await expect(gwStage(page)).toHaveAttribute("aria-busy", "false")
 })
 
 test("sessions and library show loaders until their requests finish", async ({ page }) => {

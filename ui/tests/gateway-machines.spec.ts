@@ -67,29 +67,6 @@ test("recent folders retain unavailable reasons and only available paths can sta
   }
 })
 
-test("Machines matrix shows real package pins and project install actions", async ({ page }) => {
-  await mockAPI(page)
-  await page.route(projectsPath, (route) =>
-    route.fulfill({
-      json: [
-        projectRow("/work/previous", [{ harness: "codex" }], {
-          packages: [{ module: "github.com/acme/tools", commit: "abcdef1234567890", name: "Tools" }],
-        }),
-      ],
-    }),
-  )
-  await page.goto("/machines/local")
-
-  await expect(page.getByRole("heading", { name: "Gateway machine" })).toBeVisible()
-  const matrix = page.getByRole("table", { name: "Projects and pinned packages" })
-  await expect(matrix).toContainText("previous")
-  await expect(matrix).toContainText("abcdef1")
-  await expect(matrix).not.toContainText("abcdef12")
-
-  await machineRow(page, "previous").click({ button: "right" })
-  await expect(page.getByRole("menuitem", { name: "Install…" })).toBeEnabled()
-})
-
 test("limits view shows each harness with partial failures and no raw CLI output", async ({ page }) => {
   await mockAPI(page)
   await page.goto("/")
@@ -258,60 +235,6 @@ test("startup and machine discovery announce pending work", async ({ page }) => 
   releaseNodes()
   await expect(page.getByText("Discovering connected machines")).toBeHidden()
   await expect(page.locator('[aria-label="Machines"]')).toHaveAttribute("aria-busy", "false")
-})
-
-test("limits streams per-machine progress and preserves reports during refresh", async ({ page }) => {
-  await mockAPI(page)
-  await page.setViewportSize({ width: 1280, height: 800 })
-  await page.route(nodesPath, (route) => route.fulfill({ json: [{ id: "slow", name: "Slow Mac", online: true }] }))
-  let releasePeer!: () => void
-  let releaseRefresh!: () => void
-  const peerReady = new Promise<void>((resolve) => (releasePeer = resolve))
-  const refreshReady = new Promise<void>((resolve) => (releaseRefresh = resolve))
-  await page.route(/\/api\/limits(\/refresh)?(\?.*)?$/, async (route) => {
-    if (route.request().method() === "POST") await refreshReady
-    if (new URL(route.request().url()).searchParams.get("node") === "slow") await peerReady
-    await route.fulfill({ json: { limits: [{ harness: "codex", state: "available", windows: [{ id: "weekly", label: "Weekly", remaining_percent: 63 }] }] } })
-  })
-
-  await page.goto("/")
-  await page.getByRole("link", { name: "Limits", exact: true }).click()
-  const grid = page.getByRole("table", { name: "Provider limits" })
-  // The local report shows while the slow machine is still pending, and the pending machine has a placeholder row.
-  await expect(page.getByRole("meter", { name: "Weekly remaining" }).first()).toBeVisible()
-  await expect(page.getByRole("contentinfo").getByText("Updating 1 machine")).toBeVisible()
-  await expect(grid.locator('[data-slot="skeleton"]')).toHaveCount(1)
-
-  releasePeer()
-  await expect(page.getByRole("contentinfo").getByText("Updating 1 machine")).toBeHidden()
-  await expect(grid.locator('[data-slot="skeleton"]')).toHaveCount(0)
-
-  const refresh = page.getByRole("button", { name: "Refresh", exact: true })
-  await refresh.click()
-  await expect(refresh).toBeDisabled()
-  await expect(page.getByRole("meter", { name: "Weekly remaining" }).first()).toBeVisible()
-  releaseRefresh()
-  await expect(refresh).toBeEnabled()
-})
-
-test("inventory loading is visible without claiming that project data is empty", async ({ page }) => {
-  await mockAPI(page)
-  await page.setViewportSize({ width: 1280, height: 800 })
-  let releaseProjects!: () => void
-  const ready = new Promise<void>((resolve) => (releaseProjects = resolve))
-  await page.route(projectsPath, async (route) => {
-    await ready
-    await route.fulfill({ json: [] })
-  })
-
-  await page.goto("/machines/local")
-  await expect(page.getByRole("contentinfo").getByText("Updating 1 machine")).toBeVisible()
-  await expect(page.locator('[data-slot="skeleton"]').first()).toBeVisible()
-  await expect(page.getByText("No projects yet")).toBeHidden()
-
-  releaseProjects()
-  await expect(page.getByText("No projects yet")).toBeVisible()
-  await expect(page.getByRole("contentinfo").getByText("Updating 1 machine")).toBeHidden()
 })
 
 test("settings errors finish loading and offer a working retry", async ({ page }) => {

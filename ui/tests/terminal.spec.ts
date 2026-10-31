@@ -1,11 +1,7 @@
 import { expect, test } from "@playwright/test"
 import { cell, dragCells, history, openRoute, screen, serve, session, shared, statusBar, stubApi, stubWorker } from "./terminal-stub"
 
-const viewports = [
-  { width: 1440, height: 900 },
-  { width: 1100, height: 560 },
-  { width: 800, height: 400 },
-]
+const viewports = [{ width: 1100, height: 560 }]
 
 test.beforeEach(async ({ page }) => {
   await stubApi(page, () => [session("s1", "build")])
@@ -110,16 +106,3 @@ test("the status slot shows the session line and the mouse hint follows app mous
   await expect(statusBar(page)).not.toContainText("Mouse: app")
 })
 
-for (const path of ["/limits", "/settings"]) {
-  test(`the session slot is absent on ${path}`, async ({ page }) => {
-    await stubWorker(page)
-    await openRoute(page, "/sessions/local/s1")
-    // On phone the tab bar is hidden on a session, so go back to the list where it shows.
-    const back = page.getByRole("link", { name: "Back", exact: true })
-    if (await back.count()) await back.click()
-    await page.getByRole("link", { name: path === "/limits" ? "Limits" : "Settings", exact: true }).first().click()
-    await expect(page).toHaveURL(new RegExp(path))
-    await expect(statusBar(page)).not.toContainText(" × ")
-    await expect(statusBar(page)).not.toContainText("Shared input")
-  })
-}

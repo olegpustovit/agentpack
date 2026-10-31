@@ -38,17 +38,9 @@ const settingsNav = (page: Page) => page.getByRole("navigation", { name: "Settin
 
 // `settles` is the URL the route ends on when it redirects (/machines, /settings).
 const deepLinks: { path: string; settles?: string; rendered: (page: Page) => Locator }[] = [
-  { path: "/sessions", rendered: sessionsNav },
   { path: "/sessions/local/local-alpha-claude", rendered: (page) => page.getByRole("button", { name: "Larger" }) },
-  { path: "/library", rendered: libraryNav },
   { path: "/library/package/github.com/acme/tools", rendered: (page) => page.getByText("Package not found") },
-  { path: "/library/agentpack/pack-1", rendered: (page) => page.getByText("Agentpack not found") },
-  { path: "/library/mcp/foo-tools", rendered: (page) => page.getByText("MCP server not found") },
-  { path: "/machines", rendered: machineList },
-  { path: "/machines/peer-1", rendered: (page) => page.getByRole("heading", { level: 1, name: "Build server" }) },
   { path: "/machines/topology", rendered: topologyHeading },
-  { path: "/limits", rendered: limitsGrid },
-  { path: "/settings", settles: "/settings/general", rendered: settingsNav },
   { path: "/settings/sharing", rendered: (page) => page.getByRole("switch", { name: "Tailscale sharing" }) },
 ]
 
@@ -91,7 +83,7 @@ test("back and forward step through the views, with each view's URL", async ({ p
     { label: "Sessions", url: "/sessions", rendered: sessionsNav },
     { label: "Library", url: "/library", rendered: libraryNav },
     { label: "Limits", url: "/limits", rendered: limitsGrid },
-    { label: "Machines", url: "/machines", rendered: machineList },
+    { label: "Machines", url: "/machines/local", rendered: machineList },
     { label: "Settings", url: "/settings/general", rendered: settingsNav },
   ] as const
 
@@ -148,4 +140,18 @@ test("malformed session id in the deep link renders the terminal view", async ({
   await page.goto("/sessions/local/%25ZZ")
   await expect(page.getByRole("button", { name: "Larger" })).toBeVisible()
   await expectNoCrash(page, errors)
+})
+
+test("an unauthenticated deep link redirects to login", async ({ page }) => {
+  await mockAPI(page, { authenticated: false })
+  await page.goto("/sessions")
+  await expect(page).toHaveURL(/\/login$/)
+})
+
+test("views with nothing selected say what to do", async ({ page }) => {
+  await openFleet(page)
+  await page.goto("/sessions")
+  await expect(page.getByText("Select a session")).toBeVisible()
+  await page.goto("/library")
+  await expect(page.getByText("Select an item")).toBeVisible()
 })

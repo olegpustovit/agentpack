@@ -161,6 +161,8 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 
 - **Stack:** React 19, TanStack Router (file routes in `ui/src/routes/`) and TanStack Query, Tailwind CSS v4, shadcn components on `@base-ui/react` (`ui/src/components/ui/`), and xterm.js 6 for the terminal, loaded lazily. Tokens live in `ui/src/index.css`. React Compiler handles memoization: never hand-write `useMemo`, `useCallback` or `memo`.
 - **Kit:** macOS composition in `ui/src/components/kit/`, specified in `ui/DESIGN.md`. Components use only kit tokens.
+- **CSS traps:** base rules stay inside `@layer base`, because an unlayered rule beats every Tailwind utility. Font-size utilities must name their type (`text-(length:--fs-sm)`); plain `text-(--fs-sm)` is a color. The `data-selected:` variant needs `data-selected="true"`, and Base UI toggles expose `aria-pressed`, not `data-state`. `ui/tests/visual.spec.ts` asserts computed styles, because role-based tests cannot see any of this.
+- **Placeholder:** `internal/network/webdist/placeholder.html` is the only tracked file there, so `make ui-stage` never dirties the checkout. The gateway serves it when no build was staged, and `agentpack deploy` refuses to build without one.
 - **Routes** (`ui/src/routes/`):
 
 | Path | Search params |
@@ -184,7 +186,28 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 - Linkable overlays open from a search param (`new`, `install`, `restore`, `add`). Confirmations are local state.
 - **Alert model:** one surface per situation. Action finished: `Hud`, 4 s. Action failed with nothing open: `Hud` with `Retry`, until dismissed. Ongoing pane or terminal state: `Banner`. Irreversible action: `ConfirmAlert`. Form or server rejection: inline under the field. Do not use `notice()`, `*-status` lines or `window.confirm`.
 - **Size budgets** (`ui/scripts/check-size.ts`, run by every `bun run build`): main JS 170 KB gzip, initial CSS 30 KB, every lazy JS chunk 100 KB (the terminal included). Never raise a budget. The root route imports only `Button`, `Input`, `Tooltip` and `DropdownMenu`; dialogs, selects, the command palette and context menus load inside routes or through `React.lazy`.
-- **Checks:** in `ui/`, `bun run lint && bun run test && bun run build && bun run e2e`. `make artifact` also runs `scripts/ui-smoke.sh` against the built gateway.
+- **Checks:** in `ui/`, `bun run lint && bun run test && bun run build && bun run e2e`. `make artifact` also runs `scripts/ui-smoke.sh` against the built gateway. `bun run capture` writes design-review screenshots; it is not part of the suite.
+
+## Test budgets
+
+A slow test is a defect, and a test that repeats another costs every future run. These limits are requirements, enforced where the table says.
+
+| Suite | Budget | Enforced by |
+|---|---|---|
+| One browser test | under 2 s; fails at 8 s | `ui/playwright.config.ts` `timeout`, `reportSlowTests` |
+| Whole browser suite | under 60 s on a 4-core host; fails at 90 s | `globalTimeout` |
+| One Go test | under 2 s, no real network | review; `go test -json` shows durations |
+| `go test ./...`, uncached | under 30 s | review |
+| Vitest | under 10 s | review |
+
+Rules:
+
+- **Test each behaviour once, at the cheapest level that can see it.** Pure logic goes in Vitest or Go. A browser test is for what needs a browser: CSS, focus, routing, terminals, sockets. Do not add one that restates a unit test or a sibling spec.
+- **Never wait in real time.** Use `page.clock` in the browser and an injectable interval in Go. `test.setTimeout` and `test.slow` are banned, and `bun run lint` rejects them: rewrite the test instead. A test with a 60 s window fast-forwards 60 s.
+- **No real network.** Point registries and upstreams at a local fake.
+- **Engines are not a multiplier.** Every behaviour runs on Chromium. The `phone` and `webkit` projects hold only what can differ there: touch layout, and CSS, selection and mouse handling. Use a viewport override on Chromium for layout breakpoints. Do not parametrize over viewports or routes unless the behaviour differs between them.
+- **Assert what users see.** Role queries cannot see a broken cascade, so kit styling needs computed-style assertions in `ui/tests/visual.spec.ts`.
+- `navigator.webdriver` zeroes query retry backoff and skips the WebGL renderer. Keep those two switches and do not add behavior differences under it beyond what makes tests fast.
 
 ## What agentpack does
 

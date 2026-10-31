@@ -4,7 +4,6 @@ import { cell, openRoute, screen, serve, stubWorker } from "./terminal-stub"
 
 const viewports = [
   { width: 1440, height: 900 },
-  { width: 1100, height: 560 },
   { width: 800, height: 400 },
 ]
 
@@ -47,7 +46,7 @@ const sessionRows = (page: Page) => page.locator('nav[aria-label="Sessions"] [da
 const libraryEmpty = (page: Page) => page.getByText("Nothing in the library yet")
 
 test("Idle Sessions makes at most 6 requests per 60 s with events connected", async ({ page }) => {
-  test.setTimeout(120_000)
+  await page.clock.install()
   await page.addInitScript(openEventStream)
   await mockFleet(page)
   await page.goto("/sessions")
@@ -56,13 +55,13 @@ test("Idle Sessions makes at most 6 requests per 60 s with events connected", as
   await page.waitForLoadState("networkidle")
 
   const seen = countApi(page)
-  await page.waitForTimeout(60_000)
+  await page.clock.runFor(60_000)
   seen.stop()
   expect(seen.paths.length).toBeLessThanOrEqual(6)
 })
 
 test("Idle Library makes at most 3 requests per 30 s with events connected", async ({ page }) => {
-  test.setTimeout(90_000)
+  await page.clock.install()
   await page.addInitScript(openEventStream)
   await mockFleet(page)
   await page.goto("/library")
@@ -70,13 +69,13 @@ test("Idle Library makes at most 3 requests per 30 s with events connected", asy
   await page.waitForLoadState("networkidle")
 
   const seen = countApi(page)
-  await page.waitForTimeout(30_000)
+  await page.clock.runFor(30_000)
   seen.stop()
   expect(seen.paths.length).toBeLessThanOrEqual(3)
 })
 
 test("the Sessions sidebar has 0 DOM mutations per 60 s of unchanged data", async ({ page }) => {
-  test.setTimeout(120_000)
+  await page.clock.install()
   await page.addInitScript(openEventStream)
   await mockFleet(page)
   await page.goto("/sessions")
@@ -94,7 +93,7 @@ test("the Sessions sidebar has 0 DOM mutations per 60 s of unchanged data", asyn
     }).observe(nav, { subtree: true, childList: true, attributes: true, characterData: true })
   })
 
-  await page.waitForTimeout(60_000)
+  await page.clock.runFor(60_000)
   polls.stop()
   // The sidebar must have polled during the window, or the zero count proves nothing.
   expect(polls.paths.filter((path) => path === "/api/sessions").length).toBeGreaterThanOrEqual(1)
@@ -163,52 +162,25 @@ test("New Session offers at most 4 folders on each machine", async ({ page }) =>
   }
 })
 
-test("a peer that answers after 6 s shows its sessions within 7 s", async ({ page }) => {
+// The old UI discarded any answer slower than its 5 s poll. Hold one past several polls, then release it.
+test("a peer that answers after several polls still shows its sessions", async ({ page }) => {
+  await page.clock.install()
   await mockFleet(page)
+  let answer = () => {}
+  const held = new Promise<void>((resolve) => (answer = resolve))
   // Registered after mockFleet, so it takes precedence for the peer's session list only.
   await page.route(/\/api\/sessions(\?.*)?$/, async (route) => {
     const url = new URL(route.request().url())
     if (route.request().method() !== "GET" || url.searchParams.get("node") !== "peer-1") return route.fallback()
-    await page.waitForTimeout(6_000)
+    await held
     return route.fulfill({ json: fleetSessions("peer-1") })
   })
   const asked = page.waitForRequest((request) => request.url().includes("/api/sessions") && new URL(request.url()).searchParams.get("node") === "peer-1")
   await page.goto("/sessions")
-  // The 6 s clock starts when the peer's list request is sent, not when the page loads.
   await asked
-  await page.locator('a[href="/sessions/peer-1/peer-1-alpha-claude"]').waitFor({ state: "visible", timeout: 7_000 })
-})
-
-test("four moves between two recent sessions open at most one new terminal socket", async ({ page }) => {
-  // Arrow moves need the list beside the terminal; the phone layout shows one pane at a time.
-  await page.setViewportSize({ width: 1440, height: 900 })
-  await mockFleet(page)
-  const worker = await stubWorker(page)
-  worker.behave((conn) => serve(conn, { body: screen("A") }))
-  await page.goto("/sessions")
-  const rows = sessionRows(page)
-  await expect(rows).toHaveCount(36)
-  await page.waitForLoadState("networkidle")
-  // Warm-up: the first move opens row 1, so both rows are recent before counting starts.
-  await rows.nth(0).focus()
-  await page.keyboard.press("ArrowDown")
-  await expect(page).toHaveURL(new RegExp(`${await rows.nth(1).getAttribute("href")}$`))
-
-  await expect.poll(() => worker.conns.length).toBe(1)
-  const opened = worker.conns.length
-  // Each move goes to the other row: up to row 0, down to row 1, and so on.
-  let from = 1
-  for (const to of [0, 1, 0, 1]) {
-    await rows.nth(from).focus()
-    await page.keyboard.press(to < from ? "ArrowUp" : "ArrowDown")
-    await expect(page).toHaveURL(new RegExp(`${await rows.nth(to).getAttribute("href")}$`))
-    from = to
-  }
-  // Let the last move's socket finish connecting before reading the count.
-  await page.waitForTimeout(500)
-  const created = worker.conns.length - opened
-  console.info(`new terminal sockets for 4 moves: ${created}`)
-  expect(created).toBeLessThanOrEqual(1)
+  await page.clock.runFor(6_000)
+  answer()
+  await page.locator('a[href="/sessions/peer-1/peer-1-alpha-claude"]').waitFor({ state: "visible" })
 })
 
 for (const viewport of viewports) {

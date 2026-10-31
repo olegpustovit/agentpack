@@ -30,6 +30,9 @@ func (c *countedConn) Read(p []byte) (int, error) {
 
 func TestGatewayCompressesReplayAndKeepsBrowserConnectionAlive(t *testing.T) {
 	const id = "session-compression"
+	before := browserPingInterval
+	browserPingInterval = 20 * time.Millisecond
+	t.Cleanup(func() { browserPingInterval = before })
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, "network", "sessions", id), 0o700); err != nil {
 		t.Fatal(err)
@@ -105,7 +108,7 @@ func TestGatewayCompressesReplayAndKeepsBrowserConnectionAlive(t *testing.T) {
 		t.Fatalf("replay was not compressed: wire bytes=%d replay bytes=%d", got, len(session.replay))
 	}
 	// Worker pings terminate at the gateway; the browser needs its own heartbeat.
-	if err := connection.SetReadDeadline(time.Now().Add(20 * time.Second)); err != nil {
+	if err := connection.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	pong := connection.PingHandler()
