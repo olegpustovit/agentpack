@@ -1,3 +1,4 @@
+import { getRouteApi } from "@tanstack/react-router"
 import { Boxes } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Hash, Inspector, InspectorHead, KeyValue, Section } from "@/components/kit/data"
 import { Empty } from "@/components/kit/feedback"
@@ -7,8 +8,14 @@ import { agentpackRevisions, revisionChanges } from "./inspect"
 import { Failures, MissingItem } from "./inspector-state"
 import type { AgentpackItem } from "./model"
 import { useLibrary } from "./use-library"
+import { Button } from "@/components/ui/button"
+import { useMachines } from "@/features/machines/queries"
+import { RenameSheet, SaveRevisionSheet } from "./save-sheet"
+import { RestoreSheet } from "./restore-sheet"
 
 const signs = { add: "+", update: "~", remove: "−" } as const
+
+const route = getRouteApi("/_app/library/agentpack/$id")
 
 // `revision` picks the selected revision; no value, or one this agentpack lacks, shows the newest.
 export function AgentpackInspector({
@@ -21,6 +28,13 @@ export function AgentpackInspector({
   onRevision: (revision: string) => void
 }) {
   const { inputs, items, loading, failures } = useLibrary()
+  const search = route.useSearch()
+  const navigate = route.useNavigate()
+  const machines = useMachines()
+  // Only online machines can take a rename or a new revision now.
+  const holders = machines
+    .filter((machine) => machine.online && inputs.some((input) => input.machine.id === machine.id && input.agentpacks.some((entry) => entry.agentpack.id === id)))
+    .map((machine) => machine.id)
   const pack = items.find((entry): entry is AgentpackItem => entry.type === "agentpack" && entry.id === id)
   if (!pack) {
     return (
@@ -52,7 +66,14 @@ export function AgentpackInspector({
         icon={<Boxes className="size-(--s6)" />}
         title={pack.name}
         subtitle={`${rev.project || "Unknown project"} · saved on ${selected.machine} · ${plural(revisions.length, "revision")}`}
-      />
+      >
+        <Button type="button" variant="ghost" size="sm" onClick={() => void navigate({ search: (prev) => ({ ...prev, save: "1" }) })}>
+          Save revision…
+        </Button>
+        <Button type="button" variant="ghost" size="sm" onClick={() => void navigate({ search: (prev) => ({ ...prev, rename: "1" }) })}>
+          Rename…
+        </Button>
+      </InspectorHead>
       <Section title="Details" className="col-span-full">
         <dl className="flex flex-col gap-(--s3)">
           <KeyValue label="Source">
@@ -92,6 +113,9 @@ export function AgentpackInspector({
       </Section>
       <Section title={rev.label || "Saved revision"}>
         <p className="mb-(--s2) text-(--fs-sm) text-(--fg2)">{rev.mode || "default"} mode</p>
+        <Button type="button" size="sm" className="mb-(--s2)" onClick={() => void navigate({ search: (prev) => ({ ...prev, restore: rev.id }) })}>
+          Restore…
+        </Button>
         {!previous ? (
           <p className="text-(--fs-sm)">First saved revision.</p>
         ) : changes.length === 0 ? (
@@ -139,6 +163,34 @@ export function AgentpackInspector({
           </tbody>
         </DataGrid>
       </Section>
+      <RestoreSheet
+        packId={id}
+        packName={pack.name}
+        revision={rev}
+        packages={selected.packages}
+        open={search.restore === rev.id}
+        onOpenChange={(open) => {
+          if (!open) void navigate({ search: (prev) => ({ ...prev, restore: undefined }), replace: true })
+        }}
+      />
+      <SaveRevisionSheet
+        packId={id}
+        packName={pack.name}
+        holders={holders}
+        open={search.save === "1"}
+        onOpenChange={(open) => {
+          if (!open) void navigate({ search: (prev) => ({ ...prev, save: undefined }), replace: true })
+        }}
+      />
+      <RenameSheet
+        packId={id}
+        packName={pack.name}
+        holders={holders}
+        open={search.rename === "1"}
+        onOpenChange={(open) => {
+          if (!open) void navigate({ search: (prev) => ({ ...prev, rename: undefined }), replace: true })
+        }}
+      />
     </Inspector>
   )
 }

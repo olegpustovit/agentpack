@@ -3,11 +3,14 @@ import { Link, getRouteApi, useMatchRoute } from "@tanstack/react-router"
 import { Boxes, Plug, Puzzle, Sparkles, type LucideIcon } from "lucide-react"
 import { PopupSelect } from "@/components/kit/forms"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
+import { Button } from "@/components/ui/button"
 import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
 import { projectsQuery } from "@/features/sessions/queries"
 import { plural, shortHash } from "@/lib/format"
 import { agentpacksQuery, packagesQuery } from "./queries"
+import { AddPackageSheet } from "./add-package-sheet"
+import { PendingInstalls } from "./pending-installs"
 import {
   arrangeLibrary,
   buildLibrary,
@@ -86,6 +89,7 @@ export function LibraryList() {
   const projects = useMachineQueries(projectsQuery)
   const search = route.useSearch()
   const navigate = route.useNavigate()
+  const adding = search.add === "1"
 
   const filter = parseFilter(search.type)
   const sort = parseSort(search.sort)
@@ -160,9 +164,15 @@ export function LibraryList() {
             onValueChange={(next) => patch({ sort: next === "type" ? undefined : next })}
           />
         </div>
+        <div className="flex justify-end">
+          <Button type="button" variant="ghost" size="sm" onClick={() => void navigate({ search: (prev) => ({ ...prev, add: "1" }) })}>
+            Add package…
+          </Button>
+        </div>
       </div>
 
       <SourceList aria-label="Library" className="min-h-0 flex-1">
+        <PendingInstalls />
         {machines.map((machine) => {
           if (queries.some((entry) => entry.byMachine[machine.id]?.needsUpdate)) {
             return <Banner key={machine.id} tone="warn">{`${machine.name} needs an update to show its library.`}</Banner>
@@ -201,6 +211,12 @@ export function LibraryList() {
           </div>
         ))}
       </SourceList>
+      <AddPackageSheet
+        open={adding}
+        onOpenChange={(open) => {
+          if (!open) void navigate({ search: (prev) => ({ ...prev, add: undefined }), replace: true })
+        }}
+      />
     </div>
   )
 }

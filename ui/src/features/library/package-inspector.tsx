@@ -1,3 +1,4 @@
+import { getRouteApi } from "@tanstack/react-router"
 import { useState } from "react"
 import { Puzzle, Sparkles } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Hash, Inspector, InspectorHead, KeyValue, Section } from "@/components/kit/data"
@@ -9,10 +10,15 @@ import { installedIn, packageRecord, packageVersions } from "./inspect"
 import { Failures, MissingItem } from "./inspector-state"
 import type { PackageItem } from "./model"
 import { useLibrary } from "./use-library"
+import { InstallSheet } from "./install-sheet"
+
+const route = getRouteApi("/_app/library/package/$")
 
 export function PackageInspector({ module }: { module: string }) {
   const { inputs, items, loading, failures } = useLibrary()
   const [picked, setPicked] = useState<string>()
+  const search = route.useSearch()
+  const navigate = route.useNavigate()
   const item = items.find(
     (entry): entry is PackageItem =>
       (entry.type === "skill" || entry.type === "plugin") && entry.module.toLowerCase() === module.toLowerCase(),
@@ -39,7 +45,11 @@ export function PackageInspector({ module }: { module: string }) {
         icon={<Glyph className="size-(--s6)" />}
         title={item.name}
         subtitle={`${kind} · ${plural(item.projects.length, "project")} · ${item.machines.join(", ")}`}
-      />
+      >
+        <Button type="button" variant="primary" size="sm" onClick={() => void navigate({ search: (prev) => ({ ...prev, install: "1" }) })}>
+          Install…
+        </Button>
+      </InspectorHead>
       <Section title="Details">
         <dl className="flex flex-col gap-(--s3)">
           <KeyValue label="Module">
@@ -98,6 +108,13 @@ export function PackageInspector({ module }: { module: string }) {
           </>
         )}
       </Section>
+      <InstallSheet
+        item={{ module: item.module, commit, name: item.name, cache_key: record?.cache_key ?? "", content_hash: record?.content_hash }}
+        open={search.install === "1"}
+        onOpenChange={(open) => {
+          if (!open) void navigate({ search: (prev) => ({ ...prev, install: undefined }), replace: true })
+        }}
+      />
     </Inspector>
   )
 }

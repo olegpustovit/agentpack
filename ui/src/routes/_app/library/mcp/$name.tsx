@@ -7,7 +7,7 @@ export const Route = createFileRoute("/_app/library/mcp/$name")({
     q: z.string().optional().catch(undefined),
     type: z.string().optional().catch(undefined),
     sort: z.string().optional().catch(undefined),
-    add: z.string().optional().catch(undefined),
+    add: z.coerce.string().optional().catch(undefined),
   }),
   component: McpRoute,
 })

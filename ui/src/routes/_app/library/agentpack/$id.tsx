@@ -7,9 +7,11 @@ export const Route = createFileRoute("/_app/library/agentpack/$id")({
     q: z.string().optional().catch(undefined),
     type: z.string().optional().catch(undefined),
     sort: z.string().optional().catch(undefined),
-    add: z.string().optional().catch(undefined),
+    add: z.coerce.string().optional().catch(undefined),
     revision: z.string().optional().catch(undefined),
-    restore: z.string().optional().catch(undefined),
+    restore: z.coerce.string().optional().catch(undefined),
+    save: z.coerce.string().optional().catch(undefined),
+    rename: z.coerce.string().optional().catch(undefined),
   }),
   component: AgentpackRoute,
 })

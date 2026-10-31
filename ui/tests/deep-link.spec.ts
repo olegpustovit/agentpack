@@ -12,10 +12,10 @@ test.beforeEach(async ({ page }) => {
 
 test("deep link survives reload", async ({ page }) => {
   await page.goto("/library/package/github.com/a/b?type=mcp&q=foo")
-  await expect(page.getByText("package")).toBeVisible()
+  await expect(page.getByText("Package not found")).toBeVisible()
   await page.reload()
   await expect(page).toHaveURL(/\/library\/package\/github\.com\/a\/b\?type=mcp&q=foo$/)
-  await expect(page.getByText("package")).toBeVisible()
+  await expect(page.getByText("Package not found")).toBeVisible()
 })
 
 test("unauthenticated deep link redirects to login", async ({ page }) => {

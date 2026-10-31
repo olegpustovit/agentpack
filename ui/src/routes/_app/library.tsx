@@ -9,6 +9,8 @@ export const Route = createFileRoute("/_app/library")({
     q: z.string().optional().catch(undefined),
     type: z.string().optional().catch(undefined),
     sort: z.string().optional().catch(undefined),
+    // Trigger keys are coerced: the search parser JSON-decodes "1" to a number, which z.string() would drop.
+    add: z.coerce.string().optional().catch(undefined),
   }),
   component: () => (
     <ListDetail list={<LibraryList />}>
