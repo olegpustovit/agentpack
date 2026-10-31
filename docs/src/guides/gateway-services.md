@@ -49,7 +49,7 @@ agentpack gateway sharing status
 
 The gateway listens only on its Tailscale address, port 7421. It discovers online peers
 using the local Tailscale daemon and accepts your own untagged Tailscale identity by
-default. Incoming connections are authenticated using `tailscale whois` against their
+default. Incoming connections are authenticated using Tailscale WhoIs against their
 actual source address. Tailscale ACLs still apply.
 
 Other accounts and tagged servers need explicit permission on each receiving machine:

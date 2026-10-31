@@ -22,7 +22,7 @@ type Actor struct {
 // browserUser is the single gateway account browsers sign in as, so browsers on it are indistinguishable.
 const browserUser = "root"
 
-// identityCacheTTL bounds how often identity runs `tailscale status`.
+// identityCacheTTL bounds how often identity asks Tailscale for status.
 const identityCacheTTL = 60 * time.Second
 
 type actorKey struct{}

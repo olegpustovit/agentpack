@@ -5,8 +5,14 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
+
+	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
+	"tailscale.com/types/views"
 )
 
 func TestPersonalTailnetPolicy(t *testing.T) {
@@ -168,4 +174,29 @@ func TestCloseUpgradeOnEndClosesWhenGatewayStopsOrLoginEnds(t *testing.T) {
 		default:
 		}
 	})
+}
+
+func TestTailnetStatusFromKeepsWhatPolicyReads(t *testing.T) {
+	tags := views.SliceOf([]string{"tag:ci"})
+	peer := &ipnstate.PeerStatus{ID: "n1", HostName: "mac", UserID: 7, Online: true, TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.100.1.2")}, Tags: &tags}
+	var nodeKey key.NodePublic
+	status := tailnetStatusFrom(&ipnstate.Status{
+		BackendState: "Running",
+		Self:         &ipnstate.PeerStatus{ID: "self", UserID: 7},
+		Peer:         map[key.NodePublic]*ipnstate.PeerStatus{nodeKey: peer},
+		User:         map[tailcfg.UserID]tailcfg.UserProfile{7: {LoginName: "me@"}},
+	})
+	got := status.Peer[nodeKey.String()]
+	if got == nil || got.ID != "n1" || got.UserID != 7 || !got.Online || !slices.Equal(got.Tags, []string{"tag:ci"}) {
+		t.Fatalf("peer: %+v", got)
+	}
+	if tailnetAddress(got) != "100.100.1.2:7421" {
+		t.Fatalf("address: %q", tailnetAddress(got))
+	}
+	if status.User["7"].LoginName != "me@" || status.Self.UserID != 7 {
+		t.Fatalf("status: %+v", status)
+	}
+	if tailnetPeerFrom(nil) != nil {
+		t.Fatal("a stopped daemon reports no Self")
+	}
 }

@@ -252,6 +252,12 @@ func loadFromPath(path string) (PackLock, error) {
 		return PackLock{}, err
 	}
 	for index, pkg := range disk.Packages {
+		// go-toml assigns string kinds directly and does not call UnmarshalText, so validate here.
+		if pkg.Kind != "" {
+			if err := new(PackageKind).UnmarshalText([]byte(pkg.Kind)); err != nil {
+				return PackLock{}, fmt.Errorf("parse lockfile: %w", err)
+			}
+		}
 		// "No content hash" means the key is absent. A key that is present must
 		// hold a well-formed digest of a known algorithm, or the lock is refused.
 		if !present[index] {

@@ -75,6 +75,14 @@ func Load(projectRoot string) (*Manifest, error) {
 	if err := decoder.Decode(&schema); err != nil {
 		return nil, fmt.Errorf("parse agentpack.toml: %w", err)
 	}
+	// go-toml assigns string kinds directly and does not call UnmarshalText, so validate here.
+	for _, definition := range schema.Modes {
+		if definition.Base != "" {
+			if err := new(mode.Base).UnmarshalText([]byte(definition.Base)); err != nil {
+				return nil, fmt.Errorf("parse agentpack.toml: %w", err)
+			}
+		}
+	}
 	applyDefaults(projectRoot, &schema)
 	dependencies, err := decodeDependencies(schema.Dependencies)
 	if err != nil {

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate, useParams, useRouterState, useSearch } from "@tanstack/react-router"
-import { Folder, Laptop, Plus, Server } from "lucide-react"
+import { Folder, Laptop, Plus, RefreshCw, Server } from "lucide-react"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
-import { buttonVariants } from "@/components/ui/button"
-import { useMachineQueries, useMachines } from "@/features/machines/queries"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { useEventsConnected } from "@/features/events/use-events"
+import { nodesQuery, topologyQuery, useMachineQueries, useMachines } from "@/features/machines/queries"
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { terminalPool } from "@/features/terminal/pool"
@@ -26,6 +28,9 @@ import { RowSheet, type SheetState } from "./session-sheets"
 type Cursor = { key: string; from: string | undefined }
 type Confirm = { kind: "stop" | "restart"; row: ListedSession }
 
+// Computers that could run a gateway. Phones and TVs on the tailnet never will, so they are not missing.
+const GATEWAY_OS = new Set(["linux", "macOS", "windows"])
+
 // Rewrites query keys on a full href and keeps the path, hash and every other key.
 function withSearch(href: string, patch: Record<string, string | undefined>): string {
   const url = new URL(href, "http://gateway.local")
@@ -39,6 +44,14 @@ function withSearch(href: string, patch: Record<string, string | undefined>): st
 export function SessionList() {
   const machines = useMachines()
   const queries = useMachineQueries(sessionsQuery)
+  const live = useEventsConnected()
+  const discovery = useQuery(nodesQuery(live))
+  const topology = useQuery(topologyQuery(live))
+  const noGateway = (topology.data?.peers ?? []).filter((peer) => peer.state === "no-gateway" && GATEWAY_OS.has(peer.os))
+  const queryClient = useQueryClient()
+  const refresh = useMutation({
+    mutationFn: () => Promise.all([["nodes"], ["topology"], ["m"]].map((queryKey) => queryClient.invalidateQueries({ queryKey }))),
+  })
   const search = useSearch({ from: "/_app/sessions" })
   const params = useParams({ strict: false })
   const navigate = useNavigate()
@@ -152,10 +165,16 @@ export function SessionList() {
     </Link>
   )
 
+  const refreshButton = (
+    <Button variant="ghost" size="icon" aria-label="Refresh sessions" title="Refresh sessions" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
+      <RefreshCw aria-hidden className={cn(refresh.isPending && "animate-spin motion-reduce:animate-none")} />
+    </Button>
+  )
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       {!routeKey && <ToolbarTitle title="Sessions" subtitle={`${plural(sessions.length, "session")} on ${plural(machines.length, "machine")}`} />}
-      {isPhone && <ToolbarSlot>{newSession}</ToolbarSlot>}
+      {isPhone && <ToolbarSlot>{refreshButton}{newSession}</ToolbarSlot>}
       <div className="flex shrink-0 flex-col gap-(--s3) p-(--s3)">
         <div className="flex items-center gap-(--s2)">
           <SearchField
@@ -164,6 +183,7 @@ export function SessionList() {
             defaultValue={query}
             onChange={(event) => void navigate({ href: withSearch(href, { q: event.target.value || undefined }), replace: true })}
           />
+          {!isPhone && refreshButton}
           {!isPhone && newSession}
         </div>
         <SegmentedControl value={[groupMode]} onValueChange={chooseGroup} aria-label="Group sessions by" className="w-full">
@@ -177,6 +197,12 @@ export function SessionList() {
         className="group/list flex min-h-0 flex-1 flex-col overflow-y-auto px-(--s2) pb-(--s2)"
         onKeyDown={onKeyDown}
       >
+        {discovery.error && <Banner tone="warn">{`Can't look for other machines: ${discovery.error.message}`}</Banner>}
+        {noGateway.length > 0 && (
+          <Banner action={<Link to="/machines/topology" className="shrink-0 underline">Topology</Link>}>
+            {`${noGateway.map((peer) => peer.name).join(", ")}: no gateway reachable, so ${noGateway.length === 1 ? "its" : "their"} sessions aren't listed.`}
+          </Banner>
+        )}
         {machines.map((machine) => {
           const entry = queries.byMachine[machine.id]
           if (entry?.needsUpdate) {

@@ -7,18 +7,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"tailscale.com/client/local"
+	"tailscale.com/ipn/ipnstate"
 )
 
 const tailnetPort = "7421"
@@ -117,38 +121,77 @@ func WriteSharingConfig(home string, config SharingConfig) error {
 	}
 	return os.Rename(file.Name(), filepath.Join(directory, "sharing.json"))
 }
-func tailscaleJSON(ctx context.Context, destination any, args ...string) error {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, "tailscale", args...)
-	output, err := command.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	if err = command.Start(); err != nil {
-		return errors.New("Tailscale CLI is unavailable")
-	}
-	data, readErr := io.ReadAll(io.LimitReader(output, 4<<20+1))
-	if readErr != nil || len(data) > 4<<20 {
-		_ = command.Process.Kill()
-	}
-	waitErr := command.Wait()
-	if readErr != nil || waitErr != nil || len(data) > 4<<20 {
-		return errors.New("Tailscale identity is unavailable")
-	}
-	if err = json.Unmarshal(data, destination); err != nil {
-		return errors.New("Tailscale returned an invalid identity")
-	}
-	return nil
-}
+
+// tailscaleLocal finds the daemon itself on every install, including the macOS app builds that
+// put no `tailscale` command on PATH. Tests point it at a missing socket.
+var tailscaleLocal local.Client
+
+const tailscaleTimeout = 3 * time.Second
+
 func tailnetSnapshot(ctx context.Context) (tailnetStatus, error) {
-	var status tailnetStatus
-	err := tailscaleJSON(ctx, &status, "status", "--json")
-	if err == nil && (status.BackendState != "Running" || status.Self == nil || status.Self.ID == "") {
-		err = errors.New("Tailscale is not connected")
+	ctx, cancel := context.WithTimeout(ctx, tailscaleTimeout)
+	defer cancel()
+	raw, err := tailscaleLocal.Status(ctx)
+	if err != nil {
+		return tailnetStatus{}, fmt.Errorf("Tailscale is unavailable: %w", err)
 	}
-	return status, err
+	status := tailnetStatusFrom(raw)
+	if status.BackendState != "Running" || status.Self == nil || status.Self.ID == "" {
+		return status, errors.New("Tailscale is not connected")
+	}
+	return status, nil
 }
+
+func tailnetStatusFrom(raw *ipnstate.Status) tailnetStatus {
+	status := tailnetStatus{BackendState: raw.BackendState, Self: tailnetPeerFrom(raw.Self), Peer: map[string]*tailnetPeer{}, User: map[string]tailnetUser{}}
+	for key, peer := range raw.Peer {
+		status.Peer[key.String()] = tailnetPeerFrom(peer)
+	}
+	for id, user := range raw.User {
+		status.User[strconv.FormatInt(int64(id), 10)] = tailnetUser{LoginName: user.LoginName}
+	}
+	return status
+}
+
+func tailnetPeerFrom(peer *ipnstate.PeerStatus) *tailnetPeer {
+	if peer == nil {
+		return nil
+	}
+	result := &tailnetPeer{ID: string(peer.ID), HostName: peer.HostName, DNSName: peer.DNSName, OS: peer.OS, UserID: int64(peer.UserID), Online: peer.Online, CurAddr: peer.CurAddr, Relay: peer.Relay, PeerRelay: peer.PeerRelay, LastSeen: peer.LastSeen, RxBytes: peer.RxBytes, TxBytes: peer.TxBytes}
+	for _, address := range peer.TailscaleIPs {
+		result.TailscaleIPs = append(result.TailscaleIPs, address.String())
+	}
+	if peer.Tags != nil {
+		result.Tags = peer.Tags.AsSlice()
+	}
+	return result
+}
+
+// tailnetWhois names the node behind a tailnet address. An unknown address is an error.
+func tailnetWhois(ctx context.Context, address netip.Addr) (tailnetIdentity, error) {
+	ctx, cancel := context.WithTimeout(ctx, tailscaleTimeout)
+	defer cancel()
+	raw, err := tailscaleLocal.WhoIs(ctx, address.String())
+	if err != nil {
+		return tailnetIdentity{}, err
+	}
+	if raw.Node == nil {
+		return tailnetIdentity{}, errors.New("Tailscale returned no node")
+	}
+	var identity tailnetIdentity
+	identity.Node.StableID = string(raw.Node.StableID)
+	identity.Node.ComputedName = raw.Node.ComputedName
+	identity.Node.User = int64(raw.Node.User)
+	identity.Node.Tags = raw.Node.Tags
+	for _, prefix := range raw.Node.Addresses {
+		identity.Node.Addresses = append(identity.Node.Addresses, prefix.String())
+	}
+	if raw.UserProfile != nil {
+		identity.UserProfile.LoginName = raw.UserProfile.LoginName
+	}
+	return identity, nil
+}
+
 func allowedTailnetPeer(self, peer *tailnetPeer, config SharingConfig) bool {
 	if self == nil || peer == nil || peer.ID == "" {
 		return false
@@ -443,8 +486,8 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			http.Error(w, "sharing disabled", 403)
 			return
 		}
-		var identity tailnetIdentity
-		if tailscaleJSON(r.Context(), &identity, "whois", "--json", ip.String()) != nil {
+		identity, err := tailnetWhois(r.Context(), ip)
+		if err != nil {
 			http.Error(w, "peer identity unavailable", 403)
 			return
 		}
@@ -526,17 +569,34 @@ func (g *Gateway) runTailnetSharing(ctx context.Context) {
 		}
 	}
 	defer closeServer()
+	// The loop retries every five seconds, so log a problem when it changes, not on every tick.
+	var problem string
+	report := func(err error) {
+		text := ""
+		if err != nil {
+			text = err.Error()
+		}
+		if text != problem && text != "" {
+			log.Printf("tailnet sharing is not listening: %s", text)
+		}
+		problem = text
+	}
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
 		config, err := ReadSharingConfig(g.options.Home)
 		if err != nil || !config.Enabled {
 			closeServer()
+			report(err)
 		} else {
 			status, err := tailnetSnapshot(ctx)
 			address := tailnetAddress(status.Self)
 			if err != nil || address == "" {
 				closeServer()
+				if err == nil {
+					err = errors.New("this machine has no Tailscale address")
+				}
+				report(err)
 			} else {
 				currentPolicy, _ := json.Marshal(struct {
 					Config SharingConfig
@@ -546,6 +606,7 @@ func (g *Gateway) runTailnetSharing(ctx context.Context) {
 				if server == nil || bound != address || policy != signature {
 					closeServer()
 					listener, err := net.Listen("tcp", address)
+					report(err)
 					if err == nil {
 						tracking = &peerConnections{connections: make(map[net.Conn]bool)}
 						server = &http.Server{Handler: g.peerHandler(status.Self, address), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}

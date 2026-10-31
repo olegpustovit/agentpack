@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"tailscale.com/client/local"
 )
 
 func identityGateway(t *testing.T, home string, start func(context.Context, SessionInfo) (string, error)) (*Gateway, *url.URL) {
@@ -40,7 +42,8 @@ func seedFolder(t *testing.T, home string) string {
 }
 
 func TestIdentityWithoutTailscaleReportsRootAuthOnly(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
+	tailscaleLocal = local.Client{Socket: filepath.Join(t.TempDir(), "missing"), UseSocketOnly: true}
+	t.Cleanup(func() { tailscaleLocal = local.Client{} })
 	home := t.TempDir()
 	g, origin := identityGateway(t, home, nil)
 	r := httptest.NewRequest("GET", origin.String()+"/api/identity", nil)

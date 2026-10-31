@@ -260,3 +260,14 @@ func TestPresentButInvalidContentHashIsRejected(t *testing.T) {
 		t.Fatalf("Load(absent key) = %#v, %v", lock, err)
 	}
 }
+
+func TestUnknownPackageKindIsRejected(t *testing.T) {
+	root := t.TempDir()
+	lock := "lockfile_version = 2\n[[packages]]\nmodule = \"github.com/a/b\"\nkind = \"gadget\"\n"
+	if err := os.WriteFile(filepath.Join(root, "pack.lock"), []byte(lock), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(root); err == nil || !strings.Contains(err.Error(), `unknown package kind "gadget"`) {
+		t.Fatalf("err = %v", err)
+	}
+}
