@@ -310,7 +310,7 @@ func TestCompiledCLIRefusesTamperedCacheUntilRepaired(t *testing.T) {
 	if readFile(t, entries[0]) != body {
 		t.Fatal("repair left the tampered file in the cache")
 	}
-	if result := runCLI(t, project, "sync", "--verify-only"); result.err != nil || result.stderr != "" {
+	if result := runCLI(t, project, "--no-progress", "sync", "--verify-only"); result.err != nil || result.stderr != "" {
 		t.Fatalf("verify after repair: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
 }
@@ -359,7 +359,7 @@ func TestCompiledCLIVerifyOnlyChecksStagedFilesAndSyncReportsReplacingThem(t *te
 	if result := runCLI(t, project, "add", "local-skill"); result.err != nil {
 		t.Fatalf("add: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
-	if result := runCLI(t, project, "sync", "--verify-only"); result.err != nil || result.stderr != "" {
+	if result := runCLI(t, project, "--no-progress", "sync", "--verify-only"); result.err != nil || result.stderr != "" {
 		t.Fatalf("verify of an untouched tree: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
 	staged := filepath.Join(stagedModeRoot(t, project), "plugins", "agentpack-bundle", "skills", "local-skill", "SKILL.md")
@@ -382,7 +382,7 @@ func TestCompiledCLIVerifyOnlyChecksStagedFilesAndSyncReportsReplacingThem(t *te
 	if _, err := os.Stat(extra); readFile(t, staged) != body || !os.IsNotExist(err) {
 		t.Fatalf("staging after sync: %q, extra: %v", readFile(t, staged), err)
 	}
-	if result := runCLI(t, project, "sync", "--verify-only"); result.err != nil || result.stderr != "" {
+	if result := runCLI(t, project, "--no-progress", "sync", "--verify-only"); result.err != nil || result.stderr != "" {
 		t.Fatalf("verify after sync: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
 }
