@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { AgentpackWithRevisions, Package, ProjectMCP, ProjectPackage, ProjectRow, Revision } from "@/lib/api-types"
-import { arrangeLibrary, buildLibrary, parseFilter, parseSort, type LibraryInput, type LibraryMachine, type LibraryView } from "./model"
+import { arrangeLibrary, buildLibrary, packageName, parseFilter, parseSort, type LibraryInput, type LibraryMachine, type LibraryView, type PackageItem } from "./model"
 
 const oracle: LibraryMachine = { id: "local", name: "oracle-vm" }
 const studio: LibraryMachine = { id: "n2", name: "mac-studio" }
@@ -83,17 +83,16 @@ describe("buildLibrary dedupe", () => {
     expect(items[0]?.projects.map((p) => p.name)).toEqual(["a", "b"])
   })
 
-  it("merges MCP servers by name and definition, not by name alone", () => {
+  it("gives an MCP server one row however many definitions projects use", () => {
     const items = buildLibrary([
       input(oracle, { projects: [folder({ mcp: [server({})] })] }),
       input(studio, { projects: [folder({ directory: "/b", name: "b", mcp: [server({ status: "error" })] })] }),
       input(studio, { projects: [folder({ directory: "/c", name: "c", mcp: [server({ version: "2.0.0" })] })] }),
     ])
     const mcp = items.filter((item) => item.type === "mcp")
-    expect(mcp).toHaveLength(2)
-    const merged = mcp.find((item) => item.type === "mcp" && item.version === "1.2.3")
-    expect(merged).toMatchObject({ name: "github", launcher: "npm", machines: ["mac-studio", "oracle-vm"] })
-    expect(merged?.projects).toHaveLength(2)
+    expect(mcp).toHaveLength(1)
+    expect(mcp[0]).toMatchObject({ name: "github", launcher: "npm", machines: ["mac-studio", "oracle-vm"] })
+    expect(mcp[0]?.projects).toHaveLength(3)
   })
 
   it("merges agentpacks by id, merges revisions, and takes the newest revision as the commit", () => {
@@ -230,5 +229,32 @@ describe("arrangeLibrary search", () => {
 
   it("counts reflect the search", () => {
     expect(arrangeLibrary(fixture(), { filter: "all", sort: "type", query: "zeta" }).counts).toEqual({ all: 1, skill: 0, plugin: 0, mcp: 1, agentpack: 0 })
+  })
+})
+
+describe("one row per package", () => {
+  const stored = (module: string, commit: string, kind = "skill") => ({ id: `${module}@${commit}`, module, commit, kind, url: "", owner: "", repo: "", cache_key: "" })
+  const input = (packages: ReturnType<typeof stored>[]): LibraryInput => ({ machine: { id: "local", name: "main" }, packages, agentpacks: [], projects: [] })
+
+  it("merges a moved repository and folder under one name, keeping every source and version", () => {
+    const items = buildLibrary([input([
+      stored("github.com/oleghq/agent-configs/skills/nudge-cli", "a1"),
+      stored("github.com/olegpustovit/agent-configs/skills/nudge-cli", "b2"),
+      stored("github.com/olegpustovit/agent-configs/skills/nudge-cli", "c3"),
+    ])])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ name: "nudge-cli", versions: 3 })
+    expect((items[0] as PackageItem).sources).toHaveLength(2)
+  })
+
+  it("keeps a skill and a plugin of the same name apart", () => {
+    const items = buildLibrary([input([stored("github.com/a/x/frontend-design", "a1"), stored("github.com/b/y/frontend-design", "b2", "plugin")])])
+    expect(items.map((item) => item.type).sort()).toEqual(["plugin", "skill"])
+  })
+
+  it("names a package from its path, and a folder named for its role from the repository", () => {
+    expect(packageName("github.com/acme/tools/.skills/humanizer")).toBe("humanizer")
+    expect(packageName("github.com/acme/research/plugin")).toBe("research")
+    expect(packageName("github.com/acme/tools", "Given Name")).toBe("Given Name")
   })
 })

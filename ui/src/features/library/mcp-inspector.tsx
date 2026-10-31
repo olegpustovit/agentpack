@@ -46,6 +46,7 @@ export function McpInspector({ name }: { name: string }) {
             <tr>
               <DataGridHeaderCell className="w-40">Machine</DataGridHeaderCell>
               <DataGridHeaderCell>Project</DataGridHeaderCell>
+              <DataGridHeaderCell className="w-28">Version</DataGridHeaderCell>
               <DataGridHeaderCell className="w-28">Status</DataGridHeaderCell>
               <DataGridHeaderCell className="w-56">Integrity</DataGridHeaderCell>
             </tr>
@@ -55,6 +56,7 @@ export function McpInspector({ name }: { name: string }) {
               <DataGridRow key={`${use.machine}\0${use.directory}`}>
                 <DataGridCell>{use.machine}</DataGridCell>
                 <DataGridCell title={use.directory}>{use.project}</DataGridCell>
+                <DataGridCell>{use.version || "Not pinned"}</DataGridCell>
                 <DataGridCell>{statusWords[use.status] ?? use.status}</DataGridCell>
                 <DataGridCell title={use.integrity}>
                   <code>{use.integrity || "—"}</code>

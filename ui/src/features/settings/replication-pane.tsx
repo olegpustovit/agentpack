@@ -40,7 +40,7 @@ export function ReplicationPane() {
     <>
       <Banner>
         {sharing
-          ? "Both machines must enroll each other before registry objects replicate."
+          ? "Your own machines enroll each other automatically and keep one library. A machine you remove stays out until you enroll it again."
           : "Enable Tailscale sharing before enrolling a machine."}
       </Banner>
       <Section title="Machines">

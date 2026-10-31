@@ -130,3 +130,29 @@ test("the status bar shows the last limits update on Limits and nothing on Sessi
   await expect(page).toHaveURL(/\/sessions/)
   await expect(status).not.toContainText("Updated")
 })
+
+test("a machine still answering sits below the rows that have loaded", async ({ page }) => {
+  limits = { local: [], n2: [codex(70)], n3: [] }
+  await page.route("**/api/limits**", (route) => {
+    if (machineOf(route.request().url()) === "n3") return new Promise<void>(() => {})
+    return route.fallback()
+  })
+  await page.goto("/limits")
+  const grid = page.getByRole("table", { name: "Provider limits" })
+  await expect(grid.locator('tbody[data-provider="codex"]')).toBeVisible()
+  const order = await grid.locator("tbody").evaluateAll((bodies) => bodies.map((body) => (body as HTMLElement).dataset.provider ?? "pending"))
+  expect(order).toEqual(["codex", "pending"])
+})
+
+test("a phone shows limits as cards, with nothing wider than the screen", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 })
+  limits = { local: [], n2: [codex(70)], n3: [codex(40)] }
+  await page.goto("/limits")
+  const card = page.getByRole("region", { name: "Codex" })
+  await expect(card).toContainText("70% left")
+  await expect(card).toContainText("Session")
+  await expect(page.getByRole("table", { name: "Provider limits" })).toHaveCount(0)
+  await card.getByRole("button", { name: "Other machines (1)" }).click()
+  await expect(card).toContainText("40% left")
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})

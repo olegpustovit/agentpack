@@ -55,7 +55,7 @@ function useShellShortcuts() {
 }
 
 function AppToolbar() {
-  const { view, detail } = useRoutePosition()
+  const { view, detail, landing } = useRoutePosition()
   const isPhone = useIsPhone()
   const { collapsed, toggle } = useSidebar()
   const discovering = useDiscovering()
@@ -75,9 +75,9 @@ function AppToolbar() {
           <PanelLeft />
         </ToolbarButton>
       )}
-      {isPhone && detail && (
+      {isPhone && detail && !landing && (
         <Link
-          to={tabs.find((item) => item.id === view)?.to ?? "/sessions"}
+          to={view === "machines" ? "/machines" : tabs.find((item) => item.id === view)?.to ?? "/sessions"}
           aria-label="Back"
           className={buttonVariants({ variant: "ghost", size: "icon", className: "shrink-0" })}
         >
@@ -116,8 +116,8 @@ function AppToolbar() {
 }
 
 function TabBar() {
-  const { detail } = useRoutePosition()
-  if (detail) return null
+  const { detail, landing } = useRoutePosition()
+  if (detail && !landing) return null
   return (
     <nav
       aria-label="Tabs"

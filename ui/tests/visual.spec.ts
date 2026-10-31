@@ -237,7 +237,7 @@ test("a grid column can be dragged wider", async ({ page, isMobile, browserName 
   expect((await header.boundingBox())!.width).toBeCloseTo(before.width + 80, -1)
 })
 
-test("Update on an Installed in row installs the shown commit there", async ({ page, isMobile }) => {
+test("Update on an Installed in row moves only that project to the latest version", async ({ page, isMobile }) => {
   test.skip(isMobile, "desktop")
   await desktop(page)
   const pin = (commit: string) => ({ module: "github.com/acme/tools", commit: commit.repeat(40), content_hash: "", cache_key: commit, kind: "skill", name: "tools", url: "", direct: true })
@@ -248,12 +248,11 @@ test("Update on an Installed in row installs the shown commit there", async ({ p
     posted.push(route.request().postDataJSON())
     return route.fulfill({ json: { installed: true } })
   })
+  await page.route("**/api/library/latest**", (route) => route.fulfill({ json: { commit: "b".repeat(40), current: ["b".repeat(40)], exact: true } }))
   await page.goto("/library/package/github.com/acme/tools")
-  await page.getByRole("button", { name: "Update", exact: true }).click()
+  await page.getByRole("button", { name: "Update to bbbbbbb" }).click()
   await expect.poll(() => posted.length).toBe(1)
-  // Exactly one row is behind the shown commit: it moves to the other row's pin, in its own folder.
-  const target = posted[0]!
-  expect(target.spec).toBe(`github.com/acme/tools@${(target.directory === "/work/a" ? "b" : "a").repeat(40)}`)
+  expect(posted[0]).toMatchObject({ spec: `github.com/acme/tools@${"b".repeat(40)}`, directory: "/work/a" })
 })
 
 test("a long project path stays inside the New session sheet", async ({ page, isMobile }) => {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -68,6 +69,7 @@ func TestReadLimitsUsesSharedAgentpackCredentials(t *testing.T) {
 	if err := os.WriteFile(script, []byte(`#!/bin/sh
 [ -f "$GROK_HOME/auth.json" ] || exit 1
 IFS= read -r fixture_initialize || exit 1
+printf '%s\n' '{"id":1,"result":{}}'
 IFS= read -r fixture_billing || exit 1
 printf '%s\n' '{"id":2,"result":{"config":{"creditUsagePercent":25}}}'
 `), 0700); err != nil {
@@ -77,5 +79,42 @@ printf '%s\n' '{"id":2,"result":{"config":{"creditUsagePercent":25}}}'
 	snapshot := ReadLimits(context.Background())
 	if snapshot.State != "available" || len(snapshot.Windows) != 1 {
 		t.Fatalf("snapshot=%+v", snapshot)
+	}
+}
+
+// The probe's home is thrown away, so a rotated refresh token must reach the shared credentials.
+func TestReadLimitsKeepsARefreshedLogin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("AGENTPACK_HOME", home)
+	t.Setenv("GROK_HOME", "")
+	shared := filepath.Join(home, "shared", "grok")
+	if err := os.MkdirAll(shared, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, "auth.json"), []byte(`{"token":"old"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "grok")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+printf '%s' '{"token":"rotated"}' > "$GROK_HOME/auth.json"
+IFS= read -r fixture_initialize || exit 1
+printf '%s\n' '{"id":1,"result":{}}'
+IFS= read -r fixture_billing || exit 1
+printf '%s\n' '{"id":2,"error":{"message":"Authentication required"}}'
+`), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GROK_PATH", script)
+	snapshot := ReadLimits(context.Background())
+	if !strings.Contains(snapshot.Error, "agentpack grok login") {
+		t.Fatalf("snapshot=%+v", snapshot)
+	}
+	data, err := os.ReadFile(filepath.Join(shared, "auth.json"))
+	if err != nil || string(data) != `{"token":"rotated"}` {
+		t.Fatalf("shared credentials: %q %v", data, err)
 	}
 }

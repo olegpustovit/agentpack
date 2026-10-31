@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,5 +105,42 @@ func TestEmbeddedGitProtocolFallback(t *testing.T) {
 	}
 	if _, ok := paths["README.md"]; !ok {
 		t.Fatalf("archive does not contain README.md: %v", paths)
+	}
+}
+
+func TestLatestVersionFollowsThePackageFolder(t *testing.T) {
+	latest := strings.Repeat("a", 40)
+	older, newer := strings.Repeat("b", 40), strings.Repeat("c", 40)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/acme/tools/commits":
+			if r.URL.Query().Get("path") != "skills/a b" {
+				t.Errorf("path = %q", r.URL.Query().Get("path"))
+			}
+			fmt.Fprintf(w, `[{"sha":%q,"commit":{"committer":{"date":"2026-10-30T10:00:00Z"}}}]`, latest)
+		case r.URL.Path == "/repos/acme/tools/compare/"+latest+"..."+older:
+			fmt.Fprint(w, `{"status":"behind"}`)
+		case r.URL.Path == "/repos/acme/tools/compare/"+latest+"..."+newer:
+			fmt.Fprint(w, `{"status":"ahead"}`)
+		default:
+			t.Errorf("unexpected request %s", r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	previous := apiRoot
+	apiRoot = server.URL
+	defer func() { apiRoot = previous }()
+
+	got, err := LatestVersion(context.Background(), server.Client(), "acme", "tools", "skills/a b", []string{older, newer, latest, older})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A pin ahead of the folder's last change has the same files, so only the older one is behind.
+	if got.Commit != latest || !got.Exact || got.CommittedAt == "" || !slices.Equal(got.Current, []string{latest, newer}) {
+		t.Fatalf("latest = %+v", got)
+	}
+	if _, err := LatestVersion(context.Background(), server.Client(), "../evil", "tools", "", nil); err == nil {
+		t.Fatal("an invalid owner must be refused")
 	}
 }

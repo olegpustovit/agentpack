@@ -60,6 +60,10 @@ export function renameAgentpack(machine: string, id: string, name: string) {
   return api<Agentpack>(`/api/library/agentpacks/${encodeURIComponent(id)}`, { machine, method: "PATCH", body: { name } })
 }
 
+export function resolveConflict(machine: string, id: string, heads: string[], choices: Record<string, string>) {
+  return api<Revision>(`/api/library/agentpacks/${encodeURIComponent(id)}/resolve`, { machine, body: { heads, choices } })
+}
+
 export function saveDraft(input: DraftInput) {
   return api<Draft>("/api/library/drafts", { body: input })
 }

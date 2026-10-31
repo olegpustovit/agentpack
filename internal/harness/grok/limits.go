@@ -59,6 +59,8 @@ func ReadLimits(ctx context.Context) base.LimitSnapshot {
 			snapshot.Error = "prepare limits credentials: " + err.Error()
 			return snapshot
 		}
+		// Runs after the process below has stopped, and before the home is removed.
+		defer keepRefreshedCredentials(home)
 		cmd.Env = append(cmd.Env, "GROK_HOME="+home)
 	}
 	cmd.Stderr = io.Discard
@@ -82,19 +84,27 @@ func ReadLimits(ctx context.Context) base.LimitSnapshot {
 		_ = cmd.Wait()
 	}()
 
-	requests := []string{
-		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1","clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}}`,
-		`{"jsonrpc":"2.0","id":2,"method":"_x.ai/billing","params":{}}`,
+	lines := bufio.NewScanner(stdout)
+	lines.Buffer(make([]byte, 0, 64<<10), 4<<20)
+	// Grok loads its login while answering initialize, so billing asked any sooner fails with "Internal error".
+	if _, err := io.WriteString(stdin, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1","clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}}`+"\n"); err != nil {
+		snapshot.Error = err.Error()
+		return snapshot
 	}
-	for _, request := range requests {
-		if _, err := io.WriteString(stdin, request+"\n"); err != nil {
-			snapshot.Error = err.Error()
-			return snapshot
-		}
+	if _, err := awaitResponse(ctx, lines, "1"); err != nil {
+		snapshot.Error = err.Error()
+		return snapshot
 	}
-	result, err := awaitBilling(ctx, stdout, "2")
+	if _, err := io.WriteString(stdin, `{"jsonrpc":"2.0","id":2,"method":"_x.ai/billing","params":{}}`+"\n"); err != nil {
+		snapshot.Error = err.Error()
+		return snapshot
+	}
+	result, err := awaitResponse(ctx, lines, "2")
 	if err != nil {
 		snapshot.Error = err.Error()
+		if strings.Contains(err.Error(), "Authentication required") {
+			snapshot.Error = "Grok login expired. Sign in with agentpack grok login."
+		}
 		return snapshot
 	}
 	windows, tier, err := parseBilling(result)
@@ -108,9 +118,7 @@ func ReadLimits(ctx context.Context) base.LimitSnapshot {
 	return snapshot
 }
 
-func awaitBilling(ctx context.Context, stdout io.Reader, id string) (json.RawMessage, error) {
-	lines := bufio.NewScanner(stdout)
-	lines.Buffer(make([]byte, 0, 64<<10), 4<<20)
+func awaitResponse(ctx context.Context, lines *bufio.Scanner, id string) (json.RawMessage, error) {
 	for lines.Scan() {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("grok agent timed out")

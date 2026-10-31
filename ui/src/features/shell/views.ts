@@ -4,7 +4,7 @@ import { Gauge, Library, Server, Settings, Terminal } from "lucide-react"
 export const views = [
   { id: "sessions", label: "Sessions", to: "/sessions", icon: Terminal },
   { id: "library", label: "Library", to: "/library", icon: Library },
-  { id: "machines", label: "Machines", to: "/machines", icon: Server },
+  { id: "machines", label: "Machines", to: "/machines/topology", icon: Server },
   { id: "limits", label: "Limits", to: "/limits", icon: Gauge },
 ] as const
 
@@ -48,5 +48,6 @@ export function viewLink(view: (typeof views)[number]) {
 export function useRoutePosition() {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const [, view = "", ...rest] = pathname.split("/")
-  return { view, detail: rest.some(Boolean) }
+  // The topology is where the Machines tab lands, so on a phone it keeps the tab bar and has no Back.
+  return { view, detail: rest.some(Boolean), landing: pathname === "/machines/topology" }
 }

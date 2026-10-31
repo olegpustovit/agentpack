@@ -205,12 +205,25 @@ func (s *Store) captureUnlocked(input CaptureInput) (Agentpack, Revision, error)
 	}
 	if len(input.ParentIDs) == 0 && len(pack.Revisions) > 0 {
 		if len(pack.Heads) > 1 {
-			return pack, revision, fmt.Errorf("agentpack has multiple heads; choose a parent revision")
+			if err := s.mergeHeadsUnlocked(input.ID); err != nil {
+				return pack, revision, err
+			}
+			if idx, err = s.readIndexUnlocked(); err != nil {
+				return pack, revision, err
+			}
+			pack = idx.Agentpacks[input.ID]
 		}
-		if len(pack.Heads) == 1 {
-			input.ParentIDs = []string{pack.Heads[0]}
-		} else {
+		switch len(pack.Heads) {
+		case 0:
 			input.ParentIDs = []string{pack.Revisions[len(pack.Revisions)-1]}
+		case 1:
+			input.ParentIDs = []string{pack.Heads[0]}
+		default:
+			parent, err := s.captureParent(pack.Heads, redactMetadata(input.SourceNode), redactMetadata(input.Project))
+			if err != nil {
+				return pack, revision, err
+			}
+			input.ParentIDs = []string{parent}
 		}
 	}
 	for _, parent := range input.ParentIDs {

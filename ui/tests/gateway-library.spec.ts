@@ -187,7 +187,7 @@ test("offline package rows save drafts and require a fresh review before apply",
   await expect.poll(() => discarded).toBe(true)
 })
 
-test("replication requires opt-in and reports receipts per peer", async ({ page }) => {
+test("replication explains automatic enrollment and reports receipts per peer", async ({ page }) => {
   await mockAPI(page)
   await mockLibraryBase(page)
   let enrolled = false
@@ -206,7 +206,7 @@ test("replication requires opt-in and reports receipts per peer", async ({ page 
   await page.route("**/api/library/packages**", (route) => route.fulfill({ json: [item] }))
   await page.route("**/api/library/agentpacks**", (route) => route.fulfill({ json: [] }))
   await page.goto("/settings/replication")
-  await expect(page.getByText("Both machines must enroll each other before registry objects replicate.")).toBeVisible()
+  await expect(page.getByText("Your own machines enroll each other automatically and keep one library. A machine you remove stays out until you enroll it again.")).toBeVisible()
   await expect(page.getByText("Not enrolled")).toBeVisible()
   await page.getByRole("button", { name: "Enroll", exact: true }).click()
   await expect(page.getByText("Enrolled. The other machine must enroll this gateway too.")).toBeVisible()

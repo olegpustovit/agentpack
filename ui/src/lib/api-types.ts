@@ -160,6 +160,11 @@ export type Revision = {
 
 export type AgentpackWithRevisions = { agentpack: Agentpack; revisions: Revision[] }
 
+export type LatestVersion = { commit: string; committed_at?: string; current: string[]; exact: boolean }
+
+export type AgentpackConflictField = { path: string; name: string; base: string; values: Record<string, string> }
+export type AgentpackConflict = { heads: string[]; fields: AgentpackConflictField[] }
+
 export type PackagePin = { commit: string; content_hash?: string; cache_key: string }
 
 export type Draft = {

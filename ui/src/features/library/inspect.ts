@@ -1,27 +1,65 @@
+import { LOCAL } from "@/lib/api"
 import type { Package, Revision } from "@/lib/api-types"
 import type { LibraryInput } from "./model"
 
-export type InstalledRow = { key: string; machineId: string; online: boolean; machine: string; project: string; directory: string; commit: string }
+export type InstalledRow = { key: string; machineId: string; online: boolean; machine: string; project: string; directory: string; module: string; commit: string }
 
 const sameModule = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 
-// One row per project per machine. A project's harness launches add no rows.
-export function installedIn(inputs: LibraryInput[], module: string): InstalledRow[] {
+// One row per project per machine, for every source of the package. A project's harness launches add no rows.
+export function installedIn(inputs: LibraryInput[], modules: string[]): InstalledRow[] {
   const rows = inputs.flatMap((input) =>
-    input.projects.flatMap((row) => {
-      const pin = row.packages.find((pkg) => sameModule(pkg.module, module) && pkg.commit !== "")
-      if (!pin) return []
-      return [{ key: `${input.machine.id}\0${row.directory}`, machineId: input.machine.id, online: input.machine.online !== false && row.available, machine: input.machine.name, project: row.name || row.directory, directory: row.directory, commit: pin.commit }]
-    }),
+    input.projects.flatMap((row) =>
+      row.packages
+        .filter((pkg) => modules.some((module) => sameModule(pkg.module, module)) && pkg.commit !== "")
+        .map((pin) => ({ key: `${input.machine.id}\0${row.directory}\0${pin.module}`, machineId: input.machine.id, online: input.machine.online !== false && row.available, machine: input.machine.name, project: row.name || row.directory, directory: row.directory, module: pin.module, commit: pin.commit })),
+    ),
   )
   return rows.sort((a, b) => a.machine.localeCompare(b.machine) || a.project.localeCompare(b.project) || a.directory.localeCompare(b.directory))
 }
 
-// The shown commit first, then every commit of this module in any library. Several entries open the version popup.
-export function packageVersions(inputs: LibraryInput[], module: string, current: string): string[] {
-  const commits = [current]
-  for (const input of inputs) for (const pkg of input.packages) if (sameModule(pkg.module, module)) commits.push(pkg.commit)
-  return [...new Set(commits.filter((commit) => commit !== ""))]
+export type VersionRow = { key: string; module: string; commit: string; projects: number; machines: string[]; seen: string }
+
+// Every version any library knows, those in use first and most recently used on top.
+export function packageVersions(inputs: LibraryInput[], modules: string[]): VersionRow[] {
+  const versions = new Map<string, VersionRow>()
+  const version = (module: string, commit: string) => {
+    const key = `${module.toLowerCase()}@${commit}`
+    let row = versions.get(key)
+    if (!row) versions.set(key, (row = { key, module, commit, projects: 0, machines: [], seen: "" }))
+    return row
+  }
+  const included = (module: string) => modules.some((other) => sameModule(other, module))
+  for (const input of inputs) {
+    for (const pkg of input.packages) if (included(pkg.module) && pkg.commit) version(pkg.module, pkg.commit)
+    for (const project of input.projects) {
+      for (const pin of project.packages) {
+        if (!included(pin.module) || !pin.commit) continue
+        const row = version(pin.module, pin.commit)
+        row.projects += 1
+        if (!row.machines.includes(input.machine.name)) row.machines.push(input.machine.name)
+        if ((Date.parse(project.last_used) || 0) > (Date.parse(row.seen) || 0)) row.seen = project.last_used
+      }
+    }
+  }
+  return [...versions.values()].sort((a, b) => (Date.parse(b.seen) || 0) - (Date.parse(a.seen) || 0) || b.projects - a.projects || a.key.localeCompare(b.key))
+}
+
+// What the gateway needs to ask GitHub about one source. Undefined for a package that is not on GitHub.
+export function latestRequest(inputs: LibraryInput[], module: string) {
+  const [host, owner, repo, ...rest] = module.split("/")
+  if (host?.toLowerCase() !== "github.com" || !owner || !repo) return undefined
+  const installed = installedIn(inputs, [module])
+  const record = inputs.flatMap((input) => input.packages).find((pkg) => sameModule(pkg.module, module))
+  return {
+    module,
+    owner: record?.owner || owner,
+    repo: record?.repo || repo,
+    path: record?.path ?? rest.join("/"),
+    pins: [...new Set(installed.map((row) => row.commit))].sort(),
+    // A machine using the package is the likeliest to hold GitHub credentials for it.
+    machine: installed.find((row) => row.online)?.machineId ?? LOCAL,
+  }
 }
 
 export function packageRecord(inputs: LibraryInput[], module: string, commit: string): Package | undefined {
@@ -44,7 +82,7 @@ export function agentpackRevisions(inputs: LibraryInput[], id: string): Revision
       for (const revision of revisions ?? []) {
         if (seen.has(revision.id)) continue
         const packages = (revision.package_ids ?? []).flatMap((pid) => input.packages.filter((pkg) => pkg.id === pid))
-        seen.set(revision.id, { revision, machine: input.machine.name, packages })
+        seen.set(revision.id, { revision, machine: revision.source_node || input.machine.name, packages })
       }
     }
   }
@@ -68,15 +106,15 @@ export function revisionChanges(selected: RevisionEntry, previous: RevisionEntry
   return changes
 }
 
-export type MCPUse = { machine: string; project: string; directory: string; status: string; integrity: string }
+export type MCPUse = { machine: string; project: string; directory: string; status: string; integrity: string; version: string }
 
 // Status and integrity belong to each project's own record, so they are read per project.
-export function mcpUses(inputs: LibraryInput[], server: { name: string; launcher: string; package: string; version: string }): MCPUse[] {
+export function mcpUses(inputs: LibraryInput[], server: { name: string }): MCPUse[] {
   const uses = inputs.flatMap((input) =>
     input.projects.flatMap((row) =>
       row.mcp
-        .filter((mcp) => mcp.name === server.name && mcp.launcher === server.launcher && mcp.package === server.package && mcp.version === server.version)
-        .map((mcp) => ({ machine: input.machine.name, project: row.name || row.directory, directory: row.directory, status: mcp.status, integrity: mcp.integrity })),
+        .filter((mcp) => mcp.name === server.name)
+        .map((mcp) => ({ machine: input.machine.name, project: row.name || row.directory, directory: row.directory, status: mcp.status, integrity: mcp.integrity, version: mcp.version })),
     ),
   )
   return uses.sort((a, b) => a.machine.localeCompare(b.machine) || a.project.localeCompare(b.project) || a.directory.localeCompare(b.directory))

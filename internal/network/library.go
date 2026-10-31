@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
+	"github.com/olegpustovit/agentpack/internal/github"
 	"github.com/olegpustovit/agentpack/internal/registry"
 )
 
@@ -92,6 +95,37 @@ func (g *Gateway) registerLibrary(mux *http.ServeMux) {
 		libraryResponse(w, value, err)
 	})
 	g.registerLibraryDrafts(mux)
+	mux.HandleFunc("GET /api/library/agentpacks/{id}/conflict", func(w http.ResponseWriter, r *http.Request) {
+		value, err := library.Store.Conflict(r.PathValue("id"))
+		libraryResponse(w, value, err)
+	})
+	mux.HandleFunc("POST /api/library/agentpacks/{id}/resolve", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Heads   []string          `json:"heads"`
+			Choices map[string]string `json:"choices"`
+		}
+		if !readJSON(w, r, &input) {
+			return
+		}
+		node, _ := os.Hostname()
+		value, err := library.Store.Resolve(r.PathValue("id"), input.Heads, input.Choices, node)
+		libraryResponse(w, value, err)
+	})
+	mux.HandleFunc("POST /api/library/latest", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Owner string   `json:"owner"`
+			Repo  string   `json:"repo"`
+			Path  string   `json:"path"`
+			Pins  []string `json:"pins"`
+		}
+		if !readJSON(w, r, &input) {
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		value, err := github.LatestVersion(ctx, nil, input.Owner, input.Repo, input.Path, input.Pins)
+		respond(w, value, err)
+	})
 	mux.HandleFunc("GET /api/library/agentpacks/{id}/revisions/{revision}/restore-preview", func(w http.ResponseWriter, r *http.Request) {
 		directory := r.URL.Query().Get("directory")
 		if !g.knownDirectory(directory) {
@@ -169,13 +203,16 @@ func libraryPeerRoute(method, path string) bool {
 		if parts[2] == "draft-state" {
 			return method == "POST"
 		}
-		return method == "GET" && (parts[2] == "packages" || parts[2] == "agentpacks") || method == "POST" && parts[2] == "agentpacks"
+		return method == "GET" && (parts[2] == "packages" || parts[2] == "agentpacks") || method == "POST" && (parts[2] == "agentpacks" || parts[2] == "latest")
 	}
 	if parts[2] != "agentpacks" {
 		return false
 	}
 	if len(parts) == 4 {
 		return method == "GET" || method == "PATCH" || method == "DELETE"
+	}
+	if len(parts) == 5 {
+		return method == "GET" && parts[4] == "conflict" || method == "POST" && parts[4] == "resolve"
 	}
 	return len(parts) == 7 && parts[4] == "revisions" && (method == "GET" && parts[6] == "restore-preview" || method == "POST" && parts[6] == "restore")
 }

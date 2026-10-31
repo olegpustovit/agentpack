@@ -1,7 +1,12 @@
+import { useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { getRouteApi } from "@tanstack/react-router"
 import { Boxes } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Hash, Inspector, InspectorHead, KeyValue, Section } from "@/components/kit/data"
-import { Empty } from "@/components/kit/feedback"
+import { Banner, Empty } from "@/components/kit/feedback"
+import { hud } from "@/lib/hud"
+import { errorText, resolveConflict } from "./mutations"
+import { conflictQuery } from "./queries"
 import { plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { agentpackRevisions, revisionChanges } from "./inspect"
@@ -16,6 +21,45 @@ import { RestoreSheet } from "./restore-sheet"
 const signs = { add: "+", update: "~", remove: "−" } as const
 
 const route = getRouteApi("/_app/library/agentpack/$id")
+
+// Two machines changed the same value differently. Nothing is overwritten until someone picks.
+function ConflictPanel({ machine, id }: { machine: string; id: string }) {
+  const queryClient = useQueryClient()
+  const { data } = useQuery(conflictQuery(machine, id))
+  const [choices, setChoices] = useState<Record<string, string>>({})
+  const resolve = useMutation({
+    mutationFn: () => resolveConflict(machine, id, data?.heads ?? [], choices),
+    onSuccess: () => {
+      hud.success("Conflict resolved")
+      void queryClient.invalidateQueries({ queryKey: ["m"] })
+    },
+    onError: (error) => hud.error(`Couldn't resolve the conflict: ${errorText(error)}`),
+  })
+  if (!data?.fields.length) return null
+  const complete = data.fields.every((field) => choices[field.path])
+  return (
+    <Section title="Conflict" className="col-span-full">
+      <Banner tone="warn">Two machines changed this agentpack differently. Choose which value to keep; the other stays in the history.</Banner>
+      <div className="flex flex-col">
+        {data.fields.map((field) => (
+          <div key={field.path} className="flex min-w-0 flex-wrap items-center gap-(--s3) border-b-[0.5px] border-(--sep) py-(--s2)">
+            <span className="min-w-40 flex-1 truncate" title={field.name}>{field.name}</span>
+            {data.heads.map((head) => (
+              <Button key={head} type="button" size="sm" variant={choices[field.path] === head ? "primary" : "ghost"} aria-pressed={choices[field.path] === head} onClick={() => setChoices({ ...choices, [field.path]: head })}>
+                <code>{field.values[head]}</code>
+              </Button>
+            ))}
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-end pt-(--s3)">
+        <Button type="button" variant="primary" disabled={!complete || resolve.isPending} onClick={() => resolve.mutate()}>
+          Resolve conflict
+        </Button>
+      </div>
+    </Section>
+  )
+}
 
 // `revision` picks the selected revision; no value, or one this agentpack lacks, shows the newest.
 export function AgentpackInspector({
@@ -62,6 +106,7 @@ export function AgentpackInspector({
   return (
     <Inspector>
       <Failures failures={failures} />
+      {pack.conflict && holders[0] && <ConflictPanel machine={holders[0]} id={id} />}
       <InspectorHead
         icon={<Boxes aria-hidden />}
         title={pack.name}

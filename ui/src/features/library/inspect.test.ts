@@ -44,7 +44,7 @@ describe("installedIn", () => {
       { machine: local, packages: [], agentpacks: [], projects: [folder("/a/one", [pin(alpha, "abc1234")]), folder("/a/two", [pin(alpha, "abc1234")])] },
       { machine: oracle, packages: [], agentpacks: [], projects: [folder("/b/one", [pin(alpha, "abc1234")]), folder("/b/none")] },
     ]
-    const rows = installedIn(inputs, alpha)
+    const rows = installedIn(inputs, [alpha])
     expect(rows.map((row) => `${row.machine}:${row.project}`)).toEqual(["host-a:one", "host-a:two", "oracle-vm:one"])
     expect(new Set(rows.map((row) => row.key)).size).toBe(rows.length)
   })
@@ -53,17 +53,19 @@ describe("installedIn", () => {
     const inputs: LibraryInput[] = [
       { machine: local, packages: [], agentpacks: [], projects: [folder("/a/one", [pin("github.com/acme/beta", "abc1234"), pin(alpha, "")])] },
     ]
-    expect(installedIn(inputs, alpha)).toEqual([])
+    expect(installedIn(inputs, [alpha])).toEqual([])
   })
 })
 
 describe("packageVersions", () => {
-  it("lists the shown commit first, once each, across machines", () => {
+  it("lists each version once across machines, those in use first", () => {
     const inputs: LibraryInput[] = [
       { machine: local, packages: [pkg({ commit: "aaa1111" }), pkg({ module: "github.com/acme/beta", commit: "zzz9999" })], agentpacks: [], projects: [] },
       { machine: oracle, packages: [pkg({ commit: "bbb2222" }), pkg({ commit: "aaa1111" })], agentpacks: [], projects: [] },
     ]
-    expect(packageVersions(inputs, alpha, "bbb2222")).toEqual(["bbb2222", "aaa1111"])
+    expect(packageVersions(inputs, [alpha]).map((row) => row.commit).sort()).toEqual(["aaa1111", "bbb2222"])
+    inputs[1]!.projects = [{ ...folder("/b/one", [pin(alpha, "bbb2222")]), last_used: "2026-10-30T10:00:00Z" }]
+    expect(packageVersions(inputs, [alpha])[0]).toMatchObject({ commit: "bbb2222", projects: 1, machines: ["oracle-vm"] })
     expect(packageRecord(inputs, alpha, "bbb2222")?.commit).toBe("bbb2222")
   })
 })
@@ -113,14 +115,12 @@ describe("mcpUses", () => {
   const server = { name: "foo", launcher: "npm", package: "@acme/foo", version: "1.2.3" }
   const mcp = (status: string, integrity: string): ProjectMCP => ({ ...server, source: "", status, integrity, host: "", reason: "" })
 
-  it("matches the definition and reads status per project", () => {
+  it("finds every use of the name and reads version and status per project", () => {
     const inputs: LibraryInput[] = [
       { machine: local, packages: [], agentpacks: [], projects: [folder("/a/one", [], [mcp("pinned", "sha512-a")]), folder("/a/two", [], [mcp("unpinned", "")])] },
       { machine: oracle, packages: [], agentpacks: [], projects: [folder("/b/one", [], [{ ...mcp("pinned", "sha512-b"), version: "9.9.9" }])] },
     ]
-    expect(mcpUses(inputs, server)).toEqual([
-      { machine: "host-a", project: "one", directory: "/a/one", status: "pinned", integrity: "sha512-a" },
-      { machine: "host-a", project: "two", directory: "/a/two", status: "unpinned", integrity: "" },
-    ])
+    const uses = mcpUses(inputs, server)
+    expect(uses.map((use) => [use.project, use.status, use.version])).toEqual([["one", "pinned", "1.2.3"], ["two", "unpinned", "1.2.3"], ["one", "pinned", "9.9.9"]])
   })
 })

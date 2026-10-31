@@ -116,19 +116,52 @@ test.beforeEach(async ({ page }) => {
 test("Installed in lists one row per project per machine: 4 projects × 3 harnesses on 3 machines is 12 rows, not 36", async ({ page }) => {
   await page.goto(`/library/package/${alpha}`)
   await expect(page.getByText("12 projects", { exact: true })).toBeVisible()
-  await expect(page.locator('[data-slot="data-grid"] tbody tr')).toHaveCount(12)
+  await expect(page.getByRole("table", { name: "Installed in" }).locator("tbody tr")).toHaveCount(12)
 })
 
-test("the version popup switches the shown commit and marks the other rows", async ({ page }) => {
+test("the latest version from GitHub offers an update per project and for all of them", async ({ page }) => {
+  const latest = "9999aaa" + "0".repeat(33)
+  await page.route("**/api/library/latest**", (route) => route.fulfill({ json: { commit: latest, committed_at: "2026-10-30T10:00:00Z", current: [], exact: true } }))
+  const posted: string[] = []
+  await page.route("**/api/packages**", (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    posted.push((route.request().postDataJSON() as { spec: string }).spec)
+    return route.fulfill({ json: { installed: true } })
+  })
   await page.goto(`/library/package/${alpha}`)
-  const details = page.locator("dl").first()
-  await expect(details).toContainText("abcd123")
+  const versions = page.getByRole("table", { name: "Versions" })
+  await expect(versions.getByRole("row", { name: /Latest/ })).toContainText("acme/alpha")
+  const installed = page.getByRole("table", { name: "Installed in" })
+  await expect(installed.getByRole("button", { name: "Update to 9999aaa" })).toHaveCount(12)
+  await page.getByRole("button", { name: "Update 12 projects" }).click()
+  await expect.poll(() => posted.length).toBe(12)
+  expect(new Set(posted)).toEqual(new Set([`${alpha}@${latest}`]))
+})
 
-  await page.getByRole("button", { name: "2 versions" }).click()
-  await page.getByRole("menuitem", { name: "9999aaa" }).click()
+test("a GitHub lookup that fails keeps the versions the machines know", async ({ page }) => {
+  await page.route("**/api/library/latest**", (route) => route.fulfill({ status: 500, body: "rate limited" }))
+  await page.goto(`/library/package/${alpha}`)
+  await expect(page.getByRole("alert").filter({ hasText: "Couldn't reach GitHub" })).toBeVisible()
+  await expect(page.getByRole("table", { name: "Versions" }).locator("tbody tr")).toHaveCount(2)
+})
 
-  await expect(details).toContainText("9999aaa")
-  await expect(page.getByRole("button", { name: "Update", exact: true })).toHaveCount(12)
+test("a conflict shows both values and sends the choices, and nothing resolves until each has one", async ({ page }) => {
+  const revisions = [rev("h1", "left", "2026-10-20T10:00:00Z", []), rev("h2", "right", "2026-10-21T10:00:00Z", [])]
+  await page.route("**/api/library/agentpacks**", (route) => route.fulfill({ json: [{ agentpack: { id: "pk1", name: "Pack", revisions: ["h1", "h2"], heads: ["h1", "h2"] }, revisions }] }))
+  let sent: unknown
+  await page.route("**/api/library/agentpacks/pk1/conflict**", (route) =>
+    route.fulfill({ json: { heads: ["h1", "h2"], fields: [{ path: "lock:packages/x", name: "github.com/acme/x", base: "aaa", values: { h1: "left111", h2: "right22" } }] } }),
+  )
+  await page.route("**/api/library/agentpacks/pk1/resolve**", (route) => {
+    sent = route.request().postDataJSON()
+    return route.fulfill({ json: { id: "merged" } })
+  })
+  await page.goto("/library/agentpack/pk1")
+  const resolve = page.getByRole("button", { name: "Resolve conflict" })
+  await expect(resolve).toBeDisabled()
+  await page.getByRole("button", { name: "right22" }).click()
+  await resolve.click()
+  await expect.poll(() => sent).toEqual({ heads: ["h1", "h2"], choices: { "lock:packages/x": "h2" } })
 })
 
 test("MCP inspector shows launcher, status, version and one row per project", async ({ page }) => {

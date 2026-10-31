@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useRef, useState } from "react"
 import { Link, getRouteApi, useMatchRoute } from "@tanstack/react-router"
-import { Boxes, Plug, Puzzle, Sparkles, type LucideIcon } from "lucide-react"
+import { Boxes, Plug, Puzzle, RefreshCw, Sparkles, type LucideIcon } from "lucide-react"
 import { PopupSelect } from "@/components/kit/forms"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
@@ -10,7 +10,10 @@ import { useMachineQueries, useMachines } from "@/features/machines/queries"
 import { projectsQuery } from "@/features/sessions/queries"
 import { StatusSlot } from "@/features/status/status-bar"
 import { plural, shortHash } from "@/lib/format"
+import { cn } from "@/lib/utils"
+import { installedIn } from "./inspect"
 import { agentpacksQuery, packagesQuery } from "./queries"
+import { useLatest } from "./use-library"
 import { AddPackageSheet, SaveAgentpackSheet } from "./add-package-sheet"
 import { PendingInstalls } from "./pending-installs"
 import {
@@ -25,6 +28,9 @@ import {
 } from "./model"
 
 const route = getRouteApi("/_app/library")
+
+// Three toolbar actions only fit a phone with their short names.
+const wideOnly = "max-[760px]:hidden"
 
 const filterTabs: { value: LibraryFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -44,18 +50,18 @@ const sortItems: { value: LibrarySort; label: string }[] = [
 const glyphs: Record<LibraryType, LucideIcon> = { skill: Sparkles, plugin: Puzzle, mcp: Plug, agentpack: Boxes }
 
 // Second line. Only real fields: commit, project count, machines (or launcher and pin for MCP).
-function detailLine(item: LibraryItem): string {
+function detailLine(item: LibraryItem, updatable: boolean): string {
   const projects = plural(item.projects.length, "project")
   if (item.type === "mcp") {
     return [item.launcher, item.version ? `pinned ${item.version}` : "unpinned", projects].filter(Boolean).join(" · ")
   }
   if (item.type === "agentpack") {
-    return [shortHash(item.commit), plural(item.revisions, "revision"), item.machines.join(", ")].filter(Boolean).join(" · ")
+    return [item.conflict ? "Conflict" : shortHash(item.commit), plural(item.revisions, "revision"), item.machines.join(", ")].filter(Boolean).join(" · ")
   }
-  return [shortHash(item.commit), projects, item.machines.join(", ")].filter(Boolean).join(" · ")
+  return [updatable ? "Update available" : item.versions > 1 ? plural(item.versions, "version") : shortHash(item.commit), projects, item.machines.join(", ")].filter(Boolean).join(" · ")
 }
 
-function LibraryRow({ item }: { item: LibraryItem }) {
+function LibraryRow({ item, updatable }: { item: LibraryItem; updatable: boolean }) {
   const matchRoute = useMatchRoute()
   const Glyph = glyphs[item.type]
   const selected =
@@ -63,7 +69,7 @@ function LibraryRow({ item }: { item: LibraryItem }) {
       ? matchRoute({ to: "/library/agentpack/$id", params: { id: item.id } })
       : item.type === "mcp"
         ? matchRoute({ to: "/library/mcp/$name", params: { name: item.name } })
-        : matchRoute({ to: "/library/package/$", params: { _splat: item.module } })
+        : item.sources.some((module) => matchRoute({ to: "/library/package/$", params: { _splat: module } }))
   const link =
     item.type === "agentpack" ? (
       <Link to="/library/agentpack/$id" params={{ id: item.id }} search={true} />
@@ -78,7 +84,7 @@ function LibraryRow({ item }: { item: LibraryItem }) {
       <Glyph aria-hidden className="shrink-0 text-(--fg2) sel:text-(--accent-fg)" />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate">{item.name}</span>
-        <span className="truncate text-(length:--fs-sm) text-(--fg2) sel:text-(--accent-fg)">{detailLine(item)}</span>
+        <span className="truncate text-(length:--fs-sm) text-(--fg2) sel:text-(--accent-fg)">{detailLine(item, updatable)}</span>
       </span>
     </SourceRow>
   )
@@ -114,6 +120,23 @@ export function LibraryList() {
     })),
   )
   const view = arrangeLibrary(items, { filter, sort, query: deferredQuery })
+  const inputs = machines.map((machine) => ({
+    machine,
+    packages: packages.byMachine[machine.id]?.data ?? [],
+    agentpacks: agentpacks.byMachine[machine.id]?.data ?? [],
+    projects: projects.byMachine[machine.id]?.data ?? [],
+  }))
+  // Only installed packages can be updated, and each check is a GitHub request.
+  const installedModules = [...new Set(inputs.flatMap((input) => input.projects.flatMap((row) => row.packages.map((pin) => pin.module))))]
+  const [checking, setChecking] = useState(false)
+  const latest = useLatest(inputs, installedModules, checking)
+  const outdated = new Set(installedIn(inputs, installedModules).filter((row) => {
+    const known = latest.byModule[row.module.toLowerCase()]
+    return known && !known.current.includes(row.commit)
+  }).map((row) => row.module.toLowerCase()))
+  const updatable = (item: LibraryItem) => (item.type === "skill" || item.type === "plugin") && item.sources.some((module) => outdated.has(module.toLowerCase()))
+  const updates = items.filter(updatable).length
+  const checked = checking && !latest.checking ? (updates ? plural(updates, "update") : "Up to date") : undefined
   // Status bar totals cover the whole library, so search and type do not change them.
   const totals = arrangeLibrary(items, { filter: "all", sort: "type", query: "" }).counts
   const loading = packages.firstLoadPending || agentpacks.firstLoadPending || projects.firstLoadPending
@@ -139,14 +162,18 @@ export function LibraryList() {
       <StatusSlot>{`${plural(totals.all, "item")} · ${plural(totals.skill, "skill")} · ${plural(totals.plugin, "plugin")} · ${totals.mcp} MCP`}</StatusSlot>
       <ToolbarTitle title="Library" subtitle={`${plural(totals.all, "item")} on ${plural(machines.length, "machine")}`} />
       <ToolbarSlot>
-        <Button type="button" onClick={() => void navigate({ search: (prev) => ({ ...prev, add: "1" }) })}>
-          Add package…
+        <Button type="button" aria-label={checked ?? "Check for updates"} disabled={latest.checking} onClick={() => (checking ? latest.refetch() : setChecking(true))}>
+          <RefreshCw aria-hidden className={cn(latest.checking && "animate-spin motion-reduce:animate-none")} />
+          {checked ?? <><span className={wideOnly}>Check for updates</span><span className="min-[761px]:hidden">Updates</span></>}
         </Button>
-        <Button type="button" onClick={() => setSaving(true)}>
-          Save agentpack…
+        <Button type="button" aria-label="Add package…" onClick={() => void navigate({ search: (prev) => ({ ...prev, add: "1" }) })}>
+          Add<span className={wideOnly}> package</span>…
+        </Button>
+        <Button type="button" aria-label="Save agentpack…" onClick={() => setSaving(true)}>
+          Save<span className={wideOnly}> agentpack</span>…
         </Button>
       </ToolbarSlot>
-      <div className="flex shrink-0 flex-col gap-(--s3) p-(--s3)">
+      <div className="@container flex shrink-0 flex-col gap-(--s3) p-(--s3)">
         <SearchField
             aria-label="Search library"
             placeholder="Search"
@@ -166,7 +193,7 @@ export function LibraryList() {
           {filterTabs.map((tab) => (
             <SegmentedControlItem key={tab.value} value={tab.value} className="min-w-0 flex-1 gap-(--s1) px-(--s1)">
               {tab.label}
-              <span className="text-(length:--fs-xs) text-(--fg3)">{view.counts[tab.value]}</span>
+              <span className="text-(length:--fs-xs) text-(--fg3) @max-[22rem]:hidden">{view.counts[tab.value]}</span>
             </SegmentedControlItem>
           ))}
         </SegmentedControl>
@@ -198,7 +225,6 @@ export function LibraryList() {
             {`${offlineWithData.map((machine) => machine.name).join(", ")} ${offlineWithData.length === 1 ? "is" : "are"} offline. Showing last known library.`}
           </Banner>
         )}
-        {loading && [0, 1, 2].map((index) => <RowSkeleton key={index} lines={2} />)}
         {!loading && view.groups.length === 0 &&
           (items.length === 0 ? (
             <Empty title="Nothing in the library yet">
@@ -216,10 +242,12 @@ export function LibraryList() {
               </GroupHeader>
             )}
             {group.items.map((item) => (
-              <LibraryRow key={item.key} item={item} />
+              <LibraryRow key={item.key} item={item} updatable={updatable(item)} />
             ))}
           </div>
         ))}
+        {/* Below what has loaded, so rows do not jump as each slower machine answers. */}
+        {loading && [0, 1, 2].map((index) => <RowSkeleton key={index} lines={2} />)}
       </SourceList>
       <SaveAgentpackSheet open={saving} onOpenChange={setSaving} />
       <AddPackageSheet

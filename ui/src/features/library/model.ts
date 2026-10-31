@@ -26,10 +26,18 @@ type Common = {
 }
 
 // `module` is the Go module path. `commit` is the version the list shows.
-export type PackageItem = Common & { type: "skill" | "plugin"; module: string; commit: string }
+export type PackageItem = Common & {
+  type: "skill" | "plugin"
+  module: string
+  commit: string
+  // Every module published under this name: a moved repository or folder is one package to the person using it.
+  sources: string[]
+  // Distinct module and commit pairs across the sources.
+  versions: number
+}
 export type MCPItem = Common & { type: "mcp"; launcher: string; package: string; version: string }
 // `commit` is the newest revision id, so commit-prefix search works the same as for packages.
-export type AgentpackItem = Common & { type: "agentpack"; id: string; commit: string; revisions: number }
+export type AgentpackItem = Common & { type: "agentpack"; id: string; commit: string; revisions: number; conflict: boolean }
 export type LibraryItem = PackageItem | MCPItem | AgentpackItem
 
 export type LibraryGroup = { key: string; label?: string; items: LibraryItem[] }
@@ -67,6 +75,15 @@ function finish(key: string, name: string, g: Gather): Common {
   return { key, name, machines: [...g.machines].sort(), projects: [...g.projects.values()], updated: g.updated }
 }
 
+// Stored names are often empty, and a module path says nothing in a narrow list. A folder named after
+// its role says nothing either, so those use the repository.
+export function packageName(module: string, name?: string): string {
+  if (name && !name.includes("/")) return name
+  const parts = (name || module).split("/").filter(Boolean)
+  const last = parts.at(-1) ?? module
+  return ["plugin", "plugins", "skill", "skills"].includes(last.toLowerCase()) && parts.length > 1 ? parts.at(-2)! : last
+}
+
 type Pin = { module: string; commit: string; name: string; kind: string; seen: string; project: [string, LibraryProject] }
 
 // One row per module. The pin used most recently wins; a module
@@ -78,8 +95,10 @@ function packageItems(inputs: LibraryInput[]): PackageItem[] {
     for (const pkg of input.packages) {
       const key = pkg.module && pkg.commit ? `${pkg.module.toLowerCase()}@${pkg.commit}` : pkg.id
       const hit = stored.get(key)
-      if (hit) hit.machines.add(input.machine.name)
-      else stored.set(key, { pkg, machines: new Set([input.machine.name]) })
+      // Replication gives every machine every record, so where it came from is what says something.
+      const origin = pkg.source_node || input.machine.name
+      if (hit) hit.machines.add(origin)
+      else stored.set(key, { pkg, machines: new Set([origin]) })
     }
     for (const row of input.projects) {
       for (const pin of row.packages) {
@@ -106,8 +125,8 @@ function packageItems(inputs: LibraryInput[]): PackageItem[] {
     const first = group.stored[0]?.pkg
     const record = chosen ? stored.get(`${module}@${chosen.commit}`)?.pkg : undefined
     const picked = chosen
-      ? { module: chosen.module, commit: chosen.commit, name: record?.name || chosen.name || chosen.module, kind: record?.kind || chosen.kind }
-      : first && { module: first.module, commit: first.commit, name: first.name || first.path || first.module, kind: first.kind }
+      ? { module: chosen.module, commit: chosen.commit, name: packageName(chosen.module, record?.name || chosen.name), kind: record?.kind || chosen.kind }
+      : first && { module: first.module, commit: first.commit, name: packageName(first.module, first.name), kind: first.kind }
     if (!picked) continue
 
     const g = gather()
@@ -121,26 +140,51 @@ function packageItems(inputs: LibraryInput[]): PackageItem[] {
       type: picked.kind === "plugin" ? "plugin" : "skill",
       module: picked.module,
       commit: picked.commit,
+      sources: [picked.module],
+      versions: new Set([...group.stored.map((entry) => entry.pkg.commit), ...group.pins.map((pin) => pin.commit)]).size,
     })
   }
-  return items
+  return mergeSources(items)
+}
+
+// One row per name and kind. The most recently used source speaks for the row; the inspector lists them all.
+function mergeSources(items: PackageItem[]): PackageItem[] {
+  const groups = new Map<string, PackageItem[]>()
+  for (const item of items) {
+    const key = `pkg:${item.type}:${item.name.toLowerCase()}`
+    groups.set(key, [...(groups.get(key) ?? []), item])
+  }
+  return [...groups].map(([key, group]) => {
+    const [primary] = group.sort((a, b) => time(b.updated) - time(a.updated) || a.module.localeCompare(b.module)) as [PackageItem, ...PackageItem[]]
+    const projects = new Map(group.flatMap((item) => item.projects.map((project) => [`${project.machine}\0${project.directory}`, project] as const)))
+    return {
+      ...primary,
+      key,
+      machines: [...new Set(group.flatMap((item) => item.machines))].sort(),
+      projects: [...projects.values()],
+      sources: group.flatMap((item) => item.sources),
+      versions: group.reduce((sum, item) => sum + item.versions, 0),
+    }
+  })
 }
 
 // One item per agentpack id. Revisions merge by id.
 function agentpackItems(inputs: LibraryInput[]): AgentpackItem[] {
-  const packs = new Map<string, { name: string; revisions: Map<string, Revision>; g: Gather }>()
+  const packs = new Map<string, { name: string; revisions: Map<string, Revision>; conflict: boolean; g: Gather }>()
   for (const input of inputs) {
     for (const { agentpack, revisions } of input.agentpacks) {
       let pack = packs.get(agentpack.id)
-      if (!pack) packs.set(agentpack.id, (pack = { name: agentpack.name, revisions: new Map(), g: gather() }))
-      pack.g.machines.add(input.machine.name)
+      if (!pack) packs.set(agentpack.id, (pack = { name: agentpack.name, revisions: new Map(), conflict: false, g: gather() }))
+      pack.conflict ||= (agentpack.heads?.length ?? 0) > 1
       for (const revision of revisions ?? []) {
         if (!pack.revisions.has(revision.id)) pack.revisions.set(revision.id, revision)
         pack.g.updated = newer(pack.g.updated, revision.created_at)
-        if (revision.project) {
-          addProject(pack.g, [`${input.machine.id}\0${revision.project}`, { machine: input.machine.name, name: revision.project, directory: revision.project }])
-        }
+        // Replicated revisions reach every machine; the one that saved it is the one to name.
+        const origin = revision.source_node || input.machine.name
+        pack.g.machines.add(origin)
+        if (revision.project) addProject(pack.g, [`${origin}\0${revision.project}`, { machine: origin, name: revision.project, directory: revision.project }])
       }
+      if (!revisions?.length) pack.g.machines.add(input.machine.name)
     }
   }
   return [...packs].map(([id, pack]): AgentpackItem => {
@@ -151,19 +195,21 @@ function agentpackItems(inputs: LibraryInput[]): AgentpackItem[] {
       id,
       commit: newest?.id ?? "",
       revisions: pack.revisions.size,
+      conflict: pack.conflict,
     }
   })
 }
 
-// MCP servers merge by name plus definition (launcher, package, version) across projects and machines.
+// One row per server name. The definition used most recently speaks for it; the inspector shows each project's own.
 function mcpItems(inputs: LibraryInput[]): MCPItem[] {
-  const servers = new Map<string, { server: ProjectMCP; g: Gather }>()
+  const servers = new Map<string, { server: ProjectMCP; seen: string; g: Gather }>()
   for (const input of inputs) {
     for (const row of input.projects) {
       for (const server of row.mcp) {
-        const key = `mcp:${server.name}\0${server.launcher}\0${server.package}\0${server.version}`
+        const key = `mcp:${server.name}`
         let entry = servers.get(key)
-        if (!entry) servers.set(key, (entry = { server, g: gather() }))
+        if (!entry) servers.set(key, (entry = { server, seen: row.last_used, g: gather() }))
+        if (time(row.last_used) > time(entry.seen)) Object.assign(entry, { server, seen: row.last_used })
         addProject(entry.g, projectOf(input, row))
         entry.g.updated = newer(entry.g.updated, row.last_used)
       }
@@ -192,7 +238,7 @@ export function parseSort(value: string | undefined): LibrarySort {
 
 // `q` is lowercase and trimmed. Module matches the npm package for MCP servers.
 function matches(item: LibraryItem, q: string): boolean {
-  const module = item.type === "mcp" ? item.package : item.type === "agentpack" ? "" : item.module
+  const module = item.type === "mcp" ? item.package : item.type === "agentpack" ? "" : item.sources.join(" ")
   const commit = item.type === "mcp" ? "" : item.commit
   return (
     item.name.toLowerCase().includes(q) ||

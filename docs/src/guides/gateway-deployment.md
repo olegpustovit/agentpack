@@ -59,13 +59,15 @@ definition files, and rolls them back if preparation fails. An interrupted resto
 is recovered under the definition lock on the next mutation or launch; preflight
 reports it without changing files.
 
-Library replication requires explicit enrollment on both peers as well as the
-existing Tailscale sharing policy. The gateway checks enrolled peers every 30 seconds
-and exposes the last contact/error and durable object receipts. It transfers only
+Your own machines keep one library: every 30 seconds a gateway enrolls online machines with the same untagged Tailscale owner and exchanges registry objects with them. Tagged machines and other users are never enrolled automatically. A machine removed under Settings → Replication stays out until you enroll it again, and tailnet sharing must be on.
+
+Objects are immutable and named by their SHA-256, and secrets are stripped before hashing, so machines converge on the same objects. Edits made on two machines merge three-way against their common ancestor; every machine computes the identical merge, so they agree without coordinating. When both changed one value differently, nothing is overwritten: the agentpack shows a conflict in the Library until someone chooses a value, and launches keep capturing on their own line of work meanwhile. A deletion wins over a concurrent edit.
+
+The gateway exposes the last contact/error and durable object receipts. It transfers only
 validated registry objects, never local credential bindings, terminal output, or
 arbitrary project files. Transfers currently accept up to 64 MiB of metadata per
 batch. Deletion creates a retained tombstone; physical collection waits for every
-enrolled peer to acknowledge it. Concurrent revisions remain separate heads.
+enrolled peer to acknowledge it.
 
 Offline installs are local drafts. Review rechecks the destination's identity,
 pins, and current diff before showing a confirmation; reconnect never installs

@@ -1,6 +1,8 @@
 package grok
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -66,6 +68,26 @@ func loadSharedCredentials(home string) error {
 		}
 	}
 	return nil
+}
+
+// Grok rotates its refresh token when the access token expires, so a token refreshed in a throwaway
+// home must be kept: the old one is already spent, and losing the new one signs the user out.
+func keepRefreshedCredentials(home string) {
+	shared, err := paths.SharedGrokCredentialsDir()
+	if err != nil {
+		return
+	}
+	for _, name := range credentialFiles {
+		local, global := filepath.Join(home, name), filepath.Join(shared, name)
+		data, err := os.ReadFile(local)
+		if err != nil || !json.Valid(data) {
+			continue
+		}
+		if existing, err := os.ReadFile(global); err == nil && bytes.Equal(existing, data) {
+			continue
+		}
+		_ = copyCredential(local, global)
+	}
 }
 
 func persistCredentials(ctx base.LaunchContext) error {

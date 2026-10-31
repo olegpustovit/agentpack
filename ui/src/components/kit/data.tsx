@@ -29,13 +29,13 @@ export function InspectorHead({
   className?: string;
 }) {
   return (
-    <header className={cn("col-span-full flex min-w-0 items-start gap-(--s5)", className)}>
+    <header className={cn("col-span-full flex min-w-0 items-start gap-(--s5) max-[760px]:flex-wrap", className)}>
       {icon && <span className="grid size-(--bar-h) shrink-0 place-items-center rounded-(--r-pop) bg-(--track) text-(--fg2)">{icon}</span>}
       <div className="min-w-0 flex-1">
         <h1 className="truncate text-(length:--fs-lg) font-semibold text-(--fg)">{title}</h1>
         {subtitle && <p className="truncate text-(length:--fs-sm) text-(--fg2)">{subtitle}</p>}
       </div>
-      {children && <div className="flex shrink-0 items-center gap-(--s3)">{children}</div>}
+      {children && <div className="flex shrink-0 items-center gap-(--s3) max-[760px]:w-full max-[760px]:flex-wrap">{children}</div>}
     </header>
   );
 }

@@ -39,6 +39,8 @@ type Tombstone struct {
 type peerState struct {
 	Peers    []string            `json:"peers"`
 	Receipts map[string][]string `json:"receipts"`
+	// Machines someone removed. Automatic enrollment must not undo that.
+	Left []string `json:"left,omitempty"`
 }
 
 type PeerReplica struct {
@@ -59,6 +61,26 @@ func (s *Store) EnrollPeer(node string) error {
 			return err
 		}
 		state.Peers = appendUnique(state.Peers, node)
+		sort.Strings(state.Peers)
+		state.Left = slices.DeleteFunc(state.Left, func(peer string) bool { return peer == node })
+		return s.writePeerState(state)
+	})
+}
+
+// EnrollOwnMachine enrolls a machine discovered under the same owner, unless someone removed it.
+func (s *Store) EnrollOwnMachine(node string) error {
+	if !peerName.MatchString(node) || node == "." || node == ".." {
+		return fmt.Errorf("invalid peer identity")
+	}
+	return s.withLock(func() error {
+		state, err := s.readPeerState()
+		if err != nil {
+			return err
+		}
+		if slices.Contains(state.Peers, node) || slices.Contains(state.Left, node) {
+			return nil
+		}
+		state.Peers = append(state.Peers, node)
 		sort.Strings(state.Peers)
 		return s.writePeerState(state)
 	})
@@ -87,6 +109,7 @@ func (s *Store) RemovePeer(node string) error {
 		}
 		state.Peers = slices.DeleteFunc(state.Peers, func(peer string) bool { return peer == node })
 		delete(state.Receipts, node)
+		state.Left = appendUnique(state.Left, node)
 		return s.writePeerState(state)
 	})
 }

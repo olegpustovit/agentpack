@@ -83,7 +83,7 @@ test("back and forward step through the views, with each view's URL", async ({ p
     { label: "Sessions", url: "/sessions", rendered: sessionsNav },
     { label: "Library", url: "/library", rendered: libraryNav },
     { label: "Limits", url: "/limits", rendered: limitsGrid },
-    { label: "Machines", url: "/machines/local", rendered: machineList },
+    { label: "Machines", url: "/machines/topology", rendered: topologyHeading },
     { label: "Settings", url: "/settings/general", rendered: settingsNav },
   ] as const
 

@@ -6,6 +6,7 @@ import { DataGrid, DataGridCell, DataGridHeaderCell, DataGridHead, DataGridRow, 
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
 import { useMachineQueries, useMachines, type Machine } from "@/features/machines/queries"
+import { useIsPhone } from "@/features/shell/use-is-phone"
 import { StatusSlot } from "@/features/status/status-bar"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { api } from "@/lib/api"
@@ -20,6 +21,7 @@ export function LimitsView() {
   const machines = useMachines()
   const queries = useMachineQueries(limitsQuery)
   const now = useMinuteTick()
+  const isPhone = useIsPhone()
 
   const { machine: only } = getRouteApi("/_app/limits").useSearch()
   const reports: LimitReport[] = machines.filter((machine) => !only || machine.id === only).flatMap((machine) =>
@@ -60,6 +62,15 @@ export function LimitsView() {
         <Empty title="No provider limits yet">
           Limits appear when a connected machine has a signed-in provider CLI. Refresh to check again.
         </Empty>
+      ) : isPhone ? (
+        <div className="flex min-h-0 flex-1 flex-col gap-(--s4) overflow-y-auto p-(--s4)">
+          {[...groups.filter((group) => group.usable), ...groups.filter((group) => !group.usable)].map((group) => (
+            <ProviderCard key={group.provider} group={group} now={now} />
+          ))}
+          {pending.map((machine) => (
+            <RowSkeleton key={machine.id} lines={2} />
+          ))}
+        </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col px-(--s6)">
         <DataGrid aria-label="Provider limits" className="min-w-260">
@@ -77,6 +88,10 @@ export function LimitsView() {
           {groups.filter((group) => group.usable).map((group) => (
             <ProviderRows key={group.provider} group={group} now={now} />
           ))}
+          {groups.filter((group) => !group.usable).map((group) => (
+            <ProviderRows key={group.provider} group={group} now={now} dim />
+          ))}
+          {/* Machines still answering go last, so loaded rows do not jump when they do. */}
           {pending.map((machine) => (
             <tbody key={machine.id}>
               <DataGridRow>
@@ -86,12 +101,50 @@ export function LimitsView() {
               </DataGridRow>
             </tbody>
           ))}
-          {groups.filter((group) => !group.usable).map((group) => (
-            <ProviderRows key={group.provider} group={group} now={now} dim />
-          ))}
         </DataGrid>
         </div>
       )}
+    </div>
+  )
+}
+
+// The grid needs 1040 px. A phone gets one card per provider, with the same facts.
+function ProviderCard({ group, now }: { group: ProviderGroup; now: number }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <section aria-label={harnessName(group.provider)} data-provider={group.provider} className={cn("flex flex-col gap-(--s3) rounded-(--r-pop) border-[0.5px] border-(--sep) p-(--s4)", !group.usable && "text-(--fg3)")}>
+      <h2 className="text-(length:--fs) font-medium">{harnessName(group.provider)}</h2>
+      <ReportBlock report={group.selected} now={now} />
+      {group.others.length > 0 && (
+        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="self-start text-(length:--fs-sm) text-(--fg2)">
+          {`Other machines (${group.others.length})`}
+        </button>
+      )}
+      {open && group.others.map((report) => <ReportBlock key={report.id} report={report} now={now} />)}
+    </section>
+  )
+}
+
+function ReportBlock({ report, now }: { report: LimitReport; now: number }) {
+  const windows = windowsOf(report.snapshot)
+  return (
+    <div className="flex flex-col gap-(--s3)">
+      <p className="text-(length:--fs-sm) text-(--fg2)">{[report.name, report.snapshot.plan].filter(Boolean).join(" · ")}</p>
+      {windows.length === 0 && <p className="text-(length:--fs-sm) text-(--fg2)">{report.snapshot.error || "No usage windows reported by this machine."}</p>}
+      {windows.map((window) => {
+        const left = remainingPercent(window)
+        const reset = resetLabel(window, now)
+        return (
+          <div key={window.id} className="flex flex-col gap-(--s1)">
+            <div className="flex min-w-0 items-baseline justify-between gap-(--s3)">
+              <span className="min-w-0 truncate">{window.label}</span>
+              <span className="shrink-0 text-(--fg2) tabular-nums">{left === undefined ? "Unknown" : `${Math.round(left)}% left`}</span>
+            </div>
+            <Meter value={left} label={`${window.label} remaining`} />
+            <p className={cn("text-(length:--fs-sm) text-(--fg2)", reset.due && "text-(--fg3)")}>{reset.due ? reset.text : reset.text.split(" · ")[0]}</p>
+          </div>
+        )
+      })}
     </div>
   )
 }

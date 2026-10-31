@@ -174,7 +174,7 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 | `/library/package/$` | same, plus `install` |
 | `/library/mcp/$name` | same |
 | `/library/agentpack/$id` | same, plus `revision`, `restore` |
-| `/machines` | `q` (redirects to `/machines/local`) |
+| `/machines` | `q` (redirects to `/machines/topology`; phones show the machine list) |
 | `/machines/topology` | none |
 | `/machines/$machine` | `q` |
 | `/limits` | `machine` |

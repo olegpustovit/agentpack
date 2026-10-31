@@ -200,3 +200,42 @@ func TestTailnetStatusFromKeepsWhatPolicyReads(t *testing.T) {
 		t.Fatal("a stopped daemon reports no Self")
 	}
 }
+
+func TestOnlyTheSameUntaggedOwnerEnrollsAutomatically(t *testing.T) {
+	self := &tailnetPeer{ID: "self", UserID: 7}
+	cases := []struct {
+		name string
+		self *tailnetPeer
+		peer *tailnetPeer
+		want bool
+	}{
+		{"same owner", self, &tailnetPeer{ID: "p", UserID: 7}, true},
+		{"another owner", self, &tailnetPeer{ID: "p", UserID: 8}, false},
+		{"tagged peer", self, &tailnetPeer{ID: "p", UserID: 7, Tags: []string{"tag:ci"}}, false},
+		{"tagged self", &tailnetPeer{ID: "self", UserID: 7, Tags: []string{"tag:ci"}}, &tailnetPeer{ID: "p", UserID: 7}, false},
+		{"unknown owner", &tailnetPeer{ID: "self"}, &tailnetPeer{ID: "p"}, false},
+	}
+	for _, test := range cases {
+		if got := ownMachine(test.self, test.peer); got != test.want {
+			t.Errorf("%s: got %v", test.name, got)
+		}
+	}
+}
+
+func TestLibraryPeerRoutesCoverConflictsAndVersions(t *testing.T) {
+	for _, test := range []struct {
+		method, path string
+		want         bool
+	}{
+		{"GET", "/api/library/agentpacks/abc/conflict", true},
+		{"POST", "/api/library/agentpacks/abc/resolve", true},
+		{"POST", "/api/library/latest", true},
+		{"GET", "/api/library/latest", false},
+		{"POST", "/api/library/agentpacks/abc/conflict", false},
+		{"GET", "/api/library/agentpacks/abc/resolve", false},
+	} {
+		if got := libraryPeerRoute(test.method, test.path); got != test.want {
+			t.Errorf("%s %s: got %v", test.method, test.path, got)
+		}
+	}
+}

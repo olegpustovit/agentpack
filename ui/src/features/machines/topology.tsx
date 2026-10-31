@@ -1,4 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
+import { useIsPhone } from "@/features/shell/use-is-phone"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Inspector, Section } from "@/components/kit/data"
 import { Banner, RowSkeleton } from "@/components/kit/feedback"
 import { useEventsConnected } from "@/features/events/use-events"
@@ -41,6 +43,7 @@ function Node({ x, y, width, name, parts, sessions, state, dashed }: { x: number
 }
 
 export function TopologyView() {
+  const isPhone = useIsPhone()
   const live = useEventsConnected()
   const topology = useQuery(topologyQuery(live))
   const sessions = useMachineQueries(sessionsQuery)
@@ -82,6 +85,7 @@ export function TopologyView() {
   return (
     <div className="h-full min-h-0 overflow-y-auto">
       <Inspector>
+        {isPhone && <Link to="/machines" className="col-span-full text-(--accent)">All machines</Link>}
         {topology.error && (
           <Banner tone="danger" className="col-span-full">
             {`Couldn't refresh topology: ${topology.error.message}`}

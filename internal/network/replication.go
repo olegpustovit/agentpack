@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"slices"
@@ -107,6 +108,9 @@ func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
 		}
 		ids, err := store.ImportObjects(objects)
 		// ImportObjects returns only after the objects and directory entries are durable.
+		if err == nil {
+			err = store.MergeHeads()
+		}
 		libraryResponse(w, ids, err)
 	}))
 	mux.HandleFunc("POST "+replicationPrefix+"ack", peerOnly(func(w http.ResponseWriter, r *http.Request) {
@@ -283,6 +287,10 @@ func exchangeRegistry(ctx context.Context, store *registry.Store, peer string, t
 	if _, err := store.ImportObjects(objects); err != nil {
 		return err
 	}
+	// Merging here means the merge travels in this same exchange, not on the next tick.
+	if err := store.MergeHeads(); err != nil {
+		return err
+	}
 	var ack map[string]bool
 	if err := registryPeerRequest(ctx, client, target, "POST", replicationPrefix+"ack", map[string]any{"digests": remoteIDs}, &ack); err != nil {
 		return err
@@ -359,6 +367,35 @@ func (g *Gateway) syncRegistryPeer(ctx context.Context, peer string) (err error)
 	return exchangeRegistry(ctx, g.options.Library.Store, peer, target, client)
 }
 
+// ownMachine is deliberately narrower than allowedTailnetPeer: an explicit allow entry shares sessions
+// with a machine, but only the same untagged owner gets a copy of the library unasked.
+func ownMachine(self, peer *tailnetPeer) bool {
+	return self != nil && peer != nil && peer.ID != "" && self.UserID != 0 && self.UserID == peer.UserID && len(self.Tags) == 0 && len(peer.Tags) == 0
+}
+
+func (g *Gateway) enrollOwnMachines(ctx context.Context) {
+	config, err := ReadSharingConfig(g.options.Home)
+	if err != nil || !config.Enabled {
+		return
+	}
+	status, err := tailnetSnapshot(ctx)
+	if err != nil {
+		return
+	}
+	for _, peer := range status.Peer {
+		if !ownMachine(status.Self, peer) || !peer.Online {
+			continue
+		}
+		// A machine without a gateway has nothing to replicate with.
+		if _, ok := probeTailnetPeer(ctx, peer); !ok {
+			continue
+		}
+		if err := g.options.Library.Store.EnrollOwnMachine(peer.ID); err != nil {
+			log.Printf("could not enroll %s for replication: %v", peer.HostName, err)
+		}
+	}
+}
+
 func (g *Gateway) runRegistryReplication(ctx context.Context) {
 	if g.options.Library.Store == nil {
 		return
@@ -366,6 +403,7 @@ func (g *Gateway) runRegistryReplication(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
+		g.enrollOwnMachines(ctx)
 		peers, err := g.options.Library.Store.ListPeers()
 		if err == nil {
 			for _, peer := range peers {

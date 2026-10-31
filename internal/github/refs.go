@@ -13,6 +13,9 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/storage/memory"
+	"net/url"
+	"regexp"
+	"slices"
 )
 
 var (
@@ -243,4 +246,67 @@ func isFullCommit(value string) bool {
 		}
 	}
 	return true
+}
+
+var repoPart = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+// Latest is the newest version of a package. Current lists the given pins that already hold it: a pin
+// newer than the last commit touching the package's folder has the same files, so it is not behind.
+type Latest struct {
+	Commit      string   `json:"commit"`
+	CommittedAt string   `json:"committed_at,omitempty"`
+	Current     []string `json:"current"`
+	// False when GitHub's API was unavailable: Commit is the repository's HEAD, which may not touch this folder.
+	Exact bool `json:"exact"`
+}
+
+// LatestVersion asks GitHub for the last commit that changed a package. With the API rate limited or
+// unreachable it falls back to the repository's HEAD over the Git protocol.
+func LatestVersion(ctx context.Context, client *http.Client, owner, repo, path string, pins []string) (Latest, error) {
+	if !repoPart.MatchString(owner) || !repoPart.MatchString(repo) {
+		return Latest{}, fmt.Errorf("only GitHub packages have a latest version")
+	}
+	var commits []struct {
+		SHA    string `json:"sha"`
+		Commit struct {
+			Committer struct {
+				Date string `json:"date"`
+			} `json:"committer"`
+		} `json:"commit"`
+	}
+	endpoint := fmt.Sprintf("/repos/%s/%s/commits?per_page=1", owner, repo)
+	if path != "" {
+		endpoint += "&path=" + url.QueryEscape(path)
+	}
+	if err := githubJSON(ctx, client, endpoint, &commits); err != nil || len(commits) == 0 {
+		sha, gitErr := resolveRefWithGit(ctx, owner, repo, "HEAD")
+		if gitErr != nil {
+			return Latest{}, withAccessHint(fmt.Errorf("could not look up the latest version of %s/%s", owner, repo), owner, repo)
+		}
+		current := []string{}
+		if slices.Contains(pins, sha) {
+			current = append(current, sha)
+		}
+		return Latest{Commit: sha, Current: current}, nil
+	}
+	latest := Latest{Commit: commits[0].SHA, CommittedAt: commits[0].Commit.Committer.Date, Current: []string{}, Exact: true}
+	for _, pin := range slices.Compact(slices.Sorted(slices.Values(pins))) {
+		if !isFullCommit(pin) {
+			continue
+		}
+		if pin == latest.Commit {
+			latest.Current = append(latest.Current, pin)
+			continue
+		}
+		if path == "" {
+			continue
+		}
+		var comparison struct {
+			Status string `json:"status"`
+		}
+		if githubJSON(ctx, client, fmt.Sprintf("/repos/%s/%s/compare/%s...%s", owner, repo, latest.Commit, pin), &comparison) == nil && (comparison.Status == "ahead" || comparison.Status == "identical") {
+			latest.Current = append(latest.Current, pin)
+		}
+	}
+	return latest, nil
 }
