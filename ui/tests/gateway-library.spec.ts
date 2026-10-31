@@ -20,8 +20,6 @@ async function refreshMachines(page: Page) {
 }
 
 test("Library keeps installed packages when an older peer has no Library API", async ({ page }) => {
-  // App bug: the package inspector's Failures list shows the raw 404 body from an old peer; the list hides it.
-  test.fail()
   await mockAPI(page)
   await mockLibraryBase(page)
   await page.route("**/api/nodes", (route) => route.fulfill({ json: [peer] }))
@@ -42,7 +40,8 @@ test("Library keeps installed packages when an older peer has no Library API", a
   await expect(page.getByText("github.com/acme/installed")).toBeVisible()
   await expect(page.getByRole("cell", { name: "Build server", exact: true })).toBeVisible()
   await expect(page.getByText("404 page not found")).toHaveCount(0)
-  await expect(page.getByText("Build server needs an update to show its library.")).toBeVisible()
+  // The list shows the same banner on desktop; the inspector's copy is the one that also shows on phones.
+  await expect(page.locator('[data-slot="inspector"]').getByText("Build server needs an update to show its library.")).toBeVisible()
   await expect(page.getByText("404 page not found")).toHaveCount(0)
 })
 

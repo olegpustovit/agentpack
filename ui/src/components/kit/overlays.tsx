@@ -133,7 +133,18 @@ export function MenuItem({
   );
 }
 
-export const RowContextMenu = ContextMenu;
+// Base UI leaves a context menu's focus on its list; focus the first enabled item once it opens.
+export function RowContextMenu(props: ComponentProps<typeof ContextMenu>) {
+  return (
+    <ContextMenu
+      onOpenChangeComplete={(open) => {
+        if (open) document.querySelector<HTMLElement>('[data-slot="context-menu-content"] [role="menuitem"]:not([aria-disabled="true"])')?.focus();
+      }}
+      {...props}
+    />
+  );
+}
+
 export const RowContextMenuTrigger = ContextMenuTrigger;
 
 export function RowContextMenuContent({ className, ...props }: ComponentProps<typeof ContextMenuContent>) {

@@ -29,6 +29,12 @@ export const nodesQuery = (live: boolean) =>
     refetchInterval: live ? false : 30 * 1000,
   })
 
+// True until the first machine list answers.
+export function useDiscovering(): boolean {
+  const live = useEventsConnected()
+  return useQuery(nodesQuery(live)).isPending
+}
+
 const topologySchema = z.object({
   self: z.object({ id: z.string(), name: z.string(), os: z.string(), relay: z.string() }),
   peers: z.array(

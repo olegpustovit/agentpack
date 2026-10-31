@@ -4,7 +4,7 @@ import { TerminalPool, type PoolEntry } from "./pool"
 type Fake = PoolEntry & { id: string; disposed: number }
 
 function fake(id: string): Fake {
-  const entry: Fake = { id, disposed: 0, dispose: () => entry.disposed++ }
+  const entry: Fake = { id, disposed: 0, dispose: () => entry.disposed++, reconnect: () => {} }
   return entry
 }
 

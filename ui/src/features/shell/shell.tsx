@@ -2,7 +2,8 @@ import type { ReactNode } from "react"
 import { useEffect } from "react"
 import { Link, useNavigate } from "@tanstack/react-router"
 import { ChevronLeft, PanelLeft, Settings } from "lucide-react"
-import { Hud } from "@/components/kit/feedback"
+import { Announcement, Hud } from "@/components/kit/feedback"
+import { useDiscovering } from "@/features/machines/queries"
 import { StatusBar, StatusProvider } from "@/features/status/status-bar"
 import { AppWindow, Toolbar, ToolbarButton } from "@/components/kit/window"
 import { buttonVariants } from "@/components/ui/button"
@@ -55,6 +56,7 @@ function AppToolbar() {
   const { view, detail } = useRoutePosition()
   const isPhone = useIsPhone()
   const { collapsed, toggle } = useSidebar()
+  const discovering = useDiscovering()
   const title = views.find((item) => item.id === view)?.label ?? "agentpack"
   const hasSidebar = listDetailViews.includes(view)
 
@@ -93,6 +95,7 @@ function AppToolbar() {
       </nav>
       <span className="min-w-0 truncate text-(--fs) font-medium">{title}</span>
       <div className="flex-1" />
+      {discovering && <Announcement>Discovering machines…</Announcement>}
       <ToolbarTarget />
       <Link
         to="/settings"

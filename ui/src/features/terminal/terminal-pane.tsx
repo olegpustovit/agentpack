@@ -50,7 +50,7 @@ export default function TerminalPane({
       {info && <StatusSlot>{parts.filter(Boolean).join(" · ")}</StatusSlot>}
       <RowContextMenu>
         <RowContextMenuTrigger className="relative min-h-0 flex-1">
-          <div ref={stageRef} aria-busy={snapshot.busy} className="absolute inset-0 overflow-auto" />
+          <div ref={stageRef} aria-busy={snapshot.busy} className="absolute inset-0 overflow-auto transition-opacity aria-busy:opacity-60" />
         </RowContextMenuTrigger>
         <RowContextMenuContent>
           <RowContextMenuItem onClick={() => terminal.copy()}>Copy</RowContextMenuItem>

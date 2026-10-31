@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react"
-import { useMutation, useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { FieldError } from "@/components/kit/forms"
 import { Button } from "@/components/ui/button"
@@ -11,12 +11,15 @@ import { safeReturnTo } from "./return-to"
 // Centered 340 px card. Before the root account exists, it asks for the setup token and creates it.
 export function LoginView({ returnTo }: { returnTo?: string }) {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const setup = useQuery(statusQuery).data?.setup_required === true
   const [password, setPassword] = useState("")
   const [token, setToken] = useState("")
   const login = useMutation({
     mutationFn: () => api(setup ? "/api/setup" : "/api/login", { body: setup ? { password, token } : { password } }),
-    onSuccess: () => {
+    onSuccess: async () => {
+      // The route guard reads the cached status, so refresh it before the navigation below checks it.
+      await queryClient.invalidateQueries({ queryKey: statusQuery.queryKey })
       const next = safeReturnTo(returnTo)
       if (next) window.location.assign(next)
       else void navigate({ to: "/sessions" })

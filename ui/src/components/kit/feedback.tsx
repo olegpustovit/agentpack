@@ -91,6 +91,11 @@ export function Spinner({ className, ...props }: ComponentProps<"span">) {
   );
 }
 
+// The polite status line: startup and machine discovery announce through it.
+export function Announcement({ className, children }: { className?: string; children: ReactNode }) {
+  return <p role="status" className={cn("min-w-0 truncate text-(--fs-sm) text-(--fg2)", className)}>{children}</p>;
+}
+
 export function Kbd({ className, ...props }: ComponentProps<"kbd">) {
   return (
     <kbd

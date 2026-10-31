@@ -101,9 +101,8 @@ test("the Sessions sidebar has 0 DOM mutations per 60 s of unchanged data", asyn
   expect(await page.evaluate(() => (window as Window & { churn?: number }).churn)).toBe(0)
 })
 
-// /api/status is re-queried on every navigation (_app beforeLoad, staleTime 0), so it is the measured request.
+// Returning inside staleTime re-reads nothing: the status guard and the Library queries are still fresh.
 test("returning to Library within staleTime sends no requests and shows no loader", async ({ page }) => {
-  test.fail()
   await page.addInitScript(openEventStream)
   await mockFleet(page)
   await page.goto("/library")
@@ -120,10 +119,8 @@ test("returning to Library within staleTime sends no requests and shows no loade
   await expect(skeletons(page)).toHaveCount(0)
 })
 
-// Measured 11: 9 per-machine library queries (packages, agentpacks, projects on 3 machines), the
-// drafts list, and the /api/status check that _app's beforeLoad repeats on every navigation.
+// Counts the per-machine library queries (packages, agentpacks, projects on 3 machines). The drafts list loads with the shell.
 test("first Library open makes at most 9 requests", async ({ page }) => {
-  test.fail()
   await page.addInitScript(openEventStream)
   await mockFleet(page)
   await page.goto("/sessions")

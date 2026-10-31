@@ -5,5 +5,4 @@ import type { Status } from "@/lib/api-types"
 export const statusQuery = queryOptions({
   queryKey: ["status"],
   queryFn: () => api<Status>("/api/status"),
-  staleTime: 0,
 })

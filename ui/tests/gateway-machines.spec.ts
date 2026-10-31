@@ -233,10 +233,7 @@ test("limits waits for mesh discovery when opened immediately", async ({ page })
   await expect(page.locator('[data-provider="codex"]').getByRole("row").first()).toContainText("Kyiv grid")
 })
 
-// The React app has no startup or discovery announcements: the router renders nothing while /api/status is
-// pending, the status bar shows nothing while /api/nodes is pending, and the Machines list has no loading text or aria-busy.
 test("startup and machine discovery announce pending work", async ({ page }) => {
-  test.fail(true, "No startup or discovery announcements in the React app: nothing renders while /api/status or /api/nodes is pending")
   await mockAPI(page)
   let releaseStatus!: () => void
   let releaseNodes!: () => void
@@ -257,11 +254,15 @@ test("startup and machine discovery announce pending work", async ({ page }) => 
   await expect(page.getByText("Discovering machines…")).toBeVisible()
 
   await page.getByRole("link", { name: "Machines", exact: true }).click()
-  await expect(page.getByText("Discovering connected machines")).toBeVisible()
-  await expect(page.locator('[aria-label="Machines"]')).toHaveAttribute("aria-busy", "true")
+  // Phones open Machines on the local detail (routing.spec pins that), so the list and its aria-busy are out of view there.
+  const desktop = (page.viewportSize()?.width ?? 0) > 760
+  if (desktop) {
+    await expect(page.getByText("Discovering connected machines")).toBeVisible()
+    await expect(page.locator('[aria-label="Machines"]')).toHaveAttribute("aria-busy", "true")
+  }
   releaseNodes()
   await expect(page.getByText("Discovering connected machines")).toBeHidden()
-  await expect(page.locator('[aria-label="Machines"]')).toHaveAttribute("aria-busy", "false")
+  if (desktop) await expect(page.locator('[aria-label="Machines"]')).toHaveAttribute("aria-busy", "false")
 })
 
 test("limits streams per-machine progress and preserves reports during refresh", async ({ page }) => {

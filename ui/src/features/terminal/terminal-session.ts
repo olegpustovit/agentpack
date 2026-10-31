@@ -142,6 +142,11 @@ export class TerminalSession {
     this.#listed = listed
   }
 
+  // Opens a new socket that resumes at the current position; the terminal and its element stay.
+  reconnect() {
+    if (this.#term) this.#connect(true)
+  }
+
   // First attach opens the terminal and the socket. Later attaches only move the element back in.
   attach(stage: HTMLElement) {
     this.#stage = stage
@@ -414,6 +419,7 @@ export class TerminalSession {
     let pendingOutput = 0
     let receivedFrame = false
     let replayReceived = false
+    let resetBeforeReplay = false
     const finishReplay = () => {
       if (this.#socket !== socket || generation !== this.#generation || !replayReceived || pendingOutput || (this.#state?.shared_input !== true && !receivedFrame) || this.#replayComplete) return
       this.#replayComplete = true
@@ -442,6 +448,10 @@ export class TerminalSession {
           return
         }
         this.#position += length
+        if (resetBeforeReplay) {
+          resetBeforeReplay = false
+          term.write(RESET)
+        }
         term.write(new Uint8Array(event.data), () => {
           pendingOutput -= length
           finishReplay()
@@ -454,7 +464,8 @@ export class TerminalSession {
         if (message.type === "attached") {
           terminalMark("attached")
           const offset = message.offset ?? 0
-          if (reconnecting && offset !== since) term.write(RESET)
+          // The last frame stays up until the replay's first bytes arrive; the reset is written just before them.
+          resetBeforeReplay = reconnecting && offset !== since
           this.#position = offset
         }
         if (message.type === "attached" && message.state?.shared_input !== true) replayReceived = true

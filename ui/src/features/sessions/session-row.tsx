@@ -1,3 +1,4 @@
+import type { KeyboardEvent } from "react"
 import { Link } from "@tanstack/react-router"
 import { Package, Pencil, Plug, RefreshCw, RotateCw, Save, Square, X, type LucideIcon } from "lucide-react"
 import { SourceRow } from "@/components/kit/list"
@@ -88,6 +89,14 @@ function renderEntries(entries: Entry[], context: boolean) {
 
 const dimWord = "shrink-0 text-(--fs-sm) text-(--fg3) group-data-selected/row:text-(--accent-fg)"
 
+// WebKit sends no contextmenu event for Shift+F10 or the context-menu key, so the key opens the menu itself.
+function openFromKeyboard(event: KeyboardEvent<HTMLElement>) {
+  if (!(event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))) return
+  event.preventDefault()
+  const box = event.currentTarget.getBoundingClientRect()
+  event.currentTarget.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 }))
+}
+
 // Roving focus is React-managed (tabStop), so the kit's SourceList is not used: it rewrites
 // tabindex on every render, which would churn the DOM on each refetch.
 export function SessionRow({
@@ -109,7 +118,7 @@ export function SessionRow({
 
   return (
     <RowContextMenu>
-      <RowContextMenuTrigger render={<div className="group/row relative" data-selected={selected ? "" : undefined} />}>
+      <RowContextMenuTrigger render={<div className="group/row relative" data-selected={selected ? "" : undefined} onKeyDown={openFromKeyboard} />}>
         <SourceRow
           render={
             <Link

@@ -233,8 +233,6 @@ test("context rename saves on the correct host and survives refresh and reload",
 })
 
 test("row actions rename without attaching, preserve errors, cancel, and stop the chosen session", async ({ page }) => {
-  // shortcut: app bug, Shift+F10 opens the row menu but leaves focus on the menu container, not its first item; the focus check runs last so the rest stays a real pass.
-  test.fail(true, "Shift+F10 on a focused session row opens the context menu without focusing its first item (Rename…)")
   const requests = await mockAPI(page)
   let attempts = 0
   await page.route("**/api/sessions/local-two", (route) => {
@@ -411,8 +409,6 @@ test("replay blocks input and query replies until rendered, then only the respon
 })
 
 test("clicking the selected row preserves its terminal and compact menu aligns icons and labels", async ({ page }) => {
-  // shortcut: app bug, Reconnect reopens the route, and the pooled session keeps its live socket, so nothing reconnects.
-  test.fail(true, "row-menu Reconnect on the already-open session reuses the pooled live socket, so no new connection is made")
   await page.setViewportSize(gwDesktopViewport)
   await mockAPI(page)
   const sockets: WebSocketRoute[] = []
@@ -454,6 +450,8 @@ test("clicking the selected row preserves its terminal and compact menu aligns i
   await expect(gwStatus(page)).toContainText("Codex")
 
   // Reconnect on the open row must open a new connection and keep its terminal element.
+  // The previous menu is still closing for its exit animation; wait for it, or two Reconnect items match.
+  await expect(page.getByRole("menu")).toBeHidden()
   await gwMore(page, "local:local-one").click()
   await page.getByRole("menuitem", { name: "Reconnect" }).click()
   await expect.poll(() => sockets.length).toBe(3)
@@ -676,12 +674,10 @@ test("sessions layout renders at desktop, tablet and phone sizes in both themes"
 })
 
 test("reconnect preserves and dims the last frame until replay is rendered", async ({ page }) => {
-  // shortcut: app bug, the terminal clears its screen when the worker's resume offset differs, so the last frame is gone before replay renders.
-  test.fail(true, "terminal-session.ts writes RESET on attached when the worker resumes at another offset, clearing the last frame before the replay is rendered")
   await page.setViewportSize(gwDesktopViewport)
   await mockAPI(page)
   const sockets: WebSocketRoute[] = []
-  // The React terminal has no dimmed stale class; the test checks the last frame stays and the stage is busy until replay completes.
+  // The stage is aria-busy (and dimmed) until replay completes; the last frame stays up until the replayed bytes arrive.
   await page.routeWebSocket(gwTerminalSocket, (ws) => {
     sockets.push(ws)
     ws.send(JSON.stringify({ type: "attached", attachment: 40 + sockets.length, state: { ...session.state, shared_input: true, responder: 40 + sockets.length } }))
@@ -822,8 +818,6 @@ test("terminal renders a large replay promptly and accepts live output afterward
 })
 
 test("failed session reads stay distinct from an empty session list", async ({ page }) => {
-  // shortcut: app bug, the list shows "No sessions yet" beside the load error; test.fail until the empty state is hidden on error.
-  test.fail(true, "session-list.tsx renders the 'No sessions yet' empty state whenever there are no rows and no load is pending, so a failed read also shows it")
   await mockAPI(page)
   await page.route((url) => url.pathname === "/api/sessions", (route) => route.fulfill({ status: 502, body: "Session service unavailable" }))
   await page.goto("/")

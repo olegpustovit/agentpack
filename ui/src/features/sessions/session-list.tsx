@@ -6,6 +6,7 @@ import { GroupHeader, SegmentedControl, SegmentedControlItem } from "@/component
 import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
 import { buttonVariants } from "@/components/ui/button"
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
+import { terminalPool } from "@/features/terminal/pool"
 import { basename } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useSessionCommands } from "./actions"
@@ -65,6 +66,8 @@ export function SessionList() {
   const tabStop = selectedKey ?? (first ? rowKey(first) : undefined)
   const offlineWithData = machines.filter((machine) => !machine.online && queries.byMachine[machine.id]?.data)
   const loading = queries.firstLoadPending
+  // A failed read shows its banner only; the empty copy is for a successful empty list.
+  const failed = Object.keys(queries.errors).length > 0
 
   useEffect(() => () => window.clearTimeout(pending.current), [])
 
@@ -97,7 +100,11 @@ export function SessionList() {
       rename: () => setSheet({ kind: "rename", row }),
       restart: () => setConfirm({ kind: "restart", row }),
       stop: () => setConfirm({ kind: "stop", row }),
-      reconnect: () => openRow(row),
+      // A pooled session on the open row must dial again; navigating to the row it already shows does nothing.
+      reconnect: () => {
+        terminalPool.reconnect(row.machine, row.id)
+        if (!selected) openRow(row)
+      },
       closeTerminal: () => {
         if (selected) void navigate({ to: "/sessions" })
       },
@@ -157,7 +164,7 @@ export function SessionList() {
           </Banner>
         )}
         {loading && [0, 1, 2].map((index) => <RowSkeleton key={index} />)}
-        {!loading && rows.length === 0 && (
+        {!loading && !failed && rows.length === 0 && (
           <Empty title="No sessions yet">
             Start an agent with New session, or from the CLI on a machine.
           </Empty>
