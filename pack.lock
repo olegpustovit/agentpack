@@ -1,4 +1,4 @@
-lockfile_version = 3
+lockfile_version = 4
 
 [meta]
 name = 'test'
@@ -16,40 +16,39 @@ cache_key = '14a939838da478918aef80cab384ab47aae7d1ee873d96bff48259da31d4815e'
 content_hash = 'sha256-tree-v1:909298647b750d598538e89316c4a7f10348c8852e33da3cb590a6cabce51e97'
 
 [[packages]]
-module = 'github.com/mccteam/minecraft-console-client/.skills/humanizer'
+module = 'github.com/olegpustovit/agent-configs/mcps/playwright'
 direct = true
+kind = 'plugin'
+url = 'https://github.com/olegpustovit/agent-configs/tree/dev/mcps/playwright'
+owner = 'olegpustovit'
+repo = 'agent-configs'
+path = 'mcps/playwright'
+commit = '876345d0199b15106d28eed4ac0130043190362e'
+cache_key = '46f88b183337834aaf469b2c4a15d498f3939b2106f24da5941c4d0aa34bd37e'
+content_hash = 'sha256-tree-v1:70e653d2cf61f80e08667ad2a197973a9cb5bf058022b7091d6a1aeb2d84e0c9'
+
+[[packages]]
+module = 'github.com/olegpustovit/agent-configs/plugins/react-dev'
+direct = true
+kind = 'plugin'
+url = 'https://github.com/olegpustovit/agent-configs/tree/876345d0199b15106d28eed4ac0130043190362e/plugins/react-dev'
+owner = 'olegpustovit'
+repo = 'agent-configs'
+path = 'plugins/react-dev'
+commit = '876345d0199b15106d28eed4ac0130043190362e'
+cache_key = '0c155e5053f198aa059f2ec45e95a183e86302dadfec93942c0eef86c066c642'
+content_hash = 'sha256-tree-v1:7990b1ea316c99d407b9a6895702fcd423a959c079dbedd163ddafbac16c8882'
+
+[[packages]]
+module = 'github.com/olegpustovit/agent-configs/skills/build-go-stack'
 kind = 'skill'
-url = 'https://github.com/mccteam/minecraft-console-client/tree/f39fe2d067844a21b2efc20976831f265c1f5f5c/.skills/humanizer'
-owner = 'mccteam'
-repo = 'minecraft-console-client'
-path = '.skills/humanizer'
-commit = 'f39fe2d067844a21b2efc20976831f265c1f5f5c'
-cache_key = 'ed850325c375ee6a8556209f42e05faaa0c5e064683a50a44c5807172885fbca'
-content_hash = 'sha256-tree-v1:87bbc7a9371a117d4889cef7d6a283395f9293b943708aee0699a9f2f0ab27db'
-
-[[packages]]
-module = 'github.com/olegpustovit/agent-configs/mcps/linear'
-direct = true
-kind = 'plugin'
-url = 'https://github.com/olegpustovit/agent-configs/tree/281d30f17f215d5d6cdb55cbcb7456ae4ca952f1/mcps/linear'
+url = 'https://github.com/olegpustovit/agent-configs/tree/dev/skills/build-go-stack'
 owner = 'olegpustovit'
 repo = 'agent-configs'
-path = 'mcps/linear'
-commit = '281d30f17f215d5d6cdb55cbcb7456ae4ca952f1'
-cache_key = 'aa3e07e7fe0e8e9b738463944ab430377c38ce0bbebfbcf64f4c876b4a580383'
-content_hash = 'sha256-tree-v1:affca12d1b51b1997c18882b9d8297e5f45586330e6b8047dbbdf25b169964b1'
-
-[[packages]]
-module = 'github.com/olegpustovit/agent-configs/plugins/simplifier'
-direct = true
-kind = 'plugin'
-url = 'https://github.com/olegpustovit/agent-configs/tree/281d30f17f215d5d6cdb55cbcb7456ae4ca952f1/plugins/simplifier'
-owner = 'olegpustovit'
-repo = 'agent-configs'
-path = 'plugins/simplifier'
-commit = '281d30f17f215d5d6cdb55cbcb7456ae4ca952f1'
-cache_key = '8acf9b3d8c0c5ef5ca4d3ecb5d064024c664cd3d7203ac27be8c4947e1293c30'
-content_hash = 'sha256-tree-v1:08166e1e718ce8527dbb67954a069dc02f66f94ec91abed84542f324d8b49901'
+path = 'skills/build-go-stack'
+commit = '876345d0199b15106d28eed4ac0130043190362e'
+cache_key = 'd769657051bfa353229e2849391ac25c7d751d8078a7e353868cf2a602ec8713'
+content_hash = 'sha256-tree-v1:d44e1d1557e63799e55657050b2f9efd6f38c4c90124755fb16bca2b3048acb3'
 
 [[packages]]
 module = 'github.com/pbakaus/impeccable'
@@ -63,22 +62,99 @@ cache_key = 'f3b03acd00c63915b6face91082c60b6a12a7fed75251d5f81bf1267102106fb'
 content_hash = 'sha256-tree-v1:0f943c2286b433be583f43205df501099c37d630f6c5706f5c01f51f63123c08'
 
 [[packages]]
-module = 'github.com/s1mplesonny/technical-writing-skill/technical-writing'
-direct = true
+module = 'github.com/shadcn-ui/ui/skills/shadcn'
 kind = 'skill'
-url = 'https://github.com/s1mplesonny/technical-writing-skill/tree/7b6fea6dd290676bdafc442c324fec813a6de50e/technical-writing'
-owner = 's1mplesonny'
-repo = 'technical-writing-skill'
-path = 'technical-writing'
-commit = '7b6fea6dd290676bdafc442c324fec813a6de50e'
-cache_key = '9cbdec767473b02a0b89ebe184548ac8b36b43a7f4cc640c1f4f14ee0eb5ae84'
-content_hash = 'sha256-tree-v1:e6af292e6b28bfc4f904d4c20fdd00f385a71336e24c41f65c9b61c24356cbc2'
+url = 'https://github.com/shadcn-ui/ui/tree/HEAD/skills/shadcn'
+owner = 'shadcn-ui'
+repo = 'ui'
+path = 'skills/shadcn'
+commit = 'b8d7baa15b1dca5716f13153e63795fc3d741f6b'
+cache_key = '94a8505e88587290f1a36b4bb7993dd20477d9fcbee6a373308acc67bb7f7fc6'
+content_hash = 'sha256-tree-v1:ed6e635dd7c1471a2e4c90b86b5a39946af17d104b0b6e2af74ea8e1090e87f1'
+
+[[packages]]
+module = 'github.com/tanstack/router/packages/react-router/skills/compositions/router-query'
+kind = 'skill'
+url = 'https://github.com/tanstack/router/tree/HEAD/packages/react-router/skills/compositions/router-query'
+owner = 'tanstack'
+repo = 'router'
+path = 'packages/react-router/skills/compositions/router-query'
+commit = 'da2adec76dbe6c0da6d6a0d5640f7b9388217f45'
+cache_key = 'cfa4b936bbea5f09f993c3d644d529c21e767e0a426f5c8230fc38012d31867f'
+content_hash = 'sha256-tree-v1:cde7c6baa20aa8ed03d5f45ca0c69173f03f921d9ae187a6035169cb8b23d687'
+
+[[packages]]
+module = 'github.com/tanstack/router/packages/react-router/skills/react-router'
+kind = 'skill'
+url = 'https://github.com/tanstack/router/tree/HEAD/packages/react-router/skills/react-router'
+owner = 'tanstack'
+repo = 'router'
+path = 'packages/react-router/skills/react-router'
+commit = 'da2adec76dbe6c0da6d6a0d5640f7b9388217f45'
+cache_key = '3d5bdf2f990e703d1ef0cc25db34e8c6f280173cd3a53bedfb51da61279428d7'
+content_hash = 'sha256-tree-v1:33ac9cb27033b55a4f38a97d5c81f224b8c20d38639278578341e9e01fc681b5'
+
+[[packages]]
+module = 'github.com/tanstack/router/packages/router-core/skills/router-core'
+kind = 'skill'
+url = 'https://github.com/tanstack/router/tree/HEAD/packages/router-core/skills/router-core'
+owner = 'tanstack'
+repo = 'router'
+path = 'packages/router-core/skills/router-core'
+commit = 'da2adec76dbe6c0da6d6a0d5640f7b9388217f45'
+cache_key = '95d0ac3c4fc144fe699a8dcbc3247db3fda13a8e27ff4502b05344b2a1db926e'
+content_hash = 'sha256-tree-v1:f6054d22939f3550908494cfb05e9619b540a73f44108e72820fa21ab3174f97'
+
+[[packages]]
+module = 'github.com/vercel-labs/agent-skills/skills/composition-patterns'
+kind = 'skill'
+url = 'https://github.com/vercel-labs/agent-skills/tree/HEAD/skills/composition-patterns'
+owner = 'vercel-labs'
+repo = 'agent-skills'
+path = 'skills/composition-patterns'
+commit = '1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62'
+cache_key = 'c64488561c2c99b1fc80591ebdb30a0b5074d538fc363fed98208eb24067537a'
+content_hash = 'sha256-tree-v1:caa49c02279519fba9ef55d92c256c52f1cad177216060865ec2b9590ba8b719'
+
+[[packages]]
+module = 'github.com/vercel-labs/agent-skills/skills/react-best-practices'
+kind = 'skill'
+url = 'https://github.com/vercel-labs/agent-skills/tree/HEAD/skills/react-best-practices'
+owner = 'vercel-labs'
+repo = 'agent-skills'
+path = 'skills/react-best-practices'
+commit = '1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62'
+cache_key = '9fcf58127901bf2b57888a34ef2b6d465a29be49ed80c81d6cd19feda641f7cb'
+content_hash = 'sha256-tree-v1:5a01ac4e21769ea41c11d319d3dfb0709e35f7f3abbf0f071c20ef632e49bdb2'
 
 [[mcp_servers]]
-name = 'linear'
+name = 'playwright'
 source = 'plugin'
-launcher = 'remote'
-status = 'unpinnable'
-definition = 'sha256:48ee499fe380979b2c8a32fa67b3fb3e7a94333315fbe4898dfb0ec9a834d201'
-host = 'mcp.linear.app'
-reason = 'remote server: the host decides what runs'
+launcher = 'npm'
+status = 'pinned'
+definition = 'sha256:39f1fe8018e119b3502f48ee4c78784d31bba2dd0bc2a4982fc71b32bbf29bf8'
+requested = '@playwright/mcp@latest'
+package = '@playwright/mcp'
+version = '0.0.83'
+integrity = 'sha512-oNcl+Ae2/IAjhfPeP46BfIkSakfmprY+aOtkv5MjrQ4lPav4/yNtPhL0iq8SlIM90oApWgBDUxaNKvktazUKOg=='
+registry = 'https://registry.npmjs.org'
+bin = 'cli.js'
+tree_digest = 'sha256-npm-tree-v1:a8567236c23fa41ae25ac6acfe7052b7a30d81e11cc8e5bbb4ffc6e34676910f'
+
+[[mcp_servers.tree]]
+path = 'node_modules/@playwright/mcp'
+version = '0.0.83'
+integrity = 'sha512-oNcl+Ae2/IAjhfPeP46BfIkSakfmprY+aOtkv5MjrQ4lPav4/yNtPhL0iq8SlIM90oApWgBDUxaNKvktazUKOg=='
+resolved = 'https://registry.npmjs.org/@playwright/mcp/-/mcp-0.0.83.tgz'
+
+[[mcp_servers.tree]]
+path = 'node_modules/playwright'
+version = '1.64.0-alpha-1790635538000'
+integrity = 'sha512-/5XDUMxpOd/9AojJtWDFIRV3EJZNQ0AwvK69wgt3CPzy8wTgiBG9pX45VfxtqtvIRGwfWzMhrvawNKreG69Snw=='
+resolved = 'https://registry.npmjs.org/playwright/-/playwright-1.64.0-alpha-1790635538000.tgz'
+
+[[mcp_servers.tree]]
+path = 'node_modules/playwright-core'
+version = '1.64.0-alpha-1790635538000'
+integrity = 'sha512-pNwaXirhXMRLaRQs4NQ18EpTdtDoFwyPH9FOaaDC7YXG4hpwE2xmwCic/1srbuExVQC7zT9LJSJpDBAru+Vo9A=='
+resolved = 'https://registry.npmjs.org/playwright-core/-/playwright-core-1.64.0-alpha-1790635538000.tgz'

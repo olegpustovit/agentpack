@@ -2,19 +2,13 @@ name = "test"
 version = "0.0.1"
 
 [dependencies]
-"github.com/olegpustovit/agent-configs/mcps/linear" = {}
-"github.com/olegpustovit/agent-configs/plugins/simplifier" = {}
-"github.com/mccteam/minecraft-console-client/.skills/humanizer" = {}
-"github.com/s1mplesonny/technical-writing-skill/technical-writing" = {}
 "github.com/dietrichgebert/ponytail" = {}
 "github.com/pbakaus/impeccable" = {}
+"github.com/olegpustovit/agent-configs/plugins/react-dev" = "876345d0199b15106d28eed4ac0130043190362e"
+"github.com/olegpustovit/agent-configs/mcps/playwright" = "dev"
 
 [modes]
 
 [modes.default]
 base = "all"
 
-[modes.writing]
-base = "none"
-enable = ["package:github.com/mccteam/minecraft-console-client/.skills/humanizer", "package:github.com/s1mplesonny/technical-writing-skill/technical-writing"]
-disable = ["mcp:linear"]
