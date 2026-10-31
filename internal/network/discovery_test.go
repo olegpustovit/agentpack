@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestPersonalTailnetPolicy(t *testing.T) {
@@ -124,4 +125,46 @@ func TestLimitsPeerRoutes(t *testing.T) {
 			t.Errorf("%s %s allowed=%v, want %v", tc.method, tc.path, got, tc.want)
 		}
 	}
+}
+
+type closeRecorder chan struct{}
+
+func (c closeRecorder) Close() error { close(c); return nil }
+
+func TestCloseUpgradeOnEndClosesWhenGatewayStopsOrLoginEnds(t *testing.T) {
+	wait := func(t *testing.T, closed closeRecorder) {
+		t.Helper()
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			t.Fatal("connection was not closed")
+		}
+	}
+	t.Run("gateway stops", func(t *testing.T) {
+		closed, done := make(closeRecorder), make(chan struct{})
+		go closeUpgradeOnEnd(context.Background(), done, closed, time.Hour, func() bool { return true })
+		close(done)
+		wait(t, closed)
+	})
+	t.Run("login ends", func(t *testing.T) {
+		closed := make(closeRecorder)
+		go closeUpgradeOnEnd(context.Background(), nil, closed, time.Millisecond, func() bool { return false })
+		wait(t, closed)
+	})
+	t.Run("request ends", func(t *testing.T) {
+		closed := make(closeRecorder)
+		ctx, cancel := context.WithCancel(context.Background())
+		finished := make(chan struct{})
+		go func() {
+			closeUpgradeOnEnd(ctx, nil, closed, time.Hour, func() bool { return true })
+			close(finished)
+		}()
+		cancel()
+		<-finished
+		select {
+		case <-closed:
+			t.Fatal("the proxy owns the connection once the request ends")
+		default:
+		}
+	})
 }

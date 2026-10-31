@@ -374,29 +374,35 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 		}
 		if response.StatusCode == http.StatusSwitchingProtocols {
 			private := r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1
-			go func() {
-				ticker := time.NewTicker(time.Second)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-r.Context().Done():
-						return
-					case <-g.done:
-						_ = response.Body.Close()
-						return
-					case <-ticker.C:
-						if !private && !g.auth.authenticated(r) {
-							_ = response.Body.Close()
-							return
-						}
-					}
-				}
-			}()
+			// The proxy clears response.Body once it owns the upgraded connection, so keep this reference.
+			go closeUpgradeOnEnd(r.Context(), g.done, response.Body, time.Second, func() bool { return private || g.auth.authenticated(r) })
 		}
 		return nil
 	}
 	proxy.ServeHTTP(w, r)
 }
+
+// closeUpgradeOnEnd holds an upgraded proxy connection open until its request ends, and closes it
+// when the gateway stops or the viewer's login no longer holds.
+func closeUpgradeOnEnd(ctx context.Context, done <-chan struct{}, connection io.Closer, every time.Duration, authenticated func() bool) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			_ = connection.Close()
+			return
+		case <-ticker.C:
+			if !authenticated() {
+				_ = connection.Close()
+				return
+			}
+		}
+	}
+}
+
 func allowedTailnetIdentity(self *tailnetPeer, identity tailnetIdentity, address netip.Addr, config SharingConfig) bool {
 	peer := &tailnetPeer{ID: identity.Node.StableID, UserID: identity.Node.User, Tags: identity.Node.Tags}
 	if !allowedTailnetPeer(self, peer, config) {

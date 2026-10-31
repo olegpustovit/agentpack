@@ -5,6 +5,12 @@ All notable changes to `agentpack` are documented here. The format is based on
 "Pre-release" note in `AGENTS.md` — breaking changes may land between versions without a migration
 window.
 
+## [0.12.3] - 2026-10-31
+
+### Fixed
+
+- Signing out, or stopping the gateway, while a terminal on another machine was attached crashed the gateway.
+
 ## [0.12.2] - 2026-10-31
 
 ### Fixed
