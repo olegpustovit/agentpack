@@ -27,7 +27,7 @@ automatic node participation, native-stdio presence, authenticated browser acces
 restart supervision, recent-folder APIs, locally bundled xterm.js, shared Agentnet macOS
 tokens, Tailscale discovery/WhoIs policy, explicit user services, Oracle deployment, and
 OAuth-protected Streamable HTTP MCP. The prototype remains simulated; the production
-UI is under `internal/network/web/`.
+UI is under `ui/`.
 
 Evidence recorded so far: network race tests and compiled CLI PTY integration passed,
 including gateway shutdown/restart and final agent exit. A real browser against a live

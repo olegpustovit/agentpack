@@ -1,4 +1,4 @@
-<h1><img src="internal/network/web/public/icon.svg" width="36" height="36" alt=""> Agentpack</h1>
+<h1><img src="ui/public/icon.svg" width="36" height="36" alt=""> Agentpack</h1>
 
 Pin skills, plugins and MCP servers for your coding agents in one project. Agentpack records the resolved packages in `pack.lock` and stages them for Claude Code, Cursor, OpenCode, Codex, Grok and Antigravity.
 

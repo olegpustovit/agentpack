@@ -1,17 +1,17 @@
 # Gateway UI
 
-Static frontend embedded by the Go gateway. `public/` is the only served directory:
-`index.html` at `/`, other assets at `/static/`. It uses Agentnet's macOS system font,
+Static frontend embedded by the Go gateway. The Vite build in `ui/dist` is staged into
+`internal/network/webdist` by `make ui-stage` and served at `/`. It uses Agentnet's macOS system font,
 OKLCH color and spacing tokens, with light/dark modes and responsive navigation.
 Terminal bytes are rendered by locally bundled MIT-licensed xterm.js; the terminal grid stays
 at the remote host dimensions while CSS scales the view.
-The installable PWA manifest is `/static/manifest.webmanifest`; its SVG and PNG icons are
-served from `/static/icon.svg`, `/static/icon-192.png`, and `/static/icon-512.png`. There is
+The installable PWA manifest is `/manifest.webmanifest`; its SVG and PNG icons are
+served from `/icon.svg`, `/icon-192.png`, and `/icon-512.png`. There is
 no service worker, so API responses and registry data are never cached by the UI. No
 external script, CDN, font, analytics, localStorage credentials, or runtime Node server.
 
-Build with `npm ci && npm run build`; commit the generated public assets. Run browser
-checks with `npx playwright install chromium && npm test`. Node/npm are build tools only.
+Build with `bun install --frozen-lockfile && bun run build`; `make ui-stage` publishes it.
+Run browser checks with `bunx playwright install chromium && bun run e2e`. Node/npm are build tools only.
 The gateway should set a same-origin CSP (scripts/styles from self, WebSocket connect
 from self; xterm dynamically sets style attributes) and disable HTTP caching for APIs.
 
@@ -26,6 +26,12 @@ private worker capabilities never appear in any response. An unauthenticated API
 - `POST /api/setup`: `{password, token}`. The token is obtained on the server with
   `agentpack gateway setup`. Root can be created once. Minimum password length 12.
 - `POST /api/login`: `{password}`; `POST /api/logout`: `{}`.
+- `GET /api/identity`: `{node: {id,name,os,version}, auth, tailscale_user}` for the selected machine.
+- `GET /api/nodes`: array of `{id,name,online}` for allowed Tailscale peers.
+- `GET /api/topology`: `{self: {id,name,os,relay}, peers: [{id,name,os,state,connection,relay,rtt_ms?,last_seen?,sessions}]}`.
+- `GET /api/projects`: array of project rows `{directory,name,folder_id,available,unavailable_reason,last_used,launches,packages,mcp,error}`.
+- `GET /api/events`: Server-Sent Events. Each `message` carries one JSON event that the UI uses to refresh cached queries; the UI closes the stream while the page is hidden.
+- `GET /api/library/agentpacks?include=revisions`: array of `{agentpack, revisions}`, one call instead of one request per saved agentpack.
 - `GET /api/sessions`: array (or `{sessions: [...]}`) of
   `{id, name?, directory, harness, mode, state: {running,shared_input,responder?,rows,columns,exit_code}}`.
 - `GET /api/recent`: array (or `{recent: [...]}`) of `{directory,harness,mode,last_used?,available,unavailable_reason?}`.

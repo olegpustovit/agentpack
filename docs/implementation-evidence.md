@@ -75,7 +75,7 @@ AGENTPACK_NATIVE_PROBES=1 go test -v ./internal/harness/claude ./internal/harnes
 AGENTPACK_NATIVE_PROBES=1 go test -v ./internal/cli -run '^TestNativeRestoredPackConformance$'
 ```
 
-From `internal/network/web`, run `npm ci && npm run build`, then `npm test`. `npm run check:pwa -- http://127.0.0.1:7420/` checks a running Go gateway with a persistent browser profile. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` when using a system Chromium installation.
+From `ui`, run `bun install --frozen-lockfile && bun run build`, then `bun run e2e`. `bun run check:pwa -- http://127.0.0.1:7420/` checks a running Go gateway with a persistent browser profile. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` when using a system Chromium installation.
 
 The [two external examples](../evaluation/icse/environments/README.md) provide a short offline walkthrough. An independent agent followed those documented commands in an isolated home: minimal preflight succeeded with optional staging warnings; review lock/restore/preflight succeeded; quiet mode violated the generated-skill requirement with exit 3; default mode recovered. The checkout remained empty. The strongest fault beyond a package lock is an undeclared inherited configuration/skill: the fixture runner catches both a user settings file and a project-native skill while the lock hash stays unchanged, then verifies recovery after removing those authored inputs.
 

@@ -15,10 +15,10 @@ Read `AGENTS.md` first and follow it. In particular:
 
 | Concern | Current location |
 |---|---|
-| Frontend source | `internal/network/web/app.js`, bundled by `web/build.mjs` (esbuild) into `web/public/app.js` |
-| Markup, styles | `internal/network/web/public/index.html`, `public/style.css` (embedded by `internal/network/assets.go`) |
-| Browser tests | `internal/network/web/tests/gateway.spec.js` (Playwright, `npm test`) |
-| HTTP API | `internal/network/gateway.go` (`Handler()`), contract in `internal/network/web/README.md` |
+| Frontend source | `ui/src/` (React and Vite, built by `bun run build` in `ui/`) |
+| Markup, styles | `ui/index.html`, `ui/public/`, `ui/src/` (embedded by `internal/network/assets.go` after `make ui-stage`) |
+| Browser tests | `ui/tests/` (Playwright, `bun run e2e`) |
+| HTTP API | `internal/network/gateway.go` (`Handler()`), contract in `ui/README.md` |
 | Peer routing | `internal/network/discovery.go`: `peerRoute()` allowlist, `?node=<tailnet id>` proxies to that machine |
 | Machines | `GET /api/nodes` → `[{id,name,online}]` (`TailnetNode`) |
 | Sessions | `GET /api/sessions` → `SessionInfo{id,directory,harness,mode,state{running,owner,epoch,rows,columns,exit_code,…}}` |
@@ -155,10 +155,10 @@ Done when there are Go tests for:
 ## Phase 5: PWA and polish
 
 1. **PWA.**
-   - Serve `manifest.webmanifest` and `icon.svg` (copy them from this artifact) under `/static/`.
+   - Serve `manifest.webmanifest` and `icon.svg` (copy them from this artifact) at the root (`/manifest.webmanifest`, `/icon.svg`).
    - Link them from `index.html` along with `theme-color`, and keep the `display-mode: window-controls-overlay` CSS.
    - A service worker is not required for install. Do not cache API responses.
-   - Keep the same-origin CSP from `web/README.md`, and allow `manifest-src 'self'`.
+   - Keep the same-origin CSP from `ui/README.md`, and allow `manifest-src 'self'`.
 2. **Host colors (optional, proposal in notes).** Probe the host's default foreground and background with a bounded OSC 10/11 query, intercept the replies, and fall back with the label "Fallback colors". A server-side screen snapshot plus a replay watermark replaces raw-history replay for faithful reconnects.
 3. **Connection timing.**
    - Track click → socket open → attached → first frame → replay complete.
@@ -176,6 +176,6 @@ Done when:
 - Status is always a dot or ring plus a word, never color alone.
 - Install and restore always show every destination with its current state before any action, and nothing changes until the user confirms.
 - No silent fallbacks: show unreachable peers, missing bytes, refused control and failed installs per row.
-- Build the frontend with `npm ci && npm run build` in `internal/network/web`, and commit the generated `public/` assets.
-- Run `go test ./internal/network/...` and `npm test` (Chromium and WebKit) before each PR. Keep one phase per PR.
+- Build the frontend with `bun install --frozen-lockfile && bun run build` in `ui/`, and publish it with `make ui-stage`.
+- Run `go test ./internal/network/...` and `bun run e2e` (Chromium and WebKit) before each PR. Keep one phase per PR.
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const url = process.argv[2];
-if (!url) throw new Error("usage: node check-pwa-installability.mjs <gateway-url>");
+if (!url) throw new Error("usage: bun scripts/check-pwa-installability.mjs <gateway-url>");
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 if (!executablePath) throw new Error("set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to the Chrome or Chromium executable");
 

@@ -9,7 +9,8 @@
     "test": "vitest run",
     "e2e": "playwright test",
     "build": "vite build && tsc --noEmit && bun run size",
-    "size": "bun scripts/check-size.ts"
+    "size": "bun scripts/check-size.ts",
+    "check:pwa": "bun scripts/check-pwa-installability.mjs"
   },
   "dependencies": {
     "@base-ui/react": "1.9.0",
