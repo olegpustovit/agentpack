@@ -84,10 +84,10 @@ test("returning to Limits within a minute makes no request and shows no loader",
   await expect(grid(page).getByText("72% left")).toBeVisible()
   const before = requests.length
 
-  const views = page.getByRole("navigation", { name: "Views" })
-  await views.getByRole("link", { name: "Sessions" }).click()
+  // Views on desktop, the tab bar on phone: the link is the only visible one with this name.
+  await page.getByRole("link", { name: "Sessions", exact: true }).click()
   await expect(page).toHaveURL(/\/sessions/)
-  await views.getByRole("link", { name: "Limits" }).click()
+  await page.getByRole("link", { name: "Limits", exact: true }).click()
 
   await expect(grid(page).getByText("72% left")).toBeVisible()
   await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0)
@@ -123,10 +123,10 @@ test("rows from other machines sit under a disclosure", async ({ page }) => {
 
 test("the status bar shows the last limits update on Limits and nothing on Sessions", async ({ page }) => {
   await page.goto("/limits")
-  const status = page.getByRole("contentinfo")
+  const status = page.getByRole("contentinfo", { includeHidden: true })
   await expect(status).toContainText(/Updated (now|\d+ seconds? ago|\d+ minutes? ago)/)
 
-  await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Sessions" }).click()
+  await page.getByRole("link", { name: "Sessions", exact: true }).click()
   await expect(page).toHaveURL(/\/sessions/)
   await expect(status).not.toContainText("Updated")
 })

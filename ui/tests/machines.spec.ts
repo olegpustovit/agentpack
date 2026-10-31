@@ -105,6 +105,8 @@ test("an offline machine says so in a banner", async ({ page }) => {
 })
 
 test("status bar totals projects and sessions on the machines routes only", async ({ page }) => {
+  // The totals are in the status bar, hidden under 760 px, so run at desktop width.
+  await page.setViewportSize({ width: 1280, height: 800 })
   await page.goto("/machines/local")
   await expect(page.getByText("3 projects · 2 sessions")).toBeVisible()
 

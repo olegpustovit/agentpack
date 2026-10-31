@@ -9,7 +9,7 @@ export function AppWindow({ className, ...props }: ComponentProps<"div">) {
       <div
         data-slot="app-window"
         className={cn(
-          "grid h-dvh grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden bg-(--window) text-(--fs) text-(--fg)",
+          "grid h-dvh grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden bg-(--window) text-(--fs) text-(--fg)",
           className,
         )}
         {...props}

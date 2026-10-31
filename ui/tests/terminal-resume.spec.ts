@@ -1,5 +1,12 @@
 import { expect, test, type Page } from "@playwright/test"
-import { busyStage, type Listed, openFromList, openRoute, rowText, screen, serve, session, shared, statusBar, stubApi, stubWorker } from "./terminal-stub"
+import { busyStage, type Listed, openRoute, rowText, screen, serve, session, shared, statusBar, stubApi, stubWorker } from "./terminal-stub"
+
+// On phone the session list is hidden while a session is open, so go back to it first.
+async function openFromList(page: Page, name: string) {
+  const back = page.getByRole("link", { name: "Back", exact: true })
+  if (await back.count()) await back.click()
+  await page.getByRole("link", { name, exact: true }).click()
+}
 
 const A = screen("A")
 const B = screen("B")

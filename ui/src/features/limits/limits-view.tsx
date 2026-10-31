@@ -61,7 +61,7 @@ export function LimitsView() {
               <DataGridHeaderCell className="w-44">Window</DataGridHeaderCell>
               <DataGridHeaderCell className="w-40">Usage</DataGridHeaderCell>
               <DataGridHeaderCell className="w-24">% left</DataGridHeaderCell>
-              <DataGridHeaderCell>Resets</DataGridHeaderCell>
+              <DataGridHeaderCell className="w-48">Resets</DataGridHeaderCell>
               <DataGridHeaderCell className="w-36">Machine</DataGridHeaderCell>
               <DataGridHeaderCell className="w-24">Plan</DataGridHeaderCell>
             </tr>

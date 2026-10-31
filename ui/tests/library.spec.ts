@@ -128,7 +128,7 @@ test("sort popup writes sort to the URL", async ({ page }) => {
 
 test("status bar shows library totals on /library and not on /sessions", async ({ page }) => {
   await page.goto("/library")
-  await expect(page.getByRole("contentinfo")).toContainText("4 items · 1 skill · 0 plugins · 2 MCP")
+  await expect(page.getByRole("contentinfo", { includeHidden: true })).toContainText("4 items · 1 skill · 0 plugins · 2 MCP")
   await page.goto("/sessions")
-  await expect(page.getByRole("contentinfo")).not.toContainText("items ·")
+  await expect(page.getByRole("contentinfo", { includeHidden: true })).not.toContainText("items ·")
 })

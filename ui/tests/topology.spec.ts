@@ -72,10 +72,17 @@ test("diagram labels each edge and dashes only the relay one", async ({ page }) 
   const svg = page.locator('[data-slot="topology-diagram"]')
   await expect(svg.locator("path")).toHaveCount(2)
   await expect(svg.locator("path[stroke-dasharray]")).toHaveCount(1)
-  await expect(svg.getByText("direct", { exact: true })).toBeVisible()
-  await expect(svg.getByText("relay fra", { exact: true })).toBeVisible()
+  if (test.info().project.name === "phone") {
+    // Phones hide the diagram by design (max-[760px]:hidden) and show the same edge labels in the grid's Path column.
+    await expect(svg).toBeHidden()
+    await expect(row(page, "mac-studio")).toContainText("direct")
+    await expect(row(page, "fedora-laptop")).toContainText("relay fra")
+  } else {
+    await expect(svg.getByText("direct", { exact: true })).toBeVisible()
+    await expect(svg.getByText("relay fra", { exact: true })).toBeVisible()
+  }
   // Session counts come from the sessions queries, since the topology reports 0.
-  await expect(svg.getByText("macOS · Reachable · 3 sessions")).toBeVisible()
+  if (test.info().project.name !== "phone") await expect(svg.getByText("macOS · Reachable · 3 sessions")).toBeVisible()
 })
 
 test("no IP address appears on the page or in the grid", async ({ page }) => {

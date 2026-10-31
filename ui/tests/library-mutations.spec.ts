@@ -156,6 +156,8 @@ test("a row that fails keeps its error visible after the install finishes", asyn
 })
 
 test("an install into an offline machine is saved as a draft with its exact pins", async ({ page }) => {
+  // The status bar, which holds the connection popover, is hidden under 760 px, so run at desktop width.
+  await page.setViewportSize({ width: 1280, height: 800 })
   await page.goto("/library/package/github.com/acme/alpha")
   await expect(page.getByRole("button", { name: "Install…" })).toBeVisible()
 
