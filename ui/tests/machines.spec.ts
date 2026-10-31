@@ -33,6 +33,18 @@ const projects: Record<string, unknown[]> = {
   n2: [project("/srv/oracle", [alpha]), project("/srv/api", [beta])],
 }
 
+const session = (id: string, directory: string) => ({
+  id,
+  directory,
+  harness: "claude",
+  mode: "default",
+  state: { interactive: true, running: true, restarting: false, rows: 24, columns: 80, exit_code: 0 },
+})
+const sessions: Record<string, unknown[]> = {
+  local: [session("s1", "/home/oleg/agentpack")],
+  n2: [session("s2", "/srv/oracle")],
+}
+
 let deletes: { method: string; url: string; body: unknown }[] = []
 
 function machineOf(url: string): string {
@@ -47,6 +59,7 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/topology", (route) => route.fulfill({ json: topology }))
   await page.route("**/api/events", (route) => route.abort())
   await page.route(/\/api\/projects(\?.*)?$/, (route) => route.fulfill({ json: projects[machineOf(route.request().url())] ?? [] }))
+  await page.route(/\/api\/sessions(\?.*)?$/, (route) => route.fulfill({ json: sessions[machineOf(route.request().url())] ?? [] }))
   await page.route(/\/api\/recent(\?.*)?$/, (route) => {
     const request = route.request()
     if (request.method() !== "DELETE") return route.fulfill({ json: [] })
@@ -89,4 +102,13 @@ test("an offline machine says so in a banner", async ({ page }) => {
   await page.goto("/machines/n3")
 
   await expect(page.getByText("lab-pi is offline. No projects are cached.")).toBeVisible()
+})
+
+test("status bar totals projects and sessions on the machines routes only", async ({ page }) => {
+  await page.goto("/machines/local")
+  await expect(page.getByText("3 projects · 2 sessions")).toBeVisible()
+
+  await page.goto("/sessions")
+  await expect(page.getByRole("link", { name: "New session" })).toBeVisible()
+  await expect(page.getByText(/ projects · /)).toHaveCount(0)
 })

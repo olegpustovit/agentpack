@@ -2,8 +2,11 @@ import { Link, useMatchRoute } from "@tanstack/react-router"
 import { Laptop, Network, Server } from "lucide-react"
 import { SourceList, SourceRow } from "@/components/kit/list"
 import { StatusDot } from "@/components/kit/status-dot"
+import { sessionsQuery, projectsQuery } from "@/features/sessions/queries"
+import { StatusSlot } from "@/features/status/status-bar"
 import { LOCAL } from "@/lib/api"
-import { useMachines, type Machine } from "./queries"
+import { plural } from "@/lib/format"
+import { useMachineQueries, useMachines, type Machine, type MachineQuery } from "./queries"
 
 function MachineRow({ machine }: { machine: Machine }) {
   const matchRoute = useMatchRoute()
@@ -22,12 +25,19 @@ function MachineRow({ machine }: { machine: Machine }) {
   )
 }
 
+function countRows(byMachine: Record<string, MachineQuery<unknown[]>>): number {
+  return Object.values(byMachine).reduce((sum, entry) => sum + (entry.data?.length ?? 0), 0)
+}
+
 export function MachineList() {
   const machines = useMachines()
+  const projects = useMachineQueries(projectsQuery)
+  const sessions = useMachineQueries(sessionsQuery)
   const matchRoute = useMatchRoute()
   const topology = matchRoute({ to: "/machines/topology" })
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <StatusSlot>{`${plural(countRows(projects.byMachine), "project")} · ${plural(countRows(sessions.byMachine), "session")}`}</StatusSlot>
       <SourceList aria-label="Machines" className="min-h-0 flex-1">
         <SourceRow render={<Link to="/machines/topology" />} selected={Boolean(topology)} className="h-(--row-h-2) max-[760px]:h-11">
           <Network aria-hidden className="size-(--s4) shrink-0 text-(--fg2) group-data-selected/row:text-(--accent-fg)" />
