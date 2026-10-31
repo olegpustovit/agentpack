@@ -33,7 +33,7 @@ const sessionsNav = (page: Page) => page.getByRole("navigation", { name: "Sessio
 const libraryNav = (page: Page) => page.getByRole("navigation", { name: "Library" })
 const limitsGrid = (page: Page) => page.getByRole("table", { name: "Provider limits" })
 const topologyHeading = (page: Page) => page.getByRole("heading", { level: 1, name: "Topology" })
-const machineHeading = (page: Page) => page.getByRole("heading", { level: 1 })
+const machineList = (page: Page) => page.getByRole("link", { name: "Topology", exact: true })
 const settingsNav = (page: Page) => page.getByRole("navigation", { name: "Settings sections" })
 
 // `settles` is the URL the route ends on when it redirects (/machines, /settings).
@@ -44,7 +44,7 @@ const deepLinks: { path: string; settles?: string; rendered: (page: Page) => Loc
   { path: "/library/package/github.com/acme/tools", rendered: (page) => page.getByText("Package not found") },
   { path: "/library/agentpack/pack-1", rendered: (page) => page.getByText("Agentpack not found") },
   { path: "/library/mcp/foo-tools", rendered: (page) => page.getByText("MCP server not found") },
-  { path: "/machines", settles: "/machines/local", rendered: machineHeading },
+  { path: "/machines", rendered: machineList },
   { path: "/machines/peer-1", rendered: (page) => page.getByRole("heading", { level: 1, name: "Build server" }) },
   { path: "/machines/topology", rendered: topologyHeading },
   { path: "/limits", rendered: limitsGrid },
@@ -69,18 +69,29 @@ for (const { path, settles = path, rendered } of deepLinks) {
   })
 }
 
+test("on phones Back from a machine returns to the machine list", async ({ page }) => {
+  const errors = trackPageErrors(page)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await openFleet(page)
+  await page.goto("/machines/local")
+  await page.getByRole("link", { name: "Back", exact: true }).click()
+  await expect(page).toHaveURL(/\/machines$/)
+  await expect(machineList(page)).toBeVisible()
+  await expectNoCrash(page, errors)
+})
+
 test("back and forward step through the views, with each view's URL", async ({ page }) => {
   const errors = trackPageErrors(page)
   await openFleet(page)
   await page.goto("/sessions")
   await expect(sessionsNav(page)).toBeVisible()
 
-  // Limits and Machines come before Settings: on phones a machine detail hides the tab bar, so Settings is the one link left there.
+  // Limits and Machines come before Settings; Machines opens its list, so the tab bar stays on screen on phones.
   const trail = [
     { label: "Sessions", url: "/sessions", rendered: sessionsNav },
     { label: "Library", url: "/library", rendered: libraryNav },
     { label: "Limits", url: "/limits", rendered: limitsGrid },
-    { label: "Machines", url: "/machines/local", rendered: machineHeading },
+    { label: "Machines", url: "/machines", rendered: machineList },
     { label: "Settings", url: "/settings/general", rendered: settingsNav },
   ] as const
 

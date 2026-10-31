@@ -78,8 +78,7 @@ test("Machines matrix shows real package pins and project install actions", asyn
       ],
     }),
   )
-  await page.goto("/")
-  await page.getByRole("link", { name: "Machines", exact: true }).click()
+  await page.goto("/machines/local")
 
   await expect(page.getByRole("heading", { name: "Gateway machine" })).toBeVisible()
   const matrix = page.getByRole("table", { name: "Projects and pinned packages" })
@@ -254,15 +253,11 @@ test("startup and machine discovery announce pending work", async ({ page }) => 
   await expect(page.getByText("Discovering machines…")).toBeVisible()
 
   await page.getByRole("link", { name: "Machines", exact: true }).click()
-  // Phones open Machines on the local detail (routing.spec pins that), so the list and its aria-busy are out of view there.
-  const desktop = (page.viewportSize()?.width ?? 0) > 760
-  if (desktop) {
-    await expect(page.getByText("Discovering connected machines")).toBeVisible()
-    await expect(page.locator('[aria-label="Machines"]')).toHaveAttribute("aria-busy", "true")
-  }
+  await expect(page.getByText("Discovering connected machines")).toBeVisible()
+  await expect(page.locator('[aria-label="Machines"]')).toHaveAttribute("aria-busy", "true")
   releaseNodes()
   await expect(page.getByText("Discovering connected machines")).toBeHidden()
-  if (desktop) await expect(page.locator('[aria-label="Machines"]')).toHaveAttribute("aria-busy", "false")
+  await expect(page.locator('[aria-label="Machines"]')).toHaveAttribute("aria-busy", "false")
 })
 
 test("limits streams per-machine progress and preserves reports during refresh", async ({ page }) => {
@@ -309,8 +304,7 @@ test("inventory loading is visible without claiming that project data is empty",
     await route.fulfill({ json: [] })
   })
 
-  await page.goto("/")
-  await page.getByRole("link", { name: "Machines", exact: true }).click()
+  await page.goto("/machines/local")
   await expect(page.getByRole("contentinfo").getByText("Updating 1 machine")).toBeVisible()
   await expect(page.locator('[data-slot="skeleton"]').first()).toBeVisible()
   await expect(page.getByText("No projects yet")).toBeHidden()
