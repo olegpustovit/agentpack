@@ -34,6 +34,8 @@ type TailnetNode struct {
 	Name    string `json:"name"`
 	Address string `json:"-"`
 	Online  bool   `json:"online"`
+	// Version is what a peer's /peer answer reports; empty from a peer that predates it.
+	Version string `json:"version,omitempty"`
 }
 type tailnetPeer struct {
 	ID           string
@@ -449,7 +451,7 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 				http.Error(w, "method not allowed", 405)
 				return
 			}
-			writeJSON(w, TailnetNode{ID: self.ID, Name: self.HostName, Online: true})
+			writeJSON(w, TailnetNode{ID: self.ID, Name: self.HostName, Online: true, Version: g.options.Version})
 			return
 		}
 		actor := Actor{Kind: "peer", User: identity.UserProfile.LoginName, Node: identity.Node.ComputedName}

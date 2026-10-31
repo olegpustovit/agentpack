@@ -46,6 +46,7 @@ export type TopologyPeer = {
   relay: string
   rtt_ms?: number
   last_seen?: string
+  version?: string
   // Always 0 from the server; the UI fills it from the sessions query.
   sessions: number
 }

@@ -28,7 +28,7 @@ func fixtureProbe(t *testing.T) probeFunc {
 	return func(_ context.Context, peer *tailnetPeer) (peerProbe, bool) {
 		switch peer.ID {
 		case "reach", "relayed":
-			return peerProbe{Node: TailnetNode{ID: peer.ID, Name: peer.HostName, Online: true}, RTT: 12 * time.Millisecond}, true
+			return peerProbe{Node: TailnetNode{ID: peer.ID, Name: peer.HostName, Online: true, Version: "9.9.9"}, RTT: 12 * time.Millisecond}, true
 		case "silent":
 			return peerProbe{}, false
 		}
@@ -61,6 +61,9 @@ func TestTopologyClassifiesEveryState(t *testing.T) {
 		if peer.State != expected.state || peer.Connection != expected.connection {
 			t.Errorf("%s: state=%q connection=%q, want state=%q connection=%q", id, peer.State, peer.Connection, expected.state, expected.connection)
 		}
+	}
+	if byID["reach"].Version != "9.9.9" {
+		t.Fatalf("peer version not reported: %+v", byID["reach"])
 	}
 	if byID["reach"].RTTms != 12 || byID["reach"].LastSeen.IsZero() {
 		t.Errorf("reachable peer rtt/last_seen = %d / %v", byID["reach"].RTTms, byID["reach"].LastSeen)

@@ -75,16 +75,18 @@ export function SessionRow({
   session,
   selected,
   tabStop,
+  stopping,
   actions,
 }: {
   session: ListedSession
   selected: boolean
   tabStop: boolean
+  stopping: boolean
   actions: RowActions
 }) {
   const { state } = session
   const rowState: RowState = session.offline ? "offline" : state.restarting ? "restarting" : state.running ? "running" : "stopped"
-  const word = session.offline ? "Offline" : state.restarting ? "Restarting" : state.running ? undefined : "Stopped"
+  const word = stopping ? "Stopping…" : session.offline ? "Offline" : state.restarting ? "Restarting" : state.running ? undefined : "Stopped"
   const mode = session.mode && session.mode !== "default" ? session.mode : undefined
   const entries = menuEntries(session, selected, actions)
   const since = session.last_used ?? session.started_at

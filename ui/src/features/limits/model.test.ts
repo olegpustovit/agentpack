@@ -92,3 +92,19 @@ describe("resetLabel", () => {
     expect(label.text.startsWith("reset due · rechecking · was ")).toBe(true)
   })
 })
+
+describe("machines without the CLI", () => {
+  const report = (id: string, state: string, error?: string): LimitReport => ({ id, name: id, snapshot: { harness: "opencode", state, error, observed_at: "", windows: [] } })
+  const absent = report("vm", "unsupported", "opencode CLI not found")
+  const present = report("main", "unsupported", "no OpenCode Go usage limits for this account")
+
+  it("never outrank a machine that has it, and are not listed as others", () => {
+    const [group] = providerGroups([absent, present])
+    expect(group?.selected.id).toBe("main")
+    expect(group?.others).toEqual([])
+  })
+
+  it("still show when no machine has it", () => {
+    expect(providerGroups([absent])[0]?.selected.id).toBe("vm")
+  })
+})

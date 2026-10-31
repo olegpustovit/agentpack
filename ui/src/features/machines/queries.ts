@@ -47,6 +47,7 @@ const topologySchema = z.object({
       relay: z.string(),
       rtt_ms: z.number().nullish().transform((v) => v ?? undefined),
       last_seen: z.string().nullish().transform((v) => v ?? undefined),
+      version: z.string().nullish().transform((v) => v ?? undefined),
       sessions: z.number(),
     }),
   ),

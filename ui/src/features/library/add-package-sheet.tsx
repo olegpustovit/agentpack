@@ -8,6 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
 import { projectsQuery } from "@/features/sessions/queries"
+import { SaveForm } from "@/features/sessions/session-sheets"
 import { basename, plural } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { destinationState } from "./install-state"
@@ -31,6 +32,44 @@ export function AddPackageSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent>
         <AddPackageForm onDone={() => onOpenChange(false)} initialMachine={initialMachine} initialDirectory={initialDirectory} />
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+// Save agentpack from the Library toolbar: choose a project first, then the same form a session row opens.
+export function SaveAgentpackSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const machines = useMachines()
+  const projects = useMachineQueries(projectsQuery)
+  const [choice, setChoice] = useState<string>()
+  const eligible = machines.filter((machine) => machine.online).flatMap((machine) =>
+    (projects.byMachine[machine.id]?.data ?? [])
+      .filter((project) => project.available)
+      .map((project) => ({ value: `${machine.id}\0${project.directory}`, label: `${machine.name} · ${project.name || basename(project.directory)}`, machine, project })),
+  )
+  const current = eligible.find((entry) => entry.value === choice) ?? eligible[0]
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent>
+        {current ? (
+          <>
+            <Field>
+              <FieldLabel>Project</FieldLabel>
+              <PopupSelect label="Project" value={current.value} items={eligible} onValueChange={setChoice} />
+            </Field>
+            <SaveForm
+              key={current.value}
+              row={{ machine: current.machine.id, machineName: current.machine.name, directory: current.project.directory, mode: current.project.launches[0]?.mode ?? "default" }}
+              onDone={() => onOpenChange(false)}
+            />
+          </>
+        ) : (
+          <>
+            <SheetTitle>Save agentpack</SheetTitle>
+            <Empty title="No project to save">Projects appear here after an agent runs in them on an online machine.</Empty>
+            <SheetActions>{null}</SheetActions>
+          </>
+        )}
       </SheetContent>
     </Sheet>
   )

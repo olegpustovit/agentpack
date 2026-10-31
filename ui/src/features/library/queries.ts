@@ -1,8 +1,13 @@
 import { queryOptions } from "@tanstack/react-query"
 import { api } from "@/lib/api"
-import type { AgentpackWithRevisions, Draft, Package, ReplicationPeers } from "@/lib/api-types"
+import type { Agentpack, AgentpackWithRevisions, Draft, Package, ReplicationPeers } from "@/lib/api-types"
 
 const FIVE_MINUTES = 5 * 60 * 1000
+
+// A peer older than ?include=revisions ignores it and answers bare agentpacks. Peers update on their own schedule.
+function withRevisions(row: AgentpackWithRevisions | Agentpack): AgentpackWithRevisions {
+  return "agentpack" in row ? row : { agentpack: row, revisions: [] }
+}
 
 export const packagesQuery = (machine: string) =>
   queryOptions({
@@ -14,7 +19,7 @@ export const packagesQuery = (machine: string) =>
 export const agentpacksQuery = (machine: string) =>
   queryOptions({
     queryKey: ["m", machine, "library", "agentpacks"],
-    queryFn: () => api<AgentpackWithRevisions[]>("/api/library/agentpacks?include=revisions", { machine }),
+    queryFn: async () => (await api<(AgentpackWithRevisions | Agentpack)[]>("/api/library/agentpacks?include=revisions", { machine })).map(withRevisions),
     staleTime: FIVE_MINUTES,
   })
 

@@ -47,12 +47,12 @@ export function PopupSelect({
 }) {
   return (
     <Select items={items} value={value} onValueChange={(next) => next && onValueChange(next)} disabled={disabled}>
-      <SelectTrigger aria-label={label} className="h-(--ctl-h) min-w-0 rounded-(--r-ctl) text-(length:--fs)">
+      <SelectTrigger aria-label={label} className="h-(--ctl-h) max-w-full min-w-0 rounded-(--r-ctl) text-(length:--fs) *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate">
         <SelectValue />
       </SelectTrigger>
-      <SelectContent className="rounded-(--r-pop) text-(length:--fs)">
+      <SelectContent className="max-w-[min(90vw,40rem)] rounded-(--r-pop) text-(length:--fs)">
         {items.map((item) => (
-          <SelectItem key={item.value} value={item.value} className="h-(--head-h) rounded-(--r-row) text-(length:--fs)">
+          <SelectItem key={item.value} value={item.value} className="h-(--head-h) min-w-0 rounded-(--r-row) text-(length:--fs) [&_span]:truncate">
             {item.label}
           </SelectItem>
         ))}

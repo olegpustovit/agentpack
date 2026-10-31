@@ -41,7 +41,7 @@ export function SheetContent({ className, children, ...props }: ComponentProps<t
       showCloseButton={false}
       finalFocus={() => document.querySelector<HTMLElement>(".xterm-helper-textarea") ?? true}
       className={cn(
-        "top-(--bar-h) w-96 max-w-full translate-y-0 gap-(--s5) rounded-(--r-sheet) p-(--s6) max-[760px]:top-auto max-[760px]:bottom-0 max-[760px]:w-full max-[760px]:translate-x-0 max-[760px]:translate-y-0 max-[760px]:rounded-b-none",
+        "top-(--bar-h) w-96 max-w-full translate-y-0 grid-cols-[minmax(0,1fr)] gap-(--s5) rounded-(--r-sheet) p-(--s6) max-[760px]:top-auto max-[760px]:bottom-0 max-[760px]:w-full max-[760px]:translate-x-0 max-[760px]:translate-y-0 max-[760px]:rounded-b-none",
         className,
       )}
       {...props}
@@ -90,7 +90,7 @@ export function ConfirmAlertContent({
     <AlertDialogContent className="w-70 gap-(--s4) rounded-(--r-sheet) p-(--s6)" initialFocus={cancelRef}>
       <AlertDialogTitle className="text-(length:--fs) font-semibold">{title}</AlertDialogTitle>
       <AlertDialogDescription className="text-(length:--fs-sm) text-(--fg2)">{description}</AlertDialogDescription>
-      <AlertDialogFooter className="flex-col gap-(--s3)">
+      <AlertDialogFooter className="flex-col gap-(--s3) sm:flex-col">
         <Button variant="destructive" onClick={onConfirm} className="w-full">
           {destructiveLabel}
         </Button>

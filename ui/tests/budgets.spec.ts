@@ -107,7 +107,7 @@ test("returning to Library within staleTime sends no requests and shows no loade
   await page.goto("/library")
   await expect(libraryEmpty(page)).toBeVisible()
   await page.getByRole("link", { name: "Sessions", exact: true }).click()
-  await expect(page).toHaveURL(/\/sessions$/)
+  await expect(sessionRows(page)).toHaveCount(36)
   await page.waitForLoadState("networkidle")
 
   const seen = countApi(page)

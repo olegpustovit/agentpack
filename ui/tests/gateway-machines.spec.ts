@@ -166,8 +166,8 @@ test("limits automatically prefers capable nodes and refreshes every source", as
   await expect(grid.locator('[data-provider="claude"]').getByRole("row").first()).toContainText("Gateway machine")
   expect(calls.some((call) => call.node === "peer-2")).toBeFalsy()
 
-  await codex.getByRole("button", { name: "Other machines (1)" }).click()
-  await expect(codex.getByText("codex CLI not found")).toBeVisible()
+  // A machine without the CLI says nothing about the account, so it is not offered as another report.
+  await expect(codex.getByRole("button", { name: "Other machines (1)" })).toHaveCount(0)
   await expect(page.getByText("Couldn't load limits from Unavailable node: Node is unreachable")).toBeVisible({ timeout: 15_000 })
 
   await page.getByRole("button", { name: "Refresh", exact: true }).click()

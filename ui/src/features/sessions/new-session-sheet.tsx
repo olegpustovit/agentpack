@@ -6,7 +6,7 @@ import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import type { Machine } from "@/features/machines/queries"
-import { api } from "@/lib/api"
+import { api, ApiError } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName } from "@/lib/format"
 import { sessionsQuery, projectsQuery } from "./queries"
@@ -59,7 +59,7 @@ function NewSessionForm({ machines, initialMachine, initialDirectory }: { machin
   const project = projects.find((item) => item.directory === directory) ?? projects[0]
   const newest = project?.launches[0]
   const harnessId = harness ?? newest?.harness ?? "claude"
-  const modeValue = mode ?? newest?.mode ?? "default"
+  const modeValue = mode ?? (newest?.mode || "default")
 
   const start = useMutation({
     mutationFn: (body: { directory: string; harness: string; mode: string }) =>
@@ -89,9 +89,12 @@ function NewSessionForm({ machines, initialMachine, initialDirectory }: { machin
   }
 
   // One reason at a time, most blocking first.
+  const machineName = online.find((item) => item.id === machineId)?.name ?? "this machine"
   let hint: string | undefined
   if (online.length === 0) hint = "No machine is online."
-  else if (folders.isSuccess && projects.length === 0) hint = "Folders will appear here after you launch an agent."
+  else if (folders.error instanceof ApiError && folders.error.status === 404) hint = `Update Agentpack on ${machineName} to see its projects.`
+  else if (folders.error) hint = `Couldn't load projects from ${machineName}: ${folders.error.message}`
+  else if (folders.isSuccess && projects.length === 0) hint = `Run an agent in a folder on ${machineName} first, for example agentpack claude. It then appears here.`
   else if (harnessId === "agy") hint = "Desktop launches must start locally."
 
   return (
@@ -110,12 +113,16 @@ function NewSessionForm({ machines, initialMachine, initialDirectory }: { machin
         </Field>
         <Field>
           <FieldLabel>Project</FieldLabel>
-          <PopupSelect
-            label="Project"
-            value={project?.directory ?? ""}
-            onValueChange={chooseProject}
-            items={projects.map((item) => ({ value: item.directory, label: item.directory }))}
-          />
+          {project ? (
+            <PopupSelect
+              label="Project"
+              value={project.directory}
+              onValueChange={chooseProject}
+              items={projects.map((item) => ({ value: item.directory, label: item.directory }))}
+            />
+          ) : (
+            <span className="min-w-0 text-(--fg2)">{folders.isPending ? "Loading projects…" : "No projects yet"}</span>
+          )}
         </Field>
         <Field>
           <FieldLabel>Agent</FieldLabel>

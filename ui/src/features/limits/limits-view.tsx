@@ -58,15 +58,15 @@ export function LimitsView() {
         </Empty>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col px-(--s6)">
-        <DataGrid aria-label="Provider limits" className="min-w-225">
+        <DataGrid aria-label="Provider limits" className="min-w-260">
           <DataGridHead>
             <tr>
               <DataGridHeaderCell className="w-32">Provider</DataGridHeaderCell>
-              <DataGridHeaderCell className="w-32">Window</DataGridHeaderCell>
+              <DataGridHeaderCell className="w-72">Window</DataGridHeaderCell>
               <DataGridHeaderCell className="w-40">Remaining</DataGridHeaderCell>
               <DataGridHeaderCell className="w-24 text-right">% left</DataGridHeaderCell>
               <DataGridHeaderCell>Resets</DataGridHeaderCell>
-              <DataGridHeaderCell className="w-36">Machine</DataGridHeaderCell>
+              <DataGridHeaderCell className="w-52">Machine</DataGridHeaderCell>
               <DataGridHeaderCell className="w-24">Plan</DataGridHeaderCell>
             </tr>
           </DataGridHead>
@@ -170,7 +170,7 @@ function reportLines(report: LimitReport, now: number): Line[] {
       key: `${report.id}:${window.id}`,
       cells: (
         <>
-          <DataGridCell>{window.label}</DataGridCell>
+          <DataGridCell title={window.label}>{window.label}</DataGridCell>
           <DataGridCell>
             <Meter value={left} label={`${window.label} remaining`} />
           </DataGridCell>
@@ -178,7 +178,7 @@ function reportLines(report: LimitReport, now: number): Line[] {
           <DataGridCell className={cn(reset.due && "text-(--fg3)")} title={reset.text}>
             {reset.due ? reset.text : reset.text.split(" · ")[0]}
           </DataGridCell>
-          <DataGridCell>{report.name}</DataGridCell>
+          <DataGridCell title={report.name}>{report.name}</DataGridCell>
           <DataGridCell>{snapshot.plan}</DataGridCell>
         </>
       ),

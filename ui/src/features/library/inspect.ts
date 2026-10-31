@@ -1,7 +1,7 @@
 import type { Package, Revision } from "@/lib/api-types"
 import type { LibraryInput } from "./model"
 
-export type InstalledRow = { key: string; machine: string; project: string; directory: string; commit: string }
+export type InstalledRow = { key: string; machineId: string; online: boolean; machine: string; project: string; directory: string; commit: string }
 
 const sameModule = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 
@@ -11,7 +11,7 @@ export function installedIn(inputs: LibraryInput[], module: string): InstalledRo
     input.projects.flatMap((row) => {
       const pin = row.packages.find((pkg) => sameModule(pkg.module, module) && pkg.commit !== "")
       if (!pin) return []
-      return [{ key: `${input.machine.id}\0${row.directory}`, machine: input.machine.name, project: row.name || row.directory, directory: row.directory, commit: pin.commit }]
+      return [{ key: `${input.machine.id}\0${row.directory}`, machineId: input.machine.id, online: input.machine.online !== false && row.available, machine: input.machine.name, project: row.name || row.directory, directory: row.directory, commit: pin.commit }]
     }),
   )
   return rows.sort((a, b) => a.machine.localeCompare(b.machine) || a.project.localeCompare(b.project) || a.directory.localeCompare(b.directory))

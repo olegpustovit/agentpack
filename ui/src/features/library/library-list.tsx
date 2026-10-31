@@ -11,7 +11,7 @@ import { projectsQuery } from "@/features/sessions/queries"
 import { StatusSlot } from "@/features/status/status-bar"
 import { plural, shortHash } from "@/lib/format"
 import { agentpacksQuery, packagesQuery } from "./queries"
-import { AddPackageSheet } from "./add-package-sheet"
+import { AddPackageSheet, SaveAgentpackSheet } from "./add-package-sheet"
 import { PendingInstalls } from "./pending-installs"
 import {
   arrangeLibrary,
@@ -92,6 +92,7 @@ export function LibraryList() {
   const search = route.useSearch()
   const navigate = route.useNavigate()
   const adding = search.add === "1"
+  const [saving, setSaving] = useState(false)
 
   const filter = parseFilter(search.type)
   const sort = parseSort(search.sort)
@@ -140,6 +141,9 @@ export function LibraryList() {
       <ToolbarSlot>
         <Button type="button" onClick={() => void navigate({ search: (prev) => ({ ...prev, add: "1" }) })}>
           Add package…
+        </Button>
+        <Button type="button" onClick={() => setSaving(true)}>
+          Save agentpack…
         </Button>
       </ToolbarSlot>
       <div className="flex shrink-0 flex-col gap-(--s3) p-(--s3)">
@@ -217,6 +221,7 @@ export function LibraryList() {
           </div>
         ))}
       </SourceList>
+      <SaveAgentpackSheet open={saving} onOpenChange={setSaving} />
       <AddPackageSheet
         open={adding}
         onOpenChange={(open) => {

@@ -10,7 +10,7 @@ import { useEventsConnected } from "@/features/events/use-events"
 import { AddPackageSheet } from "@/features/library/add-package-sheet"
 import { NewSessionSheet } from "@/features/sessions/new-session-sheet"
 import { projectsQuery } from "@/features/sessions/queries"
-import { api, LOCAL } from "@/lib/api"
+import { api, ApiError, LOCAL } from "@/lib/api"
 import type { ProjectRow } from "@/lib/api-types"
 import { basename, harnessName, relativeTime } from "@/lib/format"
 import { hud } from "@/lib/hud"
@@ -51,9 +51,10 @@ function MachineView({ machine }: { machine: Machine }) {
     onError: (error, target) => hud.error(`Couldn't forget ${projectLabel(target.project)}: ${error.message}`),
   })
 
+  const needsUpdate = machine.id !== LOCAL && projects.error instanceof ApiError && projects.error.status === 404
   const peer = topology.data?.peers.find((item) => item.id === machine.id)
   const facts = [
-    machine.online ? "Online" : "Offline",
+    needsUpdate ? "Needs update" : machine.online ? "Online" : "Offline",
     identity.data?.node.os,
     machine.id === LOCAL ? "local" : peer?.connection,
     identity.data ? `version ${identity.data.node.version}` : undefined,
@@ -73,7 +74,8 @@ function MachineView({ machine }: { machine: Machine }) {
             {cached ? `${machine.name} is offline. Showing last known projects.` : `${machine.name} is offline. No projects are cached.`}
           </Banner>
         )}
-        {projects.error && (
+        {needsUpdate && <Banner tone="warn" className="col-span-full">{`Update Agentpack on ${machine.name} to see its projects.`}</Banner>}
+        {projects.error && !needsUpdate && (
           <Banner tone="danger" className="col-span-full">
             {`Couldn't load projects from ${machine.name}: ${projects.error.message}`}
           </Banner>

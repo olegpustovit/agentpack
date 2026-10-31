@@ -5,6 +5,18 @@ All notable changes to `agentpack` are documented here. The format is based on
 "Pre-release" note in `AGENTS.md` — breaking changes may land between versions without a migration
 window.
 
+## [0.12.2] - 2026-10-31
+
+### Fixed
+
+- The gateway no longer breaks when a peer runs an older version: the Library crashed on its agentpacks, and Machines showed a raw 404 instead of asking for an update. An error in one view now keeps the window open and offers a retry.
+- Stop and restart alerts keep their buttons inside the dialog, long project paths stay inside sheets, and a machine with no projects says what to do in New session.
+- Provider limits prefer a machine that has the CLI over one reporting that it is missing. Grid columns can be resized.
+
+### Added
+
+- `Update` on Library rows behind the shown version, `Save agentpack…` in the Library toolbar, a `Stopping…` row state, and peer versions in the topology grid.
+
 ## [0.12.1] - 2026-10-31
 
 ### Changed

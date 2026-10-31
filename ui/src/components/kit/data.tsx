@@ -1,4 +1,4 @@
-import type { ComponentProps, CSSProperties, ReactNode } from "react";
+import type { ComponentProps, CSSProperties, PointerEvent, ReactNode } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { shortHash } from "@/lib/format";
 import { hud } from "@/lib/hud";
@@ -81,12 +81,55 @@ export function DataGridHead({ className, ...props }: ComponentProps<"thead">) {
   return <thead className={cn("sticky top-0 z-10 bg-(--window)", className)} {...props} />;
 }
 
-export function DataGridHeaderCell({ className, ...props }: ComponentProps<"th">) {
+const setColumnWidth = (cell: HTMLElement, width: number) => {
+  cell.style.width = `${Math.max(48, width)}px`;
+};
+
+// Drag or arrow keys set the width on the cell itself; fixed table layout sizes the column from it, and
+// the grid scrolls once the columns outgrow it. Double-click restores the default.
+// shortcut: widths last until the view unmounts, persist them if people resize the same columns repeatedly.
+function ColumnResizer({ label }: { label: string }) {
+  function drag(event: PointerEvent<HTMLElement>) {
+    const handle = event.currentTarget;
+    const cell = handle.parentElement!;
+    const start = event.clientX - cell.offsetWidth;
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    const move = (next: globalThis.PointerEvent) => setColumnWidth(cell, next.clientX - start);
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", () => handle.removeEventListener("pointermove", move), { once: true });
+  }
+  return (
+    <span
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`Resize ${label}`}
+      tabIndex={0}
+      onPointerDown={drag}
+      onDoubleClick={(event) => {
+        event.currentTarget.parentElement!.style.width = "";
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const cell = event.currentTarget.parentElement!;
+        setColumnWidth(cell, cell.offsetWidth + (event.key === "ArrowRight" ? 16 : -16));
+      }}
+      className="absolute inset-y-0 right-0 w-(--s3) cursor-col-resize hover:bg-(--sep) focus-visible:bg-(--accent)"
+    />
+  );
+}
+
+export function DataGridHeaderCell({ className, children, ...props }: ComponentProps<"th">) {
   return (
     <th
-      className={cn("h-(--head-h) border-b-[0.5px] border-(--sep) px-(--s3) text-left text-(length:--fs-xs) font-medium text-(--fg2)", className)}
+      scope="col"
+      className={cn("relative h-(--head-h) truncate border-b-[0.5px] border-(--sep) px-(--s3) text-left text-(length:--fs-xs) font-medium text-(--fg2)", className)}
       {...props}
-    />
+    >
+      {children}
+      <ColumnResizer label={typeof children === "string" ? children : "column"} />
+    </th>
   );
 }
 

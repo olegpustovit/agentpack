@@ -18,12 +18,19 @@ export function usable(snapshot: LimitSnapshot): boolean {
   return snapshot.state === "available" && windowsOf(snapshot).length > 0
 }
 
-// One account per provider: prefer a usable machine, then one that reports an error, then the
-// first. Windows are never summed across machines, so the others stay under a disclosure.
+// The CLI is absent on that machine, which says nothing about the provider. Matched on text because
+// peers on older versions report it the same way, with no separate state.
+function missing(report: LimitReport): boolean {
+  return report.snapshot.error?.endsWith("CLI not found") === true
+}
+
+// One account per provider: prefer a usable machine, then one whose CLI answered with an error, then
+// one that has the CLI at all. Windows are never summed across machines, so the others stay under a disclosure.
 export function selectReport(reports: LimitReport[]): LimitReport {
   return (
     reports.find((report) => usable(report.snapshot)) ??
-    reports.find((report) => report.snapshot.state === "error") ??
+    reports.find((report) => report.snapshot.state === "error" && !missing(report)) ??
+    reports.find((report) => !missing(report)) ??
     reports[0]!
   )
 }
@@ -36,7 +43,7 @@ export function providerGroups(reports: LimitReport[]): ProviderGroup[] {
   }
   return [...byProvider].map(([provider, list]) => {
     const selected = selectReport(list)
-    return { provider, selected, others: list.filter((report) => report !== selected), usable: usable(selected.snapshot) }
+    return { provider, selected, others: list.filter((report) => report !== selected && !missing(report)), usable: usable(selected.snapshot) }
   })
 }
 

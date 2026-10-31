@@ -128,7 +128,7 @@ test("the version popup switches the shown commit and marks the other rows", asy
   await page.getByRole("menuitem", { name: "9999aaa" }).click()
 
   await expect(details).toContainText("9999aaa")
-  await expect(page.getByText("Other version", { exact: true })).toHaveCount(12)
+  await expect(page.getByRole("button", { name: "Update", exact: true })).toHaveCount(12)
 })
 
 test("MCP inspector shows launcher, status, version and one row per project", async ({ page }) => {

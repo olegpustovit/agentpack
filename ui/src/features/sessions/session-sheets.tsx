@@ -13,6 +13,7 @@ import { hud } from "@/lib/hud"
 import type { ListedSession } from "./group"
 import { sessionsQuery } from "./queries"
 
+export type SaveTarget = Pick<ListedSession, "machine" | "machineName" | "directory" | "mode">
 export type SheetState = { kind: "rename" | "install" | "save"; row: ListedSession }
 
 // One Sheet for the three row dialogs. Each body mounts only while open, so its form starts clean.
@@ -77,7 +78,7 @@ function RenameForm({ row, onDone }: { row: ListedSession; onDone: () => void })
 }
 
 // Captures the folder as a new agentpack, or as a new revision of one this machine holds.
-function SaveForm({ row, onDone }: { row: ListedSession; onDone: () => void }) {
+export function SaveForm({ row, onDone }: { row: SaveTarget; onDone: () => void }) {
   const [name, setName] = useState(basename(row.directory))
   const [note, setNote] = useState("")
   const [blank, setBlank] = useState(false)

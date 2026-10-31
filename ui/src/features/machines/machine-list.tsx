@@ -8,7 +8,7 @@ import { LOCAL } from "@/lib/api"
 import { plural } from "@/lib/format"
 import { useDiscovering, useMachineQueries, useMachines, type Machine, type MachineQuery } from "./queries"
 
-function MachineRow({ machine, sessions }: { machine: Machine; sessions?: number }) {
+function MachineRow({ machine, sessions, needsUpdate }: { machine: Machine; sessions?: number; needsUpdate?: boolean }) {
   const matchRoute = useMatchRoute()
   const selected = matchRoute({ to: "/machines/$machine", params: { machine: machine.id } })
   return (
@@ -16,10 +16,10 @@ function MachineRow({ machine, sessions }: { machine: Machine; sessions?: number
       render={<Link to="/machines/$machine" params={{ machine: machine.id }} />}
       selected={Boolean(selected)}
     >
-      <StatusGlyph state={machine.online ? "running" : "offline"} />
+      <StatusGlyph state={!machine.online ? "offline" : needsUpdate ? "needsUpdate" : "running"} />
       <span className="min-w-0 flex-1 truncate">{machine.name}</span>
       <span className="shrink-0 text-(length:--fs-sm) text-(--fg3) sel:text-(--accent-fg)">
-        {machine.online ? (machine.id === LOCAL ? "gateway" : sessions) : "Offline"}
+        {!machine.online ? "Offline" : needsUpdate ? "Needs update" : machine.id === LOCAL ? "gateway" : sessions}
       </span>
     </SourceRow>
   )
@@ -58,7 +58,7 @@ export function MachineList() {
         <GroupHeader className="mt-(--s3)">Machines</GroupHeader>
         {discovering && <p className="px-(--s3) py-(--s2) text-(length:--fs-sm) text-(--fg2)">Discovering connected machines</p>}
         {machines.filter((machine) => machine.name.toLowerCase().includes(needle)).map((machine) => (
-          <MachineRow key={machine.id} machine={machine} sessions={sessions.byMachine[machine.id]?.data?.length} />
+          <MachineRow key={machine.id} machine={machine} sessions={sessions.byMachine[machine.id]?.data?.length} needsUpdate={projects.byMachine[machine.id]?.needsUpdate} />
         ))}
       </SourceList>
     </div>

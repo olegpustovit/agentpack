@@ -4,7 +4,7 @@ export type LibraryType = "skill" | "plugin" | "mcp" | "agentpack"
 export type LibraryFilter = "all" | LibraryType
 export type LibrarySort = "type" | "name" | "updated" | "machine"
 
-export type LibraryMachine = { id: string; name: string }
+export type LibraryMachine = { id: string; name: string; online?: boolean }
 export type LibraryProject = { machine: string; name: string; directory: string }
 
 // One machine's answers from /api/library/packages, /api/library/agentpacks and /api/projects.

@@ -47,6 +47,7 @@ export function SessionList() {
   const commands = useSessionCommands()
   const [sheet, setSheet] = useState<SheetState | null>(null)
   const [confirm, setConfirm] = useState<Confirm | null>(null)
+  const [stopping, setStopping] = useState<ReadonlySet<string>>(new Set())
   const [cursor, setCursor] = useState<Cursor | null>(null)
   const pending = useRef<number | undefined>(undefined)
 
@@ -223,6 +224,7 @@ export function SessionList() {
                       session={session}
                       selected={selected}
                       tabStop={key === tabStop}
+                      stopping={stopping.has(key)}
                       actions={actionsFor(session, selected)}
                     />
                   )
@@ -247,7 +249,17 @@ export function SessionList() {
             onConfirm={() => {
               const { kind, row } = confirm
               setConfirm(null)
-              if (kind === "stop") void commands.stop(row)
+              if (kind === "stop") {
+                // An agent that ignores the signal can hold this request for up to 90 s.
+                setStopping((keys) => new Set(keys).add(rowKey(row)))
+                void commands.stop(row).finally(() =>
+                  setStopping((keys) => {
+                    const next = new Set(keys)
+                    next.delete(rowKey(row))
+                    return next
+                  }),
+                )
+              }
               else void commands.restart(row)
             }}
           />

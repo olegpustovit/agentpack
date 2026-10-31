@@ -1,4 +1,5 @@
 import { getRouteApi } from "@tanstack/react-router"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { Puzzle, Sparkles } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Hash, Inspector, InspectorHead, KeyValue, Section } from "@/components/kit/data"
@@ -6,7 +7,10 @@ import { Empty } from "@/components/kit/feedback"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
 import { plural, shortHash } from "@/lib/format"
-import { installedIn, packageRecord, packageVersions } from "./inspect"
+import { projectsQuery } from "@/features/sessions/queries"
+import { hud } from "@/lib/hud"
+import { installedIn, packageRecord, packageVersions, type InstalledRow } from "./inspect"
+import { errorText, installPackage } from "./mutations"
 import { Failures, MissingItem } from "./inspector-state"
 import type { PackageItem } from "./model"
 import { useLibrary } from "./use-library"
@@ -19,6 +23,15 @@ export function PackageInspector({ module }: { module: string }) {
   const [picked, setPicked] = useState<string>()
   const search = route.useSearch()
   const navigate = route.useNavigate()
+  const queryClient = useQueryClient()
+  const update = useMutation({
+    mutationFn: ({ row, spec }: { row: InstalledRow; spec: string }) => installPackage(row.machineId, row.directory, spec, true),
+    onSuccess: (_result, { row }) => {
+      void queryClient.invalidateQueries({ queryKey: projectsQuery(row.machineId).queryKey })
+      hud.success(`Updated ${row.project}`)
+    },
+    onError: (error, { row }) => hud.error(`Couldn't update ${row.project}: ${errorText(error)}`),
+  })
   const item = items.find(
     (entry): entry is PackageItem =>
       (entry.type === "skill" || entry.type === "plugin") && entry.module.toLowerCase() === module.toLowerCase(),
@@ -90,7 +103,7 @@ export function PackageInspector({ module }: { module: string }) {
                 <tr>
                   <DataGridHeaderCell className="w-40">Machine</DataGridHeaderCell>
                   <DataGridHeaderCell>Project</DataGridHeaderCell>
-                  <DataGridHeaderCell className="w-28">Pin</DataGridHeaderCell>
+                  <DataGridHeaderCell className="w-44">Pin</DataGridHeaderCell>
                   <DataGridHeaderCell className="w-32">Status</DataGridHeaderCell>
                 </tr>
               </DataGridHead>
@@ -101,8 +114,17 @@ export function PackageInspector({ module }: { module: string }) {
                     <DataGridCell title={row.directory}>{row.project}</DataGridCell>
                     <DataGridCell>
                       <Hash value={row.commit} />
+                      {row.commit !== commit && <span className="text-(--fg2)"> → {shortHash(commit)}</span>}
                     </DataGridCell>
-                    <DataGridCell>{row.commit === commit ? "Current" : "Other version"}</DataGridCell>
+                    <DataGridCell>
+                      {row.commit === commit ? (
+                        "Current"
+                      ) : (
+                        <Button size="sm" disabled={!row.online || update.isPending} onClick={() => update.mutate({ row, spec: `${item.module}@${commit}` })}>
+                          Update
+                        </Button>
+                      )}
+                    </DataGridCell>
                   </DataGridRow>
                 ))}
               </tbody>

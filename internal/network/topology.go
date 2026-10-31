@@ -27,6 +27,7 @@ type topologyPeer struct {
 	Connection string    `json:"connection"`
 	Relay      string    `json:"relay"`
 	RTTms      int64     `json:"rtt_ms,omitempty"`
+	Version    string    `json:"version,omitempty"`
 	LastSeen   time.Time `json:"last_seen,omitzero"`
 	// Sessions is always 0 here; the UI fills it from the sessions query.
 	Sessions int `json:"sessions"`
@@ -78,6 +79,7 @@ func topologyFrom(ctx context.Context, status tailnetStatus, config SharingConfi
 		case ok:
 			entry.State = "reachable"
 			entry.RTTms = hit.RTT.Milliseconds()
+			entry.Version = hit.Node.Version
 		default:
 			entry.State = "no-gateway"
 		}

@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test"
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test"
 import { mockAPI, projectRow, session } from "./helpers"
 
 // The kit's look is enforced by CSS, which unit tests and role queries cannot see. A cascade mistake
@@ -170,4 +170,123 @@ test("a failing machine list still reports the gateway connection", async ({ pag
   await page.route("**/api/nodes", (route) => route.fulfill({ status: 400, json: { error: "tailscale is not running" } }))
   await page.goto("/sessions")
   await expect(page.getByRole("contentinfo")).toContainText("Connected · 1 machine")
+})
+
+// Peers update on their own schedule, so the gateway routinely talks to older ones.
+test.describe("a peer on an older version", () => {
+  test.skip(({ isMobile }) => isMobile, "desktop")
+
+  async function oldPeer(page: Page) {
+    await desktop(page)
+    await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "old", name: "main", online: true }] }))
+    const unlessPeer = (json: unknown, peerJson: unknown, status = 200) => (route: Route) =>
+      new URL(route.request().url()).searchParams.has("node") ? route.fulfill({ status, json: peerJson }) : route.fulfill({ json })
+    // It ignores ?include=revisions and has no /api/projects.
+    await page.route("**/api/library/agentpacks**", unlessPeer([], [{ id: "bare", name: "bare-pack", revisions: ["r1"], heads: ["r1"] }]))
+    await page.route("**/api/projects**", unlessPeer([], "404 page not found", 404))
+  }
+
+  test("the Library lists its bare agentpacks instead of crashing", async ({ page }) => {
+    await oldPeer(page)
+    await page.goto("/library")
+    await expect(page.getByRole("link", { name: /bare-pack/ })).toBeVisible()
+  })
+
+  test("Machines asks for an update, with no raw 404", async ({ page }) => {
+    await oldPeer(page)
+    await page.goto("/machines/old")
+    await expect(page.getByText("Update Agentpack on main to see its projects.")).toBeVisible()
+    await expect(page.getByText("404")).toHaveCount(0)
+  })
+})
+
+test("a confirm alert keeps its stacked buttons inside it", async ({ page, isMobile }) => {
+  test.skip(isMobile, "desktop")
+  await desktop(page)
+  await page.goto("/settings/account")
+  await page.getByRole("button", { name: "Stop gateway…" }).click()
+  const alert = await page.getByRole("alertdialog").boundingBox()
+  const stop = await page.getByRole("alertdialog").getByRole("button", { name: "Stop gateway" }).boundingBox()
+  const cancel = await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).boundingBox()
+  expect(stop!.x).toBeGreaterThanOrEqual(alert!.x)
+  expect(stop!.x + stop!.width).toBeLessThanOrEqual(alert!.x + alert!.width)
+  expect(cancel!.y).toBeGreaterThan(stop!.y)
+})
+
+test("a machine with no projects says so in New session", async ({ page, isMobile }) => {
+  test.skip(isMobile, "desktop")
+  await desktop(page)
+  await page.route("**/api/projects**", (route) => route.fulfill({ json: [] }))
+  await page.goto("/sessions?new=1")
+  await expect(page.getByText("No projects yet")).toBeVisible()
+  await expect(page.getByRole("combobox", { name: "Project" })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Start session" })).toBeDisabled()
+})
+
+test("a grid column can be dragged wider", async ({ page, isMobile, browserName }) => {
+  test.skip(isMobile || browserName !== "chromium", "desktop pointer")
+  await desktop(page)
+  await page.goto("/limits")
+  const header = page.getByRole("columnheader", { name: "Window" })
+  const before = (await header.boundingBox())!
+  const handle = (await page.getByRole("separator", { name: "Resize Window" }).boundingBox())!
+  await page.mouse.move(handle.x + 1, handle.y + 5)
+  await page.mouse.down()
+  await page.mouse.move(handle.x + 81, handle.y + 5, { steps: 3 })
+  await page.mouse.up()
+  expect((await header.boundingBox())!.width).toBeCloseTo(before.width + 80, -1)
+})
+
+test("Update on an Installed in row installs the shown commit there", async ({ page, isMobile }) => {
+  test.skip(isMobile, "desktop")
+  await desktop(page)
+  const pin = (commit: string) => ({ module: "github.com/acme/tools", commit: commit.repeat(40), content_hash: "", cache_key: commit, kind: "skill", name: "tools", url: "", direct: true })
+  await page.route("**/api/projects**", (route) => route.fulfill({ json: [projectRow("/work/a", [{ harness: "claude" }], { packages: [pin("a")] }), projectRow("/work/b", [{ harness: "claude" }], { packages: [pin("b")] })] }))
+  await page.route("**/api/library/packages**", (route) => route.fulfill({ json: ["a", "b"].map((commit) => ({ ...pin(commit), id: commit, owner: "acme", repo: "tools" })) }))
+  const posted: { spec: string; directory: string }[] = []
+  await page.route("**/api/packages", (route) => {
+    posted.push(route.request().postDataJSON())
+    return route.fulfill({ json: { installed: true } })
+  })
+  await page.goto("/library/package/github.com/acme/tools")
+  await page.getByRole("button", { name: "Update", exact: true }).click()
+  await expect.poll(() => posted.length).toBe(1)
+  // Exactly one row is behind the shown commit: it moves to the other row's pin, in its own folder.
+  const target = posted[0]!
+  expect(target.spec).toBe(`github.com/acme/tools@${(target.directory === "/work/a" ? "b" : "a").repeat(40)}`)
+})
+
+test("a long project path stays inside the New session sheet", async ({ page, isMobile }) => {
+  test.skip(isMobile, "desktop")
+  await desktop(page)
+  const long = `/work/${"very-long-folder-name/".repeat(12)}project`
+  await page.route("**/api/projects**", (route) => route.fulfill({ json: [projectRow(long, [{ harness: "claude", mode: "" }])] }))
+  await page.goto("/sessions?new=1")
+  const sheet = (await page.getByRole("dialog").boundingBox())!
+  const start = (await page.getByRole("button", { name: "Start session" }).boundingBox())!
+  const project = (await page.getByRole("combobox", { name: "Project" }).boundingBox())!
+  expect(start.x + start.width).toBeLessThanOrEqual(sheet.x + sheet.width)
+  expect(project.x + project.width).toBeLessThanOrEqual(sheet.x + sheet.width)
+  // A CLI launch records an empty mode; the field still names the real one.
+  await expect(page.getByLabel("Mode")).toHaveValue("default")
+})
+
+test("a stop in progress shows on its row until it finishes", async ({ page, isMobile }) => {
+  test.skip(isMobile, "desktop")
+  await desktop(page)
+  let finish = () => {}
+  const held = new Promise<void>((resolve) => (finish = resolve))
+  await page.route("**/api/sessions/local-one/stop", async (route) => {
+    await held
+    return route.fulfill({ json: { stopped: true } })
+  })
+  await page.goto("/sessions")
+  const wrapper = page.locator('[data-row-key="local:local-one"]').locator("..")
+  await wrapper.hover()
+  await wrapper.getByRole("button", { name: "More actions" }).click()
+  await page.getByRole("menuitem", { name: "Stop…" }).click()
+  await page.getByRole("alertdialog").getByRole("button", { name: "Stop agent" }).click()
+  await expect(wrapper).toContainText("Stopping…")
+  finish()
+  await expect(wrapper).not.toContainText("Stopping…")
 })

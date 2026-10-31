@@ -65,13 +65,15 @@ export function TopologyView() {
   const gatewaySessions = count(LOCAL)
 
   const rows = [
-    { id: LOCAL, name: data.self.name, os: data.self.os, state: "Gateway", path: "—", sessions: gatewaySessions, reason: "This machine" },
+    { id: LOCAL, name: data.self.name, os: data.self.os, state: "Gateway", path: "—", version: "", sessions: gatewaySessions, reason: "This machine" },
     ...data.peers.map((peer) => ({
       id: peer.id,
       name: peer.name,
       os: peer.os,
       state: stateWord(peer.state),
       path: peer.state === "reachable" ? edgeOf(peer).label : "—",
+      // A reachable peer that reports no version predates the field, so it needs an update.
+      version: peer.state === "reachable" ? peer.version || "Needs update" : "",
       sessions: count(peer.id, peer.sessions),
       reason: reasonOf(peer),
     })),
@@ -131,13 +133,14 @@ export function TopologyView() {
           </Section>
         )}
         <Section title="Machines" className="col-span-full">
-          <DataGrid aria-label="Machines and connections" className="min-w-180">
+          <DataGrid aria-label="Machines and connections" className="min-w-200">
             <DataGridHead>
               <DataGridRow>
                 <DataGridHeaderCell className="w-44">Machine</DataGridHeaderCell>
                 <DataGridHeaderCell className="w-24">OS</DataGridHeaderCell>
                 <DataGridHeaderCell className="w-32">State</DataGridHeaderCell>
                 <DataGridHeaderCell className="w-28">Path</DataGridHeaderCell>
+                <DataGridHeaderCell className="w-28">Version</DataGridHeaderCell>
                 <DataGridHeaderCell className="w-24">Sessions</DataGridHeaderCell>
                 <DataGridHeaderCell>Reason</DataGridHeaderCell>
               </DataGridRow>
@@ -149,6 +152,7 @@ export function TopologyView() {
                   <DataGridCell>{row.os}</DataGridCell>
                   <DataGridCell>{row.state}</DataGridCell>
                   <DataGridCell>{row.path}</DataGridCell>
+                  <DataGridCell>{row.version || "—"}</DataGridCell>
                   <DataGridCell>{row.sessions ?? "—"}</DataGridCell>
                   <DataGridCell>{row.reason}</DataGridCell>
                 </DataGridRow>
