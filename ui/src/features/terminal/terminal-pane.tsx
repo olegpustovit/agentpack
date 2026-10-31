@@ -7,6 +7,7 @@ import { ContextMenuSeparator } from "@/components/ui/context-menu"
 import { StatusSlot } from "@/features/status/status-bar"
 import type { SessionInfo } from "@/lib/api-types"
 import { zoomPercent } from "./fit"
+import { terminalPool } from "./pool"
 import { TerminalSession } from "./terminal-session"
 
 // xterm is imported only here: the session route loads this module with React.lazy.
@@ -22,15 +23,16 @@ export default function TerminalPane({
   // False only once the sessions list has loaded without this session.
   listed: boolean
 }) {
-  const [terminal] = useState(() => new TerminalSession(machine, sessionId))
+  const [terminal] = useState(() => terminalPool.get(machine, sessionId, () => new TerminalSession(machine, sessionId)))
   const stageRef = useRef<HTMLDivElement>(null)
   const snapshot = useSyncExternalStore(terminal.subscribe, terminal.getSnapshot)
 
   useEffect(() => {
     const stage = stageRef.current
     if (!stage) return
-    terminal.start(stage)
-    return () => terminal.dispose()
+    terminal.attach(stage)
+    // Unmount only detaches: the pool keeps the session, and its socket, for a quick return.
+    return () => terminal.detach()
   }, [terminal])
 
   useEffect(() => {

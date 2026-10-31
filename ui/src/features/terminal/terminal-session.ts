@@ -7,7 +7,7 @@ import { BASE_FONT, fitFont, MIN_FONT, nudgeFont } from "./fit"
 
 declare global {
   interface Window {
-    // Only set under WebDriver (Playwright) so tests can read selection and modes.
+    // Only set under WebDriver (Playwright) so tests can read selection, modes and writes.
     __agentpackTerminal?: Terminal
   }
 }
@@ -40,8 +40,9 @@ const RESTART_POLL_MS = 250
 const RESTART_DEADLINE_MS = 90_000
 const PHONE_WIDTH = 760
 const PHONE_FLOOR = 9
+const RESET = encoder.encode("\x1bc")
 
-function reconnectDelay(retries: number): number {
+export function reconnectDelay(retries: number): number {
   return Math.min(10_000, 500 * 2 ** (retries - 1))
 }
 
@@ -92,7 +93,8 @@ function registerReplyHandlers(term: Terminal, canRespond: () => boolean) {
 }
 
 // One terminal for one session: owns the xterm instance, the worker WebSocket, and the detached
-// element xterm draws into. The pane starts it on mount and disposes it on unmount.
+// element xterm draws into. The pool keeps it alive across pane mounts; `detach` only removes the
+// element, so output keeps arriving while the session is hidden.
 export class TerminalSession {
   readonly #machine: string
   readonly #sessionId: string
@@ -109,6 +111,8 @@ export class TerminalSession {
   #state: TerminalState | null = null
   #replayComplete = true
   #firstFrameMarked = false
+  // Bytes of the session's output the terminal has received, in the worker's offset space.
+  #position = 0
   #retries = 0
   // Bumped per connection so stale socket callbacks see they are obsolete.
   #generation = 0
@@ -139,27 +143,39 @@ export class TerminalSession {
     this.#listed = listed
   }
 
-  start(stage: HTMLElement) {
-    this.#teardown()
+  // First attach opens the terminal and the socket. Later attaches only move the element back in.
+  attach(stage: HTMLElement) {
     this.#stage = stage
     stage.append(this.#element)
-    this.#openFresh()
+    if (this.#term) this.#term.refresh(0, this.#term.rows - 1)
+    else this.#openFresh()
     this.#observer = new ResizeObserver(() => {
       cancelAnimationFrame(this.#frame)
       this.#frame = requestAnimationFrame(() => this.#refit())
     })
     this.#observer.observe(stage)
-    this.#term?.focus()
     this.#appearance.addEventListener("change", this.#onAppearance)
+    this.#onAppearance()
+    this.#expose()
+    this.#refit()
+    this.#term?.focus()
+    this.#publish()
+  }
+
+  // Keeps the connection and the terminal state; only the on-screen element leaves.
+  detach() {
+    this.#unexpose()
+    this.#observer?.disconnect()
+    this.#observer = null
+    cancelAnimationFrame(this.#frame)
+    this.#appearance.removeEventListener("change", this.#onAppearance)
+    this.#element.remove()
+    this.#stage = null
   }
 
   dispose() {
+    this.detach()
     this.#teardown()
-    this.#appearance.removeEventListener("change", this.#onAppearance)
-    this.#observer?.disconnect()
-    this.#observer = null
-    this.#element.remove()
-    this.#stage = null
     this.#publish()
   }
 
@@ -245,17 +261,25 @@ export class TerminalSession {
     if (term.options.fontSize !== before) this.#publish()
   }
 
+  // Tests read the attached terminal through this hook; it follows the session on screen.
+  #expose() {
+    if (navigator.webdriver && this.#term && this.#stage) window.__agentpackTerminal = this.#term
+  }
+
+  #unexpose() {
+    if (navigator.webdriver && window.__agentpackTerminal === this.#term) delete window.__agentpackTerminal
+  }
+
   #teardown() {
+    this.#unexpose()
     this.#restartToken++
     this.#generation++
     this.#retries = 0
-    cancelAnimationFrame(this.#frame)
     const socket = this.#socket
     this.#socket = null
     socket?.close()
     this.#term?.dispose()
     this.#term = null
-    if (navigator.webdriver) delete window.__agentpackTerminal
     this.#attachment = 0
     this.#state = null
     this.#replayComplete = true
@@ -291,7 +315,7 @@ export class TerminalSession {
     term.attachCustomKeyEventHandler((event) => this.#key(term, event))
     registerReplyHandlers(term, () => this.#canRespond())
     this.#term = term
-    if (navigator.webdriver) window.__agentpackTerminal = term
+    this.#expose()
     void this.#loadWebgl(term)
     this.#connect(false)
     this.#refit()
@@ -362,7 +386,8 @@ export class TerminalSession {
     this.#publish()
   }
 
-  // Reconnects reset the screen with `ESC c` before the replay: the worker replays from the start.
+  // A reconnect asks the worker to resume at `position`. The worker answers with the offset it
+  // actually resumed from; only a different offset means the screen must be reset before the replay.
   #connect(reconnecting: boolean) {
     const term = this.#term
     if (!term) return
@@ -370,6 +395,7 @@ export class TerminalSession {
     this.#socket = null
     previous?.close()
     const generation = ++this.#generation
+    const since = this.#position
     this.#attachment = 0
     this.#replayComplete = false
     this.#firstFrameMarked = false
@@ -379,6 +405,7 @@ export class TerminalSession {
 
     const url = new URL(`/api/sessions/${encodeURIComponent(this.#sessionId)}/terminal`, location.href)
     if (this.#machine !== LOCAL) url.searchParams.set("node", this.#machine)
+    if (reconnecting) url.searchParams.set("since", String(since))
     url.protocol = location.protocol === "https:" ? "wss:" : "ws:"
     const socket = new WebSocket(url)
     this.#socket = socket
@@ -405,38 +432,34 @@ export class TerminalSession {
     socket.onmessage = (event: MessageEvent) => {
       if (this.#socket !== socket || generation !== this.#generation) return
       if (event.data instanceof ArrayBuffer) {
-        const firstFrame = !receivedFrame
         receivedFrame = true
         if (!this.#firstFrameMarked) {
           this.#firstFrameMarked = true
           terminalMark("firstframe")
         }
-        pendingOutput += event.data.byteLength
+        const length = event.data.byteLength
+        pendingOutput += length
         if (pendingOutput > MAX_PENDING_BYTES) {
           socket.close()
           this.#notice("Output exceeded this browser’s buffer. Reconnect to catch up.")
           return
         }
-        const length = event.data.byteLength
-        let frame = new Uint8Array(event.data)
-        const written = () => {
+        this.#position += length
+        term.write(new Uint8Array(event.data), () => {
           pendingOutput -= length
           finishReplay()
-        }
-        if (reconnecting && firstFrame) {
-          const reset = encoder.encode("\x1bc")
-          const ordered = new Uint8Array(reset.length + frame.length)
-          ordered.set(reset)
-          ordered.set(frame, reset.length)
-          frame = ordered
-        }
-        term.write(frame, written)
+        })
         return
       }
       try {
         const message = JSON.parse(event.data) as ControlMessage
         if (message.attachment) this.#attachment = message.attachment
-        if (message.type === "attached") terminalMark("attached")
+        if (message.type === "attached") {
+          terminalMark("attached")
+          const offset = message.offset ?? 0
+          if (reconnecting && offset !== since) term.write(RESET)
+          this.#position = offset
+        }
         if (message.type === "attached" && message.state?.shared_input !== true) replayReceived = true
         if (message.type === "replay_complete") {
           replayReceived = true
