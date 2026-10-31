@@ -11,9 +11,36 @@ no service worker, so API responses and registry data are never cached by the UI
 external script, CDN, font, analytics, localStorage credentials, or runtime Node server.
 
 Build with `bun install --frozen-lockfile && bun run build`; `make ui-stage` publishes it.
-Run browser checks with `bunx playwright install chromium && bun run e2e`. Node/npm are build tools only.
+Run browser checks with `bunx playwright install chromium && bun run e2e`.
 The gateway should set a same-origin CSP (scripts/styles from self, WebSocket connect
 from self; xterm dynamically sets style attributes) and disable HTTP caching for APIs.
+
+## Bundle sizes and regression budgets
+
+`bun run build` runs `bun run size` (`scripts/check-size.ts`), which fails over budget. Sizes are gzip bytes from `make artifact` on this branch. "Before" is the plan's measurement of the old single-file UI (`app.js`); the plan gives no before value for the CSS or the chunks.
+
+| Bundle | Before | After | Budget |
+|---|---|---|---|
+| Initial JS (entry and preloaded chunks) | 97.7 KB, one `app.js` | 156,226 B | 170 KB |
+| Initial CSS | — | 12,094 B | 30 KB |
+| Terminal chunk (xterm, `terminal-pane-*.js`) | — | 98,642 B | 100 KB |
+| WebGL addon chunk (`addon-webgl-*.js`) | — | 30,984 B | 100 KB |
+
+Regression budgets are enforced by `tests/budgets.spec.ts` on the same fixture as the audit (3 machines, 4 projects, 3 harnesses per project). The run on this branch passed all 13 tests on chromium (2.9 min). Only the terminal socket count was printed: 1 new socket for four moves.
+
+| Measure | Before | Budget | After |
+|---|---|---|---|
+| Idle Sessions requests per 60 s, events connected | 92 | ≤ 6 | pass |
+| Idle Library requests per 30 s, events connected | 146 | ≤ 3 | pass |
+| Sidebar node changes per 60 s, unchanged data | 960 | 0 | pass |
+| Return to Library within `staleTime`: requests / loader | 75 / shown | 0 / not shown | pass |
+| First Library open requests | 56 | ≤ 9 | pass |
+| Install rows for the fixture | 36 | 12 | pass |
+| New Session folder options per machine | 12 | 4 | pass |
+| Peer answering in 6 s appears | never | within 7 s | pass |
+| New sockets for 4 moves among recent sessions | 4 | ≤ 1 | 1 |
+| Click at cell 61,21 at any fit | reports 90,30 | reports 61,21 | pass (3 viewports) |
+| Content height after a notice | 24 px | unchanged | pass |
 
 ## API contract
 

@@ -155,6 +155,37 @@ The Cursor CLI also reads workspace **`.cursor/`** for some features; behavior m
 
 Antigravity (`agy`) has no config-root override in the installed CLI and shares auth/settings with the desktop app under the user's real profile. agentpack therefore leaves **`HOME`** and **`~/.gemini`** untouched and exposes pack content as a workspace plugin: **`./.agents/plugins/agentpack-bundle`** symlinks to **`$STAGING/agy/agentpack-bundle`**. Add **`.agents/plugins/agentpack-bundle`** to **`.gitignore`** if you do not want the symlink in version control.
 
+## Gateway UI
+
+The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make ui-stage` builds it and copies `ui/dist` into `internal/network/webdist`, which the Go gateway embeds and serves at `/`.
+
+- **Stack:** React 19, TanStack Router (file routes in `ui/src/routes/`) and TanStack Query, Tailwind CSS v4, shadcn components on `@base-ui/react` (`ui/src/components/ui/`), and xterm.js 6 for the terminal, loaded lazily. Tokens live in `ui/src/index.css`. React Compiler handles memoization: never hand-write `useMemo`, `useCallback` or `memo`.
+- **Kit:** macOS composition in `ui/src/components/kit/`, specified in `ui/DESIGN.md`. Components use only kit tokens.
+- **Routes** (`ui/src/routes/`):
+
+| Path | Search params |
+|---|---|
+| `/` | none (redirects to `/sessions`) |
+| `/login` | `return_to` |
+| `/sessions`, `/sessions/$machine/$sessionId` | `q`, `group`, `new` |
+| `/library` | `q`, `type`, `sort`, `add` |
+| `/library/package/$` | same, plus `install` |
+| `/library/mcp/$name` | same |
+| `/library/agentpack/$id` | same, plus `revision`, `restore` |
+| `/machines` | `q` (redirects to `/machines/local`) |
+| `/machines/topology` | none |
+| `/machines/$machine` | `q` |
+| `/limits` | `machine` |
+| `/settings` | none (redirects to `/settings/general`) |
+| `/settings/$pane` | none; `general`, `sharing`, `replication`, `appearance`, `account` |
+
+- **Never use `node` as a search param.** The Go handler treats `?node=` as a proxy instruction on `/api/` paths, and this rule stays in force anyway.
+- Validate search params with `.optional().catch(undefined)`, never `.catch("")`, which makes the param required on every `<Link>`. Apply defaults where the value is read.
+- Linkable overlays open from a search param (`new`, `install`, `restore`, `add`). Confirmations are local state.
+- **Alert model:** one surface per situation. Action finished: `Hud`, 4 s. Action failed with nothing open: `Hud` with `Retry`, until dismissed. Ongoing pane or terminal state: `Banner`. Irreversible action: `ConfirmAlert`. Form or server rejection: inline under the field. Do not use `notice()`, `*-status` lines or `window.confirm`.
+- **Size budgets** (`ui/scripts/check-size.ts`, run by every `bun run build`): main JS 170 KB gzip, initial CSS 30 KB, every lazy JS chunk 100 KB (the terminal included). Never raise a budget. The root route imports only `Button`, `Input`, `Tooltip` and `DropdownMenu`; dialogs, selects, the command palette and context menus load inside routes or through `React.lazy`.
+- **Checks:** in `ui/`, `bun run lint && bun run test && bun run build && bun run e2e`. `make artifact` also runs `scripts/ui-smoke.sh` against the built gateway.
+
 ## What agentpack does
 
 **Package storage.** Pin resolution uses `$AGENTPACK_HOME` and `$STAGING`. `sync` keeps materialized package trees outside the workspace. Cursor and Antigravity launchers may add the workspace links described below; `eject` deliberately materializes content in the project. Pack agents are not installed into the user-global `~/.cursor` or `~/.claude` directories.

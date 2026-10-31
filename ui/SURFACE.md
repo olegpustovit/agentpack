@@ -18,6 +18,6 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 
 ## Evidence
 
-`tests/gateway.spec.js` exercises the behavioral contract. `tests/review-captures.spec.js` captures both themes and desktop/mobile states. The optional host-color query and screen-snapshot protocol are outside the chosen scope; the UI labels its fallback colors and keeps the last frame dimmed through reconnect.
+`tests/gateway.spec.ts` exercises the behavioral contract. `tests/review-captures.spec.ts` captures both themes and desktop/mobile states. The optional host-color query and screen-snapshot protocol are outside the chosen scope; the UI keeps the last frame dimmed through reconnect.
 
 `public/icon.svg` comes from the approved artifact. `public/icon-192.png` and `public/icon-512.png` are raster exports of that SVG for Chromium installability; they contain no generated artwork.
