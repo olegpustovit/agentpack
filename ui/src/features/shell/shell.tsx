@@ -9,18 +9,21 @@ import { buttonVariants } from "@/components/ui/button"
 import { useIsPhone } from "./use-is-phone"
 import { useSidebar } from "./sidebar"
 import { listDetailViews, tabs, useRoutePosition, views } from "./views"
+import { ToolbarProvider, ToolbarTarget } from "./toolbar-slot"
 
 export function AppShell({ children }: { children: ReactNode }) {
   useShellShortcuts()
   return (
     <StatusProvider>
-      <AppWindow>
-        <AppToolbar />
-        {children}
-        <TabBar />
-        <StatusBar />
-        <Hud />
-      </AppWindow>
+      <ToolbarProvider>
+        <AppWindow>
+          <AppToolbar />
+          {children}
+          <TabBar />
+          <StatusBar />
+          <Hud />
+        </AppWindow>
+      </ToolbarProvider>
     </StatusProvider>
   )
 }
@@ -90,6 +93,7 @@ function AppToolbar() {
       </nav>
       <span className="min-w-0 truncate text-(--fs) font-medium">{title}</span>
       <div className="flex-1" />
+      <ToolbarTarget />
       <Link
         to="/settings"
         aria-label="Settings"

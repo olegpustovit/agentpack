@@ -87,6 +87,8 @@ export type MachineQuery<T> = {
   pending: boolean
   // A peer answered 404: it predates this endpoint and must be updated.
   needsUpdate: boolean
+  // When the cached data last succeeded, in ms since epoch; 0 when none yet.
+  updatedAt: number
 }
 
 export type MachineQueries<T> = {
@@ -119,6 +121,7 @@ export function useMachineQueries<T>(
           stale: !machine.online || result?.isStale === true,
           pending,
           needsUpdate: machine.id !== LOCAL && error instanceof ApiError && error.status === 404,
+          updatedAt: result?.dataUpdatedAt ?? 0,
         }
       })
       return { byMachine, firstLoadPending, errors }
