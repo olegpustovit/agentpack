@@ -7,6 +7,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/mcp"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 // TestMain gives the tests that do not choose a staging root one of their
@@ -14,6 +15,8 @@ import (
 // it each such test leaves an agentpack-<hash> directory in the system
 // temporary directory.
 func TestMain(m *testing.M) {
+	// tests read the user home through USERPROFILE on Windows, which some shells drop
+	paths.RestoreUserEnvironment()
 	root, err := os.MkdirTemp("/tmp", "ap")
 	if err != nil {
 		root, err = os.MkdirTemp("", "ap")
