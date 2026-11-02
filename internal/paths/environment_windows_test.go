@@ -9,9 +9,10 @@ import (
 func TestRestoreUserEnvironmentFillsMissingVariables(t *testing.T) {
 	t.Setenv("USERPROFILE", "")
 	t.Setenv("LOCALAPPDATA", "")
+	t.Setenv("APPDATA", "")
 	t.Setenv("AGENTPACK_HOME", "")
 	RestoreUserEnvironment()
-	if os.Getenv("USERPROFILE") == "" || os.Getenv("LOCALAPPDATA") == "" {
+	if os.Getenv("USERPROFILE") == "" || os.Getenv("LOCALAPPDATA") == "" || os.Getenv("APPDATA") == "" {
 		t.Fatalf("not restored: %q %q", os.Getenv("USERPROFILE"), os.Getenv("LOCALAPPDATA"))
 	}
 	home, err := UserAgentpackHome()

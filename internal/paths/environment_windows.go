@@ -6,7 +6,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// RestoreUserEnvironment fills USERPROFILE and LOCALAPPDATA from the Windows
+// RestoreUserEnvironment fills USERPROFILE, LOCALAPPDATA and APPDATA from the Windows
 // known-folder API when the launching shell dropped them (some MSYS and
 // service launchers do). os.UserHomeDir, agentpack's own data home and every
 // harness child process read these variables, so restoring them once at
@@ -14,6 +14,7 @@ import (
 func RestoreUserEnvironment() {
 	restore("USERPROFILE", windows.FOLDERID_Profile)
 	restore("LOCALAPPDATA", windows.FOLDERID_LocalAppData)
+	restore("APPDATA", windows.FOLDERID_RoamingAppData)
 }
 
 func restore(name string, folder *windows.KNOWNFOLDERID) {

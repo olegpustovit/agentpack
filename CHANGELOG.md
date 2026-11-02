@@ -5,6 +5,12 @@ All notable changes to `agentpack` are documented here. The format is based on
 "Pre-release" note in `AGENTS.md` — breaking changes may land between versions without a migration
 window.
 
+## [0.12.12] - 2026-11-02
+
+### Fixed
+
+- Windows: `APPDATA` is restored at startup with `USERPROFILE` and `LOCALAPPDATA`. Without it, tools run in an agent session could not find their configuration, and `gh` reported being logged out.
+
 ## [0.12.11] - 2026-11-02
 
 ### Fixed
