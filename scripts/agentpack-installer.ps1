@@ -64,6 +64,10 @@ try {
     $Destination = Join-Path $InstallDir 'ap.exe'
     $Pending = "$Destination.new"
     Copy-Item -Force $Binary $Pending
+    # Windows can rename a running executable but not replace it, and an agent
+    # launched by agentpack keeps it running. Old copies go once nothing runs them.
+    Remove-Item -Force "$Destination.*.old" -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $Destination) { Move-Item -Force $Destination "$Destination.$([guid]::NewGuid().ToString('N')).old" }
     Move-Item -Force $Pending $Destination
 
     Write-Output "Installed agentpack $Version to $Destination"
