@@ -16,10 +16,12 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
-const stagingLayoutVersion = "5"
+const stagingLayoutVersion = "6"
 
 type launchState struct {
 	Digest string `json:"digest"`
+	// Root is the staging generation a launch digest was computed for.
+	Root string `json:"root,omitempty"`
 }
 
 func ComputeLaunchDigest(projectRoot, workspace string, effective mode.Effective, target *base.Target) (string, error) {
@@ -253,7 +255,49 @@ func WriteLaunchDigest(projectRoot, modeName string, target base.Target, digest 
 	if err != nil {
 		return err
 	}
-	return writeDigestState(path, digest)
+	root, err := paths.StagingRootForMode(projectRoot, modeName)
+	if err != nil {
+		return err
+	}
+	return writeDigestState(path, digest, root)
+}
+
+// selectLaunchGeneration returns a harness to the generation its last launch
+// built. A launch stages only its own harness, so another harness's rebuild
+// publishes a generation without this one; following it would rebuild on every
+// switch between agents. The digest still decides whether it may be reused.
+//
+// Overlay harnesses stay on the published path: the rebuild is what keeps their
+// workspace links current, as it is for any launcher that must clean them up.
+func selectLaunchGeneration(projectRoot, modeName string, target base.Target) error {
+	if target.UsesWorkspaceOverlay() {
+		return nil
+	}
+	for _, manifest := range []func(string) (string, error){paths.CursorOverlayManifestPath, paths.AgyOverlayManifestPath} {
+		path, err := manifest(projectRoot)
+		if err != nil {
+			return err
+		}
+		if info, err := os.Stat(path); err == nil && info.Size() != 0 {
+			return nil
+		}
+	}
+	path, err := paths.LaunchSyncStatePath(projectRoot, modeName, string(target))
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var state launchState
+	if json.Unmarshal(data, &state) != nil || state.Root == "" {
+		return nil
+	}
+	return paths.SelectStagingGeneration(projectRoot, modeName, state.Root)
 }
 func readMaterializationDigest(projectRoot, modeName string) (string, bool, error) {
 	path, err := paths.ProjectStateFile(projectRoot, "materialized-"+paths.ModePathComponent(modeName)+".json")
@@ -267,7 +311,7 @@ func writeMaterializationDigest(projectRoot, modeName, digest string) error {
 	if err != nil {
 		return err
 	}
-	return writeDigestState(path, digest)
+	return writeDigestState(path, digest, "")
 }
 func computeMaterializationDigest(definition, workspace string, effective mode.Effective) (string, error) {
 	inputs, err := ComputeLaunchDigest(definition, workspace, effective, nil)
@@ -303,11 +347,11 @@ func readDigestState(path string) (string, bool, error) {
 	}
 	return state.Digest, true, nil
 }
-func writeDigestState(path, digest string) error {
+func writeDigestState(path, digest, root string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.Marshal(launchState{Digest: digest})
+	data, err := json.Marshal(launchState{Digest: digest, Root: root})
 	if err != nil {
 		return err
 	}

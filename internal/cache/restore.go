@@ -29,12 +29,18 @@ func FileURL(filePath string) string {
 // entry is never repaired here: a mismatch is an IntegrityError. A missing
 // entry is built in a temporary directory and installed only once verified.
 func EnsureLockCached(pkg lockfile.Package, restoreRemote RemoteRestoreFunc) (bool, error) {
+	return EnsureLockCachedVerifying(pkg, restoreRemote, VerifyPackage)
+}
+
+// EnsureLockCachedVerifying is EnsureLockCached with the check an existing entry
+// must pass, for a caller that has already proved it or may reuse a proof.
+func EnsureLockCachedVerifying(pkg lockfile.Package, restoreRemote RemoteRestoreFunc, verify func(lockfile.Package) error) (bool, error) {
 	out, err := EntryDir(pkg.CacheKey)
 	if err != nil {
 		return false, err
 	}
 	if pkg.ContentHash != "" && !emptyOrMissingDir(out) {
-		if err := VerifyPackage(pkg); err != nil {
+		if err := verify(pkg); err != nil {
 			return false, err
 		}
 	}

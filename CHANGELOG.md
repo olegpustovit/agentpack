@@ -5,6 +5,21 @@ All notable changes to `agentpack` are documented here. The format is based on
 "Pre-release" note in `AGENTS.md` — breaking changes may land between versions without a migration
 window.
 
+## [0.12.11] - 2026-11-02
+
+### Fixed
+
+- Windows: hooks written as `node -e "..."` failed with `[eval]:1`, because Go's argument quoting broke cmd.exe's own. `${CLAUDE_PLUGIN_ROOT}` in a shell-form hook is now expanded there too.
+- OMP looked unresponsive when a prompt hook crashed: the bridge silently dropped every prompt. A crashed hook now warns and the prompt continues; a hook that blocks a prompt with exit status 2 now says so. Failure messages name the hook and the error instead of the first line of a stack trace.
+- Library on a peer failed with an HTML error page: reads took 13 s on Windows and the peer proxy gave up at 5 s. Reads now take well under a second after the first, Library reads get the long proxy timeout, and a proxy's error page is shown as a short message that no longer hides the project name.
+
+### Changed
+
+- Switching between agents no longer rebuilds staging each time: 3.4 s to 0.2 s in this repository on Windows.
+- A launch that rebuilds no longer rereads unchanged packages, using a stamp from an earlier full check. `agentpack sync` still hashes everything; `AGENTPACK_FULL_VERIFY=1` applies that to launches. A rebuild hashes each package at most once, and cold reads overlap.
+- Progress on a terminal is a spinner naming the current step. Staging warnings scroll above it without timestamps. Pipes and logs keep plain lines.
+- GitHub Actions now only builds releases. The CI, docs and agent-gate workflows are gone, so docs no longer publish automatically.
+
 ## [0.12.7] - 2026-11-01
 
 ### Fixed

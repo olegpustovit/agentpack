@@ -530,3 +530,83 @@ func TestEnsureLockCachedInstallsALinkedTreeAgainstAnOlderLock(t *testing.T) {
 		t.Fatalf("tampered entry verified: %v", err)
 	}
 }
+
+func TestVerifyPackageIncrementalReusesProofOnlyWhileMetadataHolds(t *testing.T) {
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	out, _ := EntryDir("entry")
+	file := filepath.Join(out, "SKILL.md")
+	writeTestFile(t, file, "# Demo")
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(file, old, old); err != nil {
+		t.Fatal(err)
+	}
+	pkg := lockfile.Package{Module: "demo", CacheKey: "entry", ContentHash: mustDigest(t, out)}
+	stamp, err := verifiedStampPath("entry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPackageIncremental(pkg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stamp); err != nil {
+		t.Fatalf("a full check of a settled entry records a stamp: %v", err)
+	}
+	// Same size and time: only a full check can see this, which is what the
+	// stamp's reuse is observed by, and why explicit sync always hashes.
+	writeTestFile(t, file, "# Evil")
+	if err := os.Chtimes(file, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPackageIncremental(pkg); err != nil {
+		t.Fatalf("stamp was not reused: %v", err)
+	}
+	var mismatch *IntegrityError
+	if err := VerifyPackage(pkg); !errors.As(err, &mismatch) {
+		t.Fatalf("full check missed the change: %v", err)
+	}
+	// Any visible change falls back to hashing.
+	writeTestFile(t, file, "# Evil content")
+	if err := VerifyPackageIncremental(pkg); !errors.As(err, &mismatch) {
+		t.Fatalf("visible change was trusted: %v", err)
+	}
+
+	// An entry modified just now cannot be told apart from a later edit yet.
+	if err := os.Remove(stamp); err != nil {
+		t.Fatal(err)
+	}
+	fresh := lockfile.Package{Module: "demo", CacheKey: "entry", ContentHash: mustDigest(t, out)}
+	if err := VerifyPackageIncremental(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stamp); !os.IsNotExist(err) {
+		t.Fatalf("a just-modified entry must not be stamped: %v", err)
+	}
+}
+
+func TestTreeDigestReadAheadKeepsOrderAcrossSizes(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "big"), strings.Repeat("x", readAheadFileLimit+1))
+	for index := range readAheadFiles * 3 {
+		writeTestFile(t, filepath.Join(root, fmt.Sprintf("f%03d", index)), fmt.Sprint(index))
+	}
+	hasher := sha256.New()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(root, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(hasher, "f\x00%s\x00%d\x00", entry.Name(), len(data))
+		hasher.Write(data)
+	}
+	got, err := TreeDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := lockfile.ContentHashPrefix + hex.EncodeToString(hasher.Sum(nil)); got != want {
+		t.Fatalf("digest %s, want %s", got, want)
+	}
+}

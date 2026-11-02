@@ -34,3 +34,25 @@ The rebuild benchmark forces staging each iteration; warm iterations assert that
 A launch in a real project spent over 4 minutes in `preparing claude…`, 51 s of it system time. A goroutine dump put it in `RemoveOrphanedProjectDirectories`, reading markers in a `/tmp` holding about 247,000 `agentpack-<hash>` directories. Each marker named a deleted `/tmp/agentpack-registry-validate-*`: `validateSnapshot` loaded its throwaway lock through the guarded loader, and a 0.12.6 gateway validated snapshots about 25 times a second.
 
 Validation now leaves nothing in the temp directory, and launches run the tidying in a goroutine beside the agent. Plain `sync` still tidies before returning.
+
+## Switching agents and reading the Library (2026-11-02)
+
+Measured on Windows 11 x64 with Defender on, in this repository (11 packages, one of 4,424 files), with stubbed harness binaries. These are single runs on a warm disk, not the Linux ARM64 reference benchmarks.
+
+| Operation | Before | After |
+| --- | ---: | ---: |
+| Launch after another agent's launch | 3.0-4.1 s, always a rebuild | 0.19-0.25 s |
+| Launch with nothing changed | 0.17-0.20 s | 0.19-0.25 s |
+| Rebuild for one harness | 3.0-4.6 s | 2.4-3.3 s |
+| Library bootstrap, repeated | 11-13 s | 0.44 s |
+| Library package list | 0.64 s | 0.02 s |
+
+A launch stages one harness into a new generation and publishes it, so the next agent found its own files missing and rebuilt; alternating agents never reached the fast path. Each harness now returns to its own generation while its digest holds.
+
+One sync hashed the largest package up to four times: resolving, the verify loop, and planning and validating each tree. Planning now compares metadata, the verify loop trusts the resolve just before it, and a launch reuses a stamp from an earlier full check. The 36 s seen in the field was spent in the resolve step; it was not reproduced here, because a warm disk hashes all packages in 0.22 s. The likely cause is a first read through a cold disk and the virus scanner, which these changes skip on launches once a stamp exists, and which parallel read-ahead shortens otherwise.
+
+The remaining rebuild cost is writing staged files and reading them back for `.staged.json`, where the profile shows opens of just-written files waiting. Hashing while writing is the next step if rebuilds matter.
+
+`BenchmarkCodexSetup/warm` on this Windows host moved from a median 3.1 ms to 3.6 ms over 7 runs of 20 iterations, from reading the launch state to select a generation. It was not re-measured on the reference host, whose budget is 1 ms; the added work is two stats and one small file read.
+
+Library bootstrap called `store.Get` per agentpack, and each call re-read and re-validated the whole registry, writing temporary files per revision. Objects are named by their digest, so each is now validated once per process while its metadata holds.

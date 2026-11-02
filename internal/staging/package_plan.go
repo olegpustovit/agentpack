@@ -55,7 +55,7 @@ type PlannedPackageFile struct {
 // rendering, and returns the files that staging would publish. Plugin support
 // files are included when plugin is true.
 func PlanPackageTree(sourceRoot, module, bareSkillName string, effective mode.Effective, roots []HarnessRoot, plugin bool) (PackageTreePlan, error) {
-	digest, err := cache.TreeDigest(sourceRoot)
+	digest, _, err := cache.TreeMetadata(sourceRoot)
 	if err != nil {
 		return PackageTreePlan{}, err
 	}
@@ -272,7 +272,7 @@ func packageFileContents(path string, contents map[string][]byte) ([]byte, error
 
 // Validate also detects newly added files and changed package manifests or links.
 func (plan PackageTreePlan) Validate() error {
-	actual, err := cache.TreeDigest(plan.SourceRoot)
+	actual, _, err := cache.TreeMetadata(plan.SourceRoot)
 	if err != nil {
 		return fmt.Errorf("package input changed after planning: %s: %w", plan.SourceRoot, err)
 	}

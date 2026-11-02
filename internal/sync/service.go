@@ -30,6 +30,8 @@ type Service struct {
 	Info func(message string)
 	// Progress reports work about to perform potentially slow I/O.
 	Progress func(message string)
+	// Step names the sync step running now when SyncOptions.Progress is nil.
+	Step func(message string)
 }
 type SyncOptions struct {
 	DryRun, VerifyOnly, UpdateLock bool
@@ -52,6 +54,15 @@ func (options SyncOptions) step(name string) {
 	if options.Progress != nil {
 		options.Progress(name)
 	}
+}
+
+// verifier picks how a package already in the cache is checked: a launch may
+// reuse an earlier proof, an explicit sync hashes the content.
+func (options SyncOptions) verifier() func(lockfile.Package) error {
+	if options.Target != nil && !options.Repair && !envEnabled(FullVerifyEnv) {
+		return cache.VerifyPackageIncremental
+	}
+	return cache.VerifyPackage
 }
 
 // removeOrphans is a variable so a test can hold it open.
@@ -100,6 +111,8 @@ type resolveRun struct {
 	// registry cannot be reached, instead of failing the command.
 	softMCP bool
 	primed  []lockfile.Package
+	// progress overrides Service.Progress for this run.
+	progress func(string)
 }
 
 // resolveAndSave is the resolve step of remove: it records missing content
@@ -154,6 +167,9 @@ func (service Service) resolve(ctx context.Context, projectRoot string, project 
 	options.Previous = &previous
 	options.Notify = func(message string) { service.notify("%s", message) }
 	options.Progress = service.Progress
+	if run.progress != nil {
+		options.Progress = run.progress
+	}
 	resolved, err := resolve.NewResolver(ctx, service.client()).Resolve(ctx, projectRoot, project, options)
 	if err != nil {
 		return lockfile.PackLock{}, err
@@ -343,15 +359,22 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 	if err != nil {
 		return SyncResult{}, err
 	}
+	if options.Progress == nil {
+		options.Progress = service.Step
+	}
+	verify := options.verifier()
 	if !options.DryRun && !options.Frozen && project != nil && len(project.Dependencies) != 0 {
 		// sync verifies what the lock already pins. It records a content hash
 		// only for content it has to download, and adds no MCP records.
 		// --update-lock is the one way it re-resolves on purpose.
 		options.step("resolving dependencies")
-		resolveOptions := resolve.ResolveOptions{RefreshFloating: options.UpdateLock, RepairCache: options.Repair}
-		if _, err := service.resolve(ctx, projectRoot, project, resolveRun{options: resolveOptions, explicit: options.UpdateLock}); err != nil {
+		resolveOptions := resolve.ResolveOptions{RefreshFloating: options.UpdateLock, RepairCache: options.Repair, Verify: verify}
+		run := resolveRun{options: resolveOptions, explicit: options.UpdateLock, progress: options.Progress}
+		if _, err := service.resolve(ctx, projectRoot, project, run); err != nil {
 			return SyncResult{}, err
 		}
+		// Resolving just checked every package; a second pass reads it all again.
+		verify = func(lockfile.Package) error { return nil }
 	}
 	lock, err := loadCheckedLock(projectRoot)
 	if os.IsNotExist(rootCause(err)) && options.Target != nil && !options.Frozen {
@@ -411,7 +434,7 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		}
 		options.step("verifying " + pkg.Module)
 		restore := cache.GitHubRestore(ctx, service.client())
-		ready, err := cache.EnsureLockCached(pkg, restore)
+		ready, err := cache.EnsureLockCachedVerifying(pkg, restore, verify)
 		var mismatch *cache.IntegrityError
 		if !options.Frozen && options.Repair && errors.As(err, &mismatch) && !mismatch.Fetched {
 			if _, _, err = cache.RefetchPackage(pkg, restore); err == nil {
@@ -567,6 +590,9 @@ func (service Service) SyncForLaunchOptions(ctx context.Context, projectRoot str
 		return mode.Effective{}, false, err
 	}
 	options.step("checking for changes")
+	if err := selectLaunchGeneration(projectRoot, effective.Name(), target); err != nil {
+		return mode.Effective{}, false, err
+	}
 	current, err := launchDigest(projectRoot, workspace, effective, &target, lock)
 	if err != nil {
 		return mode.Effective{}, false, err

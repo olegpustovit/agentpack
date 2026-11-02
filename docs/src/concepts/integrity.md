@@ -175,7 +175,7 @@ Limits of this check:
 
 When the manifest, the lock, `./.agents/`, the mode and the target are unchanged since the last launch, a launcher skips the sync and stages nothing: the harness starts with the tree the last sync built from a verified cache. On that path agentpack does not hash file contents. It compares a fingerprint of the cache entries' metadata (each file's path, type, permission bits, size and modification time) with the one taken after the last full verification. Any visible change ends the fast path and sends the launch through a full sync, which hashes everything and stops on a mismatch.
 
-An edit that keeps a file's size and restores its modification time is invisible to the fingerprint. It still cannot reach a harness unnoticed, because reaching a harness means re-staging and re-staging always hashes. Set `AGENTPACK_FULL_VERIFY=1` to hash on every launch anyway.
+An edit that keeps a file's size and restores its modification time is invisible to the fingerprint. A launch that does rebuild staging reuses the same kind of proof: a package hashed successfully by an earlier check is not read again while its metadata matches the stamp under `$AGENTPACK_HOME/verified/`, so such an edit can reach a harness through a launch. `agentpack sync` always hashes every package and stops on it. Set `AGENTPACK_FULL_VERIFY=1` to hash on every launch, including launches that rebuild.
 
 A launch that skips the sync does not check the staged files against the record; use `sync --verify-only` for that.
 
