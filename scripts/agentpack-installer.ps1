@@ -58,10 +58,10 @@ try {
 
     $Unpacked = Join-Path $Temporary 'unpacked'
     Expand-Archive -Path $ArchivePath -DestinationPath $Unpacked
-    $Binary = Join-Path $Unpacked 'agentpack.exe'
-    if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) { throw "agentpack.exe is missing from $Archive" }
+    $Binary = Join-Path $Unpacked 'ap.exe'
+    if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) { throw "ap.exe is missing from $Archive" }
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    $Destination = Join-Path $InstallDir 'agentpack.exe'
+    $Destination = Join-Path $InstallDir 'ap.exe'
     $Pending = "$Destination.new"
     Copy-Item -Force $Binary $Pending
     Move-Item -Force $Pending $Destination

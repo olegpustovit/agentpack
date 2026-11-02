@@ -46,7 +46,7 @@ func monochromeColorScheme(_ lipgloss.LightDarkFunc) fang.ColorScheme {
 
 func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "agentpack",
+		Use:           "ap",
 		Short:         "Pin skills and plugins for every coding agent",
 		SilenceUsage:  true,
 		SilenceErrors: true,

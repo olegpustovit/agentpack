@@ -132,11 +132,11 @@ fi
 
 if [ "$archive_format" = zip ]; then
     unzip -q "$temporary/$archive" -d "$temporary/unpacked"
-    binary_name=agentpack.exe
+    binary_name=ap.exe
 else
     mkdir -p "$temporary/unpacked"
     tar -xzf "$temporary/$archive" -C "$temporary/unpacked"
-    binary_name=agentpack
+    binary_name=ap
 fi
 [ -f "$temporary/unpacked/$binary_name" ] || fail "$binary_name is missing from $archive"
 mkdir -p "$install_dir"
