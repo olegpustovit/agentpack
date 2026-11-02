@@ -32,7 +32,11 @@ async function run(entry, event, ctx, deadline) {
     new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
   ]);
   if (status === 2) return { decision: "deny", message: stderr || stdout || "Hook blocked execution" };
-  if (status !== 0) throw new Error(stderr || stdout || `hook-exec exited ${status}`);
+  if (status !== 0) {
+    // OMP shows one line, and a stack trace often opens with "[eval]:1".
+    const lines = (stderr || stdout).trim().split(/\r?\n/);
+    throw new Error(`${entry.canonicalEvent} hook failed: ${(lines.find(line => /error/i.test(line)) ?? lines[0]) || `hook-exec exited ${status}`}`);
+  }
   let result;
   try { result = stdout.trim() ? JSON.parse(stdout) : {}; }
   catch {
@@ -69,7 +73,8 @@ export default function (pi) {
         try { result = await run(entry, event, ctx, deadline); }
         catch (error) {
           if (name === "tool_call") return { block: true, reason: String(error) };
-          if (name === "input") return { handled: true };
+          // Only exit status 2 blocks a prompt. A hook that crashes must not swallow what the user typed.
+          if (name === "input") { ctx.ui?.notify?.(String(error), "warning"); continue; }
           throw error;
         }
         const blocked = result.decision === "deny" || result.decision === "block" || result.decision === "ask";
@@ -87,7 +92,10 @@ export default function (pi) {
             event = { ...event, content: output.content };
           }
         } else if (name === "input") {
-          if (blocked) return { handled: true };
+          if (blocked) {
+            ctx.ui?.notify?.(result.message || "A hook blocked this prompt", "warning");
+            return { handled: true };
+          }
         } else if (name === "session_stop" && blocked) {
           output.continue = true;
           if (result.message) context.push(result.message);

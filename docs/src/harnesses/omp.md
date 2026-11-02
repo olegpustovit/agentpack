@@ -67,7 +67,7 @@ warning rather than running outside their requested scope.
 
 Other canonical events produce omission diagnostics. Session notifications,
 permission timing and compaction cancellation differences produce degradation
-diagnostics. A tool-hook execution failure blocks that tool call. The generated bridge honors
+diagnostics. A tool-hook execution failure blocks that tool call. A prompt hook that crashes shows a warning and the prompt continues; only exit status 2 blocks a prompt, also with a warning. The generated bridge honors
 shorter configured command timeouts and caps each event's total execution at
 25 seconds, before OMP's 30-second extension deadline. Timeout blocks pre-tool and
 input actions; hooks needing more time must be shortened or run asynchronously. Prompt and
