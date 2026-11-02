@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -114,6 +115,9 @@ func TestDeployDryRun(t *testing.T) {
 }
 
 func TestDeployInstallerIdempotentAndRollback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("deploy installer targets a Linux host")
+	}
 	for _, tool := range []string{"bash", "flock", "install", "sha256sum"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("installer integration requires %s", tool)

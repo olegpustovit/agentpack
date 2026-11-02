@@ -204,8 +204,8 @@ func hashAndCopySourceTree(source, destination string) (string, error) {
 }
 
 func gitIgnoredFiles(root string, files []string) (map[string]struct{}, bool, error) {
-	command := exec.Command("git", "-C", root, "rev-parse", "--show-toplevel")
-	repositoryBytes, err := command.Output()
+	command := exec.Command("git", "-C", root, "rev-parse", "--git-dir")
+	_, err := command.Output()
 	if err != nil {
 		var executableErr *exec.Error
 		if errors.As(err, &executableErr) || isExitError(err) {
@@ -213,37 +213,24 @@ func gitIgnoredFiles(root string, files []string) (map[string]struct{}, bool, er
 		}
 		return nil, false, fmt.Errorf("locate Git worktree for %s: %w", root, err)
 	}
-	repository := strings.TrimSpace(string(repositoryBytes))
-	rootRelative, err := filepath.Rel(repository, root)
-	if err != nil {
-		return nil, false, fmt.Errorf("resolve %s under Git worktree %s: %w", root, repository, err)
-	}
+	// Run from root with root-relative paths: Git may print worktree paths in a
+	// different style than the OS (MSYS Git prints /c/...), so never compare them.
 	var input bytes.Buffer
 	for _, file := range files {
-		candidate := file
-		if rootRelative != "." {
-			candidate = filepath.Join(rootRelative, file)
-		}
-		input.WriteString(filepath.ToSlash(candidate))
+		input.WriteString(filepath.ToSlash(file))
 		input.WriteByte(0)
 	}
-	check := exec.Command("git", "-C", repository, "check-ignore", "--no-index", "-z", "--stdin")
+	check := exec.Command("git", "-C", root, "check-ignore", "--no-index", "-z", "--stdin")
 	check.Stdin = &input
 	output, err := check.Output()
 	if err != nil && !isExitCode(err, 1) {
-		return nil, false, fmt.Errorf("apply Git ignore rules in %s: %w", repository, err)
+		return nil, false, fmt.Errorf("apply Git ignore rules in %s: %w", root, err)
 	}
 	ignored := make(map[string]struct{})
 	scanner := bufio.NewScanner(bytes.NewReader(output))
 	scanner.Split(splitNull)
 	for scanner.Scan() {
 		candidate := filepath.FromSlash(scanner.Text())
-		if rootRelative != "." {
-			candidate, err = filepath.Rel(rootRelative, candidate)
-			if err != nil {
-				return nil, false, err
-			}
-		}
 		ignored[filepath.Clean(candidate)] = struct{}{}
 	}
 	if err := scanner.Err(); err != nil {
