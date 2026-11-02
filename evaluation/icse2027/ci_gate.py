@@ -19,9 +19,9 @@ SPEC = f'anthropics/skills/skills/{SKILL}@dbd4588f9e1033efb41dad4bef2f7947c8993d
 # The project root each agent reads on its own.
 AGENTS = {'claude': '.claude/skills', 'codex': '.agents/skills', 'opencode': '.opencode/skills'}
 
-ap = shutil.which('agentpack')
+ap = shutil.which('ap')
 if not ap:
-    sys.exit('agentpack is not on PATH')
+    sys.exit('ap is not on PATH')
 agents = [a for a in AGENTS if shutil.which(a)]
 if not agents:
     sys.exit('no supported agent CLI on PATH')

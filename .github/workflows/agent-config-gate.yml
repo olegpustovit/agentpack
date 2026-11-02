@@ -47,7 +47,7 @@ jobs:
           irm https://github.com/olegpustovit/agentpack/releases/latest/download/agentpack-installer.ps1 | iex
           "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Verify installed Agentpack
-        run: agentpack --version
+        run: ap --version
       - name: Install the agents (no sign-in)
         run: npm install -g @anthropic-ai/claude-code@2.1.296 @openai/codex@0.159.3 opencode-ai@1.17.11
       - name: Pin, restore, observe and gate
