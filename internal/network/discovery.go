@@ -402,8 +402,9 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 		request.Header.Del("X-Forwarded-Proto")
 	}
 	proxy.Transport = tailnetTransport
-	// Cold limits probes can take longer than the ordinary five-second read timeout.
-	if r.URL.Path == "/api/limits" || r.Method != http.MethodGet && r.Method != http.MethodHead {
+	// Cold limits probes and a peer's first Library read can take longer than the
+	// ordinary five-second read timeout.
+	if r.URL.Path == "/api/limits" || strings.HasPrefix(r.URL.Path, "/api/library/") || r.Method != http.MethodGet && r.Method != http.MethodHead {
 		proxy.Transport = tailnetMutationTransport
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {

@@ -15,6 +15,10 @@ export function setUnauthorizedHandler(handler: () => void) {
   onUnauthorized = handler
 }
 
+function unreachableMessage(status: number) {
+  return status === 524 ? "The machine took too long to answer. Try again." : `The machine could not be reached (HTTP ${status}). Try again.`
+}
+
 // Mutations must pass `machine` explicitly; there is no default target.
 export async function api<T>(
   path: `/api/${string}`,
@@ -40,7 +44,10 @@ export async function api<T>(
     const error =
       data && typeof data === "object" && "error" in data && typeof data.error === "string"
         ? data.error
-        : text.slice(0, 200) || res.statusText
+        : // A proxy in front of the gateway can answer with its own error page.
+          /^\s*<(!doctype|html)/i.test(text)
+          ? unreachableMessage(res.status)
+          : text.slice(0, 200) || res.statusText
     throw new ApiError(error, res.status)
   }
   return data as T

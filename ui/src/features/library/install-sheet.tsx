@@ -121,10 +121,10 @@ function InstallForm({ item, onDone }: { item: InstallItem; onDone: () => void }
                       disabled={row.disabled || busy}
                       onCheckedChange={(next) => setPicked((current) => (next ? [...current, row.key] : current.filter((value) => value !== row.key)))}
                     />
-                    <span className="min-w-0 flex-1 truncate" title={row.target.project.directory}>
+                    <span className="min-w-16 flex-1 truncate" title={row.target.project.directory}>
                       {basename(row.target.project.directory)}
                     </span>
-                    <span className={current?.failed ? "shrink-0 text-(--danger)" : "shrink-0 text-(--fg2)"}>{current?.text ?? row.text}</span>
+                    <span className={`max-w-[65%] truncate ${current?.failed ? "text-(--danger)" : "text-(--fg2)"}`} title={current?.text ?? row.text}>{current?.text ?? row.text}</span>
                   </label>
                 )
               })}

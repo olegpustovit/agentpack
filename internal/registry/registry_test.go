@@ -505,3 +505,27 @@ func TestValidateSnapshotLeavesNothingInTemp(t *testing.T) {
 		t.Fatalf("validation left %d entries, first %q", len(entries), entries[0].Name())
 	}
 }
+
+func TestValidatedObjectsAreReusedUntilTheirFileChanges(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, revision, err := store.Capture(CaptureInput{Name: "Starter", Project: "/workspace/demo", Manifest: []byte(manifestTemplate), Lock: lockWithCommit("abc123")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.readRevision(revision.ID); err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.objectPath(revision.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"tampered":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.readRevision(revision.ID); err == nil {
+		t.Fatal("a rewritten object was served from the memo")
+	}
+}
