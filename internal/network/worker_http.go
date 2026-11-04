@@ -20,21 +20,26 @@ import (
 const workerStopGrace = 75 * time.Second
 
 type WorkerHTTP struct {
-	handler     http.Handler
-	mu          sync.Mutex
-	closing     bool
-	connections map[*websocket.Conn]struct{}
-	drained     chan struct{}
-	session     *Session
-	start       func(uint16, uint16) (*Session, error)
-	validate    func() error
-	lifecycle   sync.Mutex
-	done        chan struct{}
-	finished    bool
-	err         error
-	attached    chan struct{}
-	restarts    map[string]error
-	restartIDs  []string
+	handler      http.Handler
+	mu           sync.Mutex
+	blobMu       sync.Mutex
+	closing      bool
+	connections  map[*websocket.Conn]struct{}
+	drained      chan struct{}
+	session      *Session
+	conversation *ConversationSession
+	sessionDir   string
+	start        func(uint16, uint16) (*Session, error)
+	restartACP   func(context.Context) error
+	stopACP      func(context.Context) error
+	validate     func() error
+	lifecycle    sync.Mutex
+	done         chan struct{}
+	finished     bool
+	err          error
+	attached     chan struct{}
+	restarts     map[string]error
+	restartIDs   []string
 }
 
 type restartOperation struct {
@@ -53,6 +58,12 @@ func (worker *WorkerHTTP) current() *Session {
 	return worker.session
 }
 
+func (worker *WorkerHTTP) conversationSession() *ConversationSession {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	return worker.conversation
+}
+
 func (worker *WorkerHTTP) firstAttachment() <-chan struct{} {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
@@ -69,9 +80,8 @@ func (worker *WorkerHTTP) watch(session *Session) {
 	}
 }
 
-// Restart keeps the private endpoint stable while the original launch pipeline
-// rebuilds staging and starts a fresh agent. Old attachments receive an ended
-// notice with Restarting=true and reconnect to the new PTY.
+// Restart keeps the private endpoint stable while replacing the agent process.
+// Terminal attachments reconnect to the new PTY; ACP clients retain the worker endpoint.
 func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (result error) {
 	if !validRestartID(operationID) {
 		return errors.New("restart requires a valid operation_id")
@@ -97,13 +107,28 @@ func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (resu
 		worker.restartIDs = append(worker.restartIDs, operationID)
 		worker.restarts[operationID] = result
 	}()
-	if worker.finished || worker.start == nil {
+	if worker.finished {
 		return errors.New("session cannot restart")
 	}
 	if worker.validate != nil {
 		if err := worker.validate(); err != nil {
 			return err
 		}
+	}
+	if worker.conversationSession() != nil {
+		if worker.restartACP == nil {
+			return errors.New("session cannot restart")
+		}
+		if err := worker.restartACP(ctx); err != nil {
+			worker.err = err
+			worker.finished = true
+			close(worker.done)
+			return err
+		}
+		return nil
+	}
+	if worker.start == nil {
+		return errors.New("session cannot restart")
 	}
 	session := worker.current()
 	if err := session.MarkRestarting(); err != nil {
@@ -145,6 +170,20 @@ func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (resu
 func (worker *WorkerHTTP) Stop(ctx context.Context) error {
 	worker.lifecycle.Lock()
 	defer worker.lifecycle.Unlock()
+	if worker.finished {
+		return nil
+	}
+	if worker.conversationSession() != nil {
+		if worker.stopACP == nil {
+			return errors.New("session cannot stop")
+		}
+		if err := worker.stopACP(ctx); err != nil {
+			return err
+		}
+		worker.finished = true
+		close(worker.done)
+		return nil
+	}
 	stop, cancel := context.WithTimeout(ctx, workerStopGrace)
 	defer cancel()
 	return worker.current().Stop(stop)
@@ -180,14 +219,24 @@ func (worker *WorkerHTTP) Shutdown(ctx context.Context) error {
 
 // WorkerHandler is private IPC. The gateway authenticates its own callers,
 // then attaches using this worker's secret. Never expose the secret to browsers.
-func WorkerHandler(session *Session, secret string) (*WorkerHTTP, error) {
-	if session == nil || len(secret) < 32 {
-		return nil, errors.New("worker requires a session and a secret of at least 32 bytes")
+func WorkerHandler(session *Session, conversation *ConversationSession, secret, sessionDir string) (*WorkerHTTP, error) {
+	if (session == nil) == (conversation == nil) {
+		return nil, errors.New("worker requires exactly one of session or conversation")
 	}
-	worker := &WorkerHTTP{session: session, connections: make(map[*websocket.Conn]struct{}), drained: make(chan struct{}), done: make(chan struct{}), attached: make(chan struct{})}
-	go worker.watch(session)
+	if len(secret) < 32 {
+		return nil, errors.New("worker requires a secret of at least 32 bytes")
+	}
+	worker := &WorkerHTTP{session: session, conversation: conversation, sessionDir: sessionDir, connections: make(map[*websocket.Conn]struct{}), drained: make(chan struct{}), done: make(chan struct{}), attached: make(chan struct{})}
+	if session != nil {
+		go worker.watch(session)
+	}
 	mux := http.NewServeMux()
-	worker.registerMCP(mux)
+	if session != nil {
+		worker.registerMCP(mux)
+	}
+	if conversation != nil {
+		worker.registerConversation(mux)
+	}
 	mux.HandleFunc("POST /restart", func(w http.ResponseWriter, r *http.Request) {
 		operationID := r.Header.Get("Idempotency-Key")
 		if !validRestartID(operationID) {
@@ -213,9 +262,17 @@ func WorkerHandler(session *Session, secret string) (*WorkerHTTP, error) {
 	})
 	mux.HandleFunc("GET /state", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if conversation := worker.conversationSession(); conversation != nil {
+			_ = json.NewEncoder(w).Encode(TerminalState{Running: !conversation.AgentExited(), ExitCode: -1})
+			return
+		}
 		_ = json.NewEncoder(w).Encode(worker.current().State())
 	})
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {
+		if worker.current() == nil {
+			http.Error(w, "session has no terminal attachment", http.StatusConflict)
+			return
+		}
 		worker.attach(worker.current(), w, r)
 	})
 	worker.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

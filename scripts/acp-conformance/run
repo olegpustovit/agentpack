@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Optional local ACP conformance gate (WP0). Not run in CI.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$root"
+echo "== shared fixture reducers =="
+go test ./internal/acp/ -run 'TestReduceLog(Fixture|PermissionResult)' -count=1
+go test ./internal/hub/ -run TestReduceThreadFullFixture -count=1
+(cd ui && bun run test src/features/conversation/reducer.test.ts --run)
+echo
+missing=0
+for h in claude codex opencode cursor grok agy omp; do
+  if [ ! -f "testdata/acp/${h}.jsonl" ]; then
+    echo "  missing testdata/acp/${h}.jsonl (record via WP0 live probe)"
+    missing=$((missing + 1))
+  fi
+done
+if [ "$missing" -gt 0 ]; then
+  echo "(shared full.jsonl covers reducer tests until harness fixtures exist)"
+fi
+echo
+echo "Manual harness probes (real agents, network): see artifact j7 PLAN.md WP0."
+echo "Recorded fixtures live in testdata/acp/*.jsonl"

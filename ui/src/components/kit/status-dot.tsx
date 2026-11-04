@@ -2,23 +2,27 @@ import type { ComponentProps } from "react";
 import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type MachineState = "running" | "stopped" | "restarting" | "offline" | "readonly" | "needsUpdate";
+export type MachineState = "running" | "stopped" | "idle" | "restarting" | "offline" | "readonly" | "needsUpdate" | "needsYou";
 
 const words: Record<MachineState, string> = {
   running: "Running",
   stopped: "Stopped",
+  idle: "Idle",
   restarting: "Restarting",
   offline: "Offline",
   readonly: "Read-only",
   needsUpdate: "Needs update",
+  needsYou: "Needs you",
 };
 
 const glyphs: Record<Exclude<MachineState, "restarting">, string> = {
   running: "bg-(--ok) border-(--ok) sel:bg-(--accent-fg) sel:border-(--accent-fg)",
   stopped: "border-(--fg2) sel:border-(--accent-fg)",
+  idle: "border-(--ok) sel:border-(--accent-fg)",
   offline: "border-dashed border-(--fg3) sel:border-(--accent-fg)",
   readonly: "bg-(--fg3) border-(--fg3) sel:bg-(--accent-fg) sel:border-(--accent-fg)",
   needsUpdate: "bg-(--warn) border-(--warn) sel:bg-(--accent-fg) sel:border-(--accent-fg)",
+  needsYou: "bg-(--warn) border-(--warn) sel:bg-(--accent-fg) sel:border-(--accent-fg)",
 };
 
 // The glyph alone, for rows where the word would crowd the row. It names itself to assistive tech and on hover.

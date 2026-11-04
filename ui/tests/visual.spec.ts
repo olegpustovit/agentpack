@@ -1,5 +1,17 @@
+import { readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test"
-import { mockAPI, projectRow, session } from "./helpers"
+import { conversationImage, mockAPI, projectRow, session } from "./helpers"
+
+const conversationFixture = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../../testdata/acp/full.jsonl"),
+  "utf8",
+)
+const composerFixture = [
+  '{"seq":1,"ts":1,"kind":"agent_message_chunk","payload":{"text":{"text":"Ready for your prompt."}}}',
+  '{"seq":2,"ts":2,"kind":"tool_call","payload":{"toolCallId":"edit-1","title":"Edit terminal_client.go","kind":"edit","status":"completed","content":[{"type":"diff","path":"internal/network/terminal_client.go","oldText":"old","newText":"new"}]}}',
+].join("\n")
 
 // The kit's look is enforced by CSS, which unit tests and role queries cannot see. A cascade mistake
 // once made every link blue, every selected row invisible and every font size inert, with all tests green.
@@ -88,6 +100,164 @@ test.describe("kit styling", () => {
     await page.goto("/sessions")
     await expect(page.getByRole("link", { name: "Settings" })).toBeVisible()
     expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--terminal-bg").trim())).toMatch(/^#f{3,6}$/)
+  })
+
+  test("user bubbles use the neutral track token and reference width", async ({ page }) => {
+    await desktop(page)
+    const text = `Ship it ${"long message ".repeat(60)}`
+    const line = `${JSON.stringify({ seq: 1, ts: 1, kind: "user_message_chunk", payload: { text: { text } } })}\n`
+    await page.route("**/api/sessions", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({ json: [{ ...session, transport: "acp" }] })
+    })
+    await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: line, contentType: "application/x-ndjson" }))
+    await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+    await page.goto("/sessions/local/local-one")
+    const bubble = page.locator('[data-slot="user-bubble"]')
+    await expect(bubble).toContainText("Ship it")
+    const track = await page.evaluate(() => {
+      const probe = document.createElement("div")
+      probe.style.background = "var(--track)"
+      document.body.appendChild(probe)
+      const color = getComputedStyle(probe).backgroundColor
+      probe.remove()
+      return color
+    })
+    expect(await style(bubble, "background-color")).toBe(track)
+    const width = (await bubble.boundingBox())?.width ?? 0
+    expect(width).toBeGreaterThan(500)
+    expect(width).toBeLessThanOrEqual(560)
+  })
+  test("tool rows are unboxed and use tool-specific icons", async ({ page }) => {
+    await desktop(page)
+    const line = `${JSON.stringify({
+      seq: 1,
+      ts: 1,
+      kind: "tool_call",
+      payload: { toolCallId: "read-one", title: "Read worker.go", kind: "read", status: "completed" },
+    })}\n`
+    await page.route("**/api/sessions", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({ json: [{ ...session, transport: "acp" }] })
+    })
+    await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: line, contentType: "application/x-ndjson" }))
+    await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+    await page.goto("/sessions/local/local-one")
+    const row = page.locator("[data-tool-row]")
+    await expect(row).toContainText("Read worker.go")
+    expect(await style(row, "background-color")).toBe(transparent)
+    expect(await style(row, "border-top-width")).toBe("0px")
+    await expect(row.locator("summary .lucide-book-open")).toHaveCount(1)
+  })
+
+  test("agent messages use body foreground, not link accent", async ({ page }) => {
+    await desktop(page)
+    const line =
+      '{"seq":1,"ts":1,"kind":"agent_message_chunk","payload":{"text":{"text":"Plain agent reply"}}}\n'
+    await page.route("**/api/sessions", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({ json: [{ ...session, transport: "acp" }] })
+    })
+    await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+    await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: line, contentType: "application/x-ndjson" }))
+    await page.goto("/sessions/local/local-one")
+    const block = page.locator('[data-slot="agent-message"]')
+    await expect(block).toContainText("Plain agent reply")
+    expect(await style(block, "color")).toBe(await style(page.locator("body"), "color"))
+  })
+
+  test("permission cards use the warn border token", async ({ page }) => {
+    await desktop(page)
+    const permission =
+      '{"seq":1,"ts":1,"kind":"permission_request","payload":{"requestId":"p1","tool":"Bash","summary":"Run tests","options":[{"id":"allow","label":"Allow once"},{"id":"deny","label":"Deny"}]}}\n'
+    await page.route("**/api/sessions", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({ json: [{ ...session, transport: "acp" }] })
+    })
+    await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: permission, contentType: "application/x-ndjson" }))
+    await page.goto("/sessions/local/local-one")
+    const card = page.locator('[data-slot="permission-card"]')
+    await expect(card).toBeVisible()
+    const warnBorder = await page.evaluate(() => {
+      const probe = document.createElement("div")
+      probe.style.borderTop = "0.5px solid var(--warn)"
+      document.body.appendChild(probe)
+      const color = getComputedStyle(probe).borderTopColor
+      probe.remove()
+      return color
+    })
+    expect(await style(card, "border-top-color")).toBe(warnBorder)
+    await page.keyboard.press("Tab")
+    await card.focus()
+    expect(await style(card, "box-shadow")).not.toBe("none")
+  })
+
+  test("conversation composer uses translucent chrome", async ({ page }) => {
+    await desktop(page)
+    const fixture =
+      '{"seq":1,"ts":1,"kind":"plan","payload":{"entries":[{"priority":"high","status":"in_progress","content":"Publish the branch"}]}}\n'
+    await page.route("**/api/sessions", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({ json: [{ ...session, transport: "acp" }] })
+    })
+    await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: fixture, contentType: "application/x-ndjson" }))
+    await page.goto("/sessions/local/local-one")
+    const dock = page.locator(".backdrop-blur-md").last()
+    await expect(dock).toBeVisible()
+    expect(await style(dock, "backdrop-filter")).not.toBe("none")
+    await expect(page.locator('[data-slot="plan-pill"]')).toContainText("Publish the branch")
+  })
+
+  test("tool diff and elicitation cards render", async ({ page }) => {
+    await desktop(page)
+    await page.route("**/api/sessions", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({ json: [{ ...session, transport: "acp" }] })
+    })
+    await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+    await page.route("**/api/sessions/*/blobs/**", (route) =>
+      route.fulfill({ body: conversationImage, contentType: "image/png" }),
+    )
+    await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: conversationFixture, contentType: "application/x-ndjson" }))
+    await page.goto("/sessions/local/local-one")
+    await expect(page.locator('[data-slot="tool-diff-block"]')).toHaveAttribute("open", "")
+    await expect(page.locator('[data-slot="tool-diff"]').first()).toBeVisible()
+    await expect(page.locator('[data-slot="elicitation-card"]')).toBeVisible()
+    await expect(page.locator('[data-slot="conversation-inspector"]')).toBeVisible()
+    const notice = page.locator('[data-slot="conversation-divider"]').first()
+    await expect(notice).toContainText("Context compacted")
+    await expect(notice).toContainText("Older messages were summarized.")
+    const compaction = page.locator('[data-slot="conversation-compaction"]')
+    await expect(compaction).toContainText("completed")
+    await expect(compaction).toContainText("Compaction summary retained.")
+  })
+
+
+  test("composer slash menu and needs-you row label", async ({ page }) => {
+    await desktop(page)
+    await page.route("**/api/sessions", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({
+        json: [
+          { ...session, transport: "acp", conversation_state: "needs_you" },
+          { ...session, id: "local-two", name: "Another", conversation_state: "idle" },
+        ],
+      })
+    })
+    await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: composerFixture, contentType: "application/x-ndjson" }))
+    await page.goto("/sessions")
+    await expect(page.getByText("Needs you").first()).toBeVisible()
+    await expect(page.getByText("Idle").first()).toBeVisible()
+    await page.goto("/sessions/local/local-one")
+    await page.getByRole("button", { name: "Commands" }).click()
+    await expect(page.locator('[data-slot="composer-hints"]')).toBeVisible()
+    const message = page.getByRole("textbox", { name: "Message" })
+    await message.fill("/mod")
+    await expect(page.locator('[data-slot="composer-hints"]')).toBeVisible()
+    await message.fill("")
+    await page.getByRole("button", { name: "Mention a file" }).click()
+    await expect(page.locator('[data-slot="composer-hints"]')).toContainText("terminal_client.go")
+    await expect(page.locator('[data-slot="composer-hints"]')).toBeVisible()
   })
 })
 

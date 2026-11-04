@@ -2,12 +2,17 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"image/color"
+	"io"
+	"os"
 	"slices"
 
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/fang"
+	"github.com/olegpustovit/agentpack/internal/hub"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // Execute runs agentpack through Cobra's command model and Fang's terminal
@@ -45,15 +50,34 @@ func monochromeColorScheme(_ lipgloss.LightDarkFunc) fang.ColorScheme {
 }
 
 func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Command {
+	rootHub := func(command *cobra.Command, args []string) error {
+		if len(args) > 0 {
+			return command.Help()
+		}
+		if os.Getenv("AGENTPACK_SESSION") == "1" {
+			return errors.New("hub is unavailable inside a running agent session")
+		}
+		if hubTTY(runner.Stdin, runner.Stdout) {
+			return hub.Run()
+		}
+		return command.Help()
+	}
 	root := &cobra.Command{
 		Use:           "agentpack",
 		Short:         "Pin skills and plugins for every coding agent",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		RunE: func(command *cobra.Command, _ []string) error {
-			return command.Help()
-		},
+		RunE:          rootHub,
 	}
+	ap := &cobra.Command{
+		Use:                "ap",
+		Short:              "Open the agentpack hub",
+		SilenceUsage:       true,
+		SilenceErrors:      true,
+		DisableFlagParsing: true,
+		RunE:               rootHub,
+	}
+	root.AddCommand(ap)
 	root.SetVersionTemplate("agentpack {{.Version}}\n")
 
 	var global Global
@@ -250,4 +274,13 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	mcpExec.Hidden = true
 	root.AddCommand(mcpExec)
 	return root
+}
+
+func hubTTY(in io.Reader, out io.Writer) bool {
+	inFile, okIn := in.(*os.File)
+	outFile, okOut := out.(*os.File)
+	if !okIn || !okOut {
+		return false
+	}
+	return term.IsTerminal(int(inFile.Fd())) && term.IsTerminal(int(outFile.Fd()))
 }

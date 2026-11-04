@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -20,18 +21,37 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type AgentCapabilities struct {
+	LoadSession         bool                      `json:"loadSession,omitempty"`
+	PromptCapabilities  *AgentPromptCapabilities  `json:"promptCapabilities,omitempty"`
+	SessionCapabilities *AgentSessionCapabilities `json:"sessionCapabilities,omitempty"`
+}
+
+type AgentPromptCapabilities struct {
+	Image bool `json:"image,omitempty"`
+}
+
+type AgentSessionCapabilities struct {
+	Resume *struct{} `json:"resume,omitempty"`
+	Fork   *struct{} `json:"fork,omitempty"`
+}
+
 type SessionInfo struct {
-	LastUsed       time.Time     `json:"last_used,omitzero"`
-	FolderID       string        `json:"folder_id,omitempty"`
-	ID             string        `json:"id"`
-	Name           string        `json:"name,omitempty"`
-	Directory      string        `json:"directory"`
-	DefinitionRoot string        `json:"definition_root,omitempty"`
-	Harness        string        `json:"harness"`
-	Mode           string        `json:"mode"`
-	State          TerminalState `json:"state"`
-	StartedAt      time.Time     `json:"started_at,omitzero"`
-	StartedBy      *Actor        `json:"started_by,omitempty"`
+	LastUsed          time.Time          `json:"last_used,omitzero"`
+	FolderID          string             `json:"folder_id,omitempty"`
+	ID                string             `json:"id"`
+	Name              string             `json:"name,omitempty"`
+	Directory         string             `json:"directory"`
+	DefinitionRoot    string             `json:"definition_root,omitempty"`
+	Harness           string             `json:"harness"`
+	Mode              string             `json:"mode"`
+	Transport         string             `json:"transport,omitempty"`
+	AgentSessionID    string             `json:"agent_session_id,omitempty"`
+	AgentCapabilities *AgentCapabilities `json:"agent_capabilities,omitempty"`
+	ConversationState string             `json:"conversation_state,omitempty"`
+	State             TerminalState      `json:"state"`
+	StartedAt         time.Time          `json:"started_at,omitzero"`
+	StartedBy         *Actor             `json:"started_by,omitempty"`
 }
 
 func workerRecord(home, id string) (WorkerRecord, error) {
@@ -53,8 +73,24 @@ func workerRecord(home, id string) (WorkerRecord, error) {
 	return record, nil
 }
 
-func workerRequest(ctx context.Context, record WorkerRecord, method, path, operationID string) (*http.Response, error) {
-	request, err := http.NewRequestWithContext(ctx, method, "http://"+record.Address+path, nil)
+func workerRequestTimeout(method, path string) time.Duration {
+	path, _, _ = strings.Cut(path, "?")
+	if method == http.MethodPost &&
+		(path == "/stop" || path == "/restart" || path == "/api/sessions" ||
+			strings.HasSuffix(path, "/stop") || strings.HasSuffix(path, "/restart") ||
+			strings.HasSuffix(path, "/conversation/prompt") || strings.HasSuffix(path, "/conversation/blobs")) ||
+		method == http.MethodGet && strings.Contains(path, "/blobs/") {
+		return 2 * time.Minute
+	}
+	return 2 * time.Second
+}
+
+func workerRequest(ctx context.Context, record WorkerRecord, method, path, operationID string, body ...io.Reader) (*http.Response, error) {
+	var reader io.Reader
+	if len(body) > 0 {
+		reader = body[0]
+	}
+	request, err := http.NewRequestWithContext(ctx, method, "http://"+record.Address+path, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -62,11 +98,7 @@ func workerRequest(ctx context.Context, record WorkerRecord, method, path, opera
 	if operationID != "" {
 		request.Header.Set("Idempotency-Key", operationID)
 	}
-	timeout := 2 * time.Second
-	if method == http.MethodPost && (path == "/stop" || path == "/restart") {
-		timeout = 2 * time.Minute
-	}
-	client := http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := http.Client{Timeout: workerRequestTimeout(method, path), Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	defer client.CloseIdleConnections()
 	return client.Do(request)
 }
@@ -196,6 +228,19 @@ func attachWorker(ctx context.Context, record WorkerRecord, local bool, since ui
 	connection, response, err := dialer.DialContext(ctx, "ws://"+record.Address+"/attach?since="+strconv.FormatUint(since, 10), headers)
 	if response != nil && response.Body != nil {
 		response.Body.Close()
+	}
+	return connection, err
+}
+
+// AttachTerminal opens a local-viewer connection to an existing worker without taking ownership of it.
+func AttachTerminal(ctx context.Context, home, id string, since uint64) (*websocket.Conn, error) {
+	record, err := workerRecord(home, id)
+	if err != nil {
+		return nil, err
+	}
+	connection, err := reattach(ctx, record, since)
+	if err == nil {
+		connection.SetReadLimit(replayLimit + 4096)
 	}
 	return connection, err
 }

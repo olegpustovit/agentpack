@@ -116,8 +116,6 @@ function AppToolbar() {
 }
 
 function TabBar() {
-  const { detail, landing } = useRoutePosition()
-  if (detail && !landing) return null
   return (
     <nav
       aria-label="Tabs"

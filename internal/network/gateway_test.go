@@ -4,12 +4,62 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestNodeRequestForwardsBodyAndAuthorization(t *testing.T) {
+	secret := strings.Repeat("s", 64)
+	body := `{"directory":"/tmp/project"}`
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodPost || r.URL.Path != "/api/sessions" || r.Header.Get("Authorization") != "Bearer "+secret {
+			t.Errorf("request = %s %s authorization=%q", r.Method, r.URL.Path, r.Header.Get("Authorization"))
+		}
+		got, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		wantBody := body
+		if requests == 2 {
+			wantBody = ""
+		}
+		if string(got) != wantBody {
+			t.Errorf("body = %q, want %q", got, wantBody)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+		t.Fatal(err)
+	}
+	record, err := json.Marshal(nodeRecord{Address: strings.TrimPrefix(server.URL, "http://"), Secret: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "network", "node.json"), record, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NodeRequest(context.Background(), home, http.MethodPost, "/api/sessions", strings.NewReader(body)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NodeRequest(context.Background(), home, http.MethodPost, "/api/sessions"); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
 
 func TestGatewayAuthenticationHostAndOrigin(t *testing.T) {
 	auth, err := newGatewayAuth(t.TempDir())
@@ -65,7 +115,7 @@ func TestGatewayRestrictsRemoteFolders(t *testing.T) {
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
 	called := false
-	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Start: func(context.Context, SessionInfo) (string, error) { called = true; return "session-test", nil }}}
+	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Start: func(context.Context, SessionInfo, string) (string, error) { called = true; return "session-test", nil }}}
 	r := httptest.NewRequest("POST", origin.String()+"/api/sessions", bytes.NewBufferString(`{"directory":"/unregistered","harness":"claude"}`))
 	r.Header.Set("Authorization", "Bearer "+g.local.Secret)
 	w := httptest.NewRecorder()
@@ -140,5 +190,62 @@ func TestGatewayPeerProxyOnlyForAPIAndUnknownAPIIsJSON404(t *testing.T) {
 	w := serve("/api/nope", true)
 	if w.Code != 404 || w.Header().Get("Content-Type") != "application/json" || w.Body.String() != "{\"error\":\"not found\"}\n" {
 		t.Fatalf("/api/nope: %d %q %q", w.Code, w.Header().Get("Content-Type"), w.Body.String())
+	}
+}
+func TestWorkerRequestTimeoutAllowsACPConversationOperations(t *testing.T) {
+	tests := []struct {
+		method string
+		path   string
+		want   time.Duration
+	}{
+		{http.MethodPost, "/stop", 2 * time.Minute},
+		{http.MethodPost, "/api/sessions", 2 * time.Minute},
+		{http.MethodPost, "/api/sessions/session-1/stop?node=remote", 2 * time.Minute},
+		{http.MethodPost, "/api/sessions/session-1/restart?node=remote", 2 * time.Minute},
+		{http.MethodPost, "/api/sessions/session-1/conversation/prompt", 2 * time.Minute},
+		{http.MethodPost, "/api/sessions/session-1/conversation/blobs", 2 * time.Minute},
+		{http.MethodGet, "/api/sessions/session-1/blobs/sha", 2 * time.Minute},
+		{http.MethodPost, "/api/sessions/session-1/conversation/permission", 2 * time.Second},
+		{http.MethodGet, "/api/sessions/session-1/conversation/prompt", 2 * time.Second},
+	}
+	for _, test := range tests {
+		if got := workerRequestTimeout(test.method, test.path); got != test.want {
+			t.Errorf("workerRequestTimeout(%q, %q) = %v, want %v", test.method, test.path, got, test.want)
+		}
+	}
+}
+func TestNodeRequestStreamStopsAtLimit(t *testing.T) {
+	const secret = "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+secret {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == "/exact" {
+			_, _ = io.WriteString(w, "abc")
+			return
+		}
+		_, _ = io.WriteString(w, "abcdef")
+	}))
+	defer server.Close()
+	home := t.TempDir()
+	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+		t.Fatal(err)
+	}
+	record, err := json.Marshal(nodeRecord{Address: strings.TrimPrefix(server.URL, "http://"), Secret: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "network", "node.json"), record, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var got bytes.Buffer
+	err = NodeRequestStream(context.Background(), home, http.MethodGet, "/image", &got, 3)
+	if err == nil || got.String() != "abc" {
+		t.Fatalf("oversized response = %q, %v; want a 3-byte prefix and error", got.String(), err)
+	}
+	got.Reset()
+	if err := NodeRequestStream(context.Background(), home, http.MethodGet, "/exact", &got, 3); err != nil || got.String() != "abc" {
+		t.Fatalf("exact response = %q, %v; want success", got.String(), err)
 	}
 }

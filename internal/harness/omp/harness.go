@@ -11,7 +11,7 @@ import (
 )
 
 func New() base.Harness {
-	return base.Definition{Target: base.OMP, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, LSP: writeLSP, Guidance: injectGuidance, Check: verify, Launch: launch}
+	return base.Definition{Target: base.OMP, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, LSP: writeLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchACP: acpLaunch}
 }
 
 func stagedRoot(ctx base.StageContext) (string, error) {

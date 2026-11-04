@@ -263,7 +263,7 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 		t.Fatalf("list sessions: %v %+v", err, result)
 	}
 	var started atomic.Int32
-	h.gateway.options.Start = func(context.Context, SessionInfo) (string, error) { started.Add(1); return "session-test", nil }
+	h.gateway.options.Start = func(context.Context, SessionInfo, string) (string, error) { started.Add(1); return "session-test", nil }
 	directory := filepath.Join(h.gateway.options.Home, "project")
 	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "start_session", Arguments: map[string]any{"directory": directory, "harness": "codex"}})
 	if err != nil || !result.IsError || started.Load() != 0 {

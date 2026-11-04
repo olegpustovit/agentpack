@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { ApiError } from "@/lib/api"
 import { type ListedSession } from "./group"
-import { reusesOperationId, sessionRules } from "./rules"
+import { reusesOperationId, sessionRules, startSessionBody } from "./rules"
 
 function session(overrides: Partial<ListedSession> & { interactive?: boolean; running?: boolean } = {}): ListedSession {
   const { interactive = true, running = true, ...rest } = overrides
@@ -33,6 +33,14 @@ describe("sessionRules", () => {
 
   it("stop needs a running session", () => {
     expect(sessionRules(session({ running: false })).stop).toBe(false)
+  })
+})
+
+describe("startSessionBody", () => {
+  it("maps chat to acp transport and terminal to terminal transport", () => {
+    const base = { directory: "/work/x", harness: "claude", mode: "default" }
+    expect(startSessionBody({ ...base, view: "chat" })).toMatchObject({ transport: "acp" })
+    expect(startSessionBody({ ...base, view: "terminal" })).toMatchObject({ transport: "terminal" })
   })
 })
 

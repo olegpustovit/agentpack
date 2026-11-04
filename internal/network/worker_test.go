@@ -330,7 +330,7 @@ func runFastExitWorker(t *testing.T, restart bool) {
 
 func TestWorkerRestartFailureEndsWithoutOverlap(t *testing.T) {
 	session := testSession(t)
-	worker, err := WorkerHandler(session, workerTestSecret)
+	worker, err := WorkerHandler(session, nil, workerTestSecret, "")
 	if err != nil {
 		t.Fatal(err)
 	}

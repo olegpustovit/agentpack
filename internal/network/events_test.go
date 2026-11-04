@@ -56,6 +56,20 @@ func topicCount(messages []eventMessage, topic string) int {
 	return count
 }
 
+func TestDigestOfSessionsIncludesConversationState(t *testing.T) {
+	idle, err := digestOf([]SessionInfo{{ID: "s1", ConversationState: "idle", State: TerminalState{Running: true}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	needs, err := digestOf([]SessionInfo{{ID: "s1", ConversationState: "needs_you", State: TerminalState{Running: true}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idle == needs {
+		t.Fatal("sessions digest must change when conversation_state changes")
+	}
+}
+
 func TestEventsEmitOnlyOnChange(t *testing.T) {
 	var state atomic.Int64
 	topic := eventTopic{name: "sessions", interval: 5 * time.Millisecond, digest: func(context.Context) (string, error) {

@@ -1,0 +1,17 @@
+                                                             
+  Help                                                       
+                                                             
+  j/k or ↑/↓   move through sessions                         
+  Enter        open the selected session                     
+  ctrl+x n     start a new session                           
+  ctrl+x l     show all sessions                             
+  ctrl+p       open commands                                 
+  ?            show this help                                
+  q            quit the hub                                  
+  Chat slash commands: /help · /image · /reload · /sessions  
+                                                             
+  Chat: i message · a image path · Tab edits field           
+  Chat: a/A/r permission · 1–3 question · e expands          
+  Chat: click image or o opens hovered image                 
+  Chat: j/k scroll · ctrl+] back to sessions                 
+                                                             

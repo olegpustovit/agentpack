@@ -23,7 +23,7 @@ func TestRemoteSessionRequiresRememberedFolderAndTerminalHarness(t *testing.T) {
 		{"unknown folder", "codex", directory, "not been used before"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := runner.startRemoteSession(context.Background(), home, "must-not-execute", network.SessionInfo{Harness: test.harness, Directory: test.directory})
+			_, err := runner.startRemoteSession(context.Background(), home, "must-not-execute", network.SessionInfo{Harness: test.harness, Directory: test.directory}, "")
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("got %v, want %s", err, test.want)
 			}
@@ -40,7 +40,7 @@ func TestRemoteSessionRequiresRememberedFolderAndTerminalHarness(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "recent.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = runner.startRemoteSession(context.Background(), home, "must-not-execute", network.SessionInfo{Harness: "codex", Directory: directory})
+	_, err = runner.startRemoteSession(context.Background(), home, "must-not-execute", network.SessionInfo{Harness: "codex", Directory: directory}, "")
 	if err == nil || !strings.Contains(err.Error(), "folder has changed") {
 		t.Fatalf("replaced folder accepted: %v", err)
 	}

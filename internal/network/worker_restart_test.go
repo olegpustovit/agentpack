@@ -22,7 +22,7 @@ import (
 
 func TestGatewayRestartOperationIsIdempotent(t *testing.T) {
 	secret := strings.Repeat("a", 64)
-	worker, err := WorkerHandler(testSession(t), secret)
+	worker, err := WorkerHandler(testSession(t), nil, secret, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -202,6 +202,7 @@ type Harness interface {
 	FinalizeWorkspaceOverlay(StageContext) error
 	Verify(StageContext) error
 	LaunchCommand(LaunchContext) (*exec.Cmd, error)
+	ACP(LaunchContext) (ACPLaunch, error)
 	AfterLaunch(LaunchContext) error
 }
 
@@ -222,6 +223,7 @@ type Definition struct {
 	WorkspaceOverlay func(StageContext) error
 	Check            func(StageContext) error
 	Launch           func(LaunchContext) (*exec.Cmd, error)
+	LaunchACP        func(LaunchContext) (ACPLaunch, error)
 	LaunchFinished   func(LaunchContext) error
 }
 
@@ -345,6 +347,12 @@ func (definition Definition) LaunchCommand(ctx LaunchContext) (*exec.Cmd, error)
 		return nil, fmt.Errorf("%s harness has no launcher", definition.Target)
 	}
 	return definition.Launch(ctx)
+}
+func (definition Definition) ACP(ctx LaunchContext) (ACPLaunch, error) {
+	if definition.LaunchACP == nil {
+		return ACPLaunch{}, fmt.Errorf("%s harness has no ACP launcher", definition.Target)
+	}
+	return definition.LaunchACP(ctx)
 }
 func (definition Definition) AfterLaunch(ctx LaunchContext) error {
 	if definition.LaunchFinished != nil {

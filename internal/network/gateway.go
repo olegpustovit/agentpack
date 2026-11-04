@@ -25,7 +25,7 @@ import (
 
 type GatewayOptions struct {
 	Home, Address, PublicURL string
-	Start                    func(context.Context, SessionInfo) (string, error)
+	Start                    func(context.Context, SessionInfo, string) (string, error)
 	Packages                 func(context.Context, string) (ProjectContents, error)
 	Install                  func(context.Context, string, string, bool) error
 	Library                  LibraryOptions
@@ -148,6 +148,11 @@ func (g *Gateway) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		value, err := Sessions(r.Context(), g.options.Home)
+		if err == nil {
+			for i := range value {
+				value[i] = publicSession(value[i])
+			}
+		}
 		respond(w, value, err)
 	})
 	mux.HandleFunc("GET /api/recent", func(w http.ResponseWriter, r *http.Request) {
@@ -167,24 +172,64 @@ func (g *Gateway) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
-			Directory string `json:"directory"`
-			Harness   string `json:"harness"`
-			Mode      string `json:"mode"`
+			Directory      string `json:"directory"`
+			Harness        string `json:"harness"`
+			Mode           string `json:"mode"`
+			Transport      string `json:"transport,omitempty"`
+			AgentSessionID string `json:"agent_session_id,omitempty"`
+			Resume         string `json:"resume,omitempty"`
 		}
 		if !readJSON(w, r, &input) {
+			return
+		}
+		if input.Resume != "" && input.AgentSessionID == "" {
+			input.AgentSessionID = input.Resume
+		}
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			actor = browserActor()
+		}
+		info, err := g.startSession(r.Context(), actor, SessionInfo{
+			Directory: input.Directory, Harness: input.Harness, Mode: input.Mode,
+			Transport: input.Transport, AgentSessionID: input.AgentSessionID,
+		}, "")
+		writeSessionStart(w, info, err)
+	})
+	mux.HandleFunc("POST /api/sessions/{id}/fork", func(w http.ResponseWriter, r *http.Request) {
+		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		if err != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return
+		}
+		if record.Session.Transport != "acp" || record.Session.AgentSessionID == "" {
+			http.Error(w, "only ACP sessions with a native session ID can be forked", http.StatusBadRequest)
+			return
+		}
+		if !authorizeACPWrite(w, r, record.Session) {
 			return
 		}
 		actor, ok := actorFrom(r.Context())
 		if !ok {
 			actor = browserActor()
 		}
-		info, err := g.startSession(r.Context(), actor, SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode})
-		respond(w, info, err)
+		info, err := g.startSession(r.Context(), actor, SessionInfo{
+			Directory: record.Session.Directory,
+			Harness:   record.Session.Harness,
+			Mode:      record.Session.Mode,
+			Transport: "acp",
+		}, record.Session.AgentSessionID)
+		writeSessionStart(w, info, err)
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
+		if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
+			return
+		}
 		respond(w, map[string]bool{"stopped": true}, StopWorker(r.Context(), g.options.Home, r.PathValue("id")))
 	})
 	mux.HandleFunc("PATCH /api/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
+			return
+		}
 		var input struct {
 			Name *string `json:"name"`
 		}
@@ -209,7 +254,7 @@ func (g *Gateway) Handler() http.Handler {
 		case err != nil:
 			http.Error(w, "could not save session name", http.StatusInternalServerError)
 		default:
-			writeJSON(w, info)
+			writeJSON(w, publicSession(info))
 		}
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/restart", func(w http.ResponseWriter, r *http.Request) {
@@ -219,6 +264,9 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		if !validRestartID(input.OperationID) {
 			http.Error(w, "restart requires a valid operation_id", http.StatusBadRequest)
+			return
+		}
+		if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
 			return
 		}
 		if err := RestartWorker(r.Context(), g.options.Home, r.PathValue("id"), input.OperationID); err != nil {
@@ -231,9 +279,131 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		writeJSON(w, map[string]bool{"restarted": true})
 	})
+	mux.HandleFunc("GET /api/agent-sessions", g.serveAgentSessions)
 	mux.HandleFunc("GET /api/sessions/{id}/terminal", g.terminal)
 	mux.HandleFunc("GET /api/sessions/{id}/output", g.terminalData)
-	mux.HandleFunc("POST /api/sessions/{id}/input", g.terminalData)
+	mux.HandleFunc("POST /api/sessions/{id}/input", func(w http.ResponseWriter, r *http.Request) {
+		if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
+			return
+		}
+		g.terminalData(w, r)
+	})
+	mux.HandleFunc("GET /api/sessions/{id}/conversation", func(w http.ResponseWriter, r *http.Request) {
+		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		if err != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return
+		}
+		proxyWorkerConversation(w, r, record, "")
+	})
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", func(w http.ResponseWriter, r *http.Request) {
+		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		if err != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return
+		}
+		if !authorizeACPWrite(w, r, record.Session) {
+			return
+		}
+		proxyWorkerConversation(w, r, record, "/prompt")
+	})
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", func(w http.ResponseWriter, r *http.Request) {
+		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		if err != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return
+		}
+		if !authorizeACPWrite(w, r, record.Session) {
+			return
+		}
+		proxyWorkerConversation(w, r, record, "/prompt/images")
+	})
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/permission", func(w http.ResponseWriter, r *http.Request) {
+		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		if err != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return
+		}
+		if !authorizeACPWrite(w, r, record.Session) {
+			return
+		}
+		proxyWorkerConversation(w, r, record, "/permission")
+	})
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/cancel", func(w http.ResponseWriter, r *http.Request) {
+		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		if err != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return
+		}
+		if !authorizeACPWrite(w, r, record.Session) {
+			return
+		}
+		proxyWorkerConversation(w, r, record, "/cancel")
+	})
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/elicitation", func(w http.ResponseWriter, r *http.Request) {
+		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		if err != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return
+		}
+		if !authorizeACPWrite(w, r, record.Session) {
+			return
+		}
+		proxyWorkerConversation(w, r, record, "/elicitation")
+	})
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/config", func(w http.ResponseWriter, r *http.Request) {
+		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		if err != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return
+		}
+		if !authorizeACPWrite(w, r, record.Session) {
+			return
+		}
+		proxyWorkerConversation(w, r, record, "/config")
+	})
+	mux.HandleFunc("GET /api/sessions/{id}/conversation/config-options", func(w http.ResponseWriter, r *http.Request) {
+		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		if err != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return
+		}
+		proxyWorkerConversation(w, r, record, "/config-options")
+	})
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/blobs", func(w http.ResponseWriter, r *http.Request) {
+		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		if err != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return
+		}
+		if !authorizeACPWrite(w, r, record.Session) {
+			return
+		}
+		proxyWorkerConversation(w, r, record, "/blobs")
+	})
+	mux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}", func(w http.ResponseWriter, r *http.Request) {
+		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		if err != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return
+		}
+		path := "/blobs/" + r.PathValue("sha")
+		request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, "http://"+record.Address+path, nil)
+		if err != nil {
+			http.Error(w, "invalid blob request", http.StatusBadRequest)
+			return
+		}
+		request.Header.Set("Authorization", "Bearer "+record.Secret)
+		client := http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: nil}}
+		defer client.CloseIdleConnections()
+		response, err := client.Do(request)
+		if err != nil {
+			http.Error(w, "session unavailable", http.StatusBadGateway)
+			return
+		}
+		defer response.Body.Close()
+		proxySessionBlob(w, response)
+	})
 	mux.HandleFunc("GET /api/packages", func(w http.ResponseWriter, r *http.Request) {
 		directory := r.URL.Query().Get("directory")
 		if !g.knownDirectory(directory) {
@@ -272,12 +442,21 @@ func (g *Gateway) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /api/node/stop-agents", func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := Sessions(r.Context(), g.options.Home)
+		skipped := 0
 		if err == nil {
+			actor, ok := actorFrom(r.Context())
+			if !ok {
+				actor = browserActor()
+			}
 			for _, session := range sessions {
+				if session.Transport == "acp" && !actor.canWriteSession(session) {
+					skipped++
+					continue
+				}
 				err = errors.Join(err, StopWorker(r.Context(), g.options.Home, session.ID))
 			}
 		}
-		respond(w, map[string]bool{"stopped": err == nil}, err)
+		respond(w, map[string]any{"stopped": err == nil, "skipped": skipped}, err)
 	})
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -327,6 +506,16 @@ func (g *Gateway) Handler() http.Handler {
 	})
 }
 
+func publicSession(info SessionInfo) SessionInfo {
+	if info.StartedBy == nil || info.StartedBy.Kind != "peer" || info.StartedBy.StableNodeID == "" {
+		return info
+	}
+	owner := *info.StartedBy
+	owner.StableNodeID = ""
+	info.StartedBy = &owner
+	return info
+}
+
 func respond(w http.ResponseWriter, value any, err error) {
 	if err != nil {
 		http.Error(w, err.Error(), 400)
@@ -334,14 +523,57 @@ func respond(w http.ResponseWriter, value any, err error) {
 	}
 	writeJSON(w, value)
 }
+func writeSessionStart(w http.ResponseWriter, info SessionInfo, err error) {
+	if errors.Is(err, errACPResumeDenied) {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	if errors.Is(err, errACPResumeOwnerStorage) {
+		http.Error(w, "could not verify ACP session owner", http.StatusInternalServerError)
+		return
+	}
+	respond(w, publicSession(info), err)
+}
+func authorizeACPWrite(w http.ResponseWriter, r *http.Request, session SessionInfo) bool {
+	if session.Transport != "acp" {
+		return true
+	}
+	actor, ok := actorFrom(r.Context())
+	if !ok {
+		actor = browserActor()
+	}
+	if actor.canWriteSession(session) {
+		return true
+	}
+	http.Error(w, "read-only actor cannot modify this ACP session", http.StatusForbidden)
+	return false
+}
+
+func (g *Gateway) authorizeACPWriteByID(w http.ResponseWriter, r *http.Request, id string) bool {
+	record, err := workerRecord(g.options.Home, id)
+	if err != nil || record.Session.Transport != "acp" {
+		return true
+	}
+	return authorizeACPWrite(w, r, record.Session)
+}
 
 // startSession records the actor that started the session, then starts its worker.
-func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInfo) (SessionInfo, error) {
+func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInfo, forkSessionID string) (SessionInfo, error) {
 	if !g.knownDirectory(info.Directory) {
 		return SessionInfo{}, errors.New("choose a recent folder from this node")
 	}
+	source := info
+	if forkSessionID != "" {
+		if info.Transport != "acp" || info.AgentSessionID != "" {
+			return SessionInfo{}, errors.New("fork requires an ACP session without resume")
+		}
+		source.AgentSessionID = forkSessionID
+	}
+	if err := authorizeACPResume(g.options.Home, actor, source); err != nil {
+		return SessionInfo{}, err
+	}
 	info.StartedBy = &actor
-	id, err := g.options.Start(ctx, info)
+	id, err := g.options.Start(ctx, info, forkSessionID)
 	info.ID = id
 	return info, err
 }
@@ -361,6 +593,35 @@ func (g *Gateway) knownDirectory(directory string) bool {
 		}
 	}
 	return false
+}
+
+func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
+	directory := r.URL.Query().Get("directory")
+	harness := r.URL.Query().Get("harness")
+	if !g.knownDirectory(directory) || harness == "" {
+		http.Error(w, "choose a recent folder from this node", http.StatusBadRequest)
+		return
+	}
+	var definitionRoot, modeName string
+	recent, err := Recent(g.options.Home)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	clean := filepath.Clean(directory)
+	for _, entry := range recent {
+		if filepath.Clean(entry.Directory) == clean && entry.Harness == harness {
+			definitionRoot = entry.DefinitionRoot
+			modeName = entry.Mode
+			break
+		}
+	}
+	sessions, err := ListAgentSessions(r.Context(), g.options.Home, directory, harness, definitionRoot, modeName)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	writeJSON(w, map[string]any{"sessions": sessions})
 }
 
 func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
@@ -455,12 +716,12 @@ func loadNode(home string) (nodeRecord, error) {
 	}
 	return record, nil
 }
-func NodeRequest(ctx context.Context, home, method, path string) ([]byte, error) {
+func NodeRequest(ctx context.Context, home, method, path string, body ...io.Reader) ([]byte, error) {
 	record, err := loadNode(home)
 	if err != nil {
 		return nil, err
 	}
-	response, err := workerRequest(ctx, WorkerRecord{Address: record.Address, Secret: record.Secret}, method, path, "")
+	response, err := workerRequest(ctx, WorkerRecord{Address: record.Address, Secret: record.Secret}, method, path, "", body...)
 	if err != nil {
 		return nil, err
 	}
@@ -470,6 +731,44 @@ func NodeRequest(ctx context.Context, home, method, path string) ([]byte, error)
 		return nil, fmt.Errorf("node: %s", strings.TrimSpace(string(data)))
 	}
 	return data, err
+}
+
+// NodeRequestStream writes a successful node response to dst, stopping after maxBytes.
+func NodeRequestStream(ctx context.Context, home, method, path string, dst io.Writer, maxBytes int64) error {
+	if dst == nil || maxBytes < 0 {
+		return errors.New("node: invalid response destination or limit")
+	}
+	record, err := loadNode(home)
+	if err != nil {
+		return err
+	}
+	response, err := workerRequest(ctx, WorkerRecord{Address: record.Address, Secret: record.Secret}, method, path, "")
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		data, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		if readErr != nil {
+			return errors.Join(fmt.Errorf("node: %s", strings.TrimSpace(string(data))), readErr)
+		}
+		return fmt.Errorf("node: %s", strings.TrimSpace(string(data)))
+	}
+	written, err := io.Copy(dst, io.LimitReader(response.Body, maxBytes))
+	if err != nil {
+		return err
+	}
+	if written == maxBytes {
+		var extra [1]byte
+		n, err := io.ReadFull(response.Body, extra[:])
+		if n > 0 {
+			return fmt.Errorf("node: response exceeds %d bytes", maxBytes)
+		}
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			return err
+		}
+	}
+	return nil
 }
 
 func EnsureNode(ctx context.Context, home, executable string) error {

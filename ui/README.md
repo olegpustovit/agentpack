@@ -61,10 +61,24 @@ private worker capabilities never appear in any response. An unauthenticated API
 - `GET /api/events`: Server-Sent Events. Each `message` carries one JSON event that the UI uses to refresh cached queries; the UI closes the stream while the page is hidden.
 - `GET /api/library/agentpacks?include=revisions`: array of `{agentpack, revisions}`, one call instead of one request per saved agentpack.
 - `GET /api/sessions`: array (or `{sessions: [...]}`) of
-  `{id, name?, directory, harness, mode, state: {running,shared_input,responder?,rows,columns,exit_code}}`.
+  `{id, name?, directory, harness, mode, transport?, conversation_state?, agent_session_id?, state: {running,shared_input,responder?,rows,columns,exit_code}}`.
+  Omitted `transport` means `terminal`. Chat sessions use `transport: "acp"`; `conversation_state` is `working`, `needs_you`, or `idle` while the worker is running.
 - `GET /api/recent`: array (or `{recent: [...]}`) of `{directory,harness,mode,last_used?,available,unavailable_reason?}`.
   Missing or replaced folders remain visible but cannot start until a fresh local launch.
-- `POST /api/sessions`: `{directory,harness,mode}`, returns created session including `id`.
+- `POST /api/sessions`: `{directory,harness,mode,transport?,agent_session_id?,resume?}`, returns created session including `id`.
+  `transport` is `terminal` (default) or `acp` (chat). Resuming an agent conversation passes `agent_session_id` from `GET /api/agent-sessions`.
+- `GET /api/agent-sessions`: `{sessions: [{id,title?,updated_at?}]}` for the selected folder, harness, and mode (cached; requires a live worker probe).
+- Chat worker routes (also available on the gateway as `/api/sessions/{id}/conversation/...` with the same auth and `?node=` routing as other session APIs):
+  - `GET /conversation?since=` — NDJSON log; `Accept: text/event-stream` or `?stream=1` for SSE live updates.
+  - `POST /conversation/prompt` — `{text, image?}` with `{sha,mime,width?,height?}` after `POST /conversation/blobs`; the server derives MIME from stored bytes and ignores the client MIME.
+  - `POST /conversation/permission` — `{request_id, option_id}`.
+  - `POST /conversation/elicitation` — `{elicitation_id, value}`.
+  - `POST /conversation/cancel`, `POST /conversation/config` — `{key, value}`.
+  - `GET /conversation/config-options` — agent `configOptions` snapshot.
+  - `GET /blobs/{sha}` — session-scoped PNG/JPEG/GIF/WebP bytes, 20 MiB each and 100 MiB total or 128 images per session (whichever limit is reached first).
+
+Only the recorded user and stable peer node identity (or the same local user/host) may mutate an existing ACP session. Read-only peers retain conversation, config-option, and blob reads.
+
 - `PATCH /api/sessions/{id}`: `{name}` renames the session display label and returns the
   updated session. Names are trimmed and limited to 80 characters; an empty name clears
   the label. The label survives gateway restarts without changing the session ID or folder.

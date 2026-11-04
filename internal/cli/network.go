@@ -13,8 +13,10 @@ import (
 	"syscall"
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	packSync "github.com/olegpustovit/agentpack/internal/sync"
 	"golang.org/x/term"
 )
 
@@ -71,8 +73,8 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 		ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 		options := network.GatewayOptions{Home: home, Address: address, PublicURL: os.Getenv("AGENTPACK_PUBLIC_URL"), Assets: network.WebAssets(), Version: Version}
-		options.Start = func(ctx context.Context, info network.SessionInfo) (string, error) {
-			return runner.startRemoteSession(ctx, home, executable, info)
+		options.Start = func(ctx context.Context, info network.SessionInfo, forkSessionID string) (string, error) {
+			return runner.startRemoteSession(ctx, home, executable, info, forkSessionID)
 		}
 		options.Packages = func(ctx context.Context, directory string) (network.ProjectContents, error) {
 			packContext, err := resolveInvocationContext(Invocation{Global: Global{WorkspaceRoot: directory}}, true)
@@ -132,7 +134,7 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 	}
 }
 
-func (runner Runner) startRemoteSession(ctx context.Context, home, executable string, info network.SessionInfo) (string, error) {
+func (runner Runner) startRemoteSession(ctx context.Context, home, executable string, info network.SessionInfo, forkSessionID string) (string, error) {
 	if _, ok := launcherTarget(info.Harness); !ok {
 		return "", errors.New("unknown harness")
 	}
@@ -161,6 +163,21 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 	if !known {
 		return "", errors.New("folder has not been used before; launch an agent locally before starting it remotely")
 	}
+	if info.Transport == "acp" {
+		target, ok := launcherTarget(info.Harness)
+		if !ok {
+			return "", errors.New("unknown harness")
+		}
+		modeName := info.Mode
+		if modeName == "" {
+			modeName = mode.DefaultName
+		}
+		if _, _, err := runner.Service.SyncForLaunchOptions(ctx, info.DefinitionRoot, packSync.SyncOptions{
+			Mode: modeName, Target: &target, WorkspaceRoot: info.Directory,
+		}); err != nil {
+			return "", err
+		}
+	}
 	arguments := []string{"--workspace", info.Directory}
 	if info.DefinitionRoot != "" {
 		arguments = append(arguments, "--definition-root", info.DefinitionRoot)
@@ -169,7 +186,7 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 		arguments = append(arguments, "--mode", info.Mode)
 	}
 	arguments = append(arguments, info.Harness)
-	return network.StartWorker(ctx, home, executable, network.WorkerLaunch{Program: executable, Arguments: arguments, Directory: info.Directory, Environment: append(os.Environ(), "AGENTPACK_SESSION_WORKER=1"), Rows: 24, Columns: 80, Session: info})
+	return network.StartWorker(ctx, home, executable, network.WorkerLaunch{Transport: info.Transport, ForkSessionID: forkSessionID, Program: executable, Arguments: arguments, Directory: info.Directory, Environment: append(os.Environ(), "AGENTPACK_SESSION_WORKER=1"), Rows: 24, Columns: 80, Session: info})
 }
 
 func (runner Runner) launchManaged(ctx context.Context, packContext paths.Context, invocation Invocation, arguments []string) (int, error) {

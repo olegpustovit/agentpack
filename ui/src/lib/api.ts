@@ -18,10 +18,15 @@ export function setUnauthorizedHandler(handler: () => void) {
 // Mutations must pass `machine` explicitly; there is no default target.
 export async function api<T>(
   path: `/api/${string}`,
-  opts: { machine?: string; method?: string; body?: unknown } = {},
+  opts: { machine?: string; method?: string; body?: unknown; query?: Record<string, string> } = {},
 ): Promise<T> {
   const url = new URL(path, location.origin)
   if (opts.machine && opts.machine !== LOCAL) url.searchParams.set("node", opts.machine)
+  if (opts.query) {
+    for (const [key, value] of Object.entries(opts.query)) {
+      url.searchParams.set(key, value)
+    }
+  }
   const hasBody = opts.body !== undefined
   const res = await fetch(url, {
     method: opts.method ?? (hasBody ? "POST" : "GET"),

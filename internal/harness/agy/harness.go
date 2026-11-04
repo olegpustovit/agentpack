@@ -17,7 +17,7 @@ import (
 const workspaceOverlay = ".agents/plugins/agentpack-bundle"
 
 func New() base.Harness {
-	return base.Definition{Target: base.Agy, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, WorkspaceOverlay: finalizeWorkspace, Check: verify, Launch: launch}
+	return base.Definition{Target: base.Agy, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, WorkspaceOverlay: finalizeWorkspace, Check: verify, Launch: launch, LaunchACP: acpLaunch}
 }
 
 func launch(ctx base.LaunchContext) (*exec.Cmd, error) {

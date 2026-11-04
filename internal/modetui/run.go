@@ -2,13 +2,14 @@ package modetui
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/modecatalog"
@@ -59,8 +60,8 @@ type application struct {
 }
 
 type palette struct {
-	accent, dim, warn, enabled, disabled, neutral lipgloss.TerminalColor
-	success, failure, focused, unfocused          lipgloss.TerminalColor
+	accent, dim, warn, enabled, disabled, neutral color.Color
+	success, failure, focused, unfocused          color.Color
 }
 
 var colors = newPalette()
@@ -84,7 +85,7 @@ func Run(root string, project *manifest.Manifest, catalog modecatalog.Capability
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		return fmt.Errorf("mode: TUI requires an interactive terminal")
 	}
-	_, err = tea.NewProgram(app, tea.WithAltScreen()).Run()
+	_, err = tea.NewProgram(app).Run()
 	return err
 }
 
@@ -107,7 +108,7 @@ func (app *application) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		app.width, app.height = value.Width, value.Height
 		app.clampCursors()
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if app.prompt != noPrompt {
 			return app.updatePrompt(value)
 		}
@@ -218,7 +219,7 @@ func (app *application) updateTree(key string) {
 		if len(row.Node.Children) > 0 {
 			app.expanded[row.Node.ID] = true
 		}
-	case "enter", " ":
+	case "enter", " ", "space":
 		if row.Node.Selector == nil {
 			app.expanded[row.Node.ID] = !app.expanded[row.Node.ID]
 			return
@@ -260,7 +261,7 @@ func (app *application) updateTree(key string) {
 	}
 }
 
-func (app *application) updatePrompt(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (app *application) updatePrompt(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	name := key.String()
 	if name == "ctrl+c" {
 		app.prompt = noPrompt
@@ -328,14 +329,14 @@ func (app *application) updatePrompt(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			app.input = app.input[:len(app.input)-size]
 		}
 	default:
-		if key.Type == tea.KeyRunes {
-			app.input += string(key.Runes)
+		if len(key.Text) > 0 {
+			app.input += key.Text
 		}
 	}
 	return app, nil
 }
 
-func (app *application) View() string {
+func (app *application) View() tea.View {
 	width, height := max(app.width, 56), max(app.height, 16)
 	header := app.renderHeader(width)
 	footer := app.renderFooter(width)
@@ -343,12 +344,13 @@ func (app *application) View() string {
 	body := app.renderBody(width, bodyHeight)
 	view := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 	if app.showHelp {
-		return app.renderHelp(width, height)
+		view = app.renderHelp(width, height)
+	} else if app.prompt != noPrompt {
+		view = app.renderPrompt(width, height)
 	}
-	if app.prompt != noPrompt {
-		return app.renderPrompt(width, height)
-	}
-	return view
+	v := tea.NewView(view)
+	v.AltScreen = true
+	return v
 }
 
 func (app *application) renderHeader(width int) string {

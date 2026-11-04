@@ -1,11 +1,12 @@
 package modetui
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
@@ -29,7 +30,7 @@ func TestModeEditorRendersResponsiveThreePaneInterface(t *testing.T) {
 	}
 	app := newApplication("/work/demo", state, catalog)
 	app.Update(tea.WindowSizeMsg{Width: 140, Height: 34})
-	view := ansi.Strip(app.View())
+	view := ansi.Strip(app.View().Content)
 	for _, expected := range []string{
 		"agentpack", "MODE EDITOR", "project  demo", "Modes", "Capability tree", "Details",
 		"focused", "Base  none", "MCP servers", "docs", "Enabled (1)",
@@ -51,25 +52,25 @@ func TestModeEditorKeyboardWorkflowMatchesRustTUI(t *testing.T) {
 	}
 	app := newApplication(t.TempDir(), state, modecatalog.CapabilityCatalog{MCPNames: map[string]struct{}{"docs": {}}})
 
-	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	app.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	for _, character := range "focused" {
-		app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{character}})
+		app.Update(tea.KeyPressMsg{Code: character, Text: string(character)})
 	}
-	app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if app.state.Selected != "focused" || !app.state.Dirty {
 		t.Fatalf("new mode state = %#v", app.state)
 	}
-	app.Update(tea.KeyMsg{Type: tea.KeyTab})
-	app.Update(tea.KeyMsg{Type: tea.KeyDown})
-	app.Update(tea.KeyMsg{Type: tea.KeySpace})
+	app.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	app.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	app.Update(tea.KeyPressMsg{Code: tea.KeySpace})
 	if got := app.state.Definition().Enable; len(got) != 1 || got[0] != "mcp:docs" {
 		t.Fatalf("first cycle enable = %v", got)
 	}
-	app.Update(tea.KeyMsg{Type: tea.KeySpace})
+	app.Update(tea.KeyPressMsg{Code: tea.KeySpace})
 	if got := app.state.Definition().Disable; len(got) != 1 || got[0] != "mcp:docs" {
 		t.Fatalf("second cycle disable = %v", got)
 	}
-	app.Update(tea.KeyMsg{Type: tea.KeySpace})
+	app.Update(tea.KeyPressMsg{Code: tea.KeySpace})
 	if len(app.state.Definition().Enable)+len(app.state.Definition().Disable) != 0 {
 		t.Fatalf("third cycle did not restore inherited state: %#v", app.state.Definition())
 	}
@@ -77,7 +78,7 @@ func TestModeEditorKeyboardWorkflowMatchesRustTUI(t *testing.T) {
 
 func TestModeEditorUsesTerminalDefaultColors(t *testing.T) {
 	palette := newPalette()
-	for name, color := range map[string]lipgloss.TerminalColor{
+	for name, color := range map[string]color.Color{
 		"accent": palette.accent, "dim": palette.dim, "warn": palette.warn,
 		"enabled": palette.enabled, "disabled": palette.disabled, "neutral": palette.neutral,
 		"success": palette.success, "failure": palette.failure,

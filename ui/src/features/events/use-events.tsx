@@ -22,6 +22,9 @@ function dispatch(queryClient: QueryClient, msg: EventMessage) {
     return
   }
   invalidate(queryClient, ["m", msg.node || LOCAL, msg.topic])
+  if (msg.topic === "sessions") {
+    void queryClient.invalidateQueries({ queryKey: ["conversation"] })
+  }
 }
 
 // Mounted once in _app. The stream closes while the tab is hidden and reopens when it is visible.

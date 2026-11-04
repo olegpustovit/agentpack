@@ -103,11 +103,20 @@ install: release
 	 trap 'rm -f "$$tmp"' EXIT; \
 	 cp "$(RELEASE_BIN)" "$$tmp"; \
 	 chmod 755 "$$tmp"; \
-	 mv -f "$$tmp" "$(INSTALL_DIR)/$(BINARY)"
-	@echo "Installed $(INSTALL_DIR)/$(BINARY) — ensure INSTALL_DIR is on PATH"
+	 mv -f "$$tmp" "$(INSTALL_DIR)/$(BINARY)"; \
+	 alias="$(INSTALL_DIR)/ap"; \
+	 if [ -e "$$alias" ] || [ -L "$$alias" ]; then \
+	   if [ ! -L "$$alias" ]; then echo "refusing to replace existing $$alias (not installed by agentpack)" >&2; exit 1; fi; \
+	   case "$$(readlink "$$alias")" in \
+	     "$(BINARY)"|"./$(BINARY)"|"$(INSTALL_DIR)/$(BINARY)") ;; \
+	     *) echo "refusing to replace foreign symlink $$alias -> $$(readlink "$$alias")" >&2; exit 1;; \
+	   esac; \
+	 fi; \
+	 ln -sf "$(BINARY)" "$$alias"
+	@echo "Installed $(INSTALL_DIR)/$(BINARY) and $(INSTALL_DIR)/ap — ensure INSTALL_DIR is on PATH"
 
 uninstall:
-	rm -f "$(INSTALL_DIR)/$(BINARY)"
+	rm -f "$(INSTALL_DIR)/$(BINARY)" "$(INSTALL_DIR)/ap"
 
 minor:
 	@$(MAKE) _bump PART=minor

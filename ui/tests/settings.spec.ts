@@ -60,7 +60,7 @@ async function mockGateway(page: Page, options: { signedIn?: boolean; setup?: bo
   )
   await page.route("**/api/library/replication/sync", (route) => answer(route, { synced: true }))
   await page.route("**/api/library/replication/peers/*", (route) => answer(route, { removed: true }))
-  await page.route("**/api/node/stop-agents", (route) => answer(route, { stopped: true }))
+  await page.route("**/api/node/stop-agents", (route) => answer(route, { stopped: true, skipped: 1 }))
   await page.route("**/api/node/stop", (route) => answer(route, { stopping: true }))
 }
 
@@ -152,6 +152,7 @@ test("stop all agents asks first and sends nothing until confirmed", async ({ pa
 
   await dialog.getByRole("button", { name: "Stop all agents" }).click()
   await expect.poll(() => calls).toEqual([{ request: "POST /api/node/stop-agents", body: null }])
+  await expect(page.getByText("Stopped local agents; 1 ACP session owned by another device remains running.")).toBeVisible()
 })
 
 test("stop gateway asks first, then shows the gateway as stopped", async ({ page }) => {

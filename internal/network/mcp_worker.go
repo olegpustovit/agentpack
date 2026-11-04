@@ -32,6 +32,30 @@ func (worker *WorkerHTTP) registerMCP(mux *http.ServeMux) {
 			http.Error(w, "invalid terminal output range", 400)
 			return
 		}
+		if raw := r.URL.Query().Get("tail"); raw != "" {
+			tail, tailErr := strconv.Atoi(raw)
+			err = errors.Join(err, tailErr)
+			if err != nil || tail <= 0 || tail > replayLimit {
+				http.Error(w, "invalid terminal output range", 400)
+				return
+			}
+			session := worker.current()
+			session.mu.Lock()
+			end := session.offset + uint64(len(session.replay))
+			start := session.offset
+			if len(session.replay) > tail {
+				start = end - uint64(tail)
+			}
+			slice := session.replay[start-session.offset:]
+			result := TerminalOutput{
+				Offset: start, NextOffset: end,
+				Output: string(slice), Truncated: start > session.offset,
+				State: session.state,
+			}
+			session.mu.Unlock()
+			writeJSON(w, result)
+			return
+		}
 		session := worker.current()
 		session.mu.Lock()
 		truncated := offset < session.offset

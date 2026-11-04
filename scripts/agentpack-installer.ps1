@@ -66,7 +66,24 @@ try {
     Copy-Item -Force $Binary $Pending
     Move-Item -Force $Pending $Destination
 
+    $Alias = Join-Path $InstallDir 'ap.exe'
+    if (Test-Path -LiteralPath $Alias) {
+        $Existing = Get-Item -LiteralPath $Alias -Force
+        if ($Existing.LinkType -eq 'SymbolicLink') {
+            $Target = $Existing.Target
+            if ($Target.Count -gt 0) { $Target = $Target[0] }
+            if ($Target -ne 'agentpack.exe' -and $Target -ne $Destination) {
+                throw "refusing to replace foreign symlink $Alias -> $Target"
+            }
+        } else {
+            throw "refusing to replace existing $Alias (not installed by agentpack)"
+        }
+        Remove-Item -LiteralPath $Alias -Force
+    }
+    New-Item -ItemType SymbolicLink -Path $Alias -Target $Destination | Out-Null
+
     Write-Output "Installed agentpack $Version to $Destination"
+    Write-Output "Linked $Alias -> agentpack.exe"
 } finally {
     if (Test-Path $Temporary) { Remove-Item -Recurse -Force $Temporary }
 }

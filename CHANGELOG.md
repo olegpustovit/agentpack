@@ -5,6 +5,31 @@ All notable changes to `agentpack` are documented here. The format is based on
 "Pre-release" note in `AGENTS.md` — breaking changes may land between versions without a migration
 window.
 
+## Unreleased
+
+### Added
+
+- ACP chat sessions (`transport: acp`) on the gateway and worker: conversation log, prompt, permission, elicitation, cancel, config, and blob routes; gateway conversation UI; `ap` / bare `agentpack` opens the `ap` hub TUI on a TTY.
+- Worker PTY replay supports `GET /output?tail=` for one-shot tail reads.
+- The `ap` chat preview supports session navigation, text/image prompts, permission answers, elicitation choices, a slash menu, and opening attachment placeholders with the OS default file handler; downloaded images use a 100 MiB user-cache cap.
+- The `ap` Sessions screen adds state tabs, text filtering, grouped session details, and local/peer Connect and Stop actions.
+- Claude ACP sessions now pass staged plugins and attribution settings through ACP session metadata, and honor `CLAUDE_CODE_EXECUTABLE` with `CLAUDE_CODE_PATH` fallback.
+
+### Fixed
+
+- Explicit ACP stop/restart now terminates or replaces the adapter process instead of only canceling a turn or rejecting restart.
+- ACP snapshots stay within the byte limit at complete NDJSON record boundaries and mark truncation; log accounting includes the serialized record envelope.
+- ACP terminal-pool shutdown reaps a command created while the pool is closing.
+- The conversation inspector now renders file-change summaries without crashing.
+
+### Security
+
+- ACP mutations to existing sessions require the recorded user and stable peer node identity (or the same local user/host); other actors can observe but cannot modify them.
+- Prompt image MIME is derived from stored bytes; storage is limited to 20 MiB per image and 100 MiB or 128 images per session, with uploads serialized and body reads deadline-bounded.
+- ACP terminal capture is capped at 4 MiB; nested terminal process groups are force-terminated on explicit release and worker shutdown.
+- Complete oversized ACP frames are dropped; an oversized frame without a newline closes the stream after 10 seconds instead of stalling it.
+- ACP workspace text reads safely clamp extreme line limits instead of overflowing slice indexes.
+
 ## [0.12.7] - 2026-11-01
 
 ### Fixed

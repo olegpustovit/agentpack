@@ -20,3 +20,21 @@ export function sessionRules(session: ListedSession) {
 export function reusesOperationId(error: unknown): boolean {
   return !(error instanceof ApiError && error.status >= 400 && error.status < 500)
 }
+
+export type SessionView = "chat" | "terminal"
+
+export function startSessionBody(input: {
+  directory: string
+  harness: string
+  mode: string
+  view: SessionView
+  agentSessionId?: string
+}) {
+  return {
+    directory: input.directory,
+    harness: input.harness,
+    mode: input.mode.trim(),
+    transport: input.view === "chat" ? "acp" : "terminal",
+    ...(input.agentSessionId ? { agent_session_id: input.agentSessionId } : {}),
+  }
+}

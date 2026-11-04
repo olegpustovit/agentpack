@@ -23,6 +23,15 @@ export type TerminalState = {
   exit_code: number
 }
 
+export type AgentCapabilities = {
+  loadSession?: boolean
+  promptCapabilities?: { image?: boolean }
+  sessionCapabilities?: {
+    resume?: Record<string, unknown>
+    fork?: Record<string, unknown>
+  }
+}
+
 export type SessionInfo = {
   id: string
   name?: string
@@ -32,9 +41,19 @@ export type SessionInfo = {
   harness: string
   mode: string
   state: TerminalState
+  transport?: string
+  agent_session_id?: string
+  agent_capabilities?: AgentCapabilities
+  conversation_state?: string
   started_at?: string
   started_by?: Actor
   last_used?: string
+}
+
+export type AgentSession = {
+  id: string
+  title?: string
+  cwd?: string
 }
 
 export type TopologyPeer = {

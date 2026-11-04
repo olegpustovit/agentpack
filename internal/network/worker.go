@@ -12,19 +12,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
 // WorkerLaunch is delivered through a private startup pipe, never HTTP or disk.
 // Launching agentpack itself here keeps staging, auth and cleanup in the CLI.
 type WorkerLaunch struct {
-	Session     SessionInfo `json:"session"`
-	Program     string      `json:"program"`
-	Arguments   []string    `json:"arguments"`
-	Directory   string      `json:"directory"`
-	Environment []string    `json:"environment"`
-	Rows        uint16      `json:"rows"`
-	Columns     uint16      `json:"columns"`
+	Session       SessionInfo `json:"session"`
+	Transport     string      `json:"transport,omitempty"`
+	ForkSessionID string      `json:"fork_session_id,omitempty"`
+	Program       string      `json:"program"`
+	Arguments     []string    `json:"arguments"`
+	Directory     string      `json:"directory"`
+	Environment   []string    `json:"environment"`
+	Rows          uint16      `json:"rows"`
+	Columns       uint16      `json:"columns"`
 }
 
 // WorkerRecord is private connection material, readable only by the local OS
@@ -55,6 +58,9 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 		return 1, fmt.Errorf("create worker directory: %w", err)
 	}
 	defer os.RemoveAll(directory)
+	if err := EnsurePrivateDirectory(directory); err != nil {
+		return 1, fmt.Errorf("protect worker directory: %w", err)
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return 1, fmt.Errorf("listen for worker attachments: %w", err)
@@ -96,12 +102,39 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 		if environment == nil {
 			environment = os.Environ()
 		}
-		command.Dir, command.Env = launch.Directory, append(append([]string(nil), environment...), "AGENTPACK_SESSION_ID="+filepath.Base(directory))
+		command.Dir, command.Env = launch.Directory, append(append([]string(nil), environment...), "AGENTPACK_SESSION=1", "AGENTPACK_SESSION_ID="+filepath.Base(directory))
 		return StartSession(command, rows, columns)
 	}
-	session, err := start(launch.Rows, launch.Columns)
-	if err != nil {
-		return 1, err
+	var session *Session
+	var conversation *ConversationSession
+	var acpCleanup func()
+	if launch.Transport == "acp" {
+		launch.Session.Transport = "acp"
+		var err error
+		conversation, acpCleanup, err = startACPConversation(launch, directory)
+		if err != nil {
+			return 1, err
+		}
+		if acpCleanup != nil {
+			defer func() {
+				if acpCleanup != nil {
+					acpCleanup()
+				}
+			}()
+		}
+		// Restart must load the forked ID rather than fork its source again.
+		launch.ForkSessionID = ""
+		launch.Session.AgentSessionID = conversation.agentSessionID
+		launch.Session.AgentCapabilities = conversation.AgentCapabilitiesView()
+		if err := rememberACPConversationOwner(home, launch.Session, launch.Directory); err != nil {
+			return 1, fmt.Errorf("persist ACP session owner: %w", err)
+		}
+	} else {
+		var err error
+		session, err = start(launch.Rows, launch.Columns)
+		if err != nil {
+			return 1, err
+		}
 	}
 	var handler *WorkerHTTP
 	var server *http.Server
@@ -109,7 +142,7 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 		stop, cancel := context.WithTimeout(context.Background(), workerStopGrace)
 		if handler != nil {
 			_ = handler.Stop(stop)
-		} else {
+		} else if session != nil {
 			_ = session.Stop(stop)
 		}
 		cancel()
@@ -126,6 +159,13 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 		return 1, fmt.Errorf("generate worker secret: %w", err)
 	}
 	record := WorkerRecord{Session: launch.Session, ID: filepath.Base(directory), PID: os.Getpid(), Address: listener.Addr().String(), Secret: hex.EncodeToString(secret[:])}
+	if launch.Transport == "acp" {
+		record.Session.Transport = "acp"
+		record.Session.AgentSessionID = launch.Session.AgentSessionID
+		if conversation != nil {
+			record.Session.ConversationState = conversation.ConversationState()
+		}
+	}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return 1, err
@@ -138,17 +178,70 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 	if err := os.Rename(temporary, filepath.Join(directory, "worker.json")); err != nil {
 		return 1, fmt.Errorf("publish worker record: %w", err)
 	}
+	var stateWriteWarning sync.Once
+	persistConversationState := func(state string) {
+		if err := patchWorkerConversationState(directory, state); err != nil {
+			stateWriteWarning.Do(func() {
+				fmt.Fprintln(os.Stderr, "warning: ACP worker state could not be persisted")
+			})
+		}
+	}
+	if conversation != nil {
+		conversation.SetStateChange(record.Session.ConversationState, persistConversationState)
+	}
 	if launch.Session.Directory != "" {
 		if err := remember(home, launch.Session); err != nil {
 			return 1, fmt.Errorf("remember session: %w", err)
 		}
 	}
-	handler, err = WorkerHandler(session, record.Secret)
+	handler, err = WorkerHandler(session, conversation, record.Secret, directory)
 	if err != nil {
 		return 1, err
 	}
-	handler.start = start
-	handler.validate = validate
+	if session != nil {
+		handler.start = start
+		handler.validate = validate
+	} else if conversation != nil {
+		handler.validate = validate
+		handler.stopACP = func(ctx context.Context) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if acpCleanup != nil {
+				acpCleanup()
+				acpCleanup = nil
+			}
+			return nil
+		}
+		handler.restartACP = func(ctx context.Context) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if acpCleanup != nil {
+				acpCleanup()
+				acpCleanup = nil
+			}
+			next, cleanup, err := startACPConversation(launch, directory)
+			if err != nil {
+				return err
+			}
+			if err := ctx.Err(); err != nil {
+				if cleanup != nil {
+					cleanup()
+				}
+				return err
+			}
+			conversation = next
+			acpCleanup = cleanup
+			launch.Session.AgentSessionID = next.agentSessionID
+			launch.Session.AgentCapabilities = next.AgentCapabilitiesView()
+			handler.mu.Lock()
+			handler.conversation = next
+			handler.mu.Unlock()
+			next.SetStateChange(next.ConversationState(), persistConversationState)
+			return nil
+		}
+	}
 	server = &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- server.Serve(listener) }()
@@ -164,6 +257,9 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 		}
 		return 0, nil
 	case <-handler.done:
+		if handler.current() == nil {
+			return 0, handler.err
+		}
 		// A short-lived CLI child can finish before its launcher reads the record.
 		// Retain the endpoint until that first attachment can collect final output.
 		select {

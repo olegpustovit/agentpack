@@ -9,6 +9,7 @@ import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { rowKey, sessionDetail, sessionLabel, type ListedSession } from "./group"
+import { sessionGlyphState, sessionStatusWord } from "./session-status"
 import { sessionRules } from "./rules"
 
 export type RowActions = {
@@ -22,8 +23,6 @@ export type RowActions = {
 }
 
 type Entry = { label: string; icon: LucideIcon; shortcut?: string; disabled: boolean; run: () => void } | "separator"
-
-type RowState = "running" | "stopped" | "offline" | "restarting"
 
 function menuEntries(session: ListedSession, selected: boolean, actions: RowActions): Entry[] {
   const rules = sessionRules(session)
@@ -85,8 +84,8 @@ export function SessionRow({
   actions: RowActions
 }) {
   const { state } = session
-  const rowState: RowState = session.offline ? "offline" : state.restarting ? "restarting" : state.running ? "running" : "stopped"
-  const word = stopping ? "Stopping…" : session.offline ? "Offline" : state.restarting ? "Restarting" : state.running ? undefined : "Stopped"
+  const glyphState = sessionGlyphState(session)
+  const word = sessionStatusWord(session, stopping)
   const mode = session.mode && session.mode !== "default" ? session.mode : undefined
   const entries = menuEntries(session, selected, actions)
   const since = session.last_used ?? session.started_at
@@ -109,7 +108,7 @@ export function SessionRow({
           data-row-key={rowKey(session)}
           className={cn("pe-(--head-h)", session.offline && "text-(--fg3)")}
         >
-          <StatusGlyph state={rowState} className="ms-(--s7)" />
+          <StatusGlyph state={glyphState} className="ms-(--s7)" />
           <span className="min-w-0 flex-1 truncate">{sessionLabel(session)}</span>
           {mode && <span className={dimWord}>{mode}</span>}
           {/* The age is decoration: the row's title has it, and it must not churn the row's accessible name. */}

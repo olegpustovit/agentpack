@@ -90,6 +90,11 @@ func TestReleaseInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	if string(contents) != installerFixtureBinary() {
 		t.Fatalf("installed contents = %q from %s", contents, archiveName)
 	}
+	if runtime.GOOS != "windows" {
+		if link, err := os.Readlink(filepath.Join(installDir, "ap")); err != nil || link != "agentpack" {
+			t.Fatalf("ap symlink: readlink=%q err=%v", link, err)
+		}
+	}
 }
 
 func TestReleaseInstallerDefaultsToLocalBinWithoutModifyingShellEnvironment(t *testing.T) {

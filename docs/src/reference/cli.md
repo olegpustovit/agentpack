@@ -23,6 +23,8 @@ When `--env`, `--definition-root`, or an `env use`/`env bind` binding is set, lo
 
 Help and errors use the terminal's native foreground and transparent background, with no semantic colors or theme detection. Contextual help is available at every level, for example `agentpack mcp add --help`.
 
+On a TTY, bare `agentpack` and the installed `ap` symlink open the **`ap` hub** TUI (session list, preview, permission answers). Non-interactive invocations still print help. Chat workers use `transport: "acp"` on the gateway; see [ACP Chat Sessions](../guides/acp-sessions.md).
+
 ## Shell completion
 
 Generate a completion script using the built-in `completion` command:

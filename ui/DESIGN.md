@@ -93,10 +93,12 @@ Use these exact words everywhere.
 |---|---|---|---|
 | Running | filled green dot | Running | white dot |
 | Stopped | hollow ring | Stopped | white ring |
+| Idle | hollow green ring | Idle | white ring |
 | Restarting | spinner | Restarting | white spinner |
 | Offline | dashed ring | Offline | white dashed ring |
 | Read-only | filled gray dot | Read-only | white dot |
 | Needs update | filled amber dot | Needs update | white dot |
+| Needs you | filled amber dot | Needs you | white dot |
 
 ## Alert model
 

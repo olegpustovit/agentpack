@@ -99,6 +99,7 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 		}
 	}()
 	var attachment uint64
+	var lastOffset uint64 // Resume after bytes already written to the terminal.
 	var state TerminalState
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
@@ -110,7 +111,7 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 	// reattach and replay instead of abandoning the agent. Unsent input is lost.
 	reconnect := func() error {
 		connection.Close()
-		next, err := reattach(ctx, record)
+		next, err := reattach(ctx, record, lastOffset)
 		if err != nil {
 			return err
 		}
@@ -150,11 +151,15 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 				if _, err := output.Write(message.data); err != nil {
 					return 1, err
 				}
+				lastOffset += uint64(len(message.data))
 				continue
 			}
 			var notice terminalNotice
 			if err := json.Unmarshal(message.data, &notice); err != nil {
 				return 1, err
+			}
+			if notice.Type == "attached" || notice.Type == "replay_complete" {
+				lastOffset = notice.Offset
 			}
 			state = notice.State
 			if notice.Attachment != 0 {
@@ -193,10 +198,8 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 	}
 }
 
-// reattach waits out restarts, a busy worker, and a not-yet-released previous
-// attachment. It fails only when the session ended or the worker stopped
-// answering at all (refused connections for several seconds), never on a timeout.
-func reattach(ctx context.Context, record WorkerRecord) (*websocket.Conn, error) {
+// reattach waits out restarts and resumes the byte stream at the last rendered offset.
+func reattach(ctx context.Context, record WorkerRecord, since uint64) (*websocket.Conn, error) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	failures := 0
@@ -206,7 +209,7 @@ func reattach(ctx context.Context, record WorkerRecord) (*websocket.Conn, error)
 			return nil, ctx.Err()
 		case <-ticker.C:
 		}
-		connection, err := tryReattach(ctx, record)
+		connection, err := tryReattach(ctx, record, since)
 		if err == nil {
 			return connection, nil
 		}
@@ -226,7 +229,7 @@ func reattach(ctx context.Context, record WorkerRecord) (*websocket.Conn, error)
 
 var errWorkerBusy = errors.New("agent is restarting")
 
-func tryReattach(ctx context.Context, record WorkerRecord) (*websocket.Conn, error) {
+func tryReattach(ctx context.Context, record WorkerRecord, since uint64) (*websocket.Conn, error) {
 	response, err := workerRequest(ctx, record, "GET", "/state", "")
 	if err != nil {
 		return nil, err
@@ -243,5 +246,5 @@ func tryReattach(ctx context.Context, record WorkerRecord) (*websocket.Conn, err
 	if state.Restarting {
 		return nil, errWorkerBusy
 	}
-	return attachWorker(ctx, record, true, 0)
+	return attachWorker(ctx, record, true, since)
 }

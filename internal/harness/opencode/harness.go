@@ -23,7 +23,7 @@ import (
 const instructionsFile = "agentpack-no-attribution.md"
 
 func New() base.Harness {
-	return base.Definition{Target: base.OpenCode, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, LSP: writeLSP, Guidance: injectGuidance, AfterStage: finalizeSources, Check: verify, Launch: launch}
+	return base.Definition{Target: base.OpenCode, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, LSP: writeLSP, Guidance: injectGuidance, AfterStage: finalizeSources, Check: verify, Launch: launch, LaunchACP: acpLaunch}
 }
 
 func launch(ctx base.LaunchContext) (*exec.Cmd, error) {

@@ -40,7 +40,7 @@ func TestGatewayCompressesReplayAndKeepsBrowserConnectionAlive(t *testing.T) {
 	session := &Session{state: TerminalState{Running: true, Interactive: true}, replay: bytes.Repeat([]byte("terminal replay line\r\n\x1b[32mready\x1b[0m\r\n"), 1<<15), done: make(chan struct{}), attachments: make(map[uint64]*Attachment)}
 	t.Cleanup(func() { close(session.done) })
 	secret := strings.Repeat("s", 64)
-	worker, err := WorkerHandler(session, secret)
+	worker, err := WorkerHandler(session, nil, secret, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,11 +112,15 @@ func TestGatewayCompressesReplayAndKeepsBrowserConnectionAlive(t *testing.T) {
 		t.Fatal(err)
 	}
 	pong := connection.PingHandler()
+	published := false
 	connection.SetPingHandler(func(data string) error {
 		if err := pong(data); err != nil {
 			return err
 		}
-		session.publish([]byte("after browser heartbeat"))
+		if !published {
+			session.publish([]byte("after browser heartbeat"))
+			published = true
+		}
 		return nil
 	})
 	kind, data, err := connection.ReadMessage()

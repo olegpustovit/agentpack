@@ -3,8 +3,10 @@
 package network
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -27,7 +29,7 @@ const workerTestSecret = "01234567890123456789012345678901"
 
 func testWorkerServer(t *testing.T, session *Session) *httptest.Server {
 	t.Helper()
-	handler, err := WorkerHandler(session, workerTestSecret)
+	handler, err := WorkerHandler(session, nil, workerTestSecret, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,14 +191,22 @@ func TestWorkerStreamsRawPTYAndSharesInput(t *testing.T) {
 }
 
 type lockedBuffer struct {
-	mu   sync.Mutex
-	data strings.Builder
+	mu      sync.Mutex
+	data    strings.Builder
+	changed chan struct{}
 }
 
 func (buffer *lockedBuffer) Write(data []byte) (int, error) {
 	buffer.mu.Lock()
-	defer buffer.mu.Unlock()
-	return buffer.data.Write(data)
+	n, err := buffer.data.Write(data)
+	buffer.mu.Unlock()
+	if buffer.changed != nil {
+		select {
+		case buffer.changed <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
 }
 
 func (buffer *lockedBuffer) String() string {
@@ -205,14 +215,40 @@ func (buffer *lockedBuffer) String() string {
 	return buffer.data.String()
 }
 
+type notifyHijackWriter struct {
+	http.ResponseWriter
+	connected chan<- struct{}
+}
+
+func (writer notifyHijackWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := writer.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("response writer does not support hijacking")
+	}
+	connection, buffers, err := hijacker.Hijack()
+	if err == nil {
+		select {
+		case writer.connected <- struct{}{}:
+		default:
+		}
+	}
+	return connection, buffers, err
+}
+
 func TestLocalTerminalReconnectsAfterDroppedConnection(t *testing.T) {
 	session := testSession(t)
 	secret := strings.Repeat("s", 64)
-	handler, err := WorkerHandler(session, secret)
+	handler, err := WorkerHandler(session, nil, secret, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(handler)
+	attached := make(chan struct{}, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/attach" {
+			w = notifyHijackWriter{ResponseWriter: w, connected: attached}
+		}
+		handler.ServeHTTP(w, r)
+	}))
 	t.Cleanup(server.Close)
 	// A proxy lets the test cut the live attachment the way a stalled socket does.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -255,30 +291,34 @@ func TestLocalTerminalReconnectsAfterDroppedConnection(t *testing.T) {
 	go io.Copy(io.Discard, master)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	output := &lockedBuffer{}
+	output := &lockedBuffer{changed: make(chan struct{}, 1)}
 	result := make(chan error, 1)
 	go func() {
 		_, err := RunTerminal(ctx, home, record.ID, slave, output)
 		result <- err
 	}()
-	waitFor := func(condition func(string) bool) {
+	waitForOutput := func(condition func(string) bool) {
 		t.Helper()
-		deadline := time.Now().Add(10 * time.Second)
 		for !condition(output.String()) {
 			select {
+			case <-output.changed:
 			case err := <-result:
 				t.Fatalf("terminal exited: %v", err)
-			default:
 			}
-			if time.Now().After(deadline) {
-				t.Fatalf("timed out; output %q", output.String())
-			}
-			time.Sleep(20 * time.Millisecond)
 		}
 	}
-	waitFor(func(value string) bool { return strings.Contains(value, "READY") })
+	waitForAttach := func() {
+		t.Helper()
+		select {
+		case <-attached:
+		case err := <-result:
+			t.Fatalf("terminal exited before reattach: %v", err)
+		}
+	}
+	waitForOutput(func(value string) bool { return strings.Contains(value, "READY") })
+	waitForAttach()
 	(<-accepted).Close()
-	waitFor(func(value string) bool { return strings.Count(value, "READY") >= 2 })
+	waitForAttach()
 	// A slow attachment ends while the underlying agent remains alive.
 	session.mu.Lock()
 	for id, attachment := range session.attachments {
@@ -290,12 +330,12 @@ func TestLocalTerminalReconnectsAfterDroppedConnection(t *testing.T) {
 	}
 	session.updateResponderLocked()
 	session.mu.Unlock()
-	waitFor(func(value string) bool { return strings.Count(value, "READY") >= 3 })
+	waitForAttach()
 
 	if _, err := master.Write([]byte("after\n")); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(func(value string) bool { return strings.Contains(value, "ECHO after") })
+	waitForOutput(func(value string) bool { return strings.Contains(value, "ECHO after") })
 	if strings.Contains(output.String(), "agentpack: reconnecting") {
 		t.Fatal("local reconnect notice was written over terminal output")
 	}
@@ -310,7 +350,7 @@ func TestClosingLocalTerminalStopsWorker(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			session := testSession(t)
 			secret := strings.Repeat("s", 64)
-			handler, err := WorkerHandler(session, secret)
+			handler, err := WorkerHandler(session, nil, secret, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -433,4 +473,102 @@ func TestWorkerAttachResumesFromSince(t *testing.T) {
 			t.Fatalf("%s: replay_complete %+v", test.query, complete)
 		}
 	}
+}
+
+func TestACPWorkerChild(t *testing.T) {
+	if os.Getenv("AGENTPACK_TEST_ACP") != "1" {
+		return
+	}
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	select {}
+}
+
+func TestConversationReplayFromFixture(t *testing.T) {
+	home := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := filepath.Abs(filepath.Join("..", "..", "testdata", "acp", "full.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENTPACK_TEST_ACP", "1")
+	t.Setenv("AGENTPACK_TEST_ACP_FIXTURE", fixture)
+	t.Cleanup(func() {
+		os.Unsetenv("AGENTPACK_TEST_ACP")
+		os.Unsetenv("AGENTPACK_TEST_ACP_FIXTURE")
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan string, 1)
+	go func() {
+		_, runErr := RunWorker(ctx, home, WorkerLaunch{
+			Transport: "acp",
+			Program:   executable,
+			Directory: home,
+			Rows:      24,
+			Columns:   80,
+		}, func(id string) error {
+			ready <- id
+			return nil
+		})
+		if runErr != nil && !errors.Is(runErr, context.Canceled) {
+			t.Error(runErr)
+		}
+	}()
+	var id string
+	select {
+	case id = <-ready:
+	case <-time.After(10 * time.Second):
+		t.Fatal("worker startup timeout")
+	}
+	record, err := workerRecord(home, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := workerRequest(context.Background(), record, http.MethodGet, "/conversation?since=0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("conversation status %s", response.Status)
+	}
+	if ct := response.Header.Get("Content-Type"); !strings.Contains(ct, "ndjson") {
+		t.Fatalf("content type %q", ct)
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []json.RawMessage
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if line == "" {
+			continue
+		}
+		entries = append(entries, json.RawMessage(line))
+	}
+	if len(entries) != 23 {
+		t.Fatalf("got %d log lines, want 23", len(entries))
+	}
+	var first struct {
+		Kind string `json:"kind"`
+		Seq  int64  `json:"seq"`
+	}
+	if err := json.Unmarshal(entries[0], &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Kind != "agent_message_chunk" || first.Seq != 1 {
+		t.Fatalf("first entry %+v", first)
+	}
+	configResp, err := workerRequest(context.Background(), record, http.MethodGet, "/conversation/config-options", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer configResp.Body.Close()
+	if configResp.StatusCode != http.StatusOK {
+		t.Fatalf("config-options status %s", configResp.Status)
+	}
+	cancel()
 }

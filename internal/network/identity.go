@@ -14,9 +14,10 @@ import (
 // the local OS user, the gateway's browser account, or a verified tailnet whois.
 // It is never read from request headers or bodies.
 type Actor struct {
-	Kind string `json:"kind"`
-	User string `json:"user,omitempty"`
-	Node string `json:"node,omitempty"`
+	Kind         string `json:"kind"`
+	User         string `json:"user,omitempty"`
+	Node         string `json:"node,omitempty"`
+	StableNodeID string `json:"stable_node_id,omitempty"` // Verified tailnet identity; Node is the display name.
 }
 
 // browserUser is the single gateway account browsers sign in as, so browsers on it are indistinguishable.
@@ -47,6 +48,25 @@ func LocalActor(kind string) Actor {
 
 func browserActor() Actor {
 	return Actor{Kind: "browser", User: browserUser, Node: localHostname()}
+}
+
+// canWriteSession separates peer ownership from same-host local transports.
+func (actor Actor) canWriteSession(session SessionInfo) bool {
+	owner := session.StartedBy
+	if owner == nil {
+		return false
+	}
+	if owner.Kind == "peer" || actor.Kind == "peer" {
+		return owner.Kind == "peer" && actor.Kind == "peer" &&
+			owner.User != "" && actor.User == owner.User &&
+			owner.StableNodeID != "" && actor.StableNodeID != "" &&
+			actor.StableNodeID == owner.StableNodeID
+	}
+	if owner.Kind == "browser" || actor.Kind == "browser" {
+		return owner.Node != "" && actor.Node == owner.Node
+	}
+	return owner.User != "" && actor.User == owner.User &&
+		owner.Node != "" && actor.Node == owner.Node
 }
 
 func localHostname() string {

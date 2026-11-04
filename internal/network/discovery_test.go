@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,6 +84,37 @@ func TestTailnetTargetsAndRoutesAreBounded(t *testing.T) {
 	}
 	if !peerRoute("GET", "/api/sessions/x/terminal") || !peerRoute("POST", "/api/sessions/x/restart") {
 		t.Fatal("terminal routes unavailable")
+	}
+	routes := []struct{ method, path string }{
+		{"GET", "/api/agent-sessions"},
+		{"GET", "/api/sessions/x/conversation"},
+		{"GET", "/api/sessions/x/conversation/config-options"},
+		{"POST", "/api/sessions/x/conversation/prompt"},
+		{"POST", "/api/sessions/x/conversation/prompt/images"},
+		{"POST", "/api/sessions/x/conversation/cancel"},
+		{"POST", "/api/sessions/x/conversation/permission"},
+		{"POST", "/api/sessions/x/conversation/elicitation"},
+		{"POST", "/api/sessions/x/conversation/config"},
+		{"POST", "/api/sessions/x/conversation/blobs"},
+		{"POST", "/api/sessions/x/fork"},
+		{"GET", "/api/sessions/x/blobs/" + strings.Repeat("a", 64)},
+	}
+	for _, route := range routes {
+		if !peerRoute(route.method, route.path) {
+			t.Errorf("route %s %s not available to peer", route.method, route.path)
+		}
+	}
+	for _, route := range []struct{ method, path string }{
+		{"POST", "/api/sessions/../conversation/prompt/images"},
+		{"POST", "/api/sessions/x/conversation/config-options"},
+		{"GET", "/api/sessions/x/conversation/permission"},
+		{"POST", "/api/sessions/x/blobs/" + strings.Repeat("a", 64)},
+		{"GET", "/api/sessions/x/blobs/not-a-sha"},
+		{"GET", "/api/sessions/x\\..\\conversation"},
+	} {
+		if peerRoute(route.method, route.path) {
+			t.Errorf("unsafe peer route accepted: %s %s", route.method, route.path)
+		}
 	}
 }
 func TestSharingConfigPersistsAndValidates(t *testing.T) {

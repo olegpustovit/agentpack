@@ -1,0 +1,32 @@
+{"seq":1,"ts":1000,"kind":"agent_message_chunk","payload":{"text":{"text":"I'll update the reattach path to pass the last replay offset."}}}
+{"seq":2,"ts":1001,"kind":"agent_thought_chunk","payload":{"text":{"text":"Checking worker HTTP and gateway compression."}}}
+{"seq":3,"ts":1002,"kind":"tool_call","payload":{"toolCallId":"t1","title":"Read worker_http.go","kind":"read","status":"pending","locations":[{"path":"/internal/network/worker_http.go"}]}}
+{"seq":4,"ts":1003,"kind":"tool_call_update","payload":{"toolCallId":"t1","title":"Read worker_http.go","kind":"read","status":"completed"}}
+{"seq":5,"ts":1004,"kind":"tool_call","payload":{"toolCallId":"t2","title":"Search replay","kind":"search","status":"pending"}}
+{"seq":6,"ts":1005,"kind":"tool_call_update","payload":{"toolCallId":"t2","title":"Search replay","kind":"search","status":"completed"}}
+{"seq":7,"ts":1006,"kind":"tool_call","payload":{"toolCallId":"t3","title":"Read terminal_client.go","kind":"read","status":"pending","locations":[{"path":"/internal/network/terminal_client.go"}]}}
+{"seq":8,"ts":1007,"kind":"tool_call_update","payload":{"toolCallId":"t3","title":"Read terminal_client.go","kind":"read","status":"completed"}}
+{"seq":9,"ts":1008,"kind":"tool_call","payload":{"toolCallId":"t4","title":"Search lastOffset","kind":"search","status":"pending"}}
+{"seq":10,"ts":1009,"kind":"tool_call_update","payload":{"toolCallId":"t4","title":"Search lastOffset","kind":"search","status":"completed"}}
+{"seq":11,"ts":1010,"kind":"tool_call","payload":{"toolCallId":"t5","title":"Edit terminal_client.go","kind":"edit","status":"pending","content":[{"type":"diff","path":"internal/network/terminal_client.go","oldText":"conn, err := dial(ctx, record, 0)","newText":"since := record.lastOffset.Load()\n\tconn, err := dial(ctx, record, since)"}]}}
+{"seq":12,"ts":1011,"kind":"tool_call","payload":{"toolCallId":"t6","title":"go test ./internal/network/...","kind":"terminal","status":"in_progress","command":"go test ./internal/network/..."}}
+{"seq":13,"ts":1012,"kind":"tool_call_update","payload":{"toolCallId":"t6","status":"completed","output":"ok"}}
+{"seq":14,"ts":1013,"kind":"plan","payload":{"entries":[{"id":"1","priority":"high","status":"completed","content":"Reproduce with a restarted gateway"},{"id":"2","priority":"high","status":"in_progress","content":"Publish the branch"}]}}
+{"seq":15,"ts":1014,"kind":"permission_request","payload":{"requestId":"p1","tool":"Bash","summary":"Run go test on worker package","options":[{"id":"allow","label":"Allow once"},{"id":"deny","label":"Deny"}]}}
+{"seq":16,"ts":1015,"kind":"elicitation","payload":{"elicitationId":"e1","prompt":"Which tone should the copy use?","choices":["Direct","Friendly","Formal"]}}
+{"seq":17,"ts":1016,"kind":"user_message_chunk","payload":{"text":{"text":"Use the direct tone."},"image":{"blob":"sha256:deadbeef","mime":"image/png","width":640,"height":360}}}
+{"seq":18,"ts":1017,"kind":"notice","payload":{"sessionUpdate":"notice","severity":"info","title":"Context compacted","description":"Older messages were summarized."}}
+{"seq":19,"ts":1018,"kind":"compaction_update","payload":{"sessionUpdate":"compaction_update","compactionId":"cmp_001","status":"in_progress"}}
+{"seq":20,"ts":1019,"kind":"compaction_summary_chunk","payload":{"sessionUpdate":"compaction_summary_chunk","compactionId":"cmp_001","content":{"type":"text","text":"Compaction summary retained."}}}
+{"seq":21,"ts":1020,"kind":"compaction_update","payload":{"sessionUpdate":"compaction_update","compactionId":"cmp_001","status":"completed","summary":[{"type":"text","text":"Compaction summary retained."}]}}
+{"seq":22,"ts":1021,"kind":"usage_update","payload":{"used":120000,"size":200000,"cost":{"amount":0.42,"currency":"USD"}}}
+{"seq":23,"ts":1022,"kind":"agent_message_chunk","payload":{"text":{"text":"Done. The gateway will resume from the saved offset."}}}
+{"seq":24,"ts":1023,"kind":"turn_end","payload":{"status":"completed"}}
+{"seq":25,"ts":1024,"kind":"agent_message_chunk","payload":{"text":{"text":"\u001b]52;c;evil\u0007"}}}
+{"seq":26,"ts":1025,"kind":"tool_call_update","payload":{"toolCallId":"giant-fixture-output","title":"Read generated bundle","kind":"read","status":"completed","rawOutput":"Fixture output kept intact across replay."}}
+{"seq":27,"ts":1026,"kind":"available_commands_update","payload":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"review","description":"Review the current changes.","input":{"hint":"Optional focus"}}]}}
+{"seq":28,"ts":1027,"kind":"current_mode_update","payload":{"sessionUpdate":"current_mode_update","currentModeId":"plan"}}
+{"seq":29,"ts":1028,"kind":"config_option_update","payload":{"sessionUpdate":"config_option_update","configOptions":[{"type":"boolean","id":"verbose","name":"Verbose output","currentValue":true}]}}
+{"seq":30,"ts":1029,"kind":"session_info_update","payload":{"sessionUpdate":"session_info_update","title":"Replay session","updatedAt":"2026-11-04T12:00:00Z"}}
+{"seq":31,"ts":1030,"kind":"plan_update","payload":{"sessionUpdate":"plan_update","plan":{"type":"markdown","id":"p1","content":"Review and publish."}}}
+{"seq":32,"ts":1031,"kind":"plan_removed","payload":{"sessionUpdate":"plan_removed","id":"p1"}}

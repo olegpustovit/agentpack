@@ -699,3 +699,23 @@ test("failed session reads stay distinct from an empty session list", async ({ p
   await expect(page.getByRole("alert")).toContainText("Couldn't load sessions from Gateway machine: Session service unavailable", { timeout: 15_000 })
   await expect(gwSessions(page)).not.toContainText("No sessions yet")
 })
+test("New Session disables Chat when the peer lacks ACP endpoints", async ({ page }) => {
+  await mockAPI(page)
+  await page.route("**/api/agent-sessions**", (route) => route.fulfill({ status: 404, body: "route unavailable" }))
+  await page.goto("/sessions?new=1")
+  await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeDisabled()
+  await expect(page.getByText("Update Agentpack on Gateway machine before starting Chat. Terminal remains available.")).toBeVisible()
+  await expect(page.getByRole("button", { name: "Terminal", exact: true })).toBeEnabled()
+  await expect(page.getByRole("button", { name: "Start session" })).toBeDisabled()
+})
+
+test("New Session explains the Node requirement for ACP chat", async ({ page }) => {
+  await mockAPI(page)
+  await page.route("**/api/agent-sessions**", (route) =>
+    route.fulfill({ status: 500, body: "Node.js is required for ACP chat (claude-agent-acp@0.100.0); install Node" }),
+  )
+  await page.goto("/sessions?new=1")
+  await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeDisabled()
+  await expect(page.getByText("Install Node.js on Gateway machine to use Chat, or choose Terminal.")).toBeVisible()
+  await expect(page.getByRole("button", { name: "Start session" })).toBeDisabled()
+})

@@ -5,10 +5,12 @@ import { type MachineState, StatusDot } from "./status-dot";
 const words: [MachineState, string][] = [
   ["running", "Running"],
   ["stopped", "Stopped"],
+  ["idle", "Idle"],
   ["restarting", "Restarting"],
   ["offline", "Offline"],
   ["readonly", "Read-only"],
   ["needsUpdate", "Needs update"],
+  ["needsYou", "Needs you"],
 ];
 
 describe("StatusDot", () => {

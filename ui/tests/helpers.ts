@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs"
 import { expect, type Page, type WebSocketRoute } from "@playwright/test"
+
+export const conversationImage = readFileSync(new URL("./fixtures/blank-terminal.png", import.meta.url))
 
 // Shared by the gateway specs. Later page.route() calls in a test override these defaults.
 export const identity = { node: { id: "gateway", name: "Gateway machine", os: "linux", version: "0" }, auth: "password", tailscale_user: "" }
@@ -92,7 +95,12 @@ export async function mockAPI(page: Page, { authenticated = true, setup = false,
     else if (url.pathname === "/api/library/agentpacks") data = []
     else if (url.pathname === "/api/limits") {
       data = { limits: [{ harness: "codex", state: "available", source: "codex app-server account/rateLimits/read", observed_at: new Date().toISOString(), windows: [{ id: "codex/primary", label: "Codex 5h", used_percent: 28, remaining_percent: 72, reset_at: "2026-10-30T16:10:00Z" }] }, { harness: "grok", state: "error", source: "grok agent stdio _x.ai/billing", observed_at: new Date().toISOString(), error: "grok billing: authentication required", windows: [] }] }
-    }
+    } else if (url.pathname.includes("/conversation")) {
+      if (url.pathname.endsWith("/config-options")) return route.fulfill({ json: [] })
+      if (req.method() === "GET" && !url.pathname.includes("/blobs/")) return route.fulfill({ body: "", contentType: "application/x-ndjson" })
+      if (url.pathname.includes("/blobs/")) return route.fulfill({ body: conversationImage, contentType: "image/png" })
+      return route.fulfill({ json: {} })
+    } else if (url.pathname === "/api/agent-sessions") data = { sessions: [] }
     await route.fulfill({ json: data })
   })
   return requests

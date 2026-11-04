@@ -334,10 +334,7 @@ func peerRoute(method, path string) bool {
 	if method == "DELETE" && path == "/api/recent" {
 		return true
 	}
-	if method == "GET" && path == "/api/identity" {
-		return true
-	}
-	if method == "GET" && path == "/api/events" {
+	if method == "GET" && (path == "/api/identity" || path == "/api/events" || path == "/api/agent-sessions") {
 		return true
 	}
 	if method == "GET" && (path == "/api/sessions" || path == "/api/recent" || path == "/api/packages" || path == "/api/projects" || path == "/api/limits") {
@@ -347,13 +344,38 @@ func peerRoute(method, path string) bool {
 		return true
 	}
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(parts) == 3 && parts[0] == "api" && parts[1] == "sessions" && parts[2] != "" && parts[2] != "." && parts[2] != ".." {
+	if len(parts) == 6 {
+		return method == "POST" && parts[0] == "api" && parts[1] == "sessions" &&
+			validPeerSessionID(parts[2]) && parts[3] == "conversation" && parts[4] == "prompt" && parts[5] == "images"
+	}
+	if len(parts) == 3 && parts[0] == "api" && parts[1] == "sessions" && validPeerSessionID(parts[2]) {
 		return method == "PATCH"
 	}
-	if len(parts) != 4 || parts[0] != "api" || parts[1] != "sessions" || parts[2] == "" || parts[2] == "." || parts[2] == ".." {
+	if (len(parts) != 4 && len(parts) != 5) || parts[0] != "api" || parts[1] != "sessions" || !validPeerSessionID(parts[2]) {
 		return false
 	}
-	return method == "GET" && (parts[3] == "terminal" || parts[3] == "output") || method == "POST" && (parts[3] == "restart" || parts[3] == "stop" || parts[3] == "input")
+	if len(parts) == 4 {
+		return method == "GET" && (parts[3] == "terminal" || parts[3] == "output" || parts[3] == "conversation") ||
+			method == "POST" && (parts[3] == "restart" || parts[3] == "stop" || parts[3] == "input" || parts[3] == "fork")
+	}
+	if parts[4] == "" || parts[4] == "." || parts[4] == ".." {
+		return false
+	}
+	if parts[3] == "blobs" && method == "GET" {
+		_, err := validateBlobSHA(parts[4])
+		return err == nil
+	}
+	if parts[3] != "conversation" {
+		return false
+	}
+	if method == "GET" {
+		return parts[4] == "config-options"
+	}
+	return method == "POST" && (parts[4] == "prompt" || parts[4] == "permission" || parts[4] == "cancel" || parts[4] == "elicitation" || parts[4] == "config" || parts[4] == "blobs")
+}
+
+func validPeerSessionID(id string) bool {
+	return id != "" && id != "." && id != ".." && !strings.ContainsAny(id, "/\\")
 }
 func tailnetTarget(ctx context.Context, home, id string) (*url.URL, error) {
 	config, err := ReadSharingConfig(home)
@@ -503,7 +525,7 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			writeJSON(w, TailnetNode{ID: self.ID, Name: self.HostName, Online: true, Version: g.options.Version})
 			return
 		}
-		actor := Actor{Kind: "peer", User: identity.UserProfile.LoginName, Node: identity.Node.ComputedName}
+		actor := Actor{Kind: "peer", User: identity.UserProfile.LoginName, Node: identity.Node.ComputedName, StableNodeID: identity.Node.StableID}
 		request := r.Clone(withActor(context.WithValue(r.Context(), replicaPeerKey{}, identity.Node.StableID), actor))
 		request.Header = r.Header.Clone()
 		request.Header.Del("Cookie")

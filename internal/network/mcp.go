@@ -118,7 +118,7 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 			}{in.Directory, in.Harness, in.Mode})
 		}
 		// In-process so the actor is "mcp", not the loopback browser actor.
-		info, err := m.gateway.startSession(ctx, LocalActor("mcp"), SessionInfo{Directory: in.Directory, Harness: in.Harness, Mode: in.Mode})
+		info, err := m.gateway.startSession(ctx, LocalActor("mcp"), SessionInfo{Directory: in.Directory, Harness: in.Harness, Mode: in.Mode}, "")
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, nil, nil
 		}

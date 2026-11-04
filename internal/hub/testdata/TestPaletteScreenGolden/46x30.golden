@@ -1,0 +1,30 @@
+ Commands
+──────────────────────────────────────────────
+> Refresh sessions
+  Open preview                         enter
+  Quit                                     q
+  New session                       ctrl+x n
+  Sessions                          ctrl+x l
+  Home                                   esc
+  Help                                     ?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+j/k move · enter run · esc close · q quit

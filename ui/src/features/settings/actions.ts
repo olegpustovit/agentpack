@@ -59,10 +59,14 @@ export function useGatewayActions() {
       hud.error(`Couldn't remove ${peer.name}: ${errorText(error)}`, () => remove.mutate(peer)),
   })
 
-  const stopAgents = useMutation<unknown, Error, void>({
-    mutationFn: () => api("/api/node/stop-agents", { method: "POST" }),
-    onSuccess: () => {
-      hud.success("Agents on the gateway machine have been stopped.")
+  const stopAgents = useMutation<{ skipped?: number }, Error, void>({
+    mutationFn: () => api<{ skipped?: number }>("/api/node/stop-agents", { method: "POST" }),
+    onSuccess: ({ skipped = 0 }) => {
+      hud.success(
+        skipped
+          ? `Stopped local agents; ${skipped} ACP session${skipped === 1 ? "" : "s"} owned by another device remain${skipped === 1 ? "s" : ""} running.`
+          : "Agents on the gateway machine have been stopped.",
+      )
       void queryClient.invalidateQueries({ queryKey: sessionsQuery(LOCAL, false).queryKey })
     },
     onError: (error) =>
