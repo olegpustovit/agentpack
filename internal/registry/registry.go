@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
@@ -30,7 +31,11 @@ const (
 
 var ErrNotFound = errors.New("registry item not found")
 
-type Store struct{ root string }
+type Store struct {
+	root string
+	// memo holds objects that passed validation, by id and file metadata.
+	memo sync.Map
+}
 
 // New opens $AGENTPACK_HOME/registry. home is the already-resolved agentpack home.
 func New(home string) (*Store, error) {

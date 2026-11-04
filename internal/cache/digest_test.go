@@ -531,32 +531,82 @@ func TestEnsureLockCachedInstallsALinkedTreeAgainstAnOlderLock(t *testing.T) {
 	}
 }
 
-func TestTreeDigestMemoFollowsFileChanges(t *testing.T) {
+func TestVerifyPackageIncrementalReusesProofOnlyWhileMetadataHolds(t *testing.T) {
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	out, _ := EntryDir("entry")
+	file := filepath.Join(out, "SKILL.md")
+	writeTestFile(t, file, "# Demo")
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(file, old, old); err != nil {
+		t.Fatal(err)
+	}
+	pkg := lockfile.Package{Module: "demo", CacheKey: "entry", ContentHash: mustDigest(t, out)}
+	stamp, err := verifiedStampPath("entry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPackageIncremental(pkg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stamp); err != nil {
+		t.Fatalf("a full check of a settled entry records a stamp: %v", err)
+	}
+	// Same size and time: only a full check can see this, which is what the
+	// stamp's reuse is observed by, and why explicit sync always hashes.
+	writeTestFile(t, file, "# Evil")
+	if err := os.Chtimes(file, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPackageIncremental(pkg); err != nil {
+		t.Fatalf("stamp was not reused: %v", err)
+	}
+	var mismatch *IntegrityError
+	if err := VerifyPackage(pkg); !errors.As(err, &mismatch) {
+		t.Fatalf("full check missed the change: %v", err)
+	}
+	// Any visible change falls back to hashing.
+	writeTestFile(t, file, "# Evil content")
+	if err := VerifyPackageIncremental(pkg); !errors.As(err, &mismatch) {
+		t.Fatalf("visible change was trusted: %v", err)
+	}
+
+	// An entry modified just now cannot be told apart from a later edit yet.
+	if err := os.Remove(stamp); err != nil {
+		t.Fatal(err)
+	}
+	fresh := lockfile.Package{Module: "demo", CacheKey: "entry", ContentHash: mustDigest(t, out)}
+	if err := VerifyPackageIncremental(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stamp); !os.IsNotExist(err) {
+		t.Fatalf("a just-modified entry must not be stamped: %v", err)
+	}
+}
+
+func TestTreeDigestReadAheadKeepsOrderAcrossSizes(t *testing.T) {
 	root := t.TempDir()
-	file := filepath.Join(root, "SKILL.md")
-	write := func(content string, age time.Duration) string {
-		t.Helper()
-		if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		old := time.Now().Add(-age)
-		if err := os.Chtimes(file, old, old); err != nil {
-			t.Fatal(err)
-		}
-		digest, err := TreeDigest(root)
+	writeTestFile(t, filepath.Join(root, "big"), strings.Repeat("x", readAheadFileLimit+1))
+	for index := range readAheadFiles * 3 {
+		writeTestFile(t, filepath.Join(root, fmt.Sprintf("f%03d", index)), fmt.Sprint(index))
+	}
+	hasher := sha256.New()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(root, entry.Name()))
 		if err != nil {
 			t.Fatal(err)
 		}
-		return digest
+		fmt.Fprintf(hasher, "f\x00%s\x00%d\x00", entry.Name(), len(data))
+		hasher.Write(data)
 	}
-	first := write("one", time.Hour)
-	if again, _ := TreeDigest(root); again != first {
-		t.Fatalf("memoized digest %s, want %s", again, first)
+	got, err := TreeDigest(root)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if second := write("two", 2*time.Hour); second == first {
-		t.Fatal("a same-size edit with a new time kept the old digest")
-	}
-	if fresh := write("one", 0); fresh != first {
-		t.Fatalf("fresh tree digest %s, want %s", fresh, first)
+	if want := lockfile.ContentHashPrefix + hex.EncodeToString(hasher.Sum(nil)); got != want {
+		t.Fatalf("digest %s, want %s", got, want)
 	}
 }

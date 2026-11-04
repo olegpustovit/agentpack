@@ -1,6 +1,6 @@
 #!/bin/sh
 # agentpack pre-commit hook — catch the formatting failure that gates CI before
-# it ever reaches GitHub. Mirrors the `Format` job in .github/workflows/ci.yml.
+# it ever reaches GitHub.
 #
 # Installed via `make hooks` (sets core.hooksPath to .githooks). Bypass a single
 # commit with `git commit --no-verify` if you really need to.

@@ -13,7 +13,7 @@ func TestVerbatimFilesAreSharedAcrossHarnessRootsButHooksAreNot(t *testing.T) {
 	claude, cursor := t.TempDir(), t.TempDir()
 	roots := []HarnessRoot{{Target: harness.Claude, Path: claude}, {Target: harness.Cursor, Path: cursor}}
 	source := t.TempDir()
-	digest, err := cache.TreeDigest(source)
+	digest, _, err := cache.TreeMetadata(source)
 	if err != nil {
 		t.Fatal(err)
 	}

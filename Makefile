@@ -2,7 +2,7 @@ GO ?= go
 GOFMT ?= gofmt
 GORELEASER ?= goreleaser
 INSTALL_DIR ?= $(HOME)/.local/bin
-BINARY := agentpack
+BINARY := ap
 BUILD_DIR := bin
 RELEASE_BIN := $(BUILD_DIR)/$(BINARY)
 RELEASE_BRANCH ?= dev
@@ -19,7 +19,7 @@ help:
 	@echo "  install         release, then copy binary to INSTALL_DIR ($(INSTALL_DIR))"
 	@echo "  uninstall       remove binary from INSTALL_DIR"
 	@echo ""
-	@echo "Quality gates (same checks CI runs):"
+	@echo "Quality gates (local; CI only builds releases):"
 	@echo "  fmt             format all Go files"
 	@echo "  lint            run go vet"
 	@echo "  test            run the full Go test suite"

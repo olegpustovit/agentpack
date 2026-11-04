@@ -84,7 +84,7 @@ func (plan *MCPPluginPlan) copyPluginRoot(source, destination, module string, ef
 	if err != nil {
 		return err
 	}
-	digest, err := cache.TreeDigest(resolved)
+	digest, _, err := cache.TreeMetadata(resolved)
 	if err != nil {
 		return err
 	}
@@ -137,7 +137,7 @@ func (plan *MCPPluginPlan) copyPluginRoot(source, destination, module string, ef
 
 func (plan MCPPluginPlan) Validate() error {
 	for _, source := range plan.Sources {
-		actual, err := cache.TreeDigest(source.Root)
+		actual, _, err := cache.TreeMetadata(source.Root)
 		if err != nil {
 			return fmt.Errorf("MCP plugin input changed after planning: %s: %w", source.Root, err)
 		}

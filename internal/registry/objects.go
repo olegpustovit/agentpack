@@ -88,7 +88,46 @@ func (s *Store) readObject(id string, target any) error {
 	return nil
 }
 
+type objectStamp struct {
+	kind, id string
+	size     int64
+	modified int64
+}
+
+// memoized returns what load made of this object file earlier. Objects are
+// named by their digest and never rewritten, so validating each once per process
+// is enough; every list and index read otherwise re-validates all of them.
+// Changed metadata reads and validates the file again. Callers must not modify
+// the slices of a returned value.
+func memoized[T any](s *Store, kind, id string, load func() (T, error)) (T, error) {
+	path, err := s.objectPath(id)
+	if err != nil {
+		return load()
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return load()
+	}
+	stamp := objectStamp{kind, id, info.Size(), info.ModTime().UnixNano()}
+	if value, ok := s.memo.Load(stamp); ok {
+		return value.(T), nil
+	}
+	value, err := load()
+	if err == nil {
+		s.memo.Store(stamp, value)
+	}
+	return value, err
+}
+
 func (s *Store) readPackage(id string) (Package, error) {
+	return memoized(s, "package", id, func() (Package, error) { return s.loadPackage(id) })
+}
+
+func (s *Store) readRevision(id string) (Revision, error) {
+	return memoized(s, "revision", id, func() (Revision, error) { return s.loadRevision(id) })
+}
+
+func (s *Store) loadPackage(id string) (Package, error) {
 	var p Package
 	err := s.readObject(id, &p)
 	if err == nil && (p.Schema != 0 && p.Schema != objectSchema || p.Module == "" || p.Commit == "" || (p.Kind != string(lockfile.PackageSkill) && p.Kind != string(lockfile.PackagePlugin)) || (p.ContentHash != "" && !lockfile.ValidContentHash(p.ContentHash))) {
@@ -97,7 +136,7 @@ func (s *Store) readPackage(id string) (Package, error) {
 	return p, err
 }
 
-func (s *Store) readRevision(id string) (Revision, error) {
+func (s *Store) loadRevision(id string) (Revision, error) {
 	var r Revision
 	if err := s.readObject(id, &r); err != nil {
 		return r, err
@@ -222,11 +261,13 @@ func (s *Store) indexStale(idx index) (bool, error) {
 		if !validDigest(id) {
 			continue
 		}
-		data, err := readRegular(filepath.Join(s.root, objectsDir, entry.Name()))
-		if err != nil {
-			return false, err
-		}
-		obj, err := decodeImported(data)
+		obj, err := memoized(s, "stale", id, func() (importedObject, error) {
+			data, err := readRegular(filepath.Join(s.root, objectsDir, entry.Name()))
+			if err != nil {
+				return importedObject{}, err
+			}
+			return decodeImported(data)
+		})
 		if err != nil || obj.id != id {
 			return false, fmt.Errorf("invalid registry public object")
 		}

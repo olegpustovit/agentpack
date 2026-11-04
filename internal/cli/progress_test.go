@@ -35,6 +35,38 @@ func TestProgressReportsSlowWorkAndStops(t *testing.T) {
 	}
 }
 
+func TestSpinnerShowsTheStepKeepsLogLinesAndLeavesTheLineBlank(t *testing.T) {
+	var output bytes.Buffer
+	writer := &progressWriter{Writer: &output}
+	writer.draw("⠋ preparing claude: a very long step name", 20)
+	writer.draw("⠙ short", 20)
+	if _, err := writer.Write([]byte("warning: kept\n")); err != nil {
+		t.Fatal(err)
+	}
+	stop := runSpinner(writer, func() string { return "staging" }, 80)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		writer.mu.Lock()
+		shown := strings.Contains(output.String(), "staging")
+		writer.mu.Unlock()
+		if shown || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	stop()
+	text := output.String()
+	if !strings.Contains(text, "…") || !strings.Contains(text, "\rwarning: kept\n") {
+		t.Fatalf("spinner output: %q", text)
+	}
+	if !strings.Contains(text, "staging") || !strings.HasSuffix(text, "\r") || writer.width != 0 {
+		t.Fatalf("spinner did not clean up: %q", text)
+	}
+	if strings.ContainsRune(text, 0x1b) {
+		t.Fatalf("spinner used escape sequences: %q", text)
+	}
+}
+
 func TestFastOperationHasNoProgress(t *testing.T) {
 	var output bytes.Buffer
 	stop := startProgress(&output, "lock", time.Hour)

@@ -288,3 +288,33 @@ func TestLaunchDoesNotWaitForOrphanRemoval(t *testing.T) {
 		t.Fatalf("rebuild did not report staging: %v", steps)
 	}
 }
+
+// A launch stages only its own harness, so switching agents must not rebuild.
+func TestSwitchingAgentsKeepsEachGeneration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	project := t.TempDir()
+	if err := manifest.WriteStub(project, "demo", "0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(project, "demo", "0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	for index, step := range []struct {
+		target  base.Target
+		skipped bool
+	}{{base.Claude, false}, {base.OMP, false}, {base.Claude, true}, {base.OMP, true}} {
+		if _, skipped, err := NewService().SyncForLaunch(context.Background(), project, "", step.target); err != nil || skipped != step.skipped {
+			t.Fatalf("launch %d of %s: skipped=%v, want %v: %v", index, step.target, skipped, step.skipped, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(project, "agentpack.toml"), []byte("name = \"demo\"\nversion = \"0.0.2\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, skipped, err := NewService().SyncForLaunch(context.Background(), project, "", base.Claude); err != nil || skipped {
+		t.Fatalf("changed inputs must rebuild: skipped=%v: %v", skipped, err)
+	}
+}

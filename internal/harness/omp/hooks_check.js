@@ -26,7 +26,14 @@ status = 2;
 assert.equal((await handlers.get("tool_call")({toolName: "bash", input: {}}, ctx)).block, true);
 status = 1;
 assert.equal((await handlers.get("tool_call")({toolName: "bash", input: {}}, ctx)).block, true);
+// A crashed hook keeps the prompt and says why; only exit status 2 blocks it.
+const notices = [];
+ctx.ui = {notify(message) {notices.push(message);}};
+assert.deepEqual(await handlers.get("input")({text: "prompt"}, ctx), {});
+assert.match(notices[0], /UserPromptSubmit hook failed/);
+status = 2;
 assert.equal((await handlers.get("input")({text: "prompt"}, ctx)).handled, true);
+delete ctx.ui;
 status = 0;
 response = "Extra instructions";
 assert.deepEqual(await handlers.get("input")({text: "prompt"}, ctx), {text: "prompt\n\nExtra instructions"});

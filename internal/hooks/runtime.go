@@ -87,21 +87,21 @@ func RunCommand(ctx context.Context, spec ExecutionSpec, stdin []byte) (CommandO
 	if spec.Handler.Kind != CommandHandler {
 		return CommandOutput{}, fmt.Errorf("command executor received non-command hook")
 	}
+	// Exec form and cmd.exe do not expand ${NAME}, so plugin directory
+	// variables that sh would take from the environment are substituted here.
+	expand := strings.NewReplacer("${CLAUDE_PLUGIN_ROOT}", spec.WorkingDir, "${CURSOR_PLUGIN_ROOT}", spec.WorkingDir, "${PLUGIN_ROOT}", spec.WorkingDir).Replace
 	var command *exec.Cmd
 	switch {
 	case len(spec.Handler.Args) != 0:
-		// Exec form: no shell, so the plugin directory variables that a
-		// shell would take from the environment are substituted here.
-		expand := strings.NewReplacer("${CLAUDE_PLUGIN_ROOT}", spec.WorkingDir, "${CURSOR_PLUGIN_ROOT}", spec.WorkingDir, "${PLUGIN_ROOT}", spec.WorkingDir).Replace
 		arguments := make([]string, len(spec.Handler.Args))
 		for index, argument := range spec.Handler.Args {
 			arguments[index] = expand(argument)
 		}
 		command = exec.CommandContext(ctx, expand(spec.Handler.Command), arguments...)
 	case runtime.GOOS == "windows":
-		command = exec.CommandContext(ctx, "cmd", "/C", spec.Handler.Command)
+		command = shellCommand(ctx, expand(spec.Handler.Command))
 	default:
-		command = exec.CommandContext(ctx, "/bin/sh", "-c", spec.Handler.Command)
+		command = shellCommand(ctx, spec.Handler.Command)
 	}
 	// Each agent names the plugin directory its own way; a hook written for
 	// one of them finds it under that name on all of them.

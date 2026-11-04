@@ -58,32 +58,19 @@ try {
 
     $Unpacked = Join-Path $Temporary 'unpacked'
     Expand-Archive -Path $ArchivePath -DestinationPath $Unpacked
-    $Binary = Join-Path $Unpacked 'agentpack.exe'
-    if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) { throw "agentpack.exe is missing from $Archive" }
+    $Binary = Join-Path $Unpacked 'ap.exe'
+    if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) { throw "ap.exe is missing from $Archive" }
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    $Destination = Join-Path $InstallDir 'agentpack.exe'
+    $Destination = Join-Path $InstallDir 'ap.exe'
     $Pending = "$Destination.new"
     Copy-Item -Force $Binary $Pending
+    # Windows can rename a running executable but not replace it, and an agent
+    # launched by agentpack keeps it running. Old copies go once nothing runs them.
+    Remove-Item -Force "$Destination.*.old" -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $Destination) { Move-Item -Force $Destination "$Destination.$([guid]::NewGuid().ToString('N')).old" }
     Move-Item -Force $Pending $Destination
 
-    $Alias = Join-Path $InstallDir 'ap.exe'
-    if (Test-Path -LiteralPath $Alias) {
-        $Existing = Get-Item -LiteralPath $Alias -Force
-        if ($Existing.LinkType -eq 'SymbolicLink') {
-            $Target = $Existing.Target
-            if ($Target.Count -gt 0) { $Target = $Target[0] }
-            if ($Target -ne 'agentpack.exe' -and $Target -ne $Destination) {
-                throw "refusing to replace foreign symlink $Alias -> $Target"
-            }
-        } else {
-            throw "refusing to replace existing $Alias (not installed by agentpack)"
-        }
-        Remove-Item -LiteralPath $Alias -Force
-    }
-    New-Item -ItemType SymbolicLink -Path $Alias -Target $Destination | Out-Null
-
     Write-Output "Installed agentpack $Version to $Destination"
-    Write-Output "Linked $Alias -> agentpack.exe"
 } finally {
     if (Test-Path $Temporary) { Remove-Item -Recurse -Force $Temporary }
 }

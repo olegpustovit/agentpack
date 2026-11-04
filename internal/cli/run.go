@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/environment"
@@ -23,7 +22,7 @@ import (
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
-var Version = "0.12.7"
+var Version = "0.12.12"
 
 type Runner struct {
 	Stdout, Stderr io.Writer
@@ -48,10 +47,18 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 	if invocation.Command != "hook-exec" && invocation.Command != "mcp-exec" {
 		runner.Stderr = &progressWriter{Writer: runner.Stderr}
 	}
+	label := &stepLabel{operation: invocation.Command}
 	if !invocation.Global.Quiet && !invocation.Global.NoProgress {
 		switch invocation.Command {
 		case "init", "lock", "add", "remove", "update", "sync", "list", "mcp", "env", "preflight", "probe", "config", "support", "extra", "eject":
-			defer startProgress(runner.Stderr, invocation.Command, time.Second)()
+			defer watchProgress(runner.Stderr, label.String, time.Second)()
+			// On a terminal each step changes the spinner's text instead of adding a line.
+			if _, terminal := terminalColumns(runner.Stderr); terminal {
+				runner.Service.Step = label.set
+				if runner.Service.Progress == nil {
+					runner.Service.Progress = label.set
+				}
+			}
 		case "mode":
 			if len(invocation.Args) == 0 || invocation.Args[0] != "tui" {
 				defer startProgress(runner.Stderr, "mode", time.Second)()
@@ -443,12 +450,12 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (runner Runner) launch(ctx context.Context, packContext paths.Context, invocation Invocation) (int, error) {
-	var step atomic.Pointer[string]
-	setStep := func(name string) { step.Store(&name) }
+	label := &stepLabel{operation: "preparing " + invocation.Command}
+	setStep := label.set
 	setStep("waiting for another agentpack command on this project")
 	stopProgress := func() {}
 	if !invocation.Global.Quiet && !invocation.Global.NoProgress {
-		stopProgress = watchProgress(runner.Stderr, func() string { return "preparing " + invocation.Command + ": " + *step.Load() }, time.Second)
+		stopProgress = watchProgress(runner.Stderr, label.String, time.Second)
 	}
 	defer stopProgress()
 	mutation, err := acquireDefinitionMutation(ctx, packContext.DefinitionRoot)

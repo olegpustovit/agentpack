@@ -132,11 +132,11 @@ fi
 
 if [ "$archive_format" = zip ]; then
     unzip -q "$temporary/$archive" -d "$temporary/unpacked"
-    binary_name=agentpack.exe
+    binary_name=ap.exe
 else
     mkdir -p "$temporary/unpacked"
     tar -xzf "$temporary/$archive" -C "$temporary/unpacked"
-    binary_name=agentpack
+    binary_name=ap
 fi
 [ -f "$temporary/unpacked/$binary_name" ] || fail "$binary_name is missing from $archive"
 mkdir -p "$install_dir"
@@ -144,21 +144,4 @@ chmod 755 "$temporary/unpacked/$binary_name"
 mv "$temporary/unpacked/$binary_name" "$install_dir/$binary_name.new"
 mv "$install_dir/$binary_name.new" "$install_dir/$binary_name"
 
-alias_name=ap
-if [ "$os" = windows ]; then
-    alias_name=ap.exe
-fi
-alias_path="$install_dir/$alias_name"
-if [ -e "$alias_path" ] || [ -L "$alias_path" ]; then
-    if [ ! -L "$alias_path" ]; then
-        fail "refusing to replace existing $alias_path (not installed by agentpack)"
-    fi
-    case "$(readlink "$alias_path")" in
-        "$binary_name"|"./$binary_name"|"$install_dir/$binary_name") ;;
-        *) fail "refusing to replace foreign symlink $alias_path -> $(readlink "$alias_path")" ;;
-    esac
-fi
-ln -sf "$binary_name" "$alias_path"
-
 say "Installed agentpack ${APP_VERSION} to $install_dir/$binary_name"
-say "Linked $install_dir/$alias_name -> $binary_name"

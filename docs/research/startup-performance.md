@@ -37,6 +37,28 @@ The rebuild benchmark forces staging each iteration; warm iterations assert that
 
 A launch in a real project spent over 4 minutes in `preparing claude…`, 51 s of it system time. A goroutine dump put it in `RemoveOrphanedProjectDirectories`, reading markers in a `/tmp` holding about 247,000 `agentpack-<hash>` directories. Each marker named a deleted `/tmp/agentpack-registry-validate-*`: `validateSnapshot` loaded its throwaway lock through the guarded loader, and a 0.12.6 gateway validated snapshots about 25 times a second.
 
+## Switching agents and reading the Library (2026-11-02)
+
+Measured on Windows 11 x64 with Defender on, in this repository (11 packages, one of 4,424 files), with stubbed harness binaries. These are single runs on a warm disk, not the Linux ARM64 reference benchmarks.
+
+| Operation | Before | After |
+| --- | ---: | ---: |
+| Launch after another agent's launch | 3.0-4.1 s, always a rebuild | 0.19-0.25 s |
+| Launch with nothing changed | 0.17-0.20 s | 0.19-0.25 s |
+| Rebuild for one harness | 3.0-4.6 s | 2.4-3.3 s |
+| Library bootstrap, repeated | 11-13 s | 0.44 s |
+| Library package list | 0.64 s | 0.02 s |
+
+A launch stages one harness into a new generation and publishes it, so the next agent found its own files missing and rebuilt; alternating agents never reached the fast path. Each harness now returns to its own generation while its digest holds.
+
+One sync hashed the largest package up to four times: resolving, the verify loop, and planning and validating each tree. Planning now compares metadata, the verify loop trusts the resolve just before it, and a launch reuses a stamp from an earlier full check. The 36 s seen in the field was spent in the resolve step; it was not reproduced here, because a warm disk hashes all packages in 0.22 s. The likely cause is a first read through a cold disk and the virus scanner, which these changes skip on launches once a stamp exists, and which parallel read-ahead shortens otherwise.
+
+The remaining rebuild cost is writing staged files and reading them back for `.staged.json`, where the profile shows opens of just-written files waiting. Hashing while writing is the next step if rebuilds matter.
+
+`BenchmarkCodexSetup/warm` on this Windows host moved from a median 3.1 ms to 3.6 ms over 7 runs of 20 iterations, from reading the launch state to select a generation. It was not re-measured on the reference host, whose budget is 1 ms; the added work is two stats and one small file read.
+
+Library bootstrap called `store.Get` per agentpack, and each call re-read and re-validated the whole registry, writing temporary files per revision. Objects are named by their digest, so each is now validated once per process while its metadata holds.
+
 Validation now leaves nothing in the temp directory, and launches run the tidying in a goroutine beside the agent. Other commands wait for it at most 200 ms.
 
 ## Slow `add`, `lock` and `sync` (2026-11-04)
@@ -46,7 +68,7 @@ An `add` sat at `agentpack: add…` for over 3 minutes. Causes found:
 - The shared HTTP client had no timeout, so one stalled GitHub or npm connection hung the command. It now needs response headers within 20 s and a whole request within 3 minutes.
 - When codeload failed, the Git fallback cloned the whole history. It now fetches the one pinned commit at depth 1: `tanstack/router` went from 36.4 s to 5.5 s.
 - A resolve downloaded the whole repository tarball once per subpath. It now reuses the last archive within one resolve.
-- One command hashed each cache entry three times (resolve, plan, validate). `TreeDigest` now memoizes per process while every file keeps its path, mode, size and modification time, and never for a tree with a file changed in the last 2 s.
+- One command hashed each cache entry up to four times. This is now handled by the 2026-11-02 change below (planning compares metadata, launches reuse a stamp); an in-process digest memo tried here was dropped, because an explicit `sync` must always read the bytes.
 - `sync` waited for temp-directory tidying; it now waits at most 200 ms.
 - Packages resolved one at a time. Each wave of the dependency queue now fetches up to six in parallel and reads their dependencies in queue order, so the lock is identical. Cold `lock` of the 11 packages: 21.5 s to 13.6 s.
 

@@ -54,7 +54,7 @@ func TestReleaseInstallerDefaultsToRenderedVersion(t *testing.T) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("rendered installer failed without a version override: %v\n%s", err, output)
 	}
-	contents, err := os.ReadFile(filepath.Join(installDir, "agentpack"))
+	contents, err := os.ReadFile(filepath.Join(installDir, "ap"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestReleaseInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("installer failed: %v\n%s", err, output)
 	}
-	binaryName := "agentpack"
+	binaryName := "ap"
 	if runtime.GOOS == "windows" {
 		binaryName += ".exe"
 	}
@@ -89,11 +89,6 @@ func TestReleaseInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	}
 	if string(contents) != installerFixtureBinary() {
 		t.Fatalf("installed contents = %q from %s", contents, archiveName)
-	}
-	if runtime.GOOS != "windows" {
-		if link, err := os.Readlink(filepath.Join(installDir, "ap")); err != nil || link != "agentpack" {
-			t.Fatalf("ap symlink: readlink=%q err=%v", link, err)
-		}
 	}
 }
 
@@ -126,7 +121,7 @@ func TestReleaseInstallerDefaultsToLocalBinWithoutModifyingShellEnvironment(t *t
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("installer failed: %v\n%s", err, output)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".local", "bin", "agentpack")); err != nil {
+	if _, err := os.Stat(filepath.Join(home, ".local", "bin", "ap")); err != nil {
 		t.Fatalf("agentpack was not installed in $HOME/.local/bin: %v", err)
 	}
 	for _, profile := range profiles {
@@ -234,7 +229,7 @@ func writeInstallerFixture(t *testing.T, root string) string {
 	}
 	if runtime.GOOS == "windows" {
 		writer := zip.NewWriter(file)
-		entry, createErr := writer.Create("agentpack.exe")
+		entry, createErr := writer.Create("ap.exe")
 		if createErr == nil {
 			_, createErr = io.WriteString(entry, installerFixtureBinary())
 		}
@@ -247,7 +242,7 @@ func writeInstallerFixture(t *testing.T, root string) string {
 		gzipWriter := gzip.NewWriter(file)
 		tarWriter := tar.NewWriter(gzipWriter)
 		body := installerFixtureBinary()
-		if err := tarWriter.WriteHeader(&tar.Header{Name: "agentpack", Mode: 0o755, Size: int64(len(body))}); err != nil {
+		if err := tarWriter.WriteHeader(&tar.Header{Name: "ap", Mode: 0o755, Size: int64(len(body))}); err != nil {
 			t.Fatal(err)
 		}
 		_, writeErr := io.WriteString(tarWriter, body)

@@ -38,7 +38,14 @@ func UserAgentpackHome() (string, error) {
 		if value := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); value != "" {
 			return filepath.Join(value, "agentpack"), nil
 		}
-		return "", errors.New("resolve agentpack home: LOCALAPPDATA is empty")
+		// LOCALAPPDATA can be missing (minimal shells, services); derive it.
+		if value := strings.TrimSpace(os.Getenv("USERPROFILE")); value != "" {
+			return filepath.Join(value, "AppData", "Local", "agentpack"), nil
+		}
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, "AppData", "Local", "agentpack"), nil
+		}
+		return "", errors.New("resolve agentpack home: LOCALAPPDATA and USERPROFILE are empty")
 	}
 	if value := os.Getenv("XDG_DATA_HOME"); value != "" {
 		return filepath.Join(value, "agentpack"), nil

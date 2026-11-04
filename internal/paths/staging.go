@@ -51,6 +51,24 @@ func readStagingSelection(legacy string) (string, error) {
 	return filepath.Join(filepath.Dir(legacy), name), nil
 }
 
+// SelectStagingGeneration makes this command use an existing generation of the
+// mode. A generation that is gone or not of this mode is ignored: the caller
+// rebuilds as it would for any stale staging.
+func SelectStagingGeneration(projectRoot, modeName, root string) error {
+	legacy, err := stagingModePath(projectRoot, modeName)
+	if err != nil {
+		return err
+	}
+	if filepath.Dir(root) != filepath.Dir(legacy) || !strings.HasPrefix(filepath.Base(root), filepath.Base(legacy)+"-g-") {
+		return nil
+	}
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		return nil
+	}
+	stagingSelections.Store(legacy, root)
+	return nil
+}
+
 // StagingGeneration builds privately and publishes only after verification.
 // Old generations are retained so running sessions and their support files survive.
 // shortcut: generations accumulate, add lease-aware reclamation when disk use requires it.

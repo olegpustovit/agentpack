@@ -1,7 +1,6 @@
 #!/bin/sh
 # agentpack pre-push hook — run the full CI gate before pushing,
-# so a push never lands a red build. Mirrors .github/workflows/ci.yml.
-# .github/workflows/ci.yml.
+# so a push never lands a red build. CI only builds releases; this is the gate.
 #
 # Installed via `make hooks`. Bypass once with `git push --no-verify`.
 

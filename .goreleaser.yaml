@@ -12,7 +12,7 @@ before:
 builds:
   - id: agentpack
     main: ./cmd/agentpack
-    binary: agentpack
+    binary: ap
     env:
       - CGO_ENABLED=0
     goos:
@@ -87,7 +87,7 @@ homebrew_casks:
     ids:
       - agentpack
     binaries:
-      - agentpack
+      - ap
     repository:
       owner: olegpustovit
       name: homebrew-tap

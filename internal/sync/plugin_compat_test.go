@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
@@ -695,9 +696,23 @@ func TestUnchangedSyncKeepsThePublishedStaging(t *testing.T) {
 	if second := published(); second != first {
 		t.Fatalf("an unchanged sync rebuilt staging: %s then %s", first, second)
 	}
-	writeIntegrityFile(t, filepath.Join(fixture.project, ".agents", "skills", "local", "SKILL.md"), "---\nname: local\ndescription: Local\n---\n")
+	// A launch publishes a generation holding only its own harness; a full sync must not keep that.
+	target := harness.Claude
+	if _, _, err := NewService().SyncForLaunchOptions(context.Background(), fixture.project, SyncOptions{Target: &target}); err != nil {
+		t.Fatal(err)
+	}
+	launched := published()
+	if launched == first {
+		t.Fatal("the launch did not publish its own generation, so this test proves nothing")
+	}
 	fixture.sync(SyncOptions{})
-	if third := published(); third == first {
+	if after := published(); after == launched {
+		t.Fatal("a sync after a single-harness launch kept the launch's generation")
+	}
+	writeIntegrityFile(t, filepath.Join(fixture.project, ".agents", "skills", "local", "SKILL.md"), "---\nname: local\ndescription: Local\n---\n")
+	before := published()
+	fixture.sync(SyncOptions{})
+	if third := published(); third == before {
 		t.Fatal("a sync after a project change kept the old staging")
 	}
 }

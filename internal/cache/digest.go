@@ -3,6 +3,7 @@ package cache
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	githubsource "github.com/olegpustovit/agentpack/internal/github"
@@ -116,6 +116,13 @@ func (err *IntegrityError) Repaired() string {
 		err.Package.Module, err.Package.Commit, err.Path, err.Expected, err.Actual)
 }
 
+const (
+	readAheadFiles     = 32
+	readAheadFileLimit = 1 << 20
+	// Wider than the coarsest file timestamps, FAT's two seconds.
+	racyMetadataWindow = 3 * time.Second
+)
+
 // TreeDigest computes the sha256-tree-v1 digest of a package directory.
 //
 // Every regular file and symbolic link below root is one record; directories
@@ -165,7 +172,6 @@ func treeDigest(root string, linksAsEmptyFiles bool) (string, error) {
 		size     int64
 	}
 	var records []record
-	stamp, racy := sha256.New(), false
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -185,20 +191,42 @@ func treeDigest(root string, linksAsEmptyFiles bool) (string, error) {
 			return fmt.Errorf("unsupported file type %s at %s", info.Mode().Type(), relative)
 		}
 		records = append(records, record{relative: filepath.ToSlash(relative), mode: info.Mode(), size: info.Size()})
-		fmt.Fprintf(stamp, "%s\x00%d\x00%d\x00%d\x00", relative, info.Mode(), info.Size(), info.ModTime().UnixNano())
-		if time.Since(info.ModTime()) < racyWindow {
-			racy = true
-		}
 		return nil
 	})
 	if err != nil {
 		return "", fmt.Errorf("walk package tree %s: %w", root, err)
 	}
-	memoKey := fmt.Sprintf("%s\x00%t\x00%x", root, linksAsEmptyFiles, stamp.Sum(nil))
-	if digest, ok := digestMemo.Load(memoKey); ok && !racy {
-		return digest.(string), nil
-	}
 	sort.Slice(records, func(i, j int) bool { return records[i].relative < records[j].relative })
+	// The digest is one ordered stream, but files can be read ahead of it. An
+	// open is what a cold disk or a virus scanner makes slow, and those overlap.
+	type loaded struct {
+		data []byte
+		err  error
+	}
+	slots := make([]chan loaded, len(records))
+	for index, item := range records {
+		if item.mode.IsRegular() && item.size <= readAheadFileLimit {
+			slots[index] = make(chan loaded, 1)
+		}
+	}
+	finished, window := make(chan struct{}), make(chan struct{}, readAheadFiles)
+	defer close(finished)
+	go func() {
+		for index, slot := range slots {
+			if slot == nil {
+				continue
+			}
+			select {
+			case window <- struct{}{}:
+			case <-finished:
+				return
+			}
+			go func(path string) {
+				data, err := os.ReadFile(path)
+				slot <- loaded{data, err}
+			}(filepath.Join(root, filepath.FromSlash(records[index].relative)))
+		}
+	}()
 	hasher := sha256.New()
 	buffer := make([]byte, 32*1024)
 	header := func(kind, relative string, length int64) {
@@ -209,7 +237,7 @@ func treeDigest(root string, linksAsEmptyFiles bool) (string, error) {
 		hasher.Write([]byte(strconv.FormatInt(length, 10)))
 		hasher.Write([]byte{0})
 	}
-	for _, item := range records {
+	for index, item := range records {
 		path := filepath.Join(root, filepath.FromSlash(item.relative))
 		if item.mode&fs.ModeSymlink != 0 {
 			target, err := os.Readlink(path)
@@ -233,6 +261,19 @@ func treeDigest(root string, linksAsEmptyFiles bool) (string, error) {
 		if item.mode.Perm()&0o111 != 0 {
 			kind = "x"
 		}
+		if slot := slots[index]; slot != nil {
+			result := <-slot
+			<-window
+			if result.err != nil {
+				return "", fmt.Errorf("open %s: %w", path, result.err)
+			}
+			if int64(len(result.data)) != item.size {
+				return "", fmt.Errorf("read %s: file changed while hashing", path)
+			}
+			header(kind, item.relative, item.size)
+			hasher.Write(result.data)
+			continue
+		}
 		file, err := os.Open(path)
 		if err != nil {
 			return "", fmt.Errorf("open %s: %w", path, err)
@@ -248,21 +289,106 @@ func treeDigest(root string, linksAsEmptyFiles bool) (string, error) {
 			return "", fmt.Errorf("read %s: file changed while hashing", path)
 		}
 	}
-	digest := lockfile.ContentHashPrefix + hex.EncodeToString(hasher.Sum(nil))
-	if !racy {
-		digestMemo.Store(memoKey, digest)
-	}
-	return digest, nil
+	return lockfile.ContentHashPrefix + hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-// digestMemo lets one command hash a tree once although resolving, planning
-// and validating each verify it. An entry is reused only while every file
-// keeps its path, mode, size and modification time; a file changed within
-// racyWindow could change again without a new time, so such trees are always
-// read (git's racy-file rule).
-var digestMemo sync.Map
+// verifiedStamp remembers that an entry's bytes matched a content hash while
+// its files had this metadata. It lives outside the entry, which it describes.
+type verifiedStamp struct {
+	ContentHash string `json:"content_hash"`
+	Metadata    string `json:"metadata"`
+}
 
-const racyWindow = 2 * time.Second
+func verifiedStampPath(cacheKey string) (string, error) {
+	home, err := paths.UserAgentpackHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "verified", cacheKey+".json"), nil
+}
+
+// VerifyPackageIncremental is VerifyPackage for launches: an entry proved by an
+// earlier full check is not read again while its metadata is unchanged. This
+// is the trust the launch fast path already gives metadata.
+func VerifyPackageIncremental(pkg lockfile.Package) error {
+	if pkg.ContentHash == "" || pkg.CacheKey == "" {
+		return nil
+	}
+	out, err := EntryDir(pkg.CacheKey)
+	if err != nil {
+		return err
+	}
+	if path, err := verifiedStampPath(pkg.CacheKey); err == nil {
+		if data, err := os.ReadFile(path); err == nil {
+			var stamp verifiedStamp
+			if json.Unmarshal(data, &stamp) == nil && stamp.ContentHash == pkg.ContentHash {
+				if metadata, _, err := TreeMetadata(out); err == nil && metadata == stamp.Metadata {
+					return nil
+				}
+			}
+		}
+	}
+	return VerifyPackage(pkg)
+}
+
+// recordVerified writes a stamp for an entry that was hashed from checkedAt on.
+// A file modified about then could still change without its metadata showing
+// it, as in git's racy index, so that entry gets no stamp yet. Losing a stamp
+// only costs a full check, so failures are ignored.
+func recordVerified(pkg lockfile.Package, root string, checkedAt time.Time) {
+	path, err := verifiedStampPath(pkg.CacheKey)
+	if err != nil {
+		return
+	}
+	metadata, newest, err := TreeMetadata(root)
+	if err != nil || !newest.Before(checkedAt.Add(-racyMetadataWindow)) {
+		return
+	}
+	data, err := json.Marshal(verifiedStamp{ContentHash: pkg.ContentHash, Metadata: metadata})
+	if err != nil || os.MkdirAll(filepath.Dir(path), 0o755) != nil {
+		return
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".stamp-*")
+	if err != nil {
+		return
+	}
+	defer os.Remove(file.Name())
+	_, writeErr := file.Write(data)
+	if file.Close() == nil && writeErr == nil {
+		_ = os.Rename(file.Name(), path)
+	}
+}
+
+// TreeMetadata digests the path, type, permission bits, size and modification
+// time of every file below root, and reports the newest modification time. It
+// reads no contents, so it detects visible changes without proving any bytes.
+func TreeMetadata(root string) (string, time.Time, error) {
+	hasher := sha256.New()
+	var newest time.Time
+	// WalkDir visits in lexical order, so the digest is stable.
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() {
+			return walkErr
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+		fmt.Fprintf(hasher, "%s\x00%s\x00%d\x00%d\x00", filepath.ToSlash(relative), info.Mode(), info.Size(), info.ModTime().UnixNano())
+		return nil
+	})
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("walk package tree %s: %w", root, err)
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), newest, nil
+}
 
 // VerifyPackage recomputes the cache entry digest and compares it with the
 // lock. A package without a content hash is unverified and passes.
@@ -274,6 +400,7 @@ func VerifyPackage(pkg lockfile.Package) error {
 	if err != nil {
 		return err
 	}
+	checkedAt := time.Now()
 	actual, err := TreeDigest(out)
 	if err != nil {
 		return fmt.Errorf("verify %s: %w", pkg.Module, err)
@@ -281,6 +408,7 @@ func VerifyPackage(pkg lockfile.Package) error {
 	if !MatchesContentHash(out, pkg.ContentHash, actual) {
 		return &IntegrityError{Package: pkg, Path: out, Expected: pkg.ContentHash, Actual: actual}
 	}
+	recordVerified(pkg, out, checkedAt)
 	return nil
 }
 
@@ -304,24 +432,11 @@ func StatFingerprint(lock lockfile.PackLock) (string, error) {
 			fmt.Fprint(hasher, "absent\x00")
 			continue
 		}
-		err = filepath.WalkDir(out, func(path string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil || entry.IsDir() {
-				return walkErr
-			}
-			info, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			relative, err := filepath.Rel(out, path)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(hasher, "%s\x00%s\x00%d\x00%d\x00", filepath.ToSlash(relative), info.Mode(), info.Size(), info.ModTime().UnixNano())
-			return nil
-		})
+		metadata, _, err := TreeMetadata(out)
 		if err != nil {
-			return "", fmt.Errorf("walk package tree %s: %w", out, err)
+			return "", err
 		}
+		fmt.Fprintf(hasher, "%s\x00", metadata)
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }

@@ -63,7 +63,7 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 		return command.Help()
 	}
 	root := &cobra.Command{
-		Use:           "agentpack",
+		Use:           "ap",
 		Short:         "Pin skills and plugins for every coding agent",
 		SilenceUsage:  true,
 		SilenceErrors: true,

@@ -32,6 +32,8 @@ type ResolveOptions struct {
 	// RepairCache replaces a cache entry that fails verification with a fresh
 	// fetch of the pinned commit instead of failing.
 	RepairCache bool
+	// Verify checks an existing cache entry. Nil means cache.VerifyPackage.
+	Verify func(lockfile.Package) error
 	// Notify receives one-line reports about cache entries that were replaced.
 	Notify func(message string)
 	// Progress reports the package being resolved before potentially slow I/O.
@@ -269,7 +271,11 @@ func (resolver Resolver) settleContentHash(pkg lockfile.Package, options Resolve
 		return pkg, &cache.IntegrityError{Package: pkg, Expected: expected, Actual: fetched, Fetched: true}
 	case expected != "":
 		pkg.ContentHash = expected
-		err := cache.VerifyPackage(pkg)
+		verify := options.Verify
+		if verify == nil {
+			verify = cache.VerifyPackage
+		}
+		err := verify(pkg)
 		var mismatch *cache.IntegrityError
 		if !options.RepairCache || !errors.As(err, &mismatch) {
 			return pkg, err
