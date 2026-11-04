@@ -223,15 +223,16 @@ func TestHomePromptTakesLettersAndCtrlXLeads(t *testing.T) {
 	h := testHome()
 	h.panel = panelHome
 	agent := h.newSession.harness
-	for _, r := range "hello" {
+	h.Update(tea.KeyPressMsg{Code: 'h', Text: "H", Mod: tea.ModShift})
+	for _, r := range "ello" {
 		h.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
-	if h.homeDraft != "hello" || h.newSession.harness != agent {
+	if h.homeDraft != "Hello" || h.newSession.harness != agent {
 		t.Fatalf("draft = %q, harness %d → %d", h.homeDraft, agent, h.newSession.harness)
 	}
 	h.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
 	h.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
-	if h.panel != panelList || h.homeDraft != "hello" {
+	if h.panel != panelList || h.homeDraft != "Hello" {
 		t.Fatalf("ctrl+x l: panel %d, draft %q", h.panel, h.homeDraft)
 	}
 }

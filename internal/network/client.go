@@ -203,7 +203,7 @@ func StartWorker(ctx context.Context, home, executable string, launch WorkerLaun
 		}
 		output.Close()
 	}()
-	timer := time.NewTimer(30 * time.Second)
+	timer := time.NewTimer(workerStartupTimeout(launch.Transport))
 	defer timer.Stop()
 	select {
 	case id := <-ready:
@@ -272,4 +272,15 @@ func controlWorker(ctx context.Context, home, id, action, operationID string) er
 		return fmt.Errorf("%w: worker %s returned %s", errWorkerControlRejected, action, response.Status)
 	}
 	return nil
+}
+
+// workerStartupTimeout bounds how long a new worker may take to report ready.
+// A chat worker also starts its agent, and the first chat on a machine
+// installs the pinned npm adapter, which takes about half a minute; callers
+// wait up to two minutes for a start.
+func workerStartupTimeout(transport string) time.Duration {
+	if transport == "acp" {
+		return 100 * time.Second
+	}
+	return 30 * time.Second
 }

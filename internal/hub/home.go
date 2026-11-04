@@ -738,7 +738,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						h.previewSlash = 0
 					}
 				default:
-					if msg.Text != "" && msg.Mod == 0 {
+					if typedText(msg) {
 						if h.previewAttach {
 							h.previewImagePath += msg.Text
 						} else {
@@ -943,7 +943,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "backspace":
 				h.homeDraft = dropLastRune(h.homeDraft)
 			default:
-				if msg.Mod == 0 && msg.Text != "" {
+				if typedText(msg) {
 					h.homeDraft += acp.StripControls(msg.Text)
 					h.homePromptErr = nil
 				}
@@ -972,7 +972,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return h, h.loadSessionExcerptCmd()
 				}
-				if msg.Mod == 0 && msg.Text != "" {
+				if typedText(msg) {
 					h.sessionFilter += cleanSessionFilter(msg.Text)
 					h.listScrollStart = 0
 					h.ensureSessionCursor()
@@ -1650,4 +1650,10 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// typedText reports whether a key press is text to insert. Shift is how
+// capitals and many symbols arrive, so it counts; ctrl and alt do not.
+func typedText(msg tea.KeyPressMsg) bool {
+	return msg.Text != "" && msg.Mod&^tea.ModShift == 0
 }
