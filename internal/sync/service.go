@@ -76,9 +76,12 @@ type SyncResult struct {
 // and a whole request (a large tarball included) within 3 minutes.
 func NewService() Service {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.ResponseHeaderTimeout = 20 * time.Second
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
 	return Service{Client: &http.Client{Transport: transport, Timeout: 3 * time.Minute}}
 }
+
+// responseHeaderTimeout is a variable so a test can stall a server without waiting 20 s.
+var responseHeaderTimeout = 20 * time.Second
 func (service Service) client() *http.Client {
 	if service.Client != nil {
 		return service.Client
