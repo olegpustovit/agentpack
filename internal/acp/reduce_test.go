@@ -261,3 +261,14 @@ func TestThreadReducerAppliesUpdatesIncrementally(t *testing.T) {
 		t.Fatal("permission result did not clear needs-you")
 	}
 }
+
+func TestPromptShowsOnceEvenWhenTheAgentEchoesIt(t *testing.T) {
+	state := ReduceLog([]LogEntry{
+		{Seq: 1, Kind: "prompt", Payload: json.RawMessage(`{"text":{"text":"hi"}}`)},
+		{Seq: 2, Kind: "user_message_chunk", Payload: json.RawMessage(`{"text":{"text":"hi"}}`)},
+		{Seq: 3, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"ok"}}`)},
+	})
+	if len(state.Items) != 2 || state.Items[0].Kind != "user_message_chunk" || string(state.Items[0].Data) != `{"text":{"text":"hi"}}` {
+		t.Fatalf("items = %+v", state.Items)
+	}
+}

@@ -106,7 +106,12 @@ function updateCompaction(state: ThreadState, compactionId: string, patch: Compa
 export function reduceLog(entries: LogEntry[]): ThreadState {
   const state: ThreadState = { items: [], needs_you: false, working: false }
   const tools: Record<string, number> = {}
+  let afterPrompt = false
   for (const entry of entries) {
+    // Some agents (Antigravity) echo the prompt back as a user chunk; the prompt entry already shows it.
+    const echo = afterPrompt && entry.kind === "user_message_chunk"
+    afterPrompt = entry.kind === "prompt" || echo
+    if (echo) continue
     switch (entry.kind) {
       case "agent_message_chunk":
       case "user_message_chunk":

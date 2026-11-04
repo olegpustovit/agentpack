@@ -17,6 +17,14 @@ function loadFixture(): LogEntry[] {
 }
 
 describe("reduceLog", () => {
+  it("shows a prompt once even when the agent echoes it", () => {
+    const state = reduceLog([
+      { seq: 1, ts: 1, kind: "prompt", payload: { text: { text: "hi" } } },
+      { seq: 2, ts: 2, kind: "user_message_chunk", payload: { text: { text: "hi" } } },
+      { seq: 3, ts: 3, kind: "agent_message_chunk", payload: { text: { text: "ok" } } },
+    ])
+    expect(state.items.map((item) => item.kind)).toEqual(["user_message_chunk", "agent_message_chunk"])
+  })
   it("folds the full fixture into a rich thread with usage, notices, compaction, and permission", () => {
     const state = reduceLog(loadFixture())
     expect(state.items.length).toBeGreaterThanOrEqual(8)

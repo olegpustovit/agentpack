@@ -27,6 +27,7 @@ type ThreadReducer struct {
 	state       ThreadState
 	tools       map[string]int
 	compactions map[string]int
+	afterPrompt bool
 }
 
 func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
@@ -35,6 +36,12 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 		reducer.tools = map[string]int{}
 	}
 	tools := reducer.tools
+	// Some agents (Antigravity) echo the prompt back as a user chunk; the prompt item already shows it.
+	echo := reducer.afterPrompt && entry.Kind == "user_message_chunk"
+	reducer.afterPrompt = entry.Kind == "prompt" || echo
+	if echo {
+		return reducer.state
+	}
 	switch entry.Kind {
 	case "agent_message_chunk", "user_message_chunk", "agent_thought_chunk":
 		state.appendChunk(entry)
@@ -154,6 +161,7 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 		state.NeedsYou = hasOutstandingRequests(state.Items)
 	case "prompt":
 		state.Working = true
+		state.Items = append(state.Items, ThreadItem{Kind: "user_message_chunk", Data: entry.Payload})
 	}
 	return reducer.state
 }

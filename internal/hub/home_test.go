@@ -476,7 +476,7 @@ func TestHubConversationStreamAppliesIncrementalEvents(t *testing.T) {
 	if h.previewLastSeq != 3 || h.previewState == nil || h.previewState.Working {
 		t.Fatalf("state after turn_end = %+v seq=%d", h.previewState, h.previewLastSeq)
 	}
-	if len(h.previewState.Items) != 1 || chunkText(h.previewState.Items[0].Data) != "reply" {
+	if len(h.previewState.Items) != 2 || chunkText(h.previewState.Items[0].Data) != "hello" || chunkText(h.previewState.Items[1].Data) != "reply" {
 		t.Fatalf("thread items = %+v", h.previewState.Items)
 	}
 }
