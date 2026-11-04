@@ -1,0 +1,8 @@
+{"seq":1,"ts":1793818790076,"kind":"available_commands_update","payload":{"availableCommands":[{"description":"Google Drive: Upload a file with automatic metadata.","name":"$gws-drive-upload"}],"sessionUpdate":"available_commands_update"}}
+{"seq":2,"ts":1793818792237,"kind":"prompt","payload":{"text":{"text":"Reply with exactly the word: ok. Do not use tools."}}}
+{"seq":3,"ts":1793818793279,"kind":"session_info_update","payload":{"_meta":{"codex":{"threadStatus":{"activeFlags":[],"type":"active"}}},"sessionUpdate":"session_info_update"}}
+{"seq":4,"ts":1793818795588,"kind":"agent_message_chunk","payload":{"text":{"text":"ok"}}}
+{"seq":5,"ts":1793818795679,"kind":"usage_update","payload":{"sessionUpdate":"usage_update","size":475000,"used":15135}}
+{"seq":6,"ts":1793818795694,"kind":"session_info_update","payload":{"_meta":{"codex":{"threadStatus":{"type":"idle"}}},"sessionUpdate":"session_info_update"}}
+{"seq":7,"ts":1793818795696,"kind":"session_info_update","payload":{"sessionUpdate":"session_info_update","title":"Reply with exactly the word: ok. Do not use tools."}}
+{"seq":8,"ts":1793818795697,"kind":"turn_end","payload":{"_meta":{"quota":{"model_usage":[{"model":"gpt-6.1-sol","token_count":{"cacheWriteInputTokens":0,"cachedInputTokens":12288,"inputTokens":2842,"outputTokens":5,"reasoningOutputTokens":0,"totalTokens":15135}}],"token_count":{"cacheWriteInputTokens":0,"cachedInputTokens":12288,"inputTokens":2842,"outputTokens":5,"reasoningOutputTokens":0,"totalTokens":15135}}},"stopReason":"end_turn","usage":{"cachedReadTokens":12288,"cachedWriteTokens":0,"inputTokens":2842,"outputTokens":5,"thoughtTokens":0,"totalTokens":15135}}}

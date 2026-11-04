@@ -1,0 +1,6 @@
+{"seq":1,"ts":1793819155546,"kind":"available_commands_update","payload":{"availableCommands":[{"description":"Google Drive: Upload a file with automatic metadata.","name":"gws-drive-upload"}],"sessionUpdate":"available_commands_update"}}
+{"seq":2,"ts":1793819157742,"kind":"prompt","payload":{"text":{"text":"Reply with exactly the word: ok. Do not use tools."}}}
+{"seq":3,"ts":1793819157798,"kind":"user_message_chunk","payload":{"text":{"text":"Reply with exactly the word: ok. Do not use tools."}}}
+{"seq":4,"ts":1793819159019,"kind":"session_info_update","payload":{"sessionUpdate":"session_info_update","title":"System Prompt Test Acknowledgement"}}
+{"seq":5,"ts":1793819161556,"kind":"agent_message_chunk","payload":{"text":{"text":"ok"}}}
+{"seq":6,"ts":1793819161623,"kind":"turn_end","payload":{"stopReason":"end_turn","usage":{"cachedReadTokens":0,"cachedWriteTokens":0,"inputTokens":7719,"outputTokens":5,"thoughtTokens":8,"totalTokens":7732}}}

@@ -1,0 +1,7 @@
+{"seq":1,"ts":1793819021819,"kind":"available_commands_update","payload":{"availableCommands":[{"description":"Google Drive: Upload a file with automatic metadata.","input":{"hint":"arguments"},"name":"skill:gws-drive-upload"}],"sessionUpdate":"available_commands_update"}}
+{"seq":2,"ts":1793819021820,"kind":"session_info_update","payload":{"sessionUpdate":"session_info_update","updatedAt":"2026-11-04T19:03:40.022Z"}}
+{"seq":3,"ts":1793819023954,"kind":"prompt","payload":{"text":{"text":"Reply with exactly the word: ok. Do not use tools."}}}
+{"seq":4,"ts":1793819026485,"kind":"agent_message_chunk","payload":{"text":{"text":"ok"}}}
+{"seq":5,"ts":1793819027018,"kind":"usage_update","payload":{"cost":{"amount":0.0009739249999999999,"currency":"USD"},"sessionUpdate":"usage_update","size":1050000,"used":7772}}
+{"seq":6,"ts":1793819027019,"kind":"session_info_update","payload":{"sessionUpdate":"session_info_update","updatedAt":"2026-11-04T19:03:47.018Z"}}
+{"seq":7,"ts":1793819027019,"kind":"turn_end","payload":{"stopReason":"end_turn","usage":{"cachedWriteTokens":7769,"inputTokens":3,"outputTokens":5,"totalTokens":7777}}}

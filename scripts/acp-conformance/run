@@ -19,5 +19,14 @@ if [ "$missing" -gt 0 ]; then
   echo "(shared full.jsonl covers reducer tests until harness fixtures exist)"
 fi
 echo
-echo "Manual harness probes (real agents, network): see artifact j7 PLAN.md WP0."
-echo "Recorded fixtures live in testdata/acp/*.jsonl"
+if [ -n "${AGENTPACK_ACP_PROBE_PROJECT:-}" ]; then
+  # Live probes: one real prompt per agent, in a synced project. Needs each agent's login.
+  # Grok is left out unless asked for: without a login it starts a browser sign-in.
+  for h in ${AGENTPACK_ACP_PROBE_HARNESSES:-claude codex opencode cursor agy omp}; do
+    echo "== live $h"
+    AGENTPACK_ACP_PROBE="$h" AGENTPACK_ACP_PROBE_OUT="${TMPDIR:-/tmp}/acp-$h.jsonl" \
+      go test ./internal/network/ -run TestLiveACPProbe -count=1 -timeout 4m || true
+  done
+else
+  echo "Set AGENTPACK_ACP_PROBE_PROJECT to a synced project to run live probes."
+fi

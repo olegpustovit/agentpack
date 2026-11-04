@@ -1,0 +1,10 @@
+{"seq":1,"ts":1793818997157,"kind":"available_commands_update","payload":{"availableCommands":[{"description":"Google Drive: Upload a file with automatic metadata. (user skill)","name":"gws-drive-upload"}],"sessionUpdate":"available_commands_update"}}
+{"seq":2,"ts":1793818999235,"kind":"prompt","payload":{"text":{"text":"Reply with exactly the word: ok. Do not use tools."}}}
+{"seq":3,"ts":1793819000745,"kind":"session_info_update","payload":{"sessionUpdate":"session_info_update","title":"Word Reply"}}
+{"seq":4,"ts":1793819001450,"kind":"agent_thought_chunk","payload":{"text":{"text":"The"}}}
+{"seq":5,"ts":1793819001450,"kind":"agent_thought_chunk","payload":{"text":{"text":" user wants a reply "}}}
+{"seq":6,"ts":1793819001452,"kind":"agent_thought_chunk","payload":{"text":{"text":"of"}}}
+{"seq":7,"ts":1793819001459,"kind":"agent_thought_chunk","payload":{"text":{"text":" exactly \"ok\" with no"}}}
+{"seq":8,"ts":1793819001494,"kind":"agent_thought_chunk","payload":{"text":{"text":" tools used."}}}
+{"seq":9,"ts":1793819001499,"kind":"agent_message_chunk","payload":{"text":{"text":"ok"}}}
+{"seq":10,"ts":1793819002503,"kind":"turn_end","payload":{"stopReason":"end_turn"}}

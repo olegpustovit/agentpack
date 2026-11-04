@@ -6,7 +6,20 @@ Optional local gate — **not CI**. Run:
 ./scripts/acp-conformance/run
 ```
 
-That checks shared `testdata/acp/full.jsonl` reducers (Go `internal/acp`, `internal/hub`, Vitest `reducer.test.ts`). Manual harness probes (real agents, staged skills, images, permissions) belong here next; record transcripts under `testdata/acp/<harness>.jsonl`.
+That checks shared `testdata/acp/full.jsonl` reducers (Go `internal/acp`, `internal/hub`, Vitest `reducer.test.ts`). With `AGENTPACK_ACP_PROBE_PROJECT` set to a synced project, it also sends one real prompt to each agent through the worker's ACP path (`TestLiveACPProbe`) and writes the log to `$TMPDIR/acp-<harness>.jsonl`. Committed transcripts under `testdata/acp/<harness>.jsonl` keep only the staged test skill in command lists; personal user-scope commands are removed.
+
+Live run, 2026-11-04, Linux ARM64, a project with one staged skill (`gws-drive-upload`), prompt "Reply with exactly the word: ok":
+
+| Harness | Result | Staged skill seen |
+|---|---|---|
+| claude | ok | yes (after fixing adapter exec bit and plugin shape) |
+| codex | ok | yes |
+| cursor | ok | yes |
+| agy | ok | yes, once `agentpack agy` or a chat start has created the workspace overlay |
+| omp | ok | yes |
+| opencode | refused: "Authentication required" | not reached; OpenCode's default ACP model `opencode/crouton-alpha-free` needs an OpenCode sign-in. Pick a signed-in model in the composer. |
+| grok | not run | owner login needed; stale credentials exist only in old project homes |
+
 
 Verified harness ACP surface (2026-11-02, j7 §1):
 
