@@ -915,9 +915,12 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.homeField = (h.homeField + 1) % 4
 			case "shift+tab":
 				h.homeField = (h.homeField + 3) % 4
-			case "left", "h":
+			case "ctrl+x":
+				h.leader = true
+			// h and l are letters of the prompt here, not selector keys.
+			case "left":
 				h.changeHomeSelector(-1)
-			case "right", "l":
+			case "right":
 				h.changeHomeSelector(1)
 			case "up":
 				if h.cursor > 0 {
