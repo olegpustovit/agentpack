@@ -1313,19 +1313,21 @@ func (h *home) chatTextWidth() int {
 }
 
 // homeSessionLine lays out one session in the prototype's columns, dropping
-// machine, view and project as the column narrows. An unnamed session shows
-// its agent as its name, so the agent column stays empty.
+// machine, view and project as the column narrows.
 func homeSessionLine(session listedSession, width int) string {
 	type column struct {
 		width int
 		value string
 	}
 	agent := harnessLabel(session.info.Harness)
-	name := session.info.Name
+	name, project := session.info.Name, pathBase(session.info.Directory)
 	if name == "" {
-		name, agent = agent, ""
+		// An unnamed session is known by its project; its column would repeat it.
+		name, project = project, ""
+		if name == "" {
+			name = agent
+		}
 	}
-	project := pathBase(session.info.Directory)
 	machine := session.machineName
 	if machine == "" {
 		machine = session.machine
