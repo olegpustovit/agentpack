@@ -667,6 +667,12 @@ func TestCompiledCLIReportsHookRenderingAsInformationAndQuietOmitsIt(t *testing.
 	if !strings.Contains(result.stderr, "hook for claude: ") || !strings.Contains(result.stderr, "warning: ") || !strings.Contains(result.stderr, "skipping StopFailure hook") {
 		t.Fatalf("stderr=%q", result.stderr)
 	}
+	// An unchanged sync keeps its staging and renders nothing; change the plugin so this one renders.
+	changed := filepath.Join(plugin, "skills", "changed", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(changed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, changed, "---\nname: changed\ndescription: Changed\n---\n")
 	quiet := runCLI(t, project, "-q", "sync")
 	if quiet.err != nil || strings.Contains(quiet.stderr, "hook for ") || !strings.Contains(quiet.stderr, "skipping StopFailure hook") {
 		t.Fatalf("quiet sync: stderr=%q err=%v", quiet.stderr, quiet.err)
