@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -532,4 +533,20 @@ func safeFileName(name string) string {
 		}
 	}
 	return builder.String()
+}
+
+// RunsWithNode reports whether a package executable is a script for node, as
+// npm's bin shims decide it: a JavaScript extension or a node shebang.
+func RunsWithNode(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".js", ".mjs", ".cjs":
+		return true
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return true
+	}
+	defer file.Close()
+	line, _ := bufio.NewReader(file).ReadString('\n')
+	return !strings.HasPrefix(line, "#!") || strings.Contains(line, "node")
 }

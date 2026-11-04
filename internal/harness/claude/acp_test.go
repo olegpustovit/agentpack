@@ -22,7 +22,7 @@ func TestRewriteSessionPlugins(t *testing.T) {
 	claudeCode, _ := envelope.Params.Meta["claudeCode"].(map[string]any)
 	options, _ := claudeCode["options"].(map[string]any)
 	plugins, _ := options["plugins"].([]any)
-	if len(plugins) != 1 || plugins[0] != "/plugins/agentpack" {
+	if plugin, _ := plugins[0].(map[string]any); len(plugins) != 1 || plugin["type"] != "local" || plugin["path"] != "/plugins/agentpack" {
 		t.Fatalf("plugins=%v", plugins)
 	}
 	if options["settings"] != "/plugins/agentpack-bundle/agentpack-settings.json" {

@@ -23,6 +23,16 @@ func EnsureACPAdapterExecutable(ctx context.Context, packageSpec string) (string
 	return ensureACPAdapterExecutable(ctx, packageSpec, npmRegistry)
 }
 
+// ACPAdapterCommand runs an installed adapter. Package tarballs carry no
+// execute bits for bin scripts (npm sets them at install), so a node script
+// runs through node, as npm's shims would.
+func ACPAdapterCommand(executable string) *exec.Cmd {
+	if node, err := exec.LookPath("node"); err == nil && mcp.RunsWithNode(executable) {
+		return exec.Command(node, executable)
+	}
+	return exec.Command(executable)
+}
+
 func ensureACPAdapterExecutable(ctx context.Context, packageSpec, registry string) (string, error) {
 	name, version, err := splitNPMPackageSpec(packageSpec)
 	if err != nil {

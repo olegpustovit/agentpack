@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -65,5 +66,19 @@ func TestAdapterSlot(t *testing.T) {
 	got := adapterSlot("@agentclientprotocol/claude-agent-acp", "0.100.0")
 	if got != "_agentclientprotocol_claude-agent-acp@0.100.0" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestACPAdapterCommandRunsScriptsThroughNode(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "index.js")
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env node\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	if command := ACPAdapterCommand(script); command.Path != node || command.Args[1] != script {
+		t.Fatalf("command = %v %v, want node then the script", command.Path, command.Args)
 	}
 }

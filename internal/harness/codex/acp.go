@@ -3,7 +3,6 @@ package codex
 import (
 	"context"
 	"os"
-	"os/exec"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
 )
@@ -30,7 +29,7 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 			home = shortDir
 		}
 	}
-	command := exec.Command(binary)
+	command := base.ACPAdapterCommand(binary)
 	command.Env = append(os.Environ(), "CODEX_HOME="+home)
 	pendingGenerationLeases.Store(command, lease)
 	keepLease = true

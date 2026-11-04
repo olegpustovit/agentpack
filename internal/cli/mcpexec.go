@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -45,7 +43,7 @@ func (runner Runner) runMCPExec(ctx context.Context, arguments []string) (int, e
 		return 1, err
 	}
 	argv := append([]string{executable}, args...)
-	if runsWithNode(executable) {
+	if mcp.RunsWithNode(executable) {
 		node, err := exec.LookPath("node")
 		if err != nil {
 			return 1, errors.New("mcp-exec: node is not on PATH")
@@ -64,18 +62,4 @@ func (runner Runner) runMCPExec(ctx context.Context, arguments []string) (int, e
 	return 0, nil
 }
 
-// runsWithNode reports whether a package executable is a script for node, as
-// npm's bin shims decide it: a JavaScript extension or a node shebang.
-func runsWithNode(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".js", ".mjs", ".cjs":
-		return true
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return true
-	}
-	defer file.Close()
-	line, _ := bufio.NewReader(file).ReadString('\n')
-	return !strings.HasPrefix(line, "#!") || strings.Contains(line, "node")
-}
+

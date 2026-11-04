@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -20,7 +19,7 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	if err != nil {
 		return base.ACPLaunch{}, err
 	}
-	command := exec.Command(binary)
+	command := base.ACPAdapterCommand(binary)
 	claudeBinary, err := claudeCodeExecutable()
 	if err != nil {
 		return base.ACPLaunch{}, err
@@ -112,20 +111,23 @@ func rewriteSessionPlugins(pluginDirs []string, settingsPath string) func([]byte
 		if options == nil {
 			options = map[string]any{}
 		}
+		// The SDK takes plugins as {type: "local", path}; a bare path is rejected.
 		seen := map[string]bool{}
 		var merged []any
 		if existing, ok := options["plugins"].([]any); ok {
 			for _, item := range existing {
-				if path, ok := item.(string); ok && path != "" && !seen[path] {
-					seen[path] = true
-					merged = append(merged, path)
+				if plugin, ok := item.(map[string]any); ok {
+					if path, _ := plugin["path"].(string); path != "" && !seen[path] {
+						seen[path] = true
+						merged = append(merged, plugin)
+					}
 				}
 			}
 		}
 		for _, path := range pluginDirs {
 			if !seen[path] {
 				seen[path] = true
-				merged = append(merged, path)
+				merged = append(merged, map[string]any{"type": "local", "path": path})
 			}
 		}
 		if len(merged) > 0 {
