@@ -15,7 +15,7 @@ export default defineConfig({
   // A cold CI runner can miss the limit on a browser's first page. Reported as flaky, so it stays visible.
   retries: process.env.CI ? 1 : 0,
   reportSlowTests: { max: 10, threshold: 2_000 },
-  use: { baseURL: origin },
+  use: { baseURL: origin, reducedMotion: "reduce" },
   projects: [
     // Every behaviour runs once. The other two engines cover only what can differ on them.
     { name: "chromium", testIgnore: process.env.CAPTURE ? [] : [captures], use: { ...devices["Desktop Chrome"] } },

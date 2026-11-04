@@ -123,6 +123,18 @@
 @custom-variant sel (&:is(.group\/list:focus-within [data-selected=true], .group\/list:focus-within [data-selected=true] *));
 
 @layer base {
+  /* Honour a request for less motion everywhere, including popups and sheets that animate in. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
 /* base */
 *{box-sizing:border-box}
 html,body{height:100%;overflow:hidden}
