@@ -86,7 +86,7 @@ func TestCompiledCLIAddLocalDependencyFromWorkingDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(skill, "SKILL.md"), []byte("# Local skill\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	result := runCLI(t, project, "add", "local-skill", "--no-sync")
+	result := runCLI(t, project, "add", "local-skill")
 	if result.err != nil {
 		t.Fatalf("add: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
@@ -128,7 +128,7 @@ func TestCompiledCLISyncStagesLocalSkillForEveryHarness(t *testing.T) {
 	if result := runCLI(t, project, "init"); result.err != nil {
 		t.Fatalf("init: stderr=%q err=%v", result.stderr, result.err)
 	}
-	if result := runCLI(t, project, "add", "portable-skill", "--no-sync"); result.err != nil {
+	if result := runCLI(t, project, "add", "portable-skill"); result.err != nil {
 		t.Fatalf("add: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
 	if result := runCLI(t, project, "sync"); result.err != nil {
@@ -174,7 +174,7 @@ func TestCompiledCLIGrokInspectRegistersBundleSkill(t *testing.T) {
 	if result := runCLI(t, project, "init"); result.err != nil {
 		t.Fatalf("init: stderr=%q err=%v", result.stderr, result.err)
 	}
-	if result := runCLI(t, project, "add", "portable-skill", "--no-sync"); result.err != nil {
+	if result := runCLI(t, project, "add", "portable-skill"); result.err != nil {
 		t.Fatalf("add: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
 	if result := runCLI(t, project, "sync"); result.err != nil {
@@ -265,7 +265,7 @@ func TestCompiledCLIRefusesTamperedCacheUntilRepaired(t *testing.T) {
 	}
 	body := "---\nname: local-skill\ndescription: fixture\n---\n\n# Local\n"
 	writeFile(t, filepath.Join(skill, "SKILL.md"), body)
-	if result := runCLI(t, project, "add", "local-skill", "--no-sync"); result.err != nil {
+	if result := runCLI(t, project, "add", "local-skill"); result.err != nil {
 		t.Fatalf("add: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
 	// With no dependencies in the manifest the lock is authoritative, so sync
@@ -359,6 +359,10 @@ func TestCompiledCLIVerifyOnlyChecksStagedFilesAndSyncReportsReplacingThem(t *te
 	if result := runCLI(t, project, "add", "local-skill"); result.err != nil {
 		t.Fatalf("add: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
+	// add stages nothing; a launch or sync does.
+	if result := runCLI(t, project, "sync"); result.err != nil {
+		t.Fatalf("sync: stderr=%q err=%v", result.stderr, result.err)
+	}
 	if result := runCLI(t, project, "--no-progress", "sync", "--verify-only"); result.err != nil || result.stderr != "" {
 		t.Fatalf("verify of an untouched tree: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
@@ -410,6 +414,9 @@ func TestCompiledCLIPinsNPXServerAndRecordsUnpinnedOnlyWhenAllowed(t *testing.T)
 		if !strings.Contains(lock, part) {
 			t.Fatalf("pack.lock lacks %q:\n%s", part, lock)
 		}
+	}
+	if result := runCLI(t, project, "sync"); result.err != nil {
+		t.Fatalf("sync: stderr=%q err=%v", result.stderr, result.err)
 	}
 	staged := readFile(t, filepath.Join(stagedModeRoot(t, project), "plugins", "agentpack-bundle", ".mcp.json"))
 	if !strings.Contains(staged, `"@playwright/mcp@0.0.41"`) || strings.Contains(staged, "@latest") {
@@ -608,6 +615,9 @@ func TestCompiledCLIStagesHooksThatDoNotDependOnPath(t *testing.T) {
 	if result := runCLI(t, project, "add", "plug"); result.err != nil {
 		t.Fatalf("add: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
+	if result := runCLI(t, project, "sync"); result.err != nil {
+		t.Fatalf("sync: stderr=%q err=%v", result.stderr, result.err)
+	}
 	executable, err := filepath.EvalSymlinks(agentpackBinary)
 	if err != nil {
 		t.Fatal(err)
@@ -655,9 +665,12 @@ func TestCompiledCLIReportsHookRenderingAsInformationAndQuietOmitsIt(t *testing.
 		}
 		writeFile(t, path, body)
 	}
-	result := runCLI(t, project, "add", "plug")
+	if added := runCLI(t, project, "add", "plug"); added.err != nil {
+		t.Fatalf("add: stderr=%q err=%v", added.stderr, added.err)
+	}
+	result := runCLI(t, project, "sync")
 	if result.err != nil {
-		t.Fatalf("add: stderr=%q err=%v", result.stderr, result.err)
+		t.Fatalf("sync: stderr=%q err=%v", result.stderr, result.err)
 	}
 	for _, line := range strings.Split(result.stderr, "\n") {
 		if strings.HasPrefix(line, "warning:") && (strings.Contains(line, "rendered") || strings.Contains(line, "wrapped") || strings.Contains(line, "routed")) {

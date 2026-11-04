@@ -15,7 +15,15 @@ window.
 - The `ap` Sessions screen adds state tabs, text filtering, grouped session details, and local/peer Connect and Stop actions.
 - Claude ACP sessions now pass staged plugins and attribution settings through ACP session metadata, and honor `CLAUDE_CODE_EXECUTABLE` with `CLAUDE_CODE_PATH` fallback.
 
+### Changed
+
+- `add`, `remove`, `update` and `mcp add`/`remove` no longer stage every agent. Each launcher stages its own agent when `pack.lock` changed, running sessions affected by the change restart as before, and `agentpack sync` stages all of them on request. `--no-sync` is gone. A new dependency now adds in about 0.5 s instead of 5.6 s.
+- An unchanged `sync` keeps the published staging after verifying the cache and every staged file (2.5 s to 0.4 s).
+
 ### Fixed
+
+- `add`, `lock` and `sync` no longer hang on a stalled GitHub or npm connection, the Git fallback fetches one commit instead of the whole history, and a repository is downloaded once per resolve.
+- The idle gateway no longer re-validates and re-merges the library with every peer every 30 s (11% to under 1% CPU).
 
 - Explicit ACP stop/restart now terminates or replaces the adapter process instead of only canceling a turn or rejecting restart.
 - ACP snapshots stay within the byte limit at complete NDJSON record boundaries and mark truncation; log accounting includes the serialized record envelope.

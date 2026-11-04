@@ -36,7 +36,7 @@ agentpack resolves the spec, appends it under `[dependencies]`, refreshes `pack.
 "github.com/anthropics/skills/skills/canvas-design" = {}
 ```
 
-To pin a constraint, attach a `@ref` to the spec or edit the entry into table form (`{ version = "^1.0.0" }`, `{ branch = "main" }`, `{ tag = "v2.1.0" }`). See [Your First Manifest](./first-manifest.md). To stage nothing yet, pass `--no-sync`.
+To pin a constraint, attach a `@ref` to the spec or edit the entry into table form (`{ version = "^1.0.0" }`, `{ branch = "main" }`, `{ tag = "v2.1.0" }`). See [Your First Manifest](./first-manifest.md). `add` stages nothing itself: the next `agentpack claude` (or any launcher) stages that agent, and `agentpack sync` stages all of them.
 
 ## 3. Lock and sync explicitly (optional)
 

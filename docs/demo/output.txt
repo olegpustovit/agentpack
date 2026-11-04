@@ -5,10 +5,9 @@ $ agentpack init
 Initializing agentpack…
 Created /demo/project/agentpack.toml and /demo/project/pack.lock
 
-$ agentpack add ./local-skill --no-sync
+$ agentpack add ./local-skill
 Adding: ./local-skill
 Recorded local-skill in agentpack.toml and refreshed pack.lock.
-Skipping sync (--no-sync).
 
 $ agentpack sync
 Sync finished — 1 skill(s), 0 plugin(s), 1 cache index entr(ies). One merged bundle: agentpack-bundle.

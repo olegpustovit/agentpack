@@ -61,5 +61,3 @@ func (runner Runner) runMCPExec(ctx context.Context, arguments []string) (int, e
 	}
 	return 0, nil
 }
-
-

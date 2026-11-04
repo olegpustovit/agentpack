@@ -40,7 +40,7 @@ func TestInitMCPAndModeCommands(t *testing.T) {
 	}))
 	t.Cleanup(registry.Close)
 	t.Setenv("NPM_CONFIG_REGISTRY", registry.URL)
-	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "mcp", "add", "docs", "--command", "npx", "--args", "-y", "server", "--env", "TOKEN=value", "--no-sync"}); err != nil || code != 0 {
+	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "mcp", "add", "docs", "--command", "npx", "--args", "-y", "server", "--env", "TOKEN=value"}); err != nil || code != 0 {
 		t.Fatalf("mcp add code=%d err=%v", code, err)
 	}
 	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "mode", "create", "review"}); err != nil || code != 0 {

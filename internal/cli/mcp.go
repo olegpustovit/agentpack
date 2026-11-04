@@ -9,7 +9,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/staging"
-	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
 func (runner Runner) runMCP(ctx context.Context, root string, arguments []string, quiet bool) error {
@@ -24,7 +23,7 @@ func (runner Runner) runMCP(ctx context.Context, root string, arguments []string
 		}
 		name := args[0]
 		args = args[1:]
-		server, noSync, allowUnpinned, err := parseMCPAdd(args)
+		server, allowUnpinned, err := parseMCPAdd(args)
 		if err != nil {
 			return err
 		}
@@ -34,15 +33,8 @@ func (runner Runner) runMCP(ctx context.Context, root string, arguments []string
 		if !quiet {
 			fmt.Fprintf(runner.Stdout, "Added MCP server %q to agentpack.toml\n", name)
 		}
-		if err := runner.Service.RefreshMCPRecords(ctx, root, true, allowUnpinned); err != nil {
-			return err
-		}
-		if !noSync {
-			_, err = runner.Service.Sync(ctx, root, packSync.SyncOptions{})
-		}
-		return err
+		return runner.Service.RefreshMCPRecords(ctx, root, true, allowUnpinned)
 	case "remove":
-		args, noSync := takeBool(args, "--no-sync")
 		if len(args) != 1 {
 			return fmt.Errorf("mcp remove requires one name")
 		}
@@ -53,13 +45,7 @@ func (runner Runner) runMCP(ctx context.Context, root string, arguments []string
 		if !removed {
 			return fmt.Errorf("no MCP server named %q in agentpack.toml [mcp.servers]", args[0])
 		}
-		if err := runner.Service.RefreshMCPRecords(ctx, root, false, false); err != nil {
-			return err
-		}
-		if !noSync {
-			_, err = runner.Service.Sync(ctx, root, packSync.SyncOptions{})
-		}
-		return err
+		return runner.Service.RefreshMCPRecords(ctx, root, false, false)
 	case "list":
 		if err := noArgs(args); err != nil {
 			return err
@@ -102,48 +88,47 @@ func (runner Runner) runMCP(ctx context.Context, root string, arguments []string
 
 // parseMCPAdd reads the flags of `mcp add NAME`: a local server (--command,
 // --args, --env) or a remote one (--url, --type, --header), never both.
-func parseMCPAdd(args []string) (server mcp.Server, noSync, allowUnpinned bool, err error) {
+func parseMCPAdd(args []string) (server mcp.Server, allowUnpinned bool, err error) {
 	command, args, hasCommand, err := takeFlag(args, "--command")
 	if err != nil {
-		return server, false, false, err
+		return server, false, err
 	}
 	url, args, hasURL, err := takeFlag(args, "--url")
 	if err != nil {
-		return server, false, false, err
+		return server, false, err
 	}
 	serverType, args, hasType, err := takeFlag(args, "--type")
 	if err != nil {
-		return server, false, false, err
+		return server, false, err
 	}
-	args, noSync = takeBool(args, "--no-sync")
 	args, allowUnpinned = takeBool(args, "--allow-unpinned")
 	switch {
 	case hasCommand == hasURL:
-		return server, false, false, fmt.Errorf("mcp add requires exactly one of --command or --url")
+		return server, false, fmt.Errorf("mcp add requires exactly one of --command or --url")
 	case hasURL && url == "":
-		return server, false, false, fmt.Errorf("--url requires a non-empty value")
+		return server, false, fmt.Errorf("--url requires a non-empty value")
 	case hasCommand && command == "":
-		return server, false, false, fmt.Errorf("--command requires a non-empty value")
+		return server, false, fmt.Errorf("--command requires a non-empty value")
 	case hasCommand && hasType:
-		return server, false, false, fmt.Errorf("--type applies to --url servers only")
+		return server, false, fmt.Errorf("--type applies to --url servers only")
 	}
 	serverArgs, environment, headers, err := parseMCPLists(args)
 	if err != nil {
-		return server, false, false, err
+		return server, false, err
 	}
 	if hasURL {
 		if len(serverArgs) != 0 || len(environment) != 0 {
-			return server, false, false, fmt.Errorf("--args and --env apply to --command servers only")
+			return server, false, fmt.Errorf("--args and --env apply to --command servers only")
 		}
 		if !hasType {
 			serverType = "http"
 		}
-		return mcp.Server{Type: &serverType, URL: &url, Headers: headers}, noSync, allowUnpinned, nil
+		return mcp.Server{Type: &serverType, URL: &url, Headers: headers}, allowUnpinned, nil
 	}
 	if len(headers) != 0 {
-		return server, false, false, fmt.Errorf("--header applies to --url servers only")
+		return server, false, fmt.Errorf("--header applies to --url servers only")
 	}
-	return mcp.Server{Command: &command, Args: serverArgs, Env: environment}, noSync, allowUnpinned, nil
+	return mcp.Server{Command: &command, Args: serverArgs, Env: environment}, allowUnpinned, nil
 }
 
 func parseMCPLists(arguments []string) ([]string, map[string]string, map[string]string, error) {

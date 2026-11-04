@@ -57,10 +57,9 @@ Resolve a package spec, append it under `[dependencies]`, refresh `pack.lock`, t
 agentpack add anthropics/skills/skills/canvas-design
 agentpack add github.com/acme/monorepo/packages/rules@v1.2.0
 agentpack add ./local-rules
-agentpack add anthropics/skills/skills/canvas-design --no-sync
 ```
 
-A spec may be a module ID, `owner/repo[/path]` shorthand, a GitHub tree/blob URL, a single-segment local/alias name, or a filesystem path. An optional `@ref` pins a branch, tag, or commit. `--no-sync` skips the sync step. (Requires a manifest.)
+A spec may be a module ID, `owner/repo[/path]` shorthand, a GitHub tree/blob URL, a single-segment local/alias name, or a filesystem path. An optional `@ref` pins a branch, tag, or commit. `add` stages nothing: each launcher stages its own agent when `pack.lock` changed, and `agentpack sync` stages every agent now. (Requires a manifest.)
 
 `--plugin <name>` adds one plugin of a marketplace catalog; the spec then names the marketplace repository:
 
@@ -75,7 +74,7 @@ If `add` fails at any step, including the sync, `agentpack.toml` and `pack.lock`
 
 ### `agentpack remove <spec>`
 
-Drop a matching `[dependencies]` entry, prune mode selectors that targeted it, refresh `pack.lock`, then sync unless `--no-sync`.
+Drop a matching `[dependencies]` entry, prune mode selectors that targeted it, and refresh `pack.lock`. Like `add`, it stages nothing until the next launch or `sync`.
 
 ```sh
 agentpack remove github.com/acme/monorepo/packages/rules
@@ -208,7 +207,7 @@ agentpack eject --remove
 
 ## `agentpack mcp`
 
-Manage `[mcp.servers]` in the manifest. `add`/`remove` update the server records in `pack.lock` and sync afterward unless `--no-sync`.
+Manage `[mcp.servers]` in the manifest. `add`/`remove` update the server records in `pack.lock`; agents pick the change up on their next launch, or run `agentpack sync`.
 
 ```sh
 agentpack mcp add retrieval --command uvx --args mcp-retrieval --env API_KEY=sk-...

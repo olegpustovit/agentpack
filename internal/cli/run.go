@@ -119,11 +119,9 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 			return 1, lockErr
 		}
 		defer mutation.Unlock()
-		if !hasBeforeDoubleDash(invocation.Args, "--no-sync") {
-			runningBefore, err = snapshotRunningEnvironments(ctx, root)
-			if err != nil {
-				return 1, runner.reportIntegrity(err)
-			}
+		runningBefore, err = snapshotRunningEnvironments(ctx, root)
+		if err != nil {
+			return 1, runner.reportIntegrity(err)
 		}
 	}
 	if launcher {
@@ -143,7 +141,11 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 			fmt.Fprintf(runner.Stdout, "Wrote %s (%d package(s)).\n", paths.LockPath(root), len(locked.Packages))
 		}
 	case "add", "remove":
-		args, noSync := takeBool(invocation.Args, "--no-sync")
+		// Staging is lazy: each launcher stages its own harness when the lock
+		// changed, and running sessions are restarted below, so nothing here
+		// rebuilds every harness.
+		const noSync = true
+		args := invocation.Args
 		plugin, hasPlugin := "", false
 		if invocation.Command == "add" {
 			if plugin, args, hasPlugin, err = takeFlag(args, "--plugin"); err != nil {
@@ -184,21 +186,15 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 				fmt.Fprintf(runner.Stdout, "Removed %s from %s and refreshed %s.\n", key, paths.ManifestPath(root), paths.LockPath(root))
 			}
 		}
-		if err == nil && noSync && !invocation.Global.Quiet {
-			fmt.Fprintln(runner.Stdout, "Skipping sync (--no-sync).")
-		}
 	case "update":
-		args, noSync := takeBool(invocation.Args, "--no-sync")
+		args := invocation.Args
 		var updated lockfile.PackLock
-		updated, err = runner.Service.Update(ctx, root, args, noSync)
+		updated, err = runner.Service.Update(ctx, root, args, true)
 		if err == nil && !invocation.Global.Quiet {
 			if len(args) == 0 {
 				fmt.Fprintf(runner.Stdout, "Updated floating dependencies and refreshed %s (%d package(s)).\n", paths.LockPath(root), len(updated.Packages))
 			} else {
 				fmt.Fprintf(runner.Stdout, "Updated %s and refreshed %s.\n", strings.Join(args, ", "), paths.LockPath(root))
-			}
-			if noSync {
-				fmt.Fprintln(runner.Stdout, "Skipping sync (--no-sync).")
 			}
 		}
 	case "list":

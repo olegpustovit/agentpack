@@ -144,7 +144,7 @@ func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec 
 			return err
 		}
 	}
-	if _, err := runner.Service.AddAll(ctx, packContext.DefinitionRoot, spec, false); err != nil {
+	if _, err := runner.Service.AddAll(ctx, packContext.DefinitionRoot, spec, true); err != nil {
 		return err
 	}
 	if err := captureNetworkEnvironment(packContext.DefinitionRoot, directory, ""); err != nil {

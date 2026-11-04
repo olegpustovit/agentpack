@@ -19,8 +19,8 @@ description: Summarize a change and explain how to verify it.
 ---
 Describe the change in plain language. Include the verification command.
 SKILL
-printf '\n$ agentpack add ./local-skill --no-sync\n'
-/agentpack --no-progress add ./local-skill --no-sync
+printf '\n$ agentpack add ./local-skill\n'
+/agentpack --no-progress add ./local-skill
 printf '\n$ agentpack sync\n'
 /agentpack --no-progress sync
 printf '\n$ agentpack sync --verify-only\n'

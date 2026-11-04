@@ -48,7 +48,7 @@ agentpack mcp list      # every server, with provenance (manifest / plugin / .ag
 
 Give `add` exactly one of `--command` (with `--args` and `--env`) or `--url` (with `--type`, default `http`, and repeatable `--header KEY=VALUE`). A remote server is recorded in `pack.lock` as `unpinnable`: the host decides what runs.
 
-`add` and `remove` edit `[mcp.servers]`, update the server records in `pack.lock`, and then sync, unless you pass `--no-sync`.
+`add` and `remove` edit `[mcp.servers]` and update the server records in `pack.lock`. Agents pick the change up on their next launch; `agentpack sync` stages it for every agent now.
 
 ## The merge pipeline
 
