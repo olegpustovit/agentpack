@@ -1,36 +1,36 @@
- ap  · Sessions                                                                                    http://127.0.0.1:7421
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-devbox
-  agentpack
->   ● Refactor hub                                                                                             focused
-    ○ Docs pass                                                                                                   Idle
-  demo
-    ! Codex                                                                                                  Needs you
-  old
-    · Oh My Pi                                                                                                 Stopped
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-j/k · [ ] sessions · enter preview · ctrl+p|ctrl+] commands · q quit
+ ap  · Sessions                                              http://127.0.0.1:7421│ 
+──────────────────────────────────────────────────────────────────────────────────│ 
+ [All]   Needs you   Running   History                                            │ Preview
+  Filter  type / to filter                                                        │ 
+──────────────────────────────────────────────────────────────────────────────────│ Refactor hub
+  Needs you · 1                                                                   │ Running
+  Codex · Needs you                                                               │ 
+    Agent Codex · Project demo · Machine devbox · View Terminal · Age unknown     │ Agent  Cursor CLI
+  Running · 1                                                                     │ Project  agentpack
+› Refactor hub                                                                    │ Machine  devbox
+    Agent Cursor CLI · Project agentpack · Machine devbox · View Terminal · Age u…│ View  Terminal
+  Idle · 1                                                                        │ Age  unknown
+  Docs pass · Idle                                                                │ 
+    Agent Claude · Project agentpack · Machine devbox · View Terminal · Age unkno…│ 
+  History · 1                                                                     │ 
+  Oh My Pi · Stopped                                                              │ 
+    Agent Oh My Pi · Project old · Machine devbox · View Terminal · Age unknown   │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ 
+                                                                                  │ [ Connect ]    [ Stop ]
+j/k move · Enter connect · / filter · 1–4 tabs · Esc back · q quit

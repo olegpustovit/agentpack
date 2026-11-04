@@ -338,7 +338,11 @@ func (h *home) viewHome() string {
 		}
 		machineIDs[row.session.machine] = struct{}{}
 	}
-	status := fmt.Sprintf("%d running · %d needs you · %d machines", running, needs, len(machineIDs))
+	machines := "machines"
+	if len(machineIDs) == 1 {
+		machines = "machine"
+	}
+	status := fmt.Sprintf("%d running · %d needs you · %d %s", running, needs, len(machineIDs), machines)
 	start := min(max(0, height/3-5), max(0, height-8))
 	lines := make([]string, height)
 	center := func(text string) string {

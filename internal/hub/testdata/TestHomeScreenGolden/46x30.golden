@@ -3,14 +3,13 @@
 
 
 
-
-
                   AGENTPACK
 
-     3 running · 1 needs you · 1 machines
+     3 running · 1 needs you · 1 machine
 
-  │ Start a session, or type / for commands
-Cursor CLI  ·  agentpack  ·  devbox  ·  termi…
+              ┃ Describe a task…
+      Agent: Claude   Project: agentpack
+         Machine: devbox   View: Chat
 
 
                      devbox
@@ -27,4 +26,5 @@ Cursor CLI  ·  agentpack  ·  devbox  ·  termi…
 
 
 
-ctrl+p menu · ctrl+x n new · ? help · q quit
+
+enter start · tab select · ctrl+x n new · ? h…

@@ -324,7 +324,7 @@ func TestHomePromptStartsSelectedChatAndSendsPrompt(t *testing.T) {
 
 func TestSessionListShowsLoadedACPTranscriptExcerpt(t *testing.T) {
 	h := conversationTestHome(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/conversation" {
+		if r.URL.Path != "/api/sessions/session-aaa/conversation" {
 			http.NotFound(w, r)
 			return
 		}

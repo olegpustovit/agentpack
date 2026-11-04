@@ -132,14 +132,20 @@ func threadLine(item acp.ThreadItem) string {
 
 func chunkText(raw json.RawMessage) string {
 	var body struct {
-		Text struct {
-			Text string `json:"text"`
-		} `json:"text"`
+		Text json.RawMessage `json:"text"`
 	}
-	if err := json.Unmarshal(raw, &body); err != nil {
+	if json.Unmarshal(raw, &body) != nil {
 		return ""
 	}
-	return body.Text.Text
+	var flat string
+	if json.Unmarshal(body.Text, &flat) == nil {
+		return flat
+	}
+	var nested struct {
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal(body.Text, &nested)
+	return nested.Text
 }
 
 func clipLine(s string, max int) string {

@@ -655,6 +655,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.cancelPreviewStream()
 				h.panel = panelList
 				return h, h.loadSessionExcerptCmd()
+			case "n":
 				return h, h.openNewSession()
 			case "h":
 				h.cancelPreviewStream()

@@ -55,12 +55,12 @@ func TestNewSessionMouseFocusesAndCyclesChoicesWithinBounds(t *testing.T) {
 				t.Fatalf("Project choice: project=%d field=%d, want 1 and 1", h.newSession.project, h.newSession.field)
 			}
 			h.handleMouseClick(10, 6)
-			if h.newSession.view != 1 || h.newSession.field != 2 {
-				t.Fatalf("View choice: view=%d field=%d, want 1 and 2", h.newSession.view, h.newSession.field)
+			if h.newSession.view != 1 || h.newSession.field != 3 {
+				t.Fatalf("View choice: view=%d field=%d, want 1 and 3", h.newSession.view, h.newSession.field)
 			}
 
 			h.handleMouseClick(size[0], 3)
-			if h.newSession.harness != 1 || h.newSession.field != 2 {
+			if h.newSession.harness != 1 || h.newSession.field != 3 {
 				t.Fatal("out-of-bounds click changed the new-session form")
 			}
 		})

@@ -75,7 +75,7 @@ func TestHubSetsAgentConfigOptionThroughGateway(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Error(err)
 		}
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusOK)
 	}))
 	h.selectedSession().machine = "peer-7"
 	h.previewConfigOptions = []hubConfigOption{{

@@ -179,8 +179,12 @@ func renderChatThread(state acp.ThreadState, width int, expanded map[string]bool
 			firstLine := len(lines)
 			appendChatToolHeader(&lines, tool, width, open)
 			if chatToolHasDetails(tool) {
-				recordExpandableLines(groupLines, firstLine, len(lines), key)
-				if open {
+				// A running tool stays open and cannot be collapsed.
+				running := tool.Status == "pending" || tool.Status == "in_progress"
+				if !running {
+					recordExpandableLines(groupLines, firstLine, len(lines), key)
+				}
+				if open || running {
 					appendChatToolDetails(&lines, tool, width)
 				}
 			}
