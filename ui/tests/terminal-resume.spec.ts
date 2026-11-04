@@ -171,6 +171,7 @@ test("unacknowledged output past 16 MiB closes the socket and says so", async ({
 })
 
 test("a restarting agent is polled until it is listed, then reattaches as a fresh process", async ({ page }) => {
+  await page.clock.install()
   const worker = await stubWorker(page)
   worker.behave((conn) => (conn.index === 1 ? serve(conn, { body: A }) : serve(conn, { body: B })))
   await openRoute(page, "/sessions/local/s1")
@@ -178,8 +179,10 @@ test("a restarting agent is polled until it is listed, then reattaches as a fres
   s1Restarting = true
   ended(worker.conns[0]!, true)
   await expect(page.getByRole("status").filter({ hasText: "Agent restarting" })).toBeVisible()
+  await page.clock.runFor(750)
   await expect.poll(() => listRequests).toBeGreaterThanOrEqual(before + 3)
   s1Restarting = false
+  await page.clock.runFor(250)
   await expect.poll(() => worker.conns.length).toBe(2)
   expect(worker.conns[1]?.since).toBeNull()
   await expect(page.getByRole("status").filter({ hasText: "Agent restarted. This is a new process" })).toBeVisible()
@@ -190,10 +193,12 @@ test("a restarting agent is polled until it is listed, then reattaches as a fres
 })
 
 test("disposing a session stops its restart polling", async ({ page }) => {
+  await page.clock.install()
   const worker = await stubWorker(page)
   await openRoute(page, "/sessions/local/s1")
   s1Restarting = true
   ended(worker.conns[0]!, true)
+  await page.clock.runFor(1_000)
   await expect.poll(() => listRequests).toBeGreaterThan(3)
   for (const [index, name] of ["two", "three", "four", "five"].entries()) {
     await openFromList(page, name)
@@ -203,7 +208,7 @@ test("disposing a session stops its restart polling", async ({ page }) => {
   await expect.poll(() => worker.conns[0]?.closed).toBe(true)
   expect(worker.conns.slice(1).map((conn) => conn.closed)).toEqual([false, false, false, false])
   const after = listRequests
-  await settle(page, 300)
+  await page.clock.runFor(1_000)
   expect(listRequests).toBeLessThanOrEqual(after + 1)
 })
 
