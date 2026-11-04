@@ -109,7 +109,7 @@ func TestEventLogPersistenceStaysPrivateAndBoundedAfterRollover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Size() > limit || info.Mode().Perm() != 0o600 {
+	if info.Size() > limit || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("persisted log size=%d mode=%o", info.Size(), info.Mode().Perm())
 	}
 	data, err := os.ReadFile(path)
