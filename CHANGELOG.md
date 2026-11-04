@@ -5,7 +5,7 @@ All notable changes to `agentpack` are documented here. The format is based on
 "Pre-release" note in `AGENTS.md` — breaking changes may land between versions without a migration
 window.
 
-## Unreleased
+## [0.13.0] - 2026-11-04
 
 ### Added
 
