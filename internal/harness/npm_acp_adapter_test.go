@@ -48,6 +48,9 @@ func TestEnsureACPAdapterReusesResolvedSpecWithoutRegistry(t *testing.T) {
 	}
 	t.Cleanup(func() { mcp.ResolveTree = previousResolver })
 
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is not installed; the adapter needs it")
+	}
 	spec := "@agentclientprotocol/claude-agent-acp@0.100.0"
 	first, err := EnsureACPAdapterExecutable(context.Background(), spec)
 	if err != nil {

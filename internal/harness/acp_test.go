@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -19,6 +20,9 @@ import (
 )
 
 func TestHarnessACPLaunchCommands(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the Codex launch keeps its generation lease open for the agent, and Windows cannot remove an open file at cleanup")
+	}
 	project := t.TempDir()
 	stage := t.TempDir()
 	home := t.TempDir()

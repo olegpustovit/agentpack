@@ -198,14 +198,15 @@ func TestStopSessionCmdUsesLocalGatewayForPeer(t *testing.T) {
 }
 
 func TestPreferDirectoryPutsTheOpenedProjectFirst(t *testing.T) {
-	dirs := []string{"/w/scratch", "/w/repo", "/w/repo/sub"}
+	p := filepath.FromSlash
+	dirs := []string{p("/w/scratch"), p("/w/repo"), p("/w/repo/sub")}
 	for _, test := range []struct{ cwd, want string }{
-		{"/w/repo", "/w/repo"},
-		{"/w/repo/sub/pkg", "/w/repo/sub"},
-		{"/w/new", "/w/new"},
+		{p("/w/repo"), p("/w/repo")},
+		{p("/w/repo/sub/pkg"), p("/w/repo/sub")},
+		{p("/w/new"), p("/w/new")},
 	} {
 		got := preferDirectory(dirs, test.cwd)
-		if got[0] != test.want || len(got) != len(dirs)+map[bool]int{true: 1, false: 0}[test.want == "/w/new"] {
+		if got[0] != test.want || len(got) != len(dirs)+map[bool]int{true: 1, false: 0}[test.want == p("/w/new")] {
 			t.Errorf("preferDirectory(%s) = %v, want %s first", test.cwd, got, test.want)
 		}
 	}

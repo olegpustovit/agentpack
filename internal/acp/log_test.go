@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -85,7 +86,8 @@ func TestEventLogPersistenceStaysPrivateAndBoundedAfterRollover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dirInfo.Mode().Perm()&0o077 != 0 {
+	// Windows reports no Unix permission bits; the directory's ACL is what protects it there.
+	if runtime.GOOS != "windows" && dirInfo.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("worker directory permissions = %o", dirInfo.Mode().Perm())
 	}
 	path := filepath.Join(directory, "conversation.ndjson")
