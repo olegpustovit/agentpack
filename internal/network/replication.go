@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/registry"
@@ -247,7 +248,11 @@ func registryPeerRequest(ctx context.Context, client *http.Client, target *url.U
 	return nil
 }
 
-func exchangeRegistry(ctx context.Context, store *registry.Store, peer string, target *url.URL, client *http.Client) error {
+// exchangeRegistry swaps missing objects with one peer. settled (may be nil)
+// remembers the inventories each peer was left with, so an idle tick that
+// finds both sides unchanged returns before merging, acknowledging and
+// collecting garbage again.
+func exchangeRegistry(ctx context.Context, store *registry.Store, peer string, target *url.URL, client *http.Client, settled *sync.Map) error {
 	var remote registry.Inventory
 	if err := registryPeerRequest(ctx, client, target, "GET", replicationPrefix+"inventory", nil, &remote); err != nil {
 		return err
@@ -261,6 +266,11 @@ func exchangeRegistry(ctx context.Context, store *registry.Store, peer string, t
 	}
 	localIDs := append(slices.Clone(local.Objects), local.Tombstones...)
 	remoteIDs := append(slices.Clone(remote.Objects), remote.Tombstones...)
+	if settled != nil {
+		if last, ok := settled.Load(peer); ok && last == inventoryKey(localIDs, remoteIDs) {
+			return nil
+		}
+	}
 	pull := replicaTransfer{Objects: map[string][]byte{}}
 	total := 0
 	for _, id := range remoteIDs {
@@ -340,8 +350,22 @@ func exchangeRegistry(ctx context.Context, store *registry.Store, peer string, t
 	if err := store.Acknowledge(peer, acknowledged); err != nil {
 		return err
 	}
-	_, err = store.CollectGarbage()
-	return err
+	if _, err = store.CollectGarbage(); err != nil {
+		return err
+	}
+	if settled != nil {
+		// Both sides now hold what this side holds; the next tick skips if nothing moved.
+		if local, err = store.Inventory(); err == nil {
+			ids := append(slices.Clone(local.Objects), local.Tombstones...)
+			settled.Store(peer, inventoryKey(ids, ids))
+		}
+	}
+	return nil
+}
+
+func inventoryKey(local, remote []string) string {
+	local, remote = slices.Sorted(slices.Values(local)), slices.Sorted(slices.Values(remote))
+	return strings.Join(local, ",") + "|" + strings.Join(remote, ",")
 }
 
 func (g *Gateway) syncRegistryPeer(ctx context.Context, peer string) (err error) {
@@ -364,7 +388,7 @@ func (g *Gateway) syncRegistryPeer(ctx context.Context, peer string) (err error)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	client := &http.Client{Transport: tailnetMutationTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	return exchangeRegistry(ctx, g.options.Library.Store, peer, target, client)
+	return exchangeRegistry(ctx, g.options.Library.Store, peer, target, client, &g.replicaSettled)
 }
 
 // ownMachine is deliberately narrower than allowedTailnetPeer: an explicit allow entry shares sessions

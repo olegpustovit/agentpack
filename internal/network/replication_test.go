@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/registry"
@@ -43,13 +44,13 @@ func TestRegistryExchangeRequiresEnrollmentAndVerifiesTransfers(t *testing.T) {
 	}))
 	defer server.Close()
 	target, _ := url.Parse(server.URL)
-	if err := exchangeRegistry(context.Background(), a, "b", target, server.Client()); err == nil {
+	if err := exchangeRegistry(context.Background(), a, "b", target, server.Client(), nil); err == nil {
 		t.Fatal("receiver did not require its own explicit enrollment")
 	}
 	if err := b.EnrollPeer("a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := exchangeRegistry(context.Background(), a, "b", target, server.Client()); err != nil {
+	if err := exchangeRegistry(context.Background(), a, "b", target, server.Client(), nil); err != nil {
 		t.Fatal(err)
 	}
 	replicated, revisions, err := b.Get(pack.ID)
@@ -81,13 +82,13 @@ func TestRegistryExchangeRequiresEnrollmentAndVerifiesTransfers(t *testing.T) {
 	if _, err := b.DeleteAgentpack(pack.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := exchangeRegistry(context.Background(), a, "b", target, server.Client()); err != nil {
+	if err := exchangeRegistry(context.Background(), a, "b", target, server.Client(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := a.Get(pack.ID); !errors.Is(err, registry.ErrNotFound) {
 		t.Fatal("tombstone did not propagate", err)
 	}
-	if err := exchangeRegistry(context.Background(), a, "b", target, server.Client()); err != nil {
+	if err := exchangeRegistry(context.Background(), a, "b", target, server.Client(), nil); err != nil {
 		t.Fatal("repeated exchange resurrected or rejected deleted revisions", err)
 	}
 }
@@ -125,5 +126,48 @@ func TestReplicationIdentityCannotBeSuppliedInHeaders(t *testing.T) {
 		if got := peerRoute(test.method, test.path); got != test.allowed {
 			t.Fatalf("%s %s allowed=%v", test.method, test.path, got)
 		}
+	}
+}
+
+func TestSettledRegistryExchangeOnlyReadsTheInventory(t *testing.T) {
+	a, b := replicaStore(t), replicaStore(t)
+	capture := func(name string) {
+		if _, _, err := a.Capture(registry.CaptureInput{Name: name, Project: t.TempDir(), Manifest: []byte("name = 'example'\n[dependencies]\n"), Lock: []byte("lockfile_version = 2\n")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capture("Example")
+	if err := a.EnrollPeer("b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.EnrollPeer("a"); err != nil {
+		t.Fatal(err)
+	}
+	g := &Gateway{options: GatewayOptions{Library: LibraryOptions{Store: b}}}
+	mux := http.NewServeMux()
+	g.registerRegistryReplication(mux)
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), replicaPeerKey{}, "a")))
+	}))
+	defer server.Close()
+	target, _ := url.Parse(server.URL)
+	var settled sync.Map
+	exchange := func() int {
+		t.Helper()
+		requests = 0
+		if err := exchangeRegistry(context.Background(), a, "b", target, server.Client(), &settled); err != nil {
+			t.Fatal(err)
+		}
+		return requests
+	}
+	exchange()
+	if n := exchange(); n != 1 {
+		t.Fatalf("an unchanged exchange made %d requests, want only the inventory", n)
+	}
+	capture("Second")
+	if n := exchange(); n <= 1 {
+		t.Fatalf("a changed library was not exchanged (%d requests)", n)
 	}
 }

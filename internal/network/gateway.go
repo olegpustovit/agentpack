@@ -39,19 +39,20 @@ type nodeRecord struct {
 }
 
 type Gateway struct {
-	options       GatewayOptions
-	auth          *gatewayAuth
-	mcp           *GatewayMCP
-	local         nodeRecord
-	origin        *url.URL
-	stop          context.CancelFunc
-	done          <-chan struct{}
-	replicaMu     sync.Mutex
-	replicaStatus sync.Map
-	identityMu    sync.Mutex
-	identityAt    time.Time
-	identitySelf  tailnetSelf
-	events        eventHub
+	options        GatewayOptions
+	auth           *gatewayAuth
+	mcp            *GatewayMCP
+	local          nodeRecord
+	origin         *url.URL
+	stop           context.CancelFunc
+	done           <-chan struct{}
+	replicaMu      sync.Mutex
+	replicaStatus  sync.Map
+	replicaSettled sync.Map // peer → inventories after the last exchange
+	identityMu     sync.Mutex
+	identityAt     time.Time
+	identitySelf   tailnetSelf
+	events         eventHub
 }
 
 // browserPingInterval keeps idle terminal connections alive through proxies. Tests shorten it.

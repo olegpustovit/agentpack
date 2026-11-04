@@ -148,11 +148,7 @@ func (s *Store) Inventory() (Inventory, error) {
 			continue
 		}
 		id := strings.TrimSuffix(entry.Name(), ".json")
-		data, err := s.readPublicObject(id)
-		if err != nil {
-			return Inventory{}, err
-		}
-		obj, err := decodeImported(data)
+		obj, err := s.readPublicObject(id)
 		if err != nil {
 			return Inventory{}, err
 		}
@@ -777,31 +773,33 @@ func (s *Store) packageReferencedOutside(deletedAgentpack, packageID string) (bo
 	return false, nil
 }
 
-func (s *Store) readPublicObject(id string) ([]byte, error) {
+// readPublicObject reads and checks one stored object, and returns it decoded
+// so callers need not decode it again.
+func (s *Store) readPublicObject(id string) (importedObject, error) {
 	path, err := s.objectPath(id)
 	if err != nil {
-		return nil, err
+		return importedObject{}, err
 	}
 	data, err := readRegular(path)
 	if err != nil {
-		return nil, err
+		return importedObject{}, err
 	}
 	obj, err := decodeImported(data)
 	if err != nil || obj.id != id || obj.tombstone != nil {
-		return nil, fmt.Errorf("invalid registry public object")
+		return importedObject{}, fmt.Errorf("invalid registry public object")
 	}
 	if obj.revision != nil {
 		if _, err := s.readRevision(id); err != nil {
-			return nil, err
+			return importedObject{}, err
 		}
 	} else if obj.name != nil {
 		if _, err := s.readName(id); err != nil {
-			return nil, err
+			return importedObject{}, err
 		}
 	} else if _, err := s.readPackage(id); err != nil {
-		return nil, err
+		return importedObject{}, err
 	}
-	return data, nil
+	return obj, nil
 }
 
 func (s *Store) revisionHeads(ids []string) ([]string, error) {
