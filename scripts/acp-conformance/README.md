@@ -17,7 +17,7 @@ Live run, 2026-11-04, Linux ARM64, a project with one staged skill (`gws-drive-u
 | cursor | ok | yes |
 | agy | ok | yes, once `agentpack agy` or a chat start has created the workspace overlay |
 | omp | ok | yes |
-| opencode | refused: "Authentication required" | not reached; OpenCode's default ACP model `opencode/crouton-alpha-free` needs an OpenCode sign-in. Pick a signed-in model in the composer. |
+| opencode | ok after `session/set_config_option` model `anthropic/claude-fable-5` | its default ACP model `opencode/crouton-alpha-free` needs an OpenCode sign-in and refuses with "Authentication required"; the chat notice now says to pick a signed-in model |
 | grok | not run | owner login needed; stale credentials exist only in old project homes |
 
 

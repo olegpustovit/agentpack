@@ -922,8 +922,13 @@ func mustRawJSON(v any) json.RawMessage {
 // sign-in, so viewers see why instead of a turn that never ends.
 func logFailedTurn(log *acp.EventLog, err error) {
 	now := time.Now().UnixMilli()
+	description := err.Error()
+	if strings.Contains(description, "Authentication required") {
+		// OpenCode's default ACP model needs an OpenCode sign-in even when other providers are signed in.
+		description += ". Choose a model you are signed in to with Model in the composer, or sign in with the agent."
+	}
 	log.Append("notice", now, mustRawJSON(map[string]any{
-		"sessionUpdate": "notice", "severity": "error", "title": "The agent could not run this prompt", "description": err.Error(),
+		"sessionUpdate": "notice", "severity": "error", "title": "The agent could not run this prompt", "description": description,
 	}))
 	log.Append("turn_end", now, mustRawJSON(map[string]any{"stopReason": "error"}))
 }
