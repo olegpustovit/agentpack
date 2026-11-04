@@ -109,7 +109,7 @@ export function reduceLog(entries: LogEntry[]): ThreadState {
   let afterPrompt = false
   for (const entry of entries) {
     // Some agents (Antigravity) echo the prompt back as a user chunk; the prompt entry already shows it.
-    const echo = afterPrompt && entry.kind === "user_message_chunk"
+    const echo: boolean = afterPrompt && entry.kind === "user_message_chunk"
     afterPrompt = entry.kind === "prompt" || echo
     if (echo) continue
     switch (entry.kind) {

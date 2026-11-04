@@ -120,14 +120,14 @@ test.describe("kit styling", () => {
     await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
     await page.goto("/sessions/local/local-one")
     const token = (property: string, value: string, read: string) =>
-      page.evaluate(([property, value, read]) => {
+      page.evaluate(({ property, value, read }) => {
         const probe = document.createElement("div")
         probe.style.setProperty(property, value)
         document.body.appendChild(probe)
         const color = getComputedStyle(probe).getPropertyValue(read)
         probe.remove()
         return color
-      }, [property, value, read])
+      }, { property, value, read })
 
     // User bubbles use the neutral track token at the reference width.
     const bubble = page.locator('[data-slot="user-bubble"]')
