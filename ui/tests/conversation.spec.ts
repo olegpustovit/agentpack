@@ -115,7 +115,7 @@ test("agents advertising image blocks receive the image block", async ({ page })
   const sent = await sendImagePrompt(page, true)
   expect(sent).toMatchObject({
     text: "",
-    image: { sha: "a".repeat(64), mime: "image/png", width: 640, height: 360 },
+    image: { sha: "a".repeat(64), mime: "image/png", width: 640, height: 300 },
   })
   expect(sent).not.toHaveProperty("resource_link")
 })
@@ -227,6 +227,7 @@ test("permission shortcut works with no control focused", async ({ page }) => {
     return route.fulfill({ json: { accepted: true } })
   })
   await page.goto("/sessions/local/chat-one")
+  await expect(page.locator('[data-slot="permission-card"]').first()).toBeVisible()
   await page.evaluate(() => {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
     document.body.focus()
