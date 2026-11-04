@@ -779,7 +779,7 @@ func probeHarnessAgentSessions(ctx context.Context, launch WorkerLaunch) ([]Agen
 	if err != nil {
 		return nil, err
 	}
-	syncService := packSync.Service{}
+	syncService := packSync.NewService()
 	if _, _, syncErr := syncService.SyncForLaunchOptions(ctx, launchCtx.ProjectRoot, packSync.SyncOptions{
 		Mode:          launchCtx.Mode.Name(),
 		Target:        &target,

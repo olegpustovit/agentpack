@@ -12,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
@@ -44,6 +46,39 @@ type fetchResult struct {
 // private repositories second, then the Git protocol. Transient HTTP failures
 // receive the same three-attempt exponential retry policy as other sources.
 func DownloadTarball(ctx context.Context, client *http.Client, owner, repo, sha string) ([]byte, error) {
+	last, _ := ctx.Value(tarballReuseKey{}).(*reusedTarball)
+	if last == nil {
+		return downloadTarball(ctx, client, owner, repo, sha)
+	}
+	key := owner + "/" + repo + "@" + sha
+	last.Lock()
+	defer last.Unlock()
+	if last.key == key {
+		return last.data, nil
+	}
+	data, err := downloadTarball(ctx, client, owner, repo, sha)
+	if err == nil {
+		last.key, last.data = key, data
+	}
+	return data, err
+}
+
+type tarballReuseKey struct{}
+
+type reusedTarball struct {
+	sync.Mutex
+	key  string
+	data []byte
+}
+
+// ReuseTarballs makes DownloadTarball keep the latest archive for ctx: a
+// resolve walks sibling paths of one repository in a row, and each would
+// otherwise download the whole repository again. Callers only read the bytes.
+func ReuseTarballs(ctx context.Context) context.Context {
+	return context.WithValue(ctx, tarballReuseKey{}, &reusedTarball{})
+}
+
+func downloadTarball(ctx context.Context, client *http.Client, owner, repo, sha string) ([]byte, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Minute}
 	}
@@ -141,16 +176,25 @@ func fetchTarballWithGit(ctx context.Context, owner, repo, sha string) ([]byte, 
 		return nil, err
 	}
 	defer os.RemoveAll(checkout)
-	remote := gitRemoteURL(owner, repo)
-	repository, err := git.PlainCloneContext(ctx, checkout, false, &git.CloneOptions{URL: remote, NoCheckout: true})
+	repository, err := git.PlainInit(checkout, false)
 	if err != nil {
+		return nil, err
+	}
+	remote, err := repository.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{gitRemoteURL(owner, repo)}})
+	if err != nil {
+		return nil, err
+	}
+	// One commit at depth 1, never the whole history: a full clone of a large repository takes minutes.
+	options := &git.FetchOptions{RefSpecs: []config.RefSpec{config.RefSpec(sha + ":refs/heads/agentpack")}, Depth: 1, Tags: git.NoTags}
+	err = remote.FetchContext(ctx, options)
+	if err != nil && err != git.NoErrAlreadyUpToDate {
 		if token := githubToken(); token != "" {
-			_ = os.RemoveAll(checkout)
-			repository, err = git.PlainCloneContext(ctx, checkout, false, &git.CloneOptions{URL: remote, NoCheckout: true, Auth: gitAuth(token)})
+			options.Auth = gitAuth(token)
+			err = remote.FetchContext(ctx, options)
 		}
 	}
-	if err != nil {
-		return nil, fmt.Errorf("git clone: %w", err)
+	if err != nil && err != git.NoErrAlreadyUpToDate {
+		return nil, fmt.Errorf("git fetch: %w", err)
 	}
 	worktree, err := repository.Worktree()
 	if err != nil {

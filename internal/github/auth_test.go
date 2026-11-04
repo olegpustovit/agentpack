@@ -139,3 +139,22 @@ func TestAccessHints(t *testing.T) {
 		})
 	}
 }
+
+func TestReuseTarballsDownloadsARepositoryOnce(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { requests++; w.Write([]byte("archive")) }))
+	defer server.Close()
+	previous := codeloadRoot
+	codeloadRoot = server.URL
+	defer func() { codeloadRoot = previous }()
+	const sha = "a123456789abcdef0123456789abcdef01234567"
+	ctx := ReuseTarballs(context.Background())
+	for range 2 {
+		if data, err := DownloadTarball(ctx, server.Client(), "o", "r", sha); err != nil || string(data) != "archive" {
+			t.Fatalf("DownloadTarball = %q, %v", data, err)
+		}
+	}
+	if _, err := DownloadTarball(context.Background(), server.Client(), "o", "r", sha); err != nil || requests != 2 {
+		t.Fatalf("requests = %d, %v; want one per reuse scope", requests, err)
+	}
+}

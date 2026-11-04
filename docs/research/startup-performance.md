@@ -37,4 +37,16 @@ The rebuild benchmark forces staging each iteration; warm iterations assert that
 
 A launch in a real project spent over 4 minutes in `preparing claude…`, 51 s of it system time. A goroutine dump put it in `RemoveOrphanedProjectDirectories`, reading markers in a `/tmp` holding about 247,000 `agentpack-<hash>` directories. Each marker named a deleted `/tmp/agentpack-registry-validate-*`: `validateSnapshot` loaded its throwaway lock through the guarded loader, and a 0.12.6 gateway validated snapshots about 25 times a second.
 
-Validation now leaves nothing in the temp directory, and launches run the tidying in a goroutine beside the agent. Plain `sync` still tidies before returning.
+Validation now leaves nothing in the temp directory, and launches run the tidying in a goroutine beside the agent. Other commands wait for it at most 200 ms.
+
+## Slow `add`, `lock` and `sync` (2026-11-04)
+
+An `add` sat at `agentpack: add…` for over 3 minutes. Causes found:
+
+- The shared HTTP client had no timeout, so one stalled GitHub or npm connection hung the command. It now needs response headers within 20 s and a whole request within 3 minutes.
+- When codeload failed, the Git fallback cloned the whole history. It now fetches the one pinned commit at depth 1: `tanstack/router` went from 36.4 s to 5.5 s.
+- A resolve downloaded the whole repository tarball once per subpath. It now reuses the last archive within one resolve.
+- One command hashed each cache entry three times (resolve, plan, validate). `TreeDigest` now memoizes per process while every file keeps its path, mode, size and modification time, and never for a tree with a file changed in the last 2 s.
+- `sync` waited for temp-directory tidying; it now waits at most 200 ms.
+
+Warm, on the Linux ARM64 host, with this repository's 11 packages (97 MB `impeccable` entry): `sync` 2.46 s to 1.95 s, re-`add` 5.06 s to 3.06 s, `lock` 0.17 s, launch 0.07 s. Most of what remains is rebuilding staging, which copies each hook package once per harness. Benchmarks after the change (medians of five): `BenchmarkMaterializationHome` 0.39 ms, `BenchmarkCodexSetup/cold` 14.9 ms, `warm` 0.15 ms.

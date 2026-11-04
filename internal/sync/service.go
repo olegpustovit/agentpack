@@ -57,6 +57,8 @@ func (options SyncOptions) step(name string) {
 // removeOrphans is a variable so a test can hold it open.
 var removeOrphans = staging.RemoveOrphanedProjectDirectories
 
+const tidyWait = 200 * time.Millisecond
+
 // LockOptions tunes the commands that are allowed to add records to pack.lock.
 type LockOptions struct {
 	Refresh bool
@@ -70,7 +72,13 @@ type SyncResult struct {
 	Warnings                                []string
 }
 
-func NewService() Service { return Service{Client: &http.Client{Transport: http.DefaultTransport}} }
+// A stalled server must fail the command, not hang it: headers within 20 s,
+// and a whole request (a large tarball included) within 3 minutes.
+func NewService() Service {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 20 * time.Second
+	return Service{Client: &http.Client{Transport: transport, Timeout: 3 * time.Minute}}
+}
 func (service Service) client() *http.Client {
 	if service.Client != nil {
 		return service.Client
@@ -512,12 +520,16 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 			err = generation.Publish()
 		}
 		if err == nil {
-			if options.Target != nil {
-				// A launch never waits for tidying: its cost grows with the temp
-				// directory. An early exit leaves the rest for a later run.
-				go removeOrphans(projectRoot)
-			} else {
-				removeOrphans(projectRoot)
+			// Tidying costs what the temp directory holds, so a launch never
+			// waits for it and other commands wait briefly; an early exit
+			// leaves the rest for a later run.
+			tidied := make(chan struct{})
+			go func() { removeOrphans(projectRoot); close(tidied) }()
+			if options.Target == nil {
+				select {
+				case <-tidied:
+				case <-time.After(tidyWait):
+				}
 			}
 		}
 	}

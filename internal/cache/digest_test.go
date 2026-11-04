@@ -530,3 +530,33 @@ func TestEnsureLockCachedInstallsALinkedTreeAgainstAnOlderLock(t *testing.T) {
 		t.Fatalf("tampered entry verified: %v", err)
 	}
 }
+
+func TestTreeDigestMemoFollowsFileChanges(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "SKILL.md")
+	write := func(content string, age time.Duration) string {
+		t.Helper()
+		if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-age)
+		if err := os.Chtimes(file, old, old); err != nil {
+			t.Fatal(err)
+		}
+		digest, err := TreeDigest(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return digest
+	}
+	first := write("one", time.Hour)
+	if again, _ := TreeDigest(root); again != first {
+		t.Fatalf("memoized digest %s, want %s", again, first)
+	}
+	if second := write("two", 2*time.Hour); second == first {
+		t.Fatal("a same-size edit with a new time kept the old digest")
+	}
+	if fresh := write("one", 0); fresh != first {
+		t.Fatalf("fresh tree digest %s, want %s", fresh, first)
+	}
+}

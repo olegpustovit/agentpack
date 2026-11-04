@@ -55,6 +55,7 @@ func NewResolver(ctx context.Context, client *http.Client) Resolver {
 }
 
 func (resolver Resolver) Resolve(ctx context.Context, projectRoot string, project *manifest.Manifest, options ResolveOptions) (lockfile.PackLock, error) {
+	fetchCtx := githubsource.ReuseTarballs(ctx)
 	lock := lockfile.PackLock{LockfileVersion: lockfile.Version, Meta: lockfile.Meta{Name: project.Name, Version: project.Version}}
 	if len(project.Dependencies) == 0 {
 		return lock, nil
@@ -151,7 +152,7 @@ func (resolver Resolver) Resolve(ctx context.Context, projectRoot string, projec
 			return lockfile.PackLock{}, err
 		}
 		source := module.GitHubSource(gitRef)
-		pkg, err := resolver.Materialize(ctx, resolver.Client, source, githubsource.CanonicalTreeURL(source), refresh)
+		pkg, err := resolver.Materialize(fetchCtx, resolver.Client, source, githubsource.CanonicalTreeURL(source), refresh)
 		if err != nil {
 			return lockfile.PackLock{}, err
 		}

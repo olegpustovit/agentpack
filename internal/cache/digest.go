@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	githubsource "github.com/olegpustovit/agentpack/internal/github"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
@@ -163,6 +165,7 @@ func treeDigest(root string, linksAsEmptyFiles bool) (string, error) {
 		size     int64
 	}
 	var records []record
+	stamp, racy := sha256.New(), false
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -182,10 +185,18 @@ func treeDigest(root string, linksAsEmptyFiles bool) (string, error) {
 			return fmt.Errorf("unsupported file type %s at %s", info.Mode().Type(), relative)
 		}
 		records = append(records, record{relative: filepath.ToSlash(relative), mode: info.Mode(), size: info.Size()})
+		fmt.Fprintf(stamp, "%s\x00%d\x00%d\x00%d\x00", relative, info.Mode(), info.Size(), info.ModTime().UnixNano())
+		if time.Since(info.ModTime()) < racyWindow {
+			racy = true
+		}
 		return nil
 	})
 	if err != nil {
 		return "", fmt.Errorf("walk package tree %s: %w", root, err)
+	}
+	memoKey := fmt.Sprintf("%s\x00%t\x00%x", root, linksAsEmptyFiles, stamp.Sum(nil))
+	if digest, ok := digestMemo.Load(memoKey); ok && !racy {
+		return digest.(string), nil
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].relative < records[j].relative })
 	hasher := sha256.New()
@@ -237,8 +248,21 @@ func treeDigest(root string, linksAsEmptyFiles bool) (string, error) {
 			return "", fmt.Errorf("read %s: file changed while hashing", path)
 		}
 	}
-	return lockfile.ContentHashPrefix + hex.EncodeToString(hasher.Sum(nil)), nil
+	digest := lockfile.ContentHashPrefix + hex.EncodeToString(hasher.Sum(nil))
+	if !racy {
+		digestMemo.Store(memoKey, digest)
+	}
+	return digest, nil
 }
+
+// digestMemo lets one command hash a tree once although resolving, planning
+// and validating each verify it. An entry is reused only while every file
+// keeps its path, mode, size and modification time; a file changed within
+// racyWindow could change again without a new time, so such trees are always
+// read (git's racy-file rule).
+var digestMemo sync.Map
+
+const racyWindow = 2 * time.Second
 
 // VerifyPackage recomputes the cache entry digest and compares it with the
 // lock. A package without a content hash is unverified and passes.
