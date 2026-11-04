@@ -100,6 +100,7 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 	}()
 	var attachment uint64
 	var lastOffset uint64 // Resume after bytes already written to the terminal.
+	resumed := false      // set by reconnect until the worker says where its replay starts
 	var state TerminalState
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
@@ -121,8 +122,8 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 		go read(connection, incoming)
 		state = TerminalState{}
 		attachment = 0
-		_, err = fmt.Fprint(output, "\x1b[2J\x1b[H")
-		return err
+		resumed = true
+		return nil
 	}
 	control := func(action string, rows, columns uint16) error {
 		data, _ := json.Marshal(terminalControl{Action: action, Rows: rows, Columns: columns})
@@ -157,6 +158,16 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 			var notice terminalNotice
 			if err := json.Unmarshal(message.data, &notice); err != nil {
 				return 1, err
+			}
+			if notice.Type == "attached" && resumed {
+				resumed = false
+				// The screen already shows everything before lastOffset; clear it only
+				// when the worker no longer holds those bytes and replays from elsewhere.
+				if notice.Offset != lastOffset {
+					if _, err := fmt.Fprint(output, "\x1b[2J\x1b[H"); err != nil {
+						return 1, err
+					}
+				}
 			}
 			if notice.Type == "attached" || notice.Type == "replay_complete" {
 				lastOffset = notice.Offset

@@ -332,12 +332,26 @@ func TestLocalTerminalReconnectsAfterDroppedConnection(t *testing.T) {
 	session.mu.Unlock()
 	waitForAttach()
 
-	if _, err := master.Write([]byte("after\n")); err != nil {
-		t.Fatal(err)
+	// Keys typed while the client swaps connections are dropped by design, and
+	// the attach signal can arrive before the client switches, so type until echoed.
+	retype := time.NewTicker(20 * time.Millisecond)
+	defer retype.Stop()
+	for !strings.Contains(output.String(), "ECHO after") {
+		if _, err := master.Write([]byte("after\n")); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-output.changed:
+		case <-retype.C:
+		case err := <-result:
+			t.Fatalf("terminal exited: %v", err)
+		}
 	}
-	waitForOutput(func(value string) bool { return strings.Contains(value, "ECHO after") })
 	if strings.Contains(output.String(), "agentpack: reconnecting") {
 		t.Fatal("local reconnect notice was written over terminal output")
+	}
+	if strings.Contains(output.String(), "\x1b[2J\x1b[H") {
+		t.Fatal("a reconnect that resumed at its offset cleared the screen")
 	}
 }
 
