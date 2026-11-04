@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { lazy, Suspense, useEffect } from "react"
+import { useEffect, useState } from "react"
 import { z } from "zod"
 import { useEventsConnected } from "@/features/events/use-events"
 import { useMachines } from "@/features/machines/queries"
@@ -11,13 +11,26 @@ import { SessionViewSwitch } from "@/features/sessions/session-view-switch"
 import { sessionViewFromTransport, viewSwitchNeedsResume } from "@/features/sessions/view-switch"
 import { rememberSession } from "@/features/shell/views"
 import { unavailableMessage, UnavailableTerminal } from "@/features/terminal/unavailable"
-import { api } from "@/lib/api"
+import { api, LOCAL } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { hud } from "@/lib/hud"
 
-// Loaded on demand so xterm and the conversation UI stay out of the initial bundle.
-const TerminalPane = lazy(() => import("@/features/terminal/terminal-pane"))
-const ConversationPane = lazy(() => import("@/features/conversation/conversation-pane"))
+// Loaded on demand so xterm and the conversation UI stay out of the initial bundle. Not
+// React.lazy: React holds a Suspense reveal for ~300 ms, which every session open paid.
+type ConversationPaneType = typeof import("@/features/conversation/conversation-pane").default
+type TerminalPaneType = typeof import("@/features/terminal/terminal-pane").default
+const panes: { conversation?: ConversationPaneType; terminal?: TerminalPaneType } = {}
+const loadPane = {
+  conversation: () => import("@/features/conversation/conversation-pane").then((module) => (panes.conversation = module.default)),
+  terminal: () => import("@/features/terminal/terminal-pane").then((module) => (panes.terminal = module.default)),
+}
+
+function usePane(kind: keyof typeof loadPane | undefined) {
+  const [, loaded] = useState(0)
+  useEffect(() => {
+    if (kind && !panes[kind]) void loadPane[kind]().then(() => loaded((count) => count + 1))
+  }, [kind])
+}
 
 function SessionRoute() {
   const { machine, sessionId } = Route.useParams()
@@ -25,8 +38,9 @@ function SessionRoute() {
   const queryClient = useQueryClient()
   const live = useEventsConnected()
   // Fetch only once the machine is known online, as the sidebar does; an offline one shows its cache.
+  // This machine is online by definition, so its list does not wait for the machine list.
   const host = useMachines().find((item) => item.id === machine)
-  const online = host?.online
+  const online = machine === LOCAL || host?.online
   const stale = online === false
   const { data } = useQuery({ ...sessionsQuery(machine, live), enabled: online === true })
   const info = data?.find((session) => session.id === sessionId)
@@ -59,11 +73,17 @@ function SessionRoute() {
     },
     onError: (error) => hud.error(`Couldn't start session: ${(error as Error).message}`),
   })
+  usePane(info?.transport === "acp" ? "conversation" : info || data || stale ? "terminal" : undefined)
   if (message) return <UnavailableTerminal message={message} />
+  // The pane depends on the transport, so wait for the list rather than guess Terminal
+  // (which would load xterm and attach a socket to a chat session).
+  if (!data && !stale) return <p className="p-(--s4) text-(--fg2)">Loading session…</p>
   const title = listed && sessionLabel(listed)
   const subtitle = listed && sessionDetail(listed).split(" · ").slice(listed.name ? 0 : 1).join(" · ")
   const acp = info?.transport === "acp"
   const currentView = sessionViewFromTransport(info?.transport)
+  const ConversationPane = panes.conversation
+  const TerminalPane = panes.terminal
   return (
     <div className="flex h-full min-h-0 flex-col">
       <SessionViewSwitch
@@ -76,32 +96,32 @@ function SessionRoute() {
         }}
       />
       <div className="min-h-0 flex-1">
-        <Suspense fallback={<p className="p-(--s4) text-(--fg2)">{acp ? "Loading conversation…" : "Loading terminal…"}</p>}>
-          {acp ? (
-            <ConversationPane
-              key={`${machine}/${sessionId}`}
-              machine={machine}
-              sessionId={sessionId}
-              info={info}
-              title={title || undefined}
-              subtitle={subtitle || undefined}
-              onSwitchTerminal={() => {
-                if (viewSwitchNeedsResume(info)) return
-                switchView.mutate("terminal")
-              }}
-            />
-          ) : (
-            <TerminalPane
-              key={`${machine}/${sessionId}`}
-              machine={machine}
-              sessionId={sessionId}
-              info={info}
-              title={title || undefined}
-              subtitle={subtitle || undefined}
-              listed={!data || !!info}
-            />
-          )}
-        </Suspense>
+        {acp && ConversationPane ? (
+          <ConversationPane
+            key={`${machine}/${sessionId}`}
+            machine={machine}
+            sessionId={sessionId}
+            info={info}
+            title={title || undefined}
+            subtitle={subtitle || undefined}
+            onSwitchTerminal={() => {
+              if (viewSwitchNeedsResume(info)) return
+              switchView.mutate("terminal")
+            }}
+          />
+        ) : !acp && TerminalPane ? (
+          <TerminalPane
+            key={`${machine}/${sessionId}`}
+            machine={machine}
+            sessionId={sessionId}
+            info={info}
+            title={title || undefined}
+            subtitle={subtitle || undefined}
+            listed={!data || !!info}
+          />
+        ) : (
+          <p className="p-(--s4) text-(--fg2)">{acp ? "Loading conversation…" : "Loading terminal…"}</p>
+        )}
       </div>
     </div>
   )
