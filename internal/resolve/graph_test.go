@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/cache"
@@ -69,10 +70,13 @@ func TestResolverRefreshesOnlyRequestedFloatingModule(t *testing.T) {
 		{Module: second, Commit: strings.Repeat("b", 40)},
 	}}
 	var refreshed = map[string]bool{}
+	var mu sync.Mutex
 	fake := fakeMaterializer{}
 	materialize := func(ctx context.Context, client *http.Client, source githubsource.Source, url string, forceRefresh bool) (lockfile.Package, error) {
 		module := string(ModuleIDFromOwnerRepoPath(source.Owner, source.Repo, source.Path))
+		mu.Lock()
 		refreshed[module] = forceRefresh
+		mu.Unlock()
 		return fake.materialize(ctx, client, source, url, forceRefresh)
 	}
 	project := &manifest.Manifest{Dependencies: map[string]manifest.Dependency{first: shortDependency(""), second: shortDependency("")}}

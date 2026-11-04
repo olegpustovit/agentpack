@@ -48,5 +48,6 @@ An `add` sat at `agentpack: add…` for over 3 minutes. Causes found:
 - A resolve downloaded the whole repository tarball once per subpath. It now reuses the last archive within one resolve.
 - One command hashed each cache entry three times (resolve, plan, validate). `TreeDigest` now memoizes per process while every file keeps its path, mode, size and modification time, and never for a tree with a file changed in the last 2 s.
 - `sync` waited for temp-directory tidying; it now waits at most 200 ms.
+- Packages resolved one at a time. Each wave of the dependency queue now fetches up to six in parallel and reads their dependencies in queue order, so the lock is identical. Cold `lock` of the 11 packages: 21.5 s to 13.6 s.
 
 Warm, on the Linux ARM64 host, with this repository's 11 packages (97 MB `impeccable` entry): `sync` 2.46 s to 1.95 s, re-`add` 5.06 s to 3.06 s, `lock` 0.17 s, launch 0.07 s. Most of what remains is rebuilding staging, which copies each hook package once per harness. Benchmarks after the change (medians of five): `BenchmarkMaterializationHome` 0.39 ms, `BenchmarkCodexSetup/cold` 14.9 ms, `warm` 0.15 ms.

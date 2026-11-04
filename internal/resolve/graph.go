@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 	githubsource "github.com/olegpustovit/agentpack/internal/github"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
+	"golang.org/x/sync/errgroup"
 )
 
 type ResolveOptions struct {
@@ -136,69 +138,85 @@ func (resolver Resolver) Resolve(ctx context.Context, projectRoot string, projec
 	}
 	resolved := make(map[ModuleID]lockfile.Package)
 	for len(queue) != 0 {
-		module := queue[0]
-		queue = queue[1:]
-		if _, done := resolved[module]; done {
-			continue
+		// Each wave fetches its modules in parallel; their dependencies are
+		// then read in queue order, so the result does not depend on timing.
+		wave := make([]ModuleID, 0, len(queue))
+		for _, module := range queue {
+			if _, done := resolved[module]; !done && !slices.Contains(wave, module) {
+				wave = append(wave, module)
+			}
 		}
-		constraints := merged[module]
-		if options.Progress != nil {
-			options.Progress("Resolving " + string(module))
+		queue = queue[:0]
+		fetched := make([]lockfile.Package, len(wave))
+		group, groupCtx := errgroup.WithContext(fetchCtx)
+		group.SetLimit(6)
+		for index, module := range wave {
+			constraints := merged[module]
+			if options.Progress != nil {
+				options.Progress("Resolving " + string(module))
+			}
+			group.Go(func() error {
+				owner, repo, _ := module.OwnerRepoPath()
+				refresh := (options.RefreshFloating || options.RefreshModules[string(module)]) && constraints.Exact == ""
+				gitRef, err := effectiveGitRef(constraints, resolver.Tags, owner, repo, module, refresh, options.Previous)
+				if err != nil {
+					return err
+				}
+				source := module.GitHubSource(gitRef)
+				pkg, err := resolver.Materialize(groupCtx, resolver.Client, source, githubsource.CanonicalTreeURL(source), refresh)
+				if err != nil {
+					return err
+				}
+				pkg.Module, pkg.Direct = string(module), direct[module]
+				fetched[index], err = resolver.settleContentHash(pkg, options)
+				return err
+			})
 		}
-		owner, repo, _ := module.OwnerRepoPath()
-		refresh := (options.RefreshFloating || options.RefreshModules[string(module)]) && constraints.Exact == ""
-		gitRef, err := effectiveGitRef(constraints, resolver.Tags, owner, repo, module, refresh, options.Previous)
-		if err != nil {
+		if err := group.Wait(); err != nil {
 			return lockfile.PackLock{}, err
 		}
-		source := module.GitHubSource(gitRef)
-		pkg, err := resolver.Materialize(fetchCtx, resolver.Client, source, githubsource.CanonicalTreeURL(source), refresh)
-		if err != nil {
-			return lockfile.PackLock{}, err
-		}
-		pkg.Module, pkg.Direct = string(module), direct[module]
-		if pkg, err = resolver.settleContentHash(pkg, options); err != nil {
-			return lockfile.PackLock{}, err
-		}
-		resolved[module] = pkg
-		destination, err := cache.EntryDir(pkg.CacheKey)
-		if err != nil {
-			return lockfile.PackLock{}, err
-		}
-		nested, err := manifest.LoadNestedDependencies(destination)
-		if err != nil {
-			return lockfile.PackLock{}, err
-		}
-		for _, key := range sortedDependencyKeys(nested) {
-			child, incoming, err := dependencyConstraint(key, nested[key])
+		for index, module := range wave {
+			pkg := fetched[index]
+			resolved[module] = pkg
+			destination, err := cache.EntryDir(pkg.CacheKey)
 			if err != nil {
 				return lockfile.PackLock{}, err
 			}
-			current := merged[child]
-			floating := current.Exact == ""
-			if err := current.Merge(incoming); err != nil {
-				return lockfile.PackLock{}, fmt.Errorf("%s (required by %s): %w", child, module, err)
+			nested, err := manifest.LoadNestedDependencies(destination)
+			if err != nil {
+				return lockfile.PackLock{}, err
 			}
-			merged[child] = current
-			if pinned, done := resolved[child]; done {
-				if current.Exact != "" && current.Exact != pinned.Commit {
-					if !floating {
-						return lockfile.PackLock{}, fmt.Errorf("transitive dependency %q must be at commit %s (required by %s), but is already pinned at %s", child, current.Exact, module, pinned.Commit)
+			for _, key := range sortedDependencyKeys(nested) {
+				child, incoming, err := dependencyConstraint(key, nested[key])
+				if err != nil {
+					return lockfile.PackLock{}, err
+				}
+				current := merged[child]
+				floating := current.Exact == ""
+				if err := current.Merge(incoming); err != nil {
+					return lockfile.PackLock{}, fmt.Errorf("%s (required by %s): %w", child, module, err)
+				}
+				merged[child] = current
+				if pinned, done := resolved[child]; done {
+					if current.Exact != "" && current.Exact != pinned.Commit {
+						if !floating {
+							return lockfile.PackLock{}, fmt.Errorf("transitive dependency %q must be at commit %s (required by %s), but is already pinned at %s", child, current.Exact, module, pinned.Commit)
+						}
+						// The module was resolved from a floating ref before this
+						// exact pin was seen; the merged constraint now names the
+						// commit, so resolve it again there.
+						if options.Progress != nil {
+							options.Progress(fmt.Sprintf("Pinning %s at %s required by %s", child, shortCommit(current.Exact), module))
+						}
+						delete(resolved, child)
+						queue = append(queue, child)
 					}
-					// The module was resolved from a floating ref before this
-					// exact pin was seen; the merged constraint now names the
-					// commit, so resolve it again there.
-					if options.Progress != nil {
-						options.Progress(fmt.Sprintf("Pinning %s at %s required by %s", child, shortCommit(current.Exact), module))
-					}
-					delete(resolved, child)
+					continue
+				}
+				if !queued[child] {
+					queued[child] = true
 					queue = append(queue, child)
 				}
-				continue
-			}
-			if !queued[child] {
-				queued[child] = true
-				queue = append(queue, child)
 			}
 		}
 	}

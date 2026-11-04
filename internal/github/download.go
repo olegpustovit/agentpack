@@ -46,19 +46,20 @@ type fetchResult struct {
 // private repositories second, then the Git protocol. Transient HTTP failures
 // receive the same three-attempt exponential retry policy as other sources.
 func DownloadTarball(ctx context.Context, client *http.Client, owner, repo, sha string) ([]byte, error) {
-	last, _ := ctx.Value(tarballReuseKey{}).(*reusedTarball)
-	if last == nil {
+	reused, _ := ctx.Value(tarballReuseKey{}).(*sync.Map)
+	if reused == nil {
 		return downloadTarball(ctx, client, owner, repo, sha)
 	}
-	key := owner + "/" + repo + "@" + sha
-	last.Lock()
-	defer last.Unlock()
-	if last.key == key {
-		return last.data, nil
+	value, _ := reused.LoadOrStore(owner+"/"+repo+"@"+sha, &reusedTarball{})
+	entry := value.(*reusedTarball)
+	entry.Lock()
+	defer entry.Unlock()
+	if entry.data != nil {
+		return entry.data, nil
 	}
 	data, err := downloadTarball(ctx, client, owner, repo, sha)
 	if err == nil {
-		last.key, last.data = key, data
+		entry.data = data
 	}
 	return data, err
 }
@@ -67,15 +68,14 @@ type tarballReuseKey struct{}
 
 type reusedTarball struct {
 	sync.Mutex
-	key  string
 	data []byte
 }
 
-// ReuseTarballs makes DownloadTarball keep the latest archive for ctx: a
-// resolve walks sibling paths of one repository in a row, and each would
-// otherwise download the whole repository again. Callers only read the bytes.
+// ReuseTarballs makes DownloadTarball keep each archive it fetches for ctx: a
+// resolve walks sibling paths of one repository, and each would otherwise
+// download the whole repository again. Callers only read the bytes.
 func ReuseTarballs(ctx context.Context) context.Context {
-	return context.WithValue(ctx, tarballReuseKey{}, &reusedTarball{})
+	return context.WithValue(ctx, tarballReuseKey{}, &sync.Map{})
 }
 
 func downloadTarball(ctx context.Context, client *http.Client, owner, repo, sha string) ([]byte, error) {
