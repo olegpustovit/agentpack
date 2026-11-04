@@ -208,7 +208,8 @@ func TestStartACPReplayAgent(t *testing.T) {
 	}
 	var lines []string
 	for _, line := range strings.Split(string(data), "\n") {
-		if line != "" && !strings.Contains(line, `"kind":"permission_request"`) {
+		// Both block until a viewer answers, and this test attaches none.
+		if line != "" && !strings.Contains(line, `"kind":"permission_request"`) && !strings.Contains(line, `"kind":"elicitation"`) {
 			lines = append(lines, line)
 		}
 	}

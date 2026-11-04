@@ -19,7 +19,7 @@
 {"seq":19,"ts":1018,"kind":"compaction_update","payload":{"sessionUpdate":"compaction_update","compactionId":"cmp_001","status":"in_progress"}}
 {"seq":20,"ts":1019,"kind":"compaction_summary_chunk","payload":{"sessionUpdate":"compaction_summary_chunk","compactionId":"cmp_001","content":{"type":"text","text":"Compaction summary retained."}}}
 {"seq":21,"ts":1020,"kind":"compaction_update","payload":{"sessionUpdate":"compaction_update","compactionId":"cmp_001","status":"completed","summary":[{"type":"text","text":"Compaction summary retained."}]}}
-{"seq":22,"ts":1021,"kind":"usage_update","payload":{"used":120000,"size":200000,"cost":{"amount":0.42,"currency":"USD"}}}
+{"seq":22,"ts":1021,"kind":"usage_update","payload":{"sessionUpdate":"usage_update","used":120000,"size":200000,"cost":{"amount":0.42,"currency":"USD"}}}
 {"seq":23,"ts":1022,"kind":"agent_message_chunk","payload":{"text":{"text":"Done. The gateway will resume from the saved offset."}}}
 {"seq":24,"ts":1023,"kind":"turn_end","payload":{"status":"completed"}}
 {"seq":25,"ts":1024,"kind":"agent_message_chunk","payload":{"text":{"text":"\u001b]52;c;evil\u0007"}}}

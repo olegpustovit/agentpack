@@ -74,7 +74,13 @@ func TestEventLogDropsSingleOversizedEntry(t *testing.T) {
 	}
 }
 func TestEventLogPersistenceStaysPrivateAndBoundedAfterRollover(t *testing.T) {
-	directory := t.TempDir()
+	directory := filepath.Join(t.TempDir(), "worker")
+	if err := os.Mkdir(directory, 0o700); err != nil { // t.TempDir honours the umask
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	dirInfo, err := os.Stat(directory)
 	if err != nil {
 		t.Fatal(err)

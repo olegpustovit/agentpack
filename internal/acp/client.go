@@ -51,7 +51,7 @@ func (c *HarnessClient) permissionRequestID(toolCallID sdkacp.ToolCallId) (strin
 
 // NewClientSideConnection returns an SDK client connection over the given transport.
 func (c *HarnessClient) NewClientSideConnection(peerInput io.Writer, peerOutput io.Reader) *sdkacp.ClientSideConnection {
-	return sdkacp.NewClientSideConnection(c, peerInput, peerOutput)
+	return NewClientConnection(c, peerInput, peerOutput)
 }
 
 func (c *HarnessClient) RequestPermission(ctx context.Context, p sdkacp.RequestPermissionRequest) (sdkacp.RequestPermissionResponse, error) {

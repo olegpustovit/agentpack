@@ -500,9 +500,12 @@ func TestConversationReplayFromFixture(t *testing.T) {
 		os.Unsetenv("AGENTPACK_TEST_ACP_FIXTURE")
 	})
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	stopped := make(chan struct{})
+	// Wait for the worker to remove its directory before TempDir cleanup runs.
+	t.Cleanup(func() { cancel(); <-stopped })
 	ready := make(chan string, 1)
 	go func() {
+		defer close(stopped)
 		_, runErr := RunWorker(ctx, home, WorkerLaunch{
 			Transport: "acp",
 			Program:   executable,
@@ -549,8 +552,8 @@ func TestConversationReplayFromFixture(t *testing.T) {
 		}
 		entries = append(entries, json.RawMessage(line))
 	}
-	if len(entries) != 23 {
-		t.Fatalf("got %d log lines, want 23", len(entries))
+	if len(entries) != 32 {
+		t.Fatalf("got %d log lines, want 32", len(entries))
 	}
 	var first struct {
 		Kind string `json:"kind"`

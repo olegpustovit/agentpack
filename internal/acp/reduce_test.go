@@ -140,6 +140,7 @@ func TestThreadReducerNoticeAndCompactionSummary(t *testing.T) {
 	if notice.Message != "MCP server unavailable · Continuing without it." || notice.Severity != "warning" {
 		t.Fatalf("notice view = %+v", notice)
 	}
+	compaction = compactionView{} // omitempty drops fields, so decode into a fresh value
 	if err := json.Unmarshal(state.Items[1].Data, &compaction); err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,7 +68,7 @@ func TestReplayFullFixture(t *testing.T) {
 	agent := NewReplayAgent(entries)
 	c2aR, c2aW := io.Pipe()
 	a2cR, a2cW := io.Pipe()
-	clientConn := sdkacp.NewClientSideConnection(client, c2aW, a2cR)
+	clientConn := acp.NewClientConnection(client, c2aW, a2cR)
 	agentConn := sdkacp.NewAgentSideConnection(agent, a2cW, c2aR)
 	agent.SetConnection(agentConn)
 	defer func() {
@@ -78,7 +79,7 @@ func TestReplayFullFixture(t *testing.T) {
 		_ = agentConn.Done()
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // failure bound only; the replay takes ~0.8s, 3x under -race
 	defer cancel()
 	if _, err := clientConn.Initialize(ctx, sdkacp.InitializeRequest{ProtocolVersion: sdkacp.ProtocolVersionNumber}); err != nil {
 		t.Fatal(err)
@@ -220,7 +221,14 @@ func splitLines(data []byte) func(yield func(string) bool) {
 type replayTestClient struct {
 	*acp.HarnessClient
 	permissions chan string
+	mu          sync.Mutex // requests and notifications run on different goroutines
 	rawPayloads map[string][][]byte
+}
+
+func (c *replayTestClient) addRaw(kind string, payload []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.rawPayloads[kind] = append(c.rawPayloads[kind], append([]byte(nil), payload...))
 }
 
 func (c *replayTestClient) SessionUpdate(ctx context.Context, params sdkacp.SessionNotification) error {
@@ -255,7 +263,7 @@ func (c *replayTestClient) SessionUpdate(ctx context.Context, params sdkacp.Sess
 		kind, meta = "plan_removed", params.Update.PlanRemoved.Meta
 	}
 	if payload := replayPayloadFromMeta(meta); payload != nil {
-		c.rawPayloads[kind] = append(c.rawPayloads[kind], append([]byte(nil), payload...))
+		c.addRaw(kind, payload)
 	}
 	if usage := params.Update.UsageUpdate; usage != nil {
 		if usage.SessionUpdate != "usage_update" || usage.Used != 120000 || usage.Size != 200000 || usage.Cost == nil || usage.Cost.Amount != 0.42 || usage.Cost.Currency != "USD" {
@@ -284,7 +292,7 @@ func (c *replayTestClient) HandleExtensionMethod(_ context.Context, method strin
 	if err := json.Unmarshal(params, &event); err != nil {
 		return nil, err
 	}
-	c.rawPayloads[event.Kind] = append(c.rawPayloads[event.Kind], append([]byte(nil), event.Payload...))
+	c.addRaw(event.Kind, event.Payload)
 	c.Log.Append(event.Kind, 0, event.Payload)
 	return nil, nil
 }
@@ -293,7 +301,7 @@ func (c *replayTestClient) RequestPermission(_ context.Context, params sdkacp.Re
 	id := string(params.ToolCall.ToolCallId)
 	c.permissions <- id
 	if payload := replayPayloadFromMeta(params.Meta); payload != nil {
-		c.rawPayloads["permission_request"] = append(c.rawPayloads["permission_request"], append([]byte(nil), payload...))
+		c.addRaw("permission_request", payload)
 		c.Log.Append("permission_request", 0, payload)
 	}
 	if id != "p1" || params.ToolCall.Title == nil || *params.ToolCall.Title != "Run go test on worker package" || len(params.Options) != 2 || params.Options[0].OptionId != "allow" {
@@ -312,7 +320,7 @@ func (c *replayTestClient) UnstableCreateElicitation(_ context.Context, params s
 	}
 	payload := replayPayloadFromMeta(params.Form.Meta)
 	if payload != nil {
-		c.rawPayloads["elicitation"] = append(c.rawPayloads["elicitation"], append([]byte(nil), payload...))
+		c.addRaw("elicitation", payload)
 		c.Log.Append("elicitation", 0, payload)
 	}
 	if params.Form.Message != "Which tone should the copy use?" {
