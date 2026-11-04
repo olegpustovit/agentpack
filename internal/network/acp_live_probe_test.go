@@ -20,14 +20,28 @@ func TestLiveACPProbe(t *testing.T) {
 	if harness == "" || project == "" || out == "" {
 		t.Skip("set AGENTPACK_ACP_PROBE, AGENTPACK_ACP_PROBE_PROJECT and AGENTPACK_ACP_PROBE_OUT")
 	}
-	session, stop, err := startACPConversation(WorkerLaunch{Directory: project, Session: SessionInfo{Harness: harness, Directory: project, DefinitionRoot: project, Transport: "acp"}}, t.TempDir())
+	dir := t.TempDir()
+	session, stop, err := startACPConversation(WorkerLaunch{Directory: project, Session: SessionInfo{Harness: harness, Directory: project, DefinitionRoot: project, Transport: "acp"}}, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stop()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	if err := session.Prompt(ctx, acp.PromptInput{Text: "Reply with exactly the word: ok. Do not use tools."}); err != nil {
+	input := acp.PromptInput{Text: "Reply with exactly the word: ok. Do not use tools."}
+	// AGENTPACK_ACP_PROBE_IMAGE sends a PNG the way the gateway stores an upload.
+	if path := os.Getenv("AGENTPACK_ACP_PROBE_IMAGE"); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sha, err := storeSessionBlob(dir, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input = acp.PromptInput{Text: "What single colour fills this image? Reply with one word. Do not use tools.", Image: &acp.PromptImage{Sha: sha, Name: "probe.png", Mime: "image/png"}}
+	}
+	if err := session.Prompt(ctx, input); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	entries, _ := session.Attach(0)
