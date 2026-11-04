@@ -329,3 +329,40 @@ func writeDigestState(path, digest string) error {
 	}
 	return os.Rename(file.Name(), path)
 }
+
+// A plain sync skips the rebuild when its inputs, the staged tree and the
+// agentpack binary are all as the last full sync left them. Launch rebuilds
+// stage one harness, so they never write this state.
+func syncedStatePath(projectRoot, modeName string) (string, error) {
+	return paths.ProjectStateFile(projectRoot, "synced-"+paths.ModePathComponent(modeName)+".json")
+}
+
+func writeSyncedDigest(projectRoot, modeName, digest string) error {
+	path, err := syncedStatePath(projectRoot, modeName)
+	if err != nil {
+		return err
+	}
+	return writeDigestState(path, digest+"\x00"+executableStamp())
+}
+
+func readSyncedDigest(projectRoot, modeName string) (string, bool, error) {
+	path, err := syncedStatePath(projectRoot, modeName)
+	if err != nil {
+		return "", false, err
+	}
+	return readDigestState(path)
+}
+
+// executableStamp changes whenever the agentpack binary does, since a new
+// version may stage differently.
+func executableStamp() string {
+	path, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%s\x00%d\x00%d", path, info.Size(), info.ModTime().UnixNano())
+}

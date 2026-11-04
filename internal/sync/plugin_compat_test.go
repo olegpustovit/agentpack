@@ -673,3 +673,31 @@ func jsonEscaped(path string) string {
 func containsPath(text, path string) bool {
 	return strings.Contains(text, path) || strings.Contains(text, jsonEscaped(path))
 }
+
+func TestUnchangedSyncKeepsThePublishedStaging(t *testing.T) {
+	fixture := newIntegrityFixture(t)
+	fixture.manifest(demoKey, commitOne)
+	fixture.lock()
+	staging, _, err := paths.StagingProjectDir(fixture.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published := func() string {
+		data, err := os.ReadFile(filepath.Join(staging, "modes", "default.current"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	fixture.sync(SyncOptions{})
+	first := published()
+	fixture.sync(SyncOptions{})
+	if second := published(); second != first {
+		t.Fatalf("an unchanged sync rebuilt staging: %s then %s", first, second)
+	}
+	writeIntegrityFile(t, filepath.Join(fixture.project, ".agents", "skills", "local", "SKILL.md"), "---\nname: local\ndescription: Local\n---\n")
+	fixture.sync(SyncOptions{})
+	if third := published(); third == first {
+		t.Fatal("a sync after a project change kept the old staging")
+	}
+}

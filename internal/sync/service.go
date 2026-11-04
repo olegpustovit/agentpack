@@ -474,6 +474,10 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 				err = pipeline.RecordStaged()
 			}
 		}
+	} else if fresh, freshErr := service.stagingIsCurrent(pipeline, options, recorded && len(drift) == 0); freshErr != nil {
+		return result, freshErr
+	} else if fresh {
+		tidyTempDirectories(projectRoot, false)
 	} else {
 		if len(drift) != 0 {
 			shown := append([]string(nil), drift...)
@@ -515,22 +519,15 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 			if err == nil {
 				err = writeMaterializationDigest(projectRoot, effective.Name(), digest)
 			}
+			if err == nil && options.Target == nil {
+				err = writeSyncedDigest(projectRoot, effective.Name(), digest)
+			}
 		}
 		if err == nil {
 			err = generation.Publish()
 		}
 		if err == nil {
-			// Tidying costs what the temp directory holds, so a launch never
-			// waits for it and other commands wait briefly; an early exit
-			// leaves the rest for a later run.
-			tidied := make(chan struct{})
-			go func() { removeOrphans(projectRoot); close(tidied) }()
-			if options.Target == nil {
-				select {
-				case <-tidied:
-				case <-time.After(tidyWait):
-				}
-			}
+			tidyTempDirectories(projectRoot, options.Target != nil)
 		}
 	}
 	if err != nil {
@@ -690,4 +687,56 @@ func rootCause(err error) error {
 		err = unwrapped.Unwrap()
 	}
 	return nil
+}
+
+// stagingIsCurrent reports whether a plain sync can keep the published staging:
+// the cache was verified above and staging matches its record (unchanged),
+// and nothing it is built from has changed since the last full sync.
+func (service Service) stagingIsCurrent(pipeline staging.Pipeline, options SyncOptions, unchanged bool) (bool, error) {
+	if options.Target != nil || !unchanged {
+		return false, nil
+	}
+	// The cheap drift check above compares sizes and times; keeping staging
+	// needs every staged file's content to match its record.
+	if drift, recorded, err := pipeline.StagedDrift(true); err != nil || !recorded || len(drift) != 0 {
+		return false, err
+	}
+	if pending, err := pipeline.RebuildPending(); err != nil || pending {
+		return false, err
+	}
+	stored, found, err := readSyncedDigest(pipeline.ProjectRoot, pipeline.Mode.Name())
+	if err != nil || !found {
+		return false, err
+	}
+	workspace := pipeline.WorkspaceRoot
+	if workspace == "" {
+		workspace = pipeline.ProjectRoot
+	}
+	current, err := computeMaterializationDigest(pipeline.ProjectRoot, workspace, pipeline.Mode)
+	if err != nil || stored != current+"\x00"+executableStamp() {
+		return false, err
+	}
+	// Verify may drop staged copies of skills the user has since installed;
+	// record the tree again so the next sync does not read that as drift.
+	if pipeline.Verify() != nil {
+		return false, nil
+	}
+	if dropped, _, err := pipeline.StagedDrift(false); err != nil || len(dropped) == 0 {
+		return err == nil, err
+	}
+	return true, pipeline.RecordStaged()
+}
+
+// tidyTempDirectories removes what deleted projects left in the temp directory.
+// Its cost is what that directory holds, so a launch never waits for it and
+// other commands wait briefly; an early exit leaves the rest for a later run.
+func tidyTempDirectories(projectRoot string, launch bool) {
+	tidied := make(chan struct{})
+	go func() { removeOrphans(projectRoot); close(tidied) }()
+	if !launch {
+		select {
+		case <-tidied:
+		case <-time.After(tidyWait):
+		}
+	}
 }
