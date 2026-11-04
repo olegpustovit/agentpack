@@ -83,7 +83,6 @@ export function SessionRow({
   stopping: boolean
   actions: RowActions
 }) {
-  const { state } = session
   const glyphState = sessionGlyphState(session)
   const word = sessionStatusWord(session, stopping)
   const mode = session.mode && session.mode !== "default" ? session.mode : undefined

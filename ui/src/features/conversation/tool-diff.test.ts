@@ -19,7 +19,7 @@ describe("ToolDiffBody", () => {
       content: [{ type: "diff", path: "internal/network/worker.go", oldText: "return 0\n", newText: "return 1\n" }],
     })))
     expect(container.querySelector(".hljs-keyword")?.textContent).toBe("return")
-    expect(container.querySelector("mark")?.textContent).toBe("1")
+    expect([...container.querySelectorAll("mark")].map((mark) => mark.textContent)).toEqual(["0", "1"])
     act(() => root.unmount())
   })
 })
