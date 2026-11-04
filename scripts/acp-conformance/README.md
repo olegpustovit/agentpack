@@ -10,7 +10,7 @@ That checks shared `testdata/acp/full.jsonl` reducers (Go `internal/acp`, `inter
 
 The probe does not stage: run the harness's launcher once in the project first (for example `CURSOR_AGENT_PATH=/bin/true agentpack agent`), because staging generations are shared and another harness's rebuild leaves Cursor's fake home and the Antigravity overlay to be refreshed by their own launch. `AGENTPACK_ACP_PROBE_IMAGE=<png>` sends an image the way the gateway stores an upload.
 
-Image prompt (a solid red 32×32 PNG, "What single colour fills this image?"): claude, codex, cursor, agy and omp all answered "Red".
+Image prompt (a solid red 32×32 PNG, "What single colour fills this image?"): claude, codex, cursor, agy, omp and grok all answered "Red".
 
 Live run, 2026-11-04, Linux ARM64, a project with one staged skill (`gws-drive-upload`), prompt "Reply with exactly the word: ok":
 
@@ -22,7 +22,7 @@ Live run, 2026-11-04, Linux ARM64, a project with one staged skill (`gws-drive-u
 | agy | ok | yes, once `agentpack agy` or a chat start has created the workspace overlay |
 | omp | ok | yes |
 | opencode | ok after `session/set_config_option` model `anthropic/claude-fable-5` | its default ACP model `opencode/crouton-alpha-free` needs an OpenCode sign-in and refuses with "Authentication required"; the chat notice now says to pick a signed-in model |
-| grok | not run | owner login needed; stale credentials exist only in old project homes |
+| grok | ok (after the owner signed in) | yes |
 
 
 Verified harness ACP surface (2026-11-02, j7 §1):
