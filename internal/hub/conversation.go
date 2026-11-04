@@ -45,9 +45,18 @@ func parseHubConversationConfig(data []byte) ([]hubConfigOption, error) {
 		return nil, err
 	}
 	if raw, ok := fields["configOptions"]; ok {
-		var options []hubConfigOption
-		if err := json.Unmarshal(raw, &options); err != nil {
+		var items []json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
 			return nil, err
+		}
+		// The hub picks from select options; a boolean or other option is
+		// skipped rather than failing the whole list.
+		options := make([]hubConfigOption, 0, len(items))
+		for _, item := range items {
+			var option hubConfigOption
+			if json.Unmarshal(item, &option) == nil {
+				options = append(options, option)
+			}
 		}
 		return options, nil
 	}

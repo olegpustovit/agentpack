@@ -502,6 +502,10 @@ func (g *Gateway) Handler() http.Handler {
 			g.proxyTailnet(w, r, nodeID)
 			return
 		}
+		if _, known := actorFrom(r.Context()); local && !known {
+			// The node secret is only on this machine: the hub and CLI act as its OS user, not as the browser account.
+			r = r.WithContext(withActor(r.Context(), LocalActor("local")))
+		}
 		api.ServeHTTP(w, r)
 	})
 }

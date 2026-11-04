@@ -76,8 +76,9 @@ func TestBrowserActorIgnoresForgedActorHeader(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	if started.StartedBy == nil || started.StartedBy.Kind != "browser" || started.StartedBy.User != browserUser {
-		t.Fatalf("forged header changed actor: %+v", started.StartedBy)
+	// The node secret makes this the machine's own OS user; the header is ignored.
+	if want := LocalActor("local"); started.StartedBy == nil || *started.StartedBy != want {
+		t.Fatalf("forged header changed actor: %+v, want %+v", started.StartedBy, want)
 	}
 }
 

@@ -22,7 +22,9 @@ func etagPath(p string) bool {
 // conditionalAPI gives GET and HEAD API responses a content ETag so repeat reads can answer 304.
 func conditionalAPI(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if (r.Method != http.MethodGet && r.Method != http.MethodHead) || !etagPath(r.URL.Path) {
+		// A stream (the hub's live conversation) must flush as it goes, never buffer.
+		streaming := r.URL.Query().Get("stream") == "1" || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
+		if (r.Method != http.MethodGet && r.Method != http.MethodHead) || streaming || !etagPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

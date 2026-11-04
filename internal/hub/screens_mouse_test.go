@@ -236,3 +236,10 @@ func TestHomePromptTakesLettersAndCtrlXLeads(t *testing.T) {
 		t.Fatalf("ctrl+x l: panel %d, draft %q", h.panel, h.homeDraft)
 	}
 }
+
+func TestHubConfigSkipsNonSelectOptions(t *testing.T) {
+	options, err := parseHubConversationConfig([]byte(`{"configOptions":[{"id":"verbose","type":"boolean","currentValue":false},{"id":"model","category":"model","currentValue":"m1","options":[{"value":"m1","name":"M1"}]}]}`))
+	if err != nil || len(options) != 1 || options[0].ID != "model" {
+		t.Fatalf("options = %+v, %v", options, err)
+	}
+}

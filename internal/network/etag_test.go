@@ -84,3 +84,16 @@ func TestConditionalAPIStreamsLargeBodiesWithoutETag(t *testing.T) {
 		t.Fatalf("large body truncated: got %d bytes, want %d", rec.Body.Len(), len(large))
 	}
 }
+
+func TestConditionalAPILetsStreamsFlush(t *testing.T) {
+	handler := conditionalAPI(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := w.(http.Flusher); !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		}
+	}))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/sessions/s1/conversation?since=0&stream=1", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("stream through conditionalAPI = %d %s", recorder.Code, recorder.Body)
+	}
+}
