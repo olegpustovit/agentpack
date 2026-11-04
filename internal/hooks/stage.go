@@ -100,6 +100,7 @@ func ApplyTargetPlan(plan TargetPlan) error {
 		if err := os.MkdirAll(filepath.Dir(file.Path), 0o755); err != nil {
 			return err
 		}
+		_ = os.Remove(file.Path) // never write through a link shared with another harness root
 		if err := os.WriteFile(file.Path, file.Contents, 0o644); err != nil {
 			return err
 		}

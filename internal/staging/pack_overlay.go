@@ -168,6 +168,9 @@ func writeFile(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create parent for %s: %w", path, err)
 	}
+	// Staged verbatim files may be hard links shared between harness roots;
+	// replace the path rather than write through it.
+	_ = os.Remove(path)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}

@@ -49,6 +49,8 @@ type PlannedPackageFile struct {
 	RelativePath   string
 	Contents       []byte
 	ExecuteBits    os.FileMode
+	// Verbatim marks a byte-for-byte copy of a package file, the same for every harness.
+	Verbatim bool
 }
 
 // PlanPackageTree reads a package once, applies mode filtering and target
@@ -94,7 +96,7 @@ func PlanPackageTree(sourceRoot, module, bareSkillName string, effective mode.Ef
 					return PackageTreePlan{}, err
 				}
 				for _, root := range roots {
-					plan.Files = append(plan.Files, PlannedPackageFile{Target: root.Target, SourceRelative: file.Real, RelativePath: destination, Contents: data, ExecuteBits: info.Mode().Perm() & 0o111})
+					plan.Files = append(plan.Files, PlannedPackageFile{Target: root.Target, SourceRelative: file.Real, RelativePath: destination, Contents: data, ExecuteBits: info.Mode().Perm() & 0o111, Verbatim: true})
 				}
 			}
 			continue
@@ -186,14 +188,32 @@ func ApplyPackageTreePlan(plan PackageTreePlan, roots []HarnessRoot) error {
 	for _, root := range roots {
 		rootByTarget[root.Target] = root.Path
 	}
+	// A verbatim file goes to every harness root of this generation; write it
+	// once and link the rest, which also keeps staging small.
+	written := make(map[string]string)
 	for _, file := range plan.Files {
 		root, ok := rootByTarget[file.Target]
 		if !ok {
 			continue
 		}
 		destination := filepath.Join(root, filepath.FromSlash(file.RelativePath))
+		key := fmt.Sprintf("%s\x00%o", file.SourceRelative, file.ExecuteBits)
+		// Hook files are rewritten per harness after this, so they are never shared.
+		shareable := file.Verbatim && !strings.HasPrefix(file.RelativePath, "hooks/")
+		if first, seen := written[key]; seen && shareable {
+			if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+				return err
+			}
+			_ = os.Remove(destination)
+			if os.Link(first, destination) == nil {
+				continue
+			}
+		}
 		if err := writeFile(destination, file.Contents); err != nil {
 			return err
+		}
+		if shareable {
+			written[key] = destination
 		}
 		if err := os.Chmod(destination, 0o644|file.ExecuteBits); err != nil {
 			return fmt.Errorf("set staged permissions %s: %w", destination, err)
@@ -247,7 +267,7 @@ func planRawSupport(sourceRoot, module string, effective mode.Effective, roots [
 				return err
 			}
 			for _, target := range destinations[subdirectory] {
-				plan.Files = append(plan.Files, PlannedPackageFile{Target: target, SourceRelative: fullRelative, RelativePath: fullRelative, Contents: data, ExecuteBits: info.Mode().Perm() & 0o111})
+				plan.Files = append(plan.Files, PlannedPackageFile{Target: target, SourceRelative: fullRelative, RelativePath: fullRelative, Contents: data, ExecuteBits: info.Mode().Perm() & 0o111, Verbatim: true})
 			}
 			return nil
 		})
