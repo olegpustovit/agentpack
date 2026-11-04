@@ -622,8 +622,9 @@ func TestHubMouseOpensSessionsAndExpandsToolGroups(t *testing.T) {
 	state := readFullChatFixture(t)
 	h := testHome()
 	h.panel = panelHome
-	h.homeListStart = 0
-	if cmd := h.handleMouseClick(3, 2); cmd == nil || h.panel != panelPreview {
+	h.width, h.height = 120, 36
+	h.View()
+	if cmd := h.handleMouseClick(3, h.homeListStart); cmd == nil || h.panel != panelPreview {
 		t.Fatalf("home click did not open selected row: panel=%d cmd=%v", h.panel, cmd != nil)
 	}
 	h.detachTerminal()

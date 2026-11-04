@@ -196,3 +196,25 @@ func TestStopSessionCmdUsesLocalGatewayForPeer(t *testing.T) {
 		t.Fatal("peer stop did not reach the local gateway")
 	}
 }
+
+func TestPreferDirectoryPutsTheOpenedProjectFirst(t *testing.T) {
+	dirs := []string{"/w/scratch", "/w/repo", "/w/repo/sub"}
+	for _, test := range []struct{ cwd, want string }{
+		{"/w/repo", "/w/repo"},
+		{"/w/repo/sub/pkg", "/w/repo/sub"},
+		{"/w/new", "/w/new"},
+	} {
+		got := preferDirectory(dirs, test.cwd)
+		if got[0] != test.want || len(got) != len(dirs)+map[bool]int{true: 1, false: 0}[test.want == "/w/new"] {
+			t.Errorf("preferDirectory(%s) = %v, want %s first", test.cwd, got, test.want)
+		}
+	}
+}
+
+func TestPathBaseHandlesWindowsPaths(t *testing.T) {
+	for in, want := range map[string]string{`C:\Users\me\projects\rays`: "rays", "/home/me/repo/": "repo", "": ""} {
+		if got := pathBase(in); got != want {
+			t.Errorf("pathBase(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

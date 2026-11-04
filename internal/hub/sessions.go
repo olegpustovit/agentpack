@@ -2,7 +2,6 @@ package hub
 
 import (
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -50,7 +49,8 @@ func pathBase(path string) string {
 	if path == "" {
 		return ""
 	}
-	return filepath.Base(path)
+	// Remote machines may run Windows, so split on either separator.
+	return path[strings.LastIndexAny(path, `/\`)+1:]
 }
 
 func parentName(directory string) string {

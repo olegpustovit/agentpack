@@ -155,6 +155,7 @@ type home struct {
 	pendingSession           string
 	leader                   bool
 	homeListStart            int
+	homeLines                []int // h.rows index of each home list line
 	listScrollStart          int
 	sessionTab               int
 	sessionFilter            string

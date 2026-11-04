@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -162,6 +163,31 @@ func availableRecentDirectories(folders []network.RecentFolder) []string {
 	return directories
 }
 
+// preferDirectory puts the project ap was opened in first: the listed folder
+// that contains cwd (the deepest one), or cwd itself when none does.
+func preferDirectory(directories []string, cwd string) []string {
+	cwd = filepath.Clean(cwd)
+	best := -1
+	for i, directory := range directories {
+		if relative, err := filepath.Rel(directory, cwd); err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			if best < 0 || len(directory) > len(directories[best]) {
+				best = i
+			}
+		}
+	}
+	chosen := cwd
+	if best >= 0 {
+		chosen = directories[best]
+	}
+	ordered := []string{chosen}
+	for _, directory := range directories {
+		if directory != chosen {
+			ordered = append(ordered, directory)
+		}
+	}
+	return ordered
+}
+
 func (h *home) openNewSession() tea.Cmd {
 	h.cancelPreviewStream()
 	h.newFrom = h.panel
@@ -199,7 +225,11 @@ func (h *home) loadRecentFoldersCmd() tea.Cmd {
 				}
 			}
 		}
-		return recentFoldersLoadedMsg{directories: availableRecentDirectories(folders), machines: machines, err: err}
+		directories := availableRecentDirectories(folders)
+		if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+			directories = preferDirectory(directories, cwd)
+		}
+		return recentFoldersLoadedMsg{directories: directories, machines: machines, err: err}
 	}
 }
 
@@ -427,29 +457,36 @@ func (h *home) viewHome() string {
 	}
 	row := start + 7 + len(selectorGroups)
 	h.homeListStart = row
+	// The prototype's table: one centred column, no group headings, "+N more" past the fold.
+	column := min(width-4, max(52, min(92, width-16)))
+	left := strings.Repeat(" ", max(0, (width-column)/2))
+	h.homeLines = h.homeLines[:0]
+	var sessions []int
 	for i := range h.rows {
-		if row >= height-2 {
-			break
+		if h.rows[i].kind == rowSession {
+			sessions = append(sessions, i)
 		}
-		entry := h.rows[i]
-		var line string
-		switch entry.kind {
-		case rowGroup:
-			line = "  " + entry.label
-		case rowSubhead:
-			line = "  " + entry.label
-		case rowSession:
-			index := sessionRowIndex(h.rows, i)
-			marker := "  "
-			if index == h.cursor {
-				marker = "› "
-			} else if index == h.hoverRow {
-				marker = "· "
-			}
-			line = marker + dotGlyph(dotState(entry.session.info)) + " " + truncate(sessionTitle(*entry.session), max(1, width/2)) + "  " + harnessLabel(entry.session.info.Harness) + "  " + pathBase(entry.session.info.Directory)
+	}
+	shown := min(len(sessions), max(3, height-16), max(0, height-2-row))
+	if shown < len(sessions) && shown > 0 {
+		shown--
+	}
+	for _, rowIndex := range sessions[:shown] {
+		entry := h.rows[rowIndex]
+		line := homeSessionLine(*entry.session, column)
+		index := sessionRowIndex(h.rows, rowIndex)
+		switch {
+		case index == h.cursor:
+			line = lipgloss.NewStyle().Reverse(true).Render(line)
+		case index == h.hoverRow:
+			line = lipgloss.NewStyle().Bold(true).Render(line)
 		}
-		lines[row] = center(truncate(line, width))
+		lines[row] = left + line
+		h.homeLines = append(h.homeLines, rowIndex)
 		row++
+	}
+	if shown < len(sessions) && row < height-1 {
+		lines[row] = left + lipgloss.NewStyle().Faint(true).Render(fmt.Sprintf(" +%d more · ctrl+x l all sessions", len(sessions)-shown))
 	}
 	footer := "enter start · ↑/↓ sessions · tab selectors · ctrl+x n new · ? help · ctrl+c quit"
 	if width < 60 {
@@ -1142,7 +1179,10 @@ func (h *home) handleMouseClick(x, y int) tea.Cmd {
 		if y == h.homePromptLine {
 			return nil
 		}
-		return h.openSessionRow(y-h.homeListStart, panelHome)
+		if line := y - h.homeListStart; line >= 0 && line < len(h.homeLines) {
+			return h.openSessionRow(h.homeLines[line], panelHome)
+		}
+		return nil
 	case panelList:
 		return h.handleSessionMouseClick(x, y)
 	case panelPreview:
@@ -1242,7 +1282,9 @@ func (h *home) handleMouseMotion(x, y int) bool {
 	hoverRow, previewHoverLine := -1, -1
 	switch h.panel {
 	case panelHome:
-		hoverRow = h.sessionAtRow(y - h.homeListStart)
+		if line := y - h.homeListStart; line >= 0 && line < len(h.homeLines) {
+			hoverRow = h.sessionAtRow(h.homeLines[line])
+		}
 	case panelList:
 		hoverRow = h.sessionAtListLine(y)
 	case panelPreview:
@@ -1268,4 +1310,56 @@ func (h *home) chatTextWidth() int {
 		width = max(1, width-min(30, max(24, h.width/4))-3)
 	}
 	return width
+}
+
+// homeSessionLine lays out one session in the prototype's columns, dropping
+// machine, view and project as the column narrows. An unnamed session shows
+// its agent as its name, so the agent column stays empty.
+func homeSessionLine(session listedSession, width int) string {
+	type column struct {
+		width int
+		value string
+	}
+	agent := harnessLabel(session.info.Harness)
+	name := session.info.Name
+	if name == "" {
+		name, agent = agent, ""
+	}
+	project := pathBase(session.info.Directory)
+	machine := session.machineName
+	if machine == "" {
+		machine = session.machine
+	}
+	view := "chat"
+	if session.info.Transport != "acp" {
+		view = "term"
+	}
+	tail := []column{{10, sessionAgeLabel(session.info.LastUsed, session.info.StartedAt)}}
+	switch {
+	case width >= 96:
+		tail = append([]column{{10, agent}, {13, project}, {12, machine}, {5, view}}, tail...)
+	case width >= 62:
+		tail = append([]column{{10, agent}, {11, project}}, tail...)
+	case width >= 52:
+		tail = append([]column{{10, agent}}, tail...)
+	}
+	if session.info.ConversationState == "needs_you" {
+		tail[len(tail)-1].value = "needs you"
+	}
+	used := 4
+	for _, c := range tail {
+		used += c.width + 1
+	}
+	var line strings.Builder
+	line.WriteString(" " + dotGlyph(dotState(session.info)) + " ")
+	line.WriteString(padCell(name, max(8, width-used)))
+	for _, c := range tail {
+		line.WriteString(" " + padCell(c.value, c.width))
+	}
+	return truncate(line.String(), width)
+}
+
+func padCell(value string, width int) string {
+	value = truncate(value, width)
+	return value + strings.Repeat(" ", max(0, width-lipgloss.Width(value)))
 }
