@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -610,5 +611,16 @@ func TestRunWorkerACPRestartAndStop(t *testing.T) {
 	})
 	if err != nil || code != 0 {
 		t.Fatalf("RunWorker() = %d, %v", code, err)
+	}
+}
+
+func TestFailedPromptEndsTheTurnWithANotice(t *testing.T) {
+	log := acp.NewEventLog(0)
+	log.Append("prompt", 1, json.RawMessage(`{"text":"hi"}`))
+	logFailedTurn(log, errors.New("Authentication required"))
+	entries := log.Snapshot()
+	state := acp.ReduceLog(entries)
+	if state.Working || len(entries) != 3 || entries[1].Kind != "notice" || !strings.Contains(string(entries[1].Payload), "Authentication required") {
+		t.Fatalf("working=%v entries=%v", state.Working, entries)
 	}
 }

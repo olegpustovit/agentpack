@@ -110,6 +110,8 @@ func startACPReplayAgent(launch WorkerLaunch, sessionDir string, entries []acp.L
 			})
 			if err == nil {
 				log.Append("turn_end", time.Now().UnixMilli(), mustRawJSON(response))
+			} else {
+				logFailedTurn(log, err)
 			}
 			return err
 		},
@@ -213,6 +215,8 @@ func startACPAgentProcess(launch WorkerLaunch, launchCtx base.LaunchContext, har
 			})
 			if err == nil {
 				log.Append("turn_end", time.Now().UnixMilli(), mustRawJSON(response))
+			} else {
+				logFailedTurn(log, err)
 			}
 			return err
 		},
@@ -912,4 +916,14 @@ func mustRawJSON(v any) json.RawMessage {
 		return json.RawMessage("{}")
 	}
 	return b
+}
+
+// logFailedTurn ends a turn the agent refused, such as one that needs a
+// sign-in, so viewers see why instead of a turn that never ends.
+func logFailedTurn(log *acp.EventLog, err error) {
+	now := time.Now().UnixMilli()
+	log.Append("notice", now, mustRawJSON(map[string]any{
+		"sessionUpdate": "notice", "severity": "error", "title": "The agent could not run this prompt", "description": err.Error(),
+	}))
+	log.Append("turn_end", now, mustRawJSON(map[string]any{"stopReason": "error"}))
 }
