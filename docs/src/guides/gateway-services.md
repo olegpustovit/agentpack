@@ -4,16 +4,15 @@ Normal agent launches start a local node automatically. To have the gateway avai
 as a user service after login, run these commands from Bash, Zsh, or PowerShell:
 
 ```text
-agentpack service install
+agentpack service start
 agentpack service status
 agentpack service stop
-agentpack service start
 agentpack service uninstall
 ```
 
-Install captures the executable's current absolute path and `AGENTPACK_HOME`. Keep the
-binary there, or run install again after moving it. No command changes your shell
-profile, PATH, or requires a root account. The service runs as your current OS user.
+Start creates or refreshes the service definition from the current executable path and
+`AGENTPACK_HOME`, then restarts the gateway. No separate install command is needed.
+No command changes your shell profile or PATH, or requires a root account. The service runs as your current OS user.
 At startup it reads `PATH` from your login shell, so it finds the same agents your terminal does.
 
 - Linux uses `systemctl --user` and an `agentpack-gateway.service` unit under

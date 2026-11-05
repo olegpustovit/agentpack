@@ -105,7 +105,7 @@ func (runner Runner) runNetworkService(ctx context.Context, args []string) (int,
 			return 1, err
 		}
 	}
-	if runtime.GOOS == "darwin" && (action == "install" || action == "uninstall") {
+	if runtime.GOOS == "darwin" && (action == "install" || action == "start" || action == "uninstall") {
 		target := "gui/" + strconv.Itoa(os.Getuid()) + "/" + gatewayLaunchLabel
 		if exec.CommandContext(ctx, "launchctl", "print", target).Run() == nil {
 			if err := exec.CommandContext(ctx, "launchctl", "bootout", target).Run(); err != nil {
@@ -153,6 +153,9 @@ func (runner Runner) runNetworkService(ctx context.Context, args []string) (int,
 
 func makeNetworkServicePlan(goos, action, executable, home, configHome, userHome, uid string) (networkServicePlan, error) {
 	var plan networkServicePlan
+	if action == "start" {
+		action = "install"
+	}
 	if action != "install" && action != "start" && action != "stop" && action != "status" && action != "uninstall" {
 		return plan, fmt.Errorf("unknown service action %q", action)
 	}
@@ -168,8 +171,6 @@ func makeNetworkServicePlan(goos, action, executable, home, configHome, userHome
 		case "install":
 			plan.content = "[Unit]\nDescription=Agentpack gateway\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=" + systemdWord(strings.ReplaceAll(executable, "$", "$$")) + " service run\nEnvironment=" + systemdWord("AGENTPACK_HOME="+home) + "\nRestart=on-failure\nRestartSec=3\nKillMode=process\nTimeoutStopSec=10\n\n[Install]\nWantedBy=default.target\n"
 			plan.commands = [][]string{{"systemctl", "--user", "daemon-reload"}, {"systemctl", "--user", "enable", gatewayServiceName}, {"systemctl", "--user", "restart", gatewayServiceName}}
-		case "start":
-			plan.commands = [][]string{{"systemctl", "--user", "restart", gatewayServiceName}}
 		case "stop":
 			plan.commands = [][]string{{"systemctl", "--user", "stop", gatewayServiceName}}
 		case "status":
@@ -185,8 +186,6 @@ func makeNetworkServicePlan(goos, action, executable, home, configHome, userHome
 		case "install":
 			plan.content = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>" + gatewayLaunchLabel + "</string><key>ProgramArguments</key><array><string>" + xmlText(executable) + "</string><string>service</string><string>run</string></array><key>EnvironmentVariables</key><dict><key>AGENTPACK_HOME</key><string>" + xmlText(home) + "</string></dict><key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict><key>AbandonProcessGroup</key><true/><key>ThrottleInterval</key><integer>3</integer><key>StandardOutPath</key><string>" + xmlText(filepath.Join(home, "network", "gateway-service.log")) + "</string><key>StandardErrorPath</key><string>" + xmlText(filepath.Join(home, "network", "gateway-service.log")) + "</string></dict></plist>\n"
 			plan.commands = [][]string{{"launchctl", "enable", domain + "/" + gatewayLaunchLabel}, {"launchctl", "bootstrap", domain, plan.path}, {"launchctl", "kickstart", "-k", domain + "/" + gatewayLaunchLabel}}
-		case "start":
-			plan.commands = [][]string{{"launchctl", "enable", domain + "/" + gatewayLaunchLabel}, {"launchctl", "kickstart", "-k", domain + "/" + gatewayLaunchLabel}}
 		case "stop":
 			plan.commands = [][]string{{"launchctl", "disable", domain + "/" + gatewayLaunchLabel}}
 		case "status":
@@ -195,15 +194,13 @@ func makeNetworkServicePlan(goos, action, executable, home, configHome, userHome
 			plan.remove = true
 		}
 	case "windows":
-		script := "$ErrorActionPreference = 'Stop'\n$user = [Security.Principal.WindowsIdentity]::GetCurrent()\n$name = 'Agentpack Gateway-' + $user.User.Value\n"
+		script := "$ErrorActionPreference = 'Stop'\n$ProgressPreference = 'SilentlyContinue'\n$user = [Security.Principal.WindowsIdentity]::GetCurrent()\n$name = 'Agentpack Gateway-' + $user.User.Value\n"
 		switch action {
 		case "install":
 			launch := "$ErrorActionPreference = 'Stop'\n$env:AGENTPACK_HOME = " + powerShellLiteral(home) + "\n& " + powerShellLiteral(executable) + " gateway status *> $null\nif ($LASTEXITCODE -ne 0) { & " + powerShellLiteral(executable) + " service run *>> " + powerShellLiteral(filepath.Join(home, "network", "gateway-service.log")) + " }\nexit $LASTEXITCODE\n"
 			// WMI starts outside the Scheduled Task job, preserving detached workers.
 			bootstrap := "$ErrorActionPreference = 'Stop'\n$command = '\"' + (Get-Command powershell.exe).Source + '\" -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand " + encodedPowerShell(launch) + "'\n$environment = [string[]](Get-ChildItem Env: | ForEach-Object { $_.Name + '=' + $_.Value })\n$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ EnvironmentVariables = $environment; CreateFlags = [uint32]1024 }\n$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $command; ProcessStartupInformation = $startup }\nif ($result.ReturnValue -ne 0) { throw 'Could not start gateway process' }\n"
 			script += "$action = New-ScheduledTaskAction -Execute (Get-Command powershell.exe).Source -Argument " + powerShellLiteral("-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand "+encodedPowerShell(bootstrap)) + "\n$logon = New-ScheduledTaskTrigger -AtLogOn -User $user.Name\n$retry = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)\n$principal = New-ScheduledTaskPrincipal -UserId $user.Name -LogonType Interactive -RunLevel Limited\n$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 1)\nRegister-ScheduledTask -TaskName $name -Action $action -Trigger @($logon,$retry) -Principal $principal -Settings $settings -Force | Out-Null\nStart-ScheduledTask -TaskName $name\n"
-		case "start":
-			script += "Enable-ScheduledTask -TaskName $name | Out-Null\nStart-ScheduledTask -TaskName $name\n"
 		case "stop":
 			script += "Disable-ScheduledTask -TaskName $name | Out-Null\n"
 		case "status":

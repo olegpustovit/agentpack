@@ -40,8 +40,8 @@ Remove-Item Env:AGENTPACK_RESTART_SERVICE
 Use `AGENTPACK_INSTALL_DIR` when the service executable is outside
 `$HOME/.local/bin`. The restart keeps the existing service
 definition and environment. If you only installed a CLI and want the service
-to switch to it, run `ap service install` once; that updates the service
-definition and restarts it.
+to switch to it, run `ap service start`; it updates the service definition and
+restarts it automatically.
 
 ## Homebrew (macOS and Linux)
 

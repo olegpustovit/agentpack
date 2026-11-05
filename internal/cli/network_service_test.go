@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -93,7 +94,7 @@ func TestServiceLifecycleCommandsAndInvalidPaths(t *testing.T) {
 			if err != nil {
 				t.Fatal(platform, action, err)
 			}
-			if action != "install" && plan.content != "" {
+			if action != "install" && action != "start" && plan.content != "" {
 				t.Fatal("unexpected definition rewrite")
 			}
 			if platform == "windows" && action == "stop" {
@@ -102,6 +103,22 @@ func TestServiceLifecycleCommandsAndInvalidPaths(t *testing.T) {
 					t.Fatal("task stop would terminate live workers")
 				}
 			}
+		}
+	}
+	for _, platform := range []string{"linux", "darwin", "windows"} {
+		install, err := makeNetworkServicePlan(platform, "install", "/bin/agentpack", "/data", "/config", "/home", "42")
+		if err != nil {
+			t.Fatal(platform, "install", err)
+		}
+		start, err := makeNetworkServicePlan(platform, "start", "/bin/agentpack", "/data", "/config", "/home", "42")
+		if err != nil {
+			t.Fatal(platform, "start", err)
+		}
+		if start.content != install.content || !reflect.DeepEqual(start.commands, install.commands) {
+			t.Fatalf("%s start should create/refresh and start the service; got %+v, want %+v", platform, start, install)
+		}
+		if platform == "windows" && !strings.Contains(decodeServiceScript(t, start.commands[0][4]), "$ProgressPreference = 'SilentlyContinue'") {
+			t.Fatal("Windows service commands should suppress PowerShell progress output")
 		}
 	}
 	for _, path := range []string{"/bad\npath", "/bad\rpath", "/bad\x00path"} {
