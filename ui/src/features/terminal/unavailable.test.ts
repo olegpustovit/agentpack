@@ -13,6 +13,11 @@ describe("unavailableMessage", () => {
     expect(unavailableMessage({ state: { interactive: false } }, false)).toBe("Native stdio · browser input unavailable")
   })
 
+  it("keeps ACP sessions in Chat even when they have no terminal input", () => {
+    expect(unavailableMessage({ transport: "acp", state: { interactive: false } }, false)).toBeUndefined()
+    expect(unavailableMessage({ transport: "acp", state: { interactive: false } }, true)).toBe("Offline · showing last-known session metadata")
+  })
+
   it("marks a stale session offline even with no info", () => {
     expect(unavailableMessage(undefined, true)).toBe("Offline · showing last-known session metadata")
   })
