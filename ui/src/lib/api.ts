@@ -15,8 +15,12 @@ export function setUnauthorizedHandler(handler: () => void) {
   onUnauthorized = handler
 }
 
-function unreachableMessage(status: number) {
-  return status === 524 ? "The machine took too long to answer. Try again." : `The machine could not be reached (HTTP ${status}). Try again.`
+function unreachableMessage(status: number, method: string, path: string, machine?: string) {
+  const target = machine && machine !== LOCAL ? ` on node ${machine}` : ""
+  const request = `${method} ${path}${target}`
+  return status === 524
+    ? `The gateway timed out during ${request} (HTTP 524). Check the gateway and machine, then retry.`
+    : `The gateway's reverse proxy returned an HTML error during ${request} (HTTP ${status}). The response had no Agentpack error detail; check the gateway or reverse-proxy logs, then retry.`
 }
 
 // Mutations must pass `machine` explicitly; there is no default target.
@@ -32,8 +36,9 @@ export async function api<T>(
     }
   }
   const hasBody = opts.body !== undefined
+  const method = opts.method ?? (hasBody ? "POST" : "GET")
   const res = await fetch(url, {
-    method: opts.method ?? (hasBody ? "POST" : "GET"),
+    method,
     headers: hasBody ? { "Content-Type": "application/json" } : undefined,
     body: hasBody ? JSON.stringify(opts.body) : undefined,
   })
@@ -51,7 +56,7 @@ export async function api<T>(
         ? data.error
         : // A proxy in front of the gateway can answer with its own error page.
           /^\s*<(!doctype|html)/i.test(text)
-          ? unreachableMessage(res.status)
+          ? unreachableMessage(res.status, method, path, opts.machine)
           : text.slice(0, 200) || res.statusText
     throw new ApiError(error, res.status)
   }

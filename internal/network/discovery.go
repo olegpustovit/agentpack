@@ -432,9 +432,10 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 	if r.URL.Path == "/api/limits" || strings.HasPrefix(r.URL.Path, "/api/library/") || r.Method != http.MethodGet && r.Method != http.MethodHead {
 		proxy.Transport = tailnetMutationTransport
 	}
-	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
+		log.Printf("tailnet proxy failed for node %s: %v", id, err)
 		w.Header().Set("Cache-Control", "no-store")
-		http.Error(w, "remote node connection failed", 502)
+		http.Error(w, "remote node connection failed; the gateway logged the network error", http.StatusBadGateway)
 	}
 	proxy.ModifyResponse = func(response *http.Response) error {
 		response.Header.Del("Set-Cookie")
