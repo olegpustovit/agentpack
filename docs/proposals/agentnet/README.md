@@ -48,7 +48,7 @@ not Windows runtime checks. A real transient `systemd --user` unit with
 `KillMode=process` passed: a fresh session launched inside the gateway service cgroup
 retained its worker and terminal input/output after the unit stopped. The isolated unit
 and scratch directories were cleaned up. This verifies stop survival; permanent
-service install/start/uninstall remains covered by mocked lifecycle checks.
+service start/stop/uninstall remains covered by mocked lifecycle checks.
 
 The complete Go suite, `go vet ./...`, and affected race tests (network, CLI and sync)
 passed. Regression coverage includes cross-process package edits, retry-safe restarts,

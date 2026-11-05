@@ -62,3 +62,16 @@ func TestHubRefusesInsideAgentSession(t *testing.T) {
 		t.Fatalf("expected refusal, got %v", err)
 	}
 }
+
+func TestServiceStartIsTheOnlyInstallEntryPoint(t *testing.T) {
+	runner := Runner{Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard}
+	root := runner.rootCommand(nil, new(int))
+	service, _, err := root.Find([]string{"service", "start"})
+	if err != nil || service.Name() != "start" {
+		t.Fatalf("service start command missing: command=%v err=%v", service, err)
+	}
+	service, _, err = root.Find([]string{"service", "install"})
+	if err == nil && service.Name() == "install" {
+		t.Fatal("separate service install command should not be exposed")
+	}
+}

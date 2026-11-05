@@ -33,7 +33,7 @@ type networkServicePlan struct {
 
 func (runner Runner) runNetworkService(ctx context.Context, args []string) (int, error) {
 	if len(args) != 1 {
-		return 2, errors.New("expected service install, start, stop, status, or uninstall")
+		return 2, errors.New("expected service start, stop, status, or uninstall")
 	}
 	action := args[0]
 	home, err := paths.UserAgentpackHome()
@@ -100,12 +100,12 @@ func (runner Runner) runNetworkService(ctx context.Context, args []string) (int,
 			}
 		}
 	}
-	if action == "install" || action == "start" {
+	if action == "start" {
 		if err = network.SetGatewayEnabled(home, true); err != nil {
 			return 1, err
 		}
 	}
-	if runtime.GOOS == "darwin" && (action == "install" || action == "start" || action == "uninstall") {
+	if runtime.GOOS == "darwin" && (action == "start" || action == "uninstall") {
 		target := "gui/" + strconv.Itoa(os.Getuid()) + "/" + gatewayLaunchLabel
 		if exec.CommandContext(ctx, "launchctl", "print", target).Run() == nil {
 			if err := exec.CommandContext(ctx, "launchctl", "bootout", target).Run(); err != nil {

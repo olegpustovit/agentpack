@@ -166,7 +166,7 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	root.AddCommand(worker, signal)
 	gateway := &cobra.Command{Use: "gateway", Short: "Manage shared agent terminals and browser access"}
 	service := &cobra.Command{Use: "service", Short: "Manage optional user service persistence"}
-	for _, action := range []string{"install", "start", "stop", "status", "uninstall", "run"} {
+	for _, action := range []string{"start", "stop", "status", "uninstall", "run"} {
 		command := leaf(action, "User service "+action)
 		command.Hidden = action == "run"
 		service.AddCommand(command)
