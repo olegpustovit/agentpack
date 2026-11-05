@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Button } from "@/components/ui/button"
 import { Package, SquareTerminal, Trash2 } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Hash, Inspector, Section } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
@@ -15,7 +16,7 @@ import type { ProjectRow } from "@/lib/api-types"
 import { basename, harnessName, relativeTime } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { buildMatrix } from "./matrix"
-import { machineIdentityQuery, topologyQuery, useMachines, type Machine } from "./queries"
+import { compareAgentpackVersions, latestAgentpackVersionQuery, machineIdentityQuery, machineUpdateQuery, topologyQuery, useMachines, type Machine } from "./queries"
 
 type Action = { kind: "new" | "install"; machine: Machine; project: ProjectRow }
 type ForgetTarget = { machine: Machine; project: ProjectRow }
@@ -36,10 +37,25 @@ function MachineView({ machine }: { machine: Machine }) {
   const queryClient = useQueryClient()
   const identity = useQuery({ ...machineIdentityQuery(machine.id), enabled: machine.online })
   const topology = useQuery({ ...topologyQuery(live), enabled: machine.id !== LOCAL })
+  const latest = useQuery(latestAgentpackVersionQuery)
+  const updateStatus = useQuery({ ...machineUpdateQuery(machine.id), enabled: machine.online })
   // Offline machines are disabled, so this returns the last known projects from the cache.
   const projects = useQuery({ ...projectsQuery(machine.id), enabled: machine.online })
   const [action, setAction] = useState<Action | null>(null)
   const [forgetting, setForgetting] = useState<ForgetTarget | null>(null)
+
+  const update = useMutation({
+    mutationFn: () => api<{ started: boolean }>("/api/node/update", { machine: machine.id }),
+    onSuccess: () => {
+      hud.success(`Update started on ${machine.name}`)
+      void queryClient.invalidateQueries({ queryKey: machineUpdateQuery(machine.id).queryKey })
+      setTimeout(() => {
+        void queryClient.invalidateQueries({ queryKey: ["topology"] })
+        void queryClient.invalidateQueries({ queryKey: ["m", machine.id, "identity"] })
+      }, 5000)
+    },
+    onError: (error) => hud.error(`Couldn't update ${machine.name}: ${error.message}`),
+  })
 
   const forget = useMutation({
     mutationFn: (target: ForgetTarget) =>
@@ -53,6 +69,8 @@ function MachineView({ machine }: { machine: Machine }) {
 
   const needsUpdate = machine.id !== LOCAL && projects.error instanceof ApiError && projects.error.status === 404
   const peer = topology.data?.peers.find((item) => item.id === machine.id)
+  const machineVersion = machine.id === LOCAL ? identity.data?.node.version : peer?.version
+  const versionOutdated = !!machineVersion && !!latest.data?.version && compareAgentpackVersions(machineVersion, latest.data.version) < 0
   const facts = [
     needsUpdate ? "Needs update" : machine.online ? "Online" : "Offline",
     identity.data?.node.os,
@@ -74,7 +92,24 @@ function MachineView({ machine }: { machine: Machine }) {
             {cached ? `${machine.name} is offline. Showing last known projects.` : `${machine.name} is offline. No projects are cached.`}
           </Banner>
         )}
-        {needsUpdate && <Banner tone="warn" className="col-span-full">{`Update Agentpack on ${machine.name} to see its projects.`}</Banner>}
+        {(needsUpdate || versionOutdated) && (
+          <Banner
+            tone="warn"
+            className="col-span-full"
+            action={
+              machine.online && (
+                <Button variant="primary" size="sm" disabled={update.isPending || updateStatus.data?.state === "running"} onClick={() => update.mutate()}>
+                  {update.isPending || updateStatus.data?.state === "running" ? "Updating…" : "Update and restart"}
+                </Button>
+              )
+            }
+          >
+            {needsUpdate ? `Update Agentpack on ${machine.name} to restore machine details.` : `${machine.name} is running ${machineVersion}; version ${latest.data?.version} is available.`}
+          </Banner>
+        )}
+        {updateStatus.data?.state === "failed" && (
+          <Banner tone="danger" className="col-span-full">{`Couldn't update ${machine.name}: ${updateStatus.data.error}`}</Banner>
+        )}
         {projects.error && !needsUpdate && (
           <Banner tone="danger" className="col-span-full">
             {`Couldn't load projects from ${machine.name}: ${projects.error.message}`}

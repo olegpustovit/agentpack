@@ -76,6 +76,7 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 		options.Start = func(ctx context.Context, info network.SessionInfo, forkSessionID string) (string, error) {
 			return runner.startRemoteSession(ctx, home, executable, info, forkSessionID)
 		}
+		options.Update = runner.updateGateway
 		options.Packages = func(ctx context.Context, directory string) (network.ProjectContents, error) {
 			packContext, err := resolveInvocationContext(Invocation{Global: Global{WorkspaceRoot: directory}}, true)
 			if err != nil {

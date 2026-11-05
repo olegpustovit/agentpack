@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -28,6 +29,7 @@ type GatewayOptions struct {
 	Start                    func(context.Context, SessionInfo, string) (string, error)
 	Packages                 func(context.Context, string) (ProjectContents, error)
 	Install                  func(context.Context, string, string, bool) error
+	Update                   func(context.Context) error
 	Library                  LibraryOptions
 	Assets                   http.Handler
 	Version                  string
@@ -50,6 +52,9 @@ type Gateway struct {
 	replicaStatus  sync.Map
 	replicaSettled sync.Map // peer → inventories after the last exchange
 	identityMu     sync.Mutex
+	updateMu       sync.Mutex
+	updating       bool
+	updateError    string
 	identityAt     time.Time
 	identitySelf   tailnetSelf
 	events         eventHub
@@ -135,6 +140,47 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, map[string]bool{"ok": true}) })
 	mux.HandleFunc("GET /api/status", g.auth.status)
 	mux.HandleFunc("GET /api/identity", g.identity)
+	mux.HandleFunc("GET /api/version/latest", latestAgentpackVersion)
+	mux.HandleFunc("GET /api/node/update", func(w http.ResponseWriter, r *http.Request) {
+		g.updateMu.Lock()
+		defer g.updateMu.Unlock()
+		state := "idle"
+		if g.updating {
+			state = "running"
+		} else if g.updateError != "" {
+			state = "failed"
+		}
+		writeJSON(w, map[string]string{"state": state, "error": g.updateError})
+	})
+	mux.HandleFunc("POST /api/node/update", func(w http.ResponseWriter, r *http.Request) {
+		if g.options.Update == nil {
+			http.Error(w, "gateway updates are unavailable", http.StatusNotImplemented)
+			return
+		}
+		g.updateMu.Lock()
+		if g.updating {
+			g.updateMu.Unlock()
+			http.Error(w, "an update is already running", http.StatusConflict)
+			return
+		}
+		g.updating = true
+		g.updateError = ""
+		g.updateMu.Unlock()
+		go func() {
+			defer func() {
+				g.updateMu.Lock()
+				g.updating = false
+				g.updateMu.Unlock()
+			}()
+			if err := g.options.Update(context.Background()); err != nil {
+				g.updateMu.Lock()
+				g.updateError = err.Error()
+				g.updateMu.Unlock()
+				log.Printf("gateway update failed: %v", err)
+			}
+		}()
+		writeJSON(w, map[string]bool{"started": true})
+	})
 	mux.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) { g.auth.login(w, r, true, g.origin.Scheme == "https") })
 	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) { g.auth.login(w, r, false, g.origin.Scheme == "https") })
 	mux.HandleFunc("POST /api/logout", g.auth.logout)

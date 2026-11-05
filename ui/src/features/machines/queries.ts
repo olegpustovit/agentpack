@@ -13,6 +13,38 @@ export const identityQuery = queryOptions({
   staleTime: 60 * 60 * 1000,
 })
 
+export const latestAgentpackVersionQuery = queryOptions({
+  queryKey: ["agentpack-latest-version"],
+  queryFn: () => api<{ version: string; url: string }>("/api/version/latest"),
+  staleTime: 15 * 60 * 1000,
+  retry: false,
+})
+
+export const machineUpdateQuery = (machine: string) =>
+  queryOptions({
+    queryKey: ["m", machine, "update"],
+    queryFn: () => api<{ state: "idle" | "running" | "failed"; error: string }>("/api/node/update", { machine }),
+    staleTime: 0,
+    refetchInterval: (query) => query.state.data?.state === "running" ? 2000 : false,
+  })
+
+export function compareAgentpackVersions(left: string, right: string): number {
+  const parse = (value: string) => {
+    const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value)
+    return match && { parts: match.slice(1, 4).map(Number), pre: match[4] }
+  }
+  const a = parse(left)
+  const b = parse(right)
+  if (!a || !b) return 0
+  for (let i = 0; i < 3; i++) {
+    const leftPart = a.parts[i] ?? 0
+    const rightPart = b.parts[i] ?? 0
+    if (leftPart !== rightPart) return leftPart - rightPart
+  }
+  if (a.pre === b.pre) return 0
+  return a.pre ? -1 : 1
+}
+
 // A peer's identity is proxied through the gateway, so OS and version come from the machine itself.
 export const machineIdentityQuery = (machine: string) =>
   queryOptions({

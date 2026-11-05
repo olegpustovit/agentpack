@@ -343,6 +343,9 @@ func peerRoute(method, path string) bool {
 	if method == "POST" && (path == "/api/sessions" || path == "/api/packages" || path == "/api/limits/refresh") {
 		return true
 	}
+	if (method == "GET" || method == "POST") && path == "/api/node/update" {
+		return true
+	}
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	if len(parts) == 6 {
 		return method == "POST" && parts[0] == "api" && parts[1] == "sessions" &&
