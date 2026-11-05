@@ -15,7 +15,7 @@ Options:
 
 Environment:
   AGENTPACK_VERSION, AGENTPACK_DOWNLOAD_URL, AGENTPACK_INSTALL_DIR,
-  AGENTPACK_GITHUB_TOKEN
+  AGENTPACK_GITHUB_TOKEN, AGENTPACK_RESTART_SERVICE=1
 "@
     exit 0
 }
@@ -69,6 +69,19 @@ try {
     Remove-Item -Force "$Destination.*.old" -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $Destination) { Move-Item -Force $Destination "$Destination.$([guid]::NewGuid().ToString('N')).old" }
     Move-Item -Force $Pending $Destination
+
+    $AgentpackAlias = Join-Path $InstallDir 'agentpack.exe'
+    if ((Test-Path -LiteralPath $AgentpackAlias -PathType Leaf) -and -not (Get-Item -LiteralPath $AgentpackAlias).LinkType) {
+        $AliasPending = "$AgentpackAlias.new"
+        Copy-Item -Force $Destination $AliasPending
+        if (Test-Path -LiteralPath $AgentpackAlias) { Move-Item -Force $AgentpackAlias "$AgentpackAlias.$([guid]::NewGuid().ToString('N')).old" }
+        Move-Item -Force $AliasPending $AgentpackAlias
+    }
+
+    if ($env:AGENTPACK_RESTART_SERVICE -eq '1') {
+        & $Destination service start
+        if ($LASTEXITCODE -ne 0) { throw 'Could not restart the Agentpack gateway service' }
+    }
 
     Write-Output "Installed agentpack $Version to $Destination"
 } finally {

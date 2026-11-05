@@ -70,6 +70,16 @@ func TestReleaseInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	defer server.Close()
 
 	installDir := filepath.Join(t.TempDir(), "bin")
+	aliasName := "agentpack"
+	if runtime.GOOS == "windows" {
+		aliasName += ".exe"
+	}
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installDir, aliasName), []byte("old service binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	command := installerCommand(t)
 	command.Env = installerEnvironment(
 		"AGENTPACK_VERSION="+installerFixtureVersion,
@@ -89,6 +99,10 @@ func TestReleaseInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	}
 	if string(contents) != installerFixtureBinary() {
 		t.Fatalf("installed contents = %q from %s", contents, archiveName)
+	}
+	aliasContents, err := os.ReadFile(filepath.Join(installDir, aliasName))
+	if err != nil || string(aliasContents) != installerFixtureBinary() {
+		t.Fatalf("existing agentpack executable = %q, err %v", aliasContents, err)
 	}
 }
 

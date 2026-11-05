@@ -18,6 +18,7 @@ Environment:
   AGENTPACK_DOWNLOAD_URL     release asset base URL
   AGENTPACK_INSTALL_DIR      binary destination (default: $HOME/.local/bin)
   AGENTPACK_GITHUB_TOKEN     token for private GitHub/GHE downloads
+  AGENTPACK_RESTART_SERVICE=1 restarts an installed gateway after updating it
 EOF
 }
 
@@ -41,7 +42,7 @@ fail() {
     exit 1
 }
 
-for command in uname mktemp mkdir mv chmod awk; do
+for command in uname mktemp mkdir mv chmod awk cp; do
     command -v "$command" >/dev/null 2>&1 || fail "required command not found: $command"
 done
 
@@ -143,5 +144,17 @@ mkdir -p "$install_dir"
 chmod 755 "$temporary/unpacked/$binary_name"
 mv "$temporary/unpacked/$binary_name" "$install_dir/$binary_name.new"
 mv "$install_dir/$binary_name.new" "$install_dir/$binary_name"
+
+# Keep an existing `agentpack` entry point (and gateway executable) on the same release.
+agentpack_binary="$install_dir/agentpack"
+if [ -f "$agentpack_binary" ] && [ ! -L "$agentpack_binary" ]; then
+    cp "$install_dir/$binary_name" "$agentpack_binary.new"
+    chmod 755 "$agentpack_binary.new"
+    mv -f "$agentpack_binary.new" "$agentpack_binary"
+fi
+
+if [ "${AGENTPACK_RESTART_SERVICE:-0}" = "1" ]; then
+    "$install_dir/$binary_name" service start
+fi
 
 say "Installed agentpack ${APP_VERSION} to $install_dir/$binary_name"

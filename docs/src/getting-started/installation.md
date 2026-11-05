@@ -21,6 +21,28 @@ accept `AGENTPACK_INSTALL_DIR` to choose another userspace destination. They do
 not edit shell profiles or the user `PATH`. Downloads are verified against the
 release's `checksums.txt` before installation.
 
+If this machine already runs an Agentpack gateway from that same install
+directory, you can also update its existing `agentpack` executable and restart
+the gateway after verification:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/olegpustovit/agentpack/releases/latest/download/agentpack-installer.sh | AGENTPACK_RESTART_SERVICE=1 sh
+```
+
+On Windows, opt into the restart like this:
+
+```powershell
+$env:AGENTPACK_RESTART_SERVICE = '1'
+irm https://github.com/olegpustovit/agentpack/releases/latest/download/agentpack-installer.ps1 | iex
+Remove-Item Env:AGENTPACK_RESTART_SERVICE
+```
+
+Use `AGENTPACK_INSTALL_DIR` when the service executable is outside
+`$HOME/.local/bin`. The restart keeps the existing service
+definition and environment. If you only installed a CLI and want the service
+to switch to it, run `ap service install` once; that updates the service
+definition and restarts it.
+
 ## Homebrew (macOS and Linux)
 
 ```sh
