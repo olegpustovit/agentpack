@@ -117,6 +117,33 @@ func TestTailnetTargetsAndRoutesAreBounded(t *testing.T) {
 		}
 	}
 }
+
+func TestSlowTailnetRequestsUseExtendedTransport(t *testing.T) {
+	for _, request := range []struct {
+		method string
+		path   string
+		want   bool
+	}{
+		{"GET", "/api/agent-sessions", true},
+		{"GET", "/api/limits", true},
+		{"GET", "/api/library/index", true},
+		{"POST", "/api/sessions", true},
+		{"GET", "/api/projects", false},
+	} {
+		if got := slowTailnetRequest(request.method, request.path); got != request.want {
+			t.Errorf("slowTailnetRequest(%q, %q) = %t, want %t", request.method, request.path, got, request.want)
+		}
+	}
+}
+
+func TestAgentSessionRouteUsesBoundedProbeTransport(t *testing.T) {
+	if got := tailnetRequestTransport("GET", "/api/agent-sessions"); got != tailnetProbeTransport {
+		t.Fatal("agent session probe should use its 60-second response timeout")
+	}
+	if got := tailnetRequestTransport("GET", "/api/projects"); got != tailnetTransport {
+		t.Fatal("ordinary read should retain the five-second response timeout")
+	}
+}
 func TestSharingConfigPersistsAndValidates(t *testing.T) {
 	home := t.TempDir()
 	empty, err := ReadSharingConfig(home)

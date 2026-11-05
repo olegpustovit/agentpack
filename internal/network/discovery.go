@@ -220,6 +220,11 @@ func tailnetAddress(peer *tailnetPeer) string {
 }
 
 var tailnetTransport = &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}).DialContext, ResponseHeaderTimeout: 5 * time.Second, IdleConnTimeout: 30 * time.Second}
+var tailnetProbeTransport = func() *http.Transport {
+	transport := tailnetTransport.Clone()
+	transport.ResponseHeaderTimeout = time.Minute
+	return transport
+}()
 var tailnetMutationTransport = func() *http.Transport {
 	transport := tailnetTransport.Clone()
 	transport.ResponseHeaderTimeout = 5 * time.Minute
@@ -426,12 +431,7 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 		request.Header.Del("X-Forwarded-Host")
 		request.Header.Del("X-Forwarded-Proto")
 	}
-	proxy.Transport = tailnetTransport
-	// Cold limits probes and a peer's first Library read can take longer than the
-	// ordinary five-second read timeout.
-	if r.URL.Path == "/api/limits" || strings.HasPrefix(r.URL.Path, "/api/library/") || r.Method != http.MethodGet && r.Method != http.MethodHead {
-		proxy.Transport = tailnetMutationTransport
-	}
+	proxy.Transport = tailnetRequestTransport(r.Method, r.URL.Path)
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
 		log.Printf("tailnet proxy failed for node %s: %v", id, err)
 		w.Header().Set("Cache-Control", "no-store")
@@ -450,6 +450,21 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 		return nil
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+func slowTailnetRequest(method, path string) bool {
+	return path == "/api/agent-sessions" || path == "/api/limits" || strings.HasPrefix(path, "/api/library/") ||
+		method != http.MethodGet && method != http.MethodHead
+}
+
+func tailnetRequestTransport(method, path string) *http.Transport {
+	if path == "/api/agent-sessions" {
+		return tailnetProbeTransport
+	}
+	if slowTailnetRequest(method, path) {
+		return tailnetMutationTransport
+	}
+	return tailnetTransport
 }
 
 // closeUpgradeOnEnd holds an upgraded proxy connection open until its request ends, and closes it

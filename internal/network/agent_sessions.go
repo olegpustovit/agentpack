@@ -49,6 +49,8 @@ func ListAgentSessions(ctx context.Context, home, directory, harness, definition
 			Mode:           modeName,
 		},
 	})
-	agentSessionCache.Store(key, agentSessionCacheEntry{at: time.Now(), entries: entries, err: err})
+	if err == nil {
+		agentSessionCache.Store(key, agentSessionCacheEntry{at: time.Now(), entries: entries})
+	}
 	return entries, err
 }

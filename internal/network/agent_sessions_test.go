@@ -78,6 +78,21 @@ func TestAgentSessionCache(t *testing.T) {
 		t.Fatalf("cache hit expected fixture row, got %#v", second)
 	}
 }
+
+func TestAgentSessionProbeErrorIsNotCached(t *testing.T) {
+	dir := filepath.Clean(t.TempDir())
+	home := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ListAgentSessions(ctx, home, dir, "claude", dir, "default"); err == nil {
+		t.Fatal("canceled session probe unexpectedly succeeded")
+	}
+	t.Setenv("AGENTPACK_TEST_ACP", "3")
+	sessions, err := ListAgentSessions(context.Background(), home, dir, "claude", dir, "default")
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("retry after canceled probe: sessions=%v err=%v", sessions, err)
+	}
+}
 func TestACPConversationOwnerPersistsStableIdentity(t *testing.T) {
 	home := t.TempDir()
 	directory := t.TempDir()
