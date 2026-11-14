@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -214,5 +215,35 @@ func TestOpenRejectsDatabaseSymlink(t *testing.T) {
 	got, err := os.ReadFile(target)
 	if err != nil || string(got) != "keep" {
 		t.Fatalf("symlink target changed: %q %v", got, err)
+	}
+}
+
+func TestTransactionCommitsAndRollsBack(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.DB.Exec("CREATE TABLE tx_test (body TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("abort transaction")
+	for _, fail := range []bool{false, true} {
+		err := Transaction(context.Background(), store.DB, func(tx *sql.Tx) error {
+			if _, err := tx.Exec("INSERT INTO tx_test VALUES ('value')"); err != nil {
+				return err
+			}
+			if fail {
+				return failure
+			}
+			return nil
+		})
+		if fail && !errors.Is(err, failure) || !fail && err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count int
+	if err := store.Reader.QueryRow("SELECT count(*) FROM tx_test").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("transaction count=%d err=%v", count, err)
 	}
 }

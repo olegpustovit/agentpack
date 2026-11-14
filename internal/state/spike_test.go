@@ -92,8 +92,12 @@ func syncSpike(tb testing.TB, from, to *Store) {
 	}
 }
 
-func spikeSize(tb testing.TB, path string) int64 {
+func spikeSize(tb testing.TB, store *Store, path string) int64 {
 	tb.Helper()
+	// Measure the checkpointed database rather than leaving its pages in the WAL.
+	if _, err := store.DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		tb.Fatal(err)
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		tb.Fatal(err)
@@ -126,7 +130,7 @@ func TestSyncTenThousand(t *testing.T) {
 		if body != spikeBody() {
 			t.Fatal("replica body differs")
 		}
-		t.Logf("insert=%s sync=%s raw=%d source=%d replica=%d", inserted, synced, bytesTotal, spikeSize(t, pathA), spikeSize(t, pathB))
+		t.Logf("insert=%s sync=%s raw=%d source=%d replica=%d", inserted, synced, bytesTotal, spikeSize(t, a, pathA), spikeSize(t, b, pathB))
 	})
 	t.Run("delete-and-replicate", func(t *testing.T) {
 		if _, err := a.DB.Exec("DELETE FROM events"); err != nil {
@@ -140,7 +144,7 @@ func TestSyncTenThousand(t *testing.T) {
 		if count != 0 {
 			t.Fatalf("replica retained %d deleted events", count)
 		}
-		t.Logf("after deletion source=%d replica=%d", spikeSize(t, pathA), spikeSize(t, pathB))
+		t.Logf("after deletion source=%d replica=%d", spikeSize(t, a, pathA), spikeSize(t, b, pathB))
 	})
 }
 

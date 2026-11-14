@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -51,11 +53,13 @@ type mcpInstallInput struct {
 }
 
 func NewGatewayMCP(gateway *Gateway) (*GatewayMCP, error) {
-	db, err := openOAuth(gateway.options.Home)
-	if err != nil {
+	if gateway.store == nil {
+		return nil, errors.New("gateway state unavailable")
+	}
+	if err := os.Remove(filepath.Join(gateway.options.Home, "network", "oauth.db")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	m := &GatewayMCP{gateway: gateway, db: db}
+	m := &GatewayMCP{gateway: gateway}
 	server := mcp.NewServer(&mcp.Implementation{Name: "agentpack", Version: "1"}, nil)
 	m.tools(server)
 	stream := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})

@@ -258,17 +258,20 @@ func TestGatewayOwnsAndClosesStateStore(t *testing.T) {
 	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
-	legacyLimits := filepath.Join(home, "network", "limits.json")
-	if err := os.WriteFile(legacyLimits, []byte("disposable cache; do not import"), 0600); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"limits.json", "oauth.db"} {
+		if err := os.WriteFile(filepath.Join(home, "network", name), []byte("legacy disposable data; do not import"), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := ServeGateway(ctx, GatewayOptions{Home: home, Address: "127.0.0.1:0"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(legacyLimits); !os.IsNotExist(err) {
-		t.Fatalf("legacy limits cache was not removed: %v", err)
+	for _, name := range []string{"limits.json", "oauth.db"} {
+		if _, err := os.Stat(filepath.Join(home, "network", name)); !os.IsNotExist(err) {
+			t.Fatalf("legacy %s was not removed: %v", name, err)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(home, "state.db")); err != nil {
 		t.Fatal(err)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -19,7 +20,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	bolt "go.etcd.io/bbolt"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 type oauthHarness struct {
@@ -41,14 +42,18 @@ func newOAuthHarness(t *testing.T) *oauthHarness {
 	auth.sessions[sha256.Sum256([]byte(cookie.Value))] = time.Now().Add(time.Hour)
 	server := httptest.NewUnstartedServer(nil)
 	origin, _ := url.Parse("http://" + server.Listener.Addr().String())
-	g := &Gateway{options: GatewayOptions{Home: home}, auth: auth, origin: origin, local: nodeRecord{Address: server.Listener.Addr().String(), Secret: randomToken()}}
+	store, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &Gateway{store: store, options: GatewayOptions{Home: home}, auth: auth, origin: origin, local: nodeRecord{Address: server.Listener.Addr().String(), Secret: randomToken()}}
 	g.mcp, err = NewGatewayMCP(g)
 	if err != nil {
 		t.Fatal(err)
 	}
 	server.Config.Handler = g.Handler()
 	server.Start()
-	t.Cleanup(func() { server.Close(); _ = g.mcp.Close() })
+	t.Cleanup(func() { server.Close(); _ = g.store.Close() })
 	h := &oauthHarness{gateway: g, server: server, cookie: cookie, verifier: strings.Repeat("a", 43)}
 	response, data := h.request(t, "POST", "/oauth/register", `{"client_name":"Test assistant","redirect_uris":["https://assistant.example/callback"],"token_endpoint_auth_method":"none"}`, "application/json", nil, false)
 	if response.StatusCode != 201 {
@@ -201,11 +206,11 @@ func TestOAuthConsentPKCEBindingAndRefreshReplay(t *testing.T) {
 	if second.Access == first.Access || second.Refresh == first.Refresh {
 		t.Fatal("tokens did not rotate")
 	}
-	if err := h.gateway.mcp.db.Close(); err != nil {
+	if err := h.gateway.store.Close(); err != nil {
 		t.Fatal(err)
 	}
 	var err error
-	h.gateway.mcp.db, err = openOAuth(h.gateway.options.Home)
+	h.gateway.store, err = state.Open(h.gateway.options.Home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +323,7 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 
 func TestOAuthRegisteredClientDoesNotExpire(t *testing.T) {
 	h := newOAuthHarness(t)
-	err := h.gateway.mcp.db.Update(func(tx *bolt.Tx) error {
+	err := state.Transaction(context.Background(), h.gateway.store.DB, func(tx *sql.Tx) error {
 		client, err := oauthGet(tx, h.clientID)
 		if err != nil {
 			return err
@@ -350,5 +355,33 @@ func TestOAuthAuthorizeWithoutSessionRedirectsToLogin(t *testing.T) {
 	response, data := h.request(t, "GET", path, "", "", nil, false)
 	if want := "/login?return_to=" + url.QueryEscape(path); response.StatusCode != 303 || response.Header.Get("Location") != want {
 		t.Fatalf("redirect: want 303 %s got %d %q %s", want, response.StatusCode, response.Header.Get("Location"), data)
+	}
+}
+
+func TestOAuthCodeConsumedOnceAcrossStores(t *testing.T) {
+	h := newOAuthHarness(t)
+	form := h.codeForm(h.code(t)).Encode()
+	other, err := state.Open(h.gateway.options.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	second := &GatewayMCP{gateway: &Gateway{store: other, origin: h.gateway.origin}}
+	start := make(chan struct{})
+	results := make(chan int, 2)
+	for _, m := range []*GatewayMCP{h.gateway.mcp, second} {
+		go func() {
+			<-start
+			r := httptest.NewRequest(http.MethodPost, h.server.URL+"/oauth/token", strings.NewReader(form))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			w := httptest.NewRecorder()
+			m.token(w, r)
+			results <- w.Code
+		}()
+	}
+	close(start)
+	first, last := <-results, <-results
+	if first+last != 600 || first != 200 && first != 400 {
+		t.Fatalf("concurrent code exchange statuses: %d, %d", first, last)
 	}
 }

@@ -39,7 +39,7 @@ func Open(home string) (*Store, error) {
 	if err := errors.Join(modeErr, file.Close()); err != nil {
 		return nil, fmt.Errorf("secure state database: %w", err)
 	}
-	params := url.Values{"_journal_mode": {"WAL"}, "_synchronous": {"FULL"}, "_busy_timeout": {"5000"}}
+	params := url.Values{"_journal_mode": {"WAL"}, "_synchronous": {"FULL"}, "_busy_timeout": {"5000"}, "_txlock": {"immediate"}}
 	dsn := "file:" + url.PathEscape(filepath.ToSlash(path)) + "?"
 	writer, err := sql.Open(driverName, dsn+params.Encode())
 	if err != nil {
@@ -54,6 +54,7 @@ func Open(home string) (*Store, error) {
 		return nil, errors.Join(err, writer.Close())
 	}
 	params.Set("_query_only", "1")
+	params.Set("_txlock", "deferred")
 	reader, err := sql.Open(driverName, dsn+params.Encode())
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("open state reader: %w", err), writer.Close())
@@ -66,3 +67,16 @@ func Open(home string) (*Store, error) {
 }
 
 func (s *Store) Close() error { return errors.Join(s.Reader.Close(), s.DB.Close()) }
+
+// Transaction commits only when every operation succeeds; panics also roll back.
+func Transaction(ctx context.Context, db *sql.DB, run func(*sql.Tx) error) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := run(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

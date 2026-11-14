@@ -55,7 +55,7 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1–P1.6 are implemented; P1.6 onward and Phase 1A are not implemented.
+- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1–P1.7 are implemented. Phase 1A and later phases remain.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -644,3 +644,44 @@ restart persistence, and a forced SQLite write failure retaining the original.
 question marks are illegal in Windows directory names. The URI-escaping test now
 uses spaces, Unicode, hash and ampersand on every platform, plus question marks
 on Unix. The warm workflow budget still awaits a complete successful run.
+
+## OAuth in SQLite — P1.7 and Phase 1 verification
+
+Migration 0004 adds local oauth_clients (hashed key and client metadata) and
+oauth_tokens (hashed key and grant fields), with expiry/family indexes. The
+OAuth code uses the gateway-owned state store, SQL transactions, indexed pruning
+and family revocation. There is no separate OAuth database handle or forwarding
+Close method. Gateway startup deletes legacy network/oauth.db; clients must
+register again, as specified for this pre-release migration.
+
+Writer transactions use BEGIN IMMEDIATE, taking the write lock before reading a
+one-use grant. Reader transactions remain deferred/query-only. Existing OAuth
+PKCE, consent, refresh rotation/replay, revocation and restart tests pass. A new
+test redeems one code concurrently through two Store connections and proves
+exactly one succeeds. Transaction commit/rollback and legacy-file removal are
+covered. `make ci` passes, including the race suite.
+
+On the real Apple M1 Mac, all state/network/CLI tests pass. No installed state
+was touched: tests/builds use the isolated /private/tmp checkout and temp homes.
+The 10,000-event WAL fixture now checkpoints before reporting database size;
+otherwise measuring only state.db would misleadingly exclude WAL pages.
+
+| Phase 1 measurement | Linux amd64 | Apple M1 arm64 macOS |
+| --- | ---: | ---: |
+| Fresh open, median of five | 47.502 ms | 6.003 ms |
+| Insert 10,000 events, median of five | 54.491 ms | 90.747 ms |
+| Sync 10,000 events | 155.278 ms | 189.900 ms |
+| Checkpointed source / replica size | 5,849,088 bytes each | 5,849,088 bytes each |
+| Size after delete/sync | 5,849,088 bytes each | 5,849,088 bytes each |
+
+The raw payload is 5,000,000 bytes: current ratio 1.1698x. New tables account for
+the small fixed difference from the Phase 0 database. Reproduction uses the same
+state benchmark and TestSyncTenThousand commands above, now with WAL/FULL and
+all four migrations.
+
+Five repeated launch measurements first showed shared-host timing noise
+(fingerprint 0.373159 ms, cold 12.944158 ms, warm 0.258813 ms). A second set with
+unchanged code measured fingerprint 0.342552 ms, cold 6.925838 ms and warm
+0.134045 ms. Both sets meet the numeric budgets on this amd64 host; the original
+Linux ARM64 reference host remains unmeasured. Launcher no-state-access checks
+continue to pass. Warm full-workflow timing is still pending.

@@ -118,7 +118,6 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if err != nil {
 		return err
 	}
-	defer gateway.mcp.Close()
 	go gateway.runTailnetSharing(ctx)
 	go gateway.runRegistryReplication(ctx)
 	data, _ := json.Marshal(gateway.local)

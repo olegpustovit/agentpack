@@ -2,16 +2,13 @@ package network
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"time"
-
-	bolt "go.etcd.io/bbolt"
 )
 
-var oauthBucket = []byte("oauth")
 var errOAuthGrant = errors.New("invalid OAuth grant")
 
 type oauthClient struct {
@@ -41,60 +38,69 @@ func oauthKey(secret string) []byte {
 	return []byte(hex.EncodeToString(hash[:]))
 }
 
-func openOAuth(home string) (*bolt.DB, error) {
-	directory := filepath.Join(home, "network")
-	if err := EnsurePrivateDirectory(directory); err != nil {
-		return nil, err
-	}
-	db, err := bolt.Open(filepath.Join(directory, "oauth.db"), 0600, &bolt.Options{Timeout: time.Second})
-	if err != nil {
-		return nil, err
-	}
-	if err := db.Update(func(tx *bolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists(oauthBucket)
-		return err
-	}); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	return db, nil
-}
-
-func oauthGet(tx *bolt.Tx, secret string) (oauthRecord, error) {
+func oauthGet(tx *sql.Tx, secret string) (oauthRecord, error) {
 	var record oauthRecord
 	if len(secret) == 0 || len(secret) > 256 {
 		return record, errOAuthGrant
 	}
-	data := tx.Bucket(oauthBucket).Get(oauthKey(secret))
-	if data == nil || json.Unmarshal(data, &record) != nil || record.Kind != "client" && !time.Now().Before(record.Expires) {
+	key := string(oauthKey(secret))
+	var expires, grantExpires int64
+	err := tx.QueryRow(`SELECT kind, expires_at, client_id, redirect_uri, challenge, resource, family, grant_expires_at, query, session FROM oauth_tokens WHERE secret_hash = ?`, key).Scan(&record.Kind, &expires, &record.ClientID, &record.Redirect, &record.Challenge, &record.Resource, &record.Family, &grantExpires, &record.Query, &record.Session)
+	if err == nil {
+		record.Expires = time.UnixMilli(expires)
+		if grantExpires != 0 {
+			record.GrantExpires = time.UnixMilli(grantExpires)
+		}
+		if !time.Now().Before(record.Expires) {
+			return record, errOAuthGrant
+		}
+		return record, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return record, err
+	}
+	var data []byte
+	if err := tx.QueryRow("SELECT metadata FROM oauth_clients WHERE secret_hash = ?", key).Scan(&data); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return record, errOAuthGrant
+		}
+		return record, err
+	}
+	record.Kind = "client"
+	if json.Unmarshal(data, &record.Client) != nil || record.Client == nil {
 		return record, errOAuthGrant
 	}
 	return record, nil
 }
 
-func oauthPut(tx *bolt.Tx, secret string, record oauthRecord) error {
-	data, err := json.Marshal(record)
-	if err != nil {
+func oauthPut(tx *sql.Tx, secret string, record oauthRecord) error {
+	key := string(oauthKey(secret))
+	if record.Kind == "client" {
+		data, err := json.Marshal(record.Client)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec("INSERT INTO oauth_clients(secret_hash, metadata) VALUES (?, ?) ON CONFLICT(secret_hash) DO UPDATE SET metadata = excluded.metadata", key, string(data))
 		return err
 	}
-	return tx.Bucket(oauthBucket).Put(oauthKey(secret), data)
+	var grantExpires int64
+	if !record.GrantExpires.IsZero() {
+		grantExpires = record.GrantExpires.UnixMilli()
+	}
+	_, err := tx.Exec(`INSERT INTO oauth_tokens(secret_hash, kind, expires_at, client_id, redirect_uri, challenge, resource, family, grant_expires_at, query, session)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ ON CONFLICT(secret_hash) DO UPDATE SET kind=excluded.kind, expires_at=excluded.expires_at, client_id=excluded.client_id, redirect_uri=excluded.redirect_uri, challenge=excluded.challenge, resource=excluded.resource, family=excluded.family, grant_expires_at=excluded.grant_expires_at, query=excluded.query, session=excluded.session`,
+		key, record.Kind, record.Expires.UnixMilli(), record.ClientID, record.Redirect, record.Challenge, record.Resource, record.Family, grantExpires, record.Query, record.Session)
+	return err
 }
 
-func oauthPrune(tx *bolt.Tx) error {
-	cursor := tx.Bucket(oauthBucket).Cursor()
-	count := 0
-	for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
-		var record oauthRecord
-		if json.Unmarshal(value, &record) != nil {
-			return errors.New("invalid OAuth storage record")
-		}
-		if record.Kind != "client" && !time.Now().Before(record.Expires) {
-			if err := cursor.Delete(); err != nil {
-				return err
-			}
-		} else {
-			count++
-		}
+func oauthPrune(tx *sql.Tx) error {
+	if _, err := tx.Exec("DELETE FROM oauth_tokens WHERE expires_at <= ?", time.Now().UnixMilli()); err != nil {
+		return err
+	}
+	var count int
+	if err := tx.QueryRow("SELECT (SELECT count(*) FROM oauth_clients) + (SELECT count(*) FROM oauth_tokens)").Scan(&count); err != nil {
+		return err
 	}
 	if count >= 8192 {
 		return errors.New("OAuth credential limit reached")
@@ -102,21 +108,10 @@ func oauthPrune(tx *bolt.Tx) error {
 	return nil
 }
 
-func oauthRevokeFamily(tx *bolt.Tx, family string) error {
+func oauthRevokeFamily(tx *sql.Tx, family string) error {
 	if family == "" {
 		return nil
 	}
-	cursor := tx.Bucket(oauthBucket).Cursor()
-	for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
-		var record oauthRecord
-		if err := json.Unmarshal(value, &record); err != nil {
-			return err
-		}
-		if record.Family == family {
-			if err := cursor.Delete(); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	_, err := tx.Exec("DELETE FROM oauth_tokens WHERE family = ?", family)
+	return err
 }
