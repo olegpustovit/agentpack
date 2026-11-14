@@ -52,7 +52,8 @@ or user shell startup files were changed.
   Linux amd64, emulated Linux arm64, and native Apple Silicon smoke queries pass.
   Intel macOS and Windows runtime execution remain for the release smoke jobs.
 - P0.7: replication, delete propagation, size and allocator measurements pass.
-- P0.8–P7 and Phase 1A: not implemented.
+- P0.8: hidden product self-check passes natively, statically, and on the Mac.
+- P0.9–P7 and Phase 1A: not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -352,3 +353,27 @@ CGO_ENABLED=1 CC='zig cc -target x86_64-linux-musl' CGO_LDFLAGS=-lunwind \
 `make ci` passes, including the new tests with the race detector. Final Mac
 smoke executable dependency inspection (`otool -L`) shows only system libraries
 and no SQLite/crsqlite dylib; its Intel smoke executable also links successfully.
+
+## Product self-check — P0.8
+
+Hidden Cobra command `ap state-selfcheck` creates a temporary database, creates
+a CRR, writes a row, reads it through `crsql_changes`, finalizes the extension,
+closes the database and removes its temporary directory. It prints exactly `ok`.
+A CLI test checks its output, exit status and hidden flag.
+
+`make ci` and `bin/ap state-selfcheck` pass. The fully static Zig musl product
+binary and the native Apple Silicon product binary also print `ok` for the
+command. This now verifies the extension in the actual product, not a separate
+spike binary. Other launch paths do not call the self-check or open a store.
+
+Startup setup benchmarks repeated after the product import (same host/fixture
+and five runs of five iterations as P0.1):
+
+| Benchmark | Median |
+| --- | ---: |
+| `BenchmarkMaterializationHome` | 0.334202 ms |
+| `BenchmarkCodexSetup/cold` | 6.871348 ms |
+| `BenchmarkCodexSetup/warm` | 0.145098 ms |
+
+These are amd64 setup measurements; ARM64 reference-host release budgets and
+full warm release duration still require their own evidence.

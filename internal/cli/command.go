@@ -268,6 +268,12 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	mcpExec := leaf("mcp-exec", "Internal: start an MCP server from its locked npm tree")
 	mcpExec.Hidden = true
 	root.AddCommand(mcpExec)
+	root.AddCommand(&cobra.Command{
+		Use:    "state-selfcheck",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE:   runStateSelfcheck,
+	})
 	return root
 }
 
