@@ -1179,3 +1179,25 @@ and the total byte bound, and confirms no state.db was opened. The affected spoo
 offline-reader and CLI checks pass (Linux obs 0.41 s, CLI 0.28 s; Mac obs 0.57 s).
 Asset staging initially overlapped one Go compile; rerunning the affected CLI check
 after staging completed passes. No full suites or snapshots were run.
+
+## Account schema and primitives — P2.1 / P2.2
+
+Migration 0006 adds users and local hashed-token auth_sessions, with email and
+expiry indexes. Account primitives normalize mailboxes through net/mail, lowercase
+them, enforce the 254-byte address and 12–72-byte password bounds, and use bcrypt.
+The initial owner claim is one conditional INSERT; 20 simultaneous attempts yield
+exactly one owner. Member creation requires an existing claimed gateway. User
+listings never expose hashes. Unknown, disabled and incorrect logins return one
+generic error; unknown/malformed accounts still execute a default-cost dummy
+comparison.
+
+Password changes and disabling are transactional with session revocation. The
+revocation stamp advances past existing tokens even within one clock tick, and
+local tokens are removed in the same transaction. The primitives needed by the
+offline CLI have one exported definition in the network subsystem. HTTP, cookie,
+legacy-claim and frontend wiring are the next steps; the old root login is still
+in place at this intermediate checkpoint.
+
+Focused migration/default/reopen and account lifecycle/concurrent-claim checks pass:
+Linux state 0.10 s, network 0.64 s; physical Apple M1 state 0.59 s, network 1.24 s.
+No broad or slow test suite was run.
