@@ -196,8 +196,6 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.4'
-      - name: Test release configuration, installers and package
-        run: go test ./...
       - name: Snapshot release
         if: github.event_name == 'pull_request'
         uses: goreleaser/goreleaser-action@v7

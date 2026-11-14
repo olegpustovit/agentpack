@@ -67,3 +67,44 @@ func TestReleaseCachedLibrariesStillRunPlatformGates(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseRunsFullSuiteOnceAfterUIStaging(t *testing.T) {
+	contents, err := os.ReadFile("../.goreleaser.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct{ Before struct{ Hooks []string } }
+	if err := yaml.Unmarshal(contents, &config); err != nil {
+		t.Fatal(err)
+	}
+	staged, tests := false, 0
+	for _, hook := range config.Before.Hooks {
+		if hook == "make ui-stage" {
+			staged = true
+		}
+		if strings.HasPrefix(hook, "go test ./...") {
+			tests++
+			if !staged {
+				t.Fatal("full suite must see the staged UI")
+			}
+		}
+	}
+	if tests != 1 {
+		t.Fatalf("release before hooks have %d full suites, want one", tests)
+	}
+	contents, err = os.ReadFile("../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct{ Steps []struct{ Run string } }
+	}
+	if err := yaml.Unmarshal(contents, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range workflow.Jobs["goreleaser"].Steps {
+		if strings.Contains(step.Run, "go test ./...") {
+			t.Fatal("workflow duplicates GoReleaser's full suite")
+		}
+	}
+}

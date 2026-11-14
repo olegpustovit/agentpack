@@ -601,3 +601,9 @@ running all Go tests before UI staging, followed by the existing full Go test
 hook after UI staging. That redundant first suite can be removed while retaining
 full coverage in GoReleaser's hook; the performance gate remains open until the
 corrected workflow is measured.
+
+The duplicate pre-staging full suite is removed. The complete suite still runs
+once in GoReleaser's before hook after UI staging, and Windows retains its own
+full platform suite. A regression enforces this ordering and prevents the
+workflow from adding a duplicate. Local `make ci` and workflow lint pass; the
+697 s workflow budget is unchanged and awaits the next measured run.
