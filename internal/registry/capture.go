@@ -3,7 +3,6 @@ package registry
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,15 +11,12 @@ import (
 	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/pelletier/go-toml/v2"
 )
 
-var (
-	credentialKey   = regexp.MustCompile(`(?i)(token|secret|password|passwd|(?:api|private|client)[_-]?key|authorization|credential|auth|signature|sig)`)
-	credentialValue = regexp.MustCompile(`(?i)(<local>|bearer\s+[^\s,;]+|basic\s+[^\s,;]+|(?:token|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|authorization)\s*[=:]\s*[^\s,;]+|://[^/@\s]+:[^/@\s]+@|\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,})\b)`)
-	credentialFlag  = regexp.MustCompile(`(?i)^--?(?:api[_-]?key|token|access[_-]?token|refresh[_-]?token|password|passwd|secret|client[_-]?secret|authorization|credential)$`)
-)
+var credentialFlag = regexp.MustCompile(`(?i)^--?(?:api[_-]?key|token|access[_-]?token|refresh[_-]?token|password|passwd|secret|client[_-]?secret|authorization|credential)$`)
 
 func normalizeTOML(input []byte) ([]byte, map[string]string, error) {
 	var value map[string]any
@@ -61,14 +57,14 @@ func redact(value any, path, parent string, secrets map[string]string) {
 					continue
 				}
 			}
-			if credentialKey.MatchString(key) {
+			if obs.CredentialKey(key) {
 				if raw, ok := child.(string); ok && raw != "" {
 					saveSecret(secrets, childPath, raw)
 					current[key] = "<local>"
 					continue
 				}
 			}
-			if raw, ok := child.(string); ok && credentialShaped(raw) {
+			if raw, ok := child.(string); ok && obs.CredentialShaped(raw) {
 				saveSecret(secrets, childPath, raw)
 				current[key] = "<local>"
 				continue
@@ -88,7 +84,7 @@ func redact(value any, path, parent string, secrets map[string]string) {
 						continue
 					}
 				}
-				if credentialShaped(raw) {
+				if obs.CredentialShaped(raw) {
 					saveSecret(secrets, childPath, raw)
 					current[i] = "<local>"
 					continue
@@ -100,7 +96,7 @@ func redact(value any, path, parent string, secrets map[string]string) {
 			previousWasSecretFlag = false
 		}
 	case string:
-		if credentialShaped(current) {
+		if obs.CredentialShaped(current) {
 			saveSecret(secrets, path, current)
 		}
 	}
@@ -113,30 +109,10 @@ func saveSecret(secrets map[string]string, path, value string) {
 }
 
 func redactMetadata(value string) string {
-	if credentialShaped(value) {
+	if obs.CredentialShaped(value) {
 		return "<local>"
 	}
 	return value
-}
-
-func credentialShaped(value string) bool {
-	if credentialValue.MatchString(value) {
-		return true
-	}
-	parsed, err := url.Parse(value)
-	if err != nil {
-		return false
-	}
-	if parsed.User != nil {
-		return true
-	}
-	for key := range parsed.Query() {
-		key = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "-", "_"), ".", "_"))
-		if key == "key" || credentialKey.MatchString(key) {
-			return true
-		}
-	}
-	return false
 }
 
 func escapePointer(value string) string {

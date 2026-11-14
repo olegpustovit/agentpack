@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
 type Inventory struct {
@@ -329,7 +330,7 @@ func decodeImported(data []byte) (importedObject, error) {
 	}
 	if _, isName := shape["object_type"]; isName {
 		var name nameRevision
-		if err := json.Unmarshal(data, &name); err != nil || name.ObjectType != nameObjectType || name.Schema != objectSchema || !validID(name.Agentpack) || strings.TrimSpace(name.Name) == "" || credentialShaped(name.Name) || name.Node == "" || credentialShaped(name.Node) || name.CreatedAt.IsZero() || !canonicalObject(data, name) {
+		if err := json.Unmarshal(data, &name); err != nil || name.ObjectType != nameObjectType || name.Schema != objectSchema || !validID(name.Agentpack) || strings.TrimSpace(name.Name) == "" || obs.CredentialShaped(name.Name) || name.Node == "" || obs.CredentialShaped(name.Node) || name.CreatedAt.IsZero() || !canonicalObject(data, name) {
 			return obj, fmt.Errorf("invalid registry agentpack name object")
 		}
 		name.ID = obj.id
@@ -360,7 +361,7 @@ func decodeImported(data []byte) (importedObject, error) {
 			return obj, fmt.Errorf("invalid registry revision snapshot")
 		}
 		for _, value := range []string{revision.Project, revision.SourceNode, revision.Label} {
-			if value != "<local>" && credentialShaped(value) {
+			if value != "<local>" && obs.CredentialShaped(value) {
 				return obj, fmt.Errorf("registry revision contains credential-shaped metadata")
 			}
 		}
@@ -379,7 +380,7 @@ func decodeImported(data []byte) (importedObject, error) {
 			return obj, fmt.Errorf("invalid registry package object")
 		}
 		for _, value := range []string{pkg.Module, pkg.Commit, pkg.URL, pkg.Owner, pkg.Repo, pkg.Path, pkg.CacheKey, pkg.Name, pkg.SourceNode, pkg.Project} {
-			if value != "<local>" && credentialShaped(value) {
+			if value != "<local>" && obs.CredentialShaped(value) {
 				return obj, fmt.Errorf("registry package contains credential-shaped metadata")
 			}
 		}

@@ -55,7 +55,7 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1–P1.7 are implemented. Phase 1A and later phases remain.
+- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1–P1.7 and P1A.1 are implemented. P1A.2 onward remains.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -685,3 +685,32 @@ unchanged code measured fingerprint 0.342552 ms, cold 6.925838 ms and warm
 0.134045 ms. Both sets meet the numeric budgets on this amd64 host; the original
 Linux ARM64 reference host remains unmeasured. Launcher no-state-access checks
 continue to pass. Warm full-workflow timing is still pending.
+
+## Observability core — P1A.1
+
+The new internal/obs package owns context events, W3C traceparent validation and
+child spans, error-chain/caller-stack capture, normalized fingerprints, bounded
+redaction, and a nonblocking 4,096-event queue with an exact dropped counter.
+Events carry build/platform/process/schema metadata. End emits once and caps the
+encoded event at 32 KiB; nested attributes stop at depth six. Headers use an
+allowlist. Credential, cookie, environment, prompt and body attributes are
+removed, and credential-shaped string values are redacted.
+
+The Library credential check moved into obs rather than being copied. All
+registry callers use that one policy. Ordinary ASCII checks avoid regex work
+where possible; Unicode keys retain the original regexp folding. Tests caught
+and fixed a GitHub-token candidate check that was too narrow. Tests cover
+trace propagation/invalid headers, grouping, secret exclusion, size/depth caps,
+concurrent attribute updates and a stalled queue (4,096 retained, 5,904 dropped
+from 10,000 events). The Library capture/regression tests and `make ci` pass.
+
+BenchmarkEvent (amd64, three runs): 8.852 / 8.506 / 8.443 microseconds per event,
+including metadata, redaction and queue delivery. This is the core event cost,
+not yet the P1A.4 HTTP middleware measurement. No runtime sink is connected yet;
+day files, spool files and request instrumentation follow in P1A.2–P1A.4.
+
+Workflow 43611170066 now passes Windows, the complete GoReleaser snapshot and
+all five runtime smoke checks. Total duration is 937 s, still above 697 s.
+Windows took 396 s and then the Mac build took 456 s: these independent checks
+are currently serialized. The next pipeline adjustment moves the Windows gate
+to publication so both checks can run concurrently, retaining all coverage.

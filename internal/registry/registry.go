@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
 const (
@@ -203,7 +204,7 @@ func (s *Store) captureUnlocked(input CaptureInput) (Agentpack, Revision, error)
 		if pack.Name == "" || pack.Name == "." {
 			pack.Name = "agentpack"
 		}
-		if credentialShaped(pack.Name) {
+		if obs.CredentialShaped(pack.Name) {
 			return pack, revision, fmt.Errorf("agentpack name contains credential-shaped data")
 		}
 		pack.Revisions = []string{}
@@ -353,7 +354,7 @@ func (s *Store) ListPackages() ([]Package, error) {
 func (s *Store) ImportPackages(packages []Package) error {
 	for i := range packages {
 		p := &packages[i]
-		if strings.TrimSpace(p.Module) == "" || credentialShaped(p.Module) || strings.TrimSpace(p.Commit) == "" || !validCacheKey(p.CacheKey) ||
+		if strings.TrimSpace(p.Module) == "" || obs.CredentialShaped(p.Module) || strings.TrimSpace(p.Commit) == "" || !validCacheKey(p.CacheKey) ||
 			(p.Kind != string(lockfile.PackageSkill) && p.Kind != string(lockfile.PackagePlugin)) ||
 			(p.ContentHash != "" && !lockfile.ValidContentHash(p.ContentHash)) {
 			return fmt.Errorf("invalid package registry record")
@@ -431,7 +432,7 @@ func (s *Store) Get(id string) (Agentpack, []Revision, error) {
 
 func (s *Store) Rename(id, name string) (Agentpack, error) {
 	name = strings.TrimSpace(name)
-	if name == "" || credentialShaped(name) {
+	if name == "" || obs.CredentialShaped(name) {
 		return Agentpack{}, fmt.Errorf("invalid agentpack name")
 	}
 	var result Agentpack
