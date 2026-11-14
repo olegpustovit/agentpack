@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
@@ -96,6 +97,16 @@ func (s *Spool) run() {
 			record(err)
 			return
 		}
+		lock := flock.New(filepath.Join(s.directory, ".lock"), flock.SetPermissions(0600))
+		if err := lock.Lock(); err != nil {
+			record(err)
+			return
+		}
+		defer lock.Unlock()
+		if _, _, err := trimSpool(s.directory, MaxSpoolBytes-int64(len(data)+1)); err != nil {
+			record(err)
+			return
+		}
 		file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 		if err != nil {
 			record(err)
@@ -165,22 +176,16 @@ func (s *Store) IngestSpool(ctx context.Context) (SpoolStats, error) {
 	var stats SpoolStats
 	directory := filepath.Join(s.directory, "spool")
 	files, err := spoolFiles(directory)
-	if err != nil {
+	if err != nil || len(files) == 0 {
 		return stats, err
 	}
-	var total int64
-	for _, file := range files {
-		total += file.size
+	lock := flock.New(filepath.Join(directory, ".lock"), flock.SetPermissions(0600))
+	if err := lock.Lock(); err != nil {
+		return stats, err
 	}
-	for len(files) > 0 && total > MaxSpoolBytes {
-		file := files[0]
-		if err := os.Remove(filepath.Join(directory, file.name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return stats, err
-		}
-		total -= file.size
-		stats.DroppedFiles++
-		stats.DroppedBytes += file.size
-		files = files[1:]
+	stats, files, err = trimSpool(directory, MaxSpoolBytes)
+	if err := errors.Join(err, lock.Unlock()); err != nil {
+		return stats, err
 	}
 	cutoff := s.options.Now().Unix()/60 - 2
 	for _, file := range files {
@@ -209,6 +214,30 @@ func (s *Store) IngestSpool(ctx context.Context) (SpoolStats, error) {
 		stats.Files++
 	}
 	return stats, nil
+}
+
+// Callers hold the spool lock through pruning and any append that reserves space.
+func trimSpool(directory string, limit int64) (SpoolStats, []spoolFile, error) {
+	var stats SpoolStats
+	files, err := spoolFiles(directory)
+	if err != nil {
+		return stats, nil, err
+	}
+	var total int64
+	for _, file := range files {
+		total += file.size
+	}
+	for len(files) > 0 && total > limit {
+		file := files[0]
+		if err := os.Remove(filepath.Join(directory, file.name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return stats, nil, err
+		}
+		total -= file.size
+		stats.DroppedFiles++
+		stats.DroppedBytes += file.size
+		files = files[1:]
+	}
+	return stats, files, nil
 }
 
 func (s *Store) ingestSpoolFile(ctx context.Context, path string) (SpoolStats, error) {

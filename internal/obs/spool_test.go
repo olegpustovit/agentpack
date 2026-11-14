@@ -148,6 +148,62 @@ func TestSpoolDirectoryCapDeletesOldestFirst(t *testing.T) {
 	}
 }
 
+func TestSpoolWritersEnforceCapWithGatewayStopped(t *testing.T) {
+	home := t.TempDir()
+	directory := filepath.Join(home, "logs", "spool")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(directory, "worker-old-1.ndjson")
+	file, err := os.OpenFile(old, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(MaxSpoolBytes - 1024); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now()
+	if err := os.Chtimes(old, at.Add(-time.Hour), at.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	spools := []*Spool{}
+	for _, proc := range []string{"worker-a", "worker-b"} {
+		spool, err := OpenSpool(home, SpoolOptions{Proc: proc})
+		if err != nil {
+			t.Fatal(err)
+		}
+		spools = append(spools, spool)
+		event := logEvent(at, "worker")
+		event.Attrs["message"] = strings.Repeat("x", 2048)
+		spool.Write(event)
+	}
+	for _, spool := range spools {
+		if err := spool.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := spoolFiles(directory)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("files=%+v err=%v", files, err)
+	}
+	var total int64
+	for _, file := range files {
+		total += file.size
+	}
+	if total > MaxSpoolBytes {
+		t.Fatalf("offline spool exceeded cap: %d", total)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("oldest file was not evicted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "state.db")); !os.IsNotExist(err) {
+		t.Fatalf("spool opened state.db: %v", err)
+	}
+}
+
 func TestSpoolImportFailurePreservesFileAndCanRetry(t *testing.T) {
 	home := t.TempDir()
 	at := time.Now().UTC()

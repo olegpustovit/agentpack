@@ -1167,3 +1167,15 @@ been run under the user's later fast-checks-only instruction; its events/hour,
 bytes/event and 50 MiB/day projection remain an explicit validation gap. The guide,
 data-layout entries and failure-recording/launch rules are documented. This does
 not waive the measurement or the outstanding Linux ARM64 startup certification.
+
+## Offline spool storage bound — P1A hardening
+
+Spool writers now enforce the 16 MiB directory budget before appending, even while
+the gateway is stopped. The existing gofrs/flock dependency serializes reserve,
+oldest-first pruning and append across processes; gateway pruning uses the same
+lock and helper. Nothing is opened until the first event. A sparse-file regression
+starts two writers against an almost-full offline spool, verifies oldest eviction
+and the total byte bound, and confirms no state.db was opened. The affected spool,
+offline-reader and CLI checks pass (Linux obs 0.41 s, CLI 0.28 s; Mac obs 0.57 s).
+Asset staging initially overlapped one Go compile; rerunning the affected CLI check
+after staging completed passes. No full suites or snapshots were run.
