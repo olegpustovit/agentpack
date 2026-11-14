@@ -121,6 +121,7 @@ jobs:
           PY
   codex-windows:
     needs: [crsqlite-check, crsqlite]
+    if: always() && needs.crsqlite-check.result == 'success' && needs.crsqlite.result == 'success'
     runs-on: windows-latest
     env:
       CGO_ENABLED: '1'
@@ -150,6 +151,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   goreleaser:
     needs: [crsqlite-check, crsqlite, codex-windows]
+    if: always() && needs.crsqlite.result == 'success' && needs.codex-windows.result == 'success'
     # Native Apple SDK; Zig still cross-compiles the static Linux and Windows builds.
     runs-on: macos-26
     env:
@@ -216,6 +218,7 @@ jobs:
           path: dist/
   smoke:
     needs: goreleaser
+    if: always() && needs.goreleaser.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -274,7 +277,7 @@ jobs:
           test "$result" = ok
   publish:
     needs: [crsqlite-check, smoke]
-    if: github.event_name == 'push'
+    if: always() && github.event_name == 'push' && needs.smoke.result == 'success'
     runs-on: macos-26
     env:
       PWD: ${{ github.workspace }}

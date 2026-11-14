@@ -427,3 +427,11 @@ The native Mac fixture fetched all five published libraries and is running the
 full `make release-check`, including UI staging and GoReleaser snapshot builds.
 Full platform smoke results and warm workflow timing remain pending; this is
 still an ongoing P0.9 implementation, not a completed Phase 0 gate.
+
+The first checksum-pinned run (43602091356) was **not accepted as evidence**:
+it reported success while skipping Windows, GoReleaser and smoke jobs. GitHub's
+implicit `success()` condition propagated the intentionally skipped source-build
+ancestor. Downstream gates now explicitly use `always()` plus the required
+predecessor's successful result. A configuration regression checks that the
+cached-library path cannot silently skip these gates. `make ci` and actionlint
+pass after the correction; the complete workflow is being rerun.
