@@ -64,7 +64,7 @@ export CC="$work/zig-cc"
 linker_var="CARGO_TARGET_${rust_target^^}_LINKER"
 linker_var=${linker_var//-/_}
 export "$linker_var=$work/zig-cc"
-make -C "$work/source/core" static CI_GCC="$work/zig-cc" CI_MAYBE_TARGET="$rust_target" rs_build_flags=--locked
+make -C "$work/source/core" static CI_GCC="$work/zig-cc" CI_MAYBE_TARGET="$rust_target" rs_build_flags=--locked STATIC_CFLAGS="-std=c99 -O2 -fPIC -c -Wall -fno-sanitize=all"
 archive="$work/source/core/dist/crsqlite-$rust_target.a"
 [[ -s $archive ]] || { echo "static library missing: $archive" >&2; exit 1; }
 nm --defined-only "$archive" | awk '/[[:space:]]_?sqlite3_crsqlite_init$/ { found=1 } END { exit !found }'

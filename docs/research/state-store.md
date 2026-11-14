@@ -46,7 +46,8 @@ or user shell startup files were changed.
   (format, vet, full Go tests, race tests, build).
 - P0.2: fork and toolchains pinned; static target confirmed in upstream build files.
 - P0.3: host static library built and symbol checked; build-input tests and `make ci` passed.
-- P0.4–P7 and Phase 1A: not implemented.
+- P0.4: static registration and Go store smoke test passed; `make ci` passed.
+- P0.5–P7 and Phase 1A: not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -108,3 +109,21 @@ Here `/tmp/state-libclang-path.txt` holds the output of
 The Zig archive was verified against the official download index SHA-256 before
 extracting. These temporary paths describe this experiment, not a permanent
 developer setup. Other targets and Go linking are not yet verified.
+
+## Go linkage — P0.4
+
+Added `mattn/go-sqlite3 v1.14.17` and the minimal `internal/state` store.
+`sqlite3_auto_extension` registers the linked extension for every connection;
+no shared library is extracted or loaded at runtime. The store currently uses
+one connection and finalizes cr-sqlite before closing it. No production caller
+opens this store yet.
+
+`CGO_ENABLED=1 go test ./internal/state` passes on Linux amd64: SQLite reports
+3.42.0 and `crsql_site_id()` returns 16 bytes. `make ci` also passes (including
+race tests). Other platforms remain unverified.
+
+The first Go link exposed Zig's default C sanitizer references in the archive.
+The source builder now explicitly uses `-O2 -fno-sanitize=all` for C release
+objects. Rebuilding and repeating the Go link succeeded. This removes the
+unintended sanitizer runtime dependency rather than adding one to the product.
+The old driver's C compiler emits a discarded-const warning; it is not hidden.
