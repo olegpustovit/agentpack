@@ -44,5 +44,37 @@ or user shell startup files were changed.
 - P0.1: complete; baseline benchmarks, release timing, and `make ci` passed.
   Validation command: `nix shell nixpkgs#gnumake nixpkgs#gcc -c bash -c "make ci"`
   (format, vet, full Go tests, race tests, build).
-- P0.2–P7 and Phase 1A: not implemented.
+- P0.2: fork and toolchains pinned; static target confirmed in upstream build files.
+- P0.3–P7 and Phase 1A: not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
+
+## Source pin — P0.2
+
+`superfly/cr-sqlite` default branch `main` resolved to
+`8e32195704ccaea8508f7d378e11dc2dc0bb3d2e` on 2026-11-14.
+`third_party/crsqlite.lock` records that immutable commit. Its checksum table
+is intentionally empty until all target archives have actually been built.
+
+Source evidence at that commit:
+
+- `README.md`, Building: requires nightly Rust and documents static CLI linking.
+- `core/Makefile`, `static` target: compiles the extension C sources and merges
+  the Rust archive into `dist/crsqlite-<target>.a`.
+- `core/rs/bundle_static/Cargo.toml`: `crate-type = ["staticlib"]`.
+- `core/rs/bundle_static/rust-toolchain.toml`: `nightly-2023-10-05`.
+- `core/src/sqlite/sqlite3.h`: SQLite **3.42.0**. The matching Go driver is
+  `mattn/go-sqlite3 v1.14.17` (its bundled header also says 3.42.0); the latest
+  driver v1.14.53 bundles 3.54.1 and cannot satisfy the proposal's exact-match
+  requirement without changing the extension's headers. No driver has been
+  added yet. This old SQLite baseline needs review at the Phase 0 gate.
+
+### Replication semantics to resolve at the gate
+
+The pinned fork's README explicitly says `db_version` is **per site** and
+that `crsql_tracked_peers` bookkeeping is not supplied. The proposal assumes
+a single cursor per peer and extension-owned tracked peers. A single scalar
+cursor is insufficient for forwarding unrelated origin sites through a peer:
+a site's lower-numbered changes could be skipped after another site's higher
+version. Phase 4 must use origin-aware positions and preserve whole transaction
+pagination. The Phase 0 sync experiment must cover these actual fork semantics;
+the upstream protocol must not be assumed interchangeable with this fork.
