@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
 func TestWorkerExitChild(t *testing.T) {
@@ -66,7 +67,7 @@ func TestRunWorkerCancellationDrainsCleanup(t *testing.T) {
 	ready := make(chan string, 1)
 	done := make(chan error, 1)
 	go func() {
-		_, err := RunWorker(ctx, home, WorkerLaunch{Program: executable, Directory: home, Arguments: []string{"-test.run=^TestWorkerCleanupChild$"}, Environment: append(os.Environ(), "AGENTPACK_TEST_WORKER_CLEANUP=1"), Rows: 24, Columns: 80}, func(id string) error { ready <- id; return nil })
+		_, err := RunWorker(ctx, home, "test", WorkerLaunch{Program: executable, Directory: home, Arguments: []string{"-test.run=^TestWorkerCleanupChild$"}, Environment: append(os.Environ(), "AGENTPACK_TEST_WORKER_CLEANUP=1"), Rows: 24, Columns: 80}, func(id string) error { ready <- id; return nil })
 		done <- err
 	}()
 	var id string
@@ -118,12 +119,13 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	const header = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+	ctx, cancel := context.WithCancel(obs.WithTrace(context.Background(), header))
 	defer cancel()
 	ready := make(chan string, 1)
 	done := make(chan error, 1)
 	go func() {
-		_, err := RunWorker(ctx, home, WorkerLaunch{Program: executable, Directory: home, Arguments: []string{"-test.run=^TestTerminalChild$"}, Environment: append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1"), Rows: 31, Columns: 101}, func(id string) error { ready <- id; return nil })
+		_, err := RunWorker(ctx, home, "test", WorkerLaunch{Program: executable, Directory: home, Arguments: []string{"-test.run=^TestTerminalChild$"}, Environment: append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1"), Rows: 31, Columns: 101}, func(id string) error { ready <- id; return nil })
 		done <- err
 	}()
 	var id string
@@ -189,6 +191,12 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 		readWorker(t, connection, func(kind int, data []byte) bool {
 			return kind == websocket.BinaryMessage && strings.Contains(string(data), "SIZE 31 101")
 		})
+		if err := connection.WriteMessage(websocket.BinaryMessage, []byte("trace\n")); err != nil {
+			t.Fatal(err)
+		}
+		readWorker(t, connection, func(kind int, data []byte) bool {
+			return kind == websocket.BinaryMessage && strings.Contains(string(data), "TRACE "+obs.ParseTraceParent(header).ID)
+		})
 	}
 	if err := connection.WriteMessage(websocket.BinaryMessage, []byte("exit\n")); err != nil {
 		t.Fatal(err)
@@ -214,6 +222,23 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, "network", "sessions", id)); !os.IsNotExist(err) {
 		t.Fatal("worker record survived exit")
 	}
+	events := workerDiagnosticEvents(t, home)
+	names := map[string]int{}
+	for _, event := range events {
+		names[event.Name]++
+		if event.SessionID != id || event.TraceID != obs.ParseTraceParent(header).ID || event.Proc != "worker" || event.Attrs["version"] != "test" {
+			t.Fatalf("worker event identity %+v", event)
+		}
+		if event.Name == "unexpected_exit" && (event.Status != 7 || event.Level != "error" || event.Fingerprint == "" || event.Attrs["stderr_unavailable"] == nil) {
+			t.Fatalf("unexpected exit %+v", event)
+		}
+		if _, ok := event.Attrs["stderr"]; ok {
+			t.Fatal("terminal replay copied into diagnostic stderr")
+		}
+	}
+	if names["start"] != 1 || names["restart"] != 2 || names["unexpected_exit"] != 1 || len(events) != 4 {
+		t.Fatalf("worker lifecycle events %+v", names)
+	}
 }
 
 func TestRunWorkerFastExitPreservesFinalOutput(t *testing.T) {
@@ -237,7 +262,7 @@ func runFastExitWorker(t *testing.T, restart bool) {
 		environment = append(environment, "AGENTPACK_TEST_WORKER_MARKER="+filepath.Join(home, "started"))
 	}
 	go func() {
-		code, _ := RunWorker(ctx, home, WorkerLaunch{Program: executable, Directory: home, Arguments: []string{"-test.run=^TestWorkerExitChild$"}, Environment: environment, Rows: 24, Columns: 80}, func(id string) error { ready <- id; return nil })
+		code, _ := RunWorker(ctx, home, "test", WorkerLaunch{Program: executable, Directory: home, Arguments: []string{"-test.run=^TestWorkerExitChild$"}, Environment: environment, Rows: 24, Columns: 80}, func(id string) error { ready <- id; return nil })
 		done <- code
 	}()
 	var id string
@@ -330,7 +355,7 @@ func runFastExitWorker(t *testing.T, restart bool) {
 
 func TestWorkerRestartFailureEndsWithoutOverlap(t *testing.T) {
 	session := testSession(t)
-	worker, err := WorkerHandler(session, nil, workerTestSecret, "")
+	worker, err := WorkerHandler(context.Background(), session, nil, workerTestSecret, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +399,7 @@ func TestWorkerRejectsReplacedWorkspaceWithoutStoppingAgent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ready, done := make(chan string, 1), make(chan error, 1)
 	go func() {
-		_, err := RunWorker(ctx, home, WorkerLaunch{Program: executable, Arguments: []string{"-test.run=^TestTerminalChild$"}, Directory: directory, Environment: append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1"), Rows: 24, Columns: 80, Session: SessionInfo{Directory: directory, Harness: "codex"}}, func(id string) error { ready <- id; return nil })
+		_, err := RunWorker(ctx, home, "test", WorkerLaunch{Program: executable, Arguments: []string{"-test.run=^TestTerminalChild$"}, Directory: directory, Environment: append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1"), Rows: 24, Columns: 80, Session: SessionInfo{Directory: directory, Harness: "codex"}}, func(id string) error { ready <- id; return nil })
 		done <- err
 	}()
 	t.Cleanup(func() {

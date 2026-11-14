@@ -94,7 +94,7 @@ func TestACPAgentExitStopsStateButKeepsConversationAndRestart(t *testing.T) {
 	log := acp.NewEventLog(0)
 	log.Append("prompt", 1, json.RawMessage(`{}`))
 	conversation := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
-	worker, err := WorkerHandler(nil, conversation, strings.Repeat("s", 64), t.TempDir())
+	worker, err := WorkerHandler(context.Background(), nil, conversation, strings.Repeat("s", 64), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

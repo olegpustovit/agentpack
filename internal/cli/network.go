@@ -39,7 +39,7 @@ func (runner Runner) runSessionWorker(ctx context.Context, arguments []string) (
 	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return network.RunWorker(ctx, home, launch, func(id string) error {
+	return network.RunWorker(ctx, home, Version, launch, func(id string) error {
 		_, err := fmt.Fprintln(runner.Stdout, id)
 		return err
 	})

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
@@ -44,7 +45,25 @@ type WorkerRecord struct {
 
 // RunWorker owns a restartable PTY independently of a gateway. ready receives
 // only the non-secret worker ID, which survives supervised child restarts.
-func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func(string) error) (int, error) {
+func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, ready func(string) error) (code int, result error) {
+	spool, err := obs.OpenSpool(home, obs.SpoolOptions{Proc: "worker"})
+	if err != nil {
+		return 1, err
+	}
+	defer func() { result = errors.Join(result, spool.Close()) }()
+	metadata := obs.BuildMetadata(version, localStateNode, "worker")
+	ctx = obs.WithSink(obs.ProcessTrace(ctx), spool, metadata)
+	restore := obs.SetDefault(spool, metadata)
+	defer restore()
+	startCtx, started := obs.Start(ctx, "worker", "start")
+	started.Set("harness", launch.Session.Harness)
+	defer func() {
+		if started.TS.IsZero() {
+			started.Status = code
+			started.Fail(result)
+			started.End()
+		}
+	}()
 	if !filepath.IsAbs(launch.Program) || !filepath.IsAbs(launch.Directory) {
 		return 1, errors.New("worker program and directory must be absolute")
 	}
@@ -60,6 +79,7 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 		return 1, fmt.Errorf("create worker directory: %w", err)
 	}
 	defer os.RemoveAll(directory)
+	started.Set("session_id", filepath.Base(directory))
 	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		return 1, fmt.Errorf("protect worker directory: %w", err)
 	}
@@ -105,6 +125,7 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 			environment = os.Environ()
 		}
 		command.Dir, command.Env = launch.Directory, append(append([]string(nil), environment...), "AGENTPACK_SESSION=1", "AGENTPACK_SESSION_ID="+filepath.Base(directory))
+		command.Env = append(command.Env, "AGENTPACK_TRACE="+obs.ParseTraceParent(obs.TraceParent(ctx)).ID)
 		return StartSession(command, rows, columns)
 	}
 	var session *Session
@@ -113,7 +134,7 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 	if launch.Transport == "acp" {
 		launch.Session.Transport = "acp"
 		var err error
-		conversation, acpCleanup, err = startACPConversation(launch, directory)
+		conversation, acpCleanup, err = startACPConversation(startCtx, launch, directory)
 		if err != nil {
 			return 1, err
 		}
@@ -196,7 +217,7 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 			return 1, fmt.Errorf("remember session: %w", err)
 		}
 	}
-	handler, err = WorkerHandler(session, conversation, record.Secret, directory)
+	handler, err = WorkerHandler(ctx, session, conversation, record.Secret, directory)
 	if err != nil {
 		return 1, err
 	}
@@ -223,7 +244,7 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 				acpCleanup()
 				acpCleanup = nil
 			}
-			next, cleanup, err := startACPConversation(launch, directory)
+			next, cleanup, err := startACPConversation(obs.WithRecording(ctx, handler.diagnostics), launch, directory)
 			if err != nil {
 				return err
 			}
@@ -246,10 +267,11 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 	}
 	server = &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
 	serveDone := make(chan error, 1)
-	go func() { serveDone <- server.Serve(listener) }()
+	obs.Go("worker.http", func() { serveDone <- server.Serve(listener) })
 	if err := ready(record.ID); err != nil {
 		return 1, fmt.Errorf("announce worker: %w", err)
 	}
+	started.End()
 	select {
 	case <-ctx.Done():
 		return 1, ctx.Err()

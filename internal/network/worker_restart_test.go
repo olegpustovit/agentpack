@@ -18,11 +18,14 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
 func TestGatewayRestartOperationIsIdempotent(t *testing.T) {
 	secret := strings.Repeat("a", 64)
-	worker, err := WorkerHandler(testSession(t), nil, secret, "")
+	queue := obs.NewQueue()
+	worker, err := WorkerHandler(obs.WithSink(context.Background(), queue, obs.Metadata{}), testSession(t), nil, secret, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,10 +117,19 @@ func TestGatewayRestartOperationIsIdempotent(t *testing.T) {
 	if status := request(operationID); status != http.StatusOK || starts.Load() != 3 {
 		t.Fatal("retry after lost response restarted twice", status, starts.Load())
 	}
+	var restarts int
+	for len(queue.Events) > 0 {
+		if event := <-queue.Events; event.Name == "restart" {
+			restarts++
+		}
+	}
+	if restarts != 3 {
+		t.Fatalf("restart retries emitted %d events for three operations", restarts)
+	}
 }
 
 func TestWorkerRestartCacheRetainsFailuresAndIsBounded(t *testing.T) {
-	worker := &WorkerHTTP{finished: true}
+	worker := &WorkerHTTP{finished: true, diagnostics: context.Background()}
 	operationID := "operation-00000000"
 	first := worker.Restart(context.Background(), operationID)
 	if first == nil || worker.Restart(context.Background(), operationID) != first {

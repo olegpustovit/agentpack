@@ -61,6 +61,10 @@ func TestEventEndsOnceWithBoundedRedactedAttributes(t *testing.T) {
 	if got.Level != "error" || got.Fingerprint == "" || got.Stack == "" || got.TS.IsZero() || got.NodeID != "node-a" || got.Attrs["version"] != "v0.13.9" {
 		t.Fatalf("event missing metadata: %+v", got)
 	}
+	snapshot, ok := got.Attrs["snapshot"].(map[string]any)
+	if !ok || snapshot["goroutines"].(int) < 1 || snapshot["heap_bytes"].(uint64) == 0 || snapshot["memory_bytes"].(uint64) == 0 {
+		t.Fatalf("error runtime snapshot %+v", snapshot)
+	}
 	if !strings.Contains(string(encoded), "application/json") {
 		t.Fatal("allowlisted header missing")
 	}

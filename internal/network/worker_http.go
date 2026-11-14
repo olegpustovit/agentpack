@@ -6,14 +6,17 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
 // Harness credential cleanup can wait up to a minute for its shared lock.
@@ -36,6 +39,8 @@ type WorkerHTTP struct {
 	lifecycle    sync.Mutex
 	done         chan struct{}
 	finished     bool
+	stopping     bool
+	diagnostics  context.Context
 	err          error
 	attached     chan struct{}
 	restarts     map[string]error
@@ -70,11 +75,46 @@ func (worker *WorkerHTTP) firstAttachment() <-chan struct{} {
 	return worker.attached
 }
 
+func (worker *WorkerHTTP) observe(ctx context.Context, name string) *obs.Event {
+	_, event := obs.Start(obs.WithRecording(ctx, worker.diagnostics), "worker", name)
+	if worker.sessionDir != "" {
+		event.Set("session_id", filepath.Base(worker.sessionDir))
+	}
+	if worker.current() != nil {
+		// shortcut: PTYs merge chat and stderr, capture only when a backend exposes a separate diagnostic stream.
+		event.Set("stderr_unavailable", "terminal streams are merged")
+	}
+	return event
+}
+
+func (worker *WorkerHTTP) observeStderr(event *obs.Event) {
+	if conversation := worker.conversationSession(); conversation != nil && conversation.stderr != nil {
+		event.Set("stderr", conversation.stderr.Redacted())
+		if conversation.agentExitCode != nil {
+			event.Set("exit_code", int(conversation.agentExitCode.Load()))
+		}
+	}
+}
+
 func (worker *WorkerHTTP) watch(session *Session) {
 	<-session.done
 	worker.lifecycle.Lock()
 	defer worker.lifecycle.Unlock()
 	if worker.current() == session && !worker.finished {
+		if !worker.stopping {
+			code, err := session.Wait(context.Background())
+			name := "exit"
+			if code != 0 || err != nil {
+				name = "unexpected_exit"
+				if err == nil {
+					err = fmt.Errorf("agent exited with status %d", code)
+				}
+			}
+			event := worker.observe(worker.diagnostics, name)
+			event.Status = code
+			event.Fail(err)
+			event.End()
+		}
 		worker.finished = true
 		close(worker.done)
 	}
@@ -94,6 +134,15 @@ func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (resu
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	event := worker.observe(ctx, "restart")
+	defer func() {
+		event.Fail(result)
+		if result != nil {
+			event.Status = 1
+		}
+		worker.observeStderr(event)
+		event.End()
+	}()
 	defer func() {
 		if worker.restarts == nil {
 			worker.restarts = make(map[string]error)
@@ -107,7 +156,7 @@ func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (resu
 		worker.restartIDs = append(worker.restartIDs, operationID)
 		worker.restarts[operationID] = result
 	}()
-	if worker.finished {
+	if worker.finished || worker.stopping {
 		return errors.New("session cannot restart")
 	}
 	if worker.validate != nil {
@@ -152,7 +201,7 @@ func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (resu
 			worker.session = replacement
 			worker.attached = make(chan struct{})
 			worker.mu.Unlock()
-			go worker.watch(replacement)
+			obs.Go("worker.watch", func() { worker.watch(replacement) })
 			return nil
 		}
 	}
@@ -167,12 +216,32 @@ func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (resu
 	return err
 }
 
-func (worker *WorkerHTTP) Stop(ctx context.Context) error {
+func (worker *WorkerHTTP) Stop(ctx context.Context) (result error) {
 	worker.lifecycle.Lock()
 	defer worker.lifecycle.Unlock()
 	if worker.finished {
 		return nil
 	}
+	var event *obs.Event
+	if !worker.stopping {
+		worker.stopping = true
+		event = worker.observe(ctx, "stop")
+	}
+	defer func() {
+		if event != nil {
+			event.Fail(result)
+			if session := worker.current(); session != nil {
+				event.Status = session.State().ExitCode
+			} else if conversation := worker.conversationSession(); conversation != nil && conversation.agentExitCode != nil {
+				event.Status = int(conversation.agentExitCode.Load())
+			}
+			worker.observeStderr(event)
+			event.End()
+		}
+		if result != nil && !errors.Is(result, context.Canceled) && !errors.Is(result, context.DeadlineExceeded) {
+			worker.stopping = false
+		}
+	}()
 	if worker.conversationSession() != nil {
 		if worker.stopACP == nil {
 			return errors.New("session cannot stop")
@@ -219,16 +288,16 @@ func (worker *WorkerHTTP) Shutdown(ctx context.Context) error {
 
 // WorkerHandler is private IPC. The gateway authenticates its own callers,
 // then attaches using this worker's secret. Never expose the secret to browsers.
-func WorkerHandler(session *Session, conversation *ConversationSession, secret, sessionDir string) (*WorkerHTTP, error) {
+func WorkerHandler(ctx context.Context, session *Session, conversation *ConversationSession, secret, sessionDir string) (*WorkerHTTP, error) {
 	if (session == nil) == (conversation == nil) {
 		return nil, errors.New("worker requires exactly one of session or conversation")
 	}
 	if len(secret) < 32 {
 		return nil, errors.New("worker requires a secret of at least 32 bytes")
 	}
-	worker := &WorkerHTTP{session: session, conversation: conversation, sessionDir: sessionDir, connections: make(map[*websocket.Conn]struct{}), drained: make(chan struct{}), done: make(chan struct{}), attached: make(chan struct{})}
+	worker := &WorkerHTTP{diagnostics: ctx, session: session, conversation: conversation, sessionDir: sessionDir, connections: make(map[*websocket.Conn]struct{}), drained: make(chan struct{}), done: make(chan struct{}), attached: make(chan struct{})}
 	if session != nil {
-		go worker.watch(session)
+		obs.Go("worker.watch", func() { worker.watch(session) })
 	}
 	mux := http.NewServeMux()
 	if session != nil {
@@ -286,7 +355,9 @@ func WorkerHandler(session *Session, conversation *ConversationSession, secret, 
 			http.Error(w, "worker authentication required", http.StatusUnauthorized)
 			return
 		}
-		mux.ServeHTTP(w, r)
+		ctx := obs.WithRecording(r.Context(), worker.diagnostics)
+		ctx = obs.WithTrace(ctx, r.Header.Get("traceparent"))
+		mux.ServeHTTP(w, r.WithContext(ctx))
 	})
 	return worker, nil
 }

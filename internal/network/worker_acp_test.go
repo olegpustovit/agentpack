@@ -184,7 +184,7 @@ func TestWorkerLaunchContextUsesSafeDefaultPermissions(t *testing.T) {
 
 func TestStartACPRequiresHarness(t *testing.T) {
 	dir := t.TempDir()
-	_, _, err := startACPConversation(WorkerLaunch{
+	_, _, err := startACPConversation(context.Background(), WorkerLaunch{
 		Transport: "acp",
 		Directory: dir,
 		Session:   SessionInfo{Directory: dir},
@@ -224,7 +224,7 @@ func TestStartACPReplayAgent(t *testing.T) {
 		t.Setenv("AGENTPACK_TEST_ACP", "")
 		t.Setenv("AGENTPACK_TEST_ACP_FIXTURE", "")
 	})
-	session, cleanup, err := startACPConversation(WorkerLaunch{
+	session, cleanup, err := startACPConversation(context.Background(), WorkerLaunch{
 		Transport: "acp",
 		Directory: dir,
 		Session:   SessionInfo{Directory: dir, Harness: "claude"},
@@ -598,7 +598,7 @@ func TestRunWorkerACPRestartAndStop(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	code, err := RunWorker(context.Background(), home, WorkerLaunch{
+	code, err := RunWorker(context.Background(), home, "test", WorkerLaunch{
 		Session:   SessionInfo{ID: "test-session", Directory: directory, Harness: "claude", Mode: "default"},
 		Program:   program,
 		Directory: directory,
@@ -611,6 +611,17 @@ func TestRunWorkerACPRestartAndStop(t *testing.T) {
 	})
 	if err != nil || code != 0 {
 		t.Fatalf("RunWorker() = %d, %v", code, err)
+	}
+	events := workerDiagnosticEvents(t, home)
+	names := map[string]int{}
+	for _, event := range events {
+		names[event.Name]++
+		if event.SessionID == "" || event.Proc != "worker" {
+			t.Fatalf("ACP worker event identity %+v", event)
+		}
+	}
+	if names["start"] != 1 || names["restart"] != 1 || names["stop"] != 1 || len(events) != 3 {
+		t.Fatalf("ACP lifecycle events %+v", names)
 	}
 }
 

@@ -29,7 +29,7 @@ const workerTestSecret = "01234567890123456789012345678901"
 
 func testWorkerServer(t *testing.T, session *Session) *httptest.Server {
 	t.Helper()
-	handler, err := WorkerHandler(session, nil, workerTestSecret, "")
+	handler, err := WorkerHandler(context.Background(), session, nil, workerTestSecret, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func (writer notifyHijackWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 func TestLocalTerminalReconnectsAfterDroppedConnection(t *testing.T) {
 	session := testSession(t)
 	secret := strings.Repeat("s", 64)
-	handler, err := WorkerHandler(session, nil, secret, "")
+	handler, err := WorkerHandler(context.Background(), session, nil, secret, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func TestClosingLocalTerminalStopsWorker(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			session := testSession(t)
 			secret := strings.Repeat("s", 64)
-			handler, err := WorkerHandler(session, nil, secret, "")
+			handler, err := WorkerHandler(context.Background(), session, nil, secret, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -520,7 +520,7 @@ func TestConversationReplayFromFixture(t *testing.T) {
 	ready := make(chan string, 1)
 	go func() {
 		defer close(stopped)
-		_, runErr := RunWorker(ctx, home, WorkerLaunch{
+		_, runErr := RunWorker(ctx, home, "test", WorkerLaunch{
 			Transport: "acp",
 			Program:   executable,
 			Directory: home,

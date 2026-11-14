@@ -55,7 +55,7 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: all platform/storage checks pass. Latest warm CI timing and reference Linux ARM64 launch measurements remain open. P1.1–P1.7 and P1A.1–P1A.5 are implemented; P1A.6 onward remains.
+- P0.11: all platform/storage checks pass; warm CI completes in 551 s against the 697 s budget. Reference Linux ARM64 launch measurements remain open. P1.1–P1.7 and P1A.1–P1A.6 are implemented with the stderr/snapshot limits recorded below; P1A.7 onward remains.
 - Phase 0 gate: platform and storage checks pass; reference Linux ARM64 startup measurement is still required.
 
 ## Source pin — P0.2
@@ -951,3 +951,56 @@ outstanding Linux ARM64 reference-host requirement.
 P1A.6 remains open: worker lifecycle events, ACP turn summaries and error-state
 snapshots still need implementation. The physical Mac validation uses an
 isolated temporary checkout; no installed application data is changed.
+
+## Worker lifecycle and ACP turn recording — P1A.6
+
+Workers now own a spool sink and carry the release version explicitly from the
+CLI. Start, explicit stop, restart and unexpected exit events include session
+identity, status and error chains; failed startup is also recorded. Restart
+retries reuse the existing operation cache and emit one event per operation.
+Repeated stop calls still wait for termination without duplicating the event.
+Intentional forced stops are distinguished from unexpected exits. Trace IDs
+survive worker IPC and the native child environment, including after restart.
+
+ACP adapters retain only their last 8 KiB of separate stderr. The whole tail is
+checked for credential shapes and passed through Redact, then stored as two
+chunks because individual attribute strings cap at 4 KiB. Exit codes are retained
+atomically. Explicit cleanup does not report an unexpected exit. Native terminal
+workers keep stderr_unavailable="terminal streams are merged": their PTY merges
+chat/output with stderr. Capturing that replay would violate the no-chat rule;
+separating the descriptor would change the terminal behavior. A future terminal
+backend with a separate diagnostic stream can remove this limit.
+
+One acp.turn event spans the broker's actual prompt operation, including waits
+for tools and permissions. Append-time counters retain first/last seq and counts
+when the bounded replay tail evicts earlier events. Only known stop reasons are
+accepted; arbitrary response fields and all prompt/reply/tool content are
+excluded. Cancellation records a failed turn. A second overlapping prompt is
+rejected while the first remains active, so unrelated turn updates cannot be
+counted together. Worker HTTP inherits its process sink without losing request
+cancellation or trace context. Errors also capture goroutine count and Go memory
+figures. Database/peer positions, main gateway and persisted session snapshots
+still depend on the session/mesh phases; they are not invented here.
+
+A real subprocess adapter exiting with code 9 exposed two old stdin shutdown
+problems: exec.Cmd.Wait could wait on a copied stdin reader after process exit,
+and SDK cancellation could hold the rewriter mutex while cleanup tried to close
+it. Both ACP process paths now use the standard Cmd.StdinPipe and close that pipe
+before acquiring the rewriter mutex. The subprocess regression verifies the
+exit code and stderr event, deliberate shutdown suppression and prompt failure;
+three repeated race runs finish in 1.125 s instead of waiting for a ten-second
+request deadline. Failure paths close their pipes and event logs.
+
+make ci passes. Mac obs/CLI/network/integration race suites pass; a final Mac
+network race run covers the stop and trace refinements. Regressions cover real
+worker start/restart/exit spools, ACP start/restart/stop, deduplicated restart
+requests, per-request trace inheritance, cancellation and overlapping prompts,
+bounded stderr including a 1 MiB write, credentials, private response metadata,
+and turn counters after replay eviction. The native child fixture still checks
+its terminal descriptors and size and now verifies its inherited trace after
+restart. No installed Mac profile or state was changed.
+
+Five isolated Linux amd64 setup runs give medians of 0.301083 ms for
+MaterializationHome, 7.403948 ms cold Codex setup and 0.114826 ms warm (previous:
+0.302059/7.509646/0.117226 ms). The gateway-disabled cold/warm launch guard still
+passes without logs or state.db. These are not Linux ARM64 reference-host results.

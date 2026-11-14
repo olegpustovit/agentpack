@@ -63,7 +63,7 @@ func TestConversationPromptImagesUsesWorkerRoute(t *testing.T) {
 		received <- input
 		return nil
 	}, nil, nil, nil)
-	worker, err := WorkerHandler(nil, NewConversationSession(nil, broker), strings.Repeat("s", 64), t.TempDir())
+	worker, err := WorkerHandler(context.Background(), nil, NewConversationSession(nil, broker), strings.Repeat("s", 64), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -95,6 +95,14 @@ func WithSink(ctx context.Context, sink Sink, metadata Metadata) context.Context
 	return context.WithValue(ctx, recordingKey{}, recording{sink, metadata})
 }
 
+// WithRecording keeps request cancellation and tracing while inheriting a process sink.
+func WithRecording(ctx, source context.Context) context.Context {
+	if rec, ok := source.Value(recordingKey{}).(recording); ok {
+		return context.WithValue(ctx, recordingKey{}, rec)
+	}
+	return ctx
+}
+
 func Start(ctx context.Context, kind, name string) (context.Context, *Event) {
 	trace := NewTrace()
 	if parent := From(ctx); parent != nil {
@@ -163,6 +171,11 @@ func (e *Event) Fail(err error) {
 	}
 	collect(err, 0)
 	e.Attrs["errors"] = chain
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	e.Attrs["snapshot"] = map[string]any{
+		"goroutines": runtime.NumGoroutine(), "heap_bytes": memory.Alloc, "memory_bytes": memory.Sys,
+	}
 	var pcs [32]uintptr
 	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs[:])])
 	var stack strings.Builder
