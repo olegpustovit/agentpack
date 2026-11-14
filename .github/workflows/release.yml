@@ -212,6 +212,10 @@ jobs:
           distribution: goreleaser
           version: '~> v2'
           args: release --clean --skip=publish
+      - name: Verify static and platform library dependencies
+        env:
+          AGENTPACK_RELEASE_DIST: ${{ github.workspace }}/dist
+        run: go test ./integration -run '^TestReleaseBinaryDependencies$'
       - uses: actions/upload-artifact@v4
         with:
           name: release-snapshot
@@ -281,7 +285,7 @@ jobs:
     runs-on: macos-26
     env:
       PWD: ${{ github.workspace }}
-      AGENTPACK_SMOKED_DIR: ${{ github.workspace }}/approved
+      AGENTPACK_SMOKED_DIR: ${{ github.workspace }}/.release-assets/approved
     steps:
       - uses: actions/checkout@v4
         with:
@@ -324,7 +328,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: release-snapshot
-          path: approved
+          path: .release-assets/approved
       - name: Publish only after all five smoke queries pass
         uses: goreleaser/goreleaser-action@v7
         with:

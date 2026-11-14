@@ -53,7 +53,9 @@ or user shell startup files were changed.
   Intel macOS and Windows runtime execution remain for the release smoke jobs.
 - P0.7: replication, delete propagation, size and allocator measurements pass.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
-- P0.9–P7 and Phase 1A: not implemented.
+- P0.9: verified libraries published and pinned; normal-path platform workflow is running.
+- P0.10: release configuration and real-binary validation implemented and checked.
+- P0.11: final gate audit pending. Phase 1 onward and Phase 1A are not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -443,3 +445,55 @@ Run 43602401866 correctly reached the Windows gate and caught an open-file
 rename in the downloader (WinError 32). Installation now closes/fsyncs its
 staging file before atomic replacement. Existing download regression tests and
 `make ci` pass; the real Windows gate is being repeated.
+
+## Release validation — P0.10
+
+Release configuration tests reject a missing compiler, disabled cgo and missing
+Linux static flags. All five archive checksums must be present and well formed,
+and both source-build and runtime smoke matrices must include every target.
+The existing installer/header checks remain unchanged for product releases;
+the documented `crsqlite-*` build-input exception was added during bootstrap.
+
+The negative check was performed against the real file: temporarily changed
+`.goreleaser.yaml` to `CGO_ENABLED=0`, ran the configured-build test, observed its
+`cgo disabled` failure, and restored the file in a `finally` block.
+
+`TestReleaseBinaryDependencies`, with `AGENTPACK_RELEASE_DIST` set, inspects all
+five actual snapshot binaries. ELF files must have neither an interpreter nor
+dynamic libraries; Mach-O/PE files must not import SQLite/crsqlite. Go's PE
+`ImportedLibraries` is a TODO returning no libraries, so Windows inspection uses
+Xcode LLVM's complete import table (GNU objdump on other build hosts), including
+ordinal-only imports, and refuses an empty inspection. This avoids a false
+positive from an incomplete standard-library API.
+
+All five real snapshot binaries passed this inspection on the Mac. The Make
+`release-check` target and snapshot workflow now run it explicitly; ordinary
+Go test runs skip it when no snapshot directory is supplied. `make ci` and
+workflow lint pass. The warm Mac snapshot took **53 s**, compared with 6m56s
+cold on that same machine. This is not substituted for a warm GitHub workflow
+measurement or for the Linux ARM64 reference-host startup budgets.
+
+Run 43602899053 passed the complete Windows package, launch and PowerShell
+suite after the atomic-download fix; its GoReleaser and smoke stages are still
+running. Full all-target runtime completion has not yet been claimed.
+
+### Exact publishing proof and deterministic Windows metadata
+
+A publishing rehearsal on the Mac rebuilt all five binaries and compared each
+to a previously staged archive. It correctly rejected Windows: the PE timestamp
+and derived build identifier varied between links. Setting the standard
+`SOURCE_DATE_EPOCH=0` in GoReleaser's build environment fixes this with the pinned
+Zig toolchain. Two complete snapshots then passed the active byte-for-byte
+verification for **all five targets** (51 s staging, 46 s verified rebuild).
+The release configuration test now requires the deterministic environment.
+
+Approved artifacts are downloaded under `.release-assets/approved`, which is
+ignored. A regression checks this against Git and verifies that the hook's
+input directory matches the downloader. Keeping these inputs ignored preserves
+the same VCS build metadata between testing and publishing. No product release
+was published during these rehearsals.
+
+Source installation instructions now state the C compiler/Python prerequisites,
+`make crsqlite`, explicit cgo, and Windows/native-Mac release compiler settings.
+`make ci`, negative configuration checks, all-target binary inspection and
+workflow lint pass. The real five-platform runtime smoke jobs remain in flight.

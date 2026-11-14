@@ -15,6 +15,7 @@ builds:
     binary: ap
     env:
       - CGO_ENABLED=1
+      - SOURCE_DATE_EPOCH=0
       - 'CC="{{ .Env.PWD }}/scripts/cc-crsqlite.sh" {{ .Os }} {{ .Arch }}'
       - 'GOCACHE={{ .Env.HOME }}/.cache/agentpack-go/{{ .Os }}_{{ .Arch }}'
       - 'CGO_LDFLAGS={{ if ne .Os "darwin" }}-lunwind{{ end }}'
