@@ -22,6 +22,7 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/gorilla/websocket"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 type GatewayOptions struct {
@@ -42,6 +43,7 @@ type nodeRecord struct {
 
 type Gateway struct {
 	options        GatewayOptions
+	store          *state.Store
 	auth           *gatewayAuth
 	mcp            *GatewayMCP
 	local          nodeRecord
@@ -63,7 +65,7 @@ type Gateway struct {
 // browserPingInterval keeps idle terminal connections alive through proxies. Tests shorten it.
 var browserPingInterval = 15 * time.Second
 
-func ServeGateway(ctx context.Context, options GatewayOptions) error {
+func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if options.Address == "" {
 		options.Address = "127.0.0.1:7420"
 	}
@@ -94,13 +96,18 @@ func ServeGateway(ctx context.Context, options GatewayOptions) error {
 	if origin.Scheme != "https" && origin.Hostname() != "127.0.0.1" && origin.Hostname() != "localhost" {
 		return errors.New("remote gateway requires HTTPS")
 	}
+	store, err := state.Open(options.Home)
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, store.Close()) }()
 	auth, err := newGatewayAuth(options.Home)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	gateway := &Gateway{options: options, auth: auth, local: nodeRecord{listener.Addr().String(), randomToken()}, origin: origin, stop: cancel, done: ctx.Done()}
+	gateway := &Gateway{options: options, store: store, auth: auth, local: nodeRecord{listener.Addr().String(), randomToken()}, origin: origin, stop: cancel, done: ctx.Done()}
 	gateway.mcp, err = NewGatewayMCP(gateway)
 	if err != nil {
 		return err

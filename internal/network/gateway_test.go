@@ -13,6 +13,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gofrs/flock"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func TestNodeRequestForwardsBodyAndAuthorization(t *testing.T) {
@@ -247,5 +250,52 @@ func TestNodeRequestStreamStopsAtLimit(t *testing.T) {
 	got.Reset()
 	if err := NodeRequestStream(context.Background(), home, http.MethodGet, "/exact", &got, 3); err != nil || got.String() != "abc" {
 		t.Fatalf("exact response = %q, %v; want success", got.String(), err)
+	}
+}
+
+func TestGatewayOwnsAndClosesStateStore(t *testing.T) {
+	home := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := ServeGateway(ctx, GatewayOptions{Home: home, Address: "127.0.0.1:0"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "state.db")); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(filepath.Join(home, "state.db"+suffix)); !os.IsNotExist(err) {
+			t.Fatalf("gateway left state connections open (%s): %v", suffix, err)
+		}
+	}
+	store, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var version int
+	if err := store.Reader.QueryRow("SELECT version FROM schema_meta").Scan(&version); err != nil || version != state.SchemaVersion() {
+		t.Fatalf("gateway schema=%d err=%v", version, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "network", "node.json")); !os.IsNotExist(err) {
+		t.Fatalf("gateway left its process record: %v", err)
+	}
+}
+
+func TestGatewayLockPrecedesStateOpen(t *testing.T) {
+	home := t.TempDir()
+	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+		t.Fatal(err)
+	}
+	lock := flock.New(filepath.Join(home, "network", "gateway.lock"))
+	if err := lock.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Unlock()
+	if err := ServeGateway(context.Background(), GatewayOptions{Home: home, Address: "127.0.0.1:0"}); err == nil {
+		t.Fatal("started a second gateway")
+	}
+	if _, err := os.Stat(filepath.Join(home, "state.db")); !os.IsNotExist(err) {
+		t.Fatalf("locked-out gateway touched state: %v", err)
 	}
 }

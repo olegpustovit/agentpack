@@ -55,7 +55,7 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1–P1.3 are implemented; P1.4 onward and Phase 1A are not implemented.
+- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1–P1.4 are implemented; P1.5 onward and Phase 1A are not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -582,3 +582,22 @@ Five runs of the existing 32 MiB history fixture on the same amd64 host:
 
 The guard and `make ci` pass. These remain amd64 measurements, not a claim about
 the original ARM64 reference machine.
+
+## Gateway ownership — P1.4
+
+`ServeGateway` opens state only after acquiring its process lock and validating
+the public origin, retains the store on `Gateway`, and closes it on shutdown.
+Close errors are joined with the returned server result. The sharing loop exits
+before any work when its context is already cancelled.
+
+Lifecycle tests create and stop a gateway without external services, find the
+latest persisted schema, prove that WAL/SHM handles were released, and verify
+that a lock-denied second gateway never touches `state.db`. `make ci` passes.
+
+Latest Phase 0 validation run 43605315971 passes the full Windows suite,
+GoReleaser, binary dependency checks and every platform smoke. Its total 802 s
+exceeds the 697 s warm-workflow threshold. Step timing identifies 131 s spent
+running all Go tests before UI staging, followed by the existing full Go test
+hook after UI staging. That redundant first suite can be removed while retaining
+full coverage in GoReleaser's hook; the performance gate remains open until the
+corrected workflow is measured.

@@ -626,6 +626,9 @@ func (g *Gateway) runTailnetSharing(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		config, err := ReadSharingConfig(g.options.Home)
 		if err != nil || !config.Enabled {
 			closeServer()
