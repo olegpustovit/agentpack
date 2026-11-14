@@ -16,7 +16,13 @@ Start chat with `POST /api/sessions` and `{ "transport": "acp", ... }`. Resume w
 
 Session metadata, names and recent folders live in `$AGENTPACK_HOME/state.db`.
 Worker exit records the end time and final terminal state without deleting that
-metadata. A private `network/sessions/<id>/worker.json` retains only the running
+metadata. Conversation entries also persist in state.db. Memory eviction does not
+remove saved history; adjacent text chunks may be stored as one merged entry.
+Restart loads the saved replay tail and continues its sequence numbers. Writes
+batch every 50 ms, flushing sooner under byte pressure and once more after
+queued updates and active prompts drain during shutdown. Storage failures stop
+the worker and report a diagnostic without copying chat into diagnostics.
+A private `network/sessions/<id>/worker.json` retains only the running
 process's ID, PID, loopback address and secret. Forgetting a recent folder hides
 its launch rows; it does not remove files from the folder or erase session data.
 
@@ -24,7 +30,7 @@ its launch rows; it does not remove files from the folder or erase session data.
 
 Worker routes (gateway proxies as `/api/sessions/{id}/conversation/...` with the same auth and `?node=` peer routing as other session APIs):
 
-- `GET /conversation?since=` — NDJSON replay; `Accept: text/event-stream` or `?stream=1` for live updates. Snapshots are capped at 4 MiB and retain only complete records; `X-Agentpack-Truncated: true` marks omitted data.
+- `GET /conversation?since=` — NDJSON replay; `Accept: text/event-stream` or `?stream=1` for live updates. Snapshots are capped at 4 MiB and retain only complete records; `X-Agentpack-Truncated: true` marks omitted data. The gateway returns saved history when the worker is unavailable, preserving the same sequence filter and response formats. A stopped session’s SSE replay ends after its saved entries.
 - `POST /conversation/prompt`, `/cancel`, `/permission`, `/elicitation`, `/config`
 - `GET /conversation/config-options`
 - `GET /blobs/{sha}` — session-scoped PNG/JPEG/GIF/WebP images, 20 MiB each and 100 MiB total or 128 images per session (whichever limit is reached first)

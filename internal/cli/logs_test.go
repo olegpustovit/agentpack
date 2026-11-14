@@ -24,9 +24,8 @@ func diagnosticFixture(t *testing.T) (string, obs.Event) {
 		t.Fatal(err)
 	}
 	if _, err := store.DB.Exec(`CREATE TABLE mesh_nodes(node_id TEXT PRIMARY KEY,name TEXT,app_version TEXT);
-CREATE TABLE sessions(id TEXT PRIMARY KEY,name TEXT,directory TEXT,started_by TEXT);
 INSERT INTO mesh_nodes VALUES ('fixture-node','PRIVATE-HOST','v1.2.0');
-INSERT INTO sessions VALUES ('session-fixture','PRIVATE-SESSION','/home/PRIVATE-USER/project','PRIVATE-EMAIL');`); err != nil {
+INSERT INTO sessions(id,name,directory,started_by,owner_email) VALUES ('session-fixture','PRIVATE-SESSION','/home/PRIVATE-USER/project','{"user":"PRIVATE-EMAIL"}','PRIVATE-OWNER@example.com');`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {

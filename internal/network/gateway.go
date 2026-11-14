@@ -399,14 +399,7 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		g.terminalData(w, r)
 	})
-	mux.HandleFunc("GET /api/sessions/{id}/conversation", func(w http.ResponseWriter, r *http.Request) {
-		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusNotFound)
-			return
-		}
-		proxyWorkerConversation(w, r, record, "")
-	})
+	mux.HandleFunc("GET /api/sessions/{id}/conversation", g.serveConversation)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", func(w http.ResponseWriter, r *http.Request) {
 		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {

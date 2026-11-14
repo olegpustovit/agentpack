@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/tmaxmax/go-sse"
 )
 
@@ -63,6 +65,30 @@ func TestConversationGatewayProxyStreamsUntilCancelled(t *testing.T) {
 	cancel()
 	<-workerClosed
 	<-done
+}
+
+func TestConversationGatewayProxyForwardsSSEAccept(t *testing.T) {
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") != "text/event-stream" {
+			http.Error(w, "missing SSE negotiation", http.StatusBadRequest)
+			return
+		}
+		if r.Header.Get("traceparent") != "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01" {
+			http.Error(w, "missing request trace", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {}\n\n")
+	}))
+	defer worker.Close()
+	r := httptest.NewRequest(http.MethodGet, "/api/sessions/session-peer/conversation", nil)
+	r.Header.Set("Accept", "text/event-stream")
+	r = r.WithContext(obs.WithTrace(r.Context(), "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"))
+	w := httptest.NewRecorder()
+	proxyWorkerConversation(w, r, WorkerRecord{Address: strings.TrimPrefix(worker.URL, "http://")}, "")
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "text/event-stream" || w.Body.String() != "data: {}\n\n" {
+		t.Fatalf("SSE negotiation changed: %d %s", w.Code, w.Body.String())
+	}
 }
 func TestConversationTruncationEventIsOneShot(t *testing.T) {
 	var output bytes.Buffer

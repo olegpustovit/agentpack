@@ -16,6 +16,7 @@ import (
 type ConversationSession struct {
 	mu                sync.Mutex
 	promptMu          sync.Mutex
+	writes            sync.RWMutex
 	stateWriteMu      sync.Mutex
 	log               *acp.EventLog
 	broker            *acp.Broker
@@ -121,6 +122,8 @@ func (session *ConversationSession) publishState() {
 }
 
 func (session *ConversationSession) Prompt(ctx context.Context, input acp.PromptInput) (result error) {
+	session.writes.RLock()
+	defer session.writes.RUnlock()
 	if !session.promptMu.TryLock() {
 		return errors.New("ACP session already has an active prompt")
 	}
@@ -192,10 +195,16 @@ func (session *ConversationSession) Cancel(ctx context.Context) error {
 }
 
 func (session *ConversationSession) AnswerPermission(ctx context.Context, requestID, optionID string) error {
+	session.writes.RLock()
+	defer session.writes.RUnlock()
 	session.mu.Lock()
 	broker := session.broker
 	log := session.log
+	exited := session.agentExited
 	session.mu.Unlock()
+	if exited {
+		return ErrSessionEnded
+	}
 	if err := broker.AnswerPermission(ctx, requestID, optionID); err != nil {
 		return err
 	}
@@ -205,10 +214,16 @@ func (session *ConversationSession) AnswerPermission(ctx context.Context, reques
 }
 
 func (session *ConversationSession) AnswerElicitation(ctx context.Context, elicitationID, value string) error {
+	session.writes.RLock()
+	defer session.writes.RUnlock()
 	session.mu.Lock()
 	broker := session.broker
 	log := session.log
+	exited := session.agentExited
 	session.mu.Unlock()
+	if exited {
+		return ErrSessionEnded
+	}
 	if log == nil {
 		return errors.New("conversation unavailable")
 	}

@@ -1,11 +1,11 @@
 package acp
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
-	"os"
+	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -21,17 +21,28 @@ type EventLog struct {
 	seq         int64
 	bytes       int
 	truncated   bool
+	replaying   bool
 	entries     []LogEntry
 }
 
+// LogChanges contains durable updates, including replacements for coalesced chunks.
+// Removed contains only absorbed chunks, never ordinary memory evictions.
+type LogChanges struct {
+	Entries   []LogEntry
+	Removed   []int64
+	LastSeq   int64
+	Truncated bool
+}
+
 type eventLogPersistence struct {
-	path     string
-	stop     chan struct{}
-	done     chan struct{}
-	stopOnce sync.Once
-	dirty    atomic.Bool
-	mu       sync.Mutex
-	err      error
+	sink             func(LogChanges) error
+	stop, done       chan struct{}
+	pending          map[int64]LogEntry
+	removed          map[int64]struct{}
+	bytes            int
+	flushedSeq       int64
+	flushedTruncated bool
+	err              error
 }
 
 func NewEventLog(limitBytes int) *EventLog {
@@ -45,6 +56,10 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 	log.notifyMu.Lock()
 	defer log.notifyMu.Unlock()
 	log.mu.Lock()
+	if log.replaying && kind != "agent_exit" {
+		log.mu.Unlock()
+		return LogEntry{}
+	}
 	log.seq++
 	entry := LogEntry{Seq: log.seq, TS: ts, Kind: kind}
 	entry.Payload = append(json.RawMessage(nil), payload...)
@@ -54,17 +69,27 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 		log.mu.Unlock()
 		return entry
 	}
+	persistence := log.persistence
+	if persistence != nil && persistence.err != nil {
+		log.truncated = true
+		log.mu.Unlock()
+		return entry
+	}
 	log.entries = append(log.entries, entry)
 	log.bytes += size
+	if persistence != nil {
+		persistence.put(entry)
+	}
 	for log.bytes > log.limit && len(log.entries) > 0 {
 		log.coalesceDropOldest()
 	}
-	onAppend := log.onAppend
-	persistence := log.persistence
-	log.mu.Unlock()
-	if persistence != nil {
-		persistence.dirty.Store(true)
+	if persistence != nil && persistence.bytes >= log.limit {
+		// Apply backpressure before a pending batch can grow beyond the memory budget.
+		log.flushChanges(persistence)
 	}
+	onAppend := log.onAppend
+	log.mu.Unlock()
+
 	if onAppend != nil {
 		onAppend(entry)
 	}
@@ -80,30 +105,32 @@ func (log *EventLog) SetOnAppend(onAppend func(LogEntry)) []LogEntry {
 	log.mu.Unlock()
 	return entries
 }
-func (log *EventLog) EnablePersistence(path string) error {
-	if path == "" {
-		return errors.New("event log persistence path is required")
+
+// EnableSink calls sink serially under the log lock; sink must not call log methods.
+// Failed writes remain pending for retry, and Close reports the first failure.
+func (log *EventLog) EnableSink(sink func(LogChanges) error) error {
+	if sink == nil {
+		return errors.New("event log sink is required")
 	}
 	log.notifyMu.Lock()
 	defer log.notifyMu.Unlock()
 	log.mu.Lock()
+	defer log.mu.Unlock()
 	if log.persistence != nil {
-		log.mu.Unlock()
 		return errors.New("event log persistence already enabled")
 	}
 	persistence := &eventLogPersistence{
-		path: path,
-		stop: make(chan struct{}),
-		done: make(chan struct{}),
+		sink: sink, stop: make(chan struct{}), done: make(chan struct{}),
+		pending: map[int64]LogEntry{}, removed: map[int64]struct{}{},
 	}
 	log.persistence = persistence
-	entries := append([]LogEntry(nil), log.entries...)
-	log.mu.Unlock()
-	if err := writePersistedEventLog(path, entries, log.limit); err != nil {
-		log.mu.Lock()
+	for _, entry := range log.entries {
+		persistence.put(entry)
+	}
+	log.flushChanges(persistence)
+	if persistence.err != nil {
 		log.persistence = nil
-		log.mu.Unlock()
-		return err
+		return persistence.err
 	}
 	go log.persistLoop(persistence)
 	return nil
@@ -111,18 +138,18 @@ func (log *EventLog) EnablePersistence(path string) error {
 
 func (log *EventLog) Close() error {
 	log.notifyMu.Lock()
+	defer log.notifyMu.Unlock()
 	log.mu.Lock()
 	persistence := log.persistence
-	log.persistence = nil
 	log.mu.Unlock()
-	log.notifyMu.Unlock()
 	if persistence == nil {
 		return nil
 	}
-	persistence.stopOnce.Do(func() { close(persistence.stop) })
+	close(persistence.stop)
 	<-persistence.done
-	persistence.mu.Lock()
-	defer persistence.mu.Unlock()
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	log.persistence = nil
 	return persistence.err
 }
 
@@ -133,61 +160,94 @@ func (log *EventLog) persistLoop(persistence *eventLogPersistence) {
 	for {
 		select {
 		case <-ticker.C:
-			if persistence.dirty.Swap(false) {
-				log.persistSnapshot(persistence)
-			}
+			log.mu.Lock()
+			log.flushChanges(persistence)
+			log.mu.Unlock()
 		case <-persistence.stop:
-			log.persistSnapshot(persistence)
+			log.mu.Lock()
+			log.flushChanges(persistence)
+			log.mu.Unlock()
 			return
 		}
 	}
 }
 
-func (log *EventLog) persistSnapshot(persistence *eventLogPersistence) {
-	if err := writePersistedEventLog(persistence.path, log.Snapshot(), log.limit); err != nil {
-		persistence.mu.Lock()
-		if persistence.err == nil {
-			persistence.err = err
+func (p *eventLogPersistence) put(entry LogEntry) {
+	if old, ok := p.pending[entry.Seq]; ok {
+		p.bytes -= entrySize(old)
+	}
+	p.pending[entry.Seq] = entry
+	p.bytes += entrySize(entry)
+}
+
+func (p *eventLogPersistence) absorb(seq int64) {
+	if old, ok := p.pending[seq]; ok {
+		delete(p.pending, seq)
+		p.bytes -= entrySize(old)
+	}
+	if seq <= p.flushedSeq {
+		if _, ok := p.removed[seq]; !ok {
+			p.removed[seq] = struct{}{}
+			p.bytes += 8
 		}
-		persistence.mu.Unlock()
 	}
 }
 
-func writePersistedEventLog(path string, entries []LogEntry, limit int) error {
-	lines := make([][]byte, len(entries))
-	total, start := 0, 0
-	for i, entry := range entries {
-		line, err := json.Marshal(entry)
-		if err != nil {
-			return err
+// flushChanges requires log.mu. Keeping the lock applies backpressure during slow writes.
+func (log *EventLog) flushChanges(p *eventLogPersistence) {
+	if len(p.pending) == 0 && len(p.removed) == 0 && p.flushedSeq == log.seq && p.flushedTruncated == log.truncated {
+		return
+	}
+	changes := LogChanges{LastSeq: log.seq, Truncated: log.truncated}
+	for _, entry := range p.pending {
+		changes.Entries = append(changes.Entries, entry)
+	}
+	slices.SortFunc(changes.Entries, func(a, b LogEntry) int { return cmp.Compare(a.Seq, b.Seq) })
+	for seq := range p.removed {
+		changes.Removed = append(changes.Removed, seq)
+	}
+	slices.Sort(changes.Removed)
+	if err := p.sink(changes); err != nil {
+		if p.err == nil {
+			p.err = err
 		}
-		line = append(line, '\n')
-		if len(line) > limit {
-			continue
+		return
+	}
+	clear(p.pending)
+	clear(p.removed)
+	p.bytes, p.flushedSeq = 0, log.seq
+	p.flushedTruncated = log.truncated
+}
+
+// Restore seeds a new log without renumbering events or notifying live subscribers.
+func (log *EventLog) Restore(entries []LogEntry, lastSeq int64, truncated bool) error {
+	log.notifyMu.Lock()
+	defer log.notifyMu.Unlock()
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if log.seq != 0 || len(log.entries) != 0 || log.persistence != nil {
+		return errors.New("event log is not empty")
+	}
+	if lastSeq < 0 {
+		return errors.New("invalid restored event sequence")
+	}
+	var previous int64
+	var total int
+	for _, entry := range entries {
+		if entry.Seq <= previous || entry.Seq > lastSeq || entrySize(entry) < 0 {
+			return errors.New("invalid restored event sequence")
 		}
-		lines[i] = line
-		total += len(line)
-		for total > limit {
-			total -= len(lines[start])
-			start++
+		total += entrySize(entry)
+		if total > log.limit {
+			return errors.New("restored event log exceeds memory budget")
 		}
+		previous = entry.Seq
 	}
-	data := make([]byte, 0, total)
-	for i := start; i < len(lines); i++ {
-		data = append(data, lines[i]...)
-	}
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, data, 0o600); err != nil {
-		_ = os.Remove(temporary)
-		return err
-	}
-	if err := os.Chmod(temporary, 0o600); err != nil {
-		_ = os.Remove(temporary)
-		return err
-	}
-	if err := os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
-		return err
+	log.seq, log.truncated = lastSeq, truncated
+	for _, entry := range entries {
+		entry.Payload = append(json.RawMessage(nil), entry.Payload...)
+		log.entries = append(log.entries, entry)
+		log.bytes += entrySize(entry)
 	}
 	return nil
 }
@@ -224,6 +284,14 @@ func (log *EventLog) MarkTruncated() {
 	log.mu.Unlock()
 }
 
+// SetReplaying suppresses the native load response when durable history is already restored.
+// Process exits remain live events even while the adapter is loading its session.
+func (log *EventLog) SetReplaying(replaying bool) {
+	log.mu.Lock()
+	log.replaying = replaying
+	log.mu.Unlock()
+}
+
 func (log *EventLog) coalesceDropOldest() {
 	if len(log.entries) == 0 {
 		return
@@ -240,6 +308,10 @@ func (log *EventLog) coalesceDropOldest() {
 				log.bytes -= entrySize(first) + entrySize(second)
 				log.entries = append([]LogEntry{candidate}, log.entries[2:]...)
 				log.bytes += candidateSize
+				if log.persistence != nil {
+					log.persistence.put(candidate)
+					log.persistence.absorb(second.Seq)
+				}
 				log.truncated = true
 				return
 			}

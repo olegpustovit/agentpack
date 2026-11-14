@@ -1,5 +1,28 @@
 # Home-workspace startup performance
 
+## Session-store checkpoint (2026-11-14)
+
+Five repeats of ten iterations, using the existing 32 MiB history fixtures:
+
+| Benchmark | Linux amd64, i9-12900K | macOS arm64, Apple M1 |
+| --- | ---: | ---: |
+| Materialization home | 0.332408 ms | 0.799500 ms |
+| Codex verified warm setup | 0.129439 ms | 0.764996 ms |
+| Codex cold setup | 6.634093 ms | 42.738621 ms |
+
+```sh
+go test ./internal/sync -run '^$' -bench '^(BenchmarkMaterializationHome|BenchmarkCodexSetup)$' -benchtime=10x -count=5
+```
+
+The command took 1.53 s on Linux and 7.01 s on the physical Mac. These are medians
+of the five reported values. The latest earlier shared-Linux-host measurements
+were 0.342552 ms, 0.134045 ms and 6.925838 ms respectively; those used the earlier
+short-run iteration count and serve as context rather than a controlled comparison.
+The Linux ARM64 reference-host gate is still unverified; macOS cold staging is not
+subject to that Linux budget. No full release suite or soak ran for this checkpoint.
+
+## Original reference measurement
+
 Measured on Linux ARM64, Go 1.26, 2026-10-30. Each result is the median of five runs with five iterations per run. These are local setup measurements, not model requests or harness process startup.
 
 | Benchmark | Before | After |

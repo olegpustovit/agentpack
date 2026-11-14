@@ -73,7 +73,7 @@ Logout invalidates the server session and active terminal access.
   `transport` is `terminal` (default) or `acp` (chat). Resuming an agent conversation passes `agent_session_id` from `GET /api/agent-sessions`.
 - `GET /api/agent-sessions`: `{sessions: [{id,title?,updated_at?}]}` for the selected folder, harness, and mode (cached; requires a live worker probe).
 - Chat worker routes (also available on the gateway as `/api/sessions/{id}/conversation/...` with the same auth and `?node=` routing as other session APIs):
-  - `GET /conversation?since=` — NDJSON log; `Accept: text/event-stream` or `?stream=1` for SSE live updates.
+  - `GET /conversation?since=` — NDJSON log; `Accept: text/event-stream` or `?stream=1` for SSE live updates. The gateway falls back to saved SQLite history for unavailable workers. The same `since` filter and truncation header apply; stopped SSE replay is finite.
   - `POST /conversation/prompt` — `{text, image?}` with `{sha,mime,width?,height?}` after `POST /conversation/blobs`; the server derives MIME from stored bytes and ignores the client MIME.
   - `POST /conversation/permission` — `{request_id, option_id}`.
   - `POST /conversation/elicitation` — `{elicitation_id, value}`.

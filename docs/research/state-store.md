@@ -1352,3 +1352,53 @@ Chat-event storage, native ACP ownership bindings, legacy import and P3.8's
 concurrency/benchmark gates remain outstanding. In particular, legacy recent-file
 data is not yet imported into SQL; this intermediate branch must not be deployed
 as a completed session migration.
+
+## Durable chat and stopped-worker reads — P3.4 / P3.5
+
+EventLog now accepts a caller-owned sink. Flushes contain added/replaced entries,
+absorbed chunk IDs and the sequence high-water mark. Ordinary memory eviction
+never deletes database rows. Only chunks absorbed by a merged entry are removed,
+in the same transaction that stores the replacement. Pending changes flush every
+50 ms, earlier under byte pressure, and at close. Slow writes apply backpressure;
+failed batches remain available for retry and Close returns the first error.
+
+Migration 0009 brings last_seq and last_event_at forward from P4A.1/P4A.2 because
+resume already needs the sequence counter. The counter may exceed the largest
+stored key after coalescing; storing only max(seq) would reuse old sequence IDs.
+The conversation_truncated flag also survives restart, including oversized-frame
+warnings with no retained entry. These fields default to zero for existing rows.
+last_event_at follows the session table's Unix-nanosecond timestamp convention.
+
+Workers register their row before creating the SQL sink. Each flush updates
+progress and upserts whole LogEntry JSON in one transaction. Identical bodies are
+not rewritten. Storage failure records an error without chat contents and cancels
+the worker. Resume reads a consistent, byte-bounded tail and restores sequence IDs.
+Native session/load replay is suppressed when history is already restored; the
+installed ACP SDK v0.13.5 supplies the response-scoped notification barrier.
+
+A stop-during-permission regression exposed two lost final events: the live log
+held eighteen while the saved log held sixteen. Cleanup now waits for the closed
+SDK reader's queued session updates and active prompt/answer writes before the
+final flush. The existing notification gate supplies the shutdown counter; SDK
+Done alone precedes notification drain. Five repeated stop/exit checks pass.
+
+The gateway reads saved history when the endpoint is missing or unreachable,
+preserving NDJSON, since filters, truncation headers and finite SSE replay.
+Snapshots count UTF-8 bytes and contain only complete records. The proxy forwards
+SSE Accept negotiation and request tracing. Diagnostic bundle fixtures use the
+real session schema, and exported owner_email receives the existing identity
+redaction policy.
+
+Focused checks cover fixture reducer equivalence, merged-row replacement, resume
+after an old exit, one thousand native replay notifications, rollback of rejected
+batches, failure cancellation/privacy, stopped/live history equality, UTF-8 byte
+bounds, and two independent writers producing 10,000 rows beside a session reader.
+The Linux matrix passes: ACP 0.28 s, network 1.05 s, state 0.29 s, CLI 0.24 s,
+launch regression 0.016 s. The physical Mac matrix passes: ACP 1.00 s, network
+0.83 s, state 0.32 s, CLI 0.58 s, launch regression 0.95 s. Full suites, race runs,
+release snapshots and commit-hook gates were not run during this fast-only work.
+
+The short five-repeat startup benchmarks are recorded in startup-performance.md.
+The P3.8 concurrency check passes; the physical Linux ARM64 performance gate
+remains unverified. P3.6 native ownership bindings and P3.7 legacy import remain
+unfinished, so this is still an intermediate migration checkpoint.

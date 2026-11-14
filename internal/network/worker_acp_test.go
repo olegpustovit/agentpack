@@ -188,7 +188,7 @@ func TestStartACPRequiresHarness(t *testing.T) {
 		Transport: "acp",
 		Directory: dir,
 		Session:   SessionInfo{Directory: dir},
-	}, dir)
+	}, dir, acp.NewEventLog(0))
 	if err == nil || !strings.Contains(err.Error(), "harness") {
 		t.Fatalf("expected harness error, got %v", err)
 	}
@@ -228,7 +228,7 @@ func TestStartACPReplayAgent(t *testing.T) {
 		Transport: "acp",
 		Directory: dir,
 		Session:   SessionInfo{Directory: dir, Harness: "claude"},
-	}, dir)
+	}, dir, acp.NewEventLog(0))
 	if err != nil {
 		t.Fatal(err)
 	}

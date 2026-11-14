@@ -162,7 +162,7 @@ func RedactDiagnosticExport(value any) (any, error) {
 		case map[string]any:
 			for key, item := range value {
 				switch key {
-				case "user", "resolved_by", "email", "username", "hostname", "display_name", "directory", "definition_root", "folder", "project_root":
+				case "user", "resolved_by", "email", "owner_email", "username", "hostname", "display_name", "directory", "definition_root", "folder", "project_root":
 					value[key] = redactPath(fmt.Sprint(item))
 				default:
 					if obs.CredentialKey(key) {

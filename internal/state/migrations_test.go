@@ -60,6 +60,8 @@ func TestSessionsMigrationDefaultsAndEventIdentity(t *testing.T) {
 		"agent_capabilities": false, "conversation_state": false, "state": false,
 		"started_at": false, "started_by": false, "node_id": false,
 		"owner_email": false, "ended_at": false, "hidden": false,
+		"last_seq": false, "last_event_at": false,
+		"conversation_truncated": false,
 	}
 	rows, err := store.Reader.Query("PRAGMA table_info(sessions)")
 	if err != nil {
@@ -147,6 +149,40 @@ func TestSessionsMigrationPreservesAccounts(t *testing.T) {
 	}
 	if _, err := store.DB.Exec("INSERT INTO sessions(id) VALUES ('upgraded'); INSERT INTO conversation_events(session_id, seq) VALUES ('upgraded', 1)"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestConversationProgressMigrationPreservesSession(t *testing.T) {
+	db, err := sql.Open(driverName, "file:"+filepath.ToSlash(filepath.Join(t.TempDir(), "state.db")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	previous := fstest.MapFS{}
+	names, err := fs.Glob(migrationFiles, "migrations/000[1-8]_*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		body, err := migrationFiles.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous[name] = &fstest.MapFile{Data: body}
+	}
+	if err := migrate(context.Background(), db, previous); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO sessions(id,name) VALUES ('existing','Keep this label')"); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(context.Background(), db, migrationFiles); err != nil {
+		t.Fatal(err)
+	}
+	var label string
+	var lastSeq, lastEvent, truncated int64
+	if err := db.QueryRow("SELECT name,last_seq,last_event_at,conversation_truncated FROM sessions WHERE id='existing'").Scan(&label, &lastSeq, &lastEvent, &truncated); err != nil || label != "Keep this label" || lastSeq != 0 || lastEvent != 0 || truncated != 0 {
+		t.Fatalf("progress upgrade changed session: name=%q seq=%d last_event=%d truncated=%d err=%v", label, lastSeq, lastEvent, truncated, err)
 	}
 }
 

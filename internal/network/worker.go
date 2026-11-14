@@ -52,6 +52,8 @@ func createSessionDirectory(root string) (string, error) {
 // RunWorker owns a restartable PTY independently of a gateway. ready receives
 // only the non-secret worker ID, which survives supervised child restarts.
 func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, ready func(string) error) (code int, result error) {
+	ctx, cancelWorker := context.WithCancelCause(ctx)
+	defer cancelWorker(nil)
 	spool, err := obs.OpenSpool(home, obs.SpoolOptions{Proc: "worker"})
 	if err != nil {
 		return 1, err
@@ -168,8 +170,16 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	}()
 	if launch.Transport == "acp" {
 		launch.Session.Transport = "acp"
-		var err error
-		conversation, acpCleanup, err = startACPConversation(startCtx, launch, directory)
+	}
+	if err := upsertSession(ctx, store.DB, launch.Session); err != nil {
+		return 1, fmt.Errorf("register session: %w", err)
+	}
+	if launch.Transport == "acp" {
+		log, err := newConversationLog(ctx, store, launch.Session.ID, cancelWorker)
+		if err != nil {
+			return 1, err
+		}
+		conversation, acpCleanup, err = startACPConversation(startCtx, launch, directory, log)
 		if err != nil {
 			return 1, err
 		}
@@ -285,7 +295,11 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 				acpCleanup()
 				acpCleanup = nil
 			}
-			next, cleanup, err := startACPConversation(obs.WithRecording(ctx, handler.diagnostics), launch, directory)
+			log, err := newConversationLog(ctx, store, launch.Session.ID, cancelWorker)
+			if err != nil {
+				return err
+			}
+			next, cleanup, err := startACPConversation(obs.WithRecording(ctx, handler.diagnostics), launch, directory, log)
 			if err != nil {
 				return err
 			}
@@ -322,7 +336,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	started.End()
 	select {
 	case <-ctx.Done():
-		return 1, ctx.Err()
+		return 1, context.Cause(ctx)
 	case err := <-serveDone:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return 1, fmt.Errorf("serve worker: %w", err)

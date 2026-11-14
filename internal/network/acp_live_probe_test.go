@@ -21,7 +21,7 @@ func TestLiveACPProbe(t *testing.T) {
 		t.Skip("set AGENTPACK_ACP_PROBE, AGENTPACK_ACP_PROBE_PROJECT and AGENTPACK_ACP_PROBE_OUT")
 	}
 	dir := t.TempDir()
-	session, stop, err := startACPConversation(context.Background(), WorkerLaunch{Directory: project, Session: SessionInfo{Harness: harness, Directory: project, DefinitionRoot: project, Transport: "acp"}}, dir)
+	session, stop, err := startACPConversation(context.Background(), WorkerLaunch{Directory: project, Session: SessionInfo{Harness: harness, Directory: project, DefinitionRoot: project, Transport: "acp"}}, dir, acp.NewEventLog(0))
 	if err != nil {
 		t.Fatal(err)
 	}
