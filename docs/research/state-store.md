@@ -837,3 +837,12 @@ Linux/Windows builds after the Darwin builds finished. All five Go caches hit.
 The pipeline does not cache Zig's global compilation cache; recompiling target
 runtimes on each runner is the next hypothesis to verify. No timing waiver or
 increased budget is assumed.
+
+## Shutdown verification follow-up
+
+The compiled concurrent-launch integration test sometimes removed its temporary
+home after the stop RPC acknowledged shutdown but before the gateway flushed
+its final HTTP event. Cleanup now waits for the gateway's existing process lock
+to be released before removing files. This preserves the API's explicit
+"stopping" acknowledgement. Twenty repeated integration runs and `make ci`
+pass; no new production stop protocol or arbitrary cleanup delay is added.

@@ -3,7 +3,6 @@ package integration_test
 import (
 	"bytes"
 	"context"
-	"github.com/olegpustovit/agentpack/internal/network"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gofrs/flock"
+	"github.com/olegpustovit/agentpack/internal/network"
 )
 
 func TestCompiledCLILaunchesUpdatedPackWhileAnotherSessionRuns(t *testing.T) {
@@ -19,7 +21,19 @@ func TestCompiledCLILaunchesUpdatedPackWhileAnotherSessionRuns(t *testing.T) {
 	}
 	project := t.TempDir()
 	t.Cleanup(func() {
-		_, _ = network.NodeRequest(context.Background(), filepath.Join(project, "_agentpack"), "POST", "/api/node/stop")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		home := filepath.Join(project, "_agentpack")
+		_, _ = network.NodeRequest(ctx, home, "POST", "/api/node/stop")
+		// The RPC acknowledges shutdown; the process lock covers its final disk flush.
+		lock := flock.New(filepath.Join(home, "network", "gateway.lock"))
+		acquired, err := lock.TryLockContext(ctx, 10*time.Millisecond)
+		if err != nil && !os.IsNotExist(err) || err == nil && !acquired {
+			t.Errorf("wait for gateway shutdown: %v", err)
+		}
+		if err := lock.Close(); err != nil {
+			t.Error(err)
+		}
 	})
 	skill := filepath.Join(project, "local-skill", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
