@@ -59,7 +59,8 @@ All agentpack-owned terminal rendering is monochrome and terminal-agnostic: use 
 | --- | --- |
 | **`$AGENTPACK_HOME/cache/<cache_key>/`** | Package trees (GitHub tarball, or **copies** from filesystem / `local/`). The key is the SHA-256 of the package identity (`github:<owner>/<repo>`, path, commit), **not** of the files; the lock's `content_hash` is what verifies them. |
 | **`$AGENTPACK_HOME/cache/db.reddb`** | Metadata + alias map for fast repeat **`add`**, plus cached GitHub ref/tag lookups to reduce API calls. |
-| **`$AGENTPACK_HOME/state.db`** | Gateway-owned SQLite state, including accounts, hashed browser sessions, issue metadata/counts, settings, limits and OAuth. Foreground launches never open it. |
+| **`$AGENTPACK_HOME/state.db`** | Gateway/worker SQLite state, including accounts, hashed browser sessions, session metadata/names/recents, issue metadata/counts, settings, limits and OAuth. Native-stdio presence registers through the local gateway; foreground launchers never open this database. |
+| **`$AGENTPACK_HOME/network/sessions/<id>/worker.json`** | Private running-process endpoint: ID, PID, loopback address and secret. Session metadata lives in state.db; endpoint files disappear when workers exit. |
 | **`$AGENTPACK_HOME/logs/YYYY-MM-DD.db`** | Private plain SQLite diagnostic events and deduplicated stacks, retained for five days. Ordinary events have a 256 MiB daily budget; error samples are preserved. |
 | **`$AGENTPACK_HOME/logs/spool/*.ndjson`** | Private CLI/worker diagnostics awaiting gateway ingestion; 16 MiB oldest-first budget. Successful foreground launches write no diagnostics. |
 | **`$AGENTPACK_HOME/verified/<cache_key>.json`** | Proof that an entry matched its content hash while its files had this metadata. Launches reuse it instead of reading the package again. Losing it costs one full check. |

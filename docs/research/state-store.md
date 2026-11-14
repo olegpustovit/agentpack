@@ -1305,3 +1305,50 @@ Six focused migration regressions pass on Linux in 0.38 s and on the physical
 Apple M1 Mac mini in 0.62 s. They cover schema defaults and event identity, account
 preservation when upgrading migration 0007, repeat opens, rollback, concurrent
 opens and refusal of newer schemas. No full suite, snapshot or soak test was run.
+
+## Session metadata and recent folders — P3.2 / P3.3
+
+Workers own one state.Store for their lifetime. Registration writes the complete
+SessionInfo row; conversation-state changes update that row, and teardown records
+ended_at and the final terminal state after stopping the child. Session timestamps
+use Unix nanoseconds to preserve the existing time.Time precision. Random session
+IDs now use crypto/rand.Text so future mesh replicas cannot collide on the old
+small temporary-directory suffix space.
+
+New worker.json files contain only ID, PID, loopback address and secret. Gateway
+operations join that endpoint with the canonical SQL metadata, including current
+native ACP session IDs after restart. Missing metadata refuses writes. Legacy
+running workers can still supply their old embedded metadata until stopped-file
+import is implemented. Terminal attachment and readiness checks keep reading only
+the private endpoint; they do not open state.db.
+
+Native-stdio presence registers and ends through a private local-gateway endpoint.
+Browser cookies and peer routes cannot use it. It records the local actor and
+does not make the foreground launcher open SQLite. Repeated cleanup is harmless.
+Gateway storage failures record diagnostic context; a failed foreground end
+notification writes only an error spool event with the actual binary version.
+The successful path creates no diagnostic files.
+
+Session listings query this node's active rows before probing live terminal state.
+Recent folders query visible rows, newest per directory/harness/mode, capped at
+the existing hundred entries. Forget hides every matching row; a later launch is
+visible through its new row. Existing availability and folder-identity checks
+remain dynamic. Names persist through restarts and can be changed after exit;
+stopped ACP sessions retain their account-based write checks. Recents no longer
+write JSON, lock or temporary files. Callers keep the same response shapes; CLI,
+hub, project/library and ownership fixtures now seed and assert SQL state.
+
+The focused Linux matrix passes: network 1.47 s, CLI 0.42 s, hub 0.20 s, launch
+fast-path regression 0.019 s. The physical Apple M1 matrix passes: network 1.20 s,
+CLI 1.03 s, hub 0.58 s, launch fast-path regression 1.30 s. Later endpoint/privacy
+checks pass in 0.67 s (network) and 0.54 s (CLI) on the Mac; the separate existing
+stop-other-accounts regression passes there in 0.52 s. These are focused tests,
+not full suites or startup benchmark medians. No slow suite or soak was run.
+The final presence/version checks pass on Linux in 0.28 s (network) and 0.11 s
+(CLI), and on the Mac in 0.93 s and 0.86 s; the last Linux MCP/peer ownership
+selection passes in 0.33 s. Full commit-hook gates were deferred for fast-only work.
+
+Chat-event storage, native ACP ownership bindings, legacy import and P3.8's
+concurrency/benchmark gates remain outstanding. In particular, legacy recent-file
+data is not yet imported into SQL; this intermediate branch must not be deployed
+as a completed session migration.

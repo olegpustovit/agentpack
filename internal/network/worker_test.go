@@ -140,6 +140,11 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	data, err := os.ReadFile(filepath.Join(home, "network", "sessions", id, "worker.json"))
+	var endpoint map[string]json.RawMessage
+	if err != nil || json.Unmarshal(data, &endpoint) != nil || len(endpoint) != 4 || endpoint["session"] != nil {
+		t.Fatalf("worker file contains session metadata: %s %v", data, err)
+	}
 	renamed, err := RenameSession(ctx, home, id, "Long-running review")
 	if err != nil || renamed.ID != id || renamed.Name != "Long-running review" {
 		t.Fatalf("rename running worker: %+v %v", renamed, err)
@@ -221,6 +226,15 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, "network", "sessions", id)); !os.IsNotExist(err) {
 		t.Fatal("worker record survived exit")
+	}
+	store := testSessionStore(t, home)
+	stored, err := storedSession(context.Background(), store.Reader, id)
+	var ended int64
+	if err != nil || stored.Name != "Long-running review" || stored.State.Running || stored.State.ExitCode != 7 || store.Reader.QueryRow("SELECT ended_at FROM sessions WHERE id=?", id).Scan(&ended) != nil || ended == 0 {
+		t.Fatalf("worker exit lost durable metadata: %+v ended=%d err=%v", stored, ended, err)
+	}
+	if stopped, err := RenameSession(context.Background(), home, id, "Review complete"); err != nil || stopped.State.Running || stopped.Name != "Review complete" {
+		t.Fatalf("rename stopped session: %+v %v", stopped, err)
 	}
 	events := workerDiagnosticEvents(t, home)
 	names := map[string]int{}
@@ -418,8 +432,9 @@ func TestWorkerRejectsReplacedWorkspaceWithoutStoppingAgent(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("worker did not start")
 	}
-	record, err := workerRecord(home, id)
-	if err != nil || record.Session.FolderID == "" {
+	store := testSessionStore(t, home)
+	info, err := storedSession(t.Context(), store.Reader, id)
+	if err != nil || info.FolderID == "" {
 		t.Fatalf("missing worker identity: %v", err)
 	}
 	if err := os.Rename(directory, directory+"-original"); err != nil {

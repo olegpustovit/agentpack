@@ -203,6 +203,9 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 		ID: sessionID, Address: strings.TrimPrefix(upstream.URL, "http://"), Secret: strings.Repeat("s", 64),
 		Session: SessionInfo{ID: sessionID, Transport: "acp", StartedBy: &owner},
 	}
+	if err := upsertSession(t.Context(), g.auth.store.DB, record.Session); err != nil {
+		t.Fatal(err)
+	}
 	directory := filepath.Join(home, "network", "sessions", sessionID)
 	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		t.Fatal(err)
@@ -308,6 +311,18 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 	}
 	if got := <-requests; got != "/state" {
 		t.Fatalf("owner rename reached worker path %q", got)
+	}
+	if err := os.RemoveAll(directory); err != nil {
+		t.Fatal(err)
+	}
+	if err := endSession(t.Context(), g.auth.store.DB, sessionID, TerminalState{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := request(http.MethodPatch, "", `{"name":"Nope"}`, &readOnly).Code; got != http.StatusForbidden {
+		t.Fatalf("stopped session lost ownership: %d", got)
+	}
+	if got := request(http.MethodPatch, "", `{"name":"Finished"}`, &localCLI).Code; got != http.StatusOK {
+		t.Fatalf("owner cannot rename stopped session: %d", got)
 	}
 }
 func TestPeerACPResumeRequiresRecordedOwner(t *testing.T) {
@@ -539,12 +554,13 @@ func TestRunWorkerPersistsCLIStartedBy(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("worker startup timeout")
 	}
-	record, err := workerRecord(home, id)
+	store := testSessionStore(t, home)
+	info, err := storedSession(t.Context(), store.Reader, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Session.StartedBy == nil || record.Session.StartedBy.Kind != "cli" || record.Session.StartedBy.User == "" || record.Session.StartedAt.IsZero() {
-		t.Fatalf("worker record lost actor: %+v", record.Session)
+	if info.StartedBy == nil || info.StartedBy.Kind != "cli" || info.StartedBy.User == "" || info.StartedAt.IsZero() {
+		t.Fatalf("worker record lost actor: %+v", info)
 	}
 	cancel()
 	<-done

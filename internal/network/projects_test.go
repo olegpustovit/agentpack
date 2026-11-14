@@ -63,15 +63,14 @@ func TestProjectsMergesTrailingSlashDuplicates(t *testing.T) {
 	}
 	older := time.Now().UTC().Add(-time.Hour)
 	newer := time.Now().UTC()
-	data, err := json.Marshal([]SessionInfo{
-		{Directory: directory + string(filepath.Separator), Harness: "claude", Mode: "default", FolderID: identity, LastUsed: older},
-		{Directory: directory, Harness: "claude", Mode: "default", FolderID: identity, LastUsed: newer},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(home, "network", "recent.json"), data, 0o600); err != nil {
-		t.Fatal(err)
+	store := testSessionStore(t, home)
+	for i, info := range []SessionInfo{
+		{ID: "session-old", Directory: directory + string(filepath.Separator), Harness: "claude", Mode: "default", FolderID: identity, LastUsed: older},
+		{ID: "session-new", Directory: directory, Harness: "claude", Mode: "default", FolderID: identity, LastUsed: newer},
+	} {
+		if err := upsertSession(context.Background(), store.DB, info); err != nil {
+			t.Fatal(i, err)
+		}
 	}
 	rows, err := Projects(context.Background(), home, func(_ context.Context, _ string) (ProjectContents, error) {
 		return ProjectContents{}, nil

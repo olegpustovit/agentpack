@@ -2,7 +2,7 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
+	"crypto/rand"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/olegpustovit/agentpack/internal/cache"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
@@ -17,6 +18,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/registry"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func TestGatewayLibrarySaveCaptureRestore(t *testing.T) {
@@ -102,19 +104,24 @@ func TestGatewayLibraryBootstrapsRecentProjectsAndCachedPackages(t *testing.T) {
 	if err := lockfile.Init(firstRoot, "first", "1.0.0"); err != nil {
 		t.Fatal(err)
 	}
+	store, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
 	writeRecent := func(entries ...network.SessionInfo) {
 		t.Helper()
-		data, err := json.Marshal(entries)
-		if err != nil {
+		if _, err := store.DB.Exec("DELETE FROM sessions"); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.MkdirAll(filepath.Join(home, "network"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(home, "network", "recent.json"), data, 0o600); err != nil {
-			t.Fatal(err)
+		for _, info := range entries {
+			if _, err := store.DB.Exec(`INSERT INTO sessions(id,node_id,directory,definition_root,folder_id,harness,mode,last_used)
+                VALUES (?,'local',?,?,?,?,?,?)`, "session-"+rand.Text(), info.Directory, info.DefinitionRoot, info.FolderID, info.Harness, info.Mode, time.Now().UnixNano()); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
+
 	recent := func(root, workspace string) network.SessionInfo {
 		t.Helper()
 		identity, err := network.FolderIdentity(workspace)

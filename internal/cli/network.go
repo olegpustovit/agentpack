@@ -207,7 +207,7 @@ func (runner Runner) launchManaged(ctx context.Context, packContext paths.Contex
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		runner.Launch = func(process *os.Process) (func(), error) {
-			cleanup, err := network.RegisterPresence(home, network.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode}, process)
+			cleanup, err := network.RegisterPresence(home, Version, network.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode}, process)
 			if err != nil {
 				fmt.Fprintf(runner.Stderr, "warning: could not register native-stdio session: %v\n", err)
 				return nil, nil

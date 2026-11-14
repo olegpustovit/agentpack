@@ -254,32 +254,23 @@ func TestStartACPReplayAgent(t *testing.T) {
 }
 
 func TestACPNeedsYouPersistsWithoutConversationReader(t *testing.T) {
-	sessionDir := t.TempDir()
-	record := WorkerRecord{ID: "session-test", Session: SessionInfo{Transport: "acp", ConversationState: "idle"}}
-	data, err := json.Marshal(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "worker.json"), data, 0o600); err != nil {
+	store := testSessionStore(t, t.TempDir())
+	ctx := context.Background()
+	info := SessionInfo{ID: "session-test", Transport: "acp", ConversationState: "idle"}
+	if err := upsertSession(ctx, store.DB, info); err != nil {
 		t.Fatal(err)
 	}
 	log := acp.NewEventLog(0)
 	conversation := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
-	conversation.SetStateChange("idle", func(state string) {
-		if err := patchWorkerConversationState(sessionDir, state); err != nil {
+	conversation.SetStateChange("idle", func(value string) {
+		if err := patchWorkerConversationState(ctx, store.DB, info.ID, value); err != nil {
 			t.Error(err)
 		}
 	})
 	log.Append("permission_request", 1, json.RawMessage(`{"requestId":"p1"}`))
-	data, err = os.ReadFile(filepath.Join(sessionDir, "worker.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(data, &record); err != nil {
-		t.Fatal(err)
-	}
-	if record.Session.ConversationState != "needs_you" {
-		t.Fatalf("worker state without a reader = %q", record.Session.ConversationState)
+	got, err := storedSession(ctx, store.Reader, info.ID)
+	if err != nil || got.ConversationState != "needs_you" {
+		t.Fatalf("state without a reader=%q err=%v", got.ConversationState, err)
 	}
 }
 func TestConversationStateWritesOnlyOnLabelTransitions(t *testing.T) {

@@ -11,10 +11,19 @@ import (
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func writeHubLocalWorker(t *testing.T, home, address string) {
 	t.Helper()
+	store, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.DB.Exec("INSERT INTO sessions(id,node_id,harness,directory) VALUES ('session-local','local','codex','/local/project')"); err != nil {
+		t.Fatal(err)
+	}
 	const id = "session-local"
 	const secret = "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
 	directory := filepath.Join(home, "network", "sessions", id)

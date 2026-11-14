@@ -17,6 +17,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 // WorkerLaunch is delivered through a private startup pipe, never HTTP or disk.
@@ -36,11 +37,16 @@ type WorkerLaunch struct {
 // WorkerRecord is private connection material, readable only by the local OS
 // user. Public node listings must use a separate allowlisted session view.
 type WorkerRecord struct {
-	Session SessionInfo `json:"session"`
+	Session SessionInfo `json:"session,omitzero"`
 	ID      string      `json:"id"`
 	PID     int         `json:"pid"`
 	Address string      `json:"address"`
 	Secret  string      `json:"secret"`
+}
+
+func createSessionDirectory(root string) (string, error) {
+	directory := filepath.Join(root, "session-"+rand.Text())
+	return directory, os.Mkdir(directory, 0700)
 }
 
 // RunWorker owns a restartable PTY independently of a gateway. ready receives
@@ -74,11 +80,25 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if err := paths.EnsurePrivateDirectory(root); err != nil {
 		return 1, fmt.Errorf("create worker root: %w", err)
 	}
-	directory, err := os.MkdirTemp(root, "session-")
+	directory, err := createSessionDirectory(root)
 	if err != nil {
 		return 1, fmt.Errorf("create worker directory: %w", err)
 	}
 	defer os.RemoveAll(directory)
+	store, err := state.Open(home)
+	if err != nil {
+		return 1, err
+	}
+	defer func() { result = errors.Join(result, store.Close()) }()
+	launch.Session.ID = filepath.Base(directory)
+	launch.Session.LastUsed = time.Now().UTC()
+	if launch.Session.StartedAt.IsZero() {
+		launch.Session.StartedAt = launch.Session.LastUsed
+	}
+	if launch.Session.StartedBy == nil {
+		actor := LocalActor("local")
+		launch.Session.StartedBy = &actor
+	}
 	started.Set("session_id", filepath.Base(directory))
 	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		return 1, fmt.Errorf("protect worker directory: %w", err)
@@ -131,6 +151,21 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	var session *Session
 	var conversation *ConversationSession
 	var acpCleanup func()
+	var handler *WorkerHTTP
+	defer func() {
+		terminal := launch.Session.State
+		if handler != nil && handler.current() != nil {
+			terminal = handler.current().State()
+		}
+		terminal.ExitCode = code
+		if err := endSession(context.Background(), store.DB, launch.Session.ID, terminal); err != nil {
+			_, event := obs.Start(ctx, "worker", "persist_end")
+			event.Set("session_id", launch.Session.ID)
+			event.Fail(err)
+			event.End()
+			result = errors.Join(result, err)
+		}
+	}()
 	if launch.Transport == "acp" {
 		launch.Session.Transport = "acp"
 		var err error
@@ -159,7 +194,6 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			return 1, err
 		}
 	}
-	var handler *WorkerHTTP
 	var server *http.Server
 	defer func() {
 		stop, cancel := context.WithTimeout(context.Background(), workerStopGrace)
@@ -189,7 +223,15 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			record.Session.ConversationState = conversation.ConversationState()
 		}
 	}
-	data, err := json.Marshal(record)
+	if session != nil {
+		record.Session.State = session.State()
+	}
+	if err := upsertSession(ctx, store.DB, record.Session); err != nil {
+		return 1, fmt.Errorf("register session: %w", err)
+	}
+	endpoint := record
+	endpoint.Session = SessionInfo{}
+	data, err := json.Marshal(endpoint)
 	if err != nil {
 		return 1, err
 	}
@@ -203,19 +245,18 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	}
 	var stateWriteWarning sync.Once
 	persistConversationState := func(state string) {
-		if err := patchWorkerConversationState(directory, state); err != nil {
+		if err := patchWorkerConversationState(context.Background(), store.DB, record.ID, state); err != nil {
 			stateWriteWarning.Do(func() {
+				_, event := obs.Start(ctx, "worker", "persist_state")
+				event.Set("session_id", record.ID)
+				event.Fail(err)
+				event.End()
 				fmt.Fprintln(os.Stderr, "warning: ACP worker state could not be persisted")
 			})
 		}
 	}
 	if conversation != nil {
 		conversation.SetStateChange(record.Session.ConversationState, persistConversationState)
-	}
-	if launch.Session.Directory != "" {
-		if err := remember(home, launch.Session); err != nil {
-			return 1, fmt.Errorf("remember session: %w", err)
-		}
 	}
 	handler, err = WorkerHandler(ctx, session, conversation, record.Secret, directory)
 	if err != nil {
@@ -254,10 +295,17 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 				}
 				return err
 			}
-			conversation = next
-			acpCleanup = cleanup
 			launch.Session.AgentSessionID = next.agentSessionID
 			launch.Session.AgentCapabilities = next.AgentCapabilitiesView()
+			launch.Session.ConversationState = next.ConversationState()
+			if err := upsertSession(ctx, store.DB, launch.Session); err != nil {
+				if cleanup != nil {
+					cleanup()
+				}
+				return err
+			}
+			conversation = next
+			acpCleanup = cleanup
 			handler.mu.Lock()
 			handler.conversation = next
 			handler.mu.Unlock()

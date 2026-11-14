@@ -29,7 +29,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
-// shortcut: rekey local settings, limits and diagnostics to the stable tailnet node ID before P4.1 CRR conversion.
+// shortcut: rekey local settings, limits, diagnostics and sessions to the stable tailnet node ID before P4.1 CRR conversion.
 const localStateNode = "local"
 
 type GatewayOptions struct {
@@ -254,6 +254,9 @@ func (g *Gateway) Handler() http.Handler {
 		value, err := g.tailnetTopology(r.Context())
 		respond(w, value, err)
 	})
+	mux.HandleFunc("POST /api/local/sessions/{id}/presence", g.servePresence)
+	mux.HandleFunc("DELETE /api/local/sessions/{id}/presence", g.servePresence)
+
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		value, err := Sessions(r.Context(), g.options.Home)
 		if err == nil {
@@ -304,7 +307,7 @@ func (g *Gateway) Handler() http.Handler {
 		writeSessionStart(w, info, err)
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/fork", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -397,7 +400,7 @@ func (g *Gateway) Handler() http.Handler {
 		g.terminalData(w, r)
 	})
 	mux.HandleFunc("GET /api/sessions/{id}/conversation", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -405,7 +408,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "")
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -416,7 +419,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/prompt")
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -427,7 +430,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/prompt/images")
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/permission", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -438,7 +441,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/permission")
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/cancel", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -449,7 +452,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/cancel")
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/elicitation", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -460,7 +463,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/elicitation")
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/config", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -471,7 +474,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/config")
 	})
 	mux.HandleFunc("GET /api/sessions/{id}/conversation/config-options", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -479,7 +482,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/config-options")
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/blobs", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -490,7 +493,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/blobs")
 	})
 	mux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -687,11 +690,20 @@ func authorizeACPWrite(w http.ResponseWriter, r *http.Request, session SessionIn
 }
 
 func (g *Gateway) authorizeACPWriteByID(w http.ResponseWriter, r *http.Request, id string) bool {
-	record, err := workerRecord(g.options.Home, id)
-	if err != nil || record.Session.Transport != "acp" {
-		return true
+	info, err := storedSession(r.Context(), g.auth.store.Reader, id)
+	if errors.Is(err, errSessionNotFound) {
+		record, recordErr := g.workerRecord(r.Context(), id)
+		if recordErr != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return false
+		}
+		info, err = record.Session, nil
 	}
-	return authorizeACPWrite(w, r, record.Session)
+	if err != nil {
+		http.Error(w, "session metadata unavailable", http.StatusInternalServerError)
+		return false
+	}
+	return authorizeACPWrite(w, r, info)
 }
 
 // startSession records the actor that started the session, then starts its worker.
@@ -762,7 +774,7 @@ func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
-	record, err := workerRecord(g.options.Home, r.PathValue("id"))
+	record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "session unavailable", 404)
 		return

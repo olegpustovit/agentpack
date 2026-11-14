@@ -22,6 +22,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 type AgentCapabilities struct {
@@ -110,34 +111,26 @@ func workerRequest(ctx context.Context, record WorkerRecord, method, path, opera
 }
 
 func Sessions(ctx context.Context, home string) ([]SessionInfo, error) {
-	entries, err := os.ReadDir(filepath.Join(home, "network", "sessions"))
-	if os.IsNotExist(err) {
-		return []SessionInfo{}, nil
+	store, err := state.Open(home)
+	if err != nil {
+		return nil, err
 	}
+	defer store.Close()
+	sessions, err := querySessions(ctx, store.Reader, "SELECT "+sessionColumns+" FROM sessions WHERE node_id=? AND ended_at=0 ORDER BY id", localStateNode)
 	if err != nil {
 		return nil, err
 	}
 	result := []SessionInfo{}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		record, err := workerRecord(home, entry.Name())
+	for _, info := range sessions {
+		record, err := workerRecord(home, info.ID)
 		if err != nil {
 			continue
 		}
-		state, err := sessionState(ctx, record)
+		terminal, err := sessionState(ctx, record)
 		if err != nil {
 			continue
 		}
-		info := record.Session
-		info.ID = record.ID
-		info.State = state
-		name, err := readSessionName(home, record.ID)
-		if err != nil {
-			return nil, fmt.Errorf("read session name: %w", err)
-		}
-		info.Name = name
+		info.State = terminal
 		result = append(result, info)
 	}
 	return result, nil

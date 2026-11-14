@@ -98,6 +98,10 @@ func TestStopAgentsSkipsACPWorkersOwnedElsewhere(t *testing.T) {
 	stopped := map[string]bool{}
 	worker := func(id string, session SessionInfo) {
 		t.Helper()
+		session.ID = id
+		if err := upsertSession(t.Context(), auth.store.DB, session); err != nil {
+			t.Fatal(err)
+		}
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("Authorization") != "Bearer "+workerSecret {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -117,6 +121,7 @@ func TestStopAgentsSkipsACPWorkersOwnedElsewhere(t *testing.T) {
 			Session: session, ID: id, Address: strings.TrimPrefix(server.URL, "http://"),
 			Secret: workerSecret,
 		}
+		record.Session = SessionInfo{}
 		data, err := json.Marshal(record)
 		if err != nil {
 			t.Fatal(err)
@@ -163,7 +168,7 @@ func TestStopAgentsSkipsACPWorkersOwnedElsewhere(t *testing.T) {
 	if strings.Contains(listResponse.Body.String(), `"stable_node_id"`) {
 		t.Fatalf("public session list included stable_node_id: %s", listResponse.Body.String())
 	}
-	privateRecord, err := workerRecord(home, "session-foreign-acp")
+	privateRecord, err := g.workerRecord(t.Context(), "session-foreign-acp")
 	if err != nil {
 		t.Fatal(err)
 	}
