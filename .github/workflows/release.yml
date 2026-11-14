@@ -5,6 +5,7 @@ on:
     paths:
       - .goreleaser.yaml
       - .github/workflows/release.yml
+      - third_party/**
       - go.mod
       - go.sum
       - cmd/**
@@ -20,14 +21,126 @@ permissions:
   contents: write
 
 jobs:
-  codex-windows:
-    runs-on: windows-latest
+  crsqlite-check:
+    runs-on: ubuntu-24.04
+    outputs:
+      exists: ${{ steps.release.outputs.exists }}
+      commit: ${{ steps.pin.outputs.commit }}
+      rust: ${{ steps.pin.outputs.rust }}
+      zig: ${{ steps.pin.outputs.zig }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import tomllib
+          with open('third_party/crsqlite.lock','rb') as f: pin=tomllib.load(f)
+          for key in ('commit','rust','zig'): print(f'{key}={pin[key]}')
+          PY
+      - id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view 'crsqlite-${{ steps.pin.outputs.commit }}' >/dev/null 2>&1; then
+            echo exists=true >> "$GITHUB_OUTPUT"
+          else
+            echo exists=false >> "$GITHUB_OUTPUT"
+          fi
+  crsqlite-build:
+    needs: crsqlite-check
+    if: needs.crsqlite-check.outputs.exists != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64, runner: ubuntu-24.04 }
+          - { goos: linux, goarch: arm64, runner: ubuntu-24.04 }
+          - { goos: windows, goarch: amd64, runner: ubuntu-24.04 }
+          - { goos: darwin, goarch: amd64, runner: macos-26 }
+          - { goos: darwin, goarch: arm64, runner: macos-26 }
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ needs.crsqlite-check.outputs.zig }}
+      - name: Prepare source-build tools (pin bumps only)
+        run: |
+          rustup toolchain install '${{ needs.crsqlite-check.outputs.rust }}' --profile minimal
+          if [ '${{ runner.os }}' = Linux ]; then
+            sudo apt-get update
+            sudo apt-get install -y libclang-dev
+          fi
+      - name: Build pinned static library
+        run: |
+          bash scripts/build-crsqlite.sh '${{ matrix.goos }}' '${{ matrix.goarch }}'
+          mkdir -p .release-assets/crsqlite
+          tar -czf '.release-assets/crsqlite/crsqlite_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz' \
+            -C '.build/crsqlite/${{ needs.crsqlite-check.outputs.commit }}/${{ matrix.goos }}_${{ matrix.goarch }}' libcrsqlite.a LICENSE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crsqlite-${{ matrix.goos }}_${{ matrix.goarch }}
+          path: .release-assets/crsqlite/*.tar.gz
+  crsqlite:
+    needs: [crsqlite-check, crsqlite-build]
+    if: always() && needs.crsqlite-check.result == 'success' && (needs.crsqlite-build.result == 'success' || needs.crsqlite-build.result == 'skipped')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        if: needs.crsqlite-check.outputs.exists != 'true'
+        with:
+          pattern: crsqlite-*
+          path: .release-assets/crsqlite
+          merge-multiple: true
+      - name: Publish pin's toolchain assets once
+        if: needs.crsqlite-check.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd .release-assets/crsqlite
+          sha256sum crsqlite_*.tar.gz > checksums.txt
+          cat checksums.txt
+          gh release create 'crsqlite-${{ needs.crsqlite-check.outputs.commit }}' \
+            --target '${{ github.sha }}' --prerelease --latest=false \
+            --title 'cr-sqlite ${{ needs.crsqlite-check.outputs.commit }}' \
+            --notes 'Pinned static build inputs for agentpack; this is not a product release.' \
+            crsqlite_*.tar.gz checksums.txt
+      - name: Require all checksums in the source lock
+        run: |
+          python3 - <<'PY'
+          import re,sys,tomllib
+          with open('third_party/crsqlite.lock','rb') as f: pin=tomllib.load(f)
+          targets=('linux_amd64','linux_arm64','darwin_amd64','darwin_arm64','windows_amd64')
+          missing=[t for t in targets if not re.fullmatch('[0-9a-f]{64}',pin.get('sha256',{}).get(t,''))]
+          if missing: sys.exit('checksums missing from third_party/crsqlite.lock: '+', '.join(missing))
+          PY
+  codex-windows:
+    needs: [crsqlite-check, crsqlite]
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: '1'
+      CC: zig cc -target x86_64-windows-gnu
+      CGO_LDFLAGS: -lunwind
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ needs.crsqlite-check.outputs.zig }}
+      - name: Fetch verified Windows library (no Rust)
+        shell: bash
+        run: bash scripts/fetch-crsqlite.sh windows amd64
       - name: Test Codex Windows credentials
         run: go test ./internal/harness/codex -count=1
       - name: Test full Windows package, launch and PowerShell suite
@@ -36,8 +149,11 @@ jobs:
           go test ./... -count=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   goreleaser:
-    needs: codex-windows
-    runs-on: ubuntu-latest
+    needs: [crsqlite-check, crsqlite, codex-windows]
+    # Native Apple SDK; Zig still cross-compiles the static Linux and Windows builds.
+    runs-on: macos-26
+    env:
+      CGO_ENABLED: '1'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,34 +162,169 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Validate release configuration
-        uses: goreleaser/goreleaser-action@v7
+      - uses: goto-bus-stop/setup-zig@v2
         with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: check
+          version: ${{ needs.crsqlite-check.outputs.zig }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/agentpack-go/linux_amd64
+          key: go-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-linux_amd64
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/agentpack-go/linux_arm64
+          key: go-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-linux_arm64
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/agentpack-go/darwin_amd64
+          key: go-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-darwin_amd64
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/agentpack-go/darwin_arm64
+          key: go-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-darwin_arm64
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/agentpack-go/windows_amd64
+          key: go-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-windows_amd64
+      - name: Fetch all verified libraries (no Rust)
+        run: |
+          for target in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64; do
+            bash scripts/fetch-crsqlite.sh "${target%_*}" "${target#*_}"
+          done
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.4'
-      - name: Build and stage gateway UI
-        run: make ui-stage
-      - name: Test release installers
-        run: go test ./integration -run 'TestRelease(Installer|Description|Builds)' -count=1
-      - name: Test package and concurrent launches
+      - name: Test release configuration, installers and package
         run: go test ./...
       - name: Snapshot release
         if: github.event_name == 'pull_request'
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: '~> v2'
           args: release --snapshot --clean --skip=publish
-      - name: Publish release
+      - name: Stage tagged release without publishing
         if: github.event_name == 'push'
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: '~> v2'
+          args: release --clean --skip=publish
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-snapshot
+          path: dist/
+  smoke:
+    needs: goreleaser
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64, runner: ubuntu-24.04 }
+          - { goos: linux, goarch: arm64, runner: ubuntu-24.04 }
+          - { goos: darwin, goarch: amd64, runner: macos-26-intel }
+          - { goos: darwin, goarch: arm64, runner: macos-26 }
+          - { goos: windows, goarch: amd64, runner: windows-latest }
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-snapshot
+          path: dist
+      - name: Extract the target binary
+        env:
+          TARGET_OS: ${{ matrix.goos }}
+          TARGET_ARCH: ${{ matrix.goarch }}
+        run: |
+          python3 - <<'PY'
+          import glob,os,pathlib,tarfile,zipfile
+          goos,arch=os.environ['TARGET_OS'],os.environ['TARGET_ARCH']
+          extension='zip' if goos=='windows' else 'tar.gz'
+          paths=glob.glob(f'dist/agentpack_*_{goos}_{arch}.{extension}')
+          assert len(paths)==1,paths
+          binary='ap.exe' if goos=='windows' else 'ap'
+          if extension=='zip':
+              with zipfile.ZipFile(paths[0]) as z: content=z.read(binary)
+          else:
+              with tarfile.open(paths[0]) as t: content=t.extractfile(binary).read()
+          pathlib.Path('smoke').mkdir()
+          path=pathlib.Path('smoke')/binary
+          path.write_bytes(content);path.chmod(0o755)
+          PY
+      - name: Install ARM emulation
+        if: matrix.goos == 'linux' && matrix.goarch == 'arm64'
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+      - name: Check real extension and system linkage
+        run: |
+          if [ '${{ matrix.goos }}' = linux ]; then
+            file smoke/ap | grep 'statically linked'
+            if readelf -l smoke/ap | grep -q INTERP; then exit 1; fi
+          fi
+          if [ '${{ matrix.goos }}' = darwin ]; then
+            if otool -L smoke/ap | grep -Eiq 'crsqlite|sqlite3'; then exit 1; fi
+          fi
+          case '${{ matrix.goos }}/${{ matrix.goarch }}' in
+            linux/arm64) result=$(qemu-aarch64 smoke/ap state-selfcheck) ;;
+            windows/amd64) result=$(smoke/ap.exe state-selfcheck) ;;
+            *) result=$(smoke/ap state-selfcheck) ;;
+          esac
+          test "$result" = ok
+  publish:
+    needs: [crsqlite-check, smoke]
+    if: github.event_name == 'push'
+    runs-on: macos-26
+    env:
+      AGENTPACK_SMOKED_DIR: ${{ github.workspace }}/approved
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ needs.crsqlite-check.outputs.zig }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.4'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/agentpack-go/linux_amd64
+          key: go-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-linux_amd64
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/agentpack-go/linux_arm64
+          key: go-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-linux_arm64
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/agentpack-go/darwin_amd64
+          key: go-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-darwin_amd64
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/agentpack-go/darwin_arm64
+          key: go-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-darwin_arm64
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/agentpack-go/windows_amd64
+          key: go-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-windows_amd64
+      - name: Fetch verified build inputs
+        run: |
+          for target in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64; do
+            bash scripts/fetch-crsqlite.sh "${target%_*}" "${target#*_}"
+          done
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-snapshot
+          path: approved
+      - name: Publish only after all five smoke queries pass
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: '~> v2'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

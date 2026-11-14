@@ -98,6 +98,7 @@ nm -g "$archive" | awk '/[[:space:]][Tt][[:space:]]_?sqlite3_crsqlite_init$/ { f
 out="$root/.build/crsqlite/$commit/${goos}_${goarch}"
 mkdir -p "$out"
 cp "$archive" "$out/libcrsqlite.a"
+cp "$work/source/LICENSE" "$out/LICENSE"
 cd "$root/.build/crsqlite"
 ln -sfn "$commit" lib
 printf 'Built %s\n' "$out/libcrsqlite.a"

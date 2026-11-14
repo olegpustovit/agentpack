@@ -12,7 +12,9 @@ All downloaded trees, the metadata index, and your **`local/`** mirror live unde
 
 ### Release requirements
 
-Every GitHub release description must begin with copyable, version-pinned install commands for every supported operating-system family: the shell installer for macOS/Linux and the PowerShell installer for Windows. Keep these commands in GoReleaser's `release.header`; do not publish a changelog-only release. The URLs must use `{{ .Tag }}` so each release installs itself rather than whatever `latest` points to. Both installer scripts and `checksums.txt` must be attached to the same release, and release validation must fail if any command or asset declaration is removed.
+Product GitHub releases (tags `v*`) must begin with copyable, version-pinned install commands for every supported operating-system family: the shell installer for macOS/Linux and the PowerShell installer for Windows. Keep these commands in GoReleaser's `release.header`; do not publish a changelog-only release. The URLs must use `{{ .Tag }}` so each release installs itself rather than whatever `latest` points to. Both installer scripts and `checksums.txt` must be attached to the same release, and release validation must fail if any command or asset declaration is removed.
+
+Static build-input releases tagged `crsqlite-<commit>` are the sole exception: these are prereleases, never latest, contain the five static library archives and `checksums.txt`, and have no product installers. `third_party/crsqlite.lock` pins the source/toolchain/SQLite versions and archive checksums. Builds use cgo and `make crsqlite` downloads and verifies the host library; only `make crsqlite-build` needs Rust and Zig. macOS release linking uses a native Apple SDK. Normal library fetches never fall back to a source build.
 
 Installer scripts must default to the user-owned `$HOME/.local/bin` directory on every platform. They may create that directory and replace the `agentpack` executable inside it, but must never edit shell startup files, change the current process environment, or persistently modify the user's `PATH`. `AGENTPACK_INSTALL_DIR` is the only supported destination override.
 

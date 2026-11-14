@@ -377,3 +377,32 @@ and five runs of five iterations as P0.1):
 
 These are amd64 setup measurements; ARM64 reference-host release budgets and
 full warm release duration still require their own evidence.
+
+## Release bootstrap — P0.9 in progress
+
+The release pipeline now separates source-pin bootstrapping from normal builds.
+A missing `crsqlite-<commit>` release builds the five libraries (Darwin on a Mac),
+publishes only a prerelease marked never-latest, prints the checksums, and stops
+until those digests are recorded in the lock. This is the proposal's two-commit
+bootstrap; the initial expected checksum failure is not a product release.
+
+Normal jobs fetch checksum-verified archives without Rust. The downloader tests
+cover verified-cache reuse, missing and wrong hashes, symlinks and traversal;
+verification failure preserves the previously installed library. Product builds
+use per-target Go caches and the pinned Zig or native Xcode toolchain.
+
+The full GoReleaser job runs on macOS: a Linux cross-link experiment confirmed
+that Zig cannot supply the product's CoreFoundation/Security frameworks or
+libresolv without an Apple SDK. This uses the proposal's native-Mac fallback;
+no SDK is copied or redistributed. GoReleaser OSS remains sufficient.
+
+A build/snapshot job runs before five real-target smoke jobs (ARM Linux under
+QEMU), and publishing depends on all five. A post-build hook compares each
+publishing binary against the exact archive that passed smoke tests; mismatches
+refuse publication. The source branch carries no product release tag.
+
+Local checks before bootstrapping: downloader/publishing regressions pass,
+`actionlint` is clean, and `goreleaser check` validates the configuration. A Linux
+single-target GoReleaser static build also passes. The archive checksums and
+Make's switch from source preparation to downloads are deliberately pending the
+first successful library publication; P0.9 is not complete yet.
