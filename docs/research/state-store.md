@@ -53,9 +53,9 @@ or user shell startup files were changed.
   Intel macOS and Windows runtime execution remain for the release smoke jobs.
 - P0.7: replication, delete propagation, size and allocator measurements pass.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
-- P0.9: verified libraries published and pinned; normal-path platform workflow is running.
+- P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: final gate audit pending. Phase 1 onward and Phase 1A are not implemented.
+- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. Phase 1 onward and Phase 1A are not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -497,3 +497,32 @@ Source installation instructions now state the C compiler/Python prerequisites,
 `make crsqlite`, explicit cgo, and Windows/native-Mac release compiler settings.
 `make ci`, negative configuration checks, all-target binary inspection and
 workflow lint pass. The real five-platform runtime smoke jobs remain in flight.
+
+## Phase 0 gate audit — P0.11
+
+[Run 43602899053](https://github.com/olegpustovit/agentpack/actions/runs/43602899053)
+completed successfully with the complete Windows suite, the native-Mac
+GoReleaser job, and **all five** runtime smoke jobs. Only the expected source
+rebuild and product publishing jobs were skipped. This is accepted runtime
+evidence, unlike the earlier false-green cached-library run.
+
+| Gate | Required | Evidence | Result |
+| --- | --- | --- | --- |
+| Targets build/link and real extension smoke | All five | Successful five-target workflow above; Linux arm64 under QEMU, both macOS architectures and Windows on their own runners | Pass |
+| Linux static linkage | No interpreter or shared dependencies | Both ELF headers checked; static smoke binaries execute | Pass |
+| Extension runtime files | None | Mach-O and PE imports inspected; source library linked statically | Pass |
+| 10,000-event sync | <2 s | Musl median 0.791 s | Pass |
+| Open | <50 ms | Musl median 35.517 ms | Pass |
+| Storage | <3× raw JSON | 1.1592× | Pass |
+| Warm release duration | Baseline 577 s + at most 120 s | First complete CI run took 1,317 s with cold caches; warm rerun 43605315971 is active. Same-Mac warm snapshot is 46–53 s | **Pending comparable warm CI measurement** |
+| Reference Linux ARM64 launch budgets | Fingerprint <1 ms, cold <20 ms, warm <1 ms | amd64 after-change values 0.334/6.871/0.145 ms; QEMU is not reference-host performance evidence | **Reference host measurement still required** |
+
+Current source (6eca5aa) additionally enables deterministic Windows timestamps
+and strict binary dependency tests. Its workflow is running; the prior runtime
+proof above does not substitute for this latest run. The five-target byte-exact
+publishing rehearsal passes locally on the Mac with this configuration.
+
+Per the user's instruction to continue with recommended assumptions, unresolved
+performance measurements remain explicit release requirements while implementation
+continues into Phase 1. No product release or user-data migration is performed
+on the strength of an unverified gate.
