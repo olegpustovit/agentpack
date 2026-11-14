@@ -53,6 +53,7 @@ func TestCRSQLiteBuildRejectsInvalidInputsBeforeFetching(t *testing.T) {
 			for name, body := range map[string][]byte{
 				path: script,
 				filepath.Join(root, "third_party", "crsqlite.lock"): []byte(tc.lock),
+				filepath.Join(root, "tools", "uname"):               []byte("#!/bin/sh\necho Linux\n"),
 				filepath.Join(root, "tools", "zig"):                 []byte("#!/bin/sh\necho wrong-version\n"),
 				filepath.Join(root, "tools", "git"):                 []byte("#!/bin/sh\necho UNEXPECTED_NETWORK >&2\nexit 99\n"),
 			} {

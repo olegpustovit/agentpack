@@ -48,7 +48,9 @@ or user shell startup files were changed.
 - P0.3: host static library built and symbol checked; build-input tests and `make ci` passed.
 - P0.4: static registration and Go store smoke test passed; `make ci` passed.
 - P0.5: Make targets prepare the host library and enable cgo; `make ci` passed.
-- P0.6: FAILED gate; stopped as required (see results below).
+- P0.6: resumed with user authorization; all five target builds/link checks pass.
+  Linux amd64, emulated Linux arm64, and native Apple Silicon smoke queries pass.
+  Intel macOS and Windows runtime execution remain for the release smoke jobs.
 - P0.7–P7 and Phase 1A: not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
@@ -246,3 +248,59 @@ target gates. Do not start any state migration or replication phase yet.
 | P0.3 static builder | `564f889` |
 | P0.4 Go linkage | `b5ba396` |
 | P0.5 Make prerequisites | `6a06d7b` |
+
+## P0.6 resumed — compatibility results (2026-11-14)
+
+The user authorized continuing with recommended fixes and supplied SSH access to
+`snowbear@olegs-mac-mini`. The earlier STOP above records the original result;
+it is superseded by this section. Future proposal gates are reporting points,
+not requests for approval, per the user's explicit instruction.
+
+### Changes
+
+- Upgrade the Go driver to v1.14.53 / SQLite 3.54.1. Its headers now supply both
+  the extension C build and Rust bindgen, with an exact version check against
+  `crsqlite.lock`. This also supplies the JSONB required by Phase 1A. Go's module
+  checksums verify the driver source. Upstream's old amalgamation is not used.
+- Use native Xcode Clang and its SDK for Darwin. The script works with macOS's
+  Bash 3.2 and uses native `nm -g`, rather than GNU-only switches. Xcode's
+  libclang works; Homebrew libclang 23 generated incompatible Rust binding names.
+- Compile each extension C file separately before archiving: Zig's COFF backend
+  rejects the upstream Makefile's multiple-input `-c` command.
+- Fully static Zig links add `CGO_LDFLAGS=-lunwind`; Rust's static allocation
+  code references `_Unwind_Resume`. No shared unwind/SQLite extension is loaded.
+
+| Target | Archive / Go link | Product binary | Smoke runtime |
+| --- | --- | --- | --- |
+| linux/amd64 | Pass, Zig musl | Static ELF; `--version` passes | `ok`, native |
+| linux/arm64 | Pass, Zig musl | Static ELF | `ok`, QEMU aarch64 |
+| darwin/arm64 | Pass, native Xcode | Mach-O; `--version` passes | `ok`, real Mac |
+| darwin/amd64 | Pass, Xcode cross-compile on Mac | x86_64 Mach-O | Pending Intel runner |
+| windows/amd64 | Pass, Zig GNU | PE32+ | Pending Windows runner |
+
+The Mac runs macOS 27.0.1 (26A434), Apple Silicon, Xcode Clang 21.0.0.
+Both `CGO_ENABLED=1 go test ./internal/state` and an independently linked smoke
+executable opening the store pass there. Intel tests compile and link on it.
+Rosetta is absent; it was not installed or its license accepted. macOS builds
+will run on macOS runners rather than cross-linking from Linux.
+
+Linux command pattern (use the appropriate target triple):
+
+```sh
+CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+  CC="zig cc -target x86_64-linux-musl" CGO_LDFLAGS=-lunwind \
+  go build -trimpath -ldflags '-linkmode=external -extldflags=-static' \
+  -o /tmp/ap-linux-amd64 ./cmd/agentpack
+```
+
+A separate smoke program imports `internal/state` and queries the site ID;
+this proves linkage even before P0.8 adds a product caller. `file` confirms both
+Linux executables are static. PE imports contain OS runtime DLLs and no SQLite
+or crsqlite DLL. Product binaries for all five targets compile successfully.
+`make ci` passes with the final source changes. Full all-target runtime and
+release-time gates are still unproven; they remain required in P0.9–P0.11.
+
+Only isolated files under `/private/tmp/agentpack-state-spike` were built on the
+Mac; its project checkouts and installed agentpack state were not modified.
+The pinned Rust toolchain was added to rustup. An unnecessary LLVM download
+was cancelled once Xcode's libclang passed.

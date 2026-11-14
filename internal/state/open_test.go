@@ -19,7 +19,7 @@ func TestExtensionLoaded(t *testing.T) {
 	if err := store.DB.QueryRow("SELECT sqlite_version()").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "3.42.0" {
+	if version != "3.54.1" {
 		t.Fatalf("SQLite version %s differs from the extension source headers", version)
 	}
 	var siteID []byte

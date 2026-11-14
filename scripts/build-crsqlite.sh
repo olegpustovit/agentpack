@@ -17,7 +17,8 @@ case "$goos/$goarch" in
   *) echo "unsupported cr-sqlite target: $goos/$goarch" >&2; exit 2 ;;
 esac
 # tomllib validates the lock instead of interpreting it as shell code.
-mapfile -t pin < <(python3 - "$root/third_party/crsqlite.lock" <<'PYLOCK'
+pin=()
+while IFS= read -r value; do pin[${#pin[@]}]=$value; done < <(python3 - "$root/third_party/crsqlite.lock" <<'PYLOCK'
 import re, sys, tomllib
 with open(sys.argv[1], "rb") as f:
     p = tomllib.load(f)
@@ -35,7 +36,15 @@ commit=${pin[1]}
 rust=${pin[2]}
 zig=${pin[3]}
 sqlite=${pin[4]}
-[[ $(zig version) == "$zig" ]] || { echo "install Zig $zig from third_party/crsqlite.lock" >&2; exit 1; }
+if [[ $goos == darwin && $(uname -s) == Darwin ]]; then
+  export SDKROOT="$(xcrun --show-sdk-path)"
+  export LIBCLANG_PATH="${LIBCLANG_PATH:-$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib}"
+  compiler="$(xcrun --find clang) -isysroot $SDKROOT -arch $goarch"
+  [[ $goarch != amd64 ]] || compiler="$(xcrun --find clang) -isysroot $SDKROOT -arch x86_64"
+else
+  [[ $(zig version) == "$zig" ]] || { echo "install Zig $zig from third_party/crsqlite.lock" >&2; exit 1; }
+  compiler="zig cc -target $zig_target"
+fi
 rustup run "$rust" rustc --version
 rustup target add --toolchain "$rust" "$rust_target"
 work=$(mktemp -d)
@@ -47,27 +56,45 @@ git -C "$work/source" checkout -q --detach FETCH_HEAD
 [[ $(git -C "$work/source" rev-parse HEAD) == "$commit" ]] || { echo "source commit mismatch" >&2; exit 1; }
 # Upstream records an SSH submodule URL; source builds must also work anonymously.
 git -C "$work/source" -c url.https://github.com/.insteadOf=git@github.com: submodule update --init --recursive
-actual_sqlite=$(sed -n 's/^#define SQLITE_VERSION *"\([^"]*\)"/\1/p' "$work/source/core/src/sqlite/sqlite3.h")
-[[ $actual_sqlite == "$sqlite" ]] || { echo "SQLite version mismatch: source $actual_sqlite, lock $sqlite" >&2; exit 1; }
-if driver=$(cd "$root" && go list -m -f '{{.Dir}}' github.com/mattn/go-sqlite3 2>/dev/null); then
-  driver_sqlite=$(sed -n 's/^#define SQLITE_VERSION *"\([^"]*\)"/\1/p' "$driver/sqlite3-binding.h")
-  [[ $driver_sqlite == "$sqlite" ]] || { echo "SQLite version mismatch: Go driver $driver_sqlite, extension $sqlite" >&2; exit 1; }
-fi
+# Compile against the same pinned amalgamation as Go, including its extension ABI.
+(cd "$root" && go mod download github.com/mattn/go-sqlite3)
+driver=$(cd "$root" && go list -m -f '{{.Dir}}' github.com/mattn/go-sqlite3)
+[[ -n $driver ]] || { echo "download the pinned Go SQLite driver first" >&2; exit 1; }
+driver_sqlite=$(sed -n 's/^#define SQLITE_VERSION *"\([^"]*\)"/\1/p' "$driver/sqlite3-binding.h")
+[[ $driver_sqlite == "$sqlite" ]] || { echo "SQLite version mismatch: Go driver $driver_sqlite, lock $sqlite" >&2; exit 1; }
+cp "$driver/sqlite3-binding.h" "$work/source/core/src/sqlite/sqlite3.h"
+cp "$driver/sqlite3-binding.h" "$work/source/core/src/sqlite/sqlite3-binding.h"
+cp "$driver/sqlite3-binding.c" "$work/source/core/src/sqlite/sqlite3.c"
+cp "$driver/sqlite3ext.h" "$work/source/core/src/sqlite/sqlite3ext.h"
+directory="$work/source/core/rs/sqlite-rs-embedded/sqlite3_capi/deps"
+cp "$driver/sqlite3-binding.h" "$directory/sqlite3.h"
+cp "$driver/sqlite3-binding.h" "$directory/sqlite3-binding.h"
+cp "$driver/sqlite3ext.h" "$directory/sqlite3ext.h"
+# Use C99 declarations regardless of the host compiler's default language mode.
+export BINDGEN_EXTRA_CLANG_ARGS="${BINDGEN_EXTRA_CLANG_ARGS:-} -std=c99"
 # Cargo requires a single executable for the linker, rather than a command string.
 cat > "$work/zig-cc" <<WRAPPER
 #!/usr/bin/env bash
-exec zig cc -target "$zig_target" "\$@"
+exec $compiler "\$@"
 WRAPPER
 chmod +x "$work/zig-cc"
 export RUSTUP_TOOLCHAIN=$rust
 export CC="$work/zig-cc"
-linker_var="CARGO_TARGET_${rust_target^^}_LINKER"
+linker_var="CARGO_TARGET_$(printf '%s' "$rust_target" | tr '[:lower:]-' '[:upper:]_')_LINKER"
 linker_var=${linker_var//-/_}
 export "$linker_var=$work/zig-cc"
-make -C "$work/source/core" static CI_GCC="$work/zig-cc" CI_MAYBE_TARGET="$rust_target" rs_build_flags=--locked STATIC_CFLAGS="-std=c99 -O2 -fPIC -c -Wall -fno-sanitize=all"
-archive="$work/source/core/dist/crsqlite-$rust_target.a"
-[[ -s $archive ]] || { echo "static library missing: $archive" >&2; exit 1; }
-nm --defined-only "$archive" | awk '/[[:space:]]_?sqlite3_crsqlite_init$/ { found=1 } END { exit !found }'
+make -C "$work/source/core" ./dist/libcrsql_bundle_static-static.a CI_GCC="$work/zig-cc" CI_MAYBE_TARGET="$rust_target" rs_build_flags=--locked
+mkdir "$work/objects"
+cd "$work/objects"
+ar -x "$work/source/core/dist/libcrsql_bundle_static-static.a"
+# Compile separately: Zig's COFF backend cannot combine multiple -c inputs.
+for source in crsqlite changes-vtab ext-data version-guard; do
+  "$work/zig-cc" -DHAVE_GETHOSTUUID=0 -I"$work/source/core/src" -I"$work/source/core/src/sqlite" \
+    -std=c99 -O2 -fPIC -c -Wall -fno-sanitize=all "$work/source/core/src/$source.c" -o "$source.o"
+done
+ar -rcs libcrsqlite.a ./*.o
+archive="$work/objects/libcrsqlite.a"
+nm -g "$archive" | awk '/[[:space:]][Tt][[:space:]]_?sqlite3_crsqlite_init$/ { found=1 } END { exit !found }'
 out="$root/.build/crsqlite/$commit/${goos}_${goarch}"
 mkdir -p "$out"
 cp "$archive" "$out/libcrsqlite.a"
