@@ -14,7 +14,10 @@ builds:
     main: ./cmd/agentpack
     binary: ap
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
+      - 'CC="{{ .Env.PWD }}/scripts/cc-crsqlite.sh" {{ .Os }} {{ .Arch }}'
+      - 'GOCACHE={{ .Env.HOME }}/.cache/agentpack-go/{{ .Os }}_{{ .Arch }}'
+      - 'CGO_LDFLAGS={{ if ne .Os "darwin" }}-lunwind{{ end }}'
     goos:
       - darwin
       - linux
@@ -28,7 +31,13 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X github.com/olegpustovit/agentpack/internal/cli.Version={{ .Version }}
+      - >-
+        -s -w -X github.com/olegpustovit/agentpack/internal/cli.Version={{ .Version }}
+        {{ if eq .Os "linux" }}-linkmode=external -extldflags=-static{{ end }}
+
+    hooks:
+      post:
+        - 'python3 scripts/verify-smoked-binary.py {{ .Os }} {{ .Arch }} "{{ .Path }}"'
 
 archives:
   - id: agentpack

@@ -1,0 +1,8 @@
+# Updated only after the Phase 0 gate is measured; no release assets exist yet.
+repo = "https://github.com/superfly/cr-sqlite"
+commit = "8e32195704ccaea8508f7d378e11dc2dc0bb3d2e"
+rust = "nightly-2023-10-05"
+zig = "0.17.1"
+sqlite = "3.54.1"
+
+[sha256]
