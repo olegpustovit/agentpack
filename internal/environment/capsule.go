@@ -2,11 +2,14 @@ package environment
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
 // SupportCapsule is a redacted, opt-in diagnostic export. It never includes
@@ -138,4 +141,56 @@ func publicVersion(value string) string {
 		return match[1]
 	}
 	return ""
+}
+
+var diagnosticURL = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>]+`)
+var diagnosticPath = regexp.MustCompile(`(^|[\s"'=(])(?:[A-Za-z]:[\\/]|\\\\|/)[^\s"'<>]+`)
+
+// RedactDiagnosticExport applies the capsule's private-path policy to JSON-shaped diagnostics.
+func RedactDiagnosticExport(value any) (any, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var decoded any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return nil, err
+	}
+	var redact func(any) any
+	redact = func(value any) any {
+		switch value := value.(type) {
+		case map[string]any:
+			for key, item := range value {
+				switch key {
+				case "user", "resolved_by", "email", "username", "hostname", "display_name", "directory", "definition_root", "folder", "project_root":
+					value[key] = redactPath(fmt.Sprint(item))
+				default:
+					if obs.CredentialKey(key) {
+						value[key] = "<redacted>"
+					} else {
+						value[key] = redact(item)
+					}
+				}
+			}
+			return value
+		case []any:
+			for i := range value {
+				value[i] = redact(value[i])
+			}
+			return value
+		case string:
+			text, _ := obs.Redact(value).(string)
+			text = diagnosticURL.ReplaceAllStringFunc(text, redactPath)
+			return diagnosticPath.ReplaceAllStringFunc(text, func(path string) string {
+				prefix := ""
+				if strings.ContainsAny(path[:1], " \t\r\n\"'=(") {
+					prefix, path = path[:1], path[1:]
+				}
+				return prefix + redactPath(path)
+			})
+		default:
+			return value
+		}
+	}
+	return redact(decoded), nil
 }

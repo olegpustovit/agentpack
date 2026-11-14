@@ -209,7 +209,8 @@ func publishIssue(tx *sql.Tx, pending pendingIssue) error {
 		return err
 	}
 	var status, fix string
-	if err := tx.QueryRow("SELECT status,resolved_version FROM issues WHERE fingerprint=?", counter.Fingerprint).Scan(&status, &fix); err != nil {
+	var resolvedAt int64
+	if err := tx.QueryRow("SELECT status,resolved_version,resolved_at FROM issues WHERE fingerprint=?", counter.Fingerprint).Scan(&status, &fix, &resolvedAt); err != nil {
 		return err
 	}
 	versions := make([]string, 0, len(counter.Versions))
@@ -240,7 +241,7 @@ ON CONFLICT(fingerprint,node_id) DO UPDATE SET count=issue_counts.count+excluded
 		if _, err := tx.Exec("INSERT INTO issue_log_cursors(day,fingerprint,node_id,version,count) VALUES (?,?,?,?,?) ON CONFLICT(day,fingerprint,node_id,version) DO UPDATE SET count=excluded.count", pending.Day, counter.Fingerprint, counter.Node, version, occurrence.Count); err != nil {
 			return err
 		}
-		if status == "resolved" && versionAtLeast(version, fix) {
+		if status == "resolved" && occurrence.LastSeen > resolvedAt && versionAtLeast(version, fix) {
 			reopen = true
 		}
 	}

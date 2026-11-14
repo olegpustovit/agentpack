@@ -164,6 +164,7 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	supportCmd.AddCommand(supportExport)
 
 	root.AddCommand(init, lock, add, remove, update, list, syncCommand, preflight, probe, configCmd, supportCmd)
+	root.AddCommand(runner.logsCommand())
 	worker := leaf("session-worker", "Own a private agent terminal session")
 	worker.Hidden = true
 	signal := leaf("session-signal PID", "Signal a private Windows agent console")

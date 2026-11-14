@@ -213,6 +213,31 @@ func (s *Store) IngestSpool(ctx context.Context) (SpoolStats, error) {
 
 func (s *Store) ingestSpoolFile(ctx context.Context, path string) (SpoolStats, error) {
 	var stats SpoolStats
+	batch := make([]Event, 0, 256)
+	parsed, err := readSpoolFile(ctx, path, func(event Event) error {
+		batch = append(batch, event)
+		if len(batch) == 256 {
+			if err := s.Import(ctx, batch); err != nil {
+				return err
+			}
+			stats.Events += len(batch)
+			batch = batch[:0]
+		}
+		return nil
+	})
+	stats.Malformed = parsed.Malformed
+	if err != nil {
+		return stats, err
+	}
+	if err := s.Import(ctx, batch); err != nil {
+		return stats, err
+	}
+	stats.Events += len(batch)
+	return stats, nil
+}
+
+func readSpoolFile(ctx context.Context, path string, visit func(Event) error) (SpoolStats, error) {
+	var stats SpoolStats
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return stats, nil
@@ -222,9 +247,11 @@ func (s *Store) ingestSpoolFile(ctx context.Context, path string) (SpoolStats, e
 	}
 	defer file.Close()
 	reader := bufio.NewReader(file)
-	batch := make([]Event, 0, 256)
 	var lineNumber int64
 	for {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
 		line := make([]byte, 0, 1024)
 		oversized := false
 		var readErr error
@@ -252,23 +279,16 @@ func (s *Store) ingestSpoolFile(ctx context.Context, path string) (SpoolStats, e
 		if oversized || errors.Is(readErr, io.EOF) || json.Unmarshal(line, &event) != nil || event.TS.IsZero() || !validTrace(Trace{event.TraceID, event.SpanID}) {
 			stats.Malformed++
 		} else {
+			event = event.Sanitized()
 			event.source, event.sourceLine = filepath.Base(path), lineNumber
-			batch = append(batch, event)
-		}
-		if len(batch) == 256 {
-			if err := s.Import(ctx, batch); err != nil {
+			if err := visit(event); err != nil {
 				return stats, err
 			}
-			stats.Events += len(batch)
-			batch = batch[:0]
+			stats.Events++
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
 		}
 	}
-	if err := s.Import(ctx, batch); err != nil {
-		return stats, err
-	}
-	stats.Events += len(batch)
 	return stats, nil
 }

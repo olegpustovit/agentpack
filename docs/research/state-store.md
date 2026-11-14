@@ -1094,3 +1094,33 @@ finished when the user requested fast checks only. Subsequent checks were focuse
 the build-ID/cache/map response cases take 6 ms and the browser case takes 257 ms.
 No further broad or slow test run was started after that preference. Linux ARM64
 reference-host startup measurements remain outstanding.
+
+## Offline diagnostics commands — P1A.9
+
+The logs command now lists, shows, filters and traces retained diagnostics, changes
+issue status, and exports a reproduction folder. Reads use plain SQLite read-only
+connections and the bounded spool parser; an empty home stays absent. Canonical
+counts and their publication cursors share one read transaction, and unpublished
+day counts and unconsumed spool lines are merged without replay inflation. Query
+accepts only typed flags and literal grep, with bound SQL parameters. Trace and
+bundle exports include complete retained traces, including successful parent spans.
+
+Resolving requires a fix version. Delayed occurrences predating that resolution
+still contribute to counts but cannot reopen it, including when the gateway later
+publishes previously pending counters. A subsequent occurrence at or above the fix
+version reopens it. Ignored issues remain ignored.
+
+Bundle exports contain issue.json, traces.ndjson, rows.json and versions.json, in
+a private new folder. They reuse the support capsule's private-path policy and
+the recorder's credential policy. URLs, absolute paths, user identities and private
+row names are removed, while public UI asset names and build IDs remain available
+for symbolication. Existing destinations are refused. Related session and mesh-node
+rows are selected by involved IDs only; their production tables arrive in P2/P3,
+so current exports explicitly report those unavailable tables instead of inventing
+rows. Fixtures exercise actual row export against the intended table names.
+
+Focused Linux checks pass: offline readers 0.15 s, all eight CLI commands in text
+and JSON 0.26 s; the affected spool/regression/capsule checks also pass. The same
+focused checks pass on the physical Apple M1: obs 1.04 s, CLI 0.63 s, capsule 0.30 s.
+No broad suites, snapshots or slow tests were run for this step. The Linux ARM64
+reference startup measurements are still outstanding.
