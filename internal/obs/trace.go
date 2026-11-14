@@ -44,3 +44,13 @@ type traceKey struct{}
 func WithTrace(ctx context.Context, header string) context.Context {
 	return context.WithValue(ctx, traceKey{}, ParseTraceParent(header))
 }
+
+func TraceParent(ctx context.Context) string {
+	if event := From(ctx); event != nil {
+		return event.TraceParent()
+	}
+	if trace, ok := ctx.Value(traceKey{}).(Trace); ok {
+		return trace.TraceParent()
+	}
+	return ""
+}

@@ -20,6 +20,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
@@ -97,6 +98,9 @@ func workerRequest(ctx context.Context, record WorkerRecord, method, path, opera
 		return nil, err
 	}
 	request.Header.Set("Authorization", "Bearer "+record.Secret)
+	if trace := obs.TraceParent(ctx); trace != "" {
+		request.Header.Set("traceparent", trace)
+	}
 	if operationID != "" {
 		request.Header.Set("Idempotency-Key", operationID)
 	}

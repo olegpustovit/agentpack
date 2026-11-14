@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strconv"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
 // Actor is who started or called an operation. It comes from the transport:
@@ -29,6 +31,9 @@ const identityCacheTTL = 60 * time.Second
 type actorKey struct{}
 
 func withActor(ctx context.Context, actor Actor) context.Context {
+	if event := obs.From(ctx); event != nil {
+		event.Set("user", actor.User)
+	}
 	return context.WithValue(ctx, actorKey{}, actor)
 }
 

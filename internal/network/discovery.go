@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/state"
 
 	"tailscale.com/client/local"
@@ -438,16 +439,23 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	g.proxyTailnetTo(w, r, id, target)
+}
+
+func (g *Gateway) proxyTailnetTo(w http.ResponseWriter, r *http.Request, id string, target *url.URL) {
 	address := target.Host
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	original := proxy.Director
-	proxy.Director = func(request *http.Request) {
-		original(request)
+	proxy := &httputil.ReverseProxy{}
+	proxy.Rewrite = func(out *httputil.ProxyRequest) {
+		out.SetURL(target)
+		request := out.Out
 		request.Host = address
 		query := request.URL.Query()
 		query.Del("node")
 		request.URL.RawQuery = query.Encode()
 		request.Header.Del("Authorization")
+		if trace := obs.TraceParent(r.Context()); trace != "" {
+			request.Header.Set("traceparent", trace)
+		}
 		request.Header.Del("Cookie")
 		request.Header.Del("Origin")
 		request.Header.Del("Forwarded")
@@ -457,12 +465,16 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 	}
 	proxy.Transport = tailnetRequestTransport(r.Method, r.URL.Path)
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
+		if event := obs.From(r.Context()); event != nil {
+			event.Fail(err)
+		}
 		log.Printf("tailnet proxy failed for node %s: %v", id, err)
 		w.Header().Set("Cache-Control", "no-store")
 		http.Error(w, "remote node connection failed; the gateway logged the network error", http.StatusBadGateway)
 	}
 	proxy.ModifyResponse = func(response *http.Response) error {
 		response.Header.Del("Set-Cookie")
+		response.Header.Del("X-Agentpack-Trace")
 		if response.Header.Get("Cache-Control") == "" {
 			response.Header.Set("Cache-Control", "no-store")
 		}

@@ -556,7 +556,7 @@ func (g *Gateway) Handler() http.Handler {
 		mux.Handle("/", g.options.Assets)
 	}
 	api := conditionalAPI(mux)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	secured := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if p := r.URL.Path; strings.HasPrefix(p, "/api/") || isMCPPath(p) {
 			w.Header().Set("Cache-Control", "no-store")
 		}
@@ -586,17 +586,26 @@ func (g *Gateway) Handler() http.Handler {
 			http.Error(w, "login required", 401)
 			return
 		}
+		if _, known := actorFrom(r.Context()); !known {
+			if local {
+				r = r.WithContext(withActor(r.Context(), LocalActor("local")))
+			} else if g.auth.authenticated(r) {
+				r = r.WithContext(withActor(r.Context(), browserActor()))
+			}
+		}
+
 		if nodeID := r.URL.Query().Get("node"); nodeID != "" && strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Del("Cache-Control") // the peer's Cache-Control passes through unchanged
 			g.proxyTailnet(w, r, nodeID)
 			return
 		}
-		if _, known := actorFrom(r.Context()); local && !known {
-			// The node secret is only on this machine: the hub and CLI act as its OS user, not as the browser account.
-			r = r.WithContext(withActor(r.Context(), LocalActor("local")))
-		}
 		api.ServeHTTP(w, r)
 	})
+	var sink obs.Sink
+	if g.logs != nil {
+		sink = g.logs
+	}
+	return observeHTTP(mux, secured, sink, obs.BuildMetadata(g.options.Version, localStateNode, "gateway"))
 }
 
 func publicSession(info SessionInfo) SessionInfo {

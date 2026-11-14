@@ -55,7 +55,7 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: all target/storage/release-time gates pass. Reference Linux ARM64 launch measurements remain open. P1.1–P1.7 and P1A.1–P1A.3 are implemented; P1A.4 onward remains.
+- P0.11: all platform/storage checks pass. Latest warm CI timing and reference Linux ARM64 launch measurements remain open. P1.1–P1.7 and P1A.1–P1A.4 are implemented; P1A.5 onward remains.
 - Phase 0 gate: platform and storage checks pass; reference Linux ARM64 startup measurement is still required.
 
 ## Source pin — P0.2
@@ -514,7 +514,7 @@ evidence, unlike the earlier false-green cached-library run.
 | 10,000-event sync | <2 s | Musl median 0.791 s | Pass |
 | Open | <50 ms | Musl median 35.517 ms | Pass |
 | Storage | <3× raw JSON | 1.1592× | Pass |
-| Warm release duration | Baseline 577 s + at most 120 s | Run 43613015251: 660 s (83 s above baseline), Windows and all five runtime smoke checks pass | Pass |
+| Warm release duration | Baseline 577 s + at most 120 s | Run 43613015251: 660 s; newer 43616405381: 728 s, all checks pass but duration exceeds 697 s | **Investigating latest warm-run regression** |
 | Reference Linux ARM64 launch budgets | Fingerprint <1 ms, cold <20 ms, warm <1 ms | amd64 after-change values 0.334/6.871/0.145 ms; QEMU is not reference-host performance evidence | **Reference host measurement still required** |
 
 Current source (6eca5aa) additionally enables deterministic Windows timestamps
@@ -789,3 +789,51 @@ suites pass. Full five-platform workflow 43614669421 also passes for P1A.2.
 
 Runtime HTTP instrumentation follows in P1A.4. Workers/CLI begin emitting their
 own events in P1A.6; their sink and ingestion paths are now ready.
+
+## HTTP observation and propagation — P1A.4
+
+Every gateway request now gets a validated/generated trace ID and response trace
+header, with one event at completion. Route names are matched patterns; request
+paths and bodies are not stored. Observations include status, response body byte
+count, elapsed time, the verified actor, node routing and session ID when the
+route provides one. Validation/authorization failures remain info; server errors
+and panics are errors. Health checks return a trace header without storing an
+event. SSE and WebSocket events end only when their connection handler finishes.
+
+Panics before headers get a generic 500 and a caller stack. A panic after a
+response has started aborts the incomplete response rather than appending a
+fake successful body; hijacked connections are explicitly closed. The gateway
+continues serving later requests. A real gateway/day-file test verifies one
+persisted panic, a healthy later response and absence of the cookie.
+
+Response-writer interface preservation uses github.com/felixge/httpsnoop v1.1.0
+([upstream rationale](https://github.com/felixge/httpsnoop#why-this-package-exists)),
+retaining SSE, WebSocket, ReaderFrom and response-controller behavior. The small
+metrics hooks count body bytes without retaining them. go mod tidy also removes
+the obsolete go-sqlite3 v1.14.17 checksum entries.
+
+Peer and worker requests carry traceparent, including a trace-only CLI context.
+The peer proxy now uses ReverseProxy.Rewrite so hop-by-hop removal cannot erase
+the newly set trace header. It still removes credentials/cookies, and preserves
+one gateway trace response header rather than duplicating an upstream header.
+Tests cover corrected peer traces even with a hostile Connection header, worker
+propagation, trusted actor/route metadata, privacy, panic recovery/late abort,
+and one event per SSE/WebSocket closure.
+
+`make ci` and the Mac obs/network race suites pass. BenchmarkMiddleware uses the
+live asynchronous day store, not a no-op sink. Medians of three one-second runs:
+
+| Host | Bare handler | Instrumented | Added cost | Budget |
+| --- | ---: | ---: | ---: | ---: |
+| Linux amd64 i9-12900K | 0.1651 us | 17.812 us | 17.6469 us | <20 us |
+| macOS arm64 Apple M1 | 0.1891 us | 19.341 us | 19.1519 us | <20 us |
+
+Reproduce with `go test ./internal/network -run '^$' -bench '^BenchmarkMiddleware$'
+-benchmem -benchtime=1s -count=3`.
+
+P1A.3 workflow 43616405381 passes all five runtime platforms but takes 728 s,
+above 697 s. GoReleaser alone took 8m54s, including roughly four minutes for
+Linux/Windows builds after the Darwin builds finished. All five Go caches hit.
+The pipeline does not cache Zig's global compilation cache; recompiling target
+runtimes on each runner is the next hypothesis to verify. No timing waiver or
+increased budget is assumed.

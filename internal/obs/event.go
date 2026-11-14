@@ -116,6 +116,18 @@ func (e *Event) Set(key string, value any) {
 	e.life.Lock()
 	defer e.life.Unlock()
 	if !e.life.ended {
+		switch key {
+		case "user":
+			if user, ok := value.(string); ok {
+				e.User = user
+				return
+			}
+		case "session_id":
+			if session, ok := value.(string); ok {
+				e.SessionID = session
+				return
+			}
+		}
 		e.Attrs[key] = value
 	}
 }
