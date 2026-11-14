@@ -846,3 +846,18 @@ its final HTTP event. Cleanup now waits for the gateway's existing process lock
 to be released before removing files. This preserves the API's explicit
 "stopping" acknowledgement. Twenty repeated integration runs and `make ci`
 pass; no new production stop protocol or arbitrary cleanup delay is added.
+
+## Zig runtime cache follow-up
+
+Both the snapshot and publication jobs now restore a shared, explicit
+ZIG_GLOBAL_CACHE_DIR before building. Its cache key includes host OS/architecture
+and the pinned Zig version. The existing per-target Go caches remain separate.
+A regression verifies that restoration precedes each GoReleaser action and that
+the compiler uses the restored path. `make ci` passes.
+
+An isolated Apple M1 experiment compiled a tiny C program for x86_64-linux-musl
+with static linkage and libunwind, using a new temp global cache: 31.10 s cold,
+0.14 s warm (same pinned Zig 0.17.1). This confirms that target-runtime cache
+state materially affects cross-linking cost. The pending CI run seeds this new
+cache; a subsequent warm workflow must still prove the unchanged 697 s budget.
+Neither these timings nor a successful platform smoke is treated as that proof.

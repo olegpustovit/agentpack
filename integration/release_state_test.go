@@ -242,3 +242,45 @@ func TestReleaseSmokeInputsKeepTheCheckoutClean(t *testing.T) {
 	}
 	t.Fatal("publishing must download the smoke inputs to its ignored verification directory")
 }
+
+func TestReleaseCachesZigTargetRuntimes(t *testing.T) {
+	contents, err := os.ReadFile("../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			Env   map[string]string
+			Steps []struct {
+				Uses string
+				With map[string]string
+			}
+		}
+	}
+	if err := yaml.Unmarshal(contents, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"goreleaser", "publish"} {
+		job := workflow.Jobs[name]
+		const cachePath = ".build/zig-global-cache"
+		if job.Env["ZIG_GLOBAL_CACHE_DIR"] != "${{ github.workspace }}/"+cachePath {
+			t.Errorf("%s must use its cached Zig runtime directory", name)
+		}
+		restored := false
+		for _, step := range job.Steps {
+			if step.Uses == "actions/cache@v4" && step.With["path"] == cachePath {
+				key := step.With["key"]
+				if !strings.Contains(key, "runner.os") || !strings.Contains(key, "runner.arch") || !strings.Contains(key, "needs.crsqlite-check.outputs.zig") {
+					t.Errorf("%s Zig cache must be scoped to the host and pinned compiler", name)
+				}
+				restored = true
+			}
+			if strings.HasPrefix(step.Uses, "goreleaser/goreleaser-action") && !restored {
+				t.Errorf("%s builds before restoring Zig runtimes", name)
+			}
+		}
+		if !restored {
+			t.Errorf("%s lacks Zig runtime caching", name)
+		}
+	}
+}

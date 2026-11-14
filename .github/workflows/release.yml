@@ -155,6 +155,7 @@ jobs:
     # Native Apple SDK; Zig still cross-compiles the static Linux and Windows builds.
     runs-on: macos-26
     env:
+      ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.build/zig-global-cache
       CGO_ENABLED: '1'
       PWD: ${{ github.workspace }}
     steps:
@@ -168,6 +169,11 @@ jobs:
       - uses: goto-bus-stop/setup-zig@v2
         with:
           version: ${{ needs.crsqlite-check.outputs.zig }}
+      - name: Cache Zig target runtimes
+        uses: actions/cache@v4
+        with:
+          path: .build/zig-global-cache
+          key: zig-${{ runner.os }}-${{ runner.arch }}-${{ needs.crsqlite-check.outputs.zig }}-runtimes-v1
       - uses: actions/cache@v4
         with:
           path: ~/.cache/agentpack-go/linux_amd64
@@ -282,6 +288,7 @@ jobs:
     if: always() && github.event_name == 'push' && needs.smoke.result == 'success' && needs.codex-windows.result == 'success'
     runs-on: macos-26
     env:
+      ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.build/zig-global-cache
       PWD: ${{ github.workspace }}
       AGENTPACK_SMOKED_DIR: ${{ github.workspace }}/.release-assets/approved
     steps:
@@ -298,6 +305,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.4'
+      - name: Cache Zig target runtimes
+        uses: actions/cache@v4
+        with:
+          path: .build/zig-global-cache
+          key: zig-${{ runner.os }}-${{ runner.arch }}-${{ needs.crsqlite-check.outputs.zig }}-runtimes-v1
       - uses: actions/cache@v4
         with:
           path: ~/.cache/agentpack-go/linux_amd64
