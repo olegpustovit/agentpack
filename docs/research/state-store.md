@@ -55,7 +55,7 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1–P1.2 are implemented; P1.3 onward and Phase 1A are not implemented.
+- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1–P1.3 are implemented; P1.4 onward and Phase 1A are not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -562,3 +562,23 @@ opens and migrations then pass without retries or extra lock files.
 Fresh/repeated migration byte-stability, rollback, successful retry, concurrent
 startup and future-schema refusal tests pass. `make ci` passes. No gateway
 production path opens the store yet; existing user state is still untouched.
+
+## Launch-path guard — P1.3
+
+The existing cold/warm launch-setup regression now asserts that cold setup
+creates no `state.db`. It then puts an intentionally invalid database marker in
+the home and proves verified warm setup neither opens SQLite on it, changes its
+bytes/permissions/mtime, nor invalidates the fast path. This checks setup before
+spawning a gateway or worker, since those processes are explicitly allowed to
+open state after a launch. No runtime database is added to fingerprints.
+
+Five runs of the existing 32 MiB history fixture on the same amd64 host:
+
+| Benchmark | Median |
+| --- | ---: |
+| `BenchmarkMaterializationHome` | 0.350201 ms |
+| `BenchmarkCodexSetup/cold` | 7.134586 ms |
+| `BenchmarkCodexSetup/warm` | 0.136396 ms |
+
+The guard and `make ci` pass. These remain amd64 measurements, not a claim about
+the original ARM64 reference machine.
