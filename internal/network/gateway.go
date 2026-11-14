@@ -101,6 +101,9 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 		return err
 	}
 	defer func() { result = errors.Join(result, store.Close()) }()
+	if err := os.Remove(filepath.Join(options.Home, "network", "limits.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove legacy limits cache: %w", err)
+	}
 	auth, err := newGatewayAuth(options.Home)
 	if err != nil {
 		return err

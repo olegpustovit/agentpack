@@ -3,6 +3,8 @@ package state
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -51,14 +53,20 @@ func TestBrokenMigrationRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	initial, err := migrationFiles.ReadFile("migrations/0001_init.sql")
+	source := fstest.MapFS{}
+	names, err := fs.Glob(migrationFiles, "migrations/*.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := fstest.MapFS{
-		"migrations/0001_init.sql":   &fstest.MapFile{Data: initial},
-		"migrations/0002_broken.sql": &fstest.MapFile{Data: []byte("CREATE TABLE partial(body TEXT); INSERT INTO missing VALUES ('fail');")},
+	for _, name := range names {
+		data, err := migrationFiles.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source[name] = &fstest.MapFile{Data: data}
 	}
+	broken := fmt.Sprintf("migrations/%04d_broken.sql", SchemaVersion()+1)
+	source[broken] = &fstest.MapFile{Data: []byte("CREATE TABLE partial(body TEXT); INSERT INTO missing VALUES ('fail');")}
 	if err := migrate(context.Background(), store.DB, source); err == nil {
 		t.Fatal("broken migration succeeded")
 	}
@@ -67,14 +75,14 @@ func TestBrokenMigrationRollsBack(t *testing.T) {
 		t.Fatalf("partial migration survived: %d %v", count, err)
 	}
 	var version int
-	if err := store.Reader.QueryRow("SELECT version FROM schema_meta").Scan(&version); err != nil || version != 1 {
+	if err := store.Reader.QueryRow("SELECT version FROM schema_meta").Scan(&version); err != nil || version != SchemaVersion() {
 		t.Fatalf("failed migration advanced schema: %d %v", version, err)
 	}
-	source["migrations/0002_broken.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE recovered(body TEXT);")}
+	source[broken] = &fstest.MapFile{Data: []byte("CREATE TABLE recovered(body TEXT);")}
 	if err := migrate(context.Background(), store.DB, source); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Reader.QueryRow("SELECT version FROM schema_meta").Scan(&version); err != nil || version != 2 {
+	if err := store.Reader.QueryRow("SELECT version FROM schema_meta").Scan(&version); err != nil || version != SchemaVersion()+1 {
 		t.Fatalf("retry failed: %d %v", version, err)
 	}
 }

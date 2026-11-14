@@ -55,7 +55,7 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1–P1.4 are implemented; P1.5 onward and Phase 1A are not implemented.
+- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1–P1.5 are implemented; P1.6 onward and Phase 1A are not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -607,3 +607,22 @@ once in GoReleaser's before hook after UI staging, and Windows retains its own
 full platform suite. A regression enforces this ordering and prevents the
 workflow from adding a duplicate. Local `make ci` and workflow lint pass; the
 697 s workflow budget is unchanged and awaits the next measured run.
+
+## Limits in SQLite — P1.5
+
+Migration 0002 creates per-node/per-harness limit rows. The gateway loads and
+atomically replaces its own snapshots in SQLite, retaining the existing stale
+read/background-refresh behavior and probe coalescing. Other nodes' rows are
+preserved. The disposable legacy `network/limits.json` is removed on gateway
+start without import, as required. Storage failures produce an unavailable
+response instead of silently falling back to another store.
+
+Tests cover restart persistence, per-node isolation, replacement of a node's
+obsolete harness rows, legacy-cache removal and nonblocking stale reads. Channel
+synchronization replaces the old test's sleep/poll loop. Migration rollback tests
+now derive their next migration number from the embedded schema. `make ci`
+passes, including the race detector.
+
+There is one explicit transitional key: local-only limits use `local` before
+mesh enrollment. The code marks the required P4.1 rekey to the stable tailnet ID
+before CRR conversion; this is outstanding work, not the final mesh identity.
