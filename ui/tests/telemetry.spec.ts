@@ -33,12 +33,15 @@ test("a throwing component persists one browser error on pagehide with breadcrum
   await page.goto(origin)
   await expect(page.getByText(/couldn't be shown/)).toBeVisible()
   await page.goto("about:blank")
-  let events: { trace_id: string; attrs: { breadcrumbs: { kind: string; trace_id?: string }[] } }[] = []
+  let events: { trace_id: string; attrs: { ui_build_id: string; breadcrumbs: { kind: string; trace_id?: string }[] } }[] = []
   await expect.poll(async () => {
     events = await (await page.request.get(`${origin}/__test_events`)).json()
     return events.length
   }).toBe(1)
   const event = events[0]!
+  const config = await (await page.request.get(`${origin}/api/config`)).json()
+  expect(config.ui_build_id).toMatch(/^[\w-]{8}$/)
+  expect(event.attrs.ui_build_id).toBe(config.ui_build_id)
   expect(event.attrs.breadcrumbs.length).toBeGreaterThan(0)
   expect(event.trace_id).toBe(event.attrs.breadcrumbs.filter((crumb) => crumb.kind === "api").at(-1)?.trace_id)
   expect(events).toHaveLength(1)

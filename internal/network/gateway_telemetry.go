@@ -20,6 +20,7 @@ type telemetryWindow struct {
 
 type browserError struct {
 	Name        string           `json:"name"`
+	UIBuildID   string           `json:"ui_build_id"`
 	Message     string           `json:"message"`
 	Stack       string           `json:"stack"`
 	Traceparent string           `json:"traceparent"`
@@ -101,6 +102,7 @@ func (g *Gateway) telemetry(w http.ResponseWriter, r *http.Request) {
 		_, event := obs.Start(ctx, "ui.error", input.Name)
 		event.User = browserActor().User
 		event.Set("error_name", input.Name)
+		event.Set("ui_build_id", input.UIBuildID)
 		event.Set("message", input.Message)
 		event.Set("route", input.Route)
 		event.Set("search", input.Search)

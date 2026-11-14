@@ -72,7 +72,8 @@ export async function mockAPI(page: Page, { authenticated = true, setup = false,
     requests.push({ method: req.method(), path: url.pathname, query: url.searchParams, body })
     const machine = url.searchParams.get("node") ?? "local"
     let data: unknown = {}
-    if (url.pathname === "/api/status") data = { setup_required: setupNeeded, authenticated: loggedIn }
+    if (url.pathname === "/api/config") data = { ui_build_id: "test-build" }
+    else if (url.pathname === "/api/status") data = { setup_required: setupNeeded, authenticated: loggedIn }
     else if (url.pathname === "/api/login") loggedIn = true
     else if (url.pathname === "/api/setup") {
       expect(body).toMatchObject({ token: "private-token", password: "a-long-test-password" })

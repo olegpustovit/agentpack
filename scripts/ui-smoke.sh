@@ -94,6 +94,18 @@ get /api/status
 expect_code 200 "GET /api/status"
 expect_header content-type application/json "GET /api/status"
 
+get /api/config
+expect_code 200 "GET /api/config"
+expect_header cache-control no-store "GET /api/config"
+build_id=$(sed -n 's/.*"ui_build_id":"\([^"]*\)".*/\1/p' "$smoke_home/body")
+[[ -n "$build_id" ]] || fail "public configuration has no UI build ID"
+grep -Fq "/assets/index-$build_id.js" "$webdist/index.html" || fail "UI build ID does not match the entry chunk"
+[[ -z "$(find "$webdist" -type f -name '*.map' -print -quit)" ]] || fail "source maps entered the embedded tree"
+get "/assets/index-$build_id.js.map"
+expect_code 404 "source map"
+get "/assets/index-$build_id.js.map.gz"
+expect_code 404 "compressed source map"
+
 get /api/nope -H "Authorization: Bearer $secret"
 expect_code 404 "GET /api/nope"
 expect_header content-type application/json "GET /api/nope"

@@ -87,13 +87,14 @@ it("uses beacon on page hide and does not recurse when uploads fail", async () =
 
 it("records named controls and safe route context without form or chat contents", async () => {
   const { installTelemetry, reportError, flushTelemetry } = await import("./telemetry")
-  installTelemetry(() => ({ route: "/sessions/$machine/$sessionId", search: { view: "active", prompt: "private prompt", token: "private token", q: "private query" } }))
+  installTelemetry(() => ({ route: "/sessions/$machine/$sessionId", ui_build_id: "EntryHash", search: { view: "active", prompt: "private prompt", token: "private token", q: "private query" } }))
   document.body.innerHTML = '<button aria-label="Refresh">icon</button><span id="label">Retry</span><button aria-labelledby="label">icon</button><input value="private input"><div data-slot="agent-message"><a aria-label="private reply" href="#">private chat</a></div>'
   for (const control of document.querySelectorAll<HTMLElement>("button,input,a")) control.click()
   reportError(new Error("render failed"))
   flushTelemetry()
   const [event] = batches()
   expect(event.route).toBe("/sessions/$machine/$sessionId")
+  expect(event.ui_build_id).toBe("EntryHash")
   expect(event.search).toEqual({ view: "active" })
   expect(event.breadcrumbs.map((crumb: { name: string }) => crumb.name)).toEqual(["Refresh", "Retry"])
   expect(JSON.stringify(event)).not.toContain("private")

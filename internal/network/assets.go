@@ -14,6 +14,23 @@ import (
 //go:embed all:webdist
 var webDist embed.FS
 
+// uiBuildID reads Vite's generated entry name, without hashing or scanning assets.
+func uiBuildID(files fs.FS) string {
+	index, err := fs.ReadFile(files, "index.html")
+	if err != nil {
+		return ""
+	}
+	_, suffix, found := strings.Cut(string(index), `src="/assets/index-`)
+	if !found {
+		return ""
+	}
+	id, _, found := strings.Cut(suffix, `.js"`)
+	if !found {
+		return ""
+	}
+	return id
+}
+
 // WebAssets serves the embedded React build. webdist holds only a placeholder until `make ui-stage` copies ui/dist in.
 func WebAssets() http.Handler {
 	files, _ := fs.Sub(webDist, "webdist")
@@ -35,6 +52,10 @@ func webAssets(files fs.FS) http.Handler {
 			index = "placeholder.html"
 		}
 		name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+		if strings.HasSuffix(name, ".map") || strings.HasSuffix(name, ".map.gz") {
+			http.NotFound(w, r)
+			return
+		}
 		if name == "" {
 			name = index
 		}

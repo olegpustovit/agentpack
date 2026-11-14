@@ -1,5 +1,5 @@
 type Crumb = { kind: string; name: string; trace_id?: string; status?: number }
-type PageContext = { route: string; search: Record<string, unknown> }
+type PageContext = { route: string; search: Record<string, unknown>; ui_build_id?: string }
 const crumbs: Crumb[] = []
 const pending: object[] = []
 const seen = new Map<string, number>()
@@ -28,7 +28,7 @@ export function recordAPI(method: string, path: string, traceparent: string, sta
 
 export function reportError(error: unknown, traceparent = lastTrace ? `00-${lastTrace}-${lastTrace.slice(0, 16)}-01` : traceRequest()) {
   if (error instanceof Error && (error.name === "ApiError" || reported.has(error))) return
-  const { route, search } = page()
+  const { route, search, ui_build_id } = page()
   const name = (error instanceof Error ? error.name : "Error").slice(0, 80)
   const message = (error instanceof Error ? error.message : "Unhandled rejection").slice(0, 1024)
   const now = Date.now(), key = `${name}:${message}:${route}`
@@ -38,7 +38,7 @@ export function reportError(error: unknown, traceparent = lastTrace ? `00-${last
   if (count >= 20) return
   count++
   seen.set(key, now)
-  pending.push({ name, message, stack: error instanceof Error ? error.stack?.slice(0, 2048) : "", traceparent, route,
+  pending.push({ name, message, stack: error instanceof Error ? error.stack?.slice(0, 2048) : "", traceparent, route, ui_build_id,
     search: Object.fromEntries(Object.entries(search).slice(0, 10).filter(([key]) => !/pass|secret|token|auth|cookie|prompt|text|body|query|search|^q$|return_to/i.test(key)).map(([key, value]) => [key.slice(0, 64), String(value).slice(0, 128)])),
     viewport: [innerWidth, innerHeight], breadcrumbs: crumbs.slice(),
   })

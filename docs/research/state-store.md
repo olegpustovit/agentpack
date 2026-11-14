@@ -55,7 +55,7 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: all platform/storage checks pass; warm CI completes in 551 s against the 697 s budget. Reference Linux ARM64 launch measurements remain open. P1.1–P1.7 and P1A.1–P1A.7 are implemented with the stderr/snapshot limits recorded below; P1A.8 onward remains.
+- P0.11: all platform/storage checks pass; warm CI completes in 551 s against the 697 s budget. Reference Linux ARM64 launch measurements remain open. P1.1–P1.7 and P1A.1–P1A.8 are implemented with the stderr/snapshot limits recorded below; P1A.9 onward remains.
 - Phase 0 gate: platform and storage checks pass; reference Linux ARM64 startup measurement is still required.
 
 ## Source pin — P0.2
@@ -1057,3 +1057,40 @@ gate. The complete initially loaded JavaScript grows from 160,045 to 161,228 byt
 gzip (+1,183), below both the 1.5 KB addition and 170 KB initial budgets. No runtime
 dependency or lockfile change was needed. Mac validation uses the temporary
 checkout and developer-tool caches, without changing installed application state.
+
+## Hidden source maps and UI build identity — P1A.8
+
+Vite now emits hidden source maps. Staging filters *.map files from the embedded
+tree, and the asset handler also refuses .map and .map.gz requests if a map was
+accidentally present. The archive remains separate from the executable: a native
+GoReleaser files-only archive packages ui/dist/assets/*.map as
+ui-sourcemaps_<version>.tar.gz. No custom archive script or runtime dependency was
+added. See [GoReleaser's archive configuration](https://goreleaser.com/customization/package/archives/).
+
+GET /api/config exposes only ui_build_id, extracted from Vite's entry filename.
+It is public and no-store, including through the conditional-response middleware.
+The root loader reads it through Query. Every browser error includes its loaded
+entry hash, with the configuration as a fallback; an already-open tab keeps its
+own script's identity when the server deploys a newer UI. Bootstrap errors can
+use the script hash before configuration arrives. The existing browser regression
+now verifies the persisted ID against the gateway configuration. The standalone
+telemetry client remains under budget at 1,372 bytes gzip.
+
+Controlled Linux amd64 builds of the same Go/UI source with maps disabled versus
+hidden produce executables of 49,639,720 and 49,639,728 bytes: +8 bytes. Vite's
+chunk names change between modes, but zero map files enter the embedded tree.
+The built gateway passes the artifact smoke, including no-store configuration,
+entry-hash consistency and 404s for both map URL forms.
+
+Native make release-check on the Apple M1 finished in 2m56s, building all five
+targets and producing ui-sourcemaps_0.0.0-SNAPSHOT-none.tar.gz (1,616,094 bytes,
+70 maps). Runtime artifact validation checks its checksum entry, map-only members,
+version-3 JSON and the entry map's source content/mappings. Static validation
+requires the archive declaration, hidden maps and both local/workflow artifact
+checks. Make's release-check regex now escapes its dollar for Make expansion.
+
+make ci, lint, Vitest and build/size checks passed. The native snapshot had already
+finished when the user requested fast checks only. Subsequent checks were focused:
+the build-ID/cache/map response cases take 6 ms and the browser case takes 257 ms.
+No further broad or slow test run was started after that preference. Linux ARM64
+reference-host startup measurements remain outstanding.

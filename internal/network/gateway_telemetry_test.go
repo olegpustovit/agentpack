@@ -125,6 +125,18 @@ func TestBrowserTelemetryTrustLimitsAndPersistence(t *testing.T) {
 	}
 }
 
+func TestPublicUIConfiguration(t *testing.T) {
+	g, origin := identityGateway(t, t.TempDir(), nil)
+	g.options.UIBuildID = "EntryHash"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", origin.String()+"/api/config", nil)
+	r.Header.Set("If-None-Match", "*")
+	g.Handler().ServeHTTP(w, r)
+	if w.Code != 200 || w.Header().Get("ETag") != "" || w.Header().Get("Cache-Control") != "no-store" || strings.TrimSpace(w.Body.String()) != `{"ui_build_id":"EntryHash"}` {
+		t.Fatalf("public config %d %s %s", w.Code, w.Header(), w.Body.String())
+	}
+}
+
 // This subprocess fixture gives Playwright a real day store, without a production test endpoint.
 func TestTelemetryBrowserFixture(t *testing.T) {
 	if os.Getenv("AGENTPACK_TELEMETRY_FIXTURE") != "1" {
@@ -139,6 +151,7 @@ func TestTelemetryBrowserFixture(t *testing.T) {
 	g.logs = logs
 	g.auth.sessions[sha256.Sum256([]byte("telemetry-browser"))] = time.Now().Add(time.Hour)
 	g.options.Assets = http.FileServer(http.Dir("../../ui/dist"))
+	g.options.UIBuildID = uiBuildID(os.DirFS("../../ui/dist"))
 	server := httptest.NewUnstartedServer(nil)
 	defer server.Close()
 	g.origin, _ = url.Parse("http://" + server.Listener.Addr().String())
@@ -147,6 +160,8 @@ func TestTelemetryBrowserFixture(t *testing.T) {
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) {
 		var data any = []any{}
 		switch r.URL.Path {
+		case "/api/config":
+			data = map[string]string{"ui_build_id": g.options.UIBuildID}
 		case "/api/status":
 			data = map[string]any{"authenticated": true, "setup_required": false}
 		case "/api/identity":

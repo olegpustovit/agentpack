@@ -80,7 +80,7 @@ ci: fmt-check lint test race build
 release-check:
 	$(GORELEASER) check
 	$(GORELEASER) release --snapshot --clean --skip=publish
-	AGENTPACK_RELEASE_DIST="$(CURDIR)/dist" $(GO) test ./integration -run '^TestReleaseBinaryDependencies$'
+	AGENTPACK_RELEASE_DIST="$(CURDIR)/dist" $(GO) test ./integration -run '^TestRelease(BinaryDependencies|UISourceMaps)$$'
 
 hooks:
 	git config core.hooksPath .githooks

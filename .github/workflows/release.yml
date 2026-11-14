@@ -216,10 +216,10 @@ jobs:
           distribution: goreleaser
           version: '~> v2'
           args: release --clean --skip=publish
-      - name: Verify static and platform library dependencies
+      - name: Verify platform dependencies and UI source maps
         env:
           AGENTPACK_RELEASE_DIST: ${{ github.workspace }}/dist
-        run: go test ./integration -run '^TestReleaseBinaryDependencies$'
+        run: go test ./integration -run '^TestRelease(BinaryDependencies|UISourceMaps)$'
       - uses: actions/upload-artifact@v4
         with:
           name: release-snapshot

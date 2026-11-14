@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -40,6 +41,7 @@ type GatewayOptions struct {
 	Library                  LibraryOptions
 	Assets                   http.Handler
 	Version                  string
+	UIBuildID                string
 }
 
 type nodeRecord struct {
@@ -181,6 +183,14 @@ func (g *Gateway) runLogSpool(ctx context.Context) {
 
 func (g *Gateway) Handler() http.Handler {
 	mux := http.NewServeMux()
+	buildID := g.options.UIBuildID
+	if buildID == "" {
+		files, _ := fs.Sub(webDist, "webdist")
+		buildID = uiBuildID(files)
+	}
+	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]string{"ui_build_id": buildID})
+	})
 	g.registerSettings(mux)
 	g.registerLibrary(mux)
 	g.registerRegistryReplication(mux)
@@ -588,7 +598,7 @@ func (g *Gateway) Handler() http.Handler {
 			http.Error(w, "origin required", 403)
 			return
 		}
-		public := r.URL.Path == "/healthz" || r.URL.Path == "/api/status" || r.URL.Path == "/api/setup" || r.URL.Path == "/api/login" || !strings.HasPrefix(r.URL.Path, "/api/")
+		public := r.URL.Path == "/healthz" || r.URL.Path == "/api/config" || r.URL.Path == "/api/status" || r.URL.Path == "/api/setup" || r.URL.Path == "/api/login" || !strings.HasPrefix(r.URL.Path, "/api/")
 		if !public && !local && !g.auth.authenticated(r) {
 			http.Error(w, "login required", 401)
 			return

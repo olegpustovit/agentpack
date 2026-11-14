@@ -55,6 +55,15 @@ archives:
     files:
       - LICENSE
       - README.md
+  - id: ui-sourcemaps
+    meta: true
+    formats:
+      - tar.gz
+    name_template: ui-sourcemaps_{{ .Version }}
+    files:
+      - src: ui/dist/assets/*.map
+        dst: assets
+        strip_parent: true
 
 checksum:
   name_template: checksums.txt
