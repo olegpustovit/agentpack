@@ -33,8 +33,15 @@ package state
 #endif
 extern int sqlite3_auto_extension(void (*entry)(void));
 extern int sqlite3_crsqlite_init(void *, char **, const void *);
+extern int sqlite3_busy_timeout(void *, int);
+static int initialize_crsqlite(void *db, char **error, const void *api) {
+ // Auto-extension setup runs before the Go driver's DSN pragmas.
+ int rc = sqlite3_busy_timeout(db, 5000);
+ if (rc != 0) return rc;
+ return sqlite3_crsqlite_init(db, error, api);
+}
 static int register_crsqlite(void) {
- return sqlite3_auto_extension((void (*)(void))sqlite3_crsqlite_init);
+ return sqlite3_auto_extension((void (*)(void))initialize_crsqlite);
 }
 */
 import "C"

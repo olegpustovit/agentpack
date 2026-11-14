@@ -55,7 +55,7 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1 is implemented; P1.2 onward and Phase 1A are not implemented.
+- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1–P1.2 are implemented; P1.3 onward and Phase 1A are not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -545,3 +545,20 @@ writer transaction is open, retirement of pooled connections, two Store values
 writing concurrently without lost writes or lock errors, and symlink rejection
 without modifying the target. `make ci` passes; targeted store/CLI tests also
 pass on the Mac. No gateway has been switched to this store yet.
+
+## Atomic migrations — P1.2
+
+Embedded numbered SQL migrations run in filename order, one transaction per
+file, maintaining one validated `schema_meta` row. `SchemaVersion()` exposes
+the supported version. `BEGIN IMMEDIATE` serializes version checks across
+processes, and a failed file rolls back its DDL and version update. A database
+from a newer binary is refused without changing its schema version.
+
+The new concurrent-fresh-open test exposed extension initialization occurring
+before the Go driver's DSN busy timeout was installed. The static initializer
+now sets SQLite's busy timeout before invoking cr-sqlite; repeated concurrent
+opens and migrations then pass without retries or extra lock files.
+
+Fresh/repeated migration byte-stability, rollback, successful retry, concurrent
+startup and future-schema refusal tests pass. `make ci` passes. No gateway
+production path opens the store yet; existing user state is still untouched.

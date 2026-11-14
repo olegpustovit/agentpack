@@ -2,6 +2,7 @@
 package state
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -48,6 +49,9 @@ func Open(home string) (*Store, error) {
 	writer.SetMaxIdleConns(1)
 	if err := writer.Ping(); err != nil {
 		return nil, errors.Join(fmt.Errorf("connect state writer: %w", err), writer.Close())
+	}
+	if err := migrate(context.Background(), writer, migrationFiles); err != nil {
+		return nil, errors.Join(err, writer.Close())
 	}
 	params.Set("_query_only", "1")
 	reader, err := sql.Open(driverName, dsn+params.Encode())
