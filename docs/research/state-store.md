@@ -48,7 +48,8 @@ or user shell startup files were changed.
 - P0.3: host static library built and symbol checked; build-input tests and `make ci` passed.
 - P0.4: static registration and Go store smoke test passed; `make ci` passed.
 - P0.5: Make targets prepare the host library and enable cgo; `make ci` passed.
-- P0.6–P7 and Phase 1A: not implemented.
+- P0.6: FAILED gate; stopped as required (see results below).
+- P0.7–P7 and Phase 1A: not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -139,3 +140,109 @@ lock inputs are unchanged. `make crsqlite-build` explicitly rebuilds from source
 `make ci` passed with the pinned host library. A C preprocessor check with the
 archive temporarily removed confirmed the diagnostic names `make crsqlite`;
 the archive was restored. The `internal/state` smoke test passes with the guard.
+
+## Cross-target gate — P0.6: STOP
+
+No work continues beyond this gate without human direction, per the runbook:
+"STOP and report if any target fails to build or link. Do not work around it."
+
+| Target | Static extension archive | Go linkage / execution |
+| --- | --- | --- |
+| linux/amd64 | Built; init symbol verified | Native GCC store smoke test passes; **Zig musl compile fails** |
+| linux/arm64 | Built; init symbol verified | Not attempted after gate failure |
+| darwin/amd64 | Compilation and archive assembly completed; **validation fails** | Not attempted |
+| darwin/arm64 | Not attempted | Not attempted |
+| windows/amd64 | Not attempted | Not attempted |
+
+The Linux amd64 gate used a temporary Go program importing `internal/state`,
+opening a database, and reading its site ID. The product has no state caller
+until P0.8, so building only `cmd/agentpack` now would not prove extension
+linkage. The explicit smoke link was run first to avoid a false positive:
+
+```sh
+CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC=/tmp/agentpack-zig-musl-cc \
+  go build -trimpath -ldflags '-linkmode=external -extldflags=-static' \
+  -o /tmp/ap-state-linux-amd64 ./.build/state-spike
+```
+
+The CC wrapper invokes the pinned Zig with `cc -target x86_64-linux-musl`.
+The matching Go driver's old SQLite amalgamation does not compile against the
+pinned Zig musl headers. Its complete compiler output follows:
+
+```text
+# github.com/mattn/go-sqlite3
+sqlite3-binding.c:37644:42: error: use of undeclared identifier 'pread64'
+ 37644 |   { "pread64",      (sqlite3_syscall_ptr)pread64,    0  },
+       |                                          ^~~~~~~
+sqlite3-binding.c:37662:42: error: use of undeclared identifier 'pwrite64'
+ 37662 |   { "pwrite64",     (sqlite3_syscall_ptr)pwrite64,   0  },
+       |                                          ^~~~~~~~
+sqlite3-binding.c:37801:22: error: invalid application of 'sizeof' to an incomplete type 'struct unix_syscall[]'
+ 37801 |     for(i=0; i<sizeof(aSyscall)/sizeof(aSyscall[0]); i++){
+       |                      ^~~~~~~~~~
+sqlite3-binding.c:37810:22: error: invalid application of 'sizeof' to an incomplete type 'struct unix_syscall[]'
+ 37810 |     for(i=0; i<sizeof(aSyscall)/sizeof(aSyscall[0]); i++){
+       |                      ^~~~~~~~~~
+sqlite3-binding.c:37837:20: error: invalid application of 'sizeof' to an incomplete type 'struct unix_syscall[]'
+ 37837 |   for(i=0; i<sizeof(aSyscall)/sizeof(aSyscall[0]); i++){
+       |                    ^~~~~~~~~~
+sqlite3-binding.c:37854:16: error: invalid application of 'sizeof' to an incomplete type 'struct unix_syscall[]'
+ 37854 |     for(i=0; i<ArraySize(aSyscall)-1; i++){
+       |                ^~~~~~~~~~~~~~~~~~~
+sqlite3-binding.c:14847:38: note: expanded from macro 'ArraySize'
+ 14847 | #define ArraySize(X)    ((int)(sizeof(X)/sizeof(X[0])))
+       |                                      ^~~
+sqlite3-binding.c:37858:14: error: invalid application of 'sizeof' to an incomplete type 'struct unix_syscall[]'
+ 37858 |   for(i++; i<ArraySize(aSyscall); i++){
+       |              ^~~~~~~~~~~~~~~~~~~
+sqlite3-binding.c:14847:38: note: expanded from macro 'ArraySize'
+ 14847 | #define ArraySize(X)    ((int)(sizeof(X)/sizeof(X[0])))
+       |                                      ^~~
+sqlite3-binding.c:40513:11: error: type specifier missing, defaults to 'int'; ISO C99 and later do not support implicit int [-Wimplicit-int]
+ 40513 |     got = osPread64(id->h, pBuf, cnt, offset);
+       |           ^
+sqlite3-binding.c:37648:49: note: expanded from macro 'osPread64'
+ 37648 | #define osPread64 ((ssize_t(*)(int,void*,size_t,off64_t))aSyscall[10].pCurrent)
+       |                                                 ^
+sqlite3-binding.c:40642:17: error: type specifier missing, defaults to 'int'; ISO C99 and later do not support implicit int [-Wimplicit-int]
+ 40642 |   do{ rc = (int)osPwrite64(fd, pBuf, nBuf, iOff);}while( rc<0 && errno==EINTR);
+       |                 ^
+sqlite3-binding.c:37666:57: note: expanded from macro 'osPwrite64'
+ 37666 | #define osPwrite64  ((ssize_t(*)(int,const void*,size_t,off64_t))\
+       |                                                         ^
+9 errors generated.
+```
+
+The concurrently running Darwin source experiment used:
+
+```sh
+scripts/build-crsqlite.sh darwin amd64
+```
+
+It compiled and assembled `crsqlite-x86_64-apple-darwin.a`, then failed the
+symbol check: the Linux GNU `nm` used by the builder reports Mach-O objects as
+`file format not recognized`. This is a cross-format validation-tool failure,
+not proof that macOS cannot link the extension. It still fails the required
+gate. The temporary build tree was cleaned up and no Darwin archive was
+installed. No workarounds were attempted after observing the gate failure.
+
+### Verified state and next decision
+
+P0.1–P0.5 are committed individually. `make ci` passed after P0.5, including
+format, vet, all Go tests, race tests and the product build. Native amd64 GCC
+links the extension and opens the database; fully static release linkage and
+all-platform execution are **not proven**. No release was published or workflow
+modified. No user data was opened or migrated.
+
+Recommended next action for approval: continue Phase 0 by correcting musl
+compiler compatibility and cross-format archive validation while retaining
+option A and its exact SQLite header-match invariant, then repeat all five
+target gates. Do not start any state migration or replication phase yet.
+
+| Completed step | Commit |
+| --- | --- |
+| P0.1 baseline | `2ce2482` |
+| P0.2 source pin | `31e6f31` |
+| P0.3 static builder | `564f889` |
+| P0.4 Go linkage | `b5ba396` |
+| P0.5 Make prerequisites | `6a06d7b` |
