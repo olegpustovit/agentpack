@@ -15,3 +15,5 @@
 
 internal/network/webdist/*
 !internal/network/webdist/placeholder.html
+
+/.build/

@@ -45,7 +45,8 @@ or user shell startup files were changed.
   Validation command: `nix shell nixpkgs#gnumake nixpkgs#gcc -c bash -c "make ci"`
   (format, vet, full Go tests, race tests, build).
 - P0.2: fork and toolchains pinned; static target confirmed in upstream build files.
-- P0.3–P7 and Phase 1A: not implemented.
+- P0.3: host static library built and symbol checked; build-input tests and `make ci` passed.
+- P0.4–P7 and Phase 1A: not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -78,3 +79,32 @@ a site's lower-numbered changes could be skipped after another site's higher
 version. Phase 4 must use origin-aware positions and preserve whole transaction
 pagination. The Phase 0 sync experiment must cover these actual fork semantics;
 the upstream protocol must not be assumed interchangeable with this fork.
+
+## Host static build — P0.3
+
+Built Linux amd64 musl with Zig 0.17.1 and nightly-2023-10-05.
+Archive: `.build/crsqlite/8e32195704ccaea8508f7d378e11dc2dc0bb3d2e/linux_amd64/libcrsqlite.a`
+(9.3 MiB). `nm --defined-only` confirms `sqlite3_crsqlite_init`.
+`.build/crsqlite/lib` points to the pinned commit directory.
+
+The script requires Bash with `mapfile` support, Python 3.11+ (`tomllib`), Go,
+Git, Make, binutils (`ar`, `nm`), the pinned Zig and Rust toolchains, and
+libclang for upstream bindgen. It checks the source SHA, exact compiler version,
+SQLite header version and (once added) the Go driver's header version. Cargo
+uses the source lockfile (`--locked`). Temporary source trees are removed.
+
+First attempt failed because libclang was absent. Second attempt succeeded with:
+
+```sh
+nix shell nixpkgs#gnumake nixpkgs#gcc -c bash -c '
+  export PATH="/tmp/agentpack-zig/zig-x86_64-linux-0.17.1:$PATH"
+  export LIBCLANG_PATH="$(cat /tmp/state-libclang-path.txt)/lib"
+  scripts/build-crsqlite.sh linux amd64
+'
+```
+
+Here `/tmp/state-libclang-path.txt` holds the output of
+`nix build --no-link --print-out-paths nixpkgs#llvmPackages.libclang.lib`.
+The Zig archive was verified against the official download index SHA-256 before
+extracting. These temporary paths describe this experiment, not a permanent
+developer setup. Other targets and Go linking are not yet verified.
