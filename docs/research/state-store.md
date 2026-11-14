@@ -1140,3 +1140,30 @@ body. Errors are recorded through the request event. Focused tests cover all fou
 tools, their annotations, persisted resolution, invalid arguments, unknown issues,
 login and origin rejection; the existing MCP inventory/policy regression also
 passes. The Linux run takes 0.21 s. No broad or slow suites were run.
+
+## Diagnostics Settings pane — P1A.11
+
+Settings includes a lazy Diagnostics pane with status filters, issue details,
+machine counts and versions, sample JSON and recent trace IDs. Resolution stays
+inline, requires a fix version and accepts an optional note; success updates the
+detail/cache, invalidates lists and shows the existing Hud. Reopen and Ignore use
+the same mutation path. Loading, retry, empty and form-error states use the kit.
+The single column and wrapping identifiers remain readable at 390 px. No design
+tokens, dependencies or system documents were changed.
+
+Types, focused lint, the two model tests and the browser flow pass; the UI build
+passes every size gate. The lazy pane is 3,023 bytes gzip. Desktop light and phone
+dark captures were inspected against existing Settings; computed input colors and
+horizontal overflow were checked after the theme transition settled. The required
+fresh Impeccable finish reviewer returned ship with no material fixes. Context and
+detector tooling was unavailable (the supplied executable has no execute permission),
+so review used PRODUCT.md, DESIGN.md, SURFACE.md, code and the rendered captures.
+The physical Mac mini passes the same browser behavior in WebKit. Capture work is
+opt-in so ordinary behavior runs avoid screenshot and theme-transition costs.
+
+The final focused behavior run takes 1.1 s in Chromium and 2.0 s on the physical
+Apple M1 WebKit. The hour-long normal-use measurement requested by P1A.12 has not
+been run under the user's later fast-checks-only instruction; its events/hour,
+bytes/event and 50 MiB/day projection remain an explicit validation gap. The guide,
+data-layout entries and failure-recording/launch rules are documented. This does
+not waive the measurement or the outstanding Linux ARM64 startup certification.

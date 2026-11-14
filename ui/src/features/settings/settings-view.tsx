@@ -1,17 +1,19 @@
+import { Suspense } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Empty } from "@/components/kit/feedback"
+import { Empty, RowSkeleton } from "@/components/kit/feedback"
 import { identityQuery } from "@/features/machines/queries"
 import { ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { SourceList, SourceRow } from "@/components/kit/list"
 import { AccountPane } from "./account-pane"
-import { AppearancePane, GeneralPane, SharingPane } from "./panes"
+import { AppearancePane, DiagnosticsPane, GeneralPane, SharingPane } from "./panes"
 import { ReplicationPane } from "./replication-pane"
 
 const sections = [
   { id: "general", label: "General", view: GeneralPane },
   { id: "sharing", label: "Sharing", view: SharingPane },
   { id: "replication", label: "Replication", view: ReplicationPane },
+  { id: "diagnostics", label: "Diagnostics", view: DiagnosticsPane },
   { id: "appearance", label: "Appearance", view: AppearancePane },
   { id: "account", label: "Account", view: AccountPane },
 ] as const
@@ -39,7 +41,7 @@ export function SettingsView({ pane }: { pane: string }) {
       </SourceList>
       <div className="flex min-h-0 max-w-160 min-w-0 flex-1 flex-col gap-(--s6) overflow-y-auto p-(--s6)">
         {current ? (
-          <current.view />
+          <Suspense fallback={<RowSkeleton lines={2} />}><current.view /></Suspense>
         ) : (
           <Empty title="Settings section not found">Choose a section from the list.</Empty>
         )}

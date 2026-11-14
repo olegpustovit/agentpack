@@ -145,6 +145,16 @@ waits up to 90 seconds, resets the emulator, and enables shared browser input af
 Antigravity desktop launcher presence cannot be launched or controlled remotely;
 detached desktop windows are not tracked.
 
+Settings → Diagnostics loads lazily. `GET /api/logs/issues?status=open|resolved|ignored`
+lists issues (`status=` includes all), and `GET /api/logs/issues/{fingerprint}`
+returns machine counts, the sample event and recent trace IDs. Resolve sends
+`POST /api/logs/issues/{fingerprint}/resolve` with `{version,note}`; reopen/ignore
+use the corresponding path suffix. `GET /api/logs/traces/{trace}` reads the full
+retained trace. These routes use the same gateway login/origin checks as Settings.
+The inline resolution form requires the fix version and reports success through
+the Hud. See [Diagnostics](../docs/src/guides/diagnostics.md) for recording and
+regression rules.
+
 The Library shows each module once; select a version in its inspector when several pins are saved. Sessions is the initial active view. Gateway menu → Appearance settings selects System, Light, or Dark for this browser across views and reloads; the terminal background, default text, cursor, and fallback ANSI palette follow the choice. Explicit RGB colors emitted by agents remain intact.
 
 Terminal attachment shows an accessible loading indicator until replay finishes. A socket that fails to complete replay within 30 seconds is closed and retried with the existing backoff. Session polling preserves the dimmed last frame throughout reconnect. The WebSocket handshake starts before emulator initialization and layout.

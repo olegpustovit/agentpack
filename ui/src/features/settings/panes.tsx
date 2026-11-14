@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react"
+import { lazy, useState, type ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Banner, RowSkeleton } from "@/components/kit/feedback"
 import { Field, FieldGrid, FieldLabel } from "@/components/kit/forms"
@@ -13,6 +13,8 @@ import { allowListLabel, sharingLabel } from "./model"
 import { settingsQuery } from "./queries"
 import { useGatewayActions } from "./actions"
 import { applyTheme, currentTheme, themes, type Theme } from "./theme"
+
+export const DiagnosticsPane = lazy(() => import("./diagnostics-pane").then((module) => ({ default: module.DiagnosticsPane })))
 
 // The selected source row names the pane, so its heading is for assistive tech only.
 export function Pane({ title, children }: { title: string; children: ReactNode }) {

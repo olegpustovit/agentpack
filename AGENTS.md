@@ -59,6 +59,9 @@ All agentpack-owned terminal rendering is monochrome and terminal-agnostic: use 
 | --- | --- |
 | **`$AGENTPACK_HOME/cache/<cache_key>/`** | Package trees (GitHub tarball, or **copies** from filesystem / `local/`). The key is the SHA-256 of the package identity (`github:<owner>/<repo>`, path, commit), **not** of the files; the lock's `content_hash` is what verifies them. |
 | **`$AGENTPACK_HOME/cache/db.reddb`** | Metadata + alias map for fast repeat **`add`**, plus cached GitHub ref/tag lookups to reduce API calls. |
+| **`$AGENTPACK_HOME/state.db`** | Gateway-owned SQLite state, including issue metadata/counts, settings, limits and OAuth. Foreground launches never open it. |
+| **`$AGENTPACK_HOME/logs/YYYY-MM-DD.db`** | Private plain SQLite diagnostic events and deduplicated stacks, retained for five days. Ordinary events have a 256 MiB daily budget; error samples are preserved. |
+| **`$AGENTPACK_HOME/logs/spool/*.ndjson`** | Private CLI/worker diagnostics awaiting gateway ingestion; 16 MiB oldest-first budget. Successful foreground launches write no diagnostics. |
 | **`$AGENTPACK_HOME/verified/<cache_key>.json`** | Proof that an entry matched its content hash while its files had this metadata. Launches reuse it instead of reading the package again. Losing it costs one full check. |
 | **`$AGENTPACK_HOME/local/<owner>/<repo>/…`** | Optional offline mirror; same slash layout as **`owner/repo/…`** specs. |
 | **`$AGENTPACK_HOME/projects/<hash>/cursor-overlay.manifest`** | Per-project Cursor overlay bookkeeping (not stored in the repo). |
@@ -72,6 +75,12 @@ All agentpack-owned terminal rendering is monochrome and terminal-agnostic: use 
 | **`<staged Claude bundle>/agentpack-settings.json`** | Per-project/mode attribution and MCP overlay, passed as inline JSON via **`--settings`**. **`CLAUDE_CONFIG_DIR`** stays unset for native keychain continuity. |
 
 **Default `AGENTPACK_HOME`:** if unset, **Windows** uses **`%LOCALAPPDATA%\agentpack`**; **Unix** uses **`$XDG_DATA_HOME/agentpack`** when **`XDG_DATA_HOME`** is set, otherwise **`$HOME/.local/share/agentpack`**.
+
+Every new handler, background loop and command must record its failures through
+`internal/obs`, preserving request/session tracing and credential redaction. A
+successful foreground launcher must not open `state.db` or diagnostic files.
+Never record prompts, replies, tool arguments/results, request bodies, raw
+environment values or terminal transcripts. See `docs/src/guides/diagnostics.md`.
 
 ### Module IDs
 
@@ -193,7 +202,7 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 | `/machines/$machine` | `q` |
 | `/limits` | `machine` |
 | `/settings` | none (redirects to `/settings/general`) |
-| `/settings/$pane` | none; `general`, `sharing`, `replication`, `appearance`, `account` |
+| `/settings/$pane` | none; `general`, `sharing`, `replication`, `diagnostics`, `appearance`, `account` |
 
 - **Peers update on their own schedule.** The gateway routinely talks to older peers, so API reads tolerate them: a 404 means `Needs update`, never a raw error, and a response shape that changed is normalized in its query. This is runtime interoperability and is not covered by the pre-release rule. Test new endpoints against a peer without them.
 - **Never use `node` as a search param.** The Go handler treats `?node=` as a proxy instruction on `/api/` paths, and this rule stays in force anyway.
