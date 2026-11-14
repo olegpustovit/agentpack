@@ -47,16 +47,18 @@ out = base / target
 out.mkdir(exist_ok=True)
 library = out / "libcrsqlite.a"
 if not library.exists() or library.read_bytes() != content:
-    with tempfile.NamedTemporaryFile(dir=out, delete=False) as f:
-        staging = pathlib.Path(f.name)
-        try:
+    fd, name = tempfile.mkstemp(dir=out)
+    staging = pathlib.Path(name)
+    try:
+        with os.fdopen(fd, "wb") as f:
             f.write(content)
             f.flush()
             os.fsync(f.fileno())
-            os.chmod(staging, 0o644)
-            os.replace(staging, library)
-        finally:
-            staging.unlink(missing_ok=True)
+        os.chmod(staging, 0o644)
+        os.replace(staging, library)
+    finally:
+        staging.unlink(missing_ok=True)
+
 link = base.parent / "lib"
 if not link.is_symlink() or os.readlink(link) != commit:
     temporary_link = base.parent / f".lib-{os.getpid()}"

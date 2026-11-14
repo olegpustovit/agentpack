@@ -435,3 +435,11 @@ ancestor. Downstream gates now explicitly use `always()` plus the required
 predecessor's successful result. A configuration regression checks that the
 cached-library path cannot silently skip these gates. `make ci` and actionlint
 pass after the correction; the complete workflow is being rerun.
+
+Native `make release-check` on the supplied Mac passed: UI staging, all Go tests,
+five product builds, archives, installers, checksums and Homebrew cask generation.
+The cold local snapshot took 6m56s, not a warm GitHub workflow measurement.
+Run 43602401866 correctly reached the Windows gate and caught an open-file
+rename in the downloader (WinError 32). Installation now closes/fsyncs its
+staging file before atomic replacement. Existing download regression tests and
+`make ci` pass; the real Windows gate is being repeated.
