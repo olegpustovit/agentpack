@@ -12,8 +12,9 @@ const spikeRows = 10_000
 
 func spikeStore(tb testing.TB) (*Store, string) {
 	tb.Helper()
-	path := filepath.Join(tb.TempDir(), "state.db")
-	s, err := Open(path)
+	home := tb.TempDir()
+	path := filepath.Join(home, "state.db")
+	s, err := Open(home)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -144,9 +145,9 @@ func TestSyncTenThousand(t *testing.T) {
 }
 
 func BenchmarkOpen(b *testing.B) {
-	path := filepath.Join(b.TempDir(), "state.db")
+	home := b.TempDir()
 	for b.Loop() {
-		s, err := Open(path)
+		s, err := Open(home)
 		if err != nil {
 			b.Fatal(err)
 		}

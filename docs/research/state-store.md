@@ -55,7 +55,7 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. Phase 1 onward and Phase 1A are not implemented.
+- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1 is implemented; P1.2 onward and Phase 1A are not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -526,3 +526,22 @@ Per the user's instruction to continue with recommended assumptions, unresolved
 performance measurements remain explicit release requirements while implementation
 continues into Phase 1. No product release or user-data migration is performed
 on the strength of an unverified gate.
+
+## Durable opener — P1.1
+
+`state.Open(home)` now owns `<home>/state.db`, secures it to 0600, rejects a
+nonregular/symlink database, and escapes arbitrary home paths in the SQLite URI.
+It provides one serialized writer and a separate query-only reader pool. Every
+connection uses WAL, FULL synchronization and a 5 s busy timeout.
+
+A driver connection wrapper finalizes cr-sqlite on **each** connection's Close,
+including connections retired by `database/sql` before Store.Close. It preserves
+the underlying driver's context/query interfaces through embedding. The CLI
+self-check and benchmark fixtures now use the home-based opener contract.
+
+Tests cover reopen persistence, all three pragmas on both pools, database/WAL/SHM
+0600 permissions, read-only enforcement, readers seeing committed data while a
+writer transaction is open, retirement of pooled connections, two Store values
+writing concurrently without lost writes or lock errors, and symlink rejection
+without modifying the target. `make ci` passes; targeted store/CLI tests also
+pass on the Mac. No gateway has been switched to this store yet.

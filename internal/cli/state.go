@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/olegpustovit/agentpack/internal/state"
 	"github.com/spf13/cobra"
@@ -16,7 +15,7 @@ func runStateSelfcheck(command *cobra.Command, _ []string) (err error) {
 		return err
 	}
 	defer os.RemoveAll(dir)
-	store, err := state.Open(filepath.Join(dir, "state.db"))
+	store, err := state.Open(dir)
 	if err != nil {
 		return err
 	}
