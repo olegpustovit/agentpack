@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func TestGatewaySettingsSharingDoesNotStopAgents(t *testing.T) {
@@ -18,12 +20,17 @@ func TestGatewaySettingsSharingDoesNotStopAgents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = WriteSharingConfig(home, SharingConfig{Enabled: true, Allow: []string{"tag:server"}}); err != nil {
+	store, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err = WriteSharingConfig(store, SharingConfig{Enabled: true, Allow: []string{"tag:server"}}); err != nil {
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("https://agentpack.example")
 	stopped := false
-	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home}, stop: func() { stopped = true }}
+	g := &Gateway{store: store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home}, stop: func() { stopped = true }}
 	handler := g.Handler()
 	request := httptest.NewRequest("POST", origin.String()+"/api/settings/sharing", bytes.NewBufferString(`{"enabled":false}`))
 	request.Header.Set("Authorization", "Bearer "+g.local.Secret)
@@ -32,7 +39,7 @@ func TestGatewaySettingsSharingDoesNotStopAgents(t *testing.T) {
 	if response.Code != 200 || stopped {
 		t.Fatalf("sharing stop: %d stopped=%v", response.Code, stopped)
 	}
-	config, err := ReadSharingConfig(home)
+	config, err := ReadSharingConfig(store, home)
 	if err != nil || config.Enabled || len(config.Allow) != 1 {
 		t.Fatalf("config %+v %v", config, err)
 	}

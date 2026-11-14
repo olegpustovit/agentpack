@@ -185,11 +185,11 @@ func (g *Gateway) pollNodes(ctx context.Context) {
 	}()
 	list := h.nodes
 	if list == nil {
-		list = func(ctx context.Context) ([]TailnetNode, error) { return TailnetNodes(ctx, g.options.Home) }
+		list = g.tailnetNodes
 	}
 	target := h.target
 	if target == nil {
-		target = func(ctx context.Context, id string) (*url.URL, error) { return tailnetTarget(ctx, g.options.Home, id) }
+		target = g.tailnetTarget
 	}
 	client := h.client
 	if client == nil {

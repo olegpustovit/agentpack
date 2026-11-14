@@ -25,6 +25,9 @@ import (
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
+// shortcut: rekey local settings and limits to the stable tailnet node ID before P4.1 CRR conversion.
+const localStateNode = "local"
+
 type GatewayOptions struct {
 	Home, Address, PublicURL string
 	Start                    func(context.Context, SessionInfo, string) (string, error)
@@ -196,11 +199,11 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("POST /api/logout", g.auth.logout)
 	mux.HandleFunc("GET /api/events", g.serveEvents)
 	mux.HandleFunc("GET /api/nodes", func(w http.ResponseWriter, r *http.Request) {
-		value, err := TailnetNodes(r.Context(), g.options.Home)
+		value, err := g.tailnetNodes(r.Context())
 		respond(w, value, err)
 	})
 	mux.HandleFunc("GET /api/topology", func(w http.ResponseWriter, r *http.Request) {
-		value, err := tailnetTopology(r.Context(), g.options.Home)
+		value, err := g.tailnetTopology(r.Context())
 		respond(w, value, err)
 	})
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {

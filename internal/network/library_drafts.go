@@ -76,7 +76,7 @@ func (g *Gateway) currentDraftState(ctx context.Context, draft registry.Draft) (
 	if draft.Node == "local" {
 		return g.localDraftState(ctx, draft)
 	}
-	target, err := tailnetTarget(ctx, g.options.Home, draft.Node)
+	target, err := g.tailnetTarget(ctx, draft.Node)
 	if err != nil {
 		return registry.DraftState{}, nil
 	}

@@ -55,7 +55,7 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1–P1.5 are implemented; P1.6 onward and Phase 1A are not implemented.
+- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1–P1.6 are implemented; P1.6 onward and Phase 1A are not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -626,3 +626,21 @@ passes, including the race detector.
 There is one explicit transitional key: local-only limits use `local` before
 mesh enrollment. The code marks the required P4.1 rekey to the stable tailnet ID
 before CRR conversion; this is outstanding work, not the final mesh identity.
+
+## Sharing settings in SQLite — P1.6
+
+Migration 0003 adds node_settings. Sharing reads and writes use the gateway's
+existing store rather than reopening SQLite per discovery/auth request. Explicit
+CLI sharing commands own a short-lived store; launch setup remains unchanged.
+The first read imports valid legacy network/sharing.json with an atomic insert
+and removes the file only after a successful write. An existing database value
+wins against a racing import. Allow-entry validation also applies to imports;
+malformed JSON and failed writes preserve the source for recovery. The local
+node key shares the limits P4.1 rekey requirement.
+
+Tests cover defaults, enabled/disabled settings, allow validation, import,
+restart persistence, and a forced SQLite write failure retaining the original.
+`make ci` passes. Workflow 43610347558 caught a Windows-only fixture error:
+question marks are illegal in Windows directory names. The URI-escaping test now
+uses spaces, Unicode, hash and ampersand on every platform, plus question marks
+on Unix. The warm workflow budget still awaits a complete successful run.

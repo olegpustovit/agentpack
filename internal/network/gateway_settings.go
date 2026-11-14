@@ -7,7 +7,7 @@ import (
 
 func (g *Gateway) registerSettings(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
-		config, err := ReadSharingConfig(g.options.Home)
+		config, err := ReadSharingConfig(g.store, g.options.Home)
 		if err != nil {
 			respond(w, nil, err)
 			return
@@ -21,13 +21,13 @@ func (g *Gateway) registerSettings(mux *http.ServeMux) {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		config, err := ReadSharingConfig(g.options.Home)
+		config, err := ReadSharingConfig(g.store, g.options.Home)
 		if err == nil && input.Enabled {
 			err = CheckTailnet(r.Context())
 		}
 		if err == nil {
 			config.Enabled = input.Enabled
-			err = WriteSharingConfig(g.options.Home, config)
+			err = WriteSharingConfig(g.store, config)
 		}
 		respond(w, map[string]bool{"sharing_enabled": config.Enabled}, err)
 	})

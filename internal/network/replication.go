@@ -141,7 +141,7 @@ func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		config, err := ReadSharingConfig(g.options.Home)
+		config, err := ReadSharingConfig(g.store, g.options.Home)
 		if err != nil || !config.Enabled {
 			libraryResponse(w, nil, errors.New("tailnet sharing is disabled"))
 			return
@@ -381,7 +381,7 @@ func (g *Gateway) syncRegistryPeer(ctx context.Context, peer string) (err error)
 		}
 		g.replicaStatus.Store(peer, contact)
 	}()
-	target, err := tailnetTarget(ctx, g.options.Home, peer)
+	target, err := g.tailnetTarget(ctx, peer)
 	if err != nil {
 		return err
 	}
@@ -398,7 +398,7 @@ func ownMachine(self, peer *tailnetPeer) bool {
 }
 
 func (g *Gateway) enrollOwnMachines(ctx context.Context) {
-	config, err := ReadSharingConfig(g.options.Home)
+	config, err := ReadSharingConfig(g.store, g.options.Home)
 	if err != nil || !config.Enabled {
 		return
 	}

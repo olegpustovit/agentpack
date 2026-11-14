@@ -33,10 +33,10 @@ type topologyPeer struct {
 	Sessions int `json:"sessions"`
 }
 
-func tailnetTopology(ctx context.Context, home string) (topology, error) {
+func (g *Gateway) tailnetTopology(ctx context.Context) (topology, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	config, err := ReadSharingConfig(home)
+	config, err := ReadSharingConfig(g.store, g.options.Home)
 	if err != nil {
 		return topology{}, err
 	}

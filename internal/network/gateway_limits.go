@@ -159,8 +159,7 @@ func collectLimits(ctx context.Context) []harness.LimitSnapshot {
 }
 
 func (g *Gateway) registerLimits(mux *http.ServeMux) {
-	// shortcut: local key until P4.1 binds/rekeys this node to its stable tailnet ID before CRR conversion.
-	cache, cacheErr := newLimitsCache(g.store, "local", collectLimits)
+	cache, cacheErr := newLimitsCache(g.store, localStateNode, collectLimits)
 	if cacheErr != nil && g.store != nil {
 		log.Printf("limits cache cannot be loaded: %v", cacheErr)
 	}

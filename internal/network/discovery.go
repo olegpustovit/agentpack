@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/state"
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn/ipnstate"
@@ -81,45 +84,66 @@ type tailnetIdentity struct {
 
 // ReadSharingConfig defaults to sharing on, like Agentnet's tailnet discovery:
 // peers still need your own untagged identity or an explicit allow entry.
-func ReadSharingConfig(home string) (SharingConfig, error) {
+func ReadSharingConfig(store *state.Store, home string) (SharingConfig, error) {
 	config := SharingConfig{Enabled: true}
-	data, err := os.ReadFile(filepath.Join(home, "network", "sharing.json"))
+	if store == nil {
+		return config, errors.New("gateway state unavailable")
+	}
+	var data []byte
+	err := store.Reader.QueryRow("SELECT value FROM node_settings WHERE node_id = ? AND key = 'sharing'", localStateNode).Scan(&data)
+	if err == nil {
+		err = json.Unmarshal(data, &config)
+		return config, err
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return config, err
+	}
+	path := filepath.Join(home, "network", "sharing.json")
+	data, err = os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return config, nil
 	}
 	if err != nil {
 		return config, err
 	}
-	err = json.Unmarshal(data, &config)
-	return config, err
+	if err := json.Unmarshal(data, &config); err != nil {
+		return config, err
+	}
+	if err := validateSharingConfig(config); err != nil {
+		return config, err
+	}
+	// A concurrent settings write wins over a legacy import.
+	if _, err := store.DB.Exec("INSERT INTO node_settings(node_id, key, value) VALUES (?, 'sharing', ?) ON CONFLICT DO NOTHING", localStateNode, string(data)); err != nil {
+		return config, err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return config, err
+	}
+	return ReadSharingConfig(store, home)
 }
-func WriteSharingConfig(home string, config SharingConfig) error {
+
+func validateSharingConfig(config SharingConfig) error {
 	for _, value := range config.Allow {
 		if value == "" || strings.ContainsAny(value, " /\\\t\r\n") {
 			return errors.New("allow requires a stable Tailscale node ID or tag:name")
 		}
 	}
-	directory := filepath.Join(home, "network")
-	if err := EnsurePrivateDirectory(directory); err != nil {
+	return nil
+}
+
+func WriteSharingConfig(store *state.Store, config SharingConfig) error {
+	if store == nil {
+		return errors.New("gateway state unavailable")
+	}
+	if err := validateSharingConfig(config); err != nil {
 		return err
 	}
 	data, err := json.Marshal(config)
 	if err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(directory, ".sharing-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if err = file.Chmod(0600); err == nil {
-		_, err = file.Write(data)
-	}
-	err = errors.Join(err, file.Close())
-	if err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), filepath.Join(directory, "sharing.json"))
+	_, err = store.DB.Exec("INSERT INTO node_settings(node_id, key, value) VALUES (?, 'sharing', ?) ON CONFLICT(node_id, key) DO UPDATE SET value = excluded.value", localStateNode, string(data))
+	return err
 }
 
 // tailscaleLocal finds the daemon itself on every install, including the macOS app builds that
@@ -312,11 +336,11 @@ func tailnetNodesFrom(ctx context.Context, status tailnetStatus, config SharingC
 	return nodes, err
 }
 
-// TailnetNodes probes only allowed, online peers learned from the local daemon.
-func TailnetNodes(ctx context.Context, home string) ([]TailnetNode, error) {
+// tailnetNodes probes only allowed, online peers learned from the local daemon.
+func (g *Gateway) tailnetNodes(ctx context.Context) ([]TailnetNode, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	config, err := ReadSharingConfig(home)
+	config, err := ReadSharingConfig(g.store, g.options.Home)
 	if err != nil {
 		return nil, err
 	}
@@ -385,8 +409,8 @@ func peerRoute(method, path string) bool {
 func validPeerSessionID(id string) bool {
 	return id != "" && id != "." && id != ".." && !strings.ContainsAny(id, "/\\")
 }
-func tailnetTarget(ctx context.Context, home, id string) (*url.URL, error) {
-	config, err := ReadSharingConfig(home)
+func (g *Gateway) tailnetTarget(ctx context.Context, id string) (*url.URL, error) {
+	config, err := ReadSharingConfig(g.store, g.options.Home)
 	if err != nil || !config.Enabled {
 		return nil, errors.New("tailnet sharing is disabled")
 	}
@@ -409,7 +433,7 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 		http.Error(w, "route unavailable on remote nodes", 400)
 		return
 	}
-	target, err := tailnetTarget(r.Context(), g.options.Home, id)
+	target, err := g.tailnetTarget(r.Context(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -523,7 +547,7 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			http.Error(w, "peer identity required", 403)
 			return
 		}
-		config, err := ReadSharingConfig(g.options.Home)
+		config, err := ReadSharingConfig(g.store, g.options.Home)
 		if err != nil || !config.Enabled {
 			http.Error(w, "sharing disabled", 403)
 			return
@@ -629,7 +653,7 @@ func (g *Gateway) runTailnetSharing(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		config, err := ReadSharingConfig(g.options.Home)
+		config, err := ReadSharingConfig(g.store, g.options.Home)
 		if err != nil || !config.Enabled {
 			closeServer()
 			report(err)

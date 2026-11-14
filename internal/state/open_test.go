@@ -69,7 +69,11 @@ func TestLinkPathsTrackSourcePin(t *testing.T) {
 }
 
 func TestOpenReopenAndDurability(t *testing.T) {
-	home := filepath.Join(t.TempDir(), "space #?& ü")
+	name := "space #& ü"
+	if runtime.GOOS != "windows" {
+		name += "?"
+	}
+	home := filepath.Join(t.TempDir(), name)
 	store, err := Open(home)
 	if err != nil {
 		t.Fatal(err)

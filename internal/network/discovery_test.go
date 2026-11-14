@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/state"
+
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -146,32 +148,100 @@ func TestAgentSessionRouteUsesBoundedProbeTransport(t *testing.T) {
 }
 func TestSharingConfigPersistsAndValidates(t *testing.T) {
 	home := t.TempDir()
-	empty, err := ReadSharingConfig(home)
+	store, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	empty, err := ReadSharingConfig(store, home)
 	if err != nil || !empty.Enabled {
 		t.Fatalf("sharing should default on: %+v %v", empty, err)
 	}
-	if err := WriteSharingConfig(home, SharingConfig{}); err != nil {
+	if err := WriteSharingConfig(store, SharingConfig{}); err != nil {
 		t.Fatal(err)
 	}
-	if off, err := ReadSharingConfig(home); err != nil || off.Enabled {
+	if off, err := ReadSharingConfig(store, home); err != nil || off.Enabled {
 		t.Fatalf("explicit off must persist: %+v %v", off, err)
 	}
 	want := SharingConfig{Enabled: true, Allow: []string{"tag:server", "stable-node"}}
-	if err := WriteSharingConfig(home, want); err != nil {
+	if err := WriteSharingConfig(store, want); err != nil {
 		t.Fatal(err)
 	}
-	actual, err := ReadSharingConfig(home)
-	if err != nil || !actual.Enabled || len(actual.Allow) != 2 {
+	actual, err := ReadSharingConfig(store, home)
+	if err != nil || !actual.Enabled || !slices.Equal(actual.Allow, want.Allow) {
 		t.Fatalf("loaded: %+v %v", actual, err)
 	}
-	if err := WriteSharingConfig(home, SharingConfig{Allow: []string{"http://arbitrary"}}); err == nil {
+	if err := WriteSharingConfig(store, SharingConfig{Allow: []string{"http://arbitrary"}}); err == nil {
 		t.Fatal("accepted arbitrary URL")
 	}
-	if err := os.WriteFile(filepath.Join(home, "network", "sharing.json"), []byte("broken"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ReadSharingConfig(home); err == nil {
-		t.Fatal("silently ignored invalid config")
+}
+
+func TestSharingConfigImportsLegacyOnlyAfterSuccessfulWrite(t *testing.T) {
+	for _, test := range []struct {
+		name, data string
+		broken     bool
+	}{
+		{"valid", `{"enabled":false,"allow":["tag:server"]}`, false},
+		{"invalid json", "broken", true},
+		{"invalid allowance", `{"enabled":true,"allow":["http://arbitrary"]}`, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			store, err := state.Open(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(home, "network", "sharing.json")
+			if err := os.WriteFile(path, []byte(test.data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if !test.broken {
+				if _, err := store.DB.Exec("CREATE TRIGGER reject_sharing BEFORE INSERT ON node_settings BEGIN SELECT RAISE(ABORT, 'write failed'); END"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := ReadSharingConfig(store, home); err == nil {
+					t.Fatal("ignored failed import")
+				}
+				if _, err := os.Stat(path); err != nil {
+					t.Fatalf("failed import lost original: %v", err)
+				}
+				if _, err := store.DB.Exec("DROP TRIGGER reject_sharing"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := ReadSharingConfig(store, home)
+			if test.broken {
+				if err == nil {
+					t.Fatal("ignored corrupt legacy settings")
+				}
+				if _, err := os.Stat(path); err != nil {
+					t.Fatalf("failed import lost original: %v", err)
+				}
+				return
+			}
+			if err != nil || got.Enabled || !slices.Equal(got.Allow, []string{"tag:server"}) {
+				t.Fatalf("imported %+v: %v", got, err)
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("legacy file still exists: %v", err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := state.Open(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			got, err = ReadSharingConfig(reopened, home)
+			if err != nil || got.Enabled || !slices.Equal(got.Allow, []string{"tag:server"}) {
+				t.Fatalf("reopened %+v: %v", got, err)
+			}
+		})
 	}
 }
 

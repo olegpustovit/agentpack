@@ -10,6 +10,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func (runner Runner) runSharing(ctx context.Context, args []string) (int, error) {
@@ -20,7 +21,12 @@ func (runner Runner) runSharing(ctx context.Context, args []string) (int, error)
 	if err != nil {
 		return 1, err
 	}
-	config, err := network.ReadSharingConfig(home)
+	store, err := state.Open(home)
+	if err != nil {
+		return 1, err
+	}
+	defer store.Close()
+	config, err := network.ReadSharingConfig(store, home)
 	if err != nil {
 		return 1, err
 	}
@@ -53,7 +59,7 @@ func (runner Runner) runSharing(ctx context.Context, args []string) (int, error)
 	default:
 		return 2, fmt.Errorf("unknown sharing action %q", args[0])
 	}
-	if err = network.WriteSharingConfig(home, config); err != nil {
+	if err = network.WriteSharingConfig(store, config); err != nil {
 		return 1, err
 	}
 	if args[0] == "on" {
