@@ -55,7 +55,7 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: all platform/storage checks pass. Latest warm CI timing and reference Linux ARM64 launch measurements remain open. P1.1–P1.7 and P1A.1–P1A.4 are implemented; P1A.5 onward remains.
+- P0.11: all platform/storage checks pass. Latest warm CI timing and reference Linux ARM64 launch measurements remain open. P1.1–P1.7 and P1A.1–P1A.5 are implemented; P1A.6 onward remains.
 - Phase 0 gate: platform and storage checks pass; reference Linux ARM64 startup measurement is still required.
 
 ## Source pin — P0.2
@@ -861,3 +861,45 @@ with static linkage and libunwind, using a new temp global cache: 31.10 s cold,
 state materially affects cross-linking cost. The pending CI run seeds this new
 cache; a subsequent warm workflow must still prove the unchanged 697 s budget.
 Neither these timings nor a successful platform smoke is treated as that proof.
+
+## Issues, exact counts, sampling and regressions — P1A.5
+
+Migration 0005 adds the requested issues and per-node issue_counts tables plus
+small, local issue_log_cursors. Gateway-owned day stores aggregate their own
+node's errors. The first 20 per fingerprint/node/hour are retained, then one in
+50; every accepted occurrence contributes to the count. New fingerprints get a
+redacted JSON sample capped at 16 KiB. Older late-arriving events can move
+first_seen earlier without changing the original sample.
+
+Day-file meta counters and per-spool-file processed-line cursors commit in the
+same transaction as sampled events. Canonical count publication applies only the
+unpublished delta per day/version, atomically with its state cursor. This avoids
+one permanent receipt per error, prevents spool retries from inflating sampled
+counts, and recovers committed counters after interrupted publication. Raw day
+retention waits for pending counts; it never forces an early count update just
+to delete a file. Local publication cursors are pruned with the retained days.
+
+The writer accumulates in memory and publishes at most once per 30 seconds per
+fingerprint/node, with a final shutdown flush. A resolved issue reopens with
+regressed=1 only for a new occurrence from the fix version or newer; unparseable
+versions count as newer. Older builds still add to the count. Version deltas
+prevent a previously seen newer build from reopening an issue on an older
+occurrence. Ignored issues remain ignored. The existing semver package is reused.
+
+Tests prove: 1,000 identical errors yield one issue, exact count 1,000 and 39
+stored samples; hourly sampling resets; all version-regression cases; replay of
+an already committed spool; restart recovery after failed state publication;
+retention across the coalescing boundary; earlier first_seen; and a real gateway
+panic incrementing its canonical issue count. `make ci` and the Mac
+obs/state/network race suites pass.
+
+Oversized event/sample capping now preserves the mandatory build/platform/schema
+and process attributes and a short first error, with a truncation marker. A
+regression checks both size limits. Truncated strings detach their backing
+storage so a bounded queued event cannot retain a discarded huge string.
+Middleware benchmark added medians remain within 20 us: Linux 17.6976 us and
+Apple M1 19.2602 us (three one-second runs; local first run shared CPU with CI).
+
+The cache-seeding workflow 43619677112 passes every platform in 915 s. This run
+also seeded the new dependency-cache keys; it is not the required warm timing.
+The next unchanged-toolchain run must still verify the 697 s warm budget.

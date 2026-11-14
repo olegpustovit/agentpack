@@ -223,6 +223,7 @@ func (s *Store) ingestSpoolFile(ctx context.Context, path string) (SpoolStats, e
 	defer file.Close()
 	reader := bufio.NewReader(file)
 	batch := make([]Event, 0, 256)
+	var lineNumber int64
 	for {
 		line := make([]byte, 0, 1024)
 		oversized := false
@@ -246,10 +247,12 @@ func (s *Store) ingestSpoolFile(ctx context.Context, path string) (SpoolStats, e
 		if len(line) == 0 && !oversized && errors.Is(readErr, io.EOF) {
 			break
 		}
+		lineNumber++
 		var event Event
 		if oversized || errors.Is(readErr, io.EOF) || json.Unmarshal(line, &event) != nil || event.TS.IsZero() || !validTrace(Trace{event.TraceID, event.SpanID}) {
 			stats.Malformed++
 		} else {
+			event.source, event.sourceLine = filepath.Base(path), lineNumber
 			batch = append(batch, event)
 		}
 		if len(batch) == 256 {

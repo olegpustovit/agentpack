@@ -74,7 +74,7 @@ func boundedString(value string, max int) string {
 	for !utf8.ValidString(value) {
 		value = value[:len(value)-1]
 	}
-	return value
+	return strings.Clone(value)
 }
 
 func redactString(value string) string {

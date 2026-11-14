@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 const daySchema = `
@@ -38,6 +39,7 @@ CREATE INDEX IF NOT EXISTS events_session ON events(session_id) WHERE session_id
 
 type StoreOptions struct {
 	Metadata      Metadata
+	State         *state.Store
 	Now           func() time.Time
 	FlushInterval time.Duration
 	SweepInterval time.Duration
@@ -53,10 +55,12 @@ type Store struct {
 	closed     atomic.Bool
 	closeOnce  sync.Once
 	// Only the writer goroutine accesses the following fields.
-	db         *sql.DB
-	day        string
-	swept      time.Time
-	firstError error
+	db            *sql.DB
+	day           string
+	swept         time.Time
+	firstError    error
+	pendingIssues map[string]pendingIssue
+	published     map[string]time.Time
 }
 
 func Open(home string, options StoreOptions) (*Store, error) {
@@ -76,8 +80,15 @@ func Open(home string, options StoreOptions) (*Store, error) {
 	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		return nil, err
 	}
-	store := &Store{queue: NewQueue(), directory: directory, options: options, flush: make(chan chan error), stop: make(chan struct{}), done: make(chan struct{})}
-	if err := store.sweep(); err != nil {
+	store := &Store{queue: NewQueue(), directory: directory, options: options, flush: make(chan chan error), stop: make(chan struct{}), done: make(chan struct{}), pendingIssues: map[string]pendingIssue{}, published: map[string]time.Time{}}
+	err := store.recoverIssues()
+	if err == nil {
+		err = store.sweep()
+	}
+	if err != nil {
+		if store.db != nil {
+			err = errors.Join(err, store.db.Close())
+		}
 		return nil, err
 	}
 	go store.run()
@@ -158,6 +169,7 @@ func (s *Store) run() {
 			failed(s.writeBatch(batch))
 			batch = batch[:0]
 		}
+		failed(s.publishIssues(false))
 		if s.options.Now().Sub(s.swept) >= s.options.SweepInterval {
 			failed(s.sweep())
 		}
@@ -186,6 +198,7 @@ func (s *Store) run() {
 			pendingError = nil
 		case <-s.stop:
 			drain()
+			s.recordError(s.publishIssues(true))
 			if s.db != nil {
 				s.recordError(s.db.Close())
 			}
@@ -300,8 +313,16 @@ func (s *Store) insert(events []Event) error {
 		_, err := statement.Exec(event.TS.UnixMicro(), event.DurationUS, trace, span, event.NodeID, event.Proc, event.Kind, event.Name, event.Level, event.Status, session, event.User, fingerprint, stack, string(attrs))
 		return err
 	}
+	accounting := issueBatch{store: s, tx: tx, counters: map[string]*dayIssue{}, samples: map[string]string{}, sources: map[string]int64{}}
 	dropped := 0
 	for _, event := range events {
+		keep, err := accounting.accept(event)
+		if err != nil {
+			return err
+		}
+		if !keep {
+			continue
+		}
 		attrs, err := json.Marshal(event.Attrs)
 		if err != nil {
 			return err
@@ -332,9 +353,13 @@ func (s *Store) insert(events []Event) error {
 			return err
 		}
 	}
+	if err := accounting.save(); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	accounting.committed()
 	s.queue.Dropped.Add(uint64(dropped))
 	return nil
 }
@@ -360,6 +385,13 @@ func (s *Store) sweep() error {
 		return err
 	}
 	cutoff := s.options.Now().UTC().AddDate(0, 0, -5).Format(time.DateOnly)
+	held := map[string]bool{}
+	for _, pending := range s.pendingIssues {
+		if pending.Day < cutoff {
+			held[pending.Day] = true
+		}
+	}
+	deferred := false
 	for _, entry := range entries {
 		name := entry.Name()
 		if len(name) < len("2006-01-02.db") {
@@ -372,6 +404,10 @@ func (s *Store) sweep() error {
 		if _, err := time.Parse(time.DateOnly, day); err != nil || day >= cutoff {
 			continue
 		}
+		if held[day] {
+			deferred = true
+			continue
+		}
 		if s.db != nil && s.day == day {
 			if err := s.db.Close(); err != nil {
 				return err
@@ -379,10 +415,16 @@ func (s *Store) sweep() error {
 			s.db = nil
 		}
 		for _, suffix := range []string{"", "-wal", "-shm"} {
-			if err := os.Remove(filepath.Join(s.directory, name+suffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if err := os.Remove(filepath.Join(s.directory, day+".db"+suffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
 		}
+	}
+	if deferred {
+		return nil
+	}
+	if err := s.pruneIssueCursors(cutoff); err != nil {
+		return err
 	}
 	s.swept = s.options.Now()
 	return nil

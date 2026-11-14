@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -37,6 +38,8 @@ type Event struct {
 	Stack       string         `json:"stack,omitempty"`
 	Attrs       map[string]any `json:"attrs"`
 	life        *lifecycle
+	source      string
+	sourceLine  int64
 }
 
 type lifecycle struct {
@@ -195,7 +198,9 @@ func (e *Event) End() {
 }
 
 // Sanitized is also used at spool and browser ingestion boundaries.
-func (e Event) Sanitized() Event {
+func (e Event) Sanitized() Event { return e.limited(MaxEventBytes) }
+
+func (e Event) limited(maxBytes int) Event {
 	e.life = nil
 	trace := ParseTraceParent((Trace{e.TraceID, e.SpanID}).TraceParent())
 	e.TraceID, e.SpanID = trace.ID, trace.Span
@@ -209,10 +214,71 @@ func (e Event) Sanitized() Event {
 	e.Kind, e.Name, e.NodeID, e.Proc = boundedString(redactString(e.Kind), 256), boundedString(redactString(e.Name), 256), boundedString(redactString(e.NodeID), 256), boundedString(redactString(e.Proc), 256)
 	e.SessionID, e.User = boundedString(redactString(e.SessionID), 256), boundedString(redactString(e.User), 256)
 	e.Stack = boundedString(redactString(e.Stack), 8192)
-	e.Attrs, _ = Redact(e.Attrs).(map[string]any)
-	if data, err := json.Marshal(e); err != nil || len(data) > MaxEventBytes {
-		e.Attrs = map[string]any{"truncated": true}
-		e.Stack = ""
+	original := e.Attrs
+	e.Attrs, _ = Redact(original).(map[string]any)
+	if e.Attrs == nil {
+		e.Attrs = map[string]any{}
+	}
+	for _, key := range metadataKeys {
+		if _, ok := e.Attrs[key]; !ok {
+			e.Attrs[key] = metadataValue(key, original[key])
+		}
+	}
+	if !eventFits(e, maxBytes) {
+		e.Attrs = essentialAttrs(original)
+		e.Stack = boundedString(e.Stack, 2048)
+		if !eventFits(e, maxBytes) {
+			e.Stack = ""
+			e.Kind, e.Name, e.NodeID, e.Proc = boundedString(e.Kind, 128), boundedString(e.Name, 128), boundedString(e.NodeID, 128), boundedString(e.Proc, 128)
+			e.SessionID, e.User = boundedString(e.SessionID, 128), boundedString(e.User, 128)
+			for _, key := range metadataKeys {
+				if value, ok := e.Attrs[key].(string); ok {
+					e.Attrs[key] = boundedString(value, 128)
+				}
+			}
+		}
 	}
 	return e
+}
+
+var metadataKeys = []string{"version", "commit", "os", "arch", "schema_version", "pid"}
+
+func metadataValue(key string, value any) any {
+	if key != "schema_version" && key != "pid" {
+		text, _ := value.(string)
+		return boundedString(redactString(text), 256)
+	}
+	switch number := value.(type) {
+	case int:
+		return number
+	case int64:
+		return number
+	case uint64:
+		return number
+	case float64:
+		if !math.IsInf(number, 0) && !math.IsNaN(number) {
+			return number
+		}
+	}
+	return 0
+}
+
+func essentialAttrs(attrs map[string]any) map[string]any {
+	out := map[string]any{"truncated": true}
+	for _, key := range metadataKeys {
+		out[key] = metadataValue(key, attrs[key])
+	}
+	if chain, ok := attrs["errors"].([]any); ok && len(chain) > 0 {
+		if first, ok := chain[0].(map[string]any); ok {
+			message, _ := first["message"].(string)
+			kind, _ := first["type"].(string)
+			out["errors"] = []any{map[string]any{"type": boundedString(redactString(kind), 128), "message": boundedString(redactString(message), 512)}}
+		}
+	}
+	return out
+}
+
+func eventFits(event Event, maxBytes int) bool {
+	data, err := json.Marshal(event)
+	return err == nil && len(data) <= maxBytes
 }

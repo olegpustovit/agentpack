@@ -16,6 +16,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 const testTraceParent = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
@@ -269,13 +270,18 @@ func BenchmarkMiddleware(b *testing.B) {
 
 func TestGatewayPersistsPanicObservation(t *testing.T) {
 	home := t.TempDir()
-	logs, err := obs.Open(home, obs.StoreOptions{})
+	canonical, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer canonical.Close()
+	logs, err := obs.Open(home, obs.StoreOptions{State: canonical, Metadata: obs.BuildMetadata("test", localStateNode, "gateway")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer logs.Close()
 	gateway, origin := identityGateway(t, home, nil)
-	gateway.logs = logs
+	gateway.logs, gateway.store = logs, canonical
 	gateway.options.Assets = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/boom" {
 			panic("asset handler failed")
@@ -317,5 +323,8 @@ func TestGatewayPersistsPanicObservation(t *testing.T) {
 	}
 	if err := db.QueryRow("SELECT count(*) FROM events WHERE kind='panic'").Scan(&count); err != nil || count != 1 {
 		t.Fatalf("panic rows=%d err=%v", count, err)
+	}
+	if err := canonical.Reader.QueryRow("SELECT sum(count) FROM issue_counts").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("gateway issue count=%d err=%v", count, err)
 	}
 }
