@@ -1,7 +1,6 @@
 package integration_test
 
 import (
-	"context"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"os"
 	"os/exec"
@@ -17,7 +16,7 @@ func TestCompiledCLIPassesStderrDescriptorDirectlyToAgent(t *testing.T) {
 	}
 	project := t.TempDir()
 	t.Cleanup(func() {
-		_, _ = network.NodeRequest(context.Background(), filepath.Join(project, "_agentpack"), "POST", "/api/node/stop")
+		stopTestGateway(t, filepath.Join(project, "_agentpack"))
 	})
 	if result := runCLI(t, project, "init"); result.err != nil {
 		t.Fatalf("init: %s, %v", result.stderr, result.err)

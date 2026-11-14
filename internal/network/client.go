@@ -157,6 +157,8 @@ func StartWorker(ctx context.Context, home, executable string, launch WorkerLaun
 	}
 	defer log.Close()
 	command := exec.Command(executable, "session-worker")
+	trace := obs.ParseTraceParent(obs.TraceParent(ctx))
+	command.Env = append(os.Environ(), "AGENTPACK_TRACE="+trace.ID)
 	ConfigureDetached(command)
 	command.Stderr = log
 	input, err := command.StdinPipe()

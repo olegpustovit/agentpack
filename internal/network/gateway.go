@@ -120,6 +120,8 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 		return err
 	}
 	defer func() { result = errors.Join(result, logs.Close()) }()
+	restoreDiagnostics := obs.SetDefault(logs, obs.BuildMetadata(options.Version, localStateNode, "gateway"))
+	defer restoreDiagnostics()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	gateway := &Gateway{options: options, store: store, logs: logs, auth: auth, local: nodeRecord{listener.Addr().String(), randomToken()}, origin: origin, stop: cancel, done: ctx.Done()}
@@ -128,8 +130,12 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 		return err
 	}
 	var background sync.WaitGroup
-	for _, run := range []func(context.Context){gateway.runTailnetSharing, gateway.runRegistryReplication, gateway.runLogSpool} {
-		background.Go(func() { run(ctx) })
+	for _, task := range []struct {
+		name string
+		run  func(context.Context)
+	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.registry_replication", gateway.runRegistryReplication}, {"gateway.log_spool", gateway.runLogSpool}} {
+		background.Add(1)
+		obs.Go(task.name, func() { defer background.Done(); task.run(ctx) })
 	}
 	defer func() { cancel(); background.Wait() }()
 	data, _ := json.Marshal(gateway.local)

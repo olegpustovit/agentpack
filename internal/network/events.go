@@ -19,6 +19,7 @@ import (
 
 	"github.com/tmaxmax/go-sse"
 
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
@@ -115,9 +116,9 @@ func (g *Gateway) startEventLoops(ctx context.Context) {
 		topics = g.defaultEventTopics()
 	}
 	for _, topic := range topics {
-		go g.pollTopic(ctx, topic)
+		obs.Go("gateway.events."+topic.name, func() { g.pollTopic(ctx, topic) })
 	}
-	go g.pollNodes(ctx)
+	obs.Go("gateway.events.nodes", func() { g.pollNodes(ctx) })
 }
 
 func (g *Gateway) defaultEventTopics() []eventTopic {
@@ -216,7 +217,7 @@ func (g *Gateway) pollNodes(ctx context.Context) {
 				}
 				relayCtx, cancel := context.WithCancel(ctx)
 				relays[node.ID] = cancel
-				go g.relayPeer(relayCtx, client, node.ID, peer)
+				obs.Go("gateway.events.peer", func() { g.relayPeer(relayCtx, client, node.ID, peer) })
 			}
 			for id, cancel := range relays {
 				if !present[id] {

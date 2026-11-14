@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/obs"
+
 	"tailscale.com/client/local"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -446,15 +448,23 @@ func TestStartWorkerStampsStartedAtOnlyWhenZero(t *testing.T) {
 		t.Skip("shell stub worker")
 	}
 	stub := filepath.Join(t.TempDir(), "stub-agentpack")
-	if err := os.WriteFile(stub, []byte("#!/bin/sh\ncat > \"$AGENTPACK_TEST_CAPTURE\"\n"), 0700); err != nil {
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\ncat > \"$AGENTPACK_TEST_CAPTURE\"\nprintf '%s' \"$AGENTPACK_TRACE\" > \"$AGENTPACK_TEST_TRACE\"\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	capture := filepath.Join(t.TempDir(), "launch.json")
 	t.Setenv("AGENTPACK_TEST_CAPTURE", capture)
+	traceCapture := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("AGENTPACK_TEST_TRACE", traceCapture)
+	const traceID = "0123456789abcdef0123456789abcdef"
+	ctx := obs.WithTrace(context.Background(), "00-"+traceID+"-0123456789abcdef-01")
 	captured := func(t *testing.T, launch WorkerLaunch) WorkerLaunch {
 		t.Helper()
 		// The stub never registers a worker, so StartWorker returns an error after capturing stdin.
-		_, _ = StartWorker(context.Background(), t.TempDir(), stub, launch)
+		_, _ = StartWorker(ctx, t.TempDir(), stub, launch)
+		trace, err := os.ReadFile(traceCapture)
+		if err != nil || string(trace) != traceID {
+			t.Fatalf("child trace=%q err=%v", trace, err)
+		}
 		body, err := os.ReadFile(capture)
 		if err != nil {
 			t.Fatal(err)

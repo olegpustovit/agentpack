@@ -693,7 +693,8 @@ func (g *Gateway) runTailnetSharing(ctx context.Context) {
 						server = &http.Server{Handler: g.peerHandler(status.Self, address), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
 						bound = address
 						policy = signature
-						go server.Serve(peerListener{listener, tracking})
+						serving, peer := server, peerListener{listener, tracking}
+						obs.Go("gateway.peer_listener", func() { _ = serving.Serve(peer) })
 					}
 				}
 			}

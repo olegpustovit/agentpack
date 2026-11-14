@@ -561,7 +561,7 @@ type sourceLockedMCP struct {
 }
 
 func sourceMCPServerFrom(server mcp.Server) sourceMCPServer {
-	item := sourceMCPServer{Type: server.Type, Args: redactCredentialArgs(server.Args), Disabled: server.Disabled}
+	item := sourceMCPServer{Type: server.Type, Args: RedactCredentialArgs(server.Args), Disabled: server.Disabled}
 	if server.Command != nil {
 		command := portablePathValue(*server.Command)
 		item.Command = &command
@@ -587,7 +587,8 @@ func sourceMCPServerFrom(server mcp.Server) sourceMCPServer {
 	return item
 }
 
-func redactCredentialArgs(args []string) []string {
+// RedactCredentialArgs removes flag credentials and private path prefixes.
+func RedactCredentialArgs(args []string) []string {
 	result := slices.Clone(args)
 	redactNext := false
 	for i, arg := range result {

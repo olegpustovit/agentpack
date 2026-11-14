@@ -903,3 +903,51 @@ Apple M1 19.2602 us (three one-second runs; local first run shared CPU with CI).
 The cache-seeding workflow 43619677112 passes every platform in 915 s. This run
 also seeded the new dependency-cache keys; it is not the required warm timing.
 The next unchanged-toolchain run must still verify the 697 s warm budget.
+
+## Warm release timing verified
+
+Workflow 43622311770 at c1abf91 passes the Windows suite and all five runtime
+smokes in 551 s (17:39:43–17:48:54 UTC), below the unchanged 697 s budget.
+GoReleaser and Windows remain concurrent; the Zig global cache is restored.
+This closes the warm-pipeline timing check, not the separate Linux ARM64
+reference-host setup benchmark requirement.
+
+## CLI failures and background panic recording — P1A.6, partial
+
+Each CLI invocation creates or inherits a validated trace, with no filesystem
+access on that path. The existing Fang error boundary emits exactly one CLI
+failure event to a spool, including the command path, status, redacted arguments
+and error chain. Successful commands emit nothing. Harness arguments are omitted
+because they may contain prompts. Existing credential-argument redaction is
+exported and reused rather than copied. A detached worker receives its parent's
+trace ID through its own AGENTPACK_TRACE environment entry.
+
+obs.Go snapshots the process-owned sink, records a panic with its stack, attempts
+a bounded two-second flush and re-panics. The gateway's event polling, peer
+relays, sharing listener and supervised background loops now use it. Request
+contexts retain their existing sinks and trace propagation.
+
+Tests cover one failure versus no successful event, credential and harness-prompt
+exclusion, child trace inheritance, invalid trace IDs, and a subprocess proving
+that a panic both reaches disk and still terminates the process. A compiled
+foreground harness launch is exercised cold and warm with the gateway disabled;
+neither logs/ nor state.db appears. Disabling the gateway isolates the launch
+from the independent HTTP events the gateway is required to persist.
+
+The full local checks exposed the same cleanup race in other integration tests:
+the gateway-stop RPC acknowledges shutdown before the last log flush. All cleanup
+callers now reuse the existing process-lock wait, and the shared CLI test helper
+uses the actual overridden AGENTPACK_HOME. The three affected integration cases
+pass ten repeated runs, and make ci passes. The Mac obs/CLI/network/sync race
+suites pass. No production shutdown handshake or sleep was added.
+
+The final Mac CLI/integration race run also passes. Five isolated local Linux
+amd64 setup runs (one-second iterations, the existing 32 MiB history fixture)
+give medians of 0.302059 ms for MaterializationHome, 7.509646 ms cold Codex setup
+and 0.117226 ms warm. These stay within the numeric setup budgets; the earlier
+same-host medians were 0.342552/6.925838/0.134045 ms. They do not establish the
+outstanding Linux ARM64 reference-host requirement.
+
+P1A.6 remains open: worker lifecycle events, ACP turn summaries and error-state
+snapshots still need implementation. The physical Mac validation uses an
+isolated temporary checkout; no installed application data is changed.

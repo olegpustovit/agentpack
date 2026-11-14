@@ -11,6 +11,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/fang"
 	"github.com/olegpustovit/agentpack/internal/hub"
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -19,6 +20,7 @@ import (
 // presentation. Runner.Run remains the behavior boundary; the command model
 // owns discovery, contextual help, completion, version, and error rendering.
 func (runner Runner) Execute(ctx context.Context, arguments []string) (int, error) {
+	ctx = obs.ProcessTrace(ctx)
 	if len(arguments) == 1 && arguments[0] == "-V" {
 		arguments = slices.Clone(arguments)
 		arguments[0] = "--version"
@@ -32,6 +34,9 @@ func (runner Runner) Execute(ctx context.Context, arguments []string) (int, erro
 	err := fang.Execute(ctx, root, fang.WithVersion(Version), fang.WithoutManpage(), fang.WithColorSchemeFunc(monochromeColorScheme))
 	if err != nil && exitCode == 0 {
 		exitCode = 2
+	}
+	if err != nil || exitCode != 0 {
+		runner.recordFailure(ctx, root, arguments, exitCode, err)
 	}
 	return exitCode, err
 }
