@@ -1276,3 +1276,32 @@ archive and uses Zig/musl with the release's static-link/unwind settings. Fast
 command-construction and failure-propagation checks pass in 4 ms. A new cross-build
 or remote deployment was not run; prebuilt deployment still needs no local build
 toolchain, while source deployment now documents the static toolchain prerequisites.
+
+## Sessions phase: storage review and schema — P3.1
+
+The required worker, presence, client, names, recents, ownership, ACP startup and
+EventLog files were read in full before this phase. Worker endpoint addresses and
+secrets remain private process files. Session metadata, labels, recents, ownership
+and conversation entries move into state.db; the existing public SessionInfo and
+conversation response shapes remain the contracts for their callers and fixtures.
+Native-stdio presence must register through the local gateway rather than opening
+the store in foreground launch setup.
+
+EventLog increments sequence numbers for every append. It rejects single entries
+larger than the memory budget, and evicts oldest entries when the budget fills.
+Before eviction, adjacent agent-message text chunks can merge: the replacement
+keeps the first sequence number and combines both texts. Persistence must retain
+ordinary evictions, update the merged entry and remove only absorbed chunk rows;
+otherwise a later replay either loses history or duplicates text. The append
+notification still receives the original entry, not the retained merged version.
+
+Migration 0008 adds one column per SessionInfo field, local node/owner/end/hidden
+metadata, and conversation_events with a composite session/sequence key. Nested
+state, capabilities and actor values use JSON text; time values use integer
+timestamps. Indexes cover node listings, recent launches and native-session owner
+lookups. This step does not change worker behavior yet.
+
+Six focused migration regressions pass on Linux in 0.38 s and on the physical
+Apple M1 Mac mini in 0.62 s. They cover schema defaults and event identity, account
+preservation when upgrading migration 0007, repeat opens, rollback, concurrent
+opens and refusal of newer schemas. No full suite, snapshot or soak test was run.

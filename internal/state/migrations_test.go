@@ -47,6 +47,109 @@ func TestMigrationsFreshAndRepeated(t *testing.T) {
 	}
 }
 
+func TestSessionsMigrationDefaultsAndEventIdentity(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	columns := map[string]bool{
+		"id": false, "last_used": false, "folder_id": false, "name": false,
+		"directory": false, "definition_root": false, "harness": false,
+		"mode": false, "transport": false, "agent_session_id": false,
+		"agent_capabilities": false, "conversation_state": false, "state": false,
+		"started_at": false, "started_by": false, "node_id": false,
+		"owner_email": false, "ended_at": false, "hidden": false,
+	}
+	rows, err := store.Reader.Query("PRAGMA table_info(sessions)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var index, notNull, primaryKey int
+		var name, kind string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&index, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		if _, known := columns[name]; !known || notNull != 1 || (name != "id" && !defaultValue.Valid) {
+			t.Fatalf("invalid session column: name=%s not_null=%d default=%v", name, notNull, defaultValue)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for name, found := range columns {
+		if !found {
+			t.Errorf("missing session column %s", name)
+		}
+	}
+	if _, err := store.DB.Exec(`INSERT INTO sessions(id) VALUES ('one'), ('two');
+		INSERT INTO conversation_events(session_id, seq) VALUES ('one', 1), ('two', 1), ('one', 2)`); err != nil {
+		t.Fatal(err)
+	}
+	var hidden, endedAt int
+	var owner, body string
+	if err := store.Reader.QueryRow("SELECT hidden, ended_at, owner_email FROM sessions WHERE id='one'").Scan(&hidden, &endedAt, &owner); err != nil || hidden != 0 || endedAt != 0 || owner != "" {
+		t.Fatalf("session defaults: hidden=%d ended_at=%d owner=%q err=%v", hidden, endedAt, owner, err)
+	}
+	if err := store.Reader.QueryRow("SELECT body FROM conversation_events WHERE session_id='one' AND seq=1").Scan(&body); err != nil || body != "" {
+		t.Fatalf("event default: body=%q err=%v", body, err)
+	}
+	if _, err := store.DB.Exec("INSERT INTO conversation_events(session_id, seq) VALUES ('one', 1)"); err == nil {
+		t.Fatal("duplicate event identity accepted")
+	}
+	if _, err := store.DB.Exec("INSERT INTO sessions(id) VALUES (NULL)"); err == nil {
+		t.Fatal("NULL session identity accepted")
+	}
+}
+
+func TestSessionsMigrationPreservesAccounts(t *testing.T) {
+	home := t.TempDir()
+	db, err := sql.Open(driverName, "file:"+filepath.ToSlash(filepath.Join(home, "state.db")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	previous := fstest.MapFS{}
+	names, err := fs.Glob(migrationFiles, "migrations/000[1-7]_*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		body, err := migrationFiles.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous[name] = &fstest.MapFile{Data: body}
+	}
+	if err := migrate(context.Background(), db, previous); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO users(email, password_hash, role) VALUES ('owner@example.com', 'unchanged-hash', 'owner')"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var hash, role string
+	if err := store.Reader.QueryRow("SELECT password_hash, role FROM users WHERE email='owner@example.com'").Scan(&hash, &role); err != nil || hash != "unchanged-hash" || role != "owner" {
+		t.Fatalf("account changed during migration: hash=%q role=%q err=%v", hash, role, err)
+	}
+	if _, err := store.DB.Exec("INSERT INTO sessions(id) VALUES ('upgraded'); INSERT INTO conversation_events(session_id, seq) VALUES ('upgraded', 1)"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestBrokenMigrationRollsBack(t *testing.T) {
 	store, err := Open(t.TempDir())
 	if err != nil {
