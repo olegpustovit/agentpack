@@ -47,7 +47,8 @@ or user shell startup files were changed.
 - P0.2: fork and toolchains pinned; static target confirmed in upstream build files.
 - P0.3: host static library built and symbol checked; build-input tests and `make ci` passed.
 - P0.4: static registration and Go store smoke test passed; `make ci` passed.
-- P0.5–P7 and Phase 1A: not implemented.
+- P0.5: Make targets prepare the host library and enable cgo; `make ci` passed.
+- P0.6–P7 and Phase 1A: not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -127,3 +128,14 @@ The source builder now explicitly uses `-O2 -fno-sanitize=all` for C release
 objects. Rebuilding and repeating the Go link succeeded. This removes the
 unintended sanitizer runtime dependency rather than adding one to the product.
 The old driver's C compiler emits a discarded-const warning; it is not hidden.
+
+## Build prerequisites — P0.5
+
+`make build`, `release`, `lint`, `test`, and `race` now prepare the pinned host
+archive through `make crsqlite`. Existing archives are reused while source and
+lock inputs are unchanged. `make crsqlite-build` explicitly rebuilds from source.
+`CGO_ENABLED=1` is exported by Make. The download replacement remains P0.9.
+
+`make ci` passed with the pinned host library. A C preprocessor check with the
+archive temporarily removed confirmed the diagnostic names `make crsqlite`;
+the archive was restored. The `internal/state` smoke test passes with the guard.

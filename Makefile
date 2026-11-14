@@ -6,9 +6,16 @@ BINARY := ap
 BUILD_DIR := bin
 RELEASE_BIN := $(BUILD_DIR)/$(BINARY)
 RELEASE_BRANCH ?= dev
+export CGO_ENABLED := 1
+CRSQLITE_COMMIT := $(shell sed -n 's/^commit = "\([^"]*\)"/\1/p' third_party/crsqlite.lock)
+CRSQLITE_GOOS := $(shell $(GO) env GOOS)
+CRSQLITE_GOARCH := $(shell $(GO) env GOARCH)
+CRSQLITE_LIBRARY := .build/crsqlite/$(CRSQLITE_COMMIT)/$(CRSQLITE_GOOS)_$(CRSQLITE_GOARCH)/libcrsqlite.a
 VERSION := $(shell sed -n 's/^var Version = "\([^"]*\)"/\1/p' internal/cli/run.go)
 
 .PHONY: help all build release install uninstall minor patch ship-minor ship-patch _ship check-clean fmt fmt-check lint test race ci hooks release-check ui-install ui-lint ui-typecheck ui-test ui-build ui-stage ui-e2e artifact
+
+.PHONY: crsqlite crsqlite-build
 
 .DEFAULT_GOAL := help
 
@@ -16,6 +23,8 @@ help:
 	@echo "Local build / install:"
 	@echo "  all, release    build an optimized agentpack binary"
 	@echo "  build           build agentpack"
+	@echo "  crsqlite        prepare the pinned host static library"
+	@echo "  crsqlite-build  rebuild it (pinned Rust/Zig and libclang required)"
 	@echo "  install         release, then copy binary to INSTALL_DIR ($(INSTALL_DIR))"
 	@echo "  uninstall       remove binary from INSTALL_DIR"
 	@echo ""
@@ -40,12 +49,22 @@ help:
 
 all: release
 
-build:
+build: crsqlite
 	@if [ ! -f internal/network/webdist/index.html ]; then echo "warning: gateway UI is the placeholder; run make ui-stage first" >&2; fi
 	$(GO) build -o "$(RELEASE_BIN)" ./cmd/agentpack
 
-release:
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w -X github.com/olegpustovit/agentpack/internal/cli.Version=$(VERSION)" -o "$(RELEASE_BIN)" ./cmd/agentpack
+release: crsqlite
+	CGO_ENABLED=1 $(GO) build -trimpath -ldflags "-s -w -X github.com/olegpustovit/agentpack/internal/cli.Version=$(VERSION)" -o "$(RELEASE_BIN)" ./cmd/agentpack
+
+# P0.9 switches this prerequisite to verified release assets.
+crsqlite: $(CRSQLITE_LIBRARY)
+	ln -sfn "$(CRSQLITE_COMMIT)" .build/crsqlite/lib
+
+$(CRSQLITE_LIBRARY): third_party/crsqlite.lock scripts/build-crsqlite.sh
+	./scripts/build-crsqlite.sh "$(CRSQLITE_GOOS)" "$(CRSQLITE_GOARCH)"
+
+crsqlite-build:
+	./scripts/build-crsqlite.sh "$(CRSQLITE_GOOS)" "$(CRSQLITE_GOARCH)"
 
 fmt:
 	$(GOFMT) -w $$(find . -name '*.go' -not -path './vendor/*')
@@ -53,13 +72,13 @@ fmt:
 fmt-check:
 	@test -z "$$($(GOFMT) -l $$(find . -name '*.go' -not -path './vendor/*'))" || { $(GOFMT) -l $$(find . -name '*.go' -not -path './vendor/*'); exit 1; }
 
-lint:
+lint: crsqlite
 	$(GO) vet ./...
 
-test:
+test: crsqlite
 	$(GO) test ./...
 
-race:
+race: crsqlite
 	$(GO) test -race ./...
 
 ci: fmt-check lint test race build
