@@ -51,7 +51,8 @@ or user shell startup files were changed.
 - P0.6: resumed with user authorization; all five target builds/link checks pass.
   Linux amd64, emulated Linux arm64, and native Apple Silicon smoke queries pass.
   Intel macOS and Windows runtime execution remain for the release smoke jobs.
-- P0.7–P7 and Phase 1A: not implemented.
+- P0.7: replication, delete propagation, size and allocator measurements pass.
+- P0.8–P7 and Phase 1A: not implemented.
 - Phase 0 gate: not reached; no performance or cross-platform claims yet.
 
 ## Source pin — P0.2
@@ -304,3 +305,50 @@ Only isolated files under `/private/tmp/agentpack-state-spike` were built on the
 Mac; its project checkouts and installed agentpack state were not modified.
 The pinned Rust toolchain was added to rustup. An unnecessary LLVM download
 was cancelled once Xcode's libclang passed.
+
+## Replication and storage measurements — P0.7
+
+`internal/state/spike_test.go` contains `BenchmarkOpen`, `BenchmarkInsertEvents`
+and `TestSyncTenThousand`. The fixture inserts 10,000 events with a 500-byte JSON
+body in one transaction, applies all ten `crsql_changes` columns (including the
+fork's `ts`) to an empty peer in one transaction, checks count and payload, then
+deletes the source rows and checks that the replica is empty. Insert and delete
+checks are separate subtests; each takes under 2 seconds even with musl (the
+parent's aggregate is about 2.5 seconds). No network, sleeps or external data.
+
+| Host / allocator | Open median | Insert 10,000 median | Sync 10,000 |
+| --- | ---: | ---: | ---: |
+| Linux amd64 GCC | 28.200 ms | 46.399 ms | 191.289 ms |
+| Linux amd64 musl | 35.517 ms | 393.454 ms | 791.206 ms |
+| Apple M1 macOS | 7.344 ms | 99.228 ms | 203.277 ms |
+
+Benchmarks: five runs at `-benchtime=1x`; sync is the median of five except GCC,
+which is a single fixture run. The Linux reference here is the same amd64 host
+as P0.1, not the ARM64 release-budget reference machine. Mac tests ran on the
+user's physical Mac. Musl is measurably slower for these allocation-heavy
+operations but still passes the stated gate.
+
+| Size | Source | Replica |
+| --- | ---: | ---: |
+| Raw JSON | 5,000,000 bytes | 5,000,000 bytes |
+| Database after insertion | 5,795,840 bytes | 5,795,840 bytes |
+| Database after deletion | 5,795,840 bytes | 5,795,840 bytes |
+
+The ratio is **1.1592×**, below the 3× gate. Deletion leaves reusable SQLite
+pages rather than shrinking the file; deleted replicated events are gone on
+both nodes. This experiment uses the minimal P0.4 opener's default journal
+settings; Phase 1 must remeasure WAL / FULL with its actual connection model.
+
+Reproduce:
+
+```sh
+go test ./internal/state -run TestSyncTenThousand -v
+go test ./internal/state -run '^$' -bench 'Benchmark(Open|InsertEvents)$' -benchtime=1x -count=5
+CGO_ENABLED=1 CC='zig cc -target x86_64-linux-musl' CGO_LDFLAGS=-lunwind \
+  go test ./internal/state -run TestSyncTenThousand -v \
+  -bench 'Benchmark(Open|InsertEvents)$' -benchtime=1x -count=5
+```
+
+`make ci` passes, including the new tests with the race detector. Final Mac
+smoke executable dependency inspection (`otool -L`) shows only system libraries
+and no SQLite/crsqlite dylib; its Intel smoke executable also links successfully.
