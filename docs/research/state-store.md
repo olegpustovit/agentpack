@@ -714,3 +714,10 @@ all five runtime smoke checks. Total duration is 937 s, still above 697 s.
 Windows took 396 s and then the Mac build took 456 s: these independent checks
 are currently serialized. The next pipeline adjustment moves the Windows gate
 to publication so both checks can run concurrently, retaining all coverage.
+
+The release DAG now runs Windows and GoReleaser concurrently after the verified
+library gate. Publication explicitly requires both Windows success and all
+five smoke successes. Regression checks validate those dependencies/conditions
+and prevent reintroducing the serial build dependency. `make ci` passes.
+The unchanged 697 s budget awaits a measured run of this DAG; no timing pass is
+claimed from estimated savings.

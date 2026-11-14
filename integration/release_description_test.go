@@ -2,6 +2,7 @@ package integration
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -54,18 +55,25 @@ func TestReleaseCachedLibrariesStillRunPlatformGates(t *testing.T) {
 	}
 	var workflow struct {
 		Jobs map[string]struct {
-			If string `yaml:"if"`
+			If    string   `yaml:"if"`
+			Needs []string `yaml:"needs"`
 		} `yaml:"jobs"`
 	}
 	if err := yaml.Unmarshal(contents, &workflow); err != nil {
 		t.Fatal(err)
 	}
-	for job, dependency := range map[string]string{"codex-windows": "crsqlite", "goreleaser": "codex-windows", "smoke": "goreleaser", "publish": "smoke"} {
+	for job, dependencies := range map[string][]string{"codex-windows": {"crsqlite"}, "goreleaser": {"crsqlite"}, "smoke": {"goreleaser"}, "publish": {"smoke", "codex-windows"}} {
 		condition := workflow.Jobs[job].If
-		if !strings.Contains(condition, "always()") || !strings.Contains(condition, "needs."+dependency+".result == 'success'") {
-			t.Errorf("%s must run after a successful %s even when the source-build ancestor was skipped: %s", job, dependency, condition)
+		for _, dependency := range dependencies {
+			if !slices.Contains(workflow.Jobs[job].Needs, dependency) || !strings.Contains(condition, "always()") || !strings.Contains(condition, "needs."+dependency+".result == 'success'") {
+				t.Errorf("%s must require a successful %s even when the source-build ancestor was skipped: %s", job, dependency, condition)
+			}
 		}
 	}
+	if slices.Contains(workflow.Jobs["goreleaser"].Needs, "codex-windows") {
+		t.Fatal("independent platform checks must run concurrently")
+	}
+
 }
 
 func TestReleaseRunsFullSuiteOnceAfterUIStaging(t *testing.T) {

@@ -47,7 +47,7 @@ jobs:
             echo exists=false >> "$GITHUB_OUTPUT"
           fi
   crsqlite-build:
-    needs: crsqlite-check
+    needs: [crsqlite-check]
     if: needs.crsqlite-check.outputs.exists != 'true'
     strategy:
       fail-fast: false
@@ -150,8 +150,8 @@ jobs:
           go test ./... -count=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   goreleaser:
-    needs: [crsqlite-check, crsqlite, codex-windows]
-    if: always() && needs.crsqlite.result == 'success' && needs.codex-windows.result == 'success'
+    needs: [crsqlite-check, crsqlite]
+    if: always() && needs.crsqlite.result == 'success'
     # Native Apple SDK; Zig still cross-compiles the static Linux and Windows builds.
     runs-on: macos-26
     env:
@@ -219,7 +219,7 @@ jobs:
           name: release-snapshot
           path: dist/
   smoke:
-    needs: goreleaser
+    needs: [goreleaser]
     if: always() && needs.goreleaser.result == 'success'
     strategy:
       fail-fast: false
@@ -278,8 +278,8 @@ jobs:
           esac
           test "$result" = ok
   publish:
-    needs: [crsqlite-check, smoke]
-    if: always() && github.event_name == 'push' && needs.smoke.result == 'success'
+    needs: [crsqlite-check, smoke, codex-windows]
+    if: always() && github.event_name == 'push' && needs.smoke.result == 'success' && needs.codex-windows.result == 'success'
     runs-on: macos-26
     env:
       PWD: ${{ github.workspace }}
