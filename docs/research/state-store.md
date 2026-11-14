@@ -1124,3 +1124,19 @@ and JSON 0.26 s; the affected spool/regression/capsule checks also pass. The sam
 focused checks pass on the physical Apple M1: obs 1.04 s, CLI 0.63 s, capsule 0.30 s.
 No broad suites, snapshots or slow tests were run for this step. The Linux ARM64
 reference startup measurements are still outstanding.
+
+## Diagnostics tools and authenticated routes — P1A.10 / P1A.11 backend
+
+The gateway MCP server exposes list_issues, get_issue, get_trace and resolve_issue.
+All four call the same authenticated REST routes as the browser; the first three
+are marked read-only. Inputs use the SDK's typed schemas, errors use its tool-error
+response, and text is explicitly described as untrusted diagnostic content. MCP
+loopback calls now propagate their parent trace through the shared API caller.
+
+The REST routes provide issue listing/detail, complete retained traces, and
+resolve/reopen/ignore actions. They retain the gateway's login, origin and local
+bearer checks. Resolution identity comes from the authenticated actor, never the
+body. Errors are recorded through the request event. Focused tests cover all four
+tools, their annotations, persisted resolution, invalid arguments, unknown issues,
+login and origin rejection; the existing MCP inventory/policy regression also
+passes. The Linux run takes 0.21 s. No broad or slow suites were run.
