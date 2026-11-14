@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -245,5 +246,32 @@ func TestTransactionCommitsAndRollsBack(t *testing.T) {
 	var count int
 	if err := store.Reader.QueryRow("SELECT count(*) FROM tx_test").Scan(&count); err != nil || count != 1 {
 		t.Fatalf("transaction count=%d err=%v", count, err)
+	}
+}
+
+func TestPlainSQLiteSkipsExtensionPerConnection(t *testing.T) {
+	home := t.TempDir()
+	plain, err := sql.Open("sqlite3", "file:"+url.PathEscape(filepath.ToSlash(filepath.Join(home, "plain.db")))+"?agentpack_plain=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plain.Close()
+	if _, err := plain.Exec("CREATE TABLE local_only (value TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := plain.QueryRow("SELECT count(*) FROM sqlite_schema WHERE name LIKE 'crsql_%'").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("plain database extension tables=%d err=%v", count, err)
+	}
+	if err := plain.QueryRow("SELECT length(crsql_site_id())").Scan(&count); err == nil {
+		t.Fatal("plain database loaded extension")
+	}
+	store, err := Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Reader.QueryRow("SELECT length(crsql_site_id())").Scan(&count); err != nil || count != 16 {
+		t.Fatalf("plain connection disabled state extension: %d %v", count, err)
 	}
 }

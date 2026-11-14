@@ -23,6 +23,8 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/gorilla/websocket"
 	"github.com/olegpustovit/agentpack/internal/state"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 // shortcut: rekey local settings and limits to the stable tailnet node ID before P4.1 CRR conversion.
@@ -72,7 +74,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if options.Address == "" {
 		options.Address = "127.0.0.1:7420"
 	}
-	if err := EnsurePrivateDirectory(filepath.Join(options.Home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(options.Home, "network")); err != nil {
 		return err
 	}
 	lock := flock.New(filepath.Join(options.Home, "network", "gateway.lock"))
@@ -843,7 +845,7 @@ func EnsureNode(ctx context.Context, home, executable string) error {
 	if _, err := NodeRequest(ctx, home, "GET", "/healthz"); err == nil {
 		return nil
 	}
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		return err
 	}
 	log, err := os.OpenFile(filepath.Join(home, "network", "gateway.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)

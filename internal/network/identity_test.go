@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"tailscale.com/client/local"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func identityGateway(t *testing.T, home string, start func(context.Context, SessionInfo, string) (string, error)) (*Gateway, *url.URL) {
@@ -32,7 +34,7 @@ func identityGateway(t *testing.T, home string, start func(context.Context, Sess
 // seedFolder registers a fresh directory as a recent folder for the gateway's folder check.
 func seedFolder(t *testing.T, home string) string {
 	t.Helper()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
@@ -193,7 +195,7 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 		Session: SessionInfo{ID: sessionID, Transport: "acp", StartedBy: &owner},
 	}
 	directory := filepath.Join(home, "network", "sessions", sessionID)
-	if err := EnsurePrivateDirectory(directory); err != nil {
+	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		t.Fatal(err)
 	}
 	data, err := json.Marshal(record)
@@ -360,7 +362,7 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	sourceRecordDir := filepath.Join(home, "network", "sessions", sourceSession.ID)
-	if err := EnsurePrivateDirectory(sourceRecordDir); err != nil {
+	if err := paths.EnsurePrivateDirectory(sourceRecordDir); err != nil {
 		t.Fatal(err)
 	}
 	saveSourceRecord := func(session SessionInfo) {

@@ -10,12 +10,14 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func projectsHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	return home

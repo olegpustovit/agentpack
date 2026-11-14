@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestListAgentSessionsFixture(t *testing.T) {
@@ -25,7 +27,7 @@ func TestListAgentSessionsFixture(t *testing.T) {
 
 func TestAgentSessionsGateway(t *testing.T) {
 	home := t.TempDir()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()

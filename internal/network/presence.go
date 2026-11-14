@@ -8,13 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 // RegisterPresence advertises a native-stdio launch without changing its pipes.
 // Its process is owned by the caller; the node only receives public metadata.
 func RegisterPresence(home string, info SessionInfo, process *os.Process) (func(), error) {
 	root := filepath.Join(home, "network", "sessions")
-	if err := EnsurePrivateDirectory(root); err != nil {
+	if err := paths.EnsurePrivateDirectory(root); err != nil {
 		return nil, err
 	}
 	directory, err := os.MkdirTemp(root, "session-")

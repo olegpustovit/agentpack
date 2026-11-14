@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 type Store struct {
@@ -17,7 +19,7 @@ type Store struct {
 }
 
 func Open(home string) (*Store, error) {
-	if err := os.MkdirAll(home, 0700); err != nil {
+	if err := paths.EnsurePrivateDirectory(home); err != nil {
 		return nil, fmt.Errorf("create state directory: %w", err)
 	}
 	path, err := filepath.Abs(filepath.Join(home, "state.db"))

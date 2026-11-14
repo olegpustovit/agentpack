@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 var ErrGatewayDisabled = errors.New("gateway is stopped; run agentpack gateway start to enable sharing")
@@ -17,7 +19,7 @@ func GatewayEnabled(home string) (bool, error) {
 }
 func SetGatewayEnabled(home string, enabled bool) error {
 	directory := filepath.Join(home, "network")
-	if err := EnsurePrivateDirectory(directory); err != nil {
+	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		return err
 	}
 	path := filepath.Join(directory, "disabled")

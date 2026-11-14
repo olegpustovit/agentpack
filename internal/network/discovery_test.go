@@ -16,6 +16,8 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/views"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestPersonalTailnetPolicy(t *testing.T) {
@@ -192,7 +194,7 @@ func TestSharingConfigImportsLegacyOnlyAfterSuccessfulWrite(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer store.Close()
-			if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+			if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 				t.Fatal(err)
 			}
 			path := filepath.Join(home, "network", "sharing.json")

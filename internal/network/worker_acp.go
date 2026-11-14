@@ -22,10 +22,12 @@ import (
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func startACPConversation(launch WorkerLaunch, sessionDir string) (*ConversationSession, func(), error) {
-	if err := EnsurePrivateDirectory(sessionDir); err != nil {
+	if err := paths.EnsurePrivateDirectory(sessionDir); err != nil {
 		return nil, nil, fmt.Errorf("protect ACP session directory: %w", err)
 	}
 	switch os.Getenv("AGENTPACK_TEST_ACP") {

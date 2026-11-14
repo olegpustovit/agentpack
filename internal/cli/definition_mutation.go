@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
-	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/registry"
 )
@@ -19,7 +18,7 @@ func acquireDefinitionMutation(ctx context.Context, root string) (*flock.Flock, 
 	if err != nil {
 		return nil, err
 	}
-	if err := network.EnsurePrivateDirectory(filepath.Dir(path)); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	lock := flock.New(path)

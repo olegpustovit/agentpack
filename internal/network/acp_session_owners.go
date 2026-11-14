@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 
 	"github.com/gofrs/flock"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 var (
@@ -104,7 +106,7 @@ func rememberACPConversationOwner(home string, session SessionInfo, fallbackDire
 	if err != nil {
 		return err
 	}
-	if err := EnsurePrivateDirectory(ownerDir); err != nil {
+	if err := paths.EnsurePrivateDirectory(ownerDir); err != nil {
 		return err
 	}
 	lock := flock.New(filepath.Join(filepath.Dir(ownerDir), "acp-session-owners.lock"))

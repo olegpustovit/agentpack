@@ -34,7 +34,11 @@ package state
 extern int sqlite3_auto_extension(void (*entry)(void));
 extern int sqlite3_crsqlite_init(void *, char **, const void *);
 extern int sqlite3_busy_timeout(void *, int);
+extern const char *sqlite3_db_filename(void *, const char *);
+extern int sqlite3_uri_boolean(const char *, const char *, int);
 static int initialize_crsqlite(void *db, char **error, const void *api) {
+ // Day logs, archives and the cache index are deliberately plain SQLite.
+ if (sqlite3_uri_boolean(sqlite3_db_filename(db, "main"), "agentpack_plain", 0)) return 0;
  // Auto-extension setup runs before the Go driver's DSN pragmas.
  int rc = sqlite3_busy_timeout(db, 5000);
  if (rc != 0) return rc;

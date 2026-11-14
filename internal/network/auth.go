@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 type gatewayAuth struct {
@@ -37,7 +39,7 @@ func randomToken() string {
 
 func newGatewayAuth(home string) (*gatewayAuth, error) {
 	directory := filepath.Join(home, "network")
-	if err := EnsurePrivateDirectory(directory); err != nil {
+	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		return nil, err
 	}
 	a := &gatewayAuth{home: directory, sessions: make(map[[32]byte]time.Time)}

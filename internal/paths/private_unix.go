@@ -1,6 +1,6 @@
 //go:build !windows
 
-package network
+package paths
 
 import "os"
 

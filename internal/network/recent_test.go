@@ -9,11 +9,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestRecentForgetsOnlyMatchingLaunchWithoutDeletingFolder(t *testing.T) {
 	home := t.TempDir()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
@@ -62,7 +64,7 @@ func TestGatewayDisabledPersistsUntilExplicitStart(t *testing.T) {
 
 func TestKnownDirectoryRejectsReplacementUntilLocalLaunch(t *testing.T) {
 	home := t.TempDir()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	directory := filepath.Join(t.TempDir(), "project")

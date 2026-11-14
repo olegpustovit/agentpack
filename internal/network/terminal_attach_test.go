@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestAttachTerminalUsesLocalViewerAndResumeOffset(t *testing.T) {
@@ -45,7 +47,7 @@ func TestAttachTerminalUsesLocalViewerAndResumeOffset(t *testing.T) {
 
 	home := t.TempDir()
 	directory := filepath.Join(home, "network", "sessions", id)
-	if err := EnsurePrivateDirectory(directory); err != nil {
+	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		t.Fatal(err)
 	}
 	record := WorkerRecord{

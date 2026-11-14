@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 // WorkerLaunch is delivered through a private startup pipe, never HTTP or disk.
@@ -47,10 +49,10 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 		return 1, errors.New("worker program and directory must be absolute")
 	}
 	root := filepath.Join(home, "network", "sessions")
-	if err := EnsurePrivateDirectory(filepath.Dir(root)); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Dir(root)); err != nil {
 		return 1, fmt.Errorf("protect worker network directory: %w", err)
 	}
-	if err := EnsurePrivateDirectory(root); err != nil {
+	if err := paths.EnsurePrivateDirectory(root); err != nil {
 		return 1, fmt.Errorf("create worker root: %w", err)
 	}
 	directory, err := os.MkdirTemp(root, "session-")
@@ -58,7 +60,7 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 		return 1, fmt.Errorf("create worker directory: %w", err)
 	}
 	defer os.RemoveAll(directory)
-	if err := EnsurePrivateDirectory(directory); err != nil {
+	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		return 1, fmt.Errorf("protect worker directory: %w", err)
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

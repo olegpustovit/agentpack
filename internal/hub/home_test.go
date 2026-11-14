@@ -18,6 +18,8 @@ import (
 	"github.com/charmbracelet/x/exp/golden"
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/network"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func fixtureSessions() []network.SessionInfo {
@@ -586,7 +588,7 @@ func TestNewSessionPostsSelectedWorkspaceAndTransport(t *testing.T) {
 	defer server.Close()
 	home := t.TempDir()
 	networkDir := filepath.Join(home, "network")
-	if err := network.EnsurePrivateDirectory(networkDir); err != nil {
+	if err := paths.EnsurePrivateDirectory(networkDir); err != nil {
 		t.Fatal(err)
 	}
 	node, err := json.Marshal(map[string]string{

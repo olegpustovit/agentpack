@@ -1,6 +1,6 @@
 //go:build windows
 
-package network
+package paths
 
 import (
 	"fmt"
@@ -28,7 +28,7 @@ func EnsurePrivateDirectory(path string) error {
 		return err
 	}
 	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
-		return fmt.Errorf("protect private network directory: %w", err)
+		return fmt.Errorf("protect private directory: %w", err)
 	}
 	return nil
 }

@@ -55,8 +55,8 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: build/storage gate audited below; warm CI timing and reference ARM64 measurements remain open. P1.1–P1.7 and P1A.1 are implemented. P1A.2 onward remains.
-- Phase 0 gate: not reached; no performance or cross-platform claims yet.
+- P0.11: all target/storage/release-time gates pass. Reference Linux ARM64 launch measurements remain open. P1.1–P1.7 and P1A.1–P1A.2 are implemented; P1A.3 onward remains.
+- Phase 0 gate: platform and storage checks pass; reference Linux ARM64 startup measurement is still required.
 
 ## Source pin — P0.2
 
@@ -514,7 +514,7 @@ evidence, unlike the earlier false-green cached-library run.
 | 10,000-event sync | <2 s | Musl median 0.791 s | Pass |
 | Open | <50 ms | Musl median 35.517 ms | Pass |
 | Storage | <3× raw JSON | 1.1592× | Pass |
-| Warm release duration | Baseline 577 s + at most 120 s | First complete CI run took 1,317 s with cold caches; warm rerun 43605315971 is active. Same-Mac warm snapshot is 46–53 s | **Pending comparable warm CI measurement** |
+| Warm release duration | Baseline 577 s + at most 120 s | Run 43613015251: 660 s (83 s above baseline), Windows and all five runtime smoke checks pass | Pass |
 | Reference Linux ARM64 launch budgets | Fingerprint <1 ms, cold <20 ms, warm <1 ms | amd64 after-change values 0.334/6.871/0.145 ms; QEMU is not reference-host performance evidence | **Reference host measurement still required** |
 
 Current source (6eca5aa) additionally enables deterministic Windows timestamps
@@ -721,3 +721,44 @@ five smoke successes. Regression checks validate those dependencies/conditions
 and prevent reintroducing the serial build dependency. `make ci` passes.
 The unchanged 697 s budget awaits a measured run of this DAG; no timing pass is
 claimed from estimated savings.
+
+## Plain SQLite day store — P1A.2
+
+internal/obs/store.go owns one bounded queue and one writer. It writes UTC day
+files with WAL/NORMAL, JSONB attributes, typed filter columns and partial
+fingerprint/session indexes; batches commit after 250 ms or 256 events. Identical
+stacks use one hash row. A trace/span/node uniqueness key makes replay idempotent
+for the upcoming spool importer. Flush and Close drain the queue and surface
+persistence failures; a redacted stderr fallback reports the first failure.
+
+Startup/hourly sweeps delete expired day files and orphaned sidecars. The 256 MiB
+budget counts the database and WAL and conservatively reserves index/WAL pages;
+ordinary events are dropped at the limit. Errors and aggregate drop reports are
+retained as required. Clock, intervals and the test size limit are injectable.
+Writer metadata is used for drop reports, rather than attributing an aggregate
+to whichever source event happened to come first.
+
+The process-wide static extension initializer now recognizes the per-database
+agentpack_plain URI flag. Log connections therefore load neither CRR tables nor
+extension state, while concurrent state connections retain cr-sqlite. A test
+proves this separation. Future archive/cache connections must use the same flag.
+
+The existing private-directory helper moved, with its Windows inheritable-DACL
+test, from network to its shared owner paths. Every caller now imports paths;
+there is no forwarding alias. State and log directories reuse it. Log database
+files are 0600 and nonregular/symlink database paths are refused.
+
+Tests cover UTC rollover with a non-UTC clock, start/hourly retention and orphan
+sidecars, 10,000 durable tiny events, repeated stacks, replay deduplication,
+JSONB/plain-file storage, file permissions, cap/drop/error behavior and failed
+writes preserving a symlink target. `make ci` passes; the Mac passes the
+state/obs/network/CLI/paths/hub race suites. The replay-tail test was also made
+fully in-memory: its former live child could append READY after the test
+installed its fixture. The new test passes 20 race-enabled repeats and now also
+runs on Windows.
+
+Warm workflow 43613015251 (8588afa), from 15:58:19 to 16:09:19 UTC, passes in
+660 s against the unchanged 697 s budget. It includes the full Windows suite,
+GoReleaser and every platform smoke. The remaining performance evidence gap is
+the original Linux ARM64 reference-host launch benchmark, not cross-platform
+runtime compatibility.

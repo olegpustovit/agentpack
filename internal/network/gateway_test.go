@@ -16,6 +16,8 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/state"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestNodeRequestForwardsBodyAndAuthorization(t *testing.T) {
@@ -43,7 +45,7 @@ func TestNodeRequestForwardsBodyAndAuthorization(t *testing.T) {
 	defer server.Close()
 
 	home := t.TempDir()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	record, err := json.Marshal(nodeRecord{Address: strings.TrimPrefix(server.URL, "http://"), Secret: secret})
@@ -232,7 +234,7 @@ func TestNodeRequestStreamStopsAtLimit(t *testing.T) {
 	}))
 	defer server.Close()
 	home := t.TempDir()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	record, err := json.Marshal(nodeRecord{Address: strings.TrimPrefix(server.URL, "http://"), Secret: secret})
@@ -255,7 +257,7 @@ func TestNodeRequestStreamStopsAtLimit(t *testing.T) {
 
 func TestGatewayOwnsAndClosesStateStore(t *testing.T) {
 	home := t.TempDir()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"limits.json", "oauth.db"} {
@@ -297,7 +299,7 @@ func TestGatewayOwnsAndClosesStateStore(t *testing.T) {
 
 func TestGatewayLockPrecedesStateOpen(t *testing.T) {
 	home := t.TempDir()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	lock := flock.New(filepath.Join(home, "network", "gateway.lock"))

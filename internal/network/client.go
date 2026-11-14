@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 type AgentCapabilities struct {
@@ -142,7 +144,7 @@ func StartWorker(ctx context.Context, home, executable string, launch WorkerLaun
 		launch.Session.StartedAt = time.Now()
 	}
 	directory := filepath.Join(home, "network")
-	if err := EnsurePrivateDirectory(directory); err != nil {
+	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		return "", err
 	}
 	log, err := os.OpenFile(filepath.Join(directory, "workers.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
