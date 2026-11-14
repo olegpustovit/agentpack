@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,6 +24,25 @@ type User struct {
 }
 
 var errInvalidLogin = errors.New("invalid email or password")
+
+func ResetOwner(ctx context.Context, store *state.Store, home string) error {
+	if err := state.Transaction(ctx, store.DB, func(tx *sql.Tx) error {
+		for _, table := range []string{"auth_sessions", "oauth_tokens", "users"} {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("reset gateway owner: %w", err)
+	}
+	for _, name := range []string{"root-password", "setup-token"} {
+		if err := os.Remove(filepath.Join(home, "network", name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove legacy account file: %w", err)
+		}
+	}
+	return nil
+}
 
 // A missing account still pays for one default-cost comparison.
 const dummyPasswordHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"

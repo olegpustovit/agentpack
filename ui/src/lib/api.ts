@@ -63,7 +63,7 @@ export async function api<T>(
   } catch {
     data = undefined
   }
-  if (res.status === 401 && path !== "/api/login" && path !== "/api/setup") onUnauthorized()
+  if (res.status === 401 && path !== "/api/login" && path !== "/api/claim") onUnauthorized()
   if (!res.ok) {
     const error =
       data && typeof data === "object" && "error" in data && typeof data.error === "string"

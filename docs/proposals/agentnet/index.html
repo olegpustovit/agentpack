@@ -120,7 +120,7 @@ agentpack codex
 # Local gateway and one-time root setup
 agentpack gateway start
 agentpack gateway status
-agentpack gateway setup
+agentpack gateway user list
 agentpack gateway serve --listen 127.0.0.1:7420
 
 # Stop browser/discovery access; agents stay alive
@@ -139,7 +139,7 @@ agentpack gateway sharing status
 agentpack gateway sharing allow nStableNodeID
 agentpack gateway sharing allow tag:my-server
 agentpack gateway sharing revoke tag:my-server
-agentpack gateway sharing off</pre><p class="note">Private configuration and state live under <code>$AGENTPACK_HOME/network/</code>. The peer listener binds only a Tailscale IP on port 7421. A fixed public HTTPS origin is configured separately; no arbitrary peer URL is accepted. The setup token and password hash never enter frontend assets or command-line arguments.</p></div></div>
+agentpack gateway sharing off</pre><p class="note">Private configuration and state live under <code>$AGENTPACK_HOME/network/</code>. The peer listener binds only a Tailscale IP on port 7421. A fixed public HTTPS origin is configured separately; no arbitrary peer URL is accepted. Passwords and password hashes never enter frontend assets or command-line arguments.</p></div></div>
  <details><summary>Linux, macOS and Windows service behavior</summary><p>Linux uses a systemd user unit with <code>KillMode=process</code>. macOS uses a launchd user agent with <code>AbandonProcessGroup</code>. Windows uses a limited current-user Scheduled Task and a WMI bootstrap outside its process job. Services capture the executable path and Agentpack home, and respect a persistent stop marker at login.</p><p>Install is explicit. No shell-profile or persistent PATH edits, system-wide lingering, or root privileges are needed for user services. Uninstall removes the service definition and preserves packages, credentials and session data. The Oracle deployment uses an unprivileged persistent user service and preserves unrelated Caddy sites.</p><p>Template and mocked-command checks exist. Native macOS/Windows lifecycle and two-host survival checks remain required before declaring runtime support complete.</p></details>
  </section>
 </section>
@@ -179,7 +179,7 @@ agentpack gateway sharing off</pre><p class="note">Private configuration and sta
  </div><div>
  <div class="choice"><h3>Who can control sessions?</h3><p><strong>Confirmed:</strong> personal setup. Your Tailscale identity and explicitly allowed servers can participate. Other reachable tailnet members do not automatically gain terminal control.</p></div>
  <div class="choice"><h3>Existing sessions and recent folders</h3><p><strong>Confirmed:</strong> focus on opening existing sessions. Add a small Recent folders list so an agent can start fresh in a previously used directory. Remote repository cloning is deferred as unnecessary scope.</p><p class="note">Recent folders is part of the delivery plan; its launch flow is not simulated in this prototype.</p></div>
- <div class="choice"><h3>Public deployment and root account</h3><p><strong>Confirmed:</strong> <code>agentpack deploy</code> targets <code>oracle-vm</code> and <code>https://agentpack.microapps.space</code>. Create the application root account once using a private setup token from the server console. The gateway service runs as an unprivileged OS user.</p></div>
+ <div class="choice"><h3>Public deployment and root account</h3><p><strong>Confirmed:</strong> <code>agentpack deploy</code> targets <code>oracle-vm</code> and <code>https://agentpack.microapps.space</code>. Claim the first owner account in the browser using an email and password; a legacy gateway also requires its current password. The gateway service runs as an unprivileged OS user.</p></div>
  <div class="choice"><h3>MCP and shared design</h3><p><strong>Confirmed:</strong> expose authenticated Streamable HTTP MCP to ChatGPT, Grok and other clients, using the email MCP project's OAuth/PKCE/consent model. Reuse Agentnet's macOS design tokens across login, sessions, packages and settings.</p></div>
  <div class="choice"><h3>Windows and PowerShell</h3><p><strong>Confirmed:</strong> Windows is in scope, including ConPTY sharing, PowerShell deployment and native service commands. Passing a cross-build alone does not verify Windows runtime behavior.</p></div>
  </div></div>

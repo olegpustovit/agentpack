@@ -67,7 +67,7 @@ func TestNodeRequestForwardsBodyAndAuthorization(t *testing.T) {
 }
 
 func TestGatewayAuthenticationHostAndOrigin(t *testing.T) {
-	auth, err := newGatewayAuth(t.TempDir())
+	auth, err := testUnclaimedAuth(t, t.TempDir(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,13 +90,13 @@ func TestGatewayAuthenticationHostAndOrigin(t *testing.T) {
 		}
 	}
 	check("GET", "/healthz", "agentpack.example", "", "", 200)
-	check("GET", "/api/sessions", "agentpack.example", "", "", 401)
+	check("GET", "/api/sessions", "agentpack.example", "", "", 403)
 	check("GET", "/api/sessions", "evil.example", "", "", 403)
 	check("POST", "/api/node/stop", "agentpack.example", "https://evil.example", "", 403)
 	check("POST", "/api/node/stop", "agentpack.example", "", "", 403)
 	check("GET", "/api/sessions", "127.0.0.1:7420", "", gateway.local.Secret, 200)
 	check("GET", "/api/sessions", "agentpack.example", "https://evil.example", gateway.local.Secret, 403)
-	r := httptest.NewRequest("POST", "https://agentpack.example/api/setup", bytes.NewBufferString(`{"password":"long-password-123","token":"`+auth.setup+`"}`))
+	r := httptest.NewRequest("POST", "https://agentpack.example/api/claim", bytes.NewBufferString(`{"email":"owner@example.com","password":"long-password-123"}`))
 	r.Header.Set("Origin", "https://agentpack.example")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, r)
@@ -114,7 +114,7 @@ func TestGatewayAuthenticationHostAndOrigin(t *testing.T) {
 
 func TestGatewayRestrictsRemoteFolders(t *testing.T) {
 	home := t.TempDir()
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestGatewayRestrictsRemoteFolders(t *testing.T) {
 
 func TestGatewayPackageRestartChoice(t *testing.T) {
 	home, directory := t.TempDir(), t.TempDir()
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestGatewayPackageRestartChoice(t *testing.T) {
 }
 
 func TestGatewayPeerProxyOnlyForAPIAndUnknownAPIIsJSON404(t *testing.T) {
-	auth, err := newGatewayAuth(t.TempDir())
+	auth, err := testGatewayAuth(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

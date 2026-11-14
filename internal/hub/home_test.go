@@ -417,6 +417,23 @@ func TestGatewayLinePrefersPublicURL(t *testing.T) {
 	}
 }
 
+func TestGatewayLineMarksUnclaimedGateway(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENTPACK_PUBLIC_URL", "https://agentpack.example")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"claimed":false}`)) }))
+	defer server.Close()
+	if err := os.Mkdir(filepath.Join(home, "network"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]string{"address": strings.TrimPrefix(server.URL, "http://"), "secret": strings.Repeat("s", 64)})
+	if err := os.WriteFile(filepath.Join(home, "network", "node.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := gatewayLine(home); got != "UNCLAIMED: open https://agentpack.example now" {
+		t.Fatal(got)
+	}
+}
+
 func TestListViewContainsGroupedSessions(t *testing.T) {
 	h := testHome()
 	h.panel = panelList

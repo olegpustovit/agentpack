@@ -1,6 +1,6 @@
 // Hand-written from the Go JSON structs. Keep field names in step with the json tags.
 
-export type Status = { setup_required: boolean; authenticated: boolean }
+export type Status = { claimed: boolean; legacy: boolean; authenticated: boolean; email: string }
 
 export type Identity = {
   node: { id: string; name: string; os: string; version: string }

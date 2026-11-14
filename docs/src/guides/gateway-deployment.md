@@ -1,6 +1,6 @@
 # Deploy the public gateway
 
-`agentpack deploy` builds the current checkout for Linux ARM64 and deploys it over SSH to `oracle-vm`, serving `https://agentpack.microapps.space`. Run it from the Agentpack source repository with Go, OpenSSH `ssh` and `scp` installed. It works from PowerShell, Bash, and other shells; the command does not depend on a local Bash installation.
+`agentpack deploy` builds the current checkout for Linux ARM64 and deploys it over SSH to `oracle-vm`, serving `https://agentpack.microapps.space`. Run it from the Agentpack source repository with Go, Zig 0.17.1, Bash, Python 3.11+, curl, and OpenSSH installed. Source builds fetch the checksum-pinned cr-sqlite archive and link a static musl binary. Prebuilt deployment works from PowerShell, Bash, or other shells without the build toolchain.
 
 ```powershell
 agentpack deploy --dry-run
@@ -19,13 +19,21 @@ The SSH alias `oracle-vm` must connect with an SSH key. The server needs Bash, s
 
 The installer verifies the uploaded SHA-256, installs `~/.local/lib/agentpack/agentpack`, and runs `agentpack-gateway.service` as the SSH user. Application data stays in `~/.local/share/agentpack-gateway` with private permissions. Subsequent deployments require no sudo.
 
-After the first deployment, retrieve the administrator setup URL and private one-time token:
+Keep a new gateway behind private tailnet access or an access-controlled proxy until its owner is claimed. Open the gateway URL and choose **Claim gateway**: enter an email, a password of 12–72 bytes, and confirmation. An unclaimed gateway exposes only its claim/status endpoints, health check and static UI to browsers. `gateway start`, `gateway status`, and the hub print `UNCLAIMED: open <url> now` until an owner exists.
 
-```powershell
-ssh oracle-vm 'env AGENTPACK_HOME=$HOME/.local/share/agentpack-gateway AGENTPACK_PUBLIC_URL=https://agentpack.microapps.space $HOME/.local/lib/agentpack/agentpack gateway setup'
+When upgrading a legacy gateway, claiming also requires its current password and preserves the existing password hash. The retained password is the login password; use `gateway passwd EMAIL` to change it later. Account and login state live in `state.db`. Browser logins survive restarts, last thirty days with sliding expiry, and use HttpOnly, SameSite=Strict cookies (Secure with the `__Host-` name on HTTPS).
+
+Manage accounts from the server, including when the gateway is stopped:
+
+```sh
+agentpack gateway user add developer@example.com
+agentpack gateway user list
+agentpack gateway user disable developer@example.com
+agentpack gateway passwd owner@example.com
+agentpack gateway reset-owner
 ```
 
-Open the URL, enter the token, and choose the administrator password. This creates the application's root account; the gateway does not run as OS root. The setup token protects an unconfigured public gateway from takeover. Do not share the token.
+Password commands read hidden input twice from the terminal and accept no plaintext flags. Password changes and disabling revoke that account's logins. **Sign out everywhere** in Account settings also revokes its connected MCP assistants. `reset-owner` requires typing `reset`; it removes all accounts and revokes browser/OAuth logins, after which the gateway can be claimed again. Existing agents keep running.
 
 Subsequent deployments retain administrator credentials and application data. The installer checks gateway health and the public HTTPS route, and restores the previous binary and service configuration if activation fails. The previous executable also remains at `~/.local/lib/agentpack/agentpack.previous`. Rollback does not undo application data changes. Deployment fails and rolls back if the public status endpoint is unreachable.
 
@@ -87,8 +95,8 @@ once the public gateway is deployed. This is the Agentpack management server, se
 from MCP servers installed into an agent's environment.
 
 The client discovers OAuth metadata and registers a public client automatically. Sign
-in with the gateway root account and approve the connection. Authorization uses PKCE;
-there is no shared client secret or setup token to paste into ChatGPT, Grok, or another
+in with the gateway account and approve the connection. Authorization uses PKCE;
+there is no shared client secret to paste into ChatGPT, Grok, or another
 MCP client. Consent grants control over all machines accessible to this gateway
 identity, including terminal input and package installation.
 

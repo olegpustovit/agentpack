@@ -182,13 +182,30 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 		sharing.AddCommand(leaf(action, "Tailnet sharing "+action))
 	}
 	gateway.AddCommand(sharing)
-	for _, action := range []string{"start", "stop", "status", "setup", "stop-agents", "serve"} {
+	for _, action := range []string{"start", "stop", "status", "stop-agents", "serve", "passwd EMAIL", "reset-owner"} {
 		command := leaf(action, "Gateway "+action)
 		if action == "serve" {
 			value(command, "listen", "ADDRESS", "listen address (default 127.0.0.1:7420)")
 		}
 		gateway.AddCommand(command)
 	}
+	users := &cobra.Command{Use: "user", Short: "Manage gateway accounts offline"}
+	users.RunE = func(command *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return command.Help()
+		}
+		return errors.New("unknown gateway user command")
+	}
+	gateway.RunE = func(command *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return command.Help()
+		}
+		return errors.New("unknown gateway command")
+	}
+	for _, action := range []string{"add EMAIL", "list", "disable EMAIL"} {
+		users.AddCommand(leaf(action, "Gateway user "+action))
+	}
+	gateway.AddCommand(users)
 	deploy := leaf("deploy", "Deploy the public gateway to oracle-vm")
 	value(deploy, "binary", "PATH", "prebuilt Linux ARM64 agentpack binary")
 	flag(deploy, "dry-run", "", "validate and show deployment without changing the VM")

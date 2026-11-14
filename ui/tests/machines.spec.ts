@@ -53,7 +53,7 @@ function machineOf(url: string): string {
 
 test.beforeEach(async ({ page }) => {
   deletes = []
-  await page.route("**/api/status", (route) => route.fulfill({ json: { setup_required: false, authenticated: true } }))
+  await page.route("**/api/status", (route) => route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }))
   await page.route(/\/api\/identity(\?.*)?$/, (route) => route.fulfill({ json: machineOf(route.request().url()) === "n2" ? peer : local }))
   await page.route("**/api/nodes", (route) => route.fulfill({ json: nodes }))
   await page.route("**/api/topology", (route) => route.fulfill({ json: topology }))

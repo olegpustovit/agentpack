@@ -99,7 +99,7 @@ function machineOf(url: string): string {
 }
 
 async function mockLibrary(page: Page) {
-  await page.route("**/api/status", (route) => route.fulfill({ json: { setup_required: false, authenticated: true } }))
+  await page.route("**/api/status", (route) => route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }))
   await page.route("**/api/identity", (route) => route.fulfill({ json: identity }))
   await page.route("**/api/nodes", (route) => route.fulfill({ json: nodes }))
   // Aborting the stream keeps the queries on their plain fetch path.

@@ -22,9 +22,6 @@ type Actor struct {
 	StableNodeID string `json:"stable_node_id,omitempty"` // Verified tailnet identity; Node is the display name.
 }
 
-// browserUser is the single gateway account browsers sign in as, so browsers on it are indistinguishable.
-const browserUser = "root"
-
 // identityCacheTTL bounds how often identity asks Tailscale for status.
 const identityCacheTTL = 60 * time.Second
 
@@ -51,8 +48,8 @@ func LocalActor(kind string) Actor {
 	return actor
 }
 
-func browserActor() Actor {
-	return Actor{Kind: "browser", User: browserUser, Node: localHostname()}
+func browserActor(email string) Actor {
+	return Actor{Kind: "browser", User: email, Node: localHostname()}
 }
 
 // canWriteSession separates peer ownership from same-host local transports.
@@ -68,7 +65,7 @@ func (actor Actor) canWriteSession(session SessionInfo) bool {
 			actor.StableNodeID == owner.StableNodeID
 	}
 	if owner.Kind == "browser" || actor.Kind == "browser" {
-		return owner.Node != "" && actor.Node == owner.Node
+		return owner.User != "" && actor.User == owner.User
 	}
 	return owner.User != "" && actor.User == owner.User &&
 		owner.Node != "" && actor.Node == owner.Node
@@ -117,7 +114,7 @@ func (g *Gateway) identity(w http.ResponseWriter, r *http.Request) {
 	self := g.selfIdentity(r.Context())
 	writeJSON(w, identityResponse{
 		Node:          identityNode{ID: self.ID, Name: localHostname(), OS: runtime.GOOS, Version: g.options.Version},
-		Auth:          browserUser,
+		Auth:          g.auth.email(r),
 		TailscaleUser: self.User,
 	})
 }

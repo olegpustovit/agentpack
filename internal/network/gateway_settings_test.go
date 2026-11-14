@@ -16,7 +16,7 @@ import (
 
 func TestGatewaySettingsSharingDoesNotStopAgents(t *testing.T) {
 	home := t.TempDir()
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestGatewaySettingsSharingDoesNotStopAgents(t *testing.T) {
 
 func TestPeerHTTPRejectsBrowserAndAdministrativeRoutes(t *testing.T) {
 	home := t.TempDir()
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestPeerHTTPRejectsBrowserAndAdministrativeRoutes(t *testing.T) {
 
 func TestStopAgentsSkipsACPWorkersOwnedElsewhere(t *testing.T) {
 	home := t.TempDir()
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestStopAgentsSkipsACPWorkersOwnedElsewhere(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	owner := browserActor()
+	owner := browserActor(testBrowserEmail)
 	foreign := Actor{Kind: "peer", User: "alice@example.com", Node: "remote", StableNodeID: "stable-foreign"}
 	worker("session-owned-acp", SessionInfo{Transport: "acp", StartedBy: &owner})
 	worker("session-foreign-acp", SessionInfo{Transport: "acp", StartedBy: &foreign})

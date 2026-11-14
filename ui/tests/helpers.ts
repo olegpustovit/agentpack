@@ -61,10 +61,10 @@ export function fleetSessions(machine: string) {
 
 // Legacy mockAPI shape: routes the API, records every request, and returns the record.
 // `fleet` switches the list endpoints to the audit fixture; `node` selects the machine in each reply.
-export async function mockAPI(page: Page, { authenticated = true, setup = false, fleet = false }: { authenticated?: boolean; setup?: boolean; fleet?: boolean } = {}) {
+export async function mockAPI(page: Page, { authenticated = true, unclaimed = false, fleet = false }: { authenticated?: boolean; unclaimed?: boolean; fleet?: boolean } = {}) {
   const requests: { method: string; path: string; query: URLSearchParams; body: unknown }[] = []
   let loggedIn = authenticated
-  let setupNeeded = setup
+  let claimNeeded = unclaimed
   await page.route("**/api/**", async (route) => {
     const req = route.request()
     const url = new URL(req.url())
@@ -73,11 +73,11 @@ export async function mockAPI(page: Page, { authenticated = true, setup = false,
     const machine = url.searchParams.get("node") ?? "local"
     let data: unknown = {}
     if (url.pathname === "/api/config") data = { ui_build_id: "test-build" }
-    else if (url.pathname === "/api/status") data = { setup_required: setupNeeded, authenticated: loggedIn }
+    else if (url.pathname === "/api/status") data = { claimed: !claimNeeded, legacy: false, email: loggedIn ? "owner@example.com" : "", authenticated: loggedIn }
     else if (url.pathname === "/api/login") loggedIn = true
-    else if (url.pathname === "/api/setup") {
-      expect(body).toMatchObject({ token: "private-token", password: "a-long-test-password" })
-      setupNeeded = false
+    else if (url.pathname === "/api/claim") {
+      expect(body).toMatchObject({ email: "owner@example.com", password: "a-long-test-password" })
+      claimNeeded = false
       loggedIn = true
     } else if (url.pathname === "/api/identity") data = identity
     else if (url.pathname === "/api/nodes") data = fleet ? fleetNodes : []

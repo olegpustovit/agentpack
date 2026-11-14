@@ -113,7 +113,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if err := os.Remove(filepath.Join(options.Home, "network", "limits.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove legacy limits cache: %w", err)
 	}
-	auth, err := newGatewayAuth(options.Home)
+	auth, err := newGatewayAuth(options.Home, store, origin.Scheme == "https")
 	if err != nil {
 		return err
 	}
@@ -241,9 +241,10 @@ func (g *Gateway) Handler() http.Handler {
 		}()
 		writeJSON(w, map[string]bool{"started": true})
 	})
-	mux.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) { g.auth.login(w, r, true, g.origin.Scheme == "https") })
-	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) { g.auth.login(w, r, false, g.origin.Scheme == "https") })
+	mux.HandleFunc("POST /api/claim", g.auth.claim)
+	mux.HandleFunc("POST /api/login", g.auth.login)
 	mux.HandleFunc("POST /api/logout", g.auth.logout)
+	mux.HandleFunc("POST /api/logout-all", g.auth.logoutAll)
 	mux.HandleFunc("GET /api/events", g.serveEvents)
 	mux.HandleFunc("GET /api/nodes", func(w http.ResponseWriter, r *http.Request) {
 		value, err := g.tailnetNodes(r.Context())
@@ -294,7 +295,7 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		actor, ok := actorFrom(r.Context())
 		if !ok {
-			actor = browserActor()
+			actor = browserActor(g.auth.email(r))
 		}
 		info, err := g.startSession(r.Context(), actor, SessionInfo{
 			Directory: input.Directory, Harness: input.Harness, Mode: input.Mode,
@@ -317,7 +318,7 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		actor, ok := actorFrom(r.Context())
 		if !ok {
-			actor = browserActor()
+			actor = browserActor(g.auth.email(r))
 		}
 		info, err := g.startSession(r.Context(), actor, SessionInfo{
 			Directory: record.Session.Directory,
@@ -553,7 +554,7 @@ func (g *Gateway) Handler() http.Handler {
 		if err == nil {
 			actor, ok := actorFrom(r.Context())
 			if !ok {
-				actor = browserActor()
+				actor = browserActor(g.auth.email(r))
 			}
 			for _, session := range sessions {
 				if session.Transport == "acp" && !actor.canWriteSession(session) {
@@ -586,6 +587,18 @@ func (g *Gateway) Handler() http.Handler {
 			http.Error(w, "unrecognized gateway host", 403)
 			return
 		}
+		claimed, err := g.auth.claimed(r.Context())
+		if err != nil {
+			authFailure(w, r, "account state unavailable", err)
+			return
+		}
+		if !claimed && !local {
+			allowed := (r.Method == "GET" || r.Method == "HEAD") && (r.URL.Path == "/healthz" || r.URL.Path == "/api/status" || !strings.HasPrefix(r.URL.Path, "/api/") && !isMCPPath(r.URL.Path)) || r.Method == "POST" && r.URL.Path == "/api/claim"
+			if !allowed {
+				http.Error(w, "unclaimed", http.StatusForbidden)
+				return
+			}
+		}
 		if g.mcp != nil && isMCPPath(r.URL.Path) {
 			g.mcp.ServeHTTP(w, r)
 			return
@@ -599,16 +612,20 @@ func (g *Gateway) Handler() http.Handler {
 			http.Error(w, "origin required", 403)
 			return
 		}
-		public := r.URL.Path == "/healthz" || r.URL.Path == "/api/config" || r.URL.Path == "/api/status" || r.URL.Path == "/api/setup" || r.URL.Path == "/api/login" || !strings.HasPrefix(r.URL.Path, "/api/")
-		if !public && !local && !g.auth.authenticated(r) {
+		public := r.URL.Path == "/healthz" || r.URL.Path == "/api/config" || r.URL.Path == "/api/status" || r.URL.Path == "/api/claim" || r.URL.Path == "/api/login" || !strings.HasPrefix(r.URL.Path, "/api/")
+		email := ""
+		if !local {
+			email = g.auth.email(r)
+		}
+		if !public && !local && email == "" {
 			http.Error(w, "login required", 401)
 			return
 		}
 		if _, known := actorFrom(r.Context()); !known {
 			if local {
 				r = r.WithContext(withActor(r.Context(), LocalActor("local")))
-			} else if g.auth.authenticated(r) {
-				r = r.WithContext(withActor(r.Context(), browserActor()))
+			} else if email != "" {
+				r = r.WithContext(withActor(r.Context(), browserActor(email)))
 			}
 		}
 
@@ -660,7 +677,7 @@ func authorizeACPWrite(w http.ResponseWriter, r *http.Request, session SessionIn
 	}
 	actor, ok := actorFrom(r.Context())
 	if !ok {
-		actor = browserActor()
+		actor = browserActor("")
 	}
 	if actor.canWriteSession(session) {
 		return true

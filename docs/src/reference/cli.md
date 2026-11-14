@@ -254,3 +254,22 @@ differing content is reconciled toward whichever copy has the newer file modific
 agentpack extra sync-claude             # reconcile in place
 agentpack extra sync-claude --dry-run   # show what would change
 ```
+
+
+## Gateway accounts
+
+`agentpack gateway start|stop|status|serve` controls the gateway. Before it is
+claimed, start/status print `UNCLAIMED: open <url> now`; claim the owner account in
+the browser with an email and password. A legacy gateway also requires its current
+password, which claiming preserves.
+
+| Command | Action |
+|---|---|
+| `agentpack gateway user add EMAIL` | Add a member, reading its password twice from the terminal |
+| `agentpack gateway user list` | List emails, roles and disabled state |
+| `agentpack gateway user disable EMAIL` | Disable an account and revoke its logins |
+| `agentpack gateway passwd EMAIL` | Change a password and revoke existing logins |
+| `agentpack gateway reset-owner` | Type `reset` to delete accounts and revoke all logins, then claim again |
+
+These account commands work with the gateway stopped. Passwords are never accepted
+in flags. See [Gateway deployment](../guides/gateway-deployment.md).

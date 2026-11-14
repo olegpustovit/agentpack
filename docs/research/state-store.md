@@ -1201,3 +1201,78 @@ in place at this intermediate checkpoint.
 Focused migration/default/reopen and account lifecycle/concurrent-claim checks pass:
 Linux state 0.10 s, network 0.64 s; physical Apple M1 state 0.59 s, network 1.24 s.
 No broad or slow test suite was run.
+
+## Persistent accounts, ownership and offline administration — P2.3–P2.8
+
+The gateway now claims an email owner instead of issuing a bootstrap secret.
+Legacy claims require the current password, retain its exact bcrypt hash, and
+remove legacy credential files. Status reports claimed/legacy/authenticated/email.
+Only health/status, claim and static UI are available to unclaimed browsers;
+the private local node capability retains operator access. Browser sessions store
+only SHA-256 token hashes in state.db, survive restart, and slide for thirty days.
+HTTPS cookies use the __Host- name with Secure, HttpOnly and SameSite=Strict.
+
+Authentication checks expiry, disabled state and the account revocation stamp on
+every use, including open-stream rechecks. Password verification and token minting
+are bound to the same account epoch, preventing a password-change race from
+restoring a revoked login. Email/address exponential failure backoff starts after
+five failures (one second, doubling to fifteen minutes), alongside the existing
+global ten-per-minute gate; fake-clock tests need no sleeps.
+
+Browser ownership now compares account email instead of granting access by host
+name alone. OAuth consent/code/access/refresh records retain the account and epoch
+in migration 0007; disabling or globally signing out revokes every stage. MCP
+dispatch runs through the existing REST handler in-process so the authenticated
+actor survives ownership checks. Its response buffer retains the prior 4 MiB cap.
+New tests verify cross-account ACP denial, MCP attribution, OAuth revocation and
+the byte bound. The old unavailable-Tailscale identity test now uses an immediate
+local API fixture instead of spending three seconds on a missing daemon socket.
+
+The offline CLI provides user add/list/disable, passwd and confirmed reset-owner.
+Password entry uses x/term hidden input twice; actual PTY tests cover add, change
+and mismatch. Reset removes browser and OAuth credentials as well as account rows
+so reclaiming the same email cannot revive old grants. Gateway error diagnostics
+omit arguments, including mistakenly supplied positional passwords. Start/status
+and the hub show the unclaimed URL; the hub's optional status read is bounded to
+100 ms and does not open state.db.
+
+The final focused Linux matrix passes: state 0.20 s, network 1.64 s, CLI 0.71 s,
+hub 0.01 s. The physical Apple M1 matrix passes: state 0.34 s, network 1.06 s,
+CLI 0.76 s, hub 0.33 s. Stream logout and the remaining affected OAuth regressions
+also pass in 1.24 s. The later rejected-password privacy regression passes in
+0.31 s. Full suites and release snapshots were not rerun.
+
+## Account browser flow and documentation — P2.9 / P2.10
+
+Login uses email/password. Fresh claims include confirmation, and legacy claims
+also prove the current password while explaining that it is retained. Validation
+is inline and byte-based. Account settings show the email, ordinary sign-out and
+confirmed sign-out-everywhere, without account-management/password-change forms.
+The root loader checks status before requesting configuration, which an unclaimed
+gateway deliberately refuses. Fixtures now enforce that refusal. Shared API
+fixtures cover shell/configuration reads so focused account tests never fall
+through to a live development backend.
+
+Types, focused lint, eleven model/return-path tests and the build/size gates pass.
+The Chromium claim/sign-out/login flow takes 0.83 s (0.85 s with the strict config
+fixture), global sign-out confirmation 0.50 s and the legacy rejection 0.29 s.
+The same WebKit cases on the physical Mac mini pass in 2.0 s, 1.5 s and 0.63 s.
+Desktop light and phone dark captures of both claim and Account were inspected;
+the fresh Impeccable finish reviewer returned ship with no material fixes. No
+design-system tokens, runtime dependencies or lockfile entries changed.
+
+The gateway guide, CLI reference, UI contract, AGENTS.md and obsolete proposal/demo
+instructions now describe email accounts and the initial private claim. Searches
+find no obsolete public bootstrap commands or status fields. The filename of the
+legacy bootstrap credential remains only in explicit removal code and its fixture:
+P2.3 requires deleting that existing file, so P2.10's literal zero-match filename
+grep cannot also be satisfied without obscuring the compatibility behavior.
+
+The embedded Go gateway passes the artifact smoke with the new unclaimed boundary.
+Its config check now verifies refusal before using the private local capability.
+Deployment health probes check the new status field. Inspection also found an old
+CGO-disabled deployment build path; source deployment now fetches the same pinned
+archive and uses Zig/musl with the release's static-link/unwind settings. Fast
+command-construction and failure-propagation checks pass in 4 ms. A new cross-build
+or remote deployment was not run; prebuilt deployment still needs no local build
+toolchain, while source deployment now documents the static toolchain prerequisites.

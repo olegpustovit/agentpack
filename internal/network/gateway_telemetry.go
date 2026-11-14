@@ -31,21 +31,21 @@ type browserError struct {
 }
 
 func (a *gatewayAuth) allowTelemetry(r *http.Request, count int, now time.Time) int {
-	cookie, err := r.Cookie("agentpack_session")
+	cookie, err := r.Cookie(a.cookieName())
 	if err != nil {
 		return http.StatusUnauthorized
 	}
 	key := sha256.Sum256([]byte(cookie.Value))
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if expiry, ok := a.sessions[key]; !ok || !now.Before(expiry) {
+	if !a.authenticated(r) {
 		return http.StatusUnauthorized
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.telemetry == nil {
 		a.telemetry = make(map[[32]byte]telemetryWindow)
 	}
-	for key := range a.telemetry {
-		if expiry, ok := a.sessions[key]; !ok || !now.Before(expiry) {
+	for key, window := range a.telemetry {
+		if now.Sub(window.since) >= time.Minute {
 			delete(a.telemetry, key)
 		}
 	}
@@ -63,7 +63,8 @@ func (a *gatewayAuth) allowTelemetry(r *http.Request, count int, now time.Time) 
 
 func (g *Gateway) telemetry(w http.ResponseWriter, r *http.Request) {
 	// Local bearer and peer transports do not authorize browser telemetry.
-	if !g.auth.authenticated(r) {
+	email := g.auth.email(r)
+	if email == "" {
 		http.Error(w, "login required", http.StatusUnauthorized)
 		return
 	}
@@ -100,7 +101,7 @@ func (g *Gateway) telemetry(w http.ResponseWriter, r *http.Request) {
 		// The upload's HTTP span is separate from the original browser failure.
 		ctx := obs.WithSink(obs.WithTrace(context.Background(), input.Traceparent), g.logs, metadata)
 		_, event := obs.Start(ctx, "ui.error", input.Name)
-		event.User = browserActor().User
+		event.User = email
 		event.Set("error_name", input.Name)
 		event.Set("ui_build_id", input.UIBuildID)
 		event.Set("message", input.Message)

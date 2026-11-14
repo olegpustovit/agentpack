@@ -48,12 +48,16 @@ Regression budgets are enforced by `tests/budgets.spec.ts` on the same fixture a
 All requests use same-origin session cookies. Mutations send JSON and require origin
 validation. Non-2xx errors may be `{ "error": "message" }` or plain text. Credentials and
 private worker capabilities never appear in any response. An unauthenticated API returns
-401. Logout invalidates the server session and active terminal access.
+401 once claimed; an unclaimed gateway refuses protected APIs with 403 `unclaimed`.
+Logout invalidates the server session and active terminal access.
 
-- `GET /api/status`: `{setup_required, authenticated}`.
-- `POST /api/setup`: `{password, token}`. The token is obtained on the server with
-  `agentpack gateway setup`. Root can be created once. Minimum password length 12.
-- `POST /api/login`: `{password}`; `POST /api/logout`: `{}`.
+- `GET /api/status`: `{claimed, legacy, authenticated, email}`.
+- `POST /api/claim`: `{email, password, current_password?}`. The first owner claims
+  once; a legacy gateway requires its current password and preserves it.
+- `POST /api/login`: `{email,password}`; `POST /api/logout`: `{}`.
+- `POST /api/logout-all`: revokes all browser and OAuth logins for that account.
+  Cookies survive restarts and slide for thirty days. HTTPS uses a Secure,
+  HttpOnly, SameSite=Strict `__Host-agentpack_session` cookie.
 - `GET /api/identity`: `{node: {id,name,os,version}, auth, tailscale_user}` for the selected machine.
 - `GET /api/nodes`: array of `{id,name,online}` for allowed Tailscale peers.
 - `GET /api/topology`: `{self: {id,name,os,relay}, peers: [{id,name,os,state,connection,relay,rtt_ms?,last_seen?,sessions}]}`.

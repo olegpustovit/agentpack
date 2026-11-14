@@ -59,7 +59,7 @@ All agentpack-owned terminal rendering is monochrome and terminal-agnostic: use 
 | --- | --- |
 | **`$AGENTPACK_HOME/cache/<cache_key>/`** | Package trees (GitHub tarball, or **copies** from filesystem / `local/`). The key is the SHA-256 of the package identity (`github:<owner>/<repo>`, path, commit), **not** of the files; the lock's `content_hash` is what verifies them. |
 | **`$AGENTPACK_HOME/cache/db.reddb`** | Metadata + alias map for fast repeat **`add`**, plus cached GitHub ref/tag lookups to reduce API calls. |
-| **`$AGENTPACK_HOME/state.db`** | Gateway-owned SQLite state, including issue metadata/counts, settings, limits and OAuth. Foreground launches never open it. |
+| **`$AGENTPACK_HOME/state.db`** | Gateway-owned SQLite state, including accounts, hashed browser sessions, issue metadata/counts, settings, limits and OAuth. Foreground launches never open it. |
 | **`$AGENTPACK_HOME/logs/YYYY-MM-DD.db`** | Private plain SQLite diagnostic events and deduplicated stacks, retained for five days. Ordinary events have a 256 MiB daily budget; error samples are preserved. |
 | **`$AGENTPACK_HOME/logs/spool/*.ndjson`** | Private CLI/worker diagnostics awaiting gateway ingestion; 16 MiB oldest-first budget. Successful foreground launches write no diagnostics. |
 | **`$AGENTPACK_HOME/verified/<cache_key>.json`** | Proof that an entry matched its content hash while its files had this metadata. Launches reuse it instead of reading the package again. Losing it costs one full check. |
@@ -179,6 +179,24 @@ Workers can run **`transport: "acp"`** agents (Claude, Codex, OpenCode, Cursor, 
 ACP limits: all writes to an existing ACP session require the recorded user and stable peer node identity (or the same local user/host); other actors may read logs and blobs but cannot mutate the session. Client MIME is ignored in favor of stored image bytes; storage is capped at 20 MiB per image and 100 MiB total or 128 files per session, with serialized uploads and a 30-second body-read deadline. ACP terminal output is capped at 4 MiB, nested terminal process groups are force-killed on release and worker shutdown, and an oversized unterminated frame closes its stream after 10 seconds.
 
 ## Gateway UI
+
+Gateway authentication uses email accounts. The first browser owner claims an
+unclaimed gateway; a legacy gateway requires its current password and preserves
+that hash. Unclaimed browsers may access only health/status, the claim endpoint
+and static UI. Start/status and the hub show `UNCLAIMED: open <url> now` until
+claimed. Keep first-time public access restricted until the owner is claimed.
+Browser cookies survive restarts and slide for thirty days; HTTPS uses
+`__Host-agentpack_session`, Secure, HttpOnly and SameSite=Strict. Disabling an
+account, changing its password or signing out everywhere revokes its logins and
+OAuth grants. Browser ACP writes require the owning account email; a shared node
+name alone never grants write access.
+
+Offline account administration is `gateway user add EMAIL`, `gateway user list`,
+`gateway user disable EMAIL`, `gateway passwd EMAIL`, and `gateway reset-owner`.
+Password commands read hidden terminal input twice and accept no password flags.
+Owner reset requires typing `reset`, then removes accounts and revokes logins.
+The Account pane shows the email and sign-out actions, without user/password
+administration forms. See `docs/src/guides/gateway-deployment.md`.
 
 The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make ui-stage` builds it and copies `ui/dist` into `internal/network/webdist`, which the Go gateway embeds and serves at `/`.
 

@@ -50,11 +50,14 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 		return runner.runSharing(ctx, arguments[1:])
 	}
 	if len(arguments) == 0 {
-		return 2, errors.New("expected gateway serve, start, stop, status, setup, or stop-agents")
+		return 2, errors.New("expected gateway serve, start, stop, status, stop-agents, passwd, user, or reset-owner")
 	}
 	home, err := paths.UserAgentpackHome()
 	if err != nil {
 		return 1, err
+	}
+	if arguments[0] == "passwd" || arguments[0] == "user" || arguments[0] == "reset-owner" {
+		return runner.runGatewayAccounts(ctx, home, arguments)
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -98,21 +101,10 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 		if err := network.SetGatewayEnabled(home, true); err != nil {
 			return 1, err
 		}
-		return 0, network.EnsureNode(ctx, home, executable)
-	case "setup":
-		token, err := os.ReadFile(filepath.Join(home, "network", "setup-token"))
-		if err != nil {
-			return 1, fmt.Errorf("start the gateway first; setup may already be complete: %w", err)
+		if err := network.EnsureNode(ctx, home, executable); err != nil {
+			return 1, err
 		}
-		publicURL := os.Getenv("AGENTPACK_PUBLIC_URL")
-		if publicURL == "" {
-			publicURL, err = network.GatewayURL(home)
-			if err != nil {
-				return 1, err
-			}
-		}
-		fmt.Fprintf(runner.Stdout, "Open %s and enter this one-time setup token:\n%s\n", publicURL, token)
-		return 0, nil
+		return 0, runner.printGatewayClaim(ctx, home)
 	case "stop", "status", "stop-agents":
 		method, path := "GET", "/api/sessions"
 		if action == "stop" {
@@ -129,6 +121,9 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 			return 1, err
 		}
 		fmt.Fprintln(runner.Stdout, string(data))
+		if action == "status" {
+			return 0, runner.printGatewayClaim(ctx, home)
+		}
 		return 0, nil
 	default:
 		return 2, fmt.Errorf("unknown gateway action %q", action)
@@ -240,7 +235,7 @@ func (runner Runner) launchManaged(ctx context.Context, packContext paths.Contex
 	}
 	fmt.Fprintf(runner.Stderr, "agentpack: session %s; local and browser input are shared\n", id)
 	if url, err := network.GatewayURL(home); err == nil {
-		fmt.Fprintln(runner.Stderr, "agentpack: browser "+url+" (first use: agentpack gateway setup)")
+		fmt.Fprintln(runner.Stderr, "agentpack: browser "+url+" (sign in or claim the gateway)")
 	}
 	return network.RunTerminal(ctx, home, id, os.Stdin, runner.Stdout)
 }

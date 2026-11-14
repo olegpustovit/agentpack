@@ -61,7 +61,7 @@ func TestDiagnosticsRoutesRequireLoginAndOrigin(t *testing.T) {
 		if response.StatusCode != 200 || json.Unmarshal(data, &issue) != nil || issue.Status != want {
 			t.Fatalf("%s: %d %s", action, response.StatusCode, data)
 		}
-		if action == "resolve" && (issue.ResolvedBy != browserUser || issue.ResolvedVersion != "v1.2.0") {
+		if action == "resolve" && (issue.ResolvedBy != testBrowserEmail || issue.ResolvedVersion != "v1.2.0") {
 			t.Fatalf("resolution metadata=%+v", issue)
 		}
 	}
@@ -124,7 +124,7 @@ func TestMCPDiagnosticToolsReuseAuthenticatedRoutes(t *testing.T) {
 		}
 	}
 	issue, err := obs.GetIssue(ctx, h.gateway.options.Home, event.Fingerprint)
-	if err != nil || issue.Status != "resolved" || issue.Note != "fixed by test" {
+	if err != nil || issue.Status != "resolved" || issue.Note != "fixed by test" || issue.ResolvedBy != testBrowserEmail {
 		t.Fatalf("tool did not persist resolution: %+v %v", issue, err)
 	}
 }

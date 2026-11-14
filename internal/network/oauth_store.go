@@ -30,6 +30,8 @@ type oauthRecord struct {
 	GrantExpires time.Time    `json:"grant_expires,omitempty"`
 	Query        string       `json:"query,omitempty"`
 	Session      string       `json:"session,omitempty"`
+	Email        string       `json:"email,omitempty"`
+	SessionEpoch int64        `json:"session_epoch,omitempty"`
 	Client       *oauthClient `json:"client,omitempty"`
 }
 
@@ -45,7 +47,7 @@ func oauthGet(tx *sql.Tx, secret string) (oauthRecord, error) {
 	}
 	key := string(oauthKey(secret))
 	var expires, grantExpires int64
-	err := tx.QueryRow(`SELECT kind, expires_at, client_id, redirect_uri, challenge, resource, family, grant_expires_at, query, session FROM oauth_tokens WHERE secret_hash = ?`, key).Scan(&record.Kind, &expires, &record.ClientID, &record.Redirect, &record.Challenge, &record.Resource, &record.Family, &grantExpires, &record.Query, &record.Session)
+	err := tx.QueryRow(`SELECT kind, expires_at, client_id, redirect_uri, challenge, resource, family, grant_expires_at, query, session, email, session_epoch FROM oauth_tokens WHERE secret_hash = ?`, key).Scan(&record.Kind, &expires, &record.ClientID, &record.Redirect, &record.Challenge, &record.Resource, &record.Family, &grantExpires, &record.Query, &record.Session, &record.Email, &record.SessionEpoch)
 	if err == nil {
 		record.Expires = time.UnixMilli(expires)
 		if grantExpires != 0 {
@@ -87,10 +89,10 @@ func oauthPut(tx *sql.Tx, secret string, record oauthRecord) error {
 	if !record.GrantExpires.IsZero() {
 		grantExpires = record.GrantExpires.UnixMilli()
 	}
-	_, err := tx.Exec(`INSERT INTO oauth_tokens(secret_hash, kind, expires_at, client_id, redirect_uri, challenge, resource, family, grant_expires_at, query, session)
- VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
- ON CONFLICT(secret_hash) DO UPDATE SET kind=excluded.kind, expires_at=excluded.expires_at, client_id=excluded.client_id, redirect_uri=excluded.redirect_uri, challenge=excluded.challenge, resource=excluded.resource, family=excluded.family, grant_expires_at=excluded.grant_expires_at, query=excluded.query, session=excluded.session`,
-		key, record.Kind, record.Expires.UnixMilli(), record.ClientID, record.Redirect, record.Challenge, record.Resource, record.Family, grantExpires, record.Query, record.Session)
+	_, err := tx.Exec(`INSERT INTO oauth_tokens(secret_hash, kind, expires_at, client_id, redirect_uri, challenge, resource, family, grant_expires_at, query, session, email, session_epoch)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ ON CONFLICT(secret_hash) DO UPDATE SET kind=excluded.kind, expires_at=excluded.expires_at, client_id=excluded.client_id, redirect_uri=excluded.redirect_uri, challenge=excluded.challenge, resource=excluded.resource, family=excluded.family, grant_expires_at=excluded.grant_expires_at, query=excluded.query, session=excluded.session, email=excluded.email, session_epoch=excluded.session_epoch`,
+		key, record.Kind, record.Expires.UnixMilli(), record.ClientID, record.Redirect, record.Challenge, record.Resource, record.Family, grantExpires, record.Query, record.Session, record.Email, record.SessionEpoch)
 	return err
 }
 
@@ -104,6 +106,17 @@ func oauthPrune(tx *sql.Tx) error {
 	}
 	if count >= 8192 {
 		return errors.New("OAuth credential limit reached")
+	}
+	return nil
+}
+
+func oauthAccountValid(tx *sql.Tx, record oauthRecord) error {
+	var valid bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE email=? AND disabled=0 AND sessions_valid_after=?)", record.Email, record.SessionEpoch).Scan(&valid); err != nil {
+		return err
+	}
+	if !valid {
+		return errOAuthGrant
 	}
 	return nil
 }

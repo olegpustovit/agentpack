@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -76,13 +75,14 @@ func NewGatewayMCP(gateway *Gateway) (*GatewayMCP, error) {
 	mux := http.NewServeMux()
 	m.routes(mux)
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !m.authenticated(r) {
+		verified := m.authenticate(r)
+		if verified == nil {
 			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+m.baseURL()+`/.well-known/oauth-protected-resource/mcp", scope="agentpack"`)
 			oauthError(w, 401, "invalid_token")
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-		stream.ServeHTTP(w, r)
+		stream.ServeHTTP(w, verified)
 	}))
 	m.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -152,7 +152,8 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 			}{in.Directory, in.Harness, in.Mode})
 		}
 		// In-process so the actor is "mcp", not the loopback browser actor.
-		info, err := m.gateway.startSession(ctx, LocalActor("mcp"), SessionInfo{Directory: in.Directory, Harness: in.Harness, Mode: in.Mode}, "")
+		actor, _ := actorFrom(ctx)
+		info, err := m.gateway.startSession(ctx, actor, SessionInfo{Directory: in.Directory, Harness: in.Harness, Mode: in.Mode}, "")
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, nil, nil
 		}
@@ -191,9 +192,11 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 	})
 }
 
-// Tools call the same authenticated REST operations as the UI, including remote
-// node policy, folder allowlisting, package restarts, and terminal attachment validation.
+// In-process dispatch preserves the authenticated MCP actor through the same
+// REST policy, including remote-node routing and session ownership checks.
 func (m *GatewayMCP) callAPI(ctx context.Context, node, method, path string, body any) (*mcp.CallToolResult, any, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	u, err := url.Parse("http://" + m.gateway.local.Address + path)
 	if err != nil {
 		return nil, nil, errors.New("invalid gateway operation")
@@ -221,19 +224,39 @@ func (m *GatewayMCP) callAPI(ctx context.Context, node, method, path string, bod
 	request.Header.Set("Authorization", "Bearer "+m.gateway.local.Secret)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("traceparent", obs.TraceParent(ctx))
-	client := http.Client{Timeout: 2 * time.Minute, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	defer client.CloseIdleConnections()
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, nil, errors.New("gateway operation unavailable")
-	}
-	defer response.Body.Close()
-	data, err = io.ReadAll(io.LimitReader(response.Body, (4<<20)+1))
-	if err != nil || len(data) > 4<<20 {
+	response := &mcpResponse{header: make(http.Header)}
+	m.gateway.Handler().ServeHTTP(response, request)
+	if response.tooLarge {
 		return nil, nil, errors.New("gateway response unavailable or too large")
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
+	data = response.body.Bytes()
+	if response.status == 0 {
+		response.status = http.StatusOK
+	}
+	if response.status < 200 || response.status >= 300 {
 		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: strings.TrimSpace(string(data))}}}, nil, nil
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(data)}}}, nil, nil
+}
+
+type mcpResponse struct {
+	header   http.Header
+	body     bytes.Buffer
+	status   int
+	tooLarge bool
+}
+
+func (w *mcpResponse) Header() http.Header { return w.header }
+func (w *mcpResponse) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+}
+func (w *mcpResponse) Write(data []byte) (int, error) {
+	w.WriteHeader(http.StatusOK)
+	if w.body.Len()+len(data) > 4<<20 {
+		w.tooLarge = true
+		return 0, errors.New("MCP response exceeds 4 MiB")
+	}
+	return w.body.Write(data)
 }

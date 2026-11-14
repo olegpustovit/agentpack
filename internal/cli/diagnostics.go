@@ -28,6 +28,12 @@ func (runner Runner) recordFailure(ctx context.Context, root *cobra.Command, arg
 	if _, harness := launcherTarget(command.Name()); harness {
 		args = []string{command.Name(), "<harness arguments omitted>"}
 	}
+	for parent := command; parent != nil; parent = parent.Parent() {
+		if parent.Name() == "gateway" {
+			args = []string{command.CommandPath(), "<gateway arguments omitted>"}
+			break
+		}
+	}
 	_, event := obs.Start(obs.WithSink(ctx, spool, obs.BuildMetadata(Version, "local", "cli")), "cli", command.CommandPath())
 	event.Status = code
 	event.Set("args", args)

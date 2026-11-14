@@ -2,7 +2,6 @@ package network
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -63,7 +62,7 @@ func TestBrowserTelemetryTrustLimitsAndPersistence(t *testing.T) {
 	}
 	defer logs.Close()
 	g.logs = logs
-	g.auth.sessions[sha256.Sum256([]byte("browser"))] = time.Now().Add(time.Hour)
+	testBrowserSession(t, g.auth, testBrowserEmail, "browser")
 	handler := g.Handler()
 	request := func(body, token string) int {
 		r := httptest.NewRequest("POST", origin.String()+"/api/telemetry", strings.NewReader(body))
@@ -97,7 +96,7 @@ func TestBrowserTelemetryTrustLimitsAndPersistence(t *testing.T) {
 		t.Fatal("valid", code)
 	}
 	events := storedBrowserErrors(t, g)
-	if len(events) != 1 || events[0]["trace_id"] != "0123456789abcdef0123456789abcdef" || events[0]["user"] != browserUser || events[0]["node_id"] != localStateNode {
+	if len(events) != 1 || events[0]["trace_id"] != "0123456789abcdef0123456789abcdef" || events[0]["user"] != testBrowserEmail || events[0]["node_id"] != localStateNode {
 		t.Fatalf("stored %+v", events)
 	}
 	encoded, _ := json.Marshal(events)
@@ -114,7 +113,7 @@ func TestBrowserTelemetryTrustLimitsAndPersistence(t *testing.T) {
 	if code := request(body, "browser"); code != 429 {
 		t.Fatal("rate limit", code)
 	}
-	g.auth.sessions[sha256.Sum256([]byte("other"))] = time.Now().Add(time.Hour)
+	testBrowserSession(t, g.auth, testBrowserEmail, "other")
 	if code := request(body, "other"); code != 204 {
 		t.Fatal("separate session", code)
 	}
@@ -149,7 +148,7 @@ func TestTelemetryBrowserFixture(t *testing.T) {
 	}
 	defer logs.Close()
 	g.logs = logs
-	g.auth.sessions[sha256.Sum256([]byte("telemetry-browser"))] = time.Now().Add(time.Hour)
+	testBrowserSession(t, g.auth, testBrowserEmail, "telemetry-browser")
 	g.options.Assets = http.FileServer(http.Dir("../../ui/dist"))
 	g.options.UIBuildID = uiBuildID(os.DirFS("../../ui/dist"))
 	server := httptest.NewUnstartedServer(nil)
@@ -163,9 +162,9 @@ func TestTelemetryBrowserFixture(t *testing.T) {
 		case "/api/config":
 			data = map[string]string{"ui_build_id": g.options.UIBuildID}
 		case "/api/status":
-			data = map[string]any{"authenticated": true, "setup_required": false}
+			data = map[string]any{"authenticated": true, "claimed": true, "legacy": false, "email": testBrowserEmail}
 		case "/api/identity":
-			data = map[string]any{"node": map[string]any{"id": "gateway", "name": "Gateway", "os": "linux", "version": "test"}, "auth": "password"}
+			data = map[string]any{"node": map[string]any{"id": "gateway", "name": "Gateway", "os": "linux", "version": "test"}, "auth": testBrowserEmail}
 		case "/api/settings":
 			data = map[string]any{"running": true, "platform": "linux", "sharing_enabled": false, "allowed_peers": []any{}}
 		case "/api/limits":

@@ -34,7 +34,7 @@ func TestAgentSessionsGateway(t *testing.T) {
 	if err := remember(home, SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
 		t.Fatal(err)
 	}
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}

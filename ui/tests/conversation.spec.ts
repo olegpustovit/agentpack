@@ -41,7 +41,7 @@ async function sendImagePrompt(page: Page, supportsImages: boolean) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/status", (route) => route.fulfill({ json: { setup_required: false, authenticated: true } }))
+  await page.route("**/api/status", (route) => route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }))
   await page.route("**/api/identity", (route) => route.fulfill({ json: identity }))
   await page.route("**/api/nodes", (route) => route.fulfill({ json: [] }))
   await page.route("**/api/events", (route) => route.abort())

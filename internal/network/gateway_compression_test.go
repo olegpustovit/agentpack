@@ -53,7 +53,7 @@ func TestGatewayCompressesReplayAndKeepsBrowserConnectionAlive(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "network", "sessions", id, "worker.json"), recordData, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}

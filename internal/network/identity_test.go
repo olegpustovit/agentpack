@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -25,7 +26,7 @@ import (
 
 func identityGateway(t *testing.T, home string, start func(context.Context, SessionInfo, string) (string, error)) (*Gateway, *url.URL) {
 	t.Helper()
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,20 +47,26 @@ func seedFolder(t *testing.T, home string) string {
 	return dir
 }
 
-func TestIdentityWithoutTailscaleReportsRootAuthOnly(t *testing.T) {
-	tailscaleLocal = local.Client{Socket: filepath.Join(t.TempDir(), "missing"), UseSocketOnly: true}
+func TestIdentityWithoutTailscaleReportsSignedInEmail(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "unavailable", 503) }))
+	defer server.Close()
+	tailscaleLocal = local.Client{UseSocketOnly: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, "tcp", server.Listener.Addr().String())
+	}}
 	t.Cleanup(func() { tailscaleLocal = local.Client{} })
 	home := t.TempDir()
 	g, origin := identityGateway(t, home, nil)
 	r := httptest.NewRequest("GET", origin.String()+"/api/identity", nil)
-	r.Header.Set("Authorization", "Bearer "+g.local.Secret)
+	testBrowserSession(t, g.auth, testBrowserEmail, "identity")
+	r.AddCookie(&http.Cookie{Name: g.auth.cookieName(), Value: "identity"})
 	w := httptest.NewRecorder()
 	g.Handler().ServeHTTP(w, r)
 	var got identityResponse
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	if got.Auth != "root" || got.TailscaleUser != "" || got.Node.Version != "test" {
+	if got.Auth != testBrowserEmail || got.TailscaleUser != "" || got.Node.Version != "test" {
 		t.Fatalf("identity without tailscale: %+v", got)
 	}
 }
@@ -156,10 +163,10 @@ func TestPeerSessionOwnerRequiresStableNodeIdentity(t *testing.T) {
 		t.Fatal("a reused peer name matched an owner without a stable ID")
 	}
 	localOwner := LocalActor("cli")
-	localBrowser := browserActor()
-	if !localBrowser.canWriteSession(SessionInfo{StartedBy: &localOwner}) ||
-		!localOwner.canWriteSession(SessionInfo{StartedBy: &localBrowser}) {
-		t.Fatal("browser and CLI actors on the same host lost owner access")
+	localBrowser := browserActor(testBrowserEmail)
+	if localBrowser.canWriteSession(SessionInfo{StartedBy: &localOwner}) ||
+		localOwner.canWriteSession(SessionInfo{StartedBy: &localBrowser}) {
+		t.Fatal("host alone granted access across account identities")
 	}
 	localPeer := Actor{Kind: "peer", User: localOwner.User, Node: localOwner.Node, StableNodeID: "stable-peer"}
 	if localPeer.canWriteSession(SessionInfo{StartedBy: &localOwner}) {
@@ -191,7 +198,7 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 	defer upstream.Close()
 
 	sessionID := "session-answer"
-	owner := browserActor()
+	owner := browserActor(testBrowserEmail)
 	record := WorkerRecord{
 		ID: sessionID, Address: strings.TrimPrefix(upstream.URL, "http://"), Secret: strings.Repeat("s", 64),
 		Session: SessionInfo{ID: sessionID, Transport: "acp", StartedBy: &owner},
@@ -218,6 +225,27 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 		w := httptest.NewRecorder()
 		g.Handler().ServeHTTP(w, r)
 		return w
+	}
+	for _, account := range []struct {
+		email, token string
+		status       int
+	}{{testBrowserEmail, "browser-owner", 204}, {"other@example.com", "browser-other", 403}} {
+		testBrowserSession(t, g.auth, account.email, account.token)
+		r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/sessions/"+sessionID+"/conversation/prompt", strings.NewReader(`{}`))
+		r.Header.Set("Origin", origin.String())
+		r.AddCookie(&http.Cookie{Name: g.auth.cookieName(), Value: account.token})
+		w := httptest.NewRecorder()
+		g.Handler().ServeHTTP(w, r)
+		if w.Code != account.status {
+			t.Fatalf("browser account %s: %d %s", account.email, w.Code, w.Body.String())
+		}
+		if account.status == 204 {
+			if got := <-requests; got != "/conversation/prompt" {
+				t.Fatal(got)
+			}
+		} else if len(requests) != 0 {
+			t.Fatal("another browser account reached the worker")
+		}
 	}
 
 	readOnly := Actor{Kind: "peer", User: owner.User, Node: "another-node"}
@@ -343,7 +371,7 @@ func TestPeerACPResumeRequiresRecordedOwner(t *testing.T) {
 	if got := resume("unowned", otherPeer).Code; got != http.StatusForbidden || len(started) != 1 {
 		t.Fatalf("unowned peer resume status=%d starts=%d", got, len(started))
 	}
-	if got := resume("external-history", browserActor()).Code; got != http.StatusOK || len(started) != 2 {
+	if got := resume("external-history", browserActor(testBrowserEmail)).Code; got != http.StatusOK || len(started) != 2 {
 		t.Fatalf("local unowned resume status=%d starts=%d", got, len(started))
 	}
 }

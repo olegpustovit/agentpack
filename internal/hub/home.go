@@ -256,13 +256,20 @@ func newHome(agentpackHome string, load sessionLoader) *home {
 }
 
 func gatewayLine(home string) string {
-	if value := strings.TrimSpace(os.Getenv("AGENTPACK_PUBLIC_URL")); value != "" {
-		return value
+	address := strings.TrimSpace(os.Getenv("AGENTPACK_PUBLIC_URL"))
+	if address == "" {
+		var err error
+		address, err = network.GatewayURL(home)
+		if err != nil {
+			return "gateway not running — run agentpack gateway start"
+		}
 	}
-	if value, err := network.GatewayURL(home); err == nil {
-		return value
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if status, err := network.GatewayAccountStatus(ctx, home); err == nil && !status.Claimed {
+		return "UNCLAIMED: open " + address + " now"
 	}
-	return "gateway not running — run agentpack gateway start"
+	return address
 }
 
 func (h *home) Init() tea.Cmd {

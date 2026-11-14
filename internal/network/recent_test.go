@@ -99,7 +99,7 @@ func TestKnownDirectoryRejectsReplacementUntilLocalLaunch(t *testing.T) {
 
 func TestRecentAPIReportsCurrentAvailabilityAndLastUse(t *testing.T) {
 	home := t.TempDir()
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}

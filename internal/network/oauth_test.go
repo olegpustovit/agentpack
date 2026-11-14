@@ -34,12 +34,12 @@ type oauthHarness struct {
 func newOAuthHarness(t *testing.T) *oauthHarness {
 	t.Helper()
 	home := t.TempDir()
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cookie := &http.Cookie{Name: "agentpack_session", Value: randomToken()}
-	auth.sessions[sha256.Sum256([]byte(cookie.Value))] = time.Now().Add(time.Hour)
+	testBrowserSession(t, auth, testBrowserEmail, cookie.Value)
 	server := httptest.NewUnstartedServer(nil)
 	origin, _ := url.Parse("http://" + server.Listener.Addr().String())
 	store, err := state.Open(home)
@@ -178,9 +178,7 @@ func TestOAuthConsentPKCEBindingAndRefreshReplay(t *testing.T) {
 		t.Fatal("cross-site consent accepted")
 	}
 	other := &http.Cookie{Name: h.cookie.Name, Value: randomToken()}
-	h.gateway.auth.mu.Lock()
-	h.gateway.auth.sessions[sha256.Sum256([]byte(other.Value))] = time.Now().Add(time.Hour)
-	h.gateway.auth.mu.Unlock()
+	testBrowserSession(t, h.gateway.auth, testBrowserEmail, other.Value)
 	response, _ = h.request(t, "POST", path, form.Encode(), "application/x-www-form-urlencoded", other, true)
 	if response.StatusCode != 400 {
 		t.Fatal("consent crossed browser sessions")
@@ -216,17 +214,17 @@ func TestOAuthConsentPKCEBindingAndRefreshReplay(t *testing.T) {
 	}
 	r := httptest.NewRequest("POST", h.server.URL+"/mcp", nil)
 	r.Header.Set("Authorization", "Bearer "+second.Access)
-	if !h.gateway.mcp.authenticated(r) {
+	if h.gateway.mcp.authenticate(r) == nil {
 		t.Fatal("token did not survive restart")
 	}
 	h.exchange(t, refresh, 400)
-	if h.gateway.mcp.authenticated(r) {
+	if h.gateway.mcp.authenticate(r) != nil {
 		t.Fatal("refresh replay did not revoke family")
 	}
 	third := h.exchange(t, h.codeForm(h.code(t)), 200)
 	h.request(t, "POST", "/oauth/revoke", url.Values{"token": {third.Refresh}, "client_id": {h.clientID}}.Encode(), "application/x-www-form-urlencoded", nil, false)
 	r.Header.Set("Authorization", "Bearer "+third.Access)
-	if h.gateway.mcp.authenticated(r) {
+	if h.gateway.mcp.authenticate(r) != nil {
 		t.Fatal("revocation left access token valid")
 	}
 }
@@ -268,7 +266,13 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 		t.Fatalf("list sessions: %v %+v", err, result)
 	}
 	var started atomic.Int32
-	h.gateway.options.Start = func(context.Context, SessionInfo, string) (string, error) { started.Add(1); return "session-test", nil }
+	h.gateway.options.Start = func(_ context.Context, info SessionInfo, _ string) (string, error) {
+		if info.StartedBy == nil || info.StartedBy.Kind != "mcp" || info.StartedBy.User != testBrowserEmail {
+			t.Errorf("MCP identity lost: %+v", info.StartedBy)
+		}
+		started.Add(1)
+		return "session-test", nil
+	}
 	directory := filepath.Join(h.gateway.options.Home, "project")
 	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "start_session", Arguments: map[string]any{"directory": directory, "harness": "codex"}})
 	if err != nil || !result.IsError || started.Load() != 0 {

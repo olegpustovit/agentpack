@@ -217,7 +217,7 @@ test("startup and machine discovery announce pending work", async ({ page }) => 
   const nodesReady = new Promise<void>((resolve) => (releaseNodes = resolve))
   await page.route(/\/api\/status(\?.*)?$/, async (route) => {
     await statusReady
-    await route.fulfill({ json: { setup_required: false, authenticated: true } })
+    await route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } })
   })
   await page.route(nodesPath, async (route) => {
     await nodesReady
