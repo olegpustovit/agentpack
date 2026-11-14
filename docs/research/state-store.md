@@ -406,3 +406,24 @@ Local checks before bootstrapping: downloader/publishing regressions pass,
 single-target GoReleaser static build also passes. The archive checksums and
 Make's switch from source preparation to downloads are deliberately pending the
 first successful library publication; P0.9 is not complete yet.
+
+### Published library pin and normal fetch path
+
+[Bootstrap run 43601266843](https://github.com/olegpustovit/agentpack/actions/runs/43601266843)
+built all five source targets successfully and published the six expected
+[prerelease assets](https://github.com/olegpustovit/agentpack/releases/tag/crsqlite-8e32195704ccaea8508f7d378e11dc2dc0bb3d2e).
+It then failed at the planned missing-checksum check. Those generated archive
+SHA-256 values are now recorded in `third_party/crsqlite.lock`. `make crsqlite`
+and its dependent targets now fetch and verify, without Rust or Zig on a normal
+host-native build. The verified archive is cached and checked on repeat builds.
+
+`make ci` passes using the published Linux archive. Added a guard for a Go/cgo
+cache pitfall: link paths contain the actual source pin, and a test requires
+all five directives to match the lock. A future source-pin bump must update
+those directives, changing Go's link action instead of reusing a binary linked
+against the previous C library. No build caches are cleared.
+
+The native Mac fixture fetched all five published libraries and is running the
+full `make release-check`, including UI staging and GoReleaser snapshot builds.
+Full platform smoke results and warm workflow timing remain pending; this is
+still an ongoing P0.9 implementation, not a completed Phase 0 gate.

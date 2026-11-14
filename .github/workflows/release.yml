@@ -154,6 +154,7 @@ jobs:
     runs-on: macos-26
     env:
       CGO_ENABLED: '1'
+      PWD: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -276,6 +277,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: macos-26
     env:
+      PWD: ${{ github.workspace }}
       AGENTPACK_SMOKED_DIR: ${{ github.workspace }}/approved
     steps:
       - uses: actions/checkout@v4
