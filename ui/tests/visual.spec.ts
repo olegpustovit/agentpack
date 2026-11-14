@@ -319,7 +319,7 @@ test.describe("a peer on an older version", () => {
   test("Machines asks for an update, with no raw 404", async ({ page }) => {
     await oldPeer(page)
     await page.goto("/machines/old")
-    await expect(page.getByText("Update Agentpack on main to see its projects.")).toBeVisible()
+    await expect(page.getByRole("alert")).toContainText("Update Agentpack on main to restore machine details.")
     await expect(page.getByText("404")).toHaveCount(0)
   })
 })

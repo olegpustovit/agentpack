@@ -7,6 +7,10 @@ import { setUnauthorizedHandler } from "./lib/api"
 import { terminalPool } from "./features/terminal/pool"
 import { forgetLimits } from "./features/limits/queries"
 import { queryClient, router } from "./router"
+import { breadcrumb, installTelemetry } from "./lib/telemetry"
+
+installTelemetry(() => ({ route: router.state.matches.at(-1)?.fullPath ?? "", search: router.state.location.search }))
+router.subscribe("onResolved", () => breadcrumb({ kind: "navigate", name: router.state.matches.at(-1)?.fullPath ?? "" }))
 
 // A 401 ends the session: close every terminal socket before the login screen takes over.
 setUnauthorizedHandler(() => {

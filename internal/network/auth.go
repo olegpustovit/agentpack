@@ -20,13 +20,14 @@ import (
 )
 
 type gatewayAuth struct {
-	mu       sync.Mutex
-	home     string
-	password []byte
-	setup    string
-	sessions map[[32]byte]time.Time
-	attempts int
-	reset    time.Time
+	mu        sync.Mutex
+	home      string
+	password  []byte
+	setup     string
+	sessions  map[[32]byte]time.Time
+	telemetry map[[32]byte]telemetryWindow
+	attempts  int
+	reset     time.Time
 }
 
 func randomToken() string {

@@ -11,7 +11,7 @@ no service worker, so API responses and registry data are never cached by the UI
 external script, CDN, font, analytics, localStorage credentials, or runtime Node server.
 
 Build with `bun install --frozen-lockfile && bun run build`; `make ui-stage` publishes it.
-Run browser checks with `bunx playwright install chromium webkit && bun run e2e`. The test budgets are in the repository `AGENTS.md`.
+Install browsers with `bunx playwright install chromium webkit`, then run `make ui-e2e` from the repository root. This also prepares the Go test fixture that verifies browser errors reach SQLite. Direct `bun run e2e` skips that integration case unless `AGENTPACK_TELEMETRY_TEST_BINARY` points to the compiled fixture. The test budgets are in the repository `AGENTS.md`.
 The gateway should set a same-origin CSP (scripts/styles from self, WebSocket connect
 from self; xterm dynamically sets style attributes) and disable HTTP caching for APIs.
 

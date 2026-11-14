@@ -185,6 +185,7 @@ func (g *Gateway) Handler() http.Handler {
 	g.registerLibrary(mux)
 	g.registerRegistryReplication(mux)
 	g.registerLimits(mux)
+	mux.HandleFunc("POST /api/telemetry", g.telemetry)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, map[string]bool{"ok": true}) })
 	mux.HandleFunc("GET /api/status", g.auth.status)
 	mux.HandleFunc("GET /api/identity", g.identity)

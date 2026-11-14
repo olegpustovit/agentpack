@@ -1,9 +1,12 @@
+import { recordAPI, traceRequest } from "./telemetry"
+
 export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
   ) {
     super(message)
+    this.name = "ApiError"
   }
 }
 
@@ -37,12 +40,23 @@ export async function api<T>(
   }
   const hasBody = opts.body !== undefined
   const method = opts.method ?? (hasBody ? "POST" : "GET")
-  const res = await fetch(url, {
-    method,
-    headers: hasBody ? { "Content-Type": "application/json" } : undefined,
-    body: hasBody ? JSON.stringify(opts.body) : undefined,
+  const traceparent = traceRequest()
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method,
+      headers: hasBody ? { "Content-Type": "application/json", traceparent } : { traceparent },
+      body: hasBody ? JSON.stringify(opts.body) : undefined,
+    })
+  } catch (error) {
+    recordAPI(method, path, traceparent, 0, error)
+    throw error
+  }
+  recordAPI(method, path, traceparent, res.status)
+  const text = await res.text().catch((error) => {
+    if (res.ok) recordAPI(method, path, traceparent, 0, error)
+    throw error
   })
-  const text = await res.text()
   let data: unknown
   try {
     data = text ? JSON.parse(text) : undefined

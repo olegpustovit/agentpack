@@ -55,7 +55,7 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: all platform/storage checks pass; warm CI completes in 551 s against the 697 s budget. Reference Linux ARM64 launch measurements remain open. P1.1–P1.7 and P1A.1–P1A.6 are implemented with the stderr/snapshot limits recorded below; P1A.7 onward remains.
+- P0.11: all platform/storage checks pass; warm CI completes in 551 s against the 697 s budget. Reference Linux ARM64 launch measurements remain open. P1.1–P1.7 and P1A.1–P1A.7 are implemented with the stderr/snapshot limits recorded below; P1A.8 onward remains.
 - Phase 0 gate: platform and storage checks pass; reference Linux ARM64 startup measurement is still required.
 
 ## Source pin — P0.2
@@ -1004,3 +1004,56 @@ Five isolated Linux amd64 setup runs give medians of 0.301083 ms for
 MaterializationHome, 7.403948 ms cold Codex setup and 0.114826 ms warm (previous:
 0.302059/7.509646/0.117226 ms). The gateway-disabled cold/warm launch guard still
 passes without logs or state.db. These are not Linux ARM64 reference-host results.
+
+## Browser telemetry — P1A.7
+
+The shared API client generates W3C traceparent headers and records API
+breadcrumbs. A bounded 30-entry buffer also records route patterns and named
+controls. Form values and conversation content are excluded; credential and
+prompt-like search fields are omitted. API failures use status/path summaries,
+never response bodies. ApiError instances are excluded at subsequent error
+boundaries, and already-reported network errors are tracked weakly, preventing
+response text or duplicate network reports from escaping through the router.
+Window errors, unhandled rejections and router catches use the same reporter.
+
+Repeats within ten seconds are dropped, with at most twenty events per minute.
+Batches contain at most five events and split further when their actual UTF-8
+body would exceed 64 KiB. Regular uploads use fetch; pagehide uses sendBeacon
+with a keepalive fetch fallback. Failed uploads do not report themselves.
+
+POST /api/telemetry requires an authenticated browser cookie, including when a
+caller has a valid local bearer. It limits the body to 64 KiB and each session
+to sixty events per minute. Only declared error fields and breadcrumb keys are
+accepted. The server owns user/node/time/build metadata and applies the existing
+event redaction and size limits. Session-rate bookkeeping is pruned with expired
+or removed browser sessions. Browser errors use the existing UI fingerprint and
+issue machinery. UI build IDs and hidden source maps remain the next step.
+
+Tests cover ring eviction, dedupe, minute limits, status exclusions (400, 401,
+404 and other client errors), failed response streams, body exclusion even at
+the router boundary, controls versus form/chat text, multibyte batch splitting,
+beacon selection and non-recursive upload failures. Go tests exercise real day
+files, identity/time spoofing, redaction, rejected local bearer/anonymous calls,
+oversized/trailing bodies, independent session limits and minute rollover.
+
+A subprocess Go fixture gives the actual React UI an authenticated gateway and
+SQLite day store, with a deliberately malformed session list causing a real
+component render error. On leaving the page, the store contains exactly one
+ui.error with breadcrumbs and the last API trace. API fixtures live in the test
+server, avoiding a race in browser request interception during unload. Final
+Chromium and physical Apple M1 WebKit runs take 509 ms and 789 ms respectively.
+make ui-e2e prepares the pinned static library and Go test binary; the direct
+frontend-only runner skips this integration case unless that binary is supplied.
+
+make ci, lint, typecheck, all 186 Vitest tests (2.88 s), the UI build and size
+gates pass. All 189 Chromium/phone browser tests pass in 32.8 s with four workers.
+An existing older-peer assertion expected superseded banner text; it now checks
+the current machine-details update notice. Mac network race tests and the final
+telemetry race regression pass. The embedded Go artifact passes the UI smoke;
+that script now uses Make's actual bin/ap output and a task-specific temp variable.
+
+The standalone minified client is 1,356 bytes gzip, enforced by the build's size
+gate. The complete initially loaded JavaScript grows from 160,045 to 161,228 bytes
+gzip (+1,183), below both the 1.5 KB addition and 170 KB initial budgets. No runtime
+dependency or lockfile change was needed. Mac validation uses the temporary
+checkout and developer-tool caches, without changing installed application state.

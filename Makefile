@@ -104,8 +104,9 @@ ui-build: ui-install
 ui-stage: ui-build
 	cd ui && bun scripts/stage.ts
 
-ui-e2e: ui-build
-	cd ui && bun run e2e
+ui-e2e: ui-build crsqlite
+	$(GO) test -c -o .build/telemetry-e2e ./internal/network
+	cd ui && AGENTPACK_TELEMETRY_TEST_BINARY="$(CURDIR)/.build/telemetry-e2e" bun run e2e
 
 artifact: ui-stage build
 	./scripts/ui-smoke.sh
