@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -63,6 +64,23 @@ func (q *Queue) Write(event Event) {
 }
 
 type Metadata struct{ Version, Commit, NodeID, Proc string }
+
+func BuildMetadata(version, node, proc string) Metadata {
+	metadata := Metadata{Version: version, NodeID: node, Proc: proc}
+	if build, ok := debug.ReadBuildInfo(); ok {
+		if metadata.Version == "" {
+			metadata.Version = build.Main.Version
+		}
+		for _, setting := range build.Settings {
+			if setting.Key == "vcs.revision" {
+				metadata.Commit = setting.Value
+				break
+			}
+		}
+	}
+	return metadata
+}
+
 type recording struct {
 	sink     Sink
 	metadata Metadata

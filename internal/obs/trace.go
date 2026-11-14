@@ -20,14 +20,21 @@ func NewTrace() Trace {
 // ParseTraceParent starts a fresh trace for malformed or all-zero identifiers.
 func ParseTraceParent(value string) Trace {
 	if len(value) == 55 && value[:3] == "00-" && value[35] == '-' && value[52] == '-' && (value[53:] == "00" || value[53:] == "01") {
-		id, span := value[3:35], value[36:52]
-		_, idErr := hex.DecodeString(id)
-		_, spanErr := hex.DecodeString(span)
-		if idErr == nil && spanErr == nil && id != strings.Repeat("0", 32) && span != strings.Repeat("0", 16) && value == strings.ToLower(value) {
-			return Trace{id, span}
+		trace := Trace{value[3:35], value[36:52]}
+		if validTrace(trace) {
+			return trace
 		}
 	}
 	return NewTrace()
+}
+
+func validTrace(trace Trace) bool {
+	if len(trace.ID) != 32 || len(trace.Span) != 16 || trace.ID != strings.ToLower(trace.ID) || trace.Span != strings.ToLower(trace.Span) {
+		return false
+	}
+	_, idErr := hex.DecodeString(trace.ID)
+	_, spanErr := hex.DecodeString(trace.Span)
+	return idErr == nil && spanErr == nil && trace.ID != strings.Repeat("0", 32) && trace.Span != strings.Repeat("0", 16)
 }
 
 func (t Trace) TraceParent() string { return "00-" + t.ID + "-" + t.Span + "-01" }

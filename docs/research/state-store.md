@@ -55,7 +55,7 @@ or user shell startup files were changed.
 - P0.8: hidden product self-check passes natively, statically, and on the Mac.
 - P0.9: libraries published/pinned; full five-platform build and runtime workflow passed.
 - P0.10: release configuration and real-binary validation implemented and checked.
-- P0.11: all target/storage/release-time gates pass. Reference Linux ARM64 launch measurements remain open. P1.1–P1.7 and P1A.1–P1A.2 are implemented; P1A.3 onward remains.
+- P0.11: all target/storage/release-time gates pass. Reference Linux ARM64 launch measurements remain open. P1.1–P1.7 and P1A.1–P1A.3 are implemented; P1A.4 onward remains.
 - Phase 0 gate: platform and storage checks pass; reference Linux ARM64 startup measurement is still required.
 
 ## Source pin — P0.2
@@ -762,3 +762,30 @@ Warm workflow 43613015251 (8588afa), from 15:58:19 to 16:09:19 UTC, passes in
 GoReleaser and every platform smoke. The remaining performance evidence gap is
 the original Linux ARM64 reference-host launch benchmark, not cross-platform
 runtime compatibility.
+
+## Process spool and gateway ingestion — P1A.3
+
+The spool sink queues up to 4,096 events and appends one capped/redacted JSON
+line with one Write call to a process/PID/minute NDJSON file. Empty construction
+and shutdown create no log directory. Each line's file is closed immediately:
+an idle process must not keep Windows from deleting an aged spool. File names
+are validated and directories retain the shared private-permission handling.
+
+The gateway now owns its day store and ingests spool minutes at least two
+minutes old on startup and once a minute. It joins its background loops before
+closing stores. Ingestion deletes source files only after successful commits;
+bulk Import applies backpressure, while normal live Write remains nonblocking.
+The existing trace/span/node key makes a commit-before-unlink replay idempotent.
+A transient write failure leaves the source and can be retried; Flush reports
+failures since its previous barrier, while Close retains the lifetime failure.
+
+The reader bounds each line, skips/counts malformed, oversized, unterminated and
+invalid-trace entries, and continues reading later valid lines. Spool retention
+removes the oldest files first above 16 MiB. Tests cover two process spools,
+the two-minute boundary, all valid events, crash replay, damaged last lines,
+oversized records, the directory cap, safe process names, filesystem-free empty
+spools, and failed-import recovery. `make ci` and the Mac obs/network race
+suites pass. Full five-platform workflow 43614669421 also passes for P1A.2.
+
+Runtime HTTP instrumentation follows in P1A.4. Workers/CLI begin emitting their
+own events in P1A.6; their sink and ingestion paths are now ready.

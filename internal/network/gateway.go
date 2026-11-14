@@ -24,10 +24,11 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/olegpustovit/agentpack/internal/state"
 
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
-// shortcut: rekey local settings and limits to the stable tailnet node ID before P4.1 CRR conversion.
+// shortcut: rekey local settings, limits and diagnostics to the stable tailnet node ID before P4.1 CRR conversion.
 const localStateNode = "local"
 
 type GatewayOptions struct {
@@ -49,6 +50,7 @@ type nodeRecord struct {
 type Gateway struct {
 	options        GatewayOptions
 	store          *state.Store
+	logs           *obs.Store
 	auth           *gatewayAuth
 	mcp            *GatewayMCP
 	local          nodeRecord
@@ -113,15 +115,23 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if err != nil {
 		return err
 	}
+	logs, err := obs.Open(options.Home, obs.StoreOptions{Metadata: obs.BuildMetadata(options.Version, localStateNode, "gateway")})
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, logs.Close()) }()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	gateway := &Gateway{options: options, store: store, auth: auth, local: nodeRecord{listener.Addr().String(), randomToken()}, origin: origin, stop: cancel, done: ctx.Done()}
+	gateway := &Gateway{options: options, store: store, logs: logs, auth: auth, local: nodeRecord{listener.Addr().String(), randomToken()}, origin: origin, stop: cancel, done: ctx.Done()}
 	gateway.mcp, err = NewGatewayMCP(gateway)
 	if err != nil {
 		return err
 	}
-	go gateway.runTailnetSharing(ctx)
-	go gateway.runRegistryReplication(ctx)
+	var background sync.WaitGroup
+	for _, run := range []func(context.Context){gateway.runTailnetSharing, gateway.runRegistryReplication, gateway.runLogSpool} {
+		background.Go(func() { run(ctx) })
+	}
+	defer func() { cancel(); background.Wait() }()
 	data, _ := json.Marshal(gateway.local)
 	record := filepath.Join(options.Home, "network", "node.json")
 	if err = os.WriteFile(record, data, 0600); err != nil {
@@ -142,6 +152,24 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return server.Shutdown(shutdown)
+	}
+}
+
+func (g *Gateway) runLogSpool(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if _, err := g.logs.IngestSpool(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("diagnostic spool ingestion failed: %v", obs.Redact(err.Error()))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 

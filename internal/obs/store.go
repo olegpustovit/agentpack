@@ -92,6 +92,23 @@ func (s *Store) Write(event Event) {
 	s.queue.Write(event.Sanitized())
 }
 
+// Import applies backpressure to bulk ingestion; live event producers use Write.
+func (s *Store) Import(ctx context.Context, events []Event) error {
+	for _, event := range events {
+		if s.closed.Load() {
+			return errors.New("diagnostic store closed")
+		}
+		select {
+		case s.queue.Events <- event.Sanitized():
+		case <-s.done:
+			return errors.New("diagnostic store closed")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return s.Flush(ctx)
+}
+
 func (s *Store) Dropped() uint64 { return s.queue.Dropped.Load() }
 
 func (s *Store) Flush(ctx context.Context) error {
@@ -129,13 +146,20 @@ func (s *Store) run() {
 	ticker := time.NewTicker(s.options.FlushInterval)
 	defer ticker.Stop()
 	batch := make([]Event, 0, 256)
+	var pendingError error
+	failed := func(err error) {
+		s.recordError(err)
+		if pendingError == nil {
+			pendingError = err
+		}
+	}
 	flush := func() {
 		if len(batch) != 0 {
-			s.recordError(s.writeBatch(batch))
+			failed(s.writeBatch(batch))
 			batch = batch[:0]
 		}
 		if s.options.Now().Sub(s.swept) >= s.options.SweepInterval {
-			s.recordError(s.sweep())
+			failed(s.sweep())
 		}
 	}
 	add := func(event Event) {
@@ -158,7 +182,8 @@ func (s *Store) run() {
 			flush()
 		case reply := <-s.flush:
 			drain()
-			reply <- s.firstError
+			reply <- pendingError
+			pendingError = nil
 		case <-s.stop:
 			drain()
 			if s.db != nil {
