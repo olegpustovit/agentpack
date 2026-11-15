@@ -3,6 +3,9 @@
 Specification: https://artifacts.microapps.space/a/7r76ssr0a7rd (version 10).
 Baseline checkout: `0bd1c5b` (v0.13.9). No application state had been migrated at that baseline.
 
+Completed and deployed as v0.14.0 on 2026-11-15. The final publication and
+deployment entry below supersedes the remaining gates in historical checkpoints.
+
 ## Baseline — P0.1
 
 Measured 2026-11-14 on Linux amd64, Intel Core i9-12900K, Go 1.27.3.
@@ -2143,3 +2146,98 @@ and the binary-dependency/source-map integration checks. This snapshot takes
 91 s (its predecessor's 56 s was an earlier checkpoint, not a replacement for
 this current-source check). Local `make ci` passes again before the final report
 commit. Source changes remain unpublished until the tagged workflow succeeds.
+
+
+## Final publication and deployment — complete
+
+PR [#33](https://github.com/olegpustovit/agentpack/pull/33) merged to `dev`
+as `c52f59cd53ba7ffd465929c51bd8a2442093ad01`; annotated tag `v0.14.0`
+points to that commit. The tagged
+[release workflow](https://github.com/olegpustovit/agentpack/actions/runs/43693895582)
+completed successfully. Its native Windows full suite, GoReleaser builds,
+five real-extension runtime smoke jobs, binary dependencies, installer/source-map
+validation and exact-binary publication comparison all passed. The existing
+immutable cr-sqlite inputs were reused; their source rebuild was correctly skipped.
+
+[v0.14.0](https://github.com/olegpustovit/agentpack/releases/tag/v0.14.0)
+is published, non-draft, non-prerelease and latest. All nine required assets are
+present and nonempty: five platform archives, both installers, checksums and
+the separate UI source-map archive. Both install commands at the beginning of
+the release body pin v0.14.0. Published installer scripts match the rendered
+tested templates byte for byte. Actual published shell installers were exercised
+in isolated directories on Linux amd64 and physical macOS arm64; both installed
+0.14.0 and passed the real static-extension `state-selfcheck`.
+
+### Release durations
+
+| Run | Workflow timestamp span | Scope |
+| --- | ---: | --- |
+| v0.13.9 baseline, 42070852362 | 577 s | Product release baseline |
+| P0 warmed validation | 551 s | Recorded above; passes the 697 s warm gate |
+| Final corrected candidate, 43691517481 | 661 s | Full candidate validation; no tagged publication |
+| v0.14.0 tagged release, 43693895582 | 1,320 s | 08:18:40–08:40:40 UTC; complete product publication |
+| Final native Mac `make release-check` | 91 s | Current-source five-platform snapshot and integration checks |
+
+The final tagged workflow is 743 s longer than the historical product baseline;
+its tag-scoped cache/build and publication span must not be presented as the
+661 s candidate run or as an equivalent warmed build measurement. The separate
+warm-build gate passed as recorded above. Workflow spans include orchestration
+and publication; the local Mac snapshot is a different measurement.
+
+The remaining baseline UI first-frame benchmark was repeated on the same Linux
+amd64 host with the original five-by-five command: median **0.017847 ms**, versus
+baseline **0.018906 ms** (samples 0.018065, 0.017847, 0.017516, 0.017910,
+0.017595 ms). Setup, cache-add, state/replication/allocator and diagnostics
+measurements, including their limits and hardware, are recorded in the phase
+tables above. The ARM64 deployment host meets all three setup budgets; the
+hour-long storage profile projects 19.312 MiB/day against the 50 MiB ceiling.
+
+### Live gateway verification
+
+Before upgrading, the existing gateway was stopped briefly for a private complete
+data-home backup. The archive was compared to its source and its SHA-256 checked
+before the old service resumed. That backup remains under the remote user's
+private `agentpack-gateway-backups/pre-v0.14.0.*` directory. No legacy workers
+were running. The house `ap deploy --binary` path installed the published ARM64
+binary, retained the previous executable and Caddy configuration, and verified
+the local service and public HTTPS endpoint.
+
+At [agentpack.microapps.space](https://agentpack.microapps.space), verification
+confirmed:
+
+- Active systemd user service and CLI/API version 0.14.0.
+- Installed binary SHA-256
+  `b1dddb9277382fa16bc09d262cb4e3c869c19de2907742a96b19f7d0eaf25ea3`,
+  identical to the checksum-verified published ARM64 archive's executable.
+- Native static-extension self-check `ok`, schema version 22 and state.db
+  `PRAGMA quick_check` result `ok`.
+- Public page and all loaded JavaScript/CSS assets return 200. A real Chromium
+  browser renders the legacy owner-claim form without page errors.
+- `/api/status` returns 200 with `claimed=false`, `legacy=true`; unauthenticated
+  `/api/config` returns 403. All loaded JavaScript source-map URLs return 404.
+
+The preserved legacy password protects the owner claim. The owner must open the
+gateway and confirm that existing password with their email; the upgrade does
+not invent an account or replace their password. That account interaction was
+not performed with guessed credentials.
+
+### Final gate disposition
+
+P0 through P7, including P1A diagnostics and P4A archive, are implemented and
+verified by the numbered ledger and its subsequent evidence. The ledger's
+publication, duration, measurement, merge, release and deployment gates are now
+closed. P3.7's deliberate stopped-worker import rule remains product behavior;
+there were no live legacy workers to defer on the deployment host.
+
+The final code passed `make ci`, all 198 UI tests, lint/typecheck/build/budget
+checks, 195 Chromium/phone browser checks, 11 native Mac WebKit checks (two
+existing engine skips), `make artifact`, and native Mac `make release-check`.
+The full tagged workflow subsequently passed. The final report-only commit
+reruns the Go CI gate; no product source differs from the released tag.
+
+No tracked files were deleted. Removed protocols/file formats and the exact
+dependency additions/removal are listed under Final report inputs above.
+Optional headless model prompts were not run; no account quota or credentials
+were required for these checks. This completes the implementation, release and
+deployment request; retained backups and user-owned account claiming remain
+intact.
