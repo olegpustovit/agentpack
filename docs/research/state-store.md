@@ -1,7 +1,7 @@
 # Replicated state store implementation record
 
 Specification: https://artifacts.microapps.space/a/7r76ssr0a7rd (version 10).
-Baseline checkout: `0bd1c5b` (v0.13.9). No application state has been migrated.
+Baseline checkout: `0bd1c5b` (v0.13.9). No application state had been migrated at that baseline.
 
 ## Baseline — P0.1
 
@@ -2010,7 +2010,7 @@ left behind. v0.14.0 is prepared in the product source. Implementation commit:
 | P0.1–P0.11 static foundation | Immutable source/toolchain/SQLite pin, five checksum-verified libraries, real extension self-checks, static/system-link validation and version-pinned installers. Earlier native platform workflow evidence and measurements appear under P0. | Current release workflow and final duration. |
 | P1.1–P1.7 local store | FULL/WAL state store, migrations, limits, settings and OAuth; local credentials remain local. Successful foreground-launch regressions leave state.db untouched. | None in this phase. |
 | P1A.1–P1A.11 diagnostics | Redacted bounded events, daily logs, spools, correlation, exact sampled issue counts, browser telemetry, source maps, offline CLI, authenticated MCP and Diagnostics UI. Full Go/UI gates pass. | None in these steps. |
-| P1A.12 volume | Isolated one-hour run with three real workers and input/read traffic, started 2026-11-15 07:09:06 UTC. No model requests. | Finish and record events/hour, bytes/event and <=50 MiB/day projection. |
+| P1A.12 volume | Full hour: 1,923 events, 438.78 bytes/event on disk, 19.31 MiB/day projection; three real terminal workers, 720 input requests and 1,200 reads. No model requests. | Pass (<50 MiB/day). |
 | P1A.13–P1A.14 shared issues/traces | Replicated issue status/counts, retry-safe failure-only forwarding, bounded paginated peer/MCP reads and complete CLI collection. | None in these steps. |
 | P2.1–P2.10 accounts | Claim/login, preserved legacy hash, hashed sliding sessions, role checks, revocation, abuse limits, offline administration, browser/account flow and docs. Joining nodes wait for inherited users. | None in this phase. |
 | P3.1–P3.8 sessions | Durable metadata/history/progress, owner-safe native resume, stopped-worker import, coalescing replacements, concurrent writers and DB-free launcher checks. ARM64 setup medians meet budgets. | Live legacy workers intentionally await stopped import, per P3.7. |
@@ -2051,3 +2051,95 @@ before timing server readiness, retaining the same two-second deadline. Focused
 cache/database/CLI checks pass in 0.008/0.016/0.114 s. Native Windows must pass the
 corrected commit's required workflow before publication; its failed predecessor
 is not treated as a passing gate.
+
+
+### Final report inputs
+
+The source artifact was re-read during the final audit: version 10, index.md
+SHA-256 `719d4a7a1f3bd69d53ddeeea703e36ccd04f95f51070a99aec26af3bd8298d28`.
+The completion ledger above retains the original numbered scope.
+
+Same-host Linux amd64 setup measurements (32 MiB fixture) compare P0.1 baseline
+with the completed implementation's P6 run:
+
+| Benchmark | Baseline (ms) | Final implementation (ms) |
+| --- | ---: | ---: |
+| MaterializationHome | 0.389806 | 0.321437 |
+| CodexSetup/cold | 9.293943 | 6.704513 |
+| CodexSetup/warm | 0.139241 | 0.131848 |
+
+The cache-index replacement's separate controlled add benchmark increased from
+0.051531 ms on bbolt to 0.310703 ms after SQLite and Library integration. That is
+an absolute increase of 0.259172 ms; no numerical add budget was specified. Its
+before/after setup measurements and the resolver's armed no-peer-callback check
+are recorded under P7 and P6 above. The native ARM64 deployment host independently
+meets the explicit 1/20/1 ms setup budgets, as recorded in startup-performance.md.
+Earlier store/replication/allocator and diagnostics-overhead measurements remain
+in their phase sections; they are not replaced by unrelated setup timings.
+
+No tracked source file was deleted between baseline 0bd1c5b and this candidate.
+Removed behavior and data formats: the inventory/object/ack replication protocol,
+verified-object receipt bookkeeping, file-backed public Library objects/heads/
+names/tombstones/drafts (removed after verified import), and the disposable
+cache/db.reddb index (rebuilt as plain SQLite). Local capture settings and recovery
+journals remain files to keep launches database-free.
+
+Dependency changes against baseline: remove go.etcd.io/bbolt v1.5.0; add
+mattn/go-sqlite3 v1.14.53 for the pinned static SQLite/cr-sqlite store and
+felixge/httpsnoop v1.1.0 for HTTP observation while preserving streaming and
+WebSocket interfaces. Rust and Zig are build-input tools, not installed runtime
+dependencies. Published platform libraries remain immutable and checksum-pinned.
+
+
+Corrected candidate a230a8b passes required workflow 43691517481: the full native
+Windows package/launch/PowerShell suite, GoReleaser snapshot, binary dependencies,
+source maps, and all five real-extension platform smoke jobs. The library rebuild
+is correctly skipped because all pinned assets already exist; product publication
+is correctly skipped for a pull request. This supersedes the failed predecessor
+for the native Windows issues above. The storage run and tagged product publication
+remain separate gates.
+
+
+## Completed hour-long storage measurement — P1A.12
+
+2026-11-15 07:09:06–08:09:06 UTC, Linux amd64, isolated private home, Tailscale
+sharing disabled. Three real shell terminal workers received input and HTTP
+read traffic every 15 s. Workers were stopped cleanly, final spools ingested,
+and day databases closed/checkpointed before measuring. This profile uses no
+model requests and consumes no model quota.
+
+| Measurement | Result |
+| --- | ---: |
+| Elapsed | 3,600.030 s |
+| Terminal workers | 3 |
+| Successful input requests | 720 |
+| Successful read requests | 1,200 |
+| Retained diagnostic events | 1,923 |
+| Retained error events | 0 |
+| Cleanly ended workers verified in state.db | 3 |
+| Events per hour | 1,922.984 |
+| Day database bytes | 843,776 |
+| On-disk bytes per event, including tables/indexes | 438.781 |
+| Projected MiB per machine per day | 19.312 |
+| Required ceiling | 50 MiB/day |
+
+The helper asserts three live workers, successful input/read traffic, observed
+terminal output, at least 700 input and 1,000 read requests, nonempty diagnostic
+storage, and the 50 MiB/day ceiling. It stops workers and closes the gateway before
+computing counts. The measured volume passes; it is a workload projection,
+not a claim about every possible user activity level. The 256 MiB daily hard
+budget and sampling/retention guarantees remain independently tested.
+
+Corrected-candidate workflow 43691517481 completed successfully in 661 s
+(07:47:37–07:58:38 UTC). Baseline product workflow was 577 s; the candidate's
+span is +84 s and remains below the Phase 0 697 s comparison ceiling. This
+candidate run does not include tagged product publication; the final product
+workflow's own elapsed time will be recorded after it completes.
+
+
+Final current-source Mac `make release-check` also passes after the Windows and
+stream follow-through: five platform snapshots, archives/installers/checksums,
+and the binary-dependency/source-map integration checks. This snapshot takes
+91 s (its predecessor's 56 s was an earlier checkpoint, not a replacement for
+this current-source check). Local `make ci` passes again before the final report
+commit. Source changes remain unpublished until the tagged workflow succeeds.
