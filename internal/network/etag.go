@@ -13,7 +13,7 @@ const etagMaxBody = 8 << 20
 
 // etagPath reports whether an API path gets a content ETag. Streams, status and UI configuration stay uncached.
 func etagPath(p string) bool {
-	if !strings.HasPrefix(p, "/api/") || p == "/api/events" || p == "/api/status" || p == "/api/config" {
+	if !strings.HasPrefix(p, "/api/") || p == "/api/events" || p == "/api/sync/events" || p == "/api/status" || p == "/api/config" {
 		return false
 	}
 	return !strings.HasPrefix(p, "/api/sessions/") || !(strings.HasSuffix(p, "/terminal") || strings.HasSuffix(p, "/output"))

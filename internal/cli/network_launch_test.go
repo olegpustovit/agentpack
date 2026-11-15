@@ -73,6 +73,14 @@ func TestNativePresenceEndsWithLaunchProcess(t *testing.T) {
 
 func startNativePresenceGateway(t *testing.T, home string) {
 	t.Helper()
+	// Keep schema creation outside the launch-presence readiness deadline.
+	store, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- network.ServeGateway(ctx, network.GatewayOptions{Home: home, Address: "127.0.0.1:0"}) }()

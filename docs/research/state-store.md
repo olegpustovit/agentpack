@@ -1991,3 +1991,63 @@ or account quota. Its final storage projection is required before release.
 Remaining: final requirement-by-requirement completion ledger, that measurement,
 commit/push and required release-workflow checks, publication, and deployment
 with live version/health verification. The goal remains active.
+
+
+Oversized archive transport is covered end to end: a valid late coalesced event
+travels worker → intermediate peer → Main over chunked HTTP, becomes a relayed
+archive journal entry, and updates the durable archive without changing its body.
+The focused transfer/journal group passes in 1.525 s; its race run passes in
+10.174 s. Failed snapshot creation closes the temporary file before removing it,
+including on Windows; a canceled-transfer regression checks no private file is
+left behind. v0.14.0 is prepared in the product source. Implementation commit:
+`74996bf` (P4–P7 and transport/diagnostic follow-through).
+
+
+### Completion ledger before publication
+
+| Requirement | Implementation and evidence | Remaining gate |
+| --- | --- | --- |
+| P0.1–P0.11 static foundation | Immutable source/toolchain/SQLite pin, five checksum-verified libraries, real extension self-checks, static/system-link validation and version-pinned installers. Earlier native platform workflow evidence and measurements appear under P0. | Current release workflow and final duration. |
+| P1.1–P1.7 local store | FULL/WAL state store, migrations, limits, settings and OAuth; local credentials remain local. Successful foreground-launch regressions leave state.db untouched. | None in this phase. |
+| P1A.1–P1A.11 diagnostics | Redacted bounded events, daily logs, spools, correlation, exact sampled issue counts, browser telemetry, source maps, offline CLI, authenticated MCP and Diagnostics UI. Full Go/UI gates pass. | None in these steps. |
+| P1A.12 volume | Isolated one-hour run with three real workers and input/read traffic, started 2026-11-15 07:09:06 UTC. No model requests. | Finish and record events/hour, bytes/event and <=50 MiB/day projection. |
+| P1A.13–P1A.14 shared issues/traces | Replicated issue status/counts, retry-safe failure-only forwarding, bounded paginated peer/MCP reads and complete CLI collection. | None in these steps. |
+| P2.1–P2.10 accounts | Claim/login, preserved legacy hash, hashed sliding sessions, role checks, revocation, abuse limits, offline administration, browser/account flow and docs. Joining nodes wait for inherited users. | None in this phase. |
+| P3.1–P3.8 sessions | Durable metadata/history/progress, owner-safe native resume, stopped-worker import, coalescing replacements, concurrent writers and DB-free launcher checks. ARM64 setup medians meet budgets. | Live legacy workers intentionally await stopped import, per P3.7. |
+| P4.1–P4.9 mesh | CRR tables, matching-schema peer transport, whole-version apply/cursor transactions, explicit mutual trust, event wakeups, independent retry workers, acting-user authorization and unified offline browser reads. Transport-clock, partition, corrupt-transfer and large-version regressions pass. | None in this phase. |
+| P4A.1–P4A.8 archive | Single Main/archive roles, safe handoff, seven-day archive commits before prune, late-edit journal, read-only archived chats and verified attachment retention/cleanup. Large late edits relay through a peer to Main. | None in this phase. |
+| P5.1–P5.5 content pointers | Verified advertised locations, bounded peer package tar fetch with lock-integrity checks and GitHub fallback, image verification/quota and no cached-launch network requests. | None in this phase. |
+| P6.1–P6.5 Library | Verified SQL import, immutable public objects, derived heads/merge/conflicts, stable draft targets, private local bindings/approvals and removal of inventory/object/ack transport. | None in this phase. |
+| P7.1–P7.3 disposable index | Plain SQLite index with unchanged callers, safe old-index removal, offline alias reuse, bbolt removed from module graph; before/after numbers recorded above. | None in this phase. |
+| Finish | Full make ci, UI checks, native browser checks, embedded-artifact smoke and five-platform Mac snapshot checks pass. v0.14.0 candidate committed as 74996bf and pushed to PR #33. | Required current workflow, volume measurement, final report, merge/release and live deployment verification. |
+
+The required release workflow is running for candidate 74996bf:
+https://github.com/olegpustovit/agentpack/actions/runs/43689573922 .
+Historical checkpoint gaps above are superseded only by the evidence in this
+ledger and the final publication entry; pending items are not counted complete.
+
+
+The named sync-event endpoint is now checked through the complete gateway,
+including a pending join. Its bootstrap allowlist admits only the explicitly
+approved peer, and conditional response caching excludes the stream even when
+no Accept header is supplied. The same fixture verifies the joining browser can
+read its UI configuration while application data remains forbidden. Focused
+join/event/cache checks pass (2.438 s); their race check passes (3.495 s).
+
+
+### Native Windows gate follow-through
+
+Candidate workflow 43689573922 caught three Windows-specific failures. Peer tar
+links used Windows separators before POSIX archive validation; the tar filesystem
+adapter now validates and converts native link targets as archive/tar reads them,
+without changing materialized cache bytes or the sha256-tree-v1 digest. Validation
+also occurs at the actual header read rather than in a separate pre-scan. The
+existing safe round-trip and unsafe-link tests cover the behavior.
+
+The disposable-index test now checks POSIX permission bits on Unix, since Windows
+reports DOS read-only flags instead. Its plain-SQLite, read-only and nonregular-file
+checks still run on Windows. The native-presence fixture prepares its schema
+before timing server readiness, retaining the same two-second deadline. Focused
+cache/database/CLI checks pass in 0.008/0.016/0.114 s. Native Windows must pass the
+corrected commit's required workflow before publication; its failed predecessor
+is not treated as a passing gate.

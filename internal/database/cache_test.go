@@ -3,6 +3,7 @@ package database
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -42,7 +43,7 @@ func TestOpenCacheDropsLegacyAndUsesPrivatePlainSQLite(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0600 {
+	if info, err := os.Stat(path); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("index permissions: %v %v", info, err)
 	}
 	db, err = OpenCache(true)

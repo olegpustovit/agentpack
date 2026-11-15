@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/olegpustovit/agentpack/internal/state"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -55,6 +56,29 @@ func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
 	if w := request("/api/sessions", true); w.Code != 403 {
 		t.Fatalf("joining peer served application data: %d", w.Code)
 	}
+	if w := request("/api/config", false); w.Code != 200 {
+		t.Fatalf("joining browser could not load its UI configuration: %d", w.Code)
+	}
+	joining.events.topics = []eventTopic{}
+	joining.events.nodes = func(context.Context) ([]TailnetNode, error) { return nil, nil }
+	events := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Host = origin.Host
+		r.Header.Set("Authorization", "Bearer "+joining.local.Secret)
+		r = r.WithContext(withActor(context.WithValue(r.Context(), replicaPeerKey{}, "source"), Actor{Kind: "peer", StableNodeID: "source"}))
+		handler.ServeHTTP(w, r)
+	}))
+	defer events.Close()
+	client := &http.Client{Timeout: time.Second}
+	response, err := client.Get(events.URL + "/api/sync/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != 200 {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
+		response.Body.Close()
+		t.Fatalf("joining peer could not receive sync events: %d %s", response.StatusCode, body)
+	}
+	response.Body.Close()
 	if w := request("/api/sync/changes?schema=0", true); w.Code != 409 {
 		t.Fatalf("verified sync did not reach schema check: %d %s", w.Code, w.Body.String())
 	}

@@ -612,7 +612,7 @@ func (g *Gateway) Handler() http.Handler {
 				authFailure(w, r, "account state unavailable", err)
 				return
 			}
-			if !hasAccounts && (!g.meshPeer(r.Context(), peer) || !(r.Method == http.MethodGet && (r.URL.Path == "/api/sync/changes" || r.URL.Path == "/api/events"))) {
+			if !hasAccounts && (!g.meshPeer(r.Context(), peer) || !(r.Method == http.MethodGet && (r.URL.Path == "/api/sync/changes" || r.URL.Path == "/api/sync/events" || r.URL.Path == "/api/events"))) {
 				http.Error(w, "waiting for mesh accounts", http.StatusForbidden)
 				return
 			}

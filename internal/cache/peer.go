@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	githubsource "github.com/olegpustovit/agentpack/internal/github"
@@ -24,32 +25,28 @@ func WithPeerRestore(ctx context.Context, restore func(context.Context, lockfile
 	return context.WithValue(ctx, peerRestoreKey{}, restore)
 }
 
+type peerTarFS struct{ fs.ReadLinkFS }
+
+func (files peerTarFS) ReadLink(name string) (string, error) {
+	target, err := files.ReadLinkFS.ReadLink(name)
+	if err != nil {
+		return "", err
+	}
+	target = filepath.ToSlash(target)
+	if !githubsource.LinkStaysInside(name, target) {
+		return "", fmt.Errorf("cache link %s leaves its package", name)
+	}
+	return target, nil
+}
+
 func WritePeerTar(root string, out io.Writer) error {
 	opened, err := os.OpenRoot(root)
 	if err != nil {
 		return err
 	}
 	defer opened.Close()
-	files := opened.FS()
-	if err := fs.WalkDir(files, ".", func(name string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			target, err := fs.ReadLink(files, name)
-			if err != nil {
-				return err
-			}
-			if !githubsource.LinkStaysInside(name, target) {
-				return fmt.Errorf("cache link %s leaves its package", name)
-			}
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
 	writer := tar.NewWriter(out)
-	return errors.Join(writer.AddFS(files), writer.Close())
+	return errors.Join(writer.AddFS(peerTarFS{opened.FS().(fs.ReadLinkFS)}), writer.Close())
 }
 
 // ExtractPeerTar uses an OS-confined root; package integrity is checked before installation.
