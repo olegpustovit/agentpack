@@ -59,24 +59,32 @@ export function remainingPercent(window: LimitWindow): number | undefined {
   return left === undefined ? undefined : Math.min(100, Math.max(0, left))
 }
 
-export function relativeUntil(ms: number): string {
-  const minutes = Math.round(ms / 60_000)
-  if (minutes < 60) return `in ${minutes}m`
+// Countdown in whole minutes, rounded up so a pending reset never reads "0 m".
+export function untilText(ms: number): string {
+  const minutes = Math.max(1, Math.ceil(ms / 60_000))
+  if (minutes < 60) return `${minutes} m`
   const hours = Math.floor(minutes / 60)
-  return hours < 48 ? `in ${hours}h ${minutes % 60}m` : `in ${Math.round(hours / 24)}d`
+  if (hours < 48) return `${hours} h ${minutes % 60} m`
+  return `${Math.floor(hours / 24)} d ${hours % 24} h`
 }
 
-export function resetLabel(window: LimitWindow, now: number): { text: string; due: boolean } {
-  if (!window.reset_at) return { text: window.reset_text || "reset not exposed", due: false }
-  const at = new Date(window.reset_at)
-  const absolute = at.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZoneName: "short",
-  })
-  const remaining = at.getTime() - now
-  if (remaining <= 0) return { text: `reset due · rechecking · was ${absolute}`, due: true }
-  return { text: `resets ${relativeUntil(remaining)} · ${absolute}`, due: false }
+// A reset that has passed is "refreshing…": the next poll brings the new numbers, so no absolute time is shown.
+export function resetText(window: LimitWindow, now: number): { text: string; refreshing: boolean } {
+  const at = Date.parse(window.reset_at ?? "")
+  if (Number.isNaN(at)) return { text: window.reset_text ?? "", refreshing: false }
+  const remaining = at - now
+  if (remaining <= 0) return { text: "refreshing…", refreshing: true }
+  return { text: `resets in ${untilText(remaining)}`, refreshing: false }
+}
+
+// Providers report a missing login as an error message; there is no separate auth state.
+const loginError = /login|sign.?in|authentication|signed out/i
+export function needsLogin(snapshot: LimitSnapshot): boolean {
+  return snapshot.state === "error" && loginError.test(snapshot.error ?? "")
+}
+
+// Only the sign-in commands agentpack ships; other providers show the message alone.
+export const loginCommands: Record<string, string | undefined> = {
+  codex: "agentpack codex login",
+  grok: "agentpack grok login",
 }

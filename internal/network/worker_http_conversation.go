@@ -96,6 +96,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			http.Error(w, message, http.StatusConflict)
 			return
 		}
+		worker.setTitle(r.Context(), prompt.Text)
 		writeJSON(w, map[string]bool{"accepted": true})
 	})
 	mux.HandleFunc("POST /conversation/prompt/images", func(w http.ResponseWriter, r *http.Request) {
@@ -142,6 +143,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			http.Error(w, message, http.StatusConflict)
 			return
 		}
+		worker.setTitle(r.Context(), prompt.Text)
 		writeJSON(w, map[string]bool{"accepted": true})
 	})
 	mux.HandleFunc("POST /conversation/permission", func(w http.ResponseWriter, r *http.Request) {

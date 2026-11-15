@@ -178,11 +178,10 @@ test.describe("conversation pane", () => {
     )
     await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: conversationFixture, contentType: "application/x-ndjson" }))
     await page.goto("/sessions/local/local-one")
-    const notice = page.locator('[data-slot="conversation-divider"]').first()
-    await expect(notice).toContainText("Context compacted")
-    await expect(notice).toContainText("Older messages were summarized.")
     const compaction = page.locator('[data-slot="conversation-compaction"]')
-    await expect(compaction).toContainText("completed")
+    await expect(compaction).toHaveCount(1)
+    await expect(compaction).toContainText("Context compacted")
+    await expect(compaction).not.toContainText("completed")
     await expect(compaction).toContainText("Compaction summary retained.")
   })
 
@@ -350,10 +349,10 @@ test("a machine with no projects says so in New session", async ({ page, isMobil
 test("a grid column can be dragged wider", async ({ page, isMobile, browserName }) => {
   test.skip(isMobile || browserName !== "chromium", "desktop pointer")
   await desktop(page)
-  await page.goto("/limits")
-  const header = page.getByRole("columnheader", { name: "Window" })
+  await page.goto("/machines/topology")
+  const header = page.getByRole("columnheader", { name: "Machine" })
   const before = (await header.boundingBox())!
-  const handle = (await page.getByRole("separator", { name: "Resize Window" }).boundingBox())!
+  const handle = (await page.getByRole("separator", { name: "Resize Machine" }).boundingBox())!
   await page.mouse.move(handle.x + 1, handle.y + 5)
   await page.mouse.down()
   await page.mouse.move(handle.x + 81, handle.y + 5, { steps: 3 })

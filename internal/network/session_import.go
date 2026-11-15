@@ -316,7 +316,7 @@ func (g *Gateway) importStoppedWorker(ctx context.Context, workerFile *legacySes
 			return err
 		}
 		args = append(args, time.Now().UnixNano())
-		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO sessions ("+sessionWriteColumns+",node_id,owner_email,ended_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"+state.LocalNodeSQL+",?,?)", args...); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO sessions ("+sessionWriteColumns+",node_id,owner_email,ended_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"+state.LocalNodeSQL+",?,?)", args...); err != nil {
 			return err
 		}
 		var local bool
@@ -401,7 +401,7 @@ func (g *Gateway) importLegacyRecent(ctx context.Context) error {
 				return err
 			}
 			args = append(args, time.Now().UnixNano())
-			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO sessions ("+sessionWriteColumns+",node_id,owner_email,ended_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"+state.LocalNodeSQL+",?,?)", args...); err != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO sessions ("+sessionWriteColumns+",node_id,owner_email,ended_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"+state.LocalNodeSQL+",?,?)", args...); err != nil {
 				return err
 			}
 		}

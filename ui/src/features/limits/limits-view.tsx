@@ -1,26 +1,25 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { getRouteApi } from "@tanstack/react-router"
-import { RefreshCw } from "lucide-react"
-import { DataGrid, DataGridCell, DataGridHeaderCell, DataGridHead, DataGridRow, Meter } from "@/components/kit/data"
+import { Copy, RefreshCw } from "lucide-react"
+import { Meter } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
 import { useReplicatedQueries, useMachines, type Machine } from "@/features/machines/queries"
-import { useIsPhone } from "@/features/shell/use-is-phone"
 import { StatusSlot } from "@/features/status/status-bar"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { api } from "@/lib/api"
+import type { LimitWindow } from "@/lib/api-types"
 import { harnessName, plural, relativeTime } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { limitsQuery } from "./queries"
-import { observedAt, providerGroups, remainingPercent, resetLabel, windowsOf, type LimitReport, type ProviderGroup } from "./model"
+import { loginCommands, needsLogin, observedAt, providerGroups, remainingPercent, resetText, windowsOf, type LimitReport, type ProviderGroup } from "./model"
 
 export function LimitsView() {
   const machines = useMachines()
   const queries = useReplicatedQueries(limitsQuery)
   const now = useMinuteTick()
-  const isPhone = useIsPhone()
 
   const { machine: only } = getRouteApi("/_app/limits").useSearch()
   const reports: LimitReport[] = machines.filter((machine) => !only || machine.id === only).flatMap((machine) =>
@@ -61,94 +60,106 @@ export function LimitsView() {
         <Empty title="No provider limits yet">
           Limits appear when a connected machine has a signed-in provider CLI. Refresh to check again.
         </Empty>
-      ) : isPhone ? (
-        <div className="flex min-h-0 flex-1 flex-col gap-(--s4) overflow-y-auto p-(--s4)">
-          {[...groups.filter((group) => group.usable), ...groups.filter((group) => !group.usable)].map((group) => (
-            <ProviderCard key={group.provider} group={group} now={now} />
-          ))}
-          {pending.map((machine) => (
-            <RowSkeleton key={machine.id} lines={2} />
-          ))}
-        </div>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col px-(--s6)">
-        <DataGrid aria-label="Provider limits" className="min-w-260">
-          <DataGridHead>
-            <tr>
-              <DataGridHeaderCell className="w-32">Provider</DataGridHeaderCell>
-              <DataGridHeaderCell className="w-72">Window</DataGridHeaderCell>
-              <DataGridHeaderCell className="w-40">Remaining</DataGridHeaderCell>
-              <DataGridHeaderCell className="w-24 text-right">% left</DataGridHeaderCell>
-              <DataGridHeaderCell>Resets</DataGridHeaderCell>
-              <DataGridHeaderCell className="w-52">Machine</DataGridHeaderCell>
-              <DataGridHeaderCell className="w-24">Plan</DataGridHeaderCell>
-            </tr>
-          </DataGridHead>
-          {groups.filter((group) => group.usable).map((group) => (
-            <ProviderRows key={group.provider} group={group} now={now} />
-          ))}
-          {groups.filter((group) => !group.usable).map((group) => (
-            <ProviderRows key={group.provider} group={group} now={now} dim />
-          ))}
-          {/* Machines still answering go last, so loaded rows do not jump when they do. */}
-          {pending.map((machine) => (
-            <tbody key={machine.id}>
-              <DataGridRow>
-                <DataGridCell colSpan={7}>
-                  <RowSkeleton />
-                </DataGridCell>
-              </DataGridRow>
-            </tbody>
-          ))}
-        </DataGrid>
+        <div className="min-h-0 flex-1 overflow-y-auto p-(--s4) min-[761px]:p-(--s6)">
+          {/* One card per provider; usable cards first, so loaded cards keep their place when pending ones arrive. */}
+          <section aria-label="Provider limits" className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,320px),1fr))] items-start gap-(--s4)">
+            {[...groups.filter((group) => group.usable), ...groups.filter((group) => !group.usable)].map((group) => (
+              <ProviderCard key={group.provider} group={group} now={now} />
+            ))}
+            {pending.map((machine) => (
+              <RowSkeleton key={machine.id} lines={2} className="h-auto rounded-(--r-pop) border-[0.5px] border-(--sep) p-(--s4)" />
+            ))}
+          </section>
         </div>
       )}
     </div>
   )
 }
 
-// The grid needs 1040 px. A phone gets one card per provider, with the same facts.
 function ProviderCard({ group, now }: { group: ProviderGroup; now: number }) {
   const [open, setOpen] = useState(false)
+  const { selected } = group
   return (
-    <section aria-label={harnessName(group.provider)} data-provider={group.provider} className={cn("flex flex-col gap-(--s3) rounded-(--r-pop) border-[0.5px] border-(--sep) p-(--s4)", !group.usable && "text-(--fg3)")}>
-      <h2 className="text-(length:--fs) font-medium">{harnessName(group.provider)}</h2>
-      <ReportBlock report={group.selected} now={now} />
+    <section
+      aria-label={harnessName(group.provider)}
+      data-provider={group.provider}
+      className={cn("flex min-w-0 flex-col gap-(--s4) rounded-(--r-pop) border-[0.5px] border-(--sep) p-(--s4)", !group.usable && "text-(--fg3)")}
+    >
+      <header className="min-w-0">
+        <h2 className="text-(length:--fs-lg) font-semibold">{harnessName(group.provider)}</h2>
+        <p className="truncate text-(length:--fs-sm) text-(--fg2)">{[selected.name, selected.snapshot.plan].filter(Boolean).join(" · ")}</p>
+      </header>
+      <ReportBody report={selected} now={now} />
       {group.others.length > 0 && (
-        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="self-start text-(length:--fs-sm) text-(--fg2)">
+        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="self-start rounded-(--r-row) text-(length:--fs-sm) text-(--fg2) hover:text-(--fg)">
           {`Other machines (${group.others.length})`}
         </button>
       )}
-      {open && group.others.map((report) => <ReportBlock key={report.id} report={report} now={now} />)}
+      {open && group.others.map((report) => (
+        <div key={report.id} className="flex min-w-0 flex-col gap-(--s3) border-t-[0.5px] border-(--sep-soft) pt-(--s3)">
+          <p className="truncate text-(length:--fs-sm) text-(--fg2)">{[report.name, report.snapshot.plan].filter(Boolean).join(" · ")}</p>
+          <ReportBody report={report} now={now} />
+        </div>
+      ))}
     </section>
   )
 }
 
-function ReportBlock({ report, now }: { report: LimitReport; now: number }) {
-  const windows = windowsOf(report.snapshot)
+function ReportBody({ report, now }: { report: LimitReport; now: number }) {
+  const { snapshot } = report
+  if (needsLogin(snapshot)) {
+    const command = loginCommands[snapshot.harness]
+    return (
+      <div className="flex flex-col gap-(--s3)">
+        <h3 className="text-(--fg) font-medium">Signed out</h3>
+        <p className="text-(length:--fs-sm) text-(--fg2)">{`Limits need a login on ${report.name}.`}</p>
+        {command && <CopyCommand command={command} />}
+      </div>
+    )
+  }
+  const windows = windowsOf(snapshot)
+  if (windows.length === 0) {
+    return <p className="text-(length:--fs-sm) text-(--fg2)">{snapshot.error || "No usage windows reported by this machine."}</p>
+  }
+  return windows.map((window) => <WindowMeter key={window.id} window={window} now={now} />)
+}
+
+function WindowMeter({ window, now }: { window: LimitWindow; now: number }) {
+  const left = remainingPercent(window)
+  const reset = resetText(window, now)
   return (
-    <div className="flex flex-col gap-(--s3)">
-      <p className="text-(length:--fs-sm) text-(--fg2)">{[report.name, report.snapshot.plan].filter(Boolean).join(" · ")}</p>
-      {windows.length === 0 && <p className="text-(length:--fs-sm) text-(--fg2)">{report.snapshot.error || "No usage windows reported by this machine."}</p>}
-      {windows.map((window) => {
-        const left = remainingPercent(window)
-        const reset = resetLabel(window, now)
-        return (
-          <div key={window.id} className="flex flex-col gap-(--s1)">
-            <div className="flex min-w-0 items-baseline justify-between gap-(--s3)">
-              <span className="min-w-0 truncate">{window.label}</span>
-              <span className="shrink-0 text-(--fg2) tabular-nums">{left === undefined ? "Unknown" : `${Math.round(left)}% left`}</span>
-            </div>
-            <Meter value={left} label={`${window.label} remaining`} />
-            <p className={cn("text-(length:--fs-sm) text-(--fg2)", reset.due && "text-(--fg3)")}>{reset.due ? reset.text : reset.text.split(" · ")[0]}</p>
-          </div>
-        )
-      })}
+    <div className="flex min-w-0 flex-col gap-(--s1)">
+      <p className="text-(length:--fs-sm) text-(--fg2)">{window.label}</p>
+      <p className="text-(length:--fs-lg) font-semibold tabular-nums">{left === undefined ? "Unknown" : `${Math.round(left)}% left`}</p>
+      <Meter value={left} label={`${window.label} remaining`} />
+      {reset.text && <p className={cn("text-(length:--fs-sm) text-(--fg2)", reset.refreshing && "text-(--fg3)")}>{reset.text}</p>}
     </div>
   )
 }
 
-// One timer for the whole grid: reset text is minute-granular, so per-row timers would only repeat work.
+// Shows the command the user runs on that machine; click copies it.
+function CopyCommand({ command }: { command: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={`Copy ${command}`}
+      onClick={() => {
+        // navigator.clipboard is undefined on plain-HTTP gateway origins.
+        (navigator.clipboard?.writeText(command) ?? Promise.reject()).then(
+          () => hud.success("Copied"),
+          () => hud.error("Couldn't copy. Select the command and copy it manually."),
+        )
+      }}
+      className="flex min-w-0 items-center justify-between gap-(--s3) rounded-(--r-row) bg-(--track) px-(--s3) py-(--s2) text-left text-(--fg)"
+    >
+      <code className="min-w-0 truncate font-(family-name:--mono) text-(length:--fs-sm)">{command}</code>
+      <Copy aria-hidden className="size-(--fs) shrink-0 text-(--fg2)" />
+    </button>
+  )
+}
+
+// One timer for the whole view: reset text is minute-granular, so per-card timers would only repeat work.
 function useMinuteTick(): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -156,90 +167,6 @@ function useMinuteTick(): number {
     return () => clearInterval(timer)
   }, [])
   return now
-}
-
-// The provider cell spans the selected account's rows, the disclosure and any expanded rows.
-function ProviderRows({ group, now, dim = false }: { group: ProviderGroup; now: number; dim?: boolean }) {
-  const [open, setOpen] = useState(false)
-  const selected = reportLines(group.selected, now)
-  const others = open ? group.others.flatMap((report) => reportLines(report, now)) : []
-  const span = selected.length + (group.others.length > 0 ? 1 + others.length : 0)
-  return (
-    <tbody data-provider={group.provider} className={cn("border-b-[0.5px] border-(--sep)", dim && "text-(--fg3)")}>
-      {selected.map((line, index) => (
-        <DataGridRow key={line.key}>
-          {index === 0 && (
-            <DataGridCell rowSpan={span} className="align-top leading-(--row-h) font-medium">
-              {harnessName(group.provider)}
-            </DataGridCell>
-          )}
-          {line.cells}
-        </DataGridRow>
-      ))}
-      {group.others.length > 0 && (
-        <DataGridRow>
-          <DataGridCell colSpan={6}>
-            <button
-              type="button"
-              aria-expanded={open}
-              onClick={() => setOpen(!open)}
-              className="rounded-(--r-row) text-(--fg2) hover:text-(--fg)"
-            >
-              {`Other machines (${group.others.length})`}
-            </button>
-          </DataGridCell>
-        </DataGridRow>
-      )}
-      {others.map((line) => (
-        <DataGridRow key={line.key}>{line.cells}</DataGridRow>
-      ))}
-    </tbody>
-  )
-}
-
-type Line = { key: string; cells: ReactNode }
-
-// One line per window. A report without windows gets one line that says why, in the flexible column.
-function reportLines(report: LimitReport, now: number): Line[] {
-  const { snapshot } = report
-  const windows = windowsOf(snapshot)
-  if (windows.length === 0) {
-    return [
-      {
-        key: `${report.id}:none`,
-        cells: (
-          <>
-            <DataGridCell colSpan={4} className="text-(--fg2)" title={snapshot.error}>
-              {snapshot.error || "No usage windows reported by this machine."}
-            </DataGridCell>
-            <DataGridCell>{report.name}</DataGridCell>
-            <DataGridCell>{snapshot.plan}</DataGridCell>
-          </>
-        ),
-      },
-    ]
-  }
-  return windows.map((window) => {
-    const left = remainingPercent(window)
-    const reset = resetLabel(window, now)
-    return {
-      key: `${report.id}:${window.id}`,
-      cells: (
-        <>
-          <DataGridCell title={window.label}>{window.label}</DataGridCell>
-          <DataGridCell>
-            <Meter value={left} label={`${window.label} remaining`} />
-          </DataGridCell>
-          <DataGridCell className="text-right tabular-nums">{left === undefined ? "Unknown" : `${Math.round(left)}% left`}</DataGridCell>
-          <DataGridCell className={cn(reset.due && "text-(--fg3)")} title={reset.text}>
-            {reset.due ? reset.text : reset.text.split(" · ")[0]}
-          </DataGridCell>
-          <DataGridCell title={report.name}>{report.name}</DataGridCell>
-          <DataGridCell>{snapshot.plan}</DataGridCell>
-        </>
-      ),
-    }
-  })
 }
 
 // Each machine's response lands in its cache as it arrives, not after the slowest one finishes.

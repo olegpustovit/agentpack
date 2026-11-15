@@ -72,14 +72,14 @@ test("limits view shows each harness with partial failures and no raw CLI output
   await page.goto("/")
   await page.getByRole("link", { name: "Limits", exact: true }).click()
 
-  const grid = page.getByRole("table", { name: "Provider limits" })
+  const grid = page.getByRole("region", { name: "Provider limits" })
   await expect(grid).toBeVisible()
   await expect(page.getByRole("meter", { name: "Codex 5h remaining" })).toHaveAttribute("value", "72")
-  await expect(grid.locator('[data-provider="grok"]')).toContainText("grok billing: authentication required")
+  await expect(grid.locator('[data-provider="grok"]')).toContainText("Signed out")
   await expect(grid.locator('[data-provider="codex"]')).toContainText("Codex")
 })
 
-test("limits shortcut opens the view and a passed reset is labelled rechecking", async ({ page }) => {
+test("limits shortcut opens the view and a passed reset is labelled refreshing", async ({ page }) => {
   const past = new Date(Date.now() - 60000).toISOString()
   await mockAPI(page)
   await page.setViewportSize({ width: 1280, height: 800 })
@@ -93,12 +93,12 @@ test("limits shortcut opens the view and a passed reset is labelled rechecking",
   await expect(page.getByRole("link", { name: "Limits", exact: true })).toBeVisible()
   await page.keyboard.press("Meta+4")
 
-  const grid = page.getByRole("table", { name: "Provider limits" })
+  const grid = page.getByRole("region", { name: "Provider limits" })
   await expect(grid).toBeVisible()
-  const reset = grid.getByRole("cell", { name: /reset due · rechecking/ })
+  const reset = grid.getByText("refreshing…")
   await expect(reset).toBeVisible()
   // A passed reset is dimmed: its text colour differs from the window label on the same row.
-  const label = grid.getByRole("cell", { name: "Session", exact: true })
+  const label = grid.getByText("Session", { exact: true })
   expect(await reset.evaluate((element) => getComputedStyle(element).color)).not.toBe(await label.evaluate((element) => getComputedStyle(element).color))
 })
 
@@ -159,15 +159,15 @@ test("limits automatically prefers capable nodes and refreshes every source", as
   await expect(page.getByRole("contentinfo").getByRole("button", { name: "Connected · 4 machines · 1 offline" })).toBeVisible()
   await page.getByRole("link", { name: "Limits", exact: true }).click()
 
-  const grid = page.getByRole("table", { name: "Provider limits" })
+  const grid = page.getByRole("region", { name: "Provider limits" })
   const codex = grid.locator('[data-provider="codex"]')
-  await expect(codex.getByRole("row").first()).toContainText("Mac Studio")
-  await expect(codex.getByRole("row").first()).toContainText("Pro")
+  await expect(codex.locator("header")).toContainText("Mac Studio")
+  await expect(codex.locator("header")).toContainText("Pro")
   await expect(page.getByRole("meter", { name: "Session remaining", exact: true })).toHaveAttribute("value", "72")
   await expect(page.getByRole("meter", { name: "Weekly remaining" })).toHaveAttribute("value", "36")
   await expect(codex.getByText("Unknown", { exact: true })).toBeVisible()
   await expect(grid.getByRole("meter")).toHaveCount(3)
-  await expect(grid.locator('[data-provider="claude"]').getByRole("row").first()).toContainText("Gateway machine")
+  await expect(grid.locator('[data-provider="claude"]').locator("header")).toContainText("Gateway machine")
   expect(calls.some((call) => call.node === "peer-2")).toBeFalsy()
 
   // A machine without the CLI says nothing about the account, so it is not offered as another report.
@@ -209,7 +209,7 @@ test("limits labels replicated reports after machine discovery", async ({ page }
   await page.getByRole("link", { name: "Limits", exact: true }).click()
   await expect(page.getByRole("contentinfo").getByRole("button", { name: "Connected · 2 machines" })).toBeVisible()
   await expect(page.getByRole("meter", { name: "Weekly remaining" })).toHaveAttribute("value", "63")
-  await expect(page.locator('[data-provider="codex"]').getByRole("row").first()).toContainText("Kyiv grid")
+  await expect(page.locator('[data-provider="codex"]').locator("header")).toContainText("Kyiv grid")
 })
 
 test("startup and machine discovery announce pending work", async ({ page }) => {
@@ -290,7 +290,7 @@ test("Cursor CLI is included with separate usage buckets", async ({ page }) => {
   await page.goto("/")
   await page.getByRole("link", { name: "Limits", exact: true }).click()
 
-  await expect(page.getByRole("cell", { name: "Cursor CLI", exact: true })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Cursor CLI", exact: true })).toBeVisible()
   await expect(page.getByRole("meter", { name: "Auto models remaining" })).toHaveAttribute("value", "60")
   await expect(page.getByRole("meter", { name: "API models remaining" })).toHaveAttribute("value", "100")
   await expect(page.getByRole("meter")).toHaveCount(4)

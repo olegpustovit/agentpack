@@ -31,7 +31,7 @@ async function expectNoCrash(page: Page, errors: string[]) {
 
 const sessionsNav = (page: Page) => page.getByRole("navigation", { name: "Sessions" })
 const libraryNav = (page: Page) => page.getByRole("navigation", { name: "Library" })
-const limitsGrid = (page: Page) => page.getByRole("table", { name: "Provider limits" })
+const limitsGrid = (page: Page) => page.getByRole("region", { name: "Provider limits" })
 const topologyHeading = (page: Page) => page.getByRole("heading", { level: 1, name: "Topology" })
 const machineList = (page: Page) => page.getByRole("link", { name: "Topology", exact: true })
 const settingsNav = (page: Page) => page.getByRole("navigation", { name: "Settings sections" })

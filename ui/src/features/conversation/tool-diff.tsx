@@ -145,13 +145,13 @@ function diffBlock(oldText: string, newText: string, language?: string): ReactNo
   return rows
 }
 
-export function ToolDiffBody({ content }: { content: ToolDiffBlock[] | undefined }) {
+export function ToolDiffBody({ content, toolId }: { content: ToolDiffBlock[] | undefined; toolId?: string }) {
   const diffs = (content ?? []).filter((block) => block.type === "diff" && (block.oldText || block.newText))
   if (diffs.length === 0) return null
   return (
     <div className="flex flex-col gap-(--s3) border-t-[0.5px] border-(--sep) px-(--s3) py-(--s2)">
       {diffs.map((block, index) => (
-        <div key={index} id={block.path ? diffAnchorId(block.path) : undefined} data-slot="tool-diff" className="flex flex-col gap-(--s1) overflow-x-auto">
+        <div key={index} id={block.path ? diffAnchorId(block.path, toolId) : undefined} data-slot="tool-diff" className="flex flex-col gap-(--s1) overflow-x-auto">
           {block.path && (
             <p className="font-(family-name:--mono) text-(length:--fs-xs) text-(--fg2)">{block.path}</p>
           )}

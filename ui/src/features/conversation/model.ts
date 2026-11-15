@@ -10,6 +10,11 @@ export type LogEntry = {
 export type ThreadItem = {
   kind: string
   data?: unknown
+  /** seq and ts (ms) of the log entry that created the item; stable while the log grows. */
+  seq?: number
+  ts?: number
+  /** ts of the latest update to a tool call. */
+  endTs?: number
 }
 
 export type ThreadState = {
@@ -47,6 +52,7 @@ export type ToolPayload = {
   status?: string
   command?: string
   output?: string
+  rawInput?: unknown
   content?: ToolDiffBlock[]
 }
 
