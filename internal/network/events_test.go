@@ -2,7 +2,6 @@ package network
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -196,14 +195,12 @@ func TestEventsStreamFraming(t *testing.T) {
 }
 
 func TestEventsStreamClosesOnLogout(t *testing.T) {
-	auth, err := newGatewayAuth(t.TempDir())
+	auth, err := testGatewayAuth(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	setup := httptest.NewRecorder()
-	body := bytes.NewBufferString(`{"password":"a-long-password","token":"` + auth.setup + `"}`)
-	auth.login(setup, httptest.NewRequest("POST", "https://agentpack.example/api/setup", body), true, true)
-	cookie := setup.Result().Cookies()[0]
+	cookie := &http.Cookie{Name: auth.cookieName(), Value: randomToken()}
+	testBrowserSession(t, auth, testBrowserEmail, cookie.Value)
 
 	g := eventsGateway(nil, nil, nil)
 	g.auth = auth

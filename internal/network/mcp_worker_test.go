@@ -3,6 +3,7 @@
 package network
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -16,7 +17,7 @@ func TestMCPWorkerOutputAndSharedInput(t *testing.T) {
 	local, replay := attachTest(t, session, true)
 	readUntil(t, local, string(replay.Data), "READY")
 	secret := strings.Repeat("s", 64)
-	handler, err := WorkerHandler(session, nil, secret, "")
+	handler, err := WorkerHandler(context.Background(), session, nil, secret, "")
 	if err != nil {
 		t.Fatal(err)
 	}

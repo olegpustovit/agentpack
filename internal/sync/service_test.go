@@ -80,8 +80,28 @@ func TestSyncForLaunchUsesVerifiedFastPath(t *testing.T) {
 	if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", base.Claude); err != nil || skipped {
 		t.Fatalf("first skipped=%v err=%v", skipped, err)
 	}
+	database := filepath.Join(os.Getenv("AGENTPACK_HOME"), "state.db")
+	if _, err := os.Stat(database); !os.IsNotExist(err) {
+		t.Fatalf("cold launch setup created state.db: %v", err)
+	}
+	marker := []byte("runtime database must not be opened by launch setup")
+	if err := os.WriteFile(database, marker, 0600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(database)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", base.Claude); err != nil || !skipped {
 		t.Fatalf("second skipped=%v err=%v", skipped, err)
+	}
+	after, err := os.Stat(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(database)
+	if err != nil || string(contents) != string(marker) || !before.ModTime().Equal(after.ModTime()) || before.Mode() != after.Mode() {
+		t.Fatalf("warm launch setup changed state.db: %v", err)
 	}
 }
 

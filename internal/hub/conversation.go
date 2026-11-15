@@ -24,6 +24,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/olegpustovit/agentpack/internal/network"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 // shortcut: mirror the worker's 20 MiB blob cap; update this if that shared limit changes.
@@ -359,7 +361,7 @@ func chatImageCacheDir() (string, error) {
 		return "", err
 	}
 	dir := filepath.Join(root, "agentpack", "chat-images")
-	if err := network.EnsurePrivateDirectory(dir); err != nil {
+	if err := paths.EnsurePrivateDirectory(dir); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -371,7 +373,7 @@ func cacheChatImage(ctx context.Context, home, sessionID, nodeID string, ref cha
 		return "", errors.New("invalid image reference")
 	}
 	sha := hex.EncodeToString(hashBytes)
-	if err := network.EnsurePrivateDirectory(dir); err != nil {
+	if err := paths.EnsurePrivateDirectory(dir); err != nil {
 		return "", err
 	}
 	ext := ".img"

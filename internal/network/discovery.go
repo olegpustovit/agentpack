@@ -3,9 +3,12 @@ package network
 import (
 	"context"
 	"crypto/subtle"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/olegpustovit/agentpack/internal/cache"
 	"io"
 	"log"
 	"net"
@@ -21,6 +24,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/state"
+
 	"tailscale.com/client/local"
 	"tailscale.com/ipn/ipnstate"
 )
@@ -34,10 +40,12 @@ type SharingConfig struct {
 	Allow   []string `json:"allow,omitempty"`
 }
 type TailnetNode struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Address string `json:"-"`
-	Online  bool   `json:"online"`
+	Main        bool   `json:"main"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Address     string `json:"-"`
+	Online      bool   `json:"online"`
+	NeedsUpdate bool   `json:"needs_update,omitempty"`
 	// Version is what a peer's /peer answer reports; empty from a peer that predates it.
 	Version string `json:"version,omitempty"`
 }
@@ -81,45 +89,66 @@ type tailnetIdentity struct {
 
 // ReadSharingConfig defaults to sharing on, like Agentnet's tailnet discovery:
 // peers still need your own untagged identity or an explicit allow entry.
-func ReadSharingConfig(home string) (SharingConfig, error) {
+func ReadSharingConfig(store *state.Store, home string) (SharingConfig, error) {
 	config := SharingConfig{Enabled: true}
-	data, err := os.ReadFile(filepath.Join(home, "network", "sharing.json"))
+	if store == nil {
+		return config, errors.New("gateway state unavailable")
+	}
+	var data []byte
+	err := store.Reader.QueryRow("SELECT value FROM node_settings WHERE node_id = " + state.LocalNodeSQL + " AND key = 'sharing'").Scan(&data)
+	if err == nil {
+		err = json.Unmarshal(data, &config)
+		return config, err
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return config, err
+	}
+	path := filepath.Join(home, "network", "sharing.json")
+	data, err = os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return config, nil
 	}
 	if err != nil {
 		return config, err
 	}
-	err = json.Unmarshal(data, &config)
-	return config, err
+	if err := json.Unmarshal(data, &config); err != nil {
+		return config, err
+	}
+	if err := validateSharingConfig(config); err != nil {
+		return config, err
+	}
+	// A concurrent settings write wins over a legacy import.
+	if _, err := store.DB.Exec("INSERT INTO node_settings(node_id, key, value) VALUES ("+state.LocalNodeSQL+", 'sharing', ?) ON CONFLICT DO NOTHING", string(data)); err != nil {
+		return config, err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return config, err
+	}
+	return ReadSharingConfig(store, home)
 }
-func WriteSharingConfig(home string, config SharingConfig) error {
+
+func validateSharingConfig(config SharingConfig) error {
 	for _, value := range config.Allow {
 		if value == "" || strings.ContainsAny(value, " /\\\t\r\n") {
 			return errors.New("allow requires a stable Tailscale node ID or tag:name")
 		}
 	}
-	directory := filepath.Join(home, "network")
-	if err := EnsurePrivateDirectory(directory); err != nil {
+	return nil
+}
+
+func WriteSharingConfig(store *state.Store, config SharingConfig) error {
+	if store == nil {
+		return errors.New("gateway state unavailable")
+	}
+	if err := validateSharingConfig(config); err != nil {
 		return err
 	}
 	data, err := json.Marshal(config)
 	if err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(directory, ".sharing-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if err = file.Chmod(0600); err == nil {
-		_, err = file.Write(data)
-	}
-	err = errors.Join(err, file.Close())
-	if err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), filepath.Join(directory, "sharing.json"))
+	_, err = store.DB.Exec("INSERT INTO node_settings(node_id, key, value) VALUES ("+state.LocalNodeSQL+", 'sharing', ?) ON CONFLICT(node_id, key) DO UPDATE SET value = excluded.value", string(data))
+	return err
 }
 
 // tailscaleLocal finds the daemon itself on every install, including the macOS app builds that
@@ -312,25 +341,108 @@ func tailnetNodesFrom(ctx context.Context, status tailnetStatus, config SharingC
 	return nodes, err
 }
 
-// TailnetNodes probes only allowed, online peers learned from the local daemon.
-func TailnetNodes(ctx context.Context, home string) ([]TailnetNode, error) {
+// tailnetNodes probes only allowed, online peers learned from the local daemon.
+func (g *Gateway) tailnetNodes(ctx context.Context) ([]TailnetNode, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	config, err := ReadSharingConfig(home)
+	config, err := ReadSharingConfig(g.auth.store, g.options.Home)
 	if err != nil {
 		return nil, err
 	}
-	if !config.Enabled {
-		return []TailnetNode{}, nil
+	discovered := []TailnetNode{}
+	var discoveryErr error
+	if config.Enabled {
+		status, err := tailnetSnapshot(ctx)
+		if err == nil {
+			discovered, discoveryErr = tailnetNodesFrom(ctx, status, config, probeTailnetPeer)
+		} else {
+			discoveryErr = err
+		}
 	}
-	status, err := tailnetSnapshot(ctx)
+	known, err := g.meshNodes(ctx, discovered)
 	if err != nil {
 		return nil, err
 	}
-	return tailnetNodesFrom(ctx, status, config, probeTailnetPeer)
+	if len(known) == 0 && discoveryErr != nil {
+		return nil, discoveryErr
+	}
+	return known, nil
 }
+
+func (g *Gateway) meshNodes(ctx context.Context, discovered []TailnetNode) ([]TailnetNode, error) {
+	local, err := g.auth.store.NodeID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	nodes := map[string]TailnetNode{}
+	for _, node := range discovered {
+		nodes[node.ID] = node
+	}
+	rows, err := g.auth.store.Reader.QueryContext(ctx, "SELECT node_id,name,app_version FROM mesh_nodes WHERE node_id<>?", local)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var node TailnetNode
+		if err := rows.Scan(&node.ID, &node.Name, &node.Version); err != nil {
+			return nil, err
+		}
+		if node.Name == "" {
+			node.Name = node.ID
+		}
+		node.Online, _ = g.nodeContact(node.ID, local)
+		nodes[node.ID] = node
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if store := g.options.Library.Store; store != nil {
+		peers, err := store.ListPeers()
+		if err != nil {
+			return nil, err
+		}
+		for _, peer := range peers {
+			node, ok := nodes[peer.Node]
+			if !ok {
+				node = TailnetNode{ID: peer.Node, Name: peer.Node}
+			}
+			if peer.Mesh || !ok {
+				node.Online, _ = g.nodeContact(peer.Node, local)
+			}
+			node.NeedsUpdate = !peer.Mesh
+			if value, ok := g.replicaStatus.Load(peer.Node); ok {
+				node.NeedsUpdate = node.NeedsUpdate || value.(replicaContact).NeedsUpdate
+			}
+			nodes[peer.Node] = node
+		}
+	}
+	roles, err := g.auth.store.Main(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]TailnetNode, 0, len(nodes))
+	for _, node := range nodes {
+		node.Main = node.ID == roles.MainNode
+		result = append(result, node)
+	}
+	slices.SortFunc(result, func(a, b TailnetNode) int { return strings.Compare(a.Name, b.Name) })
+	return result, nil
+}
+
 func peerRoute(method, path string) bool {
-	if replicationPeerRoute(method, path) {
+	if method == http.MethodGet && strings.HasPrefix(path, "/api/cache/") {
+		return cache.ValidKey(strings.TrimPrefix(path, "/api/cache/"))
+	}
+	if method == http.MethodPost && path == "/api/logs/ingest" {
+		return true
+	}
+	if method == http.MethodGet && strings.HasPrefix(path, "/api/logs/trace/") {
+		trace := strings.TrimPrefix(path, "/api/logs/trace/")
+		decoded, err := hex.DecodeString(trace)
+		return err == nil && len(decoded) == 16 && strings.Trim(trace, "0") != ""
+	}
+	if method == http.MethodGet && (path == "/api/sync/changes" || path == "/api/sync/events") {
 		return true
 	}
 	if libraryPeerRoute(method, path) {
@@ -385,8 +497,8 @@ func peerRoute(method, path string) bool {
 func validPeerSessionID(id string) bool {
 	return id != "" && id != "." && id != ".." && !strings.ContainsAny(id, "/\\")
 }
-func tailnetTarget(ctx context.Context, home, id string) (*url.URL, error) {
-	config, err := ReadSharingConfig(home)
+func (g *Gateway) tailnetTarget(ctx context.Context, id string) (*url.URL, error) {
+	config, err := ReadSharingConfig(g.store, g.options.Home)
 	if err != nil || !config.Enabled {
 		return nil, errors.New("tailnet sharing is disabled")
 	}
@@ -409,22 +521,41 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 		http.Error(w, "route unavailable on remote nodes", 400)
 		return
 	}
-	target, err := tailnetTarget(r.Context(), g.options.Home, id)
+	target, err := g.tailnetTarget(r.Context(), id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/conversation") && g.meshPeer(r.Context(), id) {
+			g.serveConversation(w, r)
+			return
+		}
+		status := http.StatusBadGateway
+		if g.meshPeer(r.Context(), id) {
+			status = http.StatusServiceUnavailable
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
+	g.proxyTailnetTo(w, r, id, target)
+}
+
+func (g *Gateway) proxyTailnetTo(w http.ResponseWriter, r *http.Request, id string, target *url.URL) {
 	address := target.Host
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	original := proxy.Director
-	proxy.Director = func(request *http.Request) {
-		original(request)
+	proxy := &httputil.ReverseProxy{}
+	proxy.Rewrite = func(out *httputil.ProxyRequest) {
+		out.SetURL(target)
+		request := out.Out
 		request.Host = address
 		query := request.URL.Query()
 		query.Del("node")
 		request.URL.RawQuery = query.Encode()
 		request.Header.Del("Authorization")
+		if trace := obs.TraceParent(r.Context()); trace != "" {
+			request.Header.Set("traceparent", trace)
+		}
 		request.Header.Del("Cookie")
+		request.Header.Del("X-Agentpack-User")
+		if actor, ok := actorFrom(r.Context()); ok && (actor.Account || actor.Kind == "browser" || actor.Kind == "mcp") {
+			request.Header.Set("X-Agentpack-User", actor.User)
+		}
 		request.Header.Del("Origin")
 		request.Header.Del("Forwarded")
 		request.Header.Del("X-Forwarded-For")
@@ -433,12 +564,24 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 	}
 	proxy.Transport = tailnetRequestTransport(r.Method, r.URL.Path)
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
+		if event := obs.From(r.Context()); event != nil {
+			event.Fail(err)
+		}
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/conversation") && g.meshPeer(r.Context(), id) {
+			g.serveConversation(w, r)
+			return
+		}
 		log.Printf("tailnet proxy failed for node %s: %v", id, err)
 		w.Header().Set("Cache-Control", "no-store")
 		http.Error(w, "remote node connection failed; the gateway logged the network error", http.StatusBadGateway)
 	}
 	proxy.ModifyResponse = func(response *http.Response) error {
+		if response.StatusCode >= 500 && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/conversation") && g.meshPeer(r.Context(), id) {
+			return errors.New("remote conversation is temporarily unavailable")
+		}
+
 		response.Header.Del("Set-Cookie")
+		response.Header.Del("X-Agentpack-Trace")
 		if response.Header.Get("Cache-Control") == "" {
 			response.Header.Set("Cache-Control", "no-store")
 		}
@@ -523,7 +666,7 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			http.Error(w, "peer identity required", 403)
 			return
 		}
-		config, err := ReadSharingConfig(g.options.Home)
+		config, err := ReadSharingConfig(g.store, g.options.Home)
 		if err != nil || !config.Enabled {
 			http.Error(w, "sharing disabled", 403)
 			return
@@ -546,8 +689,18 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			return
 		}
 		actor := Actor{Kind: "peer", User: identity.UserProfile.LoginName, Node: identity.Node.ComputedName, StableNodeID: identity.Node.StableID}
+		actor, err = g.forwardedAccount(r.Context(), actor, r.Header.Get("X-Agentpack-User"))
+		if err != nil {
+			if event := obs.From(r.Context()); event != nil {
+				event.Fail(err)
+			}
+			http.Error(w, "forwarded account refused", http.StatusForbidden)
+			return
+		}
+
 		request := r.Clone(withActor(context.WithValue(r.Context(), replicaPeerKey{}, identity.Node.StableID), actor))
 		request.Header = r.Header.Clone()
+		request.Header.Del("X-Agentpack-User")
 		request.Header.Del("Cookie")
 		request.Header.Set("Authorization", "Bearer "+g.local.Secret)
 		request.Host = g.origin.Host
@@ -626,12 +779,18 @@ func (g *Gateway) runTailnetSharing(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
-		config, err := ReadSharingConfig(g.options.Home)
+		if ctx.Err() != nil {
+			return
+		}
+		config, err := ReadSharingConfig(g.store, g.options.Home)
 		if err != nil || !config.Enabled {
 			closeServer()
 			report(err)
 		} else {
 			status, err := tailnetSnapshot(ctx)
+			if err == nil {
+				err = g.store.BindNode(ctx, status.Self.ID)
+			}
 			address := tailnetAddress(status.Self)
 			if err != nil || address == "" {
 				closeServer()
@@ -654,7 +813,8 @@ func (g *Gateway) runTailnetSharing(ctx context.Context) {
 						server = &http.Server{Handler: g.peerHandler(status.Self, address), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
 						bound = address
 						policy = signature
-						go server.Serve(peerListener{listener, tracking})
+						serving, peer := server, peerListener{listener, tracking}
+						obs.Go("gateway.peer_listener", func() { _ = serving.Serve(peer) })
 					}
 				}
 			}

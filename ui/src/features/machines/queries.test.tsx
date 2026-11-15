@@ -1,11 +1,11 @@
-import { QueryClientProvider, type QueryClient } from "@tanstack/react-query"
+import { QueryClientProvider, queryOptions, type QueryClient } from "@tanstack/react-query"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { ApiError } from "@/lib/api"
+import { ApiError, api } from "@/lib/api"
 import { createQueryClient } from "@/lib/query-client"
 import { sessionsQuery } from "@/features/sessions/queries"
-import { useMachineQueries, type MachineQueries } from "./queries"
+import { useMachineQueries, useReplicatedQueries, partitionReplicatedRows, type MachineQueries } from "./queries"
 
 type Json = unknown
 
@@ -17,8 +17,10 @@ const identity = { node: { id: "self", name: "this-mac", os: "darwin", version: 
 
 let routes: Record<string, (url: URL) => Promise<Response> | Response>
 
+const perMachineTestQuery = (machine: string) => queryOptions({queryKey: ["m", machine, "sessions"], queryFn: () => api<unknown[]>("/api/sessions", {machine})})
+
 function Probe({ out }: { out: { current?: MachineQueries<unknown> } }) {
-  out.current = useMachineQueries(sessionsQuery)
+  out.current = useMachineQueries(perMachineTestQuery)
   return null
 }
 
@@ -100,4 +102,28 @@ describe("useMachineQueries", () => {
     expect((error as ApiError).status).toBe(400)
     expect(out.current?.byMachine.fast?.needsUpdate).toBe(false)
   })
+})
+
+function ReplicatedProbe({ out }: { out: { current?: MachineQueries<unknown> } }) {
+  out.current = useReplicatedQueries(sessionsQuery)
+  return null
+}
+
+it("loads offline peer sessions in one local request", async () => {
+  routes = {
+    "/api/identity": () => json(identity),
+    "/api/nodes": () => json([{id:"asleep",name:"Sleeping computer",online:false}]),
+    "/api/sessions": () => json([{id:"local-session",node_id:"self",reachable:true},{id:"remote-session",node_id:"asleep",reachable:false}]),
+  }
+  const out: { current?: MachineQueries<unknown> } = {}
+  await act(async () => root.render(<QueryClientProvider client={client}><ReplicatedProbe out={out} /></QueryClientProvider>))
+  await flush(); await flush()
+  expect(out.current?.byMachine.local?.data).toEqual([{id:"local-session",node_id:"self",reachable:true}])
+  expect(out.current?.byMachine.asleep?.data).toEqual([{id:"remote-session",node_id:"asleep",reachable:false}])
+  const calls = vi.mocked(fetch).mock.calls.map(([input]) => { const url = new URL(String(input)); return url.pathname + url.search })
+  expect(calls.filter((url) => url.includes("/api/sessions"))).toEqual(["/api/sessions"])
+})
+
+it("partitions by the source node and keeps legacy local rows", () => {
+  expect(partitionReplicatedRows([{node_id:"self"},{node_id:"peer"},{}],"self")).toEqual({local:[{node_id:"self"},{}],peer:[{node_id:"peer"}]})
 })

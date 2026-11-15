@@ -16,18 +16,19 @@ require (
 	github.com/coder/acp-go-sdk v0.13.5
 	github.com/creack/pty v1.1.24
 	github.com/danieljoos/wincred v1.2.3
+	github.com/felixge/httpsnoop v1.1.0
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/goccy/go-yaml v1.19.2
 	github.com/gofrs/flock v0.13.1
 	github.com/google/jsonschema-go v0.4.3
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
+	github.com/mattn/go-sqlite3 v1.14.53
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/spf13/cobra v1.10.2
 	github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f
 	github.com/tmaxmax/go-sse v0.11.0
 	github.com/zalando/go-keyring v0.2.8
-	go.etcd.io/bbolt v1.5.0
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0

@@ -22,7 +22,7 @@ for (const name of await readdir(new URL("assets/", dist))) {
 }
 
 await rm(staging, { recursive: true, force: true })
-await cp(dist, staging, { recursive: true })
+await cp(dist, staging, { recursive: true, filter: (source) => !source.endsWith(".map") })
 // Tracked, so staging never dirties the checkout; the gateway serves it only when index.html is absent.
 await cp(new URL("placeholder.html", target), new URL("placeholder.html", staging))
 

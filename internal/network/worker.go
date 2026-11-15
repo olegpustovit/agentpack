@@ -14,6 +14,10 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 // WorkerLaunch is delivered through a private startup pipe, never HTTP or disk.
@@ -33,32 +37,82 @@ type WorkerLaunch struct {
 // WorkerRecord is private connection material, readable only by the local OS
 // user. Public node listings must use a separate allowlisted session view.
 type WorkerRecord struct {
-	Session SessionInfo `json:"session"`
+	Session SessionInfo `json:"session,omitzero"`
 	ID      string      `json:"id"`
 	PID     int         `json:"pid"`
 	Address string      `json:"address"`
 	Secret  string      `json:"secret"`
 }
 
+func createSessionDirectory(root string) (string, error) {
+	directory := filepath.Join(root, "session-"+rand.Text())
+	return directory, os.Mkdir(directory, 0700)
+}
+
 // RunWorker owns a restartable PTY independently of a gateway. ready receives
 // only the non-secret worker ID, which survives supervised child restarts.
-func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func(string) error) (int, error) {
+func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, ready func(string) error) (code int, result error) {
+	ctx, cancelWorker := context.WithCancelCause(ctx)
+	defer cancelWorker(nil)
+	spool, err := obs.OpenSpool(home, obs.SpoolOptions{Proc: "worker"})
+	if err != nil {
+		return 1, err
+	}
+	defer func() { result = errors.Join(result, spool.Close()) }()
+	metadata := obs.BuildMetadata(version, localStateNode, "worker")
+	ctx = obs.WithSink(obs.ProcessTrace(ctx), spool, metadata)
+	restore := obs.SetDefault(spool, metadata)
+	defer restore()
+	startCtx, started := obs.Start(ctx, "worker", "start")
+	started.Set("harness", launch.Session.Harness)
+	defer func() {
+		if started.TS.IsZero() {
+			started.Status = code
+			started.Fail(result)
+			started.End()
+		}
+	}()
 	if !filepath.IsAbs(launch.Program) || !filepath.IsAbs(launch.Directory) {
 		return 1, errors.New("worker program and directory must be absolute")
 	}
 	root := filepath.Join(home, "network", "sessions")
-	if err := EnsurePrivateDirectory(filepath.Dir(root)); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Dir(root)); err != nil {
 		return 1, fmt.Errorf("protect worker network directory: %w", err)
 	}
-	if err := EnsurePrivateDirectory(root); err != nil {
+	if err := paths.EnsurePrivateDirectory(root); err != nil {
 		return 1, fmt.Errorf("create worker root: %w", err)
 	}
-	directory, err := os.MkdirTemp(root, "session-")
+	directory, err := createSessionDirectory(root)
 	if err != nil {
 		return 1, fmt.Errorf("create worker directory: %w", err)
 	}
-	defer os.RemoveAll(directory)
-	if err := EnsurePrivateDirectory(directory); err != nil {
+	defer func() { result = errors.Join(result, removeWorkerEndpoint(directory)) }()
+	store, err := state.Open(home)
+	if err != nil {
+		return 1, err
+	}
+	defer func() { result = errors.Join(result, store.Close()) }()
+	nodeID, err := store.NodeID(ctx)
+	if err != nil {
+		return 1, err
+	}
+	metadata = obs.BuildMetadata(version, nodeID, "worker")
+	ctx = obs.WithSink(ctx, spool, metadata)
+	startCtx = obs.WithSink(startCtx, spool, metadata)
+	started.NodeID = nodeID
+	restoreNode := obs.SetDefault(spool, metadata)
+	defer restoreNode()
+	launch.Session.ID = filepath.Base(directory)
+	launch.Session.LastUsed = time.Now().UTC()
+	if launch.Session.StartedAt.IsZero() {
+		launch.Session.StartedAt = launch.Session.LastUsed
+	}
+	if launch.Session.StartedBy == nil {
+		actor := LocalActor("local")
+		launch.Session.StartedBy = &actor
+	}
+	started.Set("session_id", filepath.Base(directory))
+	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		return 1, fmt.Errorf("protect worker directory: %w", err)
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -103,15 +157,41 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 			environment = os.Environ()
 		}
 		command.Dir, command.Env = launch.Directory, append(append([]string(nil), environment...), "AGENTPACK_SESSION=1", "AGENTPACK_SESSION_ID="+filepath.Base(directory))
+		command.Env = append(command.Env, "AGENTPACK_TRACE="+obs.ParseTraceParent(obs.TraceParent(ctx)).ID)
 		return StartSession(command, rows, columns)
 	}
 	var session *Session
 	var conversation *ConversationSession
 	var acpCleanup func()
+	var handler *WorkerHTTP
+	defer func() {
+		terminal := launch.Session.State
+		if handler != nil && handler.current() != nil {
+			terminal = handler.current().State()
+		}
+		terminal.ExitCode = code
+		if err := endSession(context.Background(), store.DB, launch.Session.ID, terminal); err != nil {
+			_, event := obs.Start(ctx, "worker", "persist_end")
+			event.Set("session_id", launch.Session.ID)
+			event.Fail(err)
+			event.End()
+			result = errors.Join(result, err)
+		}
+	}()
 	if launch.Transport == "acp" {
 		launch.Session.Transport = "acp"
-		var err error
-		conversation, acpCleanup, err = startACPConversation(launch, directory)
+	}
+	pending := launch.Session
+	pending.AgentSessionID = ""
+	if err := upsertSession(ctx, store.DB, pending); err != nil {
+		return 1, fmt.Errorf("register session: %w", err)
+	}
+	if launch.Transport == "acp" {
+		log, err := newConversationLog(ctx, store, launch.Session.ID, cancelWorker)
+		if err != nil {
+			return 1, err
+		}
+		conversation, acpCleanup, err = startACPConversation(startCtx, launch, directory, log)
 		if err != nil {
 			return 1, err
 		}
@@ -126,7 +206,7 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 		launch.ForkSessionID = ""
 		launch.Session.AgentSessionID = conversation.agentSessionID
 		launch.Session.AgentCapabilities = conversation.AgentCapabilitiesView()
-		if err := rememberACPConversationOwner(home, launch.Session, launch.Directory); err != nil {
+		if err := rememberACPConversationOwner(ctx, store, launch.Session, launch.Directory); err != nil {
 			return 1, fmt.Errorf("persist ACP session owner: %w", err)
 		}
 	} else {
@@ -136,7 +216,6 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 			return 1, err
 		}
 	}
-	var handler *WorkerHTTP
 	var server *http.Server
 	defer func() {
 		stop, cancel := context.WithTimeout(context.Background(), workerStopGrace)
@@ -166,7 +245,15 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 			record.Session.ConversationState = conversation.ConversationState()
 		}
 	}
-	data, err := json.Marshal(record)
+	if session != nil {
+		record.Session.State = session.State()
+	}
+	if err := upsertSession(ctx, store.DB, record.Session); err != nil {
+		return 1, fmt.Errorf("register session: %w", err)
+	}
+	endpoint := record
+	endpoint.Session = SessionInfo{}
+	data, err := json.Marshal(endpoint)
 	if err != nil {
 		return 1, err
 	}
@@ -179,25 +266,38 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 		return 1, fmt.Errorf("publish worker record: %w", err)
 	}
 	var stateWriteWarning sync.Once
-	persistConversationState := func(state string) {
-		if err := patchWorkerConversationState(directory, state); err != nil {
-			stateWriteWarning.Do(func() {
-				fmt.Fprintln(os.Stderr, "warning: ACP worker state could not be persisted")
-			})
+	persistConversationState := func(current *ConversationSession) func(string) {
+		return func(state string) {
+			var err error
+			if state != "working" {
+				err = current.log.Flush()
+			}
+			if err == nil {
+				err = patchWorkerConversationState(context.Background(), store.DB, record.ID, state)
+			}
+			if err != nil {
+				if err == errSessionArchived {
+					cancelWorker(err)
+					return
+				}
+				stateWriteWarning.Do(func() {
+					_, event := obs.Start(ctx, "worker", "persist_state")
+					event.Set("session_id", record.ID)
+					event.Fail(err)
+					event.End()
+					fmt.Fprintln(os.Stderr, "warning: ACP worker state could not be persisted")
+				})
+			}
 		}
 	}
 	if conversation != nil {
-		conversation.SetStateChange(record.Session.ConversationState, persistConversationState)
+		conversation.SetStateChange(record.Session.ConversationState, persistConversationState(conversation))
 	}
-	if launch.Session.Directory != "" {
-		if err := remember(home, launch.Session); err != nil {
-			return 1, fmt.Errorf("remember session: %w", err)
-		}
-	}
-	handler, err = WorkerHandler(session, conversation, record.Secret, directory)
+	handler, err = WorkerHandler(ctx, session, conversation, record.Secret, directory)
 	if err != nil {
 		return 1, err
 	}
+	handler.stateStore = store
 	if session != nil {
 		handler.start = start
 		handler.validate = validate
@@ -221,7 +321,11 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 				acpCleanup()
 				acpCleanup = nil
 			}
-			next, cleanup, err := startACPConversation(launch, directory)
+			log, err := newConversationLog(ctx, store, launch.Session.ID, cancelWorker)
+			if err != nil {
+				return err
+			}
+			next, cleanup, err := startACPConversation(obs.WithRecording(ctx, handler.diagnostics), launch, directory, log)
 			if err != nil {
 				return err
 			}
@@ -231,26 +335,37 @@ func RunWorker(ctx context.Context, home string, launch WorkerLaunch, ready func
 				}
 				return err
 			}
-			conversation = next
-			acpCleanup = cleanup
 			launch.Session.AgentSessionID = next.agentSessionID
 			launch.Session.AgentCapabilities = next.AgentCapabilitiesView()
+			launch.Session.ConversationState = next.ConversationState()
+			if err := upsertSession(ctx, store.DB, launch.Session); err != nil {
+				if cleanup != nil {
+					cleanup()
+				}
+				return err
+			}
+			conversation = next
+			acpCleanup = cleanup
 			handler.mu.Lock()
 			handler.conversation = next
 			handler.mu.Unlock()
-			next.SetStateChange(next.ConversationState(), persistConversationState)
+			next.SetStateChange(next.ConversationState(), persistConversationState(next))
 			return nil
 		}
 	}
 	server = &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
 	serveDone := make(chan error, 1)
-	go func() { serveDone <- server.Serve(listener) }()
+	obs.Go("worker.http", func() { serveDone <- server.Serve(listener) })
 	if err := ready(record.ID); err != nil {
 		return 1, fmt.Errorf("announce worker: %w", err)
 	}
+	started.End()
 	select {
 	case <-ctx.Done():
-		return 1, ctx.Err()
+		if context.Cause(ctx) == errSessionArchived {
+			return 0, nil
+		}
+		return 1, context.Cause(ctx)
 	case err := <-serveDone:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return 1, fmt.Errorf("serve worker: %w", err)

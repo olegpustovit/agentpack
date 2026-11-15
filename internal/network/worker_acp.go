@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sdkacp "github.com/coder/acp-go-sdk"
@@ -21,11 +22,22 @@ import (
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
+	"github.com/olegpustovit/agentpack/internal/obs"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
-func startACPConversation(launch WorkerLaunch, sessionDir string) (*ConversationSession, func(), error) {
-	if err := EnsurePrivateDirectory(sessionDir); err != nil {
+func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir string, log *acp.EventLog) (conversation *ConversationSession, cleanup func(), result error) {
+	defer func() {
+		if result != nil {
+			closeACPEventLog(log)
+		}
+		if conversation != nil {
+			conversation.sessionID = filepath.Base(sessionDir)
+		}
+	}()
+	if err := paths.EnsurePrivateDirectory(sessionDir); err != nil {
 		return nil, nil, fmt.Errorf("protect ACP session directory: %w", err)
 	}
 	switch os.Getenv("AGENTPACK_TEST_ACP") {
@@ -37,12 +49,14 @@ func startACPConversation(launch WorkerLaunch, sessionDir string) (*Conversation
 		if fixture == "" {
 			return nil, nil, errors.New("AGENTPACK_TEST_ACP_FIXTURE is required")
 		}
-		log, err := loadEventLogFixture(fixture)
+		entries, err := loadEventLogFixtureEntries(fixture)
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := log.EnablePersistence(filepath.Join(sessionDir, "conversation.ndjson")); err != nil {
-			return nil, nil, err
+		if len(log.Snapshot()) == 0 {
+			for _, entry := range entries {
+				log.Append(entry.Kind, entry.TS, entry.Payload)
+			}
 		}
 		return NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil)), func() { closeACPEventLog(log) }, nil
 	case "2":
@@ -54,7 +68,7 @@ func startACPConversation(launch WorkerLaunch, sessionDir string) (*Conversation
 		if err != nil {
 			return nil, nil, err
 		}
-		return startACPReplayAgent(launch, sessionDir, entries)
+		return startACPReplayAgent(ctx, launch, sessionDir, entries, log)
 	}
 
 	target, err := harnessTarget(launch.Session.Harness)
@@ -73,18 +87,15 @@ func startACPConversation(launch WorkerLaunch, sessionDir string) (*Conversation
 	if err != nil {
 		return nil, nil, err
 	}
-	return startACPAgentProcess(launch, launchCtx, harness, acpLaunch, sessionDir)
+	return startACPAgentProcess(ctx, launch, launchCtx, harness, acpLaunch, sessionDir, log)
 }
 
-func startACPReplayAgent(launch WorkerLaunch, sessionDir string, entries []acp.LogEntry) (*ConversationSession, func(), error) {
+func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir string, entries []acp.LogEntry, log *acp.EventLog) (*ConversationSession, func(), error) {
 	workspace := launch.Session.Directory
 	if workspace == "" {
 		workspace = launch.Directory
 	}
-	log := acp.NewEventLog(0)
-	if err := log.EnablePersistence(filepath.Join(sessionDir, "conversation.ndjson")); err != nil {
-		return nil, nil, err
-	}
+
 	var (
 		connMu          sync.Mutex
 		conn            *sdkacp.ClientSideConnection
@@ -92,7 +103,8 @@ func startACPReplayAgent(launch WorkerLaunch, sessionDir string, entries []acp.L
 		imageCapability bool
 	)
 	broker := acp.NewBroker(
-		func(ctx context.Context, input acp.PromptInput) error {
+		func(ctx context.Context, input acp.PromptInput) (result error) {
+			defer func() { result = errors.Join(result, log.Flush()) }()
 			connMu.Lock()
 			c, sid, images := conn, sessID, imageCapability
 			connMu.Unlock()
@@ -104,6 +116,9 @@ func startACPReplayAgent(launch WorkerLaunch, sessionDir string, entries []acp.L
 				return err
 			}
 			log.Append("prompt", time.Now().UnixMilli(), promptLogPayload(loggedInput))
+			if err := log.Flush(); err != nil {
+				return err
+			}
 			response, err := c.Prompt(ctx, sdkacp.PromptRequest{
 				SessionId: sid,
 				Prompt:    blocks,
@@ -127,6 +142,10 @@ func startACPReplayAgent(launch WorkerLaunch, sessionDir string, entries []acp.L
 		nil,
 		brokerSetConfigOption(&connMu, &conn, &sessID),
 	)
+	conv := NewConversationSession(log, broker)
+	conv.agentExited = false
+	log.SetReplaying(launch.Session.AgentSessionID != "" && conv.lastSeq > 0)
+	defer log.SetReplaying(false)
 	client := acp.NewHarnessClient(workspace, nil, log, broker)
 	agent := acptest.NewReplayAgent(entries)
 	c2aR, c2aW := io.Pipe()
@@ -137,7 +156,7 @@ func startACPReplayAgent(launch WorkerLaunch, sessionDir string, entries []acp.L
 	connMu.Lock()
 	conn = clientConn
 	connMu.Unlock()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	cleanup := func() {
 		cancel()
 		if client.Terminals != nil {
@@ -147,11 +166,10 @@ func startACPReplayAgent(launch WorkerLaunch, sessionDir string, entries []acp.L
 		_ = a2cW.Close()
 		_ = c2aR.Close()
 		_ = a2cR.Close()
-		_ = agentConn.Done()
-		closeACPEventLog(log)
+		finishACPConversation(ctx, conv, client, clientConn)
 	}
-	go func() { <-clientConn.Done() }()
 	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, "")
+	log.SetReplaying(false)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -163,7 +181,6 @@ func startACPReplayAgent(launch WorkerLaunch, sessionDir string, entries []acp.L
 		setup.AgentCapabilities.PromptCapabilities.Image
 	connMu.Unlock()
 	launch.Session.AgentSessionID = setup.AgentSessionID
-	conv := NewConversationSession(log, broker)
 	conv.agentSessionID = setup.AgentSessionID
 	conv.SetConfigOptions(setup.ConfigOptions)
 	conv.SetModes(setup.Modes)
@@ -171,24 +188,30 @@ func startACPReplayAgent(launch WorkerLaunch, sessionDir string, entries []acp.L
 	return conv, cleanup, nil
 }
 
-func startACPAgentProcess(launch WorkerLaunch, launchCtx base.LaunchContext, harness base.Harness, acpLaunch base.ACPLaunch, sessionDir string) (*ConversationSession, func(), error) {
+func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx base.LaunchContext, harness base.Harness, acpLaunch base.ACPLaunch, sessionDir string, log *acp.EventLog) (*ConversationSession, func(), error) {
 	cmd := acpLaunch.Cmd
 	if cmd == nil {
 		return nil, nil, errors.New("harness ACP launch returned nil command")
 	}
 	workspace := launchCtx.WorkspaceRoot
-	stdinReader, stdinWriter := io.Pipe()
 	agentOutR, agentOutW := io.Pipe()
 	clientInR, clientInW := io.Pipe()
-	cmd.Stdin = stdinReader
 	cmd.Stdout = agentOutW
-	cmd.Stderr = os.Stderr
+	stderr := &diagnosticStderr{}
+	defer func() {
+		if event := obs.From(ctx); event != nil {
+			event.Set("stderr", stderr.Redacted())
+		}
+	}()
+	cmd.Stderr = io.MultiWriter(os.Stderr, stderr)
 	cmd.Dir = workspace
 	cmd.Env = workerAgentEnvironment(launch.Environment, cmd.Env, workspace)
+	cmd.Env = append(cmd.Env, "AGENTPACK_TRACE="+obs.ParseTraceParent(obs.TraceParent(ctx)).ID)
 
-	log := acp.NewEventLog(0)
-	if err := log.EnablePersistence(filepath.Join(sessionDir, "conversation.ndjson")); err != nil {
-		return nil, nil, err
+	stdinWriter, err := cmd.StdinPipe()
+	if err != nil {
+		closeACPEventLog(log)
+		return nil, nil, fmt.Errorf("open ACP adapter stdin: %w", err)
 	}
 	var (
 		connMu          sync.Mutex
@@ -197,7 +220,8 @@ func startACPAgentProcess(launch WorkerLaunch, launchCtx base.LaunchContext, har
 		imageCapability bool
 	)
 	broker := acp.NewBroker(
-		func(ctx context.Context, input acp.PromptInput) error {
+		func(ctx context.Context, input acp.PromptInput) (result error) {
+			defer func() { result = errors.Join(result, log.Flush()) }()
 			connMu.Lock()
 			c, sid, images := conn, sessID, imageCapability
 			connMu.Unlock()
@@ -209,6 +233,9 @@ func startACPAgentProcess(launch WorkerLaunch, launchCtx base.LaunchContext, har
 				return err
 			}
 			log.Append("prompt", time.Now().UnixMilli(), promptLogPayload(loggedInput))
+			if err := log.Flush(); err != nil {
+				return err
+			}
 			response, err := c.Prompt(ctx, sdkacp.PromptRequest{
 				SessionId: sid,
 				Prompt:    blocks,
@@ -232,6 +259,10 @@ func startACPAgentProcess(launch WorkerLaunch, launchCtx base.LaunchContext, har
 		nil,
 		brokerSetConfigOption(&connMu, &conn, &sessID),
 	)
+	conv := NewConversationSession(log, broker)
+	conv.agentExited = false
+	log.SetReplaying(launch.Session.AgentSessionID != "" && conv.lastSeq > 0)
+	defer log.SetReplaying(false)
 	client := acp.NewHarnessClient(workspace, nil, log, broker)
 	rewriter := &rewriteStdin{w: stdinWriter, rewrite: func(line []byte) []byte {
 		line = acp.AddSessionCapabilities(line)
@@ -253,7 +284,7 @@ func startACPAgentProcess(launch WorkerLaunch, launchCtx base.LaunchContext, har
 
 	launchCtx.Command = cmd
 	if err := cmd.Start(); err != nil {
-		_ = stdinReader.Close()
+		_ = stdinWriter.Close()
 		_ = agentOutR.Close()
 		_ = agentOutW.Close()
 		_ = clientInR.Close()
@@ -263,44 +294,67 @@ func startACPAgentProcess(launch WorkerLaunch, launchCtx base.LaunchContext, har
 		return nil, nil, err
 	}
 	if err := harness.AfterLaunch(launchCtx); err != nil {
+		_ = stdinWriter.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		_ = agentOutW.Close()
 		<-adaptDone
 		appendACPAgentExit(log)
 		closeACPEventLog(log)
+		_ = clientInR.Close()
+		_ = clientInW.Close()
 		return nil, nil, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	agentDone := make(chan struct{})
+	var stopping atomic.Bool
+	exitCode := &atomic.Int32{}
+	exitCode.Store(-1)
 	cleanup := func() {
+		stopping.Store(true)
 		cancel()
 		if client.Terminals != nil {
 			_ = client.Terminals.Close()
 		}
+		// Release an SDK cancellation write before waiting for the rewriter mutex.
+		_ = stdinWriter.Close()
 		if rewriter != nil {
 			_ = rewriter.Close()
 		}
-		_ = stdinWriter.Close()
 		_ = cmd.Process.Kill()
 		<-agentDone
-		_ = stdinReader.Close()
 		_ = agentOutR.Close()
 		_ = clientInR.Close()
-		closeACPEventLog(log)
+		finishACPConversation(ctx, conv, client, clientConn)
 	}
-	go func() {
-		_ = cmd.Wait()
+	obs.Go("worker.acp_agent", func() {
+		err := cmd.Wait()
+		if cmd.ProcessState != nil {
+			exitCode.Store(int32(cmd.ProcessState.ExitCode()))
+		}
 		_ = agentOutW.Close()
 		<-adaptDone
+		if !stopping.Load() {
+			name := "exit"
+			if err != nil {
+				name = "unexpected_exit"
+			}
+			_, event := obs.Start(ctx, "worker", name)
+			event.Set("session_id", filepath.Base(sessionDir))
+			event.Set("harness", launch.Session.Harness)
+			event.Status = int(exitCode.Load())
+			event.Set("stderr", stderr.Redacted())
+			event.Fail(err)
+			event.End()
+		}
 		appendACPAgentExit(log)
 		cancel()
 		close(agentDone)
-	}()
-	go func() { <-clientConn.Done() }()
+	})
 
 	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, acpLaunch.AuthenticateMethodID)
+	log.SetReplaying(false)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -312,7 +366,8 @@ func startACPAgentProcess(launch WorkerLaunch, launchCtx base.LaunchContext, har
 		setup.AgentCapabilities.PromptCapabilities.Image
 	connMu.Unlock()
 	launch.Session.AgentSessionID = setup.AgentSessionID
-	conv := NewConversationSession(log, broker)
+	conv.stderr = stderr
+	conv.agentExitCode = exitCode
 	conv.agentSessionID = setup.AgentSessionID
 	conv.SetConfigOptions(setup.ConfigOptions)
 	conv.SetModes(setup.Modes)
@@ -597,8 +652,27 @@ func (r *rewriteStdin) Close() error {
 func appendACPAgentExit(log *acp.EventLog) {
 	log.Append("agent_exit", time.Now().UnixMilli(), json.RawMessage(`{}`))
 }
+func finishACPConversation(ctx context.Context, conversation *ConversationSession, client *acp.HarnessClient, connection *sdkacp.ClientSideConnection) {
+	conversation.mu.Lock()
+	conversation.agentExited = true
+	conversation.mu.Unlock()
+	<-connection.Done()
+	drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := client.DrainSessionUpdates(drain); err != nil {
+		conversation.log.MarkTruncated()
+		_, event := obs.Start(ctx, "worker", "drain_conversation")
+		event.Set("session_id", conversation.sessionID)
+		event.Fail(err)
+		event.End()
+	}
+	conversation.writes.Lock()
+	defer conversation.writes.Unlock()
+	closeACPEventLog(conversation.log)
+}
+
 func closeACPEventLog(log *acp.EventLog) {
-	if err := log.Close(); err != nil {
+	if err := log.Close(); err != nil && err != errSessionArchived {
 		fmt.Fprintln(os.Stderr, "warning: ACP conversation log could not be persisted")
 	}
 }
@@ -771,6 +845,7 @@ func loadEventLogFixtureEntries(path string) ([]acp.LogEntry, error) {
 }
 
 func probeHarnessAgentSessions(ctx context.Context, launch WorkerLaunch) ([]AgentSession, error) {
+	ctx = WithPeerCache(ctx, "")
 	target, err := harnessTarget(launch.Session.Harness)
 	if err != nil {
 		return nil, err
@@ -804,14 +879,17 @@ func listACPAgentSessions(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		return nil, errors.New("harness ACP launch returned nil command")
 	}
 	workspace := launchCtx.WorkspaceRoot
-	stdinReader, stdinWriter := io.Pipe()
+	stdinWriter, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("open ACP adapter stdin: %w", err)
+	}
 	agentOutR, agentOutW := io.Pipe()
 	clientInR, clientInW := io.Pipe()
-	cmd.Stdin = stdinReader
 	cmd.Stdout = agentOutW
 	cmd.Stderr = os.Stderr
 	cmd.Dir = workspace
 	cmd.Env = workerAgentEnvironment(launch.Environment, cmd.Env, workspace)
+	cmd.Env = append(cmd.Env, "AGENTPACK_TRACE="+obs.ParseTraceParent(obs.TraceParent(ctx)).ID)
 
 	log := acp.NewEventLog(0)
 	client := acp.NewHarnessClient(workspace, nil, log, acp.NewBroker(nil, nil, nil, nil))
@@ -828,21 +906,25 @@ func listACPAgentSessions(ctx context.Context, launch WorkerLaunch, launchCtx ba
 
 	launchCtx.Command = cmd
 	if err := cmd.Start(); err != nil {
+		_ = stdinWriter.Close()
+		_ = agentOutR.Close()
+		_ = agentOutW.Close()
+		_ = clientInR.Close()
+		_ = clientInW.Close()
 		return nil, err
 	}
 	cleanup := func() {
 		if client.Terminals != nil {
 			_ = client.Terminals.Close()
 		}
+		_ = stdinWriter.Close()
 		if rewriter != nil {
 			_ = rewriter.Close()
 		}
-		_ = stdinWriter.Close()
 		_ = agentOutW.Close()
 		_ = clientInW.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		_ = stdinReader.Close()
 		_ = agentOutR.Close()
 		_ = clientInR.Close()
 	}

@@ -12,6 +12,11 @@ import { settingsQuery } from "./queries"
 
 // Copy follows the legacy confirmations; the title names what will stop.
 const confirms = {
+	all: {
+		title: "Sign out everywhere?",
+		description: "End every login for this account, including connected assistants. Existing agents keep running.",
+		destructiveLabel: "Sign out everywhere",
+	},
   agents: {
     title: "Stop all agents on the gateway machine?",
     description: "Their current conversations may end.",
@@ -45,10 +50,13 @@ export function AccountPane() {
           <Row label="Tailscale user">{identity.data.tailscale_user || "None"}</Row>
           <Row label="">
             <p className="text-(length:--fs-sm) text-(--fg2)">
-              Sessions are attributed per machine and Tailscale user. Everyone using this root password appears as root.
+              Sessions are attributed to your account. Signing out leaves existing agents running.
             </p>
-            <Button disabled={actions.signOut.isPending} onClick={() => actions.signOut.mutate()}>
+            <Button disabled={actions.signOut.isPending} onClick={() => actions.signOut.mutate("current")}>
               Sign out
+            </Button>
+            <Button disabled={actions.signOut.isPending} onClick={() => setConfirm("all")}>
+              Sign out everywhere…
             </Button>
           </Row>
         </FieldGrid>
@@ -75,7 +83,8 @@ export function AccountPane() {
             {...confirms[confirm]}
             onConfirm={() => {
               setConfirm(null)
-              if (confirm === "agents") actions.stopAgents.mutate()
+              if (confirm === "all") actions.signOut.mutate("all")
+              else if (confirm === "agents") actions.stopAgents.mutate()
               else actions.stopGateway.mutate()
             }}
           />

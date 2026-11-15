@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"sort"
@@ -342,7 +341,7 @@ func (s *Store) commitMerge(merged, a, b Revision) error {
 	if err := s.mergeBindings(id, merged, a.ID, b.ID); err != nil {
 		return err
 	}
-	idx, err := s.rebuildIndex()
+	idx, err := s.readIndex()
 	if err != nil {
 		return err
 	}
@@ -351,13 +350,13 @@ func (s *Store) commitMerge(merged, a, b Revision) error {
 			return err
 		}
 	}
-	return s.writeIndexUnlocked(idx)
+	return nil
 }
 
 func (s *Store) mergeBindings(id string, merged Revision, parents ...string) error {
 	values := map[string]string{}
 	for _, parent := range parents {
-		data, exists, _, err := readRegularOptional(s.bindingPath(parent))
+		data, exists, err := s.readBindings(parent)
 		if err != nil {
 			return err
 		}
@@ -385,10 +384,6 @@ func (s *Store) mergeBindings(id string, merged Revision, parents ...string) err
 	return s.writeBindings(id, bindings{Values: values})
 }
 
-func (s *Store) bindingPath(id string) string {
-	return filepath.Join(s.root, bindingsDir, id+".json")
-}
-
 func (s *Store) headPair(heads []string, i, j int) (Revision, Revision, error) {
 	a, err := s.readRevision(heads[i])
 	if err != nil {
@@ -401,7 +396,7 @@ func (s *Store) headPair(heads []string, i, j int) (Revision, Revision, error) {
 // mergeHeadsUnlocked merges every pair of heads that merges cleanly. The caller holds the registry lock.
 func (s *Store) mergeHeadsUnlocked(id string) error {
 	for {
-		idx, err := s.readIndexUnlocked()
+		idx, err := s.readIndex()
 		if err != nil {
 			return err
 		}
@@ -437,7 +432,7 @@ func (s *Store) mergeHeadsUnlocked(id string) error {
 // MergeHeads settles every agentpack that replication left with several heads, as far as it can without a person.
 func (s *Store) MergeHeads() error {
 	return s.withLock(func() error {
-		idx, err := s.readIndexUnlocked()
+		idx, err := s.readIndex()
 		if err != nil {
 			return err
 		}
@@ -484,7 +479,7 @@ func (s *Store) Conflict(id string) (Conflict, error) {
 func (s *Store) Resolve(id string, heads []string, choices map[string]string, node string) (Revision, error) {
 	var merged Revision
 	err := s.withLock(func() error {
-		idx, err := s.readIndexUnlocked()
+		idx, err := s.readIndex()
 		if err != nil {
 			return err
 		}

@@ -13,10 +13,10 @@ import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { StatusSlot } from "@/features/status/status-bar"
 import { sessionsQuery } from "@/features/sessions/queries"
 import type { SessionInfo } from "@/lib/api-types"
-import { harnessName } from "@/lib/format"
+import { harnessName, relativeTime } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { api, LOCAL } from "@/lib/api"
-import { conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate } from "./queries"
+import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate } from "./queries"
 import { configRole, parseConfigOptions } from "./config-options"
 import type { LogEntry, ThreadItem } from "./model"
 import { reduceLog } from "./reducer"
@@ -52,6 +52,7 @@ export default function ConversationPane({
   title,
   subtitle,
   onSwitchTerminal,
+  readOnly: unavailable = false,
 }: {
   machine: string
   sessionId: string
@@ -59,6 +60,7 @@ export default function ConversationPane({
   title?: string
   subtitle?: string
   onSwitchTerminal?: () => void
+  readOnly?: boolean
 }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -70,14 +72,17 @@ export default function ConversationPane({
   const threadScrollRef = useRef<HTMLDivElement>(null)
   const scrolledSessionRef = useRef("")
   const [configValues, setConfigValues] = useState<Record<string, string | boolean>>({})
-  const live = info?.state.running === true
+  const readOnly = unavailable || info?.reachable === false || Boolean(info?.archived_at)
+  const live = !readOnly && info?.state.running === true
   const { data: entries = [], error: conversationError } = useQuery({ ...conversationEventsQuery(machine, sessionId, live), retry: false })
   const { data: configRaw, error: configError } = useQuery({
     queryKey: ["conversation-config", machine, sessionId],
+    enabled: !readOnly,
     queryFn: () => api<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/config-options`, { machine }),
     retry: false,
   })
-  const needsUpdate = conversationNeedsUpdate(conversationError, configError)
+  const needsUpdate = conversationNeedsUpdate(conversationError, readOnly ? undefined : configError)
+  const archiveUnavailable = archiveUnavailableMessage(conversationError)
   const configOptions = parseConfigOptions(configRaw)
   const selectOptions = configOptions.filter((option) => option.type === "select")
   const permissionsOption = selectOptions.find((option) => configRole(option) === "permissions")
@@ -214,8 +219,8 @@ export default function ConversationPane({
       ? retryPromptInput(prompt, info?.agent_capabilities?.promptCapabilities?.image === true)
       : undefined
   })()
-  const canRetry = Boolean(retryInput && !thread.needs_you && !needsUpdate && !send.isPending)
-  const canFork = Boolean(!needsUpdate && info?.agent_session_id && info.agent_capabilities?.sessionCapabilities?.fork)
+  const canRetry = !readOnly && Boolean(retryInput && !thread.needs_you && !needsUpdate && !send.isPending)
+  const canFork = !readOnly && Boolean(!needsUpdate && info?.agent_session_id && info.agent_capabilities?.sessionCapabilities?.fork)
   function retryLastPrompt() {
     if (retryInput && canRetry) {
       send.mutate({
@@ -226,7 +231,7 @@ export default function ConversationPane({
       })
     }
   }
-  const canSend = (draft.trim().length > 0 || attachments.length > 0) && !send.isPending && !upload.isPending && !thread.needs_you && !needsUpdate
+  const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !send.isPending && !upload.isPending && !thread.needs_you && !needsUpdate
   const diffPaths = listDiffChanges(thread.items).map((change) => change.path)
   const slashHints = filterSlashHints(draft).filter((hint) => hint.value !== "/fork" || (canFork && !fork.isPending))
   const atHints = filterAtHints(draft, diffPaths)
@@ -255,7 +260,7 @@ export default function ConversationPane({
     composerInputRef.current?.focus()
   }
   async function attachImages(files: File[]) {
-    if (files.length === 0 || thread.needs_you || needsUpdate) return
+    if (readOnly || files.length === 0 || thread.needs_you || needsUpdate) return
     if (send.isPending) {
       hud.error("Wait for the message to finish sending before adding images.")
       return
@@ -312,10 +317,12 @@ export default function ConversationPane({
           <PanelRight aria-hidden />
         </Button>
       </ToolbarSlot>
+      {readOnly && <Banner>{info?.archived_at ? "Archived, read-only" : `Offline, read-only${info?.last_sync ? ` · Last sync ${relativeTime(new Date(info.last_sync), Date.now())}` : ""}`}</Banner>}
+      {archiveUnavailable && <Banner>{archiveUnavailable}</Banner>}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div ref={threadScrollRef} tabIndex={0} aria-label="Conversation" className="min-h-0 min-w-0 flex-1 overflow-auto px-(--s4) py-(--s4) pb-64">
           <div className="mx-auto w-full max-w-180">
-            {!needsUpdate && (
+            {!needsUpdate && !readOnly && (
               <div className="mb-(--s4) flex items-center gap-(--s3)">
                 {thread.working ? <Spinner /> : <StatusDot state={statusState} />}
                 {thread.working && (
@@ -334,7 +341,8 @@ export default function ConversationPane({
                 items={thread.items}
                 machine={machine}
                 sessionId={sessionId}
-                onQuote={quoteReply}
+                readOnly={readOnly}
+                onQuote={readOnly ? undefined : quoteReply}
                 onFork={canFork && !fork.isPending ? () => fork.mutate() : undefined}
                 onRetry={canRetry ? retryLastPrompt : undefined}
               />
@@ -343,7 +351,7 @@ export default function ConversationPane({
         </div>
         <ConversationInspector thread={thread} info={info} machine={machine} open={inspectorOpen} />
       </div>
-      <div
+      {!readOnly && <div
         className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-(--s4) pt-36 pb-(--s5)"
         style={{ backgroundImage: "linear-gradient(to top, var(--window) 55%, transparent)" }}
         onDragOver={(event) => {
@@ -584,7 +592,7 @@ export default function ConversationPane({
               </div>
             </div>
           </div>
-      </div>
+      </div>}
     </div>
   )
 }

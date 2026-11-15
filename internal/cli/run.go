@@ -22,7 +22,7 @@ import (
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
-var Version = "0.13.9"
+var Version = "0.14.0"
 
 type Runner struct {
 	Stdout, Stderr io.Writer
@@ -46,6 +46,17 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 	}
 	if invocation.Command != "hook-exec" && invocation.Command != "mcp-exec" {
 		runner.Stderr = &progressWriter{Writer: runner.Stderr}
+	}
+	if invocation.Command == "logs" {
+		if invocation.Global.Proxy {
+			return 1, errors.New("--proxy is only supported with agentpack claude")
+		}
+		command := runner.logsCommand()
+		command.SetArgs(invocation.Args)
+		if err := command.ExecuteContext(ctx); err != nil {
+			return 1, err
+		}
+		return 0, nil
 	}
 	label := &stepLabel{operation: invocation.Command}
 	if !invocation.Global.Quiet && !invocation.Global.NoProgress {

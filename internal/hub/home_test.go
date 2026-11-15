@@ -18,6 +18,8 @@ import (
 	"github.com/charmbracelet/x/exp/golden"
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/network"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func fixtureSessions() []network.SessionInfo {
@@ -415,6 +417,23 @@ func TestGatewayLinePrefersPublicURL(t *testing.T) {
 	}
 }
 
+func TestGatewayLineMarksUnclaimedGateway(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENTPACK_PUBLIC_URL", "https://agentpack.example")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"claimed":false}`)) }))
+	defer server.Close()
+	if err := os.Mkdir(filepath.Join(home, "network"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]string{"address": strings.TrimPrefix(server.URL, "http://"), "secret": strings.Repeat("s", 64)})
+	if err := os.WriteFile(filepath.Join(home, "network", "node.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := gatewayLine(home); got != "UNCLAIMED: open https://agentpack.example now" {
+		t.Fatal(got)
+	}
+}
+
 func TestListViewContainsGroupedSessions(t *testing.T) {
 	h := testHome()
 	h.panel = panelList
@@ -501,6 +520,11 @@ func TestHubMultiChoiceElicitationSubmitsOptionIDs(t *testing.T) {
 	const secret = "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
 	posted := make(chan map[string]string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/status" {
+			_ = json.NewEncoder(w).Encode(network.AccountStatus{Claimed: true})
+			return
+		}
+
 		if r.Method != http.MethodPost || r.URL.Path != "/api/sessions/session-chat/conversation/elicitation" ||
 			r.URL.Query().Get("node") != "" || r.Header.Get("Authorization") != "Bearer "+secret {
 			t.Errorf("request = %s %s?%s authorization=%q", r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization"))
@@ -572,6 +596,11 @@ func TestNewSessionPostsSelectedWorkspaceAndTransport(t *testing.T) {
 	const secret = "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
 	var body map[string]string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/status" {
+			_ = json.NewEncoder(w).Encode(network.AccountStatus{Claimed: true})
+			return
+		}
+
 		if r.Method != http.MethodPost || r.URL.Path != "/api/sessions" || r.Header.Get("Authorization") != "Bearer "+secret {
 			t.Errorf("request = %s %s authorization=%q", r.Method, r.URL.Path, r.Header.Get("Authorization"))
 		}
@@ -586,7 +615,7 @@ func TestNewSessionPostsSelectedWorkspaceAndTransport(t *testing.T) {
 	defer server.Close()
 	home := t.TempDir()
 	networkDir := filepath.Join(home, "network")
-	if err := network.EnsurePrivateDirectory(networkDir); err != nil {
+	if err := paths.EnsurePrivateDirectory(networkDir); err != nil {
 		t.Fatal(err)
 	}
 	node, err := json.Marshal(map[string]string{

@@ -1,20 +1,14 @@
 package cache
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
-	bolt "go.etcd.io/bbolt"
-
 	"github.com/olegpustovit/agentpack/internal/database"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
-)
-
-var (
-	entriesBucket = []byte("cache_entries")
-	aliasesBucket = []byte("aliases")
 )
 
 type EntryRecord struct {
@@ -36,32 +30,29 @@ func UpsertEntry(cacheKey string, record EntryRecord, aliases []string) error {
 	if err != nil {
 		return err
 	}
-	updateErr := database.Update(func(transaction *bolt.Tx) error {
-		entries, err := transaction.CreateBucketIfNotExists(entriesBucket)
-		if err != nil {
-			return fmt.Errorf("open cache entries bucket: %w", err)
+	tx, err := database.Begin()
+	if err != nil {
+		return errors.Join(err, database.Close())
+	}
+	defer tx.Rollback()
+	_, updateErr := tx.Exec(`INSERT INTO cache_entries(cache_key,body) VALUES (?,?)
+ ON CONFLICT(cache_key) DO UPDATE SET body=excluded.body`, cacheKey, encoded)
+	for _, alias := range aliases {
+		if updateErr != nil {
+			break
 		}
-		if err := entries.Put([]byte(cacheKey), encoded); err != nil {
-			return fmt.Errorf("write cache entry: %w", err)
+		key := strings.ToLower(strings.TrimSpace(alias))
+		if key == "" {
+			continue
 		}
-		if len(aliases) == 0 {
-			return nil
-		}
-		aliasBucket, err := transaction.CreateBucketIfNotExists(aliasesBucket)
-		if err != nil {
-			return fmt.Errorf("open aliases bucket: %w", err)
-		}
-		for _, alias := range aliases {
-			key := strings.ToLower(strings.TrimSpace(alias))
-			if key == "" {
-				continue
-			}
-			if err := aliasBucket.Put([]byte(key), []byte(cacheKey)); err != nil {
-				return fmt.Errorf("write cache alias %q: %w", key, err)
-			}
-		}
-		return nil
-	})
+		_, updateErr = tx.Exec(`INSERT INTO aliases(alias,cache_key) VALUES (?,?)
+ ON CONFLICT(alias) DO UPDATE SET cache_key=excluded.cache_key`, key, cacheKey)
+	}
+	if updateErr == nil {
+		updateErr = tx.Commit()
+	} else {
+		updateErr = errors.Join(updateErr, tx.Rollback())
+	}
 	closeErr := database.Close()
 	if updateErr != nil {
 		if closeErr != nil {
@@ -76,34 +67,30 @@ func UpsertEntry(cacheKey string, record EntryRecord, aliases []string) error {
 }
 
 func LookupAlias(alias string) (string, bool, error) {
-	var cacheKey string
-	err := viewDatabase(func(transaction *bolt.Tx) error {
-		bucket := transaction.Bucket(aliasesBucket)
-		if bucket == nil {
+	var key string
+	err := viewDatabase(func(db *sql.DB) error {
+		err := db.QueryRow("SELECT cache_key FROM aliases WHERE alias=?", strings.ToLower(strings.TrimSpace(alias))).Scan(&key)
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
-		value := bucket.Get([]byte(strings.ToLower(strings.TrimSpace(alias))))
-		if value != nil {
-			cacheKey = string(value)
-		}
-		return nil
+		return err
 	})
-	return cacheKey, cacheKey != "", err
+	return key, key != "", err
 }
 
 func GetEntry(cacheKey string) (EntryRecord, bool, error) {
 	var record EntryRecord
-	found := false
-	err := viewDatabase(func(transaction *bolt.Tx) error {
-		bucket := transaction.Bucket(entriesBucket)
-		if bucket == nil {
+	var found bool
+	err := viewDatabase(func(db *sql.DB) error {
+		var body []byte
+		err := db.QueryRow("SELECT body FROM cache_entries WHERE cache_key=?", cacheKey).Scan(&body)
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
-		value := bucket.Get([]byte(cacheKey))
-		if value == nil {
-			return nil
+		if err != nil {
+			return err
 		}
-		if err := json.Unmarshal(value, &record); err != nil {
+		if err := json.Unmarshal(body, &record); err != nil {
 			return fmt.Errorf("deserialize cache entry %q: %w", cacheKey, err)
 		}
 		found = true
@@ -114,15 +101,20 @@ func GetEntry(cacheKey string) (EntryRecord, bool, error) {
 
 func ListKeys() ([]string, error) {
 	var keys []string
-	err := viewDatabase(func(transaction *bolt.Tx) error {
-		bucket := transaction.Bucket(entriesBucket)
-		if bucket == nil {
-			return nil
+	err := viewDatabase(func(db *sql.DB) error {
+		rows, err := db.Query("SELECT cache_key FROM cache_entries ORDER BY cache_key")
+		if err != nil {
+			return err
 		}
-		return bucket.ForEach(func(key, _ []byte) error {
-			keys = append(keys, string(key))
-			return nil
-		})
+		defer rows.Close()
+		for rows.Next() {
+			var key string
+			if err := rows.Scan(&key); err != nil {
+				return err
+			}
+			keys = append(keys, key)
+		}
+		return rows.Err()
 	})
 	return keys, err
 }
@@ -143,7 +135,7 @@ func AliasesForGitHubEntry(owner, repo, inRepoPath, packageName string) []string
 	return aliases
 }
 
-func viewDatabase(view func(*bolt.Tx) error) error {
+func viewDatabase(view func(*sql.DB) error) error {
 	database, err := database.OpenCache(true)
 	if err != nil {
 		return err
@@ -151,7 +143,7 @@ func viewDatabase(view func(*bolt.Tx) error) error {
 	if database == nil {
 		return nil
 	}
-	viewErr := database.View(view)
+	viewErr := view(database)
 	closeErr := database.Close()
 	if viewErr != nil {
 		if closeErr != nil {

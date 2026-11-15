@@ -40,7 +40,7 @@ func TestGatewayCompressesReplayAndKeepsBrowserConnectionAlive(t *testing.T) {
 	session := &Session{state: TerminalState{Running: true, Interactive: true}, replay: bytes.Repeat([]byte("terminal replay line\r\n\x1b[32mready\x1b[0m\r\n"), 1<<15), done: make(chan struct{}), attachments: make(map[uint64]*Attachment)}
 	t.Cleanup(func() { close(session.done) })
 	secret := strings.Repeat("s", 64)
-	worker, err := WorkerHandler(session, nil, secret, "")
+	worker, err := WorkerHandler(context.Background(), session, nil, secret, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,8 +53,11 @@ func TestGatewayCompressesReplayAndKeepsBrowserConnectionAlive(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "network", "sessions", id, "worker.json"), recordData, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertSession(t.Context(), auth.store.DB, SessionInfo{ID: id}); err != nil {
 		t.Fatal(err)
 	}
 	gateway := &Gateway{auth: auth, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home}}

@@ -53,13 +53,14 @@ function machineOf(url: string): string {
 
 test.beforeEach(async ({ page }) => {
   deletes = []
-  await page.route("**/api/status", (route) => route.fulfill({ json: { setup_required: false, authenticated: true } }))
+  await page.route("**/api/config", (route) => route.fulfill({ json: { ui_build_id: "test-build" } }))
+  await page.route("**/api/status", (route) => route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }))
   await page.route(/\/api\/identity(\?.*)?$/, (route) => route.fulfill({ json: machineOf(route.request().url()) === "n2" ? peer : local }))
   await page.route("**/api/nodes", (route) => route.fulfill({ json: nodes }))
   await page.route("**/api/topology", (route) => route.fulfill({ json: topology }))
   await page.route("**/api/events", (route) => route.abort())
   await page.route(/\/api\/projects(\?.*)?$/, (route) => route.fulfill({ json: projects[machineOf(route.request().url())] ?? [] }))
-  await page.route(/\/api\/sessions(\?.*)?$/, (route) => route.fulfill({ json: sessions[machineOf(route.request().url())] ?? [] }))
+  await page.route(/\/api\/sessions(\?.*)?$/, (route) => route.fulfill({ json: Object.entries(sessions).flatMap(([node_id, rows]) => rows.map((row) => ({ ...row as object, node_id: node_id === "local" ? local.node.id : node_id }))) }))
   await page.route(/\/api\/recent(\?.*)?$/, (route) => {
     const request = route.request()
     if (request.method() !== "DELETE") return route.fulfill({ json: [] })

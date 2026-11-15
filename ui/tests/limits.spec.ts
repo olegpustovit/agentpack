@@ -16,9 +16,9 @@ const codex = (remaining: number) => ({
 })
 
 // Each machine answers with its own limits. `node` selects the machine; the gateway has none.
-let limits: Record<string, unknown[]> = {}
+let limits: Record<string, object[]> = {}
 // Refresh responses, when they differ from the GET response.
-let refreshed: Record<string, unknown[]> = {}
+let refreshed: Record<string, object[]> = {}
 // A held refresh response for a machine, released by the test.
 let gates: Record<string, Promise<void>> = {}
 
@@ -35,7 +35,8 @@ test.beforeEach(async ({ page }) => {
   refreshed = {}
   gates = {}
   await page.route("**/api/**", (route) => route.fulfill({ json: [] }))
-  await page.route("**/api/status", (route) => route.fulfill({ json: { setup_required: false, authenticated: true } }))
+  await page.route("**/api/config", (route) => route.fulfill({ json: { ui_build_id: "test-build" } }))
+  await page.route("**/api/status", (route) => route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }))
   await page.route("**/api/identity", (route) => route.fulfill({ json: identity }))
   await page.route("**/api/nodes", (route) => route.fulfill({ json: nodes }))
   await page.route("**/api/events", (route) => route.abort())
@@ -43,9 +44,10 @@ test.beforeEach(async ({ page }) => {
     const machine = machineOf(route.request().url())
     if (route.request().url().includes("/refresh")) {
       await gates[machine]
-      return route.fulfill({ json: { limits: refreshed[machine] ?? limits[machine] ?? [] } })
+      limits[machine] = refreshed[machine] ?? limits[machine] ?? []
+      return route.fulfill({ json: { limits: limits[machine] } })
     }
-    return route.fulfill({ json: { limits: limits[machine] ?? [] } })
+    return route.fulfill({ json: { limits: Object.entries(limits).flatMap(([node, snapshots]) => snapshots.map((snapshot) => ({...snapshot, node_id: node === "local" ? identity.node.id : node, reachable: node !== "n4"}))) } })
   })
 })
 
@@ -131,7 +133,7 @@ test("the status bar shows the last limits update on Limits and nothing on Sessi
   await expect(status).not.toContainText("Updated")
 })
 
-test("a machine still answering sits below the rows that have loaded", async ({ page }) => {
+test("a slow remote machine does not delay the local replicated read", async ({ page }) => {
   limits = { local: [], n2: [codex(70)], n3: [] }
   await page.route("**/api/limits**", (route) => {
     if (machineOf(route.request().url()) === "n3") return new Promise<void>(() => {})
@@ -141,7 +143,7 @@ test("a machine still answering sits below the rows that have loaded", async ({ 
   const grid = page.getByRole("table", { name: "Provider limits" })
   await expect(grid.locator('tbody[data-provider="codex"]')).toBeVisible()
   const order = await grid.locator("tbody").evaluateAll((bodies) => bodies.map((body) => (body as HTMLElement).dataset.provider ?? "pending"))
-  expect(order).toEqual(["codex", "pending"])
+  expect(order).toEqual(["codex"])
 })
 
 test("a phone shows limits as cards, with nothing wider than the screen", async ({ page }) => {

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test"
+import { mockAPI } from "./helpers"
 
 const identity = { node: { id: "n1", name: "host-a", os: "linux", version: "0" }, auth: "password", tailscale_user: "" }
 const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
@@ -33,9 +34,11 @@ let reply: unknown[] = sessions
 let fetches = 0
 
 test.beforeEach(async ({ page }) => {
+  await mockAPI(page)
   reply = sessions
   fetches = 0
-  await page.route("**/api/status", (route) => route.fulfill({ json: { setup_required: false, authenticated: true } }))
+  await page.route("**/api/config", (route) => route.fulfill({ json: { ui_build_id: "test-build" } }))
+  await page.route("**/api/status", (route) => route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }))
   await page.route("**/api/identity", (route) => route.fulfill({ json: identity }))
   await page.route("**/api/nodes", (route) => route.fulfill({ json: [] }))
   // Aborting the stream makes the list poll on its 15 s fallback, as it does without live events.

@@ -57,6 +57,7 @@ func TestConditionalAPIExclusions(t *testing.T) {
 		{"terminal stream", http.MethodGet, "/api/sessions/s1/terminal"},
 		{"output stream", http.MethodGet, "/api/sessions/s1/output"},
 		{"events", http.MethodGet, "/api/events"},
+		{"sync events", http.MethodGet, "/api/sync/events"},
 		{"status", http.MethodGet, "/api/status"},
 		{"mutation", http.MethodPost, "/api/sessions"},
 		{"non api", http.MethodGet, "/sessions"},

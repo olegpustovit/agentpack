@@ -5,21 +5,20 @@ import { RefreshCw } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHeaderCell, DataGridHead, DataGridRow, Meter } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
-import { useMachineQueries, useMachines, type Machine } from "@/features/machines/queries"
+import { useReplicatedQueries, useMachines, type Machine } from "@/features/machines/queries"
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { StatusSlot } from "@/features/status/status-bar"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { api } from "@/lib/api"
-import type { LimitSnapshot, LimitsResponse } from "@/lib/api-types"
 import { harnessName, plural, relativeTime } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
-import { limitsQuery, rememberLimits } from "./queries"
+import { limitsQuery } from "./queries"
 import { observedAt, providerGroups, remainingPercent, resetLabel, windowsOf, type LimitReport, type ProviderGroup } from "./model"
 
 export function LimitsView() {
   const machines = useMachines()
-  const queries = useMachineQueries(limitsQuery)
+  const queries = useReplicatedQueries(limitsQuery)
   const now = useMinuteTick()
   const isPhone = useIsPhone()
 
@@ -46,7 +45,7 @@ export function LimitsView() {
       )}
       {machines.map((machine) => {
         const entry = queries.byMachine[machine.id]
-        if (entry?.needsUpdate) {
+        if (machine.needsUpdate || entry?.needsUpdate) {
           return <Banner key={machine.id} tone="warn">{`${machine.name} needs an update to show its limits.`}</Banner>
         }
         const error = queries.errors[machine.id]
@@ -248,9 +247,8 @@ function RefreshButton({ machines }: { machines: Machine[] }) {
   const queryClient = useQueryClient()
   async function refreshOne(machine: Machine) {
     try {
-      const { limits } = await api<LimitsResponse>("/api/limits/refresh", { machine: machine.id, method: "POST" })
-      queryClient.setQueryData<LimitSnapshot[]>(["m", machine.id, "limits"], limits)
-      rememberLimits(machine.id, limits)
+      await api("/api/limits/refresh", { machine: machine.id, method: "POST" })
+      await queryClient.invalidateQueries({ queryKey: limitsQuery(machine.id, false).queryKey })
     } catch (error) {
       hud.error(`Couldn't refresh limits on ${machine.name}: ${(error as Error).message}`, () => void refreshOne(machine))
     }

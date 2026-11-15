@@ -1,55 +1,24 @@
 package network
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"log"
 	"net/http"
-	"net/url"
-	"slices"
-	"strings"
-	"sync"
 	"time"
-
-	"github.com/olegpustovit/agentpack/internal/registry"
 )
 
 type replicaPeerKey struct{}
 
 const replicationPrefix = "/api/library/replication/"
 
-// shortcut: validate transfers in memory up to 64 MiB; page dependency batches if metadata outgrows this bound.
-const replicaBatchLimit = 64 << 20
-
-type replicaTransfer struct {
-	Objects map[string][]byte `json:"objects"`
-}
-
 type replicaContact struct {
-	At    time.Time `json:"at"`
-	Error string    `json:"error,omitempty"`
-}
-
-func replicationPeerRoute(method, path string) bool {
-	switch path {
-	case replicationPrefix + "inventory":
-		return method == http.MethodGet
-	case replicationPrefix + "objects", replicationPrefix + "ack":
-		return method == http.MethodPost
-	}
-	id, found := strings.CutPrefix(path, replicationPrefix+"objects/")
-	return found && method == http.MethodGet && replicaDigest(id)
-}
-
-func replicaDigest(id string) bool {
-	decoded, err := hex.DecodeString(id)
-	return err == nil && len(decoded) == sha256.Size && strings.ToLower(id) == id
+	At          time.Time `json:"at"`
+	LastSuccess time.Time `json:"last_sync,omitzero"`
+	Error       string    `json:"error,omitempty"`
+	NeedsUpdate bool      `json:"needs_update,omitempty"`
+	Schema      int       `json:"schema_version,omitempty"`
+	Version     int64     `json:"version,omitempty"`
+	Lag         *int64    `json:"lag,omitempty"`
 }
 
 func (g *Gateway) enrolledPeer(id string) bool {
@@ -73,58 +42,6 @@ func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
 	if store == nil {
 		return
 	}
-	// Only peerHandler can attach this identity, after Tailscale whois and policy checks.
-	peerOnly := func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-			if !g.enrolledPeer(peer) {
-				http.Error(w, "registry replication requires enrollment on both machines", http.StatusForbidden)
-				return
-			}
-			next(w, r)
-		}
-	}
-	mux.HandleFunc("GET "+replicationPrefix+"inventory", peerOnly(func(w http.ResponseWriter, r *http.Request) {
-		value, err := store.Inventory()
-		libraryResponse(w, value, err)
-	}))
-	mux.HandleFunc("GET "+replicationPrefix+"objects/{digest}", peerOnly(func(w http.ResponseWriter, r *http.Request) {
-		value, err := store.ExportObject(r.PathValue("digest"))
-		if err != nil {
-			libraryResponse(w, nil, err)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(value)
-	}))
-	mux.HandleFunc("POST "+replicationPrefix+"objects", peerOnly(func(w http.ResponseWriter, r *http.Request) {
-		var input replicaTransfer
-		if !readReplicaJSON(w, r, &input) {
-			return
-		}
-		objects, err := checkedReplicaObjects(input)
-		if err != nil {
-			libraryResponse(w, nil, err)
-			return
-		}
-		ids, err := store.ImportObjects(objects)
-		// ImportObjects returns only after the objects and directory entries are durable.
-		if err == nil {
-			err = store.MergeHeads()
-		}
-		libraryResponse(w, ids, err)
-	}))
-	mux.HandleFunc("POST "+replicationPrefix+"ack", peerOnly(func(w http.ResponseWriter, r *http.Request) {
-		var input struct {
-			Digests []string `json:"digests"`
-		}
-		if !readJSON(w, r, &input) {
-			return
-		}
-		peer := r.Context().Value(replicaPeerKey{}).(string)
-		err := store.Acknowledge(peer, input.Digests)
-		libraryResponse(w, map[string]bool{"acknowledged": err == nil}, err)
-	}))
 	mux.HandleFunc("GET "+replicationPrefix+"peers", func(w http.ResponseWriter, r *http.Request) {
 		peers, err := store.ListPeers()
 		contacts := map[string]replicaContact{}
@@ -135,13 +52,16 @@ func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
 		}{peers, contacts}, err)
 	})
 	mux.HandleFunc("POST "+replicationPrefix+"peers", func(w http.ResponseWriter, r *http.Request) {
+		if !g.meshOwner(w, r) {
+			return
+		}
 		var input struct {
 			Peer string `json:"peer"`
 		}
 		if !readJSON(w, r, &input) {
 			return
 		}
-		config, err := ReadSharingConfig(g.options.Home)
+		config, err := ReadSharingConfig(g.store, g.options.Home)
 		if err != nil || !config.Enabled {
 			libraryResponse(w, nil, errors.New("tailnet sharing is disabled"))
 			return
@@ -162,11 +82,27 @@ func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
 			http.Error(w, "choose an allowed Tailscale peer", http.StatusBadRequest)
 			return
 		}
-		err = store.EnrollPeer(input.Peer)
+		var hasAccounts bool
+		err = g.auth.store.Reader.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM users)").Scan(&hasAccounts)
+		if err == nil && !hasAccounts {
+			err = PrepareMeshJoin(r.Context(), g.auth.store, input.Peer)
+		}
+		if err == nil {
+			err = store.EnrollPeer(input.Peer)
+		}
+		if err == nil {
+			g.emitEvent(eventMessage{Topic: "replication"})
+		}
 		libraryResponse(w, map[string]bool{"enrolled": err == nil}, err)
 	})
 	mux.HandleFunc("DELETE "+replicationPrefix+"peers/{peer}", func(w http.ResponseWriter, r *http.Request) {
+		if !g.meshOwner(w, r) {
+			return
+		}
 		err := store.RemovePeer(r.PathValue("peer"))
+		if err == nil {
+			g.emitEvent(eventMessage{Topic: "replication"})
+		}
 		g.replicaStatus.Delete(r.PathValue("peer"))
 		libraryResponse(w, map[string]bool{"removed": err == nil}, err)
 	})
@@ -177,270 +113,24 @@ func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		err := g.syncRegistryPeer(r.Context(), input.Peer)
+		g.wakeStatePeer(input.Peer)
+		g.emitEvent(eventMessage{Topic: "replication"})
+		err := g.syncStatePeer(r.Context(), input.Peer)
 		libraryResponse(w, map[string]bool{"synced": err == nil}, err)
 	})
 }
 
-func readReplicaJSON(w http.ResponseWriter, r *http.Request, value any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, replicaBatchLimit)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(value); err != nil {
-		http.Error(w, "invalid registry transfer", http.StatusBadRequest)
-		return false
+func (g *Gateway) syncStatePeer(ctx context.Context, peer string) error {
+	if !g.meshPeer(ctx, peer) {
+		return errors.New("state peer is not enrolled for mesh sync")
 	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		http.Error(w, "invalid registry transfer", http.StatusBadRequest)
-		return false
-	}
-	return true
-}
-
-func checkedReplicaObjects(input replicaTransfer) (map[string][]byte, error) {
-	for id, data := range input.Objects {
-		sum := sha256.Sum256(data)
-		if !replicaDigest(id) || hex.EncodeToString(sum[:]) != id {
-			return nil, errors.New("registry object digest mismatch")
-		}
-	}
-	return input.Objects, nil
-}
-
-func registryPeerRequest(ctx context.Context, client *http.Client, target *url.URL, method, path string, input, output any) error {
-	var body io.Reader
-	if input != nil {
-		data, err := json.Marshal(input)
-		if err != nil {
-			return err
-		}
-		if len(data) > replicaBatchLimit {
-			return errors.New("registry transfer exceeds 64 MiB; reduce the retained revision history")
-		}
-		body = bytes.NewReader(data)
-	}
-	endpoint := *target
-	endpoint.Path, endpoint.RawQuery = path, ""
-	request, err := http.NewRequestWithContext(ctx, method, endpoint.String(), body)
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	response, err := client.Do(request)
-	if err != nil {
-		return errors.New("registry peer is unreachable")
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("registry peer returned HTTP %d; verify enrollment on both machines", response.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, replicaBatchLimit+1))
-	if err != nil || len(data) > replicaBatchLimit {
-		return errors.New("registry peer response is incomplete or too large")
-	}
-	if raw, ok := output.(*[]byte); ok {
-		*raw = data
-		return nil
-	}
-	if err := json.Unmarshal(data, output); err != nil {
-		return errors.New("registry peer returned invalid data")
-	}
-	return nil
-}
-
-// exchangeRegistry swaps missing objects with one peer. settled (may be nil)
-// remembers the inventories each peer was left with, so an idle tick that
-// finds both sides unchanged returns before merging, acknowledging and
-// collecting garbage again.
-func exchangeRegistry(ctx context.Context, store *registry.Store, peer string, target *url.URL, client *http.Client, settled *sync.Map) error {
-	var remote registry.Inventory
-	if err := registryPeerRequest(ctx, client, target, "GET", replicationPrefix+"inventory", nil, &remote); err != nil {
-		return err
-	}
-	if remote.Schema != 1 {
-		return errors.New("unsupported registry inventory schema")
-	}
-	local, err := store.Inventory()
-	if err != nil {
-		return err
-	}
-	localIDs := append(slices.Clone(local.Objects), local.Tombstones...)
-	remoteIDs := append(slices.Clone(remote.Objects), remote.Tombstones...)
-	if settled != nil {
-		if last, ok := settled.Load(peer); ok && last == inventoryKey(localIDs, remoteIDs) {
-			return nil
-		}
-	}
-	pull := replicaTransfer{Objects: map[string][]byte{}}
-	total := 0
-	for _, id := range remoteIDs {
-		if !replicaDigest(id) {
-			return errors.New("invalid registry inventory digest")
-		}
-		if slices.Contains(localIDs, id) {
-			continue
-		}
-		var data []byte
-		if err := registryPeerRequest(ctx, client, target, "GET", replicationPrefix+"objects/"+id, nil, &data); err != nil {
-			return err
-		}
-		total += len(data)
-		if total > replicaBatchLimit {
-			return errors.New("registry transfer exceeds 64 MiB")
-		}
-		pull.Objects[id] = data
-	}
-	objects, err := checkedReplicaObjects(pull)
-	if err != nil {
-		return err
-	}
-	if _, err := store.ImportObjects(objects); err != nil {
-		return err
-	}
-	// Merging here means the merge travels in this same exchange, not on the next tick.
-	if err := store.MergeHeads(); err != nil {
-		return err
-	}
-	var ack map[string]bool
-	if err := registryPeerRequest(ctx, client, target, "POST", replicationPrefix+"ack", map[string]any{"digests": remoteIDs}, &ack); err != nil {
-		return err
-	}
-	if !ack["acknowledged"] {
-		return errors.New("registry peer did not confirm receipt")
-	}
-	// A received tombstone may retire local objects that must not be sent back.
-	local, err = store.Inventory()
-	if err != nil {
-		return err
-	}
-	localIDs = append(slices.Clone(local.Objects), local.Tombstones...)
-	push := replicaTransfer{Objects: map[string][]byte{}}
-	for _, id := range localIDs {
-		if slices.Contains(remoteIDs, id) {
-			continue
-		}
-		data, err := store.ExportObject(id)
-		if err != nil {
-			return err
-		}
-		push.Objects[id] = data
-	}
-	var written []string
-	if len(push.Objects) > 0 {
-		if err := registryPeerRequest(ctx, client, target, "POST", replicationPrefix+"objects", push, &written); err != nil {
-			return err
-		}
-		for _, id := range written {
-			if _, exists := push.Objects[id]; !exists {
-				return errors.New("registry peer acknowledged an unexpected object")
-			}
-		}
-		for id := range push.Objects {
-			if !slices.Contains(written, id) {
-				return errors.New("registry peer did not acknowledge every object")
-			}
-		}
-	}
-	acknowledged := slices.Clone(written)
-	for _, id := range remoteIDs {
-		if slices.Contains(localIDs, id) {
-			acknowledged = append(acknowledged, id)
-		}
-	}
-	if err := store.Acknowledge(peer, acknowledged); err != nil {
-		return err
-	}
-	if _, err = store.CollectGarbage(); err != nil {
-		return err
-	}
-	if settled != nil {
-		// Both sides now hold what this side holds; the next tick skips if nothing moved.
-		if local, err = store.Inventory(); err == nil {
-			ids := append(slices.Clone(local.Objects), local.Tombstones...)
-			settled.Store(peer, inventoryKey(ids, ids))
-		}
-	}
-	return nil
-}
-
-func inventoryKey(local, remote []string) string {
-	local, remote = slices.Sorted(slices.Values(local)), slices.Sorted(slices.Values(remote))
-	return strings.Join(local, ",") + "|" + strings.Join(remote, ",")
-}
-
-func (g *Gateway) syncRegistryPeer(ctx context.Context, peer string) (err error) {
-	g.replicaMu.Lock()
-	defer g.replicaMu.Unlock()
-	if !g.enrolledPeer(peer) {
-		return errors.New("registry peer is not enrolled")
-	}
-	defer func() {
-		contact := replicaContact{At: time.Now().UTC()}
-		if err != nil {
-			contact.Error = err.Error()
-		}
-		g.replicaStatus.Store(peer, contact)
-	}()
-	target, err := tailnetTarget(ctx, g.options.Home, peer)
+	target, err := g.tailnetTarget(ctx, peer)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	client := &http.Client{Transport: tailnetMutationTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	return exchangeRegistry(ctx, g.options.Library.Store, peer, target, client, &g.replicaSettled)
-}
-
-// ownMachine is deliberately narrower than allowedTailnetPeer: an explicit allow entry shares sessions
-// with a machine, but only the same untagged owner gets a copy of the library unasked.
-func ownMachine(self, peer *tailnetPeer) bool {
-	return self != nil && peer != nil && peer.ID != "" && self.UserID != 0 && self.UserID == peer.UserID && len(self.Tags) == 0 && len(peer.Tags) == 0
-}
-
-func (g *Gateway) enrollOwnMachines(ctx context.Context) {
-	config, err := ReadSharingConfig(g.options.Home)
-	if err != nil || !config.Enabled {
-		return
-	}
-	status, err := tailnetSnapshot(ctx)
-	if err != nil {
-		return
-	}
-	for _, peer := range status.Peer {
-		if !ownMachine(status.Self, peer) || !peer.Online {
-			continue
-		}
-		// A machine without a gateway has nothing to replicate with.
-		if _, ok := probeTailnetPeer(ctx, peer); !ok {
-			continue
-		}
-		if err := g.options.Library.Store.EnrollOwnMachine(peer.ID); err != nil {
-			log.Printf("could not enroll %s for replication: %v", peer.HostName, err)
-		}
-	}
-}
-
-func (g *Gateway) runRegistryReplication(ctx context.Context) {
-	if g.options.Library.Store == nil {
-		return
-	}
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		g.enrollOwnMachines(ctx)
-		peers, err := g.options.Library.Store.ListPeers()
-		if err == nil {
-			for _, peer := range peers {
-				if ctx.Err() != nil {
-					return
-				}
-				_ = g.syncRegistryPeer(ctx, peer.Node)
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
+	client := &http.Client{Transport: tailnetTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	_, _, err = pullState(ctx, g.auth.store, g.options.Library.Store, client, target)
+	return err
 }

@@ -70,18 +70,23 @@ Pick a specific version from the [releases page](https://github.com/olegpustovit
 
 ## From source
 
-You need Go 1.26 or newer, then:
+Source builds need the Go version in `go.mod` (currently 1.27.3), Python 3.11+, curl, Make, and a C compiler (Xcode command-line tools on macOS, GCC on Linux). The pinned SQLite extension is downloaded and checksum-verified; Rust is not needed for a normal build.
+
+Then:
 
 ```sh
 git clone https://github.com/olegpustovit/agentpack.git
 cd agentpack
+make crsqlite        # downloads the pinned host static library
 make ui-stage        # needs Bun 1.4.4; builds the gateway web UI
-go install ./cmd/agentpack
+CGO_ENABLED=1 go install ./cmd/agentpack
 ```
 
 Run `make ui-stage` before building: without it the gateway serves a placeholder page instead of the UI. `make build` and `make install` warn when the placeholder is still in place.
 
 This installs `agentpack` under `GOBIN` (or the default Go bin directory); make sure that directory is on your `PATH`. The repo's `Makefile` also offers `make install`, which builds a stripped binary and copies it to `~/.local/bin` (override with `make install INSTALL_DIR=/usr/local/bin`).
+
+Windows source builds use Git Bash and the Zig version in `third_party/crsqlite.lock`, with `CGO_ENABLED=1`, `CC="zig cc -target x86_64-windows-gnu"`, and `CGO_LDFLAGS=-lunwind`. Rebuilding the extension itself (`make crsqlite-build`) additionally needs the pinned Rust toolchain and libclang; see `docs/research/state-store.md`. Full five-target `make release-check` runs on macOS with its Apple SDK and the pinned Zig compiler for Linux/Windows cross-builds.
 
 ## Verify
 

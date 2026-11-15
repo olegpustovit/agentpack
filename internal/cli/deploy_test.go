@@ -147,7 +147,7 @@ func TestDeployInstallerIdempotentAndRollback(t *testing.T) {
 			write("/tmp/agentpack-deploy.A1234567/agentpack", payload, 0700)
 			write("/tools/uname", "#!/usr/bin/env bash\nif [[ $1 == -s ]]; then echo Linux; else echo aarch64; fi\n", 0700)
 			write("/tools/loginctl", "#!/usr/bin/env bash\necho yes\n", 0700)
-			write("/tools/curl", "#!/usr/bin/env bash\nif [[ $* == *127.0.0.1* && $* != *'Host: agentpack.microapps.space'* ]]; then exit 1; fi\necho '{\"setup_required\":true}'\n", 0700)
+			write("/tools/curl", "#!/usr/bin/env bash\nif [[ $* == *127.0.0.1* && $* != *'Host: agentpack.microapps.space'* ]]; then exit 1; fi\necho '{\"claimed\":true}'\n", 0700)
 			write("/tools/systemctl", "#!/usr/bin/env bash\nif [[ ${DEPLOY_TEST_FAIL:-} == 1 && $2 == restart ]]; then exit 1; fi\nexit 0\n", 0700)
 			script := deployScript
 			// The shell validates the real remote upload path before mapping it into this fixture.
@@ -198,5 +198,30 @@ func TestRequireStagedUI(t *testing.T) {
 	}
 	if err := requireStagedUI(root); err != nil {
 		t.Fatalf("staged checkout: %v", err)
+	}
+}
+
+func TestDeploymentBuildPreservesStateLinkage(t *testing.T) {
+	var commands []*exec.Cmd
+	err := buildDeploymentBinary(context.Background(), "/tmp/output", func(cmd *exec.Cmd) error { commands = append(commands, cmd); return nil })
+	if err != nil || len(commands) != 2 {
+		t.Fatalf("commands=%d err=%v", len(commands), err)
+	}
+	if !reflect.DeepEqual(commands[0].Args[1:], []string{"scripts/fetch-crsqlite.sh", "linux", "arm64"}) {
+		t.Fatal(commands[0].Args)
+	}
+	env := strings.Join(commands[1].Env, "\n")
+	for _, required := range []string{"GOOS=linux", "GOARCH=arm64", "CGO_ENABLED=1", "CC=zig cc -target aarch64-linux-musl", "CGO_LDFLAGS=-lunwind"} {
+		if !strings.Contains(env, required) {
+			t.Fatalf("missing build setting %s", required)
+		}
+	}
+	if !strings.Contains(strings.Join(commands[1].Args, " "), "-linkmode=external -extldflags=-static") {
+		t.Fatal("deployment binary is not statically linked")
+	}
+	called := 0
+	err = buildDeploymentBinary(context.Background(), "/tmp/output", func(*exec.Cmd) error { called++; return errors.New("fetch failed") })
+	if err == nil || called != 1 {
+		t.Fatal("built after archive preparation failed", err, called)
 	}
 }

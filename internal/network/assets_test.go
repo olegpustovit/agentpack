@@ -9,12 +9,14 @@ import (
 
 func testWebFiles() fstest.MapFS {
 	return fstest.MapFS{
-		"index.html":             {Data: []byte("<html>app</html>")},
-		"icon.svg":               {Data: []byte("<svg/>")},
-		"manifest.webmanifest":   {Data: []byte("{}")},
-		"assets/index-abc.js":    {Data: []byte("console.log(1)")},
-		"assets/index-abc.js.gz": {Data: []byte("GZIPPED")},
-		"assets/style-def.css":   {Data: []byte("body{}")},
+		"index.html":                 {Data: []byte("<html>app</html>")},
+		"icon.svg":                   {Data: []byte("<svg/>")},
+		"manifest.webmanifest":       {Data: []byte("{}")},
+		"assets/index-abc.js":        {Data: []byte("console.log(1)")},
+		"assets/index-abc.js.gz":     {Data: []byte("GZIPPED")},
+		"assets/style-def.css":       {Data: []byte("body{}")},
+		"assets/index-abc.js.map":    {Data: []byte("private source map")},
+		"assets/index-abc.js.map.gz": {Data: []byte("compressed private map")},
 	}
 }
 
@@ -34,6 +36,8 @@ func TestWebAssetsDecisionTable(t *testing.T) {
 		{name: "hashed js", method: "GET", path: "/assets/index-abc.js", status: 200, contentType: "text/javascript; charset=utf-8", cache: "public, max-age=31536000, immutable", body: "console.log(1)"},
 		{name: "gzip sibling", method: "GET", path: "/assets/index-abc.js", accept: "gzip, br", status: 200, contentType: "text/javascript; charset=utf-8", cache: "public, max-age=31536000, immutable", body: "GZIPPED", encoding: "gzip"},
 		{name: "missing asset is never html", method: "GET", path: "/assets/missing.js", status: 404},
+		{name: "source map refused even if present", method: "GET", path: "/assets/index-abc.js.map", status: 404},
+		{name: "compressed source map refused", method: "GET", path: "/assets/index-abc.js.map.gz", status: 404},
 		{name: "svg icon", method: "GET", path: "/icon.svg", status: 200, contentType: "image/svg+xml", cache: "no-cache", body: "<svg/>"},
 		{name: "manifest", method: "GET", path: "/manifest.webmanifest", status: 200, contentType: "application/manifest+json", cache: "no-cache", body: "{}"},
 		{name: "missing png", method: "GET", path: "/missing.png", status: 404},
@@ -69,6 +73,23 @@ func TestWebAssetsDecisionTable(t *testing.T) {
 				t.Fatalf("body: want %q got %q", tc.body, got)
 			}
 		})
+	}
+}
+
+func TestUIBuildIDUsesTheGeneratedEntryHash(t *testing.T) {
+	for _, sample := range []struct{ html, want string }{
+		{`<script type="module" src="/assets/index-Abcd_12-.js"></script>`, "Abcd_12-"},
+		{`<link href="/assets/index-style.css"><script src="/assets/index-EntryHash.js"></script>`, "EntryHash"},
+		{`<script src="/assets/index-not-javascript.css"></script>`, ""},
+		{`placeholder`, ""},
+	} {
+		files := fstest.MapFS{"index.html": {Data: []byte(sample.html)}}
+		if got := uiBuildID(files); got != sample.want {
+			t.Fatalf("build ID=%q want=%q", got, sample.want)
+		}
+	}
+	if got := uiBuildID(fstest.MapFS{}); got != "" {
+		t.Fatal("missing build ID", got)
 	}
 }
 

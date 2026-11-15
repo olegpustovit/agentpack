@@ -39,7 +39,7 @@ func (runner Runner) runSessionWorker(ctx context.Context, arguments []string) (
 	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return network.RunWorker(ctx, home, launch, func(id string) error {
+	return network.RunWorker(ctx, home, Version, launch, func(id string) error {
 		_, err := fmt.Fprintln(runner.Stdout, id)
 		return err
 	})
@@ -50,11 +50,20 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 		return runner.runSharing(ctx, arguments[1:])
 	}
 	if len(arguments) == 0 {
-		return 2, errors.New("expected gateway serve, start, stop, status, setup, or stop-agents")
+		return 2, errors.New("expected gateway serve, start, stop, status, stop-agents, passwd, user, or reset-owner")
 	}
 	home, err := paths.UserAgentpackHome()
 	if err != nil {
 		return 1, err
+	}
+	if arguments[0] == "main" {
+		return runner.runGatewayMain(ctx, home, arguments[1:])
+	}
+	if arguments[0] == "join" {
+		return runner.runGatewayJoin(ctx, home, arguments[1:])
+	}
+	if arguments[0] == "whoami" || arguments[0] == "passwd" || arguments[0] == "user" || arguments[0] == "reset-owner" {
+		return runner.runGatewayAccounts(ctx, home, arguments)
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -93,26 +102,16 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 		if err != nil {
 			return 1, err
 		}
-		return 0, network.ServeGateway(ctx, options)
+		serveErr := network.ServeGateway(ctx, options)
+		return 0, errors.Join(serveErr, options.Library.Store.Close())
 	case "start":
 		if err := network.SetGatewayEnabled(home, true); err != nil {
 			return 1, err
 		}
-		return 0, network.EnsureNode(ctx, home, executable)
-	case "setup":
-		token, err := os.ReadFile(filepath.Join(home, "network", "setup-token"))
-		if err != nil {
-			return 1, fmt.Errorf("start the gateway first; setup may already be complete: %w", err)
+		if err := network.EnsureNode(ctx, home, executable); err != nil {
+			return 1, err
 		}
-		publicURL := os.Getenv("AGENTPACK_PUBLIC_URL")
-		if publicURL == "" {
-			publicURL, err = network.GatewayURL(home)
-			if err != nil {
-				return 1, err
-			}
-		}
-		fmt.Fprintf(runner.Stdout, "Open %s and enter this one-time setup token:\n%s\n", publicURL, token)
-		return 0, nil
+		return 0, runner.printGatewayClaim(ctx, home)
 	case "stop", "status", "stop-agents":
 		method, path := "GET", "/api/sessions"
 		if action == "stop" {
@@ -129,6 +128,9 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 			return 1, err
 		}
 		fmt.Fprintln(runner.Stdout, string(data))
+		if action == "status" {
+			return 0, runner.printGatewayClaim(ctx, home)
+		}
 		return 0, nil
 	default:
 		return 2, fmt.Errorf("unknown gateway action %q", action)
@@ -212,7 +214,7 @@ func (runner Runner) launchManaged(ctx context.Context, packContext paths.Contex
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		runner.Launch = func(process *os.Process) (func(), error) {
-			cleanup, err := network.RegisterPresence(home, network.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode}, process)
+			cleanup, err := network.RegisterPresence(home, Version, network.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode}, process)
 			if err != nil {
 				fmt.Fprintf(runner.Stderr, "warning: could not register native-stdio session: %v\n", err)
 				return nil, nil
@@ -240,7 +242,7 @@ func (runner Runner) launchManaged(ctx context.Context, packContext paths.Contex
 	}
 	fmt.Fprintf(runner.Stderr, "agentpack: session %s; local and browser input are shared\n", id)
 	if url, err := network.GatewayURL(home); err == nil {
-		fmt.Fprintln(runner.Stderr, "agentpack: browser "+url+" (first use: agentpack gateway setup)")
+		fmt.Fprintln(runner.Stderr, "agentpack: browser "+url+" (sign in or claim the gateway)")
 	}
 	return network.RunTerminal(ctx, home, id, os.Stdin, runner.Stdout)
 }

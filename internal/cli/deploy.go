@@ -64,9 +64,7 @@ func (runner Runner) runDeploy(ctx context.Context, arguments []string) (int, er
 		defer os.RemoveAll(directory)
 		binary = filepath.Join(directory, "agentpack")
 		fmt.Fprintln(runner.Stderr, "Building gateway for Linux ARM64…")
-		build := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", binary, "./cmd/agentpack")
-		build.Env = append(os.Environ(), "GOOS=linux", "GOARCH=arm64", "CGO_ENABLED=0")
-		if err := run(build); err != nil {
+		if err := buildDeploymentBinary(ctx, binary, run); err != nil {
 			return 1, fmt.Errorf("build gateway: %w", err)
 		}
 	}
@@ -74,9 +72,17 @@ func (runner Runner) runDeploy(ctx context.Context, arguments []string) (int, er
 		return 1, err
 	}
 	fmt.Fprintln(runner.Stdout, "Deployed https://agentpack.microapps.space")
-	fmt.Fprintln(runner.Stdout, "First login: retrieve the one-time administrator setup link with:")
-	fmt.Fprintln(runner.Stdout, "ssh oracle-vm 'env AGENTPACK_HOME=$HOME/.local/share/agentpack-gateway AGENTPACK_PUBLIC_URL=https://agentpack.microapps.space $HOME/.local/lib/agentpack/agentpack gateway setup'")
+	fmt.Fprintln(runner.Stdout, "Open the gateway to sign in or claim its first owner account.")
 	return 0, nil
+}
+
+func buildDeploymentBinary(ctx context.Context, binary string, run func(*exec.Cmd) error) error {
+	if err := run(exec.CommandContext(ctx, "bash", "scripts/fetch-crsqlite.sh", "linux", "arm64")); err != nil {
+		return fmt.Errorf("prepare pinned cr-sqlite: %w", err)
+	}
+	build := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags=-linkmode=external -extldflags=-static", "-o", binary, "./cmd/agentpack")
+	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH=arm64", "CGO_ENABLED=1", "CC=zig cc -target aarch64-linux-musl", "CGO_LDFLAGS=-lunwind")
+	return run(build)
 }
 
 func requireStagedUI(root string) error {

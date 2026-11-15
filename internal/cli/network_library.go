@@ -28,7 +28,7 @@ func (runner Runner) networkLibrary(home string) (network.LibraryOptions, error)
 	}
 	node, err := os.Hostname()
 	if err != nil {
-		return network.LibraryOptions{}, err
+		return network.LibraryOptions{}, errors.Join(err, store.Close())
 	}
 	var bootstrapMu sync.Mutex
 	lastCacheIndex := ""
@@ -41,10 +41,12 @@ func (runner Runner) networkLibrary(home string) (network.LibraryOptions, error)
 				return err
 			}
 			stamp := ""
-			if info, err := os.Stat(filepath.Join(home, "cache", "db.reddb")); err == nil {
-				stamp = fmt.Sprintf("%d:%d", info.ModTime().UnixNano(), info.Size())
-			} else if !os.IsNotExist(err) {
-				return err
+			for _, name := range []string{"index.db", "index.db-wal"} {
+				if info, err := os.Stat(filepath.Join(home, "cache", name)); err == nil {
+					stamp += fmt.Sprintf("%s:%d:%d;", name, info.ModTime().UnixNano(), info.Size())
+				} else if !os.IsNotExist(err) {
+					return err
+				}
 			}
 			if stamp != lastCacheIndex {
 				if err := importCachedPackages(store); err != nil {

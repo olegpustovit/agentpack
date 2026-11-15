@@ -28,6 +28,14 @@ func ComputeKey(identity string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func ValidKey(key string) bool {
+	if len(key) != sha256.Size*2 || key != strings.ToLower(key) {
+		return false
+	}
+	_, err := hex.DecodeString(key)
+	return err == nil
+}
+
 func EntryDir(cacheKey string) (string, error) {
 	root, err := paths.CacheDir()
 	if err != nil {

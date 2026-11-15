@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
 // ConversationSession is the worker-side ACP conversation view.
 type ConversationSession struct {
 	mu                sync.Mutex
+	promptMu          sync.Mutex
+	writes            sync.RWMutex
 	stateWriteMu      sync.Mutex
 	log               *acp.EventLog
 	broker            *acp.Broker
@@ -26,6 +30,13 @@ type ConversationSession struct {
 	agentSessionID    string
 	stateChange       func(string)
 	publishedState    string
+	lastSeq           int64
+	toolCalls         uint64
+	permissions       uint64
+	stopReason        string
+	stderr            *diagnosticStderr
+	agentExitCode     *atomic.Int32
+	sessionID         string
 }
 
 func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *ConversationSession {
@@ -35,6 +46,7 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 	session := &ConversationSession{log: log, broker: broker, state: "idle", initialized: make(chan struct{})}
 	entries := log.SetOnAppend(session.applyLogEntry)
 	for _, entry := range entries {
+		session.observeEntry(entry)
 		if entry.Kind == "agent_exit" {
 			session.agentExited = true
 		}
@@ -62,6 +74,7 @@ func conversationState(thread acp.ThreadState) string {
 func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	<-session.initialized
 	session.mu.Lock()
+	session.observeEntry(entry)
 	if entry.Kind == "agent_exit" {
 		session.agentExited = true
 	}
@@ -108,14 +121,70 @@ func (session *ConversationSession) publishState() {
 	callback(state)
 }
 
-func (session *ConversationSession) Prompt(ctx context.Context, input acp.PromptInput) error {
+func (session *ConversationSession) Prompt(ctx context.Context, input acp.PromptInput) (result error) {
+	session.writes.RLock()
+	defer session.writes.RUnlock()
+	if !session.promptMu.TryLock() {
+		return errors.New("ACP session already has an active prompt")
+	}
+	defer session.promptMu.Unlock()
+	_, event := obs.Start(ctx, "acp.turn", "prompt")
 	session.mu.Lock()
 	broker, exited := session.broker, session.agentExited
+	event.Set("session_id", session.sessionID)
+	first, tools, permissions := session.lastSeq+1, session.toolCalls, session.permissions
+	session.stopReason = ""
 	session.mu.Unlock()
+	defer func() {
+		session.mu.Lock()
+		if session.lastSeq < first {
+			first = session.lastSeq
+		}
+		if session.stopReason == "" && result != nil {
+			session.stopReason = "error"
+			if errors.Is(result, context.Canceled) {
+				session.stopReason = "cancelled"
+			}
+		}
+		event.Set("first_seq", first)
+		event.Set("last_seq", session.lastSeq)
+		event.Set("tool_calls", session.toolCalls-tools)
+		event.Set("permission_requests", session.permissions-permissions)
+		event.Set("stop_reason", session.stopReason)
+		session.mu.Unlock()
+		event.Fail(result)
+		event.End()
+	}()
 	if exited {
 		return errors.New("ACP adapter has exited")
 	}
 	return broker.Prompt(ctx, input)
+}
+
+// observeEntry counts events as they arrive, even when the replay tail evicts them.
+// The caller holds mu, or is initializing the session before publication.
+func (session *ConversationSession) observeEntry(entry acp.LogEntry) {
+	session.lastSeq = entry.Seq
+	switch entry.Kind {
+	case "tool_call":
+		session.toolCalls++
+	case "permission_request":
+		session.permissions++
+	case "turn_end":
+		var end struct {
+			StopReason string `json:"stopReason"`
+			Status     string `json:"status"`
+		}
+		if json.Unmarshal(entry.Payload, &end) == nil {
+			for _, reason := range []string{end.StopReason, end.Status} {
+				switch reason {
+				case "end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled", "completed", "error", "failed":
+					session.stopReason = reason
+					return
+				}
+			}
+		}
+	}
 }
 
 func (session *ConversationSession) Cancel(ctx context.Context) error {
@@ -126,10 +195,16 @@ func (session *ConversationSession) Cancel(ctx context.Context) error {
 }
 
 func (session *ConversationSession) AnswerPermission(ctx context.Context, requestID, optionID string) error {
+	session.writes.RLock()
+	defer session.writes.RUnlock()
 	session.mu.Lock()
 	broker := session.broker
 	log := session.log
+	exited := session.agentExited
 	session.mu.Unlock()
+	if exited {
+		return ErrSessionEnded
+	}
 	if err := broker.AnswerPermission(ctx, requestID, optionID); err != nil {
 		return err
 	}
@@ -139,10 +214,16 @@ func (session *ConversationSession) AnswerPermission(ctx context.Context, reques
 }
 
 func (session *ConversationSession) AnswerElicitation(ctx context.Context, elicitationID, value string) error {
+	session.writes.RLock()
+	defer session.writes.RUnlock()
 	session.mu.Lock()
 	broker := session.broker
 	log := session.log
+	exited := session.agentExited
 	session.mu.Unlock()
+	if exited {
+		return ErrSessionEnded
+	}
 	if log == nil {
 		return errors.New("conversation unavailable")
 	}

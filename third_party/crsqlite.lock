@@ -1,0 +1,13 @@
+# Pinned source/toolchains and verified static library release archives.
+repo = "https://github.com/superfly/cr-sqlite"
+commit = "8e32195704ccaea8508f7d378e11dc2dc0bb3d2e"
+rust = "nightly-2023-10-05"
+zig = "0.17.1"
+sqlite = "3.54.1"
+
+[sha256]
+darwin_amd64 = "f0319b97bf71c6f2d5660a893231f2b7bedcba563ab242501ed7d4adab12c144"
+darwin_arm64 = "11c780bbe8e75baf8f5b6dbca09e946de8c5738ae76320421a21f9183cf9402e"
+linux_amd64 = "1dc9131f826dfbb3c7a5286501752cd2b9982b7b33fafb9d6527a11e0a926802"
+linux_arm64 = "fe7d57a777f4b4f5f18dd4b63261ff34a8a7e2f237f67fb07fd632659c244a4c"
+windows_amd64 = "a3bc16724abfd423e400079df1bc54986a28ad44e776476bf356fb7edf1a886e"

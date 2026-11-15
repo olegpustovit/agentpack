@@ -1,8 +1,19 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { ApiError, LOCAL } from "@/lib/api"
-import { conversationErrorMessage, conversationNeedsUpdate } from "./queries"
+import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate } from "./queries"
+
+afterEach(() => vi.unstubAllGlobals())
 
 describe("conversation peer compatibility", () => {
+  it("names the archive main when archived history is unavailable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("archive unavailable\n", {
+      status: 503, headers: { "X-Agentpack-Archive-Main": "Sleeping computer" },
+    })))
+    const error = await conversationEventsQuery(LOCAL, "session-old").queryFn().catch((error: unknown) => error)
+    expect(archiveUnavailableMessage(error)).toBe("Archived on Sleeping computer, unavailable right now")
+    expect(conversationNeedsUpdate(error)).toBe(false)
+    expect(archiveUnavailableMessage(new ApiError("worker offline", 503))).toBeUndefined()
+  })
   it("maps missing conversation endpoints to Needs update", () => {
     const missing = new ApiError("missing", 404)
     expect(conversationNeedsUpdate(missing)).toBe(true)

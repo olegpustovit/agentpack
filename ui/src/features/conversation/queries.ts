@@ -1,6 +1,16 @@
 import { ApiError, LOCAL } from "@/lib/api"
 import type { LogEntry } from "./model"
 
+class ArchiveUnavailableError extends ApiError {
+  constructor(readonly main: string) {
+    super("archive unavailable", 503)
+  }
+}
+
+export function archiveUnavailableMessage(error: unknown): string | undefined {
+  if (error instanceof ArchiveUnavailableError) return `Archived on ${error.main}, unavailable right now`
+}
+
 async function conversationLog(machine: string, sessionId: string, since = 0): Promise<LogEntry[]> {
   const url = new URL(`/api/sessions/${encodeURIComponent(sessionId)}/conversation`, location.origin)
   if (machine && machine !== LOCAL) url.searchParams.set("node", machine)
@@ -8,6 +18,9 @@ async function conversationLog(machine: string, sessionId: string, since = 0): P
   const res = await fetch(url)
   const text = await res.text()
   if (!res.ok) {
+    if (res.status === 503 && text.trim() === "archive unavailable") {
+      throw new ArchiveUnavailableError(res.headers.get("X-Agentpack-Archive-Main") || "main gateway")
+    }
     throw new ApiError(text.slice(0, 200) || res.statusText, res.status)
   }
   const entries: LogEntry[] = []

@@ -6,14 +6,15 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 var (
+	errSessionArchived    = errors.New("archived")
 	errSessionNotFound    = errors.New("session not found")
 	errSessionUnavailable = errors.New("session unavailable")
 )
@@ -31,28 +32,6 @@ func sessionState(ctx context.Context, record WorkerRecord) (TerminalState, erro
 	return state, nil
 }
 
-func sessionNamePath(home, id string) (string, error) {
-	if !strings.HasPrefix(id, "session-") || filepath.Base(id) != id || strings.ContainsAny(id, "/\\") {
-		return "", errors.New("invalid session ID")
-	}
-	return filepath.Join(home, "network", "sessions", id, "name"), nil
-}
-
-func readSessionName(home, id string) (string, error) {
-	path, err := sessionNamePath(home, id)
-	if err != nil {
-		return "", err
-	}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return normalizeSessionName(string(data))
-}
-
 func normalizeSessionName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if !utf8.ValidString(name) || utf8.RuneCountInString(name) > 80 {
@@ -67,45 +46,32 @@ func normalizeSessionName(name string) (string, error) {
 }
 
 func RenameSession(ctx context.Context, home, id, name string) (SessionInfo, error) {
-	var info SessionInfo
 	name, err := normalizeSessionName(name)
 	if err != nil {
-		return info, err
+		return SessionInfo{}, err
 	}
-	record, err := workerRecord(home, id)
+	store, err := state.Open(home)
 	if err != nil {
-		return info, errors.Join(errSessionNotFound, err)
+		return SessionInfo{}, err
 	}
-	state, err := sessionState(ctx, record)
-	if err != nil {
-		return info, err
-	}
-	path, err := sessionNamePath(home, id)
+	defer store.Close()
+	info, err := storedSession(ctx, store.Reader, id)
 	if err != nil {
 		return info, err
 	}
-	if name == "" {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return info, err
-		}
-	} else {
-		directory := filepath.Dir(path)
-		file, err := os.CreateTemp(directory, ".name-*")
+	local, err := store.NodeID(ctx)
+	if err != nil {
+		return info, err
+	}
+	if record, recordErr := workerRecord(home, id); info.NodeID == local && recordErr == nil {
+		info.State, err = sessionState(ctx, record)
 		if err != nil {
 			return info, err
 		}
-		defer os.Remove(file.Name())
-		if err = file.Chmod(0600); err == nil {
-			_, err = file.WriteString(name)
-		}
-		if err = errors.Join(err, file.Close()); err != nil {
-			return info, err
-		}
-		if err := os.Rename(file.Name(), path); err != nil {
-			return info, err
-		}
+	} else if info.NodeID == local {
+		info.State.Running, info.State.Restarting = false, false
 	}
-	info = record.Session
-	info.ID, info.Name, info.State = id, name, state
-	return info, nil
+	_, err = store.DB.ExecContext(ctx, "UPDATE sessions SET name=? WHERE id=?", name, id)
+	info.Name = name
+	return info, err
 }

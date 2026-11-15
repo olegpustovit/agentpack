@@ -3,112 +3,98 @@ package registry
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"os"
-	"path/filepath"
+	"encoding/json"
+	"errors"
+	"github.com/olegpustovit/agentpack/internal/state"
 	"strings"
+	"sync"
 	"testing"
 )
 
-func exportInventory(t *testing.T, store *Store, inventory Inventory) map[string][]byte {
+func registryChanges(t *testing.T, s *Store) []state.Change {
 	t.Helper()
-	documents := make(map[string][]byte, len(inventory.Objects)+len(inventory.Tombstones))
-	for _, id := range append(append([]string{}, inventory.Objects...), inventory.Tombstones...) {
-		data, err := store.ExportObject(id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		documents[id] = data
+	changes, _, err := s.sql.Changes(t.Context(), 0, nil, 4<<20)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return documents
+	return changes
 }
 
-func TestInventoryExchangeAndRedaction(t *testing.T) {
-	source, err := New(t.TempDir())
+func applyRegistryChanges(t *testing.T, to *Store, changes []state.Change) {
+	t.Helper()
+	if err := ValidateChanges(to.sql, changes); err != nil {
+		t.Fatal(err)
+	}
+	if err := to.sql.Apply(t.Context(), changes); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func copyRegistry(t *testing.T, from, to *Store) {
+	t.Helper()
+	applyRegistryChanges(t, to, registryChanges(t, from))
+}
+
+func publicBodies(t *testing.T, s *Store) [][]byte {
+	t.Helper()
+	ids, err := s.objectIDs()
 	if err != nil {
 		t.Fatal(err)
 	}
-	pack, _, err := source.Capture(CaptureInput{Name: "Shared", Project: "/workspace/shared", Manifest: []byte(manifestTemplate), Lock: lockWithCommit("abc123")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	inventory, err := source.Inventory()
-	if err != nil || inventory.Schema != objectSchema || len(inventory.Objects) == 0 {
-		t.Fatalf("source inventory: %#v %v", inventory, err)
-	}
-	destination, err := New(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	delta, err := destination.MissingFrom(inventory)
-	if err != nil || len(delta.Objects) != len(inventory.Objects) {
-		t.Fatalf("missing inventory: %#v %v", delta, err)
-	}
-	if _, err := destination.ImportObjects(exportInventory(t, source, inventory)); err != nil {
-		t.Fatal(err)
-	}
-	got, revisions, err := destination.Get(pack.ID)
-	if err != nil || got.ID != pack.ID || len(revisions) != 1 {
-		t.Fatalf("imported pack: %#v %#v %v", got, revisions, err)
-	}
-	for _, id := range inventory.Objects {
-		data, err := source.ExportObject(id)
+	var bodies [][]byte
+	for _, id := range ids {
+		body, err := s.objectData(id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, secret := range []string{"env-secret", "arg-secret", "url-secret", "header-secret", "user:pass", "ghp_123", "url-secret"} {
-			if strings.Contains(string(data), secret) {
-				t.Fatalf("replication object contains %q", secret)
-			}
+		bodies = append(bodies, body)
+	}
+	return bodies
+}
+
+func TestStateReplicationAndRedaction(t *testing.T) {
+	source, target := mustStore(t), mustStore(t)
+	pack, revision, err := source.Capture(CaptureInput{Name: "Shared", Project: "/workspace/shared", Manifest: []byte(manifestTemplate), Lock: lockWithCommit("abc123")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyRegistry(t, source, target)
+	got, revisions, err := target.Get(pack.ID)
+	if err != nil || got.ID != pack.ID || len(revisions) != 1 || revisions[0].ID != revision.ID {
+		t.Fatalf("replica: %+v %+v %v", got, revisions, err)
+	}
+	if _, _, err := target.restoreBytes(revisions[0]); err == nil {
+		t.Fatal("raw local bindings replicated")
+	}
+	body, _ := json.Marshal(registryChanges(t, source))
+	for _, secret := range []string{"env-secret", "arg-secret", "url-secret", "header-secret", "user:pass", "ghp_123"} {
+		if strings.Contains(string(body), secret) {
+			t.Fatalf("replicated rows contain %q", secret)
 		}
 	}
 }
 
 func TestAgentpackNameReplicatesAndRenameConverges(t *testing.T) {
 	source, target := mustStore(t), mustStore(t)
-	pack, _, err := source.Capture(CaptureInput{Name: "Shared profile", Project: "/workspace/demo", SourceNode: "source-node", Manifest: []byte("name = \"demo\"\n"), Lock: []byte("lockfile_version = 2\n")})
+	pack, _, err := source.Capture(CaptureInput{Name: "Shared profile", Project: "/workspace/demo", SourceNode: "source-node", Manifest: []byte("name='demo'\n"), Lock: []byte("lockfile_version=2\n")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	transfer := func(inventory Inventory) {
-		t.Helper()
-		missing, err := target.MissingFrom(inventory)
-		if err != nil {
-			t.Fatal(err)
-		}
-		objects := map[string][]byte{}
-		for _, id := range append(missing.Objects, missing.Tombstones...) {
-			objects[id], err = source.ExportObject(id)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-		if _, err := target.ImportObjects(objects); err != nil {
-			t.Fatal(err)
-		}
-	}
-	inventory, err := source.Inventory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	transfer(inventory)
+	copyRegistry(t, source, target)
 	got, revisions, err := target.Get(pack.ID)
 	if err != nil || got.Name != "Shared profile" || len(revisions) != 1 {
-		t.Fatalf("custom name did not replicate: %#v %#v %v", got, revisions, err)
+		t.Fatalf("name: %+v %v", got, err)
 	}
 	if _, err := source.Rename(pack.ID, "Renamed profile"); err != nil {
 		t.Fatal(err)
 	}
-	inventory, err = source.Inventory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	transfer(inventory)
+	copyRegistry(t, source, target)
 	got, revisions, err = target.Get(pack.ID)
 	if err != nil || got.Name != "Renamed profile" || len(revisions) != 1 || len(got.Heads) != 1 {
-		t.Fatalf("rename did not converge independently of revision history: %#v %#v %v", got, revisions, err)
+		t.Fatalf("renamed: %+v %v", got, err)
 	}
 	if _, err := source.Rename(pack.ID, "Bearer should-not-publish"); err == nil {
-		t.Fatal("credential-shaped name was accepted")
+		t.Fatal("credential-shaped name accepted")
 	}
 }
 
@@ -126,18 +112,164 @@ func TestCaptureURLCredentialsNeverAffectPublicDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if first.ID != second.ID {
-		t.Fatalf("source URL credentials changed public revision digest: %s != %s", first.ID, second.ID)
+		t.Fatalf("credentials changed public digest: %s %s", first.ID, second.ID)
 	}
-	for _, id := range []string{first.ID, first.PackageIDs[0]} {
-		data, err := store.ExportObject(id)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, body := range publicBodies(t, store) {
 		for _, secret := range []string{"url-secret", "other-query-secret", "user:pass", "other-user:other-pass"} {
-			if strings.Contains(string(data), secret) {
-				t.Fatalf("public object %s contains URL credential %q", id, secret)
+			if strings.Contains(string(body), secret) {
+				t.Fatalf("public object contains %q", secret)
 			}
 		}
+	}
+}
+
+func TestCaptureRedactsCredentialShapedSourceMetadataBeforeHashing(t *testing.T) {
+	store := mustStore(t)
+	pack, revision, err := store.Capture(CaptureInput{Name: "Metadata", Label: "access_token=label-secret", SourceNode: "Bearer node-secret", Project: "/workspace/token=project-secret", Manifest: []byte("name='metadata'\n"), Lock: lockWithCommit("abc123")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revision.Project != "<local>" || revision.SourceNode != "<local>" || revision.Label != "<local>" {
+		t.Fatalf("metadata was not redacted: %+v", revision)
+	}
+	for _, body := range publicBodies(t, store) {
+		for _, secret := range []string{"label-secret", "node-secret", "project-secret"} {
+			if strings.Contains(string(body), secret) {
+				t.Fatalf("public object contains %q", secret)
+			}
+		}
+	}
+	if _, _, err := store.Get(pack.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRegistryChangesRejectChangedDigestAndMalformedObjects(t *testing.T) {
+	source, target := mustStore(t), mustStore(t)
+	for _, body := range []string{`{"schema":1,"module":"github.com/acme/tool"}`, "not json"} {
+		sum := sha256.Sum256([]byte(body))
+		id := hex.EncodeToString(sum[:])
+		if err := source.storeObject("registry_objects", id, []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ValidateChanges(target.sql, registryChanges(t, source)); err == nil {
+		t.Fatal("malformed object accepted")
+	}
+	source = mustStore(t)
+	if _, _, err := source.Capture(CaptureInput{Name: "Digest", Project: "/workspace/digest", Manifest: []byte("name='digest'\n"), Lock: lockWithCommit("abc123")}); err != nil {
+		t.Fatal(err)
+	}
+	changes := registryChanges(t, source)
+	for i := range changes {
+		if changes[i].Table == "registry_objects" && changes[i].Column == "body" {
+			changes[i].Value.Data = json.RawMessage(`"{}"`)
+			break
+		}
+	}
+	if err := ValidateChanges(target.sql, changes); err == nil || !strings.Contains(err.Error(), "object") {
+		t.Fatalf("changed digest accepted: %v", err)
+	}
+	if ids, err := target.objectIDs(); err != nil || len(ids) != 0 {
+		t.Fatalf("rejected page changed objects: %v %v", ids, err)
+	}
+}
+
+func TestTombstoneAndCollectionPropagateToOfflineAndNewPeers(t *testing.T) {
+	source, target, fresh := mustStore(t), mustStore(t), mustStore(t)
+	pack, _, err := source.Capture(CaptureInput{Name: "Delete me", Project: "/workspace/deleted", Manifest: []byte("name='deleted'\n"), Lock: lockWithCommit("abc123")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyRegistry(t, source, target)
+	stale := registryChanges(t, target)
+	if err := source.EnrollPeer("offline-peer"); err != nil {
+		t.Fatal(err)
+	}
+	tombstone, err := source.DeleteAgentpack(pack.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := source.CollectGarbage(); err != nil || len(removed) == 0 {
+		t.Fatalf("collection: %v %v", removed, err)
+	}
+	for _, to := range []*Store{target, fresh} {
+		copyRegistry(t, source, to)
+		if _, _, err := to.Get(pack.ID); !errors.Is(err, ErrNotFound) {
+			t.Fatal("deleted pack returned", err)
+		}
+	}
+	applyRegistryChanges(t, source, stale)
+	if _, _, err := source.Get(pack.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatal("stale peer resurrected a pack", err)
+	}
+	if _, err := source.readTombstone(tombstone.ID); err != nil {
+		t.Fatal("tombstone lost", err)
+	}
+}
+
+func TestConcurrentReplicasRetainTwoHeads(t *testing.T) {
+	base, left, right, merged := mustStore(t), mustStore(t), mustStore(t), mustStore(t)
+	pack, _, err := base.Capture(CaptureInput{Name: "Branches", Project: "/workspace/branches", Manifest: []byte("name='branches'\n"), Lock: lockWithCommit("base123")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, to := range []*Store{left, right} {
+		copyRegistry(t, base, to)
+	}
+	for commit, store := range map[string]*Store{"left123": left, "right123": right} {
+		if _, _, err := store.Capture(CaptureInput{ID: pack.ID, Project: "/workspace/branches", Manifest: []byte("name='branches'\n"), Lock: lockWithCommit(commit)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, from := range []*Store{left, right} {
+		copyRegistry(t, from, merged)
+	}
+	if heads, err := merged.Heads(pack.ID); err != nil || len(heads) != 2 {
+		t.Fatalf("concurrent heads: %v %v", heads, err)
+	}
+}
+
+func TestRevisionLoadsAcrossEncoderLayoutsButNotUnredacted(t *testing.T) {
+	store := mustStore(t)
+	pack, revision, err := store.Capture(CaptureInput{Name: "Shared", Project: "/workspace/shared", Manifest: []byte(manifestTemplate), Lock: lockWithCommit("abc123")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	older := revision
+	older.Manifest = strings.ReplaceAll(revision.Manifest, "\n[", "\n\n[")
+	if older.Manifest == revision.Manifest {
+		t.Fatal("fixture did not change layout")
+	}
+	data, err := marshalObject(older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeImported(data); err != nil {
+		t.Fatal("older layout rejected", err)
+	}
+	sum := sha256.Sum256(data)
+	id := hex.EncodeToString(sum[:])
+	if err := store.storeObject("registry_objects", id, data); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.sql.DB.Exec("DELETE FROM registry_objects WHERE digest=?", revision.ID); err != nil {
+		t.Fatal(err)
+	}
+	if read, err := store.readRevision(id); err != nil || read.Manifest != older.Manifest {
+		t.Fatalf("older layout: %+v %v", read, err)
+	}
+	if _, again, err := store.Capture(CaptureInput{ID: pack.ID, Project: "/workspace/shared", Manifest: []byte(older.Manifest), Lock: []byte(older.Lock)}); err != nil || again.ID != id {
+		t.Fatalf("layout difference made a revision: %+v %v", again, err)
+	}
+	leaked := revision
+	leaked.Manifest += "\n[mcp.servers.leak.env]\nKEY='plain'\n"
+	data, err = marshalObject(leaked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeImported(data); err == nil || !strings.Contains(err.Error(), "unredacted") {
+		t.Fatalf("unredacted data accepted: %v", err)
 	}
 }
 
@@ -154,169 +286,6 @@ func TestImportRejectsCredentialBearingURLMetadata(t *testing.T) {
 		if _, err := decodeImported(data); err == nil {
 			t.Fatalf("import accepted credential-bearing URL %q", value)
 		}
-	}
-}
-
-func TestCaptureRedactsCredentialShapedSourceMetadataBeforeHashing(t *testing.T) {
-	store := mustStore(t)
-	pack, revision, err := store.Capture(CaptureInput{Name: "Metadata", Label: "access_token=label-secret", SourceNode: "Bearer node-secret", Project: "/workspace/token=project-secret", Manifest: []byte("name = \"metadata\"\n"), Lock: lockWithCommit("abc123")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if revision.Project != "<local>" || revision.SourceNode != "<local>" || revision.Label != "<local>" {
-		t.Fatalf("metadata was not redacted: %#v", revision)
-	}
-	inventory, err := store.Inventory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range inventory.Objects {
-		data, err := store.ExportObject(id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, secret := range []string{"label-secret", "node-secret", "project-secret"} {
-			if strings.Contains(string(data), secret) {
-				t.Fatalf("object %s contains metadata secret %q", id, secret)
-			}
-		}
-	}
-	if _, _, err := store.Get(pack.ID); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestImportRejectsChangedDigestAndMalformedObjects(t *testing.T) {
-	store, err := New(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.ImportObjects(map[string][]byte{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": []byte(`{"schema":1,"module":"github.com/acme/tool"}`)}); err == nil {
-		t.Fatal("import accepted malformed or unsupported object")
-	}
-	if _, err := store.ImportObjects(map[string][]byte{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": []byte("not json")}); err == nil {
-		t.Fatal("import accepted invalid object bytes")
-	}
-	source := mustStore(t)
-	if _, _, err := source.Capture(CaptureInput{Name: "Digest", Project: "/workspace/digest", Manifest: []byte("name = \"digest\"\n"), Lock: lockWithCommit("abc123")}); err != nil {
-		t.Fatal(err)
-	}
-	inventory, err := source.Inventory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := source.ExportObject(inventory.Objects[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.ImportObjects(map[string][]byte{strings.Repeat("f", 64): data}); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
-		t.Fatalf("import accepted digest mismatch: %v", err)
-	}
-	if after, err := store.Inventory(); err != nil || len(after.Objects) != 0 {
-		t.Fatalf("digest mismatch published an object: %#v %v", after, err)
-	}
-}
-
-func TestTombstonePropagationWaitsForEnrolledPeerAndGarbageCollection(t *testing.T) {
-	source, err := New(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	pack, _, err := source.Capture(CaptureInput{Name: "Delete me", Project: "/workspace/deleted", Manifest: []byte("name = \"deleted\"\n"), Lock: lockWithCommit("abc123")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := source.EnrollPeer("stable-node"); err != nil {
-		t.Fatal(err)
-	}
-	tombstone, err := source.DeleteAgentpack(pack.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	before, err := source.CollectGarbage()
-	if err != nil || len(before) != 0 {
-		t.Fatalf("garbage collected before acknowledgement: %v %v", before, err)
-	}
-	inventory, err := source.Inventory()
-	if err != nil || len(inventory.Objects) != 0 || len(inventory.Tombstones) != 1 {
-		t.Fatalf("deleted inventory still advertises objects: %#v %v", inventory, err)
-	}
-	destination, err := New(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	active, err := New(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _, err = active.Capture(CaptureInput{ID: pack.ID, Name: pack.Name, Project: "/workspace/deleted", Manifest: []byte("name = \"deleted\"\n"), Lock: lockWithCommit("abc123")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	activeInventory, err := active.Inventory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := destination.ImportObjects(exportInventory(t, active, activeInventory)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := destination.ImportObjects(exportInventory(t, source, inventory)); err != nil {
-		t.Fatal(err)
-	}
-	if packs, err := destination.ListAgentpacks(); err != nil || len(packs) != 0 {
-		t.Fatalf("tombstone did not hide imported pack: %#v %v", packs, err)
-	}
-	if err := source.Acknowledge("stable-node", []string{tombstone.ID}); err != nil {
-		t.Fatal(err)
-	}
-	removed, err := source.CollectGarbage()
-	if err != nil || len(removed) == 0 {
-		t.Fatalf("garbage collection after acknowledgement: %v %v", removed, err)
-	}
-	if _, err := os.Stat(filepath.Join(source.root, tombstonesDir, tombstone.ID+".json")); err != nil {
-		t.Fatalf("tombstone removed before newer peers can learn it: %v", err)
-	}
-}
-
-func TestConcurrentReplicasRetainTwoHeads(t *testing.T) {
-	base, err := New(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	pack, _, err := base.Capture(CaptureInput{Name: "Branches", Project: "/workspace/branches", Manifest: []byte("name = \"branches\"\n"), Lock: lockWithCommit("base123")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	baseInventory, err := base.Inventory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	left, right := mustStore(t), mustStore(t)
-	for _, target := range []*Store{left, right} {
-		if _, err := target.ImportObjects(exportInventory(t, base, baseInventory)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	manifest := []byte("name = \"branches\"\n")
-	if _, _, err := left.Capture(CaptureInput{ID: pack.ID, Project: "/workspace/branches", Manifest: manifest, Lock: lockWithCommit("left123")}); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := right.Capture(CaptureInput{ID: pack.ID, Project: "/workspace/branches", Manifest: manifest, Lock: lockWithCommit("right123")}); err != nil {
-		t.Fatal(err)
-	}
-	merge := mustStore(t)
-	for _, source := range []*Store{left, right} {
-		inventory, err := source.Inventory()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := merge.ImportObjects(exportInventory(t, source, inventory)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	heads, err := merge.Heads(pack.ID)
-	if err != nil || len(heads) != 2 {
-		t.Fatalf("concurrent revisions collapsed: %#v %v", heads, err)
 	}
 }
 
@@ -354,69 +323,65 @@ func TestDraftRemoteRevalidationAndDiscard(t *testing.T) {
 	}
 }
 
+func TestReplicatedDraftKeepsItsTargetAcrossLocalAliases(t *testing.T) {
+	a, b := mustStore(t), mustStore(t)
+	draft, err := a.SaveDraft(DraftInput{Item: "tool", Node: "local", Directory: "/only-on-a", Reason: "offline", FolderIdentity: "folder", ExpectedPins: map[string]PackagePin{}})
+	if err != nil || draft.Node != "local" {
+		t.Fatalf("local save: %+v %v", draft, err)
+	}
+	if err := a.sql.BindNode(t.Context(), "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	copyRegistry(t, a, b)
+	remote, err := b.GetDraft(draft.ID)
+	if err != nil || remote.Node != "node-a" {
+		t.Fatalf("draft retargeted to receiver: %+v %v", remote, err)
+	}
+	local, err := a.GetDraft(draft.ID)
+	if err != nil || local.Node != "local" {
+		t.Fatalf("local alias lost: %+v %v", local, err)
+	}
+}
+
+func TestDraftTargetBindingAndSavesAreAtomic(t *testing.T) {
+	store := mustStore(t)
+	var writers sync.WaitGroup
+	failures := make(chan error, 8)
+	for range 8 {
+		writers.Go(func() {
+			_, err := store.SaveDraft(DraftInput{Item: "tool", Node: "local", Directory: "/local", Reason: "offline", FolderIdentity: "folder"})
+			failures <- err
+		})
+	}
+	if err := store.sql.BindNode(t.Context(), "stable-node"); err != nil {
+		t.Fatal(err)
+	}
+	writers.Wait()
+	close(failures)
+	for err := range failures {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count, wrong int
+	if err := store.sql.Reader.QueryRow("SELECT count(*),coalesce(sum(json_extract(body,'$.node')<>'stable-node'),0) FROM registry_drafts").Scan(&count, &wrong); err != nil || count != 8 || wrong != 0 {
+		t.Fatalf("draft target raced identity binding: count=%d wrong=%d err=%v", count, wrong, err)
+	}
+}
+
 func mustStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	return store
 }
 
 // Stored revisions outlive the encoder that wrote them: go-toml 2.4 lays out empty sub-tables without
 // the blank lines 2.3 wrote, and that made every older revision unreadable.
-func TestRevisionLoadsAcrossEncoderLayoutsButNotUnredacted(t *testing.T) {
-	store, err := New(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	pack, revision, err := store.Capture(CaptureInput{Name: "Shared", Project: "/workspace/shared", Manifest: []byte(manifestTemplate), Lock: lockWithCommit("abc123")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	older := revision
-	older.Manifest = strings.ReplaceAll(revision.Manifest, "\n[", "\n\n[")
-	if older.Manifest == revision.Manifest {
-		t.Fatal("fixture did not change the layout")
-	}
-	data, err := marshalObject(older)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := decodeImported(data); err != nil {
-		t.Fatalf("older layout rejected: %v", err)
-	}
-	// A store whose only revision has the older layout, as on a machine that just upgraded.
-	upgraded, err := New(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	inventory, err := store.Inventory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	objects := exportInventory(t, store, inventory)
-	delete(objects, revision.ID)
-	sum := sha256.Sum256(data)
-	id := hex.EncodeToString(sum[:])
-	objects[id] = data
-	if _, err := upgraded.ImportObjects(objects); err != nil {
-		t.Fatal(err)
-	}
-	if read, err := upgraded.readRevision(id); err != nil || read.Manifest != older.Manifest {
-		t.Fatalf("older layout unreadable: %#v %v", read, err)
-	}
-	if _, again, err := upgraded.Capture(CaptureInput{ID: pack.ID, Project: "/workspace/shared", Manifest: []byte(older.Manifest), Lock: []byte(older.Lock)}); err != nil || again.ID != id {
-		t.Fatalf("a layout difference must not create a revision: %#v %v", again, err)
-	}
-
-	leaked := revision
-	leaked.Manifest += "\n[mcp.servers.leak.env]\nKEY = 'plain'\n"
-	data, err = marshalObject(leaked)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := decodeImported(data); err == nil || !strings.Contains(err.Error(), "unredacted") {
-		t.Fatalf("unredacted manifest accepted: %v", err)
-	}
-}

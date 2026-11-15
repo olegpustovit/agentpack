@@ -14,16 +14,42 @@ Some harnesses speak the [Agent Client Protocol](https://agentclientprotocol.com
 
 Start chat with `POST /api/sessions` and `{ "transport": "acp", ... }`. Resume with `agent_session_id` from `GET /api/agent-sessions?directory=&harness=&mode=`. Switching Chat ↔ Terminal in the UI stops the current worker and starts the other transport; resume depends on the agent.
 
+Session metadata, names and recent folders live in `$AGENTPACK_HOME/state.db`.
+Explicitly enrolled mesh gateways replicate these rows and conversation events.
+The browser reads one local session list across nodes, including offline chats.
+Offline history remains readable, while the composer and request-answer controls
+are disabled. Renaming is a shared metadata edit and works offline. See
+[Gateway State and Mesh Sync](../concepts/state.md) for trust and version rules.
+Worker exit records the end time and final terminal state without deleting that
+metadata. Conversation entries also persist in state.db. Memory eviction does not
+remove saved history; adjacent text chunks may be stored as one merged entry.
+Restart loads the saved replay tail and continues its sequence numbers. Writes
+batch every 50 ms, flushing sooner under byte pressure and once more after
+queued updates and active prompts drain during shutdown. Storage failures stop
+the worker and report a diagnostic without copying chat into diagnostics.
+A private `network/sessions/<id>/worker.json` retains only the running
+process's ID, PID, loopback address and secret. Forgetting a recent folder hides
+its launch rows; it does not remove files from the folder or erase session data.
+
+Native resume ownership also lives in state.db. Hidden ownership rows retain the
+original actor even when an old worker directory has disappeared. At gateway
+startup, stopped legacy workers' metadata, names and conversation files are
+imported transactionally; their imported files are removed only after commit.
+Images and other support files remain. Live workers retain their files until a
+later startup. Unreadable sources stay in place and produce a diagnostic without
+preventing gateway startup; unreadable ownership records keep affected resumes
+read-only until the source can be imported.
+
 ## Conversation API
 
 Worker routes (gateway proxies as `/api/sessions/{id}/conversation/...` with the same auth and `?node=` peer routing as other session APIs):
 
-- `GET /conversation?since=` — NDJSON replay; `Accept: text/event-stream` or `?stream=1` for live updates. Snapshots are capped at 4 MiB and retain only complete records; `X-Agentpack-Truncated: true` marks omitted data.
+- `GET /conversation?since=` — NDJSON replay; `Accept: text/event-stream` or `?stream=1` for live updates. Snapshots are capped at 4 MiB and retain only complete records; `X-Agentpack-Truncated: true` marks omitted data. The gateway returns saved history when the worker is unavailable, preserving the same sequence filter and response formats. A stopped session’s SSE replay ends after its saved entries.
 - `POST /conversation/prompt`, `/cancel`, `/permission`, `/elicitation`, `/config`
 - `GET /conversation/config-options`
 - `GET /blobs/{sha}` — session-scoped PNG/JPEG/GIF/WebP images, 20 MiB each and 100 MiB total or 128 images per session (whichever limit is reached first)
 
-All writes to an existing ACP session—including prompts, cancellation, config changes, image uploads, permission/elicitation answers, rename, stop, and restart—require the session's recorded user and node identity. Peers match by immutable Tailscale stable node ID; local transports match by user and host. Other actors can read the conversation and images but cannot modify the session; a missing owner identity is read-only.
+All writes to an existing ACP session—including prompts, cancellation, config changes, image uploads, permission/elicitation answers, rename, stop, and restart—require the session's recorded owner. Browser writes match the authenticated account email. Peers match by immutable Tailscale stable node ID and user; local transports match by user and host. Other actors can read the conversation and images but cannot modify the session; a missing owner identity is read-only.
 
 Uploaded image MIME is detected from the stored blob bytes before the ACP agent receives it; client-supplied MIME is ignored.
 ACP terminal output is capped at 4 MiB; nested terminal process groups are terminated on release or worker shutdown. Complete stdout frames over 4 MiB are dropped; an unterminated oversized frame closes the stream after 10 seconds.
@@ -34,7 +60,7 @@ The script does not launch agents. It reports missing `testdata/acp/<harness>.js
 
 ## `ap` hub
 
-On a TTY, bare `agentpack` and the `ap` symlink (installed beside the binary) open the hub TUI instead of printing help. Without a gateway URL, the hub lists local worker records only. The preview supports permission answers, elicitation choices, text prompts, image attachments from a local path, and the `/help`, `/image`, `/reload`, and `/sessions` slash commands. Image/file blocks render as text placeholders; click one or hover it and press `o` to open the stored blob with the OS default file handler. Downloaded images are cached under the OS user cache, capped at 100 MiB.
+On a TTY, bare `agentpack` and the `ap` symlink (installed beside the binary) open the hub TUI instead of printing help. Without a gateway URL, the hub lists local session rows whose worker endpoints are reachable. The preview supports permission answers, elicitation choices, text prompts, image attachments from a local path, and the `/help`, `/image`, `/reload`, and `/sessions` slash commands. Image/file blocks render as text placeholders; click one or hover it and press `o` to open the stored blob with the OS default file handler. Downloaded images are cached under the OS user cache, capped at 100 MiB.
 
 ## Harness coverage
 

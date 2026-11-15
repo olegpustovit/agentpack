@@ -25,6 +25,6 @@ export default defineConfig({
       "/oauth": { target: goOrigin },
     },
   },
-  build: { outDir: "dist", emptyOutDir: true },
+  build: { outDir: "dist", emptyOutDir: true, sourcemap: "hidden" },
   test: { environment: "jsdom", include: ["src/**/*.test.{ts,tsx}"] },
 })

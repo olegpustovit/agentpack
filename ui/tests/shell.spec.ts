@@ -3,8 +3,9 @@ import { expect, test } from "@playwright/test"
 const identity = { node: { id: "n1", name: "host-a", os: "linux", version: "0" }, auth: "password", tailscale_user: "" }
 
 test.beforeEach(async ({ page }) => {
+  await page.route("**/api/config", (route) => route.fulfill({ json: { ui_build_id: "test-build" } }))
   await page.route("**/api/status", (route) =>
-    route.fulfill({ json: { setup_required: false, authenticated: true } }),
+    route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }),
   )
   await page.route("**/api/identity", (route) => route.fulfill({ json: identity }))
   await page.route("**/api/nodes", (route) => route.fulfill({ json: [] }))

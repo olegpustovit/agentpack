@@ -1,17 +1,13 @@
 package network
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
-	"sync"
+	"strings"
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/registry"
@@ -23,151 +19,169 @@ func replicaStore(t *testing.T) *registry.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	return store
 }
 
-func TestRegistryExchangeRequiresEnrollmentAndVerifiesTransfers(t *testing.T) {
-	a, b := replicaStore(t), replicaStore(t)
-	pack, revision, err := a.Capture(registry.CaptureInput{Name: "Example", Project: t.TempDir(), Manifest: []byte("name = 'example'\n[dependencies]\n"), Lock: []byte("lockfile_version = 2\n")})
+func registryGateway(t *testing.T, node, caller string) (*Gateway, *httptest.Server) {
+	t.Helper()
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	if err := g.auth.store.BindNode(t.Context(), node); err != nil {
+		t.Fatal(err)
+	}
+	store, err := registry.New(g.options.Home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.EnrollPeer("b"); err != nil {
-		t.Fatal(err)
-	}
-	g := &Gateway{options: GatewayOptions{Library: LibraryOptions{Store: b}}}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	g.options.Library.Store = store
 	mux := http.NewServeMux()
-	g.registerRegistryReplication(mux)
+	g.registerStateSync(mux)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Production attaches this identity only after daemon whois and sharing checks.
-		mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), replicaPeerKey{}, "a")))
+		mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), replicaPeerKey{}, caller)))
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
+	return g, server
+}
+
+func pullRegistry(t *testing.T, to *Gateway, server *httptest.Server) error {
+	t.Helper()
 	target, _ := url.Parse(server.URL)
-	if err := exchangeRegistry(context.Background(), a, "b", target, server.Client(), nil); err == nil {
-		t.Fatal("receiver did not require its own explicit enrollment")
-	}
-	if err := b.EnrollPeer("a"); err != nil {
-		t.Fatal(err)
-	}
-	if err := exchangeRegistry(context.Background(), a, "b", target, server.Client(), nil); err != nil {
-		t.Fatal(err)
-	}
-	replicated, revisions, err := b.Get(pack.ID)
-	if err != nil || replicated.Name != "Example" || len(revisions) != 1 || revisions[0].ID != revision.ID {
-		t.Fatalf("replica: %#v %+v %v", replicated, revisions, err)
-	}
-	peers, err := a.ListPeers()
-	if err != nil || len(peers) != 1 || peers[0].ReceiptCount != 2 {
-		t.Fatalf("receipt: %+v %v", peers, err)
-	}
-	before, err := b.Inventory()
+	_, _, err := pullState(t.Context(), to.auth.store, to.options.Library.Store, server.Client(), target)
+	return err
+}
+
+func TestLibraryUsesStatePagesAndConcurrentConflictResolution(t *testing.T) {
+	a, aServer := registryGateway(t, "a", "b")
+	b, bServer := registryGateway(t, "b", "a")
+	pack, revision, err := a.options.Library.Store.Capture(registry.CaptureInput{Name: "Example", Project: "/a", Manifest: []byte("name='example'\n"), Lock: []byte("lockfile_version=2\n")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	bad := []byte(`{"arbitrary":"secret"}`)
-	body, _ := json.Marshal(replicaTransfer{Objects: map[string][]byte{revision.ID: bad}})
-	response, err := server.Client().Post(server.URL+replicationPrefix+"objects", "application/json", bytes.NewReader(body))
+	if err := b.options.Library.Store.EnrollPeer("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pullRegistry(t, b, aServer); err == nil {
+		t.Fatal("source accepted an unenrolled peer")
+	}
+	if err := a.options.Library.Store.EnrollPeer("b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pullRegistry(t, b, aServer); err != nil {
+		t.Fatal(err)
+	}
+	got, revisions, err := b.options.Library.Store.Get(pack.ID)
+	if err != nil || got.Name != "Example" || len(revisions) != 1 || revisions[0].ID != revision.ID {
+		t.Fatalf("replica: %+v %+v %v", got, revisions, err)
+	}
+	for name, g := range map[string]*Gateway{"left": a, "right": b} {
+		if _, _, err := g.options.Library.Store.Capture(registry.CaptureInput{ID: pack.ID, Project: "/" + name, Manifest: []byte("name='" + name + "'\n"), Lock: []byte("lockfile_version=2\n")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := pullRegistry(t, b, aServer); err != nil {
+		t.Fatal(err)
+	}
+	if err := pullRegistry(t, a, bServer); err != nil {
+		t.Fatal(err)
+	}
+	left, err := a.options.Library.Store.Conflict(pack.ID)
+	if err != nil || len(left.Fields) == 0 {
+		t.Fatalf("conflict: %+v %v", left, err)
+	}
+	right, err := b.options.Library.Store.Conflict(pack.ID)
+	if err != nil || !reflect.DeepEqual(left, right) {
+		t.Fatalf("conflicts differ: %+v %+v %v", left, right, err)
+	}
+	choices := map[string]string{}
+	for _, field := range left.Fields {
+		choices[field.Path] = left.Heads[0]
+	}
+	if _, err := b.options.Library.Store.Resolve(pack.ID, left.Heads, choices, "b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pullRegistry(t, a, bServer); err != nil {
+		t.Fatal(err)
+	}
+	if heads, err := a.options.Library.Store.Heads(pack.ID); err != nil || len(heads) != 1 {
+		t.Fatalf("resolved heads: %v %v", heads, err)
+	}
+	if _, err := b.options.Library.Store.DeleteAgentpack(pack.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pullRegistry(t, a, bServer); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.options.Library.Store.Get(pack.ID); !errors.Is(err, registry.ErrNotFound) {
+		t.Fatal("deletion did not replicate", err)
+	}
+}
+
+func TestLibraryStatePageRejectsChangedDigestBeforeCursor(t *testing.T) {
+	a, server := registryGateway(t, "a", "b")
+	b, _ := registryGateway(t, "b", "a")
+	if err := a.options.Library.Store.EnrollPeer("b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.options.Library.Store.EnrollPeer("a"); err != nil {
+		t.Fatal(err)
+	}
+	_, revision, err := a.options.Library.Store.Capture(registry.CaptureInput{Name: "Digest", Project: "/a", Manifest: []byte("name='digest'\n"), Lock: []byte("lockfile_version=2\n")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusBadRequest {
-		t.Fatalf("digest mismatch accepted: %d", response.StatusCode)
-	}
-	after, err := b.Inventory()
-	if err != nil || !reflect.DeepEqual(before, after) {
-		t.Fatal("failed transfer changed inventory", err)
-	}
-	if _, err := b.DeleteAgentpack(pack.ID); err != nil {
+	if err := pullRegistry(t, b, server); err != nil {
 		t.Fatal(err)
 	}
-	if err := exchangeRegistry(context.Background(), a, "b", target, server.Client(), nil); err != nil {
+	site, err := a.auth.store.SiteID(t.Context())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := a.Get(pack.ID); !errors.Is(err, registry.ErrNotFound) {
-		t.Fatal("tombstone did not propagate", err)
+	cursor, err := b.auth.store.Cursor(t.Context(), site)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := exchangeRegistry(context.Background(), a, "b", target, server.Client(), nil); err != nil {
-		t.Fatal("repeated exchange resurrected or rejected deleted revisions", err)
+	if _, err := a.auth.store.DB.Exec("UPDATE registry_objects SET body='{}' WHERE digest=?", revision.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pullRegistry(t, b, server); err == nil {
+		t.Fatal("changed object digest accepted")
+	}
+	if after, err := b.auth.store.Cursor(t.Context(), site); err != nil || after != cursor {
+		t.Fatalf("failed validation advanced cursor: %d %d %v", cursor, after, err)
+	}
+	var body string
+	if err := b.auth.store.Reader.QueryRow("SELECT body FROM registry_objects WHERE digest=?", revision.ID).Scan(&body); err != nil || !strings.Contains(body, "digest") {
+		t.Fatalf("valid local object overwritten: %s %v", body, err)
 	}
 }
 
 func TestReplicationIdentityCannotBeSuppliedInHeaders(t *testing.T) {
-	store := replicaStore(t)
-	if err := store.EnrollPeer("claimed"); err != nil {
+	g, _ := registryGateway(t, "local-node", "claimed")
+	if err := g.options.Library.Store.EnrollPeer("claimed"); err != nil {
 		t.Fatal(err)
 	}
-	g := &Gateway{options: GatewayOptions{Library: LibraryOptions{Store: store}}}
 	mux := http.NewServeMux()
-	g.registerRegistryReplication(mux)
-	r := httptest.NewRequest("GET", replicationPrefix+"inventory", nil)
-	r.Header.Set("X-Agentpack-Peer", "claimed")
-	r.Header.Set("Authorization", "Bearer local-secret")
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, r)
-	if w.Code != http.StatusForbidden {
-		t.Fatal("invented identity admitted", w.Code)
+	g.registerStateSync(mux)
+	request := httptest.NewRequest("GET", "/api/sync/changes?schema=1", nil)
+	request.Header.Set("X-Agentpack-Peer", "claimed")
+	request.Header.Set("Authorization", "Bearer local-secret")
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatal("invented identity admitted", response.Code)
 	}
-	sum := sha256.Sum256([]byte("object"))
-	for _, test := range []struct {
-		method, path string
-		allowed      bool
-	}{
-		{"GET", replicationPrefix + "inventory", true},
-		{"GET", replicationPrefix + "objects/" + hex.EncodeToString(sum[:]), true},
-		{"POST", replicationPrefix + "objects", true},
-		{"POST", replicationPrefix + "ack", true},
-		{"POST", replicationPrefix + "peers", false},
-		{"GET", replicationPrefix + "peers", false},
-		{"POST", replicationPrefix + "sync", false},
-		{"GET", replicationPrefix + "objects/../../bindings", false},
-	} {
-		if got := peerRoute(test.method, test.path); got != test.allowed {
-			t.Fatalf("%s %s allowed=%v", test.method, test.path, got)
+	for _, method := range []string{"GET", "POST", "DELETE"} {
+		if peerRoute(method, replicationPrefix+"peers") || peerRoute(method, replicationPrefix+"sync") {
+			t.Fatal("peer administration exposed to peer channel")
 		}
-	}
-}
-
-func TestSettledRegistryExchangeOnlyReadsTheInventory(t *testing.T) {
-	a, b := replicaStore(t), replicaStore(t)
-	capture := func(name string) {
-		if _, _, err := a.Capture(registry.CaptureInput{Name: name, Project: t.TempDir(), Manifest: []byte("name = 'example'\n[dependencies]\n"), Lock: []byte("lockfile_version = 2\n")}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	capture("Example")
-	if err := a.EnrollPeer("b"); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.EnrollPeer("a"); err != nil {
-		t.Fatal(err)
-	}
-	g := &Gateway{options: GatewayOptions{Library: LibraryOptions{Store: b}}}
-	mux := http.NewServeMux()
-	g.registerRegistryReplication(mux)
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), replicaPeerKey{}, "a")))
-	}))
-	defer server.Close()
-	target, _ := url.Parse(server.URL)
-	var settled sync.Map
-	exchange := func() int {
-		t.Helper()
-		requests = 0
-		if err := exchangeRegistry(context.Background(), a, "b", target, server.Client(), &settled); err != nil {
-			t.Fatal(err)
-		}
-		return requests
-	}
-	exchange()
-	if n := exchange(); n != 1 {
-		t.Fatalf("an unchanged exchange made %d requests, want only the inventory", n)
-	}
-	capture("Second")
-	if n := exchange(); n <= 1 {
-		t.Fatalf("a changed library was not exchanged (%d requests)", n)
 	}
 }

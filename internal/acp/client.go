@@ -23,6 +23,7 @@ type HarnessClient struct {
 
 	requestPrefix   string
 	requestSequence atomic.Uint64
+	updates         *notificationGate
 }
 
 var _ sdkacp.Client = (*HarnessClient)(nil)
@@ -51,7 +52,29 @@ func (c *HarnessClient) permissionRequestID(toolCallID sdkacp.ToolCallId) (strin
 
 // NewClientSideConnection returns an SDK client connection over the given transport.
 func (c *HarnessClient) NewClientSideConnection(peerInput io.Writer, peerOutput io.Reader) *sdkacp.ClientSideConnection {
-	return NewClientConnection(c, peerInput, peerOutput)
+	c.updates = newNotificationGate(peerOutput)
+	return sdkacp.NewClientSideConnection(gatedClient{Client: c, gate: c.updates}, peerInput, c.updates)
+}
+
+// DrainSessionUpdates waits for queued handlers after the connection reader has stopped.
+// SDK Done closes before those handlers finish; session/load already has its own SDK barrier.
+func (c *HarnessClient) DrainSessionUpdates(ctx context.Context) error {
+	g := c.updates
+	if g == nil {
+		return errors.New("ACP connection is not initialized")
+	}
+	stop := context.AfterFunc(ctx, func() {
+		g.mu.Lock()
+		g.cond.Broadcast()
+		g.mu.Unlock()
+	})
+	defer stop()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for g.inflight != 0 && ctx.Err() == nil {
+		g.cond.Wait()
+	}
+	return ctx.Err()
 }
 
 func (c *HarnessClient) RequestPermission(ctx context.Context, p sdkacp.RequestPermissionRequest) (sdkacp.RequestPermissionResponse, error) {

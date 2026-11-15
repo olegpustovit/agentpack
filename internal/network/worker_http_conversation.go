@@ -7,11 +7,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/tmaxmax/go-sse"
 )
 
@@ -87,7 +89,11 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			return
 		}
 		if err := worker.conversationSession().Prompt(r.Context(), prompt); err != nil {
-			http.Error(w, "could not send prompt", http.StatusConflict)
+			message := "could not send prompt"
+			if errors.Is(err, errSessionArchived) {
+				message = "archived"
+			}
+			http.Error(w, message, http.StatusConflict)
 			return
 		}
 		writeJSON(w, map[string]bool{"accepted": true})
@@ -129,7 +135,11 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			return
 		}
 		if err := worker.conversationSession().Prompt(r.Context(), prompt); err != nil {
-			http.Error(w, "could not send prompt", http.StatusConflict)
+			message := "could not send prompt"
+			if errors.Is(err, errSessionArchived) {
+				message = "archived"
+			}
+			http.Error(w, message, http.StatusConflict)
 			return
 		}
 		writeJSON(w, map[string]bool{"accepted": true})
@@ -240,6 +250,13 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			http.Error(w, "could not store blob", http.StatusBadRequest)
 			return
 		}
+		if err := advertiseBlob(r.Context(), worker.stateStore, filepath.Base(worker.sessionDir), sha, int64(len(data))); err != nil {
+			if event := obs.From(r.Context()); event != nil {
+				event.Fail(err)
+			}
+			http.Error(w, "could not record blob location", http.StatusInternalServerError)
+			return
+		}
 		writeJSON(w, map[string]string{"sha": sha})
 	})
 }
@@ -300,7 +317,8 @@ func writeTruncatedSSE(w io.Writer, truncated bool, sent *bool) error {
 	return nil
 }
 
-func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record WorkerRecord, suffix string) {
+// A false result leaves the response untouched so a history read can fall back to SQL.
+func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record WorkerRecord, suffix string) bool {
 	path := "/conversation" + suffix
 	var body io.Reader
 	if r.Method == http.MethodPost {
@@ -313,9 +331,12 @@ func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record Work
 	request, err := http.NewRequestWithContext(r.Context(), r.Method, "http://"+record.Address+path+"?"+r.URL.RawQuery, body)
 	if err != nil {
 		http.Error(w, "invalid conversation request", http.StatusBadRequest)
-		return
+		return true
 	}
 	request.Header.Set("Authorization", "Bearer "+record.Secret)
+	if trace := obs.TraceParent(r.Context()); trace != "" {
+		request.Header.Set("traceparent", trace)
+	}
 	if r.Method == http.MethodPost {
 		contentType := "application/json"
 		if suffix == "/blobs" {
@@ -326,6 +347,9 @@ func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record Work
 		}
 	}
 	stream := r.Method == http.MethodGet && (r.URL.Query().Get("stream") == "1" || strings.Contains(r.Header.Get("Accept"), "text/event-stream"))
+	if stream {
+		request.Header.Set("Accept", "text/event-stream")
+	}
 	client := http.Client{Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	if !stream {
 		client.Timeout = 30 * time.Second
@@ -333,13 +357,16 @@ func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record Work
 	defer client.CloseIdleConnections()
 	response, err := client.Do(request)
 	if err != nil {
+		if r.Method == http.MethodGet && suffix == "" {
+			return false
+		}
 		http.Error(w, "session unavailable", http.StatusBadGateway)
-		return
+		return true
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotFound {
 		http.Error(w, "Needs update", http.StatusNotFound)
-		return
+		return true
 	}
 	for _, key := range []string{"Content-Type", "X-Agentpack-Truncated"} {
 		if value := response.Header.Get(key); value != "" {
@@ -350,18 +377,18 @@ func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record Work
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-			return
+			return true
 		}
 		w.WriteHeader(response.StatusCode)
 		flusher.Flush()
 		_, _ = io.Copy(conversationFlushWriter{Writer: w, Flusher: flusher}, response.Body)
-		return
+		return true
 	}
 	if r.Method == http.MethodGet && suffix == "" && response.StatusCode == http.StatusOK {
 		data, err := io.ReadAll(io.LimitReader(response.Body, maxConversationSnapshotBytes+1))
 		if err != nil {
 			http.Error(w, "conversation snapshot unavailable", http.StatusBadGateway)
-			return
+			return true
 		}
 		if len(data) > maxConversationSnapshotBytes {
 			data = data[:maxConversationSnapshotBytes]
@@ -370,10 +397,11 @@ func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record Work
 		}
 		w.WriteHeader(response.StatusCode)
 		_, _ = w.Write(data)
-		return
+		return true
 	}
 	w.WriteHeader(response.StatusCode)
 	_, _ = io.Copy(w, io.LimitReader(response.Body, 4<<20))
+	return true
 }
 
 type conversationFlushWriter struct {

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"github.com/olegpustovit/agentpack/internal/cache"
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
@@ -67,18 +68,22 @@ func BenchmarkCodexSetup(b *testing.B) {
 				b.Fatal(err)
 			}
 			service := NewService()
+			ctx := cache.WithPeerRestore(context.Background(), func(context.Context, lockfile.Package, string) error {
+				b.Fatal("launch setup contacted the peer cache")
+				return nil
+			})
 			target := harness.Codex
-			if _, _, err := service.SyncForLaunch(context.Background(), home, "", harness.Codex); err != nil {
+			if _, _, err := service.SyncForLaunch(ctx, home, "", harness.Codex); err != nil {
 				b.Fatal(err)
 			}
 			b.ResetTimer()
 			for range b.N {
 				if cold {
-					if _, err := service.Sync(context.Background(), home, SyncOptions{Target: &target}); err != nil {
+					if _, err := service.Sync(ctx, home, SyncOptions{Target: &target}); err != nil {
 						b.Fatal(err)
 					}
 				} else {
-					if _, skipped, err := service.SyncForLaunch(context.Background(), home, "", harness.Codex); err != nil || !skipped {
+					if _, skipped, err := service.SyncForLaunch(ctx, home, "", harness.Codex); err != nil || !skipped {
 						b.Fatalf("skipped=%v err=%v", skipped, err)
 					}
 				}

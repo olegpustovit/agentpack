@@ -13,6 +13,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gofrs/flock"
+	"github.com/olegpustovit/agentpack/internal/state"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestNodeRequestForwardsBodyAndAuthorization(t *testing.T) {
@@ -40,7 +45,7 @@ func TestNodeRequestForwardsBodyAndAuthorization(t *testing.T) {
 	defer server.Close()
 
 	home := t.TempDir()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	record, err := json.Marshal(nodeRecord{Address: strings.TrimPrefix(server.URL, "http://"), Secret: secret})
@@ -62,7 +67,7 @@ func TestNodeRequestForwardsBodyAndAuthorization(t *testing.T) {
 }
 
 func TestGatewayAuthenticationHostAndOrigin(t *testing.T) {
-	auth, err := newGatewayAuth(t.TempDir())
+	auth, err := testUnclaimedAuth(t, t.TempDir(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,13 +90,13 @@ func TestGatewayAuthenticationHostAndOrigin(t *testing.T) {
 		}
 	}
 	check("GET", "/healthz", "agentpack.example", "", "", 200)
-	check("GET", "/api/sessions", "agentpack.example", "", "", 401)
+	check("GET", "/api/sessions", "agentpack.example", "", "", 403)
 	check("GET", "/api/sessions", "evil.example", "", "", 403)
 	check("POST", "/api/node/stop", "agentpack.example", "https://evil.example", "", 403)
 	check("POST", "/api/node/stop", "agentpack.example", "", "", 403)
 	check("GET", "/api/sessions", "127.0.0.1:7420", "", gateway.local.Secret, 200)
 	check("GET", "/api/sessions", "agentpack.example", "https://evil.example", gateway.local.Secret, 403)
-	r := httptest.NewRequest("POST", "https://agentpack.example/api/setup", bytes.NewBufferString(`{"password":"long-password-123","token":"`+auth.setup+`"}`))
+	r := httptest.NewRequest("POST", "https://agentpack.example/api/claim", bytes.NewBufferString(`{"email":"owner@example.com","password":"long-password-123"}`))
 	r.Header.Set("Origin", "https://agentpack.example")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, r)
@@ -109,7 +114,7 @@ func TestGatewayAuthenticationHostAndOrigin(t *testing.T) {
 
 func TestGatewayRestrictsRemoteFolders(t *testing.T) {
 	home := t.TempDir()
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +132,7 @@ func TestGatewayRestrictsRemoteFolders(t *testing.T) {
 
 func TestGatewayPackageRestartChoice(t *testing.T) {
 	home, directory := t.TempDir(), t.TempDir()
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +171,7 @@ func TestGatewayPackageRestartChoice(t *testing.T) {
 }
 
 func TestGatewayPeerProxyOnlyForAPIAndUnknownAPIIsJSON404(t *testing.T) {
-	auth, err := newGatewayAuth(t.TempDir())
+	auth, err := testGatewayAuth(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,6 +212,8 @@ func TestWorkerRequestTimeoutAllowsACPConversationOperations(t *testing.T) {
 		{http.MethodGet, "/api/sessions/session-1/blobs/sha", 2 * time.Minute},
 		{http.MethodPost, "/api/sessions/session-1/conversation/permission", 2 * time.Second},
 		{http.MethodGet, "/api/sessions/session-1/conversation/prompt", 2 * time.Second},
+		{http.MethodGet, "/api/logs/traces/trace-id?all_nodes=1", 5 * time.Second},
+		{http.MethodGet, "/api/cache/entry?hash=digest", 2 * time.Minute},
 	}
 	for _, test := range tests {
 		if got := workerRequestTimeout(test.method, test.path); got != test.want {
@@ -229,7 +236,7 @@ func TestNodeRequestStreamStopsAtLimit(t *testing.T) {
 	}))
 	defer server.Close()
 	home := t.TempDir()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	record, err := json.Marshal(nodeRecord{Address: strings.TrimPrefix(server.URL, "http://"), Secret: secret})
@@ -247,5 +254,65 @@ func TestNodeRequestStreamStopsAtLimit(t *testing.T) {
 	got.Reset()
 	if err := NodeRequestStream(context.Background(), home, http.MethodGet, "/exact", &got, 3); err != nil || got.String() != "abc" {
 		t.Fatalf("exact response = %q, %v; want success", got.String(), err)
+	}
+}
+
+func TestGatewayOwnsAndClosesStateStore(t *testing.T) {
+	home := t.TempDir()
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"limits.json", "oauth.db"} {
+		if err := os.WriteFile(filepath.Join(home, "network", name), []byte("legacy disposable data; do not import"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := ServeGateway(ctx, GatewayOptions{Home: home, Address: "127.0.0.1:0"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"limits.json", "oauth.db"} {
+		if _, err := os.Stat(filepath.Join(home, "network", name)); !os.IsNotExist(err) {
+			t.Fatalf("legacy %s was not removed: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, "state.db")); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(filepath.Join(home, "state.db"+suffix)); !os.IsNotExist(err) {
+			t.Fatalf("gateway left state connections open (%s): %v", suffix, err)
+		}
+	}
+	store, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var version int
+	if err := store.Reader.QueryRow("SELECT version FROM schema_meta").Scan(&version); err != nil || version != state.SchemaVersion() {
+		t.Fatalf("gateway schema=%d err=%v", version, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "network", "node.json")); !os.IsNotExist(err) {
+		t.Fatalf("gateway left its process record: %v", err)
+	}
+}
+
+func TestGatewayLockPrecedesStateOpen(t *testing.T) {
+	home := t.TempDir()
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+		t.Fatal(err)
+	}
+	lock := flock.New(filepath.Join(home, "network", "gateway.lock"))
+	if err := lock.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Unlock()
+	if err := ServeGateway(context.Background(), GatewayOptions{Home: home, Address: "127.0.0.1:0"}); err == nil {
+		t.Fatal("started a second gateway")
+	}
+	if _, err := os.Stat(filepath.Join(home, "state.db")); !os.IsNotExist(err) {
+		t.Fatalf("locked-out gateway touched state: %v", err)
 	}
 }

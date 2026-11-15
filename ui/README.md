@@ -11,7 +11,7 @@ no service worker, so API responses and registry data are never cached by the UI
 external script, CDN, font, analytics, localStorage credentials, or runtime Node server.
 
 Build with `bun install --frozen-lockfile && bun run build`; `make ui-stage` publishes it.
-Run browser checks with `bunx playwright install chromium webkit && bun run e2e`. The test budgets are in the repository `AGENTS.md`.
+Install browsers with `bunx playwright install chromium webkit`, then run `make ui-e2e` from the repository root. This also prepares the Go test fixture that verifies browser errors reach SQLite. Direct `bun run e2e` skips that integration case unless `AGENTPACK_TELEMETRY_TEST_BINARY` points to the compiled fixture. The test budgets are in the repository `AGENTS.md`.
 The gateway should set a same-origin CSP (scripts/styles from self, WebSocket connect
 from self; xterm dynamically sets style attributes) and disable HTTP caching for APIs.
 
@@ -45,15 +45,24 @@ Regression budgets are enforced by `tests/budgets.spec.ts` on the same fixture a
 
 ## API contract
 
+Machine inventory and topology include the replicated Main role. Archived chats
+are permanently read-only and fetch history through Main; an unavailable archive
+names that machine in a banner. Archived sessions expose no resume, fork,
+composer or permission-answer controls.
+
 All requests use same-origin session cookies. Mutations send JSON and require origin
 validation. Non-2xx errors may be `{ "error": "message" }` or plain text. Credentials and
 private worker capabilities never appear in any response. An unauthenticated API returns
-401. Logout invalidates the server session and active terminal access.
+401 once claimed; an unclaimed gateway refuses protected APIs with 403 `unclaimed`.
+Logout invalidates the server session and active terminal access.
 
-- `GET /api/status`: `{setup_required, authenticated}`.
-- `POST /api/setup`: `{password, token}`. The token is obtained on the server with
-  `agentpack gateway setup`. Root can be created once. Minimum password length 12.
-- `POST /api/login`: `{password}`; `POST /api/logout`: `{}`.
+- `GET /api/status`: `{claimed, legacy, authenticated, email}`.
+- `POST /api/claim`: `{email, password, current_password?}`. The first owner claims
+  once; a legacy gateway requires its current password and preserves it.
+- `POST /api/login`: `{email,password}`; `POST /api/logout`: `{}`.
+- `POST /api/logout-all`: revokes all browser and OAuth logins for that account.
+  Cookies survive restarts and slide for thirty days. HTTPS uses a Secure,
+  HttpOnly, SameSite=Strict `__Host-agentpack_session` cookie.
 - `GET /api/identity`: `{node: {id,name,os,version}, auth, tailscale_user}` for the selected machine.
 - `GET /api/nodes`: array of `{id,name,online}` for allowed Tailscale peers.
 - `GET /api/topology`: `{self: {id,name,os,relay}, peers: [{id,name,os,state,connection,relay,rtt_ms?,last_seen?,sessions}]}`.
@@ -69,7 +78,7 @@ private worker capabilities never appear in any response. An unauthenticated API
   `transport` is `terminal` (default) or `acp` (chat). Resuming an agent conversation passes `agent_session_id` from `GET /api/agent-sessions`.
 - `GET /api/agent-sessions`: `{sessions: [{id,title?,updated_at?}]}` for the selected folder, harness, and mode (cached; requires a live worker probe).
 - Chat worker routes (also available on the gateway as `/api/sessions/{id}/conversation/...` with the same auth and `?node=` routing as other session APIs):
-  - `GET /conversation?since=` — NDJSON log; `Accept: text/event-stream` or `?stream=1` for SSE live updates.
+  - `GET /conversation?since=` — NDJSON log; `Accept: text/event-stream` or `?stream=1` for SSE live updates. The gateway falls back to saved SQLite history for unavailable workers. The same `since` filter and truncation header apply; stopped SSE replay is finite.
   - `POST /conversation/prompt` — `{text, image?}` with `{sha,mime,width?,height?}` after `POST /conversation/blobs`; the server derives MIME from stored bytes and ignores the client MIME.
   - `POST /conversation/permission` — `{request_id, option_id}`.
   - `POST /conversation/elicitation` — `{elicitation_id, value}`.
@@ -85,7 +94,7 @@ Only the recorded user and stable peer node identity (or the same local user/hos
 - `POST /api/sessions/{id}/stop`: `{}`. Stop is explicit; detach is separate.
 - `POST /api/sessions/{id}/restart`: `{operation_id}`. Each user intent gets a UUID;
   transport failures and 5xx retry the same UUID, while success or 4xx ends that intent.
-- `GET /api/limits`: `{limits: [...]}` with one snapshot per harness (`codex`, `claude`, `agy`, `grok`, `omp`, `opencode`, `cursor`) of `{harness,state,source,observed_at,plan?,error?,windows: [{id,label,used_percent?,remaining_percent?,reset_at?,reset_text?}]}`. Both limits routes support `?node=<stable-id>` over the authenticated peer channel, including cold probes longer than five seconds. The Limits view checks online machines automatically, shows a usable report first for each provider, and keeps other machine reports expandable without combining account allowances. Unknown percentages stay unknown. Results are cached for 60 seconds; a failing harness reports its own `error` and does not hide the others.
+- `GET /api/limits`: `{limits: [...]}` with one snapshot per harness (`codex`, `claude`, `agy`, `grok`, `omp`, `opencode`, `cursor`) of `{harness,state,source,observed_at,plan?,error?,windows: [{id,label,used_percent?,remaining_percent?,reset_at?,reset_text?}]}`. Reads query local replicated snapshots across nodes, with `node_id`, `reachable` and `last_sync`. `?node=<stable-id>` filters replicated reads; refreshes still route to that machine. The Limits view uses one local query, shows a usable report first for each provider, and keeps other machine reports expandable without combining account allowances. Unknown percentages stay unknown. Results are cached for 60 seconds; a failing harness reports its own `error` and does not hide the others.
 - `POST /api/limits/refresh`: `{}`, returns the same shape. Refresh is throttled to one collection per 10 seconds.
 - `GET /api/packages?directory=...`: array (or `{packages: [...]}`) of `{module,commit?}`.
 - `POST /api/packages`: `{directory,spec,restart?}`. `restart` defaults to `true`.
@@ -104,11 +113,11 @@ Only the recorded user and stable peer node identity (or the same local user/hos
   with `{}` rechecks destination reachability, authorization, folder identity, pins, and the
   current diff; it never applies changes. Only a ready review can be explicitly applied via
   the regular package install or agentpack restore endpoint. Successful apply or explicit
-  discard removes the local draft; `DELETE /api/library/drafts/{id}` discards it.
-- `GET /api/library/replication/peers` returns enrolled peers and their verified object
-  digests, plus contact results. `POST /api/library/replication/peers` with `{peer}` enrolls
+  discard removes the shared draft; `DELETE /api/library/drafts/{id}` discards it.
+- `GET /api/library/replication/peers` returns enrolled peers, their mesh approval
+  and contact results. `POST /api/library/replication/peers` with `{peer}` enrolls
   a stable peer ID; `DELETE /api/library/replication/peers/{id}` removes enrollment;
-  `POST /api/library/replication/sync` with `{peer}` syncs verified registry objects.
+  `POST /api/library/replication/sync` with `{peer}` pulls bounded shared-state pages.
   Replication is opt-in, requires Tailscale sharing, and both gateways must enroll each other.
 - The terminal grid is fixed to the host-reported `state.columns × state.rows`; browser
   resizing only changes its CSS scale.
@@ -145,10 +154,20 @@ waits up to 90 seconds, resets the emulator, and enables shared browser input af
 Antigravity desktop launcher presence cannot be launched or controlled remotely;
 detached desktop windows are not tracked.
 
+Settings → Diagnostics loads lazily. `GET /api/logs/issues?status=open|resolved|ignored`
+lists issues (`status=` includes all), and `GET /api/logs/issues/{fingerprint}`
+returns machine counts, the sample event and recent trace IDs. Resolve sends
+`POST /api/logs/issues/{fingerprint}/resolve` with `{version,note}`; reopen/ignore
+use the corresponding path suffix. `GET /api/logs/traces/{trace}` reads the full
+retained trace. These routes use the same gateway login/origin checks as Settings.
+The inline resolution form requires the fix version and reports success through
+the Hud. See [Diagnostics](../docs/src/guides/diagnostics.md) for recording and
+regression rules.
+
 The Library shows each module once; select a version in its inspector when several pins are saved. Sessions is the initial active view. Gateway menu → Appearance settings selects System, Light, or Dark for this browser across views and reloads; the terminal background, default text, cursor, and fallback ANSI palette follow the choice. Explicit RGB colors emitted by agents remain intact.
 
 Terminal attachment shows an accessible loading indicator until replay finishes. A socket that fails to complete replay within 30 seconds is closed and retried with the existing backoff. Session polling preserves the dimmed last frame throughout reconnect. The WebSocket handshake starts before emulator initialization and layout.
 
 Initial session discovery and empty Library fetches show loading states instead of premature empty results. Gateway/browser WebSockets use 15-second pings and a 45-second pong deadline so silently lost connections close and enter the normal reconnect flow.
 
-Loading states name the current operation. Limits discovers peers before probing, renders each machine's results as they arrive, and preserves prior reports during refresh. Library and Machines expose discovery/inventory progress; initial session errors are distinct from an empty list. Startup, recent folders, package reads, pending installs, and settings have loading/error states. Settings failures expose a retry action. Buttons for asynchronous actions show busy state and prevent duplicate clicks. Cursor reads its CLI login store (including the macOS keychain) and calls the read-only DashboardService usage RPC; its included, Auto, API, and on-demand percentages stay separate.
+Loading states name the current operation. Sessions and limits query the local replicated store once, including offline machines after reload. Offline chats retain history with an Offline, read-only banner and no composer; live request-answer controls stay disabled. Limits preserves prior reports during refresh. Library and Machines expose discovery/inventory progress; initial session errors are distinct from an empty list. Startup, recent folders, package reads, pending installs, and settings have loading/error states. Settings failures expose a retry action. Buttons for asynchronous actions show busy state and prevent duplicate clicks. Cursor reads its CLI login store (including the macOS keychain) and calls the read-only DashboardService usage RPC; its included, Auto, API, and on-demand percentages stay separate.

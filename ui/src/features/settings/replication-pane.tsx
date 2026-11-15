@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { useEventsConnected } from "@/features/events/use-events"
 import { replicationQuery } from "@/features/library/queries"
 import { nodesQuery } from "@/features/machines/queries"
-import type { PeerReplica, TailnetNode } from "@/lib/api-types"
+import type { PeerReplica, TailnetNode, ReplicationPeers } from "@/lib/api-types"
 import { useGatewayActions } from "./actions"
 import { replicationStatus } from "./model"
 import { LoadError } from "./panes"
@@ -16,7 +16,7 @@ import { settingsQuery } from "./queries"
 export function ReplicationPane() {
   const live = useEventsConnected()
   const settings = useQuery(settingsQuery)
-  const nodes = useQuery(nodesQuery(live))
+  const nodes = useQuery(nodesQuery(live, true))
   const replication = useQuery(replicationQuery)
   const failed = settings.error ?? nodes.error ?? replication.error
   if (failed) {
@@ -40,7 +40,7 @@ export function ReplicationPane() {
     <>
       <Banner>
         {sharing
-          ? "Your own machines enroll each other automatically and keep one library. A machine you remove stays out until you enroll it again."
+          ? "Enroll on both machines to sync accounts, chat history, limits and library data. Every mesh member is fully trusted. Only an owner can enroll or remove machines."
           : "Enable Tailscale sharing before enrolling a machine."}
       </Banner>
       <Section title="Machines">
@@ -72,11 +72,12 @@ function PeerRow({
 }: {
   peer: TailnetNode
   replica: PeerReplica | undefined
-  contact: { at: string; error?: string } | undefined
+  contact: ReplicationPeers["contacts"][string] | undefined
   sharing: boolean
 }) {
   const { enroll, sync, remove } = useGatewayActions()
   const [removing, setRemoving] = useState(false)
+  const [enrolling, setEnrolling] = useState(false)
   const usable = peer.online && sharing
   const busy = enroll.isPending || sync.isPending || remove.isPending
 
@@ -85,31 +86,42 @@ function PeerRow({
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium">{peer.name}</p>
         <p className="text-(length:--fs-sm) text-(--fg2)">{replicationStatus(peer, replica)}</p>
+        {contact?.needs_update && <p className="text-(length:--fs-sm) text-(--fg2)">Needs update</p>}
+        {contact?.last_sync && <p className="text-(length:--fs-xs) text-(--fg3)">{`Last sync ${new Date(contact.last_sync).toLocaleString()}`}</p>}
+        {contact?.schema_version ? <p className="text-(length:--fs-xs) text-(--fg3)">{`Schema ${contact.schema_version} · Lag ${contact.lag ?? "unknown"} versions`}</p> : null}
         {contact?.error ? (
           <p className="text-(length:--fs-sm) text-(--danger)">{contact.error}</p>
         ) : (
           contact?.at && <p className="text-(length:--fs-xs) text-(--fg3)">{`Last contact ${new Date(contact.at).toLocaleString()}`}</p>
         )}
       </div>
-      {replica ? (
+      {replica?.mesh ? (
         <>
           <Button disabled={!usable || busy} onClick={() => sync.mutate(peer)}>
             Sync now
           </Button>
-          <Button variant="ghost" disabled={!usable || busy} onClick={() => setRemoving(true)}>
+          <Button variant="ghost" disabled={busy} onClick={() => setRemoving(true)}>
             Remove
           </Button>
         </>
       ) : (
-        <Button disabled={!usable || busy} onClick={() => enroll.mutate(peer)}>
-          Enroll
+        <Button disabled={!usable || busy} onClick={() => setEnrolling(true)}>
+          {replica ? "Enable mesh sync" : "Enroll"}
         </Button>
       )}
+      <ConfirmAlert open={enrolling} onOpenChange={setEnrolling}>
+        {enrolling && <ConfirmAlertContent
+          title={`Trust ${peer.name} with this mesh?`}
+          description="This machine will receive password hashes, chat history and other shared state. Approve enrollment on the other machine too."
+          destructiveLabel="Trust and enroll"
+          onConfirm={() => { setEnrolling(false); enroll.mutate(peer) }}
+        />}
+      </ConfirmAlert>
       <ConfirmAlert open={removing} onOpenChange={setRemoving}>
         {removing && (
           <ConfirmAlertContent
             title={`Remove ${peer.name} from replication?`}
-            description={`Stops replicating library objects with ${peer.name}. Enroll it again to resume.`}
+            description={`Stops syncing accounts, history and library data with ${peer.name}. Previously replicated data remains on both machines.`}
             destructiveLabel="Remove"
             onConfirm={() => {
               setRemoving(false)

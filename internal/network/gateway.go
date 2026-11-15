@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,7 +24,14 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/gorilla/websocket"
+	"github.com/olegpustovit/agentpack/internal/state"
+
+	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
+
+// Error spools written before opening state are attributed by the local gateway.
+const localStateNode = "local"
 
 type GatewayOptions struct {
 	Home, Address, PublicURL string
@@ -33,6 +42,7 @@ type GatewayOptions struct {
 	Library                  LibraryOptions
 	Assets                   http.Handler
 	Version                  string
+	UIBuildID                string
 }
 
 type nodeRecord struct {
@@ -42,15 +52,18 @@ type nodeRecord struct {
 
 type Gateway struct {
 	options        GatewayOptions
+	store          *state.Store
+	logs           *obs.Store
 	auth           *gatewayAuth
 	mcp            *GatewayMCP
 	local          nodeRecord
 	origin         *url.URL
 	stop           context.CancelFunc
 	done           <-chan struct{}
-	replicaMu      sync.Mutex
 	replicaStatus  sync.Map
-	replicaSettled sync.Map // peer → inventories after the last exchange
+	statePulls     sync.Map // peer → coalesced pull notification
+	syncTransferMu sync.Mutex
+	syncTransfers  map[string]*stateTransferFile
 	identityMu     sync.Mutex
 	updateMu       sync.Mutex
 	updating       bool
@@ -63,11 +76,11 @@ type Gateway struct {
 // browserPingInterval keeps idle terminal connections alive through proxies. Tests shorten it.
 var browserPingInterval = 15 * time.Second
 
-func ServeGateway(ctx context.Context, options GatewayOptions) error {
+func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if options.Address == "" {
 		options.Address = "127.0.0.1:7420"
 	}
-	if err := EnsurePrivateDirectory(filepath.Join(options.Home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(options.Home, "network")); err != nil {
 		return err
 	}
 	lock := flock.New(filepath.Join(options.Home, "network", "gateway.lock"))
@@ -94,20 +107,52 @@ func ServeGateway(ctx context.Context, options GatewayOptions) error {
 	if origin.Scheme != "https" && origin.Hostname() != "127.0.0.1" && origin.Hostname() != "localhost" {
 		return errors.New("remote gateway requires HTTPS")
 	}
-	auth, err := newGatewayAuth(options.Home)
+	store, err := state.Open(options.Home)
 	if err != nil {
 		return err
 	}
+	defer func() { result = errors.Join(result, store.Close()) }()
+	if snapshot, err := tailnetSnapshot(ctx); err == nil {
+		if err := store.BindNode(ctx, snapshot.Self.ID); err != nil {
+			return err
+		}
+	}
+	nodeID, err := store.NodeID(context.Background())
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(options.Home, "network", "limits.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove legacy limits cache: %w", err)
+	}
+	auth, err := newGatewayAuth(options.Home, store, origin.Scheme == "https")
+	if err != nil {
+		return err
+	}
+	logs, err := obs.Open(options.Home, obs.StoreOptions{Metadata: obs.BuildMetadata(options.Version, nodeID, "gateway"), State: store})
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, logs.Close()) }()
+	restoreDiagnostics := obs.SetDefault(logs, obs.BuildMetadata(options.Version, nodeID, "gateway"))
+	defer restoreDiagnostics()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	gateway := &Gateway{options: options, auth: auth, local: nodeRecord{listener.Addr().String(), randomToken()}, origin: origin, stop: cancel, done: ctx.Done()}
+	gateway := &Gateway{options: options, store: store, logs: logs, auth: auth, local: nodeRecord{listener.Addr().String(), randomToken()}, origin: origin, stop: cancel, done: ctx.Done()}
+	defer func() { result = errors.Join(result, gateway.cleanStateTransfers(time.Time{})) }()
+	gateway.importLegacySessions(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
 	gateway.mcp, err = NewGatewayMCP(gateway)
 	if err != nil {
 		return err
 	}
-	defer gateway.mcp.Close()
-	go gateway.runTailnetSharing(ctx)
-	go gateway.runRegistryReplication(ctx)
+	var background sync.WaitGroup
+	for _, task := range []struct {
+		name string
+		run  func(context.Context)
+	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}} {
+		background.Add(1)
+		obs.Go(task.name, func() { defer background.Done(); task.run(ctx) })
+	}
+	defer func() { cancel(); background.Wait() }()
 	data, _ := json.Marshal(gateway.local)
 	record := filepath.Join(options.Home, "network", "node.json")
 	if err = os.WriteFile(record, data, 0600); err != nil {
@@ -131,12 +176,49 @@ func ServeGateway(ctx context.Context, options GatewayOptions) error {
 	}
 }
 
+func (g *Gateway) runLogSpool(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if _, err := g.logs.IngestSpool(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("diagnostic spool ingestion failed: %v", obs.Redact(err.Error()))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 func (g *Gateway) Handler() http.Handler {
+	nodeID, nodeErr := g.auth.store.NodeID(context.Background())
+	if nodeErr != nil {
+		log.Printf("gateway node identity unavailable: %v", nodeErr)
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "gateway state unavailable", http.StatusServiceUnavailable)
+		})
+	}
 	mux := http.NewServeMux()
+	buildID := g.options.UIBuildID
+	if buildID == "" {
+		files, _ := fs.Sub(webDist, "webdist")
+		buildID = uiBuildID(files)
+	}
+	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]string{"ui_build_id": buildID})
+	})
 	g.registerSettings(mux)
 	g.registerLibrary(mux)
 	g.registerRegistryReplication(mux)
+	g.registerStateSync(mux)
+	mux.HandleFunc("GET /api/cache/{cache_key}", g.serveCache)
 	g.registerLimits(mux)
+	g.registerDiagnostics(mux)
+	mux.HandleFunc("POST /api/telemetry", g.telemetry)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, map[string]bool{"ok": true}) })
 	mux.HandleFunc("GET /api/status", g.auth.status)
 	mux.HandleFunc("GET /api/identity", g.identity)
@@ -181,20 +263,37 @@ func (g *Gateway) Handler() http.Handler {
 		}()
 		writeJSON(w, map[string]bool{"started": true})
 	})
-	mux.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) { g.auth.login(w, r, true, g.origin.Scheme == "https") })
-	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) { g.auth.login(w, r, false, g.origin.Scheme == "https") })
+	mux.HandleFunc("POST /api/claim", g.auth.claim)
+	mux.HandleFunc("POST /api/login", g.auth.login)
 	mux.HandleFunc("POST /api/logout", g.auth.logout)
+	mux.HandleFunc("POST /api/logout-all", g.auth.logoutAll)
 	mux.HandleFunc("GET /api/events", g.serveEvents)
 	mux.HandleFunc("GET /api/nodes", func(w http.ResponseWriter, r *http.Request) {
-		value, err := TailnetNodes(r.Context(), g.options.Home)
-		respond(w, value, err)
+		if r.URL.Query().Get("discover") == "1" {
+			value, err := g.tailnetNodes(r.Context())
+			respond(w, value, err)
+			return
+		}
+		value, err := g.meshNodes(r.Context(), nil)
+		if err != nil {
+			meshReadError(w, r, err)
+			return
+		}
+		respond(w, value, nil)
 	})
 	mux.HandleFunc("GET /api/topology", func(w http.ResponseWriter, r *http.Request) {
-		value, err := tailnetTopology(r.Context(), g.options.Home)
+		value, err := g.tailnetTopology(r.Context())
 		respond(w, value, err)
 	})
+	mux.HandleFunc("POST /api/local/sessions/{id}/presence", g.servePresence)
+	mux.HandleFunc("DELETE /api/local/sessions/{id}/presence", g.servePresence)
+
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
-		value, err := Sessions(r.Context(), g.options.Home)
+		value, err := g.meshSessions(r.Context(), r.URL.Query().Get("node"))
+		if err != nil {
+			meshReadError(w, r, err)
+			return
+		}
 		if err == nil {
 			for i := range value {
 				value[i] = publicSession(value[i])
@@ -203,7 +302,11 @@ func (g *Gateway) Handler() http.Handler {
 		respond(w, value, err)
 	})
 	mux.HandleFunc("GET /api/recent", func(w http.ResponseWriter, r *http.Request) {
-		value, err := RecentFolders(g.options.Home)
+		value, err := g.meshRecent(r.Context(), r.URL.Query().Get("node"))
+		if err != nil {
+			meshReadError(w, r, err)
+			return
+		}
 		respond(w, value, err)
 	})
 	mux.HandleFunc("DELETE /api/recent", func(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +337,7 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		actor, ok := actorFrom(r.Context())
 		if !ok {
-			actor = browserActor()
+			actor = browserActor(g.auth.email(r))
 		}
 		info, err := g.startSession(r.Context(), actor, SessionInfo{
 			Directory: input.Directory, Harness: input.Harness, Mode: input.Mode,
@@ -243,7 +346,7 @@ func (g *Gateway) Handler() http.Handler {
 		writeSessionStart(w, info, err)
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/fork", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -257,7 +360,7 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		actor, ok := actorFrom(r.Context())
 		if !ok {
-			actor = browserActor()
+			actor = browserActor(g.auth.email(r))
 		}
 		info, err := g.startSession(r.Context(), actor, SessionInfo{
 			Directory: record.Session.Directory,
@@ -335,16 +438,9 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		g.terminalData(w, r)
 	})
-	mux.HandleFunc("GET /api/sessions/{id}/conversation", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusNotFound)
-			return
-		}
-		proxyWorkerConversation(w, r, record, "")
-	})
+	mux.HandleFunc("GET /api/sessions/{id}/conversation", g.serveConversation)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -355,7 +451,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/prompt")
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -366,7 +462,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/prompt/images")
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/permission", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -377,7 +473,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/permission")
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/cancel", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -388,7 +484,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/cancel")
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/elicitation", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -399,7 +495,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/elicitation")
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/config", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -410,7 +506,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/config")
 	})
 	mux.HandleFunc("GET /api/sessions/{id}/conversation/config-options", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -418,7 +514,7 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/config-options")
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/blobs", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
@@ -428,29 +524,7 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		proxyWorkerConversation(w, r, record, "/blobs")
 	})
-	mux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}", func(w http.ResponseWriter, r *http.Request) {
-		record, err := workerRecord(g.options.Home, r.PathValue("id"))
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusNotFound)
-			return
-		}
-		path := "/blobs/" + r.PathValue("sha")
-		request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, "http://"+record.Address+path, nil)
-		if err != nil {
-			http.Error(w, "invalid blob request", http.StatusBadRequest)
-			return
-		}
-		request.Header.Set("Authorization", "Bearer "+record.Secret)
-		client := http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: nil}}
-		defer client.CloseIdleConnections()
-		response, err := client.Do(request)
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusBadGateway)
-			return
-		}
-		defer response.Body.Close()
-		proxySessionBlob(w, response)
-	})
+	mux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}", g.serveBlob)
 	mux.HandleFunc("GET /api/packages", func(w http.ResponseWriter, r *http.Request) {
 		directory := r.URL.Query().Get("directory")
 		if !g.knownDirectory(directory) {
@@ -493,7 +567,7 @@ func (g *Gateway) Handler() http.Handler {
 		if err == nil {
 			actor, ok := actorFrom(r.Context())
 			if !ok {
-				actor = browserActor()
+				actor = browserActor(g.auth.email(r))
 			}
 			for _, session := range sessions {
 				if session.Transport == "acp" && !actor.canWriteSession(session) {
@@ -514,7 +588,8 @@ func (g *Gateway) Handler() http.Handler {
 		mux.Handle("/", g.options.Assets)
 	}
 	api := conditionalAPI(mux)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	secured := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(WithPeerCache(r.Context(), g.options.Home))
 		if p := r.URL.Path; strings.HasPrefix(p, "/api/") || isMCPPath(p) {
 			w.Header().Set("Cache-Control", "no-store")
 		}
@@ -525,6 +600,29 @@ func (g *Gateway) Handler() http.Handler {
 		if !local && r.Host != g.origin.Host {
 			http.Error(w, "unrecognized gateway host", 403)
 			return
+		}
+		claimed, err := g.auth.claimed(r.Context())
+		if err != nil {
+			authFailure(w, r, "account state unavailable", err)
+			return
+		}
+		if peer, _ := r.Context().Value(replicaPeerKey{}).(string); peer != "" {
+			var hasAccounts bool
+			if err := g.auth.store.Reader.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM users)").Scan(&hasAccounts); err != nil {
+				authFailure(w, r, "account state unavailable", err)
+				return
+			}
+			if !hasAccounts && (!g.meshPeer(r.Context(), peer) || !(r.Method == http.MethodGet && (r.URL.Path == "/api/sync/changes" || r.URL.Path == "/api/sync/events" || r.URL.Path == "/api/events"))) {
+				http.Error(w, "waiting for mesh accounts", http.StatusForbidden)
+				return
+			}
+		}
+		if !claimed && !local {
+			allowed := (r.Method == "GET" || r.Method == "HEAD") && (r.URL.Path == "/healthz" || r.URL.Path == "/api/status" || !strings.HasPrefix(r.URL.Path, "/api/") && !isMCPPath(r.URL.Path)) || r.Method == "POST" && r.URL.Path == "/api/claim"
+			if !allowed {
+				http.Error(w, "unclaimed", http.StatusForbidden)
+				return
+			}
 		}
 		if g.mcp != nil && isMCPPath(r.URL.Path) {
 			g.mcp.ServeHTTP(w, r)
@@ -539,9 +637,40 @@ func (g *Gateway) Handler() http.Handler {
 			http.Error(w, "origin required", 403)
 			return
 		}
-		public := r.URL.Path == "/healthz" || r.URL.Path == "/api/status" || r.URL.Path == "/api/setup" || r.URL.Path == "/api/login" || !strings.HasPrefix(r.URL.Path, "/api/")
-		if !public && !local && !g.auth.authenticated(r) {
+		public := r.URL.Path == "/healthz" || r.URL.Path == "/api/config" || r.URL.Path == "/api/status" || r.URL.Path == "/api/claim" || r.URL.Path == "/api/login" || !strings.HasPrefix(r.URL.Path, "/api/")
+		email := ""
+		if !local {
+			email = g.auth.email(r)
+		}
+		if !public && !local && email == "" {
 			http.Error(w, "login required", 401)
+			return
+		}
+		if _, known := actorFrom(r.Context()); !known {
+			if local {
+				actor, err := g.localActor(r.Context())
+				if errors.Is(err, errLocalAccountUnavailable) {
+					http.Error(w, err.Error(), http.StatusForbidden)
+					return
+				}
+				if err != nil {
+					authFailure(w, r, "local account unavailable", err)
+					return
+				}
+				r = r.WithContext(withActor(r.Context(), actor))
+			} else if email != "" {
+				r = r.WithContext(withActor(r.Context(), browserActor(email)))
+			}
+		}
+
+		if handled, err := g.routeMeshRequest(w, r); err != nil {
+			meshReadError(w, r, err)
+			return
+		} else if handled {
+			return
+		}
+		if r.Method == http.MethodGet && meshListRoute(r.URL.Path) && (r.URL.Query().Get("node") == "" || g.meshPeer(r.Context(), r.URL.Query().Get("node"))) {
+			api.ServeHTTP(w, r)
 			return
 		}
 		if nodeID := r.URL.Query().Get("node"); nodeID != "" && strings.HasPrefix(r.URL.Path, "/api/") {
@@ -549,12 +678,13 @@ func (g *Gateway) Handler() http.Handler {
 			g.proxyTailnet(w, r, nodeID)
 			return
 		}
-		if _, known := actorFrom(r.Context()); local && !known {
-			// The node secret is only on this machine: the hub and CLI act as its OS user, not as the browser account.
-			r = r.WithContext(withActor(r.Context(), LocalActor("local")))
-		}
 		api.ServeHTTP(w, r)
 	})
+	var sink obs.Sink
+	if g.logs != nil {
+		sink = g.logs
+	}
+	return observeHTTP(mux, secured, sink, obs.BuildMetadata(g.options.Version, nodeID, "gateway"))
 }
 
 func publicSession(info SessionInfo) SessionInfo {
@@ -575,6 +705,10 @@ func respond(w http.ResponseWriter, value any, err error) {
 	writeJSON(w, value)
 }
 func writeSessionStart(w http.ResponseWriter, info SessionInfo, err error) {
+	if errors.Is(err, errSessionArchived) {
+		http.Error(w, "archived", http.StatusConflict)
+		return
+	}
 	if errors.Is(err, errACPResumeDenied) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
@@ -586,12 +720,16 @@ func writeSessionStart(w http.ResponseWriter, info SessionInfo, err error) {
 	respond(w, publicSession(info), err)
 }
 func authorizeACPWrite(w http.ResponseWriter, r *http.Request, session SessionInfo) bool {
+	if !session.ArchivedAt.IsZero() {
+		http.Error(w, "archived", http.StatusConflict)
+		return false
+	}
 	if session.Transport != "acp" {
 		return true
 	}
 	actor, ok := actorFrom(r.Context())
 	if !ok {
-		actor = browserActor()
+		actor = browserActor("")
 	}
 	if actor.canWriteSession(session) {
 		return true
@@ -601,18 +739,24 @@ func authorizeACPWrite(w http.ResponseWriter, r *http.Request, session SessionIn
 }
 
 func (g *Gateway) authorizeACPWriteByID(w http.ResponseWriter, r *http.Request, id string) bool {
-	record, err := workerRecord(g.options.Home, id)
-	if err != nil || record.Session.Transport != "acp" {
-		return true
+	info, err := storedSession(r.Context(), g.auth.store.Reader, id)
+	if errors.Is(err, errSessionNotFound) {
+		record, recordErr := g.workerRecord(r.Context(), id)
+		if recordErr != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return false
+		}
+		info, err = record.Session, nil
 	}
-	return authorizeACPWrite(w, r, record.Session)
+	if err != nil {
+		http.Error(w, "session metadata unavailable", http.StatusInternalServerError)
+		return false
+	}
+	return authorizeACPWrite(w, r, info)
 }
 
 // startSession records the actor that started the session, then starts its worker.
 func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInfo, forkSessionID string) (SessionInfo, error) {
-	if !g.knownDirectory(info.Directory) {
-		return SessionInfo{}, errors.New("choose a recent folder from this node")
-	}
 	source := info
 	if forkSessionID != "" {
 		if info.Transport != "acp" || info.AgentSessionID != "" {
@@ -620,9 +764,21 @@ func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInf
 		}
 		source.AgentSessionID = forkSessionID
 	}
-	if err := authorizeACPResume(g.options.Home, actor, source); err != nil {
+	if err := authorizeACPResume(ctx, g.auth.store, actor, source); err != nil {
 		return SessionInfo{}, err
 	}
+	if !g.knownDirectory(info.Directory) {
+		return SessionInfo{}, errors.New("choose a recent folder from this node")
+	}
+	local, err := g.auth.store.NodeID(ctx)
+	if err != nil {
+		return SessionInfo{}, err
+	}
+	info.NodeID = local
+	info.Reachable = true
+	info.LastSync = time.Time{}
+	info.EndedAt = time.Time{}
+	info.ArchivedAt = time.Time{}
 	info.StartedBy = &actor
 	id, err := g.options.Start(ctx, info, forkSessionID)
 	info.ID = id
@@ -647,6 +803,16 @@ func (g *Gateway) knownDirectory(directory string) bool {
 }
 
 func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("directory") == "" || r.URL.Query().Get("node") != "" {
+		sessions, err := g.meshAgentSessions(r.Context(), r.URL.Query().Get("node"), r.URL.Query().Get("directory"), r.URL.Query().Get("harness"))
+		if err != nil {
+			meshReadError(w, r, err)
+			return
+		}
+		writeJSON(w, map[string]any{"sessions": sessions})
+		return
+	}
+
 	directory := r.URL.Query().Get("directory")
 	harness := r.URL.Query().Get("harness")
 	if !g.knownDirectory(directory) || harness == "" {
@@ -672,11 +838,32 @@ func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
 		respond(w, nil, err)
 		return
 	}
+	local, err := g.auth.store.NodeID(r.Context())
+	if err != nil {
+		meshReadError(w, r, err)
+		return
+	}
+	folderID, err := FolderIdentity(directory)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	archived, err := archivedNativeIDs(r.Context(), g.auth.store, folderID, harness)
+	if err != nil {
+		meshReadError(w, r, err)
+		return
+	}
+	sessions = slices.Clone(sessions)
+	sessions = slices.DeleteFunc(sessions, func(session AgentSession) bool { return archived[session.ID] })
+	for i := range sessions {
+		sessions[i].NodeID = local
+		sessions[i].Reachable = true
+	}
 	writeJSON(w, map[string]any{"sessions": sessions})
 }
 
 func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
-	record, err := workerRecord(g.options.Home, r.PathValue("id"))
+	record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "session unavailable", 404)
 		return
@@ -831,7 +1018,7 @@ func EnsureNode(ctx context.Context, home, executable string) error {
 	if _, err := NodeRequest(ctx, home, "GET", "/healthz"); err == nil {
 		return nil
 	}
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		return err
 	}
 	log, err := os.OpenFile(filepath.Join(home, "network", "gateway.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)

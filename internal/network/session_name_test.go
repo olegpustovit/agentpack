@@ -37,8 +37,13 @@ func TestSessionNameRoutePersistsWithoutChangingWorkerIdentity(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workerDirectory, "worker.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
+		t.Fatal(err)
+	}
+	info := record.Session
+	info.ID = id
+	if err := upsertSession(t.Context(), auth.store.DB, info); err != nil {
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")

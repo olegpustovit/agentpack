@@ -11,6 +11,8 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/fang"
 	"github.com/olegpustovit/agentpack/internal/hub"
+	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -19,6 +21,8 @@ import (
 // presentation. Runner.Run remains the behavior boundary; the command model
 // owns discovery, contextual help, completion, version, and error rendering.
 func (runner Runner) Execute(ctx context.Context, arguments []string) (int, error) {
+	ctx = obs.ProcessTrace(ctx)
+	ctx = network.WithPeerCache(ctx, "")
 	if len(arguments) == 1 && arguments[0] == "-V" {
 		arguments = slices.Clone(arguments)
 		arguments[0] = "--version"
@@ -32,6 +36,9 @@ func (runner Runner) Execute(ctx context.Context, arguments []string) (int, erro
 	err := fang.Execute(ctx, root, fang.WithVersion(Version), fang.WithoutManpage(), fang.WithColorSchemeFunc(monochromeColorScheme))
 	if err != nil && exitCode == 0 {
 		exitCode = 2
+	}
+	if err != nil || exitCode != 0 {
+		runner.recordFailure(ctx, root, arguments, exitCode, err)
 	}
 	return exitCode, err
 }
@@ -159,6 +166,7 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	supportCmd.AddCommand(supportExport)
 
 	root.AddCommand(init, lock, add, remove, update, list, syncCommand, preflight, probe, configCmd, supportCmd)
+	root.AddCommand(runner.logsCommand())
 	worker := leaf("session-worker", "Own a private agent terminal session")
 	worker.Hidden = true
 	signal := leaf("session-signal PID", "Signal a private Windows agent console")
@@ -176,13 +184,36 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 		sharing.AddCommand(leaf(action, "Tailnet sharing "+action))
 	}
 	gateway.AddCommand(sharing)
-	for _, action := range []string{"start", "stop", "status", "setup", "stop-agents", "serve"} {
+	for _, action := range []string{"start", "stop", "status", "stop-agents", "serve", "passwd EMAIL", "whoami EMAIL", "join NODE", "reset-owner"} {
 		command := leaf(action, "Gateway "+action)
 		if action == "serve" {
 			value(command, "listen", "ADDRESS", "listen address (default 127.0.0.1:7420)")
 		}
 		gateway.AddCommand(command)
 	}
+	mainGateway := leaf("main", "Show the main gateway and archive readiness")
+	mainGateway.AddCommand(leaf("set", "Make this machine the main gateway"))
+	archiveReady := leaf("archive-ready", "Confirm this main gateway has its archive")
+	flag(archiveReady, "empty", "", "create a fresh empty archive when none exists")
+	mainGateway.AddCommand(archiveReady)
+	gateway.AddCommand(mainGateway)
+	users := &cobra.Command{Use: "user", Short: "Manage gateway accounts offline"}
+	users.RunE = func(command *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return command.Help()
+		}
+		return errors.New("unknown gateway user command")
+	}
+	gateway.RunE = func(command *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return command.Help()
+		}
+		return errors.New("unknown gateway command")
+	}
+	for _, action := range []string{"add EMAIL", "list", "disable EMAIL"} {
+		users.AddCommand(leaf(action, "Gateway user "+action))
+	}
+	gateway.AddCommand(users)
 	deploy := leaf("deploy", "Deploy the public gateway to oracle-vm")
 	value(deploy, "binary", "PATH", "prebuilt Linux ARM64 agentpack binary")
 	flag(deploy, "dry-run", "", "validate and show deployment without changing the VM")
@@ -268,6 +299,12 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	mcpExec := leaf("mcp-exec", "Internal: start an MCP server from its locked npm tree")
 	mcpExec.Hidden = true
 	root.AddCommand(mcpExec)
+	root.AddCommand(&cobra.Command{
+		Use:    "state-selfcheck",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE:   runStateSelfcheck,
+	})
 	return root
 }
 

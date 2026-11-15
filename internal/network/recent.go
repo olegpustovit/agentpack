@@ -1,26 +1,27 @@
 package network
 
 import (
-	"encoding/json"
-	"os"
+	"context"
 	"path/filepath"
-	"slices"
-	"time"
 
-	"github.com/gofrs/flock"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func Recent(home string) ([]SessionInfo, error) {
-	data, err := os.ReadFile(filepath.Join(home, "network", "recent.json"))
-	if os.IsNotExist(err) {
-		return []SessionInfo{}, nil
-	}
+	store, err := state.Open(home)
 	if err != nil {
 		return nil, err
 	}
-	var recent []SessionInfo
-	err = json.Unmarshal(data, &recent)
-	return recent, err
+	defer store.Close()
+	entries, err := querySessions(context.Background(), store.Reader, `SELECT `+sessionColumns+` FROM (
+        SELECT *,row_number() OVER (PARTITION BY directory,harness,mode ORDER BY last_used DESC,id DESC) AS rank
+        FROM sessions WHERE node_id=`+state.LocalNodeSQL+` AND hidden=0 AND directory<>''
+    ) WHERE rank=1 ORDER BY last_used DESC,id DESC LIMIT 100`)
+	for i := range entries {
+		entries[i].ID = ""
+		entries[i].State = TerminalState{}
+	}
+	return entries, err
 }
 
 type RecentFolder struct {
@@ -52,53 +53,14 @@ func RecentFolders(home string) ([]RecentFolder, error) {
 	return folders, nil
 }
 
-func remember(home string, info SessionInfo) error { return updateRecent(home, info, false) }
-
-func ForgetRecent(home string, info SessionInfo) error { return updateRecent(home, info, true) }
-
-func updateRecent(home string, info SessionInfo, forget bool) error {
-	info.Directory = filepath.Clean(info.Directory)
-	if !forget {
-		var err error
-		info.LastUsed = time.Now().UTC()
-		info.FolderID, err = FolderIdentity(info.Directory)
-		if err != nil {
-			return err
-		}
-	}
-	lock := flock.New(filepath.Join(home, "network", "recent.lock"))
-	if err := lock.Lock(); err != nil {
-		return err
-	}
-	defer lock.Unlock()
-	recent, err := Recent(home)
+func ForgetRecent(home string, info SessionInfo) error {
+	store, err := state.Open(home)
 	if err != nil {
 		return err
 	}
-	recent = slices.DeleteFunc(recent, func(old SessionInfo) bool {
-		if filepath.Clean(old.Directory) != info.Directory {
-			return false
-		}
-		if forget {
-			return (info.Harness == "" || old.Harness == info.Harness) && (info.Mode == "" || old.Mode == info.Mode)
-		}
-		return old.Harness == info.Harness && old.Mode == info.Mode
-	})
-	info.ID = ""
-	info.State = TerminalState{}
-	if !forget {
-		recent = append([]SessionInfo{info}, recent...)
-	}
-	if len(recent) > 100 {
-		recent = recent[:100]
-	}
-	data, err := json.Marshal(recent)
-	if err != nil {
-		return err
-	}
-	name := filepath.Join(home, "network", "recent.tmp")
-	if err = os.WriteFile(name, data, 0600); err != nil {
-		return err
-	}
-	return os.Rename(name, filepath.Join(home, "network", "recent.json"))
+	defer store.Close()
+	_, err = store.DB.Exec(`UPDATE sessions SET hidden=1 WHERE node_id=`+state.LocalNodeSQL+` AND directory=?
+        AND (?='' OR harness=?) AND (?='' OR mode=?)`,
+		filepath.Clean(info.Directory), info.Harness, info.Harness, info.Mode, info.Mode)
+	return err
 }

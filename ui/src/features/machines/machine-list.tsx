@@ -1,5 +1,6 @@
 import { Link, useMatchRoute, useNavigate, useSearch } from "@tanstack/react-router"
 import { useQuery } from "@tanstack/react-query"
+import { Badge } from "@/components/ui/badge"
 import { Network } from "lucide-react"
 import { GroupHeader, SearchField, SourceList, SourceRow } from "@/components/kit/list"
 import { StatusGlyph } from "@/components/kit/status-dot"
@@ -7,9 +8,9 @@ import { sessionsQuery, projectsQuery } from "@/features/sessions/queries"
 import { StatusSlot } from "@/features/status/status-bar"
 import { LOCAL } from "@/lib/api"
 import { plural } from "@/lib/format"
-import { compareAgentpackVersions, latestAgentpackVersionQuery, topologyQuery, useDiscovering, useMachineQueries, useMachines, type Machine, type MachineQuery } from "./queries"
+import { compareAgentpackVersions, latestAgentpackVersionQuery, topologyQuery, useDiscovering, useMachineQueries, useReplicatedQueries, useMachines, type Machine, type MachineQuery } from "./queries"
 
-function MachineRow({ machine, sessions, needsUpdate }: { machine: Machine; sessions?: number; needsUpdate?: boolean }) {
+export function MachineRow({ machine, sessions, needsUpdate }: { machine: Machine; sessions?: number; needsUpdate?: boolean }) {
   const matchRoute = useMatchRoute()
   const selected = matchRoute({ to: "/machines/$machine", params: { machine: machine.id } })
   return (
@@ -19,6 +20,7 @@ function MachineRow({ machine, sessions, needsUpdate }: { machine: Machine; sess
     >
       <StatusGlyph state={!machine.online ? "offline" : needsUpdate ? "needsUpdate" : "running"} />
       <span className="min-w-0 flex-1 truncate">{machine.name}</span>
+      {machine.main && <Badge variant="secondary">Main</Badge>}
       <span className="shrink-0 text-(length:--fs-sm) text-(--fg3) sel:text-(--accent-fg)">
         {!machine.online ? "Offline" : needsUpdate ? "Needs update" : machine.id === LOCAL ? "gateway" : sessions}
       </span>
@@ -34,7 +36,7 @@ export function MachineList() {
   const latest = useQuery(latestAgentpackVersionQuery).data
   const versions = useQuery(topologyQuery(false)).data
   const projects = useMachineQueries(projectsQuery)
-  const sessions = useMachineQueries(sessionsQuery)
+  const sessions = useReplicatedQueries(sessionsQuery)
   const matchRoute = useMatchRoute()
   const topology = matchRoute({ to: "/machines/topology" })
   const discovering = useDiscovering()

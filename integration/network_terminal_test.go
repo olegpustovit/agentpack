@@ -71,7 +71,7 @@ func TestCompiledCLISharedTerminalSurvivesGatewayAndRestart(t *testing.T) {
 		for _, session := range sessions {
 			_ = network.StopWorker(ctx, home, session.ID)
 		}
-		_, _ = network.NodeRequest(ctx, home, "POST", "/api/node/stop")
+		stopTestGateway(t, home)
 		_ = command.Process.Kill()
 		terminal.Close()
 	})

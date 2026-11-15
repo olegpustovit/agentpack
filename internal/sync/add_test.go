@@ -103,3 +103,33 @@ func writeSyncFile(t *testing.T, path, body string) {
 		t.Fatal(err)
 	}
 }
+
+func BenchmarkCachedAdd(b *testing.B) {
+	b.Setenv("AGENTPACK_HOME", b.TempDir())
+	cwd := b.TempDir()
+	key := strings.Repeat("a", 64)
+	root, err := cache.EntryDir(key)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		b.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "SKILL.md"), []byte("# Cached skill"), 0600); err != nil {
+		b.Fatal(err)
+	}
+	if err := cache.UpsertEntry(key, cache.EntryRecord{Kind: lockfile.PackageSkill, Owner: "owner", Repo: "repo", Path: "skill", Commit: strings.Repeat("c", 40)}, []string{"owner/repo/skill"}); err != nil {
+		b.Fatal(err)
+	}
+	resolver := AddResolver{Materialize: func(context.Context, *http.Client, githubsource.Source, string, bool) (lockfile.Package, error) {
+		b.Fatal("cached add contacted GitHub")
+		return lockfile.Package{}, nil
+	}}
+	b.ResetTimer()
+	for range b.N {
+		resolved, err := resolver.Resolve(b.Context(), cwd, "owner/repo/skill")
+		if err != nil || resolved.Package.CacheKey != key {
+			b.Fatalf("cached add: %+v %v", resolved, err)
+		}
+	}
+}

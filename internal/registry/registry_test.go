@@ -37,6 +37,11 @@ func TestCaptureRedactsAndRestoresLocalBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	pack, first, err := store.Capture(CaptureInput{Name: "Starter", Project: "/workspace/demo", Manifest: []byte(manifestTemplate), Lock: lockWithCommit("abc123")})
 	if err != nil {
 		t.Fatal(err)
@@ -52,19 +57,17 @@ func TestCaptureRedactsAndRestoresLocalBindings(t *testing.T) {
 			t.Fatalf("snapshot retained %q", secret)
 		}
 	}
-	objects, err := os.ReadDir(filepath.Join(store.root, objectsDir))
+	changes, _, err := store.sql.Changes(t.Context(), 0, nil, 4<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, object := range objects {
-		data, err := os.ReadFile(filepath.Join(store.root, objectsDir, object.Name()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, secret := range []string{"env-secret", "arg-secret", "url-secret", "header-secret", "user:pass", "ghp_123"} {
-			if strings.Contains(string(data), secret) {
-				t.Fatalf("immutable object retained %q", secret)
-			}
+	data, err := json.Marshal(changes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"env-secret", "arg-secret", "url-secret", "header-secret", "user:pass", "ghp_123"} {
+		if strings.Contains(string(data), secret) {
+			t.Fatalf("replicated rows retained %q", secret)
 		}
 	}
 	if _, _, err := store.Get(pack.ID); err != nil {
@@ -89,6 +92,11 @@ func TestCaptureRedactsSplitCredentialFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	for _, flag := range []string{"--client-secret", "--credential", "--passwd", "--client_secret"} {
 		secret := "raw-secret-for-" + strings.TrimLeft(flag, "-")
 		manifest := []byte("name = \"demo\"\n[mcp.servers.local]\ncommand = \"run\"\nargs = [\"" + flag + "\", \"" + secret + "\"]\n")
@@ -124,6 +132,11 @@ func TestCaptureRejectsUnknownLockFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	for _, lock := range [][]byte{
 		[]byte(strings.Replace(string(lockWithCommit("abc123")), "[meta]", "unsupported = true\n[meta]", 1)),
 		[]byte(strings.Replace(string(lockWithCommit("abc123")), "kind = \"skill\"", "kind = \"skill\"\nunsupported = true", 1)),
@@ -140,12 +153,17 @@ func TestCaptureParentageDiffAndIndexRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	input := CaptureInput{Name: "First Name", Project: "/workspace/demo", Manifest: []byte("name = \"demo\"\n"), Lock: lockWithCommit("abc123")}
 	pack, first, err := store.Capture(input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldIndex, err := os.ReadFile(filepath.Join(store.root, indexName))
+	oldIndex, err := store.readIndex()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +175,7 @@ func TestCaptureParentageDiffAndIndexRebuild(t *testing.T) {
 	if len(pack.Revisions) != 2 || len(second.ParentIDs) != 1 || second.ParentIDs[0] != first.ID {
 		t.Fatalf("revision parentage: %#v", second)
 	}
-	if err := os.WriteFile(filepath.Join(store.root, indexName), oldIndex, 0o600); err != nil {
+	if err := store.writeMetadata(oldIndex.Agentpacks[pack.ID]); err != nil {
 		t.Fatal(err)
 	}
 	diff, err := store.Diff(first.ID, second.ID)
@@ -174,6 +192,11 @@ func TestCaptureParentageDiffAndIndexRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	packs, err := reopened.ListAgentpacks()
 	if err != nil {
 		t.Fatal(err)
@@ -192,6 +215,11 @@ func TestDiffTracksContentHashAndPreviewAddsIntoEmptyFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	firstLock := lockWithCommit("abc123")
 	secondLock := []byte(strings.Replace(string(firstLock), strings.Repeat("a", 64), strings.Repeat("b", 64), 1))
 	pack, first, err := store.Capture(CaptureInput{Name: "Hashes", Project: "/workspace/hashes", Manifest: []byte("name = \"hashes\"\n"), Lock: firstLock})
@@ -244,6 +272,11 @@ func TestCaptureDeduplicatesAndProjectSettingControlsCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	pack, first, err := store.Capture(CaptureInput{Name: "Demo", Project: project, Manifest: []byte("name = \"demo\"\n"), Lock: lockWithCommit("abc123"), Mode: "default"})
 	if err != nil {
 		t.Fatal(err)
@@ -272,6 +305,11 @@ func TestRestoreRollsBackBothFilesWhenApplyFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	pack, revision, err := store.Capture(CaptureInput{Name: "Snapshot", Project: project, Manifest: []byte("name = \"saved\"\n"), Lock: lockWithCommit("abc123")})
 	if err != nil {
 		t.Fatal(err)
@@ -307,6 +345,11 @@ func TestRecoverInterruptedRestoreAndPreserveFileModes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	manifestPath, lockPath := filepath.Join(project, "agentpack.toml"), filepath.Join(project, "pack.lock")
 	oldManifest, oldLock := []byte("name = \"before\"\n"), lockWithCommit("old123")
 	originalModes := make(map[string]os.FileMode, 2)
@@ -371,6 +414,11 @@ func TestRecoverRejectsIncompleteJournalWithoutChangingFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	manifestPath := filepath.Join(project, "agentpack.toml")
 	before := []byte("name = \"mixed\"\n")
 	if err := os.WriteFile(manifestPath, before, 0o600); err != nil {
@@ -399,6 +447,11 @@ func TestPendingRestoreIsReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	pending, err := PendingRestore(home, project)
 	if err != nil || pending {
 		t.Fatalf("unexpected pending restore: %v %v", pending, err)
@@ -439,12 +492,16 @@ func TestReadRejectsCorruptObjectAndDisabledCaptureDoesNotCreateRegistry(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	pack, revision, err := store.Capture(CaptureInput{Name: "One", Project: "/workspace/one", Manifest: []byte("name = \"one\"\n"), Lock: lockWithCommit("abc123")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(store.root, objectsDir, revision.ID+".json")
-	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+	if _, err := store.sql.DB.Exec("UPDATE registry_objects SET body='{}' WHERE digest=?", revision.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.Get(pack.ID); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
@@ -457,12 +514,16 @@ func TestRestoreWithoutLocalBindingsRequiresConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	_, revision, err := store.Capture(CaptureInput{Name: "Secret", Project: "/workspace/secret", Manifest: []byte(manifestTemplate), Lock: lockWithCommit("abc123")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	bindingPath := filepath.Join(store.root, bindingsDir, revision.ID+".json")
-	data, err := os.ReadFile(bindingPath)
+	data, _, err := store.readBindings(revision.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +539,7 @@ func TestRestoreWithoutLocalBindingsRequiresConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(bindingPath, data, 0o600); err != nil {
+	if _, err := store.sql.DB.Exec("UPDATE registry_bindings SET body=? WHERE revision_id=?", string(data), revision.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.restoreBytes(revision); err == nil || !strings.Contains(err.Error(), "needs local configuration") {
@@ -506,11 +567,16 @@ func TestValidateSnapshotLeavesNothingInTemp(t *testing.T) {
 	}
 }
 
-func TestValidatedObjectsAreReusedUntilTheirFileChanges(t *testing.T) {
+func TestValidatedObjectsAreReusedUntilTheirRowChanges(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	_, revision, err := store.Capture(CaptureInput{Name: "Starter", Project: "/workspace/demo", Manifest: []byte(manifestTemplate), Lock: lockWithCommit("abc123")})
 	if err != nil {
 		t.Fatal(err)
@@ -518,11 +584,14 @@ func TestValidatedObjectsAreReusedUntilTheirFileChanges(t *testing.T) {
 	if _, err := store.readRevision(revision.ID); err != nil {
 		t.Fatal(err)
 	}
-	path, err := store.objectPath(revision.ID)
-	if err != nil {
-		t.Fatal(err)
+	missing := filepath.Join(t.TempDir(), "missing")
+	for _, name := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(name, missing)
 	}
-	if err := os.WriteFile(path, []byte(`{"tampered":true}`), 0o600); err != nil {
+	if _, err := store.readRevision(revision.ID); err != nil {
+		t.Fatal("unchanged revision was needlessly revalidated", err)
+	}
+	if _, err := store.sql.DB.Exec(`UPDATE registry_objects SET body='{"tampered":true}' WHERE digest=?`, revision.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.readRevision(revision.ID); err == nil {

@@ -74,11 +74,11 @@ systemctl --user enable agentpack-gateway.service
 systemctl --user restart agentpack-gateway.service
 healthy=false
 for attempt in {1..30}; do
-  if systemctl --user is-active --quiet agentpack-gateway.service && curl --fail --silent --max-time 2 -H 'Host: agentpack.microapps.space' http://127.0.0.1:7420/api/status | grep -q 'setup_required'; then healthy=true; break; fi
+  if systemctl --user is-active --quiet agentpack-gateway.service && curl --fail --silent --max-time 2 -H 'Host: agentpack.microapps.space' http://127.0.0.1:7420/api/status | grep -q 'claimed'; then healthy=true; break; fi
   sleep 1
 done
 "$healthy"
-curl --fail --silent --max-time 20 https://agentpack.microapps.space/api/status | grep -q 'setup_required'
+curl --fail --silent --max-time 20 https://agentpack.microapps.space/api/status | grep -q 'claimed'
 if [[ -f "$work/agentpack.before" ]]; then install -m 0755 "$work/agentpack.before" "$base/agentpack.previous"; fi
 trap - ERR
 echo 'Gateway installed; local service and public HTTPS checked. Existing Caddy configuration retained.'

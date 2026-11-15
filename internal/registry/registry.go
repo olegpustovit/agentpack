@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 const (
@@ -25,7 +27,6 @@ const (
 	draftsDir       = "drafts"
 	tombstonesDir   = "tombstones"
 	indexName       = "index.json"
-	schema          = 1
 	objectSchema    = 1
 )
 
@@ -33,11 +34,12 @@ var ErrNotFound = errors.New("registry item not found")
 
 type Store struct {
 	root string
-	// memo holds objects that passed validation, by id and file metadata.
+	sql  *state.Store
+	// memo holds validated objects by digest and replicated conflict position.
 	memo sync.Map
 }
 
-// New opens $AGENTPACK_HOME/registry. home is the already-resolved agentpack home.
+// New opens the Library in state.db and its local capture/restore files under registry/.
 func New(home string) (*Store, error) {
 	if strings.TrimSpace(home) == "" {
 		return nil, fmt.Errorf("agentpack home is required")
@@ -56,26 +58,30 @@ func open(root string) (*Store, error) {
 	if info, err := os.Lstat(root); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("registry root must be a real directory")
 	}
-	for _, name := range []string{objectsDir, bindingsDir, metadataDir, capturesDir, transactionsDir, peersDir, draftsDir, tombstonesDir} {
-		if err := os.MkdirAll(filepath.Join(root, name), 0o700); err != nil {
-			return nil, fmt.Errorf("create registry storage: %w", err)
-		}
+	if err := os.Chmod(root, 0700); err != nil {
+		return nil, err
 	}
-	if err := os.Chmod(root, 0o700); err != nil {
-		return nil, fmt.Errorf("protect registry: %w", err)
-	}
-	for _, name := range []string{objectsDir, bindingsDir, metadataDir, capturesDir, transactionsDir, peersDir, draftsDir, tombstonesDir} {
+	for _, name := range []string{capturesDir, transactionsDir} {
 		path := filepath.Join(root, name)
-		info, err := os.Lstat(path)
-		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return nil, fmt.Errorf("registry storage directory is invalid")
-		}
-		if err := os.Chmod(path, 0o700); err != nil {
+		if err := os.MkdirAll(path, 0700); err != nil {
 			return nil, err
 		}
+		if info, err := os.Lstat(path); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("registry storage directory is invalid")
+		}
 	}
-	return &Store{root: root}, nil
+	db, err := state.Open(filepath.Dir(root))
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{root: root, sql: db}
+	if err := s.importLegacy(); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	return s, nil
 }
+
+func (s *Store) Close() error { return s.sql.Close() }
 
 type Package struct {
 	ID          string `json:"id"`
@@ -176,7 +182,7 @@ func (s *Store) captureUnlocked(input CaptureInput) (Agentpack, Revision, error)
 		return pack, revision, err
 	}
 
-	idx, err := s.readIndexUnlocked()
+	idx, err := s.readIndex()
 	if err != nil {
 		return pack, revision, err
 	}
@@ -203,7 +209,7 @@ func (s *Store) captureUnlocked(input CaptureInput) (Agentpack, Revision, error)
 		if pack.Name == "" || pack.Name == "." {
 			pack.Name = "agentpack"
 		}
-		if credentialShaped(pack.Name) {
+		if obs.CredentialShaped(pack.Name) {
 			return pack, revision, fmt.Errorf("agentpack name contains credential-shaped data")
 		}
 		pack.Revisions = []string{}
@@ -213,7 +219,7 @@ func (s *Store) captureUnlocked(input CaptureInput) (Agentpack, Revision, error)
 			if err := s.mergeHeadsUnlocked(input.ID); err != nil {
 				return pack, revision, err
 			}
-			if idx, err = s.readIndexUnlocked(); err != nil {
+			if idx, err = s.readIndex(); err != nil {
 				return pack, revision, err
 			}
 			pack = idx.Agentpacks[input.ID]
@@ -284,19 +290,12 @@ func (s *Store) captureUnlocked(input CaptureInput) (Agentpack, Revision, error)
 			return pack, revision, err
 		}
 	}
-	for _, id := range packageIDs {
-		idx.Packages = appendUnique(idx.Packages, id)
-	}
 	pack.Revisions = append(pack.Revisions, revision.ID)
 	pack.Heads, err = s.revisionHeads(pack.Revisions)
 	if err != nil {
 		return pack, revision, err
 	}
-	idx.Agentpacks[input.ID] = pack
 	if err := s.writeMetadata(pack); err != nil {
-		return pack, revision, err
-	}
-	if err := s.writeIndexUnlocked(idx); err != nil {
 		return pack, revision, err
 	}
 	return pack, revision, nil
@@ -353,7 +352,7 @@ func (s *Store) ListPackages() ([]Package, error) {
 func (s *Store) ImportPackages(packages []Package) error {
 	for i := range packages {
 		p := &packages[i]
-		if strings.TrimSpace(p.Module) == "" || credentialShaped(p.Module) || strings.TrimSpace(p.Commit) == "" || !validCacheKey(p.CacheKey) ||
+		if strings.TrimSpace(p.Module) == "" || obs.CredentialShaped(p.Module) || strings.TrimSpace(p.Commit) == "" || !validCacheKey(p.CacheKey) ||
 			(p.Kind != string(lockfile.PackageSkill) && p.Kind != string(lockfile.PackagePlugin)) ||
 			(p.ContentHash != "" && !lockfile.ValidContentHash(p.ContentHash)) {
 			return fmt.Errorf("invalid package registry record")
@@ -367,7 +366,7 @@ func (s *Store) ImportPackages(packages []Package) error {
 		p.Path = redactMetadata(p.Path)
 	}
 	return s.withLock(func() error {
-		idx, err := s.readIndexUnlocked()
+		idx, err := s.readIndex()
 		if err != nil {
 			return err
 		}
@@ -380,22 +379,15 @@ func (s *Store) ImportPackages(packages []Package) error {
 			pins[packagePinKey(existing)] = true
 			pins[packagePinWithoutHash(existing)] = true
 		}
-		changed := false
 		for _, p := range packages {
 			if pins[packagePinKey(p)] || p.ContentHash == "" && pins[packagePinWithoutHash(p)] {
 				continue
 			}
-			id, err := s.writeObject(p)
-			if err != nil {
+			if _, err := s.writeObject(p); err != nil {
 				return err
 			}
-			idx.Packages = appendUnique(idx.Packages, id)
 			pins[packagePinKey(p)] = true
 			pins[packagePinWithoutHash(p)] = true
-			changed = true
-		}
-		if changed {
-			return s.writeIndexUnlocked(idx)
 		}
 		return nil
 	})
@@ -431,12 +423,12 @@ func (s *Store) Get(id string) (Agentpack, []Revision, error) {
 
 func (s *Store) Rename(id, name string) (Agentpack, error) {
 	name = strings.TrimSpace(name)
-	if name == "" || credentialShaped(name) {
+	if name == "" || obs.CredentialShaped(name) {
 		return Agentpack{}, fmt.Errorf("invalid agentpack name")
 	}
 	var result Agentpack
 	err := s.withLock(func() error {
-		idx, err := s.readIndexUnlocked()
+		idx, err := s.readIndex()
 		if err != nil {
 			return err
 		}
@@ -454,10 +446,6 @@ func (s *Store) Rename(id, name string) (Agentpack, error) {
 		}
 		p.Name = name
 		if err := s.writeMetadata(p); err != nil {
-			return err
-		}
-		idx.Agentpacks[id] = p
-		if err := s.writeIndexUnlocked(idx); err != nil {
 			return err
 		}
 		result = p

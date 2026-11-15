@@ -1,33 +1,23 @@
 package network
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
+	"context"
+	"database/sql"
+
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
-// patchWorkerConversationState updates conversation_state on the worker record when it changes.
-func patchWorkerConversationState(sessionDir, state string) error {
-	path := filepath.Join(sessionDir, "worker.json")
-	data, err := os.ReadFile(path)
+func patchWorkerConversationState(ctx context.Context, db *sql.DB, id, conversationState string) error {
+	_, err := db.ExecContext(ctx, "UPDATE sessions SET conversation_state=? WHERE id=? AND archived_at=0 AND node_id="+state.LocalNodeSQL+" AND conversation_state<>?", conversationState, id, conversationState)
 	if err != nil {
 		return err
 	}
-	var record WorkerRecord
-	if err := json.Unmarshal(data, &record); err != nil {
+	var archived bool
+	if err := db.QueryRowContext(ctx, "SELECT archived_at>0 FROM sessions WHERE id=? AND node_id="+state.LocalNodeSQL, id).Scan(&archived); err != nil {
 		return err
 	}
-	if record.Session.ConversationState == state {
-		return nil
+	if archived {
+		return errSessionArchived
 	}
-	record.Session.ConversationState = state
-	updated, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, updated, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(temporary, path)
+	return nil
 }

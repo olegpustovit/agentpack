@@ -1,0 +1,2 @@
+ALTER TABLE oauth_tokens ADD COLUMN email TEXT NOT NULL DEFAULT '';
+ALTER TABLE oauth_tokens ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0;

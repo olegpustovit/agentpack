@@ -19,6 +19,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 type AgentCapabilities struct {
@@ -37,6 +41,11 @@ type AgentSessionCapabilities struct {
 }
 
 type SessionInfo struct {
+	NodeID            string             `json:"node_id,omitempty"`
+	Reachable         bool               `json:"reachable"`
+	LastSync          time.Time          `json:"last_sync,omitzero"`
+	EndedAt           time.Time          `json:"ended_at,omitzero"`
+	ArchivedAt        time.Time          `json:"archived_at,omitzero"`
 	LastUsed          time.Time          `json:"last_used,omitzero"`
 	FolderID          string             `json:"folder_id,omitempty"`
 	ID                string             `json:"id"`
@@ -63,6 +72,12 @@ func workerRecord(home, id string) (WorkerRecord, error) {
 	if err != nil {
 		return record, err
 	}
+	return parseWorkerRecord(data, id)
+}
+
+func parseWorkerRecord(data []byte, id string) (WorkerRecord, error) {
+	var record WorkerRecord
+	var err error
 	if err = json.Unmarshal(data, &record); err != nil {
 		return record, err
 	}
@@ -75,6 +90,12 @@ func workerRecord(home, id string) (WorkerRecord, error) {
 
 func workerRequestTimeout(method, path string) time.Duration {
 	path, _, _ = strings.Cut(path, "?")
+	if method == http.MethodGet && strings.HasPrefix(path, "/api/cache/") {
+		return 2 * time.Minute
+	}
+	if method == http.MethodGet && strings.HasPrefix(path, "/api/logs/traces/") {
+		return 5 * time.Second
+	}
 	if method == http.MethodPost &&
 		(path == "/stop" || path == "/restart" || path == "/api/sessions" ||
 			strings.HasSuffix(path, "/stop") || strings.HasSuffix(path, "/restart") ||
@@ -95,6 +116,9 @@ func workerRequest(ctx context.Context, record WorkerRecord, method, path, opera
 		return nil, err
 	}
 	request.Header.Set("Authorization", "Bearer "+record.Secret)
+	if trace := obs.TraceParent(ctx); trace != "" {
+		request.Header.Set("traceparent", trace)
+	}
 	if operationID != "" {
 		request.Header.Set("Idempotency-Key", operationID)
 	}
@@ -104,34 +128,26 @@ func workerRequest(ctx context.Context, record WorkerRecord, method, path, opera
 }
 
 func Sessions(ctx context.Context, home string) ([]SessionInfo, error) {
-	entries, err := os.ReadDir(filepath.Join(home, "network", "sessions"))
-	if os.IsNotExist(err) {
-		return []SessionInfo{}, nil
+	store, err := state.Open(home)
+	if err != nil {
+		return nil, err
 	}
+	defer store.Close()
+	sessions, err := querySessions(ctx, store.Reader, "SELECT "+sessionColumns+" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND ended_at=0 ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
 	result := []SessionInfo{}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		record, err := workerRecord(home, entry.Name())
+	for _, info := range sessions {
+		record, err := workerRecord(home, info.ID)
 		if err != nil {
 			continue
 		}
-		state, err := sessionState(ctx, record)
+		terminal, err := sessionState(ctx, record)
 		if err != nil {
 			continue
 		}
-		info := record.Session
-		info.ID = record.ID
-		info.State = state
-		name, err := readSessionName(home, record.ID)
-		if err != nil {
-			return nil, fmt.Errorf("read session name: %w", err)
-		}
-		info.Name = name
+		info.State = terminal
 		result = append(result, info)
 	}
 	return result, nil
@@ -142,7 +158,7 @@ func StartWorker(ctx context.Context, home, executable string, launch WorkerLaun
 		launch.Session.StartedAt = time.Now()
 	}
 	directory := filepath.Join(home, "network")
-	if err := EnsurePrivateDirectory(directory); err != nil {
+	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		return "", err
 	}
 	log, err := os.OpenFile(filepath.Join(directory, "workers.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
@@ -151,6 +167,8 @@ func StartWorker(ctx context.Context, home, executable string, launch WorkerLaun
 	}
 	defer log.Close()
 	command := exec.Command(executable, "session-worker")
+	trace := obs.ParseTraceParent(obs.TraceParent(ctx))
+	command.Env = append(os.Environ(), "AGENTPACK_TRACE="+trace.ID)
 	ConfigureDetached(command)
 	command.Stderr = log
 	input, err := command.StdinPipe()

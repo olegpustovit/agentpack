@@ -2,7 +2,7 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
+	"crypto/rand"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/olegpustovit/agentpack/internal/cache"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
@@ -17,6 +18,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/registry"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func TestGatewayLibrarySaveCaptureRestore(t *testing.T) {
@@ -40,6 +42,11 @@ func TestGatewayLibrarySaveCaptureRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := library.Store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	saved, err := library.Save(ctx, network.SaveAgentpackInput{Directory: workspace, Name: "Team review", AutoCapture: true})
 	if err != nil {
 		t.Fatal(err)
@@ -102,19 +109,24 @@ func TestGatewayLibraryBootstrapsRecentProjectsAndCachedPackages(t *testing.T) {
 	if err := lockfile.Init(firstRoot, "first", "1.0.0"); err != nil {
 		t.Fatal(err)
 	}
+	store, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
 	writeRecent := func(entries ...network.SessionInfo) {
 		t.Helper()
-		data, err := json.Marshal(entries)
-		if err != nil {
+		if _, err := store.DB.Exec("DELETE FROM sessions"); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.MkdirAll(filepath.Join(home, "network"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(home, "network", "recent.json"), data, 0o600); err != nil {
-			t.Fatal(err)
+		for _, info := range entries {
+			if _, err := store.DB.Exec(`INSERT INTO sessions(id,node_id,directory,definition_root,folder_id,harness,mode,last_used)
+                VALUES (?,(SELECT node_id FROM local_node WHERE id=1),?,?,?,?,?,?)`, "session-"+rand.Text(), info.Directory, info.DefinitionRoot, info.FolderID, info.Harness, info.Mode, time.Now().UnixNano()); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
+
 	recent := func(root, workspace string) network.SessionInfo {
 		t.Helper()
 		identity, err := network.FolderIdentity(workspace)
@@ -155,6 +167,11 @@ func TestGatewayLibraryBootstrapsRecentProjectsAndCachedPackages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := library.Store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	saved, err := library.Save(context.Background(), network.SaveAgentpackInput{Directory: manualWorkspace, Name: "Existing manual pack"})
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +268,12 @@ func TestGatewayLibraryBootstrapsRecentProjectsAndCachedPackages(t *testing.T) {
 	if err != nil || len(packages) != 1 || packages[0].Module != "github.com/acme/tool" || packages[0].Commit != commit || packages[0].ContentHash != "" {
 		t.Fatalf("bootstrapped cached packages: %+v %v", packages, err)
 	}
-	if err := os.Remove(filepath.Join(home, "registry", "index.json")); err != nil {
+	db, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.DB.Exec("DELETE FROM registry_heads"); err != nil {
 		t.Fatal(err)
 	}
 	packages, err = library.Store.ListPackages()

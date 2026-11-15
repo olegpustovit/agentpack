@@ -64,7 +64,7 @@ func recordLaunchEnvironment(packContext paths.Context, selected string, target 
 			return err
 		}
 		// Effective inputs include MCP credentials; keep their cached hash private.
-		if err := network.EnsurePrivateDirectory(filepath.Dir(cache)); err != nil {
+		if err := paths.EnsurePrivateDirectory(filepath.Dir(cache)); err != nil {
 			return err
 		}
 		if err := os.WriteFile(cache+".tmp", data, 0600); err != nil {

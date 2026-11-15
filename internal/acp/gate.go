@@ -54,7 +54,9 @@ func (g *notificationGate) Read(p []byte) (int, error) {
 func (g *notificationGate) release() {
 	g.mu.Lock()
 	g.inflight--
-	if g.inflight <= maxInFlightNotifications/2 { // wake in batches, not on every chunk
+	if g.inflight == 0 {
+		g.cond.Broadcast()
+	} else if g.inflight <= maxInFlightNotifications/2 { // wake in batches, not on every chunk
 		g.cond.Signal()
 	}
 	g.mu.Unlock()

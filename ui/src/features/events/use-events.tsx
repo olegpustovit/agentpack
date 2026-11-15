@@ -16,9 +16,24 @@ function invalidate(queryClient: QueryClient, queryKey: string[]) {
 }
 
 function dispatch(queryClient: QueryClient, msg: EventMessage) {
+  if (msg.topic === "state") {
+    invalidate(queryClient, ["identity"])
+    invalidate(queryClient, ["topology"])
+    invalidate(queryClient, ["m", LOCAL, "sessions"])
+    invalidate(queryClient, ["m", LOCAL, "limits"])
+    invalidate(queryClient, ["nodes"])
+    invalidate(queryClient, ["diagnostics"])
+    invalidate(queryClient, ["replication"])
+    return
+  }
+  if (msg.node && msg.node !== LOCAL && (msg.topic === "sessions" || msg.topic === "limits")) {
+    invalidate(queryClient, ["m", LOCAL, msg.topic])
+  }
+  if (msg.topic === "replication") invalidate(queryClient, ["replication"])
   if (msg.topic === "nodes") {
     invalidate(queryClient, ["nodes"])
     invalidate(queryClient, ["topology"])
+    invalidate(queryClient, ["replication"])
     return
   }
   invalidate(queryClient, ["m", msg.node || LOCAL, msg.topic])

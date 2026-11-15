@@ -26,3 +26,11 @@ describe("session status", () => {
     expect(sessionStatusWord(session, false)).toBe("Needs you")
   })
 })
+
+it("archived and offline state take precedence over stale live requests",()=>{
+ const pending={...base,conversation_state:"needs_you"}
+ expect(sessionStatusWord({...pending,offline:true},false)).toBe("Offline")
+ expect(sessionGlyphState({...pending,offline:true})).toBe("offline")
+ expect(sessionStatusWord({...pending,archived_at:"2026-11-15T00:00:00Z"},false)).toBe("Archived")
+ expect(sessionGlyphState({...pending,archived_at:"2026-11-15T00:00:00Z"})).toBe("stopped")
+})

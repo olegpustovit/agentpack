@@ -9,11 +9,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestRecentForgetsOnlyMatchingLaunchWithoutDeletingFolder(t *testing.T) {
 	home := t.TempDir()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
@@ -62,7 +64,7 @@ func TestGatewayDisabledPersistsUntilExplicitStart(t *testing.T) {
 
 func TestKnownDirectoryRejectsReplacementUntilLocalLaunch(t *testing.T) {
 	home := t.TempDir()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	directory := filepath.Join(t.TempDir(), "project")
@@ -97,7 +99,7 @@ func TestKnownDirectoryRejectsReplacementUntilLocalLaunch(t *testing.T) {
 
 func TestRecentAPIReportsCurrentAvailabilityAndLastUse(t *testing.T) {
 	home := t.TempDir()
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,12 +151,12 @@ func TestRecentAPIReportsCurrentAvailabilityAndLastUse(t *testing.T) {
 	if replaced.Available || replaced.UnavailableReason != "Folder changed since its last local launch" {
 		t.Fatal(replaced)
 	}
-	persisted, err := os.ReadFile(filepath.Join(home, "network", "recent.json"))
-	if err != nil {
-		t.Fatal(err)
+	persisted, err := Recent(home)
+	if err != nil || len(persisted) != 1 || persisted[0].FolderID != first.FolderID {
+		t.Fatalf("availability check changed folder authorization: %+v %v", persisted, err)
 	}
-	if strings.Contains(string(persisted), "available") {
-		t.Fatal("availability persisted as authorization", string(persisted))
+	if _, err := os.Stat(filepath.Join(home, "network", "recent.json")); !os.IsNotExist(err) {
+		t.Fatalf("recent JSON was written: %v", err)
 	}
 	if err := remember(home, info); err != nil {
 		t.Fatal(err)

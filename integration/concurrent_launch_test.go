@@ -3,7 +3,6 @@ package integration_test
 import (
 	"bytes"
 	"context"
-	"github.com/olegpustovit/agentpack/internal/network"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,16 +10,46 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/network"
 )
+
+func TestSuccessfulLocalLaunchWritesNoDiagnostics(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell harness fixture")
+	}
+	project := t.TempDir()
+	home := filepath.Join(project, "_agentpack")
+	// Isolate the foreground launch from the gateway's independent HTTP events.
+	if err := network.SetGatewayEnabled(home, false); err != nil {
+		t.Fatal(err)
+	}
+	if result := runCLI(t, project, "init"); result.err != nil {
+		t.Fatalf("init: %s, %v", result.stderr, result.err)
+	}
+	binary := filepath.Join(project, "agent-fixture")
+	writeFile(t, binary, "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(binary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if result := runCLIWithEnv(t, project, []string{"codex"}, "CODEX_PATH="+binary); result.err != nil {
+			t.Fatalf("launch: %s, %v", result.stderr, result.err)
+		}
+	}
+	for _, name := range []string{"logs", "state.db"} {
+		if _, err := os.Stat(filepath.Join(home, name)); !os.IsNotExist(err) {
+			t.Fatalf("successful launch touched %s: %v", name, err)
+		}
+	}
+}
 
 func TestCompiledCLILaunchesUpdatedPackWhileAnotherSessionRuns(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture; generation and publication tests also run on Windows")
 	}
 	project := t.TempDir()
-	t.Cleanup(func() {
-		_, _ = network.NodeRequest(context.Background(), filepath.Join(project, "_agentpack"), "POST", "/api/node/stop")
-	})
+	t.Cleanup(func() { stopTestGateway(t, filepath.Join(project, "_agentpack")) })
 	skill := filepath.Join(project, "local-skill", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
 		t.Fatal(err)

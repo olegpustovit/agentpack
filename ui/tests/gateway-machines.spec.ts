@@ -119,33 +119,37 @@ test("limits automatically prefers capable nodes and refreshes every source", as
     const node = new URL(route.request().url()).searchParams.get("node")
     calls.push({ node, method: route.request().method() })
     if (node === "peer-3") return route.fulfill({ status: 502, body: "Node is unreachable" })
-    const remote = node === "peer-1"
     return route.fulfill({
       json: {
-        limits: [
-          {
-            harness: "codex",
-            state: remote ? "available" : "unsupported",
-            plan: remote ? "Pro" : undefined,
-            source: "codex app-server account/rateLimits/read",
-            observed_at: new Date().toISOString(),
-            error: remote ? undefined : "codex CLI not found",
-            windows: remote
-              ? [
-                  { id: "primary", label: "Session", used_percent: 28, remaining_percent: 72, duration_seconds: 18000, reset_at: new Date(Date.now() + 7200000).toISOString() },
-                  { id: "weekly", label: "Weekly", used_percent: 64, remaining_percent: 36, reset_text: "Monday at 09:00" },
-                  { id: "unknown", label: "Additional usage", reset_text: "Not reported" },
-                ]
-              : [],
-          },
-          {
-            harness: "claude",
-            state: remote ? "error" : "available",
-            source: "claude -p /usage",
-            error: remote ? "Sign in required" : undefined,
-            windows: remote ? [] : [{ id: "session", label: "Current session", remaining_percent: 81, used_percent: 19 }],
-          },
-        ],
+        limits: ["local", "peer-1"].flatMap((node_id) => {
+          const remote = node_id === "peer-1"
+          return [
+            {
+              node_id,
+              harness: "codex",
+              state: remote ? "available" : "unsupported",
+              plan: remote ? "Pro" : undefined,
+              source: "codex app-server account/rateLimits/read",
+              observed_at: new Date().toISOString(),
+              error: remote ? undefined : "codex CLI not found",
+              windows: remote
+                ? [
+                    { id: "primary", label: "Session", used_percent: 28, remaining_percent: 72, duration_seconds: 18000, reset_at: new Date(Date.now() + 7200000).toISOString() },
+                    { id: "weekly", label: "Weekly", used_percent: 64, remaining_percent: 36, reset_text: "Monday at 09:00" },
+                    { id: "unknown", label: "Additional usage", reset_text: "Not reported" },
+                  ]
+                : [],
+            },
+            {
+              node_id,
+              harness: "claude",
+              state: remote ? "error" : "available",
+              source: "claude -p /usage",
+              error: remote ? "Sign in required" : undefined,
+              windows: remote ? [] : [{ id: "session", label: "Current session", remaining_percent: 81, used_percent: 19 }],
+            },
+          ]
+        }),
       },
     })
   })
@@ -168,7 +172,7 @@ test("limits automatically prefers capable nodes and refreshes every source", as
 
   // A machine without the CLI says nothing about the account, so it is not offered as another report.
   await expect(codex.getByRole("button", { name: "Other machines (1)" })).toHaveCount(0)
-  await expect(page.getByText("Couldn't load limits from Unavailable node: Node is unreachable")).toBeVisible({ timeout: 15_000 })
+  expect(calls.filter((call) => call.method === "GET").map((call) => call.node)).toEqual([null])
 
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect.poll(() => calls.filter((call) => call.method === "POST").map((call) => call.node).sort()).toEqual([null, "peer-1", "peer-3"].sort())
@@ -179,7 +183,7 @@ test("limits automatically prefers capable nodes and refreshes every source", as
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy()
 })
 
-test("limits waits for mesh discovery when opened immediately", async ({ page }) => {
+test("limits labels replicated reports after machine discovery", async ({ page }) => {
   await mockAPI(page)
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.route(nodesPath, async (route) => {
@@ -187,15 +191,14 @@ test("limits waits for mesh discovery when opened immediately", async ({ page })
     await route.fulfill({ json: [{ id: "peer-1", name: "Kyiv grid", online: true }] })
   })
   await page.route(limitsPath, (route) => {
-    const remote = new URL(route.request().url()).searchParams.get("node") === "peer-1"
     return route.fulfill({
       json: {
         limits: [
           {
+            node_id: "peer-1",
             harness: "codex",
-            state: remote ? "available" : "unsupported",
-            error: remote ? undefined : "codex CLI not found",
-            windows: remote ? [{ id: "weekly", label: "Weekly", remaining_percent: 63 }] : [],
+            state: "available",
+            windows: [{ id: "weekly", label: "Weekly", remaining_percent: 63 }],
           },
         ],
       },
@@ -217,7 +220,7 @@ test("startup and machine discovery announce pending work", async ({ page }) => 
   const nodesReady = new Promise<void>((resolve) => (releaseNodes = resolve))
   await page.route(/\/api\/status(\?.*)?$/, async (route) => {
     await statusReady
-    await route.fulfill({ json: { setup_required: false, authenticated: true } })
+    await route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } })
   })
   await page.route(nodesPath, async (route) => {
     await nodesReady

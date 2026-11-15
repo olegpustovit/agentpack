@@ -3,8 +3,10 @@ package network
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"html/template"
 	"io"
 	"net/http"
@@ -14,19 +16,18 @@ import (
 	"sync"
 	"time"
 
-	bolt "go.etcd.io/bbolt"
+	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 type GatewayMCP struct {
 	gateway  *Gateway
-	db       *bolt.DB
 	handler  http.Handler
 	mu       sync.Mutex
 	requests int
 	reset    time.Time
 }
 
-func (m *GatewayMCP) Close() error                                     { return m.db.Close() }
 func (m *GatewayMCP) ServeHTTP(w http.ResponseWriter, r *http.Request) { m.handler.ServeHTTP(w, r) }
 
 func isMCPPath(path string) bool {
@@ -115,7 +116,7 @@ func (m *GatewayMCP) register(w http.ResponseWriter, r *http.Request) {
 	}
 	client.TokenAuth, client.GrantTypes, client.ResponseTypes = "none", []string{"authorization_code", "refresh_token"}, []string{"code"}
 	id := randomToken()
-	err := m.db.Update(func(tx *bolt.Tx) error {
+	err := state.Transaction(r.Context(), m.gateway.store.DB, func(tx *sql.Tx) error {
 		if err := oauthPrune(tx); err != nil {
 			return err
 		}
@@ -145,7 +146,7 @@ func (m *GatewayMCP) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	query := r.URL.Query()
 	var client oauthRecord
-	err := m.db.View(func(tx *bolt.Tx) error { var err error; client, err = oauthGet(tx, query.Get("client_id")); return err })
+	err := state.Transaction(r.Context(), m.gateway.store.Reader, func(tx *sql.Tx) error { var err error; client, err = oauthGet(tx, query.Get("client_id")); return err })
 	if err != nil || client.Kind != "client" || client.Client == nil {
 		oauthError(w, 400, "invalid_client")
 		return
@@ -164,15 +165,20 @@ func (m *GatewayMCP) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
 		return
 	}
-	cookie, _ := r.Cookie("agentpack_session")
+	cookie, _ := r.Cookie(m.gateway.auth.cookieName())
 	session := string(oauthKey(cookie.Value))
+	cookieHash := sha256.Sum256([]byte(cookie.Value))
 	if r.Method == http.MethodGet {
 		token := randomToken()
-		err := m.db.Update(func(tx *bolt.Tx) error {
+		err := state.Transaction(r.Context(), m.gateway.store.DB, func(tx *sql.Tx) error {
 			if err := oauthPrune(tx); err != nil {
 				return err
 			}
-			return oauthPut(tx, token, oauthRecord{Kind: "consent", Session: session, Query: r.URL.RawQuery, Expires: time.Now().Add(10 * time.Minute)})
+			record := oauthRecord{Kind: "consent", Session: session, Query: r.URL.RawQuery, Expires: time.Now().Add(10 * time.Minute)}
+			if err := tx.QueryRow(`SELECT s.email,u.sessions_valid_after FROM auth_sessions s JOIN users u ON u.email=s.email WHERE s.token_hash=? AND s.expires_at>? AND u.disabled=0 AND s.created_at>=u.sessions_valid_after AND s.session_epoch=u.sessions_valid_after`, cookieHash[:], time.Now().UnixMilli()).Scan(&record.Email, &record.SessionEpoch); err != nil {
+				return err
+			}
+			return oauthPut(tx, token, record)
 		})
 		if err != nil {
 			oauthError(w, 503, "authorization_unavailable")
@@ -197,18 +203,18 @@ func (m *GatewayMCP) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := randomToken()
-	err = m.db.Update(func(tx *bolt.Tx) error {
+	err = state.Transaction(r.Context(), m.gateway.store.DB, func(tx *sql.Tx) error {
 		consent, err := oauthGet(tx, r.PostForm.Get("consent"))
-		if err != nil || consent.Kind != "consent" || consent.Session != session || consent.Query != r.URL.RawQuery {
+		if err != nil || consent.Kind != "consent" || consent.Session != session || consent.Query != r.URL.RawQuery || oauthAccountValid(tx, consent) != nil {
 			return errOAuthGrant
 		}
-		if err := tx.Bucket(oauthBucket).Delete(oauthKey(r.PostForm.Get("consent"))); err != nil {
+		if _, err := tx.Exec("DELETE FROM oauth_tokens WHERE secret_hash = ?", string(oauthKey(r.PostForm.Get("consent")))); err != nil {
 			return err
 		}
 		if r.PostForm.Get("decision") != "allow" {
 			return nil
 		}
-		return oauthPut(tx, code, oauthRecord{Kind: "code", ClientID: query.Get("client_id"), Redirect: redirect, Challenge: query.Get("code_challenge"), Resource: m.baseURL() + "/mcp", Expires: time.Now().Add(5 * time.Minute)})
+		return oauthPut(tx, code, oauthRecord{Kind: "code", ClientID: query.Get("client_id"), Redirect: redirect, Challenge: query.Get("code_challenge"), Resource: m.baseURL() + "/mcp", Expires: time.Now().Add(5 * time.Minute), Email: consent.Email, SessionEpoch: consent.SessionEpoch})
 	})
 	if err != nil {
 		oauthError(w, 400, "invalid_consent")
@@ -268,7 +274,7 @@ func (m *GatewayMCP) token(w http.ResponseWriter, r *http.Request) {
 	access, refresh := randomToken(), randomToken()
 	replayed := false
 	expires := 3600
-	err := m.db.Update(func(tx *bolt.Tx) error {
+	err := state.Transaction(r.Context(), m.gateway.store.DB, func(tx *sql.Tx) error {
 		client, err := oauthGet(tx, form.Get("client_id"))
 		if err != nil || client.Kind != "client" {
 			return errOAuthGrant
@@ -283,7 +289,7 @@ func (m *GatewayMCP) token(w http.ResponseWriter, r *http.Request) {
 			if subtle.ConstantTimeCompare([]byte(base64.RawURLEncoding.EncodeToString(hash[:])), []byte(record.Challenge)) != 1 {
 				return errOAuthGrant
 			}
-			if err := tx.Bucket(oauthBucket).Delete(oauthKey(form.Get("code"))); err != nil {
+			if _, err := tx.Exec("DELETE FROM oauth_tokens WHERE secret_hash = ?", string(oauthKey(form.Get("code")))); err != nil {
 				return err
 			}
 			record.Family, record.GrantExpires = randomToken(), time.Now().Add(30*24*time.Hour)
@@ -303,6 +309,9 @@ func (m *GatewayMCP) token(w http.ResponseWriter, r *http.Request) {
 		}
 		if record.Resource != m.baseURL()+"/mcp" {
 			return errOAuthGrant
+		}
+		if err := oauthAccountValid(tx, record); err != nil {
+			return err
 		}
 		if err := oauthPrune(tx); err != nil {
 			return err
@@ -341,7 +350,7 @@ func (m *GatewayMCP) revoke(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, 400, "invalid_request")
 		return
 	}
-	err := m.db.Update(func(tx *bolt.Tx) error {
+	err := state.Transaction(r.Context(), m.gateway.store.DB, func(tx *sql.Tx) error {
 		record, err := oauthGet(tx, r.PostForm.Get("token"))
 		if err != nil {
 			return nil
@@ -358,16 +367,33 @@ func (m *GatewayMCP) revoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (m *GatewayMCP) authenticated(r *http.Request) bool {
+func (m *GatewayMCP) authenticate(r *http.Request) *http.Request {
 	value := r.Header.Get("Authorization")
 	if !strings.HasPrefix(value, "Bearer ") {
-		return false
+		return nil
 	}
-	valid := false
-	_ = m.db.View(func(tx *bolt.Tx) error {
+	var email string
+	err := state.Transaction(r.Context(), m.gateway.store.Reader, func(tx *sql.Tx) error {
 		record, err := oauthGet(tx, strings.TrimPrefix(value, "Bearer "))
-		valid = err == nil && record.Kind == "access" && record.Resource == m.baseURL()+"/mcp"
+		if err != nil {
+			return err
+		}
+		if record.Kind != "access" || record.Resource != m.baseURL()+"/mcp" {
+			return errOAuthGrant
+		}
+		if err := oauthAccountValid(tx, record); err != nil {
+			return err
+		}
+		email = record.Email
 		return nil
 	})
-	return valid
+	if err != nil {
+		if !errors.Is(err, errOAuthGrant) && r.Context().Err() == nil {
+			if event := obs.From(r.Context()); event != nil {
+				event.Fail(err)
+			}
+		}
+		return nil
+	}
+	return r.WithContext(withActor(r.Context(), Actor{Kind: "mcp", User: email, Node: localHostname()}))
 }

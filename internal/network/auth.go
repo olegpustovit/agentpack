@@ -1,12 +1,14 @@
 package network
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -14,17 +16,24 @@ import (
 	"sync"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/state"
 	"golang.org/x/crypto/bcrypt"
 )
 
+const browserSessionLifetime = 30 * 24 * time.Hour
+
 type gatewayAuth struct {
-	mu       sync.Mutex
-	home     string
-	password []byte
-	setup    string
-	sessions map[[32]byte]time.Time
-	attempts int
-	reset    time.Time
+	mu        sync.Mutex
+	store     *state.Store
+	home      string
+	secure    bool
+	now       func() time.Time
+	telemetry map[[32]byte]telemetryWindow
+	attempts  int
+	reset     time.Time
+	failures  map[string]loginFailure
 }
 
 func randomToken() string {
@@ -35,141 +44,302 @@ func randomToken() string {
 	return hex.EncodeToString(b[:])
 }
 
-func newGatewayAuth(home string) (*gatewayAuth, error) {
+func newGatewayAuth(home string, store *state.Store, secure bool) (*gatewayAuth, error) {
+	if store == nil {
+		return nil, errors.New("gateway state unavailable")
+	}
 	directory := filepath.Join(home, "network")
-	if err := EnsurePrivateDirectory(directory); err != nil {
+	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		return nil, err
 	}
-	a := &gatewayAuth{home: directory, sessions: make(map[[32]byte]time.Time)}
-	data, err := os.ReadFile(filepath.Join(directory, "root-password"))
-	if err == nil {
-		if _, err = bcrypt.Cost(data); err != nil {
-			return nil, errors.New("invalid gateway password record")
-		}
-		a.password = data
-		return a, nil
-	}
-	if !os.IsNotExist(err) {
-		return nil, err
-	}
-	token, err := os.ReadFile(filepath.Join(directory, "setup-token"))
-	if os.IsNotExist(err) {
-		token = []byte(randomToken())
-		err = os.WriteFile(filepath.Join(directory, "setup-token"), token, 0600)
-	}
+	a := &gatewayAuth{store: store, home: directory, secure: secure, now: time.Now, failures: map[string]loginFailure{}}
+	claimed, err := a.claimed(context.Background())
 	if err != nil {
 		return nil, err
 	}
-	if len(token) != 64 {
-		return nil, errors.New("invalid gateway setup token")
+	if !claimed {
+		if _, err := a.legacyHash(); err != nil {
+			return nil, err
+		}
 	}
-	a.setup = string(token)
 	return a, nil
 }
 
-func (a *gatewayAuth) authenticated(r *http.Request) bool {
-	cookie, err := r.Cookie("agentpack_session")
+func (a *gatewayAuth) claimed(ctx context.Context) (bool, error) {
+	var claimed bool
+	err := a.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users) OR (SELECT join_peer<>'' FROM local_node WHERE id=1)").Scan(&claimed)
+	return claimed, err
+}
+
+func (a *gatewayAuth) legacyHash() ([]byte, error) {
+	path := filepath.Join(a.home, "root-password")
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return false
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 1024 {
+		return nil, errors.New("invalid legacy password record")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := bcrypt.Cost(data); err != nil {
+		return nil, errors.New("invalid legacy password record")
+	}
+	return data, nil
+}
+
+func (a *gatewayAuth) cookieName() string {
+	if a.secure {
+		return "__Host-agentpack_session"
+	}
+	return "agentpack_session"
+}
+
+func (a *gatewayAuth) email(r *http.Request) string {
+	cookie, err := r.Cookie(a.cookieName())
+	if err != nil || len(cookie.Value) == 0 || len(cookie.Value) > 256 {
+		return ""
 	}
 	key := sha256.Sum256([]byte(cookie.Value))
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	expires, ok := a.sessions[key]
-	if !ok || time.Now().After(expires) {
-		delete(a.sessions, key)
-		return false
+	now := a.now()
+	var email string
+	err = a.store.Reader.QueryRowContext(r.Context(), `SELECT s.email FROM auth_sessions s JOIN users u ON u.email=s.email
+WHERE s.token_hash=? AND s.expires_at>? AND u.disabled=0 AND s.created_at>=u.sessions_valid_after AND s.session_epoch=u.sessions_valid_after`, key[:], now.UnixMilli()).Scan(&email)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ""
 	}
-	return true
+	if err == nil {
+		var result sql.Result
+		result, err = a.store.DB.ExecContext(r.Context(), `UPDATE auth_sessions SET expires_at=max(expires_at,?) WHERE token_hash=?
+AND EXISTS(SELECT 1 FROM users u WHERE u.email=auth_sessions.email AND u.disabled=0 AND auth_sessions.created_at>=u.sessions_valid_after AND auth_sessions.session_epoch=u.sessions_valid_after)`, now.Add(browserSessionLifetime).UnixMilli(), key[:])
+		if err == nil {
+			n, e := result.RowsAffected()
+			if e == nil && n == 1 {
+				return email
+			}
+			err = e
+		}
+	}
+	if err != nil && !errors.Is(err, context.Canceled) {
+		if event := obs.From(r.Context()); event != nil {
+			event.Fail(err)
+		}
+	}
+	return ""
 }
+
+func (a *gatewayAuth) authenticated(r *http.Request) bool { return a.email(r) != "" }
 
 func (a *gatewayAuth) status(w http.ResponseWriter, r *http.Request) {
-	authenticated := a.authenticated(r)
-	a.mu.Lock()
-	setup := len(a.password) == 0
-	a.mu.Unlock()
-	writeJSON(w, map[string]bool{"setup_required": setup, "authenticated": authenticated})
+	claimed, err := a.claimed(r.Context())
+	if err != nil {
+		authFailure(w, r, "account state unavailable", err)
+		return
+	}
+	legacy := false
+	if !claimed {
+		hash, err := a.legacyHash()
+		if err != nil {
+			authFailure(w, r, "legacy account unavailable", err)
+			return
+		}
+		legacy = len(hash) != 0
+	}
+	var joining bool
+	if err := a.store.Reader.QueryRowContext(r.Context(), "SELECT NOT EXISTS(SELECT 1 FROM users) AND join_peer<>'' FROM local_node WHERE id=1").Scan(&joining); err != nil {
+		authFailure(w, r, "account state unavailable", err)
+		return
+	}
+	email := a.email(r)
+	writeJSON(w, AccountStatus{Joining: joining, Claimed: claimed, Legacy: legacy, Authenticated: email != "", Email: email})
 }
 
-func (a *gatewayAuth) login(w http.ResponseWriter, r *http.Request, setup bool, secure bool) {
+func (a *gatewayAuth) claim(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Password string `json:"password"`
-		Token    string `json:"token"`
+		Email           string `json:"email"`
+		Password        string `json:"password"`
+		CurrentPassword string `json:"current_password,omitempty"`
 	}
 	if !readJSON(w, r, &input) {
 		return
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if time.Now().After(a.reset) {
-		a.attempts = 0
-		a.reset = time.Now().Add(time.Minute)
-	}
-	if a.attempts >= 10 {
-		http.Error(w, "try again in a minute", 429)
+	email, err := normalizeEmail(input.Email)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
 		return
 	}
-	a.attempts++
-	if setup {
-		if len(a.password) > 0 {
-			http.Error(w, "administrator already configured", 409)
-			return
-		}
-		if subtle.ConstantTimeCompare([]byte(input.Token), []byte(a.setup)) != 1 {
-			http.Error(w, "invalid setup token", 401)
-			return
-		}
-		if len(input.Password) < 12 || len(input.Password) > 72 {
-			http.Error(w, "password must contain 12 to 72 bytes", 400)
-			return
-		}
-		hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
-		if err != nil {
-			http.Error(w, "could not create password", 500)
-			return
-		}
-		file, err := os.OpenFile(filepath.Join(a.home, "root-password"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-		if err != nil {
-			http.Error(w, "could not save administrator", 500)
-			return
-		}
-		_, writeErr := file.Write(hash)
-		err = errors.Join(writeErr, file.Close())
-		if err != nil {
-			http.Error(w, "could not save administrator", 500)
-			return
-		}
-		a.password = hash
-		a.setup = ""
-		_ = os.Remove(filepath.Join(a.home, "setup-token"))
-	} else if len(input.Password) > 72 || bcrypt.CompareHashAndPassword(a.password, []byte(input.Password)) != nil {
-		http.Error(w, "invalid password", 401)
+	if !a.allowLogin(w, r, email) {
 		return
 	}
+	claimed, err := a.claimed(r.Context())
+	if err != nil {
+		authFailure(w, r, "account state unavailable", err)
+		return
+	}
+	if claimed {
+		http.Error(w, "gateway already claimed", 409)
+		return
+	}
+	hash, err := a.legacyHash()
+	if err != nil {
+		authFailure(w, r, "legacy account unavailable", err)
+		return
+	}
+	if len(hash) != 0 {
+		candidate := input.CurrentPassword
+		if len(candidate) > 72 {
+			candidate = candidate[:72]
+		}
+		compared := bcrypt.CompareHashAndPassword(hash, []byte(candidate))
+		if input.CurrentPassword == "" || len(input.CurrentPassword) > 72 || compared != nil {
+			a.failedLogin(r, email)
+			http.Error(w, "invalid current password", 401)
+			return
+		}
+	} else {
+		hash, err = passwordHash(input.Password)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+	}
+	won, err := claimOwner(r.Context(), a.store, email, hash)
+	if err != nil {
+		authFailure(w, r, "could not claim gateway", err)
+		return
+	}
+	if !won {
+		http.Error(w, "gateway already claimed", 409)
+		return
+	}
+	for _, name := range []string{"root-password", "setup-token"} {
+		if err := os.Remove(filepath.Join(a.home, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			authFailure(w, r, "account created; legacy file cleanup failed", err)
+			return
+		}
+	}
+	user := User{Email: email}
+	if err := a.store.Reader.QueryRowContext(r.Context(), "SELECT sessions_valid_after FROM users WHERE email=?", email).Scan(&user.SessionsValidAfter); err != nil {
+		authFailure(w, r, "account state unavailable", err)
+		return
+	}
+	a.issueSession(w, r, user)
+}
+
+func (a *gatewayAuth) login(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if !readJSON(w, r, &input) {
+		return
+	}
+	email, _ := normalizeEmail(input.Email)
+	if !a.allowLogin(w, r, email) {
+		return
+	}
+	user, err := verifyLogin(r.Context(), a.store, input.Email, input.Password)
+	if errors.Is(err, errInvalidLogin) {
+		a.failedLogin(r, email)
+		http.Error(w, errInvalidLogin.Error(), 401)
+		return
+	}
+	if err != nil {
+		authFailure(w, r, "login unavailable", err)
+		return
+	}
+	a.issueSession(w, r, user)
+}
+
+func (a *gatewayAuth) issueSession(w http.ResponseWriter, r *http.Request, user User) {
 	token := randomToken()
-	expires := time.Now().Add(12 * time.Hour)
-	for key, expiry := range a.sessions {
-		if time.Now().After(expiry) {
-			delete(a.sessions, key)
+	key := sha256.Sum256([]byte(token))
+	now := a.now()
+	expires := now.Add(browserSessionLifetime)
+	full := false
+	err := state.Transaction(r.Context(), a.store.DB, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(r.Context(), "DELETE FROM auth_sessions WHERE expires_at<=?", now.UnixMilli()); err != nil {
+			return err
 		}
+		var count int
+		if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM auth_sessions").Scan(&count); err != nil {
+			return err
+		}
+		if count >= 128 {
+			full = true
+			return nil
+		}
+		result, err := tx.ExecContext(r.Context(), `INSERT INTO auth_sessions(token_hash,email,created_at,expires_at,session_epoch)
+SELECT ?,email,max(?,sessions_valid_after),?,sessions_valid_after FROM users WHERE email=? AND disabled=0 AND sessions_valid_after=?`, key[:], now.UnixMilli(), expires.UnixMilli(), user.Email, user.SessionsValidAfter)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err == nil && n != 1 {
+			return errInvalidLogin
+		}
+		return err
+	})
+	if errors.Is(err, errInvalidLogin) {
+		http.Error(w, errInvalidLogin.Error(), 401)
+		return
 	}
-	if len(a.sessions) >= 128 {
+	if err != nil {
+		authFailure(w, r, "could not save login", err)
+		return
+	}
+	if full {
 		http.Error(w, "too many active logins", 429)
 		return
 	}
-	a.sessions[sha256.Sum256([]byte(token))] = expires
-	http.SetCookie(w, &http.Cookie{Name: "agentpack_session", Value: token, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode, Expires: expires})
-	writeJSON(w, map[string]bool{"authenticated": true})
+	a.mu.Lock()
+	delete(a.failures, "email:"+user.Email)
+	a.mu.Unlock()
+	http.SetCookie(w, &http.Cookie{Name: a.cookieName(), Value: token, Path: "/", HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteStrictMode, Expires: expires})
+	writeJSON(w, map[string]any{"authenticated": true, "email": user.Email})
 }
 
 func (a *gatewayAuth) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie("agentpack_session"); err == nil {
-		a.mu.Lock()
-		delete(a.sessions, sha256.Sum256([]byte(c.Value)))
-		a.mu.Unlock()
+	if cookie, err := r.Cookie(a.cookieName()); err == nil {
+		hash := sha256.Sum256([]byte(cookie.Value))
+		if _, err := a.store.DB.ExecContext(r.Context(), "DELETE FROM auth_sessions WHERE token_hash=?", hash[:]); err != nil {
+			authFailure(w, r, "could not sign out", err)
+			return
+		}
 	}
-	http.SetCookie(w, &http.Cookie{Name: "agentpack_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	a.clearCookie(w)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *gatewayAuth) logoutAll(w http.ResponseWriter, r *http.Request) {
+	email := a.email(r)
+	if email == "" {
+		http.Error(w, "login required", 401)
+		return
+	}
+	err := state.Transaction(r.Context(), a.store.DB, func(tx *sql.Tx) error { return revokeUserSessions(r.Context(), tx, email, a.now()) })
+	if err != nil {
+		authFailure(w, r, "could not sign out everywhere", err)
+		return
+	}
+	a.clearCookie(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *gatewayAuth) clearCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: a.cookieName(), Path: "/", MaxAge: -1, HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteStrictMode})
+}
+
+func authFailure(w http.ResponseWriter, r *http.Request, message string, err error) {
+	if event := obs.From(r.Context()); event != nil {
+		event.Fail(fmt.Errorf("%s: %w", message, err))
+	}
+	http.Error(w, message, http.StatusInternalServerError)
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, value any) bool {

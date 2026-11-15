@@ -19,6 +19,7 @@ import (
 
 	"github.com/tmaxmax/go-sse"
 
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
@@ -115,14 +116,18 @@ func (g *Gateway) startEventLoops(ctx context.Context) {
 		topics = g.defaultEventTopics()
 	}
 	for _, topic := range topics {
-		go g.pollTopic(ctx, topic)
+		obs.Go("gateway.events."+topic.name, func() { g.pollTopic(ctx, topic) })
 	}
-	go g.pollNodes(ctx)
+	obs.Go("gateway.events.nodes", func() { g.pollNodes(ctx) })
 }
 
 func (g *Gateway) defaultEventTopics() []eventTopic {
 	home := g.options.Home
 	topics := []eventTopic{
+		{name: "state", interval: 2 * time.Second, digest: func(ctx context.Context) (string, error) {
+			version, err := g.auth.store.DBVersion(ctx)
+			return strconv.FormatInt(version, 10), err
+		}},
 		// shortcut: polls local state every 2 s while a browser is connected, replace with worker push if this shows in profiles
 		{name: "sessions", interval: 2 * time.Second, digest: func(ctx context.Context) (string, error) {
 			value, err := Sessions(ctx, home)
@@ -185,11 +190,11 @@ func (g *Gateway) pollNodes(ctx context.Context) {
 	}()
 	list := h.nodes
 	if list == nil {
-		list = func(ctx context.Context) ([]TailnetNode, error) { return TailnetNodes(ctx, g.options.Home) }
+		list = g.tailnetNodes
 	}
 	target := h.target
 	if target == nil {
-		target = func(ctx context.Context, id string) (*url.URL, error) { return tailnetTarget(ctx, g.options.Home, id) }
+		target = g.tailnetTarget
 	}
 	client := h.client
 	if client == nil {
@@ -216,7 +221,7 @@ func (g *Gateway) pollNodes(ctx context.Context) {
 				}
 				relayCtx, cancel := context.WithCancel(ctx)
 				relays[node.ID] = cancel
-				go g.relayPeer(relayCtx, client, node.ID, peer)
+				obs.Go("gateway.events.peer", func() { g.relayPeer(relayCtx, client, node.ID, peer) })
 			}
 			for id, cancel := range relays {
 				if !present[id] {
@@ -255,7 +260,11 @@ func (g *Gateway) relayPeer(ctx context.Context, client *http.Client, node strin
 }
 
 func (g *Gateway) readPeerEvents(ctx context.Context, client *http.Client, node string, target *url.URL) (bool, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.JoinPath("/api/events").String(), nil)
+	path := "/api/events"
+	if g.meshPeer(ctx, node) {
+		path = "/api/sync/events"
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.JoinPath(path).String(), nil)
 	if err != nil {
 		return false, err
 	}
@@ -277,6 +286,9 @@ func (g *Gateway) readPeerEvents(ctx context.Context, client *http.Client, node 
 		var msg eventMessage
 		if json.Unmarshal([]byte(event.Data), &msg) != nil || msg.Node != "" {
 			continue
+		}
+		if msg.Topic == "state" {
+			g.wakeStatePeer(node)
 		}
 		msg.Node = node
 		g.emitEvent(msg)
@@ -323,7 +335,18 @@ func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
 		case <-g.done:
 			return
 		case <-auth.C:
-			if !private && !g.auth.authenticated(r) {
+			peer, _ := r.Context().Value(replicaPeerKey{}).(string)
+			allowed := private
+			if peer != "" {
+				if r.URL.Path == "/api/sync/events" {
+					allowed = g.meshPeer(r.Context(), peer)
+				} else {
+					allowed = g.enrolledPeer(peer)
+				}
+			} else if !allowed {
+				allowed = g.auth.authenticated(r)
+			}
+			if !allowed {
 				return
 			}
 			continue

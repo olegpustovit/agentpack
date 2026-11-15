@@ -184,11 +184,11 @@ func TestWorkerLaunchContextUsesSafeDefaultPermissions(t *testing.T) {
 
 func TestStartACPRequiresHarness(t *testing.T) {
 	dir := t.TempDir()
-	_, _, err := startACPConversation(WorkerLaunch{
+	_, _, err := startACPConversation(context.Background(), WorkerLaunch{
 		Transport: "acp",
 		Directory: dir,
 		Session:   SessionInfo{Directory: dir},
-	}, dir)
+	}, dir, acp.NewEventLog(0))
 	if err == nil || !strings.Contains(err.Error(), "harness") {
 		t.Fatalf("expected harness error, got %v", err)
 	}
@@ -224,11 +224,11 @@ func TestStartACPReplayAgent(t *testing.T) {
 		t.Setenv("AGENTPACK_TEST_ACP", "")
 		t.Setenv("AGENTPACK_TEST_ACP_FIXTURE", "")
 	})
-	session, cleanup, err := startACPConversation(WorkerLaunch{
+	session, cleanup, err := startACPConversation(context.Background(), WorkerLaunch{
 		Transport: "acp",
 		Directory: dir,
 		Session:   SessionInfo{Directory: dir, Harness: "claude"},
-	}, dir)
+	}, dir, acp.NewEventLog(0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,32 +254,23 @@ func TestStartACPReplayAgent(t *testing.T) {
 }
 
 func TestACPNeedsYouPersistsWithoutConversationReader(t *testing.T) {
-	sessionDir := t.TempDir()
-	record := WorkerRecord{ID: "session-test", Session: SessionInfo{Transport: "acp", ConversationState: "idle"}}
-	data, err := json.Marshal(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "worker.json"), data, 0o600); err != nil {
+	store := testSessionStore(t, t.TempDir())
+	ctx := context.Background()
+	info := SessionInfo{ID: "session-test", Transport: "acp", ConversationState: "idle"}
+	if err := upsertSession(ctx, store.DB, info); err != nil {
 		t.Fatal(err)
 	}
 	log := acp.NewEventLog(0)
 	conversation := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
-	conversation.SetStateChange("idle", func(state string) {
-		if err := patchWorkerConversationState(sessionDir, state); err != nil {
+	conversation.SetStateChange("idle", func(value string) {
+		if err := patchWorkerConversationState(ctx, store.DB, info.ID, value); err != nil {
 			t.Error(err)
 		}
 	})
 	log.Append("permission_request", 1, json.RawMessage(`{"requestId":"p1"}`))
-	data, err = os.ReadFile(filepath.Join(sessionDir, "worker.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(data, &record); err != nil {
-		t.Fatal(err)
-	}
-	if record.Session.ConversationState != "needs_you" {
-		t.Fatalf("worker state without a reader = %q", record.Session.ConversationState)
+	got, err := storedSession(ctx, store.Reader, info.ID)
+	if err != nil || got.ConversationState != "needs_you" {
+		t.Fatalf("state without a reader=%q err=%v", got.ConversationState, err)
 	}
 }
 func TestConversationStateWritesOnlyOnLabelTransitions(t *testing.T) {
@@ -598,7 +589,7 @@ func TestRunWorkerACPRestartAndStop(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	code, err := RunWorker(context.Background(), home, WorkerLaunch{
+	code, err := RunWorker(context.Background(), home, "test", WorkerLaunch{
 		Session:   SessionInfo{ID: "test-session", Directory: directory, Harness: "claude", Mode: "default"},
 		Program:   program,
 		Directory: directory,
@@ -611,6 +602,17 @@ func TestRunWorkerACPRestartAndStop(t *testing.T) {
 	})
 	if err != nil || code != 0 {
 		t.Fatalf("RunWorker() = %d, %v", code, err)
+	}
+	events := workerDiagnosticEvents(t, home)
+	names := map[string]int{}
+	for _, event := range events {
+		names[event.Name]++
+		if event.SessionID == "" || event.Proc != "worker" {
+			t.Fatalf("ACP worker event identity %+v", event)
+		}
+	}
+	if names["start"] != 1 || names["restart"] != 1 || names["stop"] != 1 || len(events) != 3 {
+		t.Fatalf("ACP lifecycle events %+v", names)
 	}
 }
 

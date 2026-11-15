@@ -48,6 +48,11 @@ func newStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	return store
 }
 
@@ -55,17 +60,11 @@ func newStore(t *testing.T) *Store {
 func exchange(t *testing.T, stores ...*Store) {
 	t.Helper()
 	for _, from := range stores {
-		inventory, err := from.Inventory()
-		if err != nil {
-			t.Fatal(err)
-		}
 		for _, to := range stores {
 			if to == from {
 				continue
 			}
-			if _, err := to.ImportObjects(exportInventory(t, from, inventory)); err != nil {
-				t.Fatal(err)
-			}
+			copyRegistry(t, from, to)
 			if err := to.MergeHeads(); err != nil {
 				t.Fatal(err)
 			}
@@ -87,14 +86,9 @@ func TestIndependentMergesOfCleanEditsConvergeOnOneObject(t *testing.T) {
 		map[string]string{"github.com/acme/tool": "base", "github.com/acme/left": "l1"},
 		map[string]string{"github.com/acme/tool": "base", "github.com/acme/right": "r1"})
 	// Both machines merge the same two heads without talking to each other.
-	aInventory, _ := a.Inventory()
-	bInventory, _ := b.Inventory()
-	if _, err := b.ImportObjects(exportInventory(t, a, aInventory)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.ImportObjects(exportInventory(t, b, bInventory)); err != nil {
-		t.Fatal(err)
-	}
+	aChanges, bChanges := registryChanges(t, a), registryChanges(t, b)
+	applyRegistryChanges(t, b, aChanges)
+	applyRegistryChanges(t, a, bChanges)
 	if err := a.MergeHeads(); err != nil {
 		t.Fatal(err)
 	}

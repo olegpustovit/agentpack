@@ -15,7 +15,7 @@ describe("unavailableMessage", () => {
 
   it("keeps ACP sessions in Chat even when they have no terminal input", () => {
     expect(unavailableMessage({ transport: "acp", state: { interactive: false } }, false)).toBeUndefined()
-    expect(unavailableMessage({ transport: "acp", state: { interactive: false } }, true)).toBe("Offline · showing last-known session metadata")
+    expect(unavailableMessage({ transport: "acp", state: { interactive: false } }, true)).toBeUndefined()
   })
 
   it("marks a stale session offline even with no info", () => {

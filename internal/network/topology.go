@@ -14,12 +14,14 @@ type topology struct {
 	Peers []topologyPeer `json:"peers"`
 }
 type topologySelf struct {
+	Main  bool   `json:"main"`
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	OS    string `json:"os"`
 	Relay string `json:"relay"`
 }
 type topologyPeer struct {
+	Main       bool      `json:"main"`
 	ID         string    `json:"id"`
 	Name       string    `json:"name"`
 	OS         string    `json:"os"`
@@ -33,10 +35,10 @@ type topologyPeer struct {
 	Sessions int `json:"sessions"`
 }
 
-func tailnetTopology(ctx context.Context, home string) (topology, error) {
+func (g *Gateway) tailnetTopology(ctx context.Context) (topology, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	config, err := ReadSharingConfig(home)
+	config, err := ReadSharingConfig(g.store, g.options.Home)
 	if err != nil {
 		return topology{}, err
 	}
@@ -44,7 +46,19 @@ func tailnetTopology(ctx context.Context, home string) (topology, error) {
 	if err != nil {
 		return topology{}, err
 	}
-	return topologyFrom(ctx, status, config, probeTailnetPeer)
+	result, err := topologyFrom(ctx, status, config, probeTailnetPeer)
+	if err != nil {
+		return result, err
+	}
+	roles, err := g.auth.store.Main(ctx)
+	if err != nil {
+		return result, err
+	}
+	result.Self.Main = roles.MainNode != "" && result.Self.ID == roles.MainNode
+	for i := range result.Peers {
+		result.Peers[i].Main = roles.MainNode != "" && result.Peers[i].ID == roles.MainNode
+	}
+	return result, nil
 }
 
 // topologyFrom classifies every peer. Only online, permitted peers with an address are probed.

@@ -43,7 +43,7 @@ export function useGatewayActions() {
   const sync = useMutation<unknown, Error, Peer>({
     mutationFn: (peer) => api("/api/library/replication/sync", { body: { peer: peer.id } }),
     onSuccess: (_result, peer) => {
-      hud.success(`Sync complete with ${peer.name}.`)
+      hud.success(`Sync requested with ${peer.name}.`)
       void refreshReplication()
     },
     onError: (error, peer) => hud.error(`Couldn't sync ${peer.name}: ${errorText(error)}`, () => sync.mutate(peer)),
@@ -88,10 +88,10 @@ export function useGatewayActions() {
     onError: (error) => hud.error(`Couldn't stop the gateway: ${errorText(error)}`, () => stopGateway.mutate()),
   })
 
-  const signOut = useMutation<unknown, Error, void>({
-    mutationFn: () => {
+  const signOut = useMutation<unknown, Error, "current" | "all">({
+    mutationFn: (scope) => {
       terminalPool.disposeAll()
-      return api("/api/logout", { method: "POST" })
+      return api(scope === "all" ? "/api/logout-all" : "/api/logout", { method: "POST" })
     },
     onSuccess: () => {
       queryClient.clear()
@@ -99,9 +99,9 @@ export function useGatewayActions() {
       void navigate({ to: "/login" })
     },
     // A 401 means the session already ended; the unauthorized handler has sent the user to /login.
-    onError: (error) => {
+    onError: (error, scope) => {
       if (!(error instanceof ApiError && error.status === 401)) {
-        hud.error(`Couldn't sign out: ${errorText(error)}`, () => signOut.mutate())
+        hud.error(`Couldn't sign out: ${errorText(error)}`, () => signOut.mutate(scope))
       }
     },
   })

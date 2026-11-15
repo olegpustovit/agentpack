@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/gofrs/flock"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 const (
@@ -18,6 +21,7 @@ const (
 )
 
 var errSessionBlobQuota = errors.New("session image storage limit reached")
+var errBlobIntegrity = errors.New("blob integrity mismatch")
 
 func validateBlobSHA(sha string) (string, error) {
 	sha = strings.ToLower(strings.TrimSpace(sha))
@@ -56,11 +60,15 @@ func serveSessionBlob(w http.ResponseWriter, _ *http.Request, sessionDir, shaPar
 		http.Error(w, "blob not found", http.StatusNotFound)
 		return
 	}
-	data, err := os.ReadFile(blobPath(sessionDir, sha))
+	data, err := readSessionBlob(sessionDir, sha)
 	if err != nil {
 		http.Error(w, "blob not found", http.StatusNotFound)
 		return
 	}
+	writeSessionBlob(w, data)
+}
+
+func writeSessionBlob(w http.ResponseWriter, data []byte) {
 	ctype := sniffBlobMIME(data)
 	if ctype == "" {
 		http.Error(w, "blob not found", http.StatusNotFound)
@@ -72,6 +80,35 @@ func serveSessionBlob(w http.ResponseWriter, _ *http.Request, sessionDir, shaPar
 	w.Header().Set("Content-Security-Policy", "sandbox")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+func readSessionBlob(sessionDir, sha string) ([]byte, error) {
+	root, err := os.OpenRoot(sessionDir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	name := filepath.Join("blobs", sha)
+	info, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxBlobBytes {
+		return nil, errBlobIntegrity
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, maxBlobBytes+1))
+	if err := errors.Join(readErr, file.Close()); err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(data)
+	if len(data) > maxBlobBytes || hex.EncodeToString(sum[:]) != sha {
+		return nil, errBlobIntegrity
+	}
+	return data, nil
 }
 
 func proxySessionBlob(w http.ResponseWriter, response *http.Response) {
@@ -135,10 +172,18 @@ func storeSessionBlob(sessionDir string, data []byte) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
+	lock := flock.New(filepath.Join(sessionDir, "blobs.lock"))
+	if err := lock.Lock(); err != nil {
+		return "", err
+	}
+	defer lock.Unlock()
 	path := blobPath(sessionDir, sha)
 	if info, err := os.Lstat(path); err == nil {
 		if !info.Mode().IsRegular() {
 			return "", errors.New("invalid blob file")
+		}
+		if _, err := readSessionBlob(sessionDir, sha); err != nil {
+			return "", err
 		}
 		return sha, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -151,12 +196,21 @@ func storeSessionBlob(sessionDir string, data []byte) (string, error) {
 	if blobQuotaExceeded(used, files, int64(len(data))) {
 		return "", errSessionBlobQuota
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	file, err := os.CreateTemp(dir, ".blob-*")
+	if err != nil {
 		return "", err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	defer func() { file.Close(); os.Remove(file.Name()) }()
+	if _, err := file.Write(data); err != nil {
+		return "", err
+	}
+	if err := file.Sync(); err != nil {
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		return "", err
+	}
+	if err := paths.RenameDurable(file.Name(), path, false); err != nil {
 		return "", err
 	}
 	return sha, nil

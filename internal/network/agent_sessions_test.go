@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestListAgentSessionsFixture(t *testing.T) {
@@ -25,14 +27,14 @@ func TestListAgentSessionsFixture(t *testing.T) {
 
 func TestAgentSessionsGateway(t *testing.T) {
 	home := t.TempDir()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
 	if err := remember(home, SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
 		t.Fatal(err)
 	}
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,14 +107,14 @@ func TestACPConversationOwnerPersistsStableIdentity(t *testing.T) {
 		Directory: directory, FolderID: folderID, Harness: "agent", Mode: "default",
 		Transport: "acp", AgentSessionID: "agent-session-1", StartedBy: &owner,
 	}
-	if err := rememberACPConversationOwner(home, session, ""); err != nil {
+	if err := testRememberACPConversationOwner(t, home, session, ""); err != nil {
 		t.Fatal(err)
 	}
-	got, found, err := readACPConversationOwner(home, folderID, "cursor", session.AgentSessionID)
+	got, found, err := readACPConversationOwner(t.Context(), testSessionStore(t, home), folderID, "cursor", session.AgentSessionID)
 	if err != nil || !found || got != owner {
 		t.Fatalf("owner = %+v, found=%t, err=%v", got, found, err)
 	}
-	if _, found, err := readACPConversationOwner(home, folderID, "cursor", "other-session"); err != nil || found {
+	if _, found, err := readACPConversationOwner(t.Context(), testSessionStore(t, home), folderID, "cursor", "other-session"); err != nil || found {
 		t.Fatalf("other session owner found=%t, err=%v", found, err)
 	}
 }

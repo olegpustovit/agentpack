@@ -28,6 +28,8 @@ func TestTerminalChild(t *testing.T) {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		switch scanner.Text() {
+		case "trace":
+			fmt.Println("TRACE", os.Getenv("AGENTPACK_TRACE"))
 		case "size":
 			columns, rows, err := term.GetSize(int(os.Stdin.Fd()))
 			if err != nil {

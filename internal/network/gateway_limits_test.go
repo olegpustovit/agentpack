@@ -2,31 +2,44 @@ package network
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func TestLimitsSurviveRestartAndRefreshBehindTheReader(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "network", "limits.json")
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
 	runs := make(chan string, 1)
 	release := make(chan struct{})
+	started := make(chan struct{}, 1)
 	probe := func(context.Context) []harness.LimitSnapshot {
+		started <- struct{}{}
 		<-release
 		return []harness.LimitSnapshot{{Harness: <-runs}}
 	}
 
-	first := newLimitsCache(path, probe)
+	first, err := newLimitsCache(store, "test-node", probe)
+	if err != nil {
+		t.Fatal(err)
+	}
 	runs <- "first"
 	close(release)
 	if got := first.get(context.Background()); got[0].Harness != "first" {
 		t.Fatalf("a cold cache must collect: %#v", got)
 	}
 
+	<-started
 	release = make(chan struct{})
-	restarted := newLimitsCache(path, probe)
+	restarted, err := newLimitsCache(store, "test-node", probe)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := restarted.current().Snapshots; len(got) != 1 || got[0].Harness != "first" {
 		t.Fatalf("restart lost the cache: %#v", got)
 	}
@@ -37,12 +50,58 @@ func TestLimitsSurviveRestartAndRefreshBehindTheReader(t *testing.T) {
 	if got := restarted.get(cancelled); got[0].Harness != "first" {
 		t.Fatalf("stale read: %#v", got)
 	}
+	<-started
 	runs <- "second"
 	close(release)
-	for restarted.refreshing.Load() {
-		time.Sleep(time.Millisecond)
-	}
+	restarted.collecting.Lock()
+	restarted.collecting.Unlock()
 	if got := restarted.current().Snapshots; got[0].Harness != "second" {
 		t.Fatalf("refresh did not replace the cache: %#v", got)
+	}
+}
+
+func TestLimitsPersistPerNodeAndReplaceOnlyTheirOwnRows(t *testing.T) {
+	home := t.TempDir()
+	store, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := func(context.Context) []harness.LimitSnapshot {
+		return []harness.LimitSnapshot{{Harness: "codex"}, {Harness: "claude"}}
+	}
+	a, err := newLimitsCache(store, "node-a", probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.get(context.Background())
+	b, err := newLimitsCache(store, "node-b", probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.get(context.Background())
+	if err := a.save(savedLimits{At: time.Now(), Snapshots: []harness.LimitSnapshot{{Harness: "claude"}}}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := store.Reader.QueryRow("SELECT count(*) FROM limits WHERE node_id='node-a'").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("own rows=%d err=%v", count, err)
+	}
+	if err := store.Reader.QueryRow("SELECT count(*) FROM limits WHERE node_id='node-b'").Scan(&count); err != nil || count != 2 {
+		t.Fatalf("other node rows=%d err=%v", count, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	restarted, err := newLimitsCache(store, "node-a", probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := restarted.current().Snapshots; len(got) != 1 || got[0].Harness != "claude" {
+		t.Fatalf("lost persisted replacement: %#v", got)
 	}
 }

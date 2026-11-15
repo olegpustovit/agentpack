@@ -1,8 +1,9 @@
 import { expect, test, type Page, type Route } from "@playwright/test"
+import { mockAPI } from "./helpers"
 
 const identity = {
   node: { id: "n1", name: "host-a", os: "linux", version: "0.9.0" },
-  auth: "root",
+  auth: "ada@example.com",
   tailscale_user: "ada@example.com",
 }
 const nodes = [
@@ -10,7 +11,7 @@ const nodes = [
   { id: "n3", name: "lab-pi", online: false },
 ]
 const replication = {
-  peers: [{ node: "n2", receipt_count: 3, digests: [] }],
+  peers: [{ node: "n2", mesh: true }],
   contacts: { n2: { at: "2026-10-30T10:00:00Z" } },
 }
 
@@ -27,26 +28,30 @@ function answer(route: Route, json: unknown = {}, status = 200) {
 }
 
 // A stateful gateway: sharing and sign-in survive across requests, as they do on the real server.
-async function mockGateway(page: Page, options: { signedIn?: boolean; setup?: boolean } = {}) {
+async function mockGateway(page: Page, options: { signedIn?: boolean; unclaimed?: boolean; legacy?: boolean } = {}) {
+  await mockAPI(page, { authenticated: options.signedIn ?? true, unclaimed: options.unclaimed ?? false })
   let signedIn = options.signedIn ?? true
   let sharing = true
+  let claimed = !(options.unclaimed ?? false)
   await page.route("**/api/status", (route) =>
-    answer(route, { setup_required: options.setup ?? false, authenticated: signedIn }),
+    answer(route, { claimed, legacy: options.legacy ?? false, email: signedIn ? "ada@example.com" : "", authenticated: signedIn }),
   )
+  await page.route("**/api/config", (route) => claimed ? answer(route, { ui_build_id: "test-build" }) : route.fulfill({ status: 403, body: "unclaimed" }))
   await page.route("**/api/login", (route) => {
     signedIn = true
     return answer(route, { authenticated: true })
   })
-  await page.route("**/api/setup", (route) => {
+  await page.route("**/api/claim", (route) => {
     signedIn = true
+    claimed = true
     return answer(route, { authenticated: true })
   })
-  await page.route("**/api/logout", (route) => {
+  await page.route(/\/api\/logout(?:-all)?$/, (route) => {
     signedIn = false
     return answer(route, undefined, 204)
   })
   await page.route("**/api/identity", (route) => answer(route, identity))
-  await page.route("**/api/nodes", (route) => answer(route, nodes))
+  await page.route("**/api/nodes*", (route) => answer(route, nodes))
   await page.route("**/api/events", (route) => route.abort())
   await page.route("**/api/settings", (route) =>
     answer(route, { running: true, platform: "linux", sharing_enabled: sharing, allowed_peers: ["tag:agents"] }),
@@ -65,7 +70,8 @@ async function mockGateway(page: Page, options: { signedIn?: boolean; setup?: bo
 }
 
 async function signIn(page: Page) {
-  await page.getByLabel("Root account password").fill("correct horse battery")
+  await page.getByLabel("Email", { exact: true }).fill("ada@example.com")
+  await page.getByLabel("Password", { exact: true }).fill("correct horse battery")
   await page.getByRole("button", { name: "Sign in" }).click()
 }
 
@@ -105,10 +111,10 @@ test("the sharing switch sends the new state and says when it applies", async ({
   ).toBeVisible()
 })
 
-test("replication rows show receipts, enroll only online peers and sync one", async ({ page }) => {
+test("replication rows show enrollment, enroll only online peers and sync one", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings/replication")
-  await expect(page.getByText("3 verified object receipts · online")).toBeVisible()
+  await expect(page.getByText("Enrolled · online")).toBeVisible()
   await expect(page.getByText("Offline · enrollment unavailable")).toBeVisible()
   await expect(page.getByRole("button", { name: "Enroll" })).toBeDisabled()
 
@@ -133,10 +139,10 @@ test("appearance sets the theme and keeps it across a reload", async ({ page }) 
 test("account shows the signed-in identity and the attribution sentence", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings/account")
-  await expect(page.getByText("ada@example.com")).toBeVisible()
+  await expect(page.getByText("ada@example.com, on host-a", { exact: true })).toBeVisible()
   await expect(
     page.getByText(
-      "Sessions are attributed per machine and Tailscale user. Everyone using this root password appears as root.",
+      "Sessions are attributed to your account. Signing out leaves existing agents running.",
     ),
   ).toBeVisible()
 })
@@ -173,7 +179,7 @@ test("sign out calls the logout endpoint and returns to the login card", async (
   await mockGateway(page)
   await page.goto("/settings/account")
 
-  await page.getByRole("button", { name: "Sign out" }).click()
+  await page.getByRole("button", { name: "Sign out", exact: true }).click()
 
   await expect(page).toHaveURL(/\/login$/)
   await expect.poll(() => calls).toEqual([{ request: "POST /api/logout", body: null }])
@@ -221,30 +227,79 @@ test("a wrong password says so under the field and stays on the card", async ({ 
   await expect(page).toHaveURL(/\/login$/)
 })
 
-test("first run asks for the setup token and creates the root account", async ({ page }) => {
-  await mockGateway(page, { signedIn: false, setup: true })
+test("first run claims the owner account and signs in", async ({ page }) => {
+  await mockGateway(page, { signedIn: false, unclaimed: true })
+  if (process.env.CAPTURE) await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto("/login")
-  await expect(page.getByRole("heading", { name: "Set up your gateway" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Claim your gateway" })).toBeVisible()
 
-  await page.getByLabel("Setup token").fill("abc123")
-  await page.getByLabel("Root account password").fill("correct horse battery")
-  await page.getByRole("button", { name: "Create root account" }).click()
+  await page.getByLabel("Email", { exact: true }).fill("ada@example.com")
+  await page.getByLabel("Password", { exact: true }).fill("correct horse battery")
+  await page.getByLabel("Confirm password", { exact: true }).fill("correct horse battery")
+  if (process.env.CAPTURE) {
+    await page.screenshot({ path: test.info().outputPath("desktop.png"), animations: "disabled" })
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.emulateMedia({ colorScheme: "dark" })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: test.info().outputPath("mobile.png"), animations: "disabled" })
+  }
+  await page.getByRole("button", { name: "Claim gateway" }).click()
 
   await expect.poll(() => calls).toEqual([
-    { request: "POST /api/setup", body: { password: "correct horse battery", token: "abc123" } },
+    { request: "POST /api/claim", body: { email: "ada@example.com", password: "correct horse battery" } },
   ])
   await expect(page).toHaveURL(/\/sessions$/)
+  await page.goto("/settings/account")
+  if (process.env.CAPTURE) {
+    await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible()
+    await page.screenshot({ path: test.info().outputPath("account-mobile.png"), animations: "disabled" })
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.emulateMedia({ colorScheme: "light" })
+    await page.screenshot({ path: test.info().outputPath("account-desktop.png"), animations: "disabled" })
+  }
+  await page.getByRole("button", { name: "Sign out", exact: true }).click()
+  await expect(page).toHaveURL(/\/login$/)
+  await signIn(page)
+  await expect(page).toHaveURL(/\/sessions$/)
+  expect(calls.map((call) => call.request)).toEqual(["POST /api/claim", "POST /api/logout", "POST /api/login"])
 })
 
-test("a wrong setup token keeps the consent return_to", async ({ page }) => {
-  await mockGateway(page, { signedIn: false, setup: true })
-  await page.route("**/api/setup", (route) => route.fulfill({ status: 401, body: "invalid setup token" }))
+test("a failed claim keeps the consent return_to", async ({ page }) => {
+  await mockGateway(page, { signedIn: false, unclaimed: true })
+  await page.route("**/api/claim", (route) => route.fulfill({ status: 401, body: "gateway already claimed" }))
   await page.goto(`/login?return_to=${encodeURIComponent("/oauth/authorize?x=1")}`)
 
-  await page.getByLabel("Setup token").fill("wrong")
-  await page.getByLabel("Root account password").fill("correct horse battery")
-  await page.getByRole("button", { name: "Create root account" }).click()
+  await page.getByLabel("Email", { exact: true }).fill("ada@example.com")
+  await page.getByLabel("Password", { exact: true }).fill("correct horse battery")
+  await page.getByLabel("Confirm password", { exact: true }).fill("correct horse battery")
+  await page.getByRole("button", { name: "Claim gateway" }).click()
 
-  await expect(page.getByRole("alert")).toContainText("invalid setup token")
+  await expect(page.getByRole("alert")).toContainText("gateway already claimed")
   await expect(page).toHaveURL(/return_to=/)
+})
+
+
+test("sign out everywhere confirms before revoking account logins", async ({ page }) => {
+  await mockGateway(page)
+  await page.goto("/settings/account")
+  await page.getByRole("button", { name: "Sign out everywhere…", exact: true }).click()
+  const dialog = page.getByRole("alertdialog")
+  await expect(dialog).toContainText("Sign out everywhere?")
+  expect(calls).toEqual([])
+  await dialog.getByRole("button", { name: "Sign out everywhere", exact: true }).click()
+  await expect(page).toHaveURL(/\/login$/)
+  expect(calls).toEqual([{ request: "POST /api/logout-all", body: null }])
+})
+
+test("legacy claiming asks for the current password and keeps it", async ({ page }) => {
+  await mockGateway(page, { signedIn: false, unclaimed: true, legacy: true })
+  await page.route("**/api/claim", (route) => route.fulfill({ status: 401, body: "invalid current password" }))
+  await page.goto("/login")
+  await page.getByLabel("Email", { exact: true }).fill("ada@example.com")
+  await page.getByLabel("Current gateway password", { exact: true }).fill("correct horse battery")
+  await page.getByLabel("Password", { exact: true }).fill("correct horse battery")
+  await page.getByLabel("Confirm password", { exact: true }).fill("correct horse battery")
+  await page.getByRole("button", { name: "Claim gateway", exact: true }).click()
+  await expect(page.getByRole("alert")).toContainText("invalid current password")
+  await expect(page).toHaveURL(/\/login$/)
 })

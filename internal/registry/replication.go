@@ -3,11 +3,12 @@ package registry
 import (
 	"bytes"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -15,18 +16,8 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/obs"
 )
-
-type Inventory struct {
-	Schema     int      `json:"schema"`
-	Objects    []string `json:"objects"`
-	Tombstones []string `json:"tombstones"`
-}
-
-type InventoryDelta struct {
-	Objects    []string `json:"objects"`
-	Tombstones []string `json:"tombstones"`
-}
 
 type Tombstone struct {
 	ID        string    `json:"id"`
@@ -36,278 +27,61 @@ type Tombstone struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-type peerState struct {
-	Peers    []string            `json:"peers"`
-	Receipts map[string][]string `json:"receipts"`
-	// Machines someone removed. Automatic enrollment must not undo that.
-	Left []string `json:"left,omitempty"`
-}
-
 type PeerReplica struct {
-	Node         string   `json:"node"`
-	ReceiptCount int      `json:"receipt_count"`
-	Digests      []string `json:"digests"`
+	Node string `json:"node"`
+	Mesh bool   `json:"mesh"`
 }
 
 var peerName = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
-func (s *Store) EnrollPeer(node string) error {
+func ValidatePeer(node string) error {
 	if !peerName.MatchString(node) || node == "." || node == ".." {
 		return fmt.Errorf("invalid peer identity")
 	}
-	return s.withLock(func() error {
-		state, err := s.readPeerState()
-		if err != nil {
-			return err
-		}
-		state.Peers = appendUnique(state.Peers, node)
-		sort.Strings(state.Peers)
-		state.Left = slices.DeleteFunc(state.Left, func(peer string) bool { return peer == node })
-		return s.writePeerState(state)
-	})
+	return nil
 }
 
-// EnrollOwnMachine enrolls a machine discovered under the same owner, unless someone removed it.
-func (s *Store) EnrollOwnMachine(node string) error {
-	if !peerName.MatchString(node) || node == "." || node == ".." {
-		return fmt.Errorf("invalid peer identity")
+func (s *Store) EnrollPeer(node string) error {
+	if err := ValidatePeer(node); err != nil {
+		return err
 	}
-	return s.withLock(func() error {
-		state, err := s.readPeerState()
-		if err != nil {
-			return err
-		}
-		if slices.Contains(state.Peers, node) || slices.Contains(state.Left, node) {
-			return nil
-		}
-		state.Peers = append(state.Peers, node)
-		sort.Strings(state.Peers)
-		return s.writePeerState(state)
-	})
+	_, err := s.sql.DB.Exec(`INSERT INTO registry_peers(node_id,mesh,removed) VALUES (?,1,0)
+ ON CONFLICT(node_id) DO UPDATE SET mesh=1,removed=0`, node)
+	return err
+}
+
+func (s *Store) EnrollOwnMachine(node string) error {
+	if err := ValidatePeer(node); err != nil {
+		return err
+	}
+	_, err := s.sql.DB.Exec("INSERT OR IGNORE INTO registry_peers(node_id) VALUES (?)", node)
+	return err
 }
 
 func (s *Store) ListPeers() ([]PeerReplica, error) {
-	state, err := s.readPeerState()
+	rows, err := s.sql.Reader.Query("SELECT node_id,mesh FROM registry_peers WHERE removed=0 ORDER BY node_id")
 	if err != nil {
 		return nil, err
 	}
-	peers := make([]PeerReplica, 0, len(state.Peers))
-	for _, node := range state.Peers {
-		peers = append(peers, PeerReplica{Node: node, ReceiptCount: len(state.Receipts[node]), Digests: slices.Clone(state.Receipts[node])})
+	defer rows.Close()
+	peers := []PeerReplica{}
+	for rows.Next() {
+		var p PeerReplica
+		if err := rows.Scan(&p.Node, &p.Mesh); err != nil {
+			return nil, err
+		}
+		peers = append(peers, p)
 	}
-	return peers, nil
+	return peers, rows.Err()
 }
 
 func (s *Store) RemovePeer(node string) error {
-	if !peerName.MatchString(node) || node == "." || node == ".." {
-		return fmt.Errorf("invalid peer identity")
+	if err := ValidatePeer(node); err != nil {
+		return err
 	}
-	return s.withLock(func() error {
-		state, err := s.readPeerState()
-		if err != nil {
-			return err
-		}
-		state.Peers = slices.DeleteFunc(state.Peers, func(peer string) bool { return peer == node })
-		delete(state.Receipts, node)
-		state.Left = appendUnique(state.Left, node)
-		return s.writePeerState(state)
-	})
-}
-
-func (s *Store) Inventory() (Inventory, error) {
-	var inventory Inventory
-	objects, err := os.ReadDir(filepath.Join(s.root, objectsDir))
-	if err != nil {
-		return inventory, err
-	}
-	inventory = Inventory{Schema: objectSchema, Objects: []string{}, Tombstones: []string{}}
-	tombstoned := map[string]bool{}
-	tombstoneEntries, err := os.ReadDir(filepath.Join(s.root, tombstonesDir))
-	if err != nil {
-		return Inventory{}, err
-	}
-	for _, entry := range tombstoneEntries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		id := strings.TrimSuffix(entry.Name(), ".json")
-		tombstone, err := s.readTombstone(id)
-		if err != nil {
-			return Inventory{}, err
-		}
-		tombstoned[tombstone.Agentpack] = true
-		inventory.Tombstones = append(inventory.Tombstones, id)
-	}
-	activeRevisions := map[string]bool{}
-	activePackages := map[string]bool{}
-	referencedPackages := map[string]bool{}
-	activeAgentpacks := map[string]bool{}
-	publicObjects := map[string]importedObject{}
-	for _, entry := range objects {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		id := strings.TrimSuffix(entry.Name(), ".json")
-		obj, err := s.readPublicObject(id)
-		if err != nil {
-			return Inventory{}, err
-		}
-		publicObjects[id] = obj
-		if obj.revision != nil {
-			for _, packageID := range obj.revision.PackageIDs {
-				referencedPackages[packageID] = true
-			}
-		}
-		if obj.revision != nil && !tombstoned[obj.revision.AgentpackID] {
-			activeRevisions[id] = true
-			activeAgentpacks[obj.revision.AgentpackID] = true
-			for _, packageID := range obj.revision.PackageIDs {
-				activePackages[packageID] = true
-			}
-		}
-	}
-	for id, obj := range publicObjects {
-		if obj.packageRecord != nil && !referencedPackages[id] {
-			activePackages[id] = true
-		}
-	}
-	for id, obj := range publicObjects {
-		if obj.revision != nil && activeRevisions[id] || obj.packageRecord != nil && activePackages[id] || obj.name != nil && activeAgentpacks[obj.name.Agentpack] {
-			inventory.Objects = append(inventory.Objects, id)
-		}
-	}
-	sort.Strings(inventory.Objects)
-	sort.Strings(inventory.Tombstones)
-	return inventory, nil
-}
-
-func (s *Store) MissingFrom(remote Inventory) (InventoryDelta, error) {
-	if remote.Schema != objectSchema {
-		return InventoryDelta{}, fmt.Errorf("unsupported registry inventory schema")
-	}
-	local, err := s.Inventory()
-	if err != nil {
-		return InventoryDelta{}, err
-	}
-	knownObjects, knownTombstones := map[string]bool{}, map[string]bool{}
-	for _, id := range local.Objects {
-		knownObjects[id] = true
-	}
-	for _, id := range local.Tombstones {
-		knownTombstones[id] = true
-	}
-	delta := InventoryDelta{Objects: []string{}, Tombstones: []string{}}
-	for _, id := range remote.Objects {
-		if !validDigest(id) {
-			return InventoryDelta{}, fmt.Errorf("invalid registry inventory digest")
-		}
-		if !knownObjects[id] {
-			delta.Objects = append(delta.Objects, id)
-		}
-	}
-	for _, id := range remote.Tombstones {
-		if !validDigest(id) {
-			return InventoryDelta{}, fmt.Errorf("invalid registry inventory tombstone digest")
-		}
-		if !knownTombstones[id] {
-			delta.Tombstones = append(delta.Tombstones, id)
-		}
-	}
-	delta.Objects = uniqueDigests(delta.Objects)
-	delta.Tombstones = uniqueDigests(delta.Tombstones)
-	return delta, nil
-}
-
-func (s *Store) ExportObject(id string) ([]byte, error) {
-	path, err := s.objectPath(id)
-	if err != nil {
-		return nil, err
-	}
-	data, err := readRegular(path)
-	if os.IsNotExist(err) {
-		path = filepath.Join(s.root, tombstonesDir, id+".json")
-		data, err = readRegular(path)
-		if err == nil {
-			if _, err = s.readTombstone(id); err != nil {
-				return nil, err
-			}
-		}
-		if os.IsNotExist(err) {
-			return nil, ErrNotFound
-		}
-		return data, err
-	}
-	if err != nil {
-		return nil, err
-	}
-	if _, err := s.readPublicObject(id); err != nil {
-		return nil, err
-	}
-	return data, nil
-}
-
-// ImportObjects validates the complete batch before publishing any object.
-func (s *Store) ImportObjects(documents map[string][]byte) ([]string, error) {
-	prepared := make(map[string]importedObject, len(documents))
-	ids := make([]string, 0, len(documents))
-	for expectedID, data := range documents {
-		obj, err := decodeImported(data)
-		if err != nil {
-			return nil, err
-		}
-		if !validDigest(expectedID) || obj.id != expectedID {
-			return nil, fmt.Errorf("registry object digest mismatch")
-		}
-		if _, exists := prepared[obj.id]; exists {
-			continue
-		}
-		prepared[obj.id] = obj
-		ids = append(ids, obj.id)
-	}
-	sort.Strings(ids)
-	return ids, s.withLock(func() error {
-		for _, id := range ids {
-			obj := prepared[id]
-			if obj.tombstone != nil {
-				continue
-			}
-			if obj.revision != nil && obj.revision.Schema != 0 && obj.revision.Schema != objectSchema {
-				return fmt.Errorf("unsupported registry object schema")
-			}
-			if obj.packageRecord != nil && obj.packageRecord.Schema != 0 && obj.packageRecord.Schema != objectSchema {
-				return fmt.Errorf("unsupported registry object schema")
-			}
-		}
-		if err := s.validateImportReferences(prepared); err != nil {
-			return err
-		}
-		// Tombstones keep stale replicas hidden; accepting their bytes lets peers converge and acknowledge deletion.
-		for _, id := range ids {
-			obj := prepared[id]
-			var path string
-			if obj.tombstone != nil {
-				path = filepath.Join(s.root, tombstonesDir, id+".json")
-			} else {
-				path = filepath.Join(s.root, objectsDir, id+".json")
-			}
-			if err := writeExclusiveOrVerify(path, obj.data); err != nil {
-				return err
-			}
-		}
-		if len(ids) == 0 {
-			return nil
-		}
-		idx, err := s.rebuildIndex()
-		if err != nil {
-			return err
-		}
-		for _, pack := range idx.Agentpacks {
-			if err := s.writeMetadata(pack); err != nil {
-				return err
-			}
-		}
-		return s.writeIndexUnlocked(idx)
-	})
+	_, err := s.sql.DB.Exec(`INSERT INTO registry_peers(node_id,removed) VALUES (?,1)
+ ON CONFLICT(node_id) DO UPDATE SET removed=1,mesh=0`, node)
+	return err
 }
 
 type importedObject struct {
@@ -329,7 +103,7 @@ func decodeImported(data []byte) (importedObject, error) {
 	}
 	if _, isName := shape["object_type"]; isName {
 		var name nameRevision
-		if err := json.Unmarshal(data, &name); err != nil || name.ObjectType != nameObjectType || name.Schema != objectSchema || !validID(name.Agentpack) || strings.TrimSpace(name.Name) == "" || credentialShaped(name.Name) || name.Node == "" || credentialShaped(name.Node) || name.CreatedAt.IsZero() || !canonicalObject(data, name) {
+		if err := json.Unmarshal(data, &name); err != nil || name.ObjectType != nameObjectType || name.Schema != objectSchema || !validID(name.Agentpack) || strings.TrimSpace(name.Name) == "" || obs.CredentialShaped(name.Name) || name.Node == "" || obs.CredentialShaped(name.Node) || name.CreatedAt.IsZero() || !canonicalObject(data, name) {
 			return obj, fmt.Errorf("invalid registry agentpack name object")
 		}
 		name.ID = obj.id
@@ -360,7 +134,7 @@ func decodeImported(data []byte) (importedObject, error) {
 			return obj, fmt.Errorf("invalid registry revision snapshot")
 		}
 		for _, value := range []string{revision.Project, revision.SourceNode, revision.Label} {
-			if value != "<local>" && credentialShaped(value) {
+			if value != "<local>" && obs.CredentialShaped(value) {
 				return obj, fmt.Errorf("registry revision contains credential-shaped metadata")
 			}
 		}
@@ -379,7 +153,7 @@ func decodeImported(data []byte) (importedObject, error) {
 			return obj, fmt.Errorf("invalid registry package object")
 		}
 		for _, value := range []string{pkg.Module, pkg.Commit, pkg.URL, pkg.Owner, pkg.Repo, pkg.Path, pkg.CacheKey, pkg.Name, pkg.SourceNode, pkg.Project} {
-			if value != "<local>" && credentialShaped(value) {
+			if value != "<local>" && obs.CredentialShaped(value) {
 				return obj, fmt.Errorf("registry package contains credential-shaped metadata")
 			}
 		}
@@ -479,7 +253,7 @@ func (s *Store) validateImportReferences(prepared map[string]importedObject) err
 	}
 	for _, name := range names {
 		if tombstones[name.Agentpack] {
-			return fmt.Errorf("registry name object belongs to a deleted agentpack")
+			continue
 		}
 		if hasOwnerRevision(revisions, name.Agentpack) {
 			continue
@@ -491,71 +265,10 @@ func (s *Store) validateImportReferences(prepared map[string]importedObject) err
 	return nil
 }
 
-func (s *Store) Acknowledge(peer string, digests []string) error {
-	if !peerName.MatchString(peer) || peer == "." || peer == ".." {
-		return fmt.Errorf("invalid peer identity")
-	}
-	return s.withLock(func() error {
-		state, err := s.readPeerState()
-		if err != nil {
-			return err
-		}
-		if !slices.Contains(state.Peers, peer) {
-			return fmt.Errorf("peer is not enrolled")
-		}
-		for _, id := range digests {
-			if _, err := s.ExportObject(id); err != nil {
-				return err
-			}
-			state.Receipts[peer] = appendUnique(state.Receipts[peer], id)
-		}
-		sort.Strings(state.Receipts[peer])
-		return s.writePeerState(state)
-	})
-}
-
-func (s *Store) readPeerState() (peerState, error) {
-	state := peerState{Peers: []string{}, Receipts: map[string][]string{}}
-	data, err := readRegular(filepath.Join(s.root, peersDir, "state.json"))
-	if os.IsNotExist(err) {
-		return state, nil
-	}
-	if err != nil {
-		return state, err
-	}
-	if err := json.Unmarshal(data, &state); err != nil || state.Receipts == nil {
-		return peerState{}, fmt.Errorf("invalid registry peer state")
-	}
-	for _, peer := range state.Peers {
-		if !peerName.MatchString(peer) || peer == "." || peer == ".." {
-			return peerState{}, fmt.Errorf("invalid registry peer state")
-		}
-	}
-	for peer, receipts := range state.Receipts {
-		if !slices.Contains(state.Peers, peer) {
-			return peerState{}, fmt.Errorf("registry receipts exist for an unenrolled peer")
-		}
-		for _, id := range receipts {
-			if !validDigest(id) {
-				return peerState{}, fmt.Errorf("invalid registry receipt digest")
-			}
-		}
-	}
-	return state, nil
-}
-
-func (s *Store) writePeerState(state peerState) error {
-	data, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
-	return writeAtomic(filepath.Join(s.root, peersDir, "state.json"), data, 0o600)
-}
-
 func (s *Store) DeleteAgentpack(id string) (Tombstone, error) {
 	var result Tombstone
 	err := s.withLock(func() error {
-		idx, err := s.readIndexUnlocked()
+		idx, err := s.readIndex()
 		if err != nil {
 			return err
 		}
@@ -575,16 +288,11 @@ func (s *Store) DeleteAgentpack(id string) (Tombstone, error) {
 		}
 		sum := sha256.Sum256(data)
 		result.ID = hex.EncodeToString(sum[:])
-		path := filepath.Join(s.root, tombstonesDir, result.ID+".json")
-		if err := writeExclusiveOrVerify(path, data); err != nil {
+		if err := s.storeObject("registry_tombstones", result.ID, data); err != nil {
 			return err
 		}
-		delete(idx.Agentpacks, id)
-		if err := s.writeIndexUnlocked(idx); err != nil {
-			return err
-		}
-		_ = os.Remove(filepath.Join(s.root, metadataDir, id+".json"))
-		return nil
+		_, err = s.sql.DB.Exec("DELETE FROM registry_heads WHERE agentpack_id=?", id)
+		return err
 	})
 	return result, err
 }
@@ -594,7 +302,11 @@ func (s *Store) readTombstone(id string) (Tombstone, error) {
 	if !validDigest(id) {
 		return tombstone, fmt.Errorf("invalid tombstone digest")
 	}
-	data, err := readRegular(filepath.Join(s.root, tombstonesDir, id+".json"))
+	var data []byte
+	err := s.sql.Reader.QueryRow("SELECT body FROM registry_tombstones WHERE digest=?", id).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return tombstone, os.ErrNotExist
+	}
 	if err != nil {
 		return tombstone, err
 	}
@@ -608,15 +320,11 @@ func (s *Store) readTombstone(id string) (Tombstone, error) {
 }
 
 func (s *Store) tombstoneFor(agentpackID string) (Tombstone, bool, error) {
-	entries, err := os.ReadDir(filepath.Join(s.root, tombstonesDir))
+	entries, err := s.storedIDs("registry_tombstones")
 	if err != nil {
 		return Tombstone{}, false, err
 	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		id := strings.TrimSuffix(entry.Name(), ".json")
+	for _, id := range entries {
 		tombstone, err := s.readTombstone(id)
 		if err != nil {
 			return Tombstone{}, false, err
@@ -631,52 +339,44 @@ func (s *Store) tombstoneFor(agentpackID string) (Tombstone, bool, error) {
 func (s *Store) CollectGarbage() ([]string, error) {
 	var removed []string
 	err := s.withLock(func() error {
-		state, err := s.readPeerState()
-		if err != nil {
-			return err
-		}
 		var tombstones []Tombstone
-		entries, err := os.ReadDir(filepath.Join(s.root, tombstonesDir))
+		entries, err := s.storedIDs("registry_tombstones")
 		if err != nil {
 			return err
 		}
-		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-				continue
-			}
-			t, err := s.readTombstone(strings.TrimSuffix(entry.Name(), ".json"))
+		for _, id := range entries {
+			t, err := s.readTombstone(id)
 			if err != nil {
 				return err
 			}
 			tombstones = append(tombstones, t)
 		}
 		for _, tombstone := range tombstones {
-			ready := true
-			for _, peer := range state.Peers {
-				if !slices.Contains(state.Receipts[peer], tombstone.ID) {
-					ready = false
-					break
-				}
+			var needed bool
+			if err := s.sql.Reader.QueryRow(`SELECT
+ EXISTS(SELECT 1 FROM registry_objects WHERE json_extract(body,'$.agentpack_id')=?)
+ OR EXISTS(SELECT 1 FROM registry_names WHERE json_extract(body,'$.agentpack_id')=?)
+ OR EXISTS(SELECT 1 FROM registry_heads WHERE agentpack_id=?)
+ OR EXISTS(SELECT 1 FROM registry_bindings b,registry_tombstones t,json_each(t.body,'$.revisions') r
+ WHERE t.digest=? AND b.revision_id=r.value)`, tombstone.Agentpack, tombstone.Agentpack, tombstone.Agentpack, tombstone.ID).Scan(&needed); err != nil {
+				return err
 			}
-			if !ready {
+			if !needed {
 				continue
 			}
+			// CRR retains deletion clocks, so an offline peer can learn collection without a separate receipt protocol.
 			packageIDs := map[string]bool{}
 			revisionIDs := map[string]bool{}
 			nameIDs := map[string]bool{}
 			for _, id := range tombstone.Revisions {
 				revisionIDs[id] = true
 			}
-			objects, err := os.ReadDir(filepath.Join(s.root, objectsDir))
+			objects, err := s.objectIDs()
 			if err != nil {
 				return err
 			}
-			for _, entry := range objects {
-				if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-					continue
-				}
-				id := strings.TrimSuffix(entry.Name(), ".json")
-				data, err := readRegular(filepath.Join(s.root, objectsDir, entry.Name()))
+			for _, id := range objects {
+				data, err := s.objectData(id)
 				if err != nil {
 					return err
 				}
@@ -692,7 +392,7 @@ func (s *Store) CollectGarbage() ([]string, error) {
 				}
 			}
 			for nameID := range nameIDs {
-				if err := removeDurable(filepath.Join(s.root, objectsDir, nameID+".json")); err != nil {
+				if err := s.removeObject(nameID); err != nil {
 					return err
 				}
 				removed = append(removed, nameID)
@@ -707,11 +407,11 @@ func (s *Store) CollectGarbage() ([]string, error) {
 				}
 			}
 			for revisionID := range revisionIDs {
-				if err := removeDurable(filepath.Join(s.root, objectsDir, revisionID+".json")); err != nil {
+				if err := s.removeObject(revisionID); err != nil {
 					return err
 				}
 				removed = append(removed, revisionID)
-				if err := os.Remove(filepath.Join(s.root, bindingsDir, revisionID+".json")); err != nil && !os.IsNotExist(err) {
+				if _, err := s.sql.DB.Exec("DELETE FROM registry_bindings WHERE revision_id=?", revisionID); err != nil {
 					return err
 				}
 			}
@@ -723,21 +423,14 @@ func (s *Store) CollectGarbage() ([]string, error) {
 				if referenced {
 					continue
 				}
-				if err := removeDurable(filepath.Join(s.root, objectsDir, packageID+".json")); err != nil {
+				if err := s.removeObject(packageID); err != nil {
 					return err
 				}
 				removed = append(removed, packageID)
 			}
-			if err := os.Remove(filepath.Join(s.root, metadataDir, tombstone.Agentpack+".json")); err != nil && !os.IsNotExist(err) {
+			if _, err := s.sql.DB.Exec("DELETE FROM registry_heads WHERE agentpack_id=?", tombstone.Agentpack); err != nil {
 				return err
 			}
-		}
-		idx, err := s.rebuildIndex()
-		if err != nil {
-			return err
-		}
-		if err := s.writeIndexUnlocked(idx); err != nil {
-			return err
 		}
 		sort.Strings(removed)
 		return nil
@@ -746,15 +439,11 @@ func (s *Store) CollectGarbage() ([]string, error) {
 }
 
 func (s *Store) packageReferencedOutside(deletedAgentpack, packageID string) (bool, error) {
-	entries, err := os.ReadDir(filepath.Join(s.root, objectsDir))
+	entries, err := s.objectIDs()
 	if err != nil {
 		return true, err
 	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		id := strings.TrimSuffix(entry.Name(), ".json")
+	for _, id := range entries {
 		var shape Revision
 		if err := s.readObject(id, &shape); err != nil {
 			return true, err
@@ -771,35 +460,6 @@ func (s *Store) packageReferencedOutside(deletedAgentpack, packageID string) (bo
 		}
 	}
 	return false, nil
-}
-
-// readPublicObject reads and checks one stored object, and returns it decoded
-// so callers need not decode it again.
-func (s *Store) readPublicObject(id string) (importedObject, error) {
-	path, err := s.objectPath(id)
-	if err != nil {
-		return importedObject{}, err
-	}
-	data, err := readRegular(path)
-	if err != nil {
-		return importedObject{}, err
-	}
-	obj, err := decodeImported(data)
-	if err != nil || obj.id != id || obj.tombstone != nil {
-		return importedObject{}, fmt.Errorf("invalid registry public object")
-	}
-	if obj.revision != nil {
-		if _, err := s.readRevision(id); err != nil {
-			return importedObject{}, err
-		}
-	} else if obj.name != nil {
-		if _, err := s.readName(id); err != nil {
-			return importedObject{}, err
-		}
-	} else if _, err := s.readPackage(id); err != nil {
-		return importedObject{}, err
-	}
-	return obj, nil
 }
 
 func (s *Store) revisionHeads(ids []string) ([]string, error) {
@@ -829,10 +489,4 @@ func (s *Store) Heads(id string) ([]string, error) {
 		return nil, err
 	}
 	return append([]string(nil), pack.Heads...), nil
-}
-
-func uniqueDigests(values []string) []string {
-	values = slices.Clone(values)
-	sort.Strings(values)
-	return slices.Compact(values)
 }

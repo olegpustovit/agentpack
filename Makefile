@@ -6,9 +6,14 @@ BINARY := ap
 BUILD_DIR := bin
 RELEASE_BIN := $(BUILD_DIR)/$(BINARY)
 RELEASE_BRANCH ?= dev
+export CGO_ENABLED := 1
+CRSQLITE_GOOS := $(shell $(GO) env GOOS)
+CRSQLITE_GOARCH := $(shell $(GO) env GOARCH)
 VERSION := $(shell sed -n 's/^var Version = "\([^"]*\)"/\1/p' internal/cli/run.go)
 
 .PHONY: help all build release install uninstall minor patch ship-minor ship-patch _ship check-clean fmt fmt-check lint test race ci hooks release-check ui-install ui-lint ui-typecheck ui-test ui-build ui-stage ui-e2e artifact
+
+.PHONY: crsqlite crsqlite-build
 
 .DEFAULT_GOAL := help
 
@@ -16,6 +21,8 @@ help:
 	@echo "Local build / install:"
 	@echo "  all, release    build an optimized agentpack binary"
 	@echo "  build           build agentpack"
+	@echo "  crsqlite        download and verify the pinned host static library"
+	@echo "  crsqlite-build  rebuild it (pinned Rust/Zig and libclang required)"
 	@echo "  install         release, then copy binary to INSTALL_DIR ($(INSTALL_DIR))"
 	@echo "  uninstall       remove binary from INSTALL_DIR"
 	@echo ""
@@ -40,12 +47,18 @@ help:
 
 all: release
 
-build:
+build: crsqlite
 	@if [ ! -f internal/network/webdist/index.html ]; then echo "warning: gateway UI is the placeholder; run make ui-stage first" >&2; fi
 	$(GO) build -o "$(RELEASE_BIN)" ./cmd/agentpack
 
-release:
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w -X github.com/olegpustovit/agentpack/internal/cli.Version=$(VERSION)" -o "$(RELEASE_BIN)" ./cmd/agentpack
+release: crsqlite
+	CGO_ENABLED=1 $(GO) build -trimpath -ldflags "-s -w -X github.com/olegpustovit/agentpack/internal/cli.Version=$(VERSION)" -o "$(RELEASE_BIN)" ./cmd/agentpack
+
+crsqlite:
+	./scripts/fetch-crsqlite.sh "$(CRSQLITE_GOOS)" "$(CRSQLITE_GOARCH)"
+
+crsqlite-build:
+	./scripts/build-crsqlite.sh "$(CRSQLITE_GOOS)" "$(CRSQLITE_GOARCH)"
 
 fmt:
 	$(GOFMT) -w $$(find . -name '*.go' -not -path './vendor/*')
@@ -53,13 +66,13 @@ fmt:
 fmt-check:
 	@test -z "$$($(GOFMT) -l $$(find . -name '*.go' -not -path './vendor/*'))" || { $(GOFMT) -l $$(find . -name '*.go' -not -path './vendor/*'); exit 1; }
 
-lint:
+lint: crsqlite
 	$(GO) vet ./...
 
-test:
+test: crsqlite
 	$(GO) test ./...
 
-race:
+race: crsqlite
 	$(GO) test -race ./...
 
 ci: fmt-check lint test race build
@@ -67,6 +80,7 @@ ci: fmt-check lint test race build
 release-check:
 	$(GORELEASER) check
 	$(GORELEASER) release --snapshot --clean --skip=publish
+	AGENTPACK_RELEASE_DIST="$(CURDIR)/dist" $(GO) test ./integration -run '^TestRelease(BinaryDependencies|UISourceMaps)$$'
 
 hooks:
 	git config core.hooksPath .githooks
@@ -90,8 +104,9 @@ ui-build: ui-install
 ui-stage: ui-build
 	cd ui && bun scripts/stage.ts
 
-ui-e2e: ui-build
-	cd ui && bun run e2e
+ui-e2e: ui-build crsqlite
+	$(GO) test -c -o .build/telemetry-e2e ./internal/network
+	cd ui && AGENTPACK_TELEMETRY_TEST_BINARY="$(CURDIR)/.build/telemetry-e2e" bun run e2e
 
 artifact: ui-stage build
 	./scripts/ui-smoke.sh

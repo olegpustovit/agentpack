@@ -3,10 +3,9 @@ package network
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +18,8 @@ import (
 	"github.com/olegpustovit/agentpack/internal/harness/grok"
 	"github.com/olegpustovit/agentpack/internal/harness/omp"
 	"github.com/olegpustovit/agentpack/internal/harness/opencode"
+	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 const (
@@ -30,7 +31,8 @@ const (
 // limitsCache keeps the last collection on disk. A reader gets it at once, however old, and a stale one
 // refreshes behind it; only a machine that has never collected makes the reader wait.
 type limitsCache struct {
-	path  string
+	store *state.Store
+	node  string
 	probe func(context.Context) []harness.LimitSnapshot
 
 	mu    sync.Mutex // guards saved
@@ -45,13 +47,33 @@ type savedLimits struct {
 	Snapshots []harness.LimitSnapshot `json:"snapshots"`
 }
 
-func newLimitsCache(path string, probe func(context.Context) []harness.LimitSnapshot) *limitsCache {
-	cache := &limitsCache{path: path, probe: probe}
-	// A missing or unreadable file only means the first reader waits for a collection.
-	if data, err := os.ReadFile(path); err == nil && json.Unmarshal(data, &cache.saved) != nil {
-		cache.saved = savedLimits{}
+func newLimitsCache(store *state.Store, node string, probe func(context.Context) []harness.LimitSnapshot) (*limitsCache, error) {
+	if store == nil {
+		return nil, errors.New("gateway state unavailable")
 	}
-	return cache
+	cache := &limitsCache{store: store, node: node, probe: probe}
+	rows, err := store.Reader.Query("SELECT snapshot, collected_at FROM limits WHERE node_id = ? ORDER BY rowid", node)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var data string
+		var collected int64
+		if err := rows.Scan(&data, &collected); err != nil {
+			return nil, err
+		}
+		var snapshot harness.LimitSnapshot
+		if err := json.Unmarshal([]byte(data), &snapshot); err != nil {
+			return nil, err
+		}
+		cache.saved.Snapshots = append(cache.saved.Snapshots, snapshot)
+		at := time.UnixMilli(collected)
+		if cache.saved.At.IsZero() || at.Before(cache.saved.At) {
+			cache.saved.At = at
+		}
+	}
+	return cache, rows.Err()
 }
 
 func (c *limitsCache) current() savedLimits {
@@ -88,32 +110,38 @@ func (c *limitsCache) collect(ctx context.Context, maxAge time.Duration) []harne
 	c.saved = saved
 	c.mu.Unlock()
 	if err := c.save(saved); err != nil {
+		_, event := obs.Start(ctx, "limits", "persist")
+		event.Fail(err)
+		event.End()
 		log.Printf("limits cache is not saved: %v", err)
 	}
 	return saved.Snapshots
 }
 
 func (c *limitsCache) save(saved savedLimits) error {
-	data, err := json.Marshal(saved)
+	tx, err := c.store.DB.Begin()
 	if err != nil {
 		return err
 	}
-	if err := EnsurePrivateDirectory(filepath.Dir(c.path)); err != nil {
+	defer tx.Rollback()
+	// A running cache follows the offline-to-tailnet binding without a restart.
+	var node string
+	if err := tx.QueryRow("SELECT CASE WHEN EXISTS(SELECT 1 FROM local_node_aliases WHERE node_id=?) THEN "+state.LocalNodeSQL+" ELSE ? END", c.node, c.node).Scan(&node); err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(filepath.Dir(c.path), ".limits-*")
-	if err != nil {
+	if _, err := tx.Exec("DELETE FROM limits WHERE node_id = ?", node); err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
-	if _, err := file.Write(data); err != nil {
-		file.Close()
-		return err
+	for _, snapshot := range saved.Snapshots {
+		data, err := json.Marshal(snapshot)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec("INSERT INTO limits(node_id,harness,snapshot,collected_at) VALUES (?,?,?,?)", node, snapshot.Harness, string(data), saved.At.UnixMilli()); err != nil {
+			return err
+		}
 	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), c.path)
+	return tx.Commit()
 }
 
 func collectLimits(ctx context.Context) []harness.LimitSnapshot {
@@ -140,11 +168,74 @@ func collectLimits(ctx context.Context) []harness.LimitSnapshot {
 }
 
 func (g *Gateway) registerLimits(mux *http.ServeMux) {
-	cache := newLimitsCache(filepath.Join(g.options.Home, "network", "limits.json"), collectLimits)
+	nodeID, cacheErr := g.auth.store.NodeID(context.Background())
+	var cache *limitsCache
+	if cacheErr == nil {
+		cache, cacheErr = newLimitsCache(g.auth.store, nodeID, collectLimits)
+	}
+	if cacheErr != nil && g.store != nil {
+		log.Printf("limits cache cannot be loaded: %v", cacheErr)
+	}
 	mux.HandleFunc("GET /api/limits", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"limits": cache.get(r.Context())})
+		if cacheErr != nil {
+			http.Error(w, "limits state unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		// Reads never wait for a harness or peer; refresh the local cache beside them.
+		if (r.URL.Query().Get("node") == "" || r.URL.Query().Get("node") == nodeID) && time.Since(cache.current().At) >= limitsCacheTTL && cache.refreshing.CompareAndSwap(false, true) {
+			obs.Go("gateway.limits_refresh", func() { defer cache.refreshing.Store(false); cache.collect(r.Context(), limitsCacheTTL) })
+		}
+		limits, err := g.meshLimits(r.Context(), r.URL.Query().Get("node"))
+		if err != nil {
+			meshReadError(w, r, err)
+			return
+		}
+		writeJSON(w, map[string]any{"limits": limits})
 	})
 	mux.HandleFunc("POST /api/limits/refresh", func(w http.ResponseWriter, r *http.Request) {
+		if cacheErr != nil {
+			http.Error(w, "limits state unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		writeJSON(w, map[string]any{"limits": cache.collect(r.Context(), limitsRefreshGate)})
 	})
+}
+
+type meshLimit struct {
+	harness.LimitSnapshot
+	NodeID    string    `json:"node_id"`
+	Reachable bool      `json:"reachable"`
+	LastSync  time.Time `json:"last_sync,omitzero"`
+}
+
+func (g *Gateway) meshLimits(ctx context.Context, node string) ([]meshLimit, error) {
+	local, err := g.auth.store.NodeID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := "SELECT node_id,snapshot FROM limits"
+	var args []any
+	if node != "" {
+		query += " WHERE node_id=?"
+		args = append(args, node)
+	}
+	rows, err := g.auth.store.Reader.QueryContext(ctx, query+" ORDER BY node_id,harness", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []meshLimit{}
+	for rows.Next() {
+		var entry meshLimit
+		var body string
+		if err := rows.Scan(&entry.NodeID, &body); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(body), &entry.LimitSnapshot); err != nil {
+			return nil, err
+		}
+		entry.Reachable, entry.LastSync = g.nodeContact(entry.NodeID, local)
+		result = append(result, entry)
+	}
+	return result, rows.Err()
 }

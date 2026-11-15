@@ -44,6 +44,11 @@ func TestRestoredExternalDefinitionsKeepNativeStateAndIsolateModes(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	type destinationInfo struct {
 		definition string
 		workspace  string
@@ -218,6 +223,11 @@ func TestRestoreDuringLiveLaunchKeepsOriginalGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	pack, first, err := store.Capture(registry.CaptureInput{Name: "Launch snapshot", Project: definition, Manifest: mustRead(t, paths.ManifestPath(definition)), Lock: mustRead(t, paths.LockPath(definition))})
 	if err != nil {
 		t.Fatal(err)

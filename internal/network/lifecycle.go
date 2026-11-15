@@ -1,10 +1,32 @@
 package network
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
+
+type AccountStatus struct {
+	Joining       bool   `json:"joining,omitempty"`
+	Claimed       bool   `json:"claimed"`
+	Legacy        bool   `json:"legacy"`
+	Authenticated bool   `json:"authenticated"`
+	Email         string `json:"email"`
+}
+
+func GatewayAccountStatus(ctx context.Context, home string) (AccountStatus, error) {
+	var status AccountStatus
+	data, err := NodeRequest(ctx, home, http.MethodGet, "/api/status")
+	if err == nil {
+		err = json.Unmarshal(data, &status)
+	}
+	return status, err
+}
 
 var ErrGatewayDisabled = errors.New("gateway is stopped; run agentpack gateway start to enable sharing")
 
@@ -17,7 +39,7 @@ func GatewayEnabled(home string) (bool, error) {
 }
 func SetGatewayEnabled(home string, enabled bool) error {
 	directory := filepath.Join(home, "network")
-	if err := EnsurePrivateDirectory(directory); err != nil {
+	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		return err
 	}
 	path := filepath.Join(directory, "disabled")

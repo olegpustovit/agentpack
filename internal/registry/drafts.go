@@ -1,15 +1,16 @@
 package registry
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 type PackagePin struct {
@@ -86,23 +87,20 @@ func (s *Store) SaveDraft(input DraftInput) (Draft, error) {
 	if err != nil {
 		return Draft{}, err
 	}
-	if err := writeAtomic(filepath.Join(s.root, draftsDir, id+".json"), data, 0o600); err != nil {
+	if _, err := s.sql.DB.Exec(`INSERT INTO registry_drafts(id,body)
+ VALUES (?,CASE WHEN ?='local' THEN json_set(?,'$.node',`+state.LocalNodeSQL+`) ELSE ? END)`, id, draft.Node, string(data), string(data)); err != nil {
 		return Draft{}, err
 	}
 	return draft, nil
 }
 
 func (s *Store) ListDrafts() ([]Draft, error) {
-	entries, err := os.ReadDir(filepath.Join(s.root, draftsDir))
+	entries, err := s.storedIDs("registry_drafts")
 	if err != nil {
 		return nil, err
 	}
 	drafts := make([]Draft, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		id := strings.TrimSuffix(entry.Name(), ".json")
+	for _, id := range entries {
 		draft, err := s.readDraft(id)
 		if err != nil {
 			return nil, err
@@ -173,7 +171,8 @@ func (s *Store) DeleteDraft(id string) error {
 	if _, err := s.readDraft(id); err != nil {
 		return err
 	}
-	return removeDurable(filepath.Join(s.root, draftsDir, id+".json"))
+	_, err := s.sql.DB.Exec("DELETE FROM registry_drafts WHERE id=?", id)
+	return err
 }
 
 func (s *Store) readDraft(id string) (Draft, error) {
@@ -181,13 +180,31 @@ func (s *Store) readDraft(id string) (Draft, error) {
 	if !validID(id) {
 		return draft, fmt.Errorf("invalid draft id")
 	}
-	data, err := readRegular(filepath.Join(s.root, draftsDir, id+".json"))
+	var data []byte
+	err := s.sql.Reader.QueryRow("SELECT body FROM registry_drafts WHERE id=?", id).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return draft, ErrNotFound
+	}
 	if err != nil {
-		if os.IsNotExist(err) {
-			return draft, ErrNotFound
-		}
 		return draft, err
 	}
+	draft, err = decodeDraft(id, data)
+	if err != nil {
+		return draft, err
+	}
+	var local bool
+	if err := s.sql.Reader.QueryRow(`SELECT EXISTS(SELECT 1 FROM local_node WHERE node_id=?
+ UNION ALL SELECT 1 FROM local_node_aliases WHERE node_id=?)`, draft.Node, draft.Node).Scan(&local); err != nil {
+		return draft, err
+	}
+	if local {
+		draft.Node = "local"
+	}
+	return draft, nil
+}
+
+func decodeDraft(id string, data []byte) (Draft, error) {
+	var draft Draft
 	if err := json.Unmarshal(data, &draft); err != nil || draft.ID != id || draft.Item == "" || draft.Node == "" || draft.Directory == "" || draft.Reason == "" || draft.FolderIdentity == "" || draft.CreatedAt.IsZero() {
 		return Draft{}, fmt.Errorf("invalid registry draft")
 	}

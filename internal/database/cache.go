@@ -1,59 +1,76 @@
 package database
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
-	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/olegpustovit/agentpack/internal/paths"
-	bolt "go.etcd.io/bbolt"
-	berrors "go.etcd.io/bbolt/errors"
 )
 
-const openTimeout = 2 * time.Second
-
-// OpenCache opens agentpack's shared metadata index. The Rust implementation
-// used RedDB at the same documented path; preserve that incompatible file on
-// first Go use and start a fresh Bolt index. Resolved package trees and the
-// project lockfile remain authoritative, so cached aliases/metadata can be
-// rebuilt without data loss.
-func OpenCache(readOnly bool) (*bolt.DB, error) {
-	databasePath, err := paths.CacheDBPath()
+// OpenCache opens the disposable plain SQLite index; package trees and lockfiles remain authoritative.
+func OpenCache(readOnly bool) (_ *sql.DB, result error) {
+	path, err := paths.CacheDBPath()
 	if err != nil {
 		return nil, err
 	}
-	if readOnly {
-		if _, err := os.Stat(databasePath); errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(filepath.Join(filepath.Dir(path), "db.reddb")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("remove obsolete cache index: %w", err)
+	}
+	if info, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		if readOnly {
 			return nil, nil
-		} else if err != nil {
-			return nil, fmt.Errorf("inspect cache database %s: %w", databasePath, err)
 		}
-	} else if err := os.MkdirAll(filepath.Dir(databasePath), 0o755); err != nil {
-		return nil, fmt.Errorf("create cache database directory: %w", err)
-	}
-
-	database, err := bolt.Open(databasePath, 0o600, &bolt.Options{ReadOnly: readOnly, Timeout: openTimeout})
-	if err == nil {
-		return database, nil
-	}
-	if !errors.Is(err, berrors.ErrInvalid) {
-		return nil, fmt.Errorf("open cache database %s: %w", databasePath, err)
-	}
-	backup := databasePath + ".legacy-redb-" + time.Now().UTC().Format("20060102T150405.000000000Z")
-	if renameErr := os.Rename(databasePath, backup); renameErr != nil {
-		if errors.Is(renameErr, os.ErrNotExist) {
-			return OpenCache(readOnly)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return nil, err
 		}
-		return nil, fmt.Errorf("preserve incompatible cache database as %s: %w", backup, renameErr)
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+		if err != nil && !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
+		if err == nil {
+			if err := file.Close(); err != nil {
+				return nil, err
+			}
+		}
+	} else if err != nil {
+		return nil, err
+	} else if !info.Mode().IsRegular() {
+		return nil, errors.New("cache database must be a regular file")
 	}
+	params := url.Values{"agentpack_plain": {"1"}, "_busy_timeout": {"2000"}}
 	if readOnly {
-		return nil, nil
+		params.Set("mode", "ro")
+		params.Set("_query_only", "1")
+	} else {
+		params.Set("mode", "rw")
+		params.Set("_journal_mode", "WAL")
+		params.Set("_synchronous", "NORMAL")
 	}
-	database, err = bolt.Open(databasePath, 0o600, &bolt.Options{Timeout: openTimeout})
+	db, err := sql.Open("sqlite3", "file:"+url.PathEscape(filepath.ToSlash(path))+"?"+params.Encode())
 	if err != nil {
-		return nil, fmt.Errorf("create cache database %s after preserving %s: %w", databasePath, backup, err)
+		return nil, err
 	}
-	return database, nil
+	db.SetMaxOpenConns(1)
+	defer func() {
+		if result != nil {
+			result = errors.Join(result, db.Close())
+		}
+	}()
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("open cache index: %w", err)
+	}
+	if !readOnly {
+		_, err = db.Exec(`CREATE TABLE IF NOT EXISTS cache_entries(cache_key TEXT PRIMARY KEY,body BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS aliases(alias TEXT PRIMARY KEY,cache_key TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS github_metadata(bucket BLOB NOT NULL,key BLOB NOT NULL,body BLOB NOT NULL,PRIMARY KEY(bucket,key));`)
+		if err != nil {
+			return nil, fmt.Errorf("initialize cache index: %w", err)
+		}
+	}
+	return db, nil
 }

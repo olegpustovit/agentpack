@@ -1,5 +1,3 @@
-//go:build linux || darwin
-
 package network
 
 import (
@@ -13,11 +11,10 @@ import (
 )
 
 func TestTerminalReplayTail(t *testing.T) {
-	session := testSession(t)
-	session.replay = []byte("0123456789abcdef")
-	session.offset = 0
+	session := &Session{replay: []byte("0123456789abcdef"), done: make(chan struct{})}
+	close(session.done)
 	secret := strings.Repeat("s", 64)
-	handler, err := WorkerHandler(session, nil, secret, "")
+	handler, err := WorkerHandler(context.Background(), session, nil, secret, "")
 	if err != nil {
 		t.Fatal(err)
 	}

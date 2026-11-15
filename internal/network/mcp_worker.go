@@ -98,7 +98,7 @@ func (worker *WorkerHTTP) registerMCP(mux *http.ServeMux) {
 }
 
 func (g *Gateway) terminalData(w http.ResponseWriter, r *http.Request) {
-	record, err := workerRecord(g.options.Home, r.PathValue("id"))
+	record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "session unavailable", 404)
 		return

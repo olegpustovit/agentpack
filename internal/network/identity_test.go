@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -16,12 +17,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/obs"
+
 	"tailscale.com/client/local"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func identityGateway(t *testing.T, home string, start func(context.Context, SessionInfo, string) (string, error)) (*Gateway, *url.URL) {
 	t.Helper()
-	auth, err := newGatewayAuth(home)
+	auth, err := testGatewayAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +37,7 @@ func identityGateway(t *testing.T, home string, start func(context.Context, Sess
 // seedFolder registers a fresh directory as a recent folder for the gateway's folder check.
 func seedFolder(t *testing.T, home string) string {
 	t.Helper()
-	if err := EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
@@ -42,20 +47,26 @@ func seedFolder(t *testing.T, home string) string {
 	return dir
 }
 
-func TestIdentityWithoutTailscaleReportsRootAuthOnly(t *testing.T) {
-	tailscaleLocal = local.Client{Socket: filepath.Join(t.TempDir(), "missing"), UseSocketOnly: true}
+func TestIdentityWithoutTailscaleReportsSignedInEmail(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "unavailable", 503) }))
+	defer server.Close()
+	tailscaleLocal = local.Client{UseSocketOnly: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, "tcp", server.Listener.Addr().String())
+	}}
 	t.Cleanup(func() { tailscaleLocal = local.Client{} })
 	home := t.TempDir()
 	g, origin := identityGateway(t, home, nil)
 	r := httptest.NewRequest("GET", origin.String()+"/api/identity", nil)
-	r.Header.Set("Authorization", "Bearer "+g.local.Secret)
+	testBrowserSession(t, g.auth, testBrowserEmail, "identity")
+	r.AddCookie(&http.Cookie{Name: g.auth.cookieName(), Value: "identity"})
 	w := httptest.NewRecorder()
 	g.Handler().ServeHTTP(w, r)
 	var got identityResponse
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	if got.Auth != "root" || got.TailscaleUser != "" || got.Node.Version != "test" {
+	if got.Auth != testBrowserEmail || got.TailscaleUser != "" || got.Node.Version != "test" {
 		t.Fatalf("identity without tailscale: %+v", got)
 	}
 }
@@ -76,9 +87,9 @@ func TestBrowserActorIgnoresForgedActorHeader(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	// The node secret makes this the machine's own OS user; the header is ignored.
-	if want := LocalActor("local"); started.StartedBy == nil || *started.StartedBy != want {
-		t.Fatalf("forged header changed actor: %+v, want %+v", started.StartedBy, want)
+	// The authenticated local transport maps to the owner; caller headers have no authority.
+	if started.StartedBy == nil || started.StartedBy.Kind != "local" || started.StartedBy.User != testBrowserEmail || !started.StartedBy.Account {
+		t.Fatalf("forged header changed local account actor: %+v", started.StartedBy)
 	}
 }
 
@@ -152,10 +163,10 @@ func TestPeerSessionOwnerRequiresStableNodeIdentity(t *testing.T) {
 		t.Fatal("a reused peer name matched an owner without a stable ID")
 	}
 	localOwner := LocalActor("cli")
-	localBrowser := browserActor()
-	if !localBrowser.canWriteSession(SessionInfo{StartedBy: &localOwner}) ||
-		!localOwner.canWriteSession(SessionInfo{StartedBy: &localBrowser}) {
-		t.Fatal("browser and CLI actors on the same host lost owner access")
+	localBrowser := browserActor(testBrowserEmail)
+	if localBrowser.canWriteSession(SessionInfo{StartedBy: &localOwner}) ||
+		localOwner.canWriteSession(SessionInfo{StartedBy: &localBrowser}) {
+		t.Fatal("host alone granted access across account identities")
 	}
 	localPeer := Actor{Kind: "peer", User: localOwner.User, Node: localOwner.Node, StableNodeID: "stable-peer"}
 	if localPeer.canWriteSession(SessionInfo{StartedBy: &localOwner}) {
@@ -187,13 +198,16 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 	defer upstream.Close()
 
 	sessionID := "session-answer"
-	owner := browserActor()
+	owner := browserActor(testBrowserEmail)
 	record := WorkerRecord{
 		ID: sessionID, Address: strings.TrimPrefix(upstream.URL, "http://"), Secret: strings.Repeat("s", 64),
 		Session: SessionInfo{ID: sessionID, Transport: "acp", StartedBy: &owner},
 	}
+	if err := upsertSession(t.Context(), g.auth.store.DB, record.Session); err != nil {
+		t.Fatal(err)
+	}
 	directory := filepath.Join(home, "network", "sessions", sessionID)
-	if err := EnsurePrivateDirectory(directory); err != nil {
+	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		t.Fatal(err)
 	}
 	data, err := json.Marshal(record)
@@ -214,6 +228,27 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 		w := httptest.NewRecorder()
 		g.Handler().ServeHTTP(w, r)
 		return w
+	}
+	for _, account := range []struct {
+		email, token string
+		status       int
+	}{{testBrowserEmail, "browser-owner", 204}, {"other@example.com", "browser-other", 403}} {
+		testBrowserSession(t, g.auth, account.email, account.token)
+		r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/sessions/"+sessionID+"/conversation/prompt", strings.NewReader(`{}`))
+		r.Header.Set("Origin", origin.String())
+		r.AddCookie(&http.Cookie{Name: g.auth.cookieName(), Value: account.token})
+		w := httptest.NewRecorder()
+		g.Handler().ServeHTTP(w, r)
+		if w.Code != account.status {
+			t.Fatalf("browser account %s: %d %s", account.email, w.Code, w.Body.String())
+		}
+		if account.status == 204 {
+			if got := <-requests; got != "/conversation/prompt" {
+				t.Fatal(got)
+			}
+		} else if len(requests) != 0 {
+			t.Fatal("another browser account reached the worker")
+		}
 	}
 
 	readOnly := Actor{Kind: "peer", User: owner.User, Node: "another-node"}
@@ -277,6 +312,18 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 	if got := <-requests; got != "/state" {
 		t.Fatalf("owner rename reached worker path %q", got)
 	}
+	if err := os.RemoveAll(directory); err != nil {
+		t.Fatal(err)
+	}
+	if err := endSession(t.Context(), g.auth.store.DB, sessionID, TerminalState{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := request(http.MethodPatch, "", `{"name":"Nope"}`, &readOnly).Code; got != http.StatusForbidden {
+		t.Fatalf("stopped session lost ownership: %d", got)
+	}
+	if got := request(http.MethodPatch, "", `{"name":"Finished"}`, &localCLI).Code; got != http.StatusOK {
+		t.Fatalf("owner cannot rename stopped session: %d", got)
+	}
 }
 func TestPeerACPResumeRequiresRecordedOwner(t *testing.T) {
 	home := t.TempDir()
@@ -286,7 +333,7 @@ func TestPeerACPResumeRequiresRecordedOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := Actor{Kind: "peer", User: "alice@example.com", Node: "old-name", StableNodeID: "stable-owner"}
-	if err := rememberACPConversationOwner(home, SessionInfo{
+	if err := testRememberACPConversationOwner(t, home, SessionInfo{
 		Directory: directory, FolderID: folderID, Harness: "claude", Mode: "default",
 		Transport: "acp", AgentSessionID: "prior-1", StartedBy: &owner,
 	}, ""); err != nil {
@@ -326,11 +373,8 @@ func TestPeerACPResumeRequiresRecordedOwner(t *testing.T) {
 		t.Fatalf("resumed owner = %+v, want %+v", started[0].StartedBy, renamedOwner)
 	}
 
-	_, ownerPath, _, err := acpConversationOwnerPath(home, folderID, "claude", "prior-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(ownerPath, []byte("{"), 0o600); err != nil {
+	store := testSessionStore(t, home)
+	if _, err := store.DB.Exec("UPDATE sessions SET started_by='{' WHERE folder_id=? AND id LIKE 'ownership-%'", folderID); err != nil {
 		t.Fatal(err)
 	}
 	if got := resume("prior-1", renamedOwner).Code; got != http.StatusInternalServerError || len(started) != 1 {
@@ -339,7 +383,7 @@ func TestPeerACPResumeRequiresRecordedOwner(t *testing.T) {
 	if got := resume("unowned", otherPeer).Code; got != http.StatusForbidden || len(started) != 1 {
 		t.Fatalf("unowned peer resume status=%d starts=%d", got, len(started))
 	}
-	if got := resume("external-history", browserActor()).Code; got != http.StatusOK || len(started) != 2 {
+	if got := resume("external-history", browserActor(testBrowserEmail)).Code; got != http.StatusOK || len(started) != 2 {
 		t.Fatalf("local unowned resume status=%d starts=%d", got, len(started))
 	}
 }
@@ -356,15 +400,19 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 		ID: "session-source", Directory: directory, FolderID: folderID, Harness: "claude",
 		Mode: "default", Transport: "acp", AgentSessionID: "source-session", StartedBy: &owner,
 	}
-	if err := rememberACPConversationOwner(home, sourceSession, ""); err != nil {
+	if err := testRememberACPConversationOwner(t, home, sourceSession, ""); err != nil {
 		t.Fatal(err)
 	}
 	sourceRecordDir := filepath.Join(home, "network", "sessions", sourceSession.ID)
-	if err := EnsurePrivateDirectory(sourceRecordDir); err != nil {
+	if err := paths.EnsurePrivateDirectory(sourceRecordDir); err != nil {
 		t.Fatal(err)
 	}
+	store := testSessionStore(t, home)
 	saveSourceRecord := func(session SessionInfo) {
 		t.Helper()
+		if err := upsertSession(t.Context(), store.DB, session); err != nil {
+			t.Fatal(err)
+		}
 		data, err := json.Marshal(WorkerRecord{
 			Session: session, ID: sourceSession.ID, Address: "127.0.0.1:7420", Secret: strings.Repeat("s", 64),
 		})
@@ -426,14 +474,14 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 	}
 	forked := started
 	forked.AgentSessionID = "forked-session"
-	if err := rememberACPConversationOwner(home, forked, ""); err != nil {
+	if err := testRememberACPConversationOwner(t, home, forked, ""); err != nil {
 		t.Fatal(err)
 	}
-	gotOwner, found, err := readACPConversationOwner(home, folderID, "claude", "forked-session")
+	gotOwner, found, err := readACPConversationOwner(t.Context(), testSessionStore(t, home), folderID, "claude", "forked-session")
 	if err != nil || !found || gotOwner != renamedOwner {
 		t.Fatalf("forked native session owner=%+v found=%t err=%v", gotOwner, found, err)
 	}
-	gotOwner, found, err = readACPConversationOwner(home, folderID, "claude", "source-session")
+	gotOwner, found, err = readACPConversationOwner(t.Context(), testSessionStore(t, home), folderID, "claude", "source-session")
 	if err != nil || !found || gotOwner != owner {
 		t.Fatalf("source native session owner changed: owner=%+v found=%t err=%v", gotOwner, found, err)
 	}
@@ -444,15 +492,23 @@ func TestStartWorkerStampsStartedAtOnlyWhenZero(t *testing.T) {
 		t.Skip("shell stub worker")
 	}
 	stub := filepath.Join(t.TempDir(), "stub-agentpack")
-	if err := os.WriteFile(stub, []byte("#!/bin/sh\ncat > \"$AGENTPACK_TEST_CAPTURE\"\n"), 0700); err != nil {
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\ncat > \"$AGENTPACK_TEST_CAPTURE\"\nprintf '%s' \"$AGENTPACK_TRACE\" > \"$AGENTPACK_TEST_TRACE\"\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	capture := filepath.Join(t.TempDir(), "launch.json")
 	t.Setenv("AGENTPACK_TEST_CAPTURE", capture)
+	traceCapture := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("AGENTPACK_TEST_TRACE", traceCapture)
+	const traceID = "0123456789abcdef0123456789abcdef"
+	ctx := obs.WithTrace(context.Background(), "00-"+traceID+"-0123456789abcdef-01")
 	captured := func(t *testing.T, launch WorkerLaunch) WorkerLaunch {
 		t.Helper()
 		// The stub never registers a worker, so StartWorker returns an error after capturing stdin.
-		_, _ = StartWorker(context.Background(), t.TempDir(), stub, launch)
+		_, _ = StartWorker(ctx, t.TempDir(), stub, launch)
+		trace, err := os.ReadFile(traceCapture)
+		if err != nil || string(trace) != traceID {
+			t.Fatalf("child trace=%q err=%v", trace, err)
+		}
 		body, err := os.ReadFile(capture)
 		if err != nil {
 			t.Fatal(err)
@@ -488,7 +544,7 @@ func TestRunWorkerPersistsCLIStartedBy(t *testing.T) {
 	ready := make(chan string, 1)
 	done := make(chan error, 1)
 	go func() {
-		_, err := RunWorker(ctx, home, WorkerLaunch{Session: SessionInfo{StartedBy: &actor, StartedAt: time.Now()}, Program: executable, Directory: home, Arguments: []string{"-test.run=^TestTerminalChild$"}, Environment: append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1"), Rows: 24, Columns: 80}, func(id string) error { ready <- id; return nil })
+		_, err := RunWorker(ctx, home, "test", WorkerLaunch{Session: SessionInfo{StartedBy: &actor, StartedAt: time.Now()}, Program: executable, Directory: home, Arguments: []string{"-test.run=^TestTerminalChild$"}, Environment: append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1"), Rows: 24, Columns: 80}, func(id string) error { ready <- id; return nil })
 		done <- err
 	}()
 	var id string
@@ -499,13 +555,90 @@ func TestRunWorkerPersistsCLIStartedBy(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("worker startup timeout")
 	}
-	record, err := workerRecord(home, id)
+	store := testSessionStore(t, home)
+	info, err := storedSession(t.Context(), store.Reader, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Session.StartedBy == nil || record.Session.StartedBy.Kind != "cli" || record.Session.StartedBy.User == "" || record.Session.StartedAt.IsZero() {
-		t.Fatalf("worker record lost actor: %+v", record.Session)
+	if info.StartedBy == nil || info.StartedBy.Kind != "cli" || info.StartedBy.User == "" || info.StartedAt.IsZero() {
+		t.Fatalf("worker record lost actor: %+v", info)
 	}
 	cancel()
 	<-done
+}
+
+func TestForwardedAccountRequiresExplicitMeshAndOwnsOnlyItsChats(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	library := replicaStore(t)
+	g.options.Library.Store = library
+	peer := Actor{Kind: "peer", User: "tailscale@example.com", StableNodeID: "remote"}
+	if err := library.EnrollOwnMachine("remote"); err != nil {
+		t.Fatal(err)
+	}
+	ignored, err := g.forwardedAccount(t.Context(), peer, testBrowserEmail)
+	if err != nil || ignored != peer {
+		t.Fatalf("library-only peer asserted an account: %+v %v", ignored, err)
+	}
+	if err := library.EnrollPeer("remote"); err != nil {
+		t.Fatal(err)
+	}
+	actor, err := g.forwardedAccount(t.Context(), peer, testBrowserEmail)
+	if err != nil || !actor.Account || actor.User != testBrowserEmail {
+		t.Fatalf("mesh account refused: %+v %v", actor, err)
+	}
+	own := browserActor(testBrowserEmail)
+	if !actor.canWriteSession(SessionInfo{StartedBy: &own}) {
+		t.Fatal("same account could not continue its chat through another node")
+	}
+	other := browserActor("other@example.com")
+	if actor.canWriteSession(SessionInfo{StartedBy: &other}) {
+		t.Fatal("peer account wrote someone else's chat")
+	}
+	body, err := json.Marshal(actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved Actor
+	if err := json.Unmarshal(body, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if !own.canWriteSession(SessionInfo{StartedBy: &saved}) {
+		t.Fatal("account ownership did not survive session persistence")
+	}
+	if _, err := g.forwardedAccount(t.Context(), peer, "missing@example.com"); err == nil {
+		t.Fatal("nonexistent account accepted")
+	}
+	if _, err := g.auth.store.DB.Exec("UPDATE users SET disabled=1 WHERE email=?", testBrowserEmail); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.forwardedAccount(t.Context(), peer, testBrowserEmail); err == nil {
+		t.Fatal("disabled account accepted")
+	}
+}
+
+func TestProxyUsesAuthenticatedAccountInsteadOfCallerHeader(t *testing.T) {
+	for _, account := range []bool{false, true} {
+		got := make(chan string, 1)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got <- r.Header.Get("X-Agentpack-User")
+			w.WriteHeader(204)
+		}))
+		target, _ := url.Parse(server.URL)
+		g, _ := identityGateway(t, t.TempDir(), nil)
+		r := httptest.NewRequest("POST", "http://localhost/api/sessions/session-example/stop", nil)
+		r.Header.Set("X-Agentpack-User", "forged@example.com")
+		if account {
+			r = r.WithContext(withActor(r.Context(), browserActor(testBrowserEmail)))
+		}
+		g.proxyTailnetTo(httptest.NewRecorder(), r, "remote", target)
+		email := <-got
+		server.Close()
+		want := ""
+		if account {
+			want = testBrowserEmail
+		}
+		if email != want {
+			t.Fatalf("forwarded account=%q want %q", email, want)
+		}
+	}
 }

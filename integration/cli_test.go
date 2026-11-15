@@ -11,7 +11,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/cli"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
 	"github.com/olegpustovit/agentpack/internal/network"
@@ -150,7 +152,7 @@ func TestCompiledCLISyncStagesLocalSkillForEveryHarness(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(codexHome, "skills", "portable-skill", "SKILL.md")); err != nil {
 		t.Errorf("Codex portable skill: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(project, "_agentpack", "cache", "db.reddb")); err != nil {
+	if _, err := os.Stat(filepath.Join(project, "_agentpack", "cache", "index.db")); err != nil {
 		t.Errorf("documented cache index path: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "plugins", "agentpack-bundle", "skills", "project-local", "SKILL.md")); err != nil {
@@ -550,14 +552,35 @@ func runCLIWithEnv(t *testing.T, workingDirectory string, arguments []string, ex
 		}
 	})
 	command := exec.Command(agentpackBinary, arguments...)
-	t.Cleanup(func() { _, _ = network.NodeRequest(context.Background(), agentpackHome, "POST", "/api/node/stop") })
 	command.Dir = workingDirectory
 	overrides := []string{"HOME=" + home, "USERPROFILE=" + home, "AGENTPACK_HOME=" + agentpackHome, "AGENTPACK_STAGING_ROOT=" + stagingRoot}
 	command.Env = installerEnvironment(append(overrides, extraEnvironment...)...)
+	for _, value := range command.Env {
+		if key, value, ok := strings.Cut(value, "="); ok && strings.EqualFold(key, "AGENTPACK_HOME") {
+			t.Cleanup(func() { stopTestGateway(t, value) })
+			break
+		}
+	}
 	var stdout, stderr strings.Builder
 	command.Stdout, command.Stderr = &stdout, &stderr
 	err := command.Run()
 	return commandResult{stdout: stdout.String(), stderr: stderr.String(), err: err}
+}
+
+func stopTestGateway(t *testing.T, home string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _ = network.NodeRequest(ctx, home, "POST", "/api/node/stop")
+	// The RPC acknowledges shutdown; the process lock covers its final disk flush.
+	lock := flock.New(filepath.Join(home, "network", "gateway.lock"))
+	acquired, err := lock.TryLockContext(ctx, 10*time.Millisecond)
+	if err != nil && !os.IsNotExist(err) || err == nil && !acquired {
+		t.Errorf("wait for gateway shutdown: %v", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Error(err)
+	}
 }
 
 func readFile(t *testing.T, path string) string {

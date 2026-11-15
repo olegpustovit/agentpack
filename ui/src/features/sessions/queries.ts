@@ -1,6 +1,6 @@
 import { queryOptions } from "@tanstack/react-query"
 import { z } from "zod"
-import { api } from "@/lib/api"
+import { api, LOCAL } from "@/lib/api"
 import type { ProjectRow, SessionInfo } from "@/lib/api-types"
 
 // Go sends a nil slice as null, and a peer may predate a field. Unknown fields pass through.
@@ -16,10 +16,10 @@ const projectsSchema = z.array(
   }),
 )
 
-export const sessionsQuery = (machine: string, live: boolean) =>
+export const sessionsQuery = (_machine: string, live: boolean) =>
   queryOptions({
-    queryKey: ["m", machine, "sessions"],
-    queryFn: () => api<SessionInfo[]>("/api/sessions", { machine }),
+    queryKey: ["m", LOCAL, "sessions"],
+    queryFn: () => api<SessionInfo[]>("/api/sessions"),
     staleTime: 15 * 1000,
     // Safety-net poll while the event stream is up; events cover the rest.
     refetchInterval: live ? 60 * 1000 : 15 * 1000,
