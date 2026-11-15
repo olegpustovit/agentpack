@@ -43,7 +43,7 @@ export function useGatewayActions() {
   const sync = useMutation<unknown, Error, Peer>({
     mutationFn: (peer) => api("/api/library/replication/sync", { body: { peer: peer.id } }),
     onSuccess: (_result, peer) => {
-      hud.success(`Sync complete with ${peer.name}.`)
+      hud.success(`Sync requested with ${peer.name}.`)
       void refreshReplication()
     },
     onError: (error, peer) => hud.error(`Couldn't sync ${peer.name}: ${errorText(error)}`, () => sync.mutate(peer)),

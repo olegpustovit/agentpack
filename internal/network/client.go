@@ -41,6 +41,11 @@ type AgentSessionCapabilities struct {
 }
 
 type SessionInfo struct {
+	NodeID            string             `json:"node_id,omitempty"`
+	Reachable         bool               `json:"reachable"`
+	LastSync          time.Time          `json:"last_sync,omitzero"`
+	EndedAt           time.Time          `json:"ended_at,omitzero"`
+	ArchivedAt        time.Time          `json:"archived_at,omitzero"`
 	LastUsed          time.Time          `json:"last_used,omitzero"`
 	FolderID          string             `json:"folder_id,omitempty"`
 	ID                string             `json:"id"`
@@ -85,6 +90,12 @@ func parseWorkerRecord(data []byte, id string) (WorkerRecord, error) {
 
 func workerRequestTimeout(method, path string) time.Duration {
 	path, _, _ = strings.Cut(path, "?")
+	if method == http.MethodGet && strings.HasPrefix(path, "/api/cache/") {
+		return 2 * time.Minute
+	}
+	if method == http.MethodGet && strings.HasPrefix(path, "/api/logs/traces/") {
+		return 5 * time.Second
+	}
 	if method == http.MethodPost &&
 		(path == "/stop" || path == "/restart" || path == "/api/sessions" ||
 			strings.HasSuffix(path, "/stop") || strings.HasSuffix(path, "/restart") ||
@@ -122,7 +133,7 @@ func Sessions(ctx context.Context, home string) ([]SessionInfo, error) {
 		return nil, err
 	}
 	defer store.Close()
-	sessions, err := querySessions(ctx, store.Reader, "SELECT "+sessionColumns+" FROM sessions WHERE node_id=? AND ended_at=0 ORDER BY id", localStateNode)
+	sessions, err := querySessions(ctx, store.Reader, "SELECT "+sessionColumns+" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND ended_at=0 ORDER BY id")
 	if err != nil {
 		return nil, err
 	}

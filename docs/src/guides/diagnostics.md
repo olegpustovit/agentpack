@@ -21,6 +21,12 @@ failure writes a spool event; harness arguments are omitted. The gateway ingests
 completed spool files after two minutes. `ap logs` also reads unconsumed spools
 directly, so diagnostics remain available with the gateway stopped.
 
+If a Main gateway is configured, other explicitly approved mesh machines forward
+failed traces to it in bounded batches. Successful spans sharing a failed trace
+are included; healthy traces stay local. Uploads preserve the original machine
+identity and resume without duplicates after disconnection or restart. Main keeps
+the same five-day retention. See [Main gateway](../concepts/state.md#main-gateway-and-archive).
+
 ## What is excluded
 
 Diagnostics exclude prompt/reply text, tool arguments/results, HTTP bodies,
@@ -41,6 +47,7 @@ before sharing it.
 ap logs issues --status open --json
 ap logs show FINGERPRINT
 ap logs trace TRACE_ID --json
+ap logs trace TRACE_ID --all-nodes --json
 ap logs query --since 2h --kind http --level error --limit 100
 ap logs query --session SESSION_ID --node NODE_ID --grep timeout
 ap logs resolve FINGERPRINT --version v0.14.2 --note "Handle an empty session"
@@ -48,6 +55,16 @@ ap logs reopen FINGERPRINT
 ap logs ignore FINGERPRINT
 ap logs bundle FINGERPRINT -o ./repro
 ```
+
+Trace reads merge local events with Main while the local gateway is running.
+`--all-nodes` also asks reachable approved peers; unavailable machines do not
+prevent reading retained copies. With the gateway stopped, local traces and
+unconsumed spools remain readable. The MCP `get_trace` tool has the same default
+merge and an optional `all_nodes` flag. It returns up to 16 events and a
+`next_cursor`; pass that value as `cursor` until it is absent. Any unreachable
+requested peers appear in `unavailable_nodes`. The HTTP equivalent is
+`GET /api/logs/traces/TRACE_ID?page=1&after=CURSOR`. The CLI follows every page
+automatically, including traces larger than one network response.
 
 Every command accepts `--json`. `issues --status ''` includes all statuses.
 `query` accepts only structured flags; `--grep` searches literal text and raw SQL

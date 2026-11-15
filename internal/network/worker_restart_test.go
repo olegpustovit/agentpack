@@ -75,6 +75,9 @@ func TestGatewayRestartOperationIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := upsertSession(t.Context(), auth.store.DB, SessionInfo{ID: record.ID}); err != nil {
+		t.Fatal(err)
+	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
 	gateway := (&Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: secret}, options: GatewayOptions{Home: home}}).Handler()
 	request := func(operationID string) int {

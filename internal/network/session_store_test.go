@@ -50,6 +50,39 @@ func testSessionStore(t *testing.T, home string) *state.Store {
 	return store
 }
 
+func TestOpenWorkerFollowsStableNodeBinding(t *testing.T) {
+	home, directory := t.TempDir(), t.TempDir()
+	worker, gateway := testSessionStore(t, home), testSessionStore(t, home)
+	owner := Actor{Kind: "browser", User: testBrowserEmail, Node: "host"}
+	info := SessionInfo{ID: "session-live", Directory: directory, Harness: "codex", Transport: "acp", StartedBy: &owner}
+	if err := upsertSession(t.Context(), worker.DB, info); err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.BindNode(t.Context(), "stable-node"); err != nil {
+		t.Fatal(err)
+	}
+	info.AgentSessionID = "native"
+	if err := rememberACPConversationOwner(t.Context(), worker, info, ""); err != nil {
+		t.Fatal("already-open worker lost its native claim", err)
+	}
+	if err := patchWorkerConversationState(t.Context(), worker.DB, info.ID, "working"); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertSession(t.Context(), worker.DB, info); err != nil {
+		t.Fatal(err)
+	}
+	if err := endSession(t.Context(), worker.DB, info.ID, TerminalState{}); err != nil {
+		t.Fatal(err)
+	}
+	var wrong int
+	if err := gateway.Reader.QueryRow("SELECT count(*) FROM sessions WHERE node_id<>'stable-node'").Scan(&wrong); err != nil || wrong != 0 {
+		t.Fatalf("worker wrote under stale identity: %d %v", wrong, err)
+	}
+	if got, err := storedSession(t.Context(), gateway.Reader, info.ID); err != nil || got.AgentSessionID != "native" {
+		t.Fatalf("bound session unavailable: %+v %v", got, err)
+	}
+}
+
 func TestSessionMetadataRoundTripAndUpdatesKeepNameAndVisibility(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	ctx := context.Background()
@@ -62,6 +95,7 @@ func TestSessionMetadataRoundTripAndUpdatesKeepNameAndVisibility(t *testing.T) {
 	if err := upsertSession(ctx, store.DB, info); err != nil {
 		t.Fatal(err)
 	}
+	info.NodeID, _ = store.NodeID(ctx)
 	got, err := storedSession(ctx, store.Reader, info.ID)
 	if err != nil || !reflect.DeepEqual(got, info) {
 		t.Fatalf("round trip: %+v want %+v err=%v", got, info, err)
@@ -114,6 +148,10 @@ func TestWorkerEndpointRequiresCanonicalSessionMetadata(t *testing.T) {
 	}
 	owner := browserActor(testBrowserEmail)
 	info := SessionInfo{ID: id, Name: "Durable label", Transport: "acp", AgentSessionID: "native", StartedBy: &owner}
+	info.NodeID, err = store.NodeID(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := upsertSession(t.Context(), store.DB, info); err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -116,13 +117,65 @@ func TestMCPDiagnosticToolsReuseAuthenticatedRoutes(t *testing.T) {
 				t.Fatalf("tool=%s invalid JSON result=%+v", test.name, result)
 			}
 			if test.name == "get_trace" {
-				var events []obs.Event
-				if json.Unmarshal([]byte(content.Text), &events) != nil || len(events) != 2 {
+				var page obs.TracePage
+				if json.Unmarshal([]byte(content.Text), &page) != nil || len(page.Events) != 2 || page.NextCursor != "" {
 					t.Fatalf("incomplete trace: %s", content.Text)
 				}
 			}
 		}
 	}
+	logs, err := obs.Open(h.gateway.options.Home, obs.StoreOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	more := make([]obs.Event, 33)
+	for i := range more {
+		more[i] = obs.Event{TS: event.TS.Add(time.Duration(i+1) * time.Microsecond), TraceID: event.TraceID, SpanID: fmt.Sprintf("%016x", i+1), NodeID: "fixture-node", Kind: "http", Level: "info"}
+	}
+	if err := logs.Import(ctx, more); err != nil {
+		t.Fatal(err)
+	}
+	if err := logs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cursor, count, pages := "", 0, 0
+	seen := map[string]bool{}
+	for {
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "get_trace", Arguments: map[string]any{"trace_id": event.TraceID, "cursor": cursor}})
+		if err != nil || result.IsError {
+			t.Fatalf("page %d: %v %+v", pages, err, result)
+		}
+		content, ok := result.Content[0].(*mcp.TextContent)
+		if !ok {
+			t.Fatal("missing trace JSON")
+		}
+		var page obs.TracePage
+		if err := json.Unmarshal([]byte(content.Text), &page); err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Events) > obs.TracePageSize {
+			t.Fatal("unbounded MCP trace page")
+		}
+		for _, event := range page.Events {
+			if seen[event.SpanID] {
+				t.Fatal("duplicate MCP span")
+			}
+			seen[event.SpanID] = true
+		}
+		count += len(page.Events)
+		pages++
+		if page.NextCursor == "" {
+			break
+		}
+		if page.NextCursor == cursor || pages > 3 {
+			t.Fatal("MCP cursor did not advance")
+		}
+		cursor = page.NextCursor
+	}
+	if count != 35 || pages != 3 {
+		t.Fatalf("incomplete MCP trace: %d events, %d pages", count, pages)
+	}
+
 	issue, err := obs.GetIssue(ctx, h.gateway.options.Home, event.Fingerprint)
 	if err != nil || issue.Status != "resolved" || issue.Note != "fixed by test" || issue.ResolvedBy != testBrowserEmail {
 		t.Fatalf("tool did not persist resolution: %+v %v", issue, err)

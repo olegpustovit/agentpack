@@ -332,27 +332,6 @@ func TestTailnetStatusFromKeepsWhatPolicyReads(t *testing.T) {
 	}
 }
 
-func TestOnlyTheSameUntaggedOwnerEnrollsAutomatically(t *testing.T) {
-	self := &tailnetPeer{ID: "self", UserID: 7}
-	cases := []struct {
-		name string
-		self *tailnetPeer
-		peer *tailnetPeer
-		want bool
-	}{
-		{"same owner", self, &tailnetPeer{ID: "p", UserID: 7}, true},
-		{"another owner", self, &tailnetPeer{ID: "p", UserID: 8}, false},
-		{"tagged peer", self, &tailnetPeer{ID: "p", UserID: 7, Tags: []string{"tag:ci"}}, false},
-		{"tagged self", &tailnetPeer{ID: "self", UserID: 7, Tags: []string{"tag:ci"}}, &tailnetPeer{ID: "p", UserID: 7}, false},
-		{"unknown owner", &tailnetPeer{ID: "self"}, &tailnetPeer{ID: "p"}, false},
-	}
-	for _, test := range cases {
-		if got := ownMachine(test.self, test.peer); got != test.want {
-			t.Errorf("%s: got %v", test.name, got)
-		}
-	}
-}
-
 func TestLibraryPeerRoutesCoverConflictsAndVersions(t *testing.T) {
 	for _, test := range []struct {
 		method, path string

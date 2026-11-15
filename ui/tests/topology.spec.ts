@@ -33,14 +33,14 @@ const ipv4 = /\b\d{1,3}(?:\.\d{1,3}){3}\b/
 const ipv6 = /\b(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}\b|[0-9a-f]::[0-9a-f]|\b[0-9a-f]{1,4}::/i
 
 test.beforeEach(async ({ page }) => {
+  await page.route("**/api/config", (route) => route.fulfill({ json: { ui_build_id: "test-build" } }))
   await page.route("**/api/status", (route) => route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }))
   await page.route("**/api/identity*", (route) => route.fulfill({ json: identity }))
   await page.route("**/api/nodes", (route) => route.fulfill({ json: nodes }))
   await page.route("**/api/topology", (route) => route.fulfill({ json: topology }))
   await page.route("**/api/events", (route) => route.abort())
   await page.route(/\/api\/sessions(\?.*)?$/, (route) => {
-    const node = new URL(route.request().url()).searchParams.get("node") ?? "local"
-    return route.fulfill({ json: sessions[node] ?? [] })
+    return route.fulfill({ json: Object.entries(sessions).flatMap(([node_id, rows]) => rows.map((row) => ({ ...row as object, node_id: node_id === "local" ? identity.node.id : node_id }))) })
   })
 })
 

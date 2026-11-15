@@ -42,6 +42,11 @@ func TestGatewayLibrarySaveCaptureRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := library.Store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	saved, err := library.Save(ctx, network.SaveAgentpackInput{Directory: workspace, Name: "Team review", AutoCapture: true})
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +121,7 @@ func TestGatewayLibraryBootstrapsRecentProjectsAndCachedPackages(t *testing.T) {
 		}
 		for _, info := range entries {
 			if _, err := store.DB.Exec(`INSERT INTO sessions(id,node_id,directory,definition_root,folder_id,harness,mode,last_used)
-                VALUES (?,'local',?,?,?,?,?,?)`, "session-"+rand.Text(), info.Directory, info.DefinitionRoot, info.FolderID, info.Harness, info.Mode, time.Now().UnixNano()); err != nil {
+                VALUES (?,(SELECT node_id FROM local_node WHERE id=1),?,?,?,?,?,?)`, "session-"+rand.Text(), info.Directory, info.DefinitionRoot, info.FolderID, info.Harness, info.Mode, time.Now().UnixNano()); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -162,6 +167,11 @@ func TestGatewayLibraryBootstrapsRecentProjectsAndCachedPackages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := library.Store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	saved, err := library.Save(context.Background(), network.SaveAgentpackInput{Directory: manualWorkspace, Name: "Existing manual pack"})
 	if err != nil {
 		t.Fatal(err)
@@ -258,7 +268,12 @@ func TestGatewayLibraryBootstrapsRecentProjectsAndCachedPackages(t *testing.T) {
 	if err != nil || len(packages) != 1 || packages[0].Module != "github.com/acme/tool" || packages[0].Commit != commit || packages[0].ContentHash != "" {
 		t.Fatalf("bootstrapped cached packages: %+v %v", packages, err)
 	}
-	if err := os.Remove(filepath.Join(home, "registry", "index.json")); err != nil {
+	db, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.DB.Exec("DELETE FROM registry_heads"); err != nil {
 		t.Fatal(err)
 	}
 	packages, err = library.Store.ListPackages()

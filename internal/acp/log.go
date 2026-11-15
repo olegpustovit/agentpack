@@ -153,6 +153,17 @@ func (log *EventLog) Close() error {
 	return persistence.err
 }
 
+// Flush makes a turn boundary durable before its acknowledgement or idle state is visible.
+func (log *EventLog) Flush() error {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if log.persistence == nil {
+		return nil
+	}
+	log.flushChanges(log.persistence)
+	return log.persistence.err
+}
+
 func (log *EventLog) persistLoop(persistence *eventLogPersistence) {
 	defer close(persistence.done)
 	ticker := time.NewTicker(50 * time.Millisecond)

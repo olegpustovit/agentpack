@@ -4,7 +4,7 @@ import { Banner, Empty, Spinner } from "@/components/kit/feedback"
 import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { useMachineQueries, useMachines } from "@/features/machines/queries"
+import { useMachineQueries, useReplicatedQueries, useMachines } from "@/features/machines/queries"
 import { projectsQuery, sessionsQuery } from "@/features/sessions/queries"
 import { basename, shortHash } from "@/lib/format"
 import { draftsQuery } from "./queries"
@@ -29,7 +29,7 @@ function InstallForm({ item, onDone }: { item: InstallItem; onDone: () => void }
   const queryClient = useQueryClient()
   const machines = useMachines()
   const projects = useMachineQueries(projectsQuery)
-  const sessions = useMachineQueries(sessionsQuery)
+  const sessions = useReplicatedQueries(sessionsQuery)
   const [picked, setPicked] = useState<string[]>([])
   const [restart, setRestart] = useState(true)
   const [phase, setPhase] = useState<InstallPhase>("pick")

@@ -205,6 +205,11 @@ func (s *Store) publishIssues(force bool) error {
 
 func publishIssue(tx *sql.Tx, pending pendingIssue) error {
 	counter := pending.Counter
+	// Old day-file cursors keep their keys; only replicated counts follow this machine.
+	var node string
+	if err := tx.QueryRow("SELECT CASE WHEN EXISTS(SELECT 1 FROM local_node_aliases WHERE node_id=?) THEN "+state.LocalNodeSQL+" ELSE ? END", counter.Node, counter.Node).Scan(&node); err != nil {
+		return err
+	}
 	if _, err := tx.Exec("INSERT INTO issues(fingerprint,kind,title,first_seen,sample) VALUES (?,?,?,?,?) ON CONFLICT(fingerprint) DO UPDATE SET first_seen=excluded.first_seen WHERE excluded.first_seen<issues.first_seen", counter.Fingerprint, counter.Kind, counter.Title, counter.FirstSeen, pending.Sample); err != nil {
 		return err
 	}
@@ -235,7 +240,7 @@ func publishIssue(tx *sql.Tx, pending pendingIssue) error {
 		}
 		trace, _ := hex.DecodeString(occurrence.Trace)
 		if _, err := tx.Exec(`INSERT INTO issue_counts(fingerprint,node_id,count,first_seen,last_seen,last_version,last_trace) VALUES (?,?,?,?,?,?,?)
-ON CONFLICT(fingerprint,node_id) DO UPDATE SET count=issue_counts.count+excluded.count,first_seen=min(issue_counts.first_seen,excluded.first_seen),last_seen=max(issue_counts.last_seen,excluded.last_seen),last_version=CASE WHEN excluded.last_seen>=issue_counts.last_seen THEN excluded.last_version ELSE issue_counts.last_version END,last_trace=CASE WHEN excluded.last_seen>=issue_counts.last_seen THEN excluded.last_trace ELSE issue_counts.last_trace END`, counter.Fingerprint, counter.Node, delta, occurrence.FirstSeen, occurrence.LastSeen, version, trace); err != nil {
+ON CONFLICT(fingerprint,node_id) DO UPDATE SET count=issue_counts.count+excluded.count,first_seen=min(issue_counts.first_seen,excluded.first_seen),last_seen=max(issue_counts.last_seen,excluded.last_seen),last_version=CASE WHEN excluded.last_seen>=issue_counts.last_seen THEN excluded.last_version ELSE issue_counts.last_version END,last_trace=CASE WHEN excluded.last_seen>=issue_counts.last_seen THEN excluded.last_trace ELSE issue_counts.last_trace END`, counter.Fingerprint, node, delta, occurrence.FirstSeen, occurrence.LastSeen, version, trace); err != nil {
 			return err
 		}
 		if _, err := tx.Exec("INSERT INTO issue_log_cursors(day,fingerprint,node_id,version,count) VALUES (?,?,?,?,?) ON CONFLICT(day,fingerprint,node_id,version) DO UPDATE SET count=excluded.count", pending.Day, counter.Fingerprint, counter.Node, version, occurrence.Count); err != nil {

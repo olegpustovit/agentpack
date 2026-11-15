@@ -67,7 +67,7 @@ func newGatewayAuth(home string, store *state.Store, secure bool) (*gatewayAuth,
 
 func (a *gatewayAuth) claimed(ctx context.Context) (bool, error) {
 	var claimed bool
-	err := a.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users)").Scan(&claimed)
+	err := a.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users) OR (SELECT join_peer<>'' FROM local_node WHERE id=1)").Scan(&claimed)
 	return claimed, err
 }
 
@@ -109,14 +109,14 @@ func (a *gatewayAuth) email(r *http.Request) string {
 	now := a.now()
 	var email string
 	err = a.store.Reader.QueryRowContext(r.Context(), `SELECT s.email FROM auth_sessions s JOIN users u ON u.email=s.email
-WHERE s.token_hash=? AND s.expires_at>? AND u.disabled=0 AND s.created_at>=u.sessions_valid_after`, key[:], now.UnixMilli()).Scan(&email)
+WHERE s.token_hash=? AND s.expires_at>? AND u.disabled=0 AND s.created_at>=u.sessions_valid_after AND s.session_epoch=u.sessions_valid_after`, key[:], now.UnixMilli()).Scan(&email)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ""
 	}
 	if err == nil {
 		var result sql.Result
 		result, err = a.store.DB.ExecContext(r.Context(), `UPDATE auth_sessions SET expires_at=max(expires_at,?) WHERE token_hash=?
-AND EXISTS(SELECT 1 FROM users u WHERE u.email=auth_sessions.email AND u.disabled=0 AND auth_sessions.created_at>=u.sessions_valid_after)`, now.Add(browserSessionLifetime).UnixMilli(), key[:])
+AND EXISTS(SELECT 1 FROM users u WHERE u.email=auth_sessions.email AND u.disabled=0 AND auth_sessions.created_at>=u.sessions_valid_after AND auth_sessions.session_epoch=u.sessions_valid_after)`, now.Add(browserSessionLifetime).UnixMilli(), key[:])
 		if err == nil {
 			n, e := result.RowsAffected()
 			if e == nil && n == 1 {
@@ -150,8 +150,13 @@ func (a *gatewayAuth) status(w http.ResponseWriter, r *http.Request) {
 		}
 		legacy = len(hash) != 0
 	}
+	var joining bool
+	if err := a.store.Reader.QueryRowContext(r.Context(), "SELECT NOT EXISTS(SELECT 1 FROM users) AND join_peer<>'' FROM local_node WHERE id=1").Scan(&joining); err != nil {
+		authFailure(w, r, "account state unavailable", err)
+		return
+	}
 	email := a.email(r)
-	writeJSON(w, AccountStatus{Claimed: claimed, Legacy: legacy, Authenticated: email != "", Email: email})
+	writeJSON(w, AccountStatus{Joining: joining, Claimed: claimed, Legacy: legacy, Authenticated: email != "", Email: email})
 }
 
 func (a *gatewayAuth) claim(w http.ResponseWriter, r *http.Request) {
@@ -218,7 +223,12 @@ func (a *gatewayAuth) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	a.issueSession(w, r, User{Email: email})
+	user := User{Email: email}
+	if err := a.store.Reader.QueryRowContext(r.Context(), "SELECT sessions_valid_after FROM users WHERE email=?", email).Scan(&user.SessionsValidAfter); err != nil {
+		authFailure(w, r, "account state unavailable", err)
+		return
+	}
+	a.issueSession(w, r, user)
 }
 
 func (a *gatewayAuth) login(w http.ResponseWriter, r *http.Request) {
@@ -264,8 +274,8 @@ func (a *gatewayAuth) issueSession(w http.ResponseWriter, r *http.Request, user 
 			full = true
 			return nil
 		}
-		result, err := tx.ExecContext(r.Context(), `INSERT INTO auth_sessions(token_hash,email,created_at,expires_at)
-SELECT ?,email,max(?,sessions_valid_after),? FROM users WHERE email=? AND disabled=0 AND sessions_valid_after=?`, key[:], now.UnixMilli(), expires.UnixMilli(), user.Email, user.SessionsValidAfter)
+		result, err := tx.ExecContext(r.Context(), `INSERT INTO auth_sessions(token_hash,email,created_at,expires_at,session_epoch)
+SELECT ?,email,max(?,sessions_valid_after),?,sessions_valid_after FROM users WHERE email=? AND disabled=0 AND sessions_valid_after=?`, key[:], now.UnixMilli(), expires.UnixMilli(), user.Email, user.SessionsValidAfter)
 		if err != nil {
 			return err
 		}

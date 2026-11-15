@@ -16,7 +16,7 @@ export function SessionViewSwitch({
 }) {
   if (!info) return null
   const current = sessionViewFromTransport(info.transport)
-  const blocked = viewSwitchNeedsResume(info)
+  const blocked = info.reachable === false || Boolean(info.archived_at) || viewSwitchNeedsResume(info)
 
   function choose(value: unknown[]) {
     const next = value[0]
@@ -42,7 +42,7 @@ export function SessionViewSwitch({
         {blocked ? (
           <Tooltip>
             <TooltipTrigger render={<span className="inline-flex cursor-default" />}>{control}</TooltipTrigger>
-            <TooltipContent>{VIEW_SWITCH_RESUME_TOOLTIP}</TooltipContent>
+            <TooltipContent>{info.reachable === false ? "Offline, read-only" : info.archived_at ? "Archived, read-only" : VIEW_SWITCH_RESUME_TOOLTIP}</TooltipContent>
           </Tooltip>
         ) : (
           control

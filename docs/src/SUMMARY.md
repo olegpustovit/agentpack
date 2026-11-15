@@ -19,6 +19,7 @@
 - [Staging and Bundles](./concepts/staging.md)
 - [Modes](./concepts/modes.md)
 - [MCP Servers](./concepts/mcp.md)
+- [Gateway State and Mesh Sync](./concepts/state.md)
 
 # Harness Guides
 

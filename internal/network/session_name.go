@@ -14,6 +14,7 @@ import (
 )
 
 var (
+	errSessionArchived    = errors.New("archived")
 	errSessionNotFound    = errors.New("session not found")
 	errSessionUnavailable = errors.New("session unavailable")
 )
@@ -58,15 +59,19 @@ func RenameSession(ctx context.Context, home, id, name string) (SessionInfo, err
 	if err != nil {
 		return info, err
 	}
-	if record, recordErr := workerRecord(home, id); recordErr == nil {
+	local, err := store.NodeID(ctx)
+	if err != nil {
+		return info, err
+	}
+	if record, recordErr := workerRecord(home, id); info.NodeID == local && recordErr == nil {
 		info.State, err = sessionState(ctx, record)
 		if err != nil {
 			return info, err
 		}
-	} else {
+	} else if info.NodeID == local {
 		info.State.Running, info.State.Restarting = false, false
 	}
-	_, err = store.DB.ExecContext(ctx, "UPDATE sessions SET name=? WHERE id=? AND node_id=?", name, id, localStateNode)
+	_, err = store.DB.ExecContext(ctx, "UPDATE sessions SET name=? WHERE id=?", name, id)
 	info.Name = name
 	return info, err
 }

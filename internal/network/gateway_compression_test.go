@@ -57,6 +57,9 @@ func TestGatewayCompressesReplayAndKeepsBrowserConnectionAlive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := upsertSession(t.Context(), auth.store.DB, SessionInfo{ID: id}); err != nil {
+		t.Fatal(err)
+	}
 	gateway := &Gateway{auth: auth, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home}}
 	server := httptest.NewServer(gateway.Handler())
 	t.Cleanup(server.Close)

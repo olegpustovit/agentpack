@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/spf13/cobra"
@@ -27,6 +28,7 @@ func (runner Runner) logsCommand() *cobra.Command {
 	}
 	for _, action := range []string{"issues", "show", "trace", "query", "resolve", "reopen", "ignore", "bundle"} {
 		var status, since, version, note, output string
+		var allNodes bool
 		filter := obs.Filter{Limit: 100}
 		command := &cobra.Command{Use: action, Args: cobra.NoArgs}
 		if action != "issues" && action != "query" {
@@ -41,6 +43,7 @@ func (runner Runner) logsCommand() *cobra.Command {
 			command.Short = "Show an issue, machine counts, sample and recent traces"
 		case "trace":
 			command.Short = "Read every retained event in one trace, in time order"
+			command.Flags().BoolVar(&allNodes, "all-nodes", false, "also read every reachable mesh peer")
 		case "query":
 			command.Short = "Find events using structured filters; SQL is not accepted"
 			command.Flags().StringVar(&since, "since", "", "duration ago (2h) or RFC3339 timestamp")
@@ -90,7 +93,7 @@ func (runner Runner) logsCommand() *cobra.Command {
 			case "query", "trace":
 				var events []obs.Event
 				if action == "trace" {
-					events, err = obs.TraceEvents(ctx, home, args[0])
+					events, err = network.TraceEvents(ctx, home, args[0], allNodes)
 				} else {
 					if filter.Limit == 0 {
 						return errors.New("limit must be between 1 and 10000")

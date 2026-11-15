@@ -49,6 +49,49 @@ func issueEvent(at time.Time, version string) Event {
 	return event.Sanitized()
 }
 
+func TestIssueIdentityBindingKeepsRecoveredCountsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	canonical, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer canonical.Close()
+	options := StoreOptions{State: canonical, Metadata: Metadata{NodeID: "local"}}
+	logs, err := Open(home, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func() {
+		event := issueEvent(time.Now(), "v1.0.0")
+		event.NodeID = "local"
+		logs.Write(event)
+		flushStore(t, logs)
+	}
+	write()
+	if err := canonical.BindNode(t.Context(), "stable-node"); err != nil {
+		t.Fatal(err)
+	}
+	write()
+	if err := logs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	logs, err = Open(home, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write()
+	if err := logs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var count, rows int
+	if err := canonical.Reader.QueryRow("SELECT coalesce(sum(count),0),count(*) FROM issue_counts WHERE node_id='stable-node'").Scan(&count, &rows); err != nil || count != 3 || rows != 1 {
+		t.Fatalf("binding/recovery changed counts: count=%d rows=%d err=%v", count, rows, err)
+	}
+	if err := canonical.Reader.QueryRow("SELECT count(*) FROM issue_counts WHERE node_id<>'stable-node'").Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("counts retained old machine identity: %d %v", rows, err)
+	}
+}
+
 func TestIssuesCountEveryOccurrenceButSampleRepeatedErrors(t *testing.T) {
 	home, canonical, logs, clock := issueFixture(t)
 	at := time.UnixMilli(clock.Load())
@@ -271,5 +314,71 @@ func TestIssueCoalescingDefersRetentionUntilCountsArePublished(t *testing.T) {
 	}
 	if err := canonical.Reader.QueryRow("SELECT sum(count) FROM issue_counts").Scan(&count); err != nil || count != 2 {
 		t.Fatalf("retention lost counts: %d %v", count, err)
+	}
+}
+
+func TestReplicatedIssuesCombineMachineCountsAndResolution(t *testing.T) {
+	ctx := t.Context()
+	homes := []string{t.TempDir(), t.TempDir()}
+	stores := make([]*state.Store, 2)
+	sample := issueEvent(time.Now(), "v1.0.0")
+	for i, home := range homes {
+		canonical, err := state.Open(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stores[i] = canonical
+		t.Cleanup(func() { canonical.Close() })
+		node := fmt.Sprintf("machine-%d", i)
+		if err := canonical.BindNode(ctx, node); err != nil {
+			t.Fatal(err)
+		}
+		logs, err := Open(home, StoreOptions{State: canonical, Metadata: Metadata{NodeID: node}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		event := sample
+		event.NodeID = node
+		logs.Write(event)
+		if err := logs.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sync := func(from, to *state.Store) {
+		t.Helper()
+		site, err := from.SiteID(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor, err := to.Cursor(ctx, site)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows, next, err := from.Changes(ctx, cursor, nil, 4<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := to.ApplyPage(ctx, rows, site, next); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sync(stores[0], stores[1])
+	var sampleJSON string
+	if err := stores[1].Reader.QueryRow("SELECT sample FROM issues WHERE fingerprint=?", sample.Fingerprint).Scan(&sampleJSON); err != nil || !json.Valid([]byte(sampleJSON)) {
+		t.Fatalf("replicated sample: %q %v", sampleJSON, err)
+	}
+	if _, err := ChangeIssue(ctx, homes[1], sample.Fingerprint, "resolved", "v1.1.0", "fixed", "owner@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	sync(stores[1], stores[0])
+	for _, canonical := range stores {
+		var count, nodes int
+		if err := canonical.Reader.QueryRow("SELECT sum(count),count(*) FROM issue_counts WHERE fingerprint=?", sample.Fingerprint).Scan(&count, &nodes); err != nil || count != 2 || nodes != 2 {
+			t.Fatalf("replicated counts: %d across %d nodes: %v", count, nodes, err)
+		}
+		var status string
+		if err := canonical.Reader.QueryRow("SELECT status FROM issues WHERE fingerprint=?", sample.Fingerprint).Scan(&status); err != nil || status != "resolved" {
+			t.Fatalf("replicated resolution: %q %v", status, err)
+		}
 	}
 }

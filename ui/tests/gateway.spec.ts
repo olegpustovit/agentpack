@@ -194,8 +194,8 @@ test("context rename saves on the correct host and survives refresh and reload",
   let name = ""
   let renamedBody: unknown
   await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "peer-1", name: "Build server", online: true }] }))
-  await page.route((url) => url.pathname === "/api/sessions" && url.searchParams.get("node") === "peer-1", (route) =>
-    route.fulfill({ json: [{ ...session, id: "remote-one", name }] }),
+  await page.route((url) => url.pathname === "/api/sessions", (route) =>
+    route.fulfill({ json: [session, { ...session, id: "remote-one", node_id: "peer-1", name }] }),
   )
   await page.route((url) => url.pathname === "/api/sessions/remote-one" && url.searchParams.get("node") === "peer-1", (route) => {
     renamedBody = route.request().postDataJSON()
@@ -424,17 +424,14 @@ test("backend strings are text and API failures stay visible", async ({ page }) 
   await expect(page.getByRole("alert")).toContainText("Project is not available")
 })
 
-test("peer sessions load independently and terminal links retain the node", async ({ page }) => {
+test("replicated peer sessions use one list and terminal links retain the node", async ({ page }) => {
   await mockAPI(page)
   await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "n-main", name: "Build server", online: true }] }))
-  // The peer's list is held until the local list is on screen, which shows the peer does not block it.
-  let releasePeer: () => void = () => {}
-  const peerReady = new Promise<void>((resolve) => {
-    releasePeer = resolve
-  })
-  await page.route((url) => url.pathname === "/api/sessions" && url.searchParams.get("node") === "n-main", async (route) => {
-    await peerReady
-    await route.fulfill({ json: [{ ...session, id: "remote-one", directory: "/srv/project" }] })
+  let listRequests = 0
+  await page.route((url) => url.pathname === "/api/sessions", (route) => {
+    listRequests++
+    expect(new URL(route.request().url()).searchParams.has("node")).toBe(false)
+    return route.fulfill({ json: [session, { ...session, id: "remote-one", node_id: "n-main", directory: "/srv/project" }] })
   })
   const urls: string[] = []
   await page.routeWebSocket(/\/api\/sessions\/[^/]+\/terminal/, (ws) => {
@@ -444,10 +441,10 @@ test("peer sessions load independently and terminal links retain the node", asyn
   })
   await page.goto("/")
   await expect(gwRow(page, "local:local-one")).toBeVisible()
-  releasePeer()
   const remote = gwRow(page, "n-main:remote-one")
   await expect(remote).toBeVisible()
   await expect(gwSessions(page)).toContainText("Build server")
+  expect(listRequests).toBe(1)
   await remote.click()
   await expect.poll(() => urls.length).toBe(1)
   expect(new URL(urls[0] ?? "").searchParams.get("node")).toBe("n-main")

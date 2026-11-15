@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,7 +30,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
-// shortcut: rekey local settings, limits, diagnostics and sessions to the stable tailnet node ID before P4.1 CRR conversion.
+// Error spools written before opening state are attributed by the local gateway.
 const localStateNode = "local"
 
 type GatewayOptions struct {
@@ -59,9 +60,10 @@ type Gateway struct {
 	origin         *url.URL
 	stop           context.CancelFunc
 	done           <-chan struct{}
-	replicaMu      sync.Mutex
 	replicaStatus  sync.Map
-	replicaSettled sync.Map // peer → inventories after the last exchange
+	statePulls     sync.Map // peer → coalesced pull notification
+	syncTransferMu sync.Mutex
+	syncTransfers  map[string]*stateTransferFile
 	identityMu     sync.Mutex
 	updateMu       sync.Mutex
 	updating       bool
@@ -110,6 +112,15 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 		return err
 	}
 	defer func() { result = errors.Join(result, store.Close()) }()
+	if snapshot, err := tailnetSnapshot(ctx); err == nil {
+		if err := store.BindNode(ctx, snapshot.Self.ID); err != nil {
+			return err
+		}
+	}
+	nodeID, err := store.NodeID(context.Background())
+	if err != nil {
+		return err
+	}
 	if err := os.Remove(filepath.Join(options.Home, "network", "limits.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove legacy limits cache: %w", err)
 	}
@@ -117,17 +128,18 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if err != nil {
 		return err
 	}
-	logs, err := obs.Open(options.Home, obs.StoreOptions{Metadata: obs.BuildMetadata(options.Version, localStateNode, "gateway"), State: store})
+	logs, err := obs.Open(options.Home, obs.StoreOptions{Metadata: obs.BuildMetadata(options.Version, nodeID, "gateway"), State: store})
 	if err != nil {
 		return err
 	}
 	defer func() { result = errors.Join(result, logs.Close()) }()
-	restoreDiagnostics := obs.SetDefault(logs, obs.BuildMetadata(options.Version, localStateNode, "gateway"))
+	restoreDiagnostics := obs.SetDefault(logs, obs.BuildMetadata(options.Version, nodeID, "gateway"))
 	defer restoreDiagnostics()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	gateway := &Gateway{options: options, store: store, logs: logs, auth: auth, local: nodeRecord{listener.Addr().String(), randomToken()}, origin: origin, stop: cancel, done: ctx.Done()}
-	gateway.importLegacySessions(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, localStateNode, "gateway")))
+	defer func() { result = errors.Join(result, gateway.cleanStateTransfers(time.Time{})) }()
+	gateway.importLegacySessions(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
 	gateway.mcp, err = NewGatewayMCP(gateway)
 	if err != nil {
 		return err
@@ -136,7 +148,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	for _, task := range []struct {
 		name string
 		run  func(context.Context)
-	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.registry_replication", gateway.runRegistryReplication}, {"gateway.log_spool", gateway.runLogSpool}} {
+	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}} {
 		background.Add(1)
 		obs.Go(task.name, func() { defer background.Done(); task.run(ctx) })
 	}
@@ -183,6 +195,13 @@ func (g *Gateway) runLogSpool(ctx context.Context) {
 }
 
 func (g *Gateway) Handler() http.Handler {
+	nodeID, nodeErr := g.auth.store.NodeID(context.Background())
+	if nodeErr != nil {
+		log.Printf("gateway node identity unavailable: %v", nodeErr)
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "gateway state unavailable", http.StatusServiceUnavailable)
+		})
+	}
 	mux := http.NewServeMux()
 	buildID := g.options.UIBuildID
 	if buildID == "" {
@@ -195,6 +214,8 @@ func (g *Gateway) Handler() http.Handler {
 	g.registerSettings(mux)
 	g.registerLibrary(mux)
 	g.registerRegistryReplication(mux)
+	g.registerStateSync(mux)
+	mux.HandleFunc("GET /api/cache/{cache_key}", g.serveCache)
 	g.registerLimits(mux)
 	g.registerDiagnostics(mux)
 	mux.HandleFunc("POST /api/telemetry", g.telemetry)
@@ -248,8 +269,17 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("POST /api/logout-all", g.auth.logoutAll)
 	mux.HandleFunc("GET /api/events", g.serveEvents)
 	mux.HandleFunc("GET /api/nodes", func(w http.ResponseWriter, r *http.Request) {
-		value, err := g.tailnetNodes(r.Context())
-		respond(w, value, err)
+		if r.URL.Query().Get("discover") == "1" {
+			value, err := g.tailnetNodes(r.Context())
+			respond(w, value, err)
+			return
+		}
+		value, err := g.meshNodes(r.Context(), nil)
+		if err != nil {
+			meshReadError(w, r, err)
+			return
+		}
+		respond(w, value, nil)
 	})
 	mux.HandleFunc("GET /api/topology", func(w http.ResponseWriter, r *http.Request) {
 		value, err := g.tailnetTopology(r.Context())
@@ -259,7 +289,11 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/local/sessions/{id}/presence", g.servePresence)
 
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
-		value, err := Sessions(r.Context(), g.options.Home)
+		value, err := g.meshSessions(r.Context(), r.URL.Query().Get("node"))
+		if err != nil {
+			meshReadError(w, r, err)
+			return
+		}
 		if err == nil {
 			for i := range value {
 				value[i] = publicSession(value[i])
@@ -268,7 +302,11 @@ func (g *Gateway) Handler() http.Handler {
 		respond(w, value, err)
 	})
 	mux.HandleFunc("GET /api/recent", func(w http.ResponseWriter, r *http.Request) {
-		value, err := RecentFolders(g.options.Home)
+		value, err := g.meshRecent(r.Context(), r.URL.Query().Get("node"))
+		if err != nil {
+			meshReadError(w, r, err)
+			return
+		}
 		respond(w, value, err)
 	})
 	mux.HandleFunc("DELETE /api/recent", func(w http.ResponseWriter, r *http.Request) {
@@ -486,29 +524,7 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		proxyWorkerConversation(w, r, record, "/blobs")
 	})
-	mux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}", func(w http.ResponseWriter, r *http.Request) {
-		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusNotFound)
-			return
-		}
-		path := "/blobs/" + r.PathValue("sha")
-		request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, "http://"+record.Address+path, nil)
-		if err != nil {
-			http.Error(w, "invalid blob request", http.StatusBadRequest)
-			return
-		}
-		request.Header.Set("Authorization", "Bearer "+record.Secret)
-		client := http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: nil}}
-		defer client.CloseIdleConnections()
-		response, err := client.Do(request)
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusBadGateway)
-			return
-		}
-		defer response.Body.Close()
-		proxySessionBlob(w, response)
-	})
+	mux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}", g.serveBlob)
 	mux.HandleFunc("GET /api/packages", func(w http.ResponseWriter, r *http.Request) {
 		directory := r.URL.Query().Get("directory")
 		if !g.knownDirectory(directory) {
@@ -573,6 +589,7 @@ func (g *Gateway) Handler() http.Handler {
 	}
 	api := conditionalAPI(mux)
 	secured := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(WithPeerCache(r.Context(), g.options.Home))
 		if p := r.URL.Path; strings.HasPrefix(p, "/api/") || isMCPPath(p) {
 			w.Header().Set("Cache-Control", "no-store")
 		}
@@ -588,6 +605,17 @@ func (g *Gateway) Handler() http.Handler {
 		if err != nil {
 			authFailure(w, r, "account state unavailable", err)
 			return
+		}
+		if peer, _ := r.Context().Value(replicaPeerKey{}).(string); peer != "" {
+			var hasAccounts bool
+			if err := g.auth.store.Reader.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM users)").Scan(&hasAccounts); err != nil {
+				authFailure(w, r, "account state unavailable", err)
+				return
+			}
+			if !hasAccounts && (!g.meshPeer(r.Context(), peer) || !(r.Method == http.MethodGet && (r.URL.Path == "/api/sync/changes" || r.URL.Path == "/api/events"))) {
+				http.Error(w, "waiting for mesh accounts", http.StatusForbidden)
+				return
+			}
 		}
 		if !claimed && !local {
 			allowed := (r.Method == "GET" || r.Method == "HEAD") && (r.URL.Path == "/healthz" || r.URL.Path == "/api/status" || !strings.HasPrefix(r.URL.Path, "/api/") && !isMCPPath(r.URL.Path)) || r.Method == "POST" && r.URL.Path == "/api/claim"
@@ -620,12 +648,31 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		if _, known := actorFrom(r.Context()); !known {
 			if local {
-				r = r.WithContext(withActor(r.Context(), LocalActor("local")))
+				actor, err := g.localActor(r.Context())
+				if errors.Is(err, errLocalAccountUnavailable) {
+					http.Error(w, err.Error(), http.StatusForbidden)
+					return
+				}
+				if err != nil {
+					authFailure(w, r, "local account unavailable", err)
+					return
+				}
+				r = r.WithContext(withActor(r.Context(), actor))
 			} else if email != "" {
 				r = r.WithContext(withActor(r.Context(), browserActor(email)))
 			}
 		}
 
+		if handled, err := g.routeMeshRequest(w, r); err != nil {
+			meshReadError(w, r, err)
+			return
+		} else if handled {
+			return
+		}
+		if r.Method == http.MethodGet && meshListRoute(r.URL.Path) && (r.URL.Query().Get("node") == "" || g.meshPeer(r.Context(), r.URL.Query().Get("node"))) {
+			api.ServeHTTP(w, r)
+			return
+		}
 		if nodeID := r.URL.Query().Get("node"); nodeID != "" && strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Del("Cache-Control") // the peer's Cache-Control passes through unchanged
 			g.proxyTailnet(w, r, nodeID)
@@ -637,7 +684,7 @@ func (g *Gateway) Handler() http.Handler {
 	if g.logs != nil {
 		sink = g.logs
 	}
-	return observeHTTP(mux, secured, sink, obs.BuildMetadata(g.options.Version, localStateNode, "gateway"))
+	return observeHTTP(mux, secured, sink, obs.BuildMetadata(g.options.Version, nodeID, "gateway"))
 }
 
 func publicSession(info SessionInfo) SessionInfo {
@@ -658,6 +705,10 @@ func respond(w http.ResponseWriter, value any, err error) {
 	writeJSON(w, value)
 }
 func writeSessionStart(w http.ResponseWriter, info SessionInfo, err error) {
+	if errors.Is(err, errSessionArchived) {
+		http.Error(w, "archived", http.StatusConflict)
+		return
+	}
 	if errors.Is(err, errACPResumeDenied) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
@@ -669,6 +720,10 @@ func writeSessionStart(w http.ResponseWriter, info SessionInfo, err error) {
 	respond(w, publicSession(info), err)
 }
 func authorizeACPWrite(w http.ResponseWriter, r *http.Request, session SessionInfo) bool {
+	if !session.ArchivedAt.IsZero() {
+		http.Error(w, "archived", http.StatusConflict)
+		return false
+	}
 	if session.Transport != "acp" {
 		return true
 	}
@@ -702,9 +757,6 @@ func (g *Gateway) authorizeACPWriteByID(w http.ResponseWriter, r *http.Request, 
 
 // startSession records the actor that started the session, then starts its worker.
 func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInfo, forkSessionID string) (SessionInfo, error) {
-	if !g.knownDirectory(info.Directory) {
-		return SessionInfo{}, errors.New("choose a recent folder from this node")
-	}
 	source := info
 	if forkSessionID != "" {
 		if info.Transport != "acp" || info.AgentSessionID != "" {
@@ -715,6 +767,18 @@ func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInf
 	if err := authorizeACPResume(ctx, g.auth.store, actor, source); err != nil {
 		return SessionInfo{}, err
 	}
+	if !g.knownDirectory(info.Directory) {
+		return SessionInfo{}, errors.New("choose a recent folder from this node")
+	}
+	local, err := g.auth.store.NodeID(ctx)
+	if err != nil {
+		return SessionInfo{}, err
+	}
+	info.NodeID = local
+	info.Reachable = true
+	info.LastSync = time.Time{}
+	info.EndedAt = time.Time{}
+	info.ArchivedAt = time.Time{}
 	info.StartedBy = &actor
 	id, err := g.options.Start(ctx, info, forkSessionID)
 	info.ID = id
@@ -739,6 +803,16 @@ func (g *Gateway) knownDirectory(directory string) bool {
 }
 
 func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("directory") == "" || r.URL.Query().Get("node") != "" {
+		sessions, err := g.meshAgentSessions(r.Context(), r.URL.Query().Get("node"), r.URL.Query().Get("directory"), r.URL.Query().Get("harness"))
+		if err != nil {
+			meshReadError(w, r, err)
+			return
+		}
+		writeJSON(w, map[string]any{"sessions": sessions})
+		return
+	}
+
 	directory := r.URL.Query().Get("directory")
 	harness := r.URL.Query().Get("harness")
 	if !g.knownDirectory(directory) || harness == "" {
@@ -763,6 +837,27 @@ func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		respond(w, nil, err)
 		return
+	}
+	local, err := g.auth.store.NodeID(r.Context())
+	if err != nil {
+		meshReadError(w, r, err)
+		return
+	}
+	folderID, err := FolderIdentity(directory)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	archived, err := archivedNativeIDs(r.Context(), g.auth.store, folderID, harness)
+	if err != nil {
+		meshReadError(w, r, err)
+		return
+	}
+	sessions = slices.Clone(sessions)
+	sessions = slices.DeleteFunc(sessions, func(session AgentSession) bool { return archived[session.ID] })
+	for i := range sessions {
+		sessions[i].NodeID = local
+		sessions[i].Reachable = true
 	}
 	writeJSON(w, map[string]any{"sessions": sessions})
 }

@@ -12,6 +12,7 @@ import (
 )
 
 type AccountStatus struct {
+	Joining       bool   `json:"joining,omitempty"`
 	Claimed       bool   `json:"claimed"`
 	Legacy        bool   `json:"legacy"`
 	Authenticated bool   `json:"authenticated"`

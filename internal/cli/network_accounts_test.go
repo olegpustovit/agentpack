@@ -110,3 +110,68 @@ func TestGatewayStatusPrintsUnclaimedPublicURL(t *testing.T) {
 		t.Fatal(output.String())
 	}
 }
+
+func TestGatewayJoinClosesClaimWindowOnlyAfterConfirmation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENTPACK_HOME", home)
+	var output strings.Builder
+	runner := Runner{Stdin: strings.NewReader("cancel\n"), Stdout: &output, Stderr: io.Discard}
+	if code, err := runner.Execute(t.Context(), []string{"gateway", "join", "source"}); err == nil || code == 0 {
+		t.Fatal("join accepted without confirmation")
+	}
+	if _, err := os.Stat(filepath.Join(home, "state.db")); !os.IsNotExist(err) {
+		t.Fatalf("cancelled join created state: %v", err)
+	}
+	runner.Stdin = strings.NewReader("trust\n")
+	if code, err := runner.Execute(t.Context(), []string{"gateway", "join", "source"}); err != nil || code != 0 {
+		t.Fatalf("join: %d %v", code, err)
+	}
+	store, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var peer string
+	if err := store.Reader.QueryRow("SELECT join_peer FROM local_node WHERE id=1").Scan(&peer); err != nil || peer != "source" {
+		t.Fatalf("pending join: %q %v", peer, err)
+	}
+	library, err := runner.networkLibrary(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := library.Store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	peers, err := library.Store.ListPeers()
+	if err != nil || len(peers) != 1 || !peers[0].Mesh {
+		t.Fatalf("mesh approval: %+v %v", peers, err)
+	}
+	if !strings.Contains(output.String(), "Owner claiming is disabled") {
+		t.Fatal("missing join state", output.String())
+	}
+}
+
+func TestGatewayWhoamiBindsAnEnabledAccountOffline(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENTPACK_HOME", home)
+	store, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.DB.Exec("INSERT INTO users(email,role) VALUES ('member@example.com','member')"); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	runner := Runner{Stdin: strings.NewReader(""), Stdout: &output, Stderr: io.Discard}
+	code, err := runner.Execute(t.Context(), []string{"gateway", "whoami", "member@example.com"})
+	if err != nil || code != 0 {
+		t.Fatalf("whoami: %d %v", code, err)
+	}
+	var email string
+	if err := store.Reader.QueryRow("SELECT account_email FROM local_node WHERE id=1").Scan(&email); err != nil || email != "member@example.com" {
+		t.Fatalf("binding: %q %v", email, err)
+	}
+}

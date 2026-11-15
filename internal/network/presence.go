@@ -141,7 +141,11 @@ func (g *Gateway) servePresence(w http.ResponseWriter, r *http.Request) {
 	if info.StartedAt.IsZero() {
 		info.StartedAt = info.LastUsed
 	}
-	actor := LocalActor("local")
+	actor, ok := actorFrom(r.Context())
+	if !ok {
+		http.Error(w, "local actor unavailable", http.StatusForbidden)
+		return
+	}
 	info.StartedBy = &actor
 	info.State = TerminalState{Running: true, ExitCode: -1}
 	if err := upsertSession(r.Context(), g.auth.store.DB, info); err != nil {

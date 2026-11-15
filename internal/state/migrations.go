@@ -77,7 +77,13 @@ func migrateOne(ctx context.Context, conn *sql.Conn, version, latest int, conten
 		if current != version-1 {
 			return fmt.Errorf("state schema %d cannot apply migration %d", current, version)
 		}
-		if _, err = conn.ExecContext(ctx, contents); err != nil {
+		first, _, _ := strings.Cut(contents, "\n")
+		if table, alters := strings.CutPrefix(first, "-- crsql-alter: "); alters {
+			err = alterCRR(ctx, conn, strings.TrimSpace(table), contents)
+		} else {
+			_, err = conn.ExecContext(ctx, contents)
+		}
+		if err != nil {
 			return err
 		}
 		if version == 1 {
@@ -94,4 +100,15 @@ func migrateOne(ctx context.Context, conn *sql.Conn, version, latest int, conten
 	}
 	committed = true
 	return nil
+}
+
+func alterCRR(ctx context.Context, conn *sql.Conn, table, contents string) error {
+	if _, err := conn.ExecContext(ctx, "SELECT crsql_begin_alter(?)", table); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, contents); err != nil {
+		return err
+	}
+	_, err := conn.ExecContext(ctx, "SELECT crsql_commit_alter(?)", table)
+	return err
 }

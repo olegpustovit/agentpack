@@ -11,7 +11,7 @@ import { SessionViewSwitch } from "@/features/sessions/session-view-switch"
 import { sessionViewFromTransport, viewSwitchNeedsResume } from "@/features/sessions/view-switch"
 import { rememberSession } from "@/features/shell/views"
 import { unavailableMessage, UnavailableTerminal } from "@/features/terminal/unavailable"
-import { api, LOCAL } from "@/lib/api"
+import { api } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { hud } from "@/lib/hud"
 
@@ -37,13 +37,10 @@ function SessionRoute() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const live = useEventsConnected()
-  // Fetch only once the machine is known online, as the sidebar does; an offline one shows its cache.
-  // This machine is online by definition, so its list does not wait for the machine list.
   const host = useMachines().find((item) => item.id === machine)
-  const online = machine === LOCAL || host?.online
-  const stale = online === false
-  const { data } = useQuery({ ...sessionsQuery(machine, live), enabled: online === true })
+  const { data } = useQuery(sessionsQuery(machine, live))
   const info = data?.find((session) => session.id === sessionId)
+  const stale = info?.reachable === false || host?.online === false
   const message = unavailableMessage(info, stale)
   const { q, group } = Route.useSearch()
   // A loaded list without this session means it ended, so the Sessions view must not return to it.
@@ -51,7 +48,7 @@ function SessionRoute() {
   useEffect(() => {
     rememberSession(ended ? undefined : { machine, sessionId, search: { q, group } })
   }, [ended, machine, sessionId, q, group])
-  const listed = info && host ? { ...info, machine, machineName: host.name, offline: !host.online } : undefined
+  const listed = info && host ? { ...info, machine, machineName: host.name, offline: stale } : undefined
   const switchView = useMutation({
     mutationFn: (view: SessionView) => {
       if (!info) throw new Error("session unavailable")
@@ -73,7 +70,7 @@ function SessionRoute() {
     },
     onError: (error) => hud.error(`Couldn't start session: ${(error as Error).message}`),
   })
-  usePane(info?.transport === "acp" ? "conversation" : info || data || stale ? "terminal" : undefined)
+  usePane(info?.transport === "acp" ? "conversation" : info || data ? "terminal" : undefined)
   if (message) return <UnavailableTerminal message={message} />
   // The pane depends on the transport, so wait for the list rather than guess Terminal
   // (which would load xterm and attach a socket to a chat session).
@@ -90,8 +87,8 @@ function SessionRoute() {
         info={info}
         pending={switchView.isPending}
         onSwitch={(view) => {
-          if (view === currentView || !info) return
-          if (viewSwitchNeedsResume(info)) return
+          if (view === currentView || !info || stale || info.archived_at) return
+          if (stale || info?.archived_at || viewSwitchNeedsResume(info)) return
           switchView.mutate(view)
         }}
       />
@@ -102,10 +99,11 @@ function SessionRoute() {
             machine={machine}
             sessionId={sessionId}
             info={info}
+            readOnly={stale}
             title={title || undefined}
             subtitle={subtitle || undefined}
             onSwitchTerminal={() => {
-              if (viewSwitchNeedsResume(info)) return
+              if (stale || info?.archived_at || viewSwitchNeedsResume(info)) return
               switchView.mutate("terminal")
             }}
           />

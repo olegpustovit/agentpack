@@ -23,6 +23,11 @@ func TestLibraryRoutesPreserveTrustAndPersistRename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if err := remember(home, SessionInfo{Directory: directory, Harness: "claude"}); err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +143,11 @@ func TestLibraryAgentpacksIncludeRevisionsInOneCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	revisions := map[string]string{}
 	for _, name := range []string{"Review", "Ops"} {
 		pack, revision, err := store.Capture(registry.CaptureInput{Name: name, Project: t.TempDir(), Manifest: []byte("name = 'fixture'\n[dependencies]\n"), Lock: []byte("lockfile_version = 2\n")})

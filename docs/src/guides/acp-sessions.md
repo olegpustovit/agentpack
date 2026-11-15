@@ -15,6 +15,11 @@ Some harnesses speak the [Agent Client Protocol](https://agentclientprotocol.com
 Start chat with `POST /api/sessions` and `{ "transport": "acp", ... }`. Resume with `agent_session_id` from `GET /api/agent-sessions?directory=&harness=&mode=`. Switching Chat ↔ Terminal in the UI stops the current worker and starts the other transport; resume depends on the agent.
 
 Session metadata, names and recent folders live in `$AGENTPACK_HOME/state.db`.
+Explicitly enrolled mesh gateways replicate these rows and conversation events.
+The browser reads one local session list across nodes, including offline chats.
+Offline history remains readable, while the composer and request-answer controls
+are disabled. Renaming is a shared metadata edit and works offline. See
+[Gateway State and Mesh Sync](../concepts/state.md) for trust and version rules.
 Worker exit records the end time and final terminal state without deleting that
 metadata. Conversation entries also persist in state.db. Memory eviction does not
 remove saved history; adjacent text chunks may be stored as one merged entry.

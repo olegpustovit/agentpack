@@ -5,7 +5,7 @@ import { ApiError, LOCAL, api } from "@/lib/api"
 import type { Identity, TailnetNode, Topology } from "@/lib/api-types"
 import { useEventsConnected } from "@/features/events/use-events"
 
-export type Machine = { id: string; name: string; online: boolean }
+export type Machine = { id: string; name: string; online: boolean; main?: boolean; needsUpdate?: boolean }
 
 export const identityQuery = queryOptions({
   queryKey: ["identity"],
@@ -53,10 +53,10 @@ export const machineIdentityQuery = (machine: string) =>
     staleTime: 60 * 60 * 1000,
   })
 
-export const nodesQuery = (live: boolean) =>
+export const nodesQuery = (live: boolean, discover = false) =>
   queryOptions({
-    queryKey: ["nodes"],
-    queryFn: () => api<TailnetNode[]>("/api/nodes"),
+    queryKey: discover ? ["nodes", "discovery"] : ["nodes"],
+    queryFn: () => api<TailnetNode[]>("/api/nodes", {query: discover ? {discover: "1"} : {}}),
     staleTime: 30 * 1000,
     refetchInterval: live ? false : 30 * 1000,
   })
@@ -68,10 +68,11 @@ export function useDiscovering(): boolean {
 }
 
 const topologySchema = z.object({
-  self: z.object({ id: z.string(), name: z.string(), os: z.string(), relay: z.string() }),
+  self: z.object({ id: z.string(), name: z.string(), os: z.string(), relay: z.string(), main: z.boolean().optional() }),
   peers: z.array(
     z.object({
       id: z.string(),
+      main: z.boolean().optional(),
       name: z.string(),
       os: z.string(),
       state: z.string(),
@@ -102,10 +103,10 @@ export function useMachines(): Machine[] {
   const identity = useQuery(identityQuery).data
   const nodes = useQuery(nodesQuery(live)).data
   const found: Machine[] = []
-  if (identity) found.push({ id: LOCAL, name: identity.node.name, online: true })
+  if (identity) found.push({ id: LOCAL, name: identity.node.name, online: true, main: identity.node.main })
   for (const node of nodes ?? []) {
     if (identity && node.id === identity.node.id) continue
-    found.push({ id: node.id, name: node.name, online: node.online })
+    found.push({ id: node.id, name: node.name, online: node.online, main: node.main, needsUpdate: node.needs_update })
   }
   useEffect(() => {
     for (const machine of found) seen.set(machine.id, machine)
@@ -166,4 +167,39 @@ export function useMachineQueries<T>(
       return { byMachine, firstLoadPending, errors }
     },
   })
+}
+
+// One local read includes replicated rows, even when the originating machine is asleep.
+export function useReplicatedQueries<T extends { node_id?: string; reachable?: boolean }>(
+  factory: (machine: string, live: boolean) => UseQueryOptions<T[], Error, T[], string[]>,
+): MachineQueries<T[]> {
+  const live = useEventsConnected()
+  const machines = useMachines()
+  const identity = useQuery(identityQuery).data
+  const result = useQuery(factory(LOCAL, live))
+  const byMachine: Record<string, MachineQuery<T[]>> = {}
+  const errors: Record<string, Error> = {}
+  const groups = partitionReplicatedRows(result.data ?? [], identity?.node.id)
+  for (const machine of machines) {
+    const rows = groups[machine.id] ?? []
+    byMachine[machine.id] = {
+      data: result.data === undefined ? undefined : rows,
+      error: result.error,
+      stale: result.isStale || rows.some((row) => row.reachable === false),
+      pending: result.isPending,
+      needsUpdate: false,
+      updatedAt: result.dataUpdatedAt,
+    }
+  }
+  if (result.error) errors[LOCAL] = result.error
+  return { byMachine, errors, firstLoadPending: result.isPending }
+}
+
+export function partitionReplicatedRows<T extends { node_id?: string }>(rows: T[], localNode?: string): Record<string, T[]> {
+  const groups: Record<string, T[]> = {}
+  for (const row of rows) {
+    const machine = !row.node_id || row.node_id === localNode ? LOCAL : row.node_id
+    ;(groups[machine] ??= []).push(row)
+  }
+  return groups
 }

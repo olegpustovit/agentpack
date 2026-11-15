@@ -11,7 +11,7 @@ const nodes = [
   { id: "n3", name: "lab-pi", online: false },
 ]
 const replication = {
-  peers: [{ node: "n2", receipt_count: 3, digests: [] }],
+  peers: [{ node: "n2", mesh: true }],
   contacts: { n2: { at: "2026-10-30T10:00:00Z" } },
 }
 
@@ -51,7 +51,7 @@ async function mockGateway(page: Page, options: { signedIn?: boolean; unclaimed?
     return answer(route, undefined, 204)
   })
   await page.route("**/api/identity", (route) => answer(route, identity))
-  await page.route("**/api/nodes", (route) => answer(route, nodes))
+  await page.route("**/api/nodes*", (route) => answer(route, nodes))
   await page.route("**/api/events", (route) => route.abort())
   await page.route("**/api/settings", (route) =>
     answer(route, { running: true, platform: "linux", sharing_enabled: sharing, allowed_peers: ["tag:agents"] }),
@@ -111,10 +111,10 @@ test("the sharing switch sends the new state and says when it applies", async ({
   ).toBeVisible()
 })
 
-test("replication rows show receipts, enroll only online peers and sync one", async ({ page }) => {
+test("replication rows show enrollment, enroll only online peers and sync one", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings/replication")
-  await expect(page.getByText("3 verified object receipts · online")).toBeVisible()
+  await expect(page.getByText("Enrolled · online")).toBeVisible()
   await expect(page.getByText("Offline · enrollment unavailable")).toBeVisible()
   await expect(page.getByRole("button", { name: "Enroll" })).toBeDisabled()
 
@@ -179,7 +179,7 @@ test("sign out calls the logout endpoint and returns to the login card", async (
   await mockGateway(page)
   await page.goto("/settings/account")
 
-  await page.getByRole("button", { name: "Sign out" }).click()
+  await page.getByRole("button", { name: "Sign out", exact: true }).click()
 
   await expect(page).toHaveURL(/\/login$/)
   await expect.poll(() => calls).toEqual([{ request: "POST /api/logout", body: null }])

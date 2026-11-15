@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/registry"
 	"github.com/olegpustovit/agentpack/internal/state"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -27,6 +28,17 @@ var errInvalidLogin = errors.New("invalid email or password")
 
 func ResetOwner(ctx context.Context, store *state.Store, home string) error {
 	if err := state.Transaction(ctx, store.DB, func(tx *sql.Tx) error {
+		// Survives user deletion, so recreating an email cannot revive peer logins.
+		if _, err := tx.ExecContext(ctx, `INSERT INTO mesh_settings(key,value)
+ SELECT 'account_epoch',cast(max(?,coalesce((SELECT max(sessions_valid_after) FROM users),0)+1,
+ coalesce((SELECT max(session_epoch) FROM auth_sessions),0)+1,
+ coalesce((SELECT cast(value AS INTEGER) FROM mesh_settings WHERE key='account_epoch'),0)+1) AS TEXT)
+ ON CONFLICT(key) DO UPDATE SET value=excluded.value`, time.Now().UnixMilli()); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE local_node SET join_peer='',account_email='' WHERE id=1"); err != nil {
+			return err
+		}
 		for _, table := range []string{"auth_sessions", "oauth_tokens", "users"} {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 				return err
@@ -86,8 +98,8 @@ func claimOwner(ctx context.Context, store *state.Store, email string, hash []by
 	if _, err := bcrypt.Cost(hash); err != nil {
 		return false, errors.New("invalid password hash")
 	}
-	result, err := store.DB.ExecContext(ctx, `INSERT INTO users(email,password_hash,role,created_at)
-SELECT ?,?,'owner',? WHERE NOT EXISTS(SELECT 1 FROM users)`, email, string(hash), time.Now().UnixMilli())
+	result, err := store.DB.ExecContext(ctx, `INSERT INTO users(email,password_hash,role,created_at,sessions_valid_after)
+SELECT ?,?,'owner',?,coalesce((SELECT cast(value AS INTEGER) FROM mesh_settings WHERE key='account_epoch'),0) WHERE NOT EXISTS(SELECT 1 FROM users) AND (SELECT join_peer FROM local_node WHERE id=1)=''`, email, string(hash), time.Now().UnixMilli())
 	if err != nil {
 		return false, fmt.Errorf("claim gateway owner: %w", err)
 	}
@@ -104,8 +116,8 @@ func AddUser(ctx context.Context, store *state.Store, email, password string) er
 	if err != nil {
 		return err
 	}
-	result, err := store.DB.ExecContext(ctx, `INSERT INTO users(email,password_hash,role,created_at)
-SELECT ?,?,'member',? WHERE EXISTS(SELECT 1 FROM users)`, email, string(hash), time.Now().UnixMilli())
+	result, err := store.DB.ExecContext(ctx, `INSERT INTO users(email,password_hash,role,created_at,sessions_valid_after)
+SELECT ?,?,'member',?,coalesce((SELECT cast(value AS INTEGER) FROM mesh_settings WHERE key='account_epoch'),0) WHERE EXISTS(SELECT 1 FROM users)`, email, string(hash), time.Now().UnixMilli())
 	if err != nil {
 		return fmt.Errorf("add user: %w", err)
 	}
@@ -210,4 +222,53 @@ func verifyLogin(ctx context.Context, store *state.Store, email, password string
 		return User{}, errInvalidLogin
 	}
 	return user, nil
+}
+
+// PrepareMeshJoin closes the claim window before the local operator approves a peer.
+// A failed enrollment leaves it closed; repeating the same join safely retries.
+func PrepareMeshJoin(ctx context.Context, store *state.Store, peer string) error {
+	if err := registry.ValidatePeer(peer); err != nil {
+		return err
+	}
+	return state.Transaction(ctx, store.DB, func(tx *sql.Tx) error {
+		var users int
+		var previous, local string
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM users").Scan(&users); err != nil {
+			return err
+		}
+		if users != 0 {
+			return errors.New("gateway already has accounts; enroll it through the owner's replication settings")
+		}
+		if err := tx.QueryRowContext(ctx, "SELECT join_peer,node_id FROM local_node WHERE id=1").Scan(&previous, &local); err != nil {
+			return err
+		}
+		if peer == local {
+			return errors.New("cannot join this machine to itself")
+		}
+		if previous != "" && previous != peer {
+			return errors.New("a join to another peer is already pending")
+		}
+		_, err := tx.ExecContext(ctx, "UPDATE local_node SET join_peer=? WHERE id=1", peer)
+		return err
+	})
+}
+
+func BindLocalAccount(ctx context.Context, store *state.Store, email string) error {
+	email, err := normalizeEmail(email)
+	if err != nil {
+		return err
+	}
+	result, err := store.DB.ExecContext(ctx, `UPDATE local_node SET account_email=? WHERE id=1
+ AND EXISTS(SELECT 1 FROM users WHERE email=? AND disabled=0)`, email, email)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return errors.New("choose an enabled gateway account")
+	}
+	return nil
 }

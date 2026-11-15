@@ -92,13 +92,21 @@ describe("event stream", () => {
     expect(calls).toEqual(["m/local/sessions"])
   })
 
-  it("refetches the peer's key for a peer event", async () => {
+  it("refetches unified sessions and the peer's key for a peer event", async () => {
     const source = FakeEventSource.instances[0]!
     await act(async () => {
       source.emit({ topic: "sessions", node: "peer-1" })
       await flush()
     })
-    expect(calls).toEqual(["m/peer-1/sessions"])
+    expect(calls).toEqual(["m/local/sessions", "m/peer-1/sessions"])
+  })
+
+  it("refreshes unified state after a mesh sync", async () => {
+    await act(async () => {
+      FakeEventSource.instances[0]!.emit({ topic: "state", node: "peer-1" })
+      await flush()
+    })
+    expect(calls.sort()).toEqual(["m/local/sessions", "nodes", "topology"])
   })
 
   it("refreshes nodes and topology for a nodes event", async () => {

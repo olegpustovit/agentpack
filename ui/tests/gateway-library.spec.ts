@@ -22,7 +22,7 @@ async function refreshMachines(page: Page) {
 test("Library keeps installed packages when an older peer has no Library API", async ({ page }) => {
   await mockAPI(page)
   await mockLibraryBase(page)
-  await page.route("**/api/nodes", (route) => route.fulfill({ json: [peer] }))
+  await page.route("**/api/nodes*", (route) => route.fulfill({ json: [peer] }))
   await page.route("**/api/projects**", (route) => {
     const node = new URL(route.request().url()).searchParams.get("node")
     const rows = node === peer.id ? [projectRow("/srv/app", [{ harness: "claude" }], { packages: [{ module: "github.com/acme/installed", commit: "abc123", kind: "plugin", name: "Installed tools" }] })] : []
@@ -125,7 +125,7 @@ test("offline package rows save drafts and require a fresh review before apply",
   let discarded = false
   const packageRequests: { body: unknown; node: string | null }[] = []
   const item = { id: "package-1", module: "github.com/acme/tools", commit: "abcd1234", content_hash: "sha256-tree-v1:abc", kind: "plugin", name: "Tools", cache_key: "cache-key" }
-  await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ ...peer, online }] }))
+  await page.route("**/api/nodes*", (route) => route.fulfill({ json: [{ ...peer, online }] }))
   await page.route("**/api/projects**", (route) => {
     const rows = new URL(route.request().url()).searchParams.get("node") === peer.id ? [projectRow("/srv/project", [{ harness: "claude" }], { folder_id: "folder-fingerprint" })] : []
     return route.fulfill({ json: rows })
@@ -187,17 +187,17 @@ test("offline package rows save drafts and require a fresh review before apply",
   await expect.poll(() => discarded).toBe(true)
 })
 
-test("replication explains automatic enrollment and reports receipts per peer", async ({ page }) => {
+test("replication requires explicit trust and reports sync progress per peer", async ({ page }) => {
   await mockAPI(page)
   await mockLibraryBase(page)
   let enrolled = false
   let synced = false
   const item = { id: "package-1", module: "github.com/acme/tools", commit: "abcd1234", kind: "plugin", name: "Tools" }
-  await page.route("**/api/nodes", (route) => route.fulfill({ json: [peer] }))
+  await page.route("**/api/nodes*", (route) => route.fulfill({ json: [peer] }))
   await page.route("**/api/settings", (route) => route.fulfill({ json: { running: true, platform: "linux", sharing_enabled: true, allowed_peers: [] } }))
   await page.route("**/api/library/replication/peers", (route) => {
     if (route.request().method() === "POST") enrolled = true
-    return route.fulfill({ json: { peers: enrolled ? [{ node: peer.id, receipt_count: synced ? 1 : 0, digests: synced ? [item.id] : [] }] : [], contacts: {} } })
+    return route.fulfill({ json: { peers: enrolled ? [{ node: peer.id, mesh: true }] : [], contacts: synced ? { [peer.id]: { schema_version: 22, lag: 0 } } : {} } })
   })
   await page.route("**/api/library/replication/sync", (route) => {
     synced = true
@@ -206,13 +206,16 @@ test("replication explains automatic enrollment and reports receipts per peer", 
   await page.route("**/api/library/packages**", (route) => route.fulfill({ json: [item] }))
   await page.route("**/api/library/agentpacks**", (route) => route.fulfill({ json: [] }))
   await page.goto("/settings/replication")
-  await expect(page.getByText("Your own machines enroll each other automatically and keep one library. A machine you remove stays out until you enroll it again.")).toBeVisible()
+  await expect(page.getByText("Enroll on both machines to sync accounts, chat history, limits and library data. Every mesh member is fully trusted. Only an owner can enroll or remove machines.")).toBeVisible()
   await expect(page.getByText("Not enrolled")).toBeVisible()
   await page.getByRole("button", { name: "Enroll", exact: true }).click()
+  expect(enrolled).toBe(false)
+  await page.getByRole("alertdialog").getByRole("button", { name: "Trust and enroll" }).click()
   await expect(page.getByText("Enrolled. The other machine must enroll this gateway too.")).toBeVisible()
   await page.getByRole("button", { name: "Sync now" }).click()
-  await expect(page.getByText("Sync complete with Build server.")).toBeVisible()
-  await expect(page.getByText("1 verified object receipt · online")).toBeVisible()
+  await expect(page.getByText("Sync requested with Build server.")).toBeVisible()
+  await expect(page.getByText("Enrolled · online")).toBeVisible()
+  await expect(page.getByText("Schema 22 · Lag 0 versions")).toBeVisible()
 })
 
 test("offline restore saves the exact agentpack revision as a draft", async ({ page }) => {
@@ -223,7 +226,7 @@ test("offline restore saves the exact agentpack revision as a draft", async ({ p
   const pack = { id: "pack-1", name: "Project setup", revisions: ["rev-1"], heads: ["rev-1"] }
   const revision = { id: "rev-1", agentpack_id: pack.id, manifest: 'name = "project"\n', lock: "", package_ids: [], project: "/srv/project", created_at: "2026-10-20T10:00:00Z", label: "Stable", mode: "default" }
   let drafts: unknown[] = []
-  await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ ...peer, online }] }))
+  await page.route("**/api/nodes*", (route) => route.fulfill({ json: [{ ...peer, online }] }))
   await page.route("**/api/projects**", (route) => {
     const rows = new URL(route.request().url()).searchParams.get("node") === peer.id ? [projectRow("/srv/project", [{ harness: "claude" }], { folder_id: "folder-fingerprint" })] : []
     return route.fulfill({ json: rows })

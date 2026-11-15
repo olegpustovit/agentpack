@@ -257,11 +257,13 @@ function PermissionCard({
   machine,
   sessionId,
   keyboardDefault,
+  readOnly,
 }: {
   item: ThreadItem
   machine: string
   sessionId: string
   keyboardDefault: boolean
+  readOnly?: boolean
 }) {
   const perm = item.data as PermissionPayload
   const queryClient = useQueryClient()
@@ -278,7 +280,7 @@ function PermissionCard({
     },
   })
   useEffect(() => {
-    if (!perm.requestId || perm.resolved || perm.inactive || answer.isPending) return
+    if (readOnly || !perm.requestId || perm.resolved || perm.inactive || answer.isPending) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !/^[1-9]$/.test(event.key)) return
       if (event.target instanceof HTMLElement && event.target.closest("[role='menu'], [role='menuitem'], [role='listbox'], [role='option']")) return
@@ -297,7 +299,7 @@ function PermissionCard({
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [answer.isPending, answer.mutate, keyboardDefault, perm.inactive, perm.options, perm.requestId, perm.resolved])
+  }, [readOnly, answer.isPending, answer.mutate, keyboardDefault, perm.inactive, perm.options, perm.requestId, perm.resolved])
   const result = perm.result
   const answerLabel = perm.options?.find((option) => option.id === result?.optionId)?.label ?? result?.optionId
   return (
@@ -421,6 +423,7 @@ function ThreadItemView({
   machine,
   sessionId,
   keyboardDefault,
+  readOnly,
   onQuote,
   onFork,
   onRetry,
@@ -429,6 +432,7 @@ function ThreadItemView({
   machine: string
   sessionId: string
   keyboardDefault: boolean
+  readOnly?: boolean
   onQuote?: (text: string) => void
   onFork?: () => void
   onRetry?: () => void
@@ -452,9 +456,9 @@ function ThreadItemView({
     case "tool":
       return <ToolRow data={item.data} />
     case "permission":
-      return <PermissionCard item={item} machine={machine} sessionId={sessionId} keyboardDefault={keyboardDefault} />
+      return <fieldset disabled={readOnly}><PermissionCard item={item} machine={machine} sessionId={sessionId} keyboardDefault={keyboardDefault} readOnly={readOnly} /></fieldset>
     case "elicitation":
-      return <ElicitationCard item={item} machine={machine} sessionId={sessionId} />
+      return <fieldset disabled={readOnly}><ElicitationCard item={item} machine={machine} sessionId={sessionId} /></fieldset>
     case "compaction":
       return <CompactionBlock item={item} />
     case "divider": {
@@ -499,7 +503,9 @@ export function ThreadView({
   onQuote,
   onFork,
   onRetry,
+  readOnly,
 }: {
+  readOnly?: boolean
   items: ThreadItem[]
   machine: string
   sessionId: string
@@ -532,7 +538,8 @@ export function ThreadView({
             item={entry}
             machine={machine}
             sessionId={sessionId}
-            keyboardDefault={entry === latestPendingPermission}
+            keyboardDefault={!readOnly && entry === latestPendingPermission}
+            readOnly={readOnly}
             onQuote={onQuote}
             onFork={onFork}
             onRetry={entry.kind === "agent_message_chunk" ? retry : undefined}

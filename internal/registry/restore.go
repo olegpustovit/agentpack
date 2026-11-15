@@ -141,8 +141,7 @@ func diffLocks(a, b lockfile.PackLock, modeName string) DiffResult {
 
 func (s *Store) restoreBytes(revision Revision) ([]byte, []byte, error) {
 	var b bindings
-	path := filepath.Join(s.root, bindingsDir, revision.ID+".json")
-	data, exists, _, err := readRegularOptional(path)
+	data, exists, err := s.readBindings(revision.ID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -322,11 +321,7 @@ func RecoverDefinition(home, directory string) error {
 	} else if err != nil {
 		return err
 	}
-	store, err := New(home)
-	if err != nil {
-		return err
-	}
-	return store.Recover(directory)
+	return (&Store{root: root}).Recover(directory)
 }
 
 // PendingRestore reports an interrupted restore without changing project or registry files.

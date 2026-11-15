@@ -18,9 +18,9 @@ describe("settings labels", () => {
 })
 
 describe("replicationStatus", () => {
-  it("reports receipts and reachability for enrolled peers", () => {
-    expect(replicationStatus(online, { node: "n2", receipt_count: 3, digests: [] })).toBe("3 verified object receipts · online")
-    expect(replicationStatus(offline, { node: "n3", receipt_count: 1, digests: [] })).toBe("1 verified object receipt · offline")
+  it("reports mesh approval and reachability for enrolled peers", () => {
+    expect(replicationStatus(online, { node: "n2", mesh: true })).toBe("Enrolled · online")
+    expect(replicationStatus(offline, { node: "n3", mesh: false })).toBe("Needs mesh approval · offline")
   })
 
   it("says what an unenrolled peer needs", () => {

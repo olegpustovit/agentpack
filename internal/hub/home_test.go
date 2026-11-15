@@ -520,6 +520,11 @@ func TestHubMultiChoiceElicitationSubmitsOptionIDs(t *testing.T) {
 	const secret = "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
 	posted := make(chan map[string]string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/status" {
+			_ = json.NewEncoder(w).Encode(network.AccountStatus{Claimed: true})
+			return
+		}
+
 		if r.Method != http.MethodPost || r.URL.Path != "/api/sessions/session-chat/conversation/elicitation" ||
 			r.URL.Query().Get("node") != "" || r.Header.Get("Authorization") != "Bearer "+secret {
 			t.Errorf("request = %s %s?%s authorization=%q", r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization"))
@@ -591,6 +596,11 @@ func TestNewSessionPostsSelectedWorkspaceAndTransport(t *testing.T) {
 	const secret = "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
 	var body map[string]string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/status" {
+			_ = json.NewEncoder(w).Encode(network.AccountStatus{Claimed: true})
+			return
+		}
+
 		if r.Method != http.MethodPost || r.URL.Path != "/api/sessions" || r.Header.Get("Authorization") != "Bearer "+secret {
 			t.Errorf("request = %s %s authorization=%q", r.Method, r.URL.Path, r.Header.Get("Authorization"))
 		}

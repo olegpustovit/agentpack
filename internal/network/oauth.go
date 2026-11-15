@@ -175,7 +175,7 @@ func (m *GatewayMCP) authorize(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			record := oauthRecord{Kind: "consent", Session: session, Query: r.URL.RawQuery, Expires: time.Now().Add(10 * time.Minute)}
-			if err := tx.QueryRow(`SELECT s.email,u.sessions_valid_after FROM auth_sessions s JOIN users u ON u.email=s.email WHERE s.token_hash=? AND s.expires_at>? AND u.disabled=0 AND s.created_at>=u.sessions_valid_after`, cookieHash[:], time.Now().UnixMilli()).Scan(&record.Email, &record.SessionEpoch); err != nil {
+			if err := tx.QueryRow(`SELECT s.email,u.sessions_valid_after FROM auth_sessions s JOIN users u ON u.email=s.email WHERE s.token_hash=? AND s.expires_at>? AND u.disabled=0 AND s.created_at>=u.sessions_valid_after AND s.session_epoch=u.sessions_valid_after`, cookieHash[:], time.Now().UnixMilli()).Scan(&record.Email, &record.SessionEpoch); err != nil {
 				return err
 			}
 			return oauthPut(tx, token, record)

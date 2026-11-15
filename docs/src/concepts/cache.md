@@ -10,7 +10,7 @@ Everything sits under the user-wide agentpack home, never inside your repo:
 $AGENTPACK_HOME/
   cache/
     <cache_key>/          # one extracted package tree per repository, path and commit
-    db.reddb              # metadata index + alias map + cached GitHub ref/tag lookups
+    index.db              # metadata index + alias map + cached GitHub ref/tag lookups
   local/
     <owner>/<repo>/...     # optional offline mirror (same layout as owner/repo specs)
   projects/

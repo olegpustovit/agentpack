@@ -56,7 +56,13 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 	if err != nil {
 		return 1, err
 	}
-	if arguments[0] == "passwd" || arguments[0] == "user" || arguments[0] == "reset-owner" {
+	if arguments[0] == "main" {
+		return runner.runGatewayMain(ctx, home, arguments[1:])
+	}
+	if arguments[0] == "join" {
+		return runner.runGatewayJoin(ctx, home, arguments[1:])
+	}
+	if arguments[0] == "whoami" || arguments[0] == "passwd" || arguments[0] == "user" || arguments[0] == "reset-owner" {
 		return runner.runGatewayAccounts(ctx, home, arguments)
 	}
 	executable, err := os.Executable()
@@ -96,7 +102,8 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 		if err != nil {
 			return 1, err
 		}
-		return 0, network.ServeGateway(ctx, options)
+		serveErr := network.ServeGateway(ctx, options)
+		return 0, errors.Join(serveErr, options.Library.Store.Close())
 	case "start":
 		if err := network.SetGatewayEnabled(home, true); err != nil {
 			return 1, err

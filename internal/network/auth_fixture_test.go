@@ -37,7 +37,7 @@ func testBrowserSession(t *testing.T, auth *gatewayAuth, email, token string) {
 	}
 	hash := sha256.Sum256([]byte(token))
 	now := auth.now()
-	if _, err := auth.store.DB.Exec("INSERT INTO auth_sessions(token_hash,email,created_at,expires_at) VALUES (?,?,?,?)", hash[:], email, now.UnixMilli(), now.Add(time.Hour).UnixMilli()); err != nil {
+	if _, err := auth.store.DB.Exec("INSERT INTO auth_sessions(token_hash,email,created_at,expires_at,session_epoch) SELECT ?,email,max(?,sessions_valid_after),?,sessions_valid_after FROM users WHERE email=?", hash[:], now.UnixMilli(), now.Add(time.Hour).UnixMilli(), email); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -126,7 +126,7 @@ func readIssues(ctx context.Context, home, status, fingerprint string) ([]Issue,
 			count.LastTrace = trace
 		}
 	}
-	db, err := readOnly(filepath.Join(home, "state.db"))
+	db, err := openLogFile(filepath.Join(home, "state.db"), false)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -226,7 +226,7 @@ func readIssues(ctx context.Context, home, status, fingerprint string) ([]Issue,
 		return nil, err
 	}
 	for _, day := range days {
-		db, err := readOnly(filepath.Join(home, "logs", day))
+		db, err := openLogFile(filepath.Join(home, "logs", day), false)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}

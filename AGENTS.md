@@ -28,7 +28,7 @@ Benchmark cold setup and verified warm launches before and after changing launch
 
 Fingerprint only configuration and authored resources. Never recursively scan global chat histories, sessions, project runtime state, sockets, or logs merely because the launch workspace is the user's home. Preserve cache integrity checks, symlink validation, nonregular configuration rejection, and concurrent-launch validation when optimizing. See `docs/research/startup-performance.md` for the baseline and reproduction commands.
 
-A launch stages only its own harness, so each harness returns to the generation its last launch built (`selectLaunchGeneration`); switching agents must not rebuild. Overlay harnesses (Cursor, Antigravity) and launches after them keep the published path, because the rebuild maintains the workspace links. Registry objects are content-addressed: `registry.memoized` validates each once per process while its file metadata holds, because index reads run on every Library request and a peer's proxied read must finish well inside the gateway's limits.
+A launch stages only its own harness, so each harness returns to the generation its last launch built (`selectLaunchGeneration`); switching agents must not rebuild. Overlay harnesses (Cursor, Antigravity) and launches after them keep the published path, because the rebuild maintains the workspace links. Registry objects are content-addressed: `registry.memoized` validates each once per process while its replicated conflict position holds, because index reads run on every Library request and a peer's proxied read must finish well inside the gateway's limits.
 
 A launch never waits for housekeeping whose cost depends on what else is on the machine: tidying the temp directory runs beside the agent. A throwaway project path must never go through `lockfile.Load`, which leaves a guard directory per path; use `lockfile.LoadUnguarded`.
 
@@ -58,8 +58,9 @@ All agentpack-owned terminal rendering is monochrome and terminal-agnostic: use 
 | Path | Purpose |
 | --- | --- |
 | **`$AGENTPACK_HOME/cache/<cache_key>/`** | Package trees (GitHub tarball, or **copies** from filesystem / `local/`). The key is the SHA-256 of the package identity (`github:<owner>/<repo>`, path, commit), **not** of the files; the lock's `content_hash` is what verifies them. |
-| **`$AGENTPACK_HOME/cache/db.reddb`** | Metadata + alias map for fast repeat **`add`**, plus cached GitHub ref/tag lookups to reduce API calls. |
-| **`$AGENTPACK_HOME/state.db`** | Gateway/worker SQLite state, including accounts, hashed browser sessions, session metadata/names/recents, conversation events/progress, issue metadata/counts, settings, limits and OAuth. Native-stdio presence registers through the local gateway; foreground launchers never open this database. |
+| **`$AGENTPACK_HOME/cache/index.db`** | Metadata + alias map for fast repeat **`add`**, plus cached GitHub ref/tag lookups to reduce API calls. |
+| **`$AGENTPACK_HOME/state.db`** | Gateway/worker SQLite state, including accounts, hashed browser sessions, session metadata/names/recents, conversation events/progress, issue metadata/counts, settings, limits, Library records and OAuth. Raw Library credential bindings and peer approvals stay local. Native-stdio presence registers through the local gateway; foreground launchers never open this database. |
+| **`$AGENTPACK_HOME/archive.db`** | Main gateway only: private plain SQLite conversation archive (WAL, FULL). Back it up with its archived attachment directories; its contents are not replicated. |
 | **`$AGENTPACK_HOME/network/sessions/<id>/worker.json`** | Private running-process endpoint: ID, PID, loopback address and secret. Session metadata lives in state.db; endpoint files disappear when workers exit. |
 | **Legacy `network/sessions/`, `network/acp-session-owners/`, `network/recent.json`** | Gateway startup imports stopped workers, native ownership and recent folders into state.db. Imported files are removed only after commit; live-worker files, unreadable sources and image/support files remain. Hidden session rows retain immutable native ownership. |
 | **`$AGENTPACK_HOME/logs/YYYY-MM-DD.db`** | Private plain SQLite diagnostic events and deduplicated stacks, retained for five days. Ordinary events have a 256 MiB daily budget; error samples are preserved. |
@@ -77,6 +78,36 @@ All agentpack-owned terminal rendering is monochrome and terminal-agnostic: use 
 | **`<staged Claude bundle>/agentpack-settings.json`** | Per-project/mode attribution and MCP overlay, passed as inline JSON via **`--settings`**. **`CLAUDE_CONFIG_DIR`** stays unset for native keychain continuity. |
 
 **Default `AGENTPACK_HOME`:** if unset, **Windows** uses **`%LOCALAPPDATA%\agentpack`**; **Unix** uses **`$XDG_DATA_HOME/agentpack`** when **`XDG_DATA_HOME`** is set, otherwise **`$HOME/.local/share/agentpack`**.
+
+State sync shares password hashes and chat history only with explicitly approved
+mesh peers. Never promote a legacy or automatically discovered Library peer into
+mesh trust. Session and limits UI reads use local replicated rows; live actions
+route to their owning node. Keep offline history readable and all live controls
+disabled. Altering a replicated table uses the migration `crsql-alter` marker.
+
+`gateway main set` selects the Main gateway. Switching machines requires typing
+`switch`, cleanly stopping the old gateway and copying its `archive.db` and
+archived attachment directories, then running `gateway main archive-ready` on
+the new Main. Missing attachments can also be fetched with both gateways running.
+Until readiness validates the archive and its attachments, archiving and
+archived reads are paused. The hourly mover rechecks both replicated roles for
+every session, commits and verifies the archive before replicated pruning, and
+never archives an incomplete tail, active turn or pending approval. Main fetches
+and verifies attachments first. Other nodes remove archived images only after
+verifying Main still has them; a paused handover keeps the local copies.
+Archived sessions are permanently read-only,
+including native resumes through another folder or a harness alias. No restore
+route. Back up `archive.db` and archived `network/sessions/<id>/blobs/` directories.
+Archive event clocks and blob references replicate as metadata. A replicated
+immutable edit journal preserves late changes through intermediate peers until
+Main durably commits and acknowledges them. Keep late body edits and coalescing
+deletions safe before applying CRR pruning tombstones, including across a Main
+handover; stale gossip must never overwrite a newer archived body.
+
+Non-main gateways forward retained failed traces to Main through mesh-only
+diagnostic routes, preserving original machine identity and retry cursors. Healthy
+traces stay local. Trace reads merge Main; `logs trace --all-nodes` additionally
+queries approved peers. Raw diagnostic day files never enter state replication.
 
 Every new handler, background loop and command must record its failures through
 `internal/obs`, preserving request/session tracing and credential redaction. A
@@ -138,7 +169,7 @@ A repository root with **`.claude-plugin/marketplace.json`**, **`.cursor-plugin/
 - **Locks without content hashes still stage**, with a one-line warning on every `sync` and launch. **`AGENTPACK_REQUIRE_VERIFIED=1`** turns the warning into a refusal.
 - **MCP records.** `lock`, `add` and `mcp add` write one `[[mcp_servers]]` record per merged server with `launcher` (`npm` / `pypi` / `docker` / `remote` / `command`) and `status` (`pinned` / `unpinned` / `unpinnable`). npm servers (`npx`, `bunx`, `pnpm dlx`, `yarn dlx`, `bun x`) are resolved to an exact version plus registry integrity, and staging rewrites the package argument to `pkg@<version>` for every harness. An unreachable registry fails the lock unless **`--allow-unpinned-mcp`** records `status = "unpinned"` with `allow_unpinned = true`; `add` keeps the package and leaves that server unrecorded with a warning. `sync` and launchers never contact a registry; a record applies only while its `definition` digest (command, args, URL — never env) matches. Supported `npx` servers can also carry a locked dependency tree. Other runners and unresolved npx trees pin only the top-level package or remain explicitly unpinned; see `docs/src/concepts/mcp.md`.
 - Harness launchers (**`agentpack claude`**, **`opencode`**, **`codex`**, **`agent`**) stage and verify **only the selected harness**, suppress routine hook-rendering messages, and run a **fast pre-sync** when **`agentpack.toml`**, **`pack.lock`**, and **`./.agents/`** are unchanged since the last successful launch sync: they check staging and the cache layout and **skip** full lock resolve, re-download, and staging rebuild. Nothing is staged on that path, so the cache content is not hashed there: the launch digest includes a fingerprint of the cache entries' file metadata (path, type, permission bits, size, mtime), and any visible change forces the full sync, which hashes. **`AGENTPACK_FULL_VERIFY=1`** hashes on every launch. Floating pins (branch / floating semver) therefore **do not advance** on launch alone — run **`agentpack sync`** or **`agentpack lock`** when you need **`pack.lock`** refreshed from the manifest.
-- GitHub **ref → commit** and **tag list** lookups are cached in **`db.reddb`** and reused across **`add`**, **`lock`**, and **`sync`**. Fresh cached metadata avoids repeat API calls; exact tag-name ref lookups also reuse the cached tag list directly.
+- GitHub **ref → commit** and **tag list** lookups are cached in **`index.db`** and reused across **`add`**, **`lock`**, and **`sync`**. Fresh cached metadata avoids repeat API calls; exact tag-name ref lookups also reuse the cached tag list directly.
 - When GitHub REST ref/tag lookups fail, agentpack falls back to the Git protocol through an embedded Go Git client against **`https://github.com/<owner>/<repo>.git`** before using stale cached metadata. This removes dependencies on both the throttled REST API and an external `git` executable for ref and tag resolution.
 - **GitHub credentials** come from `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token --hostname github.com` (only when `gh` is on `PATH`; run once per process with a 5 s timeout; failure means anonymous, silently). The token is sent on REST requests and authenticated codeload; the Git-protocol fallbacks try anonymously first and retry with HTTP basic auth (`x-access-token`). When every source answers 401/403/404 the error says the repository may be private and suggests `gh auth login`, or, if a token was used, that the account may lack access. The token is never printed or logged.
 
@@ -195,6 +226,12 @@ name alone never grants write access.
 
 Offline account administration is `gateway user add EMAIL`, `gateway user list`,
 `gateway user disable EMAIL`, `gateway passwd EMAIL`, and `gateway reset-owner`.
+`gateway join NODE` prepares an unclaimed gateway before it starts, closes its
+claim window, and records explicit mesh approval after typing `trust`.
+`gateway whoami EMAIL` binds local actions to an enabled account; default mapping
+is the owner. Local bindings never replicate or fall back to owner when disabled.
+Owner reset must preserve the replicated account epoch; browser and OAuth logins
+must not revive when an email is recreated on another node.
 Password commands read hidden terminal input twice and accept no password flags.
 Owner reset requires typing `reset`, then removes accounts and revokes logins.
 The Account pane shows the email and sign-out actions, without user/password
@@ -262,7 +299,7 @@ Rules:
 **Project `./.agents/` ([dot-agents](https://github.com/dot-agents/dot-agents)-style)** — Optional. After pack content is staged, **`sync`** merges shared content into harness trees under **`$STAGING`** only where native discovery is unavailable. Claude receives shared **`skills/`**, **`agents/`**, **`commands/`**, **`rules/**/*.mdc`**, **`hooks/`**, and **`CLAUDE.md`** in its bundle. Codex natively scans **`.agents/skills`** from the launch CWD through the repository root, so agentpack **must not copy shared project skills into staged `CODEX_HOME/skills`**; doing so creates duplicate skill entries. Codex still receives converted **`agents/`** / **`commands/`**, top-level **`AGENTS.md`**, and the optional **`codex/`** subtree. **Cursor, OpenCode, and Antigravity are excluded** — they natively discover workspace-scoped customization, and merging into their staging would duplicate content. The workspace pointers agentpack may add are **`./.cursor/agents`** (only when launching via **`agentpack agent`**) for Cursor subagents and **`./.agents/plugins/agentpack-bundle`** (only when launching via **`agentpack agy`**) for Antigravity pack content. Bare **`agentpack sync`** and the other harness launchers do not write either symlink and clean up stale ones from a previous run. Set **`AGENTPACK_DOT_AGENTS=0`** to skip agentpack's dot-agents merging; this does not disable a harness's own native project discovery.
 
 1. **Cache** — **`add`**, **`lock`**, and **`sync`** populate **`$AGENTPACK_HOME/cache/<cache_key>/`**.  
-2. **Index** — **`$AGENTPACK_HOME/cache/db.reddb`** stores metadata (`kind`: `skill` | `plugin`) and shorthand **aliases** → `cache_key`.  
+2. **Index** — **`$AGENTPACK_HOME/cache/index.db`** stores metadata (`kind`: `skill` | `plugin`) and shorthand **aliases** → `cache_key`.
 3. **Artifact conversion** — **`sync`** parses supported markdown artifacts from cached pack content and re-renders them per target harness instead of copying frontmatter blindly:
    - **Commands**: Cursor plain markdown, OpenCode markdown frontmatter, Claude command/skill frontmatter, Codex skill fallback.
    - **Agents**: Claude / OpenCode / Cursor agent markdown frontmatter, Codex skill fallback.
@@ -340,7 +377,7 @@ For Cursor specifically, **`$STAGING/cursor-home/.cursor/cli-config.json`** is m
 
 | Variable | Meaning |
 | --- | --- |
-| **`AGENTPACK_HOME`** | User agentpack root (`cache/`, `local/`, `projects/`, `db.reddb`). Overrides XDG / OS defaults. |
+| **`AGENTPACK_HOME`** | User agentpack root (`cache/`, `local/`, `projects/`, `index.db`). Overrides XDG / OS defaults. |
 | **`AGENTPACK_STAGING_ROOT`** | Staging root override (default: `temp_dir()/agentpack-<hash>`). |
 | **`AGENTPACK_REQUIRE_VERIFIED`** | Set to **`1`** / **`true`** / **`yes`** to make **`sync`** and launchers refuse a lock that has packages without a `content_hash`. Default: stage them with a warning. |
 | **`AGENTPACK_FULL_VERIFY`** | Set to **`1`** / **`true`** / **`yes`** to hash every cache entry on every launch, including launches that skip the sync. |

@@ -29,14 +29,15 @@ for (const viewport of viewports) {
     await expect.poll(() => worker.conns[0]?.sent).toContain("\x1b[<0;61;21M")
   })
 
-  test(`shift-drag selects while the app owns the mouse at ${size}`, async ({ page }) => {
+  test(`the platform selection modifier drag selects while the app owns the mouse at ${size}`, async ({ page }) => {
     await page.setViewportSize(viewport)
     const worker = await stubWorker(page)
     worker.behave((conn) => serve(conn, { body: screen("A", { mouseModes: true }) }))
     await openRoute(page, "/sessions/local/s1")
-    await page.keyboard.down("Shift")
+    const modifier = await page.evaluate(() => /Mac/.test(navigator.platform) ? "Alt" : "Shift")
+    await page.keyboard.down(modifier)
     await dragCells(page, { x: 20, y: 20 }, { x: 60, y: 20 })
-    await page.keyboard.up("Shift")
+    await page.keyboard.up(modifier)
     expect(await page.evaluate(() => window.__agentpackTerminal?.getSelection().length)).toBe(40)
     expect(worker.conns[0]?.sent.some((message) => message.startsWith("\x1b[<"))).toBe(false)
   })

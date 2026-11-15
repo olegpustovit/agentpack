@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/olegpustovit/agentpack/internal/cache"
 	"io"
 	"log"
 	"net"
@@ -38,10 +40,12 @@ type SharingConfig struct {
 	Allow   []string `json:"allow,omitempty"`
 }
 type TailnetNode struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Address string `json:"-"`
-	Online  bool   `json:"online"`
+	Main        bool   `json:"main"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Address     string `json:"-"`
+	Online      bool   `json:"online"`
+	NeedsUpdate bool   `json:"needs_update,omitempty"`
 	// Version is what a peer's /peer answer reports; empty from a peer that predates it.
 	Version string `json:"version,omitempty"`
 }
@@ -91,7 +95,7 @@ func ReadSharingConfig(store *state.Store, home string) (SharingConfig, error) {
 		return config, errors.New("gateway state unavailable")
 	}
 	var data []byte
-	err := store.Reader.QueryRow("SELECT value FROM node_settings WHERE node_id = ? AND key = 'sharing'", localStateNode).Scan(&data)
+	err := store.Reader.QueryRow("SELECT value FROM node_settings WHERE node_id = " + state.LocalNodeSQL + " AND key = 'sharing'").Scan(&data)
 	if err == nil {
 		err = json.Unmarshal(data, &config)
 		return config, err
@@ -114,7 +118,7 @@ func ReadSharingConfig(store *state.Store, home string) (SharingConfig, error) {
 		return config, err
 	}
 	// A concurrent settings write wins over a legacy import.
-	if _, err := store.DB.Exec("INSERT INTO node_settings(node_id, key, value) VALUES (?, 'sharing', ?) ON CONFLICT DO NOTHING", localStateNode, string(data)); err != nil {
+	if _, err := store.DB.Exec("INSERT INTO node_settings(node_id, key, value) VALUES ("+state.LocalNodeSQL+", 'sharing', ?) ON CONFLICT DO NOTHING", string(data)); err != nil {
 		return config, err
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -143,7 +147,7 @@ func WriteSharingConfig(store *state.Store, config SharingConfig) error {
 	if err != nil {
 		return err
 	}
-	_, err = store.DB.Exec("INSERT INTO node_settings(node_id, key, value) VALUES (?, 'sharing', ?) ON CONFLICT(node_id, key) DO UPDATE SET value = excluded.value", localStateNode, string(data))
+	_, err = store.DB.Exec("INSERT INTO node_settings(node_id, key, value) VALUES ("+state.LocalNodeSQL+", 'sharing', ?) ON CONFLICT(node_id, key) DO UPDATE SET value = excluded.value", string(data))
 	return err
 }
 
@@ -341,21 +345,104 @@ func tailnetNodesFrom(ctx context.Context, status tailnetStatus, config SharingC
 func (g *Gateway) tailnetNodes(ctx context.Context) ([]TailnetNode, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	config, err := ReadSharingConfig(g.store, g.options.Home)
+	config, err := ReadSharingConfig(g.auth.store, g.options.Home)
 	if err != nil {
 		return nil, err
 	}
-	if !config.Enabled {
-		return []TailnetNode{}, nil
+	discovered := []TailnetNode{}
+	var discoveryErr error
+	if config.Enabled {
+		status, err := tailnetSnapshot(ctx)
+		if err == nil {
+			discovered, discoveryErr = tailnetNodesFrom(ctx, status, config, probeTailnetPeer)
+		} else {
+			discoveryErr = err
+		}
 	}
-	status, err := tailnetSnapshot(ctx)
+	known, err := g.meshNodes(ctx, discovered)
 	if err != nil {
 		return nil, err
 	}
-	return tailnetNodesFrom(ctx, status, config, probeTailnetPeer)
+	if len(known) == 0 && discoveryErr != nil {
+		return nil, discoveryErr
+	}
+	return known, nil
 }
+
+func (g *Gateway) meshNodes(ctx context.Context, discovered []TailnetNode) ([]TailnetNode, error) {
+	local, err := g.auth.store.NodeID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	nodes := map[string]TailnetNode{}
+	for _, node := range discovered {
+		nodes[node.ID] = node
+	}
+	rows, err := g.auth.store.Reader.QueryContext(ctx, "SELECT node_id,name,app_version FROM mesh_nodes WHERE node_id<>?", local)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var node TailnetNode
+		if err := rows.Scan(&node.ID, &node.Name, &node.Version); err != nil {
+			return nil, err
+		}
+		if node.Name == "" {
+			node.Name = node.ID
+		}
+		node.Online, _ = g.nodeContact(node.ID, local)
+		nodes[node.ID] = node
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if store := g.options.Library.Store; store != nil {
+		peers, err := store.ListPeers()
+		if err != nil {
+			return nil, err
+		}
+		for _, peer := range peers {
+			node, ok := nodes[peer.Node]
+			if !ok {
+				node = TailnetNode{ID: peer.Node, Name: peer.Node}
+			}
+			if peer.Mesh || !ok {
+				node.Online, _ = g.nodeContact(peer.Node, local)
+			}
+			node.NeedsUpdate = !peer.Mesh
+			if value, ok := g.replicaStatus.Load(peer.Node); ok {
+				node.NeedsUpdate = node.NeedsUpdate || value.(replicaContact).NeedsUpdate
+			}
+			nodes[peer.Node] = node
+		}
+	}
+	roles, err := g.auth.store.Main(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]TailnetNode, 0, len(nodes))
+	for _, node := range nodes {
+		node.Main = node.ID == roles.MainNode
+		result = append(result, node)
+	}
+	slices.SortFunc(result, func(a, b TailnetNode) int { return strings.Compare(a.Name, b.Name) })
+	return result, nil
+}
+
 func peerRoute(method, path string) bool {
-	if replicationPeerRoute(method, path) {
+	if method == http.MethodGet && strings.HasPrefix(path, "/api/cache/") {
+		return cache.ValidKey(strings.TrimPrefix(path, "/api/cache/"))
+	}
+	if method == http.MethodPost && path == "/api/logs/ingest" {
+		return true
+	}
+	if method == http.MethodGet && strings.HasPrefix(path, "/api/logs/trace/") {
+		trace := strings.TrimPrefix(path, "/api/logs/trace/")
+		decoded, err := hex.DecodeString(trace)
+		return err == nil && len(decoded) == 16 && strings.Trim(trace, "0") != ""
+	}
+	if method == http.MethodGet && (path == "/api/sync/changes" || path == "/api/sync/events") {
 		return true
 	}
 	if libraryPeerRoute(method, path) {
@@ -436,7 +523,15 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 	}
 	target, err := g.tailnetTarget(r.Context(), id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/conversation") && g.meshPeer(r.Context(), id) {
+			g.serveConversation(w, r)
+			return
+		}
+		status := http.StatusBadGateway
+		if g.meshPeer(r.Context(), id) {
+			status = http.StatusServiceUnavailable
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	g.proxyTailnetTo(w, r, id, target)
@@ -457,6 +552,10 @@ func (g *Gateway) proxyTailnetTo(w http.ResponseWriter, r *http.Request, id stri
 			request.Header.Set("traceparent", trace)
 		}
 		request.Header.Del("Cookie")
+		request.Header.Del("X-Agentpack-User")
+		if actor, ok := actorFrom(r.Context()); ok && (actor.Account || actor.Kind == "browser" || actor.Kind == "mcp") {
+			request.Header.Set("X-Agentpack-User", actor.User)
+		}
 		request.Header.Del("Origin")
 		request.Header.Del("Forwarded")
 		request.Header.Del("X-Forwarded-For")
@@ -468,11 +567,19 @@ func (g *Gateway) proxyTailnetTo(w http.ResponseWriter, r *http.Request, id stri
 		if event := obs.From(r.Context()); event != nil {
 			event.Fail(err)
 		}
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/conversation") && g.meshPeer(r.Context(), id) {
+			g.serveConversation(w, r)
+			return
+		}
 		log.Printf("tailnet proxy failed for node %s: %v", id, err)
 		w.Header().Set("Cache-Control", "no-store")
 		http.Error(w, "remote node connection failed; the gateway logged the network error", http.StatusBadGateway)
 	}
 	proxy.ModifyResponse = func(response *http.Response) error {
+		if response.StatusCode >= 500 && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/conversation") && g.meshPeer(r.Context(), id) {
+			return errors.New("remote conversation is temporarily unavailable")
+		}
+
 		response.Header.Del("Set-Cookie")
 		response.Header.Del("X-Agentpack-Trace")
 		if response.Header.Get("Cache-Control") == "" {
@@ -582,8 +689,18 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			return
 		}
 		actor := Actor{Kind: "peer", User: identity.UserProfile.LoginName, Node: identity.Node.ComputedName, StableNodeID: identity.Node.StableID}
+		actor, err = g.forwardedAccount(r.Context(), actor, r.Header.Get("X-Agentpack-User"))
+		if err != nil {
+			if event := obs.From(r.Context()); event != nil {
+				event.Fail(err)
+			}
+			http.Error(w, "forwarded account refused", http.StatusForbidden)
+			return
+		}
+
 		request := r.Clone(withActor(context.WithValue(r.Context(), replicaPeerKey{}, identity.Node.StableID), actor))
 		request.Header = r.Header.Clone()
+		request.Header.Del("X-Agentpack-User")
 		request.Header.Del("Cookie")
 		request.Header.Set("Authorization", "Bearer "+g.local.Secret)
 		request.Host = g.origin.Host
@@ -671,6 +788,9 @@ func (g *Gateway) runTailnetSharing(ctx context.Context) {
 			report(err)
 		} else {
 			status, err := tailnetSnapshot(ctx)
+			if err == nil {
+				err = g.store.BindNode(ctx, status.Self.ID)
+			}
 			address := tailnetAddress(status.Self)
 			if err != nil || address == "" {
 				closeServer()

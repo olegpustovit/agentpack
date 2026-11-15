@@ -21,7 +21,7 @@ func writeHubLocalWorker(t *testing.T, home, address string) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.DB.Exec("INSERT INTO sessions(id,node_id,harness,directory) VALUES ('session-local','local','codex','/local/project')"); err != nil {
+	if _, err := store.DB.Exec("INSERT INTO sessions(id,node_id,harness,directory) VALUES ('session-local',(SELECT node_id FROM local_node WHERE id=1),'codex','/local/project')"); err != nil {
 		t.Fatal(err)
 	}
 	const id = "session-local"

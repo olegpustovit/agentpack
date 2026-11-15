@@ -86,7 +86,7 @@ func loadACPConversationOwner(ctx context.Context, tx *sql.Tx, folderID, harness
 		return Actor{}, false, err
 	}
 	var pending bool
-	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sessions WHERE id=? AND node_id=?)", pendingID, localStateNode).Scan(&pending); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sessions WHERE id=? AND node_id="+state.LocalNodeSQL+")", pendingID).Scan(&pending); err != nil {
 		return Actor{}, false, err
 	}
 	if pending {
@@ -95,7 +95,7 @@ func loadACPConversationOwner(ctx context.Context, tx *sql.Tx, folderID, harness
 	var body, email, storedFolder, storedHarness string
 	var owner Actor
 	found := false
-	err = tx.QueryRowContext(ctx, "SELECT started_by,owner_email,folder_id,harness FROM sessions WHERE id=? AND node_id=?", id, localStateNode).Scan(&body, &email, &storedFolder, &storedHarness)
+	err = tx.QueryRowContext(ctx, "SELECT started_by,owner_email,folder_id,harness FROM sessions WHERE id=? AND node_id="+state.LocalNodeSQL, id).Scan(&body, &email, &storedFolder, &storedHarness)
 	if err == nil {
 		if storedFolder != folderID || storedHarness != canonical {
 			return Actor{}, false, errACPResumeOwnerStorage
@@ -108,19 +108,26 @@ func loadACPConversationOwner(ctx context.Context, tx *sql.Tx, folderID, harness
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return Actor{}, false, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT harness,started_by,owner_email FROM sessions
-        WHERE node_id=? AND folder_id=? AND agent_session_id=? AND transport='acp' AND started_by NOT IN ('','null') ORDER BY started_at,id`, localStateNode, folderID, sessionID)
+	rows, err := tx.QueryContext(ctx, `SELECT harness,started_by,owner_email,archived_at FROM sessions
+        WHERE node_id=`+state.LocalNodeSQL+` AND folder_id=? AND agent_session_id=? AND transport='acp' ORDER BY started_at,id`, folderID, sessionID)
 	if err != nil {
 		return Actor{}, false, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var name, body, email string
-		if err := rows.Scan(&name, &body, &email); err != nil {
+		var archivedAt int64
+		if err := rows.Scan(&name, &body, &email, &archivedAt); err != nil {
 			return Actor{}, false, err
 		}
 		target, err := harnessTarget(name)
 		if err != nil || string(target) != canonical {
+			continue
+		}
+		if archivedAt != 0 {
+			return Actor{}, false, errSessionArchived
+		}
+		if body == "" || body == "null" {
 			continue
 		}
 		candidate, err := decodeACPAccountOwner(body, email)
@@ -154,8 +161,32 @@ func readACPConversationOwner(ctx context.Context, store *state.Store, folderID,
 }
 
 func authorizeACPResume(ctx context.Context, store *state.Store, actor Actor, session SessionInfo) error {
-	if session.Transport != "acp" || session.AgentSessionID == "" {
+	if session.AgentSessionID == "" {
 		return nil
+	}
+	target, err := harnessTarget(session.Harness)
+	if err != nil {
+		return err
+	}
+	rows, err := store.Reader.QueryContext(ctx, "SELECT harness FROM sessions WHERE agent_session_id=? AND archived_at>0", session.AgentSessionID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		canonical, err := harnessTarget(name)
+		if err == nil && canonical == target {
+			rows.Close()
+			return errSessionArchived
+		}
+	}
+	err = errors.Join(rows.Err(), rows.Close())
+	if err != nil || session.Transport != "acp" {
+		return err
 	}
 	folderID, err := FolderIdentity(session.Directory)
 	if err != nil {
@@ -192,18 +223,18 @@ func insertOwnerBinding(ctx context.Context, tx *sql.Tx, key string, record acpC
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO sessions(id,node_id,folder_id,harness,started_by,owner_email,hidden,ended_at)
-        VALUES (?,?,?,?,?,?,1,?)`, id, localStateNode, record.FolderID, record.Harness, string(body), email, time.Now().UnixNano())
+        VALUES (?,`+state.LocalNodeSQL+`,?,?,?,?,1,?)`, id, record.FolderID, record.Harness, string(body), email, time.Now().UnixNano())
 	if err != nil {
 		return err
 	}
 	// Only an import marker has an empty scope and owner; valid bindings stay immutable.
 	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET folder_id=?,harness=?,started_by=?,owner_email=?
-		WHERE id=? AND node_id=? AND folder_id='' AND harness='' AND started_by='' AND owner_email=''`,
-		record.FolderID, record.Harness, string(body), email, id, localStateNode); err != nil {
+		WHERE id=? AND node_id=`+state.LocalNodeSQL+` AND folder_id='' AND harness='' AND started_by='' AND owner_email=''`,
+		record.FolderID, record.Harness, string(body), email, id); err != nil {
 		return err
 	}
 	var existing, existingEmail string
-	if err := tx.QueryRowContext(ctx, "SELECT started_by,owner_email FROM sessions WHERE id=? AND node_id=?", id, localStateNode).Scan(&existing, &existingEmail); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT started_by,owner_email FROM sessions WHERE id=? AND node_id="+state.LocalNodeSQL, id).Scan(&existing, &existingEmail); err != nil {
 		return err
 	}
 	owner, err := decodeACPAccountOwner(existing, existingEmail)
@@ -254,7 +285,7 @@ func rememberACPConversationOwner(ctx context.Context, store *state.Store, sessi
 		if err := insertOwnerBinding(ctx, tx, key, acpConversationOwnerRecord{FolderID: folderID, Harness: canonical, Owner: owner}); err != nil {
 			return err
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE sessions SET agent_session_id=?,folder_id=?,started_by=?,owner_email=? WHERE id=? AND node_id=?`, session.AgentSessionID, folderID, string(body), email, session.ID, localStateNode)
+		result, err := tx.ExecContext(ctx, `UPDATE sessions SET agent_session_id=?,folder_id=?,started_by=?,owner_email=? WHERE id=? AND node_id=`+state.LocalNodeSQL, session.AgentSessionID, folderID, string(body), email, session.ID)
 		if err != nil {
 			return err
 		}
@@ -264,4 +295,31 @@ func rememberACPConversationOwner(ctx context.Context, store *state.Store, sessi
 		}
 		return err
 	})
+}
+
+func archivedNativeIDs(ctx context.Context, store *state.Store, folderID, name string) (map[string]bool, error) {
+	target, err := harnessTarget(name)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := store.Reader.QueryContext(ctx, `SELECT harness,agent_session_id FROM sessions WHERE node_id=`+state.LocalNodeSQL+` AND folder_id=? AND archived_at>0 AND agent_session_id<>''`, folderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := map[string]bool{}
+	for rows.Next() {
+		var harness, id string
+		if err := rows.Scan(&harness, &id); err != nil {
+			return nil, err
+		}
+		canonical, err := harnessTarget(harness)
+		if err != nil {
+			return nil, err
+		}
+		if canonical == target {
+			ids[id] = true
+		}
+	}
+	return ids, rows.Err()
 }

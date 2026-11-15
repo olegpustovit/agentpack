@@ -23,8 +23,7 @@ func diagnosticFixture(t *testing.T) (string, obs.Event) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB.Exec(`CREATE TABLE mesh_nodes(node_id TEXT PRIMARY KEY,name TEXT,app_version TEXT);
-INSERT INTO mesh_nodes VALUES ('fixture-node','PRIVATE-HOST','v1.2.0');
+	if _, err := store.DB.Exec(`INSERT INTO mesh_nodes(node_id,name,app_version) VALUES ('fixture-node','PRIVATE-HOST','v1.2.0');
 INSERT INTO sessions(id,name,directory,started_by,owner_email) VALUES ('session-fixture','PRIVATE-SESSION','/home/PRIVATE-USER/project','{"user":"PRIVATE-EMAIL"}','PRIVATE-OWNER@example.com');`); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +56,7 @@ func TestLogsCommandsOfflineTextAndJSON(t *testing.T) {
 				t.Run(command, func(t *testing.T) {
 					args := []string{"logs", command}
 					if command == "trace" {
-						args = append(args, event.TraceID)
+						args = append(args, event.TraceID, "--all-nodes")
 					} else if command != "issues" && command != "query" {
 						args = append(args, event.Fingerprint)
 					}

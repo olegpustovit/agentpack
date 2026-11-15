@@ -7,20 +7,6 @@ import (
 	"path/filepath"
 )
 
-func publishExclusive(source, target string) error {
-	if err := os.Link(source, target); err != nil {
-		return err
-	}
-	return syncDirectory(filepath.Dir(target))
-}
-
-func renameDurable(source, target string, replace bool) error {
-	if err := os.Rename(source, target); err != nil {
-		return err
-	}
-	return syncDirectory(filepath.Dir(target))
-}
-
 func removeFileDurable(path string) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err

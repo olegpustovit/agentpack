@@ -379,6 +379,11 @@ func TestConversationStoreRestartAcceptsPromptAfterOldExit(t *testing.T) {
 	if err := conversation.Prompt(t.Context(), acp.PromptInput{Text: "continue"}); err != nil {
 		t.Fatal(err)
 	}
+	entries := log.Snapshot()
+	var stored int64
+	if err := store.Reader.QueryRow("SELECT last_seq FROM sessions WHERE id=?", id).Scan(&stored); err != nil || len(entries) == 0 || stored < entries[len(entries)-1].Seq {
+		t.Fatalf("acknowledged an unflushed turn: stored=%d entries=%v %v", stored, entries, err)
+	}
 }
 
 func TestConversationStoreStopKeepsFinalTurnEvents(t *testing.T) {

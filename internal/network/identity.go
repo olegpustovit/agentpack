@@ -2,6 +2,8 @@ package network
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"net/http"
 	"os"
 	"os/user"
@@ -14,9 +16,11 @@ import (
 
 // Actor is who started or called an operation. It comes from the transport:
 // the local OS user, the gateway's browser account, or a verified tailnet whois.
-// It is never read from request headers or bodies.
+// Caller-provided identities have no authority; forwarded accounts require verified mesh membership.
 type Actor struct {
+	nativeUser   string
 	Kind         string `json:"kind"`
+	Account      bool   `json:"account,omitempty"`
 	User         string `json:"user,omitempty"`
 	Node         string `json:"node,omitempty"`
 	StableNodeID string `json:"stable_node_id,omitempty"` // Verified tailnet identity; Node is the display name.
@@ -58,6 +62,13 @@ func (actor Actor) canWriteSession(session SessionInfo) bool {
 	if owner == nil {
 		return false
 	}
+	if actor.Kind == "local" && actor.Account && !owner.Account && (owner.Kind == "local" || owner.Kind == "cli") {
+		return actor.nativeUser != "" && actor.nativeUser == owner.User && actor.Node == owner.Node
+	}
+	if actor.Account || owner.Account {
+		account := func(a Actor) bool { return a.Account || a.Kind == "browser" || a.Kind == "mcp" }
+		return account(actor) && account(*owner) && actor.User != "" && actor.User == owner.User
+	}
 	if owner.Kind == "peer" || actor.Kind == "peer" {
 		return owner.Kind == "peer" && actor.Kind == "peer" &&
 			owner.User != "" && actor.User == owner.User &&
@@ -98,6 +109,7 @@ func (g *Gateway) selfIdentity(ctx context.Context) tailnetSelf {
 }
 
 type identityNode struct {
+	Main    bool   `json:"main"`
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	OS      string `json:"os"`
@@ -112,9 +124,76 @@ type identityResponse struct {
 
 func (g *Gateway) identity(w http.ResponseWriter, r *http.Request) {
 	self := g.selfIdentity(r.Context())
+	if self.ID == "" {
+		self.ID, _ = g.auth.store.NodeID(r.Context())
+	}
+	roles, err := g.auth.store.Main(r.Context())
+	if err != nil {
+		meshReadError(w, r, err)
+		return
+	}
 	writeJSON(w, identityResponse{
-		Node:          identityNode{ID: self.ID, Name: localHostname(), OS: runtime.GOOS, Version: g.options.Version},
+		Node:          identityNode{Main: roles.MainNode != "" && roles.MainNode == self.ID, ID: self.ID, Name: localHostname(), OS: runtime.GOOS, Version: g.options.Version},
 		Auth:          g.auth.email(r),
 		TailscaleUser: self.User,
 	})
+}
+
+// An account assertion has authority only after both machines explicitly approved mesh membership.
+func (g *Gateway) forwardedAccount(ctx context.Context, actor Actor, email string) (Actor, error) {
+	if email == "" || !g.meshPeer(ctx, actor.StableNodeID) {
+		return actor, nil
+	}
+	normalized, err := normalizeEmail(email)
+	if err != nil {
+		return Actor{}, errors.New("invalid forwarded account")
+	}
+	var enabled bool
+	if err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE email=? AND disabled=0)", normalized).Scan(&enabled); err != nil {
+		return Actor{}, err
+	}
+	if !enabled {
+		return Actor{}, errors.New("forwarded account is unavailable")
+	}
+	actor.User = normalized
+	actor.Account = true
+	return actor, nil
+}
+
+var errLocalAccountUnavailable = errors.New("local gateway account is unavailable; use gateway whoami to bind an enabled account")
+
+// Local transports keep OS authority but attribute account-owned work to the bound account or owner.
+func (g *Gateway) localActor(ctx context.Context) (Actor, error) {
+	actor := LocalActor("local")
+	var bound string
+	if err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT account_email FROM local_node WHERE id=1").Scan(&bound); err != nil {
+		return Actor{}, err
+	}
+	var email string
+	query := "SELECT email FROM users WHERE disabled=0 AND role='owner' ORDER BY created_at,email LIMIT 1"
+	var args []any
+	if bound != "" {
+		query = "SELECT email FROM users WHERE disabled=0 AND email=?"
+		args = append(args, bound)
+	}
+	err := g.auth.store.Reader.QueryRowContext(ctx, query, args...).Scan(&email)
+	if errors.Is(err, sql.ErrNoRows) && bound == "" {
+		var hasAccounts bool
+		if err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users)").Scan(&hasAccounts); err != nil {
+			return Actor{}, err
+		}
+		if !hasAccounts {
+			return actor, nil
+		}
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return Actor{}, errLocalAccountUnavailable
+	}
+	if err != nil {
+		return Actor{}, err
+	}
+	actor.nativeUser = actor.User
+	actor.User = email
+	actor.Account = true
+	return actor, nil
 }

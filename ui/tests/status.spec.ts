@@ -4,6 +4,7 @@ const identity = { node: { id: "n1", name: "host-a", os: "linux", version: "0" }
 
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
+  await page.route("**/api/config", (route) => route.fulfill({ json: { ui_build_id: "test-build" } }))
   await page.route("**/api/status", (route) =>
     route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }),
   )

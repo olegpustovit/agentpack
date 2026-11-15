@@ -69,6 +69,6 @@ Nothing is written to the manifest, the lock or the cache. Agentpack stages skil
 
 ## Metadata caching and the offline fallback
 
-GitHub ref→commit and tag-list lookups are cached in `$AGENTPACK_HOME/cache/db.reddb` and reused across `add`, `lock`, and `sync`, which keeps repeat resolutions off the network. When the GitHub REST API fails or is throttled, agentpack falls back to the Git protocol through an embedded Go Git client against `https://github.com/<owner>/<repo>.git` before resorting to stale cached metadata. There is no external `git` executable or hard REST API dependency for ref and tag resolution.
+GitHub ref→commit and tag-list lookups are cached in `$AGENTPACK_HOME/cache/index.db` and reused across `add`, `lock`, and `sync`, which keeps repeat resolutions off the network. When the GitHub REST API fails or is throttled, agentpack falls back to the Git protocol through an embedded Go Git client against `https://github.com/<owner>/<repo>.git` before resorting to stale cached metadata. There is no external `git` executable or hard REST API dependency for ref and tag resolution.
 
 To work entirely from a warm cache without touching the network, keep `[dependencies]` and `pack.lock` unchanged and run `agentpack sync`: with an unchanged lock, sync stages from the cache without re-resolving.

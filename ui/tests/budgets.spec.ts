@@ -162,20 +162,20 @@ test("New Session offers at most 4 folders on each machine", async ({ page }) =>
   }
 })
 
-// The old UI discarded any answer slower than its 5 s poll. Hold one past several polls, then release it.
-test("a peer that answers after several polls still shows its sessions", async ({ page }) => {
+// A delayed replicated list must survive without dropping the eventual peer rows.
+test("a delayed unified response still shows its peer sessions", async ({ page }) => {
   await page.clock.install()
   await mockFleet(page)
   let answer = () => {}
   const held = new Promise<void>((resolve) => (answer = resolve))
-  // Registered after mockFleet, so it takes precedence for the peer's session list only.
+  // Registered after mockFleet, so it holds the unified sessions request.
   await page.route(/\/api\/sessions(\?.*)?$/, async (route) => {
     const url = new URL(route.request().url())
-    if (route.request().method() !== "GET" || url.searchParams.get("node") !== "peer-1") return route.fallback()
+    if (route.request().method() !== "GET" || url.searchParams.has("node")) return route.fallback()
     await held
-    return route.fulfill({ json: fleetSessions("peer-1") })
+    return route.fulfill({ json: ["local", "peer-1", "peer-2"].flatMap(fleetSessions) })
   })
-  const asked = page.waitForRequest((request) => request.url().includes("/api/sessions") && new URL(request.url()).searchParams.get("node") === "peer-1")
+  const asked = page.waitForRequest((request) => request.url().includes("/api/sessions") && !new URL(request.url()).searchParams.has("node"))
   await page.goto("/sessions")
   await asked
   await page.clock.runFor(6_000)

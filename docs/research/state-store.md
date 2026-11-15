@@ -1439,3 +1439,555 @@ owners, unreadable sources, live-worker retention and actual gateway startup wit
 an unreadable chat file. No full suite, Windows runtime check, race build, soak or
 full commit-hook gates were run. The physical Linux ARM64 P3.8 performance gate
 remains unverified. Mesh synchronization and archiving are not implemented yet.
+
+
+## Replication change-set validation — P4.2 in progress
+
+Added a deterministic 300-operation, three-database convergence test. A and C
+exchange changes only through B; pages cross a JSON encode/decode boundary and
+are applied twice to verify idempotency. SQLite value tests preserve NULL,
+64-bit integers, reals, text, empty blobs and binary blobs.
+
+The test exposed a pooled reader reporting crsql_db_version below the persisted
+change high-water mark. Version reads now include the maximum persisted change
+version, preventing a returned page from exceeding its own cursor. The complete
+internal/state suite passes locally (1.995 s). internal/obs also passes (1.679 s).
+The broader network suite fails compression handshake, gateway close, MCP restart
+and restart idempotency checks; those failures remain unresolved. Mesh endpoints,
+pull loops, archive behavior and release/deployment verification remain pending.
+
+## Peer change endpoint and migration regression sweep — P4.3
+
+Added GET /api/sync/changes behind the same verified-context and enrolled-peer
+check as Library transfers. Schema skew returns JSON with both versions and HTTP
+409; invalid cursors and excluded site IDs are rejected. Responses reserve room
+for their envelope within the 4 MiB limit. Errors attach to the request's wide
+event without logging change contents.
+
+Tests transfer six MiB of conversation rows over multiple bounded pages into a
+second database. Other checks cover forged identity headers, missing enrollment,
+schema mismatch, transaction boundaries, excluded-only cursor progress, every
+SQLite storage type through actual CRR transfer, and atomic data/cursor rollback
+when the last row of a page is malformed.
+
+Fixed canceled gateway startup querying node identity with an already-canceled
+context. Updated network, CLI and hub fixtures for canonical SQL session rows,
+per-database local identity, the real mesh_nodes schema and account-status reads.
+The earlier four network failures are resolved. A full `go test ./...` run now
+passes, including integration tests; network takes 13.430 s, CLI 2.639 s and hub
+0.154 s (the latter two reused in the final full run). `git diff --check` passes.
+
+This remains an intermediate, unreleased change. P4.4 pull scheduling, P4.5 acting
+identity, P4.6 owner-only explicit mesh enrollment (including replacing automatic
+Library enrollment before expanding its trust to account/history replication),
+local all-node reads, UI, archiving and remaining proposal phases are unfinished.
+No deployment, release build or startup benchmark gate was performed here.
+
+## Pull workers, explicit trust and account forwarding — P4.4–P4.6
+
+Gateway startup now registers its mesh_nodes metadata and manages independent
+pull workers for explicitly approved peers. Each worker performs a cheap site-ID
+handshake, resumes its saved cursor, validates bounded pages, and atomically
+commits changes with the cursor. Failed connections back off; HTTP 404/409 become
+Needs update without terminating the worker. State events wake pulls, with a
+30-second timer fallback. The manager holds an internal event subscription so
+peer relays stay active without browser viewers, cancels removed peers and joins
+all worker goroutines at shutdown. Enrollment mutations wake reconciliation.
+
+Old Library peers do not automatically gain account/history access. Explicit
+EnrollPeer records a local mesh approval; legacy and automatically enrolled
+roster entries have none. Automatic network enrollment was removed. Owner account
+checks protect enrollment/removal, while the authenticated machine-local transport
+retains administrative access. Both machines must explicitly approve each other.
+The UI still needs the corresponding full-trust explanation and legacy-peer
+upgrade action before this is ready to ship.
+
+Proxied browser/MCP calls replace any caller-supplied X-Agentpack-User with the
+verified acting email. The receiving peer honors it only for explicit mesh
+members and a currently enabled account. Persisted account attribution allows
+same-account writes across nodes while preserving stable-node ownership checks
+for legacy peer actors. Different, disabled and unknown accounts are refused.
+
+Focused network tests pass in 1.470 seconds before the final small scheduling
+checks. They exercise A→B→C convergence, partition healing, Needs update recovery,
+periodic refresh without an event, event wakeups without a browser, manager
+shutdown, legacy-peer refusal, owner-only mutation and forwarded-account trust.
+The diagnostics replication test passes in 0.154 seconds: real errors from two
+machines yield two combined counts, their sample survives sync, and resolution
+on the second machine reaches the first. The final focused network rerun also
+passes; no broad suite, race build or release gate was run after these edits,
+following the request for focused fast tests.
+
+Remaining proposal work includes all-node local queries and offline reads/UI,
+mesh onboarding for an unclaimed node, local CLI account bindings, archive and
+blob/cache phases, wider verification, release and deployment. This checkpoint
+is not a completed or deployed implementation of the full proposal.
+
+## Replicated local reads and offline history — P4.7 backend
+
+The gateway sessions and recent-folder endpoints query replicated rows across
+nodes. Native session IDs and limit snapshots can also be read locally for remote
+nodes. Results include node_id, reachable and the last successful sync time;
+session results include ended_at and archived_at. The canonical session scanner
+now reads this metadata, while write inputs continue to assign the local node in
+SQL. Local CLI session discovery remains local-only so environment restarts cannot
+affect another machine. Recent local folders retain filesystem identity checks.
+
+The router infers a session's owning node even without a node query parameter.
+Offline conversation reads use SQL in NDJSON or finite SSE form. Live history
+requests fall back to the replicated copy if the owner disconnects or returns a
+server error. Other offline session actions return 503. Renaming is a replicated
+metadata edit and works without the owning machine. Existing legacy non-mesh
+nodes retain the prior explicit live proxy behavior.
+
+Limits reads return SQL snapshots immediately and refresh local probes in the
+background; remote filtered reads do not run local probes. Newly started sessions
+and local native-session probes receive server-controlled node/reachability
+metadata. Read failures attach to the HTTP diagnostic event and return a generic
+500 instead of exposing storage errors.
+
+A focused end-to-end test synchronizes a gateway, closes the source HTTP server,
+and verifies sessions, recents, native IDs, limits and history remain readable;
+prompt/restart/stop/fork fail with 503 and a rename persists. It also checks cached
+history fallback for HTTP 503 and connection failure. Liveness tests preserve the
+last successful sync time after a failed contact. The focused network selection
+passes in 0.633 seconds; a broader related session/conversation/import/sync
+selection passes in 3.116 seconds. Related CLI and hub checks pass in 0.273 and
+0.228 seconds. The final mesh/limits rerun passes. No broad suite or release gate
+was run, per the request for fast focused checks.
+
+The frontend still needs to replace its per-machine session/limits fetches with
+the unified local response and display offline read-only state. This intermediate
+backend checkpoint is not released or deployed, and the remaining proposal phases
+remain outstanding.
+
+## Unified browser reads and offline chat — P4.8 / P4.9
+
+Sessions and limits now share one local query across machines. The browser groups
+replicated rows by node ID rather than issuing per-machine reads, and session
+routes load the saved metadata even when their owner is offline. The redundant
+browser limits snapshot cache was removed; SQL supplies offline persistence and
+the ordinary query cache preserves already rendered data during navigation.
+The default machine inventory is local too; replication settings explicitly
+request live discovery only when finding machines to enroll.
+
+Offline chats show an Offline, read-only banner with last successful sync time,
+retain the thread, hide the composer, disable permission/elicitation inputs and
+shortcuts, and prevent terminal switching and forks. Copying remains available.
+Offline renames remain enabled because they edit replicated metadata. A stale
+live configuration error cannot hide otherwise readable offline history.
+
+Replication settings explains full trust, confirms that password hashes and chat
+history will be shared, lets existing Library peers explicitly enable mesh sync,
+and shows last sync, schema, lag and errors including Needs update. Sync now wakes
+the state worker as well as exchanging Library objects; its HUD says requested,
+not complete before the asynchronous pull finishes. Contact updates invalidate
+the replication pane without generating extra SQL writes or empty-pull logs.
+
+Added concepts/state.md, linked it in SUMMARY.md, updated ACP and UI guides and
+recorded the explicit trust/offline UI invariants in AGENTS.md. Phase 4 is still
+not a full-proposal completion claim: unclaimed-node mesh bootstrap and local CLI
+account binding, archive, package/blob migrations and release gates remain.
+
+Focused evidence: 21 frontend unit tests pass in 1.25 seconds; build/typecheck,
+lint and bundle size gates pass (telemetry remains 1372 bytes gzip). Thirteen
+related Chromium browser checks pass in 3.8 seconds, covering offline reload,
+disabled permission input, explicit trust, limits refresh and session navigation.
+The existing replication-row check passes in 1.2 seconds including browser startup.
+Focused network checks pass in 0.676 seconds. Desktop and 390px phone captures
+were inspected; the thread and offline banner fit, with no composer or horizontal
+overflow. These are Chromium/emulated viewport checks, not physical-phone tests.
+
+The default browser-test port was serving an unrelated app. Verification used a
+temporary isolated preview on port 4186, leaving that app untouched; the temporary
+configuration was removed afterward. Session/settings fixtures were corrected for
+the required config read and explicit discovery query. No full test suite, soak,
+physical-device run, release or deployment was performed during this fast-check
+checkpoint.
+
+## Mesh bootstrap, local account binding and reset generations
+
+Added `gateway join NODE` for a new machine. After the operator types `trust`, it
+records a pending join and explicit peer approval before starting a gateway.
+The command prints the remaining start/reciprocal-approval steps. Owner claiming
+is refused while a join is pending, including inside the claim transaction;
+concurrent preparation and claiming cannot both win. The joining screen polls
+for inherited accounts and transitions to ordinary sign-in without offering a
+second owner form. Before accounts arrive, verified peers can use only approved
+sync/event routes; other application routes are refused.
+
+Added `gateway whoami EMAIL`. Authenticated local actions map to that enabled
+account, or the owner by default. Native presence uses the mapped actor. Legacy
+histories owned by this OS user retain local-only access; a bound member cannot
+write the owner's account-owned chats. Disabling a binding refuses access rather
+than falling back to owner. Both join state and account binding are local columns
+in local_node. Migration 0013 adds them without replicating local authority.
+
+A reset/reclaim audit found old peer browser and OAuth logins could revive when
+the same email was recreated with the original zero epoch. Migration 0014 adds
+mesh_settings (CRR) and a local auth_sessions.session_epoch. Reset advances a
+replicated epoch before deleting users; new accounts inherit it. Cookie reads,
+sliding expiry and OAuth consent validate the login's exact epoch. The shared
+key survives user deletion, so clock skew cannot make old future-dated sessions
+valid again. The two-store regression verifies old browser and OAuth rejection
+and a successful fresh login after reclaim.
+
+Focused network checks pass in 1.135 seconds, related CLI checks in 0.156 seconds
+and replicated schema checks in 0.144 seconds. Join/binding/claim-race selections
+also pass in under a second per package. Eleven auth UI unit tests pass in 428 ms;
+build/typecheck, lint and bundle size gates pass. The joining browser test passes
+in 2.1 seconds including startup; desktop and 390px emulated-phone captures were
+inspected. Verification used an isolated temporary preview port, with its config
+removed afterward. No full suite, race build, physical-device run, release or
+deployment was performed here. Archive and remaining proposal phases still need
+implementation and final verification.
+
+The final related browser-session revocation, account lifecycle, unclaimed
+lockdown, OAuth revocation and mesh bootstrap selection passes in 1.307 seconds.
+`git diff --check` also passes.
+
+## Main gateway, archive and failure-trace forwarding
+
+Added `gateway main`, `main set` and `main archive-ready [--empty]`. A switch
+compares both roles against the confirmed snapshot, prints the actual old archive
+holder and both paths, and requires `switch`. Repeating `set` cannot finish an
+interrupted handover. Archive readiness validates a private plain SQLite file;
+invalid files, links and copied state databases are refused without replacement.
+Main badges are included in inventory/identity/topology and the Machines UI.
+
+P1A.14 now forwards retained failed traces to Main through explicitly approved
+peer-only routes. Day files retain positive error-trace forwarding positions;
+late failures promote earlier spans beyond acknowledged positions. Per-main/day
+cursors advance only after an upload commits. Batches are bounded and drained;
+lost acknowledgements and restarts are idempotent. Ordinary healthy traces stay
+local. CLI and MCP trace reads merge Main; all-nodes additionally asks peers in
+parallel. Forwarded spans retain their original node identity and redaction.
+
+The hourly archiver has injectable time and interval, rechecks both roles inside
+each session transaction, skips incomplete/recent/attachment chats, commits the
+archive with FULL durability, verifies row counts, then atomically prunes and
+marks shared history. A failed prune keeps the shared source. An unmarked retry
+refreshes its earlier copy, so changed/coalesced bodies cannot leave stale data.
+Archived NDJSON and SSE reads use Main through any gateway; missing or unreachable
+archives return `503 archive unavailable`, with Main named in the UI. Read-only
+archive opens never create a missing file. All writes, including rename and native
+resume through harness aliases or another directory, refuse archived sessions.
+
+A two-replica race test exposed a further issue: a worker can coalesce an existing
+event before receiving Main's archive marker, and CRR deletion wins before the
+late body becomes visible. Migration 0015 therefore replicates body-free archive
+event clocks. Archive pruning remembers original clocks; sync captures newer
+archived body edits and coalescing deletions before CRR applies tombstones, commits
+the archive first, and acknowledges its state cursor afterward. Keys use the
+extension's own unpacking function and comparisons use SQLite values. New tail
+rows are safely folded into the archive on read or the next archive pass. The
+marker is never cleared. Regression coverage includes late coalescing, stale
+gossip, copy/prune crash recovery, row-count mismatch, and another late flush after
+copying the archive to a new Main.
+
+Focused final checks pass: state 2.373 s, network 3.390 s, CLI 0.527 s, diagnostics
+0.384 s. The complete diagnostics package also passes in 1.478 s. Thirteen UI
+tests pass in 1.21 s; build/typecheck, lint and bundle-size gates pass (telemetry
+1372 bytes gzip). Earlier Main badge/offline browser checks and inspected desktop
+and 390px captures cover the badge. No new browser test was needed for the archive
+error banner; its state has a focused Vitest regression. Temporary browser config
+and the local SQLite probing test were removed.
+
+This is not a full-proposal completion or release claim. Attachment chats still
+stay shared until P5.5; blob pointers, verified peer fetch, non-main attachment
+cleanup, cache/Library migration and final release/deployment gates remain. Very
+large peer trace replies currently have a 16 MiB transport ceiling; final protocol
+verification must address pagination before claiming every-sized cross-node trace.
+No full repository suite, race build, new soak, release or deployment was run at
+this checkpoint. Launch/staging/fingerprint code was not changed here.
+
+
+## Relayed archive edits, attachments, and peer content — P4A/P5 follow-through
+
+The archive race protection now uses immutable replicated `archive_edits` rows
+(migration 0018), rather than refusing late edits on intermediate machines. Before
+CRR can absorb an old event body or coalescing deletion, the receiver publishes a
+bounded independent backup version. The original received page and source cursor
+still commit atomically. A rejected page may leave a harmless authored backup.
+Main drains the journal after a pull, before an archived read and during its
+hourly pass; archive commits precede each journal acknowledgment. Stable edit IDs
+and replicated acknowledgment tombstones prevent stale replay from recreating
+already processed edits. Migration 0017 tracks the finalized archive sequence.
+
+The owner refuses an archive marker while a turn is working or awaiting approval.
+Prompt and turn-boundary persistence flush synchronously before idle state is
+published. Worker shutdown now removes only its endpoint files, preserving images
+and support files. Tests cover an idle late tail, pending handover, a new Main
+owning the late edit, three-node delivery after the original worker closes, stale
+replay, and failure after archive commit but before the journal acknowledgment.
+
+P5 adds replicated package/blob pointers, gateway-only verified-stamp advertising,
+peer-only tar transport and verified peer-first restoration. Standard archive/tar
+and os.Root preserve executability and safe in-package symlinks. Missing or corrupt
+peer copies fall through to the existing GitHub installer; verified cached launches
+never invoke the peer hook. Blob copies verify their SHA before durable publication
+under the existing per-session quota, and quota publication is protected by a
+cross-process lock. Durable rename now belongs to internal/paths and is shared
+with registry publication.
+
+Attachment chats now archive: Main fetches missing referenced images first, then
+checks the exact stored prompt references and local hashes under the archive
+transaction. Migration 0019 retains replicated attachment references and local
+cleanup progress. Non-Main cleanup waits for the finalized sequence, ready roles
+and an actual hash-verified response from Main, rather than trusting a stale
+location row. A handover or corrupt Main copy preserves source files. Main keeps
+its files. Archive readiness verifies and advertises copied attachments, fetching
+missing ones through the running local gateway; backup/switch instructions include
+attachment directories.
+
+Focused checks passed: network/state/CLI 3.102/1.494/0.423 s. The archive/worker
+race sweep passed (ACP/state/network 1.019/1.131/4.651 s); the final focused race
+regressions including attachment preservation and failed journal acknowledgment
+passed in 2.341 s. Existing cache/resolver/registry checks and UI checks from the
+previous checkpoint remain relevant; no UI source changed in this follow-through.
+
+Peer-transfer startup measurements (median of five runs, 5 iterations each,
+32 MiB history fixture, Linux amd64 i9-12900K):
+
+| Benchmark | Before (ms) | After (ms) |
+| --- | ---: | ---: |
+| MaterializationHome | 0.350419 | 0.353678 |
+| CodexSetup/cold | 8.301259 | 8.162245 |
+| CodexSetup/warm | 0.128611 | 0.149694 |
+
+The benchmark arms a peer callback that fails immediately if launch setup calls
+it. These are local host measurements, not the Linux ARM64 release reference.
+
+## Disposable cache index on SQLite — P7
+
+`cache/index.db` replaces bbolt metadata and aliases, using plain SQLite with the
+extension explicitly disabled, private creation permissions, WAL, NORMAL sync and
+read-only query connections. The old `cache/db.reddb` is deleted on first open;
+package trees and lockfiles are untouched. Cache/GitHub operations retain their
+exported names and semantics. Library bootstrap watches both database and WAL
+metadata. `go mod tidy` removed go.etcd.io/bbolt and its two checksum entries.
+
+Full focused packages passed: database 0.016 s, cache 0.111 s, GitHub 0.092 s,
+resolver 0.013 s. Cached-add/offline resolver checks passed in 0.029 s; the Library
+bootstrap regression passed in the CLI sweep above. Tests cover the disposable
+legacy index, private plain SQLite without cr-sqlite, persistent aliases, read-only
+writes and nonregular database rejection.
+
+Before/after medians of five runs with 10 iterations each on the same amd64 host:
+
+| Benchmark | bbolt (ms) | SQLite (ms) |
+| --- | ---: | ---: |
+| CachedAdd resolver | 0.051531 | 0.329547 |
+| MaterializationHome | 0.315432 | 0.331153 |
+| CodexSetup/cold | 6.699471 | 7.064142 |
+| CodexSetup/warm | 0.129086 | 0.135908 |
+
+Reproduce the current side with:
+
+```sh
+go test ./internal/sync -run '^$' \
+  -bench '^(BenchmarkCachedAdd|BenchmarkMaterializationHome|BenchmarkCodexSetup)$' \
+  -benchtime=10x -count=5 -benchmem
+```
+
+The controlled bbolt baseline used database/cache.go, cache/index.go,
+github/metadata.go, paths/paths.go and go.mod/go.sum from
+5bbdf394889cbac74df882d758fb9478cc631ddb, with the same current benchmark and
+remaining source. SQLite connection setup for the two alias/record lookups adds
+about 0.28 ms to cached-add resolution. No connection cache or new abstraction was
+introduced for that submillisecond cost. Verified warm launch setup still does no index or peer
+I/O. An initial after-run overlapped focused tests and was replaced by the isolated
+run reported above.
+
+Remaining: P6 Library migration/removal of the old object-transfer protocol, large
+trace reply pagination, live legacy-worker upgrade audit, final full checks,
+reference-host performance/soak, product release and deployment. The 4 MiB change
+page limit also needs a final oversized-event/transaction audit, including encoded
+journal overhead. No release or deployment is claimed by this checkpoint.
+
+
+## Library storage and one state protocol — P6
+
+The Library now stores immutable public objects, name objects, head metadata,
+tombstones and pending drafts in state.db. Private raw credential bindings and
+peer approvals are local SQL tables; captures and interrupted-restore journals
+remain files so foreground launch setup/recovery never opens state.db. Effective
+heads are derived from immutable revisions, preserving clean three-way merges,
+concurrent conflicts, explicit resolution, normalization and redaction behavior.
+Object validation is memoized by digest and the replicated conflict position;
+row tampering invalidates the proof. A test makes temporary snapshot validation
+unavailable after the first read and proves an unchanged revision is still reused.
+
+First open verifies every legacy public digest and reference, copies bindings,
+drafts and metadata durably, then removes imported files and empty directories.
+A corrupt source leaves all sources intact. Conflicting private bindings/drafts
+are refused with both copies retained. Legacy peer approvals preserve their mesh
+flags and removals; they never replicate. Unknown support files are retained.
+Drafts store stable target node IDs internally and expose the local alias only on
+the owning machine; binding an offline site identity updates draft targets too.
+A replicated draft can never silently retarget the receiver's own folder.
+
+The inventory/object/ack protocol, transfer caches, receipts and its serial polling
+loop are removed. Library changes use the same bounded state pages as accounts and
+chat history. Public record digests/types/redaction are checked before applying a
+page, even when the Library UI is disabled. Each applied Library page runs
+MergeHeads and collection; retained tombstones plus CRR deletion clocks keep a
+returning offline node from resurrecting deleted records. Settings retains local
+peer administration and sync controls, displaying approval/contact state without
+obsolete receipt counts. Draft review retains its bounded peer request.
+
+The existing behavior tests were retained, with filesystem-specific setup/assertions
+translated to SQL and retired protocol fixtures translated to state pages. A real
+two-gateway HTTP test captures on A, reads on B, diverges on both, checks identical
+conflict views, resolves, and propagates deletion. A corrupted object is rejected
+before either the destination object or source cursor changes.
+
+### Pinned extension transport-clock correction
+
+The two-gateway resolution regression exposed a mismatch that previous narrow
+replication checks missed: the pinned superfly fork uses per-author database
+versions, unlike the global versions described by upstream documentation. The
+previous maximum-of-surviving-clock-rows cursor could move backward after a
+foreign winning value was replaced, or skip a low-version change relayed by a
+busy node. See the [pinned fork's bookkeeping model](https://github.com/superfly/cr-sqlite/blob/8e32195704ccaea8508f7d378e11dc2dc0bb3d2e/README.md).
+
+Migration 0021 reconciles the persisted local counter with known versions. Incoming
+source-version groups receive monotonic local transport versions within the same
+transaction as their data and cursor. Author, column version, lifetime and sequence
+are preserved. The persisted counter, rather than surviving rows, supplies the
+high-water mark. Writer connections retire between transactions so a following
+native write reloads the advanced counter; no extension source or pinned asset
+changed. Self-authored echoes cannot modify the receiver's own records. Tests
+cover three-node low-version relay, the next local edit through the same writer
+pool, deletion, rollback and randomized convergence.
+
+### Verification and performance
+
+Final full phase checks passed: registry 8.931 s, network 29.143 s, state 7.389 s,
+CLI 5.780 s (packages ran together). Focused race checks passed: registry 2.787 s,
+state 1.550 s, network 2.463 s. Additional draft-target and collection regressions
+passed in registry/network/state 0.989/0.828/2.077 s. Settings label tests (4), UI
+build/typecheck, lint and bundle-size gates pass; telemetry remains 1372 bytes gzip.
+No old inventory/ack route or receipt field remains in internal/ or ui/src.
+
+Same-host median of five runs, 10 iterations each, compared with the P7 after-run:
+
+| Benchmark | Before P6 (ms) | After P6 (ms) |
+| --- | ---: | ---: |
+| CachedAdd resolver | 0.329547 | 0.310703 |
+| MaterializationHome | 0.331153 | 0.321437 |
+| CodexSetup/cold | 7.064142 | 6.704513 |
+| CodexSetup/warm | 0.135908 | 0.131848 |
+
+Use the same benchmark command documented under P7. This is Linux amd64, not the
+ARM64 reference host. The existing cold/warm-launch regression checks that state.db
+is neither created nor changed. No new launch-path database access was added.
+
+Remaining before release: large trace reply pagination, oversized state-version
+and journal transport audit, live legacy-worker upgrade audit, the final proposal
+completion audit, full make ci/UI/artifact/release-check gates, reference-host
+performance and soak evidence, then product release and deployment. No product
+release or deployment has been performed at this checkpoint.
+
+
+Follow-up draft regressions cover concurrent saves during the first stable-node
+binding. Target normalization happens inside the SQL insert/import transaction;
+reads recognize prior local aliases. The focused alias/import race check passed
+in 1.522 s. Legacy draft fixtures retain their original local-target semantics.
+Peer draft review keeps its prior 64 MiB bound while the retired object-transfer
+helper is gone. The cold/warm launch state-file regression passed in 0.017 s.
+
+
+The remaining protocol audit must also reconcile the proposal's named
+`GET /api/sync/events` stream with the current reuse of `/api/events` for mesh
+wakeups. Functioning wakeups alone do not prove that named endpoint delivered.
+The final Library draft peer-bound check passed in 0.806 s.
+
+
+## Final protocol audit: event authentication, trace pages and oversized versions
+
+`GET /api/sync/events` now exposes the named, explicitly enrolled mesh stream.
+Peer clients select it for mesh peers; existing browser and legacy event routes
+remain available. Stream revalidation checks peer enrollment rather than browser
+cookies and closes a removed peer's stream. Focused event/authentication tests
+pass (3.784 s).
+
+Trace reads use stable timestamp/node/span cursors across day files and pending
+spools. Peer HTTP replies and MCP `get_trace` return 16-event pages; the CLI
+collects every page. MCP accepts `cursor` and reports unreachable requested peers
+in `unavailable_nodes`. A 1,600-span trace larger than 16 MiB crosses 100 peer
+pages without missing or duplicated spans. A separate regression ingests spools
+between pages; authenticated MCP follows three pages and preserves all 35 spans.
+
+Oversized source versions no longer stop replication at HTTP 413. Schema 0022
+negotiates a chunked fallback: source-side SQLite snapshots stream one version to
+a private temporary file, a random peer-bound token identifies that immutable
+snapshot, and chunks stay below the existing 4 MiB HTTP limit. The receiver
+checks offsets, source identity, version and a whole-transfer SHA-256 before
+applying all changes and its cursor in one transaction. One source snapshot per
+approved peer expires after two minutes; normal gateway shutdown removes it.
+A corrupted chunk leaves both rows and cursor untouched, retry succeeds, another
+peer cannot reuse the token, and source edits cannot change an in-flight copy.
+The receiver decodes the complete verified transaction before applying it; its
+memory therefore scales with the largest transaction, not just the HTTP chunk.
+Temporary files are private and derived; an abrupt process kill can leave an OS
+temporary file, which is not treated as durable state or resumed.
+
+Focused state/network checks pass (0.128/1.023 s). Focused race checks covering
+oversized versions, event streams and large trace reads pass (1.117/13.076 s).
+Authenticated MCP/legacy-import/oversized-transfer checks pass together (0.791 s).
+
+The live-worker audit follows P3.7 exactly: running legacy workers retain their
+endpoint, metadata, ownership and history files, and stopped workers are imported
+on a later gateway start. No speculative live-worker migration bridge was added.
+Existing import regressions verify live-file preservation, unreadable-source
+failure reporting, idempotence and preservation of canonical SQL rows. Legacy
+workers are not added to the SQL-backed mesh lists until that stopped import.
+
+The final full gate found and removed an unreachable return in Library deletion.
+UI tests also exposed a duplicate local-session refetch; local events now refresh
+once, peer events refresh unified and peer caches, and state hints refresh unified
+state. All five event-provider tests pass (0.785 s). Full gates are still running;
+this entry is not a release or deployment claim.
+
+
+## Final gates and native ARM64 setup measurements
+
+The completed checkout passes `make ci`: formatting, vet, all Go packages,
+all race tests and the product build. An unlocked test-only persistence-byte
+assertion was fixed before accepting the race result. The final UI unit suite
+passes all 198 tests across 37 files; lint, TypeScript, build and every size gate
+pass. `make artifact` stages the actual UI, rebuilds the binary and passes its
+real-gateway smoke test. Telemetry remains 1,372 bytes gzip.
+
+Browser checks now cover the unified response contract, tagged peer rows, one
+sessions/limits read, routing mutations to their owner, explicit trust confirmation
+and sync progress. Chromium and phone pass 195 tests in 21.2 s. WebKit runs on
+the physical Mac because this Linux environment lacks its system libraries:
+11 applicable tests pass in 9.8 s; two existing browser-specific cases are skipped.
+The selection test uses xterm's native platform modifier (Option on macOS,
+Shift elsewhere). Startup's connecting announcement moved to the root loader,
+which owns the first status/configuration request. It no longer waits for the
+nested application loader to mount.
+
+The native Mac's final `make release-check` passes: GoReleaser configuration,
+five platform builds, installers, archives, checksums, source maps and binary
+system-dependency tests. The warm snapshot takes 56 s; this is not a substitute
+for the final GitHub release workflow duration or its native platform smoke jobs.
+No installers or product release have been published at this checkpoint.
+
+Native Linux ARM64 measurements on oracle-vm (Neoverse-N1, two virtual CPUs)
+meet all setup budgets. Median of five repetitions, ten iterations, 32 MiB
+history fixture: MaterializationHome 0.663780 ms (<1), CodexSetup/cold
+17.508913 ms (<20), CodexSetup/warm 0.350938 ms (<1). The original reference
+hardware was unspecified, so this is a deployment-host certification, not a
+matched-hardware comparison. Commands are in startup-performance.md.
+
+The hour-long normal-use measurement is running separately from unit tests in
+an isolated home with Tailscale sharing disabled, three real terminal workers,
+and successful input/read HTTP traffic every 15 s. It uses no model requests
+or account quota. Its final storage projection is required before release.
+
+Remaining: final requirement-by-requirement completion ledger, that measurement,
+commit/push and required release-workflow checks, publication, and deployment
+with live version/health verification. The goal remains active.

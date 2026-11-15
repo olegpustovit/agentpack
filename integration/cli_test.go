@@ -152,7 +152,7 @@ func TestCompiledCLISyncStagesLocalSkillForEveryHarness(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(codexHome, "skills", "portable-skill", "SKILL.md")); err != nil {
 		t.Errorf("Codex portable skill: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(project, "_agentpack", "cache", "db.reddb")); err != nil {
+	if _, err := os.Stat(filepath.Join(project, "_agentpack", "cache", "index.db")); err != nil {
 		t.Errorf("documented cache index path: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "plugins", "agentpack-bundle", "skills", "project-local", "SKILL.md")); err != nil {

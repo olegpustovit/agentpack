@@ -67,6 +67,7 @@ export function serve(conn: Conn, { offset = 0, body, complete = true }: { offse
 
 // Sessions list and the account endpoints. `sessions` is read on every list request.
 export async function stubApi(page: Page, sessions: () => unknown[], nodes: unknown[] = []) {
+  await page.route("**/api/config", (route) => route.fulfill({ json: { ui_build_id: "test-build" } }))
   await page.route("**/api/status", (route) => route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }))
   await page.route("**/api/identity", (route) => route.fulfill({ json: identity }))
   await page.route("**/api/nodes", (route) => route.fulfill({ json: nodes }))

@@ -96,7 +96,11 @@ func TestBrowserTelemetryTrustLimitsAndPersistence(t *testing.T) {
 		t.Fatal("valid", code)
 	}
 	events := storedBrowserErrors(t, g)
-	if len(events) != 1 || events[0]["trace_id"] != "0123456789abcdef0123456789abcdef" || events[0]["user"] != testBrowserEmail || events[0]["node_id"] != localStateNode {
+	nodeID, err := g.auth.store.NodeID(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0]["trace_id"] != "0123456789abcdef0123456789abcdef" || events[0]["user"] != testBrowserEmail || events[0]["node_id"] != nodeID {
 		t.Fatalf("stored %+v", events)
 	}
 	encoded, _ := json.Marshal(events)

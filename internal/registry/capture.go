@@ -262,11 +262,7 @@ func CaptureProjectIfEnabled(home, definitionRoot, sourceProject, sourceNode, mo
 	}
 	transaction := filepath.Join(root, transactionsDir, transactionHash+".json")
 	if _, err := os.Lstat(transaction); err == nil {
-		store, err := New(home)
-		if err != nil {
-			return Agentpack{}, Revision{}, false, err
-		}
-		if err := store.Recover(definitionRoot); err != nil {
+		if err := (&Store{root: root}).Recover(definitionRoot); err != nil {
 			return Agentpack{}, Revision{}, false, err
 		}
 	} else if !os.IsNotExist(err) {
@@ -287,6 +283,7 @@ func CaptureProjectIfEnabled(home, definitionRoot, sourceProject, sourceNode, mo
 	if err != nil {
 		return Agentpack{}, Revision{}, false, err
 	}
+	defer store.Close()
 	input, err := captureProject(definitionRoot)
 	if err != nil {
 		return Agentpack{}, Revision{}, false, err

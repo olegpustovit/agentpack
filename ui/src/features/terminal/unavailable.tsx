@@ -3,7 +3,7 @@ import { Banner } from "@/components/kit/feedback"
 // Sessions with this message have no terminal to attach to, so they never open a socket.
 export function unavailableMessage(session: { transport?: string; state: { interactive: boolean } } | undefined, stale: boolean): string | undefined {
   if (session?.transport !== "acp" && session?.state.interactive === false) return "Native stdio · browser input unavailable"
-  return stale ? "Offline · showing last-known session metadata" : undefined
+  return stale && session?.transport !== "acp" ? "Offline · showing last-known session metadata" : undefined
 }
 
 export function UnavailableTerminal({ message }: { message: string }) {

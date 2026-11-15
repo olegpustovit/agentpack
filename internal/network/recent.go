@@ -15,8 +15,8 @@ func Recent(home string) ([]SessionInfo, error) {
 	defer store.Close()
 	entries, err := querySessions(context.Background(), store.Reader, `SELECT `+sessionColumns+` FROM (
         SELECT *,row_number() OVER (PARTITION BY directory,harness,mode ORDER BY last_used DESC,id DESC) AS rank
-        FROM sessions WHERE node_id=? AND hidden=0 AND directory<>''
-    ) WHERE rank=1 ORDER BY last_used DESC,id DESC LIMIT 100`, localStateNode)
+        FROM sessions WHERE node_id=`+state.LocalNodeSQL+` AND hidden=0 AND directory<>''
+    ) WHERE rank=1 ORDER BY last_used DESC,id DESC LIMIT 100`)
 	for i := range entries {
 		entries[i].ID = ""
 		entries[i].State = TerminalState{}
@@ -59,8 +59,8 @@ func ForgetRecent(home string, info SessionInfo) error {
 		return err
 	}
 	defer store.Close()
-	_, err = store.DB.Exec(`UPDATE sessions SET hidden=1 WHERE node_id=? AND directory=?
-        AND (?='' OR harness=?) AND (?='' OR mode=?)`, localStateNode,
+	_, err = store.DB.Exec(`UPDATE sessions SET hidden=1 WHERE node_id=`+state.LocalNodeSQL+` AND directory=?
+        AND (?='' OR harness=?) AND (?='' OR mode=?)`,
 		filepath.Clean(info.Directory), info.Harness, info.Harness, info.Mode, info.Mode)
 	return err
 }

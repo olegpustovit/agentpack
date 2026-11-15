@@ -55,7 +55,7 @@ export function fleetProjects(machine: string) {
 
 export function fleetSessions(machine: string) {
   return fleetProjectNames.flatMap((name) =>
-    fleetHarnesses.map((harness) => ({ ...session, id: `${machine}-${name}-${harness}`, directory: `${fleetRoot(machine)}/${name}`, harness, state: { ...session.state, shared_input: false } })),
+    fleetHarnesses.map((harness) => ({ ...session, id: `${machine}-${name}-${harness}`, node_id: machine === "local" ? identity.node.id : machine, reachable: true, directory: `${fleetRoot(machine)}/${name}`, harness, state: { ...session.state, shared_input: false } })),
   )
 }
 
@@ -85,7 +85,7 @@ export async function mockAPI(page: Page, { authenticated = true, unclaimed = fa
     else if (url.pathname === "/api/library/replication/peers") data = { peers: [], contacts: {} }
     else if (url.pathname === "/api/events") return route.abort()
     else if (url.pathname === "/api/sessions") {
-      const list = fleet ? fleetSessions(machine) : [session, second]
+      const list = fleet ? (machine === "local" ? ["local", ...fleetNodes.map((node) => node.id)].flatMap(fleetSessions) : fleetSessions(machine)) : [session, second]
       data = req.method() === "POST" ? { ...session, ...body, id: "created" } : list
     } else if (url.pathname === "/api/projects") data = fleet ? fleetProjects(machine) : [projectRow("/work/previous", [{ harness: "codex" }])]
     else if (url.pathname === "/api/packages") data = req.method() === "POST" ? {} : [{ module: "github.com/acme/tools", commit: "abcd1234" }]

@@ -228,7 +228,7 @@ func (g *Gateway) importLegacyOwners(ctx context.Context, live map[string]bool) 
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE id=? AND node_id=?", id, localStateNode)
+		_, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE id=? AND node_id="+state.LocalNodeSQL, id)
 		return err
 	}); err != nil {
 		g.reportSessionImport(ctx, directory, err)
@@ -241,7 +241,7 @@ func (g *Gateway) markOwnerImportPending(ctx context.Context, key string) error 
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO sessions(id,node_id,hidden,ended_at) VALUES (?,?,1,?)", id, localStateNode, time.Now().UnixNano())
+		_, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO sessions(id,node_id,hidden,ended_at) VALUES (?,"+state.LocalNodeSQL+",1,?)", id, time.Now().UnixNano())
 		return err
 	})
 }
@@ -316,14 +316,14 @@ func (g *Gateway) importStoppedWorker(ctx context.Context, workerFile *legacySes
 			return err
 		}
 		args = append(args, time.Now().UnixNano())
-		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO sessions ("+sessionColumns+",node_id,owner_email,ended_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", args...); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO sessions ("+sessionWriteColumns+",node_id,owner_email,ended_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"+state.LocalNodeSQL+",?,?)", args...); err != nil {
 			return err
 		}
-		var node string
-		if err := tx.QueryRowContext(ctx, "SELECT node_id FROM sessions WHERE id=?", info.ID).Scan(&node); err != nil {
+		var local bool
+		if err := tx.QueryRowContext(ctx, "SELECT node_id="+state.LocalNodeSQL+" FROM sessions WHERE id=?", info.ID).Scan(&local); err != nil {
 			return err
 		}
-		if node != localStateNode {
+		if !local {
 			return errors.New("legacy session ID belongs to another node")
 		}
 		insert, err := tx.PrepareContext(ctx, "INSERT OR IGNORE INTO conversation_events(session_id,seq,body) VALUES (?,?,?)")
@@ -401,7 +401,7 @@ func (g *Gateway) importLegacyRecent(ctx context.Context) error {
 				return err
 			}
 			args = append(args, time.Now().UnixNano())
-			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO sessions ("+sessionColumns+",node_id,owner_email,ended_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", args...); err != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO sessions ("+sessionWriteColumns+",node_id,owner_email,ended_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"+state.LocalNodeSQL+",?,?)", args...); err != nil {
 				return err
 			}
 		}

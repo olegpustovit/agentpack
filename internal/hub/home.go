@@ -266,8 +266,13 @@ func gatewayLine(home string) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if status, err := network.GatewayAccountStatus(ctx, home); err == nil && !status.Claimed {
-		return "UNCLAIMED: open " + address + " now"
+	if status, err := network.GatewayAccountStatus(ctx, home); err == nil {
+		if status.Joining {
+			return "JOINING: waiting for mesh accounts"
+		}
+		if !status.Claimed {
+			return "UNCLAIMED: open " + address + " now"
+		}
 	}
 	return address
 }

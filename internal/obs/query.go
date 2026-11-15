@@ -19,9 +19,11 @@ type Filter struct {
 	Since                                                time.Time
 	Kind, Level, Session, Node, Trace, Fingerprint, Grep string
 	Limit                                                int
+	errorAfter                                           *int64
+	traceAfter                                           *tracePosition
 }
 
-func readOnly(path string) (*sql.DB, error) {
+func openLogFile(path string, writable bool) (*sql.DB, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -33,7 +35,11 @@ func readOnly(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", "file:"+url.PathEscape(filepath.ToSlash(absolute))+"?agentpack_plain=1&mode=ro&_query_only=1&_busy_timeout=5000")
+	mode := "&mode=ro&_query_only=1"
+	if writable {
+		mode = "&mode=rw"
+	}
+	db, err := sql.Open("sqlite3", "file:"+url.PathEscape(filepath.ToSlash(absolute))+"?agentpack_plain=1&_busy_timeout=5000"+mode)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +116,7 @@ func queryEvents(ctx context.Context, home string, filter Filter) ([]Event, erro
 		if !filter.Since.IsZero() && strings.TrimSuffix(day, ".db") < filter.Since.UTC().Format(time.DateOnly) {
 			continue
 		}
-		db, err := readOnly(filepath.Join(home, "logs", day))
+		db, err := openLogFile(filepath.Join(home, "logs", day), false)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -142,10 +148,7 @@ func queryEvents(ctx context.Context, home string, filter Filter) ([]Event, erro
 		}
 	}
 	slices.SortFunc(result, func(a, b Event) int {
-		order := a.TS.Compare(b.TS)
-		if order == 0 {
-			order = strings.Compare(a.NodeID+a.TraceID+a.SpanID, b.NodeID+b.TraceID+b.SpanID)
-		}
+		order := CompareEvents(a, b)
 		if filter.Trace == "" {
 			return -order
 		}
@@ -182,7 +185,15 @@ func queryDay(ctx context.Context, db *sql.DB, filter Filter) ([]Event, map[stri
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, nil, err
 	}
-	query := `SELECT e.ts,e.duration_us,e.trace_id,e.span_id,e.node_id,e.proc,e.kind,e.name,e.level,e.status,COALESCE(e.session_id,''),e.user,COALESCE(e.fingerprint,''),COALESCE(s.text,''),json(e.attrs) FROM events e LEFT JOIN stacks s ON s.hash=e.stack WHERE 1=1`
+	var hasFlag bool
+	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM pragma_table_info('events') WHERE name='error_trace')").Scan(&hasFlag); err != nil {
+		return nil, nil, err
+	}
+	flag := "e.error_trace"
+	if !hasFlag {
+		flag = "CASE WHEN EXISTS(SELECT 1 FROM events f WHERE f.trace_id=e.trace_id AND f.level='error') THEN e.id ELSE 0 END"
+	}
+	query := `SELECT e.ts,e.duration_us,e.trace_id,e.span_id,e.node_id,e.proc,e.kind,e.name,e.level,e.status,COALESCE(e.session_id,''),e.user,COALESCE(e.fingerprint,''),COALESCE(s.text,''),json(e.attrs),` + flag + ` FROM events e LEFT JOIN stacks s ON s.hash=e.stack WHERE 1=1`
 	args := []any{}
 	if !filter.Since.IsZero() {
 		query += " AND e.ts>=?"
@@ -194,17 +205,28 @@ func queryDay(ctx context.Context, db *sql.DB, filter Filter) ([]Event, map[stri
 			args = append(args, part.value)
 		}
 	}
+	if filter.errorAfter != nil {
+		query += " AND (" + flag + ")>?"
+		args = append(args, *filter.errorAfter)
+	}
 	if filter.Trace != "" {
 		value, _ := hex.DecodeString(filter.Trace)
 		query += " AND e.trace_id=?"
 		args = append(args, value)
 	}
+	if after := filter.traceAfter; after != nil {
+		span, _ := hex.DecodeString(after.Span)
+		query += " AND (e.ts,e.node_id,e.span_id)>(?,?,?)"
+		args = append(args, after.At, after.Node, span)
+	}
 	if filter.Grep != "" {
 		query += " AND instr(lower(e.name||' '||e.kind||' '||e.node_id||' '||e.proc||' '||COALESCE(e.session_id,'')||' '||json(e.attrs)||' '||COALESCE(s.text,'')),lower(?))>0"
 		args = append(args, filter.Grep)
 	}
-	if filter.Trace != "" {
-		query += " ORDER BY e.ts,e.id"
+	if filter.errorAfter != nil {
+		query += " ORDER BY " + flag + ",e.id"
+	} else if filter.Trace != "" {
+		query += " ORDER BY e.ts,e.node_id,e.span_id"
 	} else {
 		query += " ORDER BY e.ts DESC,e.id DESC"
 	}
@@ -223,7 +245,7 @@ func queryDay(ctx context.Context, db *sql.DB, filter Filter) ([]Event, map[stri
 		var at int64
 		var trace, span []byte
 		var attrs string
-		if err := rows.Scan(&at, &event.DurationUS, &trace, &span, &event.NodeID, &event.Proc, &event.Kind, &event.Name, &event.Level, &event.Status, &event.SessionID, &event.User, &event.Fingerprint, &event.Stack, &attrs); err != nil {
+		if err := rows.Scan(&at, &event.DurationUS, &trace, &span, &event.NodeID, &event.Proc, &event.Kind, &event.Name, &event.Level, &event.Status, &event.SessionID, &event.User, &event.Fingerprint, &event.Stack, &attrs, &event.errorPosition); err != nil {
 			return nil, nil, err
 		}
 		if err := json.Unmarshal([]byte(attrs), &event.Attrs); err != nil {
@@ -232,6 +254,7 @@ func queryDay(ctx context.Context, db *sql.DB, filter Filter) ([]Event, map[stri
 		event.TS = time.UnixMicro(at).UTC()
 		event.TraceID = hex.EncodeToString(trace)
 		event.SpanID = hex.EncodeToString(span)
+		event.ErrorTrace = event.errorPosition > 0
 		events = append(events, event)
 	}
 	return events, cursors, rows.Err()
@@ -240,6 +263,12 @@ func queryDay(ctx context.Context, db *sql.DB, filter Filter) ([]Event, map[stri
 func matches(event Event, filter Filter) bool {
 	if !filter.Since.IsZero() && event.TS.Before(filter.Since) {
 		return false
+	}
+	if after := filter.traceAfter; after != nil {
+		at := event.TS.UnixMicro()
+		if at < after.At || at == after.At && (event.NodeID < after.Node || event.NodeID == after.Node && event.SpanID <= after.Span) {
+			return false
+		}
 	}
 	for _, part := range [][2]string{{filter.Kind, event.Kind}, {filter.Level, event.Level}, {filter.Session, event.SessionID}, {filter.Node, event.NodeID}, {filter.Trace, event.TraceID}, {filter.Fingerprint, event.Fingerprint}} {
 		if part[0] != "" && part[0] != part[1] {

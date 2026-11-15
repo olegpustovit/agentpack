@@ -1,7 +1,6 @@
 package registry
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,25 +9,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 
 	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 type index struct {
-	Schema     int                  `json:"schema"`
 	Agentpacks map[string]Agentpack `json:"agentpacks"`
 	Packages   []string             `json:"packages"`
-}
-
-func (s *Store) objectPath(id string) (string, error) {
-	if !validDigest(id) {
-		return "", fmt.Errorf("invalid object digest")
-	}
-	return filepath.Join(s.root, objectsDir, id+".json"), nil
 }
 
 func (s *Store) writeObject(value any) (string, error) {
@@ -38,8 +29,11 @@ func (s *Store) writeObject(value any) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	id := hex.EncodeToString(sum[:])
-	path := filepath.Join(s.root, objectsDir, id+".json")
-	if err := writeExclusiveOrVerify(path, data); err != nil {
+	table := "registry_objects"
+	if _, ok := value.(nameRevision); ok {
+		table = "registry_names"
+	}
+	if err := s.storeObject(table, id, data); err != nil {
 		return "", err
 	}
 	return id, nil
@@ -62,11 +56,7 @@ func marshalObject(value any) ([]byte, error) {
 }
 
 func (s *Store) readObject(id string, target any) error {
-	path, err := s.objectPath(id)
-	if err != nil {
-		return err
-	}
-	data, err := readRegular(path)
+	data, err := s.objectData(id)
 	if err != nil {
 		return err
 	}
@@ -89,26 +79,20 @@ func (s *Store) readObject(id string, target any) error {
 }
 
 type objectStamp struct {
-	kind, id string
-	size     int64
-	modified int64
+	kind, id, site string
+	version, cl    int64
 }
 
-// memoized returns what load made of this object file earlier. Objects are
-// named by their digest and never rewritten, so validating each once per process
-// is enough; every list and index read otherwise re-validates all of them.
-// Changed metadata reads and validates the file again. Callers must not modify
-// the slices of a returned value.
+// Immutable objects are revalidated when their replicated conflict position changes.
 func memoized[T any](s *Store, kind, id string, load func() (T, error)) (T, error) {
-	path, err := s.objectPath(id)
+	stamp := objectStamp{kind: kind, id: id}
+	var site []byte
+	err := s.sql.Reader.QueryRow(`SELECT col_version,cl,site_id FROM crsql_changes
+ WHERE "table" IN ('registry_objects','registry_names') AND pk=crsql_pack_columns(?) AND cid='body'`, id).Scan(&stamp.version, &stamp.cl, &site)
 	if err != nil {
 		return load()
 	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return load()
-	}
-	stamp := objectStamp{kind, id, info.Size(), info.ModTime().UnixNano()}
+	stamp.site = string(site)
 	if value, ok := s.memo.Load(stamp); ok {
 		return value.(T), nil
 	}
@@ -178,221 +162,47 @@ func (s *Store) loadRevision(id string) (Revision, error) {
 	return r, nil
 }
 
-func (s *Store) readIndex() (index, error) { return s.readIndexUnlocked() }
-
-func (s *Store) readIndexUnlocked() (index, error) {
-	path := filepath.Join(s.root, indexName)
-	data, err := readRegular(path)
-	if os.IsNotExist(err) {
-		return s.rebuildIndex()
-	}
-	if err != nil {
-		return index{}, err
-	}
-	var idx index
-	if err := json.Unmarshal(data, &idx); err != nil {
-		return index{}, fmt.Errorf("parse registry index")
-	}
-	if idx.Schema != schema {
-		return index{}, fmt.Errorf("unsupported registry index schema")
-	}
-	if idx.Agentpacks == nil {
-		idx.Agentpacks = map[string]Agentpack{}
-	}
-	for _, id := range idx.Packages {
-		if _, err := s.readPackage(id); err != nil {
-			return index{}, err
-		}
-	}
-	for id, p := range idx.Agentpacks {
-		if !validID(p.ID) || p.ID != id {
-			return index{}, fmt.Errorf("invalid agentpack index entry")
-		}
-		for _, id := range p.Revisions {
-			if _, err := s.readRevision(id); err != nil {
-				return index{}, err
-			}
-		}
-	}
-	stale, err := s.indexStale(idx)
-	if err != nil {
-		return index{}, err
-	}
-	if stale {
-		return s.rebuildIndex()
-	}
-	return idx, nil
-}
-
-func (s *Store) indexStale(idx index) (bool, error) {
-	tombstoned := map[string]bool{}
-	entries, err := os.ReadDir(filepath.Join(s.root, tombstonesDir))
-	if err != nil {
-		return false, err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		tombstone, err := s.readTombstone(strings.TrimSuffix(entry.Name(), ".json"))
-		if err != nil {
-			return false, err
-		}
-		tombstoned[tombstone.Agentpack] = true
-	}
-	for id := range tombstoned {
-		if _, ok := idx.Agentpacks[id]; ok {
-			return true, nil
-		}
-	}
-	entries, err = os.ReadDir(filepath.Join(s.root, objectsDir))
-	if err != nil {
-		return false, err
-	}
-	packages := map[string]bool{}
-	for _, id := range idx.Packages {
-		packages[id] = true
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		id := strings.TrimSuffix(entry.Name(), ".json")
-		if !validDigest(id) {
-			continue
-		}
-		obj, err := memoized(s, "stale", id, func() (importedObject, error) {
-			data, err := readRegular(filepath.Join(s.root, objectsDir, entry.Name()))
-			if err != nil {
-				return importedObject{}, err
-			}
-			return decodeImported(data)
-		})
-		if err != nil || obj.id != id {
-			return false, fmt.Errorf("invalid registry public object")
-		}
-		if obj.name != nil {
-			if tombstoned[obj.name.Agentpack] {
-				continue
-			}
-			_, ok := idx.Agentpacks[obj.name.Agentpack]
-			if !ok {
-				return true, nil
-			}
-			continue
-		}
-		if obj.packageRecord != nil {
-			if _, err := s.readPackage(id); err != nil {
-				return false, err
-			}
-			if !packages[id] {
-				return true, nil
-			}
-			continue
-		}
-		if obj.revision == nil {
-			continue
-		}
-		revision := obj.revision
-		if tombstoned[revision.AgentpackID] {
-			continue
-		}
-		pack, ok := idx.Agentpacks[revision.AgentpackID]
-		if !ok || !slices.Contains(pack.Revisions, id) {
-			return true, nil
-		}
-		for _, packageID := range revision.PackageIDs {
-			if !packages[packageID] {
-				return true, nil
-			}
-		}
-	}
-	latestNames, err := s.nameObjects()
-	if err != nil {
-		return false, err
-	}
-	for owner, name := range latestNames {
-		if tombstoned[owner] {
-			continue
-		}
-		pack, ok := idx.Agentpacks[owner]
-		if !ok || pack.Name != name.Name {
-			return true, nil
-		}
-	}
-	for id, pack := range idx.Agentpacks {
-		if tombstoned[id] {
-			return true, nil
-		}
-		computedHeads, err := s.revisionHeads(pack.Revisions)
-		if err != nil {
-			return false, err
-		}
-		if !slices.Equal(pack.Heads, computedHeads) {
-			return true, nil
-		}
-		data, err := readRegular(filepath.Join(s.root, metadataDir, id+".json"))
-		if os.IsNotExist(err) {
-			return true, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		var metadata Agentpack
-		_, hasName := latestNames[id]
-		if err := json.Unmarshal(data, &metadata); err != nil || metadata.ID != id || !hasName && metadata.Name != pack.Name {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func (s *Store) rebuildIndex() (index, error) {
-	result := index{Schema: schema, Agentpacks: map[string]Agentpack{}, Packages: []string{}}
-	entries, err := os.ReadDir(filepath.Join(s.root, objectsDir))
+func (s *Store) readIndex() (index, error) {
+	result := index{Agentpacks: map[string]Agentpack{}, Packages: []string{}}
+	entries, err := s.objectIDs()
 	if err != nil {
 		return index{}, err
 	}
 	revisions := map[string][]Revision{}
 	names := map[string]nameRevision{}
 	tombstoned := map[string]bool{}
-	tombstoneEntries, err := os.ReadDir(filepath.Join(s.root, tombstonesDir))
+	tombstoneEntries, err := s.storedIDs("registry_tombstones")
 	if err != nil {
 		return index{}, err
 	}
-	for _, entry := range tombstoneEntries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		t, err := s.readTombstone(strings.TrimSuffix(entry.Name(), ".json"))
+	for _, id := range tombstoneEntries {
+		t, err := s.readTombstone(id)
 		if err != nil {
 			return index{}, err
 		}
 		tombstoned[t.Agentpack] = true
 	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		id := strings.TrimSuffix(entry.Name(), ".json")
-		if !validDigest(id) {
-			continue
-		}
-		if !entry.Type().IsRegular() {
-			return index{}, fmt.Errorf("registry object must be a regular file")
-		}
-		path, _ := s.objectPath(id)
-		data, err := readRegular(path)
+	for _, id := range entries {
+		obj, err := memoized(s, "index", id, func() (importedObject, error) {
+			data, err := s.objectData(id)
+			if err != nil {
+				return importedObject{}, err
+			}
+			sum := sha256.Sum256(data)
+			if hex.EncodeToString(sum[:]) != id {
+				return importedObject{}, fmt.Errorf("registry object digest mismatch")
+			}
+			obj, err := decodeImported(data)
+			if err != nil {
+				return importedObject{}, err
+			}
+			if obj.id != id {
+				return importedObject{}, fmt.Errorf("registry object digest mismatch")
+			}
+			return obj, nil
+		})
 		if err != nil {
 			return index{}, err
-		}
-		sum := sha256.Sum256(data)
-		if hex.EncodeToString(sum[:]) != id {
-			return index{}, fmt.Errorf("registry object digest mismatch")
-		}
-		obj, err := decodeImported(data)
-		if err != nil || obj.id != id {
-			return index{}, fmt.Errorf("decode registry object")
 		}
 		if obj.name != nil {
 			if !tombstoned[obj.name.Agentpack] {
@@ -439,14 +249,12 @@ func (s *Store) rebuildIndex() (index, error) {
 		name := ""
 		if record, ok := names[id]; ok {
 			name = record.Name
-		} else if metadata, err := readRegular(filepath.Join(s.root, metadataDir, id+".json")); err == nil {
-			var pack Agentpack
-			if json.Unmarshal(metadata, &pack) == nil && pack.ID == id {
-				name = pack.Name
-			}
+		} else if metadata, err := s.metadata(id); err == nil {
+			name = metadata.Name
 		} else if !os.IsNotExist(err) {
 			return index{}, err
 		}
+
 		if name == "" {
 			name = filepath.Base(packRevisions[0].Project)
 		}
@@ -472,17 +280,9 @@ func (s *Store) writeMetadata(pack Agentpack) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(filepath.Join(s.root, metadataDir, pack.ID+".json"), data, 0o600)
-}
-
-func (s *Store) writeIndexUnlocked(idx index) error {
-	idx.Schema = schema
-	sort.Strings(idx.Packages)
-	data, err := json.MarshalIndent(idx, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeAtomic(filepath.Join(s.root, indexName), append(data, '\n'), 0o600)
+	_, err = s.sql.DB.Exec(`INSERT INTO registry_heads(agentpack_id,body) VALUES (?,?)
+ ON CONFLICT(agentpack_id) DO UPDATE SET body=excluded.body WHERE body<>excluded.body`, pack.ID, string(data))
+	return err
 }
 
 func (s *Store) writeBindings(id string, b bindings) error {
@@ -490,7 +290,9 @@ func (s *Store) writeBindings(id string, b bindings) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(filepath.Join(s.root, bindingsDir, id+".json"), data, 0o600)
+	_, err = s.sql.DB.Exec(`INSERT INTO registry_bindings(revision_id,body) VALUES (?,?)
+ ON CONFLICT(revision_id) DO UPDATE SET body=excluded.body WHERE body<>excluded.body`, id, string(data))
+	return err
 }
 
 func (s *Store) withLock(fn func() error) (err error) {
@@ -500,51 +302,6 @@ func (s *Store) withLock(fn func() error) (err error) {
 	}
 	defer func() { err = errors.Join(err, guard.Unlock()) }()
 	return fn()
-}
-
-func writeExclusiveOrVerify(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	if existing, err := readRegular(path); err == nil {
-		if !bytes.Equal(existing, data) {
-			return fmt.Errorf("registry object collision")
-		}
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".object-")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer os.Remove(name)
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := publishExclusive(name, path); err != nil {
-		if os.IsExist(err) {
-			existing, e := readRegular(path)
-			if e == nil && bytes.Equal(existing, data) {
-				return nil
-			}
-		}
-		return err
-	}
-	return nil
 }
 
 func writeAtomic(path string, data []byte, mode os.FileMode) error {
@@ -572,7 +329,7 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := renameDurable(name, path, true); err != nil {
+	if err := paths.RenameDurable(name, path, true); err != nil {
 		return err
 	}
 	return nil

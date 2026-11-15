@@ -34,7 +34,7 @@ func TestRemoteSessionRequiresRememberedFolderAndTerminalHarness(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.DB.Exec("INSERT INTO sessions(id,node_id,directory,harness,folder_id) VALUES ('session-replaced','local',?,'codex','replaced-folder')", directory); err != nil {
+	if _, err := store.DB.Exec("INSERT INTO sessions(id,node_id,directory,harness,folder_id) VALUES ('session-replaced',(SELECT node_id FROM local_node WHERE id=1),?,'codex','replaced-folder')", directory); err != nil {
 		t.Fatal(err)
 	}
 	_, err = runner.startRemoteSession(context.Background(), home, "must-not-execute", network.SessionInfo{Harness: "codex", Directory: directory}, "")

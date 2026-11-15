@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS events (
  id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, duration_us INTEGER NOT NULL,
  trace_id BLOB NOT NULL, span_id BLOB NOT NULL, node_id TEXT NOT NULL, proc TEXT NOT NULL,
  kind TEXT NOT NULL, name TEXT NOT NULL, level TEXT NOT NULL, status INTEGER NOT NULL,
+ error_trace INTEGER NOT NULL DEFAULT 0,
  session_id TEXT, user TEXT NOT NULL, fingerprint TEXT, stack BLOB, attrs BLOB NOT NULL,
  UNIQUE(trace_id, span_id, node_id)
 );
@@ -242,6 +243,19 @@ func (s *Store) openDay(day string) error {
 	if _, err := db.Exec(daySchema); err != nil {
 		return errors.Join(err, db.Close())
 	}
+	var hasFlag bool
+	if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM pragma_table_info('events') WHERE name='error_trace')").Scan(&hasFlag); err != nil {
+		return errors.Join(err, db.Close())
+	}
+	if !hasFlag {
+		if _, err := db.Exec(`BEGIN IMMEDIATE; ALTER TABLE events ADD COLUMN error_trace INTEGER NOT NULL DEFAULT 0;
+UPDATE events SET error_trace=id WHERE trace_id IN (SELECT trace_id FROM events WHERE level='error'); COMMIT;`); err != nil {
+			return errors.Join(err, db.Close())
+		}
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS events_error_trace ON events(error_trace) WHERE error_trace>0"); err != nil {
+		return errors.Join(err, db.Close())
+	}
 	s.db, s.day = db, day
 	return nil
 }
@@ -273,6 +287,36 @@ func (s *Store) writeBatch(events []Event) error {
 }
 
 func (s *Store) insert(events []Event) error {
+	if s.options.State != nil {
+		aliases := map[string]bool{}
+		rows, err := s.options.State.Reader.Query("SELECT node_id FROM local_node_aliases")
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var alias string
+			if err := rows.Scan(&alias); err != nil {
+				rows.Close()
+				return err
+			}
+			aliases[alias] = true
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return err
+		}
+		node, err := s.options.State.NodeID(context.Background())
+		if err != nil {
+			return err
+		}
+		if aliases[s.options.Metadata.NodeID] {
+			s.options.Metadata.NodeID = node
+		}
+		for i := range events {
+			if aliases[events[i].NodeID] {
+				events[i].NodeID = node
+			}
+		}
+	}
 	used, err := logFileSize(filepath.Join(s.directory, s.day+".db"))
 	if err != nil {
 		return err
@@ -329,7 +373,7 @@ func (s *Store) insert(events []Event) error {
 		}
 		// Reserve index/WAL pages conservatively; errors and drop reports survive the cap.
 		estimate := int64(16<<10 + 2*len(attrs) + len(event.Stack))
-		if event.Level != "error" && used+estimate > s.options.MaxDayBytes {
+		if event.Level != "error" && !event.ErrorTrace && used+estimate > s.options.MaxDayBytes {
 			dropped++
 			continue
 		}
@@ -355,6 +399,18 @@ func (s *Store) insert(events []Event) error {
 	}
 	if err := accounting.save(); err != nil {
 		return err
+	}
+	// A positive flag is a forwarding position: late failures promote earlier spans beyond saved cursors.
+	var position int64
+	if err := tx.QueryRow("SELECT COALESCE(max(error_trace),0) FROM events WHERE error_trace>0").Scan(&position); err != nil {
+		return err
+	}
+	for _, event := range events {
+		trace, _ := hex.DecodeString(event.TraceID)
+		if _, err := tx.Exec(`UPDATE events SET error_trace=?+id WHERE trace_id=? AND error_trace=0
+AND (? OR EXISTS(SELECT 1 FROM events WHERE trace_id=? AND error_trace>0))`, position, trace, event.Level == "error" || event.ErrorTrace, trace); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err

@@ -22,24 +22,26 @@ import (
 var currentSchema = state.SchemaVersion()
 
 type Event struct {
-	TS          time.Time      `json:"ts"`
-	DurationUS  int64          `json:"duration_us"`
-	TraceID     string         `json:"trace_id"`
-	SpanID      string         `json:"span_id"`
-	NodeID      string         `json:"node_id"`
-	Proc        string         `json:"proc"`
-	Kind        string         `json:"kind"`
-	Name        string         `json:"name"`
-	Level       string         `json:"level"`
-	Status      int            `json:"status"`
-	SessionID   string         `json:"session_id,omitempty"`
-	User        string         `json:"user,omitempty"`
-	Fingerprint string         `json:"fingerprint,omitempty"`
-	Stack       string         `json:"stack,omitempty"`
-	Attrs       map[string]any `json:"attrs"`
-	life        *lifecycle
-	source      string
-	sourceLine  int64
+	TS            time.Time      `json:"ts"`
+	DurationUS    int64          `json:"duration_us"`
+	TraceID       string         `json:"trace_id"`
+	SpanID        string         `json:"span_id"`
+	NodeID        string         `json:"node_id"`
+	Proc          string         `json:"proc"`
+	Kind          string         `json:"kind"`
+	Name          string         `json:"name"`
+	Level         string         `json:"level"`
+	ErrorTrace    bool           `json:"error_trace,omitempty"`
+	Status        int            `json:"status"`
+	SessionID     string         `json:"session_id,omitempty"`
+	User          string         `json:"user,omitempty"`
+	Fingerprint   string         `json:"fingerprint,omitempty"`
+	Stack         string         `json:"stack,omitempty"`
+	Attrs         map[string]any `json:"attrs"`
+	life          *lifecycle
+	source        string
+	sourceLine    int64
+	errorPosition int64
 }
 
 type lifecycle struct {

@@ -45,7 +45,7 @@ type DiagnosticRows struct {
 // RelatedRows reads only the involved session and mesh-node records, never credentials.
 func RelatedRows(ctx context.Context, home string, nodes, sessions []string) (DiagnosticRows, error) {
 	result := DiagnosticRows{Nodes: []map[string]any{}, Sessions: []map[string]any{}}
-	db, err := readOnly(filepath.Join(home, "state.db"))
+	db, err := openLogFile(filepath.Join(home, "state.db"), false)
 	if errors.Is(err, os.ErrNotExist) {
 		result.MissingTables = []string{"mesh_nodes", "sessions"}
 		return result, nil

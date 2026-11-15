@@ -87,9 +87,9 @@ func TestBrowserActorIgnoresForgedActorHeader(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	// The node secret makes this the machine's own OS user; the header is ignored.
-	if want := LocalActor("local"); started.StartedBy == nil || *started.StartedBy != want {
-		t.Fatalf("forged header changed actor: %+v, want %+v", started.StartedBy, want)
+	// The authenticated local transport maps to the owner; caller headers have no authority.
+	if started.StartedBy == nil || started.StartedBy.Kind != "local" || started.StartedBy.User != testBrowserEmail || !started.StartedBy.Account {
+		t.Fatalf("forged header changed local account actor: %+v", started.StartedBy)
 	}
 }
 
@@ -565,4 +565,80 @@ func TestRunWorkerPersistsCLIStartedBy(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+func TestForwardedAccountRequiresExplicitMeshAndOwnsOnlyItsChats(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	library := replicaStore(t)
+	g.options.Library.Store = library
+	peer := Actor{Kind: "peer", User: "tailscale@example.com", StableNodeID: "remote"}
+	if err := library.EnrollOwnMachine("remote"); err != nil {
+		t.Fatal(err)
+	}
+	ignored, err := g.forwardedAccount(t.Context(), peer, testBrowserEmail)
+	if err != nil || ignored != peer {
+		t.Fatalf("library-only peer asserted an account: %+v %v", ignored, err)
+	}
+	if err := library.EnrollPeer("remote"); err != nil {
+		t.Fatal(err)
+	}
+	actor, err := g.forwardedAccount(t.Context(), peer, testBrowserEmail)
+	if err != nil || !actor.Account || actor.User != testBrowserEmail {
+		t.Fatalf("mesh account refused: %+v %v", actor, err)
+	}
+	own := browserActor(testBrowserEmail)
+	if !actor.canWriteSession(SessionInfo{StartedBy: &own}) {
+		t.Fatal("same account could not continue its chat through another node")
+	}
+	other := browserActor("other@example.com")
+	if actor.canWriteSession(SessionInfo{StartedBy: &other}) {
+		t.Fatal("peer account wrote someone else's chat")
+	}
+	body, err := json.Marshal(actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved Actor
+	if err := json.Unmarshal(body, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if !own.canWriteSession(SessionInfo{StartedBy: &saved}) {
+		t.Fatal("account ownership did not survive session persistence")
+	}
+	if _, err := g.forwardedAccount(t.Context(), peer, "missing@example.com"); err == nil {
+		t.Fatal("nonexistent account accepted")
+	}
+	if _, err := g.auth.store.DB.Exec("UPDATE users SET disabled=1 WHERE email=?", testBrowserEmail); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.forwardedAccount(t.Context(), peer, testBrowserEmail); err == nil {
+		t.Fatal("disabled account accepted")
+	}
+}
+
+func TestProxyUsesAuthenticatedAccountInsteadOfCallerHeader(t *testing.T) {
+	for _, account := range []bool{false, true} {
+		got := make(chan string, 1)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got <- r.Header.Get("X-Agentpack-User")
+			w.WriteHeader(204)
+		}))
+		target, _ := url.Parse(server.URL)
+		g, _ := identityGateway(t, t.TempDir(), nil)
+		r := httptest.NewRequest("POST", "http://localhost/api/sessions/session-example/stop", nil)
+		r.Header.Set("X-Agentpack-User", "forged@example.com")
+		if account {
+			r = r.WithContext(withActor(r.Context(), browserActor(testBrowserEmail)))
+		}
+		g.proxyTailnetTo(httptest.NewRecorder(), r, "remote", target)
+		email := <-got
+		server.Close()
+		want := ""
+		if account {
+			want = testBrowserEmail
+		}
+		if email != want {
+			t.Fatalf("forwarded account=%q want %q", email, want)
+		}
+	}
 }

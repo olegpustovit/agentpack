@@ -3,10 +3,10 @@ import type { ListedSession } from "./group"
 
 // Row action availability. Non-interactive sessions have no browser terminal.
 export function sessionRules(session: ListedSession) {
-  const offline = session.offline
+  const offline = session.offline || Boolean(session.archived_at)
   const nonInteractive = session.state.interactive === false
   return {
-    rename: !offline,
+    rename: !session.archived_at,
     restart: !offline && !nonInteractive,
     stop: !offline && session.state.running,
     reconnect: !offline && !nonInteractive,

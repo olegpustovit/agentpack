@@ -18,6 +18,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
@@ -73,6 +74,18 @@ func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 		}
 		if err := os.WriteFile(path, data, 0600); err != nil {
 			t.Fatal(err)
+		}
+		store, err := state.Open(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, writeErr := store.DB.Exec("INSERT INTO sessions(id,node_id,directory,definition_root,harness,mode) VALUES (?,"+state.LocalNodeSQL+",?,?,?,?)", id, directory, directory, "claude", selected)
+		closeErr := store.Close()
+		if writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
 		}
 		return count
 	}

@@ -13,6 +13,8 @@ type issueResolution struct {
 }
 
 func (g *Gateway) registerDiagnostics(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/logs/ingest", g.peerOnly(g.ingestTraces))
+	mux.HandleFunc("GET /api/logs/trace/{trace}", g.peerOnly(g.localTrace))
 	mux.HandleFunc("GET /api/logs/issues", func(w http.ResponseWriter, r *http.Request) {
 		status := "open"
 		if r.URL.Query().Has("status") {
@@ -26,7 +28,12 @@ func (g *Gateway) registerDiagnostics(mux *http.ServeMux) {
 		writeDiagnostics(w, r, issue, err)
 	})
 	mux.HandleFunc("GET /api/logs/traces/{trace}", func(w http.ResponseWriter, r *http.Request) {
-		events, err := obs.TraceEvents(r.Context(), g.options.Home, r.PathValue("trace"))
+		if r.URL.Query().Get("page") == "1" {
+			page, err := g.tracePage(r.Context(), r.PathValue("trace"), r.URL.Query().Get("after"), r.URL.Query().Get("all_nodes") == "1", g.tailnetTarget)
+			writeDiagnostics(w, r, page, err)
+			return
+		}
+		events, err := g.traceEvents(r.Context(), r.PathValue("trace"), r.URL.Query().Get("all_nodes") == "1", g.tailnetTarget)
 		writeDiagnostics(w, r, events, err)
 	})
 	for _, action := range []string{"resolve", "reopen", "ignore"} {

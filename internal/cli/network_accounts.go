@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/registry"
 	"github.com/olegpustovit/agentpack/internal/state"
 	"golang.org/x/term"
 )
@@ -31,7 +32,7 @@ func (runner Runner) runGatewayAccounts(ctx context.Context, home string, args [
 	if len(args) != want {
 		return 2, fmt.Errorf("unexpected arguments for gateway %s", action)
 	}
-	if action != "passwd" && action != "add" && action != "list" && action != "disable" && action != "reset-owner" {
+	if action != "whoami" && action != "passwd" && action != "add" && action != "list" && action != "disable" && action != "reset-owner" {
 		return 2, errors.New("unknown gateway account command")
 	}
 	store, err := state.Open(home)
@@ -40,6 +41,11 @@ func (runner Runner) runGatewayAccounts(ctx context.Context, home string, args [
 	}
 	defer store.Close()
 	switch action {
+	case "whoami":
+		if err := network.BindLocalAccount(ctx, store, args[1]); err != nil {
+			return 1, err
+		}
+		_, err = fmt.Fprintln(runner.Stdout, "Local gateway actions now use "+args[1])
 	case "list":
 		users, err := network.ListUsers(ctx, store)
 		if err != nil {
@@ -123,6 +129,10 @@ func (runner Runner) printGatewayClaim(ctx context.Context, home string) error {
 	if err != nil {
 		return err
 	}
+	if status.Joining {
+		_, err := fmt.Fprintln(runner.Stdout, "JOINING: waiting for mesh accounts; approve enrollment on the existing gateway.")
+		return err
+	}
 	if status.Claimed {
 		return nil
 	}
@@ -135,4 +145,45 @@ func (runner Runner) printGatewayClaim(ctx context.Context, home string) error {
 	}
 	_, err = fmt.Fprintln(runner.Stdout, "UNCLAIMED: open "+address+" now")
 	return err
+}
+
+func (runner Runner) runGatewayJoin(ctx context.Context, home string, args []string) (int, error) {
+	if len(args) != 1 {
+		return 2, errors.New("expected gateway join NODE")
+	}
+	peer := args[0]
+	if err := registry.ValidatePeer(peer); err != nil {
+		return 2, err
+	}
+	if _, err := fmt.Fprintf(runner.Stderr, "Trust %s with account password hashes, chat history and shared state? Type trust to join: ", peer); err != nil {
+		return 1, err
+	}
+	answer, err := bufio.NewReader(runner.Stdin).ReadString('\n')
+	if err != nil {
+		return 1, err
+	}
+	if strings.TrimSpace(answer) != "trust" {
+		return 1, errors.New("mesh join cancelled")
+	}
+	store, err := state.Open(home)
+	if err != nil {
+		return 1, err
+	}
+	defer store.Close()
+	if err := network.PrepareMeshJoin(ctx, store, peer); err != nil {
+		return 1, err
+	}
+	library, err := runner.networkLibrary(home)
+	if err != nil {
+		return 1, err
+	}
+	defer library.Store.Close()
+	if err := library.Store.EnrollPeer(peer); err != nil {
+		return 1, err
+	}
+	_, err = fmt.Fprintf(runner.Stdout, "Joining %s. Owner claiming is disabled while accounts sync.\nRun agentpack gateway start, then approve this machine in the existing gateway's Replication settings.\n", peer)
+	if err != nil {
+		return 1, err
+	}
+	return 0, nil
 }

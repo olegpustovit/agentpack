@@ -22,14 +22,21 @@ import (
 func persistConversationChanges(ctx context.Context, db *sql.DB, id string, changes acp.LogChanges) error {
 	return state.Transaction(ctx, db, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `UPDATE sessions SET last_seq=max(last_seq,?),last_event_at=?,
-			conversation_truncated=max(conversation_truncated,?) WHERE id=? AND node_id=?`,
-			changes.LastSeq, time.Now().UnixNano(), changes.Truncated, id, localStateNode)
+			conversation_truncated=max(conversation_truncated,?) WHERE id=? AND archived_at=0 AND node_id=`+state.LocalNodeSQL,
+			changes.LastSeq, time.Now().UnixNano(), changes.Truncated, id)
 		if err != nil {
 			return err
 		}
 		if count, err := result.RowsAffected(); err != nil {
 			return err
 		} else if count != 1 {
+			var archived bool
+			if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sessions WHERE id=? AND archived_at>0 AND node_id="+state.LocalNodeSQL+")", id).Scan(&archived); err != nil {
+				return err
+			}
+			if archived {
+				return errSessionArchived
+			}
 			return errSessionNotFound
 		}
 		for _, seq := range changes.Removed {
@@ -70,21 +77,32 @@ func storedConversationTail(ctx context.Context, db *sql.DB, id string, since in
 	defer tx.Rollback()
 	var lastSeq int64
 	var truncated bool
-	err = tx.QueryRowContext(ctx, "SELECT last_seq,conversation_truncated FROM sessions WHERE id=? AND node_id=?", id, localStateNode).Scan(&lastSeq, &truncated)
+	err = tx.QueryRowContext(ctx, "SELECT last_seq,conversation_truncated FROM sessions WHERE id=?", id).Scan(&lastSeq, &truncated)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = errSessionNotFound
 	}
 	if err != nil {
 		return nil, 0, false, err
 	}
+	entries, truncated, err := readConversationEntries(ctx, tx, id, since, lastSeq, truncated)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, false, err
+	}
+	return entries, lastSeq, truncated, nil
+}
+
+func readConversationEntries(ctx context.Context, tx *sql.Tx, id string, since, lastSeq int64, truncated bool) ([]acp.LogEntry, bool, error) {
 	if lastSeq < 0 {
-		return nil, 0, false, errors.New("invalid stored conversation sequence")
+		return nil, false, errors.New("invalid stored conversation sequence")
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT seq,length(CAST(body AS BLOB)),
 		CASE WHEN length(CAST(body AS BLOB))<=? THEN body ELSE '' END
 		FROM conversation_events WHERE session_id=? AND seq>? ORDER BY seq DESC`, maxConversationSnapshotBytes, id, since)
 	if err != nil {
-		return nil, 0, false, err
+		return nil, false, err
 	}
 	defer rows.Close()
 	entries := []acp.LogEntry{}
@@ -94,7 +112,7 @@ func storedConversationTail(ctx context.Context, db *sql.DB, id string, since in
 		var size int
 		var body string
 		if err := rows.Scan(&seq, &size, &body); err != nil {
-			return nil, 0, false, err
+			return nil, false, err
 		}
 		if size+1 > maxConversationSnapshotBytes-total {
 			truncated = true
@@ -102,25 +120,22 @@ func storedConversationTail(ctx context.Context, db *sql.DB, id string, since in
 		}
 		var entry acp.LogEntry
 		if err := json.Unmarshal([]byte(body), &entry); err != nil {
-			return nil, 0, false, fmt.Errorf("decode conversation entry %d: %w", seq, err)
+			return nil, false, fmt.Errorf("decode conversation entry %d: %w", seq, err)
 		}
 		if seq <= 0 || entry.Seq != seq || seq > lastSeq {
-			return nil, 0, false, errors.New("invalid stored conversation sequence")
+			return nil, false, errors.New("invalid stored conversation sequence")
 		}
 		total += size + 1
 		entries = append(entries, entry)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, false, err
+		return nil, false, err
 	}
 	if err := rows.Close(); err != nil {
-		return nil, 0, false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, 0, false, err
+		return nil, false, err
 	}
 	slices.Reverse(entries)
-	return entries, lastSeq, truncated, nil
+	return entries, truncated, nil
 }
 
 func newConversationLog(ctx context.Context, store *state.Store, id string, fail func(error)) (*acp.EventLog, error) {
@@ -138,6 +153,10 @@ func newConversationLog(ctx context.Context, store *state.Store, id string, fail
 		defer cancel()
 		err := persistConversationChanges(writeCtx, store.DB, id, changes)
 		if err != nil {
+			if err == errSessionArchived {
+				fail(err)
+				return err
+			}
 			report.Do(func() {
 				_, event := obs.Start(ctx, "worker", "persist_conversation")
 				event.Set("session_id", id)
@@ -153,13 +172,17 @@ func newConversationLog(ctx context.Context, store *state.Store, id string, fail
 
 func (g *Gateway) serveConversation(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	info, err := storedSession(r.Context(), g.auth.store.Reader, id)
+	if err == nil && !info.ArchivedAt.IsZero() {
+		g.serveArchivedConversation(w, r, info, g.tailnetTarget)
+		return
+	}
 	if record, err := g.workerRecord(r.Context(), id); err == nil && proxyWorkerConversation(w, r, record, "") {
 		return
 	}
 	if r.Context().Err() != nil {
 		return
 	}
-	info, err := storedSession(r.Context(), g.auth.store.Reader, id)
 	if errors.Is(err, errSessionNotFound) || err == nil && info.Transport != "acp" {
 		http.Error(w, "conversation unavailable", http.StatusNotFound)
 		return
@@ -180,6 +203,10 @@ func (g *Gateway) serveConversation(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "conversation history unavailable", http.StatusInternalServerError)
 		return
 	}
+	writeConversationEntries(w, r, entries, truncated)
+}
+
+func writeConversationEntries(w http.ResponseWriter, r *http.Request, entries []acp.LogEntry, truncated bool) {
 	if truncated {
 		w.Header().Set("X-Agentpack-Truncated", "true")
 	}

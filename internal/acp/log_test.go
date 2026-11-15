@@ -12,6 +12,33 @@ func chunk(text string) json.RawMessage {
 	return raw
 }
 
+func TestEventLogFlushIsSynchronousAndReportsFailure(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		log := NewEventLog(1024)
+		want := errors.New("write failed")
+		var stored int64
+		if err := log.EnableSink(func(changes LogChanges) error {
+			if fail {
+				return want
+			}
+			stored = changes.LastSeq
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		log.Append("prompt", 1, chunk("go"))
+		err := log.Flush()
+		if fail {
+			if !errors.Is(err, want) {
+				t.Fatalf("flush hid failure: %v", err)
+			}
+		} else if err != nil || stored != 1 {
+			t.Fatalf("flush returned before persistence: %d %v", stored, err)
+		}
+		log.Close()
+	}
+}
+
 func TestEventLogCoalescesTinyChunks(t *testing.T) {
 	log := NewEventLog(16 << 10)
 	const n = 10_000
@@ -120,7 +147,10 @@ func TestEventLogSinkReplacesAlreadyPersistedMergedChunks(t *testing.T) {
 	}
 	for i := range 4000 {
 		log.Append("agent_message_chunk", int64(i+3), chunk("x"))
-		if log.persistence.bytes > 4*log.limit {
+		log.mu.Lock()
+		pendingBytes := log.persistence.bytes
+		log.mu.Unlock()
+		if pendingBytes > 4*log.limit {
 			t.Fatal("pending writes exceeded byte bound")
 		}
 	}

@@ -7,7 +7,7 @@ import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem } from
 import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useEventsConnected } from "@/features/events/use-events"
-import { nodesQuery, topologyQuery, useMachineQueries, useMachines } from "@/features/machines/queries"
+import { nodesQuery, topologyQuery, useReplicatedQueries, useMachines } from "@/features/machines/queries"
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { terminalPool } from "@/features/terminal/pool"
@@ -44,7 +44,7 @@ function withSearch(href: string, patch: Record<string, string | undefined>): st
 
 export function SessionList() {
   const machines = useMachines()
-  const queries = useMachineQueries(sessionsQuery)
+  const queries = useReplicatedQueries(sessionsQuery)
   const live = useEventsConnected()
   const discovery = useQuery(nodesQuery(live))
   const topology = useQuery(topologyQuery(live))
@@ -74,7 +74,7 @@ export function SessionList() {
       ...session,
       machine: machine.id,
       machineName: machine.name,
-      offline: !machine.online,
+      offline: session.reachable === false || !machine.online,
     })),
   )
   const query = search.q ?? ""
@@ -204,12 +204,12 @@ export function SessionList() {
         {discovery.error && <Banner tone="warn">{`Can't look for other machines: ${discovery.error.message}`}</Banner>}
         {noGateway.length > 0 && (
           <Banner action={<Link to="/machines/topology" className="shrink-0 underline">Topology</Link>}>
-            {`${noGateway.map((peer) => peer.name).join(", ")}: no gateway reachable, so ${noGateway.length === 1 ? "its" : "their"} sessions aren't listed.`}
+            {`${noGateway.map((peer) => peer.name).join(", ")}: no gateway reachable. Replicated sessions remain available.`}
           </Banner>
         )}
         {machines.map((machine) => {
           const entry = queries.byMachine[machine.id]
-          if (entry?.needsUpdate) {
+          if (machine.needsUpdate || entry?.needsUpdate) {
             return <Banner key={machine.id} tone="warn">{`${machine.name} needs an update to show its sessions.`}</Banner>
           }
           const error = queries.errors[machine.id]

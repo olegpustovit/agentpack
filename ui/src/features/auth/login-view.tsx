@@ -13,7 +13,7 @@ import { safeReturnTo } from "./return-to"
 export function LoginView({ returnTo }: { returnTo?: string }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const status = useQuery(statusQuery)
+  const status = useQuery({ ...statusQuery, refetchInterval: (query) => query.state.data?.joining ? 1000 : false })
   const [fields, setFields] = useState<LoginFields>({ email: "", password: "", confirm: "", currentPassword: "" })
   const [errors, setErrors] = useState<LoginErrors>({})
   const claim = status.data?.claimed === false
@@ -32,7 +32,7 @@ export function LoginView({ returnTo }: { returnTo?: string }) {
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!status.data) return
+    if (!status.data || status.data.joining) return
     const next = loginErrors(status.data, fields)
     setErrors(next)
     if (!Object.keys(next).length) login.mutate()
@@ -54,10 +54,10 @@ export function LoginView({ returnTo }: { returnTo?: string }) {
     <main className="flex h-dvh overflow-y-auto bg-(--window) p-(--s6) text-(length:--fs) text-(--fg)">
       <form noValidate onSubmit={submit} className="m-auto flex w-85 max-w-full shrink-0 flex-col gap-(--s5) rounded-(--r-sheet) bg-(--chrome) p-(--s7) shadow-(--shadow-pop)">
         <div className="flex flex-col gap-(--s2)">
-          <h1 className="text-(length:--fs) font-semibold">{claim ? "Claim your gateway" : "Sign in to Agentpack"}</h1>
-          <p className="text-(length:--fs-sm) text-(--fg2)">{claim ? legacy ? "Confirm the current gateway password to become its owner. Legacy claiming keeps that password." : "Create the first owner account for this gateway." : "Use your email and password to open your sessions."}</p>
+          <h1 className="text-(length:--fs) font-semibold">{status.data?.joining ? "Joining your mesh" : claim ? "Claim your gateway" : "Sign in to Agentpack"}</h1>
+          <p className="text-(length:--fs-sm) text-(--fg2)">{status.data?.joining ? "Waiting for existing accounts. Approve this machine in the other gateway’s Replication settings." : claim ? legacy ? "Confirm the current gateway password to become its owner. Legacy claiming keeps that password." : "Create the first owner account for this gateway." : "Use your email and password to open your sessions."}</p>
         </div>
-        {status.error ? <><FieldError>Couldn't reach the gateway: {status.error.message}</FieldError><Button type="button" onClick={() => void status.refetch()}>Retry</Button></> : !status.data ? <Announcement>Connecting to gateway…</Announcement> : <>
+        {status.error ? <><FieldError>Couldn't reach the gateway: {status.error.message}</FieldError><Button type="button" onClick={() => void status.refetch()}>Retry</Button></> : !status.data ? <Announcement>Connecting to gateway…</Announcement> : status.data.joining ? <Announcement>Synchronizing accounts…</Announcement> : <>
           <FieldGrid>
             {keys.map((key) => (
               <Field key={key} className="flex-col items-stretch gap-(--s2)" data-invalid={visible[key] ? "true" : undefined}>

@@ -1,13 +1,19 @@
 package network
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/registry"
 )
+
+const draftReviewLimit = 64 << 20
 
 func (g *Gateway) registerLibraryDrafts(mux *http.ServeMux) {
 	store := g.options.Library.Store
@@ -83,6 +89,34 @@ func (g *Gateway) currentDraftState(ctx context.Context, draft registry.Draft) (
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	var state registry.DraftState
-	err = registryPeerRequest(ctx, tailnetHTTP, target, "POST", "/api/library/draft-state", draft, &state)
+	body, err := json.Marshal(draft)
+	if err != nil {
+		return state, err
+	}
+	if len(body) > draftReviewLimit {
+		return state, errors.New("draft review request is too large")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target.JoinPath("/api/library/draft-state").String(), bytes.NewReader(body))
+	if err != nil {
+		return state, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("traceparent", obs.TraceParent(ctx))
+	response, err := tailnetHTTP.Do(request)
+	if err != nil {
+		return state, errors.New("draft machine is unreachable")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return state, errors.New("draft machine could not review this draft")
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, draftReviewLimit+1))
+	if err != nil {
+		return state, err
+	}
+	if len(data) > draftReviewLimit {
+		return state, errors.New("draft review response is too large")
+	}
+	err = json.Unmarshal(data, &state)
 	return state, err
 }

@@ -96,7 +96,12 @@ func (g *Gateway) telemetry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "diagnostics unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	metadata := obs.BuildMetadata(g.options.Version, localStateNode, "ui")
+	nodeID, err := g.auth.store.NodeID(r.Context())
+	if err != nil {
+		http.Error(w, "gateway state unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	metadata := obs.BuildMetadata(g.options.Version, nodeID, "ui")
 	for _, input := range batch.Events {
 		// The upload's HTTP span is separate from the original browser failure.
 		ctx := obs.WithSink(obs.WithTrace(context.Background(), input.Traceparent), g.logs, metadata)

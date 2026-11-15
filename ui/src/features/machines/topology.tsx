@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { useIsPhone } from "@/features/shell/use-is-phone"
@@ -9,7 +10,7 @@ import { ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { LOCAL } from "@/lib/api"
 import { plural } from "@/lib/format"
-import { topologyQuery, useMachineQueries } from "./queries"
+import { topologyQuery, useReplicatedQueries } from "./queries"
 import {
   DIAGRAM_W,
   GATEWAY_W,
@@ -46,7 +47,7 @@ export function TopologyView() {
   const isPhone = useIsPhone()
   const live = useEventsConnected()
   const topology = useQuery(topologyQuery(live))
-  const sessions = useMachineQueries(sessionsQuery)
+  const sessions = useReplicatedQueries(sessionsQuery)
   const data = topology.data
   // Replication enrolment is known locally, so the edge marks it without another peer probe.
   const replication = useQuery(replicationQuery)
@@ -68,9 +69,10 @@ export function TopologyView() {
   const gatewaySessions = count(LOCAL)
 
   const rows = [
-    { id: LOCAL, name: data.self.name, os: data.self.os, state: "Gateway", path: "—", version: "", sessions: gatewaySessions, reason: "This machine" },
+    { id: LOCAL, main: data.self.main, name: data.self.name, os: data.self.os, state: "Gateway", path: "—", version: "", sessions: gatewaySessions, reason: "This machine" },
     ...data.peers.map((peer) => ({
       id: peer.id,
+      main: peer.main,
       name: peer.name,
       os: peer.os,
       state: stateWord(peer.state),
@@ -152,7 +154,7 @@ export function TopologyView() {
             <tbody>
               {rows.map((row) => (
                 <DataGridRow key={row.id}>
-                  <DataGridCell>{row.name}</DataGridCell>
+                  <DataGridCell><span className="inline-flex items-center gap-(--s2)">{row.name}{row.main && <Badge variant="secondary">Main</Badge>}</span></DataGridCell>
                   <DataGridCell>{row.os}</DataGridCell>
                   <DataGridCell>{row.state}</DataGridCell>
                   <DataGridCell>{row.path}</DataGridCell>

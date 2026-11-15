@@ -16,6 +16,7 @@ import (
 type Store struct {
 	DB     *sql.DB
 	Reader *sql.DB
+	home   string
 }
 
 func Open(home string) (*Store, error) {
@@ -48,7 +49,8 @@ func Open(home string) (*Store, error) {
 		return nil, fmt.Errorf("open state writer: %w", err)
 	}
 	writer.SetMaxOpenConns(1)
-	writer.SetMaxIdleConns(1)
+	// Imported pages advance the persisted local clock; a fresh writer reloads it before its next transaction.
+	writer.SetMaxIdleConns(0)
 	if err := writer.Ping(); err != nil {
 		return nil, errors.Join(fmt.Errorf("connect state writer: %w", err), writer.Close())
 	}
@@ -65,7 +67,7 @@ func Open(home string) (*Store, error) {
 	if err := reader.Ping(); err != nil {
 		return nil, errors.Join(fmt.Errorf("connect state reader: %w", err), reader.Close(), writer.Close())
 	}
-	return &Store{DB: writer, Reader: reader}, nil
+	return &Store{DB: writer, Reader: reader, home: home}, nil
 }
 
 func (s *Store) Close() error { return errors.Join(s.Reader.Close(), s.DB.Close()) }

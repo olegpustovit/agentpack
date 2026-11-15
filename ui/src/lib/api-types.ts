@@ -1,14 +1,14 @@
 // Hand-written from the Go JSON structs. Keep field names in step with the json tags.
 
-export type Status = { claimed: boolean; legacy: boolean; authenticated: boolean; email: string }
+export type Status = { joining?: boolean; claimed: boolean; legacy: boolean; authenticated: boolean; email: string }
 
 export type Identity = {
-  node: { id: string; name: string; os: string; version: string }
+  node: { id: string; name: string; os: string; version: string; main?: boolean }
   auth: string
   tailscale_user: string
 }
 
-export type TailnetNode = { id: string; name: string; online: boolean }
+export type TailnetNode = { id: string; name: string; online: boolean; main?: boolean; needs_update?: boolean }
 
 export type Actor = { kind: string; user?: string; node?: string }
 
@@ -33,6 +33,11 @@ export type AgentCapabilities = {
 }
 
 export type SessionInfo = {
+  node_id?: string
+  reachable?: boolean
+  last_sync?: string
+  ended_at?: string
+  archived_at?: string
   id: string
   name?: string
   directory: string
@@ -57,6 +62,7 @@ export type AgentSession = {
 }
 
 export type TopologyPeer = {
+  main?: boolean
   id: string
   name: string
   os: string
@@ -71,7 +77,7 @@ export type TopologyPeer = {
 }
 
 export type Topology = {
-  self: { id: string; name: string; os: string; relay: string }
+  self: { id: string; name: string; os: string; relay: string; main?: boolean }
   peers: TopologyPeer[]
 }
 
@@ -124,6 +130,9 @@ export type LimitWindow = {
 }
 
 export type LimitSnapshot = {
+  node_id?: string
+  reachable?: boolean
+  last_sync?: string
   harness: string
   state: string
   source?: string
@@ -200,9 +209,9 @@ export type Draft = {
   created_at: string
 }
 
-export type PeerReplica = { node: string; receipt_count: number; digests: string[] }
+export type PeerReplica = { node: string; mesh?: boolean }
 
 export type ReplicationPeers = {
   peers: PeerReplica[]
-  contacts: Record<string, { at: string; error?: string }>
+  contacts: Record<string, { at: string; last_sync?: string; error?: string; needs_update?: boolean; schema_version?: number; version?: number; lag?: number }>
 }

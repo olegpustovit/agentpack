@@ -103,7 +103,8 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 		imageCapability bool
 	)
 	broker := acp.NewBroker(
-		func(ctx context.Context, input acp.PromptInput) error {
+		func(ctx context.Context, input acp.PromptInput) (result error) {
+			defer func() { result = errors.Join(result, log.Flush()) }()
 			connMu.Lock()
 			c, sid, images := conn, sessID, imageCapability
 			connMu.Unlock()
@@ -115,6 +116,9 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 				return err
 			}
 			log.Append("prompt", time.Now().UnixMilli(), promptLogPayload(loggedInput))
+			if err := log.Flush(); err != nil {
+				return err
+			}
 			response, err := c.Prompt(ctx, sdkacp.PromptRequest{
 				SessionId: sid,
 				Prompt:    blocks,
@@ -216,7 +220,8 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		imageCapability bool
 	)
 	broker := acp.NewBroker(
-		func(ctx context.Context, input acp.PromptInput) error {
+		func(ctx context.Context, input acp.PromptInput) (result error) {
+			defer func() { result = errors.Join(result, log.Flush()) }()
 			connMu.Lock()
 			c, sid, images := conn, sessID, imageCapability
 			connMu.Unlock()
@@ -228,6 +233,9 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 				return err
 			}
 			log.Append("prompt", time.Now().UnixMilli(), promptLogPayload(loggedInput))
+			if err := log.Flush(); err != nil {
+				return err
+			}
 			response, err := c.Prompt(ctx, sdkacp.PromptRequest{
 				SessionId: sid,
 				Prompt:    blocks,
@@ -664,7 +672,7 @@ func finishACPConversation(ctx context.Context, conversation *ConversationSessio
 }
 
 func closeACPEventLog(log *acp.EventLog) {
-	if err := log.Close(); err != nil {
+	if err := log.Close(); err != nil && err != errSessionArchived {
 		fmt.Fprintln(os.Stderr, "warning: ACP conversation log could not be persisted")
 	}
 }
@@ -837,6 +845,7 @@ func loadEventLogFixtureEntries(path string) ([]acp.LogEntry, error) {
 }
 
 func probeHarnessAgentSessions(ctx context.Context, launch WorkerLaunch) ([]AgentSession, error) {
+	ctx = WithPeerCache(ctx, "")
 	target, err := harnessTarget(launch.Session.Harness)
 	if err != nil {
 		return nil, err

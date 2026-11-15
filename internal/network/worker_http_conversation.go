@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -88,7 +89,11 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			return
 		}
 		if err := worker.conversationSession().Prompt(r.Context(), prompt); err != nil {
-			http.Error(w, "could not send prompt", http.StatusConflict)
+			message := "could not send prompt"
+			if errors.Is(err, errSessionArchived) {
+				message = "archived"
+			}
+			http.Error(w, message, http.StatusConflict)
 			return
 		}
 		writeJSON(w, map[string]bool{"accepted": true})
@@ -130,7 +135,11 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			return
 		}
 		if err := worker.conversationSession().Prompt(r.Context(), prompt); err != nil {
-			http.Error(w, "could not send prompt", http.StatusConflict)
+			message := "could not send prompt"
+			if errors.Is(err, errSessionArchived) {
+				message = "archived"
+			}
+			http.Error(w, message, http.StatusConflict)
 			return
 		}
 		writeJSON(w, map[string]bool{"accepted": true})
@@ -239,6 +248,13 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 		}
 		if err != nil {
 			http.Error(w, "could not store blob", http.StatusBadRequest)
+			return
+		}
+		if err := advertiseBlob(r.Context(), worker.stateStore, filepath.Base(worker.sessionDir), sha, int64(len(data))); err != nil {
+			if event := obs.From(r.Context()); event != nil {
+				event.Fail(err)
+			}
+			http.Error(w, "could not record blob location", http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, map[string]string{"sha": sha})

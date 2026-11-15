@@ -11,6 +11,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/fang"
 	"github.com/olegpustovit/agentpack/internal/hub"
+	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -21,6 +22,7 @@ import (
 // owns discovery, contextual help, completion, version, and error rendering.
 func (runner Runner) Execute(ctx context.Context, arguments []string) (int, error) {
 	ctx = obs.ProcessTrace(ctx)
+	ctx = network.WithPeerCache(ctx, "")
 	if len(arguments) == 1 && arguments[0] == "-V" {
 		arguments = slices.Clone(arguments)
 		arguments[0] = "--version"
@@ -182,13 +184,19 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 		sharing.AddCommand(leaf(action, "Tailnet sharing "+action))
 	}
 	gateway.AddCommand(sharing)
-	for _, action := range []string{"start", "stop", "status", "stop-agents", "serve", "passwd EMAIL", "reset-owner"} {
+	for _, action := range []string{"start", "stop", "status", "stop-agents", "serve", "passwd EMAIL", "whoami EMAIL", "join NODE", "reset-owner"} {
 		command := leaf(action, "Gateway "+action)
 		if action == "serve" {
 			value(command, "listen", "ADDRESS", "listen address (default 127.0.0.1:7420)")
 		}
 		gateway.AddCommand(command)
 	}
+	mainGateway := leaf("main", "Show the main gateway and archive readiness")
+	mainGateway.AddCommand(leaf("set", "Make this machine the main gateway"))
+	archiveReady := leaf("archive-ready", "Confirm this main gateway has its archive")
+	flag(archiveReady, "empty", "", "create a fresh empty archive when none exists")
+	mainGateway.AddCommand(archiveReady)
+	gateway.AddCommand(mainGateway)
 	users := &cobra.Command{Use: "user", Short: "Manage gateway accounts offline"}
 	users.RunE = func(command *cobra.Command, args []string) error {
 		if len(args) == 0 {

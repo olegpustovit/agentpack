@@ -45,6 +45,11 @@ Regression budgets are enforced by `tests/budgets.spec.ts` on the same fixture a
 
 ## API contract
 
+Machine inventory and topology include the replicated Main role. Archived chats
+are permanently read-only and fetch history through Main; an unavailable archive
+names that machine in a banner. Archived sessions expose no resume, fork,
+composer or permission-answer controls.
+
 All requests use same-origin session cookies. Mutations send JSON and require origin
 validation. Non-2xx errors may be `{ "error": "message" }` or plain text. Credentials and
 private worker capabilities never appear in any response. An unauthenticated API returns
@@ -89,7 +94,7 @@ Only the recorded user and stable peer node identity (or the same local user/hos
 - `POST /api/sessions/{id}/stop`: `{}`. Stop is explicit; detach is separate.
 - `POST /api/sessions/{id}/restart`: `{operation_id}`. Each user intent gets a UUID;
   transport failures and 5xx retry the same UUID, while success or 4xx ends that intent.
-- `GET /api/limits`: `{limits: [...]}` with one snapshot per harness (`codex`, `claude`, `agy`, `grok`, `omp`, `opencode`, `cursor`) of `{harness,state,source,observed_at,plan?,error?,windows: [{id,label,used_percent?,remaining_percent?,reset_at?,reset_text?}]}`. Both limits routes support `?node=<stable-id>` over the authenticated peer channel, including cold probes longer than five seconds. The Limits view checks online machines automatically, shows a usable report first for each provider, and keeps other machine reports expandable without combining account allowances. Unknown percentages stay unknown. Results are cached for 60 seconds; a failing harness reports its own `error` and does not hide the others.
+- `GET /api/limits`: `{limits: [...]}` with one snapshot per harness (`codex`, `claude`, `agy`, `grok`, `omp`, `opencode`, `cursor`) of `{harness,state,source,observed_at,plan?,error?,windows: [{id,label,used_percent?,remaining_percent?,reset_at?,reset_text?}]}`. Reads query local replicated snapshots across nodes, with `node_id`, `reachable` and `last_sync`. `?node=<stable-id>` filters replicated reads; refreshes still route to that machine. The Limits view uses one local query, shows a usable report first for each provider, and keeps other machine reports expandable without combining account allowances. Unknown percentages stay unknown. Results are cached for 60 seconds; a failing harness reports its own `error` and does not hide the others.
 - `POST /api/limits/refresh`: `{}`, returns the same shape. Refresh is throttled to one collection per 10 seconds.
 - `GET /api/packages?directory=...`: array (or `{packages: [...]}`) of `{module,commit?}`.
 - `POST /api/packages`: `{directory,spec,restart?}`. `restart` defaults to `true`.
@@ -108,11 +113,11 @@ Only the recorded user and stable peer node identity (or the same local user/hos
   with `{}` rechecks destination reachability, authorization, folder identity, pins, and the
   current diff; it never applies changes. Only a ready review can be explicitly applied via
   the regular package install or agentpack restore endpoint. Successful apply or explicit
-  discard removes the local draft; `DELETE /api/library/drafts/{id}` discards it.
-- `GET /api/library/replication/peers` returns enrolled peers and their verified object
-  digests, plus contact results. `POST /api/library/replication/peers` with `{peer}` enrolls
+  discard removes the shared draft; `DELETE /api/library/drafts/{id}` discards it.
+- `GET /api/library/replication/peers` returns enrolled peers, their mesh approval
+  and contact results. `POST /api/library/replication/peers` with `{peer}` enrolls
   a stable peer ID; `DELETE /api/library/replication/peers/{id}` removes enrollment;
-  `POST /api/library/replication/sync` with `{peer}` syncs verified registry objects.
+  `POST /api/library/replication/sync` with `{peer}` pulls bounded shared-state pages.
   Replication is opt-in, requires Tailscale sharing, and both gateways must enroll each other.
 - The terminal grid is fixed to the host-reported `state.columns × state.rows`; browser
   resizing only changes its CSS scale.
@@ -165,4 +170,4 @@ Terminal attachment shows an accessible loading indicator until replay finishes.
 
 Initial session discovery and empty Library fetches show loading states instead of premature empty results. Gateway/browser WebSockets use 15-second pings and a 45-second pong deadline so silently lost connections close and enter the normal reconnect flow.
 
-Loading states name the current operation. Limits discovers peers before probing, renders each machine's results as they arrive, and preserves prior reports during refresh. Library and Machines expose discovery/inventory progress; initial session errors are distinct from an empty list. Startup, recent folders, package reads, pending installs, and settings have loading/error states. Settings failures expose a retry action. Buttons for asynchronous actions show busy state and prevent duplicate clicks. Cursor reads its CLI login store (including the macOS keychain) and calls the read-only DashboardService usage RPC; its included, Auto, API, and on-demand percentages stay separate.
+Loading states name the current operation. Sessions and limits query the local replicated store once, including offline machines after reload. Offline chats retain history with an Offline, read-only banner and no composer; live request-answer controls stay disabled. Limits preserves prior reports during refresh. Library and Machines expose discovery/inventory progress; initial session errors are distinct from an empty list. Startup, recent folders, package reads, pending installs, and settings have loading/error states. Settings failures expose a retry action. Buttons for asynchronous actions show busy state and prevent duplicate clicks. Cursor reads its CLI login store (including the macOS keychain) and calls the read-only DashboardService usage RPC; its included, Auto, API, and on-demand percentages stay separate.

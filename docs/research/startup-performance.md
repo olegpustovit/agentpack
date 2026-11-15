@@ -1,5 +1,26 @@
 # Home-workspace startup performance
 
+## State migration release check — Linux ARM64
+
+Measured 2026-11-15 on the deployment host (`oracle-vm`, aarch64 Neoverse-N1,
+two virtual CPUs), Go 1.27.3. These are native executions of the static musl
+benchmark binary, using the existing 32 MiB history fixture, five repetitions
+of ten iterations. They are not QEMU timings. The host was lightly loaded.
+
+| Benchmark | Median (ms) | Budget (ms) | Result |
+| --- | ---: | ---: | --- |
+| MaterializationHome | 0.663780 | <1 | Pass |
+| CodexSetup/cold | 17.508913 | <20 | Pass |
+| CodexSetup/warm | 0.350938 | <1 | Pass |
+
+The original 2026-10-30 reference host's hardware was not recorded, so these
+numbers certify the deployment host against the same budgets without claiming
+a matched-hardware before/after comparison. Reproduction: build the
+`internal/sync` test binary for Linux ARM64 with the pinned static library, then
+run it natively with `-test.run='^$'
+-test.bench='Benchmark(MaterializationHome|CodexSetup)$' -test.benchmem
+-test.benchtime=10x -test.count=5`.
+
 ## Session-store checkpoint (2026-11-14)
 
 Five repeats of ten iterations, using the existing 32 MiB history fixtures:

@@ -9,9 +9,11 @@ import (
 
 // AgentSession is one resumable agent-side conversation from session/list.
 type AgentSession struct {
-	ID    string `json:"id"`
-	Title string `json:"title,omitempty"`
-	Cwd   string `json:"cwd,omitempty"`
+	NodeID    string `json:"node_id,omitempty"`
+	Reachable bool   `json:"reachable"`
+	ID        string `json:"id"`
+	Title     string `json:"title,omitempty"`
+	Cwd       string `json:"cwd,omitempty"`
 }
 
 type agentSessionCacheEntry struct {

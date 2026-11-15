@@ -1,10 +1,8 @@
 package registry
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -54,8 +52,7 @@ func (s *Store) readName(id string) (nameRevision, error) {
 	if !validID(value.Agentpack) || value.ObjectType != nameObjectType || value.Schema != objectSchema || strings.TrimSpace(value.Name) == "" || obs.CredentialShaped(value.Name) || value.Node == "" || obs.CredentialShaped(value.Node) || value.CreatedAt.IsZero() {
 		return value, fmt.Errorf("invalid agentpack name object")
 	}
-	path, _ := s.objectPath(id)
-	data, err := readRegular(path)
+	data, err := s.objectData(id)
 	if err != nil || !canonicalObject(data, value) {
 		return value, fmt.Errorf("agentpack name object is not canonical")
 	}
@@ -73,27 +70,12 @@ func nameNewer(a, b nameRevision) bool {
 }
 
 func (s *Store) nameObjects() (map[string]nameRevision, error) {
-	entries, err := os.ReadDir(filepath.Join(s.root, objectsDir))
+	entries, err := s.storedIDs("registry_names")
 	if err != nil {
 		return nil, err
 	}
 	latest := map[string]nameRevision{}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		id := strings.TrimSuffix(entry.Name(), ".json")
-		var shape map[string]json.RawMessage
-		data, err := readRegular(filepath.Join(s.root, objectsDir, entry.Name()))
-		if err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(data, &shape); err != nil {
-			return nil, fmt.Errorf("invalid registry object JSON")
-		}
-		if _, ok := shape["object_type"]; !ok {
-			continue
-		}
+	for _, id := range entries {
 		name, err := s.readName(id)
 		if err != nil {
 			return nil, err

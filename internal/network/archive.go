@@ -1,0 +1,228 @@
+package network
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/state"
+)
+
+const archiveAge = 7 * 24 * time.Hour
+
+func (g *Gateway) runArchive(ctx context.Context, interval time.Duration, now func() time.Time) {
+	if g.logs != nil {
+		node, _ := g.auth.store.NodeID(ctx)
+		ctx = obs.WithSink(ctx, g.logs, obs.BuildMetadata(g.options.Version, node, "gateway"))
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		passCtx, event := obs.Start(ctx, "archive.move", "inactive conversations")
+		count, err := g.archivePass(passCtx, now())
+		if err != nil && ctx.Err() == nil {
+			event.Fail(err)
+		}
+		if err != nil || count > 0 {
+			event.Set("count", count)
+			event.End()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (g *Gateway) archivePass(ctx context.Context, now time.Time) (count int, result error) {
+	local, err := g.auth.store.NodeID(ctx)
+	if err != nil {
+		return 0, err
+	}
+	roles, err := g.auth.store.Main(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if roles.MainNode != local || roles.ArchiveNode != local {
+		return 0, g.cleanupArchivedBlobs(ctx, g.tailnetTarget)
+	}
+	if err := g.drainArchiveEdits(ctx, g.tailnetTarget); err != nil {
+		return 0, err
+	}
+	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT id FROM sessions
+ WHERE transport='acp' AND hidden=0 AND conversation_state NOT IN ('working','needs_you') AND
+ ((archived_at=0 AND last_event_at>0 AND last_event_at<?) OR
+ (archived_at>0 AND EXISTS(SELECT 1 FROM conversation_events WHERE session_id=sessions.id)))
+ ORDER BY last_event_at,id`, now.Add(-archiveAge).UnixNano())
+	if err != nil {
+		return 0, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil || len(ids) == 0 {
+		return 0, err
+	}
+	if _, err := os.Lstat(filepath.Join(g.options.Home, "archive.db")); errors.Is(err, os.ErrNotExist) {
+		var archived bool
+		if err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sessions WHERE archived_at>0)").Scan(&archived); err != nil {
+			return 0, err
+		}
+		if archived {
+			return 0, errors.New("archive.db is missing; restore it before moving more history")
+		}
+	}
+	archive, err := state.OpenArchive(g.options.Home)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { result = errors.Join(result, archive.Close()) }()
+	for _, id := range ids {
+		if err := g.prepareArchiveSession(ctx, id, g.tailnetTarget); err != nil {
+			_, event := obs.Start(ctx, "archive.blobs", "preserve attachments")
+			event.Set("session_id", id)
+			event.Fail(err)
+			event.End()
+			continue
+		}
+		moved, err := g.archiveSession(ctx, archive, id, now)
+		if err != nil {
+			return count, fmt.Errorf("archive session %s: %w", id, err)
+		}
+		if moved {
+			count++
+		}
+	}
+	if count > 0 {
+		g.emitEvent(eventMessage{Topic: "sessions"})
+	}
+	return count, nil
+}
+
+func (g *Gateway) archiveSession(ctx context.Context, archive *sql.DB, id string, now time.Time) (bool, error) {
+	store := g.auth.store
+	moved := false
+	// Keep local sync and worker writes outside the copy/commit/prune window.
+	err := state.Transaction(ctx, store.DB, func(tx *sql.Tx) error {
+		var ready bool
+		if err := tx.QueryRowContext(ctx, `SELECT
+ coalesce((SELECT value FROM mesh_settings WHERE key='main_node'),'')=`+state.LocalNodeSQL+`
+ AND coalesce((SELECT value FROM mesh_settings WHERE key='archive_node'),'')=`+state.LocalNodeSQL).Scan(&ready); err != nil || !ready {
+			return err
+		}
+		var lastSeq, archivedAt int64
+		err := tx.QueryRowContext(ctx, `SELECT last_seq,archived_at FROM sessions WHERE id=?
+ AND (archived_at>0 OR (last_event_at>0 AND last_event_at<?)) AND transport='acp' AND hidden=0
+ AND conversation_state NOT IN ('working','needs_you')`, id, now.Add(-archiveAge).UnixNano()).Scan(&lastSeq, &archivedAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var count, highest int64
+		if err := tx.QueryRowContext(ctx, "SELECT count(*),coalesce(max(seq),0) FROM conversation_events WHERE session_id=?", id).Scan(&count, &highest); err != nil {
+			return err
+		}
+		if count == 0 || lastSeq <= 0 {
+			return nil
+		}
+		if archivedAt != 0 {
+			var savedHighest int64
+			if err := archive.QueryRowContext(ctx, "SELECT coalesce(max(seq),0) FROM conversation_events WHERE session_id=?", id).Scan(&savedHighest); err != nil {
+				return err
+			}
+			if savedHighest == 0 {
+				return errors.New("original archived history is missing; replicated history was kept")
+			}
+			highest = max(highest, savedHighest)
+		}
+		if highest != lastSeq {
+			return nil
+		}
+		if err := verifyArchiveSessionBlobs(ctx, tx, g.options.Home, id); err != nil {
+			return err
+		}
+		expected := count
+		if err := state.Transaction(ctx, archive, func(copy *sql.Tx) error {
+			// Refresh an unmarked crash-recovery copy if its live events changed before the retry.
+			if archivedAt == 0 {
+				if _, err := copy.ExecContext(ctx, "DELETE FROM conversation_events WHERE session_id=?", id); err != nil {
+					return err
+				}
+			} else if err := copy.QueryRowContext(ctx, "SELECT count(*) FROM conversation_events WHERE session_id=?", id).Scan(&expected); err != nil {
+				return err
+			}
+			insert, err := copy.PrepareContext(ctx, "INSERT OR IGNORE INTO conversation_events(session_id,seq,body) VALUES (?,?,?)")
+			if err != nil {
+				return err
+			}
+			defer insert.Close()
+			rows, err := tx.QueryContext(ctx, "SELECT seq,body FROM conversation_events WHERE session_id=? ORDER BY seq", id)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var seq int64
+				var body string
+				if err := rows.Scan(&seq, &body); err != nil {
+					return err
+				}
+				if archivedAt != 0 {
+					var exists bool
+					if err := copy.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM conversation_events WHERE session_id=? AND seq=?)", id, seq).Scan(&exists); err != nil {
+						return err
+					}
+					if !exists {
+						expected++
+					} else if _, err := copy.ExecContext(ctx, "UPDATE conversation_events SET body=? WHERE session_id=? AND seq=? AND body<>?", body, id, seq, body); err != nil {
+						return err
+					}
+				}
+				if _, err := insert.ExecContext(ctx, id, seq, body); err != nil {
+					return err
+				}
+			}
+			return rows.Err()
+		}); err != nil {
+			return err
+		}
+		var copied int64
+		if err := archive.QueryRowContext(ctx, "SELECT count(*) FROM conversation_events WHERE session_id=?", id).Scan(&copied); err != nil {
+			return err
+		}
+		if copied != expected {
+			return errors.New("archive row count differs; replicated history was kept")
+		}
+		if err := state.RememberArchiveClocks(ctx, tx, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE sessions SET archived_seq=? WHERE id=? AND archived_seq<>?", lastSeq, id, lastSeq); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM conversation_events WHERE session_id=?", id); err != nil {
+			return err
+		}
+		if archivedAt == 0 {
+			if _, err := tx.ExecContext(ctx, "UPDATE sessions SET archived_at=? WHERE id=?", now.UnixNano(), id); err != nil {
+				return err
+			}
+		}
+		moved = true
+		return nil
+	})
+	return moved && err == nil, err
+}

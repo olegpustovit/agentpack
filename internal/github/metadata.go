@@ -1,6 +1,7 @@
 package github
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,7 +9,6 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/database"
-	bolt "go.etcd.io/bbolt"
 )
 
 const (
@@ -68,24 +68,15 @@ func readMetadata(bucket, key []byte, destination any) (bool, error) {
 	if database == nil {
 		return false, nil
 	}
-	found := false
-	viewErr := database.View(func(transaction *bolt.Tx) error {
-		table := transaction.Bucket(bucket)
-		if table == nil {
-			return nil
-		}
-		value := table.Get(key)
-		if value == nil {
-			return nil
-		}
-		found = true
-		return json.Unmarshal(value, destination)
-	})
-	closeErr := database.Close()
-	if viewErr != nil || closeErr != nil {
-		return false, errors.Join(viewErr, closeErr)
+	var body []byte
+	err = database.QueryRow("SELECT body FROM github_metadata WHERE bucket=? AND key=?", bucket, key).Scan(&body)
+	found := err == nil
+	if errors.Is(err, sql.ErrNoRows) {
+		err = nil
+	} else if err == nil {
+		err = json.Unmarshal(body, destination)
 	}
-	return found, nil
+	return found, errors.Join(err, database.Close())
 }
 
 func writeMetadata(bucket, key []byte, value any) error {
@@ -97,13 +88,8 @@ func writeMetadata(bucket, key []byte, value any) error {
 	if err != nil {
 		return err
 	}
-	updateErr := database.Update(func(transaction *bolt.Tx) error {
-		table, err := transaction.CreateBucketIfNotExists(bucket)
-		if err != nil {
-			return err
-		}
-		return table.Put(key, encoded)
-	})
+	_, updateErr := database.Exec(`INSERT INTO github_metadata(bucket,key,body) VALUES (?,?,?)
+ ON CONFLICT(bucket,key) DO UPDATE SET body=excluded.body`, bucket, key, encoded)
 	return errors.Join(updateErr, database.Close())
 }
 

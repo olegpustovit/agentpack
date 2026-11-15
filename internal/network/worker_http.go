@@ -17,6 +17,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 // Harness credential cleanup can wait up to a minute for its shared lock.
@@ -32,6 +33,7 @@ type WorkerHTTP struct {
 	session      *Session
 	conversation *ConversationSession
 	sessionDir   string
+	stateStore   *state.Store
 	start        func(uint16, uint16) (*Session, error)
 	restartACP   func(context.Context) error
 	stopACP      func(context.Context) error

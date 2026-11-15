@@ -86,12 +86,22 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if err != nil {
 		return 1, fmt.Errorf("create worker directory: %w", err)
 	}
-	defer os.RemoveAll(directory)
+	defer func() { result = errors.Join(result, removeWorkerEndpoint(directory)) }()
 	store, err := state.Open(home)
 	if err != nil {
 		return 1, err
 	}
 	defer func() { result = errors.Join(result, store.Close()) }()
+	nodeID, err := store.NodeID(ctx)
+	if err != nil {
+		return 1, err
+	}
+	metadata = obs.BuildMetadata(version, nodeID, "worker")
+	ctx = obs.WithSink(ctx, spool, metadata)
+	startCtx = obs.WithSink(startCtx, spool, metadata)
+	started.NodeID = nodeID
+	restoreNode := obs.SetDefault(spool, metadata)
+	defer restoreNode()
 	launch.Session.ID = filepath.Base(directory)
 	launch.Session.LastUsed = time.Now().UTC()
 	if launch.Session.StartedAt.IsZero() {
@@ -256,24 +266,38 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		return 1, fmt.Errorf("publish worker record: %w", err)
 	}
 	var stateWriteWarning sync.Once
-	persistConversationState := func(state string) {
-		if err := patchWorkerConversationState(context.Background(), store.DB, record.ID, state); err != nil {
-			stateWriteWarning.Do(func() {
-				_, event := obs.Start(ctx, "worker", "persist_state")
-				event.Set("session_id", record.ID)
-				event.Fail(err)
-				event.End()
-				fmt.Fprintln(os.Stderr, "warning: ACP worker state could not be persisted")
-			})
+	persistConversationState := func(current *ConversationSession) func(string) {
+		return func(state string) {
+			var err error
+			if state != "working" {
+				err = current.log.Flush()
+			}
+			if err == nil {
+				err = patchWorkerConversationState(context.Background(), store.DB, record.ID, state)
+			}
+			if err != nil {
+				if err == errSessionArchived {
+					cancelWorker(err)
+					return
+				}
+				stateWriteWarning.Do(func() {
+					_, event := obs.Start(ctx, "worker", "persist_state")
+					event.Set("session_id", record.ID)
+					event.Fail(err)
+					event.End()
+					fmt.Fprintln(os.Stderr, "warning: ACP worker state could not be persisted")
+				})
+			}
 		}
 	}
 	if conversation != nil {
-		conversation.SetStateChange(record.Session.ConversationState, persistConversationState)
+		conversation.SetStateChange(record.Session.ConversationState, persistConversationState(conversation))
 	}
 	handler, err = WorkerHandler(ctx, session, conversation, record.Secret, directory)
 	if err != nil {
 		return 1, err
 	}
+	handler.stateStore = store
 	if session != nil {
 		handler.start = start
 		handler.validate = validate
@@ -325,7 +349,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			handler.mu.Lock()
 			handler.conversation = next
 			handler.mu.Unlock()
-			next.SetStateChange(next.ConversationState(), persistConversationState)
+			next.SetStateChange(next.ConversationState(), persistConversationState(next))
 			return nil
 		}
 	}
@@ -338,6 +362,9 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	started.End()
 	select {
 	case <-ctx.Done():
+		if context.Cause(ctx) == errSessionArchived {
+			return 0, nil
+		}
 		return 1, context.Cause(ctx)
 	case err := <-serveDone:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {

@@ -212,6 +212,8 @@ func TestWorkerRequestTimeoutAllowsACPConversationOperations(t *testing.T) {
 		{http.MethodGet, "/api/sessions/session-1/blobs/sha", 2 * time.Minute},
 		{http.MethodPost, "/api/sessions/session-1/conversation/permission", 2 * time.Second},
 		{http.MethodGet, "/api/sessions/session-1/conversation/prompt", 2 * time.Second},
+		{http.MethodGet, "/api/logs/traces/trace-id?all_nodes=1", 5 * time.Second},
+		{http.MethodGet, "/api/cache/entry?hash=digest", 2 * time.Minute},
 	}
 	for _, test := range tests {
 		if got := workerRequestTimeout(test.method, test.path); got != test.want {
