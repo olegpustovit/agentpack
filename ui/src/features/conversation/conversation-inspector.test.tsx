@@ -72,7 +72,7 @@ describe("conversation inspector", () => {
       ],
     }
     act(() => root.render(<ConversationInspector thread={withDiff} info={info} machine="local" open />))
-    expect(container.textContent).toContain("main.go")
+    expect(container.textContent).toContain("src/main.go")
     expect(container.textContent).toContain("+1")
     expect(container.textContent).toContain("−1")
   })

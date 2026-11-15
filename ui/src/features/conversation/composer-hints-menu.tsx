@@ -4,7 +4,11 @@ export function ComposerHintsMenu({
   title,
   hints,
   onPick,
+  id,
+  activeIndex,
 }: {
+  id: string
+  activeIndex: number
   title: string
   hints: ComposerHint[]
   onPick: (hint: ComposerHint) => void
@@ -14,16 +18,20 @@ export function ComposerHintsMenu({
     <div
       data-slot="composer-hints"
       className="absolute bottom-full left-0 z-20 mb-(--s2) w-full max-w-md rounded-(--r-pop) border-[0.5px] border-(--sep) bg-(--chrome) py-(--s2) shadow-(--shadow-pop)"
+      id={id}
       role="listbox"
       aria-label={title}
     >
       <p className="px-(--s3) pb-(--s1) text-(length:--fs-xs) text-(--fg3)">{title}</p>
-      {hints.map((hint) => (
+      {hints.map((hint, index) => (
         <button
           key={hint.value}
+          id={`${id}-${index}`}
           type="button"
           role="option"
-          className="flex w-full flex-col items-start gap-(--s1) px-(--s3) py-(--s2) text-left hover:bg-(--hover)"
+          tabIndex={-1}
+          aria-selected={index === activeIndex}
+          className={`flex w-full flex-col items-start gap-(--s1) px-(--s3) py-(--s2) text-left hover:bg-(--hover) ${index === activeIndex ? "bg-(--hover)" : ""}`}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => onPick(hint)}
         >

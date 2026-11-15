@@ -27,7 +27,7 @@ export function rowKey(session: ListedSession): string {
 }
 
 export function sessionLabel(session: ListedSession): string {
-  return session.name || harnessName(session.harness)
+  return session.name || session.title || harnessName(session.harness)
 }
 
 const UNKNOWN_PROJECT = "Unknown project"
@@ -51,7 +51,7 @@ export function sessionDetail(session: ListedSession): string {
 // What the filter field matches: everything the row and its tooltip show.
 export function matchesSession(session: ListedSession, query: string): boolean {
   const needle = query.trim().toLowerCase()
-  return !needle || [session.name, harnessName(session.harness), session.harness, session.mode, session.directory, session.machineName].some((part) => part?.toLowerCase().includes(needle))
+  return !needle || [session.name, session.title, harnessName(session.harness), session.harness, session.mode, session.directory, session.machineName].some((part) => part?.toLowerCase().includes(needle))
 }
 
 // A trailing separator would otherwise make "/a/x/" and "/a/x" two folders.

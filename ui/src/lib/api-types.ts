@@ -40,6 +40,8 @@ export type SessionInfo = {
   archived_at?: string
   id: string
   name?: string
+  // First user prompt of an ACP chat, one line. Older peers omit it.
+  title?: string
   directory: string
   definition_root?: string
   folder_id?: string

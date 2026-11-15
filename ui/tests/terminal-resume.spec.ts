@@ -5,7 +5,7 @@ import { busyStage, type Listed, openRoute, rowText, screen, serve, session, sha
 async function openFromList(page: Page, name: string) {
   const back = page.getByRole("link", { name: "Back", exact: true })
   if (await back.count()) await back.click()
-  await page.getByRole("link", { name: new RegExp(`${name}$`) }).click()
+  await page.getByRole("link", { name: new RegExp(`(^|\\s)${name}(\\s|$)`) }).click()
 }
 
 const A = screen("A")

@@ -221,22 +221,6 @@ test("permission shortcuts answer only from the focused card or when no control 
   expect(answers[0]).toMatchObject({ request_id: "p1", option_id: "allow" })
 })
 
-test("permission shortcut works with no control focused", async ({ page }) => {
-  let posted: Record<string, unknown> | undefined
-  await page.route("**/api/sessions/*/conversation/permission", (route) => {
-    posted = route.request().postDataJSON() as Record<string, unknown>
-    return route.fulfill({ json: { accepted: true } })
-  })
-  await page.goto("/sessions/local/chat-one")
-  await expect(page.locator('[data-slot="permission-card"]').first()).toBeVisible()
-  await page.evaluate(() => {
-    if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
-    document.body.focus()
-  })
-  await page.keyboard.press("1")
-  await expect.poll(() => posted).toBeDefined()
-  expect(posted).toMatchObject({ request_id: "p1", option_id: "allow" })
-})
 test("resolved permission and elicitation cards show their result without answer buttons", async ({ page }) => {
   await page.route("**/api/sessions/*/conversation**", (route) =>
     route.fulfill({
@@ -257,9 +241,9 @@ test("exploration starts collapsed and leaves diff and terminal output open", as
   await page.goto("/sessions/local/chat-one")
   const group = page.locator('[data-slot="tool-group"]')
   await expect(group).not.toHaveAttribute("open")
-  await group.locator("summary").click()
-  await expect(group.locator("li")).toHaveCount(4)
-  await expect(group.locator("details")).toHaveCount(0)
+  await group.locator(":scope > summary").click()
+  await expect(group).toContainText("Worked")
+  await expect(group.locator("[data-tool-row]")).toHaveCount(6)
   await expect(page.locator('[data-slot="tool-diff-block"]')).toHaveAttribute("open", "")
   await expect(page.locator('[data-slot="tool-terminal-block"]')).toHaveAttribute("open", "")
   await expect(page.locator('[data-slot="tool-terminal"]')).toContainText("ok")

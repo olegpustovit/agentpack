@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { groupSessions, matchesSession, type ListedSession } from "./group"
+import { groupSessions, matchesSession, sessionLabel, type ListedSession } from "./group"
 
 function session(id: string, machine: string, machineName: string, directory: string, offline = false): ListedSession {
   return {
@@ -89,5 +89,15 @@ describe("matchesSession", () => {
   })
   it("rejects anything else", () => {
     expect(matchesSession(row, "grok")).toBe(false)
+  })
+})
+
+describe("sessionLabel", () => {
+  it("prefers name, then title, then the harness", () => {
+    const base = session("a", laptop, "laptop", "/work/x")
+    expect(sessionLabel({ ...base, name: "Mine", title: "Fix it" })).toBe("Mine")
+    expect(sessionLabel({ ...base, title: "Fix it" })).toBe("Fix it")
+    expect(sessionLabel(base)).toBe("Claude")
+    expect(matchesSession({ ...base, title: "Fix terminal replay" }, "replay")).toBe(true)
   })
 })

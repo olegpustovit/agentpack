@@ -29,7 +29,7 @@ function appendChunk(state: ThreadState, entry: LogEntry) {
   }
   const next = items.slice(0, -1)
   try {
-    next.push({ kind: entry.kind, data: mergeTextChunks(last.data, entry.payload) })
+    next.push({ ...last, data: mergeTextChunks(last.data, entry.payload) })
     state.items = next
   } catch {
     state.items = [...items, { kind: entry.kind, data: entry.payload }]
@@ -98,7 +98,7 @@ function updateCompaction(state: ThreadState, compactionId: string, patch: Compa
   if (index < 0) state.items = [...state.items, { kind: "compaction", data }]
   else {
     const items = state.items.slice()
-    items[index] = { kind: "compaction", data }
+    items[index] = { ...state.items[index]!, data }
     state.items = items
   }
 }
@@ -132,7 +132,7 @@ export function reduceLog(entries: LogEntry[]): ThreadState {
         if (idx !== undefined) {
           const items = state.items.slice()
           const prev = items[idx]!
-          items[idx] = { kind: prev.kind, data: entry.payload }
+          items[idx] = { ...prev, data: entry.payload, endTs: entry.ts }
           state.items = items
         } else {
           state.items = [...state.items, { kind: "tool", data: entry.payload }]
@@ -219,6 +219,10 @@ export function reduceLog(entries: LogEntry[]): ThreadState {
         state.working = true
         state.items = [...state.items, { kind: "user_message_chunk", data: entry.payload }]
         break
+    }
+    // New items are always appended; replaced ones spread the original, so only fresh ones lack a seq.
+    for (let i = state.items.length - 1; i >= 0 && state.items[i]!.seq === undefined; i--) {
+      state.items[i] = { ...state.items[i]!, seq: entry.seq, ts: entry.ts }
     }
   }
   return state

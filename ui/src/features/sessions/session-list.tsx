@@ -20,6 +20,7 @@ import { groupSessions, matchesSession, rowKey, sessionLabel, type GroupMode, ty
 import { NewSessionSheet } from "./new-session-sheet"
 import { sessionRules } from "./rules"
 import { sessionsQuery } from "./queries"
+import { sessionGlyphState } from "./session-status"
 import { SessionRow, type RowActions } from "./session-row"
 import { RowSheet, type SheetState } from "./session-sheets"
 
@@ -78,10 +79,13 @@ export function SessionList() {
     })),
   )
   const query = search.q ?? ""
-  const groups = groupSessions(sessions.filter((session) => matchesSession(session, query)), groupMode)
+  const shown = sessions.filter((session) => matchesSession(session, query))
+  // Pinned above the machine and project groups, and listed only there.
+  const needsYou = shown.filter((session) => sessionGlyphState(session) === "needsYou")
+  const groups = groupSessions(shown.filter((session) => !needsYou.includes(session)), groupMode)
   const isPhone = useIsPhone()
   // Flat order matches the DOM order, so keyboard index and element index agree.
-  const rows = groups.flatMap((group) => group.subheads.flatMap((head) => head.sessions))
+  const rows = needsYou.concat(groups.flatMap((group) => group.subheads.flatMap((head) => head.sessions)))
   const first = rows[0]
   const tabStop = selectedKey ?? (first ? rowKey(first) : undefined)
   const offlineWithData = machines.filter((machine) => !machine.online && queries.byMachine[machine.id]?.data)
@@ -145,6 +149,21 @@ export function SessionList() {
       install: () => setSheet({ kind: "install", row }),
       save: () => setSheet({ kind: "save", row }),
     }
+  }
+
+  function renderRow(session: ListedSession) {
+    const key = rowKey(session)
+    const selected = key === selectedKey
+    return (
+      <SessionRow
+        key={key}
+        session={session}
+        selected={selected}
+        tabStop={key === tabStop}
+        stopping={stopping.has(key)}
+        actions={actionsFor(session, selected)}
+      />
+    )
   }
 
   function chooseGroup(value: unknown[]) {
@@ -231,6 +250,14 @@ export function SessionList() {
             Start an agent with New session, or from the CLI on a machine.
           </Empty>
         ))}
+        {needsYou.length > 0 && (
+          <div>
+            <GroupHeader>
+              <span className="min-w-0 flex-1 truncate">{`Needs you · ${needsYou.length}`}</span>
+            </GroupHeader>
+            {needsYou.map((session) => renderRow(session))}
+          </div>
+        )}
         {groups.map((group) => (
           <div key={group.key}>
             <GroupHeader>
@@ -245,20 +272,7 @@ export function SessionList() {
                   <span className="min-w-0 truncate">{head.label}</span>
                   {head.parent && <span className="ms-(--s2) shrink-0 text-(--fg3)">{head.parent}</span>}
                 </GroupHeader>
-                {head.sessions.map((session) => {
-                  const key = rowKey(session)
-                  const selected = key === selectedKey
-                  return (
-                    <SessionRow
-                      key={key}
-                      session={session}
-                      selected={selected}
-                      tabStop={key === tabStop}
-                      stopping={stopping.has(key)}
-                      actions={actionsFor(session, selected)}
-                    />
-                  )
-                })}
+                {head.sessions.map((session) => renderRow(session))}
               </div>
             ))}
           </div>

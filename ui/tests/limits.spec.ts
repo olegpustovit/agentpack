@@ -60,7 +60,7 @@ function limitRequests(page: Page): string[] {
   return requests
 }
 
-const grid = (page: Page) => page.getByRole("table", { name: "Provider limits" })
+const grid = (page: Page) => page.getByRole("region", { name: "Provider limits" })
 
 test("Refresh shows each machine's response before the slowest machine answers", async ({ page }) => {
   let releaseSlow = () => {}
@@ -97,16 +97,17 @@ test("returning to Limits within a minute makes no request and shows no loader",
   expect(requests).not.toContain("n4")
 })
 
-test("unavailable providers sit in a dim group below the usable ones", async ({ page }) => {
+test("unavailable providers sit in a dim card below the usable ones, and a missing login offers its command", async ({ page }) => {
   await page.goto("/limits")
-  await expect(grid(page).getByText("grok billing: authentication required")).toBeVisible()
+  await expect(grid(page).getByText("Signed out", { exact: true })).toBeVisible()
+  await expect(grid(page).getByRole("button", { name: "Copy agentpack grok login" })).toBeVisible()
 
-  const providers = await grid(page).locator("tbody").evaluateAll((bodies) => bodies.map((body) => body.dataset.provider))
+  const providers = await grid(page).locator("[data-provider]").evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.provider))
   expect(providers).toEqual(["codex", "claude", "grok"])
 
   const colors = await grid(page)
-    .locator("tbody")
-    .evaluateAll((bodies) => bodies.map((body) => getComputedStyle(body).color))
+    .locator("[data-provider]")
+    .evaluateAll((cards) => cards.map((card) => getComputedStyle(card).color))
   expect(colors[2]).not.toBe(colors[0])
 })
 
@@ -120,7 +121,7 @@ test("rows from other machines sit under a disclosure", async ({ page }) => {
   await disclosure.click()
   await expect(disclosure).toHaveAttribute("aria-expanded", "true")
   await expect(grid(page).getByText("Peer weekly", { exact: true })).toBeVisible()
-  await expect(grid(page).getByRole("cell", { name: "Fast Mac", exact: true })).toBeVisible()
+  await expect(grid(page).getByText("Fast Mac")).toBeVisible()
 })
 
 test("the status bar shows the last limits update on Limits and nothing on Sessions", async ({ page }) => {
@@ -140,20 +141,21 @@ test("a slow remote machine does not delay the local replicated read", async ({ 
     return route.fallback()
   })
   await page.goto("/limits")
-  const grid = page.getByRole("table", { name: "Provider limits" })
-  await expect(grid.locator('tbody[data-provider="codex"]')).toBeVisible()
-  const order = await grid.locator("tbody").evaluateAll((bodies) => bodies.map((body) => (body as HTMLElement).dataset.provider ?? "pending"))
+  const grid = page.getByRole("region", { name: "Provider limits" })
+  await expect(grid.locator('[data-provider="codex"]')).toBeVisible()
+  const order = await grid.locator("[data-provider]").evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.provider))
   expect(order).toEqual(["codex"])
 })
 
-test("a phone shows limits as cards, with nothing wider than the screen", async ({ page }) => {
+test("a phone shows limits as one full-width card, with nothing wider than the screen", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 })
   limits = { local: [], n2: [codex(70)], n3: [codex(40)] }
   await page.goto("/limits")
   const card = page.getByRole("region", { name: "Codex" })
   await expect(card).toContainText("70% left")
   await expect(card).toContainText("Session")
-  await expect(page.getByRole("table", { name: "Provider limits" })).toHaveCount(0)
+  await expect(card).toContainText("resets in 2 h 0 m")
+  expect((await card.boundingBox())!.width).toBeGreaterThan(330)
   await card.getByRole("button", { name: "Other machines (1)" }).click()
   await expect(card).toContainText("40% left")
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)

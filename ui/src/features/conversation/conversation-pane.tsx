@@ -1,14 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { useEffect, useRef, useState } from "react"
-import { AtSign, Check, ChevronDown, ChevronRight, Circle, CircleDot, PanelRight, Paperclip, SendHorizontal, Slash } from "lucide-react"
+import { AtSign, Check, ChevronDown, ChevronRight, Circle, CircleDot, PanelRight, Paperclip, SendHorizontal, Slash, Square } from "lucide-react"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
-import { Meter } from "@/components/kit/data"
 import { Banner, Spinner } from "@/components/kit/feedback"
 import { PopupSelect } from "@/components/kit/forms"
 import { StatusDot } from "@/components/kit/status-dot"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { StatusSlot } from "@/features/status/status-bar"
 import { sessionsQuery } from "@/features/sessions/queries"
@@ -20,9 +20,9 @@ import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMe
 import { configRole, parseConfigOptions } from "./config-options"
 import type { LogEntry, ThreadItem } from "./model"
 import { reduceLog } from "./reducer"
-import { latestUserPrompt, quoteMessage, ThreadView } from "./thread-view"
+import { findPendingPermission, latestUserPrompt, PermissionCard, quoteMessage, ThreadView } from "./thread-view"
 import { ConversationInspector } from "./conversation-inspector"
-import { applyHint, filterAtHints, filterSlashHints, type ComposerHint } from "./composer-hints"
+import { applyHint, filterAtHints, filterSlashHints, moveHint, type ComposerHint } from "./composer-hints"
 import { ComposerHintsMenu } from "./composer-hints-menu"
 import { diffAnchorId, listDiffChanges } from "./diff-summary"
 import { uploadConversationBlob, type PendingAttachment } from "./upload-blob"
@@ -34,6 +34,14 @@ type SendInput = {
   attachments: (Pick<PendingAttachment, "sha" | "mime" | "width" | "height"> & { name?: string })[]
   resourceLink?: { sha: string; name: string }
   clearComposer: boolean
+}
+const draftKey = (machine: string, sessionId: string) => `agentpack:draft:${machine}/${sessionId}`
+function loadDraft(key: string) {
+  try {
+    return sessionStorage.getItem(key) ?? ""
+  } catch {
+    return ""
+  }
 }
 type PlanEntry = { id?: string; status?: string; content?: string }
 
@@ -64,13 +72,15 @@ export default function ConversationPane({
 }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const [draft, setDraft] = useState("")
+  const [draft, setDraft] = useState(() => loadDraft(draftKey(machine, sessionId)))
+  const [hintIndex, setHintIndex] = useState(0)
+  const [hintsClosed, setHintsClosed] = useState(false)
+  const stickToBottomRef = useRef(true)
   const [attachments, setAttachments] = useState<UploadedAttachment[]>([])
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1240)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const composerInputRef = useRef<HTMLTextAreaElement>(null)
   const threadScrollRef = useRef<HTMLDivElement>(null)
-  const scrolledSessionRef = useRef("")
   const [configValues, setConfigValues] = useState<Record<string, string | boolean>>({})
   const readOnly = unavailable || info?.reachable === false || Boolean(info?.archived_at)
   const live = !readOnly && info?.state.running === true
@@ -116,10 +126,17 @@ export default function ConversationPane({
   useEffect(() => {
     const element = threadScrollRef.current
     if (!element || entries.length === 0) return
-    const nearLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 160
-    if (scrolledSessionRef.current !== sessionId || nearLatest) element.scrollTop = element.scrollHeight
-    scrolledSessionRef.current = sessionId
-  }, [entries, sessionId])
+    if (stickToBottomRef.current) element.scrollTop = element.scrollHeight
+  }, [entries])
+  useEffect(() => {
+    try {
+      const key = draftKey(machine, sessionId)
+      if (draft) sessionStorage.setItem(key, draft)
+      else sessionStorage.removeItem(key)
+    } catch {
+      // Storage can be blocked; the draft then lives only in memory.
+    }
+  }, [draft, machine, sessionId])
   useEffect(() => {
     const input = composerInputRef.current
     if (!input) return
@@ -139,11 +156,17 @@ export default function ConversationPane({
         method: "POST",
         body: { key, value },
       }),
-    onError: (error, { key, value }) =>
+    onSuccess: (_, { key }) =>
+      queryClient.invalidateQueries({ queryKey: ["conversation-config", machine, sessionId] }).then(() =>
+        setConfigValues(({ [key]: _drop, ...rest }) => rest),
+      ),
+    onError: (error, { key, value }) => {
+      setConfigValues(({ [key]: _drop, ...rest }) => rest)
       hud.error(
         conversationErrorMessage(machine, `set ${key}`, error),
-        conversationNeedsUpdate(error) ? undefined : () => setConfig.mutate({ key, value }),
-      ),
+        conversationNeedsUpdate(error) ? undefined : () => setConfigValue(key, value),
+      )
+    },
   })
   function setConfigValue(key: string, value: string | boolean) {
     setConfigValues((current) => ({ ...current, [key]: value }))
@@ -231,14 +254,17 @@ export default function ConversationPane({
       })
     }
   }
+  const pendingPermission = readOnly ? undefined : findPendingPermission(thread.items)
   const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !send.isPending && !upload.isPending && !thread.needs_you && !needsUpdate
   const diffPaths = listDiffChanges(thread.items).map((change) => change.path)
   const slashHints = filterSlashHints(draft).filter((hint) => hint.value !== "/fork" || (canFork && !fork.isPending))
   const atHints = filterAtHints(draft, diffPaths)
-  const composerHints = slashHints.length > 0 ? slashHints : atHints
+  const composerHints = hintsClosed ? [] : slashHints.length > 0 ? slashHints : atHints
+  const activeHint = Math.min(hintIndex, Math.max(composerHints.length - 1, 0))
   const hintTitle =
     slashHints.length > 0 ? `Commands from ${harnessName(info?.harness ?? "agent")}` : "Files in this thread"
   function pickHint(hint: ComposerHint) {
+    setHintIndex(0)
     if (hint.value === "/fork") {
       if (canFork && !fork.isPending) fork.mutate()
       setDraft("")
@@ -279,24 +305,19 @@ export default function ConversationPane({
     }
   }
   const statusState = thread.needs_you ? "needsYou" : thread.working ? "running" : "idle"
-  const usageLabel =
+  const contextPercent =
     thread.context_limit && thread.context_tokens !== undefined
-      ? `${thread.context_tokens.toLocaleString()} / ${thread.context_limit.toLocaleString()} context`
+      ? Math.min(100, Math.round((thread.context_tokens / thread.context_limit) * 100))
+      : undefined
+  const usageLabel =
+    contextPercent !== undefined
+      ? `${thread.context_tokens!.toLocaleString()} / ${thread.context_limit!.toLocaleString()} context`
       : undefined
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-(--window)">
       <StatusSlot>
-        {usageLabel && (
-          <span className="flex min-w-0 flex-1 items-center gap-(--s3)">
-            <Meter value={thread.context_tokens} max={thread.context_limit} label={usageLabel} />
-            <span className="shrink-0 tabular-nums">{usageLabel}</span>
-            {thread.cost_usd !== undefined && thread.cost_usd > 0 && (
-              <span className="shrink-0 tabular-nums">${thread.cost_usd.toFixed(2)}</span>
-            )}
-          </span>
-        )}
-        {!usageLabel && info && (
+        {info && (
           <span>
             {[harnessName(info.harness), info.mode || "default"].filter(Boolean).join(" · ")}
           </span>
@@ -320,16 +341,17 @@ export default function ConversationPane({
       {readOnly && <Banner>{info?.archived_at ? "Archived, read-only" : `Offline, read-only${info?.last_sync ? ` · Last sync ${relativeTime(new Date(info.last_sync), Date.now())}` : ""}`}</Banner>}
       {archiveUnavailable && <Banner>{archiveUnavailable}</Banner>}
       <div className="flex min-h-0 min-w-0 flex-1">
-        <div ref={threadScrollRef} tabIndex={0} aria-label="Conversation" className="min-h-0 min-w-0 flex-1 overflow-auto px-(--s4) py-(--s4) pb-64">
+        <div
+          ref={threadScrollRef}
+          onScroll={(event) => {
+            const el = event.currentTarget
+            stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 160
+          }}
+          tabIndex={0} aria-label="Conversation" className="min-h-0 min-w-0 flex-1 overflow-auto px-(--s4) py-(--s4) pb-64">
           <div className="mx-auto w-full max-w-180">
             {!needsUpdate && !readOnly && (
               <div className="mb-(--s4) flex items-center gap-(--s3)">
                 {thread.working ? <Spinner /> : <StatusDot state={statusState} />}
-                {thread.working && (
-                  <Button type="button" size="sm" variant="ghost" disabled={cancelTurn.isPending} onClick={() => cancelTurn.mutate()}>
-                    Stop
-                  </Button>
-                )}
               </div>
             )}
             {needsUpdate ? (
@@ -342,6 +364,7 @@ export default function ConversationPane({
                 machine={machine}
                 sessionId={sessionId}
                 readOnly={readOnly}
+                dockPending={!readOnly}
                 onQuote={readOnly ? undefined : quoteReply}
                 onFork={canFork && !fork.isPending ? () => fork.mutate() : undefined}
                 onRetry={canRetry ? retryLastPrompt : undefined}
@@ -397,6 +420,7 @@ export default function ConversationPane({
                 </ol>
               </details>
             )}
+            {pendingPermission && <PermissionCard docked item={pendingPermission} machine={machine} sessionId={sessionId} />}
             <div className="flex flex-col gap-(--s2) rounded-(--r-sheet) bg-(--field) p-(--s3) focus-within:ring-2 focus-within:ring-(--accent-soft)" style={{ boxShadow: "var(--shadow-composer)" }}>
               <div className="relative flex min-h-(--ctl-h) flex-col gap-(--s2)">
                 {attachments.map((item, index) => (
@@ -408,16 +432,22 @@ export default function ConversationPane({
                     </Button>
                   </div>
                 ))}
-                <ComposerHintsMenu title={hintTitle} hints={composerHints} onPick={pickHint} />
+                <ComposerHintsMenu id="composer-hints-list" activeIndex={activeHint} title={hintTitle} hints={composerHints} onPick={pickHint} />
                 <textarea
                   ref={composerInputRef}
                   id="conversation-message"
                   aria-label="Message"
                   rows={1}
-                  placeholder={needsUpdate ? "Update this peer to open the conversation…" : thread.needs_you ? "Answer the permission card first…" : "Message the agent…"}
+                  placeholder={needsUpdate ? "Update this peer to open the conversation…" : "Message the agent…"}
                   value={draft}
-                  disabled={send.isPending || thread.needs_you || needsUpdate}
-                  onChange={(event) => setDraft(event.currentTarget.value)}
+                  disabled={needsUpdate}
+                  aria-controls={composerHints.length > 0 ? "composer-hints-list" : undefined}
+                  aria-activedescendant={composerHints.length > 0 ? `composer-hints-list-${activeHint}` : undefined}
+                  onChange={(event) => {
+                    setDraft(event.currentTarget.value)
+                    setHintIndex(0)
+                    setHintsClosed(false)
+                  }}
                   onPaste={(event) => {
                     const files = imageFilesFromClipboard(event.clipboardData)
                     if (files.length > 0) {
@@ -426,6 +456,30 @@ export default function ConversationPane({
                     }
                   }}
                   onKeyDown={(event) => {
+                    if (event.nativeEvent.isComposing || event.keyCode === 229) return
+                    if (composerHints.length > 0) {
+                      const move = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0
+                      if (move) {
+                        event.preventDefault()
+                        setHintIndex(moveHint(activeHint, move, composerHints.length))
+                        return
+                      }
+                      if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
+                        event.preventDefault()
+                        pickHint(composerHints[activeHint]!)
+                        return
+                      }
+                      if (event.key === "Escape") {
+                        event.preventDefault()
+                        setHintsClosed(true)
+                        return
+                      }
+                    }
+                    if (event.key === "Escape" && thread.working && !cancelTurn.isPending) {
+                      event.preventDefault()
+                      cancelTurn.mutate()
+                      return
+                    }
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault()
                       if (canSend) send.mutate({ text: draft.trim(), attachments, clearComposer: true })
@@ -579,16 +633,56 @@ export default function ConversationPane({
                     items={option.items}
                   />
                 ))}
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  disabled={!canSend}
-                  aria-label="Send"
-                  onClick={() => send.mutate({ text: draft.trim(), attachments, clearComposer: true })}
-                >
-                  <SendHorizontal aria-hidden />
-                </Button>
+                {usageLabel && (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={<span role="img" aria-label={`Context ${contextPercent}% used`} className="grid size-(--ctl-h) shrink-0 place-items-center" />}
+                    >
+                      <svg viewBox="0 0 20 20" className="size-(--s5) -rotate-90" aria-hidden>
+                        <circle cx="10" cy="10" r="8" fill="none" strokeWidth="2.5" className="stroke-(--track)" />
+                        <circle
+                          cx="10"
+                          cy="10"
+                          r="8"
+                          fill="none"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          pathLength={100}
+                          strokeDasharray={`${contextPercent} 100`}
+                          className={contextPercent! >= 95 ? "stroke-(--danger)" : contextPercent! >= 80 ? "stroke-(--warn)" : "stroke-(--accent)"}
+                        />
+                      </svg>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <span className="tabular-nums">{usageLabel}</span>
+                      {thread.cost_usd !== undefined && thread.cost_usd > 0 && <span className="tabular-nums"> · ${thread.cost_usd.toFixed(2)}</span>}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+                {thread.working ? (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    disabled={cancelTurn.isPending}
+                    aria-label={cancelTurn.isPending ? "Stopping…" : "Stop"}
+                    title={cancelTurn.isPending ? "Stopping…" : "Stop (Esc)"}
+                    onClick={() => cancelTurn.mutate()}
+                  >
+                    {cancelTurn.isPending ? <Spinner /> : <Square aria-hidden className="fill-current" />}
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    disabled={!canSend}
+                    aria-label="Send"
+                    onClick={() => send.mutate({ text: draft.trim(), attachments, clearComposer: true })}
+                  >
+                    <SendHorizontal aria-hidden />
+                  </Button>
+                )}
               </div>
             </div>
           </div>

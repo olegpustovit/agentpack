@@ -1,11 +1,13 @@
+import { useState } from "react"
 import { FileCode2 } from "lucide-react"
-import { Meter, Section, KeyValue } from "@/components/kit/data"
+import { Section, KeyValue } from "@/components/kit/data"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName } from "@/lib/format"
 import { hud } from "@/lib/hud"
+import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { cn } from "@/lib/utils"
 import type { ThreadState } from "./model"
-import { diffAnchorId, listDiffChanges } from "./diff-summary"
+import { groupByPath, listDiffChanges } from "./diff-summary"
 
 export function ConversationInspector({
   thread,
@@ -28,16 +30,10 @@ export function ConversationInspector({
     (sessionCapabilities?.resume !== undefined && sessionCapabilities.resume !== null)
   const forkSupport =
     sessionCapabilities?.fork !== undefined && sessionCapabilities.fork !== null
-  const contextLabel =
-    thread.context_limit && thread.context_tokens !== undefined
-      ? `${thread.context_tokens.toLocaleString()} of ${thread.context_limit.toLocaleString()}`
-      : undefined
-  const contextPercent =
-    thread.context_limit && thread.context_tokens !== undefined
-      ? Math.min(100, Math.round((thread.context_tokens / thread.context_limit) * 100))
-      : undefined
-
-  const changes = listDiffChanges(thread.items)
+  const all = listDiffChanges(thread.items)
+  const [scope, setScope] = useState<"turn" | "all">("turn")
+  const lastTurn = Math.max(0, ...all.map((c) => c.turn))
+  const changes = groupByPath(scope === "turn" ? all.filter((c) => c.turn === lastTurn) : all)
   return (
     <aside
       data-slot="conversation-inspector"
@@ -51,31 +47,21 @@ export function ConversationInspector({
       style={{ ["--inspector-w" as string]: "272px" }}
     >
       <div id="conversation-inspector-content" className="flex min-w-0 flex-col gap-(--s6)">
-        {contextLabel && (
-          <Section title="Context">
-            {contextPercent !== undefined && (
-              <Meter value={thread.context_tokens} max={thread.context_limit} label={`${contextPercent}% of context used`} />
-            )}
-            <dl className="flex flex-col gap-(--s3)">
-              <KeyValue label="Used">{contextLabel}</KeyValue>
-              {thread.cost_usd !== undefined && thread.cost_usd > 0 && (
-                <KeyValue label="Cost so far">${thread.cost_usd.toFixed(2)}</KeyValue>
-              )}
-            </dl>
-          </Section>
-        )}
-        {changes.length > 0 && (
+        {all.length > 0 && (
           <Section title="Changes">
+            <SegmentedControl aria-label="Changes scope" value={[scope]} onValueChange={(v) => v[0] && setScope(v[0] as "turn" | "all")}>
+              <SegmentedControlItem value="turn">{lastTurn > 0 ? `Turn ${lastTurn}` : "Latest"}</SegmentedControlItem>
+              <SegmentedControlItem value="all">All</SegmentedControlItem>
+            </SegmentedControl>
             <ul className="flex flex-col gap-(--s2)">
               {changes.map((change) => {
-                const file = change.path.split("/").pop() ?? change.path
                 return (
                   <li key={change.path}>
                     <button
                       type="button"
                       className="flex w-full items-center gap-(--s2) rounded-(--r-row) border-[0.5px] border-(--sep) bg-(--window) px-(--s3) py-(--s2) text-left text-(length:--fs-sm) hover:bg-(--hover)"
                       onClick={() => {
-                        const target = document.getElementById(diffAnchorId(change.path))
+                        const target = document.getElementById(change.anchor)
                         if (target) {
                           target.scrollIntoView({ behavior: "smooth", block: "center" })
                         } else {
@@ -84,7 +70,7 @@ export function ConversationInspector({
                       }}
                     >
                       <FileCode2 aria-hidden className="size-(--s4) shrink-0 text-(--fg2)" />
-                      <code className="min-w-0 flex-1 truncate font-(family-name:--mono) text-(length:--fs-xs)">{file}</code>
+                      <code className="min-w-0 flex-1 break-all font-(family-name:--mono) text-(length:--fs-xs)">{change.path}</code>
                       <span className="shrink-0 tabular-nums text-(--ok-word)">+{change.add}</span>
                       <span className="shrink-0 tabular-nums text-(--danger-word)">−{change.del}</span>
                     </button>

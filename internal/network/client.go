@@ -50,6 +50,7 @@ type SessionInfo struct {
 	FolderID          string             `json:"folder_id,omitempty"`
 	ID                string             `json:"id"`
 	Name              string             `json:"name,omitempty"`
+	Title             string             `json:"title,omitempty"`
 	Directory         string             `json:"directory"`
 	DefinitionRoot    string             `json:"definition_root,omitempty"`
 	Harness           string             `json:"harness"`

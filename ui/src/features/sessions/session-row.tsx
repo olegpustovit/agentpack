@@ -1,12 +1,12 @@
 import type { KeyboardEvent } from "react"
 import { Link } from "@tanstack/react-router"
-import { Package, Pencil, Plug, RotateCw, Save, Square, X, type LucideIcon } from "lucide-react"
+import { Loader, Package, Pencil, Plug, RotateCw, Save, Square, X, type LucideIcon } from "lucide-react"
 import { SourceRow } from "@/components/kit/list"
 import { StatusGlyph } from "@/components/kit/status-dot"
 import { Menu, MenuContent, MenuItem, MenuTrigger, RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger, RowMoreButton } from "@/components/kit/overlays"
 import { ContextMenuSeparator } from "@/components/ui/context-menu"
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
-import { shortAge } from "@/lib/format"
+import { harnessName, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { rowKey, sessionDetail, sessionLabel, type ListedSession } from "./group"
 import { sessionGlyphState, sessionStatusWord } from "./session-status"
@@ -60,6 +60,18 @@ function renderEntries(entries: Entry[], context: boolean) {
 
 const dimWord = "shrink-0 text-(length:--fs-sm) text-(--fg3) sel:text-(--accent-fg)"
 
+// Text glyphs for chat state read without colour; terminal sessions keep the kit dot.
+function RowGlyph({ session }: { session: ListedSession }) {
+  const state = sessionGlyphState(session)
+  const cls = "ms-(--s7) inline-flex size-(--s4) shrink-0 items-center justify-center text-(length:--fs-sm) leading-none sel:text-(--accent-fg)"
+  if (state === "needsYou") return <span role="img" aria-label="Needs you" title="Needs you" className={cn(cls, "font-bold")}>!</span>
+  if (state === "idle") return <span role="img" aria-label="Idle" title="Idle" className={cls}>○</span>
+  if (state === "running" && session.conversation_state === "working") {
+    return <span role="img" aria-label="Working" title="Working" className={cls}><Loader aria-hidden className="size-(--s4) animate-spin motion-reduce:animate-none" /></span>
+  }
+  return <StatusGlyph state={state} className="ms-(--s7)" />
+}
+
 // WebKit sends no contextmenu event for Shift+F10 or the context-menu key, so the key opens the menu itself.
 function openFromKeyboard(event: KeyboardEvent<HTMLElement>) {
   if (!(event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))) return
@@ -83,7 +95,7 @@ export function SessionRow({
   stopping: boolean
   actions: RowActions
 }) {
-  const glyphState = sessionGlyphState(session)
+  const label = sessionLabel(session)
   const word = sessionStatusWord(session, stopping)
   const mode = session.mode && session.mode !== "default" ? session.mode : undefined
   const entries = menuEntries(session, selected, actions)
@@ -107,8 +119,9 @@ export function SessionRow({
           data-row-key={rowKey(session)}
           className={cn("pe-(--head-h)", session.offline && "text-(--fg3)")}
         >
-          <StatusGlyph state={glyphState} className="ms-(--s7)" />
-          <span className="min-w-0 flex-1 truncate">{sessionLabel(session)}</span>
+          <RowGlyph session={session} />
+          <span className="min-w-0 flex-1 truncate">{label}</span>
+          {label !== harnessName(session.harness) && <span className={dimWord}>{harnessName(session.harness)}</span>}
           {mode && <span className={dimWord}>{mode}</span>}
           {/* The age is decoration: the row's title has it, and it must not churn the row's accessible name. */}
           <span aria-hidden={!word} className={dimWord}>{word ?? age}</span>

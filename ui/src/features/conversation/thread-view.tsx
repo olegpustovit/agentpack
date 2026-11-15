@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useState, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { BookOpen, ChevronRight, Copy, Folder, GitFork, Globe, Pencil, Quote, RotateCcw, Search, Sparkles, Terminal, Wrench } from "lucide-react"
 import { RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
@@ -10,6 +10,7 @@ import { AgentMessageBody } from "./agent-message"
 import { ToolDiffBody } from "./tool-diff"
 import { QuickLook } from "./quick-look"
 import { conversationErrorMessage } from "./queries"
+import { listDiffChanges } from "./diff-summary"
 
 function chunkText(data: unknown): string {
   return (data as TextChunkPayload).text?.text ?? ""
@@ -125,14 +126,33 @@ function toolIcon(kind?: string) {
   }
 }
 
+function statusGlyph(status: string) {
+  const glyph = status === "completed" ? "✓" : status === "failed" ? "✕" : "…"
+  return (
+    <span role="img" aria-label={status} title={status} className={`shrink-0 ${status === "failed" ? "text-(--danger-word)" : "text-(--fg3)"}`}>
+      {glyph}
+    </span>
+  )
+}
+
+// One-line form of a tool's input: a string as is, an object as `key: value` pairs.
+function shortInput(input: unknown): string {
+  if (input === undefined || input === null) return ""
+  if (typeof input !== "object") return String(input)
+  return Object.entries(input).map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`).join(", ").replace(/\s+/g, " ")
+}
+
+const preClass = "mt-(--s2) max-h-40 overflow-auto rounded-(--r-row) bg-(--window) px-(--s3) py-(--s2) font-(family-name:--mono) text-(length:--fs-xs) text-(--fg2) whitespace-pre-wrap"
+
 function ToolRow({ data }: { data: unknown }) {
   const tool = data as ToolPayload
   const title = tool.title ?? tool.kind ?? "Tool"
   const status = tool.status ?? "pending"
   const Icon = toolIcon(tool.kind)
-  const diff = <ToolDiffBody content={tool.content} />
+  const diff = <ToolDiffBody content={tool.content} toolId={tool.toolCallId} />
   const hasDiff = (tool.content ?? []).some((block) => block.type === "diff" && (block.oldText || block.newText))
   const terminalBody = tool.output?.trim() || (tool.kind === "terminal" && tool.command ? tool.command : "")
+  const input = shortInput(tool.rawInput)
   return (
     <details
       open={hasDiff || Boolean(terminalBody)}
@@ -144,56 +164,60 @@ function ToolRow({ data }: { data: unknown }) {
         <ChevronRight aria-hidden className="size-(--s4) shrink-0 text-(--fg3) in-open:rotate-90" />
         <Icon aria-hidden className="size-(--s4) shrink-0 text-(--fg2)" />
         <span className="min-w-0 flex-1 truncate text-(--fg)">{title}</span>
-        <span className={`shrink-0 ${status === "completed" ? "text-(--ok-word)" : status === "failed" ? "text-(--danger-word)" : "text-(--fg3)"}`}>{status}</span>
+        {statusGlyph(status)}
       </summary>
       {hasDiff ? (
         diff
       ) : terminalBody ? (
-        <pre
-          data-slot="tool-terminal"
-          className="mt-(--s2) max-h-40 overflow-auto rounded-(--r-row) bg-(--window) px-(--s3) py-(--s2) font-(family-name:--mono) text-(length:--fs-xs) text-(--fg2) whitespace-pre-wrap"
-        >
-          {terminalBody}
-        </pre>
+        <pre data-slot="tool-terminal" className={preClass}>{terminalBody}</pre>
       ) : (
-        <pre className="mt-(--s2) max-h-40 overflow-auto rounded-(--r-row) bg-(--window) px-(--s3) py-(--s2) font-(family-name:--mono) text-(length:--fs-xs) text-(--fg2) whitespace-pre-wrap">
-          {JSON.stringify(data, null, 2)}
-        </pre>
+        <div className="pl-(--s7)">
+          {input && <p data-slot="tool-input" className="truncate font-(family-name:--mono) text-(length:--fs-xs) text-(--fg2)">{input}</p>}
+          <details data-slot="tool-details" className="text-(length:--fs-xs) text-(--fg3)">
+            <summary className="cursor-default">Details</summary>
+            <pre className={preClass}>{JSON.stringify(data, null, 2)}</pre>
+          </details>
+        </div>
       )}
     </details>
   )
 }
 
+function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000)
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} m ${s % 60} s`
+}
+
+function plural(n: number, word: string) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`
+}
+
 function ToolGroup({ tools }: { tools: ThreadItem[] }) {
   if (tools.length === 1) return <ToolRow data={tools[0]!.data} />
+  const failed = tools.filter((item) => (item.data as ToolPayload).status === "failed").length
+  const files = new Set(listDiffChanges(tools).map((change) => change.path)).size
+  // ts is only known for streamed items; omit the time rather than guess.
+  const stamps = tools.flatMap((item) => item.ts === undefined ? [] : [item.ts, item.endTs ?? item.ts])
+  const span = stamps.length ? Math.max(...stamps) - Math.min(...stamps) : 0
+  const parts = [
+    span >= 1000 ? `Worked for ${formatDuration(span)}` : "Worked",
+    plural(tools.length, "tool"),
+    ...(files ? [`${plural(files, "file")} changed`] : []),
+  ]
   return (
-    <details data-slot="tool-group" className="text-(length:--fs-sm)">
+    <details data-slot="tool-group" open={failed > 0} className="text-(length:--fs-sm)">
       <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
         <ChevronRight aria-hidden className="size-(--s4) shrink-0 text-(--fg3) in-open:rotate-90" />
-        <span className="min-w-0 flex-1 truncate font-medium text-(--fg)">Explored</span>
-        <span className="shrink-0 text-(--fg3)">{tools.length} steps</span>
+        <span className="min-w-0 flex-1 truncate text-(--fg2)">{parts.join(" · ")}</span>
+        {failed > 0 && <span className="shrink-0 text-(--danger-word)">{failed} failed</span>}
       </summary>
-      <ul className="flex flex-col border-l-[0.5px] border-(--sep) pl-(--s4)">
-        {tools.map((item, index) => {
-          const tool = item.data as ToolPayload
-          const Icon = toolIcon(tool.kind)
-          return (
-            <li key={index} className="flex min-h-(--row-h) items-center gap-(--s3) text-(length:--fs-sm) text-(--fg2)">
-              <Icon aria-hidden className="size-(--s4) shrink-0" />
-              <span className="min-w-0 flex-1 truncate">{tool.title ?? tool.kind ?? "Tool"}</span>
-              <span className="shrink-0 text-(--fg3)">{tool.status ?? "pending"}</span>
-            </li>
-          )
-        })}
-      </ul>
+      <div className="flex flex-col border-l-[0.5px] border-(--sep) pl-(--s4)">
+        {tools.map((item, index) => <ToolRow key={item.seq ?? index} data={item.data} />)}
+      </div>
     </details>
   )
 }
 
-function isExploratoryTool(item: ThreadItem): boolean {
-  const kind = (item.data as ToolPayload | undefined)?.kind
-  return kind === "read" || kind === "search" || kind === "list"
-}
 function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem; machine: string; sessionId: string }) {
   const ask = item.data as ElicitationPayload & { optionIds?: string[]; allowMultiple?: boolean }
   const [selected, setSelected] = useState<string[]>([])
@@ -252,22 +276,28 @@ function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem; machi
   )
 }
 
-function PermissionCard({
+export function findPendingPermission(items: ThreadItem[]): ThreadItem | undefined {
+  return items.findLast((item) => {
+    const permission = item.kind === "permission" ? item.data as PermissionPayload : undefined
+    return Boolean(permission?.requestId && !permission.resolved && !permission.inactive)
+  })
+}
+
+export function PermissionCard({
   item,
   machine,
   sessionId,
-  keyboardDefault,
   readOnly,
+  docked,
 }: {
   item: ThreadItem
   machine: string
   sessionId: string
-  keyboardDefault: boolean
   readOnly?: boolean
+  docked?: boolean
 }) {
   const perm = item.data as PermissionPayload
   const queryClient = useQueryClient()
-  const cardRef = useRef<HTMLDivElement>(null)
   const answer = useMutation({
     mutationFn: (optionId: string) =>
       api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/permission`, {
@@ -279,44 +309,36 @@ function PermissionCard({
       void queryClient.invalidateQueries({ queryKey: ["conversation", machine, sessionId] })
     },
   })
-  useEffect(() => {
-    if (readOnly || !perm.requestId || perm.resolved || perm.inactive || answer.isPending) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !/^[1-9]$/.test(event.key)) return
-      if (event.target instanceof HTMLElement && event.target.closest("[role='menu'], [role='menuitem'], [role='listbox'], [role='option']")) return
-      for (const menu of document.querySelectorAll<HTMLElement>("[role='menu'], [role='listbox']")) {
-        if (menu.getClientRects().length > 0) return
-      }
-      const active = document.activeElement
-      const focusedControl =
-        active instanceof HTMLElement &&
-        active.matches("a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex='-1']), [contenteditable='true'], [role='menu'], [role='menuitem'], [role='listbox'], [role='option'], [role='combobox']")
-      if (active !== cardRef.current && (!keyboardDefault || focusedControl)) return
-      const option = perm.options?.[Number(event.key) - 1]
-      if (!option) return
-      event.preventDefault()
-      answer.mutate(option.id)
-    }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [readOnly, answer.isPending, answer.mutate, keyboardDefault, perm.inactive, perm.options, perm.requestId, perm.resolved])
+  const open = !readOnly && !perm.resolved && !perm.inactive
   const result = perm.result
   const answerLabel = perm.options?.find((option) => option.id === result?.optionId)?.label ?? result?.optionId
   return (
     <div
-      ref={cardRef}
       data-slot="permission-card"
       role="group"
       aria-label={`Permission request: ${perm.tool ?? "Permission"}`}
       tabIndex={perm.resolved || perm.inactive ? -1 : 0}
-      className="rounded-(--r-pop) border-[0.5px] border-(--warn) bg-(--window) p-(--s4) focus-visible:ring-2 focus-visible:ring-(--accent-soft)"
+      onKeyDown={(event) => {
+        if (!open || !perm.requestId || answer.isPending || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !/^[1-9]$/.test(event.key)) return
+        if (event.target instanceof HTMLElement && event.target.closest("input, textarea, select, [contenteditable='true']")) return
+        const option = perm.options?.[Number(event.key) - 1]
+        if (!option) return
+        event.preventDefault()
+        answer.mutate(option.id)
+      }}
+      className={`rounded-(--r-pop) border-[0.5px] border-(--warn) bg-(--window) focus-visible:ring-2 focus-visible:ring-(--accent-soft) ${docked ? "p-(--s3)" : "p-(--s4)"}`}
     >
       <p className="text-(length:--fs-sm) font-medium text-(--fg)">{perm.tool ?? "Permission"}</p>
-      {perm.summary && <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">{perm.summary}</p>}
+      {perm.summary && (docked
+        ? <pre data-slot="permission-command" className="mt-(--s2) max-h-24 overflow-auto rounded-(--r-row) bg-(--track) px-(--s3) py-(--s2) font-(family-name:--mono) text-(length:--fs-xs) text-(--fg) whitespace-pre-wrap">{perm.summary}</pre>
+        : <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">{perm.summary}</p>)}
       {perm.resolved ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">Answered: {answerLabel ?? "—"}</p> : perm.inactive ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">No longer active</p> : (
         <div className="mt-(--s3) flex flex-wrap gap-(--s2)">
-          {(perm.options ?? []).map((option) => (
-            <Button key={option.id} type="button" size="sm" variant="default" disabled={!perm.requestId || answer.isPending} onClick={() => answer.mutate(option.id)}>{option.label}</Button>
+          {(perm.options ?? []).map((option, index) => (
+            <Button key={option.id} type="button" size="sm" variant="default" disabled={!perm.requestId || answer.isPending} onClick={() => answer.mutate(option.id)}>
+              {index < 9 && <kbd aria-hidden className="font-(family-name:--mono) text-(--fg3)">{index + 1}</kbd>}
+              {option.label}
+            </Button>
           ))}
         </div>
       )}
@@ -383,7 +405,7 @@ function AgentBlock({
         <AgentMessageBody text={text} />
       </MessageContextMenu>
       {text && (
-        <div className="absolute top-0 right-0 z-10 flex gap-(--s1) rounded-(--r-pop) bg-(--control) p-(--s1) opacity-0 shadow-(--shadow-pop) transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-[760px]:opacity-100">
+        <div className="mt-(--s1) flex justify-end gap-(--s1) min-[760px]:absolute min-[760px]:top-0 min-[760px]:right-0 min-[760px]:z-10 min-[760px]:mt-0 min-[760px]:rounded-(--r-pop) min-[760px]:bg-(--control) min-[760px]:p-(--s1) min-[760px]:opacity-0 min-[760px]:shadow-(--shadow-pop) min-[760px]:transition-opacity min-[760px]:group-hover:opacity-100 min-[760px]:group-focus-within:opacity-100">
           <Button type="button" size="icon" variant="ghost" className="size-(--ctl-h-sm)" aria-label="Copy message" onClick={() => copyText(text)}>
             <Copy aria-hidden />
           </Button>
@@ -404,16 +426,18 @@ function AgentBlock({
 }
 function CompactionBlock({ item }: { item: ThreadItem }) {
   const compaction = item.data as CompactionPayload
+  const label = compaction.status === "in_progress" ? "Compacting context…" : compaction.error ? "Context compaction failed" : "Context compacted"
+  const rule = <span aria-hidden className="h-px flex-1 bg-(--sep)" />
   return (
-    <section
-      data-slot="conversation-compaction"
-      aria-label="Context compaction"
-      className="rounded-(--r-row) border-[0.5px] border-(--sep) bg-(--track) px-(--s3) py-(--s2) text-(length:--fs-sm)"
-    >
-      <p className="font-medium text-(--fg)">{compaction.status}</p>
+    <details data-slot="conversation-compaction" aria-label="Context compaction" className="text-(length:--fs-xs) text-(--fg3)">
+      <summary className="flex cursor-default list-none items-center gap-(--s3) marker:content-none [&::-webkit-details-marker]:hidden">
+        {rule}
+        <span>{label}</span>
+        {rule}
+      </summary>
       {compaction.summary && <p className="mt-(--s2) whitespace-pre-wrap text-(--fg2)">{compaction.summary}</p>}
       {compaction.error && <p role="alert" className="mt-(--s2) text-(--danger-word)">{compaction.error}</p>}
-    </section>
+    </details>
   )
 }
 
@@ -422,8 +446,8 @@ function ThreadItemView({
   item,
   machine,
   sessionId,
-  keyboardDefault,
   readOnly,
+  docked,
   onQuote,
   onFork,
   onRetry,
@@ -431,8 +455,8 @@ function ThreadItemView({
   item: ThreadItem
   machine: string
   sessionId: string
-  keyboardDefault: boolean
   readOnly?: boolean
+  docked?: boolean
   onQuote?: (text: string) => void
   onFork?: () => void
   onRetry?: () => void
@@ -456,7 +480,8 @@ function ThreadItemView({
     case "tool":
       return <ToolRow data={item.data} />
     case "permission":
-      return <fieldset disabled={readOnly}><PermissionCard item={item} machine={machine} sessionId={sessionId} keyboardDefault={keyboardDefault} readOnly={readOnly} /></fieldset>
+      if (docked) return <p data-slot="permission-placeholder" className="text-(length:--fs-sm) text-(--fg2)">⧗ {(item.data as PermissionPayload).tool ?? "Permission"} · waiting for approval</p>
+      return <fieldset disabled={readOnly}><PermissionCard item={item} machine={machine} sessionId={sessionId} readOnly={readOnly} /></fieldset>
     case "elicitation":
       return <fieldset disabled={readOnly}><ElicitationCard item={item} machine={machine} sessionId={sessionId} /></fieldset>
     case "compaction":
@@ -477,6 +502,7 @@ function ThreadItemView({
   }
 }
 
+// One work log per run of tool calls; user, agent, thought, permission and compaction items end the run.
 function groupTools(items: ThreadItem[]): (ThreadItem | ThreadItem[])[] {
   const out: (ThreadItem | ThreadItem[])[] = []
   let batch: ThreadItem[] = []
@@ -486,8 +512,8 @@ function groupTools(items: ThreadItem[]): (ThreadItem | ThreadItem[])[] {
     batch = []
   }
   for (const item of items) {
-    if (item.kind === "tool" && isExploratoryTool(item)) batch.push(item)
-    else {
+    if (item.kind === "tool") batch.push(item)
+    else if (item.kind !== "plan") {
       flush()
       out.push(item)
     }
@@ -504,8 +530,10 @@ export function ThreadView({
   onFork,
   onRetry,
   readOnly,
+  dockPending,
 }: {
   readOnly?: boolean
+  dockPending?: boolean
   items: ThreadItem[]
   machine: string
   sessionId: string
@@ -516,36 +544,30 @@ export function ThreadView({
   if (items.length === 0) {
     return <p className="py-(--s7) text-center text-(length:--fs-sm) text-(--fg3)">No messages yet.</p>
   }
-  const latestPrompt = latestUserPrompt(items)
-  const retry = latestPrompt && onRetry ? onRetry : undefined
-  let latestPendingPermission: ThreadItem | undefined
-  for (let index = items.length - 1; index >= 0; index--) {
-    const item = items[index]!
-    const permission = item.kind === "permission" ? item.data as PermissionPayload : undefined
-    if (permission?.requestId && !permission.resolved && !permission.inactive) {
-      latestPendingPermission = item
-      break
-    }
-  }
+  const retry = latestUserPrompt(items) && onRetry ? onRetry : undefined
+  const pending = dockPending && !readOnly ? findPendingPermission(items) : undefined
+  const lastAgent = items.findLast((item) => item.kind === "agent_message_chunk")
+  const compacted = items.some((item) => item.kind === "compaction")
   return (
     <div className="flex flex-col gap-(--s4)">
-      {groupTools(items).map((entry, index) =>
-        Array.isArray(entry) ? (
-          <ToolGroup key={index} tools={entry} />
-        ) : (
+      {groupTools(items).map((entry, index) => {
+        if (Array.isArray(entry)) return <ToolGroup key={entry[0]!.seq ?? index} tools={entry} />
+        // The compaction block is the one divider for a compaction; the notice would repeat it.
+        if (compacted && entry.kind === "divider" && (entry.data as NoticePayload).title === "Context compacted") return null
+        return (
           <ThreadItemView
-            key={index}
+            key={entry.seq ?? index}
             item={entry}
             machine={machine}
             sessionId={sessionId}
-            keyboardDefault={!readOnly && entry === latestPendingPermission}
             readOnly={readOnly}
+            docked={entry === pending}
             onQuote={onQuote}
             onFork={onFork}
-            onRetry={entry.kind === "agent_message_chunk" ? retry : undefined}
+            onRetry={entry === lastAgent ? retry : undefined}
           />
-        ),
-      )}
+        )
+      })}
     </div>
   )
 }

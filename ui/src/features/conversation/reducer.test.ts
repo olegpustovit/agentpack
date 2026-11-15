@@ -105,7 +105,7 @@ describe("reduceLog", () => {
       { seq: 1, ts: 1, kind: "user_message_chunk", payload: { text: { text: "Review" }, images } },
       { seq: 2, ts: 2, kind: "user_message_chunk", payload: { text: { text: " these" } } },
     ])
-    expect(state.items).toEqual([{ kind: "user_message_chunk", data: { text: { text: "Review these" }, images } }])
+    expect(state.items).toMatchObject([{ kind: "user_message_chunk", data: { text: { text: "Review these" }, images } }])
   })
 
 
@@ -120,7 +120,7 @@ describe("reduceLog", () => {
     ]
     const state = reduceLog(entries)
     expect(state.needs_you).toBe(true)
-    expect(state.items).toEqual([
+    expect(state.items).toMatchObject([
       {
         kind: "permission",
         data: { requestId: "p1", resolved: true, result: { requestId: "p1", optionId: "allow" } },
@@ -164,5 +164,19 @@ describe("reduceLog", () => {
     const state = reduceLog(entries)
     expect(state.working).toBe(false)
     expect(state.needs_you).toBe(false)
+  })
+
+  it("gives items a stable seq as the log grows", () => {
+    const log: LogEntry[] = [
+      { seq: 5, ts: 50, kind: "tool_call", payload: { toolCallId: "t" } },
+      { seq: 6, ts: 60, kind: "tool_call_update", payload: { toolCallId: "t", status: "completed" } },
+      { seq: 7, ts: 70, kind: "agent_message_chunk", payload: { text: { text: "a" } } },
+      { seq: 8, ts: 80, kind: "agent_message_chunk", payload: { text: { text: "b" } } },
+    ]
+    const short = reduceLog(log.slice(0, 3)).items
+    const full = reduceLog(log).items
+    expect(short.map((i) => i.seq)).toEqual([5, 7])
+    expect(full.map((i) => i.seq)).toEqual([5, 7])
+    expect(full[0]).toMatchObject({ ts: 50, endTs: 60 })
   })
 })

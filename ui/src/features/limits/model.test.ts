@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { LimitSnapshot, LimitWindow } from "@/lib/api-types"
-import { observedAt, providerGroups, relativeUntil, remainingPercent, resetLabel, selectReport, type LimitReport } from "./model"
+import { needsLogin, observedAt, providerGroups, remainingPercent, resetText, selectReport, untilText, type LimitReport } from "./model"
 
 const snapshot = (over: Partial<LimitSnapshot>): LimitSnapshot => ({
   harness: "codex",
@@ -64,32 +64,46 @@ describe("remainingPercent", () => {
   })
 })
 
-describe("relativeUntil", () => {
-  it("uses minutes, then hours and minutes, then days", () => {
-    expect(relativeUntil(5 * 60_000)).toBe("in 5m")
-    expect(relativeUntil(90 * 60_000)).toBe("in 1h 30m")
-    expect(relativeUntil(50 * 3_600_000)).toBe("in 2d")
+describe("untilText", () => {
+  it("counts minutes, then hours and minutes, then days and hours", () => {
+    expect(untilText(42 * 60_000)).toBe("42 m")
+    expect(untilText(72 * 60_000)).toBe("1 h 12 m")
+    expect(untilText(50 * 3_600_000)).toBe("2 d 2 h")
+  })
+
+  it("rounds up, so a pending reset never reads zero", () => {
+    expect(untilText(1)).toBe("1 m")
+    expect(untilText(60_001)).toBe("2 m")
   })
 })
 
-describe("resetLabel", () => {
+describe("resetText", () => {
   const now = Date.parse("2026-10-30T12:00:00Z")
 
-  it("shows the provider's own reset text when no reset time is given", () => {
-    expect(resetLabel(window({ reset_text: "Monday at 09:00" }), now)).toEqual({ text: "Monday at 09:00", due: false })
-    expect(resetLabel(window({}), now)).toEqual({ text: "reset not exposed", due: false })
-  })
-
   it("counts down to a future reset", () => {
-    const label = resetLabel(window({ reset_at: "2026-10-30T14:00:00Z" }), now)
-    expect(label.due).toBe(false)
-    expect(label.text.startsWith("resets in 2h 0m · ")).toBe(true)
+    expect(resetText(window({ reset_at: "2026-10-30T13:12:00Z" }), now)).toEqual({ text: "resets in 1 h 12 m", refreshing: false })
   })
 
-  it("labels a passed reset as rechecking", () => {
-    const label = resetLabel(window({ reset_at: "2026-10-30T11:59:00Z" }), now)
-    expect(label.due).toBe(true)
-    expect(label.text.startsWith("reset due · rechecking · was ")).toBe(true)
+  it("says refreshing once the reset has passed", () => {
+    expect(resetText(window({ reset_at: "2026-10-30T11:59:00Z" }), now)).toEqual({ text: "refreshing…", refreshing: true })
+  })
+
+  it("shows the provider's own reset text when no reset time is given", () => {
+    expect(resetText(window({ reset_text: "Monday at 09:00" }), now)).toEqual({ text: "Monday at 09:00", refreshing: false })
+    expect(resetText(window({}), now)).toEqual({ text: "", refreshing: false })
+  })
+})
+
+describe("needsLogin", () => {
+  it("is true for an error that names a missing login", () => {
+    expect(needsLogin(snapshot({ state: "error", error: "grok billing: authentication required" }))).toBe(true)
+    expect(needsLogin(snapshot({ state: "error", error: "Grok login expired. Sign in with agentpack grok login." }))).toBe(true)
+  })
+
+  it("is false for other errors and for available providers", () => {
+    expect(needsLogin(snapshot({ state: "error", error: "codex reported no rate-limit windows" }))).toBe(false)
+    expect(needsLogin(snapshot({ state: "unsupported", error: "codex CLI not found" }))).toBe(false)
+    expect(needsLogin(snapshot({ state: "available" }))).toBe(false)
   })
 })
 
