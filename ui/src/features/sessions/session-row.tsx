@@ -61,10 +61,11 @@ function renderEntries(entries: Entry[], context: boolean) {
 const dimWord = "shrink-0 text-(length:--fs-sm) text-(--fg3) sel:text-(--accent-fg)"
 
 // Text glyphs for chat state read without colour; terminal sessions keep the kit dot.
-function RowGlyph({ session }: { session: ListedSession }) {
+function RowGlyph({ session, unread }: { session: ListedSession; unread: boolean }) {
   const state = sessionGlyphState(session)
   const cls = "ms-(--s7) inline-flex size-(--s4) shrink-0 items-center justify-center text-(length:--fs-sm) leading-none sel:text-(--accent-fg)"
   if (state === "needsYou") return <span role="img" aria-label="Needs you" title="Needs you" className={cn(cls, "font-bold")}>!</span>
+  if (state === "idle" && unread) return <span role="img" aria-label="Unread" title="Unread" className={cls}>●</span>
   if (state === "idle") return <span role="img" aria-label="Idle" title="Idle" className={cls}>○</span>
   if (state === "running" && session.conversation_state === "working") {
     return <span role="img" aria-label="Working" title="Working" className={cls}><Loader aria-hidden className="size-(--s4) animate-spin motion-reduce:animate-none" /></span>
@@ -87,12 +88,14 @@ export function SessionRow({
   selected,
   tabStop,
   stopping,
+  unread,
   actions,
 }: {
   session: ListedSession
   selected: boolean
   tabStop: boolean
   stopping: boolean
+  unread: boolean
   actions: RowActions
 }) {
   const label = sessionLabel(session)
@@ -119,7 +122,7 @@ export function SessionRow({
           data-row-key={rowKey(session)}
           className={cn("pe-(--head-h)", session.offline && "text-(--fg3)")}
         >
-          <RowGlyph session={session} />
+          <RowGlyph session={session} unread={unread} />
           <span className="min-w-0 flex-1 truncate">{label}</span>
           {label !== harnessName(session.harness) && <span className={dimWord}>{harnessName(session.harness)}</span>}
           {mode && <span className={dimWord}>{mode}</span>}

@@ -20,7 +20,7 @@ import { groupSessions, matchesSession, rowKey, sessionLabel, type GroupMode, ty
 import { NewSessionSheet } from "./new-session-sheet"
 import { sessionRules } from "./rules"
 import { sessionsQuery } from "./queries"
-import { sessionGlyphState } from "./session-status"
+import { isUnread, loadSeen, saveSeen, sessionGlyphState } from "./session-status"
 import { SessionRow, type RowActions } from "./session-row"
 import { RowSheet, type SheetState } from "./session-sheets"
 
@@ -64,9 +64,10 @@ export function SessionList() {
   const [confirm, setConfirm] = useState<Confirm | null>(null)
   const [stopping, setStopping] = useState<ReadonlySet<string>>(new Set())
   const [cursor, setCursor] = useState<Cursor | null>(null)
+  const [seen, setSeen] = useState(loadSeen)
   const pending = useRef<number | undefined>(undefined)
 
-  const groupMode: GroupMode = search.group === "project" ? "project" : "machine"
+  const groupMode: GroupMode = search.group === "machine" ? "machine" : "project"
   const routeKey = params.machine && params.sessionId ? `${params.machine}:${params.sessionId}` : undefined
   const selectedKey = cursor?.from === routeKey ? cursor?.key : routeKey
 
@@ -94,6 +95,18 @@ export function SessionList() {
   const failed = Object.keys(queries.errors).length > 0
 
   useEffect(() => () => window.clearTimeout(pending.current), [])
+
+  // Opening a row marks it seen; activity that lands while it stays open counts too.
+  const openUsed = rows.find((row) => rowKey(row) === routeKey)?.last_used
+  useEffect(() => {
+    if (!routeKey) return
+    const at = Math.max(Date.now(), openUsed ? Date.parse(openUsed) || 0 : 0)
+    setSeen((current) => {
+      const next = { ...current, [routeKey]: at }
+      saveSeen(next)
+      return next
+    })
+  }, [routeKey, openUsed])
 
   function openRow(row: ListedSession) {
     void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: row.machine, sessionId: row.id }, search: true })
@@ -161,6 +174,7 @@ export function SessionList() {
         selected={selected}
         tabStop={key === tabStop}
         stopping={stopping.has(key)}
+        unread={isUnread(session, seen[key] ?? seen[""])}
         actions={actionsFor(session, selected)}
       />
     )

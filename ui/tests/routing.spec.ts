@@ -105,12 +105,12 @@ test("back and forward step through the views, with each view's URL", async ({ p
   await expectNoCrash(page, errors)
 })
 
-test("malformed sessions search falls back to grouping by machine", async ({ page }) => {
+test("malformed sessions search falls back to grouping by project", async ({ page }) => {
   const errors = trackPageErrors(page)
   await openFleet(page)
   await page.goto("/sessions?group=bogus&new=maybe")
   await expect(sessionsNav(page)).toBeVisible()
-  await expect(page.getByRole("button", { name: "Machine", exact: true })).toHaveAttribute("aria-pressed", "true")
+  await expect(page.getByRole("button", { name: "Project", exact: true })).toHaveAttribute("aria-pressed", "true")
   await expectNoCrash(page, errors)
 })
 

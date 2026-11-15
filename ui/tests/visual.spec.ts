@@ -55,7 +55,7 @@ test.describe("kit styling", () => {
 
   test("segmented controls show which segment is on", async ({ page }) => {
     await desktop(page)
-    await page.goto("/sessions")
+    await page.goto("/sessions?group=machine")
     const on = page.getByRole("button", { name: "Machine", exact: true })
     await expect(on).toHaveAttribute("aria-pressed", "true")
     expect(await style(on, "background-color")).not.toBe(await style(page.getByRole("button", { name: "Project", exact: true }), "background-color"))

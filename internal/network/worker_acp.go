@@ -143,6 +143,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 		brokerSetConfigOption(&connMu, &conn, &sessID),
 	)
 	conv := NewConversationSession(log, broker)
+	conv.workspace = workspace
 	conv.agentExited = false
 	log.SetReplaying(launch.Session.AgentSessionID != "" && conv.lastSeq > 0)
 	defer log.SetReplaying(false)
@@ -260,6 +261,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		brokerSetConfigOption(&connMu, &conn, &sessID),
 	)
 	conv := NewConversationSession(log, broker)
+	conv.workspace = workspace
 	conv.agentExited = false
 	log.SetReplaying(launch.Session.AgentSessionID != "" && conv.lastSeq > 0)
 	defer log.SetReplaying(false)

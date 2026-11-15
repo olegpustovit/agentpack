@@ -15,6 +15,8 @@ function lineCount(text: string | undefined): number {
   return lines.length
 }
 
+// Turn numbering: a turn starts at every reduced item of kind "prompt" or "user_message_chunk" (1-based);
+// a tool item belongs to the latest turn. Mirrors revertPlan in internal/network/conversation_revert.go.
 export function listDiffChanges(items: ThreadItem[]): DiffChange[] {
   const out: DiffChange[] = []
   let turn = 0
