@@ -46,6 +46,7 @@ Worker routes (gateway proxies as `/api/sessions/{id}/conversation/...` with the
 
 - `GET /conversation?since=` — NDJSON replay; `Accept: text/event-stream` or `?stream=1` for live updates. Snapshots are capped at 4 MiB and retain only complete records; `X-Agentpack-Truncated: true` marks omitted data. The gateway returns saved history when the worker is unavailable, preserving the same sequence filter and response formats. A stopped session’s SSE replay ends after its saved entries.
 - `POST /conversation/prompt`, `/cancel`, `/permission`, `/elicitation`, `/config`
+- `POST /conversation/revert` — body `{turn}` (1-based; a turn starts at each user prompt). Restores the turn's edited files from the worker's own log: every file must still match the turn's final text, all are checked before any is written, created files are deleted, paths must stay inside the session directory. Refused with 409 while a turn runs.
 - `GET /conversation/config-options`
 - `GET /blobs/{sha}` — session-scoped PNG/JPEG/GIF/WebP images, 20 MiB each and 100 MiB total or 128 images per session (whichever limit is reached first)
 

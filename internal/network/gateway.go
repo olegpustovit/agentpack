@@ -472,6 +472,17 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		proxyWorkerConversation(w, r, record, "/permission")
 	})
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/revert", func(w http.ResponseWriter, r *http.Request) {
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
+		if err != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return
+		}
+		if !authorizeACPWrite(w, r, record.Session) {
+			return
+		}
+		proxyWorkerConversation(w, r, record, "/revert")
+	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/cancel", func(w http.ResponseWriter, r *http.Request) {
 		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {

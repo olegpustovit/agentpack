@@ -163,6 +163,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 		}
 		writeJSON(w, map[string]bool{"accepted": true})
 	})
+	mux.HandleFunc("POST /conversation/revert", worker.handleRevert)
 	mux.HandleFunc("POST /conversation/cancel", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		if _, ok := ctx.Deadline(); !ok {

@@ -167,7 +167,7 @@ test("session hierarchy has icons and keeps collapsed groups through refresh", a
   // shortcut: the React list has no collapsible groups, so only the hierarchy and its refresh survival are ported.
   await page.setViewportSize(gwDesktopViewport)
   await mockAPI(page)
-  await page.goto("/")
+  await page.goto("/sessions?group=machine")
   const group = page.locator("nav > div").filter({ has: page.locator('[data-slot="group-header"]', { hasText: "Gateway machine" }) })
   const subhead = group.locator('[data-slot="group-header"]').filter({ hasText: "my-project" })
   const row = gwRow(page, "local:local-one")

@@ -21,3 +21,37 @@ export function sessionStatusWord(session: ListedSession, stopping: boolean): st
   if (session.state.running) return undefined
   return "Stopped"
 }
+
+// Idle chat with activity newer than the last time this browser opened it (or the first-visit baseline).
+export function isUnread(session: ListedSession, seenAt: number | undefined): boolean {
+  if (sessionGlyphState(session) !== "idle" || !session.last_used) return false
+  const used = Date.parse(session.last_used)
+  return !Number.isNaN(used) && (seenAt === undefined || used > seenAt)
+}
+
+const SEEN_KEY = "agentpack.sessions.seen"
+
+// Per-viewer convenience: storage may be blocked, so every access falls back to nothing.
+export function loadSeen(): Record<string, number> {
+  try {
+    const stored = localStorage.getItem(SEEN_KEY)
+    // First visit: rows never opened count as seen now, so old history isn't all "unread".
+    if (stored === null) {
+      const baseline = { "": Date.now() }
+      saveSeen(baseline)
+      return baseline
+    }
+    const value: unknown = JSON.parse(stored)
+    return value && typeof value === "object" ? (value as Record<string, number>) : {}
+  } catch {
+    return {}
+  }
+}
+
+export function saveSeen(seen: Record<string, number>) {
+  try {
+    localStorage.setItem(SEEN_KEY, JSON.stringify(seen))
+  } catch {
+    // Unread markers just reset on reload.
+  }
+}

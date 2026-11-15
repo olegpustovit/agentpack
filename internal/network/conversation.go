@@ -37,6 +37,7 @@ type ConversationSession struct {
 	stderr            *diagnosticStderr
 	agentExitCode     *atomic.Int32
 	sessionID         string
+	workspace         string // session working directory; set by the worker, bounds revert
 }
 
 func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *ConversationSession {

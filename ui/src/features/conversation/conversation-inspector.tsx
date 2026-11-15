@@ -1,6 +1,9 @@
 import { useState } from "react"
 import { FileCode2 } from "lucide-react"
 import { Section, KeyValue } from "@/components/kit/data"
+import { Button } from "@/components/ui/button"
+import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
+import { api, ApiError } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName } from "@/lib/format"
 import { hud } from "@/lib/hud"
@@ -14,11 +17,15 @@ export function ConversationInspector({
   info,
   machine,
   open,
+  sessionId,
+  readOnly,
 }: {
   thread: ThreadState
   info?: SessionInfo
   machine: string
   open: boolean
+  sessionId?: string
+  readOnly?: boolean
 }) {
   const actor = info?.started_by
   const startedBy = actor ? [actor.user ?? actor.node, actor.kind].filter(Boolean).join(" · ") : undefined
@@ -32,6 +39,8 @@ export function ConversationInspector({
     sessionCapabilities?.fork !== undefined && sessionCapabilities.fork !== null
   const all = listDiffChanges(thread.items)
   const [scope, setScope] = useState<"turn" | "all">("turn")
+  const [confirming, setConfirming] = useState(false)
+  const [revertError, setRevertError] = useState<string>()
   const lastTurn = Math.max(0, ...all.map((c) => c.turn))
   const changes = groupByPath(scope === "turn" ? all.filter((c) => c.turn === lastTurn) : all)
   return (
@@ -78,6 +87,32 @@ export function ConversationInspector({
                 )
               })}
             </ul>
+            {scope === "turn" && lastTurn > 0 && sessionId && (
+              <>
+                <Button type="button" size="sm" variant="ghost" disabled={readOnly} onClick={() => setConfirming(true)}>
+                  Revert turn {lastTurn}
+                </Button>
+                {revertError && <p role="alert" className="text-(length:--fs-sm) text-(--danger-word)">{revertError}</p>}
+                <ConfirmAlert open={confirming} onOpenChange={setConfirming}>
+                  {confirming && (
+                    <ConfirmAlertContent
+                      title={`Revert turn ${lastTurn}?`}
+                      description="Restores the files this turn changed. Refused if any of them changed since."
+                      destructiveLabel="Revert"
+                      onConfirm={() => {
+                        setConfirming(false)
+                        setRevertError(undefined)
+                        api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/revert`, { machine, method: "POST", body: { turn: lastTurn } }).then(
+                          () => hud.success(`Reverted turn ${lastTurn}`),
+                          (error: unknown) =>
+                            setRevertError(error instanceof ApiError && error.status === 404 ? "Needs update" : error instanceof Error ? error.message : "Couldn't revert this turn."),
+                        )
+                      }}
+                    />
+                  )}
+                </ConfirmAlert>
+              </>
+            )}
           </Section>
         )}
         {info && (

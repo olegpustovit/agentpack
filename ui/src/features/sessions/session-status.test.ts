@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { ListedSession } from "./group"
-import { sessionGlyphState, sessionStatusWord } from "./session-status"
+import { isUnread, sessionGlyphState, sessionStatusWord } from "./session-status"
 
 const base: ListedSession = {
   id: "s1",
@@ -33,4 +33,18 @@ it("archived and offline state take precedence over stale live requests",()=>{
  expect(sessionGlyphState({...pending,offline:true})).toBe("offline")
  expect(sessionStatusWord({...pending,archived_at:"2026-11-15T00:00:00Z"},false)).toBe("Archived")
  expect(sessionGlyphState({...pending,archived_at:"2026-11-15T00:00:00Z"})).toBe("stopped")
+})
+
+describe("isUnread", () => {
+  const idle = { ...base, conversation_state: "idle", last_used: "2026-01-01T00:00:10Z" }
+  const at = (iso: string) => Date.parse(iso)
+  it("is unread when idle activity is newer than the last open, or never opened", () => {
+    expect(isUnread(idle, undefined)).toBe(true)
+    expect(isUnread(idle, at("2026-01-01T00:00:05Z"))).toBe(true)
+    expect(isUnread(idle, at("2026-01-01T00:00:10Z"))).toBe(false)
+  })
+  it("ignores sessions that are not idle or have no activity time", () => {
+    expect(isUnread({ ...idle, conversation_state: "working" }, undefined)).toBe(false)
+    expect(isUnread({ ...idle, last_used: undefined }, undefined)).toBe(false)
+  })
 })

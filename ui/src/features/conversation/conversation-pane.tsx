@@ -372,7 +372,7 @@ export default function ConversationPane({
             )}
           </div>
         </div>
-        <ConversationInspector thread={thread} info={info} machine={machine} open={inspectorOpen} />
+        <ConversationInspector thread={thread} info={info} machine={machine} open={inspectorOpen} sessionId={sessionId} readOnly={readOnly || needsUpdate} />
       </div>
       {!readOnly && <div
         className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-(--s4) pt-36 pb-(--s5)"
