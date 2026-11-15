@@ -1402,3 +1402,40 @@ The short five-repeat startup benchmarks are recorded in startup-performance.md.
 The P3.8 concurrency check passes; the physical Linux ARM64 performance gate
 remains unverified. P3.6 native ownership bindings and P3.7 legacy import remain
 unfinished, so this is still an intermediate migration checkpoint.
+
+## Native ownership and legacy import — P3.6 / P3.7
+
+Native ACP ownership now reads and writes sessions.started_by and owner_email.
+An immutable, hidden session row retains each native ownership scope, keyed by
+this database's site ID and the old scope hash. This preserves orphaned legacy
+owner records, whose filenames contain a hash rather than the native session ID,
+and keeps ownership independent of any particular worker's lifetime. These rows
+have no directory or native session ID and are excluded from public sessions and
+recents. They stay in replicated metadata when chat events are archived later.
+The initial worker row leaves the native ID empty until the ownership claim and
+actual row binding commit together, preventing two actors from claiming one
+native conversation through concurrent launches. Harness aliases share a scope.
+
+Gateway startup imports stopped legacy workers, names, conversation NDJSON,
+native owner files and recent folders. Imports use bounded regular-file reads,
+check file identity and metadata before commit, preserve canonical SQL rows with
+INSERT OR IGNORE, and remove imported files only after commit. Images and other
+support files remain. Folder identities are preserved rather than granting
+fresh authorization to a replaced directory. Repeat import is harmless.
+
+Running worker PIDs are skipped conservatively; the live IPC endpoint is also
+used when an old record has no PID. Their owner records become readable through
+SQL while their source files remain for the old worker. Unreadable files remain
+in place and record a structured diagnostic without preventing gateway startup.
+Unreadable owner records create a hidden refusal marker until a later successful
+import; an unreadable owner directory temporarily refuses native resumes rather
+than treating missing ownership as unclaimed.
+
+The focused Linux import/startup/claim selection passes in 0.56 s, the existing
+owner/resume/fork/worker selection in 0.35 s, and metadata/name/import checks in
+0.56 s. The physical Apple M1 Mac import and authorization selection passes in
+1.75 s. These checks include a two-store ownership race, repeat import, orphaned
+owners, unreadable sources, live-worker retention and actual gateway startup with
+an unreadable chat file. No full suite, Windows runtime check, race build, soak or
+full commit-hook gates were run. The physical Linux ARM64 P3.8 performance gate
+remains unverified. Mesh synchronization and archiving are not implemented yet.

@@ -127,6 +127,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	gateway := &Gateway{options: options, store: store, logs: logs, auth: auth, local: nodeRecord{listener.Addr().String(), randomToken()}, origin: origin, stop: cancel, done: ctx.Done()}
+	gateway.importLegacySessions(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, localStateNode, "gateway")))
 	gateway.mcp, err = NewGatewayMCP(gateway)
 	if err != nil {
 		return err
@@ -711,7 +712,7 @@ func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInf
 		}
 		source.AgentSessionID = forkSessionID
 	}
-	if err := authorizeACPResume(g.options.Home, actor, source); err != nil {
+	if err := authorizeACPResume(ctx, g.auth.store, actor, source); err != nil {
 		return SessionInfo{}, err
 	}
 	info.StartedBy = &actor

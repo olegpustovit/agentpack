@@ -171,7 +171,9 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if launch.Transport == "acp" {
 		launch.Session.Transport = "acp"
 	}
-	if err := upsertSession(ctx, store.DB, launch.Session); err != nil {
+	pending := launch.Session
+	pending.AgentSessionID = ""
+	if err := upsertSession(ctx, store.DB, pending); err != nil {
 		return 1, fmt.Errorf("register session: %w", err)
 	}
 	if launch.Transport == "acp" {
@@ -194,7 +196,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		launch.ForkSessionID = ""
 		launch.Session.AgentSessionID = conversation.agentSessionID
 		launch.Session.AgentCapabilities = conversation.AgentCapabilitiesView()
-		if err := rememberACPConversationOwner(home, launch.Session, launch.Directory); err != nil {
+		if err := rememberACPConversationOwner(ctx, store, launch.Session, launch.Directory); err != nil {
 			return 1, fmt.Errorf("persist ACP session owner: %w", err)
 		}
 	} else {

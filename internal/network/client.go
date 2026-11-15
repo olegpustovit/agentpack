@@ -67,6 +67,12 @@ func workerRecord(home, id string) (WorkerRecord, error) {
 	if err != nil {
 		return record, err
 	}
+	return parseWorkerRecord(data, id)
+}
+
+func parseWorkerRecord(data []byte, id string) (WorkerRecord, error) {
+	var record WorkerRecord
+	var err error
 	if err = json.Unmarshal(data, &record); err != nil {
 		return record, err
 	}

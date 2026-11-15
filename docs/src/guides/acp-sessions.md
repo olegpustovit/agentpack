@@ -26,6 +26,15 @@ A private `network/sessions/<id>/worker.json` retains only the running
 process's ID, PID, loopback address and secret. Forgetting a recent folder hides
 its launch rows; it does not remove files from the folder or erase session data.
 
+Native resume ownership also lives in state.db. Hidden ownership rows retain the
+original actor even when an old worker directory has disappeared. At gateway
+startup, stopped legacy workers' metadata, names and conversation files are
+imported transactionally; their imported files are removed only after commit.
+Images and other support files remain. Live workers retain their files until a
+later startup. Unreadable sources stay in place and produce a diagnostic without
+preventing gateway startup; unreadable ownership records keep affected resumes
+read-only until the source can be imported.
+
 ## Conversation API
 
 Worker routes (gateway proxies as `/api/sessions/{id}/conversation/...` with the same auth and `?node=` peer routing as other session APIs):

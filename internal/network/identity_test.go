@@ -333,7 +333,7 @@ func TestPeerACPResumeRequiresRecordedOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := Actor{Kind: "peer", User: "alice@example.com", Node: "old-name", StableNodeID: "stable-owner"}
-	if err := rememberACPConversationOwner(home, SessionInfo{
+	if err := testRememberACPConversationOwner(t, home, SessionInfo{
 		Directory: directory, FolderID: folderID, Harness: "claude", Mode: "default",
 		Transport: "acp", AgentSessionID: "prior-1", StartedBy: &owner,
 	}, ""); err != nil {
@@ -373,11 +373,8 @@ func TestPeerACPResumeRequiresRecordedOwner(t *testing.T) {
 		t.Fatalf("resumed owner = %+v, want %+v", started[0].StartedBy, renamedOwner)
 	}
 
-	_, ownerPath, _, err := acpConversationOwnerPath(home, folderID, "claude", "prior-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(ownerPath, []byte("{"), 0o600); err != nil {
+	store := testSessionStore(t, home)
+	if _, err := store.DB.Exec("UPDATE sessions SET started_by='{' WHERE folder_id=? AND id LIKE 'ownership-%'", folderID); err != nil {
 		t.Fatal(err)
 	}
 	if got := resume("prior-1", renamedOwner).Code; got != http.StatusInternalServerError || len(started) != 1 {
@@ -403,15 +400,19 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 		ID: "session-source", Directory: directory, FolderID: folderID, Harness: "claude",
 		Mode: "default", Transport: "acp", AgentSessionID: "source-session", StartedBy: &owner,
 	}
-	if err := rememberACPConversationOwner(home, sourceSession, ""); err != nil {
+	if err := testRememberACPConversationOwner(t, home, sourceSession, ""); err != nil {
 		t.Fatal(err)
 	}
 	sourceRecordDir := filepath.Join(home, "network", "sessions", sourceSession.ID)
 	if err := paths.EnsurePrivateDirectory(sourceRecordDir); err != nil {
 		t.Fatal(err)
 	}
+	store := testSessionStore(t, home)
 	saveSourceRecord := func(session SessionInfo) {
 		t.Helper()
+		if err := upsertSession(t.Context(), store.DB, session); err != nil {
+			t.Fatal(err)
+		}
 		data, err := json.Marshal(WorkerRecord{
 			Session: session, ID: sourceSession.ID, Address: "127.0.0.1:7420", Secret: strings.Repeat("s", 64),
 		})
@@ -473,14 +474,14 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 	}
 	forked := started
 	forked.AgentSessionID = "forked-session"
-	if err := rememberACPConversationOwner(home, forked, ""); err != nil {
+	if err := testRememberACPConversationOwner(t, home, forked, ""); err != nil {
 		t.Fatal(err)
 	}
-	gotOwner, found, err := readACPConversationOwner(home, folderID, "claude", "forked-session")
+	gotOwner, found, err := readACPConversationOwner(t.Context(), testSessionStore(t, home), folderID, "claude", "forked-session")
 	if err != nil || !found || gotOwner != renamedOwner {
 		t.Fatalf("forked native session owner=%+v found=%t err=%v", gotOwner, found, err)
 	}
-	gotOwner, found, err = readACPConversationOwner(home, folderID, "claude", "source-session")
+	gotOwner, found, err = readACPConversationOwner(t.Context(), testSessionStore(t, home), folderID, "claude", "source-session")
 	if err != nil || !found || gotOwner != owner {
 		t.Fatalf("source native session owner changed: owner=%+v found=%t err=%v", gotOwner, found, err)
 	}

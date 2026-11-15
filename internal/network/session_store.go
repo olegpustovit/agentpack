@@ -12,25 +12,36 @@ import (
 const sessionColumns = `id,last_used,folder_id,name,directory,definition_root,harness,mode,
 	transport,agent_session_id,agent_capabilities,conversation_state,state,started_at,started_by`
 
-func upsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
+func sessionValues(info SessionInfo) ([]any, error) {
 	if info.ID == "" {
-		return errors.New("session ID is required")
+		return nil, errors.New("session ID is required")
 	}
 	capabilities, err := json.Marshal(info.AgentCapabilities)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	owner, err := json.Marshal(info.StartedBy)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	terminal, err := json.Marshal(info.State)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var email string
 	if info.StartedBy != nil {
 		email, _ = normalizeEmail(info.StartedBy.User)
+	}
+	return []any{info.ID, sessionTimestamp(info.LastUsed), info.FolderID, info.Name, info.Directory,
+		info.DefinitionRoot, info.Harness, info.Mode, info.Transport, info.AgentSessionID,
+		string(capabilities), info.ConversationState, string(terminal), sessionTimestamp(info.StartedAt),
+		string(owner), localStateNode, email}, nil
+}
+
+func upsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
+	args, err := sessionValues(info)
+	if err != nil {
+		return err
 	}
 	_, err = db.ExecContext(ctx, `INSERT INTO sessions (`+sessionColumns+`,node_id,owner_email)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
@@ -39,11 +50,7 @@ func upsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
 		transport=excluded.transport,agent_session_id=excluded.agent_session_id,
 		agent_capabilities=excluded.agent_capabilities,conversation_state=excluded.conversation_state,
 		state=excluded.state,started_at=excluded.started_at,started_by=excluded.started_by,
-		node_id=excluded.node_id,owner_email=excluded.owner_email,ended_at=0`,
-		info.ID, sessionTimestamp(info.LastUsed), info.FolderID, info.Name, info.Directory,
-		info.DefinitionRoot, info.Harness, info.Mode, info.Transport, info.AgentSessionID,
-		string(capabilities), info.ConversationState, string(terminal), sessionTimestamp(info.StartedAt),
-		string(owner), localStateNode, email)
+		node_id=excluded.node_id,owner_email=excluded.owner_email,ended_at=0`, args...)
 	return err
 }
 
