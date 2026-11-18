@@ -359,3 +359,12 @@ test("a missing pane chunk reloads once, then offers Reload instead of loading f
   await expect(page.getByRole("button", { name: "Reload" })).toBeVisible()
   expect(loads).toBe(2)
 })
+
+test("a stalled pane chunk offers Reload after 15 s", async ({ page }) => {
+  await page.clock.install()
+  await page.route("**/conversation-pane-*.js", () => {}) // never answered
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByText("Loading conversation…")).toBeAttached()
+  await page.clock.fastForward(16_000)
+  await expect(page.getByRole("button", { name: "Reload" })).toBeVisible()
+})

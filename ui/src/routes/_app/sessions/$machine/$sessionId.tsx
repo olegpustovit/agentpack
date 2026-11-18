@@ -32,7 +32,11 @@ function usePane(kind: keyof typeof loadPane | undefined): boolean {
   const [, loaded] = useState(0)
   const [failed, setFailed] = useState(false)
   useEffect(() => {
-    if (kind && !panes[kind]) loadPane[kind]().then(() => loaded((count) => count + 1), () => setFailed(true))
+    if (!kind || panes[kind]) return
+    // A module fetch can stall without failing (a gateway restarting behind the CDN); offer Reload rather than spin forever.
+    const stalled = setTimeout(() => setFailed(true), 15_000)
+    loadPane[kind]().then(() => { clearTimeout(stalled); setFailed(false); loaded((count) => count + 1) }, () => setFailed(true))
+    return () => clearTimeout(stalled)
   }, [kind])
   return failed
 }

@@ -96,6 +96,13 @@ func observeHTTP(mux *http.ServeMux, next http.Handler, sink obs.Sink, metadata 
 		defer func() {
 			problem := recover()
 			abort := false
+			if problem == http.ErrAbortHandler {
+				// The reverse proxy's way to drop a response whose client or upstream went away: not a crash.
+				event.Status = int(metrics.code.Load())
+				event.Set("aborted", true)
+				event.Set("response_bytes", metrics.bytes.Load())
+				panic(problem)
+			}
 			if problem != nil {
 				event.Kind = "panic"
 				switch value := problem.(type) {

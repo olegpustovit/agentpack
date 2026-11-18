@@ -7,7 +7,7 @@ import { setUnauthorizedHandler } from "./lib/api"
 import { terminalPool } from "./features/terminal/pool"
 import { forgetLimits } from "./features/limits/queries"
 import { queryClient, router } from "./router"
-import { breadcrumb, installTelemetry } from "./lib/telemetry"
+import { breadcrumb, flushTelemetry, installTelemetry, reportError } from "./lib/telemetry"
 import { configQuery } from "./lib/config"
 
 const entryBuildID = document.querySelector<HTMLScriptElement>('script[type="module"][src]')?.src.match(/index-(.+)\.js$/)?.[1]
@@ -20,6 +20,9 @@ router.subscribe("onResolved", () => breadcrumb({ kind: "navigate", name: router
 // A deploy removes the previous build's chunks, so an open tab fails its next lazy import:
 // reload once to pick up the new build. The stamp stops a loop if the chunk is really broken.
 window.addEventListener("vite:preloadError", (event) => {
+  // Report first: the reload otherwise erases the only record of which chunk failed.
+  reportError((event as Event & { payload?: unknown }).payload)
+  flushTelemetry(true)
   try {
     if (Date.now() - Number(sessionStorage.getItem("agentpack:reloaded") ?? 0) < 10_000) return
     sessionStorage.setItem("agentpack:reloaded", String(Date.now()))

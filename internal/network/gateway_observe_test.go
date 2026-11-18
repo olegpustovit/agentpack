@@ -131,6 +131,28 @@ func TestHTTPObservationAbortsPanicAfterFlushing(t *testing.T) {
 	}
 }
 
+func TestHTTPObservationRecordsProxyAbortAsAbortNotPanic(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /proxy", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "partial")
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	})
+	queue := obs.NewQueue()
+	server := httptest.NewServer(observeHTTP(mux, mux, queue, obs.Metadata{}))
+	defer server.Close()
+	response, err := server.Client().Get(server.URL + "/proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	_, _ = io.ReadAll(response.Body)
+	event := observedEvent(t, queue)
+	if event.Kind == "panic" || event.Level == "error" || event.Status != 200 {
+		t.Fatalf("proxy abort recorded as a failure: %+v", event)
+	}
+}
+
 func TestHTTPObservationStreamsFinishOnceOnClose(t *testing.T) {
 	for _, kind := range []string{"sse", "websocket"} {
 		t.Run(kind, func(t *testing.T) {
