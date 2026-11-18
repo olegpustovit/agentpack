@@ -28,7 +28,7 @@ import { RowSheet, type SheetState } from "./session-sheets"
 // holding a key opens one terminal. `from` is the route the cursor was set under; a route change
 // drops it without an effect.
 type Cursor = { key: string; from: string | undefined }
-type Confirm = { kind: "stop" | "restart"; row: ListedSession }
+type Confirm = { kind: "stop" | "restart" | "archive"; row: ListedSession }
 
 // Computers that could run a gateway. Phones and TVs on the tailnet never will, so they are not missing.
 
@@ -144,6 +144,7 @@ export function SessionList() {
       rename: () => setSheet({ kind: "rename", row }),
       restart: () => setConfirm({ kind: "restart", row }),
       stop: () => setConfirm({ kind: "stop", row }),
+      archive: () => setConfirm({ kind: "archive", row }),
       // A pooled session on the open row must dial again; navigating to the row it already shows does nothing.
       reconnect: () => {
         terminalPool.reconnect(row.machine, row.id)
@@ -277,17 +278,23 @@ export function SessionList() {
       <ConfirmAlert open={confirm !== null} onOpenChange={(open) => { if (!open) setConfirm(null) }}>
         {confirm && (
           <ConfirmAlertContent
-            title={`${confirm.kind === "stop" ? "Stop" : "Restart"} ${sessionLabel(confirm.row)} in ${basename(confirm.row.directory) || "this folder"}?`}
+            title={`${{ stop: "Stop", restart: "Restart", archive: "Archive" }[confirm.kind]} ${sessionLabel(confirm.row)} in ${basename(confirm.row.directory) || "this folder"}?`}
             description={
               confirm.kind === "stop"
                 ? `On ${confirm.row.machineName}. Its current conversation may end.`
-                : `On ${confirm.row.machineName}. Its current conversation may end unless the agent supports resume.`
+                : confirm.kind === "archive"
+                  ? `It leaves the session list on every machine.${confirm.row.state.running ? " The agent is stopped first." : ""}`
+                  : `On ${confirm.row.machineName}. Its current conversation may end unless the agent supports resume.`
             }
-            destructiveLabel={confirm.kind === "stop" ? "Stop agent" : "Restart agent"}
+            destructiveLabel={{ stop: "Stop agent", restart: "Restart agent", archive: "Archive" }[confirm.kind]}
             onConfirm={() => {
               const { kind, row } = confirm
               setConfirm(null)
-              if (kind === "stop") {
+              if (kind === "archive") {
+                void commands.archive(row).then((done) => {
+                  if (done && routeKey === rowKey(row)) void navigate({ to: "/sessions", search: true })
+                })
+              } else if (kind === "stop") {
                 // An agent that ignores the signal can hold this request for up to 90 s.
                 setStopping((keys) => new Set(keys).add(rowKey(row)))
                 void commands.stop(row).finally(() =>

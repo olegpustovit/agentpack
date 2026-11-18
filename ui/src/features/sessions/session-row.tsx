@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from "react"
 import { Link } from "@tanstack/react-router"
-import { Loader, Package, Pencil, Plug, RotateCw, Save, Square, X, type LucideIcon } from "lucide-react"
+import { Archive, Loader, Package, Pencil, Plug, RotateCw, Save, Square, X, type LucideIcon } from "lucide-react"
 import { SourceRow } from "@/components/kit/list"
 import { StatusGlyph } from "@/components/kit/status-dot"
 import { Menu, MenuContent, MenuItem, MenuTrigger, RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger, RowMoreButton } from "@/components/kit/overlays"
@@ -16,6 +16,7 @@ export type RowActions = {
   rename: () => void
   restart: () => void
   stop: () => void
+  archive: () => void
   reconnect: () => void
   closeTerminal: () => void
   install: () => void
@@ -30,6 +31,7 @@ function menuEntries(session: ListedSession, selected: boolean, actions: RowActi
     { label: "Rename…", icon: Pencil, shortcut: "F2", disabled: !rules.rename, run: actions.rename },
     { label: "Restart…", icon: RotateCw, disabled: !rules.restart, run: actions.restart },
     { label: "Stop…", icon: Square, disabled: !rules.stop, run: actions.stop },
+    { label: "Archive…", icon: Archive, disabled: !rules.archive, run: actions.archive },
     "separator",
     { label: "Reconnect", icon: Plug, disabled: !rules.reconnect, run: actions.reconnect },
     { label: "Close terminal", icon: X, disabled: !selected, run: actions.closeTerminal },

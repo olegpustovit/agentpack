@@ -145,6 +145,9 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 	if err != nil || json.Unmarshal(data, &endpoint) != nil || len(endpoint) != 4 || endpoint["session"] != nil {
 		t.Fatalf("worker file contains session metadata: %s %v", data, err)
 	}
+	if err := HideSession(ctx, home, id); !errors.Is(err, errSessionRunning) {
+		t.Fatalf("archived a running session: %v", err)
+	}
 	renamed, err := RenameSession(ctx, home, id, "Long-running review")
 	if err != nil || renamed.ID != id || renamed.Name != "Long-running review" {
 		t.Fatalf("rename running worker: %+v %v", renamed, err)
@@ -235,6 +238,10 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 	}
 	if stopped, err := RenameSession(context.Background(), home, id, "Review complete"); err != nil || stopped.State.Running || stopped.Name != "Review complete" {
 		t.Fatalf("rename stopped session: %+v %v", stopped, err)
+	}
+	var hidden bool
+	if err := HideSession(context.Background(), home, id); err != nil || store.Reader.QueryRow("SELECT hidden FROM sessions WHERE id=?", id).Scan(&hidden) != nil || !hidden {
+		t.Fatalf("archive stopped session: hidden=%v err=%v", hidden, err)
 	}
 	events := workerDiagnosticEvents(t, home)
 	names := map[string]int{}

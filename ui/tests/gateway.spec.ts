@@ -716,3 +716,20 @@ test("New Session explains the Node requirement for ACP chat", async ({ page }) 
   await expect(page.getByText("Install Node.js on Gateway machine to use Chat, or choose Terminal.")).toBeVisible()
   await expect(page.getByRole("button", { name: "Start session" })).toBeDisabled()
 })
+
+test("archive stops a running session, then hides it from the list", async ({ page }) => {
+  const requests = await mockAPI(page)
+  const bodies: unknown[] = []
+  await page.route("**/api/sessions/local-two", (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback()
+    bodies.push(route.request().postDataJSON())
+    return route.fulfill({ json: { hidden: true } })
+  })
+  await page.goto("/")
+  await gwRow(page, "local:local-two").click({ button: "right" })
+  await page.getByRole("menuitem", { name: "Archive…" }).click()
+  await expect(page.getByRole("alertdialog")).toContainText("The agent is stopped first.")
+  await page.getByRole("alertdialog").getByRole("button", { name: "Archive" }).click()
+  await expect.poll(() => bodies).toEqual([{ hidden: true }])
+  expect(requests.some((item) => item.path === "/api/sessions/local-two/stop")).toBeTruthy()
+})

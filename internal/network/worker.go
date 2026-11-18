@@ -290,7 +290,18 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			}
 		}
 	}
+	persistTitle := func(title string) {
+		if _, err := store.DB.ExecContext(context.Background(), "UPDATE sessions SET title=? WHERE id=? AND archived_at=0 AND node_id="+state.LocalNodeSQL, title, record.ID); err != nil {
+			_, event := obs.Start(ctx, "worker", "set_title")
+			event.Set("session_id", record.ID)
+			event.Fail(err)
+			event.End()
+		}
+	}
 	if conversation != nil {
+		conversation.mu.Lock()
+		conversation.titleChange = persistTitle
+		conversation.mu.Unlock()
 		conversation.SetStateChange(record.Session.ConversationState, persistConversationState(conversation))
 	}
 	handler, err = WorkerHandler(ctx, session, conversation, record.Secret, directory)
@@ -346,6 +357,9 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			}
 			conversation = next
 			acpCleanup = cleanup
+			next.mu.Lock()
+			next.titleChange = persistTitle
+			next.mu.Unlock()
 			handler.mu.Lock()
 			handler.conversation = next
 			handler.mu.Unlock()

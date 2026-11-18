@@ -381,9 +381,24 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 		var input struct {
-			Name *string `json:"name"`
+			Name   *string `json:"name"`
+			Hidden *bool   `json:"hidden"`
 		}
 		if !readJSON(w, r, &input) {
+			return
+		}
+		if input.Hidden != nil && *input.Hidden {
+			err := HideSession(r.Context(), g.options.Home, r.PathValue("id"))
+			switch {
+			case errors.Is(err, errSessionNotFound):
+				http.Error(w, "session not found", http.StatusNotFound)
+			case errors.Is(err, errSessionRunning):
+				http.Error(w, "Stop the session before archiving it.", http.StatusConflict)
+			case err != nil:
+				http.Error(w, "Couldn't archive the session.", http.StatusInternalServerError)
+			default:
+				writeJSON(w, map[string]bool{"hidden": true})
+			}
 			return
 		}
 		if input.Name == nil {

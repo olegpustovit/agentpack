@@ -29,6 +29,7 @@ type ConversationSession struct {
 	agentCapabilities *AgentCapabilities
 	agentSessionID    string
 	stateChange       func(string)
+	titleChange       func(string) // the agent named the chat (session_info_update)
 	publishedState    string
 	lastSeq           int64
 	toolCalls         uint64
@@ -83,10 +84,31 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	state := conversationState(session.reducer.Apply(entry))
 	changed := state != session.state
 	session.state = state
+	titleChange, title := session.titleChange, agentTitle(entry)
 	session.mu.Unlock()
+	if titleChange != nil && title != "" {
+		titleChange(title)
+	}
 	if changed {
 		session.publishState()
 	}
+}
+
+func agentTitle(entry acp.LogEntry) string {
+	if entry.Kind != "session_info_update" {
+		return ""
+	}
+	var update struct {
+		Title *string `json:"title"`
+	}
+	if json.Unmarshal(entry.Payload, &update) != nil || update.Title == nil {
+		return ""
+	}
+	title, err := normalizeSessionName(*update.Title)
+	if err != nil {
+		return ""
+	}
+	return title
 }
 
 // applyConfigUpdate keeps the cached options in step with the agent. The caller holds mu.

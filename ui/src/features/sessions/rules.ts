@@ -12,6 +12,7 @@ export function sessionRules(session: ListedSession) {
     reconnect: !offline && !nonInteractive,
     install: !offline,
     save: !offline,
+    archive: !offline,
   }
 }
 

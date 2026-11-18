@@ -75,3 +75,23 @@ func RenameSession(ctx context.Context, home, id, name string) (SessionInfo, err
 	info.Name = name
 	return info, err
 }
+
+var errSessionRunning = errors.New("session is running")
+
+// HideSession archives a stopped session from the user's view: it leaves every list on the mesh, and its
+// history stays in place until the hourly mover takes it to the archive like any other idle chat.
+func HideSession(ctx context.Context, home, id string) error {
+	store, err := state.Open(home)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if _, err := storedSession(ctx, store.Reader, id); err != nil {
+		return err
+	}
+	if _, err := workerRecord(home, id); err == nil {
+		return errSessionRunning
+	}
+	_, err = store.DB.ExecContext(ctx, "UPDATE sessions SET hidden=1 WHERE id=? AND hidden=0", id)
+	return err
+}
