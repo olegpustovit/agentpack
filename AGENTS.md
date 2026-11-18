@@ -79,9 +79,10 @@ All agentpack-owned terminal rendering is monochrome and terminal-agnostic: use 
 
 **Default `AGENTPACK_HOME`:** if unset, **Windows** uses **`%LOCALAPPDATA%\agentpack`**; **Unix** uses **`$XDG_DATA_HOME/agentpack`** when **`XDG_DATA_HOME`** is set, otherwise **`$HOME/.local/share/agentpack`**.
 
-State sync shares password hashes and chat history only with explicitly approved
-mesh peers. Never promote a legacy or automatically discovered Library peer into
-mesh trust. Session and limits UI reads use local replicated rows; live actions
+State sync shares password hashes and chat history with mesh peers. Every
+gateway on the tailnet sharing allow list pairs automatically once discovery
+reaches it, so starting `ap` is enough to be visible; a peer the owner removed
+stays removed. Session and limits UI reads use local replicated rows; live actions
 route to their owning node. Keep offline history readable and all live controls
 disabled. Altering a replicated table uses the migration `crsql-alter` marker.
 

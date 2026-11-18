@@ -354,6 +354,30 @@ func nameFromTailnet(nodes map[string]TailnetNode, status tailnetStatus) {
 	}
 }
 
+// autoEnroll pairs every discovered peer the owner has not removed, so starting ap on an allowed tailnet machine is enough to be visible.
+func (g *Gateway) autoEnroll(ctx context.Context, discovered []TailnetNode) {
+	if g.options.Library.Store == nil {
+		return
+	}
+	for _, node := range discovered {
+		if g.meshPeer(ctx, node.ID) {
+			continue
+		}
+		removed, err := g.options.Library.Store.PeerRemoved(node.ID)
+		if err == nil && removed {
+			continue
+		}
+		if err == nil {
+			err = g.enrollPeer(ctx, node.ID)
+		}
+		if err != nil {
+			_, event := obs.Start(ctx, "mesh", "auto_enroll")
+			event.Fail(err)
+			event.End()
+		}
+	}
+}
+
 // tailnetNodes probes only allowed, online peers learned from the local daemon.
 func (g *Gateway) tailnetNodes(ctx context.Context) ([]TailnetNode, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -372,6 +396,7 @@ func (g *Gateway) tailnetNodes(ctx context.Context) ([]TailnetNode, error) {
 			discoveryErr = err
 		}
 	}
+	g.autoEnroll(ctx, discovered)
 	known, err := g.meshNodes(ctx, discovered)
 	if err != nil {
 		return nil, err

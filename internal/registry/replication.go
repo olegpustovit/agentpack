@@ -84,6 +84,13 @@ func (s *Store) RemovePeer(node string) error {
 	return err
 }
 
+// PeerRemoved reports whether the owner removed this peer, which automatic pairing must respect.
+func (s *Store) PeerRemoved(node string) (bool, error) {
+	var removed bool
+	err := s.sql.Reader.QueryRow("SELECT EXISTS(SELECT 1 FROM registry_peers WHERE node_id=? AND removed=1)", node).Scan(&removed)
+	return removed, err
+}
+
 type importedObject struct {
 	id            string
 	data          []byte

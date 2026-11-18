@@ -67,10 +67,11 @@ definition files, and rolls them back if preparation fails. An interrupted resto
 is recovered under the definition lock on the next mutation or launch; preflight
 reports it without changing files.
 
-Owners explicitly enroll each gateway in Settings → Replication on both machines.
-Mesh members receive accounts, chat history, limits and Library records, so enroll
-only machines you fully trust. Discovery alone never grants mesh access. Removed
-machines stay removed until explicitly enrolled again; tailnet sharing must be on.
+Gateways pair automatically: every gateway on the tailnet sharing allow list joins
+the mesh as soon as discovery reaches it, and an unclaimed one takes the peer's
+accounts. Mesh members receive accounts, chat history, limits and Library records,
+so keep the allow list to machines you trust. Removed machines stay removed until
+enrolled again in Settings → Replication; tailnet sharing must be on.
 
 Objects are immutable and named by their SHA-256, and secrets are stripped before hashing, so machines converge on the same objects. Edits made on two machines merge three-way against their common ancestor; every machine computes the identical merge, so they agree without coordinating. When both changed one value differently, nothing is overwritten: the agentpack shows a conflict in the Library until someone chooses a value, and later captures continue their own project’s branch meanwhile. A deletion wins over a concurrent edit.
 

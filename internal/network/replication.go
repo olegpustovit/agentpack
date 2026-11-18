@@ -37,6 +37,22 @@ func (g *Gateway) enrolledPeer(id string) bool {
 	return false
 }
 
+// enrollPeer pairs an allowed peer; an unclaimed gateway first closes its claim window to join the mesh's accounts.
+func (g *Gateway) enrollPeer(ctx context.Context, peer string) error {
+	var claimed bool
+	err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users) OR (SELECT join_peer<>'' FROM local_node WHERE id=1)").Scan(&claimed)
+	if err == nil && !claimed {
+		err = PrepareMeshJoin(ctx, g.auth.store, peer)
+	}
+	if err == nil {
+		err = g.options.Library.Store.EnrollPeer(peer)
+	}
+	if err == nil {
+		g.emitEvent(eventMessage{Topic: "replication"})
+	}
+	return err
+}
+
 func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
 	store := g.options.Library.Store
 	if store == nil {
@@ -82,17 +98,7 @@ func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
 			http.Error(w, "choose an allowed Tailscale peer", http.StatusBadRequest)
 			return
 		}
-		var hasAccounts bool
-		err = g.auth.store.Reader.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM users)").Scan(&hasAccounts)
-		if err == nil && !hasAccounts {
-			err = PrepareMeshJoin(r.Context(), g.auth.store, input.Peer)
-		}
-		if err == nil {
-			err = store.EnrollPeer(input.Peer)
-		}
-		if err == nil {
-			g.emitEvent(eventMessage{Topic: "replication"})
-		}
+		err = g.enrollPeer(r.Context(), input.Peer)
 		libraryResponse(w, map[string]bool{"enrolled": err == nil}, err)
 	})
 	mux.HandleFunc("DELETE "+replicationPrefix+"peers/{peer}", func(w http.ResponseWriter, r *http.Request) {

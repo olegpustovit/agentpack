@@ -112,7 +112,7 @@ function PeerRow({
       <ConfirmAlert open={enrolling} onOpenChange={setEnrolling}>
         {enrolling && <ConfirmAlertContent
           title={`Trust ${peer.name} with this mesh?`}
-          description="This machine will receive password hashes, chat history and other shared state. Approve enrollment on the other machine too."
+          description="This machine will receive password hashes, chat history and other shared state."
           destructiveLabel="Trust and enroll"
           onConfirm={() => { setEnrolling(false); enroll.mutate(peer) }}
         />}

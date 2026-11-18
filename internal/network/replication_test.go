@@ -185,3 +185,24 @@ func TestReplicationIdentityCannotBeSuppliedInHeaders(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscoveredPeersEnrollAutomatically(t *testing.T) {
+	g, _ := registryGateway(t, "nSelf", "")
+	// An unclaimed gateway pairs with every discovered peer, not only the first one it joins.
+	g.autoEnroll(t.Context(), []TailnetNode{{ID: "nPeer", Name: "gigacomp", Online: true}, {ID: "nOther"}})
+	if !g.meshPeer(t.Context(), "nPeer") || !g.meshPeer(t.Context(), "nOther") {
+		t.Fatal("a discovered peer was not paired")
+	}
+	g.autoEnroll(t.Context(), []TailnetNode{{ID: "nPeer"}})
+	peers, err := g.options.Library.Store.ListPeers()
+	if err != nil || len(peers) != 2 {
+		t.Fatalf("peers = %v, %v", peers, err)
+	}
+	if err := g.options.Library.Store.RemovePeer("nPeer"); err != nil {
+		t.Fatal(err)
+	}
+	g.autoEnroll(t.Context(), []TailnetNode{{ID: "nPeer"}})
+	if g.meshPeer(t.Context(), "nPeer") {
+		t.Fatal("a removed peer was paired again")
+	}
+}
