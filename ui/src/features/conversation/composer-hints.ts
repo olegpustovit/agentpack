@@ -1,18 +1,24 @@
 export type ComposerHint = { value: string; description: string }
 
-export const slashCommands = (): ComposerHint[] => [
-  { value: "/compact", description: "Compact the conversation" },
+// The agent advertises its own commands (skills, custom commands) over ACP; /fork and /terminal are the gateway's.
+const localCommands: ComposerHint[] = [
   { value: "/fork", description: "Fork this session" },
-  { value: "/model", description: "Switch model" },
-  { value: "/mode", description: "Switch mode" },
-  { value: "/review", description: "Review the current diff" },
   { value: "/terminal", description: "Reopen in the agent's own TUI" },
 ]
 
-export function filterSlashHints(draft: string): ComposerHint[] {
-  if (!draft.startsWith("/")) return []
+export type AgentCommand = { name?: string; description?: string }
+
+// The newest available_commands_update in the log is the agent's current list.
+export function agentCommands(entries: { kind: string; payload: unknown }[]): AgentCommand[] {
+  const update = entries.findLast((entry) => entry.kind === "available_commands_update")
+  return (update?.payload as { availableCommands?: AgentCommand[] } | undefined)?.availableCommands ?? []
+}
+
+export function filterSlashHints(draft: string, commands: AgentCommand[] = []): ComposerHint[] {
+  if (!draft.startsWith("/") || /\s/.test(draft)) return []
   const query = draft.slice(1).toLowerCase()
-  return slashCommands().filter((item) => item.value.slice(1).toLowerCase().startsWith(query))
+  const fromAgent = commands.flatMap((command) => command.name ? [{ value: `/${command.name}`, description: command.description ?? "" }] : [])
+  return [...fromAgent, ...localCommands].filter((item) => item.value.slice(1).toLowerCase().includes(query)).slice(0, 50)
 }
 
 export function filterAtHints(draft: string, paths: string[]): ComposerHint[] {

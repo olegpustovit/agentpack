@@ -133,9 +133,9 @@ describe("reduceLog", () => {
     ])
   })
 
-  it("preserves outstanding requests after turn_end and makes them inactive after agent_exit", () => {
+  it("keeps a question past turn_end and makes it inactive after agent_exit", () => {
     const entries: LogEntry[] = [
-      { seq: 1, ts: 1, kind: "permission_request", payload: { requestId: "p1" } },
+      { seq: 1, ts: 1, kind: "elicitation", payload: { elicitationId: "e1" } },
       { seq: 2, ts: 2, kind: "turn_end", payload: {} },
     ]
     const ended = reduceLog(entries)
@@ -187,5 +187,14 @@ describe("reduceLog", () => {
       { seq: 3, ts: 3, kind: "tool_call_update", payload: { toolCallId: "t", status: "completed", rawOutput: "ok" } },
     ])
     expect(items[0]!.data).toMatchObject({ kind: "execute", title: "go test ./...", status: "completed", rawOutput: "ok" })
+  })
+
+  it("retires a permission left behind by a failed turn", () => {
+    const state = reduceLog([
+      { seq: 1, ts: 1, kind: "permission_request", payload: { requestId: "p1", options: [] } },
+      { seq: 2, ts: 2, kind: "turn_end", payload: { stopReason: "error" } },
+    ])
+    expect(state.needs_you).toBe(false)
+    expect(state.items[0]!.data).toMatchObject({ inactive: true })
   })
 })

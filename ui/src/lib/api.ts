@@ -18,12 +18,15 @@ export function setUnauthorizedHandler(handler: () => void) {
   onUnauthorized = handler
 }
 
-function unreachableMessage(status: number, method: string, path: string, machine?: string) {
-  const target = machine && machine !== LOCAL ? ` on node ${machine}` : ""
-  const request = `${method} ${path}${target}`
-  return status === 524
-    ? `The gateway timed out during ${request} (HTTP 524). Check the gateway and machine, then retry.`
-    : `The gateway's reverse proxy returned an HTML error during ${request} (HTTP ${status}). The response had no Agentpack error detail; check the gateway or reverse-proxy logs, then retry.`
+function unreachableMessage(status: number) {
+  return status === 524 ? "The machine took too long to answer. Try again in a moment." : "The gateway didn't answer. It may be restarting; try again in a moment."
+}
+
+// Go and network errors ("dial tcp …", "context canceled") mean nothing to a person; say what happened instead.
+const technical = /\b(dial tcp|context (canceled|deadline exceeded)|EOF|connection (refused|reset)|broken pipe|no such host|i\/o timeout|tls:|x509|panic|runtime error|nil pointer|json: |unexpected end of JSON|goroutine)\b/i
+export function readableError(text: string, status: number): string {
+  if (!technical.test(text)) return text
+  return status >= 502 && status <= 504 ? "The machine didn't answer. It may be offline or restarting." : "Something went wrong on the machine. Try again."
 }
 
 // Mutations must pass `machine` explicitly; there is no default target.
@@ -70,9 +73,9 @@ export async function api<T>(
         ? data.error
         : // A proxy in front of the gateway can answer with its own error page.
           /^\s*<(!doctype|html)/i.test(text)
-          ? unreachableMessage(res.status, method, path, opts.machine)
+          ? unreachableMessage(res.status)
           : text.slice(0, 200) || res.statusText
-    throw new ApiError(error, res.status)
+    throw new ApiError(readableError(error.trim(), res.status), res.status)
   }
   return data as T
 }

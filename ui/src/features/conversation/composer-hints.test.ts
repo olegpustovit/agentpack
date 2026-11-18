@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest"
-import { applyHint, filterAtHints, filterSlashHints, moveHint } from "./composer-hints"
+import { agentCommands, applyHint, filterAtHints, filterSlashHints, moveHint } from "./composer-hints"
 
 describe("composer hints", () => {
-  it("filters slash commands by prefix", () => {
-    const hits = filterSlashHints("/mod")
-    expect(hits.some((item) => item.value === "/model")).toBe(true)
-    expect(hits.some((item) => item.value === "/mode")).toBe(true)
+  it("lists the agent's own commands with the gateway's", () => {
+    const commands = agentCommands([
+      { kind: "available_commands_update", payload: { availableCommands: [{ name: "old" }] } },
+      { kind: "available_commands_update", payload: { availableCommands: [{ name: "compact", description: "Compact" }, { name: "agentpack-bundle:ponytail" }] } },
+    ])
+    expect(filterSlashHints("/", commands).map((item) => item.value)).toEqual(["/compact", "/agentpack-bundle:ponytail", "/fork", "/terminal"])
+    expect(filterSlashHints("/pony", commands).map((item) => item.value)).toEqual(["/agentpack-bundle:ponytail"])
+    expect(filterSlashHints("/compact now", commands)).toEqual([])
   })
 
   it("filters @ file hints", () => {

@@ -402,7 +402,7 @@ func TestBrokerSetConfigOptionForwardsBooleanAndStringVariants(t *testing.T) {
 	conn := client
 	sessionID := sdkacp.SessionId("session")
 	var mu sync.Mutex
-	setConfig := brokerSetConfigOption(&mu, &conn, &sessionID)
+	setConfig := brokerSetConfigOption(&mu, &conn, &sessionID, nil)
 	if err := setConfig(context.Background(), "enabled", `true`); err != nil {
 		t.Fatal(err)
 	}

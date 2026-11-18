@@ -76,6 +76,7 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	<-session.initialized
 	session.mu.Lock()
 	session.observeEntry(entry)
+	session.applyConfigUpdate(entry)
 	if entry.Kind == "agent_exit" {
 		session.agentExited = true
 	}
@@ -85,6 +86,40 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	session.mu.Unlock()
 	if changed {
 		session.publishState()
+	}
+}
+
+// applyConfigUpdate keeps the cached options in step with the agent. The caller holds mu.
+func (session *ConversationSession) applyConfigUpdate(entry acp.LogEntry) {
+	switch entry.Kind {
+	case "config_option_update":
+		var update struct {
+			ConfigOptions json.RawMessage `json:"configOptions"`
+		}
+		if json.Unmarshal(entry.Payload, &update) == nil && len(update.ConfigOptions) > 0 {
+			session.configOptions = update.ConfigOptions
+		}
+	case "current_mode_update":
+		var update struct {
+			CurrentModeID string `json:"currentModeId"`
+		}
+		if json.Unmarshal(entry.Payload, &update) != nil || update.CurrentModeID == "" {
+			return
+		}
+		var modes map[string]any
+		if json.Unmarshal(session.modes, &modes) == nil && modes != nil {
+			modes["currentModeId"] = update.CurrentModeID
+			session.modes, _ = json.Marshal(modes)
+		}
+		var options []map[string]any
+		if json.Unmarshal(session.configOptions, &options) == nil {
+			for _, option := range options {
+				if option["category"] == "mode" {
+					option["currentValue"] = update.CurrentModeID
+				}
+			}
+			session.configOptions, _ = json.Marshal(options)
+		}
 	}
 }
 

@@ -149,12 +149,13 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 		} else if usage.CostUSD != nil {
 			state.CostUSD = *usage.CostUSD
 		}
-	case "turn_end":
+	case "turn_end", "agent_exit":
+		// A failed or cancelled turn leaves its permission unanswerable; elicitations can outlive
+		// a turn and end only with the agent.
 		state.Working = false
-	case "agent_exit":
-		state.Working = false
+		failed := entry.Kind == "turn_end" && turnFailed(entry.Payload)
 		for i := range state.Items {
-			if isOutstandingRequest(state.Items[i]) {
+			if isOutstandingRequest(state.Items[i]) && (entry.Kind == "agent_exit" || failed && state.Items[i].Kind == "permission") {
 				setItemFlag(&state.Items[i], "inactive")
 			}
 		}
@@ -403,4 +404,11 @@ func toolID(payload json.RawMessage) string {
 	}
 	_ = json.Unmarshal(payload, &body)
 	return body.ToolCallID
+}
+
+func turnFailed(payload json.RawMessage) bool {
+	var end struct {
+		StopReason string `json:"stopReason"`
+	}
+	return json.Unmarshal(payload, &end) == nil && (end.StopReason == "error" || end.StopReason == "cancelled")
 }

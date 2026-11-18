@@ -144,7 +144,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 			return c.Cancel(ctx, sdkacp.CancelNotification{SessionId: sid})
 		},
 		nil,
-		brokerSetConfigOption(&connMu, &conn, &sessID),
+		brokerSetConfigOption(&connMu, &conn, &sessID, log),
 	)
 	conv := NewConversationSession(log, broker)
 	conv.workspace = workspace
@@ -262,7 +262,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 			return c.Cancel(ctx, sdkacp.CancelNotification{SessionId: sid})
 		},
 		nil,
-		brokerSetConfigOption(&connMu, &conn, &sessID),
+		brokerSetConfigOption(&connMu, &conn, &sessID, log),
 	)
 	conv := NewConversationSession(log, broker)
 	conv.workspace = workspace
@@ -974,7 +974,8 @@ func listACPAgentSessions(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	return out, nil
 }
 
-func brokerSetConfigOption(connMu *sync.Mutex, conn **sdkacp.ClientSideConnection, sessID *sdkacp.SessionId) func(context.Context, string, string) error {
+// A successful change records the agent's full option set, which is how the session's cached options follow it.
+func brokerSetConfigOption(connMu *sync.Mutex, conn **sdkacp.ClientSideConnection, sessID *sdkacp.SessionId, log *acp.EventLog) func(context.Context, string, string) error {
 	return func(ctx context.Context, key, value string) error {
 		var configValue any
 		if err := json.Unmarshal([]byte(value), &configValue); err != nil {
@@ -1004,7 +1005,12 @@ func brokerSetConfigOption(connMu *sync.Mutex, conn **sdkacp.ClientSideConnectio
 		default:
 			return errors.New("config value must be a string or boolean")
 		}
-		_, err := c.SetSessionConfigOption(ctx, request)
+		response, err := c.SetSessionConfigOption(ctx, request)
+		if err == nil && log != nil && response.ConfigOptions != nil {
+			log.Append("config_option_update", time.Now().UnixMilli(), mustRawJSON(map[string]any{
+				"sessionUpdate": "config_option_update", "configOptions": response.ConfigOptions,
+			}))
+		}
 		return err
 	}
 }
@@ -1022,6 +1028,9 @@ func mustRawJSON(v any) json.RawMessage {
 func logFailedTurn(log *acp.EventLog, err error) {
 	now := time.Now().UnixMilli()
 	description := err.Error()
+	if errors.Is(err, context.Canceled) || strings.Contains(description, "context canceled") || strings.Contains(description, "Request cancelled") {
+		description = "The request to the agent was interrupted before it finished. Send the message again."
+	}
 	if strings.Contains(description, "Authentication required") {
 		// OpenCode's default ACP model needs an OpenCode sign-in even when other providers are signed in.
 		description += ". Choose a model you are signed in to with Model in the composer, or sign in with the agent."

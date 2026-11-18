@@ -174,7 +174,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			return
 		}
 		if err := worker.conversationSession().AnswerPermission(r.Context(), input.RequestID, input.OptionID); err != nil {
-			http.Error(w, "could not answer permission", http.StatusConflict)
+			http.Error(w, "This request is no longer waiting for an answer.", http.StatusConflict)
 			return
 		}
 		writeJSON(w, map[string]bool{"accepted": true})

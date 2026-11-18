@@ -152,3 +152,18 @@ func TestPromptMultipleImagesAreBounded(t *testing.T) {
 		t.Fatal("expected excessive image count rejection")
 	}
 }
+
+func TestConversationSessionFollowsAgentOptionAndModeUpdates(t *testing.T) {
+	log := acp.NewEventLog(0)
+	session := NewConversationSession(log, nil)
+	session.SetConfigOptions([]byte(`[{"id":"mode","category":"mode","type":"select","currentValue":"default"}]`))
+	session.SetModes([]byte(`{"currentModeId":"default"}`))
+	log.Append("current_mode_update", 1, []byte(`{"sessionUpdate":"current_mode_update","currentModeId":"bypassPermissions"}`))
+	if got := string(session.ConfigJSON()); strings.Count(got, "bypassPermissions") != 2 {
+		t.Fatalf("mode update not applied to options and modes: %s", got)
+	}
+	log.Append("config_option_update", 2, []byte(`{"configOptions":[{"id":"mode","category":"mode","type":"select","currentValue":"plan"}]}`))
+	if got := string(session.ConfigJSON()); !strings.Contains(got, `"currentValue":"plan"`) {
+		t.Fatalf("option update not applied: %s", got)
+	}
+}

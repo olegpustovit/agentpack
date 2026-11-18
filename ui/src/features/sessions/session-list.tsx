@@ -87,7 +87,6 @@ export function SessionList() {
   const first = rows[0]
   const tabStop = selectedKey ?? (first ? rowKey(first) : undefined)
   const outdated = machines.filter((machine) => machine.needsUpdate || queries.byMachine[machine.id]?.needsUpdate)
-  const offlineWithData = machines.filter((machine) => !machine.online && !outdated.includes(machine) && queries.byMachine[machine.id]?.data)
   const loading = queries.firstLoadPending
   // A failed read shows its banner only; the empty copy is for a successful empty list.
   const failed = Object.keys(queries.errors).length > 0
@@ -233,16 +232,10 @@ export function SessionList() {
         onKeyDown={onKeyDown}
       >
         {discovery.error && <Banner tone="warn">{`Can't look for other machines: ${discovery.error.message}`}</Banner>}
-        {outdated.length > 0 && <Banner>{`${outdated.map((machine) => machine.name).join(", ")} ${outdated.length === 1 ? "needs" : "need"} an update to show sessions.`}</Banner>}
         {machines.map((machine) => {
           const error = !outdated.includes(machine) && queries.errors[machine.id]
           return error ? <Banner key={machine.id} tone="danger">{`Couldn't load sessions from ${machine.name}: ${error.message}`}</Banner> : null
         })}
-        {offlineWithData.length > 0 && (
-          <Banner>
-            {`${offlineWithData.map((machine) => machine.name).join(", ")} ${offlineWithData.length === 1 ? "is" : "are"} offline. Showing last known sessions.`}
-          </Banner>
-        )}
         {loading && [0, 1, 2].map((index) => <RowSkeleton key={index} />)}
         {!loading && !failed && rows.length === 0 && (query ? (
           <Empty title="No matches">Try another name, folder or machine.</Empty>

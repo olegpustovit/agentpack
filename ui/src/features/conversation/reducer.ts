@@ -204,6 +204,13 @@ export function reduceLog(entries: LogEntry[]): ThreadState {
       }
       case "turn_end":
         state.working = false
+        // A failed or cancelled turn leaves its permission unanswerable.
+        if (!["error", "cancelled"].includes((entry.payload as { stopReason?: string }).stopReason ?? "")) break
+        state.items = state.items.map((item) => {
+          const data = item.data as { requestId?: string; resolved?: boolean; inactive?: boolean } | undefined
+          return item.kind === "permission" && data?.requestId && !data.resolved && !data.inactive ? { ...item, data: { ...data, inactive: true } } : item
+        })
+        state.needs_you = hasOutstandingRequests(state.items)
         break
       case "agent_exit":
         state.working = false

@@ -20,9 +20,9 @@ import type { LogEntry, ThreadItem } from "./model"
 import { reduceLog } from "./reducer"
 import { latestUserPrompt, quoteMessage, ThreadView } from "./thread-view"
 import { ConversationInspector } from "./conversation-inspector"
-import { applyHint, filterAtHints, filterSlashHints, moveHint, type ComposerHint } from "./composer-hints"
+import { agentCommands, applyHint, filterAtHints, filterSlashHints, moveHint, type ComposerHint } from "./composer-hints"
 import { ComposerHintsMenu } from "./composer-hints-menu"
-import { diffAnchorId, listDiffChanges } from "./diff-summary"
+import { listDiffChanges } from "./diff-summary"
 import { uploadConversationBlob, type PendingAttachment } from "./upload-blob"
 import { imageFilesFromClipboard, imageFilesFromList, promptRequest, retryPromptInput } from "./composer-attach"
 
@@ -255,7 +255,7 @@ export default function ConversationPane({
   }
   const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !send.isPending && !upload.isPending && !thread.needs_you && !needsUpdate
   const diffPaths = listDiffChanges(thread.items).map((change) => change.path)
-  const slashHints = filterSlashHints(draft).filter((hint) => hint.value !== "/fork" || (canFork && !fork.isPending))
+  const slashHints = filterSlashHints(draft, agentCommands(entries)).filter((hint) => hint.value !== "/fork" || (canFork && !fork.isPending))
   const atHints = filterAtHints(draft, diffPaths)
   const composerHints = hintsClosed ? [] : slashHints.length > 0 ? slashHints : atHints
   const activeHint = Math.min(hintIndex, Math.max(composerHints.length - 1, 0))
@@ -274,10 +274,6 @@ export default function ConversationPane({
       return
     }
     setDraft(applyHint(draft, hint))
-    if (hint.value === "/review") {
-      const path = diffPaths[0]
-      if (path) document.getElementById(diffAnchorId(path))?.scrollIntoView({ behavior: "smooth", block: "center" })
-    }
   }
   function quoteReply(text: string) {
     setDraft((current) => `${current}${current ? "\n\n" : ""}${quoteMessage(text)}\n`)

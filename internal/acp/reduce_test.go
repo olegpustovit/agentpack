@@ -272,3 +272,13 @@ func TestPromptShowsOnceEvenWhenTheAgentEchoesIt(t *testing.T) {
 		t.Fatalf("items = %+v", state.Items)
 	}
 }
+
+func TestReduceLogFailedTurnRetiresItsPermission(t *testing.T) {
+	state := ReduceLog([]LogEntry{
+		{Seq: 1, Kind: "permission_request", Payload: json.RawMessage(`{"requestId":"p1","options":[{"id":"allow","label":"Yes"}]}`)},
+		{Seq: 2, Kind: "turn_end", Payload: json.RawMessage(`{"stopReason":"error"}`)},
+	})
+	if state.NeedsYou || isOutstandingRequest(state.Items[0]) {
+		t.Fatalf("permission outlived its turn: %+v", state)
+	}
+}
