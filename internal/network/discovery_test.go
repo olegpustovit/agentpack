@@ -349,3 +349,20 @@ func TestLibraryPeerRoutesCoverConflictsAndVersions(t *testing.T) {
 		}
 	}
 }
+
+func TestNameFromTailnetNamesOnlyUnnamedPeers(t *testing.T) {
+	nodes := map[string]TailnetNode{
+		"nA": {ID: "nA", Name: "nA"},
+		"nB": {ID: "nB", Name: "kept"},
+		"nC": {ID: "nC", Name: "nC"},
+	}
+	status := tailnetStatus{Peer: map[string]*tailnetPeer{
+		"k1": {ID: "nA", HostName: "gigacomp"},
+		"k2": {ID: "nB", HostName: "other"},
+		"k3": nil,
+	}}
+	nameFromTailnet(nodes, status)
+	if nodes["nA"].Name != "gigacomp" || nodes["nB"].Name != "kept" || nodes["nC"].Name != "nC" {
+		t.Fatalf("names = %v", nodes)
+	}
+}

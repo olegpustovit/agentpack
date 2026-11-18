@@ -12,32 +12,23 @@ export const DIAGRAM_W = PEER_X + PEER_W
 const stateWords: Record<string, string> = {
   reachable: "Reachable",
   offline: "Offline",
-  "no-gateway": "No gateway",
-  "not-allowed": "Not allowed",
 }
 
 export function stateWord(state: string): string {
   return stateWords[state] ?? state
 }
 
-const unreachableStates: Record<string, true> = { "no-gateway": true, "not-allowed": true }
-
-// Online peers without a gateway, or not allowed, go under the unreachable heading. The rest are diagram nodes.
-export function partitionPeers(peers: TopologyPeer[]) {
-  return {
-    diagram: peers.filter((peer) => unreachableStates[peer.state] !== true),
-    unreachable: peers.filter((peer) => unreachableStates[peer.state] === true),
-  }
-}
-
-const unreachableReasons: Record<string, string> = {
-  "no-gateway": "No gateway running on this device",
-  "not-allowed": "Not on the sharing allow list",
+// The topology shows the same machines as the sidebar, with the same online state; the tailnet adds OS and path.
+export function machinePeers(peers: TopologyPeer[], machines: { id: string; name: string; online: boolean }[]): TopologyPeer[] {
+  return machines.map((machine) => {
+    const peer = peers.find((candidate) => candidate.id === machine.id) ?? { id: machine.id, name: machine.name, os: "", state: "", connection: "", relay: "", sessions: 0 }
+    return { ...peer, name: machine.name, state: machine.online ? "reachable" : "offline" }
+  })
 }
 
 export function reasonOf(peer: TopologyPeer): string {
   if (peer.state === "offline") return peer.last_seen ? `Last seen ${relativeTime(new Date(peer.last_seen))}` : "Not connected"
-  return unreachableReasons[peer.state] ?? ""
+  return ""
 }
 
 export type Edge = { label: string; dashed: boolean }

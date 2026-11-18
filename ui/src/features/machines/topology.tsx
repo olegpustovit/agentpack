@@ -10,7 +10,7 @@ import { ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { LOCAL } from "@/lib/api"
 import { plural } from "@/lib/format"
-import { topologyQuery, useReplicatedQueries } from "./queries"
+import { topologyQuery, useMachines, useReplicatedQueries } from "./queries"
 import {
   DIAGRAM_W,
   GATEWAY_W,
@@ -19,7 +19,7 @@ import {
   PEER_X,
   edgeOf,
   layoutDiagram,
-  partitionPeers,
+  machinePeers,
   reasonOf,
   sessionCount,
   stateWord,
@@ -47,6 +47,7 @@ export function TopologyView() {
   const isPhone = useIsPhone()
   const live = useEventsConnected()
   const topology = useQuery(topologyQuery(live))
+  const machines = useMachines()
   const sessions = useReplicatedQueries(sessionsQuery)
   const data = topology.data
   // Replication enrolment is known locally, so the edge marks it without another peer probe.
@@ -62,15 +63,15 @@ export function TopologyView() {
   }
 
   const count = (machine: string, fromTopology?: number) => sessionCount(fromTopology, sessions.byMachine[machine]?.data?.length)
-  const { diagram, unreachable } = partitionPeers(data.peers)
-  const layout = layoutDiagram(diagram)
-  const reachable = data.peers.filter((peer) => peer.state === "reachable").length
-  const offline = data.peers.filter((peer) => peer.state === "offline").length
+  const peers = machinePeers(data.peers, machines.filter((machine) => machine.id !== LOCAL))
+  const layout = layoutDiagram(peers)
+  const reachable = peers.filter((peer) => peer.state === "reachable").length
+  const offline = peers.length - reachable
   const gatewaySessions = count(LOCAL)
 
   const rows = [
     { id: LOCAL, main: data.self.main, name: data.self.name, os: data.self.os, state: "Gateway", path: "—", version: "", sessions: gatewaySessions, reason: "This machine" },
-    ...data.peers.map((peer) => ({
+    ...peers.map((peer) => ({
       id: peer.id,
       main: peer.main,
       name: peer.name,
@@ -93,7 +94,7 @@ export function TopologyView() {
             {`Couldn't refresh topology: ${topology.error.message}`}
           </Banner>
         )}
-        <ToolbarTitle title="Topology" subtitle={`${reachable} reachable · ${offline} offline · ${unreachable.length} not reachable by Agentpack`} />
+        <ToolbarTitle title="Topology" subtitle={`${reachable} reachable · ${offline} offline`} />
         <h1 className="sr-only">Topology</h1>
         {/* The diagram repeats the grid below, so assistive tech skips it, and phones show only the grid. */}
         <div className="col-span-full max-[760px]:hidden">
@@ -126,18 +127,6 @@ export function TopologyView() {
             ))}
           </svg>
         </div>
-        {unreachable.length > 0 && (
-          <Section title="Not reachable by Agentpack" className="col-span-full">
-            <ul className="flex flex-col">
-              {unreachable.map((peer) => (
-                <li key={peer.id} className="flex h-(--row-h) items-center gap-(--s4) border-b-[0.5px] border-(--sep-soft) last:border-b-0">
-                  <span className="w-40 shrink-0 truncate">{peer.name}</span>
-                  <span className="min-w-0 truncate text-(--fg2)">{reasonOf(peer)}</span>
-                </li>
-              ))}
-            </ul>
-          </Section>
-        )}
         <Section title="Machines" className="col-span-full">
           <DataGrid aria-label="Machines and connections" className="min-w-200">
             <DataGridHead>

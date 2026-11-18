@@ -341,6 +341,19 @@ func tailnetNodesFrom(ctx context.Context, status tailnetStatus, config SharingC
 	return nodes, err
 }
 
+// nameFromTailnet replaces a node name that is only its stable ID with the peer's tailnet host name.
+func nameFromTailnet(nodes map[string]TailnetNode, status tailnetStatus) {
+	for _, peer := range status.Peer {
+		if peer == nil {
+			continue
+		}
+		if node, ok := nodes[peer.ID]; ok && node.Name == node.ID && peer.HostName != "" {
+			node.Name = peer.HostName
+			nodes[peer.ID] = node
+		}
+	}
+}
+
 // tailnetNodes probes only allowed, online peers learned from the local daemon.
 func (g *Gateway) tailnetNodes(ctx context.Context) ([]TailnetNode, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -404,6 +417,10 @@ func (g *Gateway) meshNodes(ctx context.Context, discovered []TailnetNode) ([]Ta
 		}
 		for _, peer := range peers {
 			node, ok := nodes[peer.Node]
+			if !ok && !peer.Mesh {
+				// An unpaired legacy Library peer is not a machine until discovery finds it or it is paired.
+				continue
+			}
 			if !ok {
 				node = TailnetNode{ID: peer.Node, Name: peer.Node}
 			}
@@ -415,6 +432,15 @@ func (g *Gateway) meshNodes(ctx context.Context, discovered []TailnetNode) ([]Ta
 				node.NeedsUpdate = node.NeedsUpdate || value.(replicaContact).NeedsUpdate
 			}
 			nodes[peer.Node] = node
+		}
+	}
+	for _, node := range nodes {
+		if node.Name == node.ID {
+			// Legacy Library peers store only the stable ID; name them from the local daemon when it answers.
+			if status, err := tailnetSnapshot(ctx); err == nil {
+				nameFromTailnet(nodes, status)
+			}
+			break
 		}
 	}
 	roles, err := g.auth.store.Main(ctx)

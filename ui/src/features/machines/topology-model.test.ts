@@ -1,19 +1,14 @@
 import { describe, expect, it } from "vitest"
 import type { TopologyPeer } from "@/lib/api-types"
-import { edgeOf, layoutDiagram, partitionPeers, reasonOf, ROW_H, sessionCount, stateWord } from "./topology-model"
+import { edgeOf, layoutDiagram, machinePeers, reasonOf, ROW_H, sessionCount, stateWord } from "./topology-model"
 
 function peer(name: string, state: string, connection = "", relay = ""): TopologyPeer {
   return { id: name, name, os: "linux", state, connection, relay, sessions: 0 }
 }
 
 describe("stateWord", () => {
-  it("names all four peer states in words", () => {
-    expect(["reachable", "offline", "no-gateway", "not-allowed"].map(stateWord)).toEqual([
-      "Reachable",
-      "Offline",
-      "No gateway",
-      "Not allowed",
-    ])
+  it("names both peer states in words", () => {
+    expect(["reachable", "offline"].map(stateWord)).toEqual(["Reachable", "Offline"])
   })
 })
 
@@ -28,19 +23,17 @@ describe("edgeOf", () => {
   })
 })
 
-describe("partitionPeers", () => {
-  it("lists online peers without a gateway or not allowed as unreachable, and keeps the rest in the diagram", () => {
-    const peers = [peer("mac", "reachable"), peer("build", "offline"), peer("phone", "no-gateway"), peer("ci", "not-allowed")]
-    const { diagram, unreachable } = partitionPeers(peers)
-    expect(diagram.map((p) => p.name)).toEqual(["mac", "build"])
-    expect(unreachable.map((p) => p.name)).toEqual(["phone", "ci"])
+describe("machinePeers", () => {
+  it("lists exactly the sidebar machines with their online state, enriched from the tailnet", () => {
+    const peers = [{ ...peer("mac", "reachable", "direct"), os: "macOS" }, peer("tv", "offline"), peer("phone", "no-gateway")]
+    const result = machinePeers(peers, [{ id: "mac", name: "mac", online: false }, { id: "gone", name: "gone", online: false }])
+    expect(result.map((p) => [p.name, p.os, p.state])).toEqual([["mac", "macOS", "offline"], ["gone", "", "offline"]])
   })
 })
 
 describe("reasonOf", () => {
-  it("gives a reason for each unreachable peer and the last contact for offline ones", () => {
-    expect(reasonOf(peer("phone", "no-gateway"))).toBe("No gateway running on this device")
-    expect(reasonOf(peer("ci", "not-allowed"))).toBe("Not on the sharing allow list")
+  it("gives the last contact for offline peers only", () => {
+    expect(reasonOf(peer("mac", "reachable"))).toBe("")
     expect(reasonOf({ ...peer("build", "offline"), last_seen: new Date(Date.now() - 3 * 86_400_000).toISOString() })).toBe("Last seen 3 days ago")
   })
 })

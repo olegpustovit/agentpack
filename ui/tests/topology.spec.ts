@@ -5,8 +5,6 @@ const nodes = [
   { id: "n-mac", name: "mac-studio", online: true },
   { id: "n-fed", name: "fedora-laptop", online: true },
   { id: "n-build", name: "build-box", online: false },
-  { id: "n-phone", name: "iphone", online: true },
-  { id: "n-ci", name: "ci-runner-3", online: true },
 ]
 
 // Each peer carries address fields the page must never show. The client parser drops them, and this checks it.
@@ -52,18 +50,13 @@ function row(page: Page, name: string) {
   return grid(page).locator("tbody tr").filter({ hasText: name })
 }
 
-test("all four peer states render with words", async ({ page }) => {
+test("only the sidebar machines are shown, with the same state", async ({ page }) => {
   await page.goto("/machines/topology")
 
   await expect(row(page, "mac-studio")).toContainText("Reachable")
   await expect(row(page, "build-box")).toContainText("Offline")
-  await expect(row(page, "iphone")).toContainText("No gateway")
-  await expect(row(page, "ci-runner-3")).toContainText("Not allowed")
-
-  const unreachable = page.getByRole("heading", { name: "Not reachable by Agentpack" })
-  await expect(unreachable).toBeVisible()
-  await expect(unreachable.locator("xpath=following-sibling::ul")).toContainText("No gateway running on this device")
-  await expect(unreachable.locator("xpath=following-sibling::ul")).toContainText("Not on the sharing allow list")
+  await expect(row(page, "iphone")).toHaveCount(0)
+  await expect(row(page, "ci-runner-3")).toHaveCount(0)
 })
 
 test("diagram labels each edge and dashes only the relay one", async ({ page }) => {
