@@ -179,4 +179,13 @@ describe("reduceLog", () => {
     expect(full.map((i) => i.seq)).toEqual([5, 7])
     expect(full[0]).toMatchObject({ ts: 50, endTs: 60 })
   })
+
+  it("keeps a tool's title and kind through partial updates", () => {
+    const { items } = reduceLog([
+      { seq: 1, ts: 1, kind: "tool_call", payload: { toolCallId: "t", kind: "execute", title: "Terminal", status: "pending" } },
+      { seq: 2, ts: 2, kind: "tool_call_update", payload: { toolCallId: "t", title: "go test ./..." } },
+      { seq: 3, ts: 3, kind: "tool_call_update", payload: { toolCallId: "t", status: "completed", rawOutput: "ok" } },
+    ])
+    expect(items[0]!.data).toMatchObject({ kind: "execute", title: "go test ./...", status: "completed", rawOutput: "ok" })
+  })
 })

@@ -56,7 +56,7 @@ describe("conversation inspector", () => {
     expect(container.textContent).toContain("ResumeYes")
     expect(container.textContent).toContain("ForkYes")
     act(() => root.render(<ConversationInspector thread={thread} info={info} machine="local" open />))
-    expect(container.textContent).not.toContain("Agent capabilities")
+    expect(container.textContent).not.toContain("This agent supports")
   })
   it("shows changed files from the thread", () => {
     const withDiff: ThreadState = {

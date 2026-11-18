@@ -1,17 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { useEffect, useRef, useState } from "react"
-import { AtSign, Check, ChevronDown, ChevronRight, Circle, CircleDot, PanelRight, Paperclip, SendHorizontal, Slash, Square } from "lucide-react"
+import { ArrowUp, AtSign, Check, ChevronDown, ChevronRight, Circle, CircleDot, PanelRight, Plus, Slash, Square } from "lucide-react"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
 import { Banner, Spinner } from "@/components/kit/feedback"
 import { PopupSelect } from "@/components/kit/forms"
-import { StatusDot } from "@/components/kit/status-dot"
 import { Button } from "@/components/ui/button"
-import { Switch } from "@/components/ui/switch"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { StatusSlot } from "@/features/status/status-bar"
 import { sessionsQuery } from "@/features/sessions/queries"
+import { useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName, relativeTime } from "@/lib/format"
 import { hud } from "@/lib/hud"
@@ -20,7 +18,7 @@ import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMe
 import { configRole, parseConfigOptions } from "./config-options"
 import type { LogEntry, ThreadItem } from "./model"
 import { reduceLog } from "./reducer"
-import { findPendingPermission, latestUserPrompt, PermissionCard, quoteMessage, ThreadView } from "./thread-view"
+import { latestUserPrompt, quoteMessage, ThreadView } from "./thread-view"
 import { ConversationInspector } from "./conversation-inspector"
 import { applyHint, filterAtHints, filterSlashHints, moveHint, type ComposerHint } from "./composer-hints"
 import { ComposerHintsMenu } from "./composer-hints-menu"
@@ -72,6 +70,7 @@ export default function ConversationPane({
 }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const machines = useMachines()
   const [draft, setDraft] = useState(() => loadDraft(draftKey(machine, sessionId)))
   const [hintIndex, setHintIndex] = useState(0)
   const [hintsClosed, setHintsClosed] = useState(false)
@@ -254,7 +253,6 @@ export default function ConversationPane({
       })
     }
   }
-  const pendingPermission = readOnly ? undefined : findPendingPermission(thread.items)
   const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !send.isPending && !upload.isPending && !thread.needs_you && !needsUpdate
   const diffPaths = listDiffChanges(thread.items).map((change) => change.path)
   const slashHints = filterSlashHints(draft).filter((hint) => hint.value !== "/fork" || (canFork && !fork.isPending))
@@ -304,22 +302,20 @@ export default function ConversationPane({
       }
     }
   }
-  const statusState = thread.needs_you ? "needsYou" : thread.working ? "running" : "idle"
+  const agentName = harnessName(info?.harness ?? "agent")
+  const machineName = machines.find((candidate) => candidate.id === machine)?.name ?? machine
   const contextPercent =
     thread.context_limit && thread.context_tokens !== undefined
       ? Math.min(100, Math.round((thread.context_tokens / thread.context_limit) * 100))
       : undefined
-  const usageLabel =
-    contextPercent !== undefined
-      ? `${thread.context_tokens!.toLocaleString()} / ${thread.context_limit!.toLocaleString()} context`
-      : undefined
+
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-(--window)">
       <StatusSlot>
         {info && (
           <span>
-            {[harnessName(info.harness), info.mode || "default"].filter(Boolean).join(" · ")}
+            {[harnessName(info.harness), info.mode || "default", contextPercent !== undefined ? `Context ${contextPercent}%` : "", thread.cost_usd ? `$${thread.cost_usd.toFixed(2)}` : ""].filter(Boolean).join(" · ")}
           </span>
         )}
       </StatusSlot>
@@ -341,6 +337,7 @@ export default function ConversationPane({
       {readOnly && <Banner>{info?.archived_at ? "Archived, read-only" : `Offline, read-only${info?.last_sync ? ` · Last sync ${relativeTime(new Date(info.last_sync), Date.now())}` : ""}`}</Banner>}
       {archiveUnavailable && <Banner>{archiveUnavailable}</Banner>}
       <div className="flex min-h-0 min-w-0 flex-1">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <div
           ref={threadScrollRef}
           onScroll={(event) => {
@@ -349,11 +346,6 @@ export default function ConversationPane({
           }}
           tabIndex={0} aria-label="Conversation" className="min-h-0 min-w-0 flex-1 overflow-auto px-(--s4) py-(--s4) pb-64">
           <div className="mx-auto w-full max-w-180">
-            {!needsUpdate && !readOnly && (
-              <div className="mb-(--s4) flex items-center gap-(--s3)">
-                {thread.working ? <Spinner /> : <StatusDot state={statusState} />}
-              </div>
-            )}
             {needsUpdate ? (
               <Banner tone="warn">
                 {machine === LOCAL ? "The gateway needs an update to show this conversation." : "This peer needs an update to show this conversation."}
@@ -364,7 +356,8 @@ export default function ConversationPane({
                 machine={machine}
                 sessionId={sessionId}
                 readOnly={readOnly}
-                dockPending={!readOnly}
+                agent={agentName}
+                working={live && thread.working && !thread.needs_you}
                 onQuote={readOnly ? undefined : quoteReply}
                 onFork={canFork && !fork.isPending ? () => fork.mutate() : undefined}
                 onRetry={canRetry ? retryLastPrompt : undefined}
@@ -372,8 +365,6 @@ export default function ConversationPane({
             )}
           </div>
         </div>
-        <ConversationInspector thread={thread} info={info} machine={machine} open={inspectorOpen} sessionId={sessionId} readOnly={readOnly || needsUpdate} />
-      </div>
       {!readOnly && <div
         className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-(--s4) pt-36 pb-(--s5)"
         style={{ backgroundImage: "linear-gradient(to top, var(--window) 55%, transparent)" }}
@@ -387,7 +378,7 @@ export default function ConversationPane({
       >
           <div className="pointer-events-auto mx-auto flex w-full max-w-180 flex-col gap-(--s3)">
             {plan.length > 0 && (
-              <details data-slot="plan-pill" className="group overflow-hidden rounded-(--r-pop) bg-(--glass) backdrop-blur-md" style={{ boxShadow: "var(--shadow-composer)" }}>
+              <details data-slot="plan-pill" className="group overflow-hidden rounded-(--r-sheet) bg-(--glass) shadow-(--shadow-composer) backdrop-blur-xl backdrop-saturate-[1.8]">
                 <summary className="flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) px-(--s4) py-(--s2) text-(length:--fs-sm) marker:content-none [&::-webkit-details-marker]:hidden">
                   <span className="shrink-0 font-medium">{planDone} of {plan.length}</span>
                   <span className="min-w-0 flex-1 truncate text-(--fg2)">{currentStep?.content}</span>
@@ -420,8 +411,7 @@ export default function ConversationPane({
                 </ol>
               </details>
             )}
-            {pendingPermission && <PermissionCard docked item={pendingPermission} machine={machine} sessionId={sessionId} />}
-            <div className="flex flex-col gap-(--s2) rounded-(--r-sheet) bg-(--field) p-(--s3) focus-within:ring-2 focus-within:ring-(--accent-soft)" style={{ boxShadow: "var(--shadow-composer)" }}>
+            <div className="flex flex-col gap-(--s1) rounded-[12px] bg-(--field) px-(--s3) pt-(--s3) pb-(--s2) shadow-(--shadow-composer) transition-shadow focus-within:shadow-[var(--shadow-composer),0_0_0_3px_var(--accent-soft)]">
               <div className="relative flex min-h-(--ctl-h) flex-col gap-(--s2)">
                 {attachments.map((item, index) => (
                   <div key={`${item.sha}-${index}`} className="flex items-center gap-(--s2) rounded-(--r-ctl) border-[0.5px] border-(--sep) bg-(--window) p-(--s2)">
@@ -438,7 +428,7 @@ export default function ConversationPane({
                   id="conversation-message"
                   aria-label="Message"
                   rows={1}
-                  placeholder={needsUpdate ? "Update this peer to open the conversation…" : "Message the agent…"}
+                  placeholder={needsUpdate ? "Update this peer to open the conversation…" : `Message ${agentName}`}
                   value={draft}
                   disabled={needsUpdate}
                   aria-controls={composerHints.length > 0 ? "composer-hints-list" : undefined}
@@ -509,7 +499,7 @@ export default function ConversationPane({
                   disabled={send.isPending || upload.isPending || thread.needs_you || needsUpdate}
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  <Paperclip aria-hidden />
+                  <Plus aria-hidden />
                 </Button>
                 <Button
                   type="button"
@@ -542,7 +532,7 @@ export default function ConversationPane({
                     items={permissionsOption.items}
                   />
                 )}
-                {(modelOption || effortOption) && (
+                {(modelOption || effortOption || extraOptions.length > 0) && (
                   <Menu>
                     <MenuTrigger
                       render={
@@ -550,7 +540,7 @@ export default function ConversationPane({
                           type="button"
                           size="sm"
                           variant="ghost"
-                          aria-label={effortOption ? "Model and effort" : modelOption?.name ?? "Model"}
+                          aria-label={effortOption ? "Model and effort" : modelOption?.name ?? "Options"}
                           title="Choose model and effort"
                           disabled={setConfig.isPending || thread.needs_you || needsUpdate}
                           className="max-w-48 gap-(--s2)"
@@ -558,7 +548,7 @@ export default function ConversationPane({
                           <span className="min-w-0 truncate">
                             {modelOption
                               ? modelOption.items.find((item) => item.value === (typeof configValues[modelOption.id] === "string" ? configValues[modelOption.id] : modelOption.value))?.label ?? modelOption.value
-                              : "Effort"}
+                              : effortOption ? "Effort" : "Options"}
                           </span>
                           {effortOption && (
                             <span className="shrink-0 text-(--fg3)">
@@ -611,54 +601,43 @@ export default function ConversationPane({
                           })}
                         </>
                       )}
+                      {extraOptions.map((option) => {
+                        const current = configValues[option.id] ?? option.value
+                        return (
+                          <div key={option.id}>
+                            <div role="separator" className="my-(--s2) h-px bg-(--sep)" />
+                            {option.type === "boolean" ? (
+                              <MenuItem
+                                role="menuitemcheckbox"
+                                aria-checked={current === true}
+                                icon={current === true ? <Check aria-hidden /> : <span aria-hidden className="size-(--s4)" />}
+                                disabled={setConfig.isPending || thread.needs_you || needsUpdate}
+                                onClick={() => setConfigValue(option.id, current !== true)}
+                              >
+                                {option.name}
+                              </MenuItem>
+                            ) : (
+                              <>
+                                <p className="px-(--s3) py-(--s2) text-(length:--fs-xs) text-(--fg3)">{option.name}</p>
+                                {option.items.map((item) => (
+                                  <MenuItem
+                                    key={item.value}
+                                    role="menuitemradio"
+                                    aria-checked={current === item.value}
+                                    icon={current === item.value ? <Check aria-hidden /> : <span aria-hidden className="size-(--s4)" />}
+                                    disabled={setConfig.isPending || thread.needs_you || needsUpdate}
+                                    onClick={() => setConfigValue(option.id, item.value)}
+                                  >
+                                    {item.label}
+                                  </MenuItem>
+                                ))}
+                              </>
+                            )}
+                          </div>
+                        )
+                      })}
                     </MenuContent>
                   </Menu>
-                )}
-                {extraOptions.map((option) => option.type === "boolean" ? (
-                  <label key={option.id} className="flex items-center gap-(--s2) text-(length:--fs-xs) text-(--fg2)">
-                    <span>{option.name}</span>
-                    <Switch
-                      aria-label={option.name}
-                      checked={typeof configValues[option.id] === "boolean" ? configValues[option.id] as boolean : option.value}
-                      onCheckedChange={(value) => setConfigValue(option.id, value)}
-                      disabled={setConfig.isPending || thread.needs_you || needsUpdate}
-                    />
-                  </label>
-                ) : (
-                  <PopupSelect
-                    key={option.id}
-                    label={option.name}
-                    value={typeof configValues[option.id] === "string" ? configValues[option.id] as string : option.value}
-                    onValueChange={(value) => setConfigValue(option.id, value)}
-                    disabled={setConfig.isPending || thread.needs_you || needsUpdate}
-                    items={option.items}
-                  />
-                ))}
-                {usageLabel && (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={<span role="img" aria-label={`Context ${contextPercent}% used`} className="grid size-(--ctl-h) shrink-0 place-items-center" />}
-                    >
-                      <svg viewBox="0 0 20 20" className="size-(--s5) -rotate-90" aria-hidden>
-                        <circle cx="10" cy="10" r="8" fill="none" strokeWidth="2.5" className="stroke-(--track)" />
-                        <circle
-                          cx="10"
-                          cy="10"
-                          r="8"
-                          fill="none"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                          pathLength={100}
-                          strokeDasharray={`${contextPercent} 100`}
-                          className={contextPercent! >= 95 ? "stroke-(--danger)" : contextPercent! >= 80 ? "stroke-(--warn)" : "stroke-(--accent)"}
-                        />
-                      </svg>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <span className="tabular-nums">{usageLabel}</span>
-                      {thread.cost_usd !== undefined && thread.cost_usd > 0 && <span className="tabular-nums"> · ${thread.cost_usd.toFixed(2)}</span>}
-                    </TooltipContent>
-                  </Tooltip>
                 )}
                 {thread.working ? (
                   <Button
@@ -673,21 +652,23 @@ export default function ConversationPane({
                     {cancelTurn.isPending ? <Spinner /> : <Square aria-hidden className="fill-current" />}
                   </Button>
                 ) : (
-                  <Button
+                  <button
                     type="button"
-                    size="icon"
-                    variant="ghost"
                     disabled={!canSend}
                     aria-label="Send"
+                    className="ml-(--s2) grid size-6 shrink-0 place-items-center rounded-full bg-(--accent) text-(--accent-fg) disabled:bg-(--track) disabled:text-(--fg3) [&_svg]:size-(--s4)"
                     onClick={() => send.mutate({ text: draft.trim(), attachments, clearComposer: true })}
                   >
-                    <SendHorizontal aria-hidden />
-                  </Button>
+                    <ArrowUp aria-hidden />
+                  </button>
                 )}
               </div>
             </div>
           </div>
       </div>}
+        </div>
+        <ConversationInspector thread={thread} info={info} machine={machine} machineName={machineName} open={inspectorOpen} sessionId={sessionId} readOnly={readOnly || needsUpdate} />
+      </div>
     </div>
   )
 }

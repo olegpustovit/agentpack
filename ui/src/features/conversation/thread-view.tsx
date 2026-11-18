@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { BookOpen, ChevronRight, Copy, Folder, GitFork, Globe, Pencil, Quote, RotateCcw, Search, Sparkles, Terminal, Wrench } from "lucide-react"
+import { BookOpen, ChevronRight, Copy, Folder, GitFork, Globe, Pencil, Lock, Quote, RotateCcw, Search, Sparkles, SquareTerminal, Wrench } from "lucide-react"
 import { RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
+import { Spinner } from "@/components/kit/feedback"
 import { api, LOCAL } from "@/lib/api"
 import { hud } from "@/lib/hud"
 import type { CompactionPayload, ElicitationPayload, NoticePayload, PermissionPayload, TextChunkPayload, ThreadItem, ToolPayload, UserMessagePayload } from "./model"
@@ -78,7 +79,7 @@ function UserMessageBody({
         )}
         {text ? (
           <MessageContextMenu text={text} onQuote={onQuote} onFork={onFork}>
-            <p data-slot="user-bubble" className="max-w-[min(78%,560px)] rounded-(--r-pop) bg-(--track) px-(--s4) py-(--s3) text-(length:--fs-sm) text-(--fg) whitespace-pre-wrap">
+            <p data-slot="user-bubble" className="max-w-[min(78%,560px)] rounded-[14px] bg-(--track) px-(--s4) py-(--s2) text-(length:--fs) text-(--fg) whitespace-pre-wrap [overflow-wrap:anywhere]">
               {text}
             </p>
           </MessageContextMenu>
@@ -93,6 +94,18 @@ function UserMessageBody({
       )}
     </>
   )
+}
+
+// Agent errors arrive as JSON-RPC error objects; show their words, not the JSON.
+export function noticeText(description: string): string {
+  try {
+    const error = JSON.parse(description) as { message?: unknown; data?: { error?: unknown; details?: unknown } }
+    const detail = error.data?.details ?? error.data?.error
+    if (typeof error.message === "string") return typeof detail === "string" && detail !== error.message ? `${error.message}: ${detail}` : error.message
+  } catch {
+    // Plain text.
+  }
+  return description
 }
 
 export function quoteMessage(text: string): string {
@@ -120,16 +133,20 @@ function toolIcon(kind?: string) {
     case "search": return Search
     case "list": return Folder
     case "edit": return Pencil
-    case "terminal": return Terminal
+    case "execute":
+    case "terminal": return SquareTerminal
     case "fetch": return Globe
+    case "think": return Sparkles
     default: return Wrench
   }
 }
 
 function statusGlyph(status: string) {
+  if (status === "in_progress") return <span role="img" aria-label={status} title={status} className="shrink-0"><Spinner /></span>
   const glyph = status === "completed" ? "✓" : status === "failed" ? "✕" : "…"
+  const tone = status === "failed" ? "text-(--danger-word)" : status === "completed" ? "text-(--ok-word)" : "text-(--fg3)"
   return (
-    <span role="img" aria-label={status} title={status} className={`shrink-0 ${status === "failed" ? "text-(--danger-word)" : "text-(--fg3)"}`}>
+    <span role="img" aria-label={status} title={status} className={`shrink-0 ${tone}`}>
       {glyph}
     </span>
   )
@@ -142,17 +159,28 @@ function shortInput(input: unknown): string {
   return Object.entries(input).map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`).join(", ").replace(/\s+/g, " ")
 }
 
-const preClass = "mt-(--s2) max-h-40 overflow-auto rounded-(--r-row) bg-(--window) px-(--s3) py-(--s2) font-(family-name:--mono) text-(length:--fs-xs) text-(--fg2) whitespace-pre-wrap"
+// Shell output: the fixture's `output`, the adapter's raw string, or its text content without the console fence.
+export function toolOutput(tool: ToolPayload): string {
+  if (tool.output) return tool.output.trim()
+  if (typeof tool.rawOutput === "string") return tool.rawOutput.trim()
+  const text = (tool.content ?? []).flatMap((block) => block.type === "content" && block.content?.type === "text" && block.content.text ? [block.content.text] : []).join("\n")
+  return text.replace(/^```[a-z]*\n?/, "").replace(/\n?```\s*$/, "").trim()
+}
 
-function ToolRow({ data }: { data: unknown }) {
-  const tool = data as ToolPayload
-  const title = tool.title ?? tool.kind ?? "Tool"
+const preClass = "mt-(--s2) max-h-60 overflow-auto rounded-(--r-pop) bg-(--window) shadow-(--shadow-card) px-(--s4) py-(--s3) font-(family-name:--mono) text-(length:--fs-xs) text-(--fg) whitespace-pre-wrap"
+
+function ToolRow({ item }: { item: ThreadItem }) {
+  const tool = item.data as ToolPayload
+  const shell = tool.kind === "execute" || tool.kind === "terminal"
+  const command = shell ? (tool.command ?? (tool.rawInput as { command?: string } | undefined)?.command) : undefined
+  const title = command ?? tool.title ?? tool.kind ?? "Tool"
   const status = tool.status ?? "pending"
   const Icon = toolIcon(tool.kind)
   const diff = <ToolDiffBody content={tool.content} toolId={tool.toolCallId} />
   const hasDiff = (tool.content ?? []).some((block) => block.type === "diff" && (block.oldText || block.newText))
-  const terminalBody = tool.output?.trim() || (tool.kind === "terminal" && tool.command ? tool.command : "")
+  const terminalBody = shell ? toolOutput(tool) || (tool.kind === "terminal" ? command ?? "" : "") : ""
   const input = shortInput(tool.rawInput)
+  const took = item.ts !== undefined && item.endTs !== undefined && item.endTs - item.ts >= 1000 ? formatDuration(item.endTs - item.ts) : ""
   return (
     <details
       open={hasDiff || Boolean(terminalBody)}
@@ -161,10 +189,11 @@ function ToolRow({ data }: { data: unknown }) {
       className="text-(length:--fs-sm)"
     >
       <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
-        <ChevronRight aria-hidden className="size-(--s4) shrink-0 text-(--fg3) in-open:rotate-90" />
-        <Icon aria-hidden className="size-(--s4) shrink-0 text-(--fg2)" />
-        <span className="min-w-0 flex-1 truncate text-(--fg)">{title}</span>
+        <Icon aria-hidden className="size-3.5 shrink-0 text-(--fg2)" />
+        <span className={`min-w-0 flex-1 truncate text-(--fg) ${shell ? "font-(family-name:--mono) text-(length:--fs-xs)" : ""}`}>{title}</span>
+        {took && <span className="shrink-0 tabular-nums text-(length:--fs-xs) text-(--fg3)">{took}</span>}
         {statusGlyph(status)}
+        <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
       </summary>
       {hasDiff ? (
         diff
@@ -175,7 +204,7 @@ function ToolRow({ data }: { data: unknown }) {
           {input && <p data-slot="tool-input" className="truncate font-(family-name:--mono) text-(length:--fs-xs) text-(--fg2)">{input}</p>}
           <details data-slot="tool-details" className="text-(length:--fs-xs) text-(--fg3)">
             <summary className="cursor-default">Details</summary>
-            <pre className={preClass}>{JSON.stringify(data, null, 2)}</pre>
+            <pre className={preClass}>{JSON.stringify(item.data, null, 2)}</pre>
           </details>
         </div>
       )}
@@ -193,7 +222,7 @@ function plural(n: number, word: string) {
 }
 
 function ToolGroup({ tools }: { tools: ThreadItem[] }) {
-  if (tools.length === 1) return <ToolRow data={tools[0]!.data} />
+  if (tools.length === 1) return <ToolRow item={tools[0]!} />
   const failed = tools.filter((item) => (item.data as ToolPayload).status === "failed").length
   const files = new Set(listDiffChanges(tools).map((change) => change.path)).size
   // ts is only known for streamed items; omit the time rather than guess.
@@ -207,12 +236,12 @@ function ToolGroup({ tools }: { tools: ThreadItem[] }) {
   return (
     <details data-slot="tool-group" open={failed > 0} className="text-(length:--fs-sm)">
       <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
-        <ChevronRight aria-hidden className="size-(--s4) shrink-0 text-(--fg3) in-open:rotate-90" />
+        <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
         <span className="min-w-0 flex-1 truncate text-(--fg2)">{parts.join(" · ")}</span>
         {failed > 0 && <span className="shrink-0 text-(--danger-word)">{failed} failed</span>}
       </summary>
       <div className="flex flex-col border-l-[0.5px] border-(--sep) pl-(--s4)">
-        {tools.map((item, index) => <ToolRow key={item.seq ?? index} data={item.data} />)}
+        {tools.map((item, index) => <ToolRow key={item.seq ?? index} item={item} />)}
       </div>
     </details>
   )
@@ -235,8 +264,8 @@ function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem; machi
   })
   const result = ask.result
   return (
-    <div data-slot="elicitation-card" className="rounded-(--r-pop) border-[0.5px] border-(--warn) bg-(--window) p-(--s4)">
-      <p className="text-(length:--fs-sm) font-medium text-(--fg)">{ask.prompt ?? "Input needed"}</p>
+    <div data-slot="elicitation-card" className="rounded-(--r-sheet) border-[0.5px] border-(--warn) bg-(--window) px-(--s5) pt-(--s5) pb-(--s4) shadow-(--shadow-card)">
+      <p className="text-(length:--fs) font-semibold text-(--fg)">{ask.prompt ?? "Input needed"}</p>
       {ask.resolved ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">Answered: {result?.value ?? "—"}</p> : ask.inactive ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">No longer active</p> : (
         <div className="mt-(--s3) flex flex-wrap gap-(--s2)">
           {(ask.choices ?? []).map((choice, index) => {
@@ -283,18 +312,36 @@ export function findPendingPermission(items: ThreadItem[]): ThreadItem | undefin
   })
 }
 
+function permissionVerb(tool?: string): string {
+  switch (tool) {
+    case "execute": case "terminal": case "Bash": return "run this command"
+    case "edit": return "edit this file"
+    case "read": return "read this file"
+    case "fetch": return "fetch this page"
+    default: return tool ? `use ${tool}` : "continue"
+  }
+}
+
+// Adapters word options as "Yes"/"No"; the card uses the prototype's verbs and keeps specific labels.
+function optionLabel(option: { id: string; label: string }): string {
+  if (option.id.startsWith("reject") || option.label === "No") return "Reject"
+  if (option.id === "allow-once" || option.label === "Yes") return "Allow once"
+  if (option.id === "allow-always") return "Always allow"
+  return option.label
+}
+
 export function PermissionCard({
   item,
   machine,
   sessionId,
   readOnly,
-  docked,
+  agent,
 }: {
   item: ThreadItem
   machine: string
   sessionId: string
   readOnly?: boolean
-  docked?: boolean
+  agent?: string
 }) {
   const perm = item.data as PermissionPayload
   const queryClient = useQueryClient()
@@ -310,38 +357,48 @@ export function PermissionCard({
     },
   })
   const open = !readOnly && !perm.resolved && !perm.inactive
-  const result = perm.result
-  const answerLabel = perm.options?.find((option) => option.id === result?.optionId)?.label ?? result?.optionId
+  const options = perm.options ?? []
+  if (perm.resolved || perm.inactive) {
+    const chosen = options.find((option) => option.id === perm.result?.optionId)
+    const answerLabel = chosen ? optionLabel(chosen) : perm.result?.optionId
+    return (
+      <p data-slot="permission-card" className="flex min-h-(--row-h) items-center gap-(--s3) text-(length:--fs-sm) text-(--fg3)">
+        <Lock aria-hidden className="size-3.5 shrink-0" />
+        <span className="min-w-0 truncate">{perm.resolved ? `Answered: ${answerLabel ?? "—"}` : "No longer active"}{perm.summary ? ` · ${perm.summary}` : ""}</span>
+      </p>
+    )
+  }
   return (
     <div
       data-slot="permission-card"
       role="group"
       aria-label={`Permission request: ${perm.tool ?? "Permission"}`}
-      tabIndex={perm.resolved || perm.inactive ? -1 : 0}
+      tabIndex={0}
       onKeyDown={(event) => {
-        if (!open || !perm.requestId || answer.isPending || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !/^[1-9]$/.test(event.key)) return
+        if (!open || !perm.requestId || answer.isPending || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
         if (event.target instanceof HTMLElement && event.target.closest("input, textarea, select, [contenteditable='true']")) return
-        const option = perm.options?.[Number(event.key) - 1]
+        const option = event.key === "Enter" && event.target === event.currentTarget ? options[0] : /^[1-9]$/.test(event.key) ? options[Number(event.key) - 1] : undefined
         if (!option) return
         event.preventDefault()
         answer.mutate(option.id)
       }}
-      className={`rounded-(--r-pop) border-[0.5px] border-(--warn) bg-(--window) focus-visible:ring-2 focus-visible:ring-(--accent-soft) ${docked ? "p-(--s3)" : "p-(--s4)"}`}
+      className="rounded-(--r-sheet) border-[0.5px] border-(--warn) bg-(--window) px-(--s5) pt-(--s5) pb-(--s4) shadow-(--shadow-card) outline-none focus-visible:ring-2 focus-visible:ring-(--accent-soft)"
     >
-      <p className="text-(length:--fs-sm) font-medium text-(--fg)">{perm.tool ?? "Permission"}</p>
-      {perm.summary && (docked
-        ? <pre data-slot="permission-command" className="mt-(--s2) max-h-24 overflow-auto rounded-(--r-row) bg-(--track) px-(--s3) py-(--s2) font-(family-name:--mono) text-(length:--fs-xs) text-(--fg) whitespace-pre-wrap">{perm.summary}</pre>
-        : <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">{perm.summary}</p>)}
-      {perm.resolved ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">Answered: {answerLabel ?? "—"}</p> : perm.inactive ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">No longer active</p> : (
-        <div className="mt-(--s3) flex flex-wrap gap-(--s2)">
-          {(perm.options ?? []).map((option, index) => (
-            <Button key={option.id} type="button" size="sm" variant="default" disabled={!perm.requestId || answer.isPending} onClick={() => answer.mutate(option.id)}>
-              {index < 9 && <kbd aria-hidden className="font-(family-name:--mono) text-(--fg3)">{index + 1}</kbd>}
-              {option.label}
-            </Button>
-          ))}
-        </div>
-      )}
+      <div className="flex items-start gap-(--s4)">
+        <span aria-hidden className="grid size-7 shrink-0 place-items-center rounded-[7px] bg-[color-mix(in_oklch,var(--warn)_20%,transparent)] text-(--warn-word)">
+          <Lock className="size-4" />
+        </span>
+        <p className="pt-(--s1) text-(length:--fs) font-semibold text-(--fg)">Allow {agent || "the agent"} to {permissionVerb(perm.tool)}?</p>
+      </div>
+      {perm.summary && <pre data-slot="permission-command" className="my-(--s4) max-h-40 overflow-auto rounded-(--r-ctl) bg-(--code) px-(--s4) py-(--s3) font-(family-name:--mono) text-(length:--fs-sm) text-(--fg) whitespace-pre-wrap break-words">{perm.summary}</pre>}
+      <div className="flex flex-wrap justify-end gap-(--s2)">
+        {options.map((option, index) => ({ option, index })).reverse().map(({ option, index }) => (
+          <Button key={option.id} type="button" size="sm" variant={index === 0 ? "primary" : "default"} title={index < 9 ? `Press ${index + 1}` : undefined} disabled={!perm.requestId || answer.isPending} onClick={() => answer.mutate(option.id)}>
+            {optionLabel(option)}
+            {index === 0 && <kbd aria-hidden className="font-(family-name:--mono) opacity-70">↩</kbd>}
+          </Button>
+        ))}
+      </div>
       {answer.error && <p className="mt-(--s2) text-(length:--fs-sm) text-(--danger)">{conversationErrorMessage(machine, "answer a permission request", answer.error)}</p>}
     </div>
   )
@@ -447,7 +504,7 @@ function ThreadItemView({
   machine,
   sessionId,
   readOnly,
-  docked,
+  agent,
   onQuote,
   onFork,
   onRetry,
@@ -456,7 +513,7 @@ function ThreadItemView({
   machine: string
   sessionId: string
   readOnly?: boolean
-  docked?: boolean
+  agent?: string
   onQuote?: (text: string) => void
   onFork?: () => void
   onRetry?: () => void
@@ -470,20 +527,19 @@ function ThreadItemView({
       return (
         <details data-slot="thought-block" className="text-(length:--fs-sm)">
           <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) text-(--fg2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
-            <ChevronRight aria-hidden className="size-(--s4) shrink-0 text-(--fg3) in-open:rotate-90" />
-            <Sparkles aria-hidden className="size-(--s4) shrink-0" />
+            <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
+            <Sparkles aria-hidden className="size-3.5 shrink-0" />
             Thought
           </summary>
           <p className="ml-(--s3) border-l-[0.5px] border-(--sep) py-(--s2) pl-(--s4) text-(--fg2) italic whitespace-pre-wrap">{chunkText(item.data)}</p>
         </details>
       )
     case "tool":
-      return <ToolRow data={item.data} />
+      return <ToolRow item={item} />
     case "permission":
-      if (docked) return <p data-slot="permission-placeholder" className="text-(length:--fs-sm) text-(--fg2)">⧗ {(item.data as PermissionPayload).tool ?? "Permission"} · waiting for approval</p>
-      return <fieldset disabled={readOnly}><PermissionCard item={item} machine={machine} sessionId={sessionId} readOnly={readOnly} /></fieldset>
+      return <fieldset disabled={readOnly} className="min-w-0"><PermissionCard item={item} machine={machine} sessionId={sessionId} readOnly={readOnly} agent={agent} /></fieldset>
     case "elicitation":
-      return <fieldset disabled={readOnly}><ElicitationCard item={item} machine={machine} sessionId={sessionId} /></fieldset>
+      return <fieldset disabled={readOnly} className="min-w-0"><ElicitationCard item={item} machine={machine} sessionId={sessionId} /></fieldset>
     case "compaction":
       return <CompactionBlock item={item} />
     case "divider": {
@@ -491,7 +547,7 @@ function ThreadItemView({
       return (
         <div data-slot="conversation-divider" className="flex flex-col gap-(--s1) text-center text-(length:--fs-xs) text-(--fg3)">
           {notice.title && <p className="font-medium text-(--fg2)">{notice.title}</p>}
-          {notice.description && <p>{notice.description}</p>}
+          {notice.description && <p>{noticeText(notice.description)}</p>}
         </div>
       )
     }
@@ -530,10 +586,12 @@ export function ThreadView({
   onFork,
   onRetry,
   readOnly,
-  dockPending,
+  agent,
+  working,
 }: {
   readOnly?: boolean
-  dockPending?: boolean
+  agent?: string
+  working?: boolean
   items: ThreadItem[]
   machine: string
   sessionId: string
@@ -545,7 +603,6 @@ export function ThreadView({
     return <p className="py-(--s7) text-center text-(length:--fs-sm) text-(--fg3)">No messages yet.</p>
   }
   const retry = latestUserPrompt(items) && onRetry ? onRetry : undefined
-  const pending = dockPending && !readOnly ? findPendingPermission(items) : undefined
   const lastAgent = items.findLast((item) => item.kind === "agent_message_chunk")
   const compacted = items.some((item) => item.kind === "compaction")
   return (
@@ -561,13 +618,18 @@ export function ThreadView({
             machine={machine}
             sessionId={sessionId}
             readOnly={readOnly}
-            docked={entry === pending}
+            agent={agent}
             onQuote={onQuote}
             onFork={onFork}
             onRetry={entry === lastAgent ? retry : undefined}
           />
         )
       })}
+      {working && (
+        <p data-slot="thread-working" className="flex items-center gap-(--s3) text-(length:--fs-sm) text-(--fg3)">
+          <Spinner /> Working…
+        </p>
+      )}
     </div>
   )
 }

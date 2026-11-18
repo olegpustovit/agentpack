@@ -149,13 +149,13 @@ export function ToolDiffBody({ content, toolId }: { content: ToolDiffBlock[] | u
   const diffs = (content ?? []).filter((block) => block.type === "diff" && (block.oldText || block.newText))
   if (diffs.length === 0) return null
   return (
-    <div className="flex flex-col gap-(--s3) border-t-[0.5px] border-(--sep) px-(--s3) py-(--s2)">
+    <div className="mt-(--s2) flex flex-col gap-(--s3)">
       {diffs.map((block, index) => (
-        <div key={index} id={block.path ? diffAnchorId(block.path, toolId) : undefined} data-slot="tool-diff" className="flex flex-col gap-(--s1) overflow-x-auto">
+        <div key={index} id={block.path ? diffAnchorId(block.path, toolId) : undefined} data-slot="tool-diff" className="flex flex-col overflow-hidden rounded-(--r-pop) bg-(--window) shadow-(--shadow-card)">
           {block.path && (
-            <p className="font-(family-name:--mono) text-(length:--fs-xs) text-(--fg2)">{block.path}</p>
+            <p className="border-b-[0.5px] border-(--sep) bg-(--code) px-(--s3) py-(--s2) font-(family-name:--mono) text-(length:--fs-xs) text-(--fg2)">{block.path}</p>
           )}
-          <div className="flex flex-col gap-px rounded-(--r-row) border-[0.5px] border-(--sep) py-(--s1)">
+          <div className="flex flex-col gap-px overflow-x-auto py-(--s1)">
             {diffBlock(block.oldText ?? "", block.newText ?? "", diffLanguage(block.path))}
           </div>
         </div>

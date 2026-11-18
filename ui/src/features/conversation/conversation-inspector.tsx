@@ -1,6 +1,6 @@
-import { useState } from "react"
+import { useState, type ReactNode } from "react"
 import { FileCode2 } from "lucide-react"
-import { Section, KeyValue } from "@/components/kit/data"
+import { Section } from "@/components/kit/data"
 import { Button } from "@/components/ui/button"
 import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
 import { api, ApiError } from "@/lib/api"
@@ -12,10 +12,25 @@ import { cn } from "@/lib/utils"
 import type { ThreadState } from "./model"
 import { groupByPath, listDiffChanges } from "./diff-summary"
 
+// Inspector rows are label left, value right: the pane is too narrow for the settings two-column form.
+function Row({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex min-w-0 items-baseline justify-between gap-(--s4)">
+      <dt className="shrink-0 text-(--fg2)">{label}</dt>
+      <dd className="min-w-0 truncate text-right" title={typeof children === "string" ? children : undefined}>{children}</dd>
+    </div>
+  )
+}
+
+function tokens(n: number): string {
+  return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
+}
+
 export function ConversationInspector({
   thread,
   info,
   machine,
+  machineName,
   open,
   sessionId,
   readOnly,
@@ -23,6 +38,7 @@ export function ConversationInspector({
   thread: ThreadState
   info?: SessionInfo
   machine: string
+  machineName?: string
   open: boolean
   sessionId?: string
   readOnly?: boolean
@@ -55,7 +71,18 @@ export function ConversationInspector({
       )}
       style={{ ["--inspector-w" as string]: "272px" }}
     >
-      <div id="conversation-inspector-content" className="flex min-w-0 flex-col gap-(--s6)">
+      <div id="conversation-inspector-content" className="flex min-w-0 flex-col gap-(--s6) text-(length:--fs-sm)">
+        {thread.context_limit !== undefined && thread.context_tokens !== undefined && (
+          <Section title="Context">
+            <div role="meter" aria-label="Context used" aria-valuemin={0} aria-valuemax={thread.context_limit} aria-valuenow={thread.context_tokens} className="mb-(--s4) h-1.5 overflow-hidden rounded-full bg-(--track)">
+              <div className="h-full rounded-full bg-(--accent)" style={{ width: `${Math.min(100, (thread.context_tokens / Math.max(thread.context_limit, 1)) * 100)}%` }} />
+            </div>
+            <dl className="flex flex-col gap-(--s2)">
+              <Row label="Used">{`${tokens(thread.context_tokens)} of ${tokens(thread.context_limit)}`}</Row>
+              {thread.cost_usd !== undefined && thread.cost_usd > 0 && <Row label="Cost so far">{`$${thread.cost_usd.toFixed(2)}`}</Row>}
+            </dl>
+          </Section>
+        )}
         {all.length > 0 && (
           <Section title="Changes">
             <SegmentedControl aria-label="Changes scope" value={[scope]} onValueChange={(v) => v[0] && setScope(v[0] as "turn" | "all")}>
@@ -117,21 +144,21 @@ export function ConversationInspector({
         )}
         {info && (
           <Section title="Session">
-            <dl className="flex flex-col gap-(--s3)">
-              <KeyValue label="Agent">{harnessName(info.harness)}</KeyValue>
-              {startedBy && <KeyValue label="Started by">{startedBy}</KeyValue>}
-              <KeyValue label="Machine">{machine}</KeyValue>
-              <KeyValue label="Project">{info.directory.split("/").pop() || info.directory}</KeyValue>
-              <KeyValue label="Mode">{info.mode || "default"}</KeyValue>
+            <dl className="flex flex-col gap-(--s2)">
+              <Row label="Agent">{harnessName(info.harness)}</Row>
+              {startedBy && <Row label="Started by">{startedBy}</Row>}
+              <Row label="Machine">{machineName ?? machine}</Row>
+              <Row label="Project">{info.directory.split("/").pop() || info.directory}</Row>
+              <Row label="Mode">{info.mode || "default"}</Row>
             </dl>
           </Section>
         )}
         {capabilities && (
-          <Section title="Agent capabilities">
-            <dl className="flex flex-col gap-(--s3)">
-              <KeyValue label="Images">{imageSupport === true ? "Yes" : "No"}</KeyValue>
-              <KeyValue label="Resume">{resumeSupport ? "Yes" : "No"}</KeyValue>
-              <KeyValue label="Fork">{forkSupport ? "Yes" : "No"}</KeyValue>
+          <Section title="This agent supports">
+            <dl className="flex flex-col gap-(--s2)">
+              <Row label="Images">{imageSupport === true ? "Yes" : "No"}</Row>
+              <Row label="Resume">{resumeSupport ? "Yes" : "No"}</Row>
+              <Row label="Fork">{forkSupport ? "Yes" : "No"}</Row>
             </dl>
           </Section>
         )}

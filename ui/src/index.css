@@ -33,6 +33,9 @@
   --ok:oklch(.6 .15 150);--warn:oklch(.72 .15 70);--danger:oklch(.58 .21 27);--idle:oklch(.7 .004 260);
   --shadow-ctl:0 .5px 1px oklch(0 0 0 / 18%),0 0 0 .5px oklch(0 0 0 / 10%);
   --shadow-pop:0 10px 30px oklch(0 0 0 / 18%),0 0 0 .5px oklch(0 0 0 / 14%);
+  --shadow-card:0 1px 3px oklch(0 0 0 / 7%),0 0 0 .5px oklch(0 0 0 / 9%);
+  --shadow-composer:0 4px 16px oklch(0 0 0 / 9%),0 0 0 .5px oklch(0 0 0 / 13%);
+  --glass:oklch(.985 .001 260 / 84%);--code:oklch(.965 .003 260);
   --scrim:oklch(0 0 0 / 22%);
   --terminal-bg:#ffffff;--terminal-fg:#202124;
   color-scheme:light;
@@ -43,6 +46,7 @@
   --hover:oklch(1 0 0 / 7%);--press:oklch(1 0 0 / 12%);--accent:oklch(.64 .17 255);--accent-soft:oklch(.64 .17 255 / 22%);--sel-inactive:oklch(1 0 0 / 11%);
   --ok:oklch(.72 .15 150);--warn:oklch(.8 .14 75);--danger:oklch(.7 .18 25);--idle:oklch(.55 0 0);--terminal-bg:#171b22;--terminal-fg:#e6e8ed;
   --shadow-ctl:0 .5px 1px oklch(0 0 0 / 40%),inset 0 .5px 0 oklch(1 0 0 / 10%);--shadow-pop:0 12px 36px oklch(0 0 0 / 50%),0 0 0 .5px oklch(1 0 0 / 14%);--scrim:oklch(0 0 0 / 40%);
+  --shadow-card:0 1px 3px oklch(0 0 0 / 30%),0 0 0 .5px oklch(1 0 0 / 10%);--shadow-composer:0 6px 22px oklch(0 0 0 / 40%),0 0 0 .5px oklch(1 0 0 / 15%);--glass:oklch(.22 .001 260 / 84%);--code:oklch(.245 .002 260);
   color-scheme:dark}}
 :root[data-theme=dark]{
   --window:oklch(.2 0 0);--chrome:oklch(.255 .002 260);--sidebar:oklch(.225 .002 260);--control:oklch(.43 .002 260);--field:oklch(.27 .002 260);--track:oklch(.3 .002 260);
@@ -50,6 +54,7 @@
   --hover:oklch(1 0 0 / 7%);--press:oklch(1 0 0 / 12%);--accent:oklch(.64 .17 255);--accent-soft:oklch(.64 .17 255 / 22%);--sel-inactive:oklch(1 0 0 / 11%);
   --ok:oklch(.72 .15 150);--warn:oklch(.8 .14 75);--danger:oklch(.7 .18 25);--idle:oklch(.55 0 0);--terminal-bg:#171b22;--terminal-fg:#e6e8ed;
   --shadow-ctl:0 .5px 1px oklch(0 0 0 / 40%),inset 0 .5px 0 oklch(1 0 0 / 10%);--shadow-pop:0 12px 36px oklch(0 0 0 / 50%),0 0 0 .5px oklch(1 0 0 / 14%);--scrim:oklch(0 0 0 / 40%);
+  --shadow-card:0 1px 3px oklch(0 0 0 / 30%),0 0 0 .5px oklch(1 0 0 / 10%);--shadow-composer:0 6px 22px oklch(0 0 0 / 40%),0 0 0 .5px oklch(1 0 0 / 15%);--glass:oklch(.22 .001 260 / 84%);--code:oklch(.245 .002 260);
   color-scheme:dark}
 
 :root {

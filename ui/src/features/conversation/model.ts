@@ -53,6 +53,7 @@ export type ToolPayload = {
   command?: string
   output?: string
   rawInput?: unknown
+  rawOutput?: unknown
   content?: ToolDiffBlock[]
 }
 
@@ -61,6 +62,7 @@ export type ToolDiffBlock = {
   path?: string
   oldText?: string
   newText?: string
+  content?: { type?: string; text?: string }
 }
 
 export type PermissionPayload = {

@@ -156,8 +156,8 @@ test.describe("kit styling", () => {
     await card.focus()
     expect(await style(card, "box-shadow")).not.toBe("none")
 
-    // The composer dock is translucent chrome and carries the plan pill.
-    const dock = page.locator(".backdrop-blur-md").last()
+    // The plan pill above the composer is translucent chrome.
+    const dock = page.locator('[data-slot="plan-pill"]')
     await expect(dock).toBeVisible()
     expect(await style(dock, "backdrop-filter")).not.toBe("none")
     await expect(page.locator('[data-slot="plan-pill"]')).toContainText("Publish the branch")

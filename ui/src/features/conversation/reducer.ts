@@ -132,7 +132,8 @@ export function reduceLog(entries: LogEntry[]): ThreadState {
         if (idx !== undefined) {
           const items = state.items.slice()
           const prev = items[idx]!
-          items[idx] = { ...prev, data: entry.payload, endTs: entry.ts }
+          // ACP updates are partial: a status or output update keeps the title and kind from earlier.
+          items[idx] = { ...prev, data: { ...(prev.data as object), ...(entry.payload as object) }, endTs: entry.ts }
           state.items = items
         } else {
           state.items = [...state.items, { kind: "tool", data: entry.payload }]

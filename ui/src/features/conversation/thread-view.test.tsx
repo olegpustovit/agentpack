@@ -105,12 +105,13 @@ describe("conversation message actions", () => {
     expect(container.querySelector('[data-slot="tool-details"]')!.hasAttribute("open")).toBe(false)
   })
 
-  it("docks the pending permission and finds the newest one", () => {
+  it("shows the pending permission inline and finds the newest one", () => {
     const perm = (requestId: string, resolved?: boolean): ThreadItem => ({ kind: "permission", data: { requestId, tool: "Bash", resolved } })
     const list = [perm("a"), perm("b"), perm("c", true)]
     expect(findPendingPermission(list)).toBe(list[1])
     expect(findPendingPermission([list[2]!])).toBeUndefined()
-    act(() => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(ThreadView, { items: list, machine: "local", sessionId: "s", dockPending: true }))))
-    expect(container.querySelector('[data-slot="permission-placeholder"]')!.textContent).toBe("⧗ Bash · waiting for approval")
+    act(() => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(ThreadView, { items: list, machine: "local", sessionId: "s", agent: "Claude" }))))
+    expect(container.querySelectorAll('[role="group"][data-slot="permission-card"]')).toHaveLength(2)
+    expect(container.textContent).toContain("Allow Claude to run this command?")
   })
 })
