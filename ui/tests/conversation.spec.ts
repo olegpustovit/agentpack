@@ -350,3 +350,12 @@ test("phone layout keeps tabs and opens the session inspector on demand", async 
   await expect(inspector).toBeHidden()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy()
 })
+
+test("a missing pane chunk reloads once, then offers Reload instead of loading forever", async ({ page }) => {
+  let loads = 0
+  page.on("load", () => { loads += 1 })
+  await page.route("**/conversation-pane-*.js", (route) => route.fulfill({ status: 404, body: "" }))
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByRole("button", { name: "Reload" })).toBeVisible()
+  expect(loads).toBe(2)
+})

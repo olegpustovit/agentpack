@@ -160,3 +160,5 @@ a{color:inherit;text-decoration:none;text-underline-offset:2px}
 .titlebar,.statusbar,.sidebar,.pane-head,button,label,th,.list-caption,.sheet-actions{user-select:none;-webkit-user-select:none;cursor:default}
 * {scrollbar-width:thin;scrollbar-color:var(--sep) transparent}
 }
+
+@keyframes pane-loading { to { opacity: 1 } }

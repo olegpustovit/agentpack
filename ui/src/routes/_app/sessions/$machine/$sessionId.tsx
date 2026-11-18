@@ -14,6 +14,8 @@ import { unavailableMessage, UnavailableTerminal } from "@/features/terminal/una
 import { api } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { hud } from "@/lib/hud"
+import { Spinner } from "@/components/kit/feedback"
+import { Button } from "@/components/ui/button"
 
 // Loaded on demand so xterm and the conversation UI stay out of the initial bundle. Not
 // React.lazy: React holds a Suspense reveal for ~300 ms, which every session open paid.
@@ -25,11 +27,32 @@ const loadPane = {
   terminal: () => import("@/features/terminal/terminal-pane").then((module) => (panes.terminal = module.default)),
 }
 
-function usePane(kind: keyof typeof loadPane | undefined) {
+// Returns true when the chunk failed to load (a deploy replaced it, or the network dropped).
+function usePane(kind: keyof typeof loadPane | undefined): boolean {
   const [, loaded] = useState(0)
+  const [failed, setFailed] = useState(false)
   useEffect(() => {
-    if (kind && !panes[kind]) void loadPane[kind]().then(() => loaded((count) => count + 1))
+    if (kind && !panes[kind]) loadPane[kind]().then(() => loaded((count) => count + 1), () => setFailed(true))
   }, [kind])
+  return failed
+}
+
+function PaneLoading({ label, failed }: { label: string; failed?: boolean }) {
+  return (
+    <div className="grid h-full place-items-center p-(--s6)">
+      {failed ? (
+        <div className="flex flex-col items-center gap-(--s4) text-center text-(length:--fs-sm) text-(--fg2)">
+          <p>Couldn't load this view. The gateway was probably updated.</p>
+          <Button type="button" size="sm" onClick={() => location.reload()}>Reload</Button>
+        </div>
+      ) : (
+        // Fades in late so a fast load never flashes it.
+        <p className="flex items-center gap-(--s3) text-(length:--fs-sm) text-(--fg3) opacity-0 [animation:pane-loading_.2s_.3s_forwards]">
+          <Spinner /> {label}
+        </p>
+      )}
+    </div>
+  )
 }
 
 function SessionRoute() {
@@ -70,11 +93,11 @@ function SessionRoute() {
     },
     onError: (error) => hud.error(`Couldn't start session: ${(error as Error).message}`),
   })
-  usePane(info?.transport === "acp" ? "conversation" : info || data ? "terminal" : undefined)
+  const paneFailed = usePane(info?.transport === "acp" ? "conversation" : info || data ? "terminal" : undefined)
   if (message) return <UnavailableTerminal message={message} />
   // The pane depends on the transport, so wait for the list rather than guess Terminal
   // (which would load xterm and attach a socket to a chat session).
-  if (!data && !stale) return <p className="p-(--s4) text-(--fg2)">Loading session…</p>
+  if (!data && !stale) return <PaneLoading label="Loading session…" />
   const title = listed && sessionLabel(listed)
   const subtitle = listed && sessionDetail(listed).split(" · ").slice(listed.name ? 0 : 1).join(" · ")
   const acp = info?.transport === "acp"
@@ -118,7 +141,7 @@ function SessionRoute() {
             listed={!data || !!info}
           />
         ) : (
-          <p className="p-(--s4) text-(--fg2)">{acp ? "Loading conversation…" : "Loading terminal…"}</p>
+          <PaneLoading label={acp ? "Loading conversation…" : "Loading terminal…"} failed={paneFailed} />
         )}
       </div>
     </div>

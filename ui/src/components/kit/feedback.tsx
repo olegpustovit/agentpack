@@ -1,5 +1,5 @@
 import type { ComponentProps, ReactNode } from "react";
-import { CircleAlert, Info, RefreshCw, TriangleAlert, X } from "lucide-react";
+import { CircleAlert, Info, TriangleAlert, X } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
@@ -86,7 +86,7 @@ export function RowSkeleton({ lines = 1, className }: { lines?: 1 | 2; className
 export function Spinner({ className, ...props }: ComponentProps<"span">) {
   return (
     <span role="status" aria-label="Loading" className={cn("inline-flex", className)} {...props}>
-      <RefreshCw aria-hidden className="size-(--fs) animate-spin motion-reduce:animate-none" />
+      <span aria-hidden className="size-(--fs) rounded-full border-[1.5px] border-current border-r-transparent opacity-70 animate-spin motion-reduce:animate-none" />
     </span>
   );
 }
