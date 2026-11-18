@@ -11,7 +11,7 @@ CRSQLITE_GOOS := $(shell $(GO) env GOOS)
 CRSQLITE_GOARCH := $(shell $(GO) env GOARCH)
 VERSION := $(shell sed -n 's/^var Version = "\([^"]*\)"/\1/p' internal/cli/run.go)
 
-.PHONY: help all build release install uninstall minor patch ship-minor ship-patch _ship check-clean fmt fmt-check lint test race ci hooks release-check ui-install ui-lint ui-typecheck ui-test ui-build ui-stage ui-e2e artifact
+.PHONY: help all build release install uninstall minor patch ship-minor ship-patch _ship check-clean fmt fmt-check lint test race ci hooks release-check ui-install ui-lint ui-typecheck ui-test ui-build ui-stage ui-e2e artifact dev-deploy
 
 .PHONY: crsqlite crsqlite-build
 
@@ -25,6 +25,7 @@ help:
 	@echo "  crsqlite-build  rebuild it (pinned Rust/Zig and libclang required)"
 	@echo "  install         release, then copy binary to INSTALL_DIR ($(INSTALL_DIR))"
 	@echo "  uninstall       remove binary from INSTALL_DIR"
+	@echo "  dev-deploy      ui-stage + install and restart the gateway here, deploy the checkout to oracle-vm and install its CLI there"
 	@echo ""
 	@echo "Quality gates (local; CI only builds releases):"
 	@echo "  fmt             format all Go files"
@@ -111,27 +112,26 @@ ui-e2e: ui-build crsqlite
 artifact: ui-stage build
 	./scripts/ui-smoke.sh
 
+# Keep an existing `agentpack` entry point on the same build, as the release installer does.
 install: release
 	mkdir -p "$(INSTALL_DIR)"
 	@set -e; \
-	 tmp=$$(mktemp "$(INSTALL_DIR)/.$(BINARY).XXXXXX"); \
-	 trap 'rm -f "$$tmp"' EXIT; \
-	 cp "$(RELEASE_BIN)" "$$tmp"; \
-	 chmod 755 "$$tmp"; \
-	 mv -f "$$tmp" "$(INSTALL_DIR)/$(BINARY)"; \
-	 alias="$(INSTALL_DIR)/ap"; \
-	 if [ -e "$$alias" ] || [ -L "$$alias" ]; then \
-	   if [ ! -L "$$alias" ]; then echo "refusing to replace existing $$alias (not installed by agentpack)" >&2; exit 1; fi; \
-	   case "$$(readlink "$$alias")" in \
-	     "$(BINARY)"|"./$(BINARY)"|"$(INSTALL_DIR)/$(BINARY)") ;; \
-	     *) echo "refusing to replace foreign symlink $$alias -> $$(readlink "$$alias")" >&2; exit 1;; \
-	   esac; \
-	 fi; \
-	 ln -sf "$(BINARY)" "$$alias"
-	@echo "Installed $(INSTALL_DIR)/$(BINARY) and $(INSTALL_DIR)/ap — ensure INSTALL_DIR is on PATH"
+	 for target in "$(BINARY)" agentpack; do \
+	   dest="$(INSTALL_DIR)/$$target"; \
+	   if [ "$$target" = agentpack ] && { [ ! -f "$$dest" ] || [ -L "$$dest" ]; }; then continue; fi; \
+	   tmp=$$(mktemp "$(INSTALL_DIR)/.$$target.XXXXXX"); \
+	   cp "$(RELEASE_BIN)" "$$tmp"; chmod 755 "$$tmp"; mv -f "$$tmp" "$$dest"; \
+	   echo "Installed $$dest"; \
+	 done
+
+dev-deploy: ui-stage install
+	"$(INSTALL_DIR)/$(BINARY)" gateway stop
+	"$(INSTALL_DIR)/$(BINARY)" gateway start
+	"$(INSTALL_DIR)/$(BINARY)" deploy
+	ssh -o BatchMode=yes oracle-vm "sh -c 'set -e; cd ~/.local/bin; for t in ap agentpack; do [ \$$t = agentpack ] && [ ! -f agentpack ] && continue; cp ~/.local/lib/agentpack/agentpack .\$$t.new; mv -f .\$$t.new \$$t; done; ./ap --version'"
 
 uninstall:
-	rm -f "$(INSTALL_DIR)/$(BINARY)" "$(INSTALL_DIR)/ap"
+	rm -f "$(INSTALL_DIR)/$(BINARY)"
 
 minor:
 	@$(MAKE) _bump PART=minor
