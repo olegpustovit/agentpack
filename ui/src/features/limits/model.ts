@@ -47,7 +47,8 @@ export function providerGroups(reports: LimitReport[]): ProviderGroup[] {
     const provider = report.snapshot.harness
     byProvider.set(provider, [...(byProvider.get(provider) ?? []), report])
   }
-  return [...byProvider].map(([provider, list]) => {
+  // A provider whose CLI no machine has is not a limit worth a card.
+  return [...byProvider].filter(([, list]) => list.some((report) => !missing(report))).map(([provider, list]) => {
     const selected = selectReport(list)
     return { provider, selected, others: list.filter((report) => report !== selected && !missing(report)), usable: usable(selected.snapshot) }
   })

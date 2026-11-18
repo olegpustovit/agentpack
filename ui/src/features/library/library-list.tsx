@@ -141,8 +141,9 @@ export function LibraryList() {
   const totals = arrangeLibrary(items, { filter: "all", sort: "type", query: "" }).counts
   const loading = packages.firstLoadPending || agentpacks.firstLoadPending || projects.firstLoadPending
   const queries = [packages, agentpacks, projects]
+  const stale = machines.filter((machine) => queries.some((entry) => entry.byMachine[machine.id]?.needsUpdate))
   const offlineWithData = machines.filter(
-    (machine) => !machine.online && queries.some((entry) => entry.byMachine[machine.id]?.data !== undefined),
+    (machine) => !machine.online && !stale.includes(machine) && queries.some((entry) => entry.byMachine[machine.id]?.data !== undefined),
   )
 
   // Search, type and sort live in the URL. Replace, so each keystroke does not add history.
@@ -210,15 +211,10 @@ export function LibraryList() {
 
       <SourceList aria-label="Library" className="min-h-0 flex-1">
         <PendingInstalls />
+        {stale.length > 0 && <Banner>{`${stale.map((machine) => machine.name).join(", ")} ${stale.length === 1 ? "needs" : "need"} an update to show the library.`}</Banner>}
         {machines.map((machine) => {
-          if (queries.some((entry) => entry.byMachine[machine.id]?.needsUpdate)) {
-            return <Banner key={machine.id} tone="warn">{`${machine.name} needs an update to show its library.`}</Banner>
-          }
-          const error = queries.map((entry) => entry.errors[machine.id]).find(Boolean)
-          if (error) {
-            return <Banner key={machine.id} tone="danger">{`Couldn't load library from ${machine.name}: ${error.message}`}</Banner>
-          }
-          return null
+          const error = !stale.includes(machine) && queries.map((entry) => entry.errors[machine.id]).find(Boolean)
+          return error ? <Banner key={machine.id} tone="danger">{`Couldn't load library from ${machine.name}: ${error.message}`}</Banner> : null
         })}
         {offlineWithData.length > 0 && (
           <Banner>

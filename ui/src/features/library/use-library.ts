@@ -21,7 +21,7 @@ export function useLibrary(): { inputs: LibraryInput[]; items: LibraryItem[]; lo
   }))
   const failures = machines.flatMap((machine) => {
     // An older peer answers the Library API with a raw 404; say it needs an update, as the list does.
-    if (queries.some((query) => query.byMachine[machine.id]?.needsUpdate)) return [`${machine.name} needs an update to show its library.`]
+    if (queries.some((query) => query.byMachine[machine.id]?.needsUpdate)) return [`${machine.name} needs an update to show the library.`]
     const error = queries.map((query) => query.errors[machine.id]).find(Boolean)
     return error ? [`Couldn't load library from ${machine.name}: ${error.message}`] : []
   })

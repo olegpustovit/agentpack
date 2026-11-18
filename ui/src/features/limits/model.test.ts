@@ -118,8 +118,8 @@ describe("machines without the CLI", () => {
     expect(group?.others).toEqual([])
   })
 
-  it("still show when no machine has it", () => {
-    expect(providerGroups([absent])[0]?.selected.id).toBe("vm")
+  it("hide the provider when no machine has it", () => {
+    expect(providerGroups([absent])).toEqual([])
   })
 })
 

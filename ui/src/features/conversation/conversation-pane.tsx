@@ -537,7 +537,8 @@ export default function ConversationPane({
                     label="Permissions"
                     value={typeof configValues[permissionsOption.id] === "string" ? configValues[permissionsOption.id] as string : permissionsOption.value}
                     onValueChange={(value) => setConfigValue(permissionsOption.id, value)}
-                    disabled={setConfig.isPending || thread.needs_you || needsUpdate}
+                    // Stays usable while the agent waits on you: that is when switching to bypass helps.
+                    disabled={setConfig.isPending || needsUpdate}
                     items={permissionsOption.items}
                   />
                 )}

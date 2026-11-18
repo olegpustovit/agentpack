@@ -626,3 +626,29 @@ func TestFailedPromptEndsTheTurnWithANotice(t *testing.T) {
 		t.Fatalf("working=%v entries=%v", state.Working, entries)
 	}
 }
+
+func TestStartPromptOutlivesTheRequest(t *testing.T) {
+	previous := promptAcceptWait
+	promptAcceptWait = 10 * time.Millisecond
+	t.Cleanup(func() { promptAcceptWait = previous })
+	release, finished := make(chan struct{}), make(chan error, 1)
+	session := NewConversationSession(acp.NewEventLog(0), acp.NewBroker(func(ctx context.Context, _ acp.PromptInput) error {
+		<-release
+		finished <- ctx.Err()
+		return nil
+	}, nil, nil, nil))
+	ctx, cancel := context.WithCancel(t.Context())
+	if err := startPrompt(ctx, session, acp.PromptInput{Text: "go"}); err != nil {
+		t.Fatalf("a long turn was not accepted: %v", err)
+	}
+	cancel()
+	close(release)
+	if err := <-finished; err != nil {
+		t.Fatalf("ending the request cancelled the turn: %v", err)
+	}
+	if err := startPrompt(t.Context(), NewConversationSession(acp.NewEventLog(0), acp.NewBroker(func(context.Context, acp.PromptInput) error {
+		return errors.New("refused")
+	}, nil, nil, nil)), acp.PromptInput{Text: "go"}); err == nil {
+		t.Fatal("an immediate failure was reported as accepted")
+	}
+}

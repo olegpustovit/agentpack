@@ -27,7 +27,8 @@ export function LimitsView() {
   )
   const groups = providerGroups(reports)
   const pending = machines.filter((machine) => queries.byMachine[machine.id]?.pending)
-  const offline = machines.filter((machine) => !machine.online && queries.byMachine[machine.id]?.data)
+  const outdated = machines.filter((machine) => machine.needsUpdate || queries.byMachine[machine.id]?.needsUpdate)
+  const offline = machines.filter((machine) => !machine.online && !outdated.includes(machine) && queries.byMachine[machine.id]?.data)
   // Newest measurement across machines; 0 when none has data yet. A gateway can answer from its saved copy, so
   // the fetch time would overstate freshness. The minute tick can lag a fresh fetch, so `now` is clamped below.
   const latest = Math.max(0, ...machines.map((machine) => {
@@ -42,20 +43,12 @@ export function LimitsView() {
       {latest > 0 && (
         <StatusSlot>{`Updated ${relativeTime(new Date(latest), Math.max(now, latest))}`}</StatusSlot>
       )}
+      {outdated.length > 0 && <Banner>{`${names(outdated)} ${outdated.length === 1 ? "needs" : "need"} an update to show limits.`}</Banner>}
       {machines.map((machine) => {
-        const entry = queries.byMachine[machine.id]
-        if (machine.needsUpdate || entry?.needsUpdate) {
-          return <Banner key={machine.id} tone="warn">{`${machine.name} needs an update to show its limits.`}</Banner>
-        }
-        const error = queries.errors[machine.id]
-        if (error) return <Banner key={machine.id} tone="danger">{`Couldn't load limits from ${machine.name}: ${error.message}`}</Banner>
-        return null
+        const error = !outdated.includes(machine) && queries.errors[machine.id]
+        return error ? <Banner key={machine.id} tone="danger">{`Couldn't load limits from ${machine.name}: ${error.message}`}</Banner> : null
       })}
-      {offline.length > 0 && (
-        <Banner>
-          {`${offline.map((machine) => machine.name).join(", ")} ${offline.length === 1 ? "is" : "are"} offline. Showing last known limits.`}
-        </Banner>
-      )}
+      {offline.length > 0 && <Banner>{`${names(offline)} ${offline.length === 1 ? "is" : "are"} offline. Showing last known limits.`}</Banner>}
       {groups.length === 0 && pending.length === 0 ? (
         <Empty title="No provider limits yet">
           Limits appear when a connected machine has a signed-in provider CLI. Refresh to check again.
@@ -76,6 +69,8 @@ export function LimitsView() {
     </div>
   )
 }
+
+const names = (machines: Machine[]) => machines.map((machine) => machine.name).join(", ")
 
 function ProviderCard({ group, now }: { group: ProviderGroup; now: number }) {
   const [open, setOpen] = useState(false)

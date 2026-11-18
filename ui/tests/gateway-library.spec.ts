@@ -41,7 +41,7 @@ test("Library keeps installed packages when an older peer has no Library API", a
   await expect(page.getByRole("cell", { name: "Build server", exact: true })).toBeVisible()
   await expect(page.getByText("404 page not found")).toHaveCount(0)
   // The list shows the same banner on desktop; the inspector's copy is the one that also shows on phones.
-  await expect(page.locator('[data-slot="inspector"]').getByText("Build server needs an update to show its library.")).toBeVisible()
+  await expect(page.locator('[data-slot="inspector"]').getByText("Build server needs an update to show the library.")).toBeVisible()
   await expect(page.getByText("404 page not found")).toHaveCount(0)
 })
 

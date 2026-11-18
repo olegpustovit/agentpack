@@ -79,11 +79,15 @@ func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir s
 	if err != nil {
 		return nil, nil, err
 	}
+	done := startStep(ctx, "acp_launch_context")
 	launchCtx, err := workerLaunchContext(launch)
+	done(err)
 	if err != nil {
 		return nil, nil, err
 	}
+	done = startStep(ctx, "acp_adapter")
 	acpLaunch, err := harness.ACP(launchCtx)
+	done(err)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -355,7 +359,9 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		close(agentDone)
 	})
 
+	done := startStep(ctx, "acp_handshake")
 	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, acpLaunch.AuthenticateMethodID)
+	done(err)
 	log.SetReplaying(false)
 	if err != nil {
 		cleanup()
@@ -375,6 +381,15 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	conv.SetModes(setup.Modes)
 	conv.SetAgentCapabilities(setup.AgentCapabilities)
 	return conv, cleanup, nil
+}
+
+// startStep records how long one session start step took, so a slow start names its cause.
+func startStep(ctx context.Context, name string) func(error) {
+	_, event := obs.Start(ctx, "worker", name)
+	return func(err error) {
+		event.Fail(err)
+		event.End()
+	}
 }
 
 type acpSessionSetup struct {

@@ -53,8 +53,10 @@ func TestACPAdapterExitRecordsCodeAndStderr(t *testing.T) {
 			defer cleanup()
 			if !unexpected {
 				cleanup()
-				if len(queue.Events) != 0 {
-					t.Fatal("requested shutdown reported an unexpected exit")
+				for len(queue.Events) > 0 {
+					if event := <-queue.Events; !strings.HasPrefix(event.Name, "acp_") {
+						t.Fatalf("requested shutdown reported %s", event.Name)
+					}
 				}
 				return
 			}
@@ -64,7 +66,7 @@ func TestACPAdapterExitRecordsCodeAndStderr(t *testing.T) {
 			for {
 				select {
 				case event := <-queue.Events:
-					if event.Kind != "worker" {
+					if event.Kind != "worker" || strings.HasPrefix(event.Name, "acp_") {
 						continue
 					}
 					encoded, _ := json.Marshal(event)

@@ -642,3 +642,13 @@ func TestProxyUsesAuthenticatedAccountInsteadOfCallerHeader(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewayCSPAllowsOnlySelfAndBlobImages(t *testing.T) {
+	g, origin := identityGateway(t, t.TempDir(), nil)
+	w := httptest.NewRecorder()
+	g.Handler().ServeHTTP(w, httptest.NewRequest("GET", origin.String()+"/api/status", nil))
+	// Pasted images are measured from a blob: URL before they are sent.
+	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self' blob:;") || !strings.Contains(csp, "default-src 'self';") {
+		t.Fatalf("CSP = %q", csp)
+	}
+}

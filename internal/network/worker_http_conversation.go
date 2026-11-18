@@ -19,6 +19,22 @@ import (
 
 const maxBlobUploadReadTime = 30 * time.Second
 
+// promptAcceptWait bounds how long a prompt request waits for an immediate failure before reporting acceptance.
+var promptAcceptWait = 2 * time.Second
+
+// startPrompt runs a turn beyond the request: a turn lasts until the agent finishes, which can take far longer
+// than any HTTP hop allows. Failures after acceptance are recorded in the conversation as a failed turn.
+func startPrompt(ctx context.Context, session *ConversationSession, prompt acp.PromptInput) error {
+	done := make(chan error, 1)
+	go func() { done <- session.Prompt(context.WithoutCancel(ctx), prompt) }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(promptAcceptWait):
+		return nil
+	}
+}
+
 func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 	mux.HandleFunc("GET /conversation", func(w http.ResponseWriter, r *http.Request) {
 		conv := worker.conversationSession()
@@ -88,7 +104,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			http.Error(w, "text or image is required", http.StatusBadRequest)
 			return
 		}
-		if err := worker.conversationSession().Prompt(r.Context(), prompt); err != nil {
+		if err := startPrompt(r.Context(), worker.conversationSession(), prompt); err != nil {
 			message := "could not send prompt"
 			if errors.Is(err, errSessionArchived) {
 				message = "archived"
@@ -135,7 +151,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			http.Error(w, "text or image is required", http.StatusBadRequest)
 			return
 		}
-		if err := worker.conversationSession().Prompt(r.Context(), prompt); err != nil {
+		if err := startPrompt(r.Context(), worker.conversationSession(), prompt); err != nil {
 			message := "could not send prompt"
 			if errors.Is(err, errSessionArchived) {
 				message = "archived"

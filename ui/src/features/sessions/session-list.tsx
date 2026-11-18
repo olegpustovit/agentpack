@@ -7,7 +7,7 @@ import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem } from
 import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useEventsConnected } from "@/features/events/use-events"
-import { nodesQuery, topologyQuery, useReplicatedQueries, useMachines } from "@/features/machines/queries"
+import { nodesQuery, useReplicatedQueries, useMachines } from "@/features/machines/queries"
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { terminalPool } from "@/features/terminal/pool"
@@ -31,7 +31,6 @@ type Cursor = { key: string; from: string | undefined }
 type Confirm = { kind: "stop" | "restart"; row: ListedSession }
 
 // Computers that could run a gateway. Phones and TVs on the tailnet never will, so they are not missing.
-const GATEWAY_OS = new Set(["linux", "macOS", "windows"])
 
 // Rewrites query keys on a full href and keeps the path, hash and every other key.
 function withSearch(href: string, patch: Record<string, string | undefined>): string {
@@ -48,8 +47,6 @@ export function SessionList() {
   const queries = useReplicatedQueries(sessionsQuery)
   const live = useEventsConnected()
   const discovery = useQuery(nodesQuery(live))
-  const topology = useQuery(topologyQuery(live))
-  const noGateway = (topology.data?.peers ?? []).filter((peer) => peer.state === "no-gateway" && GATEWAY_OS.has(peer.os))
   const queryClient = useQueryClient()
   const refresh = useMutation({
     mutationFn: () => Promise.all([["nodes"], ["topology"], ["m"]].map((queryKey) => queryClient.invalidateQueries({ queryKey }))),
@@ -89,7 +86,8 @@ export function SessionList() {
   const rows = needsYou.concat(groups.flatMap((group) => group.subheads.flatMap((head) => head.sessions)))
   const first = rows[0]
   const tabStop = selectedKey ?? (first ? rowKey(first) : undefined)
-  const offlineWithData = machines.filter((machine) => !machine.online && queries.byMachine[machine.id]?.data)
+  const outdated = machines.filter((machine) => machine.needsUpdate || queries.byMachine[machine.id]?.needsUpdate)
+  const offlineWithData = machines.filter((machine) => !machine.online && !outdated.includes(machine) && queries.byMachine[machine.id]?.data)
   const loading = queries.firstLoadPending
   // A failed read shows its banner only; the empty copy is for a successful empty list.
   const failed = Object.keys(queries.errors).length > 0
@@ -235,21 +233,10 @@ export function SessionList() {
         onKeyDown={onKeyDown}
       >
         {discovery.error && <Banner tone="warn">{`Can't look for other machines: ${discovery.error.message}`}</Banner>}
-        {noGateway.length > 0 && (
-          <Banner action={<Link to="/machines/topology" className="shrink-0 underline">Topology</Link>}>
-            {`${noGateway.map((peer) => peer.name).join(", ")}: no gateway reachable. Replicated sessions remain available.`}
-          </Banner>
-        )}
+        {outdated.length > 0 && <Banner>{`${outdated.map((machine) => machine.name).join(", ")} ${outdated.length === 1 ? "needs" : "need"} an update to show sessions.`}</Banner>}
         {machines.map((machine) => {
-          const entry = queries.byMachine[machine.id]
-          if (machine.needsUpdate || entry?.needsUpdate) {
-            return <Banner key={machine.id} tone="warn">{`${machine.name} needs an update to show its sessions.`}</Banner>
-          }
-          const error = queries.errors[machine.id]
-          if (error) {
-            return <Banner key={machine.id} tone="danger">{`Couldn't load sessions from ${machine.name}: ${error.message}`}</Banner>
-          }
-          return null
+          const error = !outdated.includes(machine) && queries.errors[machine.id]
+          return error ? <Banner key={machine.id} tone="danger">{`Couldn't load sessions from ${machine.name}: ${error.message}`}</Banner> : null
         })}
         {offlineWithData.length > 0 && (
           <Banner>
