@@ -3,7 +3,9 @@ package network
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -405,5 +407,57 @@ func TestChatGetsAgentpackToolsOnlyOverHTTP(t *testing.T) {
 			servers[0].Http.Headers[0].Value != "Bearer session-x.secret" {
 			t.Fatalf("mcpServers: %+v", servers)
 		}
+	}
+}
+
+func TestChatToolsRelayFollowsTheGatewayAcrossRestarts(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "network", "sessions", "session-relay"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	gateway := func(name string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("Authorization") != "Bearer token" {
+				http.Error(w, "forwarded", 400)
+				return
+			}
+			_, _ = io.WriteString(w, name)
+		}))
+	}
+	point := func(server *httptest.Server) {
+		data, _ := json.Marshal(nodeRecord{Address: strings.TrimPrefix(server.URL, "http://"), Secret: strings.Repeat("x", 64)})
+		if err := os.WriteFile(filepath.Join(home, "network", "node.json"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, second := gateway("first"), gateway("second")
+	defer first.Close()
+	defer second.Close()
+	point(first)
+	tools := newChatTools(home, "session-relay")
+	if tools.close == nil {
+		t.Fatal("no relay")
+	}
+	defer tools.close()
+	call := func(path string) (int, string) {
+		request, _ := http.NewRequest("POST", strings.TrimSuffix(tools.url, "/mcp")+path, nil)
+		request.Header.Set("Authorization", "Bearer token")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		body, _ := io.ReadAll(response.Body)
+		return response.StatusCode, string(body)
+	}
+	if code, body := call("/mcp"); code != 200 || body != "first" {
+		t.Fatalf("relay: %d %s", code, body)
+	}
+	point(second) // the gateway restarted on another port
+	if code, body := call("/mcp"); code != 200 || body != "second" {
+		t.Fatalf("relay after a gateway restart: %d %s", code, body)
+	}
+	if code, _ := call("/api/sessions"); code != 404 {
+		t.Fatal("the relay must serve /mcp only")
 	}
 }

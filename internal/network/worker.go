@@ -211,6 +211,9 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			return 1, err
 		}
 		launch.tools = newChatTools(home, filepath.Base(directory))
+		if launch.tools.close != nil {
+			defer launch.tools.close()
+		}
 		conversation, acpCleanup, err = startACPConversation(startCtx, launch, directory, log)
 		if err != nil {
 			return 1, err

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -455,7 +456,15 @@ func TestOAuthClientMetadataDocument(t *testing.T) {
 			t.Fatalf("%s accepted: %d", bad, response.StatusCode)
 		}
 	}
-	for _, address := range []string{"127.0.0.1:443", "10.1.2.3:443", "100.101.102.103:443", "[fd7a:115c:a1e0::1]:443", "169.254.169.254:80", "[::ffff:127.0.0.1]:443"} {
+	// Unsigned visitors can trigger fetches; a host gets ten uncached tries a minute, then none.
+	before := fetches.Load()
+	for i := range 15 {
+		h.authorizeFor(t, fmt.Sprintf("https://client.example.com/missing-%d.json", i), "https://assistant.example/callback", "")
+	}
+	if got := fetches.Load() - before; got > 10 {
+		t.Fatalf("%d uncached fetches for one host in a minute", got)
+	}
+	for _, address := range []string{"127.0.0.1:443", "10.1.2.3:443", "100.101.102.103:443", "[fd7a:115c:a1e0::1]:443", "169.254.169.254:80", "[::ffff:127.0.0.1]:443", "[64:ff9b::a00:1]:443", "[2002:a00:1::1]:443"} {
 		if publicAddressOnly("tcp", address, nil) == nil {
 			t.Fatalf("metadata fetch may reach %s", address)
 		}

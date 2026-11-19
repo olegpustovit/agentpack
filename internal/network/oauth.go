@@ -30,6 +30,7 @@ type GatewayMCP struct {
 	mu       sync.Mutex
 	window   clientWindow
 	metadata map[string]cachedClient // Client ID Metadata Documents by URL
+	fetches  clientWindow            // uncached document fetches, which anyone can trigger before sign-in
 	fetcher  *http.Client            // nil: metadataFetcher; tests point it at a local server
 }
 
@@ -515,9 +516,15 @@ func (m *GatewayMCP) metadataClient(ctx context.Context, id string) (*oauthClien
 	m.mu.Lock()
 	cached, ok := m.metadata[id]
 	fetcher := m.fetcher
+	fresh := ok && now.Before(cached.expires)
+	// The authorize page fetches before sign-in, so the gateway must not become anyone's request cannon.
+	busy := !fresh && m.fetches.take(now, u.Hostname(), 10, 60) > 0
 	m.mu.Unlock()
-	if ok && now.Before(cached.expires) {
+	if fresh {
 		return &cached.client, nil
+	}
+	if busy {
+		return nil, errOAuthGrant
 	}
 	if fetcher == nil {
 		fetcher = metadataFetcher

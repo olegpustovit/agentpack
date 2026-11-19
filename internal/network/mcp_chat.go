@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -28,21 +29,50 @@ import (
 )
 
 // chatTools is the agentpack MCP server one chat's agent may call. The bearer names the chat and
-// lives only in the worker's private worker.json and the agent's own session configuration.
-type chatTools struct{ url, token string }
+// lives only in the worker's private tools.token and the agent's own session configuration.
+type chatTools struct {
+	url, token string
+	close      func()
+}
 
 // newChatTools mints the chat's credential and stores it before the agent starts, because an agent
 // may connect to its MCP servers during session/new. The worker removes it when it exits.
+//
+// The agent gets a relay on its own worker rather than the gateway's address: the gateway may restart
+// on another port, and the address an agent was given at session/new never changes.
 func newChatTools(home, id string) chatTools {
-	node, err := loadNode(home)
-	if err != nil {
+	if _, err := loadNode(home); err != nil {
 		return chatTools{} // no gateway running: the chat starts without agentpack tools
 	}
-	tools := chatTools{url: "http://" + node.Address + "/mcp", token: id + "." + randomToken()}
-	if os.WriteFile(chatToolsTokenPath(home, id), []byte(tools.token), 0o600) != nil {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
 		return chatTools{}
 	}
-	return tools
+	token := id + "." + randomToken()
+	if os.WriteFile(chatToolsTokenPath(home, id), []byte(token), 0o600) != nil {
+		listener.Close()
+		return chatTools{}
+	}
+	relay := &httputil.ReverseProxy{
+		// No X-Forwarded-* headers: the gateway accepts the chat credential only from a direct loopback peer.
+		Rewrite: func(r *httputil.ProxyRequest) {
+			node, err := loadNode(home)
+			if err != nil {
+				node.Address = "127.0.0.1:1" // gateway down: the call fails and the agent sees an error
+			}
+			r.SetURL(&url.URL{Scheme: "http", Host: node.Address})
+		},
+		FlushInterval: -1, // MCP answers stream
+	}
+	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/mcp" {
+			http.NotFound(w, r)
+			return
+		}
+		relay.ServeHTTP(w, r)
+	})}
+	obs.Go("worker.chat_tools_relay", func() { _ = server.Serve(listener) })
+	return chatTools{url: "http://" + listener.Addr().String() + "/mcp", token: token, close: func() { _ = server.Close() }}
 }
 
 func chatToolsTokenPath(home, id string) string {

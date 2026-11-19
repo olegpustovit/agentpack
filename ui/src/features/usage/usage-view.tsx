@@ -45,7 +45,7 @@ const dimensionKey: Record<Dimension, (row: UsageHour) => string> = {
   model: (row) => row.model,
 }
 const dimensionTitle: Record<Dimension, string> = { project: "Projects", agent: "Agents", machine: "Machines", model: "Models" }
-const subtitle: Record<View["kind"], string> = { overview: "All machines", limits: "Limits", project: "Project", machine: "Machine", agent: "Agent" }
+const subtitle: Record<View["kind"], string> = { overview: "All machines", project: "Project", machine: "Machine", agent: "Agent" }
 
 export function UsageView({ view }: { view: View }) {
   const usage = useUsage()
@@ -227,7 +227,6 @@ function Summary({ rows, sessions, view, names }: { rows: UsageHour[]; sessions:
 
 const mostUsedDimensions: Record<View["kind"], Dimension[]> = {
   overview: ["project", "agent", "machine", "model"],
-  limits: ["project", "agent", "machine", "model"],
   project: ["agent", "machine", "model"],
   machine: ["project", "agent", "model"],
   agent: ["project", "machine", "model"],

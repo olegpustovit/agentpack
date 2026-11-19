@@ -54,7 +54,7 @@ export const metrics = {
   out: { label: "Output tokens", kind: "tokens", value: (row: UsageHour) => row.output_tokens },
   all: { label: "All tokens", kind: "tokens", value: allTokens },
   cost: { label: "Reported cost", kind: "cost", value: (row: UsageHour) => Math.max(0, row.cost_micros) / 1e6 },
-  sessions: { label: "Sessions", kind: "count", value: (row: UsageHour) => row.sessions },
+  sessions: { label: "New sessions", kind: "count", value: (row: UsageHour) => row.sessions },
   time: { label: "Agent time", kind: "time", value: (row: UsageHour) => row.agent_ms / 60_000 },
 } as const satisfies Record<string, { label: string; kind: Kind; value: (row: UsageHour) => number }>
 
@@ -64,7 +64,7 @@ export const metricOf = (value: string | undefined): Metric => (value && value i
 export const rangeOf = (value: string | undefined): Range => (value === "day" || value === "month" ? value : "week")
 
 // A sidebar source. Overview and Limits take every row.
-export type View = { kind: "overview" | "limits" | "project" | "machine" | "agent"; id?: string }
+export type View = { kind: "overview" | "project" | "machine" | "agent"; id?: string }
 
 export const viewKinds = ["project", "machine", "agent"] as const
 

@@ -120,7 +120,8 @@ function BurnHero({ group, window, now }: { group: ProviderGroup; window: LimitW
   const used = 100 - (remainingPercent(window) ?? 0)
   const points = samples
     .filter((sample) => sample.node_id === selected.snapshot.node_id && sample.harness === selected.snapshot.harness && sample.window_id === window.id && sample.used_percent != null)
-    .map((sample) => [sample.hour * 1000, sample.used_percent!] as const)
+    // A sample is the hour's last reading; mid-hour, never later than now, is where it most likely fell.
+    .map((sample) => [Math.min(now, sample.hour * 1000 + 1_800_000), sample.used_percent!] as const)
   points.push([now, used])
   const W = 560
   const H = 90

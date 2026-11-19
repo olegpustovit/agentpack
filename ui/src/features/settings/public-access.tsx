@@ -31,7 +31,7 @@ export function PublicAccessBanner({ access }: { access: PublicAccess | undefine
   return (
     <Banner className="mb-(--s5) rounded-(--r-pop) border-b-0 bg-(--accent-soft)">
       Detected <b>{publicHost(access.candidate)}</b> forwarding to this gateway through a proxy. Turn on Public access
-      to use it.
+      only if that is your own domain.
     </Banner>
   )
 }

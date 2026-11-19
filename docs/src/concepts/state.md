@@ -26,7 +26,11 @@ merging never loses an increment. Counters move in the same transaction that sto
 a new `turn_end` or cost update, and a replayed event counts nothing. Claude, Codex,
 OMP and Antigravity report tokens per turn; Grok reports tokens and cost in its own
 metadata; Claude and OMP report cost as a running total, stored as the difference
-from the previous total (a smaller total means the adapter restarted). Cursor
+from the previous total since the worker last started (a smaller total, or a
+fresh agent process, starts over). Failed turns count nothing. `usage_hourly`
+has no retention (about a hundred rows per machine per day); each machine deletes
+its own week-old `limit_samples`, which leaves small replicated tombstones, and a
+removed peer's samples stay until its rows are cleared. Cursor
 reports neither, so its turns count without tokens, and an agent that reports no
 cost shows "—", never $0. Sessions from before the counters existed are not
 backfilled. A gateway re-reads an agent's limits after its turns, at most every five
