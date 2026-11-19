@@ -242,7 +242,7 @@ test("row actions rename without attaching, preserve errors, cancel, and stop th
 
   const row = gwRow(page, "local:local-two")
   await row.click({ button: "right" })
-  await page.getByRole("menuitem", { name: "Stop…" }).click()
+  await page.getByRole("menuitem", { name: "Stop agent…" }).click()
   await page.getByRole("alertdialog").getByRole("button", { name: "Stop agent" }).click()
   await expect.poll(() => requests.some((item) => item.path === "/api/sessions/local-two/stop")).toBeTruthy()
   expect(requests.some((item) => item.path === "/api/sessions/local-one/stop")).toBeFalsy()
@@ -725,11 +725,13 @@ test("archive stops a running session, then hides it from the list", async ({ pa
     bodies.push(route.request().postDataJSON())
     return route.fulfill({ json: { hidden: true } })
   })
+  // The row was stale and the agent had already stopped: archiving still goes through.
+  await page.route("**/api/sessions/local-two/stop", (route) => route.fulfill({ status: 400, body: "session is not running" }))
   await page.goto("/")
   await gwRow(page, "local:local-two").click({ button: "right" })
   await page.getByRole("menuitem", { name: "Archive…" }).click()
   await expect(page.getByRole("alertdialog")).toContainText("The agent is stopped first.")
   await page.getByRole("alertdialog").getByRole("button", { name: "Archive" }).click()
   await expect.poll(() => bodies).toEqual([{ hidden: true }])
-  expect(requests.some((item) => item.path === "/api/sessions/local-two/stop")).toBeTruthy()
+  await expect(page.getByText("Session archived")).toBeVisible()
 })

@@ -53,7 +53,8 @@ export function useSessionCommands() {
   // Archive takes the session out of every list; a running agent is stopped first.
   async function archive(session: ListedSession): Promise<boolean> {
     try {
-      if (session.state.running) await api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST" })
+      // The row can be stale (just stopped): a failed stop is fine, the archive request refuses a live agent itself.
+      if (session.state.running) await api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST" }).catch(() => undefined)
       await api(`/api/sessions/${encodeURIComponent(session.id)}`, { machine: session.machine, method: "PATCH", body: { hidden: true } })
       hud.success("Session archived")
       await refresh(session)

@@ -30,8 +30,8 @@ function menuEntries(session: ListedSession, selected: boolean, actions: RowActi
   return [
     { label: "Rename…", icon: Pencil, shortcut: "F2", disabled: !rules.rename, run: actions.rename },
     { label: "Restart…", icon: RotateCw, disabled: !rules.restart, run: actions.restart },
-    { label: "Stop…", icon: Square, disabled: !rules.stop, run: actions.stop },
     { label: "Archive…", icon: Archive, disabled: !rules.archive, run: actions.archive },
+    { label: "Stop agent…", icon: Square, disabled: !rules.stop, run: actions.stop },
     "separator",
     { label: "Reconnect", icon: Plug, disabled: !rules.reconnect, run: actions.reconnect },
     { label: "Close terminal", icon: X, disabled: !selected, run: actions.closeTerminal },

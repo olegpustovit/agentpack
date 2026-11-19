@@ -406,7 +406,7 @@ test("a stop in progress shows on its row until it finishes", async ({ page, isM
   const wrapper = page.locator('[data-row-key="local:local-one"]').locator("..")
   await wrapper.hover()
   await wrapper.getByRole("button", { name: "More actions" }).click()
-  await page.getByRole("menuitem", { name: "Stop…" }).click()
+  await page.getByRole("menuitem", { name: "Stop agent…" }).click()
   await page.getByRole("alertdialog").getByRole("button", { name: "Stop agent" }).click()
   await expect(wrapper).toContainText("Stopping…")
   finish()

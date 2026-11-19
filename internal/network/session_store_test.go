@@ -122,6 +122,33 @@ func TestSessionMetadataRoundTripAndUpdatesKeepNameAndVisibility(t *testing.T) {
 	}
 }
 
+func TestEndedChatWithoutMessagesLeavesTheList(t *testing.T) {
+	store := testSessionStore(t, t.TempDir())
+	ctx := t.Context()
+	for _, id := range []string{"session-empty", "session-used", "session-terminal"} {
+		transport := "acp"
+		if id == "session-terminal" {
+			transport = ""
+		}
+		if err := upsertSession(ctx, store.DB, SessionInfo{ID: id, Transport: transport, Directory: "/project", LastUsed: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.DB.Exec(`INSERT INTO conversation_events(session_id,seq,body) VALUES ('session-empty',1,'{"seq":1,"kind":"available_commands_update"}'),('session-used',1,'{"seq":1,"kind":"prompt","payload":{}}')`); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int{"session-empty": 1, "session-used": 0, "session-terminal": 0}
+	for id, hidden := range want {
+		if err := endSession(ctx, store.DB, id, TerminalState{}); err != nil {
+			t.Fatal(err)
+		}
+		var got int
+		if err := store.Reader.QueryRow("SELECT hidden FROM sessions WHERE id=?", id).Scan(&got); err != nil || got != hidden {
+			t.Fatalf("%s hidden=%d want %d err=%v", id, got, hidden, err)
+		}
+	}
+}
+
 func TestWorkerEndpointRequiresCanonicalSessionMetadata(t *testing.T) {
 	home := t.TempDir()
 	store := testSessionStore(t, home)

@@ -281,7 +281,7 @@ export function SessionList() {
             title={`${{ stop: "Stop", restart: "Restart", archive: "Archive" }[confirm.kind]} ${sessionLabel(confirm.row)} in ${basename(confirm.row.directory) || "this folder"}?`}
             description={
               confirm.kind === "stop"
-                ? `On ${confirm.row.machineName}. Its current conversation may end.`
+                ? `On ${confirm.row.machineName}. The session stays in the list so you can resume it; use Archive to remove it.`
                 : confirm.kind === "archive"
                   ? `It leaves the session list on every machine.${confirm.row.state.running ? " The agent is stopped first." : ""}`
                   : `On ${confirm.row.machineName}. Its current conversation may end unless the agent supports resume.`
