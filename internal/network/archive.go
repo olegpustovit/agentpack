@@ -56,7 +56,7 @@ func (g *Gateway) archivePass(ctx context.Context, now time.Time) (count int, re
 		return 0, err
 	}
 	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT id FROM sessions
- WHERE transport='acp' AND conversation_state NOT IN ('working','needs_you') AND
+ WHERE transport='acp' AND (ended_at>0 OR conversation_state NOT IN ('working','needs_you')) AND
  ((archived_at=0 AND last_event_at>0 AND last_event_at<?) OR
  (archived_at>0 AND EXISTS(SELECT 1 FROM conversation_events WHERE session_id=sessions.id)))
  ORDER BY last_event_at,id`, now.Add(-archiveAge).UnixNano())
@@ -125,7 +125,7 @@ func (g *Gateway) archiveSession(ctx context.Context, archive *sql.DB, id string
 		var lastSeq, archivedAt int64
 		err := tx.QueryRowContext(ctx, `SELECT last_seq,archived_at FROM sessions WHERE id=?
  AND (archived_at>0 OR (last_event_at>0 AND last_event_at<?)) AND transport='acp' AND hidden=0
- AND conversation_state NOT IN ('working','needs_you')`, id, now.Add(-archiveAge).UnixNano()).Scan(&lastSeq, &archivedAt)
+ AND (ended_at>0 OR conversation_state NOT IN ('working','needs_you'))`, id, now.Add(-archiveAge).UnixNano()).Scan(&lastSeq, &archivedAt)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}

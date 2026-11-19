@@ -67,9 +67,6 @@ func (g *Gateway) failStart(ctx context.Context, info SessionInfo, cause error) 
 		if err := log.Flush(); err != nil {
 			return err
 		}
-		if err := patchWorkerConversationState(ctx, g.auth.store.DB, info.ID, "idle"); err != nil {
-			return err
-		}
 		return endSession(ctx, g.auth.store.DB, info.ID, TerminalState{ExitCode: 1})
 	}()
 	if err != nil {

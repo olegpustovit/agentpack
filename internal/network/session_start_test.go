@@ -83,3 +83,19 @@ func TestGatewayStartEndsLeftoverStartingRows(t *testing.T) {
 		t.Fatalf("leftover start: %+v, %v", stored, err)
 	}
 }
+
+func TestEndingAChatSettlesAStaleState(t *testing.T) {
+	home := t.TempDir()
+	dir := seedFolder(t, home)
+	g, _ := identityGateway(t, home, nil)
+	if err := upsertSession(context.Background(), g.auth.store.DB, SessionInfo{ID: "session-busy", Directory: dir, Harness: "claude", Transport: "acp", ConversationState: "needs_you"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := endSession(context.Background(), g.auth.store.DB, "session-busy", TerminalState{}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := storedSession(context.Background(), g.auth.store.Reader, "session-busy")
+	if err != nil || stored.ConversationState != "idle" {
+		t.Fatalf("ended chat: %+v, %v", stored, err)
+	}
+}
