@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -214,7 +215,9 @@ func StartWorker(ctx context.Context, home, executable string, launch WorkerLaun
 	trace := obs.ParseTraceParent(obs.TraceParent(ctx))
 	command.Env = append(os.Environ(), "AGENTPACK_TRACE="+trace.ID)
 	ConfigureDetached(command)
-	command.Stderr = log
+	// The log is shared by every worker; the tail of this one's stderr explains an early exit.
+	var stderr workerStderr
+	command.Stderr = io.MultiWriter(log, &stderr)
 	input, err := command.StdinPipe()
 	if err != nil {
 		return "", err
@@ -270,6 +273,18 @@ func StartWorker(ctx context.Context, home, executable string, launch WorkerLaun
 	select {
 	case id := <-ready:
 		if _, err = workerRecord(home, id); err != nil {
+			if id == "" {
+				// It exited without announcing itself; wait (briefly) for its last words.
+				done := make(chan struct{})
+				go func() { _ = command.Wait(); close(done) }()
+				select {
+				case <-done:
+				case <-time.After(2 * time.Second):
+				}
+				if reason := stderr.lastLine(); reason != "" {
+					return "", errors.New(reason)
+				}
+			}
 			return "", fmt.Errorf("worker did not start; inspect %s: %w", log.Name(), err)
 		}
 		failed = false
@@ -345,4 +360,35 @@ func workerStartupTimeout(transport string) time.Duration {
 		return 100 * time.Second
 	}
 	return 30 * time.Second
+}
+
+// workerStderr keeps the end of a starting worker's stderr; its last line is the reason it stopped.
+type workerStderr struct {
+	mu   sync.Mutex
+	tail []byte
+}
+
+func (w *workerStderr) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.tail = append(w.tail, data...)
+	if len(w.tail) > 4096 {
+		w.tail = w.tail[len(w.tail)-4096:]
+	}
+	return len(data), nil
+}
+
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+
+// lastLine is the final meaningful line, without colour codes or the CLI's "ERROR" heading.
+func (w *workerStderr) lastLine() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	lines := strings.Split(ansiEscape.ReplaceAllString(string(w.tail), ""), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" && line != "ERROR" {
+			return line
+		}
+	}
+	return ""
 }

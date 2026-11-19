@@ -121,6 +121,11 @@ func TestPublicAccessOffPageRemembersCandidate(t *testing.T) {
 	if status := g.publicStatus(t.Context()); status.Candidate != testPublicOrigin {
 		t.Fatalf("a Funnel visitor chose the candidate: %+v", status)
 	}
+	// A proxy that forwards a second host name forwards any: nothing is suggested, the owner types it.
+	serve(handler, "GET", "http://127.0.0.1:7420/", "127.0.0.1:5000", map[string]string{"X-Forwarded-Host": "evil.example", "X-Forwarded-Proto": "https"})
+	if status := g.publicStatus(t.Context()); status.Candidate != "" || !status.CatchAll {
+		t.Fatalf("catch-all proxy still suggests a host: %+v", status)
+	}
 	config := &ipn.ServeConfig{Foreground: map[string]*ipn.ServeConfig{"session": {
 		Web:         map[ipn.HostPort]*ipn.WebServerConfig{"box.tail.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:7420"}}}},
 		AllowFunnel: map[ipn.HostPort]bool{"box.tail.ts.net:443": true},

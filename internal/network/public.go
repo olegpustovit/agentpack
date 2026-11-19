@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,7 +28,7 @@ type publicAccess struct {
 	mu        sync.Mutex
 	origin    *url.URL // nil while off
 	pinned    bool     // AGENTPACK_PUBLIC_URL
-	candidate string   // last HTTPS origin a loopback proxy forwarded while off
+	forwarded []string // distinct HTTPS origins a loopback proxy forwarded while off (at most maxForwarded)
 	nonce     string   // pending self-probe: sent with the request
 	answer    string   // and what only this gateway answers, so a server echoing headers fails
 	probe     *url.URL // origin under verification
@@ -40,6 +41,8 @@ type publicStatus struct {
 	Origin    string `json:"origin,omitempty"`
 	Pinned    bool   `json:"pinned,omitempty"`
 	Candidate string `json:"candidate,omitempty"`
+	// CatchAll: the proxy forwards more than one host name, so anyone could name one; the owner types it.
+	CatchAll bool `json:"catch_all,omitempty"`
 }
 
 type publicCheck struct {
@@ -165,6 +168,9 @@ func (g *Gateway) wideListener() bool {
 	return err == nil && !address.Addr().IsLoopback()
 }
 
+// maxForwarded bounds what a stream of made-up host names can store; two already mean a catch-all proxy.
+const maxForwarded = 8
+
 func withRequestSource(r *http.Request, source requestSource) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), requestSourceKey{}, source))
 }
@@ -189,8 +195,10 @@ func (g *Gateway) servePublicOff(w http.ResponseWriter, r *http.Request, source 
 	// Funnel passes the visitor's own Host on, so its candidate comes only from the serve config.
 	if origin, err := parsePublicOrigin("https://" + source.host); err == nil && r.Header.Get("Tailscale-Funnel-Request") == "" {
 		g.public.mu.Lock()
-		// shortcut: the newest forwarded host wins, so a catch-all proxy lets anyone propose one; a relay to this gateway also passes the probe, so the owner must recognise the host. Upgrade to proxy-config detection if that proves too loose.
-		g.public.candidate = origin.String()
+		// A proxy for one site only ever forwards one host; a second one means anyone can name a host.
+		if !slices.Contains(g.public.forwarded, origin.String()) && len(g.public.forwarded) < maxForwarded {
+			g.public.forwarded = append(g.public.forwarded, origin.String())
+		}
 		g.public.mu.Unlock()
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -258,12 +266,18 @@ func funnelOrigin(config *ipn.ServeConfig, port string) string {
 
 func (g *Gateway) publicStatus(ctx context.Context) publicStatus {
 	g.public.mu.Lock()
-	origin, pinned, candidate, serve := g.public.origin, g.public.pinned, g.public.candidate, g.public.serve
+	origin, pinned, forwarded, serve := g.public.origin, g.public.pinned, slices.Clone(g.public.forwarded), g.public.serve
 	g.public.mu.Unlock()
 	if origin != nil {
 		return publicStatus{Enabled: true, Origin: origin.String(), Pinned: pinned}
 	}
-	if candidate == "" {
+	if len(forwarded) > 1 {
+		return publicStatus{CatchAll: true}
+	}
+	candidate := ""
+	if len(forwarded) == 1 {
+		candidate = forwarded[0]
+	} else {
 		if serve == nil {
 			serve = tailscaleLocal.GetServeConfig
 		}
@@ -299,7 +313,7 @@ func (g *Gateway) writePublic(ctx context.Context, origin *url.URL) error {
 	g.public.mu.Lock()
 	g.public.origin = origin
 	if origin == nil {
-		g.public.candidate = ""
+		g.public.forwarded = nil
 	}
 	g.public.mu.Unlock()
 	return nil

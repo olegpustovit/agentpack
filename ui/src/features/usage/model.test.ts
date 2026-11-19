@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { averageOf, bucketOf, bucketize, fmt, windowOf, type UsageHour } from "./model"
+import { averageOf, bucketOf, bucketize, fmt, metrics, windowOf, type UsageHour } from "./model"
 
 // New York: 4 h behind UTC until DST ends on Sunday, Nov 1 2026, 5 h after.
 const zone = process.env.TZ
@@ -71,4 +71,10 @@ describe("fmt", () => {
   it("formats the way macOS does", () => {
     expect([fmt(1_340_000), fmt(980_400), fmt(12), fmt(1772.4, "cost"), fmt(3.5, "cost"), fmt(125, "time")]).toEqual(["1.3M", "980K", "12", "$1,772", "$3.50", "2 h 5 min"])
   })
+})
+
+it("names the sessions metric for what it counts: sessions whose first turn falls in the bucket", () => {
+  const row = { sessions: 1, turns: 3 } as UsageHour
+  expect(metrics.sessions.label).toBe("New sessions")
+  expect(metrics.sessions.value(row)).toBe(1)
 })

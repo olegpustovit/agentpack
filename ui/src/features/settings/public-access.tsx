@@ -4,6 +4,7 @@ import { Check, Copy, X } from "lucide-react"
 import { Banner, Spinner } from "@/components/kit/feedback"
 import { FieldError } from "@/components/kit/forms"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { errorText } from "@/features/library/mutations"
 import { apiLines } from "@/lib/api"
@@ -40,12 +41,16 @@ export function PublicAccessBanner({ access }: { access: PublicAccess | undefine
 export function PublicAccessRows({ access }: { access: PublicAccess }) {
   const queryClient = useQueryClient()
   const [results, setResults] = useState<CheckResult[] | null>(null)
+  // A catch-all proxy can't tell us the address, so the owner types it; the checks still verify it.
+  const [typed, setTyped] = useState("")
+  const typedHost = typed.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "")
+  const origin = access.candidate ?? (access.catch_all && typedHost ? `https://${typedHost}` : undefined)
   const change = useMutation<PublicAccess | undefined, Error, boolean>({
     mutationFn: async (enabled) => {
       setResults(enabled ? [] : null)
       let status: PublicAccess | undefined
       let failure = ""
-      await apiLines("/api/settings/public", { enabled, origin: access.candidate }, (line) => {
+      await apiLines("/api/settings/public", { enabled, origin }, (line) => {
         if (!line || typeof line !== "object") return
         if ("check" in line) setResults((old) => [...(old ?? []), line as CheckResult])
         if ("public" in line) status = line.public as PublicAccess
@@ -72,10 +77,20 @@ export function PublicAccessRows({ access }: { access: PublicAccess }) {
         <Switch
           id="public-access"
           checked={Boolean(on)}
-          disabled={change.isPending || access.pinned || (!access.enabled && !access.candidate)}
+          disabled={change.isPending || access.pinned || (!access.enabled && !origin)}
           onCheckedChange={(next) => change.mutate(next)}
         />
         <span className="text-(length:--fs-sm) text-(--fg2)">{label}</span>
+        {access.catch_all && !access.enabled && (
+          <Input
+            aria-label="Public address"
+            placeholder="agentpack.example.com"
+            value={typed}
+            disabled={change.isPending}
+            onChange={(event) => setTyped(event.currentTarget.value)}
+            className="w-64"
+          />
+        )}
         <div className="basis-full" />
         {results ? (
           <ul className="grid gap-(--s2) text-(length:--fs-sm)" aria-label="Public access checks">
@@ -103,7 +118,9 @@ export function PublicAccessRows({ access }: { access: PublicAccess }) {
             <p className="m-0 max-w-[60ch] text-(length:--fs-xs) text-(--fg2)">
               {access.candidate
                 ? "Anyone on the internet can reach the sign-in page and the MCP endpoint. Every request still needs your login."
-                : "Put an HTTPS proxy or Tailscale Funnel in front of this gateway and open its address once; it appears here."}
+                : access.catch_all
+                  ? "Your proxy forwards any host name, so the address isn't suggested. Type your own; it is checked before anything opens."
+                  : "Put an HTTPS proxy or Tailscale Funnel in front of this gateway and open its address once; it appears here."}
             </p>
           )
         )}

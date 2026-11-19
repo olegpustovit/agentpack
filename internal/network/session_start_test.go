@@ -3,6 +3,8 @@ package network
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -102,5 +104,18 @@ func TestEndingAChatSettlesAStaleState(t *testing.T) {
 	stored, err := storedSession(context.Background(), g.auth.store.Reader, "session-busy")
 	if err != nil || stored.ConversationState != "idle" {
 		t.Fatalf("ended chat: %+v, %v", stored, err)
+	}
+}
+
+func TestWorkerThatExitsEarlyReportsItsOwnError(t *testing.T) {
+	home := t.TempDir()
+	script := filepath.Join(t.TempDir(), "worker")
+	body := "#!/bin/sh\ncat >/dev/null\nprintf '          \\n   \\033[1mERROR\\033[0m  \\n          \\n  Acp session/new: Authentication required.\\n' >&2\nexit 1\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := StartWorker(context.Background(), home, script, WorkerLaunch{Transport: "acp"})
+	if err == nil || err.Error() != "Acp session/new: Authentication required." {
+		t.Fatalf("start error: %v", err)
 	}
 }

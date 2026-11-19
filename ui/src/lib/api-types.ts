@@ -193,7 +193,8 @@ export type Settings = {
 }
 
 // Public access: an HTTPS origin served beside the loopback one. `candidate` is a detected proxy or Funnel.
-export type PublicAccess = { enabled: boolean; origin?: string; pinned?: boolean; candidate?: string }
+// `catch_all`: the proxy forwards any host name, so nothing is suggested and the owner types the address.
+export type PublicAccess = { enabled: boolean; origin?: string; pinned?: boolean; candidate?: string; catch_all?: boolean }
 
 export type Package = {
   id: string

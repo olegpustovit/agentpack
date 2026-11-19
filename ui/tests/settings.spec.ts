@@ -111,6 +111,23 @@ test("the sharing switch sends the new state and says when it applies", async ({
   ).toBeVisible()
 })
 
+test("a catch-all proxy suggests nothing; the owner types the address and it is checked", async ({ page }) => {
+  await mockGateway(page)
+  await page.route("**/api/settings", (route) => answer(route, { running: true, platform: "linux", sharing_enabled: true, public: { enabled: false, catch_all: true } }))
+  await page.route("**/api/settings/public", (route) => {
+    calls.push({ request: "POST /api/settings/public", body: route.request().postDataJSON() })
+    return route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({ check: "reachable", ok: false, detail: "couldn't reach mine.example" }) + "\n" + JSON.stringify({ public: { enabled: false, catch_all: true } }) + "\n" })
+  })
+  await page.goto("/settings/sharing")
+  const toggle = page.getByRole("switch", { name: "Public access" })
+  await expect(page.getByText("Detected")).toBeHidden()
+  await expect(toggle).toBeDisabled()
+  await page.getByRole("textbox", { name: "Public address" }).fill("https://mine.example/")
+  await toggle.click()
+  await expect.poll(() => calls).toEqual([{ request: "POST /api/settings/public", body: { enabled: true, origin: "https://mine.example" } }])
+  await expect(page.getByRole("list", { name: "Public access checks" }).getByLabel("Failed")).toHaveCount(1)
+})
+
 test("public access turns on the detected address after its checks stream in", async ({ page }) => {
   await mockGateway(page)
   const origin = "https://agentpack.example.com"

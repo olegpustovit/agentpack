@@ -182,3 +182,56 @@ func TestUsageCostAfterWorkerRestartCountsTheNewProcessInFull(t *testing.T) {
 		t.Fatalf("cost after restart: %d %v, want 490000", session, err)
 	}
 }
+
+func TestLimitSamplesKeepTheHoursLastReadingForAWeekPerMachine(t *testing.T) {
+	store := testSessionStore(t, t.TempDir())
+	write := func(node string, at time.Time, used float64) {
+		t.Helper()
+		tx, err := store.DB.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		remaining := 100 - used
+		// RemainingPercent alone is converted to used.
+		snapshot := harness.LimitSnapshot{Harness: "codex", Windows: []harness.LimitWindow{{ID: "codex/primary", RemainingPercent: &remaining}}}
+		if err := writeLimitSamples(t.Context(), tx, node, at, []harness.LimitSnapshot{snapshot}); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	samples := func(node string) map[int64]float64 {
+		rows, err := store.Reader.Query("SELECT hour,used_percent FROM limit_samples WHERE node_id=?", node)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		out := map[int64]float64{}
+		for rows.Next() {
+			var hour int64
+			var used float64
+			if err := rows.Scan(&hour, &used); err != nil {
+				t.Fatal(err)
+			}
+			out[hour] = used
+		}
+		return out
+	}
+	start := time.Date(2026, 11, 1, 10, 5, 0, 0, time.UTC)
+	write("peer", start, 10)
+	write("local", start, 20)
+	write("local", start.Add(40*time.Minute), 25) // same hour: the last reading wins
+	if got := samples("local"); len(got) != 1 || got[start.Truncate(time.Hour).Unix()] != 25 {
+		t.Fatalf("hour's last reading: %v", got)
+	}
+	later := start.Add(8 * 24 * time.Hour)
+	write("local", later, 50)
+	if got := samples("local"); len(got) != 1 || got[later.Truncate(time.Hour).Unix()] != 50 {
+		t.Fatalf("week-old samples kept: %v", got)
+	}
+	if got := samples("peer"); len(got) != 1 {
+		t.Fatalf("another machine's samples were deleted: %v", got)
+	}
+}
