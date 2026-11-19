@@ -221,7 +221,7 @@ test.describe("conversation pane", () => {
   })
 
 
-  test("sidebar status dot: one element, accent pulse while working, warn for needs you", async ({ page }) => {
+  test("sidebar status dot: accent arc while working, solid dot when finished unread, warn for needs you", async ({ page }) => {
     await desktop(page)
     await page.route("**/api/sessions", (route) => {
       if (route.request().method() !== "GET") return route.fallback()
@@ -229,6 +229,8 @@ test.describe("conversation pane", () => {
         json: [
           { ...session, transport: "acp", conversation_state: "working" },
           { ...session, id: "local-two", name: "Another", transport: "acp", conversation_state: "needs_you" },
+          // Activity after this browser's first-visit baseline: finished and unread.
+          { ...session, id: "local-three", name: "Finished", transport: "acp", conversation_state: "idle", last_event_at: "2099-01-01T00:00:00Z" },
         ],
       })
     })
@@ -244,8 +246,13 @@ test.describe("conversation pane", () => {
       }, value)
     const working = page.locator('[data-row-key="local:local-one"] [data-slot="agent-dot"]')
     await expect(working).toHaveAttribute("data-state", "working")
-    expect(await style(working, "animation-name")).toBe("dot-pulse")
-    expect(await style(working, "background-color")).toBe(await token("var(--accent)"))
+    expect(await style(working, "animation-name")).toBe("dot-spin")
+    expect(await style(working, "border-right-color")).toBe(await token("var(--accent)"))
+    expect(await style(working, "border-top-color")).toBe("rgba(0, 0, 0, 0)")
+    const done = page.locator('[data-row-key="local:local-three"] [data-slot="agent-dot"]')
+    await expect(done).toHaveAttribute("data-state", "done")
+    expect(await style(done, "background-color")).toBe(await token("var(--accent)"))
+    expect(await style(page.locator('[data-row-key="local:local-three"] span.flex-1'), "font-weight")).toBe("600")
     const needs = page.locator('[data-row-key="local:local-two"] [data-slot="agent-dot"]')
     await expect(needs).toHaveAttribute("data-state", "needs")
     expect(await style(needs, "background-color")).toBe(await token("var(--warn)"))

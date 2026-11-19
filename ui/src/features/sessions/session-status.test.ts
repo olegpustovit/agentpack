@@ -20,6 +20,12 @@ describe("session status", () => {
     expect(sessionStatusWord(session, false)).toBeUndefined()
   })
 
+  it("shows a stopped chat as stopped even with a stale needs_you", () => {
+    const session = { ...base, conversation_state: "needs_you", state: { ...base.state, running: false } }
+    expect(sessionGlyphState(session)).toBe("stopped")
+    expect(sessionStatusWord(session, false)).toBe("Stopped")
+  })
+
   it("prefers needs you over idle", () => {
     const session = { ...base, conversation_state: "needs_you" }
     expect(sessionGlyphState(session)).toBe("needsYou")
@@ -46,6 +52,11 @@ describe("isUnread", () => {
   it("ignores sessions that are not idle or have no activity time", () => {
     expect(isUnread({ ...idle, conversation_state: "working" }, undefined)).toBe(false)
     expect(isUnread({ ...idle, last_used: undefined }, undefined)).toBe(false)
+  })
+  it("uses conversation activity, not the launch time", () => {
+    const active = { ...idle, last_event_at: "2026-01-01T00:01:00Z" }
+    expect(isUnread(active, at("2026-01-01T00:00:30Z"))).toBe(true)
+    expect(isUnread(active, at("2026-01-01T00:01:00Z"))).toBe(false)
   })
 })
 

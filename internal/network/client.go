@@ -49,6 +49,7 @@ type SessionInfo struct {
 	EndedAt           time.Time          `json:"ended_at,omitzero"`
 	ArchivedAt        time.Time          `json:"archived_at,omitzero"`
 	LastUsed          time.Time          `json:"last_used,omitzero"`
+	LastEventAt       time.Time          `json:"last_event_at,omitzero"`
 	FolderID          string             `json:"folder_id,omitempty"`
 	ID                string             `json:"id"`
 	Name              string             `json:"name,omitempty"`

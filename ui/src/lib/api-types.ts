@@ -55,6 +55,8 @@ export type SessionInfo = {
   started_at?: string
   started_by?: Actor
   last_used?: string
+  // Last conversation activity; older peers and terminal sessions omit it.
+  last_event_at?: string
   // Older peers omit both.
   goal?: GoalState
   subagents?: SubagentSummary[]

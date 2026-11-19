@@ -38,9 +38,10 @@ export function relativeTime(date: Date, now: number = Date.now()): string {
   return relative.format(Math.round(seconds / size), unit);
 }
 
-// Compact age for row trailers: "12 m", "2 h", "3 d".
+// Compact age for row trailers: "now", "12 m", "2 h", "3 d".
 export function shortAge(date: Date, now: number = Date.now()): string {
   const minutes = Math.max(0, Math.round((now - date.getTime()) / 60_000));
+  if (minutes === 0) return "now";
   if (minutes < 60) return `${minutes} m`;
   const hours = Math.round(minutes / 60);
   return hours < 48 ? `${hours} h` : `${Math.round(hours / 24)} d`;

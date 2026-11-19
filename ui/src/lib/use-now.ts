@@ -35,7 +35,8 @@ function snapshot() {
 }
 
 // The current time, ticking every second while active. Inactive callers get a fresh read per render.
-export function useNow(active: boolean): number {
-  const ticking = useSyncExternalStore(active ? subscribe : idle, snapshot)
+// A coarser step re-renders only when the rounded value changes, e.g. once a minute for row ages.
+export function useNow(active: boolean, step = 1000): number {
+  const ticking = useSyncExternalStore(active ? subscribe : idle, () => Math.floor(snapshot() / step) * step)
   return active ? ticking : Date.now()
 }

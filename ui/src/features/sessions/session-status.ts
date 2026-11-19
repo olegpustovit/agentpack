@@ -1,8 +1,10 @@
-import type { ListedSession } from "./group"
+import { lastActivity, type ListedSession } from "./group"
 
 export function sessionGlyphState(session: ListedSession): "running" | "stopped" | "idle" | "restarting" | "offline" | "needsYou" {
   if (session.archived_at) return "stopped"
   if (session.offline) return "offline"
+  // A stopped chat can keep a stale needs_you; nothing can answer it any more.
+  if (!session.state.running && !session.state.restarting) return "stopped"
   if (session.conversation_state === "needs_you") return "needsYou"
   if (session.conversation_state === "idle" && session.state.running) return "idle"
   if (session.conversation_state === "working" && session.state.running) return "running"
@@ -36,16 +38,18 @@ export function sessionStatusWord(session: ListedSession, stopping: boolean): st
   if (session.archived_at) return "Archived"
   if (session.offline) return "Offline"
   if (stopping) return "Stopping…"
-  if (session.conversation_state === "needs_you") return "Needs you"
   if (session.state.restarting) return "Restarting"
+  if (!session.state.running) return "Stopped"
+  if (session.conversation_state === "needs_you") return "Needs you"
   if (session.state.running) return undefined
   return "Stopped"
 }
 
 // Idle chat with activity newer than the last time this browser opened it (or the first-visit baseline).
 export function isUnread(session: ListedSession, seenAt: number | undefined): boolean {
-  if (sessionGlyphState(session) !== "idle" || !session.last_used) return false
-  const used = Date.parse(session.last_used)
+  const when = lastActivity(session)
+  if (sessionGlyphState(session) !== "idle" || !when) return false
+  const used = Date.parse(when)
   return !Number.isNaN(used) && (seenAt === undefined || used > seenAt)
 }
 

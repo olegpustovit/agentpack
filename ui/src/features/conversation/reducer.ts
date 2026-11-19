@@ -251,7 +251,11 @@ class ThreadReducer {
           used?: number
           size?: number
           cost?: { amount?: number; currency?: string }
+          _meta?: { "_claude/origin"?: unknown }
         }
+        // Claude's own follow-up cycles (after a background task) have no prompt or turn_end; their
+        // origin-stamped usage is the end. Inside a user turn it must not clear "working".
+        if (!this.turn && usage._meta?.["_claude/origin"]) state.working = false
         state.context_tokens = usage.used
         state.context_limit = usage.size
         const compacting = this.compacting
@@ -334,6 +338,7 @@ class ThreadReducer {
       }
       case "agent_exit":
         state.working = false
+        this.turn = undefined
         deactivate(state, (item, data) => item.kind === "permission" ? !!data?.requestId : item.kind === "elicitation" && !!data?.elicitationId)
         break
       case "prompt":

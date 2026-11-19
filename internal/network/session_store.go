@@ -16,7 +16,7 @@ const sessionWriteColumns = `id,last_used,folder_id,name,directory,definition_ro
 	transport,agent_session_id,agent_capabilities,conversation_state,state,started_at,started_by,title`
 
 // goal and subagents are written only by the worker (worker_record_patch.go), so upserts never clobber them.
-const sessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at,goal,subagents"
+const sessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at,goal,subagents,last_event_at"
 
 func sessionValues(info SessionInfo) ([]any, error) {
 	if info.ID == "" {
@@ -71,12 +71,12 @@ func upsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
 
 func scanSession(row interface{ Scan(...any) error }) (SessionInfo, error) {
 	var info SessionInfo
-	var lastUsed, startedAt, endedAt, archivedAt int64
+	var lastUsed, startedAt, endedAt, archivedAt, lastEvent int64
 	var capabilities, owner, terminal, goal, subagents string
 	err := row.Scan(&info.ID, &lastUsed, &info.FolderID, &info.Name, &info.Directory,
 		&info.DefinitionRoot, &info.Harness, &info.Mode, &info.Transport, &info.AgentSessionID,
 		&capabilities, &info.ConversationState, &terminal, &startedAt, &owner, &info.Title, &info.NodeID, &endedAt, &archivedAt,
-		&goal, &subagents)
+		&goal, &subagents, &lastEvent)
 	if err != nil {
 		return info, err
 	}
@@ -101,6 +101,9 @@ func scanSession(row interface{ Scan(...any) error }) (SessionInfo, error) {
 	}
 	if archivedAt != 0 {
 		info.ArchivedAt = time.Unix(0, archivedAt).UTC()
+	}
+	if lastEvent != 0 {
+		info.LastEventAt = time.Unix(0, lastEvent).UTC()
 	}
 	return info, nil
 }

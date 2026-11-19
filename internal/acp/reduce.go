@@ -33,6 +33,7 @@ type ThreadReducer struct {
 	tools       map[string]int
 	compactions map[string]int
 	afterPrompt bool
+	inTurn      bool
 }
 
 func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
@@ -150,8 +151,16 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 			ContextTokens *int     `json:"contextTokens"`
 			ContextLimit  *int     `json:"contextLimit"`
 			CostUSD       *float64 `json:"costUsd"`
+			Meta          struct {
+				Origin json.RawMessage `json:"_claude/origin"`
+			} `json:"_meta"`
 		}
 		_ = json.Unmarshal(entry.Payload, &usage)
+		// Claude's own follow-up cycles (after a background task) have no prompt or turn_end;
+		// their origin-stamped usage is the end. Inside a user turn it must not clear "working".
+		if !reducer.inTurn && !child && len(usage.Meta.Origin) > 0 {
+			state.Working = false
+		}
 		if usage.Used != nil {
 			state.ContextTokens = *usage.Used
 		} else if usage.ContextTokens != nil {
@@ -174,6 +183,7 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 		// A failed or cancelled turn leaves its permissions and questions unanswerable; only a URL
 		// elicitation (an MCP sign-in) can outlive a turn, and it ends with the agent.
 		state.Working = false
+		reducer.inTurn = false
 		failed := entry.Kind == "turn_end" && turnFailed(entry.Payload)
 		for i := range state.Items {
 			if isOutstandingRequest(state.Items[i]) && (entry.Kind == "agent_exit" || failed && !isURLElicitation(state.Items[i])) {
@@ -183,6 +193,7 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 		state.NeedsYou = hasOutstandingRequests(state.Items)
 	case "prompt":
 		state.Working = true
+		reducer.inTurn = true
 		if !reducer.StateOnly {
 			state.Items = append(state.Items, ThreadItem{Kind: "user_message_chunk", Data: entry.Payload})
 		}

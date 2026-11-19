@@ -36,6 +36,7 @@ describe("compact values", () => {
   })
   it("formats ages for row trailers", () => {
     const now = Date.UTC(2026, 0, 3)
+    expect(shortAge(new Date(now - 10_000), now)).toBe("now")
     expect(shortAge(new Date(now - 12 * 60_000), now)).toBe("12 m")
     expect(shortAge(new Date(now - 120 * 60_000), now)).toBe("2 h")
     expect(shortAge(new Date(now - 72 * 3_600_000), now)).toBe("3 d")

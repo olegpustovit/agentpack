@@ -328,3 +328,22 @@ func TestStateOnlyReducerMatchesFullStateWithBoundedItems(t *testing.T) {
 		}
 	}
 }
+
+func TestThreadReducerAutonomousCycleEnds(t *testing.T) {
+	origin := json.RawMessage(`{"_meta":{"_claude/origin":{"kind":"task-notification"}},"sessionUpdate":"usage_update","used":10}`)
+	chunk := json.RawMessage(`{"content":{"type":"text","text":"summary"}}`)
+	var reducer ThreadReducer
+	for _, entry := range []LogEntry{{Kind: "prompt", Payload: json.RawMessage(`{}`)}, {Kind: "turn_end", Payload: json.RawMessage(`{}`)}, {Kind: "agent_message_chunk", Payload: chunk}} {
+		reducer.Apply(entry)
+	}
+	if !reducer.Apply(LogEntry{Kind: "agent_message_chunk", Payload: chunk}).Working {
+		t.Fatal("a follow-up cycle should show as working")
+	}
+	if reducer.Apply(LogEntry{Kind: "usage_update", Payload: origin}).Working {
+		t.Fatal("an origin-stamped usage after turn_end should end the follow-up cycle")
+	}
+	reducer.Apply(LogEntry{Kind: "prompt", Payload: json.RawMessage(`{}`)})
+	if !reducer.Apply(LogEntry{Kind: "usage_update", Payload: origin}).Working {
+		t.Fatal("an origin-stamped usage inside a user turn must not clear working")
+	}
+}

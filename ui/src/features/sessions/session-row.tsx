@@ -12,7 +12,7 @@ import { ContextMenuSeparator } from "@/components/ui/context-menu"
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { basename, harnessName, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { rowKey, sessionDetail, sessionLabel, type ListedSession } from "./group"
+import { lastActivity, rowKey, sessionDetail, sessionLabel, type ListedSession } from "./group"
 import { HOLD_MS, holdGlyph, sessionGlyphState, sessionStatusWord, type GlyphState } from "./session-status"
 import { sessionRules } from "./rules"
 
@@ -114,9 +114,9 @@ const stateWords: Record<GlyphState, string> = {
 
 // The agent's icon with a corner status dot. One element whose data-state changes, so refetches
 // never restart its pulse.
-export function AgentTile({ harness, state, label, title, className }: { harness: string; state: GlyphState | "requires_action"; label: string; title?: string; className?: string }) {
+export function AgentTile({ harness, state, label, title, className, unread = false }: { harness: string; state: GlyphState | "requires_action"; label: string; title?: string; className?: string; unread?: boolean }) {
   const Icon = agentIcons[harness] ?? Bot
-  const dot = state === "needsYou" || state === "requires_action" ? "needs" : state === "running" ? "working" : state === "restarting" ? "restarting" : "none"
+  const dot = state === "needsYou" || state === "requires_action" ? "needs" : state === "running" ? "working" : state === "restarting" ? "restarting" : unread ? "done" : "none"
   return (
     <span data-slot="agent-tile" role="img" aria-label={label} title={title} className={cn("relative inline-grid size-[18px] shrink-0 place-items-center rounded-[5px] bg-(--track) text-(--fg2) sel:bg-(--accent-fg)/20 sel:text-(--accent-fg)", className)}>
       <Icon aria-hidden strokeWidth={1.75} className="size-3" />
@@ -173,8 +173,10 @@ export function SessionRow({
   const state = useHeld(rowKey(session), sessionGlyphState(session), chat)
   const word = state === "running" || state === "idle" ? stopping ? "Stopping…" : undefined : sessionStatusWord(session, stopping)
   const entries = group ? groupEntries(group) : menuEntries(session, selected, actions)
-  const since = session.last_used ?? session.started_at
-  const age = since ? shortAge(new Date(since)) : undefined
+  const since = lastActivity(session)
+  // Ages tick once a minute; a working chat is active now whatever its last refetch said.
+  const minute = useNow(true, 60_000)
+  const age = state === "running" && chat ? "now" : since ? shortAge(new Date(since), minute) : undefined
   const goal = liveGoal(session.goal) ? session.goal : undefined
   const now = useNow(goal?.state === "active")
   const goalClock = goal && clock(goalElapsedMs(goal, now))
@@ -205,16 +207,14 @@ export function SessionRow({
             data-row-key={rowKey(session)}
             className={cn("pe-(--head-h)", session.offline && "text-(--fg3)")}
           >
-            <AgentTile className="ms-(--s6)" harness={session.harness} state={state} label={stateWord} title={`${harnessName(session.harness)}, ${stateWord}`} />
+            <AgentTile className="ms-(--s6)" harness={session.harness} state={state} unread={unread} label={unread ? "Finished, unread" : stateWord} title={`${harnessName(session.harness)}, ${unread ? "Finished, unread" : stateWord}`} />
             {/* Not hit-testable: Safari adds its own tooltip to ellipsized text under the pointer, doubling the row's. */}
-            <span className="pointer-events-none min-w-0 flex-1 truncate">{label}</span>
+            <span className={cn("pointer-events-none min-w-0 flex-1 truncate", unread && "font-semibold")}>{label}</span>
             {/* One trailing item. The age is decoration: the tooltip has it. */}
             {word ? (
               <span className={cn(dimWord, state === "needsYou" && "font-medium text-(--warn-word)")}>{word}</span>
             ) : goal ? (
               <span className={dimWord} aria-label={goalStateWords[goal.state]}>◎ {goalClock}</span>
-            ) : unread ? (
-              <span role="img" aria-label="Unread" className="size-(--s3) shrink-0 rounded-full bg-(--accent) sel:bg-(--accent-fg)" />
             ) : (
               <span aria-hidden className={dimWord}>{age}</span>
             )}

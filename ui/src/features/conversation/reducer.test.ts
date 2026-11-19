@@ -170,6 +170,17 @@ describe("reduceLog", () => {
     expect(reduceLog(entries).working).toBe(false)
   })
 
+  it("ends Claude's own follow-up cycle on its origin-stamped usage, but not inside a user turn", () => {
+    const origin = { _meta: { "_claude/origin": { kind: "task-notification" } }, used: 10 }
+    const cycle: LogEntry[] = [
+      { seq: 1, ts: 1, kind: "prompt", payload: { text: { text: "go" } } },
+      { seq: 2, ts: 2, kind: "turn_end", payload: {} },
+      { seq: 3, ts: 3, kind: "agent_message_chunk", payload: { text: { text: "summary" } } },
+    ]
+    expect(reduceLog(cycle).working).toBe(true)
+    expect(reduceLog([...cycle, { seq: 4, ts: 4, kind: "usage_update", payload: origin }]).working).toBe(false)
+    expect(reduceLog([...cycle, { seq: 4, ts: 4, kind: "prompt", payload: {} }, { seq: 5, ts: 5, kind: "usage_update", payload: origin }]).working).toBe(true)
+  })
   it("clears working after agent_exit", () => {
     const entries: LogEntry[] = [
       { seq: 1, ts: 1, kind: "prompt", payload: { text: "hi" } },

@@ -34,13 +34,18 @@ export function sessionLabel(session: ListedSession): string {
   return session.name || session.title || harnessName(session.harness)
 }
 
+// When the row last changed: conversation activity, else the launch.
+export function lastActivity(session: ListedSession): string | undefined {
+  return session.last_event_at ?? session.last_used ?? session.started_at
+}
+
 const UNKNOWN_PROJECT = "Unknown project"
 
 // Row tooltip and terminal subtitle: harness, folder, machine, who started it, when.
 export function sessionDetail(session: ListedSession): string {
   const actor = session.started_by
   const started = actor?.user ? `started by ${actor.user} from ${actor.kind}` : undefined
-  const when = session.last_used ?? session.started_at
+  const when = lastActivity(session)
   return [
     harnessName(session.harness),
     basename(session.directory) || UNKNOWN_PROJECT,

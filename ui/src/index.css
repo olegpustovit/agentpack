@@ -189,11 +189,14 @@ a{color:inherit;text-decoration:none;text-underline-offset:2px}
   /* Sidebar agent tile: a status dot cut out of the tile's corner. */
   .agent-dot{position:absolute;right:-2px;bottom:-2px;width:7px;height:7px;border-radius:999px;box-shadow:0 0 0 1.5px var(--dot-ring,var(--sidebar));background:transparent;transition:background-color .2s}
   .agent-dot[data-state=none]{visibility:hidden}
-  .agent-dot[data-state=working]{background:var(--accent);animation:dot-pulse 2.4s ease-in-out infinite}
+  /* Working is a spinning arc, so it never reads like the solid "finished, unread" dot. */
+  .agent-dot[data-state=working]{width:8px;height:8px;right:-3px;bottom:-3px;border:1.5px solid var(--accent);border-top-color:transparent;animation:dot-spin .9s linear infinite}
+  .agent-dot[data-state=done]{background:var(--accent)}
   .agent-dot[data-state=needs]{background:var(--warn)}
   .agent-dot[data-state=restarting]{background:var(--fg3)}
   .group\/list:focus-within [data-selected=true] .agent-dot{--dot-ring:var(--accent);background:var(--accent-fg)}
   .group\/list:focus-within [data-selected=true] .agent-dot[data-state=none]{background:transparent}
+  .group\/list:focus-within [data-selected=true] .agent-dot[data-state=working]{background:transparent;border-color:var(--accent-fg);border-top-color:transparent}
 
   /* Off-screen thread items skip layout and paint; a long chat costs what is visible. The size is remembered once shown. */
   .thread-item{content-visibility:auto;contain-intrinsic-size:auto 48px}
@@ -209,7 +212,7 @@ a{color:inherit;text-decoration:none;text-underline-offset:2px}
   .md th{background:var(--code);font-weight:600}
 }
 
-@keyframes dot-pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+@keyframes dot-spin { to { rotate: 360deg } }
 @keyframes thread-enter { from { opacity: 0; transform: translateY(4px) } }
 @keyframes tool-enter { from { opacity: 0; transform: translateX(-3px) } }
 @keyframes menu-enter { from { opacity: 0; transform: scale(.97) translateY(4px) } }
