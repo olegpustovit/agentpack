@@ -17,5 +17,6 @@ describe("viewSwitchNeedsResume", () => {
     expect(viewSwitchNeedsResume({ ...base, transport: "acp", conversation_state: "idle" })).toBe(false)
     expect(viewSwitchNeedsResume({ ...base, transport: "acp", conversation_state: "working" })).toBe(true)
     expect(viewSwitchNeedsResume({ ...base, transport: "acp", conversation_state: "needs_you" })).toBe(true)
+    expect(viewSwitchNeedsResume({ ...base, transport: "acp", conversation_state: "starting" })).toBe(true)
   })
 })

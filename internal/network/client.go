@@ -71,7 +71,7 @@ type SessionInfo struct {
 
 func workerRecord(home, id string) (WorkerRecord, error) {
 	var record WorkerRecord
-	if !strings.HasPrefix(id, "session-") || filepath.Base(id) != id || strings.ContainsAny(id, "/\\") {
+	if !validSessionID(id) {
 		return record, errors.New("invalid session ID")
 	}
 	data, err := os.ReadFile(filepath.Join(home, "network", "sessions", id, "worker.json"))

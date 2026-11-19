@@ -1,8 +1,14 @@
 import { lastActivity, type ListedSession } from "./group"
 
-export function sessionGlyphState(session: ListedSession): "running" | "stopped" | "idle" | "restarting" | "offline" | "needsYou" {
+// A chat "+" just started: the gateway answered and the agent is still coming up.
+export function isStarting(session: Pick<ListedSession, "conversation_state" | "ended_at">): boolean {
+  return session.conversation_state === "starting" && !session.ended_at
+}
+
+export function sessionGlyphState(session: ListedSession): "running" | "stopped" | "idle" | "restarting" | "offline" | "needsYou" | "starting" {
   if (session.archived_at) return "stopped"
   if (session.offline) return "offline"
+  if (isStarting(session)) return "starting"
   // A stopped chat can keep a stale needs_you; nothing can answer it any more.
   if (!session.state.running && !session.state.restarting) return "stopped"
   if (session.conversation_state === "needs_you") return "needsYou"
@@ -38,6 +44,7 @@ export function sessionStatusWord(session: ListedSession, stopping: boolean): st
   if (session.archived_at) return "Archived"
   if (session.offline) return "Offline"
   if (stopping) return "Stopping…"
+  if (isStarting(session)) return undefined
   if (session.state.restarting) return "Restarting"
   if (!session.state.running) return "Stopped"
   if (session.conversation_state === "needs_you") return "Needs you"

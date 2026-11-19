@@ -110,13 +110,14 @@ const stateWords: Record<GlyphState, string> = {
   stopped: "Stopped",
   restarting: "Restarting",
   offline: "Offline",
+  starting: "Starting",
 }
 
 // The agent's icon with a corner status dot. One element whose data-state changes, so refetches
 // never restart its pulse.
 export function AgentTile({ harness, state, label, title, className, unread = false }: { harness: string; state: GlyphState | "requires_action"; label: string; title?: string; className?: string; unread?: boolean }) {
   const Icon = agentIcons[harness] ?? Bot
-  const dot = state === "needsYou" || state === "requires_action" ? "needs" : state === "running" ? "working" : state === "restarting" ? "restarting" : unread ? "done" : "none"
+  const dot = state === "needsYou" || state === "requires_action" ? "needs" : state === "running" ? "working" : state === "restarting" ? "restarting" : state === "starting" ? "starting" : unread ? "done" : "none"
   return (
     <span data-slot="agent-tile" role="img" aria-label={label} title={title} className={cn("relative inline-grid size-[18px] shrink-0 place-items-center rounded-[5px] bg-(--track) text-(--fg2) sel:bg-(--accent-fg)/20 sel:text-(--accent-fg)", className)}>
       <Icon aria-hidden strokeWidth={1.75} className="size-3" />
@@ -176,7 +177,7 @@ export function SessionRow({
   const since = lastActivity(session)
   // Ages tick once a minute; a working chat is active now whatever its last refetch said.
   const minute = useNow(true, 60_000)
-  const age = state === "running" && chat ? "now" : since ? shortAge(new Date(since), minute) : undefined
+  const age = state === "starting" ? undefined : state === "running" && chat ? "now" : since ? shortAge(new Date(since), minute) : undefined
   const goal = liveGoal(session.goal) ? session.goal : undefined
   const now = useNow(goal?.state === "active")
   const goalClock = goal && clock(goalElapsedMs(goal, now))

@@ -123,7 +123,10 @@ export default function ConversationPane({
   const threadScrollRef = useRef<HTMLDivElement>(null)
   const [configValues, setConfigValues] = useState<Record<string, string | boolean>>({})
   const readOnly = unavailable || info?.reachable === false || Boolean(info?.archived_at)
-  const live = !readOnly && info?.state.running === true
+  // "+" opens the chat before the agent is up; until it is, a message is held here and sent on arrival.
+  const starting = !readOnly && info?.conversation_state === "starting" && !info.ended_at
+  const live = !readOnly && !starting && info?.state.running === true
+  const [held, setHeld] = useState<SendInput>()
   const { data: tail, error: conversationError } = useQuery({ ...conversationEventsQuery(machine, sessionId, live), retry: false })
   // Earlier pages, loaded as the thread scrolls up. Keyed, so another session never shows them.
   const historyKey = `${machine}\0${sessionId}`
@@ -136,7 +139,7 @@ export default function ConversationPane({
   const scrollAnchorRef = useRef<{ height: number; top: number } | null>(null)
   const { data: configRaw, error: configError } = useQuery({
     queryKey: ["conversation-config", machine, sessionId],
-    enabled: !readOnly,
+    enabled: !readOnly && !starting,
     queryFn: () => api<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/config-options`, { machine }),
     retry: false,
   })
@@ -399,7 +402,16 @@ export default function ConversationPane({
       })
     }
   }
-  const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !send.isPending && !upload.isPending && !needsUpdate
+  // Images upload to the running agent, so a starting chat holds text only.
+  const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !(starting && (attachments.length > 0 || held)) && !send.isPending && !upload.isPending && !needsUpdate
+  useEffect(() => {
+    if (!held) return
+    if (live) send.mutate(held)
+    // A start that failed ends the row; the message goes back to the composer.
+    else if (info?.ended_at) setDraft((current) => current || held.text)
+    else return
+    setHeld(undefined)
+  }, [held, live, info?.ended_at, send])
   // Enter sends, or queues while the agent works; steer interrupts the turn and sends this next.
   function submit(steer = false) {
     if (!canSend) return
@@ -413,6 +425,11 @@ export default function ConversationPane({
         { goal: { objective: goalCommand.objective }, edit: false },
         { onError: (error) => hud.error(conversationErrorMessage(machine, "set the goal", error)) },
       )
+      return
+    }
+    if (starting) {
+      setHeld({ text, attachments: [], clearComposer: false, optimisticAfter: entries.at(-1)?.seq ?? 0 })
+      setDraft("")
       return
     }
     // A message to an idle agent becomes the next prompt, so it can show before the gateway answers.
@@ -559,7 +576,7 @@ export default function ConversationPane({
                 <p className="py-(--s7) text-center text-(length:--fs-sm) text-(--fg3)">This subagent isn't in the loaded part of the conversation.</p>
               ) : (
                 <ThreadView
-                  items={subagent ? thread.items : withSending(thread.items, entries, send.isPending ? send.variables : undefined)}
+                  items={subagent ? thread.items : withSending(thread.items, entries, held ?? (send.isPending ? send.variables : undefined))}
                   machine={machine}
                   sessionId={sessionId}
                   readOnly={readOnly}
@@ -576,6 +593,7 @@ export default function ConversationPane({
                   onStopSubagent={readOnly ? undefined : (id) => stopSubagent.mutate(id)}
                 />
               )}
+              {held && <p className="flex items-center justify-end gap-(--s2) text-(length:--fs-xs) text-(--fg3)"><Spinner aria-hidden />Sends when {harnessName(info?.harness ?? "agent")} is ready</p>}
               </>
             )}
           </div>
@@ -630,7 +648,7 @@ export default function ConversationPane({
                   id="conversation-message"
                   aria-label="Message"
                   rows={1}
-                  placeholder={needsUpdate ? "Update this peer to open the conversation…" : parent.working ? `Queue a message for ${agentName} (⌘↵ steers)` : `Message ${agentName}`}
+                  placeholder={needsUpdate ? "Update this peer to open the conversation…" : starting ? `Starting ${agentName}…` : parent.working ? `Queue a message for ${agentName} (⌘↵ steers)` : `Message ${agentName}`}
                   value={draft}
                   disabled={needsUpdate}
                   aria-controls={composerHints.length > 0 ? "composer-hints-list" : undefined}

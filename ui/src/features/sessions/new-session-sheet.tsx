@@ -13,10 +13,9 @@ import type { AgentSession, ProjectRow, SessionInfo } from "@/lib/api-types"
 import { basename, harnessName, plural, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { sessionsQuery, projectsQuery } from "./queries"
-import { canStart, mergeProjects, modeChoices, modeEffect, placeKey, placeLabel, placeProblem, startSessionBody, type MergedProject, type SessionView } from "./rules"
+import { agentIds, canStart, defaultAgent, mergeProjects, modeChoices, modeEffect, placeKey, placeLabel, placeProblem, startSessionBody, type MergedProject, type SessionView } from "./rules"
 
 // Harness ids the gateway starts.
-const agents = ["claude", "codex", "grok", "omp", "opencode", "agent", "agy"]
 const DAY = 24 * 60 * 60 * 1000
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
 
@@ -94,7 +93,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   const newest = row?.launches[0]
   // What this browser last started here wins over the folder's newest launch.
   const remembered = row ? loadStartChoices(row.directory) : {}
-  const harnessId = harness ?? remembered.harness ?? newest?.harness ?? "claude"
+  const harnessId = harness ?? defaultAgent(remembered, row?.launches ?? []).harness
   const modes = row ? modeChoices(row) : ["default"]
   const modeValue = mode && modes.includes(mode) ? mode : remembered.mode && modes.includes(remembered.mode) && (!harness || harness === remembered.harness) ? remembered.mode : newest?.mode || "default"
   const view = chosenView ?? remembered.view ?? "chat"
@@ -262,7 +261,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
 
               <Choice label="Agent">
                 <div role="group" aria-label="Agent" className="flex flex-wrap gap-(--s2)">
-                  {agents.map((id) => {
+                  {agentIds.map((id) => {
                     const used = row.launches.find((launch) => launch.harness === id)
                     return (
                       <Button key={id} type="button" variant={id === harnessId ? "primary" : "default"} aria-pressed={id === harnessId} onClick={() => { setHarness(id); setResumeId("") }}>

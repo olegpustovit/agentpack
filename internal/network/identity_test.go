@@ -360,6 +360,7 @@ func TestPeerACPResumeRequiresRecordedOwner(t *testing.T) {
 		r = r.WithContext(withActor(r.Context(), actor))
 		w := httptest.NewRecorder()
 		g.Handler().ServeHTTP(w, r)
+		g.starting.Wait()
 		return w
 	}
 
@@ -441,6 +442,7 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 		r = r.WithContext(withActor(r.Context(), actor))
 		w := httptest.NewRecorder()
 		g.Handler().ServeHTTP(w, r)
+		g.starting.Wait()
 		return w
 	}
 	renamedOwner := Actor{Kind: "peer", User: owner.User, Node: "new-name", StableNodeID: owner.StableNodeID}

@@ -53,6 +53,7 @@ type nodeRecord struct {
 
 type Gateway struct {
 	options        GatewayOptions
+	starting       sync.WaitGroup // chats launching in the background; tests wait on it
 	store          *state.Store
 	logs           *obs.Store
 	auth           *gatewayAuth
@@ -143,6 +144,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	gateway := &Gateway{options: options, store: store, logs: logs, auth: auth, local: nodeRecord{listener.Addr().String(), randomToken()}, origin: origin, stop: cancel, done: ctx.Done()}
 	defer func() { result = errors.Join(result, gateway.cleanStateTransfers(time.Time{})) }()
 	gateway.importLegacySessions(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
+	gateway.endLeftoverStarts(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
 	gateway.mcp, err = NewGatewayMCP(gateway)
 	if err != nil {
 		return err
@@ -847,9 +849,7 @@ func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInf
 	info.EndedAt = time.Time{}
 	info.ArchivedAt = time.Time{}
 	info.StartedBy = &actor
-	id, err := g.options.Start(ctx, info, forkSessionID)
-	info.ID = id
-	return info, err
+	return g.launchSession(ctx, info, forkSessionID)
 }
 
 func (g *Gateway) knownDirectory(directory string) bool {

@@ -9,10 +9,11 @@ Some harnesses speak the [Agent Client Protocol](https://agentclientprotocol.com
 | Field | Meaning |
 |---|---|
 | `transport` | `terminal` (default) or `acp` |
-| `conversation_state` | `working`, `needs_you`, or `idle` while the worker is running |
+| `conversation_state` | `starting` until a new chat's agent is up, then `working`, `needs_you`, or `idle` while the worker is running |
+| `last_event_at` | Time of the chat's latest conversation entry; the session list's ages and unread markers use it |
 | `agent_session_id` | Agent-native session id for resume |
 
-Start chat with `POST /api/sessions` and `{ "transport": "acp", ... }`. Resume with `agent_session_id` from `GET /api/agent-sessions?directory=&harness=&mode=`. Switching Chat ↔ Terminal in the UI stops the current worker and starts the other transport; resume depends on the agent.
+Start chat with `POST /api/sessions` and `{ "transport": "acp", ... }`. The gateway answers at once with a gateway-chosen session ID and `conversation_state: "starting"`; pack sync and the agent launch continue in the background, and the worker keeps `starting` until its endpoint serves. A message typed meanwhile is held by the browser and sent once the chat is running. A failed start ends the row and leaves the error in the transcript; a gateway restart ends any chat it was still starting. In the sidebar, "+" on a folder starts a chat with that folder's last agent (⌥-click or right-click picks another); ⌘N opens the full New session sheet. Resume with `agent_session_id` from `GET /api/agent-sessions?directory=&harness=&mode=`. Switching Chat ↔ Terminal in the UI stops the current worker and starts the other transport; resume depends on the agent.
 
 Session metadata, names and recent folders live in `$AGENTPACK_HOME/state.db`.
 Explicitly enrolled mesh gateways replicate these rows and conversation events.

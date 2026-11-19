@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams, useRouter, useSearch } from "@tanstack/re
 import { Folder, Laptop, Plus, RefreshCw, Server } from "lucide-react"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
-import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
+import { ConfirmAlert, ConfirmAlertContent, RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useEventsConnected } from "@/features/events/use-events"
 import { nodesQuery, useReplicatedQueries, useMachines } from "@/features/machines/queries"
@@ -12,14 +12,16 @@ import { useIsPhone } from "@/features/shell/use-is-phone"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { terminalPool } from "@/features/terminal/pool"
 import { rememberSession } from "@/features/shell/views"
-import { LOCAL } from "@/lib/api"
-import { basename, plural } from "@/lib/format"
+import { api, LOCAL } from "@/lib/api"
+import type { SessionInfo } from "@/lib/api-types"
+import { basename, harnessName, plural } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { useSessionCommands } from "./actions"
 import { groupSessions, matchesSession, rowKey, sessionLabel, type GroupMode, type ListedSession, type SessionSubhead } from "./group"
 import { NewSessionSheet } from "./new-session-sheet"
-import { sessionRules } from "./rules"
+import { loadStartChoices, markNewChat, saveStartChoices } from "./choices"
+import { agentIds, defaultAgent, sessionRules, startSessionBody } from "./rules"
 import { sessionsQuery } from "./queries"
 import { isUnread, loadSeen, saveSeen, sessionGlyphState } from "./session-status"
 import { SessionRow, SubagentRow, type GroupActions, type RowActions } from "./session-row"
@@ -423,31 +425,57 @@ function SessionConfirm({ confirm, onConfirm }: { confirm: Confirm; onConfirm: (
   )
 }
 
-// Starts a session in this subhead's folder on its machine. Revealed on hover; always shown on touch.
+// "+" starts a chat in this subhead's folder at once with its last agent; ⌥-click or right-click picks
+// another. Revealed on hover; always shown on touch. ⌘N still opens the full New session sheet.
 function NewInFolder({ head }: { head: SessionSubhead }) {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const folder = basename(head.directory) || head.directory
   const machineName = head.sessions[0]?.machineName ?? head.machine
-  const label = head.offline ? `${machineName} is offline` : `New session in ${folder} on ${machineName}`
+  const usual = defaultAgent(loadStartChoices(head.directory), head.sessions)
+  const start = useMutation({
+    mutationFn: (agent: { harness: string; mode: string }) =>
+      api<SessionInfo>("/api/sessions", { machine: head.machine, method: "POST", body: startSessionBody({ directory: head.directory, ...agent, view: "chat" }) }),
+    onSuccess: (info, agent) => {
+      saveStartChoices(head.directory, { ...agent, view: "chat" })
+      markNewChat(info.id)
+      void queryClient.invalidateQueries({ queryKey: sessionsQuery(head.machine, false).queryKey })
+      void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: head.machine, sessionId: info.id } })
+    },
+    onError: (error, agent) => hud.error(`Could not start ${harnessName(agent.harness)}: ${error instanceof Error ? error.message : String(error)}`, () => start.mutate(agent)),
+  })
+  const label = head.offline ? `${machineName} is offline` : `New ${harnessName(usual.harness)} chat in ${folder} on ${machineName}`
   const className = cn(
     buttonVariants({ variant: "ghost", size: "icon" }),
     "ms-auto size-(--head-h) shrink-0 opacity-0 group-hover/head:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100",
   )
   if (head.offline) {
     return (
-      <span aria-disabled="true" role="link" aria-label={label} title={label} className={cn(className, "text-(--fg3)")}>
+      <span aria-disabled="true" role="button" aria-label={label} title={label} className={cn(className, "text-(--fg3)")}>
         <Plus aria-hidden />
       </span>
     )
   }
+  function onClick(event: MouseEvent<HTMLButtonElement>) {
+    if (event.altKey) {
+      // The agent list is the context menu; ⌥-click opens it where the pointer is.
+      event.currentTarget.dispatchEvent(new globalThis.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: event.clientX, clientY: event.clientY }))
+      return
+    }
+    if (!start.isPending) start.mutate(usual)
+  }
   return (
-    <Link
-      to="."
-      search={(prev: Record<string, unknown>) => ({ ...prev, new: "1", machine: head.machine, folder: head.directory })}
-      aria-label={label}
-      title={label}
-      className={className}
-    >
-      <Plus aria-hidden />
-    </Link>
+    <RowContextMenu>
+      <RowContextMenuTrigger render={<button type="button" aria-label={label} title={label} className={className} onClick={onClick} />}>
+        <Plus aria-hidden />
+      </RowContextMenuTrigger>
+      <RowContextMenuContent>
+        {agentIds.map((id) => (
+          <RowContextMenuItem key={id} onClick={() => start.mutate({ harness: id, mode: id === usual.harness ? usual.mode : head.sessions.find((session) => session.harness === id)?.mode || "default" })}>
+            {`New ${harnessName(id)} chat`}
+          </RowContextMenuItem>
+        ))}
+      </RowContextMenuContent>
+    </RowContextMenu>
   )
 }

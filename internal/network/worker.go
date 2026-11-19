@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,9 +45,21 @@ type WorkerRecord struct {
 	Secret  string      `json:"secret"`
 }
 
-func createSessionDirectory(root string) (string, error) {
-	directory := filepath.Join(root, "session-"+rand.Text())
+// createSessionDirectory claims id (chosen by the gateway for an instant start) or a fresh one.
+func createSessionDirectory(root, id string) (string, error) {
+	if id == "" {
+		id = newSessionID()
+	} else if !validSessionID(id) {
+		return "", errors.New("invalid session ID")
+	}
+	directory := filepath.Join(root, id)
 	return directory, os.Mkdir(directory, 0700)
+}
+
+func newSessionID() string { return "session-" + rand.Text() }
+
+func validSessionID(id string) bool {
+	return strings.HasPrefix(id, "session-") && filepath.Base(id) == id && !strings.ContainsAny(id, "/\\")
 }
 
 // RunWorker owns a restartable PTY independently of a gateway. ready receives
@@ -82,7 +95,12 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if err := paths.EnsurePrivateDirectory(root); err != nil {
 		return 1, fmt.Errorf("create worker root: %w", err)
 	}
-	directory, err := createSessionDirectory(root)
+	// Only an instant start arrives with its ID; other launches always get a fresh one.
+	claimed := ""
+	if launch.Session.ConversationState == "starting" {
+		claimed = launch.Session.ID
+	}
+	directory, err := createSessionDirectory(root, claimed)
 	if err != nil {
 		return 1, fmt.Errorf("create worker directory: %w", err)
 	}
@@ -240,12 +258,18 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		return 1, fmt.Errorf("generate worker secret: %w", err)
 	}
 	record := WorkerRecord{Session: launch.Session, ID: filepath.Base(directory), PID: os.Getpid(), Address: listener.Addr().String(), Secret: hex.EncodeToString(secret[:])}
+	// An instant start stays "starting" in the row until the endpoint serves; see the patch after ready.
+	instant := launch.Session.ConversationState == "starting"
 	if launch.Transport == "acp" {
 		record.Session.Transport = "acp"
 		record.Session.AgentSessionID = launch.Session.AgentSessionID
 		if conversation != nil {
 			record.Session.ConversationState = conversation.ConversationState()
 		}
+	}
+	liveState := record.Session.ConversationState
+	if instant {
+		record.Session.ConversationState = "starting"
 	}
 	if session != nil {
 		record.Session.State = session.State()
@@ -313,7 +337,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	}
 	if conversation != nil {
 		wireConversation(conversation)
-		conversation.SetStateChange(record.Session.ConversationState, persistConversationState(conversation))
+		conversation.SetStateChange(liveState, persistConversationState(conversation))
 		conversation.ResumeTurns()
 	}
 	handler, err = WorkerHandler(ctx, session, conversation, record.Secret, directory)
@@ -383,6 +407,9 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	obs.Go("worker.http", func() { serveDone <- server.Serve(listener) })
 	if err := ready(record.ID); err != nil {
 		return 1, fmt.Errorf("announce worker: %w", err)
+	}
+	if instant && conversation != nil {
+		persistConversationState(conversation)(conversation.ConversationState())
 	}
 	started.End()
 	select {

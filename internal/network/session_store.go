@@ -155,9 +155,9 @@ func endSession(ctx context.Context, db *sql.DB, id string, terminal TerminalSta
 	if _, err = db.ExecContext(ctx, "UPDATE sessions SET ended_at=?,state=? WHERE id=? AND node_id="+state.LocalNodeSQL+" AND ended_at=0", time.Now().UnixNano(), string(body), id); err != nil {
 		return err
 	}
-	// A chat that ended before its first message has nothing to keep in the list.
+	// A chat that ended before its first message has nothing to keep in the list, unless it failed to start.
 	_, err = db.ExecContext(ctx, `UPDATE sessions SET hidden=1 WHERE id=? AND transport='acp' AND hidden=0 AND node_id=`+state.LocalNodeSQL+`
- AND NOT EXISTS (SELECT 1 FROM conversation_events WHERE session_id=sessions.id AND body LIKE '%"kind":"prompt"%')`, id)
+ AND NOT EXISTS (SELECT 1 FROM conversation_events WHERE session_id=sessions.id AND (body LIKE '%"kind":"prompt"%' OR body LIKE '%"kind":"notice"%"severity":"error"%'))`, id)
 	return err
 }
 

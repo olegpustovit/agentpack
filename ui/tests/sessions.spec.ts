@@ -130,18 +130,45 @@ test("New session shows what the chosen mode loads", async ({ page }) => {
   await expect(loaded.getByRole("listitem").filter({ hasText: "heavy" })).toContainText("off in design")
 })
 
-test("a folder's + in the sidebar starts New session there", async ({ page }) => {
+test("+ starts a chat at once with the folder's last agent and holds a message until it is up", async ({ page }) => {
+  await page.clock.install()
+  const starting = { ...sessions[1], id: "s3", transport: "acp", conversation_state: "starting", state: terminal(false) }
+  let posted: unknown
+  await page.route(/\/api\/sessions(\?.*)?$/, (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    posted = route.request().postDataJSON()
+    reply = [...sessions, starting]
+    return route.fulfill({ json: starting })
+  })
+  const prompts: unknown[] = []
+  await page.route("**/api/sessions/s3/conversation/prompt", (route) => {
+    prompts.push(route.request().postDataJSON())
+    return route.fulfill({ json: {} })
+  })
   await page.goto("/sessions")
-  // The folder is not among the machine's listed projects; it still opens, ready to start.
-  await page.getByRole("link", { name: "New session in oracle on host-a" }).click()
-  await expect(page).toHaveURL(/folder=%2Fhome%2Foleg%2Foracle/)
-  const dialog = page.getByRole("dialog")
-  await expect(dialog.getByRole("heading", { name: "oracle" })).toBeVisible()
-  await expect(dialog.getByRole("combobox", { name: "Machine" })).toContainText("host-a")
-  await expect(dialog).toContainText("/home/oleg/oracle")
-  const posted = page.waitForRequest((request) => request.method() === "POST" && /\/api\/sessions$/.test(request.url()))
-  await page.getByRole("button", { name: "Start session" }).click()
-  expect((await posted).postDataJSON()).toMatchObject({ directory: "/home/oleg/oracle" })
+  // The folder's last agent is Codex in mode "plan"; the sheet is not involved.
+  await page.getByRole("button", { name: "New Codex chat in oracle on host-a" }).click()
+  await expect(page).toHaveURL(/\/sessions\/[^/]+\/s3/)
+  expect(posted).toMatchObject({ directory: "/home/oleg/oracle", harness: "codex", mode: "plan", transport: "acp" })
+  await expect(page.getByRole("dialog")).toBeHidden()
+  const composer = page.getByRole("textbox", { name: "Message" })
+  await expect(composer).toHaveAttribute("placeholder", "Starting Codex…")
+  await composer.fill("check the budgets")
+  await composer.press("Enter")
+  await expect(page.getByText("Sends when Codex is ready")).toBeVisible()
+  expect(prompts).toHaveLength(0)
+  reply = [...sessions, { ...starting, conversation_state: "idle", state: terminal(true) }]
+  // Without live events the list polls every 15 s.
+  await page.clock.runFor(16_000)
+  await expect.poll(() => prompts).toEqual([{ text: "check the budgets" }])
+  await expect(page.getByText("Sends when Codex is ready")).toBeHidden()
+})
+
+test("⌥-click on + lists the agents", async ({ page }) => {
+  await page.goto("/sessions")
+  await page.getByRole("button", { name: "New Codex chat in oracle on host-a" }).click({ modifiers: ["Alt"] })
+  await expect(page.getByRole("menuitem", { name: "New Claude chat" })).toBeVisible()
+  await expect(page).not.toHaveURL(/\/sessions\/[^/]+\/s/)
 })
 
 test("closing New session drops the folder it was opened for", async ({ page }) => {

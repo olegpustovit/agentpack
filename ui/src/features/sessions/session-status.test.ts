@@ -26,6 +26,13 @@ describe("session status", () => {
     expect(sessionStatusWord(session, false)).toBe("Stopped")
   })
 
+  it("shows a chat that is still starting as starting, until its row ends", () => {
+    const session = { ...base, conversation_state: "starting", state: { ...base.state, running: false } }
+    expect(sessionGlyphState(session)).toBe("starting")
+    expect(sessionStatusWord(session, false)).toBeUndefined()
+    expect(sessionGlyphState({ ...session, ended_at: "2026-01-01T00:00:00Z" })).toBe("stopped")
+  })
+
   it("prefers needs you over idle", () => {
     const session = { ...base, conversation_state: "needs_you" }
     expect(sessionGlyphState(session)).toBe("needsYou")

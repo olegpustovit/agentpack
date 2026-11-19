@@ -2,6 +2,16 @@ import type { ProjectRow } from "@/lib/api-types"
 import { basename } from "@/lib/format"
 import { ApiError } from "@/lib/api"
 import type { ListedSession } from "./group"
+import type { StartChoices } from "./choices"
+
+export const agentIds = ["claude", "codex", "grok", "omp", "opencode", "agent", "agy"]
+
+// What "+" and New session start in a folder: this browser's last choice there, else the folder's newest launch.
+export function defaultAgent(remembered: StartChoices, launches: { harness: string; mode: string }[]) {
+  const harness = remembered.harness ?? launches[0]?.harness ?? "claude"
+  const mode = (remembered.harness === harness && remembered.mode) || launches.find((launch) => launch.harness === harness)?.mode || "default"
+  return { harness, mode }
+}
 
 // Row action availability. Non-interactive sessions have no browser terminal.
 export function sessionRules(session: ListedSession) {
