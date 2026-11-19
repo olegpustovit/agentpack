@@ -2,6 +2,8 @@ import { useState, type CSSProperties, type ReactNode } from "react"
 import { ArrowUpRight, FileCode2 } from "lucide-react"
 import { Section } from "@/components/kit/data"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
+import { useSessionCommands } from "@/features/sessions/actions"
 import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
 import { api, ApiError } from "@/lib/api"
 import type { GoalState, SessionInfo } from "@/lib/api-types"
@@ -63,7 +65,10 @@ export function ConversationInspector({
   const subagents = Object.values(thread.subagents ?? {}).sort((a, b) => (b.startedTs ?? 0) - (a.startedTs ?? 0))
   const now = useNow(goal?.state === "active" || subagents.some(subagentRunning))
   const actor = info?.started_by
-  const startedBy = actor ? [actor.user ?? actor.node, actor.kind].filter(Boolean).join(" · ") : undefined
+  const startedBy = actor?.agent ? harnessName(actor.agent) : actor ? [actor.user ?? actor.node, actor.kind].filter(Boolean).join(" · ") : undefined
+  const commands = useSessionCommands()
+  // Shown at once; the list refetch then confirms it.
+  const [tools, setTools] = useState<boolean>()
   const capabilities = info?.agent_capabilities
   const imageSupport = capabilities?.promptCapabilities?.image
   const sessionCapabilities = capabilities?.sessionCapabilities
@@ -230,6 +235,26 @@ export function ConversationInspector({
               <Row label="Project">{info.directory.split("/").pop() || info.directory}</Row>
               <Row label="Mode">{info.mode || "default"}</Row>
             </dl>
+            {info.transport === "acp" && (
+              <>
+                <div className="mt-(--s3) flex items-center justify-between gap-(--s4)">
+                  <label htmlFor="agentpack-tools" className="text-(--fg2)">agentpack tools</label>
+                  <Switch
+                    id="agentpack-tools"
+                    aria-describedby="agentpack-tools-help"
+                    checked={tools ?? Boolean(info.tools)}
+                    disabled={readOnly || Boolean(info.archived_at) || tools !== undefined}
+                    onCheckedChange={(next) => {
+                      setTools(next)
+                      void commands.setTools({ ...info, machine, machineName: machineName ?? machine, offline: false }, next).finally(() => setTools(undefined))
+                    }}
+                  />
+                </div>
+                <p id="agentpack-tools-help" className="mt-(--s1) text-(--fg3)">
+                  Lets this agent see your other sessions and start helper sessions. It can never approve permissions.
+                </p>
+              </>
+            )}
           </Section>
         )}
         {capabilities && (

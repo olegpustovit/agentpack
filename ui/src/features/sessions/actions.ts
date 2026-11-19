@@ -1,10 +1,15 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { useState } from "react"
-import { api } from "@/lib/api"
+import { api, ApiError } from "@/lib/api"
 import { hud } from "@/lib/hud"
 import { rowKey, sessionLabel, type ListedSession } from "./group"
 import { sessionsQuery } from "./queries"
 import { reusesOperationId } from "./rules"
+
+// An older gateway has no switch.
+export function toolsError(error: unknown): string {
+  return error instanceof ApiError && error.status === 404 ? "Needs update" : errorText(error)
+}
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "the request did not complete"
@@ -71,5 +76,16 @@ function sessionCommands(queryClient: QueryClient, operations: Map<string, strin
     }
   }
 
-  return { stop, restart, archive }
+  // agentpack tools for a chat's agent; while off, the gateway refuses its next call.
+  async function setTools(session: ListedSession, enabled: boolean): Promise<void> {
+    try {
+      await api(`/api/sessions/${encodeURIComponent(session.id)}/tools`, { machine: session.machine, method: "POST", body: { enabled } })
+      hud.success(enabled ? "agentpack tools on" : "agentpack tools off")
+      await refresh(session)
+    } catch (error) {
+      hud.error(`Couldn't turn agentpack tools ${enabled ? "on" : "off"}: ${toolsError(error)}`, () => void setTools(session, enabled))
+    }
+  }
+
+  return { stop, restart, archive, setTools }
 }

@@ -18,7 +18,7 @@ import { basename, harnessName, plural } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { useSessionCommands } from "./actions"
-import { groupSessions, matchesSession, rowKey, sessionLabel, type GroupMode, type ListedSession, type SessionSubhead } from "./group"
+import { groupSessions, matchesSession, nestHelpers, rowKey, sessionLabel, type GroupMode, type ListedSession, type SessionSubhead } from "./group"
 import { NewSessionSheet } from "./new-session-sheet"
 import { loadStartChoices, markNewChat, saveStartChoices } from "./choices"
 import { agentIds, defaultAgent, sessionRules, startSessionBody } from "./rules"
@@ -94,7 +94,7 @@ export function SessionList() {
   const groups = groupSessions(shown.filter((session) => !pinned.has(session)), groupMode)
   const isPhone = useIsPhone()
   // Flat order matches the DOM order, so keyboard index and element index agree.
-  const rows = needsYou.concat(groups.flatMap((group) => group.subheads.flatMap((head) => head.sessions)))
+  const rows = needsYou.concat(groups.flatMap((group) => group.subheads.flatMap((head) => nestHelpers(head.sessions).map((entry) => entry.session))))
   const first = rows[0]
   const tabStop = selectedKey ?? (first ? rowKey(first) : undefined)
   const outdated = machines.filter((machine) => machine.needsUpdate || queries.byMachine[machine.id]?.needsUpdate)
@@ -245,10 +245,11 @@ export function SessionList() {
       },
       install: () => setSheet({ kind: "install", row }),
       save: () => setSheet({ kind: "save", row }),
+      tools: () => void commands.setTools(row, !row.tools),
     }
   }
 
-  function renderRow(session: ListedSession) {
+  function renderRow(session: ListedSession, nested = false) {
     const key = rowKey(session)
     const selected = key === selectedKey
     // Running subagents show under their chat on every width; finished ones leave the list.
@@ -264,6 +265,7 @@ export function SessionList() {
           actions={actionsFor(session, selected)}
           marked={marked.has(key)}
           group={marked.has(key) ? group : undefined}
+          nested={nested}
         />
         {children.map((child) => (
           <SubagentRow key={child.id} session={session} subagent={child} selected={selected && openSub === child.id} />
@@ -364,7 +366,7 @@ export function SessionList() {
                   {head.parent && <span className="ms-(--s2) shrink-0 text-(--fg3)">{head.parent}</span>}
                   <NewInFolder head={head} />
                 </GroupHeader>
-                {head.sessions.map((session) => renderRow(session))}
+                {nestHelpers(head.sessions).map(({ session, nested }) => renderRow(session, nested))}
               </div>
             ))}
           </div>

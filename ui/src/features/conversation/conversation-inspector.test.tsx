@@ -1,4 +1,5 @@
 import { act } from "react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import type { SessionInfo } from "@/lib/api-types"
@@ -17,13 +18,14 @@ const info: SessionInfo = {
 
 let container: HTMLDivElement
 let root: Root
+const client = new QueryClient()
 
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   container = document.createElement("div")
   document.body.appendChild(container)
   root = createRoot(container)
-  act(() => root.render(<ConversationInspector thread={thread} info={info} machine="local" open />))
+  act(() => root.render(<QueryClientProvider client={client}><ConversationInspector thread={thread} info={info} machine="local" open /></QueryClientProvider>))
 })
 
 afterEach(() => {
@@ -51,11 +53,11 @@ describe("conversation inspector", () => {
         sessionCapabilities: { resume: {}, fork: {} },
       },
     }
-    act(() => root.render(<ConversationInspector thread={thread} info={withCapabilities} machine="local" open />))
+    act(() => root.render(<QueryClientProvider client={client}><ConversationInspector thread={thread} info={withCapabilities} machine="local" open /></QueryClientProvider>))
     expect(container.textContent).toContain("ImagesNo")
     expect(container.textContent).toContain("ResumeYes")
     expect(container.textContent).toContain("ForkYes")
-    act(() => root.render(<ConversationInspector thread={thread} info={info} machine="local" open />))
+    act(() => root.render(<QueryClientProvider client={client}><ConversationInspector thread={thread} info={info} machine="local" open /></QueryClientProvider>))
     expect(container.textContent).not.toContain("This agent supports")
   })
   it("shows changed files from the thread", () => {
@@ -71,7 +73,7 @@ describe("conversation inspector", () => {
         },
       ],
     }
-    act(() => root.render(<ConversationInspector thread={withDiff} info={info} machine="local" open />))
+    act(() => root.render(<QueryClientProvider client={client}><ConversationInspector thread={withDiff} info={info} machine="local" open /></QueryClientProvider>))
     const row = container.querySelector<HTMLButtonElement>('button[title="src/main.go"]')!
     expect([...row.querySelectorAll("span.block")].map((line) => line.textContent)).toEqual(["main.go", "src"])
     expect(container.textContent).toContain("+1")
@@ -79,7 +81,15 @@ describe("conversation inspector", () => {
   })
 
   it("hides when the toolbar closes the inspector", () => {
-    act(() => root.render(<ConversationInspector thread={thread} info={info} machine="local" open={false} />))
+    act(() => root.render(<QueryClientProvider client={client}><ConversationInspector thread={thread} info={info} machine="local" open={false} /></QueryClientProvider>))
     expect(container.querySelector<HTMLDivElement>("#conversation-inspector-content")!.parentElement?.hidden).toBe(true)
+  })
+
+  it("switches agentpack tools for a chat only", () => {
+    expect(container.querySelector("[role=switch]")).toBeNull()
+    act(() => root.render(<QueryClientProvider client={client}><ConversationInspector thread={thread} info={{ ...info, transport: "acp", tools: true, started_by: { kind: "browser", user: "a@b.c", agent: "claude" } }} machine="local" open /></QueryClientProvider>))
+    expect(container.querySelector("[role=switch]")?.getAttribute("aria-checked")).toBe("true")
+    expect(container.textContent).toContain("It can never approve permissions.")
+    expect(container.textContent).toContain("Started byClaude")
   })
 })

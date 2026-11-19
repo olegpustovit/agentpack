@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { groupSessions, matchesSession, sessionLabel, type ListedSession } from "./group"
+import { groupSessions, matchesSession, nestHelpers, sessionDetail, sessionLabel, type ListedSession } from "./group"
 
 function session(id: string, machine: string, machineName: string, directory: string, offline = false): ListedSession {
   return {
@@ -106,5 +106,16 @@ describe("sessionLabel", () => {
     expect(sessionLabel({ ...base, title: "Fix it" })).toBe("Fix it")
     expect(sessionLabel(base)).toBe("Claude")
     expect(matchesSession({ ...base, title: "Fix terminal replay" }, "replay")).toBe(true)
+  })
+})
+
+describe("nestHelpers", () => {
+  it("lists helpers under the chat whose agent started them", () => {
+    const helper = { ...session("h", laptop, "laptop", "/w"), parent_id: "p", started_by: { kind: "browser", user: "a@b.c", agent: "claude" } }
+    const grandchild = { ...session("g", laptop, "laptop", "/w"), parent_id: "h" }
+    const orphan = { ...session("o", laptop, "laptop", "/w"), parent_id: "gone" }
+    const nested = nestHelpers([grandchild, helper, session("x", laptop, "laptop", "/w"), session("p", laptop, "laptop", "/w"), orphan])
+    expect(nested.map((entry) => `${entry.session.id}${entry.nested ? "+" : ""}`)).toEqual(["x", "p", "h+", "g+", "o"])
+    expect(sessionDetail(helper)).toContain("started by Claude")
   })
 })

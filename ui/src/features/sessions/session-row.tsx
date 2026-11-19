@@ -1,6 +1,6 @@
 import { useEffect, useState, type KeyboardEvent } from "react"
 import { Link } from "@tanstack/react-router"
-import { Archive, Asterisk, Bot, Box, Braces, Copy, MousePointer2, Orbit, Package, Pencil, Pi, Plug, RotateCw, Save, Square, X, Zap, type LucideIcon } from "lucide-react"
+import { Archive, Asterisk, Check, createLucideIcon, Bot, Box, Braces, Copy, MousePointer2, Orbit, Package, Pencil, Pi, Plug, RotateCw, Save, Square, X, Zap, type LucideIcon } from "lucide-react"
 import { SourceRow } from "@/components/kit/list"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { SubagentSummary } from "@/lib/api-types"
@@ -25,12 +25,16 @@ export type RowActions = {
   closeTerminal: () => void
   install: () => void
   save: () => void
+  tools: () => void
 }
 
 // Actions on every marked row (⌘- or Shift-click). Absent actions mean no marked row allows them.
 export type GroupActions = { stopCount: number; archiveCount: number; stop: () => void; archive: () => void; ids: string[] }
 
-type Entry = { label: string; icon: LucideIcon; shortcut?: string; disabled: boolean; run: () => void } | "separator"
+// `checked` makes the entry a checkbox item: a check when on, an empty icon slot when off.
+type Entry = { label: string; icon: LucideIcon; shortcut?: string; disabled: boolean; checked?: boolean; run: () => void } | "separator"
+
+const Unchecked = createLucideIcon("unchecked", [])
 
 function groupEntries(group: GroupActions): Entry[] {
   return [
@@ -54,6 +58,10 @@ function menuEntries(session: ListedSession, selected: boolean, actions: RowActi
       { label: "Reconnect", icon: Plug, disabled: !rules.reconnect, run: actions.reconnect },
       { label: "Close terminal", icon: X, disabled: !selected, run: actions.closeTerminal },
     ]),
+    ...(session.transport === "acp" ? [
+      "separator" as const,
+      { label: "agentpack Tools", icon: session.tools ? Check : Unchecked, checked: Boolean(session.tools), disabled: session.offline || Boolean(session.archived_at), run: actions.tools },
+    ] : []),
     "separator",
     { label: "Install package…", icon: Package, disabled: !rules.install, run: actions.install },
     { label: "Save agentpack…", icon: Save, disabled: !rules.save, run: actions.save },
@@ -78,12 +86,13 @@ function renderEntries(entries: Entry[], context: boolean) {
       return context ? <ContextMenuSeparator key={index} /> : <DropdownMenuSeparator key={index} />
     }
     const Icon = entry.icon
+    const check = entry.checked === undefined ? {} : { role: "menuitemcheckbox", "aria-checked": entry.checked }
     return context ? (
-      <RowContextMenuItem key={entry.label} icon={<Icon aria-hidden />} shortcut={entry.shortcut} disabled={entry.disabled} onClick={entry.run}>
+      <RowContextMenuItem key={entry.label} icon={<Icon aria-hidden />} shortcut={entry.shortcut} disabled={entry.disabled} onClick={entry.run} {...check}>
         {entry.label}
       </RowContextMenuItem>
     ) : (
-      <MenuItem key={entry.label} icon={<Icon aria-hidden />} shortcut={entry.shortcut} disabled={entry.disabled} onClick={entry.run}>
+      <MenuItem key={entry.label} icon={<Icon aria-hidden />} shortcut={entry.shortcut} disabled={entry.disabled} onClick={entry.run} {...check}>
         {entry.label}
       </MenuItem>
     )
@@ -158,6 +167,7 @@ export function SessionRow({
   actions,
   marked = false,
   group,
+  nested = false,
 }: {
   session: ListedSession
   selected: boolean
@@ -168,6 +178,8 @@ export function SessionRow({
   // Part of a multi-row selection; `group` replaces the menu while two or more rows are marked.
   marked?: boolean
   group?: GroupActions
+  // A helper chat listed under the chat whose agent started it.
+  nested?: boolean
 }) {
   const label = sessionLabel(session)
   const chat = session.transport === "acp"
@@ -206,7 +218,7 @@ export function SessionRow({
             data-marked={marked || undefined}
             tabIndex={tabStop ? 0 : -1}
             data-row-key={rowKey(session)}
-            className={cn("pe-(--head-h)", session.offline && "text-(--fg3)")}
+            className={cn("pe-(--head-h)", nested && "ps-(--s7)", session.offline && "text-(--fg3)")}
           >
             <AgentTile className="ms-(--s6)" harness={session.harness} state={state} unread={unread} label={unread ? "Finished, unread" : stateWord} title={`${harnessName(session.harness)}, ${unread ? "Finished, unread" : stateWord}`} />
             {/* Not hit-testable: Safari adds its own tooltip to ellipsized text under the pointer, doubling the row's. */}

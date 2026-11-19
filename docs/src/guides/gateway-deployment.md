@@ -124,7 +124,12 @@ MCP client. Consent grants control over all machines accessible to this gateway
 identity, including terminal input and package installation.
 
 Tools list machines, sessions, recent folders and packages; start, stop and restart
-sessions; read and write terminal output/input; and install packages. Local terminal,
+sessions; read and write terminal output/input; read chats (`read_conversation`),
+see what needs you (`get_attention`), `wait` up to 25 seconds for a state, send
+messages (`send_prompt`), answer permission requests and questions, `cancel` a turn
+or one subagent, `fork_session`, read `get_usage` and `get_limits`, and install
+packages. See [MCP Servers](../concepts/mcp.md#the-gateways-own-tools) for result
+types and paging. Local terminal,
 browser, and MCP input share the same PTY. Each write is serialized; typing in two
 places at once can mix keystrokes. The local terminal controls the grid size.
 

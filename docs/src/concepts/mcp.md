@@ -209,6 +209,29 @@ During staging, an enabled remote server whose URL matches a connection (lowerca
 
 Limits: the bridge opens no standalone server-sent-event stream, so notifications a server sends outside a request (such as a changed tool list) arrive only with the next request. Logins use dynamic client registration or a client ID you supply (`--client-id`, or the server's `[mcp.servers.<name>.oauth]`); register the redirect URL that Settings → Connections shows with a pre-registered OAuth app. Removing a machine from the mesh does not erase what it already received: reconnect the logins you want to rotate.
 
+## The gateway's own tools
+
+The gateway serves its own MCP server at `/mcp` (see [Deploy the public gateway](../guides/gateway-deployment.md#connect-an-mcp-client) for sign-in). Every tool publishes an `outputSchema` and returns `structuredContent`, so typed clients such as codemode generate typed results. Closed sets are enums taken from the Go constants: `agent` (`claude`, `agent` for Cursor, `codex`, `opencode`, `grok`, `agy`, `omp`), session `state` (`starting`, `working`, `needs_you`, `idle`, `stopped`), permission `decision` (`allow_once`, `allow_always`, `reject_once`, `reject_always`) and `wait`'s `until` (`needs_you`, `idle`, `any`). Lists page with `cursor` / `next_cursor`, and the gateway refuses any result over 1 MB.
+
+| Tool | Does |
+| --- | --- |
+| `get_attention` | Sessions that need you, as one short paragraph to read aloud plus the pending requests. Read-only. |
+| `wait` | Returns when a listed session reaches `needs_you`, `idle` or any change, within 25 seconds. Read-only. |
+| `read_conversation` | Typed transcript items after a sequence number. Read-only. |
+| `send_prompt` | Sends a message; it queues behind a running turn and waits for a chat that is still starting. |
+| `respond_permission`, `answer_question` | Answer a request. Repeating an applied answer is a no-op. |
+| `cancel`, `fork_session` | Cancel a turn or one subagent; fork a chat (the agent's own fork of the whole conversation). |
+| `get_usage`, `get_limits` | Usage for a range (`available: false` on a gateway without the Usage page) and reported plan limits. Read-only. |
+| `start_session` | Starts a chat (or, with `terminal`, a terminal session) and returns at once; an optional `prompt` is sent when the chat is ready. |
+
+### agentpack tools inside a chat
+
+A chat can use these tools itself. When the worker starts a chat it creates a credential for that chat and keeps it in its private `network/sessions/<id>/worker.json`. If the agent advertises `mcpCapabilities.http`, ACP `session/new` (and load and fork) gets one server, `{type: "http", name: "agentpack", url: "http://127.0.0.1:<port>/mcp", headers: [Authorization: Bearer …]}`. Agents without HTTP MCP get none; there is no stdio bridge. The gateway accepts the credential only from loopback without forwarding headers, and the agent acts as the chat's owner.
+
+**agentpack Tools** in a chat's row menu, and the switch in its inspector, call `POST /api/sessions/{id}/tools` with `{"enabled": bool}`. The flag is the replicated `sessions.tools` column, written by the chat's own machine. While it is off, every call with that chat's credential returns "agentpack tools are off for this chat"; nothing reloads, and turning it on works on the next call. New chats start with it on unless the start request sends `"tools": false`.
+
+Guardrails: an agent can never answer permission requests or questions. What it starts or forks is a helper of its own chat (`parent_id`, shown nested under the parent and "started by Claude"). Helpers are at most 2 levels below their root chat, and at most 6 run at once per root chat.
+
 ## Toggling servers per mode
 
 Use the `mcp:<name>` selector in a mode to enable or disable a server without removing it:

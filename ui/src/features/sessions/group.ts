@@ -44,7 +44,7 @@ const UNKNOWN_PROJECT = "Unknown project"
 // Row tooltip and terminal subtitle: harness, folder, machine, who started it, when.
 export function sessionDetail(session: ListedSession): string {
   const actor = session.started_by
-  const started = actor?.user ? `started by ${actor.user} from ${actor.kind}` : undefined
+  const started = actor?.agent ? `started by ${harnessName(actor.agent)}` : actor?.user ? `started by ${actor.user} from ${actor.kind}` : undefined
   const when = lastActivity(session)
   return [
     harnessName(session.harness),
@@ -127,4 +127,23 @@ export function groupSessions(sessions: ListedSession[], group: GroupMode): Sess
   return sortByLabel(
     [...groups.values()].map(({ heads, ...rest }) => ({ ...rest, subheads: sortByLabel([...heads.values()]) })),
   )
+}
+
+// Helper chats follow the chat whose agent started them, when both are in the list.
+export function nestHelpers(sessions: ListedSession[]): { session: ListedSession; nested: boolean }[] {
+  const listed = new Set(sessions.map((session) => session.id))
+  const children = new Map<string, ListedSession[]>()
+  for (const session of sessions) {
+    if (session.parent_id && listed.has(session.parent_id)) children.set(session.parent_id, [...(children.get(session.parent_id) ?? []), session])
+  }
+  const out: { session: ListedSession; nested: boolean }[] = []
+  const visit = (session: ListedSession, nested: boolean) => {
+    out.push({ session, nested })
+    for (const child of children.get(session.id) ?? []) visit(child, true)
+  }
+  for (const session of sessions) if (!session.parent_id || !listed.has(session.parent_id)) visit(session, false)
+  // A parent loop has no root; its rows still show.
+  const shown = new Set(out.map((entry) => entry.session))
+  for (const session of sessions) if (!shown.has(session)) out.push({ session, nested: false })
+  return out
 }

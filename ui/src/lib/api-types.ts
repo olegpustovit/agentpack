@@ -10,7 +10,8 @@ export type Identity = {
 
 export type TailnetNode = { id: string; name: string; online: boolean; main?: boolean; needs_update?: boolean }
 
-export type Actor = { kind: string; user?: string; node?: string }
+// agent: the harness of the chat that acted for the user through agentpack tools.
+export type Actor = { kind: string; user?: string; node?: string; agent?: string }
 
 export type TerminalState = {
   interactive: boolean
@@ -60,6 +61,9 @@ export type SessionInfo = {
   // Older peers omit both.
   goal?: GoalState
   subagents?: SubagentSummary[]
+  // The chat whose agent started this helper, and whether this chat's agent may use agentpack tools.
+  parent_id?: string
+  tools?: boolean
 }
 
 export type GoalLimits = { minutes?: number; cost_usd?: number; tokens?: number; turns?: number }

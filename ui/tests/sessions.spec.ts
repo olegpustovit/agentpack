@@ -240,6 +240,25 @@ test("⌘/Ctrl- and Shift-click mark rows; the menu then acts on all of them", a
   await expect(page.locator("[data-marked]")).toHaveCount(0)
 })
 
+test("a chat's row menu switches agentpack tools, and its helpers list under it", async ({ page }) => {
+  const chat = { ...sessions[0], id: "c1", name: "lead", transport: "acp", conversation_state: "idle", tools: true }
+  const helper = { ...chat, id: "c2", name: "helper", parent_id: "c1", started_by: { kind: "browser", user: "oleg@", agent: "claude" } }
+  reply = [helper, sessions[1], chat]
+  const bodies: unknown[] = []
+  await page.route("**/api/sessions/c1/tools", (route) => {
+    bodies.push(route.request().postDataJSON())
+    return route.fulfill({ json: { tools: false } })
+  })
+  await page.goto("/sessions")
+  const rows = page.getByRole("navigation", { name: "Sessions" }).locator("[data-source-row]")
+  await expect(rows.filter({ hasText: /lead|helper/ })).toHaveText([/lead/, /helper/])
+  await rows.filter({ hasText: "lead" }).click({ button: "right" })
+  const toggle = page.getByRole("menuitemcheckbox", { name: "agentpack Tools" })
+  await expect(toggle).toHaveAttribute("aria-checked", "true")
+  await toggle.click()
+  await expect.poll(() => bodies).toEqual([{ enabled: false }])
+})
+
 test("Esc clears the marked rows", async ({ page }) => {
   await page.goto("/sessions")
   const rows = page.getByRole("navigation", { name: "Sessions" }).locator("[data-source-row]")
