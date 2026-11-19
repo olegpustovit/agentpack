@@ -35,7 +35,7 @@ export type PackageItem = Common & {
   // Distinct module and commit pairs across the sources.
   versions: number
 }
-export type MCPItem = Common & { type: "mcp"; launcher: string; package: string; version: string }
+export type MCPItem = Common & { type: "mcp"; launcher: string; package: string; version: string; url: string }
 // `commit` is the newest revision id, so commit-prefix search works the same as for packages.
 export type AgentpackItem = Common & { type: "agentpack"; id: string; commit: string; revisions: number; conflict: boolean }
 export type LibraryItem = PackageItem | MCPItem | AgentpackItem
@@ -221,6 +221,7 @@ function mcpItems(inputs: LibraryInput[]): MCPItem[] {
     launcher: server.launcher,
     package: server.package,
     version: server.version,
+    url: server.url ?? "",
   }))
 }
 

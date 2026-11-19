@@ -27,6 +27,7 @@ const mcpLoginLifetime = 10 * time.Minute
 
 type mcpLogin struct {
 	id, account, state string
+	returnTo           string
 	authorize          chan string
 	result             chan *auth.AuthorizationResult
 	done               chan struct{}
@@ -42,6 +43,8 @@ type mcpLoginInput struct {
 	ClientID     string   `json:"client_id"`
 	ClientSecret string   `json:"client_secret"`
 	Scopes       []string `json:"scopes"`
+	// ReturnTo is the gateway page the browser comes back to; Settings → Connections by default.
+	ReturnTo string `json:"return_to"`
 }
 
 func (g *Gateway) mcpCallbackURL() string {
@@ -99,7 +102,12 @@ func (g *Gateway) startMCPLogin(account string, input mcpLoginInput) (*mcpLogin,
 		return nil, "", errors.New("the label looks like a secret; choose a plain name")
 	}
 	client := mcpOutboundClient()
-	login := &mcpLogin{id: randomToken()[:24], account: account, authorize: make(chan string, 1), result: make(chan *auth.AuthorizationResult, 1), done: make(chan struct{}), expires: time.Now().Add(mcpLoginLifetime)}
+	returnTo := "/settings/connections"
+	// Only a path on this gateway: "//host" and "/\host" would leave it.
+	if strings.HasPrefix(input.ReturnTo, "/") && !strings.HasPrefix(input.ReturnTo, "//") && !strings.HasPrefix(input.ReturnTo, "/\\") {
+		returnTo = input.ReturnTo
+	}
+	login := &mcpLogin{id: randomToken()[:24], account: account, returnTo: returnTo, authorize: make(chan string, 1), result: make(chan *auth.AuthorizationResult, 1), done: make(chan struct{}), expires: time.Now().Add(mcpLoginLifetime)}
 	var granted struct {
 		config *oauth2.Config
 		token  *oauth2.Token
@@ -327,6 +335,6 @@ func (g *Gateway) registerMCPOAuth(mux *http.ServeMux) {
 		case <-login.done:
 		case <-time.After(30 * time.Second):
 		}
-		http.Redirect(w, r, "/settings/connections", http.StatusSeeOther)
+		http.Redirect(w, r, login.returnTo, http.StatusSeeOther)
 	})
 }

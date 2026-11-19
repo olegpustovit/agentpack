@@ -95,3 +95,26 @@ func TestReadCredentialIndex(t *testing.T) {
 		t.Fatalf("index = %+v, %v", index, err)
 	}
 }
+
+func TestLoginURLOnlyForServersASharedLoginCanServe(t *testing.T) {
+	remote := func(raw string) Server { return Server{URL: &raw} }
+	withHeader := remote("https://a.example/mcp")
+	withHeader.Headers = map[string]string{"authorization": "Bearer x"}
+	named := remote("https://a.example/mcp")
+	named.Credential = "work"
+	command := "npx"
+	for _, test := range []struct {
+		server Server
+		want   string
+	}{
+		{remote("https://MCP.Example.com:443/mcp/"), "https://mcp.example.com/mcp"},
+		{remote("https://a.example/mcp?key=secret"), ""},
+		{withHeader, ""},
+		{named, ""},
+		{Server{Command: &command}, ""},
+	} {
+		if got := LoginURL(test.server); got != test.want {
+			t.Errorf("LoginURL(%+v) = %q, want %q", test.server, got, test.want)
+		}
+	}
+}

@@ -45,6 +45,8 @@ type ProjectMCP struct {
 	Integrity string `json:"integrity"`
 	Host      string `json:"host"`
 	Reason    string `json:"reason"`
+	// URL is set for a remote server that a shared MCP login can serve (mcp.LoginURL).
+	URL string `json:"url,omitempty"`
 }
 
 type ProjectLaunch struct {

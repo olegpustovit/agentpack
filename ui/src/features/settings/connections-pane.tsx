@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react"
-import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Section } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Field, FieldError, FieldGrid, FieldLabel } from "@/components/kit/forms"
@@ -11,20 +11,8 @@ import { useEventsConnected } from "@/features/events/use-events"
 import { errorText } from "@/features/library/mutations"
 import { api } from "@/lib/api"
 import { hud } from "@/lib/hud"
-import { connectionStatus, readConnections, type Connection } from "./connections-model"
+import { connectionsQuery, connectionStatus, signIn, type Connection } from "./connections-model"
 import { LoadError, Pane } from "./panes"
-
-export const connectionsQuery = (live: boolean) => queryOptions({
-  queryKey: ["mcp-credentials"],
-  queryFn: async () => readConnections(await api<unknown>("/api/mcp/credentials")),
-  refetchInterval: live ? false : 30_000,
-})
-
-// Sign-in leaves for the authorization server and returns through the gateway to this pane.
-async function signIn(input: { url: string; label?: string; client_id?: string; client_secret?: string }) {
-  const started = await api<{ authorize_url: string }>("/api/mcp/logins", { body: input })
-  location.assign(started.authorize_url)
-}
 
 export function ConnectionsPane() {
   const connections = useQuery(connectionsQuery(useEventsConnected()))

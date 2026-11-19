@@ -133,3 +133,24 @@ test("status bar shows library totals on /library and not on /sessions", async (
   await page.goto("/sessions")
   await expect(page.getByRole("contentinfo", { includeHidden: true })).not.toContainText("items ·")
 })
+
+test("remote MCP servers show their shared login and connect in place", async ({ page }) => {
+  const remote = (name: string, url: string) => ({ name, source: "plugin", launcher: "remote", status: "unpinnable", package: "", version: "", integrity: "", host: new URL(url).host, reason: "", url })
+  await page.route(/\/api\/projects(\?.*)?$/, (route) => route.fulfill({
+    json: machineOf(route.request().url()) === "local" ? [folder("/w/admin", "admin", [remote("cloudflare", "https://mcp.cloudflare.com/mcp"), remote("linear", "https://mcp.linear.app/mcp")])] : [],
+  }))
+  await page.route("**/api/mcp/credentials", (route) => route.fulfill({
+    json: { callback_url: "", credentials: [{ id: "c1", match: "https://mcp.linear.app/mcp", kind: "oauth", label: "linear", status: "connected" }] },
+  }))
+  let login: Record<string, unknown> | undefined
+  await page.route("**/api/mcp/logins", (route) => {
+    login = route.request().postDataJSON() as Record<string, unknown>
+    return route.fulfill({ json: { login: "l1", authorize_url: "/library?type=mcp" } })
+  })
+  await page.goto("/library/mcp/cloudflare?type=mcp")
+  const list = page.getByRole("navigation", { name: "Library" })
+  await expect(list.getByRole("link", { name: /linear/ })).toContainText("Connected")
+  await expect(list.getByRole("link", { name: /cloudflare/ })).toContainText("Not connected")
+  await page.getByRole("button", { name: "Connect…" }).click()
+  await expect.poll(() => login).toEqual({ url: "https://mcp.cloudflare.com/mcp", label: "cloudflare", return_to: "/library/mcp/cloudflare?type=mcp" })
+})

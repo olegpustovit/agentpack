@@ -25,7 +25,9 @@ import {
   type LibraryItem,
   type LibrarySort,
   type LibraryType,
+  type MCPItem,
 } from "./model"
+import { LoginGlyph, loginWords, useServerLogin } from "./mcp-inspector"
 
 const route = getRouteApi("/_app/library")
 
@@ -61,6 +63,17 @@ function detailLine(item: LibraryItem, updatable: boolean): string {
   return [updatable ? "Update available" : item.versions > 1 ? plural(item.versions, "version") : shortHash(item.commit), projects, item.machines.join(", ")].filter(Boolean).join(" · ")
 }
 
+function McpLogin({ item }: { item: MCPItem }) {
+  const login = useServerLogin(item)
+  if (!login) return null
+  return (
+    <span className="flex shrink-0 items-center gap-(--s1) text-(length:--fs-xs) text-(--fg2) sel:text-(--accent-fg)">
+      <LoginGlyph login={login} />
+      {loginWords[login]}
+    </span>
+  )
+}
+
 function LibraryRow({ item, updatable }: { item: LibraryItem; updatable: boolean }) {
   const matchRoute = useMatchRoute()
   const Glyph = glyphs[item.type]
@@ -86,6 +99,7 @@ function LibraryRow({ item, updatable }: { item: LibraryItem; updatable: boolean
         <span className="truncate">{item.name}</span>
         <span className="truncate text-(length:--fs-sm) text-(--fg2) sel:text-(--accent-fg)">{detailLine(item, updatable)}</span>
       </span>
+      {item.type === "mcp" && <McpLogin item={item} />}
     </SourceRow>
   )
 }

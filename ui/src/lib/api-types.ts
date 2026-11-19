@@ -135,6 +135,8 @@ export type ProjectMCP = {
   integrity: string
   host: string
   reason: string
+  /** Set for a remote server a shared MCP login can serve; absent from older peers. */
+  url?: string
 }
 
 // What one mode turns off; a peer that predates modes sends none.

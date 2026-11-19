@@ -73,6 +73,20 @@ func CanonicalURL(raw string) (string, error) {
 	return canonical, nil
 }
 
+// LoginURL is the canonical URL a shared login for server would match, or "" when the server
+// cannot use one: it is local, names its own credential or Authorization header, or its URL has
+// a query, which may hold a secret and so never leaves the machine.
+func LoginURL(server Server) string {
+	if !server.IsRemote() || server.Credential != "" || hasHeader(server.Headers, "Authorization") {
+		return ""
+	}
+	canonical, err := CanonicalURL(*server.URL)
+	if err != nil || strings.Contains(canonical, "?") {
+		return ""
+	}
+	return canonical
+}
+
 func hasHeader(headers map[string]string, name string) bool {
 	for key := range headers {
 		if strings.EqualFold(key, name) {

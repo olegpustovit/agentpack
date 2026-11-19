@@ -14,9 +14,11 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
+	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/staging"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 	"golang.org/x/term"
 )
@@ -98,7 +100,14 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 			}
 			// A folder without agentpack.toml still has the implicit default mode.
 			project, _ := manifest.Load(packContext.DefinitionRoot)
-			return projectContents(locked, project), nil
+			contents := projectContents(locked, project)
+			// The Library matches a remote server to its shared login by URL and starts one from it.
+			if plan, err := staging.CollectMCPPlan(packContext.WorkspaceRoot, locked, project, nil); err == nil {
+				for i, server := range contents.MCP {
+					contents.MCP[i].URL = mcp.LoginURL(plan.Entries[server.Name].Server)
+				}
+			}
+			return contents, nil
 		}
 		options.Install = runner.installNetworkPackage
 		options.Library, err = runner.networkLibrary(home)
