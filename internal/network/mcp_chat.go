@@ -32,6 +32,7 @@ import (
 // lives only in the worker's private tools.token and the agent's own session configuration.
 type chatTools struct {
 	url, token string
+	bridge     *sdkacp.McpServerStdio // for agents without HTTP MCP; nil when this binary can't be found
 	close      func()
 }
 
@@ -72,7 +73,11 @@ func newChatTools(home, id string) chatTools {
 		relay.ServeHTTP(w, r)
 	})}
 	obs.Go("worker.chat_tools_relay", func() { _ = server.Serve(listener) })
-	return chatTools{url: "http://" + listener.Addr().String() + "/mcp", token: token, close: func() { _ = server.Close() }}
+	tools := chatTools{url: "http://" + listener.Addr().String() + "/mcp", token: token, close: func() { _ = server.Close() }}
+	if executable, err := os.Executable(); err == nil {
+		tools.bridge = &sdkacp.McpServerStdio{Name: "agentpack", Command: executable, Args: []string{"mcp-bridge", "chat:" + id, "--url", tools.url}, Env: []sdkacp.EnvVariable{}}
+	}
+	return tools
 }
 
 func chatToolsTokenPath(home, id string) string {
@@ -85,19 +90,30 @@ func (tools chatTools) headers() []sdkacp.HttpHeader {
 	return []sdkacp.HttpHeader{{Name: "Authorization", Value: "Bearer " + tools.token}}
 }
 
-// HTTP only: an agent without mcpCapabilities.http gets no agentpack tools.
+// An agent with mcpCapabilities.http calls the relay directly. Every ACP agent must take stdio servers,
+// so the rest (Antigravity, for one) get `agentpack mcp-bridge chat:<id>`, which relays stdio to it.
 func (tools chatTools) servers(capabilities sdkacp.McpCapabilities) []sdkacp.McpServer {
-	if tools.token == "" || !capabilities.Http {
+	switch {
+	case tools.token == "":
 		return []sdkacp.McpServer{}
+	case capabilities.Http:
+		return []sdkacp.McpServer{{Http: &sdkacp.McpServerHttpInline{Type: "http", Name: "agentpack", Url: tools.url, Headers: tools.headers()}}}
+	case tools.bridge != nil:
+		return []sdkacp.McpServer{{Stdio: tools.bridge}}
 	}
-	return []sdkacp.McpServer{{Http: &sdkacp.McpServerHttpInline{Type: "http", Name: "agentpack", Url: tools.url, Headers: tools.headers()}}}
+	return []sdkacp.McpServer{}
 }
 
 func (tools chatTools) unstableServers(capabilities sdkacp.McpCapabilities) []sdkacp.UnstableMcpServer {
-	if tools.token == "" || !capabilities.Http {
+	switch {
+	case tools.token == "":
 		return []sdkacp.UnstableMcpServer{}
+	case capabilities.Http:
+		return []sdkacp.UnstableMcpServer{{Http: &sdkacp.UnstableMcpServerHttp{Type: "http", Name: "agentpack", Url: tools.url, Headers: tools.headers()}}}
+	case tools.bridge != nil:
+		return []sdkacp.UnstableMcpServer{{Stdio: tools.bridge}}
 	}
-	return []sdkacp.UnstableMcpServer{{Http: &sdkacp.UnstableMcpServerHttp{Type: "http", Name: "agentpack", Url: tools.url, Headers: tools.headers()}}}
+	return []sdkacp.UnstableMcpServer{}
 }
 
 var (

@@ -387,8 +387,9 @@ func TestWaitConditions(t *testing.T) {
 	}
 }
 
-func TestChatGetsAgentpackToolsOnlyOverHTTP(t *testing.T) {
-	tools := chatTools{url: "http://127.0.0.1:7420/mcp", token: "session-x.secret"}
+func TestChatGetsAgentpackToolsOverHTTPOrTheStdioBridge(t *testing.T) {
+	bridge := &sdkacp.McpServerStdio{Name: "agentpack", Command: "/bin/agentpack", Args: []string{"mcp-bridge", "chat:session-x", "--url", "http://127.0.0.1:7420/mcp"}, Env: []sdkacp.EnvVariable{}}
+	tools := chatTools{url: "http://127.0.0.1:7420/mcp", token: "session-x.secret", bridge: bridge}
 	for _, http := range []bool{true, false} {
 		agent := &authReplayAgent{ReplayAgent: acptest.NewReplayAgent(nil), agentCapabilities: sdkacp.AgentCapabilities{McpCapabilities: sdkacp.McpCapabilities{Http: http}}}
 		connection, cleanup := authReplayConnection(agent)
@@ -398,8 +399,9 @@ func TestChatGetsAgentpackToolsOnlyOverHTTP(t *testing.T) {
 		cleanup()
 		servers := agent.newRequest.McpServers
 		if !http {
-			if len(servers) != 0 {
-				t.Fatal("agentpack tools offered without HTTP MCP support")
+			// Every ACP agent takes stdio servers; the token stays in the chat's private file.
+			if len(servers) != 1 || servers[0].Stdio == nil || servers[0].Stdio.Command != bridge.Command || strings.Join(servers[0].Stdio.Args, " ") != strings.Join(bridge.Args, " ") || strings.Contains(strings.Join(servers[0].Stdio.Args, " "), "secret") {
+				t.Fatalf("agent without HTTP MCP: %+v", servers)
 			}
 			continue
 		}
@@ -459,5 +461,23 @@ func TestChatToolsRelayFollowsTheGatewayAcrossRestarts(t *testing.T) {
 	}
 	if code, _ := call("/api/sessions"); code != 404 {
 		t.Fatal("the relay must serve /mcp only")
+	}
+}
+
+func TestChatToolsStdioBridgeReachesTheGateway(t *testing.T) {
+	h := newOAuthHarness(t)
+	chatFixture(t, h, "session-chat", "")
+	next, stop := runTestBridge(t, h.gateway.options.Home, "chat:session-chat", h.server.URL+"/mcp")
+	defer stop()
+	tools, _ := next()["tools"].([]any)
+	names := map[string]bool{}
+	for _, tool := range tools {
+		names[tool.(map[string]any)["name"].(string)] = true
+	}
+	if !names["list_sessions"] || !names["send_prompt"] {
+		t.Fatalf("bridged tools: %v", names)
+	}
+	if code, err := RunMCPBridge(t.Context(), MCPBridgeOptions{Home: h.gateway.options.Home, ID: "chat:session-missing", URL: h.server.URL + "/mcp", Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard}); code == 0 || err == nil {
+		t.Fatal("a chat without a token file got a bridge")
 	}
 }

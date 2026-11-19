@@ -100,9 +100,12 @@ type bridgeTransport struct {
 
 func (t *bridgeTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	for attempt := 0; ; attempt++ {
-		secret, err := t.credential.get(request.Context())
-		if err != nil {
-			return nil, err
+		var secret mcpBridgeSecret
+		var err error
+		if t.credential != nil {
+			if secret, err = t.credential.get(request.Context()); err != nil {
+				return nil, err
+			}
 		}
 		out := request.Clone(request.Context())
 		if attempt > 0 && request.GetBody != nil {
@@ -120,7 +123,7 @@ func (t *bridgeTransport) RoundTrip(request *http.Request) (*http.Response, erro
 			out.Header.Set("MCP-Protocol-Version", version)
 		}
 		response, err := t.base.RoundTrip(out)
-		if err != nil || response.StatusCode != http.StatusUnauthorized || attempt > 0 || request.Body != nil && request.GetBody == nil {
+		if err != nil || t.credential == nil || response.StatusCode != http.StatusUnauthorized || attempt > 0 || request.Body != nil && request.GetBody == nil {
 			return response, err
 		}
 		response.Body.Close()
@@ -131,8 +134,19 @@ func (t *bridgeTransport) RoundTrip(request *http.Request) (*http.Response, erro
 }
 
 // RunMCPBridge serves the harness until it closes standard input.
+//
+// The ID "chat:<session>" serves a chat's own agentpack tools to an agent that only takes stdio MCP
+// servers; the bearer comes from the chat's private token file, never from the command line.
 func RunMCPBridge(ctx context.Context, options MCPBridgeOptions) (int, error) {
 	credential := &bridgeCredential{home: options.Home, id: options.ID}
+	if chat, ok := strings.CutPrefix(options.ID, "chat:"); ok {
+		token, err := os.ReadFile(chatToolsTokenPath(options.Home, chat))
+		if !validSessionID(chat) || err != nil || len(options.Command) != 0 {
+			return 1, errors.New("agentpack tools are not available for this chat")
+		}
+		options.Headers = map[string]string{"Authorization": "Bearer " + string(token)}
+		credential = nil
+	}
 	if len(options.Command) != 0 {
 		return runEnvBridge(ctx, credential, options)
 	}
