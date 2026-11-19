@@ -160,7 +160,7 @@ func TestPresenceEndpointRejectsBrowserCredentials(t *testing.T) {
 		}
 		r := httptest.NewRequest(method, g.origin.String()+"/api/local/sessions/session-test/presence", nil)
 		r.Header.Set("Origin", g.origin.String())
-		r.AddCookie(&http.Cookie{Name: g.auth.cookieName(), Value: "browser-token"})
+		r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: "browser-token"})
 		w := httptest.NewRecorder()
 		g.Handler().ServeHTTP(w, r)
 		if w.Code != http.StatusForbidden {

@@ -226,6 +226,10 @@ unclaimed gateway; a legacy gateway requires its current password and preserves
 that hash. Unclaimed browsers may access only health/status, the claim endpoint
 and static UI. Start/status and bare `ap` show `UNCLAIMED: open <url> now` until
 claimed. Keep first-time public access restricted until the owner is claimed.
+The loopback origin is always served; Public access (node_settings `public`,
+owner-only, enabled only after a nonce self-probe over verified TLS, or pinned by
+`AGENTPACK_PUBLIC_URL`) adds one HTTPS origin. Origin, cookie name and limiter key
+are resolved per request; X-Forwarded-* counts only from a loopback peer while on.
 Browser cookies survive restarts and slide for thirty days; HTTPS uses
 `__Host-agentpack_session`, Secure, HttpOnly and SameSite=Strict. Disabling an
 account, changing its password or signing out everywhere revokes its logins and

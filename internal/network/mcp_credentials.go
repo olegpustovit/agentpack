@@ -156,7 +156,7 @@ func (g *Gateway) credentialsChanged() {
 }
 
 func (g *Gateway) connectURL() string {
-	return g.origin.Scheme + "://" + g.origin.Host + "/settings/connections"
+	return g.preferredOrigin() + "/settings/connections"
 }
 
 const mcpCredentialColumns = "id,match,kind,label,account,client,state,created_node,created_at"

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -390,5 +391,107 @@ func TestOAuthCodeConsumedOnceAcrossStores(t *testing.T) {
 	first, last := <-results, <-results
 	if first+last != 600 || first != 200 && first != 400 {
 		t.Fatalf("concurrent code exchange statuses: %d, %d", first, last)
+	}
+}
+
+func (h *oauthHarness) authorizeFor(t *testing.T, clientID, redirect, scope string) (*http.Response, string) {
+	t.Helper()
+	hash := sha256.Sum256([]byte(h.verifier))
+	path := "/oauth/authorize?" + url.Values{"client_id": {clientID}, "redirect_uri": {redirect}, "response_type": {"code"}, "scope": {scope}, "state": {"s"}, "resource": {h.server.URL + "/mcp"}, "code_challenge_method": {"S256"}, "code_challenge": {base64.RawURLEncoding.EncodeToString(hash[:])}}.Encode()
+	response, data := h.request(t, "GET", path, "", "", h.cookie, false)
+	if response.StatusCode != 200 {
+		return response, string(data)
+	}
+	_, after, _ := strings.Cut(string(data), `name="consent" value="`)
+	consent, _, _ := strings.Cut(after, `"`)
+	response, _ = h.request(t, "POST", path, url.Values{"consent": {consent}, "decision": {"allow"}}.Encode(), "application/x-www-form-urlencoded", h.cookie, true)
+	location, _ := url.Parse(response.Header.Get("Location"))
+	return response, location.Query().Get("code")
+}
+
+func TestOAuthClientMetadataDocument(t *testing.T) {
+	h := newOAuthHarness(t)
+	const id = "https://client.example.com/oauth/client.json"
+	documents := map[string]string{
+		"/oauth/client.json": `{"client_id":"` + id + `","client_name":"Hosted assistant","redirect_uris":["http://127.0.0.1/callback"],"token_endpoint_auth_method":"private_key_jwt"}`,
+		"/other.json":        `{"client_id":"https://elsewhere.example.com/client.json","redirect_uris":["https://assistant.example/callback"]}`,
+		"/secret.json":       `{"client_id":"https://client.example.com/secret.json","client_secret":"s","redirect_uris":["https://assistant.example/callback"]}`,
+		"/big.json":          `{"client_id":"https://client.example.com/big.json","redirect_uris":["https://assistant.example/callback"],"pad":"` + strings.Repeat("x", clientMetadataLimit) + `"}`,
+	}
+	var fetches atomic.Int32
+	host := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		document, ok := documents[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(document))
+	}))
+	defer host.Close()
+	client := host.Client()
+	client.Transport.(*http.Transport).DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, host.Listener.Addr().String())
+	}
+	h.gateway.mcp.fetcher = client
+	_, data := h.request(t, "GET", "/.well-known/oauth-authorization-server", "", "", nil, false)
+	if !bytes.Contains(data, []byte(`"client_id_metadata_document_supported":true`)) {
+		t.Fatalf("metadata does not advertise CIMD: %s", data)
+	}
+	// The document's loopback redirect also accepts any port (RFC 8252).
+	response, code := h.authorizeFor(t, id, "http://127.0.0.1:43123/callback", "agentpack offline_access")
+	if response.StatusCode != 303 || code == "" {
+		t.Fatalf("authorize with a metadata document: %d %s", response.StatusCode, code)
+	}
+	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {id}, "redirect_uri": {"http://127.0.0.1:43123/callback"}, "code": {code}, "code_verifier": {h.verifier}, "resource": {h.server.URL + "/mcp"}, "scope": {"offline_access agentpack"}}
+	if tokens := h.exchange(t, form, 200); tokens.Refresh == "" {
+		t.Fatal("no refresh token")
+	}
+	if response, _ := h.authorizeFor(t, id, "http://127.0.0.1:9/callback", ""); response.StatusCode != 303 || fetches.Load() != 1 {
+		t.Fatalf("cached document: %d after %d fetches", response.StatusCode, fetches.Load())
+	}
+	for _, bad := range []string{"https://client.example.com/other.json", "https://client.example.com/secret.json", "https://client.example.com/big.json", "https://client.example.com/", "https://client.example.com/missing.json"} {
+		if response, _ := h.authorizeFor(t, bad, "https://assistant.example/callback", ""); response.StatusCode != 400 {
+			t.Fatalf("%s accepted: %d", bad, response.StatusCode)
+		}
+	}
+	for _, address := range []string{"127.0.0.1:443", "10.1.2.3:443", "100.101.102.103:443", "[fd7a:115c:a1e0::1]:443", "169.254.169.254:80", "[::ffff:127.0.0.1]:443"} {
+		if publicAddressOnly("tcp", address, nil) == nil {
+			t.Fatalf("metadata fetch may reach %s", address)
+		}
+	}
+	if err := publicAddressOnly("tcp", "93.184.215.14:443", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOAuthRegistrationScopesRedirectsAndLimiter(t *testing.T) {
+	h := newOAuthHarness(t)
+	response, data := h.request(t, "POST", "/oauth/register", `{"redirect_uris":["http://localhost/cb","https://assistant.example/callback"],"token_endpoint_auth_method":"client_secret_basic"}`, "application/json", nil, false)
+	var registered struct {
+		ClientID  string `json:"client_id"`
+		TokenAuth string `json:"token_endpoint_auth_method"`
+	}
+	if response.StatusCode != 201 || json.Unmarshal(data, &registered) != nil || registered.TokenAuth != "none" {
+		t.Fatalf("auth method was not downgraded: %d %s", response.StatusCode, data)
+	}
+	if response, _ := h.authorizeFor(t, registered.ClientID, "http://localhost:51234/cb", "agentpack offline_access"); response.StatusCode != 303 {
+		t.Fatalf("loopback port or scope set refused: %d", response.StatusCode)
+	}
+	for _, test := range []struct{ redirect, scope string }{{"http://localhost:51234/other", ""}, {"https://assistant.example:8443/callback", ""}, {"https://assistant.example/callback", "agentpack admin"}} {
+		if response, _ := h.authorizeFor(t, registered.ClientID, test.redirect, test.scope); response.StatusCode != 400 {
+			t.Fatalf("%+v accepted: %d", test, response.StatusCode)
+		}
+	}
+	limited := func(address string) bool {
+		r := httptest.NewRequest("POST", "/oauth/token", nil)
+		r.RemoteAddr = address
+		return h.gateway.mcp.limited(httptest.NewRecorder(), r)
+	}
+	for range 120 {
+		limited("203.0.113.1:1")
+	}
+	if !limited("203.0.113.1:2") || limited("203.0.113.2:1") {
+		t.Fatal("OAuth limit is not per client address")
 	}
 }

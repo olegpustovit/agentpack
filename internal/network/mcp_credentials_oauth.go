@@ -45,7 +45,7 @@ type mcpLoginInput struct {
 }
 
 func (g *Gateway) mcpCallbackURL() string {
-	return g.origin.Scheme + "://" + g.origin.Host + "/mcp-oauth/callback"
+	return g.preferredOrigin() + "/mcp-oauth/callback"
 }
 
 func (b *mcpBroker) addLogin(login *mcpLogin) {

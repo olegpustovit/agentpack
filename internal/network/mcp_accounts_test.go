@@ -33,7 +33,7 @@ func TestOAuthCredentialsFollowAccountRevocation(t *testing.T) {
 	}
 	h.exchange(t, h.codeForm(pendingCode), 400)
 	h.exchange(t, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {tokens.Refresh}, "client_id": {h.clientID}}, 400)
-	h.cookie = &http.Cookie{Name: h.gateway.auth.cookieName(), Value: randomToken()}
+	h.cookie = &http.Cookie{Name: "agentpack_session", Value: randomToken()}
 	testBrowserSession(t, h.gateway.auth, "other@example.com", h.cookie.Value)
 	other := h.exchange(t, h.codeForm(h.code(t)), 200)
 	if h.gateway.mcp.authenticate(request(other.Access)) == nil {

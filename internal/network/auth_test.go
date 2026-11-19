@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,7 +19,11 @@ import (
 )
 
 func authRequest(auth *gatewayAuth, action, body string, cookie *http.Cookie) *httptest.ResponseRecorder {
-	r := httptest.NewRequest("POST", "https://agentpack.example/api/"+action, strings.NewReader(body))
+	return authRequestFrom(auth, requestSource{}, action, body, cookie)
+}
+
+func authRequestFrom(auth *gatewayAuth, source requestSource, action, body string, cookie *http.Cookie) *httptest.ResponseRecorder {
+	r := withRequestSource(httptest.NewRequest("POST", "https://agentpack.example/api/"+action, strings.NewReader(body)), source)
 	if cookie != nil {
 		r.AddCookie(cookie)
 	}
@@ -38,13 +43,14 @@ func authRequest(auth *gatewayAuth, action, body string, cookie *http.Cookie) *h
 
 func TestPersistentBrowserLoginCookiesAndExpiry(t *testing.T) {
 	home := t.TempDir()
-	auth, err := testUnclaimedAuth(t, home, true)
+	auth, err := testUnclaimedAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().Truncate(time.Millisecond)
 	auth.now = func() time.Time { return now }
-	w := authRequest(auth, "claim", `{"email":"Owner@Example.COM","password":"a-long-password"}`, nil)
+	https := requestSource{origin: "https://agentpack.example"}
+	w := authRequestFrom(auth, https, "claim", `{"email":"Owner@Example.COM","password":"a-long-password"}`, nil)
 	if w.Code != 200 {
 		t.Fatalf("claim: %d %s", w.Code, w.Body.String())
 	}
@@ -65,12 +71,12 @@ func TestPersistentBrowserLoginCookiesAndExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	auth, err = newGatewayAuth(home, reopened, true)
+	auth, err = newGatewayAuth(home, reopened)
 	if err != nil {
 		t.Fatal(err)
 	}
 	auth.now = func() time.Time { return now }
-	r := httptest.NewRequest("GET", "https://agentpack.example/api/status", nil)
+	r := withRequestSource(httptest.NewRequest("GET", "https://agentpack.example/api/status", nil), https)
 	r.AddCookie(cookie)
 	if !auth.authenticated(r) {
 		t.Fatal("cookie lost across restart")
@@ -95,15 +101,15 @@ func TestPersistentBrowserLoginCookiesAndExpiry(t *testing.T) {
 	if auth.authenticated(r) {
 		t.Fatal("expired cookie accepted")
 	}
-	w = authRequest(auth, "login", `{"email":"owner@example.com","password":"a-long-password"}`, nil)
+	w = authRequestFrom(auth, https, "login", `{"email":"owner@example.com","password":"a-long-password"}`, nil)
 	if w.Code != 200 {
 		t.Fatalf("login: %d %s", w.Code, w.Body.String())
 	}
 	cookie = w.Result().Cookies()[0]
-	if w = authRequest(auth, "logout", "", cookie); w.Code != 204 || w.Result().Cookies()[0].MaxAge != -1 || !w.Result().Cookies()[0].Secure {
+	if w = authRequestFrom(auth, https, "logout", "", cookie); w.Code != 204 || w.Result().Cookies()[0].MaxAge != -1 || !w.Result().Cookies()[0].Secure {
 		t.Fatalf("logout: %d %+v", w.Code, w.Result().Cookies())
 	}
-	r = httptest.NewRequest("GET", "/", nil)
+	r = withRequestSource(httptest.NewRequest("GET", "/", nil), https)
 	r.AddCookie(cookie)
 	if auth.authenticated(r) {
 		t.Fatal("logged-out cookie accepted")
@@ -120,10 +126,10 @@ func TestBrowserSessionRevocationAndUserIsolation(t *testing.T) {
 	testBrowserSession(t, auth, "other@example.com", "other")
 	request := func(token string) *http.Request {
 		r := httptest.NewRequest("GET", "/", nil)
-		r.AddCookie(&http.Cookie{Name: auth.cookieName(), Value: token})
+		r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: token})
 		return r
 	}
-	if w := authRequest(auth, "logout-all", "", &http.Cookie{Name: auth.cookieName(), Value: "first"}); w.Code != 204 {
+	if w := authRequest(auth, "logout-all", "", &http.Cookie{Name: "agentpack_session", Value: "first"}); w.Code != 204 {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	if auth.authenticated(request("first")) || auth.authenticated(request("second")) || !auth.authenticated(request("other")) {
@@ -172,7 +178,7 @@ func TestLegacyClaimRequiresCurrentPasswordAndKeepsHash(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	auth, err := testUnclaimedAuth(t, home, false)
+	auth, err := testUnclaimedAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,13 +261,23 @@ func TestLoginLimiterUsesEmailAddressAndFakeClock(t *testing.T) {
 		}
 	}
 	w = httptest.NewRecorder()
-	if auth.allowLogin(w, req("192.0.2.4:1"), "another@example.com") || w.Code != 429 {
-		t.Fatal("global limit lost")
+	if auth.allowLogin(w, req("192.0.2.3:1"), "another@example.com") || w.Code != 429 {
+		t.Fatal("per-client limit lost")
+	}
+	// One client exhausting its attempts must not lock out the others.
+	if !auth.allowLogin(httptest.NewRecorder(), req("192.0.2.4:1"), "another@example.com") {
+		t.Fatal("one client's attempts blocked another")
+	}
+	for i := range 89 {
+		auth.allowLogin(httptest.NewRecorder(), req(fmt.Sprintf("198.51.100.%d:1", i/10)), "many@example.com")
+	}
+	if w = httptest.NewRecorder(); auth.allowLogin(w, req("203.0.113.1:1"), "last@example.com") || w.Code != 429 {
+		t.Fatal("ceiling across clients lost")
 	}
 }
 
 func TestClaimValidationAndStrictJSON(t *testing.T) {
-	auth, err := testUnclaimedAuth(t, t.TempDir(), false)
+	auth, err := testUnclaimedAuth(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +299,7 @@ func TestClaimValidationAndStrictJSON(t *testing.T) {
 
 func TestUnclaimedGatewayLockdown(t *testing.T) {
 	home := t.TempDir()
-	auth, err := testUnclaimedAuth(t, home, false)
+	auth, err := testUnclaimedAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}

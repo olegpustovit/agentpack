@@ -111,6 +111,33 @@ test("the sharing switch sends the new state and says when it applies", async ({
   ).toBeVisible()
 })
 
+test("public access turns on the detected address after its checks stream in", async ({ page }) => {
+  await mockGateway(page)
+  const origin = "https://agentpack.example.com"
+  await page.route("**/api/settings", (route) =>
+    answer(route, { running: true, platform: "linux", sharing_enabled: true, public: { enabled: false, candidate: origin } }),
+  )
+  await page.route("**/api/settings/public", (route) => {
+    calls.push({ request: "POST /api/settings/public", body: route.request().postDataJSON() })
+    const checks = ["reachable", "sign_in", "cookies"].map((check) => ({ check, ok: true, detail: `${check} ok` }))
+    const lines = [...checks, { check: "mcp", ok: true, detail: "OAuth metadata answers" }, { public: { enabled: true, origin } }]
+    return route.fulfill({ contentType: "application/x-ndjson", body: lines.map((line) => JSON.stringify(line)).join("\n") + "\n" })
+  })
+  await page.goto("/settings/sharing")
+  await expect(page.getByText("agentpack.example.com", { exact: true })).toBeVisible()
+
+  await page.getByRole("switch", { name: "Public access" }).click()
+
+  await expect.poll(() => calls).toEqual([{ request: "POST /api/settings/public", body: { enabled: true, origin } }])
+  const checks = page.getByRole("list", { name: "Public access checks" })
+  await expect(checks.getByRole("listitem")).toHaveCount(4)
+  await expect(checks.getByLabel("Passed")).toHaveCount(4)
+  await expect(page.getByText(`On · ${origin}`)).toBeVisible()
+  await expect(page.getByRole("switch", { name: "Public access" })).toBeChecked()
+  await expect(page.getByText(`${origin}/mcp`)).toBeVisible()
+  await expect(page.getByText("Public access on")).toBeVisible()
+})
+
 test("replication rows show enrollment, enroll only online peers and sync one", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings/replication")

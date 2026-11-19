@@ -12,6 +12,7 @@ import { screenReaderEnabled, setScreenReaderEnabled } from "@/features/terminal
 import { allowListLabel, sharingLabel } from "./model"
 import { settingsQuery } from "./queries"
 import { useGatewayActions } from "./actions"
+import { PublicAccessBanner, PublicAccessRows } from "./public-access"
 import { applyTheme, currentTheme, themes, type Theme } from "./theme"
 
 export const DiagnosticsPane = lazy(() => import("./diagnostics-pane").then((module) => ({ default: module.DiagnosticsPane })))
@@ -86,7 +87,9 @@ export function SharingPane() {
   const enabled = settings.data.sharing_enabled
   return (
     <Pane title="Sharing">
+      <PublicAccessBanner access={settings.data.public} />
       <FieldGrid>
+        {settings.data.public && <PublicAccessRows access={settings.data.public} />}
         <Row label="Tailscale sharing" htmlFor="sharing">
           <Switch
             id="sharing"

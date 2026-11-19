@@ -202,7 +202,7 @@ func TestEventsStreamClosesOnLogout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cookie := &http.Cookie{Name: auth.cookieName(), Value: randomToken()}
+	cookie := &http.Cookie{Name: "agentpack_session", Value: randomToken()}
 	testBrowserSession(t, auth, testBrowserEmail, cookie.Value)
 
 	g := eventsGateway(nil, nil, nil)

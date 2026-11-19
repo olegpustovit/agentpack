@@ -59,7 +59,8 @@ type Gateway struct {
 	auth           *gatewayAuth
 	mcp            *GatewayMCP
 	local          nodeRecord
-	origin         *url.URL
+	origin         *url.URL // loopback origin; public access adds another
+	public         publicAccess
 	stop           context.CancelFunc
 	done           <-chan struct{}
 	replicaStatus  sync.Map
@@ -101,14 +102,9 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 		return err
 	}
 	defer listener.Close()
-	if options.PublicURL == "" {
-		options.PublicURL = "http://" + listener.Addr().String()
-	}
-	origin, err := url.Parse(options.PublicURL)
-	if err != nil || origin.Host == "" || origin.User != nil || (origin.Scheme != "https" && origin.Scheme != "http") || origin.RawQuery != "" || origin.Fragment != "" || origin.Path != "" && origin.Path != "/" {
-		return errors.New("public URL must be an HTTP(S) origin")
-	}
-	if origin.Scheme != "https" && origin.Hostname() != "127.0.0.1" && origin.Hostname() != "localhost" {
+	// The loopback origin is always served; a public HTTPS origin is added by the Public access switch.
+	origin := &url.URL{Scheme: "http", Host: listener.Addr().String()}
+	if address, ok := listener.Addr().(*net.TCPAddr); !ok || !address.IP.IsLoopback() && options.PublicURL == "" {
 		return errors.New("remote gateway requires HTTPS")
 	}
 	store, err := state.Open(options.Home)
@@ -128,7 +124,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if err := os.Remove(filepath.Join(options.Home, "network", "limits.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove legacy limits cache: %w", err)
 	}
-	auth, err := newGatewayAuth(options.Home, store, origin.Scheme == "https")
+	auth, err := newGatewayAuth(options.Home, store)
 	if err != nil {
 		return err
 	}
@@ -143,6 +139,9 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	defer cancel()
 	gateway := &Gateway{options: options, store: store, logs: logs, auth: auth, local: nodeRecord{listener.Addr().String(), randomToken()}, origin: origin, stop: cancel, done: ctx.Done()}
 	defer func() { result = errors.Join(result, gateway.cleanStateTransfers(time.Time{})) }()
+	if err := gateway.loadPublic(context.Background()); err != nil {
+		return err
+	}
 	gateway.importLegacySessions(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
 	gateway.endLeftoverStarts(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
 	gateway.mcp, err = NewGatewayMCP(gateway)
@@ -666,13 +665,28 @@ func (g *Gateway) Handler() http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		local := g.localRequest(r)
-		if !local && r.Host != g.origin.Host {
+		publicOrigin, pinned := g.public.current()
+		source := g.resolveSource(r, publicOrigin)
+		r = withRequestSource(r, source)
+		if g.serveProbe(w, r) {
+			return
+		}
+		if !local && source.origin == "" {
+			if source.proxied && publicOrigin == nil {
+				g.servePublicOff(w, source)
+				return
+			}
 			http.Error(w, "unrecognized gateway host", 403)
 			return
 		}
 		claimed, err := g.auth.claimed(r.Context())
 		if err != nil {
 			authFailure(w, r, "account state unavailable", err)
+			return
+		}
+		// After an owner reset, a switched-on public origin closes until someone claims locally.
+		if !local && !claimed && !pinned && publicOrigin != nil && source.origin == publicOrigin.String() {
+			g.servePublicOff(w, source)
 			return
 		}
 		if peer, _ := r.Context().Value(replicaPeerKey{}).(string); peer != "" {
@@ -698,7 +712,7 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 		origin := r.Header.Get("Origin")
-		if origin != "" && origin != g.origin.Scheme+"://"+g.origin.Host {
+		if origin != "" && origin != source.origin {
 			http.Error(w, "cross-origin access refused", 403)
 			return
 		}
@@ -946,7 +960,8 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer worker.Close()
 	upgrader := websocket.Upgrader{EnableCompression: true, CheckOrigin: func(r *http.Request) bool {
-		return r.Header.Get("Origin") == g.origin.Scheme+"://"+g.origin.Host || (g.localRequest(r))
+		origin := r.Header.Get("Origin")
+		return origin != "" && origin == sourceOf(r).origin || g.localRequest(r)
 	}}
 	browser, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {

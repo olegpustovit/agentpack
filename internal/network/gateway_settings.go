@@ -12,8 +12,9 @@ func (g *Gateway) registerSettings(mux *http.ServeMux) {
 			respond(w, nil, err)
 			return
 		}
-		writeJSON(w, map[string]any{"running": true, "platform": runtime.GOOS, "sharing_enabled": config.Enabled, "allowed_peers": config.Allow})
+		writeJSON(w, map[string]any{"running": true, "platform": runtime.GOOS, "sharing_enabled": config.Enabled, "allowed_peers": config.Allow, "public": g.publicStatus(r.Context())})
 	})
+	mux.HandleFunc("POST /api/settings/public", g.setPublic)
 	mux.HandleFunc("POST /api/settings/sharing", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			Enabled bool `json:"enabled"`

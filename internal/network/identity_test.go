@@ -61,7 +61,7 @@ func TestIdentityWithoutTailscaleReportsSignedInEmail(t *testing.T) {
 	g, origin := identityGateway(t, home, nil)
 	r := httptest.NewRequest("GET", origin.String()+"/api/identity", nil)
 	testBrowserSession(t, g.auth, testBrowserEmail, "identity")
-	r.AddCookie(&http.Cookie{Name: g.auth.cookieName(), Value: "identity"})
+	r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: "identity"})
 	w := httptest.NewRecorder()
 	g.Handler().ServeHTTP(w, r)
 	var got identityResponse
@@ -238,7 +238,7 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 		testBrowserSession(t, g.auth, account.email, account.token)
 		r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/sessions/"+sessionID+"/conversation/prompt", strings.NewReader(`{}`))
 		r.Header.Set("Origin", origin.String())
-		r.AddCookie(&http.Cookie{Name: g.auth.cookieName(), Value: account.token})
+		r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: account.token})
 		w := httptest.NewRecorder()
 		g.Handler().ServeHTTP(w, r)
 		if w.Code != account.status {

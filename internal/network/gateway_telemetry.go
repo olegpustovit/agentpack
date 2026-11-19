@@ -31,7 +31,7 @@ type browserError struct {
 }
 
 func (a *gatewayAuth) allowTelemetry(r *http.Request, count int, now time.Time) int {
-	cookie, err := r.Cookie(a.cookieName())
+	cookie, err := r.Cookie(cookieName(r))
 	if err != nil {
 		return http.StatusUnauthorized
 	}

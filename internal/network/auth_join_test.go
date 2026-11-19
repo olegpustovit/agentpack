@@ -16,7 +16,7 @@ import (
 
 func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
 	home := t.TempDir()
-	auth, err := testUnclaimedAuth(t, home, false)
+	auth, err := testUnclaimedAuth(t, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestMeshOwnerResetCannotRevivePeerLoginsForRecreatedEmail(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest("GET", "http://peer.local/api/status", nil)
-	request.AddCookie(&http.Cookie{Name: peer.cookieName(), Value: token})
+	request.AddCookie(&http.Cookie{Name: "agentpack_session", Value: token})
 	if !peer.authenticated(request) {
 		t.Fatal("fixture login was not initially valid")
 	}

@@ -10,19 +10,19 @@ import (
 
 const testBrowserEmail = "owner@example.com"
 
-func testUnclaimedAuth(t *testing.T, home string, secure bool) (*gatewayAuth, error) {
+func testUnclaimedAuth(t *testing.T, home string) (*gatewayAuth, error) {
 	t.Helper()
 	store, err := state.Open(home)
 	if err != nil {
 		return nil, err
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return newGatewayAuth(home, store, secure)
+	return newGatewayAuth(home, store)
 }
 
 func testGatewayAuth(t *testing.T, home string) (*gatewayAuth, error) {
 	t.Helper()
-	auth, err := testUnclaimedAuth(t, home, false)
+	auth, err := testUnclaimedAuth(t, home)
 	if err != nil {
 		return nil, err
 	}

@@ -79,3 +79,29 @@ export async function api<T>(
   }
   return data as T
 }
+
+// POSTs body and hands each NDJSON line to onLine as it arrives, so a slow check reports progress.
+export async function apiLines(path: `/api/${string}`, body: unknown, onLine: (line: unknown) => void): Promise<void> {
+  const traceparent = traceRequest()
+  const res = await fetch(new URL(path, location.origin), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", traceparent },
+    body: JSON.stringify(body),
+  })
+  recordAPI("POST", path, traceparent, res.status)
+  if (!res.ok || !res.body) {
+    if (res.status === 401) onUnauthorized()
+    const text = await res.text().catch(() => "")
+    throw new ApiError(readableError(text.trim().slice(0, 200) || res.statusText, res.status), res.status)
+  }
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
+  let buffer = ""
+  for (;;) {
+    const { done, value } = await reader.read()
+    buffer += value ?? ""
+    const lines = buffer.split("\n")
+    buffer = done ? "" : (lines.pop() ?? "")
+    for (const line of lines) if (line.trim()) onLine(JSON.parse(line))
+    if (done) return
+  }
+}

@@ -77,7 +77,7 @@ func NewGatewayMCP(gateway *Gateway) (*GatewayMCP, error) {
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		verified := m.authenticate(r)
 		if verified == nil {
-			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+m.baseURL()+`/.well-known/oauth-protected-resource/mcp", scope="agentpack"`)
+			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+m.baseURL(r)+`/.well-known/oauth-protected-resource/mcp", scope="agentpack"`)
 			oauthError(w, 401, "invalid_token")
 			return
 		}
@@ -88,7 +88,7 @@ func NewGatewayMCP(gateway *Gateway) (*GatewayMCP, error) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		if r.Host != gateway.origin.Host {
+		if sourceOf(r).origin == "" {
 			oauthError(w, 403, "invalid_host")
 			return
 		}
@@ -100,7 +100,7 @@ func NewGatewayMCP(gateway *Gateway) (*GatewayMCP, error) {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
-		} else if origin := r.Header.Get("Origin"); origin != "" && origin != m.baseURL() {
+		} else if origin := r.Header.Get("Origin"); origin != "" && origin != m.baseURL(r) {
 			oauthError(w, 403, "invalid_origin")
 			return
 		}

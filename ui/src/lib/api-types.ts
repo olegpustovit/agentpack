@@ -185,7 +185,11 @@ export type Settings = {
   platform: string
   sharing_enabled: boolean
   allowed_peers?: string[]
+  public?: PublicAccess
 }
+
+// Public access: an HTTPS origin served beside the loopback one. `candidate` is a detected proxy or Funnel.
+export type PublicAccess = { enabled: boolean; origin?: string; pinned?: boolean; candidate?: string }
 
 export type Package = {
   id: string

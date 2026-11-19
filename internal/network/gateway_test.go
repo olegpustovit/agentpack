@@ -67,7 +67,7 @@ func TestNodeRequestForwardsBodyAndAuthorization(t *testing.T) {
 }
 
 func TestGatewayAuthenticationHostAndOrigin(t *testing.T) {
-	auth, err := testUnclaimedAuth(t, t.TempDir(), true)
+	auth, err := testUnclaimedAuth(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

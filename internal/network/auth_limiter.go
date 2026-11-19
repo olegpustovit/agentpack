@@ -1,7 +1,6 @@
 package network
 
 import (
-	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -12,36 +11,50 @@ type loginFailure struct {
 	last, until time.Time
 }
 
-func loginKeys(r *http.Request, email string) [2]string {
-	address := r.RemoteAddr
-	if host, _, err := net.SplitHostPort(address); err == nil {
-		address = host
+// clientWindow counts requests per client address in one-minute windows. The ceiling across all
+// clients bounds memory and work when many addresses take part.
+type clientWindow struct {
+	reset  time.Time
+	total  int
+	counts map[string]int
+}
+
+// take admits one request from client, or returns how long to wait. The caller holds its lock.
+func (c *clientWindow) take(now time.Time, client string, perClient, ceiling int) time.Duration {
+	if !now.Before(c.reset) {
+		c.reset, c.total, c.counts = now.Add(time.Minute), 0, map[string]int{}
 	}
-	return [2]string{"email:" + email, "address:" + address}
+	if c.counts[client] >= perClient || c.total >= ceiling {
+		return c.reset.Sub(now)
+	}
+	c.counts[client]++
+	c.total++
+	return 0
+}
+
+func loginKeys(r *http.Request, email string) [2]string {
+	return [2]string{"email:" + email, "address:" + sourceOf(r).client}
+}
+
+func retryAfter(w http.ResponseWriter, wait time.Duration) {
+	w.Header().Set("Retry-After", strconv.Itoa(max(1, int((wait+time.Second-1)/time.Second))))
 }
 
 func (a *gatewayAuth) allowLogin(w http.ResponseWriter, r *http.Request, email string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := a.now()
-	if !now.Before(a.reset) {
-		a.attempts, a.reset = 0, now.Add(time.Minute)
-	}
-	wait := time.Duration(0)
-	if a.attempts >= 10 {
-		wait = a.reset.Sub(now)
-	}
+	wait := a.attempts.take(now, sourceOf(r).client, 10, 100)
 	for _, key := range loginKeys(r, email) {
 		if remaining := a.failures[key].until.Sub(now); remaining > wait {
 			wait = remaining
 		}
 	}
 	if wait > 0 {
-		w.Header().Set("Retry-After", strconv.Itoa(max(1, int((wait+time.Second-1)/time.Second))))
+		retryAfter(w, wait)
 		http.Error(w, "too many attempts; retry later", http.StatusTooManyRequests)
 		return false
 	}
-	a.attempts++
 	return true
 }
 
@@ -49,7 +62,7 @@ func (a *gatewayAuth) failedLogin(r *http.Request, email string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := a.now()
-	// The global ten-per-minute gate bounds these thirty-minute records.
+	// The hundred-per-minute ceiling bounds these thirty-minute records.
 	for key, failure := range a.failures {
 		if now.Sub(failure.last) > 30*time.Minute {
 			delete(a.failures, key)

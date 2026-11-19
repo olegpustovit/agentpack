@@ -31,11 +31,9 @@ type gatewayAuth struct {
 	mu        sync.Mutex
 	store     *state.Store
 	home      string
-	secure    bool
 	now       func() time.Time
 	telemetry map[[32]byte]telemetryWindow
-	attempts  int
-	reset     time.Time
+	attempts  clientWindow
 	failures  map[string]loginFailure
 }
 
@@ -47,7 +45,7 @@ func randomToken() string {
 	return hex.EncodeToString(b[:])
 }
 
-func newGatewayAuth(home string, store *state.Store, secure bool) (*gatewayAuth, error) {
+func newGatewayAuth(home string, store *state.Store) (*gatewayAuth, error) {
 	if store == nil {
 		return nil, errors.New("gateway state unavailable")
 	}
@@ -55,7 +53,7 @@ func newGatewayAuth(home string, store *state.Store, secure bool) (*gatewayAuth,
 	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		return nil, err
 	}
-	a := &gatewayAuth{store: store, home: directory, secure: secure, now: time.Now, failures: map[string]loginFailure{}}
+	a := &gatewayAuth{store: store, home: directory, now: time.Now, failures: map[string]loginFailure{}}
 	claimed, err := a.claimed(context.Background())
 	if err != nil {
 		return nil, err
@@ -96,15 +94,15 @@ func (a *gatewayAuth) legacyHash() ([]byte, error) {
 	return data, nil
 }
 
-func (a *gatewayAuth) cookieName() string {
-	if a.secure {
+func cookieName(r *http.Request) string {
+	if secureRequest(r) {
 		return "__Host-agentpack_session"
 	}
 	return "agentpack_session"
 }
 
 func (a *gatewayAuth) email(r *http.Request) string {
-	cookie, err := r.Cookie(a.cookieName())
+	cookie, err := r.Cookie(cookieName(r))
 	if err != nil || len(cookie.Value) == 0 || len(cookie.Value) > 256 {
 		return ""
 	}
@@ -308,19 +306,19 @@ SELECT ?,email,max(?,sessions_valid_after),?,sessions_valid_after FROM users WHE
 	a.mu.Lock()
 	delete(a.failures, "email:"+user.Email)
 	a.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: a.cookieName(), Value: token, Path: "/", HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteStrictMode, Expires: expires})
+	http.SetCookie(w, &http.Cookie{Name: cookieName(r), Value: token, Path: "/", HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteStrictMode, Expires: expires})
 	writeJSON(w, map[string]any{"authenticated": true, "email": user.Email})
 }
 
 func (a *gatewayAuth) logout(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie(a.cookieName()); err == nil {
+	if cookie, err := r.Cookie(cookieName(r)); err == nil {
 		hash := sha256.Sum256([]byte(cookie.Value))
 		if _, err := a.store.DB.ExecContext(r.Context(), "DELETE FROM auth_sessions WHERE token_hash=?", hash[:]); err != nil {
 			authFailure(w, r, "could not sign out", err)
 			return
 		}
 	}
-	a.clearCookie(w)
+	clearCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -335,12 +333,12 @@ func (a *gatewayAuth) logoutAll(w http.ResponseWriter, r *http.Request) {
 		authFailure(w, r, "could not sign out everywhere", err)
 		return
 	}
-	a.clearCookie(w)
+	clearCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *gatewayAuth) clearCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: a.cookieName(), Path: "/", MaxAge: -1, HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteStrictMode})
+func clearCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: cookieName(r), Path: "/", MaxAge: -1, HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteStrictMode})
 }
 
 func authFailure(w http.ResponseWriter, r *http.Request, message string, err error) {
