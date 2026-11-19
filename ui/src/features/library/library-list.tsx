@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useRef, useState } from "react"
+import { useDeferredValue, useState } from "react"
 import { Link, getRouteApi, useMatchRoute } from "@tanstack/react-router"
 import { Boxes, Plug, Puzzle, RefreshCw, Sparkles, type LucideIcon } from "lucide-react"
 import { PopupSelect } from "@/components/kit/forms"
@@ -103,29 +103,18 @@ export function LibraryList() {
   const filter = parseFilter(search.type)
   const sort = parseSort(search.sort)
   const query = search.q ?? ""
-  // The URL trails typing by a render, so the input keeps its own draft and only follows the URL while unfocused.
-  const [draft, setDraft] = useState(query)
-  const typing = useRef(false)
-  useEffect(() => {
-    if (!typing.current) setDraft(query)
-  }, [query])
+  // The URL trails typing by a render, so the focused input shows its own draft and otherwise the URL.
+  const [draft, setDraft] = useState<string>()
   const deferredQuery = useDeferredValue(query)
 
-  const items = buildLibrary(
-    machines.map((machine) => ({
-      machine,
-      packages: packages.byMachine[machine.id]?.data ?? [],
-      agentpacks: agentpacks.byMachine[machine.id]?.data ?? [],
-      projects: projects.byMachine[machine.id]?.data ?? [],
-    })),
-  )
-  const view = arrangeLibrary(items, { filter, sort, query: deferredQuery })
   const inputs = machines.map((machine) => ({
     machine,
     packages: packages.byMachine[machine.id]?.data ?? [],
     agentpacks: agentpacks.byMachine[machine.id]?.data ?? [],
     projects: projects.byMachine[machine.id]?.data ?? [],
   }))
+  const items = buildLibrary(inputs)
+  const view = arrangeLibrary(items, { filter, sort, query: deferredQuery })
   // Only installed packages can be updated, and each check is a GitHub request.
   const installedModules = [...new Set(inputs.flatMap((input) => input.projects.flatMap((row) => row.packages.map((pin) => pin.module))))]
   const [checking, setChecking] = useState(false)
@@ -178,13 +167,9 @@ export function LibraryList() {
         <SearchField
             aria-label="Search library"
             placeholder="Search"
-            value={draft}
-            onFocus={() => {
-              typing.current = true
-            }}
-            onBlur={() => {
-              typing.current = false
-            }}
+            value={draft ?? query}
+            onFocus={() => setDraft(query)}
+            onBlur={() => setDraft(undefined)}
             onChange={(event) => {
               setDraft(event.target.value)
               patch({ q: event.target.value || undefined })

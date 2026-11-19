@@ -130,7 +130,7 @@ func skillTreeHash(root string) ([sha256.Size]byte, error) {
 		if _, err := fmt.Fprintf(h, "%s\x00", filepath.ToSlash(relative)); err != nil {
 			return err
 		}
-		contents, err := os.ReadFile(path)
+		contents, err := readTreeEntry(path, entry)
 		if err != nil {
 			return err
 		}
@@ -332,7 +332,7 @@ func fileContentsByRelativePath(root string) (map[string][]byte, error) {
 		if err != nil {
 			return err
 		}
-		data, err := os.ReadFile(path)
+		data, err := readTreeEntry(path, entry)
 		if err != nil {
 			return err
 		}
@@ -366,4 +366,14 @@ func latestModTime(root string) (time.Time, error) {
 		return nil
 	})
 	return latest, err
+}
+
+// readTreeEntry returns a symlink's target rather than following it, so links
+// to directories (e.g. .venv/lib64 -> lib) or dangling links compare by target.
+func readTreeEntry(path string, entry fs.DirEntry) ([]byte, error) {
+	if entry.Type()&fs.ModeSymlink != 0 {
+		target, err := os.Readlink(path)
+		return []byte("link:" + target), err
+	}
+	return os.ReadFile(path)
 }

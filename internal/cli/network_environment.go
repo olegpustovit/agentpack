@@ -37,6 +37,7 @@ func recordLaunchEnvironment(packContext paths.Context, selected string, target 
 	var state struct {
 		Stamp  string `json:"stamp"`
 		Digest string `json:"digest"`
+		Binary string `json:"binary"` // the digest's algorithm is the binary's staging code
 	}
 	if skipped && found && stamp != "" {
 		data, err := os.ReadFile(cache)
@@ -48,7 +49,7 @@ func recordLaunchEnvironment(packContext paths.Context, selected string, target 
 				return fmt.Errorf("read runtime environment cache: %w", err)
 			}
 			decoded, err := hex.DecodeString(state.Digest)
-			if state.Stamp == stamp && err == nil && len(decoded) == 32 {
+			if state.Stamp == stamp && state.Binary == network.BinaryTag() && err == nil && len(decoded) == 32 {
 				return network.RecordSessionEnvironment(home, id, state.Digest)
 			}
 		}
@@ -58,7 +59,7 @@ func recordLaunchEnvironment(packContext paths.Context, selected string, target 
 		return err
 	}
 	if found && stamp != "" {
-		state.Stamp = stamp
+		state.Stamp, state.Binary = stamp, network.BinaryTag()
 		data, err := json.Marshal(state)
 		if err != nil {
 			return err

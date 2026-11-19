@@ -1,3 +1,5 @@
+import type { GoalState } from "@/lib/api-types"
+
 // Mirrors internal/acp LogEntry and ThreadState JSON.
 
 export type LogEntry = {
@@ -25,6 +27,32 @@ export type ThreadState = {
   context_tokens?: number
   context_limit?: number
   cost_usd?: number
+  /** The finished turn's length, and its token and cost growth when the agent reports usage. */
+  last_turn?: { ms: number; tokens?: number; cost?: number }
+  /** ts of the prompt that started the running turn. */
+  turn_started?: number
+  queue?: QueuedPrompt[]
+  goal?: GoalState
+  subagents?: Record<string, Subagent>
+}
+
+export type QueuedPrompt = UserMessagePayload & { queueId: string; steer?: boolean }
+
+export type Subagent = {
+  id: string
+  title?: string
+  description?: string
+  state: string
+  stopReason?: string
+  cancellable: boolean
+  /** The parent's tool call that spawned it, when known. */
+  toolCallId?: string
+  startedTs?: number
+  endTs?: number
+  thread: ThreadState
+  tools: number
+  tokens?: number
+  lastTool?: string
 }
 
 export type UserAttachmentPayload = {
@@ -86,12 +114,25 @@ export type CompactionPayload = {
   status: string
   summary: string
   error?: string
+  /** Context tokens before and after, when the agent reports usage. */
+  before?: number
+  after?: number
+}
+
+export type ElicitationField = {
+  key: string
+  title?: string
+  description?: string
+  multiple?: boolean
+  options?: { value: string; label: string; description?: string }[]
 }
 
 export type ElicitationPayload = {
   elicitationId?: string
   prompt?: string
   choices?: string[]
+  /** A form: each field is a question with options, or free text. Answered with a JSON object keyed by field. */
+  fields?: ElicitationField[]
   resolved?: boolean
   inactive?: boolean
   result?: { value?: string }

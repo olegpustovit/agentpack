@@ -52,9 +52,6 @@ Measured on Linux ARM64, Go 1.26, 2026-10-30. Each result is the median of five 
 | Fingerprint allocation | 17.74 MB | 0.165 MB |
 | Codex rebuild, same history fixture | 33.06 ms | 11.59 ms |
 | Codex verified warm setup | 0.172 ms | 0.175 ms |
-| `ap` hub first frame (`BenchmarkHubFirstFrame`, list fixture 120×36) | — | 0.012 ms |
-
-`BenchmarkHubFirstFrame` was repeated after the hub changes on 2026-11-03, with five runs of five iterations; median was 11.758 µs.
 
 The materialization and preflight fingerprints previously recursed through entire `.claude` and `.cursor` directories. Launching from home therefore read global history and rejected Cursor's `projects/.../worker.sock` as nonregular configuration. A failed rebuild could not publish its generation, so the next launch repeated setup.
 
@@ -66,7 +63,6 @@ Reproduce the controlled comparison on the same machine and filesystem:
 
 ```sh
 go test ./internal/sync -run '^$' -bench 'Benchmark(MaterializationHome|CodexSetup)$' -benchmem -benchtime=5x -count=5
-go test ./internal/hub -run '^$' -bench BenchmarkHubFirstFrame -benchtime=5x -count=5
 ```
 
 Optional read-only profile measurement (the benchmark writes its own state only to temporary directories):
@@ -121,3 +117,7 @@ Warm, on the Linux ARM64 host, with this repository's 11 packages (97 MB `impecc
 ## Idle gateway CPU (2026-11-04)
 
 The installed gateway used 11–16% of a core while nothing happened. A CPU profile put 85% of it in library replication: every 30 s, for each peer, it decoded and validated every registry object twice, then merged heads, acknowledged and collected garbage, even when neither side had changed. `Inventory` now decodes each object once, and an exchange that finds both inventories as the last one left them returns after reading the peer's inventory. Idle CPU with five peers: 11% to 0.85%.
+
+## MCP connection index in the launch digest (2026-11-19)
+
+Shared MCP logins add one read of `$AGENTPACK_HOME/mcp-credentials.json` (a few hundred bytes, written by the gateway) to the launch digest, so connecting or removing a login restages the next launch. Staging reads the same file once per rebuild. Measured on an x86_64 WSL2 host (20 threads), not the ARM64 reference host, medians of five runs of 10 iterations: `BenchmarkMaterializationHome` 0.33 ms, `BenchmarkCodexSetup/cold` 6.8 ms, `warm` 0.13 ms. All are inside the budgets. The gateway's credential loop runs every 30 s with one indexed query and rewrites the file only when its bytes change.

@@ -335,6 +335,11 @@ func StagingCursorPackPluginDirForMode(root, mode string) (string, error) {
 func SharedCodexAuthPath() (string, error)      { return underHome("shared", "codex", "auth.json") }
 func SharedGrokCredentialsDir() (string, error) { return underHome("shared", "grok") }
 
+// MCPCredentialIndexName lists the gateway's stored MCP credentials (no secrets) for staging.
+const MCPCredentialIndexName = "mcp-credentials.json"
+
+func MCPCredentialIndexPath() (string, error) { return underHome(MCPCredentialIndexName) }
+
 func canonical(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {

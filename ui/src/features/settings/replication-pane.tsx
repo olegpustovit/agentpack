@@ -121,7 +121,7 @@ function PeerRow({
         {removing && (
           <ConfirmAlertContent
             title={`Remove ${peer.name} from replication?`}
-            description={`Stops syncing accounts, history and library data with ${peer.name}. Previously replicated data remains on both machines.`}
+            description={`Stops syncing accounts, history and library data with ${peer.name}. Previously replicated data remains on both machines, including MCP logins: sign out of them under Connections to cut it off.`}
             destructiveLabel="Remove"
             onConfirm={() => {
               setRemoving(false)

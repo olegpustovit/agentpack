@@ -250,3 +250,32 @@ func TestConversationPromptImagesProxyMapsOldPeer404ToNeedsUpdate(t *testing.T) 
 		t.Fatalf("peer path=%q response=%d %q", gotPath, response.Code, response.Body.String())
 	}
 }
+
+func TestConversationSnapshotIsNamedBySequence(t *testing.T) {
+	log := acp.NewEventLog(0)
+	log.Append("prompt", 1, json.RawMessage(`{"text":{"text":"hi"}}`))
+	worker := &WorkerHTTP{conversation: NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))}
+	mux := http.NewServeMux()
+	worker.registerConversation(mux)
+	get := func(match string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, "/conversation", nil)
+		if match != "" {
+			request.Header.Set("If-None-Match", match)
+		}
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, request)
+		return response
+	}
+	first := get("")
+	tag := first.Header().Get("ETag")
+	if first.Code != http.StatusOK || tag == "" {
+		t.Fatalf("first read: %d etag %q", first.Code, tag)
+	}
+	if again := get(tag); again.Code != http.StatusNotModified || again.Body.Len() != 0 {
+		t.Fatalf("unchanged log: %d %q", again.Code, again.Body.String())
+	}
+	log.Append("agent_message_chunk", 2, json.RawMessage(`{}`))
+	if changed := get(tag); changed.Code != http.StatusOK || changed.Header().Get("ETag") == tag {
+		t.Fatalf("appended log answered %d with etag %q", changed.Code, changed.Header().Get("ETag"))
+	}
+}

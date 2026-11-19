@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -23,6 +24,9 @@ import (
 )
 
 var Version = "0.14.0"
+
+// workerMemoryLimit is a soft GC target for session workers; GOMEMLIMIT overrides it.
+const workerMemoryLimit = 64 << 20
 
 type Runner struct {
 	Stdout, Stderr io.Writer
@@ -44,7 +48,7 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 	if err != nil {
 		return 2, err
 	}
-	if invocation.Command != "hook-exec" && invocation.Command != "mcp-exec" {
+	if invocation.Command != "hook-exec" && invocation.Command != "mcp-exec" && invocation.Command != "mcp-bridge" {
 		runner.Stderr = &progressWriter{Writer: runner.Stderr}
 	}
 	if invocation.Command == "logs" {
@@ -71,9 +75,7 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 				}
 			}
 		case "mode":
-			if len(invocation.Args) == 0 || invocation.Args[0] != "tui" {
-				defer startProgress(runner.Stderr, "mode", time.Second)()
-			}
+			defer startProgress(runner.Stderr, "mode", time.Second)()
 		}
 	}
 	if runner.Service.Notify == nil {
@@ -101,10 +103,20 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 	if invocation.Command == "mcp-exec" {
 		return runner.runMCPExec(ctx, invocation.Args)
 	}
+	if invocation.Command == "mcp-bridge" {
+		return runner.runMCPBridge(ctx, invocation.Args)
+	}
+	if mcpCredentialAction(invocation) {
+		return runner.runMCPCredentials(ctx, invocation)
+	}
 	if invocation.Command == "session-signal" {
 		return runner.runSessionSignal(invocation.Args)
 	}
 	if invocation.Command == "session-worker" {
+		// A worker's live heap is small; a soft limit makes GC return idle memory instead of growing to 2x.
+		if os.Getenv("GOMEMLIMIT") == "" {
+			debug.SetMemoryLimit(workerMemoryLimit)
+		}
 		return runner.runSessionWorker(ctx, invocation.Args)
 	}
 	if invocation.Command == "gateway" {

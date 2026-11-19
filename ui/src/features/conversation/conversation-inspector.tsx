@@ -1,16 +1,20 @@
-import { useState, type ReactNode } from "react"
-import { FileCode2 } from "lucide-react"
+import { useState, type CSSProperties, type ReactNode } from "react"
+import { ArrowUpRight, FileCode2 } from "lucide-react"
 import { Section } from "@/components/kit/data"
 import { Button } from "@/components/ui/button"
 import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
 import { api, ApiError } from "@/lib/api"
-import type { SessionInfo } from "@/lib/api-types"
+import type { GoalState, SessionInfo } from "@/lib/api-types"
+import { clock, goalElapsedMs, goalStateWords } from "@/lib/goal"
+import { useNow } from "@/lib/use-now"
 import { harnessName } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { cn } from "@/lib/utils"
 import type { ThreadState } from "./model"
-import { groupByPath, listDiffChanges } from "./diff-summary"
+import type { GoalAction } from "./goal-sheet"
+import { subagentRunning, subagentStats } from "./subagent-card"
+import { fileLabel, groupByPath, listDiffChanges } from "./diff-summary"
 
 // Inspector rows are label left, value right: the pane is too narrow for the settings two-column form.
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -34,6 +38,12 @@ export function ConversationInspector({
   open,
   sessionId,
   readOnly,
+  goal,
+  onGoalEdit,
+  onGoalAction,
+  compact,
+  compactReason,
+  onOpenSubagent,
 }: {
   thread: ThreadState
   info?: SessionInfo
@@ -42,7 +52,16 @@ export function ConversationInspector({
   open: boolean
   sessionId?: string
   readOnly?: boolean
+  goal?: GoalState
+  onGoalEdit?: () => void
+  onGoalAction?: (action: GoalAction) => void
+  /** Sends the agent's /compact; absent when the agent doesn't offer it. */
+  compact?: () => void
+  compactReason?: string
+  onOpenSubagent?: (id: string) => void
 }) {
+  const subagents = Object.values(thread.subagents ?? {}).sort((a, b) => (b.startedTs ?? 0) - (a.startedTs ?? 0))
+  const now = useNow(goal?.state === "active" || subagents.some(subagentRunning))
   const actor = info?.started_by
   const startedBy = actor ? [actor.user ?? actor.node, actor.kind].filter(Boolean).join(" · ") : undefined
   const capabilities = info?.agent_capabilities
@@ -69,7 +88,7 @@ export function ConversationInspector({
         open ? "flex" : "hidden",
         open && "max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0 max-[1040px]:z-30 max-[1040px]:max-w-[calc(100vw-64px)]",
       )}
-      style={{ ["--inspector-w" as string]: "272px" }}
+      style={{ "--inspector-w": "272px" } as CSSProperties}
     >
       <div id="conversation-inspector-content" className="flex min-w-0 flex-col gap-(--s6) text-(length:--fs-sm)">
         {thread.context_limit !== undefined && thread.context_tokens !== undefined && (
@@ -81,65 +100,125 @@ export function ConversationInspector({
               <Row label="Used">{`${tokens(thread.context_tokens)} of ${tokens(thread.context_limit)}`}</Row>
               {thread.cost_usd !== undefined && thread.cost_usd > 0 && <Row label="Cost so far">{`$${thread.cost_usd.toFixed(2)}`}</Row>}
             </dl>
+            <Button type="button" size="sm" className="mt-(--s3)" disabled={readOnly || !compact} title={compact ? "Summarise the conversation to free context" : compactReason} onClick={compact}>
+              Compact
+            </Button>
+          </Section>
+        )}
+        {goal && (
+          <Section title="Goal">
+            <p className="mb-(--s3) whitespace-pre-wrap text-(--fg) [overflow-wrap:anywhere]">{goal.objective}</p>
+            <dl className="flex flex-col gap-(--s2)">
+              <Row label="State">{goalStateWords[goal.state]}</Row>
+              <Row label="Time">{clock(goalElapsedMs(goal, now))}</Row>
+              {goal.turns !== undefined && <Row label="Turns">{String(goal.turns)}</Row>}
+              {goal.checks && <Row label="Done when">{goal.checks}</Row>}
+              {goal.last_reason && <Row label="Last check">{goal.last_reason}</Row>}
+              {goal.limits && Object.entries(goal.limits).filter(([, value]) => value).map(([key, value]) => (
+                <Row key={key} label={`Limit: ${key === "cost_usd" ? "cost" : key}`}>{key === "cost_usd" ? `$${value}` : String(value)}</Row>
+              ))}
+            </dl>
+            {!readOnly && (
+              <div className="mt-(--s3) flex flex-wrap gap-(--s2)">
+                {goal.state === "active" ? (
+                  <Button type="button" size="sm" onClick={() => onGoalAction?.("pause")}>Pause</Button>
+                ) : goal.state !== "met" && (
+                  <Button type="button" size="sm" onClick={() => onGoalAction?.("resume")}>Resume</Button>
+                )}
+                <Button type="button" size="sm" onClick={onGoalEdit}>Edit</Button>
+                <Button type="button" size="sm" onClick={() => onGoalAction?.("clear")}>Clear</Button>
+              </div>
+            )}
+          </Section>
+        )}
+        {subagents.length > 0 && (
+          <Section title="Subagents">
+            <ul className="flex flex-col gap-(--s1)">
+              {subagents.map((subagent) => (
+                <li key={subagent.id}>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-(--s2) rounded-(--r-row) px-(--s2) py-(--s1) text-left hover:bg-(--hover)"
+                    onClick={() => onOpenSubagent?.(subagent.id)}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{subagent.title || "Subagent"}</span>
+                      <span className="block truncate text-(length:--fs-xs) tabular-nums text-(--fg3)">
+                        {subagentRunning(subagent) ? (subagent.state === "requires_action" ? "Needs you · " : "Running · ") : ""}{subagentStats(subagent, now)}
+                      </span>
+                    </span>
+                    <ArrowUpRight aria-hidden className="size-3.5 shrink-0 text-(--fg3)" />
+                  </button>
+                </li>
+              ))}
+            </ul>
           </Section>
         )}
         {all.length > 0 && (
           <Section title="Changes">
-            <SegmentedControl aria-label="Changes scope" value={[scope]} onValueChange={(v) => v[0] && setScope(v[0] as "turn" | "all")}>
-              <SegmentedControlItem value="turn">{lastTurn > 0 ? `Turn ${lastTurn}` : "Latest"}</SegmentedControlItem>
-              <SegmentedControlItem value="all">All</SegmentedControlItem>
-            </SegmentedControl>
-            <ul className="flex flex-col gap-(--s2)">
-              {changes.map((change) => {
-                return (
-                  <li key={change.path}>
-                    <button
-                      type="button"
-                      className="flex w-full items-center gap-(--s2) rounded-(--r-row) border-[0.5px] border-(--sep) bg-(--window) px-(--s3) py-(--s2) text-left text-(length:--fs-sm) hover:bg-(--hover)"
-                      onClick={() => {
-                        const target = document.getElementById(change.anchor)
-                        if (target) {
-                          target.scrollIntoView({ behavior: "smooth", block: "center" })
-                        } else {
-                          hud.error("Couldn't find that diff in the thread.")
-                        }
-                      }}
-                    >
-                      <FileCode2 aria-hidden className="size-(--s4) shrink-0 text-(--fg2)" />
-                      <code className="min-w-0 flex-1 break-all font-(family-name:--mono) text-(length:--fs-xs)">{change.path}</code>
-                      <span className="shrink-0 tabular-nums text-(--ok-word)">+{change.add}</span>
-                      <span className="shrink-0 tabular-nums text-(--danger-word)">−{change.del}</span>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
-            {scope === "turn" && lastTurn > 0 && sessionId && (
-              <>
-                <Button type="button" size="sm" variant="ghost" disabled={readOnly} onClick={() => setConfirming(true)}>
-                  Revert turn {lastTurn}
-                </Button>
-                {revertError && <p role="alert" className="text-(length:--fs-sm) text-(--danger-word)">{revertError}</p>}
-                <ConfirmAlert open={confirming} onOpenChange={setConfirming}>
-                  {confirming && (
-                    <ConfirmAlertContent
-                      title={`Revert turn ${lastTurn}?`}
-                      description="Restores the files this turn changed. Refused if any of them changed since."
-                      destructiveLabel="Revert"
-                      onConfirm={() => {
-                        setConfirming(false)
-                        setRevertError(undefined)
-                        api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/revert`, { machine, method: "POST", body: { turn: lastTurn } }).then(
-                          () => hud.success(`Reverted turn ${lastTurn}`),
-                          (error: unknown) =>
-                            setRevertError(error instanceof ApiError && error.status === 404 ? "Needs update" : error instanceof Error ? error.message : "Couldn't revert this turn."),
-                        )
-                      }}
-                    />
-                  )}
-                </ConfirmAlert>
-              </>
-            )}
+            <div className="flex flex-col gap-(--s3)">
+              <SegmentedControl aria-label="Changes scope" value={[scope]} onValueChange={(v) => v[0] && setScope(v[0] as "turn" | "all")}>
+                <SegmentedControlItem value="turn">{lastTurn > 0 ? `Turn ${lastTurn}` : "Latest"}</SegmentedControlItem>
+                <SegmentedControlItem value="all">All</SegmentedControlItem>
+              </SegmentedControl>
+              <ul className="-mx-(--s2) flex flex-col">
+                {changes.map((change) => {
+                  const { name, folder } = fileLabel(change.path, info?.directory)
+                  return (
+                    <li key={change.path}>
+                      <button
+                        type="button"
+                        title={change.path}
+                        className="flex w-full min-w-0 items-center gap-(--s2) rounded-(--r-row) px-(--s2) py-(--s1) text-left hover:bg-(--hover)"
+                        onClick={() => {
+                          const target = document.getElementById(change.anchor)
+                          if (target) {
+                            target.scrollIntoView({ behavior: "smooth", block: "center" })
+                          } else {
+                            hud.error("Couldn't find that diff in the thread.")
+                          }
+                        }}
+                      >
+                        <FileCode2 aria-hidden className="size-(--s4) shrink-0 text-(--fg3)" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate">{name}</span>
+                          {folder && <span className="block truncate text-(length:--fs-xs) text-(--fg3)">{folder}</span>}
+                        </span>
+                        <span className="shrink-0 text-(length:--fs-xs) tabular-nums">
+                          <span className="text-(--ok-word)">+{change.add}</span> <span className="text-(--danger-word)">−{change.del}</span>
+                        </span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+              {scope === "turn" && lastTurn > 0 && sessionId && (
+                <>
+                  <Button type="button" size="sm" className="self-start" disabled={readOnly} onClick={() => setConfirming(true)}>
+                    Revert turn {lastTurn}…
+                  </Button>
+                  {revertError && <p role="alert" className="text-(length:--fs-sm) text-(--danger-word)">{revertError}</p>}
+                  <ConfirmAlert open={confirming} onOpenChange={setConfirming}>
+                    {confirming && (
+                      <ConfirmAlertContent
+                        title={`Revert turn ${lastTurn}?`}
+                        description="Restores the files this turn changed. Refused if any of them changed since."
+                        destructiveLabel="Revert"
+                        onConfirm={() => {
+                          setConfirming(false)
+                          setRevertError(undefined)
+                          api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/revert`, { machine, method: "POST", body: { turn: lastTurn } }).then(
+                            () => hud.success(`Reverted turn ${lastTurn}`),
+                            (error: unknown) =>
+                              setRevertError(error instanceof ApiError && error.status === 404 ? "Needs update" : error instanceof Error ? error.message : "Couldn't revert this turn."),
+                          )
+                        }}
+                      />
+                    )}
+                  </ConfirmAlert>
+                </>
+              )}
+            </div>
           </Section>
         )}
         {info && (

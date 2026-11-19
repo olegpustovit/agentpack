@@ -598,3 +598,27 @@ func TestValidatedObjectsAreReusedUntilTheirRowChanges(t *testing.T) {
 		t.Fatal("a rewritten object was served from the memo")
 	}
 }
+
+func TestIndexVersionIgnoresWritesOutsideTheLibrary(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	before, err := store.dbVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.sql.DB.Exec("INSERT INTO sessions(id) VALUES ('session-elsewhere')"); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := store.dbVersion(); after != before {
+		t.Fatalf("a session write moved the Library version from %d to %d", before, after)
+	}
+	if err := store.ImportPackages([]Package{{Module: "github.com/acme/skill", Kind: "skill", Commit: strings.Repeat("a", 40), CacheKey: strings.Repeat("b", 64)}}); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := store.dbVersion(); after <= before {
+		t.Fatalf("a Library write left the version at %d", after)
+	}
+}

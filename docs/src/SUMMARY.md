@@ -44,7 +44,7 @@
 - [Publishing Packages](./guides/publishing.md)
 - [Team Workflows](./guides/team-workflows.md)
 - [Public Gateway Deployment](./guides/gateway-deployment.md)
-- [ACP Chat Sessions and `ap` Hub](./guides/acp-sessions.md)
+- [ACP Chat Sessions](./guides/acp-sessions.md)
 - [Diagnostics](./guides/diagnostics.md)
 - [Gateway Services and Tailscale](./guides/gateway-services.md)
 - [Overrides and Attribution](./guides/overrides.md)

@@ -2,6 +2,8 @@ package network
 
 import (
 	"bytes"
+	"compress/gzip"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -96,5 +98,32 @@ func TestConditionalAPILetsStreamsFlush(t *testing.T) {
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/sessions/s1/conversation?since=0&stream=1", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("stream through conditionalAPI = %d %s", recorder.Code, recorder.Body)
+	}
+}
+
+func TestConditionalAPIGzipsLargeBodiesForClientsThatAccept(t *testing.T) {
+	body := `[` + strings.Repeat(`{"id":"session","state":"idle"},`, 100) + `{}]`
+	handler := conditionalAPI(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }))
+	for _, accept := range []string{"", "gzip, deflate, br"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
+		req.Header.Set("Accept-Encoding", accept)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		got := rec.Body.Bytes()
+		if accept != "" {
+			if rec.Header().Get("Content-Encoding") != "gzip" || len(got) >= len(body) {
+				t.Fatalf("gzip not applied: encoding %q, %d bytes", rec.Header().Get("Content-Encoding"), len(got))
+			}
+			reader, err := gzip.NewReader(bytes.NewReader(got))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err = io.ReadAll(reader); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if string(got) != body || !strings.Contains(rec.Header().Get("Vary"), "Accept-Encoding") {
+			t.Fatalf("accept %q: body differs or Vary missing", accept)
+		}
 	}
 }

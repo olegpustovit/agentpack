@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
 	"os"
 	"os/exec"
@@ -71,6 +72,8 @@ type Gateway struct {
 	identityAt     time.Time
 	identitySelf   tailnetSelf
 	events         eventHub
+	tailnet        tailnetCache
+	mcpBroker      mcpBroker
 }
 
 // browserPingInterval keeps idle terminal connections alive through proxies. Tests shorten it.
@@ -148,7 +151,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	for _, task := range []struct {
 		name string
 		run  func(context.Context)
-	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}} {
+	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}} {
 		background.Add(1)
 		obs.Go(task.name, func() { defer background.Done(); task.run(ctx) })
 	}
@@ -194,6 +197,11 @@ func (g *Gateway) runLogSpool(ctx context.Context) {
 	}
 }
 
+// localRequest reports a same-machine CLI call: it carries the private local secret and no browser origin.
+func (g *Gateway) localRequest(r *http.Request) bool {
+	return r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1
+}
+
 func (g *Gateway) Handler() http.Handler {
 	nodeID, nodeErr := g.auth.store.NodeID(context.Background())
 	if nodeErr != nil {
@@ -218,7 +226,23 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("GET /api/cache/{cache_key}", g.serveCache)
 	g.registerLimits(mux)
 	g.registerDiagnostics(mux)
+	g.registerMCPCredentials(mux)
 	mux.HandleFunc("POST /api/telemetry", g.telemetry)
+	// Profiles reveal memory contents, so only this machine's CLI may read them; peers and browsers never can.
+	mux.HandleFunc("GET /api/debug/pprof/{name...}", func(w http.ResponseWriter, r *http.Request) {
+		if !g.localRequest(r) {
+			http.Error(w, "local access only", http.StatusForbidden)
+			return
+		}
+		switch name := r.PathValue("name"); name {
+		case "profile":
+			pprof.Profile(w, r)
+		case "trace":
+			pprof.Trace(w, r)
+		default:
+			pprof.Handler(name).ServeHTTP(w, r)
+		}
+	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, map[string]bool{"ok": true}) })
 	mux.HandleFunc("GET /api/status", g.auth.status)
 	mux.HandleFunc("GET /api/identity", g.identity)
@@ -550,6 +574,23 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		proxyWorkerConversation(w, r, record, "/blobs")
 	})
+	for _, route := range []string{
+		"PATCH /queue/{queueId}", "DELETE /queue/{queueId}", "POST /queue/{queueId}/steer",
+		"POST /goal", "PATCH /goal", "DELETE /goal",
+	} {
+		method, suffix, _ := strings.Cut(route, " ")
+		mux.HandleFunc(method+" /api/sessions/{id}/conversation"+suffix, func(w http.ResponseWriter, r *http.Request) {
+			record, err := g.workerRecord(r.Context(), r.PathValue("id"))
+			if err != nil {
+				http.Error(w, "session unavailable", http.StatusNotFound)
+				return
+			}
+			if !authorizeACPWrite(w, r, record.Session) {
+				return
+			}
+			proxyWorkerConversation(w, r, record, strings.Replace(suffix, "{queueId}", url.PathEscape(r.PathValue("queueId")), 1))
+		})
+	}
 	mux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}", g.serveBlob)
 	mux.HandleFunc("GET /api/packages", func(w http.ResponseWriter, r *http.Request) {
 		directory := r.URL.Query().Get("directory")
@@ -561,7 +602,7 @@ func (g *Gateway) Handler() http.Handler {
 		respond(w, contents.Packages, err)
 	})
 	mux.HandleFunc("GET /api/projects", func(w http.ResponseWriter, r *http.Request) {
-		value, err := Projects(r.Context(), g.options.Home, g.options.Packages)
+		value, err := g.projects(r.Context())
 		respond(w, value, err)
 	})
 	mux.HandleFunc("POST /api/packages", func(w http.ResponseWriter, r *http.Request) {
@@ -588,7 +629,7 @@ func (g *Gateway) Handler() http.Handler {
 		g.stop()
 	})
 	mux.HandleFunc("POST /api/node/stop-agents", func(w http.ResponseWriter, r *http.Request) {
-		sessions, err := Sessions(r.Context(), g.options.Home)
+		sessions, err := sessionsIn(r.Context(), g.auth.store.Reader, g.options.Home)
 		skipped := 0
 		if err == nil {
 			actor, ok := actorFrom(r.Context())
@@ -622,7 +663,7 @@ func (g *Gateway) Handler() http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
-		local := r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1
+		local := g.localRequest(r)
 		if !local && r.Host != g.origin.Host {
 			http.Error(w, "unrecognized gateway host", 403)
 			return
@@ -815,7 +856,7 @@ func (g *Gateway) knownDirectory(directory string) bool {
 	if !filepath.IsAbs(directory) {
 		return false
 	}
-	recent, err := Recent(g.options.Home)
+	recent, err := recentIn(context.Background(), g.auth.store.Reader)
 	if err != nil {
 		return false
 	}
@@ -846,7 +887,7 @@ func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var definitionRoot, modeName string
-	recent, err := Recent(g.options.Home)
+	recent, err := recentIn(r.Context(), g.auth.store.Reader)
 	if err != nil {
 		respond(w, nil, err)
 		return
@@ -905,7 +946,7 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer worker.Close()
 	upgrader := websocket.Upgrader{EnableCompression: true, CheckOrigin: func(r *http.Request) bool {
-		return r.Header.Get("Origin") == g.origin.Scheme+"://"+g.origin.Host || (r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1)
+		return r.Header.Get("Origin") == g.origin.Scheme+"://"+g.origin.Host || (g.localRequest(r))
 	}}
 	browser, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -946,7 +987,7 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 	defer ticker.Stop()
 	ping := time.NewTicker(browserPingInterval)
 	defer ping.Stop()
-	private := r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1
+	private := g.localRequest(r)
 	for {
 		select {
 		case <-done:

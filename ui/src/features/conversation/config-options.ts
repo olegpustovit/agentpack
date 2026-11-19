@@ -25,6 +25,11 @@ export function configRole(option: ConfigOption): ConfigRole {
   return "other"
 }
 
+// Modes that let the agent act without asking: Claude's bypassPermissions, Codex full-access, yolo modes.
+export function dangerousMode(item: { value: string; label: string }): boolean {
+  return /bypass|full.?access|yolo|dangerous/i.test(`${item.value} ${item.label}`)
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? value as Record<string, unknown> : undefined
 }

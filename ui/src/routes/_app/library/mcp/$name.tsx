@@ -1,13 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { z } from "zod"
+import { search } from "@/lib/search"
 import { McpInspector } from "@/features/library/mcp-inspector"
 
 export const Route = createFileRoute("/_app/library/mcp/$name")({
-  validateSearch: z.object({
-    q: z.string().optional().catch(undefined),
-    type: z.string().optional().catch(undefined),
-    sort: z.string().optional().catch(undefined),
-    add: z.coerce.string().optional().catch(undefined),
+  validateSearch: search({
+    q: "text",
+    type: "text",
+    sort: "text",
+    add: "flag",
   }),
   component: McpRoute,
 })

@@ -41,7 +41,7 @@ export function SheetContent({ className, children, ...props }: ComponentProps<t
       showCloseButton={false}
       finalFocus={() => document.querySelector<HTMLElement>(".xterm-helper-textarea") ?? true}
       className={cn(
-        "top-(--bar-h) w-96 max-w-full translate-y-0 grid-cols-[minmax(0,1fr)] gap-(--s5) rounded-(--r-sheet) p-(--s6) max-[760px]:top-auto max-[760px]:bottom-0 max-[760px]:w-full max-[760px]:translate-x-0 max-[760px]:translate-y-0 max-[760px]:rounded-b-none",
+        "top-(--bar-h) w-96 max-w-full translate-y-0 grid-cols-[minmax(0,1fr)] gap-(--s5) rounded-(--r-sheet) p-(--s6) max-[760px]:top-auto max-[760px]:bottom-0 max-[760px]:left-0 max-[760px]:w-full max-[760px]:translate-x-0 max-[760px]:translate-y-0 max-[760px]:rounded-b-none",
         className,
       )}
       {...props}
@@ -105,31 +105,32 @@ export function ConfirmAlertContent({
 export const Menu = DropdownMenu;
 export const MenuTrigger = DropdownMenuTrigger;
 
+// macOS 26 NSMenu: 5 px window padding, 12 px corners, translucent material. Shared by menus, context menus and PopupSelect.
+export const menuSurface =
+  "min-w-44 rounded-(--r-menu) bg-(--menu) p-[5px] text-(length:--fs) text-(--fg) shadow-(--shadow-menu) ring-0 backdrop-blur-xl backdrop-saturate-180";
+
+// 24 px row with a 6 px selection pill; the title sits 16 px from the menu edge. A danger row is red and highlights red.
+export const menuRow =
+  "h-(--ctl-h) gap-[7px] rounded-[6px] pr-[10px] pl-[11px] py-0 text-(length:--fs) [&_svg:not([class*='size-'])]:size-[15px] focus:bg-(--accent) focus:text-(--accent-fg) focus:**:text-(--accent-fg) data-disabled:opacity-35 data-[danger=true]:text-(--danger-word) data-[danger=true]:focus:bg-(--menu-danger) data-[danger=true]:focus:text-(--accent-fg)";
+
 export function MenuContent({ className, ...props }: ComponentProps<typeof DropdownMenuContent>) {
-  return (
-    <DropdownMenuContent
-      className={cn("min-w-44 rounded-(--r-pop) p-(--s1) text-(length:--fs) shadow-(--shadow-pop)", className)}
-      {...props}
-    />
-  );
+  return <DropdownMenuContent className={cn(menuSurface, className)} {...props} />;
 }
 
-// 22 px item (--head-h, the nearest token for a menu row): icon, label, shortcut.
+// Icon, label, shortcut; the shortcut turns white with the pill, as in AppKit.
 export function MenuItem({
   icon,
   shortcut,
+  danger,
   children,
   className,
   ...props
-}: ComponentProps<typeof DropdownMenuItem> & { icon?: ReactNode; shortcut?: string }) {
+}: ComponentProps<typeof DropdownMenuItem> & { icon?: ReactNode; shortcut?: string; danger?: boolean }) {
   return (
-    <DropdownMenuItem
-      className={cn("h-(--head-h) gap-(--s3) rounded-(--r-row) px-(--s3) text-(length:--fs) focus:bg-(--accent) focus:text-(--accent-fg)", className)}
-      {...props}
-    >
+    <DropdownMenuItem data-danger={danger} className={cn(menuRow, className)} {...props}>
       {icon}
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      {shortcut && <Kbd>{shortcut}</Kbd>}
+      {shortcut && <Kbd className="ml-(--s6) font-(family-name:--font)">{shortcut}</Kbd>}
     </DropdownMenuItem>
   );
 }
@@ -150,10 +151,7 @@ export const RowContextMenuTrigger = ContextMenuTrigger;
 
 export function RowContextMenuContent({ className, ...props }: ComponentProps<typeof ContextMenuContent>) {
   return (
-    <ContextMenuContent
-      className={cn("min-w-44 rounded-(--r-pop) p-(--s1) text-(length:--fs) shadow-(--shadow-pop)", className)}
-      {...props}
-    />
+    <ContextMenuContent className={cn(menuSurface, className)} {...props} />
   );
 }
 
@@ -165,13 +163,10 @@ export function RowContextMenuItem({
   ...props
 }: ComponentProps<typeof ContextMenuItem> & { icon?: ReactNode; shortcut?: string }) {
   return (
-    <ContextMenuItem
-      className={cn("h-(--head-h) gap-(--s3) rounded-(--r-row) px-(--s3) text-(length:--fs) focus:bg-(--accent) focus:text-(--accent-fg)", className)}
-      {...props}
-    >
+    <ContextMenuItem className={cn(menuRow, className)} {...props}>
       {icon}
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      {shortcut && <Kbd>{shortcut}</Kbd>}
+      {shortcut && <Kbd className="ml-(--s6) font-(family-name:--font)">{shortcut}</Kbd>}
     </ContextMenuItem>
   );
 }

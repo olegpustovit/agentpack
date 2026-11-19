@@ -39,6 +39,31 @@ type ConversationSession struct {
 	agentExitCode     *atomic.Int32
 	sessionID         string
 	workspace         string // session working directory; set by the worker, bounds revert
+
+	// Queue and goal state (conversation_queue.go, conversation_goal.go). queueMu orders queue
+	// changes with their log entries; it is taken before mu and never inside a log callback.
+	queueMu         sync.Mutex
+	queue           []queuedPrompt
+	running         bool // a turn loop owns the agent
+	userCancelled   bool // the user stopped the running turn
+	archived        bool
+	now             func() time.Time
+	goal            *Goal
+	goalCleared     *Goal // the last goal, kept to log its "cleared" state
+	goalPublished   string
+	goalDirty       bool // the agent reported a native goal snapshot
+	goalPublishMu   sync.Mutex
+	goalChange      func(*Goal)
+	nativeGoal      bool // the agent advertises a /goal command
+	turnText        []byte
+	turnTools       int
+	goalBlocked     int
+	goalIdle        int
+	usageUsed       int64
+	usageCost       float64
+	subagents       map[string]*subagentState
+	subagentsSaved  string
+	subagentsChange func([]SubagentSummary)
 }
 
 func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *ConversationSession {
@@ -46,9 +71,11 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 		log = acp.NewEventLog(0)
 	}
 	session := &ConversationSession{log: log, broker: broker, state: "idle", initialized: make(chan struct{})}
+	session.reducer.StateOnly = true
 	entries := log.SetOnAppend(session.applyLogEntry)
 	for _, entry := range entries {
 		session.observeEntry(entry)
+		session.replayEntry(entry)
 		if entry.Kind == "agent_exit" {
 			session.agentExited = true
 		}
@@ -85,12 +112,24 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	changed := state != session.state
 	session.state = state
 	titleChange, title := session.titleChange, agentTitle(entry)
+	goalDirty := session.goalDirty
+	session.goalDirty = false
+	subagents, subagentsChanged := session.applySubagent(entry)
+	subagentsChange := session.subagentsChange
 	session.mu.Unlock()
 	if titleChange != nil && title != "" {
 		titleChange(title)
 	}
+	if subagentsChanged && subagentsChange != nil {
+		subagentsChange(subagents)
+	}
+	if goalDirty {
+		// Appending from inside a log callback would deadlock; publish once this entry is done.
+		obs.Go("acp.goal_publish", session.publishGoal)
+	}
 	if changed {
 		session.publishState()
+		session.maybeDrain()
 	}
 }
 
@@ -143,6 +182,32 @@ func (session *ConversationSession) applyConfigUpdate(entry acp.LogEntry) {
 			session.configOptions, _ = json.Marshal(options)
 		}
 	}
+}
+
+// bypassModes are agent mode IDs that mean "never ask". Claude Code's bypassPermissions still
+// requests permission for some commands; the user's choice of mode answers those.
+var bypassModes = map[string]bool{"bypassPermissions": true}
+
+// BypassingPermissions reports whether the agent's current mode is one where the user is never asked.
+func (session *ConversationSession) BypassingPermissions() bool {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	var options []struct {
+		Category     string          `json:"category"`
+		CurrentValue json.RawMessage `json:"currentValue"`
+	}
+	if json.Unmarshal(session.configOptions, &options) == nil {
+		for _, option := range options {
+			var value string
+			if option.Category == "mode" && json.Unmarshal(option.CurrentValue, &value) == nil {
+				return bypassModes[value]
+			}
+		}
+	}
+	var modes struct {
+		CurrentModeID string `json:"currentModeId"`
+	}
+	return json.Unmarshal(session.modes, &modes) == nil && bypassModes[modes.CurrentModeID]
 }
 
 func (session *ConversationSession) ConversationState() string {
@@ -223,6 +288,7 @@ func (session *ConversationSession) Prompt(ctx context.Context, input acp.Prompt
 // The caller holds mu, or is initializing the session before publication.
 func (session *ConversationSession) observeEntry(entry acp.LogEntry) {
 	session.lastSeq = entry.Seq
+	session.observeGoalEntry(entry)
 	switch entry.Kind {
 	case "tool_call":
 		session.toolCalls++
@@ -245,9 +311,13 @@ func (session *ConversationSession) observeEntry(entry acp.LogEntry) {
 	}
 }
 
+// Cancel is the user's Stop: it ends the running turn and pauses an active goal.
 func (session *ConversationSession) Cancel(ctx context.Context) error {
 	session.mu.Lock()
 	broker := session.broker
+	if session.running {
+		session.userCancelled = true
+	}
 	session.mu.Unlock()
 	return broker.Cancel(ctx)
 }

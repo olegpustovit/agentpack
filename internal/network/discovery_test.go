@@ -101,6 +101,12 @@ func TestTailnetTargetsAndRoutesAreBounded(t *testing.T) {
 		{"POST", "/api/sessions/x/conversation/config"},
 		{"POST", "/api/sessions/x/conversation/blobs"},
 		{"POST", "/api/sessions/x/fork"},
+		{"PATCH", "/api/sessions/x/conversation/queue/q1"},
+		{"DELETE", "/api/sessions/x/conversation/queue/q1"},
+		{"POST", "/api/sessions/x/conversation/queue/q1/steer"},
+		{"POST", "/api/sessions/x/conversation/goal"},
+		{"PATCH", "/api/sessions/x/conversation/goal"},
+		{"DELETE", "/api/sessions/x/conversation/goal"},
 		{"GET", "/api/sessions/x/blobs/" + strings.Repeat("a", 64)},
 	}
 	for _, route := range routes {
@@ -115,6 +121,9 @@ func TestTailnetTargetsAndRoutesAreBounded(t *testing.T) {
 		{"POST", "/api/sessions/x/blobs/" + strings.Repeat("a", 64)},
 		{"GET", "/api/sessions/x/blobs/not-a-sha"},
 		{"GET", "/api/sessions/x\\..\\conversation"},
+		{"POST", "/api/sessions/x/conversation/queue/.."},
+		{"GET", "/api/sessions/x/conversation/goal"},
+		{"POST", "/api/sessions/x/conversation/queue/q1/drop"},
 	} {
 		if peerRoute(route.method, route.path) {
 			t.Errorf("unsafe peer route accepted: %s %s", route.method, route.path)

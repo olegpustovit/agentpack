@@ -67,14 +67,14 @@ Components live in `ui/src/components/kit/`.
 | `AppWindow` | CSS grid | Rows: toolbar, content, status bar. Nothing else is a grid child |
 | `Toolbar`, `ToolbarButton` | `Button` | Borderless with hover fill. Leading order: sidebar toggle, view switcher, title. Trailing: view tools, gear |
 | `StatusBar`, `StatusItem` | plain | 24 px high on desktop, hidden at ≤ 760 px (see Metrics) |
-| `SourceList`, `SourceRow`, `GroupHeader` | plain + roving tabindex | Row is `<Link>` or button. Selected is gray when the list is unfocused and accent when focused. Trailing `⋯` visible on hover or selection |
+| `SourceList`, `SourceRow`, `GroupHeader` | plain + roving tabindex | Row is `<Link>` or button. Selected is gray when the list is unfocused and accent when focused. Trailing `⋯` visible on hover or selection. Session rows mark like Finder: ⌘-click (Ctrl elsewhere) toggles, Shift-click extends, Esc or a plain click clears; the menu of a marked row acts on all of them |
 | `SegmentedControl` | `ToggleGroup` | 24 px track, 20 px thumb |
 | `SearchField` | `Input` | Track fill, icon inset, `⌘F` focuses it |
 | `Field`, `FieldGrid` | `Input`, `Select` | 120 px right-aligned labels, 8 px row gap. One column on phone |
 | `Sheet` | `Dialog` | Drops from the toolbar. Title, body, then buttons bottom-right: Cancel, primary. Bottom sheet on phone. No close `✕` |
 | `ConfirmAlert` | `AlertDialog` | 280 px, centered. Title names the object. Stacked buttons, destructive first, Cancel focused |
-| `Menu`, `RowContextMenu` | `DropdownMenu`, `ContextMenu` | 22 px items, icon + label + shortcut |
-| `PopupSelect` | `Select` | Replaces every native `<select>` |
+| `Menu`, `RowContextMenu` | `DropdownMenu`, `ContextMenu` | macOS 26 NSMenu: `--menu` material, 12 px corners, 5 px padding, 24 px rows with a 6 px pill, separators inset 16 px, shortcut white on the pill. A `danger` row is red and highlights `--menu-danger` |
+| `PopupSelect` | `Select` | Replaces every native `<select>`. Menu surface, checkmark in the left state column. `danger` items get their own group; while one is chosen the trigger is red with a shield |
 | `Banner` | plain | Inside a pane, top of its scroller. Icon, one sentence, optional action. Tones: info, warn, danger |
 | `Hud` | `sonner` | Above the status bar, centered, `--hud` fill, 4 s |
 | `StatusDot` | plain | See state vocabulary. Always with a word or `aria-label` plus tooltip |

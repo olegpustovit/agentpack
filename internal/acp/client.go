@@ -21,6 +21,10 @@ type HarnessClient struct {
 	Broker    *Broker
 	Terminals *TerminalPool
 
+	// AutoApprove reports that the agent runs in a mode where the user chose never to be asked.
+	// Some agents still request permission then (Claude Code for commands outside the project).
+	AutoApprove func() bool
+
 	requestPrefix   string
 	requestSequence atomic.Uint64
 	updates         *notificationGate
@@ -53,7 +57,11 @@ func (c *HarnessClient) permissionRequestID(toolCallID sdkacp.ToolCallId) (strin
 // NewClientSideConnection returns an SDK client connection over the given transport.
 func (c *HarnessClient) NewClientSideConnection(peerInput io.Writer, peerOutput io.Reader) *sdkacp.ClientSideConnection {
 	c.updates = newNotificationGate(peerOutput)
-	return sdkacp.NewClientSideConnection(gatedClient{Client: c, gate: c.updates}, peerInput, c.updates)
+	conn := sdkacp.NewClientSideConnection(gatedClient{Client: c, gate: c.updates}, peerInput, c.updates)
+	c.Broker.setCancelSession(func(ctx context.Context, sessionID string) error {
+		return conn.Cancel(ctx, sdkacp.CancelNotification{SessionId: sdkacp.SessionId(sessionID)})
+	})
+	return conn
 }
 
 // DrainSessionUpdates waits for queued handlers after the connection reader has stopped.
@@ -78,6 +86,13 @@ func (c *HarnessClient) DrainSessionUpdates(ctx context.Context) error {
 }
 
 func (c *HarnessClient) RequestPermission(ctx context.Context, p sdkacp.RequestPermissionRequest) (sdkacp.RequestPermissionResponse, error) {
+	if c.AutoApprove != nil && c.AutoApprove() {
+		if choice, ok := allowOnce(p.Options); ok {
+			return sdkacp.RequestPermissionResponse{
+				Outcome: sdkacp.RequestPermissionOutcome{Selected: &sdkacp.RequestPermissionOutcomeSelected{OptionId: choice}},
+			}, nil
+		}
+	}
 	id, err := c.permissionRequestID(p.ToolCall.ToolCallId)
 	if err != nil {
 		return sdkacp.RequestPermissionResponse{}, err
@@ -86,8 +101,9 @@ func (c *HarnessClient) RequestPermission(ctx context.Context, p sdkacp.RequestP
 		return sdkacp.RequestPermissionResponse{}, err
 	}
 	defer c.Broker.End(id)
-	c.Log.Append("permission_request", time.Now().UnixMilli(), permissionRequestPayload(id, p))
-	opt, err := c.Broker.Wait(ctx, id)
+	subagent := subagentID(c.Log.subagentSession(string(p.SessionId)), p.ToolCall.Meta)
+	c.Log.Append("permission_request", time.Now().UnixMilli(), stampSubagent(permissionRequestPayload(id, p), subagent))
+	opt, err := c.waitAnswer(ctx, "permission", "requestId", id)
 	if err != nil {
 		return sdkacp.RequestPermissionResponse{}, err
 	}
@@ -112,7 +128,8 @@ func (c *HarnessClient) SessionUpdate(ctx context.Context, n sdkacp.SessionNotif
 	if kind == "" {
 		return nil
 	}
-	c.Log.Append(kind, time.Now().UnixMilli(), payload)
+	subagent := subagentID(c.Log.subagentSession(string(n.SessionId)), sessionUpdateMeta(n.Update))
+	c.Log.Append(kind, time.Now().UnixMilli(), stampSubagent(payload, subagent))
 	return nil
 }
 
@@ -272,7 +289,17 @@ func (c *HarnessClient) waitElicitation(ctx context.Context, payload map[string]
 	defer c.Broker.End(id)
 	payload["elicitationId"] = id
 	c.Log.Append("elicitation", time.Now().UnixMilli(), mustJSON(payload))
-	return c.Broker.Wait(ctx, id)
+	return c.waitAnswer(ctx, "elicitation", "elicitationId", id)
+}
+
+// waitAnswer waits for the user. When the agent withdraws the request ($/cancel_request), it
+// records that, so the thread no longer waits for an answer nobody can give.
+func (c *HarnessClient) waitAnswer(ctx context.Context, kind, idField, id string) (string, error) {
+	value, err := c.Broker.Wait(ctx, id)
+	if err != nil && ctx.Err() != nil {
+		c.Log.Append(kind+"_result", time.Now().UnixMilli(), mustJSON(map[string]any{idField: id, "cancelled": true}))
+	}
+	return value, err
 }
 
 func (c *HarnessClient) ReadTextFile(ctx context.Context, p sdkacp.ReadTextFileRequest) (sdkacp.ReadTextFileResponse, error) {
@@ -397,4 +424,17 @@ func permissionRequestPayload(requestID string, p sdkacp.RequestPermissionReques
 		"summary":    summary,
 		"options":    options,
 	})
+}
+
+// allowOnce picks the one-time allow option, else the persistent one. Once is preferred so an
+// automatic answer never writes a standing rule into the agent's own settings.
+func allowOnce(options []sdkacp.PermissionOption) (sdkacp.PermissionOptionId, bool) {
+	for _, kind := range []sdkacp.PermissionOptionKind{sdkacp.PermissionOptionKindAllowOnce, sdkacp.PermissionOptionKindAllowAlways} {
+		for _, option := range options {
+			if option.Kind == kind {
+				return option.OptionId, true
+			}
+		}
+	}
+	return "", false
 }

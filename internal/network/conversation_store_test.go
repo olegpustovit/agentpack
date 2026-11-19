@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -428,5 +429,97 @@ func TestConversationStoreStopKeepsFinalTurnEvents(t *testing.T) {
 	stored, _, _, err := storedConversationTail(t.Context(), store.Reader, id, 0)
 	if err != nil || !reflect.DeepEqual(stored, log.Snapshot()) {
 		t.Fatalf("stop lost final turn events: stored=%d live=%d err=%v", len(stored), len(log.Snapshot()), err)
+	}
+}
+
+func TestConversationPagesReachTheFirstEventWithoutTheWorker(t *testing.T) {
+	home := t.TempDir()
+	g, origin := identityGateway(t, home, nil)
+	id := "session-long"
+	if err := upsertSession(t.Context(), g.auth.store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]string{"text": strings.Repeat("x", 200<<10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const total = 60 // about 12 MiB: three times the tail
+	changes := acp.LogChanges{LastSeq: total}
+	for seq := int64(1); seq <= total; seq++ {
+		changes.Entries = append(changes.Entries, acp.LogEntry{Seq: seq, Kind: "agent_message_chunk", Payload: payload})
+	}
+	if err := persistConversationChanges(t.Context(), g.auth.store.DB, id, changes); err != nil {
+		t.Fatal(err)
+	}
+	// A running worker that cannot serve history proves older pages come from the store.
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "tail only", http.StatusTeapot) }))
+	defer worker.Close()
+	directory := filepath.Join(home, "network", "sessions", id)
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	record, _ := json.Marshal(WorkerRecord{ID: id, Address: strings.TrimPrefix(worker.URL, "http://"), Secret: strings.Repeat("s", 64)})
+	if err := os.WriteFile(filepath.Join(directory, "worker.json"), record, 0600); err != nil {
+		t.Fatal(err)
+	}
+	page := func(before int64) ([]acp.LogEntry, bool) {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/sessions/%s/conversation?before=%d", origin, id, before), nil)
+		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
+		w := httptest.NewRecorder()
+		g.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("page before %d: %d %s", before, w.Code, w.Body.String())
+		}
+		entries, err := readConversationNDJSON(w.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entries, w.Header().Get("X-Agentpack-Truncated") == "true"
+	}
+	tail, _, truncated, err := storedConversationTail(t.Context(), g.auth.store.Reader, id, 0)
+	if err != nil || !truncated || tail[0].Seq == 1 {
+		t.Fatalf("tail should stop short of the first event: first=%d truncated=%t err=%v", tail[0].Seq, truncated, err)
+	}
+	seen := map[int64]bool{}
+	for _, entry := range tail {
+		seen[entry.Seq] = true
+	}
+	before, pages := tail[0].Seq, 0
+	for more := true; more; pages++ {
+		var entries []acp.LogEntry
+		entries, more = page(before)
+		if len(entries) == 0 || entries[len(entries)-1].Seq != before-1 {
+			t.Fatalf("page before %d must end right below it: %+v", before, len(entries))
+		}
+		for i, entry := range entries {
+			if seen[entry.Seq] || i > 0 && entry.Seq != entries[i-1].Seq+1 {
+				t.Fatalf("page before %d is not a gapless ascending run: seq %d", before, entry.Seq)
+			}
+			seen[entry.Seq] = true
+		}
+		before = entries[0].Seq
+	}
+	if len(seen) != total || before != 1 || pages < 2 {
+		t.Fatalf("paging reached %d of %d events in %d pages, ending at %d", len(seen), total, pages, before)
+	}
+	if entries, more := page(1); len(entries) != 0 || more {
+		t.Fatalf("nothing is older than the first event: %d %t", len(entries), more)
+	}
+}
+
+func TestBypassingPermissionsFollowsTheAgentMode(t *testing.T) {
+	log := acp.NewEventLog(0)
+	session := NewConversationSession(log, nil)
+	if session.BypassingPermissions() {
+		t.Fatal("no mode reported yet")
+	}
+	log.Append("config_option_update", 1, json.RawMessage(`{"configOptions":[{"id":"mode","category":"mode","currentValue":"bypassPermissions"}]}`))
+	if !session.BypassingPermissions() {
+		t.Fatal("bypassPermissions must bypass")
+	}
+	log.Append("current_mode_update", 2, json.RawMessage(`{"currentModeId":"acceptEdits"}`))
+	if session.BypassingPermissions() {
+		t.Fatal("switching away from bypass must ask again")
 	}
 }

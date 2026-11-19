@@ -5,7 +5,6 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$root"
 echo "== shared fixture reducers =="
 go test ./internal/acp/ -run 'TestReduceLog(Fixture|PermissionResult)' -count=1
-go test ./internal/hub/ -run TestReduceThreadFullFixture -count=1
 (cd ui && bun run test src/features/conversation/reducer.test.ts --run)
 echo
 missing=0

@@ -82,6 +82,13 @@ describe("groupSessions", () => {
   })
 })
 
+describe("subhead targets", () => {
+  it("names the exact folder and machine a subhead starts in, without a trailing separator", () => {
+    const [group] = groupSessions([session("a", vm, "vm", "/srv/agentpack/", true)], "project")
+    expect(group!.subheads[0]).toMatchObject({ machine: vm, directory: "/srv/agentpack", offline: true })
+  })
+})
+
 describe("matchesSession", () => {
   const row = { name: "feed-parser", harness: "claude", mode: "review", directory: "/home/o/rssdude", machineName: "oracle-vm" } as ListedSession
   it.each(["", "FEED", "claude", "review", "rssdude", "oracle"])("matches %j", (query) => {

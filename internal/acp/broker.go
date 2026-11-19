@@ -12,6 +12,8 @@ type Broker struct {
 	cancel    func(context.Context) error
 	answer    func(context.Context, string, string) error
 	setConfig func(context.Context, string, string) error
+	// cancelChild sends session/cancel for a subagent session; set by HarnessClient's connection.
+	cancelChild func(context.Context, string) error
 
 	mu      sync.Mutex
 	pending map[string]*pendingAnswer
@@ -91,6 +93,25 @@ func (b *Broker) Cancel(ctx context.Context) error {
 		return nil
 	}
 	return b.cancel(ctx)
+}
+
+func (b *Broker) setCancelSession(cancel func(context.Context, string) error) {
+	b.mu.Lock()
+	b.cancelChild = cancel
+	b.mu.Unlock()
+}
+
+func (b *Broker) cancelSession(ctx context.Context, sessionID string) error {
+	if b == nil {
+		return errors.New("ACP connection is not initialized")
+	}
+	b.mu.Lock()
+	cancel := b.cancelChild
+	b.mu.Unlock()
+	if cancel == nil {
+		return errors.New("ACP connection is not initialized")
+	}
+	return cancel(ctx, sessionID)
 }
 
 // AnswerPermission forwards and records the first answer for an active request.

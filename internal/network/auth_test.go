@@ -83,6 +83,14 @@ func TestPersistentBrowserLoginCookiesAndExpiry(t *testing.T) {
 	if err := auth.store.Reader.QueryRow("SELECT expires_at FROM auth_sessions").Scan(&expires); err != nil || expires != now.Add(browserSessionLifetime).UnixMilli() {
 		t.Fatalf("sliding expiry=%d %v", expires, err)
 	}
+	slid := expires
+	now = now.Add(browserSessionSlide - time.Minute)
+	if !auth.authenticated(r) {
+		t.Fatal("fresh cookie rejected")
+	}
+	if err := auth.store.Reader.QueryRow("SELECT expires_at FROM auth_sessions").Scan(&expires); err != nil || expires != slid {
+		t.Fatalf("expiry rewritten within the slide window: %d %v", expires, err)
+	}
 	now = now.Add(31 * 24 * time.Hour)
 	if auth.authenticated(r) {
 		t.Fatal("expired cookie accepted")

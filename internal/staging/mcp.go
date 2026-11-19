@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/cache"
+	"github.com/olegpustovit/agentpack/internal/hooks"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mcp"
@@ -176,4 +177,21 @@ func mergePluginMCP(root string, plugin lockfile.Package, effective *mode.Effect
 			mergeServers(servers, origin, effective, merged)
 		}
 	}
+}
+
+// applyMCPCredentials routes servers with a stored credential through the bridge.
+func applyMCPCredentials(entries mcp.Entries) (mcp.Entries, error) {
+	path, err := paths.MCPCredentialIndexPath()
+	if err != nil {
+		return nil, err
+	}
+	index, err := mcp.ReadCredentialIndex(path)
+	if err != nil {
+		return nil, err
+	}
+	applied, notes := mcp.ApplyCredentials(entries, index, hooks.Executable())
+	for _, note := range notes {
+		log.Printf("warning: %s", note)
+	}
+	return applied, nil
 }

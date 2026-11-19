@@ -7,7 +7,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/modecatalog"
-	"github.com/olegpustovit/agentpack/internal/modetui"
 )
 
 func (runner Runner) runMode(root string, arguments []string, quiet bool) error {
@@ -86,11 +85,6 @@ func (runner Runner) runMode(root string, arguments []string, quiet bool) error 
 			return fmt.Errorf("invalid mode base %q", args[1])
 		}
 		err = manifest.SetModeBase(root, args[0], base)
-	case "tui":
-		if len(args) > 1 {
-			return fmt.Errorf("mode tui accepts at most one mode name")
-		}
-		return modetui.Run(root, project, catalog, first(args))
 	default:
 		return fmt.Errorf("unknown mode action %q", action)
 	}

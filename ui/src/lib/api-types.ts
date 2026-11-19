@@ -55,7 +55,30 @@ export type SessionInfo = {
   started_at?: string
   started_by?: Actor
   last_used?: string
+  // Older peers omit both.
+  goal?: GoalState
+  subagents?: SubagentSummary[]
 }
+
+export type GoalLimits = { minutes?: number; cost_usd?: number; tokens?: number; turns?: number }
+
+// Mirrors the worker's goal record (also the payload of goal_update log entries).
+export type GoalState = {
+  objective: string
+  checks?: string
+  state: "active" | "paused" | "blocked" | "limited" | "met" | "cleared"
+  engine?: "native" | "gateway"
+  started_at?: number
+  active_ms?: number
+  resumed_at?: number
+  turns?: number
+  last_reason?: string
+  limits?: GoalLimits
+  updated_at?: number
+}
+
+// Running subagents of a chat, for the sidebar's child rows.
+export type SubagentSummary = { id: string; title?: string; state: string; started_at?: number }
 
 export type AgentSession = {
   id: string
@@ -108,6 +131,14 @@ export type ProjectMCP = {
   reason: string
 }
 
+// What one mode turns off; a peer that predates modes sends none.
+export type ProjectMode = {
+  name: string
+  off_packages: string[]
+  partial_packages: string[]
+  off_mcp: string[]
+}
+
 export type ProjectRow = {
   directory: string
   name: string
@@ -118,6 +149,7 @@ export type ProjectRow = {
   launches: ProjectLaunch[]
   packages: ProjectPackage[]
   mcp: ProjectMCP[]
+  modes: ProjectMode[]
   error: string
 }
 

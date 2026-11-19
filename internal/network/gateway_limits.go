@@ -183,7 +183,12 @@ func (g *Gateway) registerLimits(mux *http.ServeMux) {
 		}
 		// Reads never wait for a harness or peer; refresh the local cache beside them.
 		if (r.URL.Query().Get("node") == "" || r.URL.Query().Get("node") == nodeID) && time.Since(cache.current().At) >= limitsCacheTTL && cache.refreshing.CompareAndSwap(false, true) {
-			obs.Go("gateway.limits_refresh", func() { defer cache.refreshing.Store(false); cache.collect(r.Context(), limitsCacheTTL) })
+			obs.Go("gateway.limits_refresh", func() {
+				defer cache.refreshing.Store(false)
+				cache.collect(r.Context(), limitsCacheTTL)
+				// Browsers refetch on this instead of polling for the refresh to land.
+				g.emitEvent(eventMessage{Topic: "limits"})
+			})
 		}
 		limits, err := g.meshLimits(r.Context(), r.URL.Query().Get("node"))
 		if err != nil {

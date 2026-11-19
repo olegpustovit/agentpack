@@ -53,3 +53,11 @@ export function groupByPath(changes: DiffChange[]): (DiffChange & { anchor: stri
   }
   return [...byPath.values()]
 }
+
+// A changed file as the inspector lists it: its name, and its folder relative to the project.
+export function fileLabel(path: string, project?: string): { name: string; folder: string } {
+  const root = project?.replace(/\/+$/, "")
+  const relative = root && path.startsWith(root + "/") ? path.slice(root.length + 1) : path
+  const cut = relative.lastIndexOf("/")
+  return cut < 0 ? { name: relative, folder: "" } : { name: relative.slice(cut + 1), folder: relative.slice(0, cut) }
+}

@@ -13,6 +13,15 @@ import (
 type ProjectContents struct {
 	Packages []ProjectPackage `json:"packages"`
 	MCP      []ProjectMCP     `json:"mcp"`
+	Modes    []ProjectMode    `json:"modes"`
+}
+
+// ProjectMode names one mode and what it turns off; selectors themselves stay on the node.
+type ProjectMode struct {
+	Name            string   `json:"name"`
+	OffPackages     []string `json:"off_packages"`
+	PartialPackages []string `json:"partial_packages"`
+	OffMCP          []string `json:"off_mcp"`
 }
 
 type ProjectPackage struct {
@@ -55,6 +64,7 @@ type ProjectRow struct {
 	Launches          []ProjectLaunch  `json:"launches"`
 	Packages          []ProjectPackage `json:"packages"`
 	MCP               []ProjectMCP     `json:"mcp"`
+	Modes             []ProjectMode    `json:"modes"`
 	Error             string           `json:"error"`
 }
 
@@ -68,6 +78,18 @@ func Projects(ctx context.Context, home string, contents func(context.Context, s
 	if err != nil {
 		return nil, err
 	}
+	return projectRows(ctx, folders, contents)
+}
+
+func (g *Gateway) projects(ctx context.Context) ([]ProjectRow, error) {
+	recent, err := recentIn(ctx, g.auth.store.Reader)
+	if err != nil {
+		return nil, err
+	}
+	return projectRows(ctx, recentFolders(recent), g.options.Packages)
+}
+
+func projectRows(ctx context.Context, folders []RecentFolder, contents func(context.Context, string) (ProjectContents, error)) ([]ProjectRow, error) {
 	slices.SortStableFunc(folders, func(a, b RecentFolder) int { return b.LastUsed.Compare(a.LastUsed) })
 	rows := []ProjectRow{}
 	index := map[string]int{}
@@ -88,6 +110,7 @@ func Projects(ctx context.Context, home string, contents func(context.Context, s
 				Launches:          []ProjectLaunch{},
 				Packages:          []ProjectPackage{},
 				MCP:               []ProjectMCP{},
+				Modes:             []ProjectMode{},
 			})
 		}
 		row := &rows[i]
@@ -116,6 +139,7 @@ func Projects(ctx context.Context, home string, contents func(context.Context, s
 			}
 			row.Packages = append([]ProjectPackage{}, read.Packages...)
 			row.MCP = append([]ProjectMCP{}, read.MCP...)
+			row.Modes = append([]ProjectMode{}, read.Modes...)
 		}(&rows[i])
 	}
 	wg.Wait()

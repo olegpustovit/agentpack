@@ -33,6 +33,11 @@ func migrate(ctx context.Context, db *sql.DB, source fs.FS) error {
 		return err
 	}
 	defer conn.Close()
+	// A current database needs no write lock: per-migration checks each take one and stall a streaming worker.
+	var current int
+	if conn.QueryRowContext(ctx, "SELECT CASE WHEN count(*)=1 THEN max(version) END FROM schema_meta").Scan(&current) == nil && current == len(files) {
+		return nil
+	}
 	for i, name := range files {
 		contents, err := fs.ReadFile(source, name)
 		if err != nil {

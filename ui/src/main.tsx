@@ -5,10 +5,10 @@ import { QueryClientProvider } from "@tanstack/react-query"
 import { RouterProvider } from "@tanstack/react-router"
 import { setUnauthorizedHandler } from "./lib/api"
 import { terminalPool } from "./features/terminal/pool"
-import { forgetLimits } from "./features/limits/queries"
 import { queryClient, router } from "./router"
 import { breadcrumb, flushTelemetry, installTelemetry, reportError } from "./lib/telemetry"
 import { configQuery } from "./lib/config"
+import { forgetQueries, persistQueries, restoreQueries } from "./lib/persist"
 
 const entryBuildID = document.querySelector<HTMLScriptElement>('script[type="module"][src]')?.src.match(/index-(.+)\.js$/)?.[1]
 installTelemetry(() => ({
@@ -37,14 +37,21 @@ window.addEventListener("vite:preloadError", (event) => {
 setUnauthorizedHandler(() => {
   terminalPool.disposeAll()
   queryClient.clear()
-  forgetLimits()
+  forgetQueries()
   void router.navigate({ to: "/login" })
 })
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
-  </StrictMode>,
-)
+// Secure origins only; on a plain-HTTP tailnet address registration fails and the app just loads from the network.
+if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js").catch(() => undefined)
+
+const build = entryBuildID || "dev"
+void restoreQueries(queryClient, build).finally(() => {
+  persistQueries(queryClient, build)
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </StrictMode>,
+  )
+})

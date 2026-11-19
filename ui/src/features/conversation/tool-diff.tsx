@@ -1,7 +1,7 @@
 import { diffLines, diffWordsWithSpace } from "diff"
 import type { ReactNode } from "react"
 import type { ToolDiffBlock } from "./model"
-import { highlightDiffCode } from "./agent-markdown"
+import { highlightCode } from "./agent-markdown"
 import { diffAnchorId } from "./diff-summary"
 
 function trimSplit(text: string): string[] {
@@ -11,7 +11,7 @@ function trimSplit(text: string): string[] {
 }
 
 function highlighted(text: string, language?: string): ReactNode {
-  return language ? <span dangerouslySetInnerHTML={{ __html: highlightDiffCode(text, language) }} /> : text
+  return language ? <span dangerouslySetInnerHTML={{ __html: highlightCode(text, language) }} /> : text
 }
 
 function delWords(oldLine: string, newLine: string, language?: string): ReactNode {
@@ -68,7 +68,7 @@ function DiffLine({
     <div className={`grid grid-cols-[2.5rem_1rem_1fr] gap-(--s2) px-(--s2) py-px font-(family-name:--mono) text-(length:--fs-xs) tabular-nums ${tone}`}>
       <span className="text-right text-(--fg3)">{lineNo}</span>
       <span>{sign}</span>
-      <span className="min-w-0 whitespace-pre-wrap break-words [&_.hljs-keyword]:text-(--accent) [&_.hljs-built_in]:text-(--accent) [&_.hljs-title]:text-(--accent) [&_.hljs-string]:text-(--ok-word) [&_.hljs-number]:text-(--warn-word) [&_.hljs-literal]:text-(--warn-word) [&_.hljs-comment]:text-(--fg3)">{children}</span>
+      <span className="min-w-0 whitespace-pre-wrap break-words">{children}</span>
     </div>
   )
 }

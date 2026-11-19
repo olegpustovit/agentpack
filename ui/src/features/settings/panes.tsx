@@ -15,6 +15,7 @@ import { useGatewayActions } from "./actions"
 import { applyTheme, currentTheme, themes, type Theme } from "./theme"
 
 export const DiagnosticsPane = lazy(() => import("./diagnostics-pane").then((module) => ({ default: module.DiagnosticsPane })))
+export const ConnectionsPane = lazy(() => import("./connections-pane").then((module) => ({ default: module.ConnectionsPane })))
 
 // The selected source row names the pane, so its heading is for assistive tech only.
 export function Pane({ title, children }: { title: string; children: ReactNode }) {

@@ -22,6 +22,9 @@ type Server struct {
 	// OAuth holds the client settings of a remote server. Each agent spells
 	// them its own way, so the harness writers render them.
 	OAuth *OAuth `toml:"oauth,omitempty" json:"-"`
+	// Credential names a stored MCP credential (label or ID) to use for this
+	// server instead of matching one by URL. It is never a secret.
+	Credential string `toml:"credential,omitempty" json:"credential,omitempty"`
 }
 
 // OAuth is the OAuth client a remote MCP server is used with.

@@ -72,11 +72,12 @@ func PlanDotAgents(dotRoot string, effective mode.Effective, target *harness.Tar
 		if info, err := os.Stat(sourceRoot); err != nil || !info.IsDir() {
 			return nil
 		}
+		sourceRoot = resolvedDir(sourceRoot)
 		return filepath.WalkDir(sourceRoot, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
-			if entry.IsDir() {
+			if entry.IsDir() || skipUnreadableLink(path, entry, &plan) {
 				return nil
 			}
 			relative, err := filepath.Rel(sourceRoot, path)
@@ -222,11 +223,12 @@ func planDotRules(dotRoot string, effective mode.Effective, plan *DotAgentsPlan)
 	if info, err := os.Stat(rulesRoot); err != nil || !info.IsDir() {
 		return nil
 	}
+	rulesRoot = resolvedDir(rulesRoot)
 	return filepath.WalkDir(rulesRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() || !strings.EqualFold(filepath.Ext(path), ".mdc") {
+		if entry.IsDir() || skipUnreadableLink(path, entry, plan) || !strings.EqualFold(filepath.Ext(path), ".mdc") {
 			return nil
 		}
 		relative, err := filepath.Rel(rulesRoot, path)
@@ -257,11 +259,12 @@ func planDotCodexSkills(dotRoot, sourceRelative string, effective mode.Effective
 	if info, err := os.Stat(sourceRoot); err != nil || !info.IsDir() {
 		return nil
 	}
+	sourceRoot = resolvedDir(sourceRoot)
 	return filepath.WalkDir(sourceRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() {
+		if entry.IsDir() || skipUnreadableLink(path, entry, plan) {
 			return nil
 		}
 		extension := strings.ToLower(filepath.Ext(path))
@@ -350,4 +353,30 @@ func addParsedDotArtifact(plan *DotAgentsPlan, target harness.Target, sourceRela
 		item.OutputPath, item.Output = outputPath, contents
 	}
 	plan.Artifacts = append(plan.Artifacts, item)
+}
+
+// resolvedDir follows a symlinked root (e.g. .agents/skills -> ../.claude/skills);
+// WalkDir does not, and would hand the link itself to the callback as a file.
+func resolvedDir(root string) string {
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		return resolved
+	}
+	return root
+}
+
+// skipUnreadableLink skips, with a warning, a symlink that is dangling or does
+// not point at a regular file; WalkDir would otherwise hand it to ReadFile.
+func skipUnreadableLink(path string, entry os.DirEntry, plan *DotAgentsPlan) bool {
+	if entry.Type()&os.ModeSymlink == 0 {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err == nil && info.Mode().IsRegular() {
+		return false
+	}
+	if err == nil {
+		err = fmt.Errorf("not a regular file")
+	}
+	plan.Warnings = append(plan.Warnings, fmt.Sprintf("skipping dot-agents link %s: %v", path, err))
+	return true
 }

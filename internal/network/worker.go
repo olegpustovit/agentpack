@@ -300,11 +300,21 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			event.End()
 		}
 	}
+	wireConversation := func(current *ConversationSession) {
+		current.mu.Lock()
+		current.titleChange = persistTitle
+		current.goalChange = func(goal *Goal) {
+			persistSessionJSON(context.Background(), store.DB, record.ID, "goal", goal, goal == nil)
+		}
+		current.subagentsChange = func(subagents []SubagentSummary) {
+			persistSessionJSON(context.Background(), store.DB, record.ID, "subagents", subagents, len(subagents) == 0)
+		}
+		current.mu.Unlock()
+	}
 	if conversation != nil {
-		conversation.mu.Lock()
-		conversation.titleChange = persistTitle
-		conversation.mu.Unlock()
+		wireConversation(conversation)
 		conversation.SetStateChange(record.Session.ConversationState, persistConversationState(conversation))
+		conversation.ResumeTurns()
 	}
 	handler, err = WorkerHandler(ctx, session, conversation, record.Secret, directory)
 	if err != nil {
@@ -359,13 +369,12 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			}
 			conversation = next
 			acpCleanup = cleanup
-			next.mu.Lock()
-			next.titleChange = persistTitle
-			next.mu.Unlock()
+			wireConversation(next)
 			handler.mu.Lock()
 			handler.conversation = next
 			handler.mu.Unlock()
 			next.SetStateChange(next.ConversationState(), persistConversationState(next))
+			next.ResumeTurns()
 			return nil
 		}
 	}

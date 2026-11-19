@@ -46,6 +46,9 @@ func TestInitializeRequestAdvertisesStandardSessionCapabilitiesJSON(t *testing.T
 	if string(session["configOptions"]) != `{"boolean":{}}` || string(session["notices"]) != `{}` || string(session["compaction"]) != `{}` {
 		t.Fatalf("session capability JSON = %s", request.Params.ClientCapabilities["session"])
 	}
+	if string(request.Params.ClientCapabilities["subagents"]) != `{}` {
+		t.Fatalf("subagents capability = %s", request.Params.ClientCapabilities["subagents"])
+	}
 	if strings.Contains(string(request.Params.ClientCapabilities["_meta"]), `"session"`) {
 		t.Fatal("standard session capabilities must not be advertised under _meta")
 	}
@@ -263,18 +266,48 @@ func TestCursorCreatePlanNeedsExplicitDecision(t *testing.T) {
 	}
 }
 
-func TestElicitationChoicesFromEnumSchema(t *testing.T) {
+func TestElicitationFieldsReadAskUserQuestionForm(t *testing.T) {
+	// The shape claude-agent-acp sends for AskUserQuestion with two questions.
 	schema := sdkacp.UnstableElicitationSchema{
 		Type: sdkacp.UnstableElicitationSchemaTypeObject,
 		Properties: map[string]any{
-			"tone": map[string]any{"type": "string", "enum": []any{"Direct", "Friendly"}},
+			"question_1":        map[string]any{"type": "array", "title": "Login", "items": map[string]any{"anyOf": []any{map[string]any{"const": "a", "title": "A"}}}},
+			"question_0":        map[string]any{"type": "string", "title": "Commit", "oneOf": []any{map[string]any{"const": "yes", "title": "Commit everything", "description": "One commit"}}},
+			"question_0_custom": map[string]any{"type": "string", "title": "Other"},
+			"tone":              map[string]any{"type": "string", "enum": []any{"Direct"}},
 		},
 	}
-	got := elicitationChoices(schema)
-	if len(got) != 2 || got[0] != "Direct" {
-		t.Fatalf("got %v", got)
+	got := elicitationFields(schema)
+	if len(got) != 4 || got[0].Key != "question_0" || got[1].Key != "question_0_custom" || got[2].Key != "question_1" {
+		t.Fatalf("fields = %+v", got)
 	}
-	_, _ = json.Marshal(schema)
+	if o := got[0].Options; len(o) != 1 || o[0] != (elicitationOption{Value: "yes", Label: "Commit everything", Description: "One commit"}) {
+		t.Fatalf("oneOf options = %+v", o)
+	}
+	if len(got[1].Options) != 0 || !got[2].Multiple || got[2].Options[0].Label != "A" || got[3].Options[0].Value != "Direct" {
+		t.Fatalf("fields = %+v", got)
+	}
+	if c := elicitationContent(got, `{"question_0":"yes","question_1":["a"]}`); c["question_0"] != "yes" {
+		t.Fatalf("object answer = %v", c)
+	}
+	if c := elicitationContent(got[3:], "Direct"); c["tone"] != "Direct" {
+		t.Fatalf("plain answer = %v", c)
+	}
+}
+
+func TestWithdrawnElicitationStopsNeedingTheUser(t *testing.T) {
+	client := NewHarnessClient("", nil, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := sdkacp.NewUnstableCreateElicitationRequestForm(sdkacp.UnstableElicitationSchema{Type: sdkacp.UnstableElicitationSchemaTypeObject})
+	response, err := client.UnstableCreateElicitation(ctx, request)
+	if err != nil || response.Cancel == nil {
+		t.Fatalf("response = %+v, %v", response, err)
+	}
+	entries, _ := client.Log.ReadSince(0)
+	if state := ReduceLog(entries); state.NeedsYou {
+		t.Fatalf("a withdrawn question still needs the user: %+v", entries)
+	}
 }
 
 func TestRequestPermissionRejectsEmptyRequestID(t *testing.T) {
@@ -332,4 +365,39 @@ func TestPermissionRequestIDDoesNotReuseToolCallID(t *testing.T) {
 		t.Fatalf("second request result = %q, %v", got, err)
 	}
 	broker.End(second)
+}
+
+func TestBypassModeAnswersPermissionWithoutAskingOrLogging(t *testing.T) {
+	log := NewEventLog(0)
+	client := NewHarnessClient("", nil, log, nil)
+	bypass := true
+	client.AutoApprove = func() bool { return bypass }
+	request := sdkacp.RequestPermissionRequest{
+		ToolCall: sdkacp.ToolCallUpdate{ToolCallId: "tool-1"},
+		Options: []sdkacp.PermissionOption{
+			{OptionId: "always", Kind: sdkacp.PermissionOptionKindAllowAlways},
+			{OptionId: "reject", Kind: sdkacp.PermissionOptionKindRejectOnce},
+			{OptionId: "once", Kind: sdkacp.PermissionOptionKindAllowOnce},
+		},
+	}
+	response, err := client.RequestPermission(context.Background(), request)
+	if err != nil || response.Outcome.Selected == nil || response.Outcome.Selected.OptionId != "once" {
+		t.Fatalf("bypass must allow once without a card: %+v %v", response, err)
+	}
+	if entries, _ := log.ReadSince(0); len(entries) != 0 {
+		t.Fatalf("an automatic answer must not leave a card: %+v", entries)
+	}
+	// With no allow option it cannot answer for the user, so it still asks.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request.Options = request.Options[1:2]
+	if _, err := client.RequestPermission(ctx, request); err == nil {
+		t.Fatal("a request with no allow option must wait for the user")
+	}
+	// Leaving bypass mode asks again.
+	bypass = false
+	request.Options = []sdkacp.PermissionOption{{OptionId: "once", Kind: sdkacp.PermissionOptionKindAllowOnce}}
+	if _, err := client.RequestPermission(ctx, request); err == nil {
+		t.Fatal("outside bypass mode the user answers")
+	}
 }

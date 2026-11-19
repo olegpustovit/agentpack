@@ -3,6 +3,7 @@ package network
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -62,6 +64,8 @@ type SessionInfo struct {
 	State             TerminalState      `json:"state"`
 	StartedAt         time.Time          `json:"started_at,omitzero"`
 	StartedBy         *Actor             `json:"started_by,omitempty"`
+	Goal              *Goal              `json:"goal,omitempty"`
+	Subagents         []SubagentSummary  `json:"subagents,omitempty"`
 }
 
 func workerRecord(home, id string) (WorkerRecord, error) {
@@ -97,6 +101,10 @@ func workerRequestTimeout(method, path string) time.Duration {
 	if method == http.MethodGet && strings.HasPrefix(path, "/api/logs/traces/") {
 		return 5 * time.Second
 	}
+	if strings.HasPrefix(path, "/api/mcp/") {
+		// Refreshing may ask Main over the mesh, and starting a login discovers the authorization server.
+		return time.Minute
+	}
 	if method == http.MethodPost &&
 		(path == "/stop" || path == "/restart" || path == "/api/sessions" ||
 			strings.HasSuffix(path, "/stop") || strings.HasSuffix(path, "/restart") ||
@@ -123,9 +131,39 @@ func workerRequest(ctx context.Context, record WorkerRecord, method, path, opera
 	if operationID != "" {
 		request.Header.Set("Idempotency-Key", operationID)
 	}
-	client := http.Client{Timeout: workerRequestTimeout(method, path), Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	defer client.CloseIdleConnections()
+	// Writes get a fresh connection: a reused one that drops would be retried silently and hide an ambiguous result.
+	transport := workerTransport
+	if method != http.MethodGet {
+		transport = &http.Transport{Proxy: nil}
+		defer transport.CloseIdleConnections()
+	}
+	client := http.Client{Timeout: workerRequestTimeout(method, path), Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	return client.Do(request)
+}
+
+// workerTransport keeps loopback read connections to workers alive, so the 2 s session polls do not reconnect each time.
+var workerTransport = &http.Transport{Proxy: nil, MaxIdleConnsPerHost: 2, IdleConnTimeout: 30 * time.Second}
+
+// workerStates asks every listed local worker for its live terminal state at once; a worker that does not answer is left out.
+func workerStates(ctx context.Context, home string, sessions []SessionInfo) map[string]TerminalState {
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	states := map[string]TerminalState{}
+	for _, info := range sessions {
+		record, err := workerRecord(home, info.ID)
+		if err != nil {
+			continue
+		}
+		wg.Go(func() {
+			if terminal, err := sessionState(ctx, record); err == nil {
+				mu.Lock()
+				states[info.ID] = terminal
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	return states
 }
 
 func Sessions(ctx context.Context, home string) ([]SessionInfo, error) {
@@ -134,22 +172,22 @@ func Sessions(ctx context.Context, home string) ([]SessionInfo, error) {
 		return nil, err
 	}
 	defer store.Close()
-	sessions, err := querySessions(ctx, store.Reader, "SELECT "+sessionColumns+" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND ended_at=0 ORDER BY id")
+	return sessionsIn(ctx, store.Reader, home)
+}
+
+// sessionsIn lists this node's live sessions from an open store; the gateway passes its own.
+func sessionsIn(ctx context.Context, db *sql.DB, home string) ([]SessionInfo, error) {
+	sessions, err := querySessions(ctx, db, "SELECT "+sessionColumns+" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND ended_at=0 ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
+	states := workerStates(ctx, home, sessions)
 	result := []SessionInfo{}
 	for _, info := range sessions {
-		record, err := workerRecord(home, info.ID)
-		if err != nil {
-			continue
+		if terminal, ok := states[info.ID]; ok {
+			info.State = terminal
+			result = append(result, info)
 		}
-		terminal, err := sessionState(ctx, record)
-		if err != nil {
-			continue
-		}
-		info.State = terminal
-		result = append(result, info)
 	}
 	return result, nil
 }

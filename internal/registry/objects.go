@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
@@ -85,14 +88,12 @@ type objectStamp struct {
 
 // Immutable objects are revalidated when their replicated conflict position changes.
 func memoized[T any](s *Store, kind, id string, load func() (T, error)) (T, error) {
-	stamp := objectStamp{kind: kind, id: id}
-	var site []byte
-	err := s.sql.Reader.QueryRow(`SELECT col_version,cl,site_id FROM crsql_changes
- WHERE "table" IN ('registry_objects','registry_names') AND pk=crsql_pack_columns(?) AND cid='body'`, id).Scan(&stamp.version, &stamp.cl, &site)
-	if err != nil {
+	stamps, err := s.bodyStamps()
+	stamp, ok := stamps[id]
+	if err != nil || !ok {
 		return load()
 	}
-	stamp.site = string(site)
+	stamp.kind = kind
 	if value, ok := s.memo.Load(stamp); ok {
 		return value.(T), nil
 	}
@@ -101,6 +102,75 @@ func memoized[T any](s *Store, kind, id string, load func() (T, error)) (T, erro
 		s.memo.Store(stamp, value)
 	}
 	return value, err
+}
+
+// stampCache holds every object and name body's conflict position as of one database version.
+type indexCache struct {
+	mu      sync.Mutex
+	ok      bool
+	version int64
+	value   index
+}
+
+type stampCache struct {
+	mu      sync.Mutex
+	version int64
+	byID    map[string]objectStamp
+}
+
+// bodyStamps answers every lookup from one crsql_changes scan until the database version moves:
+// a per-object query scans the whole change table each time, which made Library reads O(objects × changes).
+func (s *Store) bodyStamps() (map[string]objectStamp, error) {
+	version, err := s.dbVersion()
+	if err != nil {
+		return nil, err
+	}
+	s.stamps.mu.Lock()
+	defer s.stamps.mu.Unlock()
+	if s.stamps.byID != nil && s.stamps.version == version {
+		return s.stamps.byID, nil
+	}
+	digests := map[string]string{}
+	rows, err := s.sql.Reader.Query(`SELECT digest,crsql_pack_columns(digest) FROM registry_objects
+ UNION ALL SELECT digest,crsql_pack_columns(digest) FROM registry_names`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var digest string
+		var pk []byte
+		if err := rows.Scan(&digest, &pk); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		digests[string(pk)] = digest
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, err
+	}
+	byID := make(map[string]objectStamp, len(digests))
+	rows, err = s.sql.Reader.Query(`SELECT pk,col_version,cl,site_id FROM crsql_changes
+ WHERE "table" IN ('registry_objects','registry_names') AND cid='body'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pk, site []byte
+		var stamp objectStamp
+		if err := rows.Scan(&pk, &stamp.version, &stamp.cl, &site); err != nil {
+			return nil, err
+		}
+		if digest, ok := digests[string(pk)]; ok {
+			stamp.id, stamp.site = digest, string(site)
+			byID[digest] = stamp
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	s.stamps.version, s.stamps.byID = version, byID
+	return byID, nil
 }
 
 func (s *Store) readPackage(id string) (Package, error) {
@@ -162,7 +232,45 @@ func (s *Store) loadRevision(id string) (Revision, error) {
 	return r, nil
 }
 
+// readIndex reuses the last index while the database version holds: every input is a replicated table.
 func (s *Store) readIndex() (index, error) {
+	version, versionErr := s.dbVersion()
+	s.indexCache.mu.Lock()
+	hit := versionErr == nil && s.indexCache.ok && s.indexCache.version == version
+	cached := s.indexCache.value
+	s.indexCache.mu.Unlock()
+	if hit {
+		return index{Agentpacks: maps.Clone(cached.Agentpacks), Packages: cached.Packages}, nil
+	}
+	idx, err := s.buildIndex()
+	if err != nil || versionErr != nil {
+		return idx, err
+	}
+	// Clipped slices make a caller's append copy instead of writing into the cached index.
+	for id, pack := range idx.Agentpacks {
+		pack.Revisions, pack.Heads = slices.Clip(pack.Revisions), slices.Clip(pack.Heads)
+		idx.Agentpacks[id] = pack
+	}
+	idx.Packages = slices.Clip(idx.Packages)
+	s.indexCache.mu.Lock()
+	s.indexCache.ok, s.indexCache.version, s.indexCache.value = true, version, idx
+	s.indexCache.mu.Unlock()
+	return index{Agentpacks: maps.Clone(idx.Agentpacks), Packages: idx.Packages}, nil
+}
+
+// dbVersion is the newest change to a table the index reads. Each clock table's db_version index answers it
+// directly; the database-wide version moves on every streamed chat flush and would rebuild the index constantly.
+func (s *Store) dbVersion() (int64, error) {
+	var version int64
+	err := s.sql.Reader.QueryRow(`SELECT max(
+ (SELECT coalesce(max(db_version),0) FROM registry_objects__crsql_clock),
+ (SELECT coalesce(max(db_version),0) FROM registry_names__crsql_clock),
+ (SELECT coalesce(max(db_version),0) FROM registry_heads__crsql_clock),
+ (SELECT coalesce(max(db_version),0) FROM registry_tombstones__crsql_clock))`).Scan(&version)
+	return version, err
+}
+
+func (s *Store) buildIndex() (index, error) {
 	result := index{Agentpacks: map[string]Agentpack{}, Packages: []string{}}
 	entries, err := s.objectIDs()
 	if err != nil {

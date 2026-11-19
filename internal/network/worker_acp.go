@@ -123,6 +123,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 			if err := log.Flush(); err != nil {
 				return err
 			}
+			acp.Accepted(ctx)
 			response, err := c.Prompt(ctx, sdkacp.PromptRequest{
 				SessionId: sid,
 				Prompt:    blocks,
@@ -152,6 +153,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 	log.SetReplaying(launch.Session.AgentSessionID != "" && conv.lastSeq > 0)
 	defer log.SetReplaying(false)
 	client := acp.NewHarnessClient(workspace, nil, log, broker)
+	client.AutoApprove = conv.BypassingPermissions
 	agent := acptest.NewReplayAgent(entries)
 	c2aR, c2aW := io.Pipe()
 	a2cR, a2cW := io.Pipe()
@@ -241,6 +243,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 			if err := log.Flush(); err != nil {
 				return err
 			}
+			acp.Accepted(ctx)
 			response, err := c.Prompt(ctx, sdkacp.PromptRequest{
 				SessionId: sid,
 				Prompt:    blocks,
@@ -270,6 +273,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	log.SetReplaying(launch.Session.AgentSessionID != "" && conv.lastSeq > 0)
 	defer log.SetReplaying(false)
 	client := acp.NewHarnessClient(workspace, nil, log, broker)
+	client.AutoApprove = conv.BypassingPermissions
 	rewriter := &rewriteStdin{w: stdinWriter, rewrite: func(line []byte) []byte {
 		line = acp.AddSessionCapabilities(line)
 		if acpLaunch.Rewrite != nil {
@@ -735,28 +739,7 @@ func adaptAgentStdoutWithDrainTimeout(r io.ReadCloser, w io.WriteCloser, adapt f
 }
 
 func appendRawSessionUpdate(log *acp.EventLog, line []byte) bool {
-	var message struct {
-		Method string `json:"method"`
-		Params struct {
-			Update json.RawMessage `json:"update"`
-		} `json:"params"`
-	}
-	if json.Unmarshal(line, &message) != nil || message.Method != "session/update" || len(message.Params.Update) == 0 {
-		return false
-	}
-	var update struct {
-		Kind string `json:"sessionUpdate"`
-	}
-	if json.Unmarshal(message.Params.Update, &update) != nil {
-		return false
-	}
-	switch update.Kind {
-	case "notice", "compaction_update", "compaction_summary_chunk":
-		log.Append(update.Kind, time.Now().UnixMilli(), message.Params.Update)
-		return true
-	default:
-		return false
-	}
+	return acp.AppendRawSessionUpdate(log, line)
 }
 
 const maxACPFrameBytes = 4 << 20

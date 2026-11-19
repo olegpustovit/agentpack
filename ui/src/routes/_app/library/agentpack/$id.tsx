@@ -1,17 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { z } from "zod"
+import { search } from "@/lib/search"
 import { AgentpackInspector } from "@/features/library/agentpack-inspector"
 
 export const Route = createFileRoute("/_app/library/agentpack/$id")({
-  validateSearch: z.object({
-    q: z.string().optional().catch(undefined),
-    type: z.string().optional().catch(undefined),
-    sort: z.string().optional().catch(undefined),
-    add: z.coerce.string().optional().catch(undefined),
-    revision: z.string().optional().catch(undefined),
-    restore: z.coerce.string().optional().catch(undefined),
-    save: z.coerce.string().optional().catch(undefined),
-    rename: z.coerce.string().optional().catch(undefined),
+  validateSearch: search({
+    q: "text",
+    type: "text",
+    sort: "text",
+    add: "flag",
+    revision: "text",
+    restore: "flag",
+    save: "flag",
+    rename: "flag",
   }),
   component: AgentpackRoute,
 })

@@ -6,6 +6,7 @@ import { Field, FieldError, FieldGrid, FieldLabel } from "@/components/kit/forms
 import { SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { useEventsConnected } from "@/features/events/use-events"
 import { api, LOCAL } from "@/lib/api"
 import { plural, relativeTime } from "@/lib/format"
 import { hud } from "@/lib/hud"
@@ -15,14 +16,15 @@ import { LoadError, Pane } from "./panes"
 const issuesQuery = (status: IssueFilter) => queryOptions({
   queryKey: ["diagnostics", "issues", status],
   queryFn: () => api<DiagnosticIssue[]>("/api/logs/issues", { query: { status: status === "all" ? "" : status } }),
-  refetchInterval: 30_000,
 })
 
 const issueQuery = (fingerprint: string) => queryOptions({
   queryKey: ["diagnostics", "issue", fingerprint],
   queryFn: () => api<DiagnosticIssue>(`/api/logs/issues/${encodeURIComponent(fingerprint)}`),
-  refetchInterval: 30_000,
 })
+
+// State events refetch diagnostics; the poll covers only a dropped stream.
+const pollUnlessLive = (live: boolean) => (live ? false : 30_000)
 
 export function DiagnosticsPane() {
   const [status, setStatus] = useState<IssueFilter>("open")
@@ -47,7 +49,7 @@ export function DiagnosticsPane() {
 }
 
 function IssueList({ status, select }: { status: IssueFilter; select: (fingerprint: string) => void }) {
-  const issues = useQuery(issuesQuery(status))
+  const issues = useQuery({ ...issuesQuery(status), refetchInterval: pollUnlessLive(useEventsConnected()) })
   if (issues.error) return <LoadError what="diagnostic issues" error={issues.error} retry={() => void issues.refetch()} />
   if (!issues.data) return <RowSkeleton lines={2} />
   if (!issues.data.length) return <Empty title={status === "all" ? "No recorded issues" : `No ${status} issues`}>Recorded failures appear here. Choose another status to see earlier issues.</Empty>
@@ -69,7 +71,7 @@ type IssueChange = { action: "resolve" | "reopen" | "ignore"; version?: string; 
 
 function IssueDetail({ fingerprint, back }: { fingerprint: string; back: () => void }) {
   const queryClient = useQueryClient()
-  const result = useQuery(issueQuery(fingerprint))
+  const result = useQuery({ ...issueQuery(fingerprint), refetchInterval: pollUnlessLive(useEventsConnected()) })
   const [resolving, setResolving] = useState(false)
   const [version, setVersion] = useState("")
   const [note, setNote] = useState("")

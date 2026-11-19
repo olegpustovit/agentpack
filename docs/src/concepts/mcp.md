@@ -187,6 +187,28 @@ The server is then recorded with `status = "unpinned"` and `allow_unpinned = tru
 - **Version ranges** (`pkg@^1.2`), Git and tarball specs, and `npx --package` are recorded as `unpinned`. Use an exact version or a dist-tag.
 - **PyPI and docker** servers are recorded but not resolved. Write `pkg==1.2.3` or `image@sha256:…` yourself to fix what runs.
 
+## Shared logins (MCP connections)
+
+A remote server that needs an OAuth login or a token is connected once, for every agent, project, mode and machine in the mesh:
+
+```sh
+agentpack mcp login https://mcp.linear.app/mcp                 # OAuth: opens the sign-in page
+agentpack mcp login github                                     # a server name from this project
+agentpack mcp login https://api.githubcopilot.com/mcp/ --header Authorization   # reads "Bearer ghp_…" hidden
+agentpack mcp login --var GITHUB_PERSONAL_ACCESS_TOKEN --label gh              # for local servers
+agentpack mcp connections
+agentpack mcp logout linear
+agentpack mcp approve linear github.com/acme/linear-plugin
+```
+
+The web UI does the same under **Settings → Connections**. Credentials live in the gateway's replicated `state.db` table `mcp_credentials`, owned by the signed-in account, and replicate to every enrolled machine; they never reach `agentpack.toml`, `pack.lock`, staging, registry objects or diagnostics. The gateway writes `$AGENTPACK_HOME/mcp-credentials.json` with each connection's ID, label and URL only.
+
+During staging, an enabled remote server whose URL matches a connection (lowercase scheme and host, default port and trailing slash ignored) is replaced in every harness by `agentpack mcp-bridge <id> --url <url>`, a stdio MCP server that relays to the real server and adds the credential at run time. A server that sets its own `Authorization` header is left alone. `credential = "<label>"` in a server definition names a connection explicitly; that is how a local server receives `--var` environment variables (`agentpack mcp-bridge <id> -- <command> <args>`). A server declared by a plugin matches only after `agentpack mcp approve` names the plugin's module, so a package cannot claim your login by naming its URL. Connecting or removing a connection restages the next launch.
+
+**Refresh.** One node refreshes each OAuth token: Main, or the node that created the login when no Main is set. It renews tokens at about 80 % of their lifetime. Other nodes use the replicated access token and ask that node over the mesh when the server rejects one; a rejected generation is refreshed once however many agents saw it. When the refresher is unreachable a node refreshes itself, and if the token server reports the refresh token already used it waits one sync interval for the newer token before asking you to reconnect.
+
+Limits: the bridge opens no standalone server-sent-event stream, so notifications a server sends outside a request (such as a changed tool list) arrive only with the next request. Logins use dynamic client registration or a client ID you supply (`--client-id`, or the server's `[mcp.servers.<name>.oauth]`); register the redirect URL that Settings → Connections shows with a pre-registered OAuth app. Removing a machine from the mesh does not erase what it already received: reconnect the logins you want to rotate.
+
 ## Toggling servers per mode
 
 Use the `mcp:<name>` selector in a mode to enable or disable a server without removing it:

@@ -17,6 +17,7 @@ function project(directory: string, packages: ProjectPackage[]): ProjectRow {
     launches: [],
     packages,
     mcp: [],
+    modes: [],
     error: "",
   }
 }

@@ -24,6 +24,10 @@ independent backups may survive a rejected page and are safe to relay or retry.
 archive_blobs retains required attachment references; archive_cleanup is local.
 
 
+mcp_credentials and mcp_credential_approvals replicate MCP logins, secrets
+included, on purpose: one login serves every node. Mutable token state stays in
+the single `state` JSON cell so a refresh is never mixed with another node's.
+
 Registry public objects, names, heads, tombstones and drafts are replicated.
 registry_bindings and registry_peers are local: raw configuration secrets and
 machine trust must never enter a change page. Draft bodies store stable target

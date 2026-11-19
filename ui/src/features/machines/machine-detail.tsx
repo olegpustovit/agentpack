@@ -33,7 +33,6 @@ export function MachineDetail({ id }: { id: string }) {
 
 function MachineView({ machine }: { machine: Machine }) {
   const live = useEventsConnected()
-  const machines = useMachines()
   const queryClient = useQueryClient()
   const identity = useQuery({ ...machineIdentityQuery(machine.id), enabled: machine.online })
   const topology = useQuery({ ...topologyQuery(live), enabled: machine.id !== LOCAL })
@@ -182,7 +181,6 @@ function MachineView({ machine }: { machine: Machine }) {
 
       <NewSessionSheet
         open={action?.kind === "new"}
-        machines={machines}
         initialMachine={action?.machine.id}
         initialDirectory={action?.project.directory}
         onOpenChange={closeAction}

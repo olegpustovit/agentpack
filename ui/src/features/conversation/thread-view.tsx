@@ -1,14 +1,21 @@
 import { useState, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { BookOpen, ChevronRight, Copy, Folder, GitFork, Globe, Pencil, Lock, Quote, RotateCcw, Search, Sparkles, SquareTerminal, Wrench } from "lucide-react"
+import { BookOpen, ChevronRight, Copy, Flag, Folder, GitFork, Globe, Pencil, Lock, Quote, RotateCcw, Search, Sparkles, SquareTerminal, Wrench } from "lucide-react"
 import { RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/kit/feedback"
 import { api, LOCAL } from "@/lib/api"
 import { hud } from "@/lib/hud"
-import type { CompactionPayload, ElicitationPayload, NoticePayload, PermissionPayload, TextChunkPayload, ThreadItem, ToolPayload, UserMessagePayload } from "./model"
+import { cn } from "@/lib/utils"
+import type { GoalState } from "@/lib/api-types"
+import { clock, goalStateWords } from "@/lib/goal"
+import { useNow } from "@/lib/use-now"
+import type { CompactionPayload, ElicitationField, ElicitationPayload, NoticePayload, PermissionPayload, Subagent, TextChunkPayload, ThreadItem, ThreadState, ToolPayload, UserMessagePayload } from "./model"
+import { compactCount, SubagentCard, subagentRunning } from "./subagent-card"
 import { AgentMessageBody } from "./agent-message"
 import { ToolDiffBody } from "./tool-diff"
+import { ToolOutput } from "./tool-output"
 import { QuickLook } from "./quick-look"
 import { conversationErrorMessage } from "./queries"
 import { listDiffChanges } from "./diff-summary"
@@ -17,7 +24,7 @@ function chunkText(data: unknown): string {
   return (data as TextChunkPayload).text?.text ?? ""
 }
 
-function userImageSrc(machine: string, sessionId: string, blob?: string) {
+export function userImageSrc(machine: string, sessionId: string, blob?: string) {
   if (!blob) return ""
   const sha = blob.replace(/^sha256:/i, "")
   const url = new URL(`/api/sessions/${encodeURIComponent(sessionId)}/blobs/${sha}`, location.origin)
@@ -52,9 +59,10 @@ function UserMessageBody({
   const quickLookImage = quickLook === null ? undefined : previews[quickLook]
   return (
     <>
-      <div className="flex w-full flex-col items-end gap-(--s2)">
+      <div className="flex w-full flex-col items-start gap-(--s2)">
+        <p aria-hidden className="text-(length:--fs-xs) font-medium text-(--fg3)">You</p>
         {previews.length > 0 && (
-          <div data-slot="user-attachments" className="flex max-w-[min(78%,560px)] flex-wrap justify-end gap-(--s3)">
+          <div data-slot="user-attachments" className="flex max-w-full flex-wrap gap-(--s3)">
             {previews.map(({ image, src }, index) => {
               const label = image.name || `image ${index + 1}`
               return (
@@ -79,7 +87,7 @@ function UserMessageBody({
         )}
         {text ? (
           <MessageContextMenu text={text} onQuote={onQuote} onFork={onFork}>
-            <p data-slot="user-bubble" className="max-w-[min(78%,560px)] rounded-[14px] bg-(--track) px-(--s4) py-(--s2) text-(length:--fs) text-(--fg) whitespace-pre-wrap [overflow-wrap:anywhere]">
+            <p data-slot="user-bubble" className="w-full rounded-(--r-sheet) bg-(--track) px-(--s4) py-(--s3) text-(length:--fs) text-(--fg) whitespace-pre-wrap [overflow-wrap:anywhere]">
               {text}
             </p>
           </MessageContextMenu>
@@ -167,7 +175,19 @@ export function toolOutput(tool: ToolPayload): string {
   return text.replace(/^```[a-z]*\n?/, "").replace(/\n?```\s*$/, "").trim()
 }
 
-const preClass = "mt-(--s2) max-h-60 overflow-auto rounded-(--r-pop) bg-(--window) shadow-(--shadow-card) px-(--s4) py-(--s3) font-(family-name:--mono) text-(length:--fs-xs) text-(--fg) whitespace-pre-wrap"
+
+// The file a tool read or wrote, which names the output's language.
+function toolPath(input: unknown): string | undefined {
+  const fields = input && typeof input === "object" ? (input as Record<string, unknown>) : {}
+  const path = fields.file_path ?? fields.path ?? fields.notebook_path
+  return typeof path === "string" ? path : undefined
+}
+
+// A <details> whose body mounts only while open: closed tool rows cost nothing to render.
+function useOpen(initial: boolean) {
+  const [open, setOpen] = useState(initial)
+  return { open, onToggle: (event: { currentTarget: HTMLDetailsElement }) => setOpen(event.currentTarget.open) }
+}
 
 function ToolRow({ item }: { item: ThreadItem }) {
   const tool = item.data as ToolPayload
@@ -178,12 +198,15 @@ function ToolRow({ item }: { item: ThreadItem }) {
   const Icon = toolIcon(tool.kind)
   const diff = <ToolDiffBody content={tool.content} toolId={tool.toolCallId} />
   const hasDiff = (tool.content ?? []).some((block) => block.type === "diff" && (block.oldText || block.newText))
-  const terminalBody = shell ? toolOutput(tool) || (tool.kind === "terminal" ? command ?? "" : "") : ""
+  const output = toolOutput(tool)
+  const terminalBody = shell ? output || (tool.kind === "terminal" ? command ?? "" : "") : ""
   const input = shortInput(tool.rawInput)
   const took = item.ts !== undefined && item.endTs !== undefined && item.endTs - item.ts >= 1000 ? formatDuration(item.endTs - item.ts) : ""
+  const { open, onToggle } = useOpen(hasDiff || Boolean(terminalBody))
   return (
     <details
-      open={hasDiff || Boolean(terminalBody)}
+      open={open}
+      onToggle={onToggle}
       data-slot={hasDiff ? "tool-diff-block" : terminalBody ? "tool-terminal-block" : "tool-row"}
       data-tool-row=""
       className="text-(length:--fs-sm)"
@@ -195,17 +218,33 @@ function ToolRow({ item }: { item: ThreadItem }) {
         {statusGlyph(status)}
         <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
       </summary>
-      {hasDiff ? (
+      {!open ? null : hasDiff ? (
         diff
       ) : terminalBody ? (
-        <pre data-slot="tool-terminal" className={preClass}>{terminalBody}</pre>
+        <ToolOutput slot="tool-terminal" text={terminalBody} command={command} />
       ) : (
         <div className="pl-(--s7)">
           {input && <p data-slot="tool-input" className="truncate font-(family-name:--mono) text-(length:--fs-xs) text-(--fg2)">{input}</p>}
-          <details data-slot="tool-details" className="text-(length:--fs-xs) text-(--fg3)">
-            <summary className="cursor-default">Details</summary>
-            <pre className={preClass}>{JSON.stringify(item.data, null, 2)}</pre>
-          </details>
+          {output && <ToolOutput text={output} path={toolPath(tool.rawInput)} />}
+        </div>
+      )}
+    </details>
+  )
+}
+
+// Thoughts are markdown like replies, dimmed, and rendered only once opened.
+function ThoughtBlock({ text, ms }: { text: string; ms?: number }) {
+  const { open, onToggle } = useOpen(false)
+  return (
+    <details data-slot="thought-block" open={open} onToggle={onToggle} className="text-(length:--fs-sm)">
+      <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) text-(--fg2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
+        <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
+        <Sparkles aria-hidden className="size-3.5 shrink-0" />
+        {ms !== undefined && ms >= 1000 ? `Thought for ${clock(ms)}` : "Thought"}
+      </summary>
+      {open && (
+        <div className="ml-(--s3) border-l-[0.5px] border-(--sep) py-(--s2) pl-(--s4) opacity-80">
+          <AgentMessageBody text={text} />
         </div>
       )}
     </details>
@@ -222,27 +261,29 @@ function plural(n: number, word: string) {
 }
 
 function ToolGroup({ tools }: { tools: ThreadItem[] }) {
-  if (tools.length === 1) return <ToolRow item={tools[0]!} />
   const failed = tools.filter((item) => (item.data as ToolPayload).status === "failed").length
   const files = new Set(listDiffChanges(tools).map((change) => change.path)).size
   // ts is only known for streamed items; omit the time rather than guess.
   const stamps = tools.flatMap((item) => item.ts === undefined ? [] : [item.ts, item.endTs ?? item.ts])
   const span = stamps.length ? Math.max(...stamps) - Math.min(...stamps) : 0
+  const { open, onToggle } = useOpen(failed > 0)
   const parts = [
     span >= 1000 ? `Worked for ${formatDuration(span)}` : "Worked",
     plural(tools.length, "tool"),
     ...(files ? [`${plural(files, "file")} changed`] : []),
   ]
   return (
-    <details data-slot="tool-group" open={failed > 0} className="text-(length:--fs-sm)">
+    <details data-slot="tool-group" open={open} onToggle={onToggle} className="text-(length:--fs-sm)">
       <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
         <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
         <span className="min-w-0 flex-1 truncate text-(--fg2)">{parts.join(" · ")}</span>
         {failed > 0 && <span className="shrink-0 text-(--danger-word)">{failed} failed</span>}
       </summary>
-      <div className="flex flex-col border-l-[0.5px] border-(--sep) pl-(--s4)">
-        {tools.map((item, index) => <ToolRow key={item.seq ?? index} item={item} />)}
-      </div>
+      {open && (
+        <div className="flex flex-col border-l-[0.5px] border-(--sep) pl-(--s4)">
+          {tools.map((item, index) => <ToolRow key={item.seq ?? index} item={item} />)}
+        </div>
+      )}
     </details>
   )
 }
@@ -266,7 +307,9 @@ function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem; machi
   return (
     <div data-slot="elicitation-card" className="rounded-(--r-sheet) border-[0.5px] border-(--warn) bg-(--window) px-(--s5) pt-(--s5) pb-(--s4) shadow-(--shadow-card)">
       <p className="text-(length:--fs) font-semibold text-(--fg)">{ask.prompt ?? "Input needed"}</p>
-      {ask.resolved ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">Answered: {result?.value ?? "—"}</p> : ask.inactive ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">No longer active</p> : (
+      {ask.resolved ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">Answered: {answerSummary(ask, result?.value)}</p> : ask.inactive ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">No longer active</p> : ask.fields?.length ? (
+        <ElicitationForm fields={ask.fields} disabled={!ask.elicitationId || answer.isPending} onSubmit={(value) => answer.mutate(value)} />
+      ) : (
         <div className="mt-(--s3) flex flex-wrap gap-(--s2)">
           {(ask.choices ?? []).map((choice, index) => {
             const value = ask.optionIds?.[index] ?? choice
@@ -303,6 +346,92 @@ function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem; machi
       {answer.error && <p className="mt-(--s2) text-(length:--fs-sm) text-(--danger)">{conversationErrorMessage(machine, "answer a question", answer.error)}</p>}
     </div>
   )
+}
+
+function ElicitationForm({ fields, disabled, onSubmit }: { fields: ElicitationField[]; disabled: boolean; onSubmit: (value: string) => void }) {
+  const [values, setValues] = useState<Record<string, string | string[]>>({})
+  // One question with options and nothing else to fill answers on click.
+  const quick = fields.length === 1 && !fields[0]!.multiple && (fields[0]!.options?.length ?? 0) > 0
+  return (
+    <div className="mt-(--s3) flex flex-col gap-(--s4)">
+      {fields.map((field) => {
+        const current = values[field.key]
+        return (
+          <div key={field.key} className="flex flex-col gap-(--s2)">
+            {(field.title || field.description) && (
+              <p className="text-(length:--fs-sm) text-(--fg)">
+                {field.title && <span className="font-semibold">{field.title}</span>}
+                {field.title && field.description && " · "}
+                {field.description && <span className="text-(--fg2)">{field.description}</span>}
+              </p>
+            )}
+            {field.options?.length ? (
+              <div className="flex flex-wrap gap-(--s2)">
+                {field.options.map((option) => {
+                  const picked = Array.isArray(current) ? current.includes(option.value) : current === option.value
+                  return (
+                    <Button
+                      key={option.value}
+                      type="button"
+                      size="sm"
+                      variant={picked ? "primary" : "default"}
+                      aria-pressed={quick ? undefined : picked}
+                      title={option.description}
+                      disabled={disabled}
+                      onClick={() => {
+                        if (quick) return onSubmit(JSON.stringify({ [field.key]: option.value }))
+                        setValues((all) => {
+                          const prior = all[field.key]
+                          if (!field.multiple) return { ...all, [field.key]: prior === option.value ? "" : option.value }
+                          const list = Array.isArray(prior) ? prior : []
+                          return { ...all, [field.key]: list.includes(option.value) ? list.filter((item) => item !== option.value) : [...list, option.value] }
+                        })
+                      }}
+                    >
+                      {option.label}
+                    </Button>
+                  )
+                })}
+              </div>
+            ) : (
+              <Input
+                aria-label={field.title || field.description || field.key}
+                placeholder={field.title === "Other" ? "Your own answer (optional)" : undefined}
+                value={typeof current === "string" ? current : ""}
+                disabled={disabled}
+                onChange={(event) => {
+                  const text = event.currentTarget.value
+                  setValues((all) => ({ ...all, [field.key]: text }))
+                }}
+              />
+            )}
+          </div>
+        )
+      })}
+      {!quick && (
+        <div>
+          <Button type="button" size="sm" variant="primary" disabled={disabled} onClick={() => onSubmit(JSON.stringify(values))}>
+            Submit
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function answerSummary(ask: ElicitationPayload, value?: string): string {
+  if (!value) return "—"
+  if (!ask.fields?.length) return value
+  try {
+    const answers = JSON.parse(value) as Record<string, unknown>
+    const parts = ask.fields.flatMap((field) => {
+      const picked = ([] as unknown[]).concat(answers[field.key] ?? []).map(String).filter(Boolean)
+      return picked.map((item) => field.options?.find((option) => option.value === item)?.label ?? item)
+    })
+    return parts.length ? parts.join(", ") : "skipped"
+  } catch {
+    return value
+  }
 }
 
 export function findPendingPermission(items: ThreadItem[]): ThreadItem | undefined {
@@ -447,49 +576,68 @@ function MessageContextMenu({
 
 function AgentBlock({
   text,
+  last,
+  streaming,
+  meta,
   onQuote,
   onFork,
   onRetry,
 }: {
   text: string
+  last?: boolean
+  streaming?: boolean
+  meta?: string
   onQuote?: (text: string) => void
   onFork?: () => void
   onRetry?: () => void
 }) {
+  const actions = text && !streaming
   return (
     <div data-slot="agent-message" className="group relative">
       <MessageContextMenu text={text} onQuote={onQuote} onFork={onFork} onRetry={onRetry}>
-        <AgentMessageBody text={text} />
+        <AgentMessageBody text={text} streaming={streaming} />
       </MessageContextMenu>
-      {text && (
-        <div className="mt-(--s1) flex justify-end gap-(--s1) min-[760px]:absolute min-[760px]:top-0 min-[760px]:right-0 min-[760px]:z-10 min-[760px]:mt-0 min-[760px]:rounded-(--r-pop) min-[760px]:bg-(--control) min-[760px]:p-(--s1) min-[760px]:opacity-0 min-[760px]:shadow-(--shadow-pop) min-[760px]:transition-opacity min-[760px]:group-hover:opacity-100 min-[760px]:group-focus-within:opacity-100">
-          <Button type="button" size="icon" variant="ghost" className="size-(--ctl-h-sm)" aria-label="Copy message" onClick={() => copyText(text)}>
+      {actions && (
+        // Always shown under the last answer; on hover or focus for older ones.
+        <div
+          data-slot="answer-actions"
+          className={`mt-(--s1) flex flex-wrap items-center gap-(--s1) transition-opacity ${last ? "" : "min-[760px]:opacity-0 min-[760px]:group-hover:opacity-100 min-[760px]:group-focus-within:opacity-100"}`}
+        >
+          <Button type="button" size="icon" variant="ghost" className="size-(--ctl-h-sm)" aria-label="Copy message" title="Copy" onClick={() => copyText(text)}>
             <Copy aria-hidden />
           </Button>
-          {onFork && (
-            <Button type="button" size="icon" variant="ghost" className="size-(--ctl-h-sm)" aria-label="Fork conversation" onClick={onFork}>
-              <GitFork aria-hidden />
-            </Button>
-          )}
           {onRetry && (
-            <Button type="button" size="icon" variant="ghost" className="size-(--ctl-h-sm)" aria-label="Retry last message" onClick={onRetry}>
+            <Button type="button" size="icon" variant="ghost" className="size-(--ctl-h-sm)" aria-label="Retry last message" title="Retry" onClick={onRetry}>
               <RotateCcw aria-hidden />
             </Button>
           )}
+          {onFork && (
+            <Button type="button" size="icon" variant="ghost" className="size-(--ctl-h-sm)" aria-label="Fork conversation" title="Fork from here" onClick={onFork}>
+              <GitFork aria-hidden />
+            </Button>
+          )}
+          {onQuote && (
+            <Button type="button" size="icon" variant="ghost" className="size-(--ctl-h-sm)" aria-label="Quote in reply" title="Quote" onClick={() => onQuote(text)}>
+              <Quote aria-hidden />
+            </Button>
+          )}
+          {last && meta && <span data-slot="answer-meta" className="ms-(--s2) text-(length:--fs-xs) tabular-nums text-(--fg3)">{meta}</span>}
         </div>
       )}
     </div>
   )
 }
+
 function CompactionBlock({ item }: { item: ThreadItem }) {
   const compaction = item.data as CompactionPayload
-  const label = compaction.status === "in_progress" ? "Compacting context…" : compaction.error ? "Context compaction failed" : "Context compacted"
+  const sizes = compaction.before !== undefined && compaction.after !== undefined ? ` · ${compactCount(compaction.before)} → ${compactCount(compaction.after)}` : ""
+  const label = compaction.status === "in_progress" ? "Compacting context" : compaction.error ? "Context compaction failed" : `Context compacted${sizes}`
   const rule = <span aria-hidden className="h-px flex-1 bg-(--sep)" />
   return (
     <details data-slot="conversation-compaction" aria-label="Context compaction" className="text-(length:--fs-xs) text-(--fg3)">
       <summary className="flex cursor-default list-none items-center gap-(--s3) marker:content-none [&::-webkit-details-marker]:hidden">
         {rule}
-        <span>{label}</span>
+        <span className={compaction.status === "in_progress" ? "shimmer" : undefined}>{label}</span>
         {rule}
       </summary>
       {compaction.summary && <p className="mt-(--s2) whitespace-pre-wrap text-(--fg2)">{compaction.summary}</p>}
@@ -508,6 +656,10 @@ function ThreadItemView({
   onQuote,
   onFork,
   onRetry,
+  next,
+  last,
+  streaming,
+  meta,
 }: {
   item: ThreadItem
   machine: string
@@ -517,23 +669,19 @@ function ThreadItemView({
   onQuote?: (text: string) => void
   onFork?: () => void
   onRetry?: () => void
+  /** ts of the item after this one; a thought lasted until then. */
+  next?: number
+  last?: boolean
+  streaming?: boolean
+  meta?: string
 }) {
   switch (item.kind) {
     case "user_message_chunk":
       return <UserMessageBody data={item.data} machine={machine} sessionId={sessionId} onQuote={onQuote} onFork={onFork} />
     case "agent_message_chunk":
-      return <AgentBlock text={chunkText(item.data)} onQuote={onQuote} onFork={onFork} onRetry={onRetry} />
+      return <AgentBlock text={chunkText(item.data)} last={last} streaming={streaming} meta={meta} onQuote={onQuote} onFork={onFork} onRetry={onRetry} />
     case "agent_thought_chunk":
-      return (
-        <details data-slot="thought-block" className="text-(length:--fs-sm)">
-          <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) text-(--fg2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
-            <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
-            <Sparkles aria-hidden className="size-3.5 shrink-0" />
-            Thought
-          </summary>
-          <p className="ml-(--s3) border-l-[0.5px] border-(--sep) py-(--s2) pl-(--s4) text-(--fg2) italic whitespace-pre-wrap">{chunkText(item.data)}</p>
-        </details>
-      )
+      return <ThoughtBlock text={chunkText(item.data)} ms={item.ts !== undefined && next !== undefined ? next - item.ts : undefined} />
     case "tool":
       return <ToolRow item={item} />
     case "permission":
@@ -551,6 +699,16 @@ function ThreadItemView({
         </div>
       )
     }
+    case "goal":
+      return <GoalLine goal={item.data as GoalState} />
+    case "task":
+      // A subagent's brief from its parent.
+      return (
+        <div data-slot="subagent-task" className="flex flex-col gap-(--s2)">
+          <p aria-hidden className="text-(length:--fs-xs) font-medium text-(--fg3)">Task</p>
+          <div className="rounded-(--r-sheet) bg-(--track) px-(--s4) py-(--s3)"><AgentMessageBody text={chunkText(item.data)} /></div>
+        </div>
+      )
     case "plan":
       return null
     default:
@@ -558,24 +716,101 @@ function ThreadItemView({
   }
 }
 
-// One work log per run of tool calls; user, agent, thought, permission and compaction items end the run.
-function groupTools(items: ThreadItem[]): (ThreadItem | ThreadItem[])[] {
-  const out: (ThreadItem | ThreadItem[])[] = []
+// One line per goal state change: set, paused, met, blocked, limited, cleared.
+function GoalLine({ goal }: { goal: GoalState }) {
+  const elapsed = goal.active_ms ? ` in ${clock(goal.active_ms)}` : ""
+  const turns = goal.turns ? ` · ${goal.turns} ${goal.turns === 1 ? "turn" : "turns"}` : ""
+  const text =
+    goal.state === "active" ? `Goal: ${goal.objective}` :
+    goal.state === "met" ? `Goal met${elapsed}${turns}` :
+    `${goalStateWords[goal.state]}${goal.state === "paused" || goal.state === "cleared" ? "" : elapsed}${turns}`
+  return (
+    <div data-slot="goal-line" className="flex items-center gap-(--s3) text-(length:--fs-xs) text-(--fg3)">
+      <Flag aria-hidden className="size-3.5 shrink-0" />
+      <span className="min-w-0 truncate">{text}</span>
+      {goal.last_reason && goal.state !== "active" && <span className="min-w-0 truncate text-(--fg2)">· {goal.last_reason}</span>}
+    </div>
+  )
+}
+
+type Entry = ThreadItem | ThreadItem[] | { cards: { subagent: Subagent; item: ThreadItem }[] }
+
+// One work log per run of tool calls; user, agent, thought, permission and compaction items end the
+// run. A tool that spawned a subagent (and a subagent seen before its tool) becomes a card, and
+// cards side by side share one "in parallel" heading.
+function groupItems(items: ThreadItem[], subagents: Record<string, Subagent>): Entry[] {
+  const byTool = new Map<string, Subagent>()
+  for (const subagent of Object.values(subagents)) if (subagent.toolCallId) byTool.set(subagent.toolCallId, subagent)
+  const toolCallIds = new Set(items.flatMap((item) => item.kind === "tool" ? [(item.data as ToolPayload).toolCallId] : []))
+  const out: Entry[] = []
   let batch: ThreadItem[] = []
   const flush = () => {
     if (batch.length === 0) return
     out.push(batch.length === 1 ? batch[0]! : [...batch])
     batch = []
   }
+  const card = (subagent: Subagent, item: ThreadItem) => {
+    flush()
+    const previous = out.at(-1)
+    if (previous && "cards" in previous) previous.cards.push({ subagent, item })
+    else out.push({ cards: [{ subagent, item }] })
+  }
   for (const item of items) {
-    if (item.kind === "tool") batch.push(item)
-    else if (item.kind !== "plan") {
+    if (item.kind === "tool") {
+      const spawned = byTool.get((item.data as ToolPayload).toolCallId ?? "")
+      if (spawned) card(spawned, item)
+      else batch.push(item)
+    } else if (item.kind === "subagent") {
+      const subagent = subagents[(item.data as { id: string }).id]
+      // A linked tool call shows this subagent's card in its place.
+      if (subagent && !(subagent.toolCallId && toolCallIds.has(subagent.toolCallId))) card(subagent, item)
+    } else if (item.kind !== "plan") {
       flush()
       out.push(item)
     }
   }
   flush()
   return out
+}
+
+// What the agent is doing right now, with how long it has been at it.
+export function livePhase(items: ThreadItem[], subagents: Record<string, Subagent>): { label: string; since?: number } {
+  const running = Object.values(subagents).filter(subagentRunning).length
+  if (running > 0) return { label: `${running} ${running === 1 ? "subagent" : "subagents"} running` }
+  const last = items.findLast((item) => item.kind !== "plan" && item.kind !== "goal")
+  if (last?.kind === "agent_thought_chunk") return { label: "Thinking", since: last.ts }
+  const tool = items.findLast((item) => item.kind === "tool" && (item.data as ToolPayload).status === "in_progress")
+  if (tool) {
+    const data = tool.data as ToolPayload
+    const command = data.command ?? (data.rawInput as { command?: string } | undefined)?.command
+    return { label: `Running ${command ?? data.title ?? data.kind ?? "a tool"}`, since: tool.ts }
+  }
+  if (last?.kind === "agent_message_chunk") return { label: "Writing", since: last.ts }
+  return { label: "Working", since: last?.ts }
+}
+
+function LiveLine({ items, subagents, turnStarted }: { items: ThreadItem[]; subagents: Record<string, Subagent>; turnStarted?: number }) {
+  const now = useNow(true)
+  const phase = livePhase(items, subagents)
+  const since = phase.since ?? turnStarted
+  return (
+    <p data-slot="thread-working" className="flex min-w-0 items-center gap-(--s3) text-(length:--fs-sm) text-(--fg3)">
+      <Spinner />
+      <span className="min-w-0 truncate">{phase.label}</span>
+      {since !== undefined && <span className="shrink-0 tabular-nums">{clock(Math.max(0, now - since))}</span>}
+    </p>
+  )
+}
+
+// "Worked 1m 52s · 14.2k tokens · $0.09", plus the time of the answer.
+export function turnMeta(turn: ThreadState["last_turn"], ts?: number): string {
+  const parts = [
+    turn ? `Worked ${clock(turn.ms)}` : undefined,
+    turn?.tokens ? `${compactCount(turn.tokens)} tokens` : undefined,
+    turn?.cost ? `$${turn.cost.toFixed(2)}` : undefined,
+    ts !== undefined ? new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : undefined,
+  ]
+  return parts.filter(Boolean).join(" · ")
 }
 
 export function ThreadView({
@@ -588,6 +823,12 @@ export function ThreadView({
   readOnly,
   agent,
   working,
+  subagents = {},
+  lastTurn,
+  turnStarted,
+  animateAfter,
+  onOpenSubagent,
+  onStopSubagent,
 }: {
   readOnly?: boolean
   agent?: string
@@ -598,38 +839,85 @@ export function ThreadView({
   onQuote?: (text: string) => void
   onFork?: () => void
   onRetry?: () => void
+  subagents?: Record<string, Subagent>
+  lastTurn?: ThreadState["last_turn"]
+  turnStarted?: number
+  /** Items with a newer seq arrived after the first paint and animate in. */
+  animateAfter?: number
+  onOpenSubagent?: (id: string) => void
+  onStopSubagent?: (id: string) => void
 }) {
   if (items.length === 0) {
-    return <p className="py-(--s7) text-center text-(length:--fs-sm) text-(--fg3)">No messages yet.</p>
+    return working ? <LiveLine items={items} subagents={subagents} turnStarted={turnStarted} /> : <p className="py-(--s7) text-center text-(length:--fs-sm) text-(--fg3)">No messages yet.</p>
   }
   const retry = latestUserPrompt(items) && onRetry ? onRetry : undefined
   const lastAgent = items.findLast((item) => item.kind === "agent_message_chunk")
   const compacted = items.some((item) => item.kind === "compaction")
+  const fresh = (item: ThreadItem) => animateAfter !== undefined && item.seq !== undefined && item.seq > animateAfter
+  const permission = (item: ThreadItem) => (
+    <fieldset disabled={readOnly} className="min-w-0">
+      <PermissionCard item={item} machine={machine} sessionId={sessionId} readOnly={readOnly} agent={agent} />
+    </fieldset>
+  )
+  const entries = groupItems(items, subagents)
+  // Each item's successor timestamp, found once instead of searching the list per item.
+  const nextTs = new Map<ThreadItem, number | undefined>()
+  for (let i = 0; i < items.length; i++) nextTs.set(items[i]!, items[i + 1]?.ts)
   return (
     <div className="flex flex-col gap-(--s4)">
-      {groupTools(items).map((entry, index) => {
-        if (Array.isArray(entry)) return <ToolGroup key={entry[0]!.seq ?? index} tools={entry} />
+      {entries.map((entry, index) => {
+        if (Array.isArray(entry)) {
+          return (
+            <div key={entry[0]!.seq ?? index} className={cn("thread-item", fresh(entry.at(-1)!) && "tool-enter")}>
+              <ToolGroup tools={entry} />
+            </div>
+          )
+        }
+        if ("cards" in entry) {
+          const running = entry.cards.filter(({ subagent }) => subagentRunning(subagent)).length
+          return (
+            <div key={entry.cards[0]!.item.seq ?? index} data-slot="subagent-group" className={`flex flex-col gap-(--s2) ${fresh(entry.cards[0]!.item) ? "thread-enter" : ""}`}>
+              {entry.cards.length > 1 && (
+                <p className="text-(length:--fs-xs) text-(--fg3)">
+                  {running > 0 ? `Running ${entry.cards.length} subagents in parallel` : `${entry.cards.length} subagents`}
+                </p>
+              )}
+              {entry.cards.map(({ subagent, item }) => (
+                <SubagentCard
+                  key={subagent.id}
+                  subagent={subagent}
+                  toolTitle={item.kind === "tool" ? (item.data as ToolPayload).title : undefined}
+                  renderPermission={permission}
+                  onOpen={onOpenSubagent ? () => onOpenSubagent(subagent.id) : undefined}
+                  onStop={!readOnly && onStopSubagent && !subagent.id.startsWith("tool:") ? () => onStopSubagent(subagent.id) : undefined}
+                />
+              ))}
+            </div>
+          )
+        }
         // The compaction block is the one divider for a compaction; the notice would repeat it.
         if (compacted && entry.kind === "divider" && (entry.data as NoticePayload).title === "Context compacted") return null
+        const isLastAgent = entry === lastAgent
         return (
-          <ThreadItemView
-            key={entry.seq ?? index}
-            item={entry}
-            machine={machine}
-            sessionId={sessionId}
-            readOnly={readOnly}
-            agent={agent}
-            onQuote={onQuote}
-            onFork={onFork}
-            onRetry={entry === lastAgent ? retry : undefined}
-          />
+          <div key={entry.seq ?? index} className={cn("thread-item", fresh(entry) && (entry.kind === "tool" ? "tool-enter" : "thread-enter"))}>
+            <ThreadItemView
+              item={entry}
+              machine={machine}
+              sessionId={sessionId}
+              readOnly={readOnly}
+              agent={agent}
+              onQuote={onQuote}
+              onFork={onFork}
+              onRetry={isLastAgent ? retry : undefined}
+              next={nextTs.get(entry)}
+              last={isLastAgent && !working}
+              streaming={isLastAgent && working}
+              meta={isLastAgent && !working ? turnMeta(lastTurn, entry.ts) : undefined}
+            />
+          </div>
         )
       })}
-      {working && (
-        <p data-slot="thread-working" className="flex items-center gap-(--s3) text-(length:--fs-sm) text-(--fg3)">
-          <Spinner /> Working…
-        </p>
-      )}
+      {working && <LiveLine items={items} subagents={subagents} turnStarted={turnStarted} />}
     </div>
   )
 }

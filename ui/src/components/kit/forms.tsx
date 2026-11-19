@@ -1,5 +1,7 @@
-import type { ComponentProps } from "react";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Fragment, type ComponentProps } from "react";
+import { ShieldAlert } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { menuRow, menuSurface } from "@/components/kit/overlays";
 import { cn } from "@/lib/utils";
 
 // Label column is 120 px (w-30) and right-aligned; stacks on phone widths.
@@ -41,20 +43,36 @@ export function PopupSelect({
 }: {
   value: string;
   onValueChange: (value: string) => void;
-  items: { value: string; label: string }[];
+  items: { value: string; label: string; disabled?: boolean; danger?: boolean }[];
   label: string;
   disabled?: boolean;
 }) {
+  // A dangerous choice stays visible after the menu closes: the trigger turns red with a shield.
+  const danger = items.find((item) => item.value === value)?.danger === true;
   return (
     <Select items={items} value={value} onValueChange={(next) => next && onValueChange(next)} disabled={disabled}>
-      <SelectTrigger aria-label={label} className="h-(--ctl-h) max-w-full min-w-0 rounded-(--r-ctl) text-(length:--fs) *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate">
+      <SelectTrigger
+        aria-label={label}
+        data-danger={danger}
+        className="h-(--ctl-h) max-w-full min-w-0 rounded-(--r-ctl) text-(length:--fs) *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate data-[danger=true]:bg-(--del) data-[danger=true]:text-(--danger-word) data-[danger=true]:shadow-[inset_0_0_0_.5px_var(--del-strong)] data-[danger=true]:[&_svg]:text-(--danger-word)"
+      >
+        {danger && <ShieldAlert aria-hidden className="size-3.5" />}
         <SelectValue />
       </SelectTrigger>
-      <SelectContent className="max-w-[min(90vw,40rem)] rounded-(--r-pop) text-(length:--fs)">
-        {items.map((item) => (
-          <SelectItem key={item.value} value={item.value} className="h-(--head-h) min-w-0 rounded-(--r-row) text-(length:--fs) [&_span]:truncate">
-            {item.label}
-          </SelectItem>
+      <SelectContent className={cn(menuSurface, "w-max min-w-(--anchor-width) max-w-[min(90vw,40rem)]")}>
+        {items.map((item, index) => (
+          <Fragment key={item.value}>
+            {/* Dangerous choices form their own group, as AppKit separates destructive items. */}
+            {item.danger && index > 0 && !items[index - 1]?.danger && <SelectSeparator />}
+            <SelectItem
+              value={item.value}
+              disabled={item.disabled}
+              data-danger={item.danger}
+              className={cn(menuRow, "min-w-0 pl-6 [&_span]:truncate")}
+            >
+              {item.label}
+            </SelectItem>
+          </Fragment>
         ))}
       </SelectContent>
     </Select>

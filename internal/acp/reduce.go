@@ -1,11 +1,13 @@
 package acp
 
 import (
+	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 )
 
-// ThreadItem is the reduced view shared by the gateway UI and ap hub TUI.
+// ThreadItem is the reduced view the worker keeps for session state.
 type ThreadItem struct {
 	Kind string          `json:"kind"`
 	Data json.RawMessage `json:"data,omitempty"`
@@ -24,6 +26,9 @@ type ThreadState struct {
 
 // ThreadReducer applies conversation entries without rescanning the full log.
 type ThreadReducer struct {
+	// StateOnly keeps only what Working and NeedsYou need: unanswered requests. A worker never
+	// renders the thread, so it skips message text, tools and plans and its memory stays bounded.
+	StateOnly   bool
 	state       ThreadState
 	tools       map[string]int
 	compactions map[string]int
@@ -42,23 +47,31 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 	if echo {
 		return reducer.state
 	}
+	// A subagent can run on after the parent's turn ends; only the parent's own activity is "working".
+	child := bytes.Contains(entry.Payload, []byte(`"`+SubagentKey+`"`)) && payloadSubagent(entry.Payload) != ""
 	switch entry.Kind {
 	case "agent_message_chunk", "user_message_chunk", "agent_thought_chunk":
-		state.appendChunk(entry)
-		if entry.Kind != "user_message_chunk" && !state.NeedsYou {
+		if !reducer.StateOnly {
+			state.appendChunk(entry)
+		}
+		if entry.Kind != "user_message_chunk" && !state.NeedsYou && !child {
 			state.Working = true
 		}
 	case "tool_call":
 		id := toolID(entry.Payload)
-		item := ThreadItem{Kind: "tool", Data: entry.Payload}
-		state.Items = append(state.Items, item)
-		if id != "" {
-			tools[id] = len(state.Items) - 1
+		if !reducer.StateOnly {
+			state.Items = append(state.Items, ThreadItem{Kind: "tool", Data: entry.Payload})
+			if id != "" {
+				tools[id] = len(state.Items) - 1
+			}
 		}
-		if !state.NeedsYou {
+		if !state.NeedsYou && !child {
 			state.Working = true
 		}
 	case "tool_call_update":
+		if reducer.StateOnly {
+			break
+		}
 		id := toolID(entry.Payload)
 		if idx, ok := tools[id]; ok {
 			state.Items[idx].Data = entry.Payload
@@ -66,7 +79,9 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 			state.Items = append(state.Items, ThreadItem{Kind: "tool", Data: entry.Payload})
 		}
 	case "plan":
-		state.Items = append(state.Items, ThreadItem{Kind: "plan", Data: entry.Payload})
+		if !reducer.StateOnly {
+			state.Items = append(state.Items, ThreadItem{Kind: "plan", Data: entry.Payload})
+		}
 		var plan struct {
 			Entries []struct {
 				Status  string `json:"status"`
@@ -113,11 +128,17 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 		resolveRequest(state.Items, "elicitation", "elicitationId", entry.Payload)
 		state.NeedsYou = hasOutstandingRequests(state.Items)
 	case "notice":
-		state.Items = append(state.Items, ThreadItem{Kind: "divider", Data: noticeViewPayload(entry.Payload)})
+		if !reducer.StateOnly {
+			state.Items = append(state.Items, ThreadItem{Kind: "divider", Data: noticeViewPayload(entry.Payload)})
+		}
 	case "compaction_update":
-		reducer.updateCompaction(entry.Payload)
+		if !reducer.StateOnly {
+			reducer.updateCompaction(entry.Payload)
+		}
 	case "compaction_summary_chunk":
-		reducer.appendCompactionSummary(entry.Payload)
+		if !reducer.StateOnly {
+			reducer.appendCompactionSummary(entry.Payload)
+		}
 	case "usage_update":
 		var usage struct {
 			Used *int `json:"used"`
@@ -150,19 +171,24 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 			state.CostUSD = *usage.CostUSD
 		}
 	case "turn_end", "agent_exit":
-		// A failed or cancelled turn leaves its permission unanswerable; elicitations can outlive
-		// a turn and end only with the agent.
+		// A failed or cancelled turn leaves its permissions and questions unanswerable; only a URL
+		// elicitation (an MCP sign-in) can outlive a turn, and it ends with the agent.
 		state.Working = false
 		failed := entry.Kind == "turn_end" && turnFailed(entry.Payload)
 		for i := range state.Items {
-			if isOutstandingRequest(state.Items[i]) && (entry.Kind == "agent_exit" || failed && state.Items[i].Kind == "permission") {
+			if isOutstandingRequest(state.Items[i]) && (entry.Kind == "agent_exit" || failed && !isURLElicitation(state.Items[i])) {
 				setItemFlag(&state.Items[i], "inactive")
 			}
 		}
 		state.NeedsYou = hasOutstandingRequests(state.Items)
 	case "prompt":
 		state.Working = true
-		state.Items = append(state.Items, ThreadItem{Kind: "user_message_chunk", Data: entry.Payload})
+		if !reducer.StateOnly {
+			state.Items = append(state.Items, ThreadItem{Kind: "user_message_chunk", Data: entry.Payload})
+		}
+	}
+	if reducer.StateOnly {
+		state.Items = slices.DeleteFunc(state.Items, func(item ThreadItem) bool { return !isOutstandingRequest(item) })
 	}
 	return reducer.state
 }
@@ -336,8 +362,12 @@ func resolveRequest(items []ThreadItem, kind, idField string, result json.RawMes
 		if requestID != id {
 			continue
 		}
-		request["resolved"] = json.RawMessage("true")
-		request["result"] = result
+		if string(payload["cancelled"]) == "true" {
+			request["inactive"] = json.RawMessage("true")
+		} else {
+			request["resolved"] = json.RawMessage("true")
+			request["result"] = result
+		}
 		if data, err := json.Marshal(request); err == nil {
 			items[i].Data = data
 		}
@@ -371,6 +401,13 @@ func isOutstandingRequest(item ThreadItem) bool {
 		return request.RequestID != ""
 	}
 	return request.ElicitationID != ""
+}
+
+func isURLElicitation(item ThreadItem) bool {
+	var request struct {
+		AgentElicitationID string `json:"agentElicitationId"`
+	}
+	return item.Kind == "elicitation" && json.Unmarshal(item.Data, &request) == nil && request.AgentElicitationID != ""
 }
 
 func setItemFlag(item *ThreadItem, flag string) {

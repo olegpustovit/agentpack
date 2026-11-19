@@ -37,13 +37,21 @@ function RenameForm({ row, onDone }: { row: ListedSession; onDone: () => void })
   const queryClient = useQueryClient()
   const [name, setName] = useState(row.name ?? "")
   const [blank, setBlank] = useState(false)
+  const listKey = sessionsQuery(row.machine, false).queryKey
+  const setListedName = (name: string | undefined) =>
+    queryClient.setQueryData<SessionInfo[]>(listKey, (items) => items?.map((item) => (item.id === row.id ? { ...item, name } : item)))
   const rename = useMutation({
     mutationFn: (next: string) =>
       api<SessionInfo>(`/api/sessions/${encodeURIComponent(row.id)}`, { machine: row.machine, method: "PATCH", body: { name: next } }),
+    // The list shows the new name at once; the sheet stays open so a refusal still shows under the field.
+    onMutate: (next) => {
+      const previous = queryClient.getQueryData<SessionInfo[]>(listKey)?.find((item) => item.id === row.id)?.name
+      setListedName(next)
+      return { previous }
+    },
+    onError: (_, __, context) => setListedName(context?.previous),
     onSuccess: (updated) => {
-      queryClient.setQueryData<SessionInfo[]>(sessionsQuery(row.machine, false).queryKey, (items) =>
-        items?.map((item) => (item.id === row.id ? { ...item, name: updated.name } : item)),
-      )
+      setListedName(updated.name)
       hud.success("Session renamed")
       onDone()
     },

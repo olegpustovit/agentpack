@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -247,6 +248,24 @@ func TestReduceLogTurnEndKeepsPendingRequest(t *testing.T) {
 	}
 }
 
+func TestReduceLogCancelledTurnReleasesQuestion(t *testing.T) {
+	// The stuck chat: an AskUserQuestion form, then the user interrupted the turn.
+	entries := []LogEntry{
+		{Kind: "prompt", Payload: json.RawMessage(`{"text":"hi"}`)},
+		{Kind: "elicitation", Payload: json.RawMessage(`{"elicitationId":"e1","prompt":"Please answer the following questions."}`)},
+		{Kind: "elicitation", Payload: json.RawMessage(`{"elicitationId":"e2","agentElicitationId":"oauth"}`)},
+		{Kind: "turn_end", Payload: json.RawMessage(`{"stopReason":"cancelled"}`)},
+	}
+	state := ReduceLog(entries)
+	if !strings.Contains(string(state.Items[1].Data), `"inactive":true`) || strings.Contains(string(state.Items[2].Data), "inactive") {
+		t.Fatalf("form must end with the turn, a sign-in URL must outlive it: %+v", state.Items)
+	}
+	state = ReduceLog(append(entries, LogEntry{Kind: "elicitation_result", Payload: json.RawMessage(`{"elicitationId":"e2","cancelled":true}`)}))
+	if state.NeedsYou {
+		t.Fatalf("a withdrawn request still needs the user: %+v", state.Items)
+	}
+}
+
 func TestThreadReducerAppliesUpdatesIncrementally(t *testing.T) {
 	var reducer ThreadReducer
 	if state := reducer.Apply(LogEntry{Kind: "prompt", Payload: json.RawMessage(`{"text":"hello"}`)}); !state.Working {
@@ -280,5 +299,32 @@ func TestReduceLogFailedTurnRetiresItsPermission(t *testing.T) {
 	})
 	if state.NeedsYou || isOutstandingRequest(state.Items[0]) {
 		t.Fatalf("permission outlived its turn: %+v", state)
+	}
+}
+
+func TestStateOnlyReducerMatchesFullStateWithBoundedItems(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "acp", "full.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var full, lean ThreadReducer
+	lean.StateOnly = true
+	for line := range splitLines(data) {
+		if line == "" {
+			continue
+		}
+		var entry LogEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatal(err)
+		}
+		want, got := full.Apply(entry), lean.Apply(entry)
+		if got.Working != want.Working || got.NeedsYou != want.NeedsYou {
+			t.Fatalf("after %s: working %v/%v needs you %v/%v", entry.Kind, got.Working, want.Working, got.NeedsYou, want.NeedsYou)
+		}
+		for _, item := range got.Items {
+			if !isOutstandingRequest(item) {
+				t.Fatalf("state-only reducer kept %s", item.Kind)
+			}
+		}
 	}
 }

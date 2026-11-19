@@ -35,6 +35,9 @@ func ComputeLaunchDigest(projectRoot, workspace string, effective mode.Effective
 		return "", err
 	}
 	hash.Write(dot)
+	if index, err := paths.MCPCredentialIndexPath(); err == nil {
+		writeDigestFile(hash, "mcp_credentials", index)
+	}
 	hash.Write([]byte("staging_root\x00" + os.Getenv("AGENTPACK_STAGING_ROOT")))
 	stagingRoot, err := paths.StagingRootForMode(projectRoot, effective.Name())
 	if err != nil {

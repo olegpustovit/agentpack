@@ -112,6 +112,6 @@ test("status bar totals projects and sessions on the machines routes only", asyn
   await expect(page.getByText("3 projects · 2 sessions")).toBeVisible()
 
   await page.goto("/sessions")
-  await expect(page.getByRole("link", { name: "New session" })).toBeVisible()
+  await expect(page.getByRole("link", { name: "New session", exact: true })).toBeVisible()
   await expect(page.getByText(/ projects · /)).toHaveCount(0)
 })

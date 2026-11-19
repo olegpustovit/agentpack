@@ -26,6 +26,7 @@ function folder(directory: string, packages: ProjectPackage[] = [], mcp: Project
     ],
     packages,
     mcp,
+    modes: [],
     error: "",
   }
 }

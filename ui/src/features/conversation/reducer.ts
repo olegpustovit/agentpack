@@ -1,4 +1,29 @@
-import type { CompactionPayload, LogEntry, ThreadItem, ThreadState, UserMessagePayload } from "./model"
+import type { GoalState } from "@/lib/api-types"
+import type { CompactionPayload, LogEntry, QueuedPrompt, Subagent, ThreadItem, ThreadState, UserMessagePayload } from "./model"
+
+// Entries from a subagent carry its session id (or "tool:<id>" for agents that only tag the parent tool call).
+function subagentOf(payload: unknown): string | undefined {
+  const id = (payload as { _subagent?: unknown } | null)?._subagent
+  return typeof id === "string" && id ? id : undefined
+}
+
+type SubagentUpdate = {
+  sessionId?: string
+  title?: string | null
+  description?: string | null
+  capabilities?: { cancel?: object | null } | null
+  state?: { state?: string; stopReason?: string | null } | null
+}
+
+// The child a parent tool call spawned: an RFD session link in its content.
+function linkedSession(payload: unknown): string | undefined {
+  const content = (payload as { content?: { type?: string; sessionId?: string }[] } | null)?.content
+  return Array.isArray(content) ? content.find((block) => block?.type === "session" && block.sessionId)?.sessionId : undefined
+}
+
+function chunkText(data: unknown): string {
+  return (data as UserMessagePayload).text?.text ?? ""
+}
 
 function toolID(payload: unknown): string {
   const body = payload as { toolCallId?: string }
@@ -24,15 +49,13 @@ function appendChunk(state: ThreadState, entry: LogEntry) {
   const items = state.items
   const last = items[items.length - 1]
   if (!last || last.kind !== entry.kind) {
-    state.items = [...items, { kind: entry.kind, data: entry.payload }]
+    items.push({ kind: entry.kind, data: entry.payload })
     return
   }
-  const next = items.slice(0, -1)
   try {
-    next.push({ ...last, data: mergeTextChunks(last.data, entry.payload) })
-    state.items = next
+    items[items.length - 1] = { ...last, data: mergeTextChunks(last.data, entry.payload) }
   } catch {
-    state.items = [...items, { kind: entry.kind, data: entry.payload }]
+    items.push({ kind: entry.kind, data: entry.payload })
   }
 }
 function hasOutstandingRequests(items: ThreadItem[]): boolean {
@@ -48,16 +71,15 @@ function resolveRequest(state: ThreadState, kind: "permission" | "elicitation", 
   const result = payload as Record<string, unknown>
   const id = result[idKey]
   if (typeof id !== "string") return
-  const items = state.items.slice()
+  const items = state.items
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i]!
     const data = item.data as Record<string, unknown> | undefined
     if (item.kind === kind && data?.[idKey] === id && !data.resolved && !data.inactive) {
-      items[i] = { ...item, data: { ...data, resolved: true, result: payload } }
+      items[i] = { ...item, data: result.cancelled === true ? { ...data, inactive: true } : { ...data, resolved: true, result: payload } }
       break
     }
   }
-  state.items = items
   state.needs_you = hasOutstandingRequests(state.items)
 
 }
@@ -94,24 +116,55 @@ function updateCompaction(state: ThreadState, compactionId: string, patch: Compa
       ? `${current?.summary ?? ""}${patch.appendSummary}`
       : patch.summary ?? current?.summary ?? ""
   const error = Object.prototype.hasOwnProperty.call(patch, "error") ? patch.error : current?.error
-  const data = { compactionId, status, summary, ...(error === undefined ? {} : { error }) }
-  if (index < 0) state.items = [...state.items, { kind: "compaction", data }]
-  else {
-    const items = state.items.slice()
-    items[index] = { ...state.items[index]!, data }
-    state.items = items
-  }
+  const { error: _previous, ...kept } = current ?? ({} as Partial<CompactionPayload>)
+  const data = { ...kept, compactionId, status, summary, ...(error === undefined ? {} : { error }) }
+  if (index < 0) state.items.push({ kind: "compaction", data })
+  else state.items[index] = { ...state.items[index]!, data }
 }
 
-export function reduceLog(entries: LogEntry[]): ThreadState {
-  const state: ThreadState = { items: [], needs_you: false, working: false }
-  const tools: Record<string, number> = {}
-  let afterPrompt = false
-  for (const entry of entries) {
+// ThreadReducer folds log entries one at a time. Items are updated in place and replaced, never mutated, so a
+// snapshot's copy of the list stays valid while later entries arrive: each new entry costs O(1) plus one copy.
+class ThreadReducer {
+  private state: ThreadState = { items: [], needs_you: false, working: false }
+  private tools: Record<string, number> = {}
+  private children = new Map<string, ThreadReducer>()
+  private meta = new Map<string, Omit<Subagent, "thread" | "tools">>()
+  private queue = new Map<string, QueuedPrompt>()
+  private turn: { ts: number; tokens?: number; cost?: number } | undefined
+  private compacting: string | undefined
+  private goal: GoalState | undefined
+  private afterPrompt = false
+
+  constructor(private readonly nested = false) {}
+
+  // The first sight of a subagent places its card in the thread; a linked tool call takes the card's place.
+  private child(id: string, entry: LogEntry) {
+    let found = this.meta.get(id)
+    if (!found) {
+      found = { id, state: "running", cancellable: false, startedTs: entry.ts }
+      if (id.startsWith("tool:")) found.toolCallId = id.slice(5)
+      this.meta.set(id, found)
+      this.state.items.push({ kind: "subagent", data: { id }, seq: entry.seq, ts: entry.ts })
+    }
+    return found
+  }
+
+  apply(entry: LogEntry) {
+    const { state, tools, meta, queue, nested } = this
+    // Answers are logged by the gateway without a child stamp; each child resolves its own request by id.
+    if (!nested && (entry.kind === "permission_result" || entry.kind === "elicitation_result")) for (const reducer of this.children.values()) reducer.apply(entry)
+    const sub = nested ? undefined : subagentOf(entry.payload)
+    if (sub) {
+      let reducer = this.children.get(sub)
+      if (!reducer) this.children.set(sub, (reducer = new ThreadReducer(true)))
+      reducer.apply(entry)
+      this.child(sub, entry)
+      return
+    }
     // Some agents (Antigravity) echo the prompt back as a user chunk; the prompt entry already shows it.
-    const echo: boolean = afterPrompt && entry.kind === "user_message_chunk"
-    afterPrompt = entry.kind === "prompt" || echo
-    if (echo) continue
+    const echo: boolean = this.afterPrompt && entry.kind === "user_message_chunk"
+    this.afterPrompt = entry.kind === "prompt" || echo
+    if (echo) return
     switch (entry.kind) {
       case "agent_message_chunk":
       case "user_message_chunk":
@@ -121,7 +174,7 @@ export function reduceLog(entries: LogEntry[]): ThreadState {
         break
       case "tool_call": {
         const id = toolID(entry.payload)
-        state.items = [...state.items, { kind: "tool", data: entry.payload }]
+        state.items.push({ kind: "tool", data: entry.payload })
         if (id) tools[id] = state.items.length - 1
         if (!state.needs_you) state.working = true
         break
@@ -130,18 +183,16 @@ export function reduceLog(entries: LogEntry[]): ThreadState {
         const id = toolID(entry.payload)
         const idx = tools[id]
         if (idx !== undefined) {
-          const items = state.items.slice()
-          const prev = items[idx]!
+          const prev = state.items[idx]!
           // ACP updates are partial: a status or output update keeps the title and kind from earlier.
-          items[idx] = { ...prev, data: { ...(prev.data as object), ...(entry.payload as object) }, endTs: entry.ts }
-          state.items = items
+          state.items[idx] = { ...prev, data: { ...(prev.data as object), ...(entry.payload as object) }, endTs: entry.ts }
         } else {
-          state.items = [...state.items, { kind: "tool", data: entry.payload }]
+          state.items.push({ kind: "tool", data: entry.payload })
         }
         break
       }
       case "plan": {
-        state.items = [...state.items, { kind: "plan", data: entry.payload }]
+        state.items.push({ kind: "plan", data: entry.payload })
         const entries = (entry.payload as { entries?: { status?: string; content?: string }[] }).entries ?? []
         const active =
           entries.find((item) => item.status === "in_progress") ??
@@ -151,21 +202,21 @@ export function reduceLog(entries: LogEntry[]): ThreadState {
         break
       }
       case "permission_request":
-        state.items = [...state.items, { kind: "permission", data: entry.payload }]
+        state.items.push({ kind: "permission", data: entry.payload })
         state.needs_you = hasOutstandingRequests(state.items)
         break
       case "permission_result":
         resolveRequest(state, "permission", "requestId", entry.payload)
         break
       case "elicitation":
-        state.items = [...state.items, { kind: "elicitation", data: entry.payload }]
+        state.items.push({ kind: "elicitation", data: entry.payload })
         state.needs_you = hasOutstandingRequests(state.items)
         break
       case "elicitation_result":
         resolveRequest(state, "elicitation", "elicitationId", entry.payload)
         break
       case "notice":
-        state.items = [...state.items, { kind: "divider", data: entry.payload }]
+        state.items.push({ kind: "divider", data: entry.payload })
         break
       case "compaction_update": {
         const update = entry.payload as {
@@ -182,6 +233,10 @@ export function reduceLog(entries: LogEntry[]): ThreadState {
           patch.error = typeof update.error === "string" ? update.error : undefined
         }
         updateCompaction(state, update.compactionId, patch)
+        if (patch.status === "in_progress" && state.context_tokens !== undefined) {
+          this.compacting = update.compactionId
+          patchCompaction(state, update.compactionId, { before: state.context_tokens })
+        }
         break
       }
       case "compaction_summary_chunk": {
@@ -199,39 +254,173 @@ export function reduceLog(entries: LogEntry[]): ThreadState {
         }
         state.context_tokens = usage.used
         state.context_limit = usage.size
+        const compacting = this.compacting
+        if (compacting && usage.used !== undefined) {
+          const item = state.items.find((candidate) => candidate.kind === "compaction" && (candidate.data as CompactionPayload).compactionId === compacting)
+          if (item && (item.data as CompactionPayload).status !== "in_progress") {
+            patchCompaction(state, compacting, { after: usage.used })
+            this.compacting = undefined
+          }
+        }
         state.cost_usd = usage.cost?.currency === "USD" ? usage.cost?.amount : undefined
         break
       }
-      case "turn_end":
-        state.working = false
-        // A failed or cancelled turn leaves its permission unanswerable.
-        if (!["error", "cancelled"].includes((entry.payload as { stopReason?: string }).stopReason ?? "")) break
-        state.items = state.items.map((item) => {
-          const data = item.data as { requestId?: string; resolved?: boolean; inactive?: boolean } | undefined
-          return item.kind === "permission" && data?.requestId && !data.resolved && !data.inactive ? { ...item, data: { ...data, inactive: true } } : item
-        })
-        state.needs_you = hasOutstandingRequests(state.items)
+      case "subagent_update": {
+        const update = entry.payload as SubagentUpdate
+        if (!update.sessionId) break
+        const found = this.child(update.sessionId, entry)
+        if (update.title !== undefined) found.title = update.title ?? undefined
+        if (update.description !== undefined) found.description = update.description ?? undefined
+        if (update.capabilities !== undefined) found.cancellable = Boolean(update.capabilities?.cancel)
+        if (update.state !== undefined) {
+          found.state = update.state?.state ?? "unknown"
+          found.stopReason = update.state?.stopReason ?? undefined
+          found.endTs = found.state === "idle" ? entry.ts : undefined
+        }
         break
+      }
+      case "subagent_progress": {
+        const progress = entry.payload as { sessionId?: string; toolCallId?: string; usage?: { totalTokens?: number }; lastToolName?: string }
+        const id = progress.sessionId ?? (progress.toolCallId ? `tool:${progress.toolCallId}` : undefined)
+        if (!id) break
+        const found = this.child(id, entry)
+        if (typeof progress.usage?.totalTokens === "number") found.tokens = progress.usage.totalTokens
+        if (progress.lastToolName) found.lastTool = progress.lastToolName
+        break
+      }
+      case "session_message":
+      case "session_message_chunk": {
+        // Parent stream: the task handed to a child (places its card) or the child's reply.
+        const message = entry.payload as { messageId?: string; senderSessionId?: string; recipientSessionId?: string }
+        const to = message.recipientSessionId && message.recipientSessionId !== message.senderSessionId ? message.recipientSessionId : undefined
+        if (nested) {
+          const text = compactionText((entry.payload as { content?: unknown }).content)
+          const last = state.items.at(-1)
+          if (entry.kind === "session_message_chunk" && last?.kind === "task") {
+            state.items[state.items.length - 1] = { ...last, data: { text: { text: chunkText(last.data) + text } } }
+          } else if (text) state.items.push({ kind: "task", data: { text: { text } } })
+        } else if (to && meta.has(to)) this.child(to, entry)
+        break
+      }
+      case "queued_prompt": {
+        const queued = entry.payload as QueuedPrompt
+        if (queued.queueId) queue.set(queued.queueId, queued)
+        break
+      }
+      case "dequeued_prompt":
+        queue.delete((entry.payload as { queueId?: string }).queueId ?? "")
+        break
+      case "goal_update": {
+        const next = entry.payload as GoalState
+        if (!next?.state) break
+        // The thread records each change of state, not every clock tick.
+        if (next.state !== this.goal?.state) state.items.push({ kind: "goal", data: next })
+        this.goal = next.state === "cleared" ? undefined : next
+        break
+      }
+      case "turn_end": {
+        state.working = false
+        const turn = this.turn
+        if (turn) {
+          const tokens = state.context_tokens !== undefined && turn.tokens !== undefined ? state.context_tokens - turn.tokens : undefined
+          const cost = state.cost_usd !== undefined && turn.cost !== undefined ? state.cost_usd - turn.cost : undefined
+          state.last_turn = { ms: entry.ts - turn.ts, tokens: tokens !== undefined && tokens > 0 ? tokens : undefined, cost: cost !== undefined && cost > 0 ? cost : undefined }
+          this.turn = undefined
+        }
+        // A failed or cancelled turn leaves its permissions and questions unanswerable; an MCP sign-in URL outlives it.
+        if (!["error", "cancelled"].includes((entry.payload as { stopReason?: string }).stopReason ?? "")) break
+        deactivate(state, (item, data) => item.kind === "permission" ? !!data?.requestId : item.kind === "elicitation" && !!data?.elicitationId && !data.agentElicitationId)
+        break
+      }
       case "agent_exit":
         state.working = false
-        state.items = state.items.map((item) => {
-          const data = item.data as { requestId?: string; elicitationId?: string; resolved?: boolean; inactive?: boolean } | undefined
-          const hasID = item.kind === "permission" ? !!data?.requestId : !!data?.elicitationId
-          return (item.kind === "permission" || item.kind === "elicitation") && hasID && !data?.resolved && !data?.inactive
-            ? { ...item, data: { ...data, inactive: true } }
-            : item
-        })
-        state.needs_you = hasOutstandingRequests(state.items)
+        deactivate(state, (item, data) => item.kind === "permission" ? !!data?.requestId : item.kind === "elicitation" && !!data?.elicitationId)
         break
       case "prompt":
         state.working = true
-        state.items = [...state.items, { kind: "user_message_chunk", data: entry.payload }]
+        this.turn = { ts: entry.ts, tokens: state.context_tokens, cost: state.cost_usd }
+        state.items.push({ kind: "user_message_chunk", data: entry.payload })
         break
     }
-    // New items are always appended; replaced ones spread the original, so only fresh ones lack a seq.
+    // Fresh and replaced items carry the entry that last changed them; a replaced one keeps its first seq.
     for (let i = state.items.length - 1; i >= 0 && state.items[i]!.seq === undefined; i--) {
       state.items[i] = { ...state.items[i]!, seq: entry.seq, ts: entry.ts }
     }
+    if (entry.kind === "tool_call" || entry.kind === "tool_call_update") {
+      const linked = linkedSession(entry.payload)
+      const id = (entry.payload as { toolCallId?: string }).toolCallId
+      if (linked && id) this.child(linked, entry).toolCallId = id
+    }
   }
-  return state
+
+  // A new state object each call; the reducer's own list keeps changing afterwards.
+  snapshot(): ThreadState {
+    const state: ThreadState = { ...this.state, items: this.state.items.slice() }
+    if (this.queue.size > 0) state.queue = [...this.queue.values()]
+    if (this.goal) state.goal = this.goal
+    if (state.working) state.turn_started = this.turn?.ts
+    if (this.meta.size > 0) {
+      state.subagents = {}
+      for (const [id, info] of this.meta) {
+        const thread = this.children.get(id)?.snapshot() ?? new ThreadReducer(true).snapshot()
+        const tools = thread.items.filter((item) => item.kind === "tool")
+        const last = tools.at(-1)?.data as { title?: string } | undefined
+        state.subagents[id] = {
+          ...info,
+          thread,
+          tools: tools.length,
+          tokens: info.tokens ?? thread.context_tokens,
+          lastTool: last?.title ?? info.lastTool,
+        }
+        // A child waiting on you makes the whole chat wait on you.
+        if (thread.needs_you) state.needs_you = true
+      }
+    }
+    return state
+  }
+}
+
+function deactivate(state: ThreadState, applies: (item: ThreadItem, data: { requestId?: string; elicitationId?: string; agentElicitationId?: string } | undefined) => boolean) {
+  const items = state.items
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!
+    const data = item.data as { requestId?: string; elicitationId?: string; resolved?: boolean; inactive?: boolean } | undefined
+    if (applies(item, data) && !data?.resolved && !data?.inactive) items[i] = { ...item, data: { ...data, inactive: true } }
+  }
+  state.needs_you = hasOutstandingRequests(items)
+}
+
+export function reduceLog(entries: LogEntry[], nested = false): ThreadState {
+  const reducer = new ThreadReducer(nested)
+  for (const entry of entries) reducer.apply(entry)
+  return reducer.snapshot()
+}
+
+// Per-chat reducers, so a streamed entry applies alone instead of replaying the log. A refetch hands over
+// new entry objects, which no longer match the last applied one, and rebuilds once.
+const threads = new Map<string, { reducer: ThreadReducer; count: number; last: LogEntry | undefined; first: LogEntry | undefined; state: ThreadState }>()
+const THREADS_KEPT = 16
+
+export function reduceThread(key: string, entries: LogEntry[]): ThreadState {
+  let cached = threads.get(key)
+  if (cached && cached.count === entries.length && cached.last === entries.at(-1) && cached.first === entries[0]) return cached.state
+  if (!cached || entries.length < cached.count || cached.first !== entries[0] || (cached.count > 0 && entries[cached.count - 1] !== cached.last)) {
+    cached = { reducer: new ThreadReducer(), count: 0, last: undefined, first: entries[0], state: { items: [], needs_you: false, working: false } }
+  }
+  for (let i = cached.count; i < entries.length; i++) cached.reducer.apply(entries[i]!)
+  cached.count = entries.length
+  cached.last = entries.at(-1)
+  cached.state = cached.reducer.snapshot()
+  threads.delete(key)
+  threads.set(key, cached)
+  if (threads.size > THREADS_KEPT) threads.delete(threads.keys().next().value!)
+  return cached.state
+}
+
+function patchCompaction(state: ThreadState, compactionId: string, patch: Partial<CompactionPayload>) {
+  const items = state.items
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!
+    if (item.kind === "compaction" && (item.data as CompactionPayload).compactionId === compactionId) items[i] = { ...item, data: { ...(item.data as object), ...patch } }
+  }
 }

@@ -243,6 +243,9 @@ func renderMCPServer(server mcp.Server) string {
 	if oauth := renderMCPOAuth(server.OAuth); oauth != "" {
 		fields = append(fields, "oauth = "+oauth)
 	}
+	if server.Credential != "" {
+		fields = append(fields, "credential = "+quoteString(server.Credential))
+	}
 	if len(fields) == 0 {
 		return "{}"
 	}

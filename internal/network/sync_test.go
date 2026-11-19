@@ -16,6 +16,7 @@ import (
 
 	"github.com/tmaxmax/go-sse"
 
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -452,5 +453,39 @@ func TestStateManagerCancelsItsPeerWorkers(t *testing.T) {
 	}
 	if _, ok := g.statePulls.Load("trusted"); ok {
 		t.Fatal("stopped pull worker remained registered")
+	}
+}
+
+type countingSink struct{ errors atomic.Int32 }
+
+func (s *countingSink) Write(event obs.Event) {
+	if event.Level == "error" {
+		s.errors.Add(1)
+	}
+}
+
+func TestStatePeerRecordsARepeatedFailureOnce(t *testing.T) {
+	target, _, _ := syncGateway(t, "target")
+	sink := &countingSink{}
+	ctx, cancel := context.WithCancel(obs.WithSink(t.Context(), sink, obs.Metadata{}))
+	var attempts atomic.Int32
+	failure := errors.New("peer is down")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		target.runStatePeer(ctx, "trusted", nil, time.Millisecond, func(context.Context, string) (*url.URL, error) {
+			if attempts.Add(1) == 5 {
+				failure = errors.New("peer needs update")
+			}
+			return nil, failure
+		})
+	}()
+	for attempts.Load() < 10 {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	if got := sink.errors.Load(); got != 2 {
+		t.Fatalf("recorded %d failures for two distinct errors over %d attempts", got, attempts.Load())
 	}
 }

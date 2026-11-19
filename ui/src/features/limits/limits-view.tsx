@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { getRouteApi } from "@tanstack/react-router"
 import { Copy, RefreshCw } from "lucide-react"
 import { Meter } from "@/components/kit/data"
@@ -16,12 +16,14 @@ import { cn } from "@/lib/utils"
 import { limitsQuery } from "./queries"
 import { loginCommands, needsLogin, observedAt, providerGroups, remainingPercent, resetText, windowsOf, type LimitReport, type ProviderGroup } from "./model"
 
+const limitsRoute = getRouteApi("/_app/limits")
+
 export function LimitsView() {
   const machines = useMachines()
   const queries = useReplicatedQueries(limitsQuery)
   const now = useMinuteTick()
 
-  const { machine: only } = getRouteApi("/_app/limits").useSearch()
+  const { machine: only } = limitsRoute.useSearch()
   const reports: LimitReport[] = machines.filter((machine) => !only || machine.id === only).flatMap((machine) =>
     (queries.byMachine[machine.id]?.data ?? []).map((snapshot) => ({ id: machine.id, name: machine.name, snapshot })),
   )
@@ -165,18 +167,19 @@ function useMinuteTick(): number {
 }
 
 // Each machine's response lands in its cache as it arrives, not after the slowest one finishes.
+async function refreshOne(queryClient: QueryClient, machine: Machine): Promise<void> {
+  try {
+    await api("/api/limits/refresh", { machine: machine.id, method: "POST" })
+    await queryClient.invalidateQueries({ queryKey: limitsQuery(machine.id, false).queryKey })
+  } catch (error) {
+    hud.error(`Couldn't refresh limits on ${machine.name}: ${(error as Error).message}`, () => void refreshOne(queryClient, machine))
+  }
+}
+
 function RefreshButton({ machines }: { machines: Machine[] }) {
   const queryClient = useQueryClient()
-  async function refreshOne(machine: Machine) {
-    try {
-      await api("/api/limits/refresh", { machine: machine.id, method: "POST" })
-      await queryClient.invalidateQueries({ queryKey: limitsQuery(machine.id, false).queryKey })
-    } catch (error) {
-      hud.error(`Couldn't refresh limits on ${machine.name}: ${(error as Error).message}`, () => void refreshOne(machine))
-    }
-  }
   const refresh = useMutation({
-    mutationFn: () => Promise.all(machines.filter((machine) => machine.online).map(refreshOne)),
+    mutationFn: () => Promise.all(machines.filter((machine) => machine.online).map((machine) => refreshOne(queryClient, machine))),
   })
   return (
     <ToolbarSlot>

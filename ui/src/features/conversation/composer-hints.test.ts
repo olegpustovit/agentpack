@@ -1,15 +1,32 @@
 import { describe, expect, it } from "vitest"
-import { agentCommands, applyHint, filterAtHints, filterSlashHints, moveHint } from "./composer-hints"
+import { afterEach } from "vitest"
+import { agentCommands, applyHint, cachedCommands, filterAtHints, filterSlashHints, moveHint, rememberCommands } from "./composer-hints"
 
 describe("composer hints", () => {
+  afterEach(() => localStorage.clear())
   it("lists the agent's own commands with the gateway's", () => {
     const commands = agentCommands([
       { kind: "available_commands_update", payload: { availableCommands: [{ name: "old" }] } },
       { kind: "available_commands_update", payload: { availableCommands: [{ name: "compact", description: "Compact" }, { name: "agentpack-bundle:ponytail" }] } },
     ])
-    expect(filterSlashHints("/", commands).map((item) => item.value)).toEqual(["/compact", "/agentpack-bundle:ponytail", "/fork", "/terminal"])
+    expect(filterSlashHints("/", commands).map((item) => item.value)).toEqual(["/goal", "/compact", "/fork", "/terminal", "/agentpack-bundle:ponytail"])
     expect(filterSlashHints("/pony", commands).map((item) => item.value)).toEqual(["/agentpack-bundle:ponytail"])
     expect(filterSlashHints("/compact now", commands)).toEqual([])
+  })
+
+  it("matches a slash command at the start of any line and replaces only that line", () => {
+    const commands = [{ name: "review", input: { hint: "path" } }]
+    expect(filterSlashHints("context first\n/rev", commands)[0]).toMatchObject({ value: "/review", hint: "path", source: "agent" })
+    expect(filterSlashHints("not /rev", commands)).toEqual([])
+    expect(applyHint("context first\n/rev", { value: "/review", description: "" })).toBe("context first\n/review ")
+  })
+
+  it("lists gateway commands before the first update and caches each agent's list", () => {
+    expect(agentCommands([])).toBeUndefined()
+    expect(filterSlashHints("/go").map((item) => item.value)).toEqual(["/goal"])
+    rememberCommands("claude", [{ name: "review" }])
+    expect(cachedCommands("claude")).toEqual([{ name: "review" }])
+    expect(cachedCommands("codex")).toEqual([])
   })
 
   it("filters @ file hints", () => {

@@ -95,14 +95,20 @@ describe("conversation message actions", () => {
     expect(container.querySelectorAll('[data-slot="tool-group"]')).toHaveLength(1)
   })
 
-  it("shows tool input on one line and keeps raw JSON behind Details", () => {
+  it("shows tool input on one line once the row opens", () => {
     act(() => root.render(createElement(ThreadView, {
       items: [{ kind: "tool", data: { title: "Search", kind: "search", status: "completed", rawInput: { pattern: "replay" } } }],
       machine: "local",
       sessionId: "s",
     })))
+    // A closed row mounts no body; opening it shows the input.
+    const row = container.querySelector<HTMLDetailsElement>("[data-tool-row]")!
+    expect(container.querySelector('[data-slot="tool-input"]')).toBeNull()
+    act(() => {
+      row.open = true
+      row.dispatchEvent(new Event("toggle"))
+    })
     expect(container.querySelector('[data-slot="tool-input"]')!.textContent).toBe("pattern: replay")
-    expect(container.querySelector('[data-slot="tool-details"]')!.hasAttribute("open")).toBe(false)
   })
 
   it("shows the pending permission inline and finds the newest one", () => {

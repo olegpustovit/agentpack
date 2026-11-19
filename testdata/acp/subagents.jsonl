@@ -1,0 +1,27 @@
+{"seq":1,"ts":2000,"kind":"prompt","payload":{"text":{"text":"Find the cancel route and review its tests, in parallel."}}}
+{"seq":2,"ts":2001,"kind":"agent_message_chunk","payload":{"text":{"text":"I'll split this between two subagents."}}}
+{"seq":3,"ts":2002,"kind":"subagent_update","payload":{"sessionUpdate":"subagent_update","sessionId":"sub-explore","title":"Explore","description":"Find the cancel route","capabilities":{"cancel":{}},"state":{"state":"running"}}}
+{"seq":4,"ts":2003,"kind":"tool_call","payload":{"sessionUpdate":"tool_call","toolCallId":"toolu_explore","title":"Task: Find the cancel route","kind":"think","status":"in_progress","content":[{"type":"session","sessionId":"sub-explore"}]}}
+{"seq":5,"ts":2004,"kind":"subagent_update","payload":{"sessionUpdate":"subagent_update","sessionId":"sub-review","title":"Review","description":"Review the cancel tests","capabilities":{"cancel":{}},"state":{"state":"running"}}}
+{"seq":6,"ts":2005,"kind":"tool_call","payload":{"sessionUpdate":"tool_call","toolCallId":"toolu_review","title":"Task: Review the cancel tests","kind":"think","status":"in_progress","content":[{"type":"session","sessionId":"sub-review"}]}}
+{"seq":7,"ts":2006,"kind":"session_message","payload":{"_subagent":"sub-explore","sessionUpdate":"session_message","messageId":"toolu_explore","senderSessionId":"ses-parent","recipientSessionId":"sub-explore","content":[{"type":"text","text":"Find where POST /conversation/cancel is handled."}],"senderMessageId":"toolu_explore"}}
+{"seq":8,"ts":2007,"kind":"session_message","payload":{"_subagent":"sub-review","sessionUpdate":"session_message","messageId":"toolu_review","senderSessionId":"ses-parent","recipientSessionId":"sub-review","content":[{"type":"text","text":"Run and review the cancel tests."}],"senderMessageId":"toolu_review"}}
+{"seq":9,"ts":2008,"kind":"agent_message_chunk","payload":{"_subagent":"sub-explore","text":{"text":"Searching the worker routes."}}}
+{"seq":10,"ts":2009,"kind":"tool_call","payload":{"_subagent":"sub-explore","kind":"search","sessionUpdate":"tool_call","status":"pending","title":"grep conversation/cancel","toolCallId":"toolu_grep"}}
+{"seq":11,"ts":2010,"kind":"agent_message_chunk","payload":{"_subagent":"sub-review","text":{"text":"Running the cancel tests."}}}
+{"seq":12,"ts":2011,"kind":"tool_call_update","payload":{"_subagent":"sub-explore","sessionUpdate":"tool_call_update","status":"completed","toolCallId":"toolu_grep"}}
+{"seq":13,"ts":2012,"kind":"tool_call","payload":{"_subagent":"sub-review","kind":"execute","sessionUpdate":"tool_call","status":"pending","title":"go test ./internal/network/ -run Cancel","toolCallId":"toolu_test"}}
+{"seq":14,"ts":2013,"kind":"permission_request","payload":{"_subagent":"sub-review","options":[{"id":"allow","label":"Allow once"},{"id":"reject","label":"Reject"}],"requestId":"permission-fixture-1","summary":"go test ./internal/network/ -run Cancel","tool":"execute","toolCallId":"toolu_test"}}
+{"seq":15,"ts":2014,"kind":"subagent_update","payload":{"sessionUpdate":"subagent_update","sessionId":"sub-review","state":{"state":"requires_action"}}}
+{"seq":16,"ts":2015,"kind":"permission_result","payload":{"optionId":"allow","requestId":"permission-fixture-1"}}
+{"seq":17,"ts":2016,"kind":"subagent_update","payload":{"sessionUpdate":"subagent_update","sessionId":"sub-review","state":{"state":"running"}}}
+{"seq":18,"ts":2017,"kind":"tool_call_update","payload":{"_subagent":"sub-review","rawOutput":{"output":"ok  internal/network 0.41s"},"sessionUpdate":"tool_call_update","status":"completed","toolCallId":"toolu_test"}}
+{"seq":19,"ts":2018,"kind":"agent_message_chunk","payload":{"_subagent":"sub-explore","text":{"text":"It is handled in worker_http_conversation.go."}}}
+{"seq":20,"ts":2019,"kind":"subagent_update","payload":{"sessionUpdate":"subagent_update","sessionId":"sub-explore","state":{"state":"idle","stopReason":"end_turn"}}}
+{"seq":21,"ts":2020,"kind":"session_message","payload":{"sessionUpdate":"session_message","messageId":"toolu_explore:reply","senderSessionId":"sub-explore","recipientSessionId":"ses-parent","content":[{"type":"text","text":"It is handled in worker_http_conversation.go."}]}}
+{"seq":22,"ts":2021,"kind":"tool_call_update","payload":{"sessionUpdate":"tool_call_update","status":"completed","toolCallId":"toolu_explore"}}
+{"seq":23,"ts":2022,"kind":"agent_message_chunk","payload":{"_subagent":"sub-review","text":{"text":"The tests pass; they only cover cancelling the parent turn."}}}
+{"seq":24,"ts":2023,"kind":"subagent_update","payload":{"sessionUpdate":"subagent_update","sessionId":"sub-review","state":{"state":"idle","stopReason":"end_turn"}}}
+{"seq":25,"ts":2024,"kind":"tool_call_update","payload":{"sessionUpdate":"tool_call_update","status":"completed","toolCallId":"toolu_review"}}
+{"seq":26,"ts":2025,"kind":"agent_message_chunk","payload":{"text":{"text":"The cancel route lives in worker_http_conversation.go; its tests cover only the parent turn."}}}
+{"seq":27,"ts":2026,"kind":"turn_end","payload":{"stopReason":"end_turn"}}

@@ -178,3 +178,32 @@ func TestDotAgentsPlanRejectsSourceChangesAndAdditions(t *testing.T) {
 		t.Fatal("new source accepted")
 	}
 }
+
+func TestDotAgentsFollowsSymlinkedSkillsRoot(t *testing.T) {
+	project := t.TempDir()
+	writeTree(t, project, map[string]string{".claude/skills/linked/SKILL.md": "---\nname: linked\n---\nSkill\n"})
+	dot := filepath.Join(project, ".agents")
+	if err := os.MkdirAll(dot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../.claude/skills", filepath.Join(dot, "skills")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../missing/skill", filepath.Join(project, ".claude/skills/dangling")); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanDotAgents(dot, mode.ImplicitEffective(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, file := range plan.Files {
+		found = found || file.RelativePath == "skills/linked/SKILL.md"
+	}
+	if !found {
+		t.Fatalf("symlinked skills root not staged: %#v", plan.Files)
+	}
+	if len(plan.Warnings) == 0 {
+		t.Fatalf("dangling link should warn: %#v", plan.Warnings)
+	}
+}

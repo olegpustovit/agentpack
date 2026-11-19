@@ -197,3 +197,35 @@ func TestStopAgentsSkipsACPWorkersOwnedElsewhere(t *testing.T) {
 		t.Fatal("stop-all stopped an ACP session owned by another peer")
 	}
 }
+
+func TestProfilesAreLocalOnly(t *testing.T) {
+	home := t.TempDir()
+	auth, err := testGatewayAuth(t, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin, _ := url.Parse("https://agentpack.example")
+	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home}}
+	handler := g.Handler()
+	for _, request := range []struct {
+		header, origin string
+		want           int
+	}{
+		{"Bearer " + g.local.Secret, "", 200},
+		{"Bearer " + g.local.Secret, origin.String(), 401},
+		{"", "", 401},
+	} {
+		r := httptest.NewRequest("GET", origin.String()+"/api/debug/pprof/goroutine?debug=1", nil)
+		if request.header != "" {
+			r.Header.Set("Authorization", request.header)
+		}
+		if request.origin != "" {
+			r.Header.Set("Origin", request.origin)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != request.want {
+			t.Errorf("auth=%t origin=%q: %d, want %d", request.header != "", request.origin, w.Code, request.want)
+		}
+	}
+}

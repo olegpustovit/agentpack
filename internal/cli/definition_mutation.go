@@ -52,7 +52,7 @@ func definitionMutation(invocation Invocation) bool {
 		return first(invocation.Args) == "add" || first(invocation.Args) == "remove"
 	case "mode":
 		switch first(invocation.Args) {
-		case "create", "delete", "enable", "disable", "base", "tui":
+		case "create", "delete", "enable", "disable", "base":
 			return true
 		}
 	case "env":

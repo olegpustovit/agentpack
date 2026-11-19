@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { diffAnchorId, groupByPath, listDiffChanges } from "./diff-summary"
+import { diffAnchorId, fileLabel, groupByPath, listDiffChanges } from "./diff-summary"
 import type { ThreadItem } from "./model"
 
 describe("listDiffChanges", () => {
@@ -50,5 +50,14 @@ describe("per-turn grouping", () => {
   it("latest turn only", () => {
     const all = listDiffChanges(items)
     expect(groupByPath(all.filter((c) => c.turn === 1)).map((c) => c.path)).toEqual(["a.go"])
+  })
+})
+
+describe("fileLabel", () => {
+  it("names the file and its folder inside the project, or the whole path outside it", () => {
+    expect(fileLabel("/home/u/p/internal/network/mcp_bridge.go", "/home/u/p/")).toEqual({ name: "mcp_bridge.go", folder: "internal/network" })
+    expect(fileLabel("/home/u/p/go.mod", "/home/u/p")).toEqual({ name: "go.mod", folder: "" })
+    expect(fileLabel("/etc/hosts", "/home/u/p")).toEqual({ name: "hosts", folder: "/etc" })
+    expect(fileLabel("README.md")).toEqual({ name: "README.md", folder: "" })
   })
 })

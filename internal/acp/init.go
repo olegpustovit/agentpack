@@ -46,6 +46,8 @@ func AddSessionCapabilities(line []byte) []byte {
 		capabilities = make(map[string]json.RawMessage)
 	}
 	capabilities["session"] = json.RawMessage(`{"configOptions":{"boolean":{}},"notices":{},"compaction":{}}`)
+	// Subagent Sessions RFD: children arrive as their own sessions (see subagents.go).
+	capabilities["subagents"] = json.RawMessage(`{}`)
 	params["clientCapabilities"], _ = json.Marshal(capabilities)
 	message["params"], _ = json.Marshal(params)
 	out, err := json.Marshal(message)

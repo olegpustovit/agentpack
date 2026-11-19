@@ -16,6 +16,7 @@ function project(overrides: Partial<ProjectRow> = {}): ProjectRow {
     launches: [],
     packages: [],
     mcp: [],
+    modes: [],
     error: "",
     ...overrides,
   }

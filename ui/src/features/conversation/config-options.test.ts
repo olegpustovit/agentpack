@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { configRole, parseConfigOptions } from "./config-options"
+import { configRole, dangerousMode, parseConfigOptions } from "./config-options"
 
 describe("parseConfigOptions", () => {
   it("reads select and boolean values from ACP configOptions JSON", () => {
@@ -61,5 +61,14 @@ describe("parseConfigOptions", () => {
       { type: "select", id: "reasoning", category: "thought_level", currentValue: "high", options: [{ value: "high" }] },
     ])
     expect(options.map(configRole)).toEqual(["permissions", "model", "effort"])
+  })
+})
+
+describe("dangerousMode", () => {
+  it("flags modes that skip approvals", () => {
+    expect(dangerousMode({ value: "bypassPermissions", label: "Bypass Permissions" })).toBe(true)
+    expect(dangerousMode({ value: "full-access", label: "Full Access" })).toBe(true)
+    expect(dangerousMode({ value: "acceptEdits", label: "Accept edits" })).toBe(false)
+    expect(dangerousMode({ value: "auto", label: "Auto" })).toBe(false)
   })
 })

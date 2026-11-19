@@ -51,7 +51,7 @@ func TestCompiledCLIHelpAndVersion(t *testing.T) {
 		t.Fatalf("--version: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
 	result = runCLI(t, t.TempDir(), "mode", "--help")
-	if result.err != nil || !strings.Contains(result.stdout, "create") || !strings.Contains(result.stdout, "tui") {
+	if result.err != nil || !strings.Contains(result.stdout, "create") || strings.Contains(result.stdout, "tui") {
 		t.Fatalf("mode --help: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)
 	}
 	result = runCLI(t, t.TempDir(), "--help")

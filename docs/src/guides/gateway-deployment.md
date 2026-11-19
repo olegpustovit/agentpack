@@ -19,7 +19,7 @@ The SSH alias `oracle-vm` must connect with an SSH key. The server needs Bash, s
 
 The installer verifies the uploaded SHA-256, installs `~/.local/lib/agentpack/agentpack`, and runs `agentpack-gateway.service` as the SSH user. Application data stays in `~/.local/share/agentpack-gateway` with private permissions. Subsequent deployments require no sudo.
 
-Keep a new gateway behind private tailnet access or an access-controlled proxy until its owner is claimed. Open the gateway URL and choose **Claim gateway**: enter an email, a password of 12–72 bytes, and confirmation. An unclaimed gateway exposes only its claim/status endpoints, health check and static UI to browsers. `gateway start`, `gateway status`, and the hub print `UNCLAIMED: open <url> now` until an owner exists.
+Keep a new gateway behind private tailnet access or an access-controlled proxy until its owner is claimed. Open the gateway URL and choose **Claim gateway**: enter an email, a password of 12–72 bytes, and confirmation. An unclaimed gateway exposes only its claim/status endpoints, health check and static UI to browsers. `gateway start`, `gateway status`, and bare `ap` print `UNCLAIMED: open <url> now` until an owner exists.
 
 When upgrading a legacy gateway, claiming also requires its current password and preserves the existing password hash. The retained password is the login password; use `gateway passwd EMAIL` to change it later. Account and login state live in `state.db`. Browser logins survive restarts, last thirty days with sliding expiry, and use HttpOnly, SameSite=Strict cookies (Secure with the `__Host-` name on HTTPS).
 

@@ -197,6 +197,60 @@ func tailnetPeerFrom(peer *ipnstate.PeerStatus) *tailnetPeer {
 }
 
 // tailnetWhois names the node behind a tailnet address. An unknown address is an error.
+// tailnetCacheTTL bounds how stale a proxied request's view of peers and their identities may be.
+const tailnetCacheTTL = 5 * time.Second
+
+// tailnetCache spares every proxied or peer request its own Tailscale round trips. Failures are never cached.
+type tailnetCache struct {
+	mu       sync.Mutex
+	statusAt time.Time
+	status   tailnetStatus
+	whois    map[netip.Addr]cachedWhois
+}
+
+type cachedWhois struct {
+	at       time.Time
+	identity tailnetIdentity
+}
+
+func (g *Gateway) cachedTailnetStatus(ctx context.Context) (tailnetStatus, error) {
+	cache := &g.tailnet
+	cache.mu.Lock()
+	if !cache.statusAt.IsZero() && time.Since(cache.statusAt) < tailnetCacheTTL {
+		status := cache.status
+		cache.mu.Unlock()
+		return status, nil
+	}
+	cache.mu.Unlock()
+	status, err := tailnetSnapshot(ctx)
+	if err == nil {
+		cache.mu.Lock()
+		cache.status, cache.statusAt = status, time.Now()
+		cache.mu.Unlock()
+	}
+	return status, err
+}
+
+func (g *Gateway) cachedTailnetWhois(ctx context.Context, address netip.Addr) (tailnetIdentity, error) {
+	cache := &g.tailnet
+	cache.mu.Lock()
+	if hit, ok := cache.whois[address]; ok && time.Since(hit.at) < tailnetCacheTTL {
+		cache.mu.Unlock()
+		return hit.identity, nil
+	}
+	cache.mu.Unlock()
+	identity, err := tailnetWhois(ctx, address)
+	if err == nil {
+		cache.mu.Lock()
+		if cache.whois == nil || len(cache.whois) >= 256 {
+			cache.whois = map[netip.Addr]cachedWhois{}
+		}
+		cache.whois[address] = cachedWhois{at: time.Now(), identity: identity}
+		cache.mu.Unlock()
+	}
+	return identity, err
+}
+
 func tailnetWhois(ctx context.Context, address netip.Addr) (tailnetIdentity, error) {
 	ctx, cancel := context.WithTimeout(ctx, tailscaleTimeout)
 	defer cancel()
@@ -514,10 +568,21 @@ func peerRoute(method, path string) bool {
 	if (method == "GET" || method == "POST") && path == "/api/node/update" {
 		return true
 	}
+	if method == "POST" && strings.HasPrefix(path, "/api/mcp/credentials/") && strings.HasSuffix(path, "/refresh") && strings.Count(path, "/") == 5 {
+		return true
+	}
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	conversation := len(parts) >= 5 && parts[0] == "api" && parts[1] == "sessions" &&
+		validPeerSessionID(parts[2]) && parts[3] == "conversation"
 	if len(parts) == 6 {
-		return method == "POST" && parts[0] == "api" && parts[1] == "sessions" &&
-			validPeerSessionID(parts[2]) && parts[3] == "conversation" && parts[4] == "prompt" && parts[5] == "images"
+		return conversation && (method == "POST" && parts[4] == "prompt" && parts[5] == "images" ||
+			(method == "PATCH" || method == "DELETE") && parts[4] == "queue" && validPeerSessionID(parts[5]))
+	}
+	if len(parts) == 7 {
+		return conversation && method == "POST" && parts[4] == "queue" && validPeerSessionID(parts[5]) && parts[6] == "steer"
+	}
+	if conversation && len(parts) == 5 && parts[4] == "goal" {
+		return method == "POST" || method == "PATCH" || method == "DELETE"
 	}
 	if len(parts) == 3 && parts[0] == "api" && parts[1] == "sessions" && validPeerSessionID(parts[2]) {
 		return method == "PATCH"
@@ -553,7 +618,7 @@ func (g *Gateway) tailnetTarget(ctx context.Context, id string) (*url.URL, error
 	if err != nil || !config.Enabled {
 		return nil, errors.New("tailnet sharing is disabled")
 	}
-	status, err := tailnetSnapshot(ctx)
+	status, err := g.cachedTailnetStatus(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -722,7 +787,7 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			http.Error(w, "sharing disabled", 403)
 			return
 		}
-		identity, err := tailnetWhois(r.Context(), ip)
+		identity, err := g.cachedTailnetWhois(r.Context(), ip)
 		if err != nil {
 			http.Error(w, "peer identity unavailable", 403)
 			return

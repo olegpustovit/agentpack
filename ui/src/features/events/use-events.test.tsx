@@ -3,7 +3,8 @@ import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createQueryClient } from "@/lib/query-client"
-import { EventsProvider, useEventsConnected } from "./use-events"
+import { LOCAL } from "@/lib/api"
+import { EventsProvider, stateFamilies, useEventsConnected } from "./use-events"
 
 class FakeEventSource {
   static instances: FakeEventSource[] = []
@@ -131,5 +132,16 @@ describe("event stream", () => {
     hidden = false
     await act(async () => document.dispatchEvent(new Event("visibilitychange")))
     expect(FakeEventSource.instances).toHaveLength(2)
+  })
+})
+
+describe("stateFamilies", () => {
+  it("refetches nothing for chat writes, only the readers of known tables, and everything otherwise", () => {
+    expect(stateFamilies(["conversation_events"])).toEqual([])
+    expect(stateFamilies(["sessions", "conversation_events"])).toEqual([["m", LOCAL, "sessions"]])
+    expect(stateFamilies(["mesh_nodes", "mesh_settings"])).toHaveLength(3)
+    expect(stateFamilies(["mcp_credentials", "mcp_credential_approvals"])).toEqual([["mcp-credentials"]])
+    expect(stateFamilies(undefined)).toHaveLength(8)
+    expect(stateFamilies(["a_future_table"])).toHaveLength(8)
   })
 })

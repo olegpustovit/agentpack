@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/manifest"
+	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
@@ -156,8 +159,8 @@ func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec 
 // projectContents converts pack.lock into the node's project view. Commands, arguments,
 // environment and headers never leave the node.
 // shortcut: lists only servers recorded in pack.lock, extend when mcp list provenance moves out of cli
-func projectContents(locked lockfile.PackLock) network.ProjectContents {
-	contents := network.ProjectContents{Packages: []network.ProjectPackage{}, MCP: []network.ProjectMCP{}}
+func projectContents(locked lockfile.PackLock, project *manifest.Manifest) network.ProjectContents {
+	contents := network.ProjectContents{Packages: []network.ProjectPackage{}, MCP: []network.ProjectMCP{}, Modes: []network.ProjectMode{}}
 	for _, pkg := range locked.Packages {
 		contents.Packages = append(contents.Packages, network.ProjectPackage{
 			Module: pkg.Module, Commit: pkg.Commit, ContentHash: pkg.ContentHash, CacheKey: pkg.CacheKey,
@@ -170,5 +173,58 @@ func projectContents(locked lockfile.PackLock) network.ProjectContents {
 			Package: server.Package, Version: server.Version, Integrity: server.Integrity, Host: server.Host, Reason: server.Reason,
 		})
 	}
+	names := []string{mode.DefaultName}
+	if project != nil {
+		names = project.ListModeNames()
+	}
+	for _, name := range names {
+		definition := mode.ImplicitDefault()
+		if project != nil {
+			definition, _ = project.ModeDefinition(name)
+		}
+		contents.Modes = append(contents.Modes, projectMode(name, definition, contents))
+	}
 	return contents
+}
+
+// projectMode reports what a mode turns off, so the new-session sheet can show it before launch.
+// A package is off when its package-level selectors and base exclude it; any path selector marks it partial.
+func projectMode(name string, definition mode.Definition, contents network.ProjectContents) network.ProjectMode {
+	definition.ApplyDefaults()
+	parse := func(raws []string) []mode.Selector {
+		selectors := []mode.Selector{}
+		for _, raw := range raws {
+			if selector, err := mode.ParseSelector(raw); err == nil {
+				selectors = append(selectors, selector)
+			}
+		}
+		return selectors
+	}
+	enabled, disabled := parse(definition.Enable), parse(definition.Disable)
+	view := network.ProjectMode{Name: name, OffPackages: []string{}, PartialPackages: []string{}, OffMCP: []string{}}
+	effective, err := mode.NewEffective(name, definition, nil)
+	if err != nil {
+		return view // launching this mode fails anyway; the launch reports why
+	}
+	for _, pkg := range contents.Packages {
+		whole := func(selectors []mode.Selector) bool {
+			return slices.ContainsFunc(selectors, func(s mode.Selector) bool { return s.Kind == mode.SelectorPackage && s.Module == pkg.Module })
+		}
+		paths := slices.ContainsFunc(append(append([]mode.Selector{}, enabled...), disabled...), func(s mode.Selector) bool {
+			return s.Kind == mode.SelectorPackagePath && s.Module == pkg.Module
+		})
+		off := whole(disabled) || (!whole(enabled) && definition.Base != mode.BaseAll)
+		switch {
+		case off && !paths:
+			view.OffPackages = append(view.OffPackages, pkg.Module)
+		case paths:
+			view.PartialPackages = append(view.PartialPackages, pkg.Module)
+		}
+	}
+	for _, server := range contents.MCP {
+		if !effective.AllowsMCP(server.Name) {
+			view.OffMCP = append(view.OffMCP, server.Name)
+		}
+	}
+	return view
 }

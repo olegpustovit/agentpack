@@ -2,10 +2,12 @@ package network
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // etagMaxBody bounds buffering; a larger response streams through without an ETag.
@@ -74,17 +76,47 @@ func (rec *etagRecorder) finish(r *http.Request) {
 		status = http.StatusOK
 	}
 	if status == http.StatusOK {
-		sum := sha256.Sum256(rec.body.Bytes())
-		tag := `"` + hex.EncodeToString(sum[:8]) + `"`
-		rec.Header().Set("ETag", tag)
+		// A handler that names its content (a worker's conversation sequence) skips the hash.
+		tag := rec.Header().Get("ETag")
+		if tag == "" {
+			sum := sha256.Sum256(rec.body.Bytes())
+			tag = `"` + hex.EncodeToString(sum[:8]) + `"`
+			rec.Header().Set("ETag", tag)
+		}
 		rec.Header().Set("Cache-Control", "no-cache, private")
 		if etagMatches(r.Header.Get("If-None-Match"), tag) {
 			rec.ResponseWriter.WriteHeader(http.StatusNotModified)
 			return
 		}
 	}
+	body := rec.body.Bytes()
+	rec.Header().Add("Vary", "Accept-Encoding")
+	if len(body) >= gzipMinBody && rec.Header().Get("Content-Encoding") == "" && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		body = gzipped(body)
+		rec.Header().Set("Content-Encoding", "gzip")
+		rec.Header().Del("Content-Length")
+	}
 	rec.ResponseWriter.WriteHeader(status)
-	_, _ = rec.ResponseWriter.Write(rec.body.Bytes())
+	_, _ = rec.ResponseWriter.Write(body)
+}
+
+// Below this size the gzip header and CPU cost more than the bytes saved.
+const gzipMinBody = 1024
+
+var gzipWriters = sync.Pool{New: func() any {
+	writer, _ := gzip.NewWriterLevel(nil, gzip.BestSpeed)
+	return writer
+}}
+
+// gzipped compresses an already buffered API response; JSON lists shrink several times over a tailnet link.
+func gzipped(body []byte) []byte {
+	var out bytes.Buffer
+	writer := gzipWriters.Get().(*gzip.Writer)
+	writer.Reset(&out)
+	_, _ = writer.Write(body)
+	_ = writer.Close()
+	gzipWriters.Put(writer)
+	return out.Bytes()
 }
 
 func etagMatches(header, tag string) bool {

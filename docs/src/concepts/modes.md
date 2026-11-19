@@ -66,7 +66,4 @@ agentpack mode base review none
 agentpack mode enable review package:github.com/acme/shared-rules
 agentpack mode disable review mcp:filesystem
 agentpack mode delete review        # `default` is reserved and cannot be deleted
-agentpack mode tui                  # interactive editor
 ```
-
-`agentpack mode tui` opens a terminal UI for toggling selectors visually. It uses the terminal's native foreground and background, so it stays monochrome and readable with light, dark, and custom terminal themes.

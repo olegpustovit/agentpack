@@ -3,7 +3,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import type { LogEntry } from "./model"
-import { reduceLog } from "./reducer"
+import { reduceLog, reduceThread } from "./reducer"
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "testdata", "acp", "full.jsonl")
 
@@ -148,6 +148,20 @@ describe("reduceLog", () => {
     expect(inactiveItem).not.toHaveProperty("result")
   })
 
+  it("releases a question when its turn is cancelled or the agent withdraws it", () => {
+    const entries: LogEntry[] = [
+      { seq: 1, ts: 1, kind: "elicitation", payload: { elicitationId: "e1" } },
+      { seq: 2, ts: 2, kind: "elicitation", payload: { elicitationId: "e2", agentElicitationId: "oauth" } },
+      { seq: 3, ts: 3, kind: "turn_end", payload: { stopReason: "cancelled" } },
+    ]
+    const ended = reduceLog(entries)
+    expect(ended.items.map((item) => (item.data as { inactive?: boolean }).inactive)).toEqual([true, undefined])
+    expect(ended.needs_you).toBe(true)
+    const withdrawn = reduceLog([...entries, { seq: 4, ts: 4, kind: "elicitation_result", payload: { elicitationId: "e2", cancelled: true } }])
+    expect(withdrawn.needs_you).toBe(false)
+    expect(withdrawn.items[1]!.data).not.toHaveProperty("resolved")
+  })
+
   it("clears working after turn_end", () => {
     const entries: LogEntry[] = [
       { seq: 1, ts: 1, kind: "prompt", payload: { text: "hi" } },
@@ -196,5 +210,102 @@ describe("reduceLog", () => {
     ])
     expect(state.needs_you).toBe(false)
     expect(state.items[0]!.data).toMatchObject({ inactive: true })
+  })
+})
+
+function loadJSONL(name: string): LogEntry[] {
+  const path = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "testdata", "acp", name)
+  return readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as LogEntry)
+}
+
+describe("reduceLog subagents", () => {
+  it("routes child entries into their own threads and links the spawning tool", () => {
+    const state = reduceLog(loadJSONL("subagents.jsonl"))
+    const subagents = state.subagents ?? {}
+    expect(Object.keys(subagents).sort()).toEqual(["sub-explore", "sub-review"])
+    const explore = subagents["sub-explore"]!
+    expect(explore).toMatchObject({ title: "Explore", toolCallId: "toolu_explore", cancellable: true, state: "idle", stopReason: "end_turn" })
+    expect(explore.thread.items[0]?.kind).toBe("task")
+    expect(explore.tools).toBeGreaterThan(0)
+    // No child text leaks into the parent thread.
+    const parentText = state.items.filter((item) => item.kind === "agent_message_chunk").map((item) => JSON.stringify(item.data)).join(" ")
+    expect(parentText).not.toContain("Searching the worker routes")
+    expect(state.needs_you).toBe(false)
+  })
+
+  it("a pending child permission makes the chat need you", () => {
+    const entries = loadJSONL("subagents.jsonl")
+    const cut = entries.findIndex((entry) => entry.kind === "permission_result")
+    expect(reduceLog(entries.slice(0, cut)).needs_you).toBe(true)
+  })
+
+  it("groups Claude's flat parentToolUseId stamping under the Task tool", () => {
+    const state = reduceLog([
+      { seq: 1, ts: 1, kind: "tool_call", payload: { toolCallId: "t1", title: "Task", status: "in_progress" } },
+      { seq: 2, ts: 2, kind: "tool_call", payload: { _subagent: "tool:t1", toolCallId: "c1", title: "grep" } },
+      { seq: 3, ts: 3, kind: "agent_message_chunk", payload: { _subagent: "tool:t1", text: { text: "child" } } },
+    ])
+    expect(state.subagents?.["tool:t1"]).toMatchObject({ toolCallId: "t1", tools: 1 })
+    expect(state.items.map((item) => item.kind)).toEqual(["tool", "subagent"])
+  })
+})
+
+describe("reduceLog queue, goal and turns", () => {
+  it("tracks the queue from queued and dequeued entries, edits replace", () => {
+    const state = reduceLog([
+      { seq: 1, ts: 1, kind: "queued_prompt", payload: { queueId: "q1", text: { text: "a" } } },
+      { seq: 2, ts: 2, kind: "queued_prompt", payload: { queueId: "q2", text: { text: "b" } } },
+      { seq: 3, ts: 3, kind: "queued_prompt", payload: { queueId: "q1", text: { text: "a2" } } },
+      { seq: 4, ts: 4, kind: "dequeued_prompt", payload: { queueId: "q2", reason: "removed" } },
+    ])
+    expect(state.queue?.map((item) => [item.queueId, item.text?.text])).toEqual([["q1", "a2"]])
+  })
+
+  it("keeps the latest goal and records one thread line per state change", () => {
+    const goal = { objective: "Ship", state: "active" as const, active_ms: 0 }
+    const state = reduceLog([
+      { seq: 1, ts: 1, kind: "goal_update", payload: goal },
+      { seq: 2, ts: 2, kind: "goal_update", payload: { ...goal, turns: 1 } },
+      { seq: 3, ts: 3, kind: "goal_update", payload: { ...goal, state: "met", turns: 2, active_ms: 5000 } },
+    ])
+    expect(state.goal).toMatchObject({ state: "met", turns: 2 })
+    expect(state.items.filter((item) => item.kind === "goal")).toHaveLength(2)
+    expect(reduceLog([{ seq: 1, ts: 1, kind: "goal_update", payload: { ...goal, state: "cleared" } }]).goal).toBeUndefined()
+  })
+
+  it("measures the last turn and a compaction's before and after", () => {
+    const state = reduceLog([
+      { seq: 1, ts: 1000, kind: "usage_update", payload: { used: 1000, size: 10_000, cost: { amount: 0.1, currency: "USD" } } },
+      { seq: 2, ts: 2000, kind: "prompt", payload: { text: { text: "go" } } },
+      { seq: 3, ts: 3000, kind: "usage_update", payload: { used: 9000, size: 10_000, cost: { amount: 0.25, currency: "USD" } } },
+      { seq: 4, ts: 9000, kind: "turn_end", payload: { stopReason: "end_turn" } },
+      { seq: 5, ts: 9100, kind: "compaction_update", payload: { compactionId: "c", status: "in_progress" } },
+      { seq: 6, ts: 9200, kind: "compaction_update", payload: { compactionId: "c", status: "completed", summary: [] } },
+      { seq: 7, ts: 9300, kind: "usage_update", payload: { used: 2000, size: 10_000 } },
+    ])
+    expect(state.last_turn?.ms).toBe(7000)
+    expect(state.last_turn?.tokens).toBe(8000)
+    expect(state.last_turn?.cost).toBeCloseTo(0.15)
+    expect(state.items.find((item) => item.kind === "compaction")?.data).toMatchObject({ before: 9000, after: 2000 })
+  })
+})
+
+describe("reduceThread", () => {
+  it("applies streamed entries alone, matches a full replay, and keeps finished items identical", () => {
+    const all = loadFixture()
+    let shown: LogEntry[] = []
+    let previous = reduceThread("fixture", shown)
+    for (const entry of all) {
+      shown = [...shown, entry]
+      const next = reduceThread("fixture", shown)
+      expect(next).toEqual(reduceLog(shown))
+      // Items before the newest change are the same objects, so React skips them.
+      const untouched = previous.items.findIndex((item, index) => next.items[index] !== item)
+      for (let i = 0; i < (untouched < 0 ? previous.items.length : untouched); i++) expect(next.items[i]).toBe(previous.items[i])
+      previous = next
+    }
+    // A refetch hands over new objects; the result is rebuilt, not appended twice.
+    const refetched = all.map((entry) => ({ ...entry }))
+    expect(reduceThread("fixture", refetched)).toEqual(reduceLog(all))
   })
 })

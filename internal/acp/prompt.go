@@ -1,5 +1,21 @@
 package acp
 
+import "context"
+
+type acceptedKey struct{}
+
+// WithAccepted returns a context whose prompt implementation calls accept once the prompt is durably sent.
+func WithAccepted(ctx context.Context, accept func()) context.Context {
+	return context.WithValue(ctx, acceptedKey{}, accept)
+}
+
+// Accepted reports that the prompt carried by ctx was logged and is being sent to the agent.
+func Accepted(ctx context.Context) {
+	if accept, ok := ctx.Value(acceptedKey{}).(func()); ok {
+		accept()
+	}
+}
+
 // PromptImage references an image blob stored under the worker session directory.
 type PromptImage struct {
 	Sha           string

@@ -1,11 +1,14 @@
 package network
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -638,7 +641,7 @@ func TestStartPromptOutlivesTheRequest(t *testing.T) {
 		return nil
 	}, nil, nil, nil))
 	ctx, cancel := context.WithCancel(t.Context())
-	if err := startPrompt(ctx, session, acp.PromptInput{Text: "go"}); err != nil {
+	if _, err := startPrompt(ctx, session, acp.PromptInput{Text: "go"}, false); err != nil {
 		t.Fatalf("a long turn was not accepted: %v", err)
 	}
 	cancel()
@@ -646,9 +649,73 @@ func TestStartPromptOutlivesTheRequest(t *testing.T) {
 	if err := <-finished; err != nil {
 		t.Fatalf("ending the request cancelled the turn: %v", err)
 	}
-	if err := startPrompt(t.Context(), NewConversationSession(acp.NewEventLog(0), acp.NewBroker(func(context.Context, acp.PromptInput) error {
+	if _, err := startPrompt(t.Context(), NewConversationSession(acp.NewEventLog(0), acp.NewBroker(func(context.Context, acp.PromptInput) error {
 		return errors.New("refused")
-	}, nil, nil, nil)), acp.PromptInput{Text: "go"}); err == nil {
+	}, nil, nil, nil)), acp.PromptInput{Text: "go"}, false); err == nil {
 		t.Fatal("an immediate failure was reported as accepted")
+	}
+}
+
+func TestStartPromptReturnsOnceThePromptIsSent(t *testing.T) {
+	previous := promptAcceptWait
+	promptAcceptWait = time.Hour
+	t.Cleanup(func() { promptAcceptWait = previous })
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	session := NewConversationSession(acp.NewEventLog(0), acp.NewBroker(func(ctx context.Context, _ acp.PromptInput) error {
+		acp.Accepted(ctx)
+		<-release
+		return errors.New("late failure is logged, not returned")
+	}, nil, nil, nil))
+	done := make(chan error, 1)
+	go func() {
+		_, err := startPrompt(t.Context(), session, acp.PromptInput{Text: "go"}, false)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("prompt request waited for the turn instead of acceptance")
+	}
+}
+
+func TestConversationStreamPushesAppendsWithoutPolling(t *testing.T) {
+	log := acp.NewEventLog(0)
+	log.Append("prompt", 1, json.RawMessage(`{"text":"old"}`))
+	conv := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		(&WorkerHTTP{}).serveConversationSSE(w, r, conv)
+	}))
+	t.Cleanup(server.Close)
+	response, err := http.Get(server.URL + "?since=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	lines := make(chan string, 8)
+	go func() {
+		scanner := bufio.NewScanner(response.Body)
+		for scanner.Scan() {
+			if text := scanner.Text(); strings.HasPrefix(text, "data:") {
+				lines <- text
+			}
+		}
+		close(lines)
+	}()
+	started := time.Now()
+	log.Append("agent_message_chunk", 2, json.RawMessage(`{"text":"new"}`))
+	select {
+	case line := <-lines:
+		if !strings.Contains(line, `"seq":2`) {
+			t.Fatalf("since was not honored: %s", line)
+		}
+		if elapsed := time.Since(started); elapsed > 300*time.Millisecond {
+			t.Fatalf("append took %s to reach the stream", elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("append never reached the stream")
 	}
 }

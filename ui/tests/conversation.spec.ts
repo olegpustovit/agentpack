@@ -155,6 +155,31 @@ test("multi-choice elicitation submits the selected ACP option IDs", async ({ pa
   expect(posted).toEqual({ elicitation_id: "question-2", value: '["remote-id","local-id"]' })
 })
 
+test("AskUserQuestion form answers every question and leaves the composer usable", async ({ page }) => {
+  const fields = [
+    { key: "question_0", title: "Commit", description: "Commit the work?", options: [{ value: "Commit everything", label: "Commit everything" }, { value: "Don't commit", label: "Don't commit" }] },
+    { key: "question_0_custom", title: "Other" },
+    { key: "question_1", title: "Login", multiple: true, options: [{ value: "Linear", label: "Linear" }, { value: "Skip", label: "Skip" }] },
+  ]
+  const event = JSON.stringify({ seq: 101, ts: 1101, kind: "elicitation", payload: { elicitationId: "question-3", prompt: "Please answer the following questions.", fields } }) + "\n"
+  let posted: Record<string, unknown> | undefined
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: event, contentType: "application/x-ndjson" }))
+  await page.route("**/api/sessions/*/conversation/elicitation", (route) => {
+    posted = route.request().postDataJSON() as Record<string, unknown>
+    return route.fulfill({ json: { accepted: true } })
+  })
+  await page.goto("/sessions/local/chat-one")
+  const card = page.locator('[data-slot="elicitation-card"]')
+  await expect(card).toContainText("Commit the work?")
+  await expect(page.getByRole("button", { name: "Attach image" })).toBeEnabled()
+  await card.getByRole("button", { name: "Commit everything" }).click()
+  await card.getByRole("textbox", { name: "Other" }).fill("and push")
+  await card.getByRole("button", { name: "Linear" }).click()
+  await card.getByRole("button", { name: "Submit" }).click()
+  await expect.poll(() => posted).toBeDefined()
+  expect(JSON.parse(posted!.value as string)).toEqual({ question_0: "Commit everything", question_0_custom: "and push", question_1: ["Linear"] })
+})
+
 test("ACP mode fallback shows and updates only actual mode state when configOptions is absent", async ({ page }) => {
   let posted: Record<string, unknown> | undefined
   await page.route("**/api/sessions/*/conversation**", (route) =>
@@ -250,34 +275,7 @@ test("exploration starts collapsed and leaves diff and terminal output open", as
   await expect(page.locator('[data-slot="tool-terminal"]')).toContainText("ok")
 })
 
-test("working acp session disables terminal view switch", async ({ page }) => {
-  await page.route("**/api/sessions", (route) => route.request().method() === "GET"
-    ? route.fulfill({ json: [{ ...session, id: "chat-one", transport: "acp", conversation_state: "working" }] })
-    : route.fallback())
-  await page.goto("/sessions/local/chat-one")
-  await expect(page.getByRole("button", { name: "Terminal", exact: true })).toBeDisabled()
-})
-
-test("idle acp session can switch while its worker remains running", async ({ page }) => {
-  let posted: unknown
-  await page.route("**/api/sessions", (route) => {
-    if (route.request().method() === "POST") {
-      posted = route.request().postDataJSON()
-      return route.fulfill({ json: { ...session, id: "term-one", transport: "terminal", state: { ...session.state, running: true } } })
-    }
-    if (route.request().method() !== "GET") return route.fallback()
-    return route.fulfill({
-      json: [{ ...session, id: "chat-one", transport: "acp", conversation_state: "idle", state: { ...session.state, running: true } }],
-    })
-  })
-  await page.goto("/sessions/local/chat-one")
-  await expect(page.getByRole("button", { name: "Terminal", exact: true })).toBeEnabled()
-  await page.getByRole("button", { name: "Terminal", exact: true }).click()
-  await expect(page).toHaveURL(/term-one/)
-  expect(posted).toMatchObject({ transport: "terminal" })
-})
-
-test("stopped acp session can POST a terminal session on view switch", async ({ page }) => {
+test("/terminal reopens a stopped chat as a terminal session", async ({ page }) => {
   let posted: unknown
   await page.route("**/api/sessions", (route) => {
     if (route.request().method() === "POST") {
@@ -291,7 +289,10 @@ test("stopped acp session can POST a terminal session on view switch", async ({ 
   })
   await page.goto("/sessions/local/chat-one")
   await expect(page.getByRole("alert")).toHaveCount(0)
-  await page.getByRole("button", { name: "Terminal", exact: true }).click()
+  // The toolbar has no Chat/Terminal switch; the composer command is the way.
+  await expect(page.getByRole("group", { name: "Session view" })).toHaveCount(0)
+  await page.getByRole("textbox", { name: "Message" }).fill("/terminal")
+  await page.keyboard.press("Enter")
   await expect(page).toHaveURL(/term-one/)
   expect(posted).toMatchObject({ transport: "terminal", directory: session.directory })
 })
@@ -367,4 +368,190 @@ test("a stalled pane chunk offers Reload after 15 s", async ({ page }) => {
   await expect(page.getByText("Loading conversation…")).toBeAttached()
   await page.clock.fastForward(16_000)
   await expect(page.getByRole("button", { name: "Reload" })).toBeVisible()
+})
+
+test("scrolling up loads earlier history and keeps the reader in place", async ({ page }) => {
+  const line = (seq: number) =>
+    JSON.stringify(seq % 2
+      ? { seq, ts: seq, kind: "user_message_chunk", payload: { text: { text: `Question ${seq}` } } }
+      : { seq, ts: seq, kind: "agent_message_chunk", payload: { text: { text: `Answer ${seq}\n\nwith a second paragraph` } } })
+  const body = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => `${line(from + i)}\n`).join("")
+  const befores: string[] = []
+  await page.route("**/api/sessions/*/conversation**", (route) => {
+    const before = new URL(route.request().url()).searchParams.get("before")
+    if (!before) return route.fulfill({ body: body(41, 80), contentType: "application/x-ndjson", headers: { "X-Agentpack-Truncated": "true" } })
+    befores.push(before)
+    return route.fulfill({ body: body(1, 40), contentType: "application/x-ndjson" })
+  })
+  await page.goto("/sessions/local/chat-one")
+  const thread = page.getByRole("region", { name: "Conversation" }).or(page.getByLabel("Conversation", { exact: true })).first()
+  await expect(page.getByText("Answer 80")).toBeInViewport()
+  await expect(page.getByText("Question 1", { exact: true })).toHaveCount(0)
+
+  await thread.evaluate((element) => (element.scrollTop = 0))
+  await expect(page.getByText("Beginning of conversation")).toHaveCount(1)
+  await expect(page.getByText("Question 1", { exact: true })).toHaveCount(1)
+  // The message the reader was on stays on screen; older ones are above it.
+  await expect(page.getByText("Question 41", { exact: true })).toBeInViewport()
+  expect(befores).toEqual(["41"])
+})
+
+const subagentsBody = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../testdata/acp/subagents.jsonl"), "utf8")
+
+test("attached images survive switching chats and coming back", async ({ page }) => {
+  await page.route("**/api/sessions", (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    return route.fulfill({ json: [{ ...session, id: "chat-one", transport: "acp" }, { ...session, id: "chat-two", transport: "acp", name: "Other chat" }] })
+  })
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: "", contentType: "application/x-ndjson" }))
+  await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+  await page.route("**/api/sessions/*/conversation/blobs", (route) => route.fulfill({ json: { sha: "b".repeat(64) } }))
+  await page.goto("/sessions/local/chat-one")
+  await page.locator('input[type="file"]').setInputFiles({ name: "diagram.png", mimeType: "image/png", buffer: conversationImage })
+  await expect(page.getByText("Image attached · diagram.png")).toBeVisible()
+  await page.goto("/sessions/local/chat-two")
+  await expect(page.getByText("Image attached")).toHaveCount(0)
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByText("Image attached · diagram.png")).toBeVisible()
+  // The restored preview comes from the server, not a dead blob: URL.
+  await expect(page.locator(`img[src*="/blobs/${"b".repeat(64)}"]`)).toBeVisible()
+})
+
+test("history replay does not animate", async ({ page }) => {
+  await page.clock.install()
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByText("Done. The gateway will resume from the saved offset.")).toBeVisible()
+  await expect(page.locator(".thread-enter, .tool-enter")).toHaveCount(0)
+})
+
+test("subagents show as cards, open in the main view, and Back returns", async ({ page }) => {
+  await page.route("**/api/sessions", (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    return route.fulfill({ json: [{ ...session, id: "chat-one", transport: "acp", subagents: [{ id: "sub-review", title: "Review", state: "running", started_at: Date.now() }] }] })
+  })
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: subagentsBody, contentType: "application/x-ndjson" }))
+  await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+  await page.goto("/sessions/local/chat-one")
+  const cards = page.locator('[data-slot="subagent-card"]')
+  await expect(cards).toHaveCount(2)
+  await expect(page.getByText("2 subagents")).toBeVisible()
+  // Child output stays in the child.
+  await expect(page.getByText("Searching the worker routes.")).toHaveCount(0)
+
+  await page.getByRole("button", { name: "Open Explore" }).click()
+  await expect(page).toHaveURL(/sub=sub-explore/)
+  await expect(page.getByText("Searching the worker routes.")).toBeVisible()
+  await expect(page.locator('[data-slot="subagent-task"]')).toContainText("Find where POST /conversation/cancel is handled.")
+  await page.getByRole("button", { name: "Back to the conversation" }).click()
+  await expect(page).not.toHaveURL(/sub=/)
+
+  // From the inspector, then the browser's back button.
+  await page.locator('[data-slot="conversation-inspector"]').getByRole("button", { name: /Review/ }).click()
+  await expect(page).toHaveURL(/sub=sub-review/)
+  await page.goBack()
+  await expect(page).not.toHaveURL(/sub=/)
+
+  // From the sidebar child row, then Esc.
+  await page.locator('[data-subagent-row="sub-review"]').click()
+  await expect(page).toHaveURL(/sub=sub-review/)
+  await page.locator("body").press("Escape")
+  await expect(page).not.toHaveURL(/sub=/)
+})
+
+test("phone: a subagent's sidebar row opens it full-screen", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.route("**/api/sessions", (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    return route.fulfill({ json: [{ ...session, id: "chat-one", transport: "acp", subagents: [{ id: "sub-review", title: "Review", state: "running" }] }] })
+  })
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: subagentsBody, contentType: "application/x-ndjson" }))
+  await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+  await page.goto("/sessions")
+  await page.locator('[data-subagent-row="sub-review"]').click()
+  await expect(page).toHaveURL(/sub=sub-review/)
+  await expect(page.getByText("Running the cancel tests.")).toBeVisible()
+})
+
+test("Enter queues while the agent works and ⌘Enter steers", async ({ page }) => {
+  const posts: Record<string, unknown>[] = []
+  await page.route("**/api/sessions", (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    return route.fulfill({ json: [{ ...session, id: "chat-one", transport: "acp" }] })
+  })
+  const working = [
+    { seq: 1, ts: 1000, kind: "prompt", payload: { text: { text: "Go" } } },
+    { seq: 2, ts: 1001, kind: "agent_message_chunk", payload: { text: { text: "On it" } } },
+    { seq: 3, ts: 1002, kind: "queued_prompt", payload: { queueId: "q1", text: { text: "Then add tests" } } },
+  ].map((entry) => JSON.stringify(entry)).join("\n")
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: working, contentType: "application/x-ndjson" }))
+  await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+  await page.route("**/api/sessions/*/conversation/prompt", (route) => {
+    posts.push(route.request().postDataJSON() as Record<string, unknown>)
+    return route.fulfill({ json: { accepted: true, queued: "q2" } })
+  })
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.locator('[data-slot="prompt-queue"]')).toContainText("Then add tests")
+  await expect(page.getByRole("button", { name: "Steer now" })).toBeVisible()
+  const message = page.getByRole("textbox", { name: "Message" })
+  await message.fill("queue me")
+  await message.press("Enter")
+  await expect.poll(() => posts.length).toBe(1)
+  expect(posts[0]).toMatchObject({ text: "queue me" })
+  expect(posts[0]!.steer).toBeUndefined()
+  await message.fill("steer me")
+  await message.press("ControlOrMeta+Enter")
+  await expect.poll(() => posts.length).toBe(2)
+  expect(posts[1]).toMatchObject({ text: "steer me", steer: true })
+})
+
+test("a chat New session starts takes the folder's last model once", async ({ page }) => {
+  const posted: Record<string, unknown>[] = []
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: "", contentType: "application/x-ndjson" }))
+  await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({
+    json: {
+      configOptions: [{
+        type: "select", id: "model", name: "Model", category: "model", currentValue: "sonnet",
+        options: [{ value: "sonnet", name: "Sonnet" }, { value: "opus", name: "Opus" }],
+      }],
+    },
+  }))
+  await page.route("**/api/sessions/*/conversation/config", (route) => {
+    posted.push(route.request().postDataJSON() as Record<string, unknown>)
+    return route.fulfill({ json: { accepted: true } })
+  })
+  await page.addInitScript(({ directory }) => {
+    if (sessionStorage.getItem("seeded")) return
+    sessionStorage.setItem("seeded", "1")
+    localStorage.setItem(`agentpack.agentChoices.claude.${directory}`, JSON.stringify({ model: "opus" }))
+    sessionStorage.setItem("agentpack.applyChoices.chat-one", "1")
+  }, { directory: session.directory })
+  await page.goto("/sessions/local/chat-one")
+  await expect.poll(() => posted).toEqual([{ key: "model", value: "opus" }])
+  await page.reload()
+  await expect(page.getByRole("textbox", { name: "Message" })).toBeVisible()
+  expect(posted).toHaveLength(1)
+})
+
+test("a sent message shows before the gateway answers, and a failure puts it back in the composer", async ({ page }) => {
+  let release: (() => void) | undefined
+  const idle = [
+    { seq: 1, ts: 1000, kind: "prompt", payload: { text: { text: "Go" } } },
+    { seq: 2, ts: 1001, kind: "turn_end", payload: { stopReason: "end_turn" } },
+  ].map((entry) => JSON.stringify(entry)).join("\n")
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: idle, contentType: "application/x-ndjson" }))
+  await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+  await page.route("**/api/sessions/*/conversation/prompt", (route) => new Promise<void>((resolve) => {
+    release = () => resolve(route.fulfill({ status: 500, body: "agent unavailable" }))
+  }))
+  await page.goto("/sessions/local/chat-one")
+  const message = page.getByRole("textbox", { name: "Message" })
+  await message.fill("ship the fix")
+  await message.press("Enter")
+  const thread = page.getByLabel("Conversation")
+  await expect(message).toHaveValue("")
+  await expect(thread.getByText("ship the fix")).toBeVisible()
+  await expect.poll(() => release).toBeDefined()
+  release!()
+  await expect(message).toHaveValue("ship the fix")
+  await expect(thread.getByText("ship the fix")).toHaveCount(0)
 })

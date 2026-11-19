@@ -32,6 +32,7 @@ export function projectRow(directory: string, launches: { harness: string; mode?
     launches: launches.map((launch) => ({ harness: launch.harness, mode: launch.mode ?? "default", last_used: launched })),
     packages: [],
     mcp: [],
+    modes: [],
     error: "",
     ...overrides,
   }

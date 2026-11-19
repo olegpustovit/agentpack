@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	sdkacp "github.com/coder/acp-go-sdk"
@@ -25,7 +27,7 @@ func (c *HarnessClient) UnstableCreateElicitation(ctx context.Context, params sd
 			"agentElicitationId": agentID,
 			"prompt":             params.Url.Url,
 		}))
-		value, err := c.Broker.Wait(ctx, id)
+		value, err := c.waitAnswer(ctx, "elicitation", "elicitationId", id)
 		if err != nil {
 			return sdkacp.NewUnstableCreateElicitationResponseCancel(), nil
 		}
@@ -36,26 +38,17 @@ func (c *HarnessClient) UnstableCreateElicitation(ctx context.Context, params sd
 	if params.Form == nil {
 		return sdkacp.UnstableCreateElicitationResponse{}, fmt.Errorf("unsupported elicitation request")
 	}
-	id := c.nextRequestID("elicitation")
-	if err := c.Broker.Begin(id); err != nil {
-		return sdkacp.UnstableCreateElicitationResponse{}, err
+	fields := elicitationFields(params.Form.RequestedSchema)
+	payload := map[string]any{"prompt": params.Form.Message}
+	if len(fields) > 0 {
+		payload["fields"] = fields
 	}
-	defer c.Broker.End(id)
-	choices := elicitationChoices(params.Form.RequestedSchema)
-	payload := map[string]any{
-		"elicitationId": id,
-		"prompt":        params.Form.Message,
-	}
-	if len(choices) > 0 {
-		payload["choices"] = choices
-	}
-	c.Log.Append("elicitation", time.Now().UnixMilli(), mustJSON(payload))
-	value, err := c.Broker.Wait(ctx, id)
+	value, err := c.waitElicitation(ctx, payload)
 	if err != nil {
 		return sdkacp.NewUnstableCreateElicitationResponseCancel(), nil
 	}
 	return sdkacp.UnstableCreateElicitationResponse{
-		Accept: &sdkacp.UnstableCreateElicitationAccept{Action: "accept", Content: map[string]any{"value": value}},
+		Accept: &sdkacp.UnstableCreateElicitationAccept{Action: "accept", Content: elicitationContent(fields, value)},
 	}, nil
 }
 
@@ -63,28 +56,78 @@ func (c *HarnessClient) UnstableCompleteElicitation(_ context.Context, _ sdkacp.
 	return nil
 }
 
-func elicitationChoices(schema sdkacp.UnstableElicitationSchema) []string {
-	raw, err := json.Marshal(schema)
-	if err != nil {
-		return nil
+type elicitationOption struct {
+	Value       string `json:"value"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+// elicitationField is one form property as the UI renders it: options to pick, or free text.
+type elicitationField struct {
+	Key         string              `json:"key"`
+	Title       string              `json:"title,omitempty"`
+	Description string              `json:"description,omitempty"`
+	Multiple    bool                `json:"multiple,omitempty"`
+	Options     []elicitationOption `json:"options,omitempty"`
+}
+
+// elicitationFields reads the form schema in key order; Claude's AskUserQuestion names its
+// fields question_<n> and question_<n>_custom, so that order keeps each question beside its note.
+func elicitationFields(schema sdkacp.UnstableElicitationSchema) []elicitationField {
+	fields := make([]elicitationField, 0, len(schema.Properties))
+	for _, key := range slices.Sorted(maps.Keys(schema.Properties)) {
+		prop, _ := schema.Properties[key].(map[string]any)
+		field := elicitationField{Key: key}
+		field.Title, _ = prop["title"].(string)
+		field.Description, _ = prop["description"].(string)
+		source := prop
+		if prop["type"] == "array" {
+			field.Multiple = true
+			source, _ = prop["items"].(map[string]any)
+		}
+		field.Options = elicitationOptions(source)
+		fields = append(fields, field)
 	}
-	var doc map[string]any
-	if json.Unmarshal(raw, &doc) != nil {
-		return nil
+	return fields
+}
+
+// elicitationOptions accepts a plain enum or titled oneOf/anyOf options.
+func elicitationOptions(prop map[string]any) []elicitationOption {
+	var options []elicitationOption
+	if enum, ok := prop["enum"].([]any); ok {
+		for _, item := range enum {
+			options = append(options, elicitationOption{Value: fmt.Sprint(item), Label: fmt.Sprint(item)})
+		}
+		return options
 	}
-	props, _ := doc["properties"].(map[string]any)
-	if len(props) == 0 {
-		return nil
-	}
-	for _, prop := range props {
-		m, _ := prop.(map[string]any)
-		if enum, ok := m["enum"].([]any); ok {
-			out := make([]string, 0, len(enum))
-			for _, item := range enum {
-				out = append(out, fmt.Sprint(item))
+	for _, key := range []string{"oneOf", "anyOf"} {
+		list, _ := prop[key].([]any)
+		for _, item := range list {
+			option, _ := item.(map[string]any)
+			value, ok := option["const"]
+			if !ok {
+				continue
 			}
-			return out
+			label, _ := option["title"].(string)
+			if label == "" {
+				label = fmt.Sprint(value)
+			}
+			description, _ := option["description"].(string)
+			options = append(options, elicitationOption{Value: fmt.Sprint(value), Label: label, Description: description})
 		}
 	}
-	return nil
+	return options
+}
+
+// elicitationContent maps the UI's answer to form content: a JSON object keyed by field, or one
+// plain value for a single-field form.
+func elicitationContent(fields []elicitationField, value string) map[string]any {
+	var content map[string]any
+	if json.Unmarshal([]byte(value), &content) == nil && content != nil {
+		return content
+	}
+	if len(fields) == 1 {
+		return map[string]any{fields[0].Key: value}
+	}
+	return map[string]any{"value": value}
 }

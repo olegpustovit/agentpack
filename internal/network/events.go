@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -27,6 +28,8 @@ import (
 type eventMessage struct {
 	Topic string `json:"topic"`
 	Node  string `json:"node"`
+	// Tables lists what a state change touched, so browsers refetch only what reads them. Absent means unknown.
+	Tables []string `json:"tables,omitempty"`
 }
 
 // eventTopic is one change source. digest must be stable while the underlying state is unchanged.
@@ -34,6 +37,8 @@ type eventTopic struct {
 	name     string
 	interval time.Duration
 	digest   func(context.Context) (string, error)
+	// detail, when set, describes the change between two digests.
+	detail func(ctx context.Context, previous, current string) []string
 }
 
 const (
@@ -49,9 +54,11 @@ var errNoPeerEvents = errors.New("peer does not serve /api/events")
 // only while at least one stream is subscribed. The unexported fields are test seams: nil means
 // the real sources.
 type eventHub struct {
-	mu     sync.Mutex
-	subs   map[chan eventMessage]struct{}
-	cancel context.CancelFunc
+	mu   sync.Mutex
+	subs map[chan eventMessage]bool // true for streams that need the pollers running
+	// watchers counts subscribers that keep pollers alive; internal listeners only hear emitted events.
+	watchers int
+	cancel   context.CancelFunc
 
 	topics []eventTopic
 	nodes  func(context.Context) ([]TailnetNode, error)
@@ -62,15 +69,32 @@ type eventHub struct {
 // subscribe returns a stream of events and the function that ends it. The channel is closed
 // when a subscriber falls behind, so the client reconnects and receives a fresh baseline.
 func (g *Gateway) subscribe() (<-chan eventMessage, func()) {
+	return g.subscribeEvents(true)
+}
+
+// listen hears emitted events without starting the pollers, so background work never keeps them running.
+func (g *Gateway) listen() (<-chan eventMessage, func()) {
+	return g.subscribeEvents(false)
+}
+
+func (g *Gateway) subscribeEvents(watch bool) (<-chan eventMessage, func()) {
 	h := &g.events
 	ch := make(chan eventMessage, eventSubscriberBuffer)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.subs == nil {
-		h.subs = map[chan eventMessage]struct{}{}
+		h.subs = map[chan eventMessage]bool{}
 	}
-	h.subs[ch] = struct{}{}
-	if len(h.subs) == 1 {
+	h.subs[ch] = watch
+	if !watch {
+		return ch, func() {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			g.dropSubscriber(ch)
+		}
+	}
+	h.watchers++
+	if h.watchers == 1 {
 		var ctx context.Context
 		ctx, h.cancel = context.WithCancel(context.Background())
 		g.startEventLoops(ctx)
@@ -85,12 +109,17 @@ func (g *Gateway) subscribe() (<-chan eventMessage, func()) {
 // dropSubscriber requires h.mu. The last subscriber leaving stops every loop.
 func (g *Gateway) dropSubscriber(ch chan eventMessage) {
 	h := &g.events
-	if _, ok := h.subs[ch]; !ok {
+	watch, ok := h.subs[ch]
+	if !ok {
 		return
 	}
 	delete(h.subs, ch)
 	close(ch)
-	if len(h.subs) == 0 {
+	if !watch {
+		return
+	}
+	h.watchers--
+	if h.watchers == 0 {
 		h.cancel()
 		h.cancel = nil
 	}
@@ -127,17 +156,18 @@ func (g *Gateway) defaultEventTopics() []eventTopic {
 		{name: "state", interval: 2 * time.Second, digest: func(ctx context.Context) (string, error) {
 			version, err := g.auth.store.DBVersion(ctx)
 			return strconv.FormatInt(version, 10), err
-		}},
+		}, detail: g.changedTables},
 		// shortcut: polls local state every 2 s while a browser is connected, replace with worker push if this shows in profiles
 		{name: "sessions", interval: 2 * time.Second, digest: func(ctx context.Context) (string, error) {
-			value, err := Sessions(ctx, home)
+			value, err := sessionsIn(ctx, g.auth.store.Reader, home)
 			return digestOf(value, err)
 		}},
-		{name: "projects", interval: 10 * time.Second, digest: func(context.Context) (string, error) {
-			folders, err := RecentFolders(home)
+		{name: "projects", interval: 10 * time.Second, digest: func(ctx context.Context) (string, error) {
+			recent, err := recentIn(ctx, g.auth.store.Reader)
 			if err != nil {
 				return "", err
 			}
+			folders := recentFolders(recent)
 			locks := make([]string, len(folders))
 			for i, folder := range folders {
 				if info, err := os.Stat(filepath.Join(folder.Directory, paths.LockfileName)); err == nil {
@@ -160,14 +190,50 @@ func (g *Gateway) defaultEventTopics() []eventTopic {
 	return topics
 }
 
+var streamingColumns = map[string]bool{"last_seq": true, "last_event_at": true, "conversation_truncated": true}
+
+// changedTables names the replicated tables written between two state versions; nil means unknown.
+func (g *Gateway) changedTables(ctx context.Context, previous, current string) []string {
+	from, err1 := strconv.ParseInt(previous, 10, 64)
+	to, err2 := strconv.ParseInt(current, 10, 64)
+	if err1 != nil || err2 != nil || to <= from {
+		return nil
+	}
+	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT DISTINCT "table",cid FROM crsql_changes WHERE db_version>? AND db_version<=?`, from, to)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	tables := []string{}
+	for rows.Next() {
+		var table, column string
+		if rows.Scan(&table, &column) != nil {
+			return nil
+		}
+		// A streaming chat bumps these on its session row each flush; no list shows them.
+		if table == "sessions" && streamingColumns[column] || slices.Contains(tables, table) {
+			continue
+		}
+		tables = append(tables, table)
+	}
+	if rows.Err() != nil || len(tables) == 0 {
+		return nil
+	}
+	return tables
+}
+
 func (g *Gateway) pollTopic(ctx context.Context, topic eventTopic) {
 	ticker := time.NewTicker(topic.interval)
 	defer ticker.Stop()
 	last := ""
 	for {
 		if digest, err := topic.digest(ctx); err == nil && digest != last {
+			message := eventMessage{Topic: topic.name}
+			if topic.detail != nil && last != "" {
+				message.Tables = topic.detail(ctx, last, digest)
+			}
 			last = digest
-			g.emitEvent(eventMessage{Topic: topic.name})
+			g.emitEvent(message)
 		}
 		select {
 		case <-ctx.Done():

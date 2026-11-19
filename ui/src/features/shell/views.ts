@@ -17,22 +17,28 @@ export type LastSession = { machine: string; sessionId: string; search: { q?: st
 
 const LAST_SESSION_KEY = "agentpack-last-session"
 
-// Per tab, as the terminal pool is: another browser tab keeps its own selection.
+// Per tab, as the terminal pool is: another browser tab keeps its own selection. A new tab
+// starts from the chat this browser had open last.
 export function lastSession(): LastSession | undefined {
-  try {
-    const value = JSON.parse(sessionStorage.getItem(LAST_SESSION_KEY) ?? "null") as LastSession | null
-    return value?.machine && value.sessionId ? value : undefined
-  } catch {
-    return undefined
+  for (const storage of [() => sessionStorage, () => localStorage]) {
+    try {
+      const value = JSON.parse(storage().getItem(LAST_SESSION_KEY) ?? "null") as LastSession | null
+      if (value?.machine && value.sessionId) return value
+    } catch {
+      // Blocked storage: try the next one.
+    }
   }
+  return undefined
 }
 
 export function rememberSession(session: LastSession | undefined) {
-  try {
-    if (session) sessionStorage.setItem(LAST_SESSION_KEY, JSON.stringify(session))
-    else sessionStorage.removeItem(LAST_SESSION_KEY)
-  } catch {
-    // Private windows may refuse storage; the Sessions view then opens with nothing selected.
+  for (const storage of [() => sessionStorage, () => localStorage]) {
+    try {
+      if (session) storage().setItem(LAST_SESSION_KEY, JSON.stringify(session))
+      else storage().removeItem(LAST_SESSION_KEY)
+    } catch {
+      // Private windows may refuse storage; the Sessions view then opens with nothing selected.
+    }
   }
 }
 

@@ -2,7 +2,35 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { LOCAL } from "@/lib/api"
 
-type EventMessage = { topic: string; node?: string }
+type EventMessage = { topic: string; node?: string; tables?: string[] }
+
+// What each replicated table feeds. A state change refetches only these; chat tables feed the chat stream alone.
+const STATE_FAMILIES: Record<string, string[][]> = {
+  sessions: [["m", LOCAL, "sessions"]],
+  limits: [["m", LOCAL, "limits"]],
+  users: [["identity"]],
+  node_settings: [["identity"], ["nodes"], ["topology"]],
+  mesh_nodes: [["nodes"], ["topology"], ["replication"]],
+  mesh_settings: [["nodes"], ["topology"], ["replication"]],
+  issues: [["diagnostics"]],
+  issue_counts: [["diagnostics"]],
+  conversation_events: [],
+  archive_blobs: [],
+  archive_edits: [],
+  archive_event_clocks: [],
+  blob_locations: [],
+  mcp_credentials: [["mcp-credentials"]],
+  mcp_credential_approvals: [["mcp-credentials"]],
+}
+const ALL_STATE_FAMILIES = [["identity"], ["topology"], ["m", LOCAL, "sessions"], ["m", LOCAL, "limits"], ["nodes"], ["diagnostics"], ["replication"], ["mcp-credentials"]]
+
+// Unknown tables, or an older gateway that sends none, refetch every family.
+export function stateFamilies(tables: string[] | undefined): string[][] {
+  if (!tables || tables.some((table) => !(table in STATE_FAMILIES))) return ALL_STATE_FAMILIES
+  const keys = new Map<string, string[]>()
+  for (const table of tables) for (const key of STATE_FAMILIES[table]!) keys.set(key.join("\0"), key)
+  return [...keys.values()]
+}
 
 const EventsContext = createContext(false)
 
@@ -17,13 +45,7 @@ function invalidate(queryClient: QueryClient, queryKey: string[]) {
 
 function dispatch(queryClient: QueryClient, msg: EventMessage) {
   if (msg.topic === "state") {
-    invalidate(queryClient, ["identity"])
-    invalidate(queryClient, ["topology"])
-    invalidate(queryClient, ["m", LOCAL, "sessions"])
-    invalidate(queryClient, ["m", LOCAL, "limits"])
-    invalidate(queryClient, ["nodes"])
-    invalidate(queryClient, ["diagnostics"])
-    invalidate(queryClient, ["replication"])
+    for (const key of stateFamilies(msg.tables)) invalidate(queryClient, key)
     return
   }
   if (msg.node && msg.node !== LOCAL && (msg.topic === "sessions" || msg.topic === "limits")) {
@@ -36,10 +58,8 @@ function dispatch(queryClient: QueryClient, msg: EventMessage) {
     invalidate(queryClient, ["replication"])
     return
   }
+  // An open chat follows its own stream, so a sessions change never refetches conversations.
   invalidate(queryClient, ["m", msg.node || LOCAL, msg.topic])
-  if (msg.topic === "sessions") {
-    void queryClient.invalidateQueries({ queryKey: ["conversation"] })
-  }
 }
 
 // Mounted once in _app. The stream closes while the tab is hidden and reopens when it is visible.

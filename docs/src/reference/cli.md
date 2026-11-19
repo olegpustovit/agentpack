@@ -23,7 +23,7 @@ When `--env`, `--definition-root`, or an `env use`/`env bind` binding is set, lo
 
 Help and errors use the terminal's native foreground and transparent background, with no semantic colors or theme detection. Contextual help is available at every level, for example `agentpack mcp add --help`.
 
-On a TTY, bare `agentpack` and the installed `ap` symlink open the **`ap` hub** TUI (session list, preview, permission answers). Non-interactive invocations still print help. Chat workers use `transport: "acp"` on the gateway; see [ACP Chat Sessions](../guides/acp-sessions.md).
+On a TTY, bare `agentpack` and the installed `ap` symlink print the gateway URL and open the web UI. Non-interactive invocations still print help. Chat workers use `transport: "acp"` on the gateway; see [ACP Chat Sessions](../guides/acp-sessions.md).
 
 ## Shell completion
 
@@ -218,6 +218,15 @@ agentpack mcp remove retrieval
 agentpack mcp list      # all servers with provenance and lock status
 ```
 
+`login`, `logout`, `connections` and `approve` manage logins shared by every agent and mesh machine; see [Shared logins](../concepts/mcp.md#shared-logins-mcp-connections). They talk to the running gateway and need no project.
+
+```sh
+agentpack mcp login https://mcp.linear.app/mcp          # OAuth sign-in in the browser
+agentpack mcp login github --header Authorization       # token read from hidden input
+agentpack mcp connections
+agentpack mcp logout linear
+```
+
 `add` takes either `--command COMMAND [--args ARGS...] [--env KEY=VALUE...]` for a local server or `--url URL [--type TYPE] [--header KEY=VALUE...]` for a remote one (`--type` defaults to `http`); giving both, or neither, is an error. Headers may hold credentials and are never written to `pack.lock`.
 
 `add` resolves an npm server to an exact version and fails if the registry is unreachable; `--allow-unpinned` records it as unpinned instead. See [MCP Servers](../concepts/mcp.md#what-packlock-records).
@@ -234,7 +243,6 @@ agentpack mode base review none
 agentpack mode enable review package:github.com/acme/shared-rules
 agentpack mode disable review mcp:filesystem
 agentpack mode delete review        # `default` is reserved
-agentpack mode tui                  # interactive editor
 ```
 
 See [Modes](../concepts/modes.md) for selector syntax.

@@ -1,10 +1,10 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
-import { z } from "zod"
+import { search } from "@/lib/search"
 import { Empty } from "@/components/kit/feedback"
 
 // Desktop opens the topology. Phones stay here, where ListDetail shows the list alone.
 export const Route = createFileRoute("/_app/machines/")({
-  validateSearch: z.object({ q: z.string().optional().catch(undefined) }),
+  validateSearch: search({ q: "text" }),
   beforeLoad: () => {
     if (!matchMedia("(max-width: 760px)").matches) throw redirect({ to: "/machines/topology", replace: true })
   },

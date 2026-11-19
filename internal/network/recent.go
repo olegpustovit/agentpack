@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -13,7 +14,12 @@ func Recent(home string) ([]SessionInfo, error) {
 		return nil, err
 	}
 	defer store.Close()
-	entries, err := querySessions(context.Background(), store.Reader, `SELECT `+sessionColumns+` FROM (
+	return recentIn(context.Background(), store.Reader)
+}
+
+// recentIn reads recent launches from an open store; the gateway passes its own.
+func recentIn(ctx context.Context, db *sql.DB) ([]SessionInfo, error) {
+	entries, err := querySessions(ctx, db, `SELECT `+sessionColumns+` FROM (
         SELECT *,row_number() OVER (PARTITION BY directory,harness,mode ORDER BY last_used DESC,id DESC) AS rank
         FROM sessions WHERE node_id=`+state.LocalNodeSQL+` AND hidden=0 AND directory<>''
     ) WHERE rank=1 ORDER BY last_used DESC,id DESC LIMIT 100`)
@@ -36,6 +42,10 @@ func RecentFolders(home string) ([]RecentFolder, error) {
 	if err != nil {
 		return nil, err
 	}
+	return recentFolders(recent), nil
+}
+
+func recentFolders(recent []SessionInfo) []RecentFolder {
 	folders := make([]RecentFolder, 0, len(recent))
 	for _, entry := range recent {
 		folder := RecentFolder{SessionInfo: entry}
@@ -50,7 +60,7 @@ func RecentFolders(home string) ([]RecentFolder, error) {
 		}
 		folders = append(folders, folder)
 	}
-	return folders, nil
+	return folders
 }
 
 func ForgetRecent(home string, info SessionInfo) error {

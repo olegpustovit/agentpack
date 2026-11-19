@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
@@ -134,8 +133,7 @@ func (g *Gateway) serveArchivedConversation(w http.ResponseWriter, r *http.Reque
 		archiveUnavailable(w, r, errors.Join(err, errors.New("archived conversation is incomplete")))
 		return
 	}
-	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
-	entries, truncated, err := readConversationEntries(r.Context(), tx, info.ID, since, lastSeq, truncated)
+	entries, truncated, err := readConversationEntries(r.Context(), tx, info.ID, conversationPage(r), lastSeq, truncated)
 	if err == nil {
 		err = tx.Commit()
 	}

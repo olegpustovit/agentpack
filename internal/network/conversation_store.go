@@ -70,6 +70,30 @@ func persistConversationChanges(ctx context.Context, db *sql.DB, id string, chan
 }
 
 func storedConversationTail(ctx context.Context, db *sql.DB, id string, since int64) ([]acp.LogEntry, int64, bool, error) {
+	return storedConversationRange(ctx, db, id, conversationRange{since: since})
+}
+
+// maxConversationSnapshotBytes caps one conversation read, matching the worker log budget.
+const maxConversationSnapshotBytes = 4 << 20
+
+// Older history arrives in pages this size, so scrolling up stays quick on long conversations.
+const conversationPageBytes = 1 << 20
+
+// conversationRange selects seq in (since, before); before 0 means the newest tail.
+type conversationRange struct{ since, before int64 }
+
+// conversationPage reads ?before= from a request: 0 when absent or invalid.
+func conversationPage(r *http.Request) conversationRange {
+	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+	return conversationRange{since: max(since, 0), before: max(before, 0)}
+}
+
+// readConversationEntries returns the newest entries in the range that fit the byte budget, oldest first.
+// truncated reports that older entries exist that were not returned. For the tail it also carries the
+// session's recorded loss; a page reports only its own budget, since the rest is still stored.
+// storedConversationRange reads one range of a session's stored conversation and its last sequence.
+func storedConversationRange(ctx context.Context, db *sql.DB, id string, span conversationRange) ([]acp.LogEntry, int64, bool, error) {
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, 0, false, err
@@ -84,7 +108,7 @@ func storedConversationTail(ctx context.Context, db *sql.DB, id string, since in
 	if err != nil {
 		return nil, 0, false, err
 	}
-	entries, truncated, err := readConversationEntries(ctx, tx, id, since, lastSeq, truncated)
+	entries, truncated, err := readConversationEntries(ctx, tx, id, span, lastSeq, truncated)
 	if err != nil {
 		return nil, 0, false, err
 	}
@@ -94,13 +118,21 @@ func storedConversationTail(ctx context.Context, db *sql.DB, id string, since in
 	return entries, lastSeq, truncated, nil
 }
 
-func readConversationEntries(ctx context.Context, tx *sql.Tx, id string, since, lastSeq int64, truncated bool) ([]acp.LogEntry, bool, error) {
+func readConversationEntries(ctx context.Context, tx *sql.Tx, id string, span conversationRange, lastSeq int64, truncated bool) ([]acp.LogEntry, bool, error) {
 	if lastSeq < 0 {
 		return nil, false, errors.New("invalid stored conversation sequence")
 	}
+	budget := maxConversationSnapshotBytes
+	if span.before > 0 {
+		budget, truncated = conversationPageBytes, false
+	}
+	upper := span.before
+	if upper == 0 {
+		upper = lastSeq + 1
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT seq,length(CAST(body AS BLOB)),
 		CASE WHEN length(CAST(body AS BLOB))<=? THEN body ELSE '' END
-		FROM conversation_events WHERE session_id=? AND seq>? ORDER BY seq DESC`, maxConversationSnapshotBytes, id, since)
+		FROM conversation_events WHERE session_id=? AND seq>? AND seq<? ORDER BY seq DESC`, budget, id, span.since, upper)
 	if err != nil {
 		return nil, false, err
 	}
@@ -114,7 +146,7 @@ func readConversationEntries(ctx context.Context, tx *sql.Tx, id string, since, 
 		if err := rows.Scan(&seq, &size, &body); err != nil {
 			return nil, false, err
 		}
-		if size+1 > maxConversationSnapshotBytes-total {
+		if size+1 > budget-total {
 			truncated = true
 			break
 		}
@@ -177,8 +209,11 @@ func (g *Gateway) serveConversation(w http.ResponseWriter, r *http.Request) {
 		g.serveArchivedConversation(w, r, info, g.tailnetTarget)
 		return
 	}
-	if record, err := g.workerRecord(r.Context(), id); err == nil && proxyWorkerConversation(w, r, record, "") {
-		return
+	// A running worker holds only a bounded tail; older pages always come from the store.
+	if conversationPage(r).before == 0 {
+		if record, err := g.workerRecord(r.Context(), id); err == nil && proxyWorkerConversation(w, r, record, "") {
+			return
+		}
 	}
 	if r.Context().Err() != nil {
 		return
@@ -190,8 +225,7 @@ func (g *Gateway) serveConversation(w http.ResponseWriter, r *http.Request) {
 	var entries []acp.LogEntry
 	var truncated bool
 	if err == nil {
-		since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
-		entries, _, truncated, err = storedConversationTail(r.Context(), g.auth.store.Reader, id, since)
+		entries, _, truncated, err = storedConversationRange(r.Context(), g.auth.store.Reader, id, conversationPage(r))
 	}
 	if err != nil {
 		if r.Context().Err() != nil {

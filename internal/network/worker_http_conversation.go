@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -19,20 +20,31 @@ import (
 
 const maxBlobUploadReadTime = 30 * time.Second
 
-// promptAcceptWait bounds how long a prompt request waits for an immediate failure before reporting acceptance.
+// promptAcceptWait caps the wait for brokers that never report acceptance (adapters fail or log the prompt sooner).
 var promptAcceptWait = 2 * time.Second
 
 // startPrompt runs a turn beyond the request: a turn lasts until the agent finishes, which can take far longer
 // than any HTTP hop allows. Failures after acceptance are recorded in the conversation as a failed turn.
-func startPrompt(ctx context.Context, session *ConversationSession, prompt acp.PromptInput) error {
-	done := make(chan error, 1)
-	go func() { done <- session.Prompt(context.WithoutCancel(ctx), prompt) }()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(promptAcceptWait):
-		return nil
+// While a turn runs the prompt is queued instead, and its queue ID is returned.
+func startPrompt(ctx context.Context, session *ConversationSession, prompt acp.PromptInput, steer bool) (string, error) {
+	queued, first, err := session.Submit(ctx, prompt, steer)
+	if err != nil || first == nil {
+		return queued, err
 	}
+	select {
+	case err := <-first:
+		return "", err
+	case <-time.After(promptAcceptWait):
+		return "", nil
+	}
+}
+
+func writePromptAccepted(w http.ResponseWriter, queued string) {
+	body := map[string]any{"accepted": true}
+	if queued != "" {
+		body["queued"] = queued
+	}
+	writeJSON(w, body)
 }
 
 func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
@@ -47,6 +59,13 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			return
 		}
 		since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+		// Every append moves the sequence, so it names the snapshot without encoding or hashing it.
+		tag := fmt.Sprintf(`"c%d-%t"`, conv.log.Seq(), conv.log.Truncated())
+		w.Header().Set("ETag", tag)
+		if etagMatches(r.Header.Get("If-None-Match"), tag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		entries, truncated := conv.Attach(since)
 		if truncated {
 			w.Header().Set("X-Agentpack-Truncated", "true")
@@ -72,6 +91,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 				Sha  string `json:"sha"`
 				Name string `json:"name"`
 			} `json:"resource_link"`
+			Steer bool `json:"steer"`
 		}
 		if !readJSON(w, r, &input) {
 			return
@@ -104,7 +124,8 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			http.Error(w, "text or image is required", http.StatusBadRequest)
 			return
 		}
-		if err := startPrompt(r.Context(), worker.conversationSession(), prompt); err != nil {
+		queued, err := startPrompt(r.Context(), worker.conversationSession(), prompt, input.Steer)
+		if err != nil {
 			message := "could not send prompt"
 			if errors.Is(err, errSessionArchived) {
 				message = "archived"
@@ -113,7 +134,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			return
 		}
 		worker.setTitle(r.Context(), prompt.Text)
-		writeJSON(w, map[string]bool{"accepted": true})
+		writePromptAccepted(w, queued)
 	})
 	mux.HandleFunc("POST /conversation/prompt/images", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -124,6 +145,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 				Width  int    `json:"width"`
 				Height int    `json:"height"`
 			} `json:"images"`
+			Steer bool `json:"steer"`
 		}
 		if !readJSON(w, r, &input) {
 			return
@@ -151,7 +173,8 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			http.Error(w, "text or image is required", http.StatusBadRequest)
 			return
 		}
-		if err := startPrompt(r.Context(), worker.conversationSession(), prompt); err != nil {
+		queued, err := startPrompt(r.Context(), worker.conversationSession(), prompt, input.Steer)
+		if err != nil {
 			message := "could not send prompt"
 			if errors.Is(err, errSessionArchived) {
 				message = "archived"
@@ -160,8 +183,9 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			return
 		}
 		worker.setTitle(r.Context(), prompt.Text)
-		writeJSON(w, map[string]bool{"accepted": true})
+		writePromptAccepted(w, queued)
 	})
+	worker.registerQueueAndGoal(mux)
 	mux.HandleFunc("POST /conversation/permission", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			RequestID string `json:"request_id"`
@@ -186,6 +210,29 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
+		}
+		// An optional {"subagent": id} body cancels one subagent session instead of the turn.
+		var input struct {
+			Subagent string `json:"subagent"`
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<10))
+		if err != nil || len(bytes.TrimSpace(body)) > 0 && json.Unmarshal(body, &input) != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if input.Subagent != "" {
+			err := worker.conversationSession().CancelSubagent(ctx, input.Subagent)
+			if errors.Is(err, acp.ErrSubagentNotCancellable) {
+				http.Error(w, "subagent cannot be cancelled", http.StatusBadRequest)
+				return
+			}
+			if err != nil {
+				obs.From(r.Context()).Fail(err)
+				http.Error(w, "could not cancel subagent", http.StatusConflict)
+				return
+			}
+			writeJSON(w, map[string]bool{"cancelled": true})
+			return
 		}
 		if err := worker.conversationSession().Cancel(ctx); err != nil {
 			http.Error(w, "could not cancel turn", http.StatusConflict)
@@ -287,42 +334,55 @@ func (worker *WorkerHTTP) serveConversationSSE(w http.ResponseWriter, r *http.Re
 		return
 	}
 	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
-	_, truncated := conv.Attach(since)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
-	if truncated {
+	if conv.log.Truncated() {
 		w.Header().Set("X-Agentpack-Truncated", "true")
 	}
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 	truncatedSent := false
-	ticker := time.NewTicker(400 * time.Millisecond)
-	defer ticker.Stop()
+	coalesce := time.NewTimer(conversationStreamCoalesce)
+	defer coalesce.Stop()
 	for {
+		// Take the wake channel before reading so an append between the two is never missed.
+		changed := conv.log.Changed()
+		entries, truncated := conv.Attach(since)
+		for _, entry := range entries {
+			since = entry.Seq
+			data, err := json.Marshal(entry)
+			if err != nil {
+				continue
+			}
+			var message sse.Message
+			message.AppendData(string(data))
+			if _, err := message.WriteTo(w); err != nil {
+				return
+			}
+		}
+		if err := writeTruncatedSSE(w, truncated, &truncatedSent); err != nil {
+			return
+		}
+		if len(entries) > 0 || truncated {
+			flusher.Flush()
+		}
 		select {
 		case <-r.Context().Done():
 			return
-		case <-ticker.C:
-			entries, truncated := conv.Attach(since)
-			for _, entry := range entries {
-				since = entry.Seq
-				data, err := json.Marshal(entry)
-				if err != nil {
-					continue
-				}
-				var message sse.Message
-				message.AppendData(string(data))
-				if _, err := message.WriteTo(w); err != nil {
-					return
-				}
-			}
-			if err := writeTruncatedSSE(w, truncated, &truncatedSent); err != nil {
-				return
-			}
-			flusher.Flush()
+		case <-changed:
+		}
+		// Batch a token burst into one write without adding visible latency.
+		coalesce.Reset(conversationStreamCoalesce)
+		select {
+		case <-r.Context().Done():
+			return
+		case <-coalesce.C:
 		}
 	}
 }
+
+const conversationStreamCoalesce = 16 * time.Millisecond
+
 func writeTruncatedSSE(w io.Writer, truncated bool, sent *bool) error {
 	if !truncated || *sent {
 		return nil
@@ -340,7 +400,8 @@ func writeTruncatedSSE(w io.Writer, truncated bool, sent *bool) error {
 func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record WorkerRecord, suffix string) bool {
 	path := "/conversation" + suffix
 	var body io.Reader
-	if r.Method == http.MethodPost {
+	sendsBody := r.Method == http.MethodPost || r.Method == http.MethodPatch
+	if sendsBody {
 		limit := int64(1 << 20)
 		if suffix == "/blobs" {
 			limit = maxBlobBytes + 1
@@ -356,7 +417,10 @@ func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record Work
 	if trace := obs.TraceParent(r.Context()); trace != "" {
 		request.Header.Set("traceparent", trace)
 	}
-	if r.Method == http.MethodPost {
+	if match := r.Header.Get("If-None-Match"); match != "" && r.Method == http.MethodGet {
+		request.Header.Set("If-None-Match", match)
+	}
+	if sendsBody {
 		contentType := "application/json"
 		if suffix == "/blobs" {
 			contentType = r.Header.Get("Content-Type")
@@ -387,7 +451,7 @@ func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record Work
 		http.Error(w, "Needs update", http.StatusNotFound)
 		return true
 	}
-	for _, key := range []string{"Content-Type", "X-Agentpack-Truncated"} {
+	for _, key := range []string{"Content-Type", "X-Agentpack-Truncated", "ETag"} {
 		if value := response.Header.Get(key); value != "" {
 			w.Header().Set(key, value)
 		}

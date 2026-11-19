@@ -11,10 +11,13 @@ export function archiveUnavailableMessage(error: unknown): string | undefined {
   if (error instanceof ArchiveUnavailableError) return `Archived on ${error.main}, unavailable right now`
 }
 
-async function conversationLog(machine: string, sessionId: string, since = 0): Promise<LogEntry[]> {
+// truncated: older entries exist that this response left out.
+export type ConversationPage = { entries: LogEntry[]; truncated: boolean }
+
+async function conversationLog(machine: string, sessionId: string, before = 0): Promise<ConversationPage> {
   const url = new URL(`/api/sessions/${encodeURIComponent(sessionId)}/conversation`, location.origin)
   if (machine && machine !== LOCAL) url.searchParams.set("node", machine)
-  if (since > 0) url.searchParams.set("since", String(since))
+  if (before > 0) url.searchParams.set("before", String(before))
   const res = await fetch(url)
   const text = await res.text()
   if (!res.ok) {
@@ -28,13 +31,27 @@ async function conversationLog(machine: string, sessionId: string, since = 0): P
     if (!line) continue
     entries.push(JSON.parse(line) as LogEntry)
   }
-  return entries
+  return { entries, truncated: res.headers.get("X-Agentpack-Truncated") === "true" }
+}
+
+// The page of history just before seq. A peer that predates paging ignores ?before= and answers
+// with its newest tail, which reads as Needs update rather than as duplicated messages.
+export async function olderConversationPage(machine: string, sessionId: string, before: number): Promise<ConversationPage> {
+  const page = await conversationLog(machine, sessionId, before)
+  if (page.entries.some((entry) => entry.seq >= before)) throw new ApiError("earlier history needs an update", 404)
+  return page
+}
+
+// Older pages stay loaded while the tail refetches; anything the tail already holds wins.
+export function joinHistory(older: LogEntry[], tail: LogEntry[]): LogEntry[] {
+  const first = tail[0]?.seq ?? Infinity
+  return older.length === 0 ? tail : [...older.filter((entry) => entry.seq < first), ...tail]
 }
 
 export function conversationEventsQuery(machine: string, sessionId: string, _live = false) {
   return {
     queryKey: ["conversation", machine, sessionId] as const,
-    queryFn: (): Promise<LogEntry[]> => conversationLog(machine, sessionId),
+    queryFn: (): Promise<ConversationPage> => conversationLog(machine, sessionId),
     refetchInterval: false as false | number,
   }
 }

@@ -94,9 +94,11 @@ test("the Sessions sidebar has 0 DOM mutations per 60 s of unchanged data", asyn
   })
 
   await page.clock.runFor(60_000)
+  // Live events replace polling, so returning to the tab is what refetches the stale list.
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")))
+  await expect.poll(() => polls.paths.filter((path) => path === "/api/sessions").length).toBeGreaterThanOrEqual(1)
+  await page.waitForLoadState("networkidle")
   polls.stop()
-  // The sidebar must have polled during the window, or the zero count proves nothing.
-  expect(polls.paths.filter((path) => path === "/api/sessions").length).toBeGreaterThanOrEqual(1)
   expect(await page.evaluate(() => (window as Window & { churn?: number }).churn)).toBe(0)
 })
 
@@ -146,20 +148,15 @@ test("the fleet's install rows total at most 12 across machines", async ({ page 
   expect(rows).toBeLessThanOrEqual(12)
 })
 
-test("New Session offers at most 4 folders on each machine", async ({ page }) => {
+test("New Session merges each machine's 4 folders into 4 projects", async ({ page }) => {
   await mockFleet(page)
   await page.goto("/sessions?new=1")
   const machine = page.getByRole("combobox", { name: "Machine" })
-  const project = page.getByRole("combobox", { name: "Project" })
-  for (const name of ["Gateway machine", "Build server", "oracle-vm"]) {
-    if (name !== "Gateway machine") {
-      await machine.click()
-      await page.getByRole("option", { name, exact: true }).click()
-    }
-    await project.click()
-    await expect(page.getByRole("option")).toHaveCount(4)
-    await page.keyboard.press("Escape")
-  }
+  // Same-named folders merge across machines; each project offers all three machines.
+  await expect(page.getByRole("navigation", { name: "Projects" }).getByRole("button")).toHaveCount(4)
+  await machine.click()
+  await expect(page.getByRole("option")).toHaveCount(3)
+  for (const name of ["Gateway machine", "Build server", "oracle-vm"]) await expect(page.getByRole("option", { name, exact: true })).toBeVisible()
 })
 
 // A delayed replicated list must survive without dropping the eventual peer rows.

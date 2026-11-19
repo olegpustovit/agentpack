@@ -112,7 +112,7 @@ function AddPackageForm({ onDone, initialMachine, initialDirectory }: { onDone: 
           machine: initialMachine,
           machineName: initialMachine,
           online: true,
-          project: { directory: initialDirectory, name: basename(initialDirectory), folder_id: "", available: true, unavailable_reason: "", last_used: "", launches: [], packages: [], mcp: [], error: "" },
+          project: { directory: initialDirectory, name: basename(initialDirectory), folder_id: "", available: true, unavailable_reason: "", last_used: "", launches: [], packages: [], mcp: [], modes: [], error: "" },
         },
       }
     : undefined

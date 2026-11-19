@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -95,7 +96,9 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 			if err != nil {
 				return network.ProjectContents{}, err
 			}
-			return projectContents(locked), nil
+			// A folder without agentpack.toml still has the implicit default mode.
+			project, _ := manifest.Load(packContext.DefinitionRoot)
+			return projectContents(locked, project), nil
 		}
 		options.Install = runner.installNetworkPackage
 		options.Library, err = runner.networkLibrary(home)

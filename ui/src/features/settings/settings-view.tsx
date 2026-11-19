@@ -6,13 +6,14 @@ import { identityQuery } from "@/features/machines/queries"
 import { ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { SourceList, SourceRow } from "@/components/kit/list"
 import { AccountPane } from "./account-pane"
-import { AppearancePane, DiagnosticsPane, GeneralPane, SharingPane } from "./panes"
+import { AppearancePane, ConnectionsPane, DiagnosticsPane, GeneralPane, SharingPane } from "./panes"
 import { ReplicationPane } from "./replication-pane"
 
 const sections = [
   { id: "general", label: "General", view: GeneralPane },
   { id: "sharing", label: "Sharing", view: SharingPane },
   { id: "replication", label: "Replication", view: ReplicationPane },
+  { id: "connections", label: "Connections", view: ConnectionsPane },
   { id: "diagnostics", label: "Diagnostics", view: DiagnosticsPane },
   { id: "appearance", label: "Appearance", view: AppearancePane },
   { id: "account", label: "Account", view: AccountPane },

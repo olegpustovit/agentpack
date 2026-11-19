@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router"
 import { Plug } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Inspector, InspectorHead, KeyValue, Section } from "@/components/kit/data"
 import { plural } from "@/lib/format"
@@ -37,6 +38,13 @@ export function McpInspector({ name }: { name: string }) {
           <KeyValue label="Launcher">{server.launcher || "—"}</KeyValue>
           <KeyValue label="Status">{statuses.join(", ") || "—"}</KeyValue>
           <KeyValue label="Version">{server.version || "Not pinned"}</KeyValue>
+          {server.launcher === "remote" && (
+            <KeyValue label="Login">
+              <Link to="/settings/$pane" params={{ pane: "connections" }} className="text-(--accent) underline-offset-2 hover:underline">
+                Connect once for every agent…
+              </Link>
+            </KeyValue>
+          )}
         </dl>
       </Section>
       <Section title="Used in" className="col-span-full">

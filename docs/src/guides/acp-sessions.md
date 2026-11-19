@@ -1,4 +1,4 @@
-# ACP chat sessions and the `ap` hub
+# ACP chat sessions
 
 Some harnesses speak the [Agent Client Protocol](https://agentclientprotocol.com/) over stdio. Agentpack runs them in a **worker** (same ownership model as terminal PTY sessions), exposes a **conversation log** on the gateway, and renders chat in the browser or in the **`ap`** Bubble Tea hub.
 
@@ -56,12 +56,12 @@ Uploaded image MIME is detected from the stored blob bytes before the ACP agent 
 ACP terminal output is capped at 4 MiB; nested terminal process groups are terminated on release or worker shutdown. Complete stdout frames over 4 MiB are dropped; an unterminated oversized frame closes the stream after 10 seconds.
 Session stop/restart are distinct from turn cancel: stop terminates the ACP adapter process; restart replaces it and reloads the native session. Both retain the existing session owner checks.
 
-The wire log stores raw ACP `session/update` kinds plus agentpack kinds such as `permission_request` and `turn_end`. Shared fixtures live in `testdata/acp/full.jsonl`; reducers in Go (`internal/acp`, `internal/hub`) and the gateway UI (`ui/src/features/conversation/reducer.ts`) must stay aligned. Optional local check: `./scripts/acp-conformance/run`.
+The wire log stores raw ACP `session/update` kinds plus agentpack kinds such as `permission_request` and `turn_end`. Shared fixtures live in `testdata/acp/full.jsonl`; reducers in Go (`internal/acp`) and the gateway UI (`ui/src/features/conversation/reducer.ts`) must stay aligned. Optional local check: `./scripts/acp-conformance/run`.
 The script does not launch agents. It reports missing `testdata/acp/<harness>.jsonl` transcripts; recording them requires owner-authorized live prompts and terminal captures and may incur provider usage.
 
-## `ap` hub
+## Opening the web UI
 
-On a TTY, bare `agentpack` and the `ap` symlink (installed beside the binary) open the hub TUI instead of printing help. Without a gateway URL, the hub lists local session rows whose worker endpoints are reachable. The preview supports permission answers, elicitation choices, text prompts, image attachments from a local path, and the `/help`, `/image`, `/reload`, and `/sessions` slash commands. Image/file blocks render as text placeholders; click one or hover it and press `o` to open the stored blob with the OS default file handler. Downloaded images are cached under the OS user cache, capped at 100 MiB.
+On a TTY, bare `agentpack` and the `ap` symlink (installed beside the binary) print the running gateway's URL and open it in the default browser; inside an agent session they only print it. Chats, permission answers, queued prompts, goals and image attachments all live in the gateway web UI. When no gateway is running, the command says to start one with `ap gateway start`.
 
 ## Harness coverage
 

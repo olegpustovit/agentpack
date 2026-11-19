@@ -64,7 +64,7 @@ test("focus on a row survives a refetch that changes the data", async ({ page })
   await expect(rows.first()).toBeFocused()
 })
 
-test("holding an arrow key opens the session once, 150 ms after the last press", async ({ page }) => {
+test("arrow keys open each session at once and leave one history entry", async ({ page }) => {
   await page.goto("/sessions")
   const rows = page.getByRole("navigation", { name: "Sessions" }).locator("[data-source-row]")
   await rows.first().focus()
@@ -98,12 +98,58 @@ test("New session posts Cursor CLI as the agent harness", async ({ page }) => {
   })
 
   await page.goto("/sessions?new=1")
-  await page.getByRole("combobox", { name: "Agent" }).click()
-  await page.getByRole("option", { name: "Cursor CLI" }).click()
+  await page.getByRole("group", { name: "Agent" }).getByRole("button", { name: "Cursor CLI" }).click()
   const posted = page.waitForRequest((request) => request.method() === "POST" && /\/api\/sessions$/.test(request.url()))
   await page.getByRole("button", { name: "Start session" }).click()
   const body = (await posted).postDataJSON()
   expect(body).toMatchObject({ directory: "/home/oleg/agentpack", harness: "agent" })
+})
+
+test("New session shows what the chosen mode loads", async ({ page }) => {
+  const project = {
+    directory: "/home/oleg/agentpack",
+    name: "agentpack",
+    available: true,
+    last_used: twoHoursAgo,
+    launches: [{ harness: "claude", mode: "default", last_used: twoHoursAgo }],
+    packages: [{ module: "github.com/acme/heavy", name: "heavy", kind: "plugin", direct: true }],
+    mcp: [{ name: "playwright", launcher: "npm", status: "pinned", package: "@playwright/mcp", version: "1.0.0", source: "plugin" }],
+    modes: [
+      { name: "default", off_packages: [], partial_packages: [], off_mcp: [] },
+      { name: "design", off_packages: ["github.com/acme/heavy"], partial_packages: [], off_mcp: ["playwright"] },
+    ],
+    error: "",
+  }
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [project] }))
+  await page.goto("/sessions?new=1")
+  const loaded = page.getByRole("region", { name: "Loaded in this session" })
+  await expect(loaded).toContainText("2 active")
+  await expect(loaded).toContainText("@playwright/mcp@1.0.0")
+  await page.getByRole("group", { name: "Mode" }).getByRole("button", { name: "design" }).click()
+  await expect(loaded).toContainText("0 active, 2 turned off by mode “design”")
+  await expect(loaded.getByRole("listitem").filter({ hasText: "heavy" })).toContainText("off in design")
+})
+
+test("a folder's + in the sidebar starts New session there", async ({ page }) => {
+  await page.goto("/sessions")
+  // The folder is not among the machine's listed projects; it still opens, ready to start.
+  await page.getByRole("link", { name: "New session in oracle on host-a" }).click()
+  await expect(page).toHaveURL(/folder=%2Fhome%2Foleg%2Foracle/)
+  const dialog = page.getByRole("dialog")
+  await expect(dialog.getByRole("heading", { name: "oracle" })).toBeVisible()
+  await expect(dialog.getByRole("combobox", { name: "Machine" })).toContainText("host-a")
+  await expect(dialog).toContainText("/home/oleg/oracle")
+  const posted = page.waitForRequest((request) => request.method() === "POST" && /\/api\/sessions$/.test(request.url()))
+  await page.getByRole("button", { name: "Start session" }).click()
+  expect((await posted).postDataJSON()).toMatchObject({ directory: "/home/oleg/oracle" })
+})
+
+test("closing New session drops the folder it was opened for", async ({ page }) => {
+  await page.goto("/sessions?new=1&machine=local&folder=%2Fhome%2Foleg%2Foracle")
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "oracle" })).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(page.getByRole("dialog")).toBeHidden()
+  await expect(page).not.toHaveURL(/folder=|machine=|new=/)
 })
 
 test("Refresh rereads sessions", async ({ page }) => {
@@ -121,4 +167,58 @@ test("Refresh rereads sessions", async ({ page }) => {
   await page.route("**/api/nodes", (route) => route.fulfill({ status: 400, json: { error: "Tailscale is unavailable" } }))
   await page.getByRole("button", { name: "Refresh sessions" }).click()
   await expect(list.getByRole("alert")).toHaveText(/Can't look for other machines: Tailscale is unavailable/)
+})
+
+test("a reload paints the last-known list before the gateway answers", async ({ page }) => {
+  await page.clock.install()
+  await page.goto("/sessions")
+  const rows = page.getByRole("navigation", { name: "Sessions" }).locator("[data-source-row]")
+  await expect(rows).toHaveCount(2)
+  // The cache is written a second after the last change.
+  await page.clock.runFor(1_100)
+  await page.waitForFunction(() => new Promise((resolve) => {
+    const open = indexedDB.open("agentpack-cache")
+    open.onsuccess = () => {
+      const request = open.result.transaction("queries").objectStore("queries").get("client")
+      request.onsuccess = () => resolve(request.result !== undefined)
+    }
+  }))
+  await page.route(/\/api\/sessions(\?.*)?$/, () => undefined)
+  await page.reload()
+  await expect(rows).toHaveCount(2)
+})
+
+test("⌘/Ctrl- and Shift-click mark rows; the menu then acts on all of them", async ({ page }) => {
+  const archived: string[] = []
+  await page.route("**/api/sessions/*", (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback()
+    archived.push(new URL(route.request().url()).pathname.split("/").pop()!)
+    return route.fulfill({ json: {} })
+  })
+  await page.route("**/api/sessions/*/stop", (route) => route.fulfill({ json: { stopped: true } }))
+  await page.goto("/sessions")
+  const rows = page.getByRole("navigation", { name: "Sessions" }).locator("[data-source-row]")
+  await rows.first().click({ modifiers: ["ControlOrMeta"] })
+  await rows.last().click({ modifiers: ["Shift"] })
+  // Marking never opens a session.
+  await expect(page).toHaveURL(/\/sessions(\?|$)/)
+  await expect(rows.and(page.locator("[data-marked]"))).toHaveCount(2)
+
+  await rows.last().click({ button: "right" })
+  // Only s1 is running, so the stop counts one; both can be archived.
+  await expect(page.getByRole("menuitem", { name: "Stop agent…" })).toBeEnabled()
+  await page.getByRole("menuitem", { name: "Archive 2 sessions…" }).click()
+  await page.getByRole("alertdialog").getByRole("button", { name: "Archive 2" }).click()
+  await expect.poll(() => archived.sort()).toEqual(["s1", "s2"])
+  await expect(page.locator("[data-marked]")).toHaveCount(0)
+})
+
+test("Esc clears the marked rows", async ({ page }) => {
+  await page.goto("/sessions")
+  const rows = page.getByRole("navigation", { name: "Sessions" }).locator("[data-source-row]")
+  await rows.first().click({ modifiers: ["ControlOrMeta"] })
+  await rows.last().click({ modifiers: ["ControlOrMeta"] })
+  await expect(page.locator("[data-marked]")).toHaveCount(2)
+  await page.keyboard.press("Escape")
+  await expect(page.locator("[data-marked]")).toHaveCount(0)
 })

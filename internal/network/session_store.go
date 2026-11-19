@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -14,7 +15,8 @@ import (
 const sessionWriteColumns = `id,last_used,folder_id,name,directory,definition_root,harness,mode,
 	transport,agent_session_id,agent_capabilities,conversation_state,state,started_at,started_by,title`
 
-const sessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at"
+// goal and subagents are written only by the worker (worker_record_patch.go), so upserts never clobber them.
+const sessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at,goal,subagents"
 
 func sessionValues(info SessionInfo) ([]any, error) {
 	if info.ID == "" {
@@ -70,17 +72,18 @@ func upsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
 func scanSession(row interface{ Scan(...any) error }) (SessionInfo, error) {
 	var info SessionInfo
 	var lastUsed, startedAt, endedAt, archivedAt int64
-	var capabilities, owner, terminal string
+	var capabilities, owner, terminal, goal, subagents string
 	err := row.Scan(&info.ID, &lastUsed, &info.FolderID, &info.Name, &info.Directory,
 		&info.DefinitionRoot, &info.Harness, &info.Mode, &info.Transport, &info.AgentSessionID,
-		&capabilities, &info.ConversationState, &terminal, &startedAt, &owner, &info.Title, &info.NodeID, &endedAt, &archivedAt)
+		&capabilities, &info.ConversationState, &terminal, &startedAt, &owner, &info.Title, &info.NodeID, &endedAt, &archivedAt,
+		&goal, &subagents)
 	if err != nil {
 		return info, err
 	}
 	for _, value := range []struct {
 		body string
 		into any
-	}{{capabilities, &info.AgentCapabilities}, {owner, &info.StartedBy}, {terminal, &info.State}} {
+	}{{capabilities, &info.AgentCapabilities}, {owner, &info.StartedBy}, {terminal, &info.State}, {goal, &info.Goal}, {subagents, &info.Subagents}} {
 		if value.body != "" {
 			if err := json.Unmarshal([]byte(value.body), value.into); err != nil {
 				return info, fmt.Errorf("decode session %s: %w", info.ID, err)
@@ -123,7 +126,7 @@ func (g *Gateway) workerRecord(ctx context.Context, id string) (WorkerRecord, er
 		return record, err
 	}
 	info, err := storedSession(ctx, g.auth.store.Reader, id)
-	if errors.Is(err, errSessionNotFound) && record.Session != (SessionInfo{}) {
+	if errors.Is(err, errSessionNotFound) && !reflect.ValueOf(record.Session).IsZero() {
 		// Running legacy workers retain their metadata until the stopped-session import.
 		return record, nil
 	}

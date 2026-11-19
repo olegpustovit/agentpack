@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/registry"
 	"github.com/olegpustovit/agentpack/internal/state"
 	"golang.org/x/term"
@@ -122,6 +125,44 @@ func (runner Runner) readAccountPassword() (string, error) {
 		return "", errors.New("passwords do not match")
 	}
 	return values[0], nil
+}
+
+// openGateway prints the running gateway's browser address and opens it; the web UI replaced the terminal hub.
+func (runner Runner) openGateway(ctx context.Context) error {
+	home, err := paths.UserAgentpackHome()
+	if err != nil {
+		return err
+	}
+	address := strings.TrimSpace(os.Getenv("AGENTPACK_PUBLIC_URL"))
+	if address == "" {
+		if address, err = network.GatewayURL(home); err != nil {
+			return errors.New("the gateway is not running; start it with: ap gateway start")
+		}
+	}
+	fmt.Fprintln(runner.Stdout, address)
+	if err := runner.printGatewayClaim(ctx, home); err != nil {
+		return err
+	}
+	if os.Getenv("AGENTPACK_SESSION") != "1" {
+		openInBrowser(address)
+	}
+	return nil
+}
+
+// openInBrowser is best effort: the printed address is the fallback when no desktop is available.
+func openInBrowser(address string) {
+	var command *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		command = exec.Command("open", address)
+	case "windows":
+		command = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", address)
+	default:
+		command = exec.Command("xdg-open", address)
+	}
+	if command.Start() == nil {
+		go command.Wait()
+	}
 }
 
 func (runner Runner) printGatewayClaim(ctx context.Context, home string) error {

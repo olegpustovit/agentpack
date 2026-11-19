@@ -108,7 +108,7 @@ test.describe("kit styling", () => {
     const body = [
       { seq: 1, ts: 1, kind: "user_message_chunk", payload: { text: { text } } },
       { seq: 2, ts: 2, kind: "tool_call", payload: { toolCallId: "read-one", title: "Read worker.go", kind: "read", status: "completed" } },
-      { seq: 3, ts: 3, kind: "agent_message_chunk", payload: { text: { text: "Plain agent reply" } } },
+      { seq: 3, ts: 3, kind: "agent_message_chunk", payload: { text: { text: "Plain agent reply\n\nSecond paragraph\n\n- first point\n- second point" } } },
       { seq: 4, ts: 4, kind: "plan", payload: { entries: [{ priority: "high", status: "in_progress", content: "Publish the branch" }] } },
       { seq: 5, ts: 5, kind: "permission_request", payload: { requestId: "p1", tool: "Bash", summary: "Run tests", options: [{ id: "allow", label: "Allow once" }, { id: "deny", label: "Deny" }] } },
     ].map((entry) => `${JSON.stringify(entry)}\n`).join("")
@@ -129,13 +129,14 @@ test.describe("kit styling", () => {
         return color
       }, { property, value, read })
 
-    // User bubbles use the neutral track token at the reference width.
+    // User messages are full-width cards on the thread's left edge, in the neutral track token.
     const bubble = page.locator('[data-slot="user-bubble"]')
     await expect(bubble).toContainText("Ship it")
     expect(await style(bubble, "background-color")).toBe(await token("background", "var(--track)", "background-color"))
-    const width = (await bubble.boundingBox())?.width ?? 0
-    expect(width).toBeGreaterThan(500)
-    expect(width).toBeLessThanOrEqual(560)
+    const box = await bubble.boundingBox()
+    const agentBox = await page.locator('[data-slot="agent-message"]').first().boundingBox()
+    expect(box?.width ?? 0).toBeGreaterThan(560)
+    expect(Math.abs((box?.x ?? 0) - (agentBox?.x ?? -100))).toBeLessThan(2)
 
     // Tool rows are unboxed and use tool-specific icons.
     const row = page.locator("[data-tool-row]")
@@ -148,6 +149,9 @@ test.describe("kit styling", () => {
     const block = page.locator('[data-slot="agent-message"]').first()
     await expect(block).toContainText("Plain agent reply")
     expect(await style(block, "color")).toBe(await style(page.locator("body"), "color"))
+    // Paragraphs are spaced and lists keep their bullets despite preflight.
+    expect(await style(block.locator(".md > div").nth(1), "margin-top")).not.toBe("0px")
+    expect(await style(block.locator("ul"), "list-style-type")).toBe("disc")
 
     // Permission cards use the warn border token and show focus.
     const card = page.locator('[data-slot="permission-card"]')
@@ -166,6 +170,37 @@ test.describe("kit styling", () => {
 
 // Behaviour of the conversation pane: Chromium only, it cannot differ by engine.
 test.describe("conversation pane", () => {
+  test("bypass mode is red, menus use NSMenu metrics, and the composer is focused close under the thread", async ({ page }) => {
+    await desktop(page)
+    await page.route("**/api/sessions", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({ json: [{ ...session, transport: "acp" }] })
+    })
+    await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: composerFixture, contentType: "application/x-ndjson" }))
+    await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [
+      { type: "select", id: "mode", name: "Mode", currentValue: "bypassPermissions", options: [{ value: "default", name: "Manual" }, { value: "plan", name: "Plan" }, { value: "bypassPermissions", name: "Bypass permissions" }] },
+    ] }))
+    await page.goto("/sessions/local/local-one")
+    await expect(page.getByRole("textbox", { name: "Message" })).toBeFocused()
+
+    const trigger = page.getByRole("combobox", { name: "Permissions" })
+    await expect(trigger).toHaveAttribute("data-danger", "true")
+    expect(await style(trigger, "background-color")).not.toBe(transparent)
+
+    // The thread reserves the composer's height plus a 36 px gap, not a fixed 256 px.
+    const composer = page.locator('[aria-label="Conversation"] ~ div').filter({ has: page.getByRole("textbox", { name: "Message" }) }).locator("> div").first()
+    const reserved = await page.locator('[aria-label="Conversation"]').evaluate((element) => parseFloat(getComputedStyle(element).paddingBottom))
+    expect(reserved - (await composer.boundingBox())!.height).toBe(36)
+
+    await trigger.click()
+    const bypass = page.getByRole("option", { name: "Bypass permissions" })
+    await expect(bypass).toBeVisible()
+    expect(await style(bypass, "height")).toBe("24px")
+    expect(await style(page.locator('[data-slot="select-content"]'), "border-top-left-radius")).toBe("12px")
+    // Dangerous modes are their own group.
+    await expect(page.locator('[data-slot="select-separator"]')).toHaveCount(1)
+  })
+
   test("notices and compactions render in the thread", async ({ page }) => {
     await desktop(page)
     await page.route("**/api/sessions", (route) => {
@@ -186,6 +221,38 @@ test.describe("conversation pane", () => {
   })
 
 
+  test("sidebar status dot: one element, accent pulse while working, warn for needs you", async ({ page }) => {
+    await desktop(page)
+    await page.route("**/api/sessions", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({
+        json: [
+          { ...session, transport: "acp", conversation_state: "working" },
+          { ...session, id: "local-two", name: "Another", transport: "acp", conversation_state: "needs_you" },
+        ],
+      })
+    })
+    await page.goto("/sessions")
+    const token = (value: string) =>
+      page.evaluate((value) => {
+        const probe = document.createElement("div")
+        probe.style.background = value
+        document.body.appendChild(probe)
+        const color = getComputedStyle(probe).backgroundColor
+        probe.remove()
+        return color
+      }, value)
+    const working = page.locator('[data-row-key="local:local-one"] [data-slot="agent-dot"]')
+    await expect(working).toHaveAttribute("data-state", "working")
+    expect(await style(working, "animation-name")).toBe("dot-pulse")
+    expect(await style(working, "background-color")).toBe(await token("var(--accent)"))
+    const needs = page.locator('[data-row-key="local:local-two"] [data-slot="agent-dot"]')
+    await expect(needs).toHaveAttribute("data-state", "needs")
+    expect(await style(needs, "background-color")).toBe(await token("var(--warn)"))
+    // The name gets the row: no agent or status words beside it except the one trailing slot.
+    await expect(page.locator('[data-row-key="local:local-two"]')).toContainText("Needs you")
+  })
+
   test("composer slash menu and needs-you row label", async ({ page }) => {
     await desktop(page)
     await page.route("**/api/sessions", (route) => {
@@ -200,7 +267,8 @@ test.describe("conversation pane", () => {
     await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: composerFixture, contentType: "application/x-ndjson" }))
     await page.goto("/sessions")
     await expect(page.getByText("Needs you").first()).toBeVisible()
-    await expect(page.getByText("Idle").first()).toBeVisible()
+    // Idle shows as the agent tile with no dot; its name is on the tile.
+    await expect(page.getByRole("img", { name: "Idle" }).first()).toBeAttached()
     await page.goto("/sessions/local/local-one")
     await page.getByRole("button", { name: "Commands" }).click()
     await expect(page.locator('[data-slot="composer-hints"]')).toBeVisible()
@@ -342,7 +410,7 @@ test("a machine with no projects says so in New session", async ({ page, isMobil
   await page.route("**/api/projects**", (route) => route.fulfill({ json: [] }))
   await page.goto("/sessions?new=1")
   await expect(page.getByText("No projects yet")).toBeVisible()
-  await expect(page.getByRole("combobox", { name: "Project" })).toHaveCount(0)
+  await expect(page.getByRole("navigation", { name: "Projects" }).getByRole("button")).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Start session" })).toBeDisabled()
 })
 
@@ -386,11 +454,11 @@ test("a long project path stays inside the New session sheet", async ({ page, is
   await page.goto("/sessions?new=1")
   const sheet = (await page.getByRole("dialog").boundingBox())!
   const start = (await page.getByRole("button", { name: "Start session" }).boundingBox())!
-  const project = (await page.getByRole("combobox", { name: "Project" }).boundingBox())!
+  const project = (await page.getByText(long, { exact: true }).last().boundingBox())!
   expect(start.x + start.width).toBeLessThanOrEqual(sheet.x + sheet.width)
   expect(project.x + project.width).toBeLessThanOrEqual(sheet.x + sheet.width)
-  // A CLI launch records an empty mode; the field still names the real one.
-  await expect(page.getByLabel("Mode")).toHaveValue("default")
+  // A CLI launch records an empty mode; the control still names the real one.
+  await expect(page.getByRole("group", { name: "Mode" }).getByRole("button", { name: "default" })).toHaveAttribute("aria-pressed", "true")
 })
 
 test("a stop in progress shows on its row until it finishes", async ({ page, isMobile }) => {

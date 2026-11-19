@@ -24,6 +24,9 @@ import (
 
 const browserSessionLifetime = 30 * 24 * time.Hour
 
+// browserSessionSlide is how stale a session expiry may get before a request extends it.
+const browserSessionSlide = time.Hour
+
 type gatewayAuth struct {
 	mu        sync.Mutex
 	store     *state.Store
@@ -108,10 +111,15 @@ func (a *gatewayAuth) email(r *http.Request) string {
 	key := sha256.Sum256([]byte(cookie.Value))
 	now := a.now()
 	var email string
-	err = a.store.Reader.QueryRowContext(r.Context(), `SELECT s.email FROM auth_sessions s JOIN users u ON u.email=s.email
-WHERE s.token_hash=? AND s.expires_at>? AND u.disabled=0 AND s.created_at>=u.sessions_valid_after AND s.session_epoch=u.sessions_valid_after`, key[:], now.UnixMilli()).Scan(&email)
+	var expires int64
+	err = a.store.Reader.QueryRowContext(r.Context(), `SELECT s.email,s.expires_at FROM auth_sessions s JOIN users u ON u.email=s.email
+WHERE s.token_hash=? AND s.expires_at>? AND u.disabled=0 AND s.created_at>=u.sessions_valid_after AND s.session_epoch=u.sessions_valid_after`, key[:], now.UnixMilli()).Scan(&email, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ""
+	}
+	// Sliding expiry moves at most hourly: a write per request contended with streaming for the one write lock.
+	if err == nil && expires >= now.Add(browserSessionLifetime-browserSessionSlide).UnixMilli() {
+		return email
 	}
 	if err == nil {
 		var result sql.Result

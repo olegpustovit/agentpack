@@ -10,7 +10,6 @@ import (
 
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/fang"
-	"github.com/olegpustovit/agentpack/internal/hub"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/spf13/cobra"
@@ -61,11 +60,8 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 		if len(args) > 0 {
 			return command.Help()
 		}
-		if os.Getenv("AGENTPACK_SESSION") == "1" {
-			return errors.New("hub is unavailable inside a running agent session")
-		}
-		if hubTTY(runner.Stdin, runner.Stdout) {
-			return hub.Run()
+		if interactiveTerminal(runner.Stdin, runner.Stdout) {
+			return runner.openGateway(command.Context())
 		}
 		return command.Help()
 	}
@@ -78,7 +74,7 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	}
 	ap := &cobra.Command{
 		Use:                "ap",
-		Short:              "Open the agentpack hub",
+		Short:              "Open the gateway web UI",
 		SilenceUsage:       true,
 		SilenceErrors:      true,
 		DisableFlagParsing: true,
@@ -240,7 +236,15 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	value(mcpAdd, "env", "KEY=VALUE...", "environment passed to the server")
 	flag(mcpAdd, "allow-unpinned", "", "record the server as unpinned when its registry is unreachable")
 	mcpRemove := leaf("remove NAME", "Remove an MCP server")
-	mcp.AddCommand(mcpAdd, mcpRemove, leaf("list", "List configured MCP servers"))
+	mcpLogin := leaf("login SERVER|URL", "Connect a remote MCP server once for every agent and node")
+	value(mcpLogin, "header", "NAME", "store a header value (read hidden) instead of signing in with OAuth")
+	value(mcpLogin, "var", "NAME...", "store environment variables (read hidden) for local servers that name --label")
+	value(mcpLogin, "label", "LABEL", "connection name, used by credential = \"LABEL\"")
+	value(mcpLogin, "client-id", "ID", "pre-registered OAuth client ID (default: register dynamically)")
+	mcp.AddCommand(mcpAdd, mcpRemove, leaf("list", "List configured MCP servers"), mcpLogin,
+		leaf("logout CONNECTION", "Remove an MCP connection from every node"),
+		leaf("connections", "List MCP connections shared across the mesh"),
+		leaf("approve CONNECTION MODULE", "Let a plugin's MCP server use a connection"))
 	root.AddCommand(mcp)
 
 	mode := &cobra.Command{Use: "mode", Short: "Manage project-local staging modes"}
@@ -252,7 +256,6 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 		leaf("enable NAME [SELECTOR...]", "Enable capabilities in a mode"),
 		leaf("disable NAME [SELECTOR...]", "Disable capabilities in a mode"),
 		leaf("base NAME <all|none>", "Set a mode's default selection"),
-		leaf("tui [NAME]", "Open the interactive mode editor"),
 	)
 	root.AddCommand(mode)
 
@@ -299,6 +302,9 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	mcpExec := leaf("mcp-exec", "Internal: start an MCP server from its locked npm tree")
 	mcpExec.Hidden = true
 	root.AddCommand(mcpExec)
+	mcpBridge := leaf("mcp-bridge", "Internal: serve an MCP server with a stored credential")
+	mcpBridge.Hidden = true
+	root.AddCommand(mcpBridge)
 	root.AddCommand(&cobra.Command{
 		Use:    "state-selfcheck",
 		Hidden: true,
@@ -308,7 +314,7 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	return root
 }
 
-func hubTTY(in io.Reader, out io.Writer) bool {
+func interactiveTerminal(in io.Reader, out io.Writer) bool {
 	inFile, okIn := in.(*os.File)
 	outFile, okOut := out.(*os.File)
 	if !okIn || !okOut {

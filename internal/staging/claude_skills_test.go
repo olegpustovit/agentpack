@@ -148,3 +148,16 @@ func TestOmitProjectClaudeSkillDuplicatesByNameAndHashWholeTree(t *testing.T) {
 		t.Fatalf("different invocation name was removed: %v", err)
 	}
 }
+
+func TestSkillTreeHashHashesLinksByTarget(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".venv", "lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("lib", filepath.Join(root, ".venv", "lib64")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := skillTreeHash(root); err != nil {
+		t.Fatalf("directory symlink broke skill hash: %v", err)
+	}
+}

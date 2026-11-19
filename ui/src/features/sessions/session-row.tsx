@@ -1,15 +1,19 @@
-import type { KeyboardEvent } from "react"
+import { useEffect, useState, type KeyboardEvent } from "react"
 import { Link } from "@tanstack/react-router"
-import { Archive, Loader, Package, Pencil, Plug, RotateCw, Save, Square, X, type LucideIcon } from "lucide-react"
+import { Archive, Asterisk, Bot, Box, Braces, Copy, MousePointer2, Orbit, Package, Pencil, Pi, Plug, RotateCw, Save, Square, X, Zap, type LucideIcon } from "lucide-react"
 import { SourceRow } from "@/components/kit/list"
-import { StatusGlyph } from "@/components/kit/status-dot"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import type { SubagentSummary } from "@/lib/api-types"
+import { clock, goalElapsedMs, goalStateWords, liveGoal } from "@/lib/goal"
+import { useNow } from "@/lib/use-now"
+import { hud } from "@/lib/hud"
 import { Menu, MenuContent, MenuItem, MenuTrigger, RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger, RowMoreButton } from "@/components/kit/overlays"
 import { ContextMenuSeparator } from "@/components/ui/context-menu"
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
-import { harnessName, shortAge } from "@/lib/format"
+import { basename, harnessName, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { rowKey, sessionDetail, sessionLabel, type ListedSession } from "./group"
-import { sessionGlyphState, sessionStatusWord } from "./session-status"
+import { HOLD_MS, holdGlyph, sessionGlyphState, sessionStatusWord, type GlyphState } from "./session-status"
 import { sessionRules } from "./rules"
 
 export type RowActions = {
@@ -23,7 +27,19 @@ export type RowActions = {
   save: () => void
 }
 
+// Actions on every marked row (⌘- or Shift-click). Absent actions mean no marked row allows them.
+export type GroupActions = { stopCount: number; archiveCount: number; stop: () => void; archive: () => void; ids: string[] }
+
 type Entry = { label: string; icon: LucideIcon; shortcut?: string; disabled: boolean; run: () => void } | "separator"
+
+function groupEntries(group: GroupActions): Entry[] {
+  return [
+    { label: group.stopCount > 1 ? `Stop ${group.stopCount} agents…` : "Stop agent…", icon: Square, disabled: group.stopCount === 0, run: group.stop },
+    { label: group.archiveCount > 1 ? `Archive ${group.archiveCount} sessions…` : "Archive…", icon: Archive, disabled: group.archiveCount === 0, run: group.archive },
+    "separator",
+    { label: `Copy ${group.ids.length} session IDs`, icon: Copy, disabled: false, run: () => copySessionId(group.ids.join("\n")) },
+  ]
+}
 
 function menuEntries(session: ListedSession, selected: boolean, actions: RowActions): Entry[] {
   const rules = sessionRules(session)
@@ -32,13 +48,27 @@ function menuEntries(session: ListedSession, selected: boolean, actions: RowActi
     { label: "Restart…", icon: RotateCw, disabled: !rules.restart, run: actions.restart },
     { label: "Archive…", icon: Archive, disabled: !rules.archive, run: actions.archive },
     { label: "Stop agent…", icon: Square, disabled: !rules.stop, run: actions.stop },
-    "separator",
-    { label: "Reconnect", icon: Plug, disabled: !rules.reconnect, run: actions.reconnect },
-    { label: "Close terminal", icon: X, disabled: !selected, run: actions.closeTerminal },
+    // A chat has no terminal to reconnect or close.
+    ...(session.transport === "acp" ? [] : [
+      "separator" as const,
+      { label: "Reconnect", icon: Plug, disabled: !rules.reconnect, run: actions.reconnect },
+      { label: "Close terminal", icon: X, disabled: !selected, run: actions.closeTerminal },
+    ]),
     "separator",
     { label: "Install package…", icon: Package, disabled: !rules.install, run: actions.install },
     { label: "Save agentpack…", icon: Save, disabled: !rules.save, run: actions.save },
+    "separator",
+    // For bug reports: the ID finds the session's state and diagnostic traces.
+    { label: "Copy session ID", icon: Copy, disabled: false, run: () => copySessionId(session.id) },
   ]
+}
+
+function copySessionId(text: string) {
+  // navigator.clipboard is undefined on plain-HTTP gateway origins.
+  ;(navigator.clipboard?.writeText(text) ?? Promise.reject()).then(
+    () => hud.success(text.includes("\n") ? "Copied session IDs" : "Copied session ID"),
+    () => hud.error(`Couldn't copy. ${text.replaceAll("\n", ", ")}`),
+  )
 }
 
 // Context menus and the ⋯ menu share one entry list; only their item components differ.
@@ -60,19 +90,52 @@ function renderEntries(entries: Entry[], context: boolean) {
   })
 }
 
-const dimWord = "shrink-0 text-(length:--fs-sm) text-(--fg3) sel:text-(--accent-fg)"
+const dimWord = "shrink-0 text-(length:--fs-sm) text-(--fg3) tabular-nums sel:text-(--accent-fg)"
 
-// Text glyphs for chat state read without colour; terminal sessions keep the kit dot.
-function RowGlyph({ session, unread }: { session: ListedSession; unread: boolean }) {
-  const state = sessionGlyphState(session)
-  const cls = "ms-(--s7) inline-flex size-(--s4) shrink-0 items-center justify-center text-(length:--fs-sm) leading-none sel:text-(--accent-fg)"
-  if (state === "needsYou") return <span role="img" aria-label="Needs you" title="Needs you" className={cn(cls, "font-bold")}>!</span>
-  if (state === "idle" && unread) return <span role="img" aria-label="Unread" title="Unread" className={cls}>●</span>
-  if (state === "idle") return <span role="img" aria-label="Idle" title="Idle" className={cls}>○</span>
-  if (state === "running" && session.conversation_state === "working") {
-    return <span role="img" aria-label="Working" title="Working" className={cls}><Loader aria-hidden className="size-(--s4) animate-spin motion-reduce:animate-none" /></span>
-  }
-  return <StatusGlyph state={state} className="ms-(--s7)" />
+const agentIcons: Record<string, LucideIcon> = {
+  claude: Asterisk,
+  codex: Box,
+  opencode: Braces,
+  cursor: MousePointer2,
+  agent: MousePointer2,
+  grok: Zap,
+  omp: Pi,
+  agy: Orbit,
+}
+
+const stateWords: Record<GlyphState, string> = {
+  running: "Working",
+  needsYou: "Needs you",
+  idle: "Idle",
+  stopped: "Stopped",
+  restarting: "Restarting",
+  offline: "Offline",
+}
+
+// The agent's icon with a corner status dot. One element whose data-state changes, so refetches
+// never restart its pulse.
+export function AgentTile({ harness, state, label, title, className }: { harness: string; state: GlyphState | "requires_action"; label: string; title?: string; className?: string }) {
+  const Icon = agentIcons[harness] ?? Bot
+  const dot = state === "needsYou" || state === "requires_action" ? "needs" : state === "running" ? "working" : state === "restarting" ? "restarting" : "none"
+  return (
+    <span data-slot="agent-tile" role="img" aria-label={label} title={title} className={cn("relative inline-grid size-[18px] shrink-0 place-items-center rounded-[5px] bg-(--track) text-(--fg2) sel:bg-(--accent-fg)/20 sel:text-(--accent-fg)", className)}>
+      <Icon aria-hidden strokeWidth={1.75} className="size-3" />
+      <span data-slot="agent-dot" data-state={dot} aria-hidden className="agent-dot" />
+    </span>
+  )
+}
+
+// Re-renders once a held state expires, so the row settles without waiting for a refetch.
+// Only chats are held: a terminal session's state is its process, which never blips.
+function useHeld(key: string, state: GlyphState, chat: boolean): GlyphState {
+  const [, tick] = useState(0)
+  const shown = chat ? holdGlyph(key, state, Date.now()) : state
+  useEffect(() => {
+    if (shown === state) return
+    const timer = setTimeout(() => tick((count) => count + 1), HOLD_MS)
+    return () => clearTimeout(timer)
+  }, [shown, state])
+  return shown
 }
 
 // WebKit sends no contextmenu event for Shift+F10 or the context-menu key, so the key opens the menu itself.
@@ -92,6 +155,8 @@ export function SessionRow({
   stopping,
   unread,
   actions,
+  marked = false,
+  group,
 }: {
   session: ListedSession
   selected: boolean
@@ -99,38 +164,67 @@ export function SessionRow({
   stopping: boolean
   unread: boolean
   actions: RowActions
+  // Part of a multi-row selection; `group` replaces the menu while two or more rows are marked.
+  marked?: boolean
+  group?: GroupActions
 }) {
   const label = sessionLabel(session)
-  const word = sessionStatusWord(session, stopping)
-  const mode = session.mode && session.mode !== "default" ? session.mode : undefined
-  const entries = menuEntries(session, selected, actions)
+  const chat = session.transport === "acp"
+  const state = useHeld(rowKey(session), sessionGlyphState(session), chat)
+  const word = state === "running" || state === "idle" ? stopping ? "Stopping…" : undefined : sessionStatusWord(session, stopping)
+  const entries = group ? groupEntries(group) : menuEntries(session, selected, actions)
   const since = session.last_used ?? session.started_at
   const age = since ? shortAge(new Date(since)) : undefined
+  const goal = liveGoal(session.goal) ? session.goal : undefined
+  const now = useNow(goal?.state === "active")
+  const goalClock = goal && clock(goalElapsedMs(goal, now))
+  const mode = session.mode && session.mode !== "default" ? session.mode : undefined
+  const stateWord = state === "running" && !chat ? "Running" : stateWords[state]
+  const detail = [harnessName(session.harness), mode, basename(session.directory), session.machineName, word ?? stateWord, goal && `${goalStateWords[goal.state]} ${goalClock}`].filter(Boolean).join(" · ")
 
   return (
     <RowContextMenu>
-      <RowContextMenuTrigger render={<div className="group/row relative" data-selected={selected ? "true" : undefined} onKeyDown={openFromKeyboard} />}>
-        <SourceRow
-          render={
-            <Link
-              to="/sessions/$machine/$sessionId"
-              params={{ machine: session.machine, sessionId: session.id }}
-              search={true}
-              title={sessionDetail(session)}
-            />
-          }
-          selected={selected}
-          tabIndex={tabStop ? 0 : -1}
-          data-row-key={rowKey(session)}
-          className={cn("pe-(--head-h)", session.offline && "text-(--fg3)")}
-        >
-          <RowGlyph session={session} unread={unread} />
-          <span className="min-w-0 flex-1 truncate">{label}</span>
-          {label !== harnessName(session.harness) && <span className={dimWord}>{harnessName(session.harness)}</span>}
-          {mode && <span className={dimWord}>{mode}</span>}
-          {/* The age is decoration: the row's title has it, and it must not churn the row's accessible name. */}
-          <span aria-hidden={!word} className={dimWord}>{word ?? age}</span>
-        </SourceRow>
+      <RowContextMenuTrigger render={<div className="group/row relative" data-selected={selected || marked ? "true" : undefined} onKeyDown={openFromKeyboard} />}>
+        <Tooltip>
+          <SourceRow
+            render={
+              <TooltipTrigger
+                render={
+                  <Link
+                    to="/sessions/$machine/$sessionId"
+                    params={{ machine: session.machine, sessionId: session.id }}
+                    search={(prev: Record<string, unknown>) => ({ ...prev, sub: undefined })}
+                  />
+                }
+              />
+            }
+            selected={selected || marked}
+            aria-current={selected ? "true" : undefined}
+            data-marked={marked || undefined}
+            tabIndex={tabStop ? 0 : -1}
+            data-row-key={rowKey(session)}
+            className={cn("pe-(--head-h)", session.offline && "text-(--fg3)")}
+          >
+            <AgentTile className="ms-(--s6)" harness={session.harness} state={state} label={stateWord} title={`${harnessName(session.harness)}, ${stateWord}`} />
+            {/* Not hit-testable: Safari adds its own tooltip to ellipsized text under the pointer, doubling the row's. */}
+            <span className="pointer-events-none min-w-0 flex-1 truncate">{label}</span>
+            {/* One trailing item. The age is decoration: the tooltip has it. */}
+            {word ? (
+              <span className={cn(dimWord, state === "needsYou" && "font-medium text-(--warn-word)")}>{word}</span>
+            ) : goal ? (
+              <span className={dimWord} aria-label={goalStateWords[goal.state]}>◎ {goalClock}</span>
+            ) : unread ? (
+              <span role="img" aria-label="Unread" className="size-(--s3) shrink-0 rounded-full bg-(--accent) sel:bg-(--accent-fg)" />
+            ) : (
+              <span aria-hidden className={dimWord}>{age}</span>
+            )}
+          </SourceRow>
+          <TooltipContent side="right" align="start" className="flex-col items-start gap-0">
+            <strong className="font-semibold">{label}</strong>
+            <span>{detail}</span>
+            <span>{sessionDetail(session).split(" · ").slice(3).join(" · ")}</span>
+          </TooltipContent>
+        </Tooltip>
         <Menu>
           <MenuTrigger render={<RowMoreButton className="absolute top-1/2 right-(--s1) -translate-y-1/2" />} />
           <MenuContent align="end">{renderEntries(entries, false)}</MenuContent>
@@ -138,5 +232,30 @@ export function SessionRow({
       </RowContextMenuTrigger>
       <RowContextMenuContent>{renderEntries(entries, true)}</RowContextMenuContent>
     </RowContextMenu>
+  )
+}
+
+// A running subagent, indented under its chat. Opens it in the main view.
+export function SubagentRow({ session, subagent, selected }: { session: ListedSession; subagent: SubagentSummary; selected: boolean }) {
+  const now = useNow(true)
+  const elapsed = subagent.started_at ? clock(now - subagent.started_at) : undefined
+  return (
+    <SourceRow
+      render={
+        <Link
+          to="/sessions/$machine/$sessionId"
+          params={{ machine: session.machine, sessionId: session.id }}
+          search={(prev: Record<string, unknown>) => ({ ...prev, sub: subagent.id })}
+        />
+      }
+      selected={selected}
+      tabIndex={-1}
+      data-subagent-row={subagent.id}
+      className="ps-(--s7) text-(length:--fs-sm)"
+    >
+      <AgentTile className="ms-(--s6)" harness={session.harness} state={subagent.state === "requires_action" ? "requires_action" : "running"} label={subagent.state === "requires_action" ? "Needs you" : "Running"} />
+      <span className="min-w-0 flex-1 truncate">{subagent.title || "Subagent"}</span>
+      {elapsed && <span aria-hidden className={dimWord}>{elapsed}</span>}
+    </SourceRow>
   )
 }

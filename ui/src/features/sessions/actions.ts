@@ -1,5 +1,5 @@
-import { useQueryClient } from "@tanstack/react-query"
-import { useRef } from "react"
+import { useQueryClient, type QueryClient } from "@tanstack/react-query"
+import { useState } from "react"
 import { api } from "@/lib/api"
 import { hud } from "@/lib/hud"
 import { rowKey, sessionLabel, type ListedSession } from "./group"
@@ -13,50 +13,56 @@ function errorText(error: unknown): string {
 // Stop and restart for session rows. A restart keeps one operation id per session until the
 // gateway accepts it or rejects it, so a retry cannot start a second restart.
 export function useSessionCommands() {
-  const queryClient = useQueryClient()
-  const operations = useRef(new Map<string, string>())
+  return sessionCommands(useQueryClient(), useState(() => new Map<string, string>())[0])
+}
+
+// Outside the hook: the retry callbacks reference their own function, which React Compiler cannot memoize.
+function sessionCommands(queryClient: QueryClient, operations: Map<string, string>) {
 
   async function refresh(session: ListedSession) {
     await queryClient.invalidateQueries({ queryKey: sessionsQuery(session.machine, false).queryKey })
   }
 
-  async function stop(session: ListedSession): Promise<void> {
+  // `announce` is off for multi-row actions, which show one Hud for the batch. Failures always report.
+  async function stop(session: ListedSession, announce = true): Promise<boolean> {
     try {
       await api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST" })
-      hud.success("Agent stopped")
+      if (announce) hud.success("Agent stopped")
       await refresh(session)
+      return true
     } catch (error) {
       hud.error(`Couldn't stop ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, () => void stop(session))
+      return false
     }
   }
 
   async function restart(session: ListedSession): Promise<void> {
     const key = rowKey(session)
     // crypto.randomUUID does not exist on plain-HTTP gateway origins; getRandomValues does.
-    const operationId = operations.current.get(key) ?? Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("")
-    operations.current.set(key, operationId)
+    const operationId = operations.get(key) ?? Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("")
+    operations.set(key, operationId)
     try {
       await api(`/api/sessions/${encodeURIComponent(session.id)}/restart`, {
         machine: session.machine,
         method: "POST",
         body: { operation_id: operationId },
       })
-      operations.current.delete(key)
+      operations.delete(key)
       hud.success("Agent restart requested")
       await refresh(session)
     } catch (error) {
-      if (!reusesOperationId(error)) operations.current.delete(key)
+      if (!reusesOperationId(error)) operations.delete(key)
       hud.error(`Couldn't restart ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, () => void restart(session))
     }
   }
 
   // Archive takes the session out of every list; a running agent is stopped first.
-  async function archive(session: ListedSession): Promise<boolean> {
+  async function archive(session: ListedSession, announce = true): Promise<boolean> {
     try {
       // The row can be stale (just stopped): a failed stop is fine, the archive request refuses a live agent itself.
       if (session.state.running) await api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST" }).catch(() => undefined)
       await api(`/api/sessions/${encodeURIComponent(session.id)}`, { machine: session.machine, method: "PATCH", body: { hidden: true } })
-      hud.success("Session archived")
+      if (announce) hud.success("Session archived")
       await refresh(session)
       return true
     } catch (error) {

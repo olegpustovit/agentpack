@@ -36,7 +36,9 @@ type Store struct {
 	root string
 	sql  *state.Store
 	// memo holds validated objects by digest and replicated conflict position.
-	memo sync.Map
+	memo       sync.Map
+	stamps     stampCache
+	indexCache indexCache
 }
 
 // New opens the Library in state.db and its local capture/restore files under registry/.

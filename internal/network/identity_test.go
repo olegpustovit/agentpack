@@ -8,12 +8,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -650,5 +652,40 @@ func TestGatewayCSPAllowsOnlySelfAndBlobImages(t *testing.T) {
 	// Pasted images are measured from a blob: URL before they are sent.
 	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self' blob:;") || !strings.Contains(csp, "default-src 'self';") {
 		t.Fatalf("CSP = %q", csp)
+	}
+}
+
+func TestTailnetWhoisIsCachedButFailuresAreNot(t *testing.T) {
+	var calls atomic.Int32
+	var failing atomic.Bool
+	failing.Store(true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if failing.Load() {
+			http.Error(w, "unavailable", 503)
+			return
+		}
+		_, _ = w.Write([]byte(`{"Node":{"StableID":"n1","ComputedName":"peer"},"UserProfile":{"LoginName":"owner@example.com"}}`))
+	}))
+	defer server.Close()
+	tailscaleLocal = local.Client{UseSocketOnly: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, "tcp", server.Listener.Addr().String())
+	}}
+	t.Cleanup(func() { tailscaleLocal = local.Client{} })
+	g := &Gateway{}
+	address := netip.MustParseAddr("100.64.0.1")
+	if _, err := g.cachedTailnetWhois(t.Context(), address); err == nil {
+		t.Fatal("failure was not reported")
+	}
+	failing.Store(false)
+	for range 3 {
+		identity, err := g.cachedTailnetWhois(t.Context(), address)
+		if err != nil || identity.Node.StableID != "n1" {
+			t.Fatalf("identity %+v err %v", identity, err)
+		}
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("Tailscale asked %d times, want one failure and one cached success", got)
 	}
 }

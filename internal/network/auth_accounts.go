@@ -39,7 +39,7 @@ func ResetOwner(ctx context.Context, store *state.Store, home string) error {
 		if _, err := tx.ExecContext(ctx, "UPDATE local_node SET join_peer='',account_email='' WHERE id=1"); err != nil {
 			return err
 		}
-		for _, table := range []string{"auth_sessions", "oauth_tokens", "users"} {
+		for _, table := range []string{"auth_sessions", "oauth_tokens", "mcp_credential_approvals", "mcp_credentials", "users"} {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 				return err
 			}

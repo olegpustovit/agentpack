@@ -245,3 +245,54 @@ func TestEventLogNativeReplayDoesNotDuplicateRestoredHistory(t *testing.T) {
 		t.Fatal("native exit disappeared during load")
 	}
 }
+
+// Reading a stream's new tail is a binary search plus a copy of the new entries, not a scan of the log.
+func BenchmarkEventLogReadSinceTail(b *testing.B) {
+	log := NewEventLog(64 << 20)
+	payload := json.RawMessage(`{"content":{"type":"text","text":"token "}}`)
+	for range 20000 {
+		log.Append("agent_message_chunk", 1, payload)
+	}
+	since := log.seq - 1
+	b.ReportAllocs()
+	for b.Loop() {
+		if entries, _ := log.ReadSince(since); len(entries) != 1 {
+			b.Fatal(len(entries))
+		}
+	}
+}
+
+// A streamed token wakes every waiting reader once, with no polling.
+// The log is full here, so every append also evicts: the steady state of a long chat.
+func BenchmarkEventLogAppendWakesReaders(b *testing.B) {
+	log := NewEventLog(1 << 20)
+	payload := json.RawMessage(`{"content":{"type":"text","text":"token "}}`)
+	b.ReportAllocs()
+	for b.Loop() {
+		changed := log.Changed()
+		log.Append("agent_message_chunk", 1, payload)
+		<-changed
+	}
+}
+
+func TestReadSinceAllocatesOnlyTheTail(t *testing.T) {
+	log := NewEventLog(64 << 20)
+	for range 5000 {
+		log.Append("agent_message_chunk", 1, json.RawMessage(`{}`))
+	}
+	since := log.seq - 3
+	if allocs := testing.AllocsPerRun(100, func() { log.ReadSince(since) }); allocs > 1 {
+		t.Fatalf("ReadSince allocated %v times for a three-entry tail", allocs)
+	}
+}
+
+func TestCoalescedHeadStaysBounded(t *testing.T) {
+	log := NewEventLog(256 << 10)
+	payload := json.RawMessage(`{"content":{"type":"text","text":"` + strings.Repeat("x", 200) + `"}}`)
+	for range 20000 {
+		log.Append("agent_message_chunk", 1, payload)
+	}
+	if head := len(log.Snapshot()[0].Payload); head > maxCoalescedPayload+len(payload) {
+		t.Fatalf("head entry grew to %d bytes", head)
+	}
+}

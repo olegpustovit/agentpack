@@ -11,12 +11,32 @@ export function sessionGlyphState(session: ListedSession): "running" | "stopped"
   return "stopped"
 }
 
+export type GlyphState = ReturnType<typeof sessionGlyphState>
+
+export const HOLD_MS = 1500
+const held = new Map<string, { state: GlyphState; until?: number }>()
+
+// A turn boundary or a refetch that briefly reads running=false must not flicker the row: the
+// last live state is kept for HOLD_MS after it ends. Module-level so a remount keeps it too.
+export function holdGlyph(key: string, state: GlyphState, now: number, memory = held): GlyphState {
+  const last = memory.get(key)
+  if (last && (state === "stopped" || (state === "idle" && last.state === "running"))) {
+    const until = last.until ?? now + HOLD_MS
+    if (now < until) {
+      memory.set(key, { state: last.state, until })
+      return last.state
+    }
+  }
+  if (state === "running" || state === "idle" || state === "needsYou") memory.set(key, { state })
+  else memory.delete(key)
+  return state
+}
+
 export function sessionStatusWord(session: ListedSession, stopping: boolean): string | undefined {
   if (session.archived_at) return "Archived"
   if (session.offline) return "Offline"
   if (stopping) return "Stopping…"
   if (session.conversation_state === "needs_you") return "Needs you"
-  if (session.conversation_state === "idle" && session.state.running) return "Idle"
   if (session.state.restarting) return "Restarting"
   if (session.state.running) return undefined
   return "Stopped"

@@ -9,6 +9,10 @@ export type ListedSession = SessionInfo & { machine: string; machineName: string
 export type SessionSubhead = {
   key: string
   label: string
+  // The one folder on one machine this subhead lists, so New session can start there.
+  machine: string
+  directory: string
+  offline: boolean
   // Parent folder, shown dim only when another directory on the same machine has the same basename.
   parent: string | null
   sessions: ListedSession[]
@@ -105,6 +109,9 @@ export function groupSessions(sessions: ListedSession[], group: GroupMode): Sess
         key: headKey,
         label: byMachine ? folder || UNKNOWN_PROJECT : session.machineName,
         parent: shared ? parentName(directory) : null,
+        machine: session.machine,
+        directory,
+        offline: session.offline,
         sessions: [],
       }
       entry.heads.set(headKey, head)

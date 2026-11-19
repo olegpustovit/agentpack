@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,16 +44,14 @@ func (g *Gateway) meshSessions(ctx context.Context, node string) ([]SessionInfo,
 	if err != nil {
 		return nil, err
 	}
+	localEntries := slices.DeleteFunc(slices.Clone(entries), func(info SessionInfo) bool { return info.NodeID != local })
+	states := workerStates(ctx, g.options.Home, localEntries)
 	for i := range entries {
 		info := &entries[i]
 		info.Reachable, info.LastSync = g.nodeContact(info.NodeID, local)
 		if info.NodeID == local {
-			if record, err := workerRecord(g.options.Home, info.ID); err == nil {
-				if terminal, err := sessionState(ctx, record); err == nil {
-					info.State = terminal
-				} else {
-					info.State.Running = false
-				}
+			if terminal, ok := states[info.ID]; ok {
+				info.State = terminal
 			} else {
 				info.State.Running = false
 			}

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { useEffect, useRef, useState } from "react"
-import { ArrowUp, AtSign, Check, ChevronDown, ChevronRight, Circle, CircleDot, PanelRight, Plus, Slash, Square } from "lucide-react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { ArrowLeft, ArrowUp, AtSign, Check, ChevronDown, CornerDownLeft, PanelRight, Plus, Slash, Square } from "lucide-react"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
 import { Banner, Spinner } from "@/components/kit/feedback"
 import { PopupSelect } from "@/components/kit/forms"
@@ -9,29 +9,39 @@ import { Button } from "@/components/ui/button"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { StatusSlot } from "@/features/status/status-bar"
 import { sessionsQuery } from "@/features/sessions/queries"
+import { loadAgentChoices, rememberAgentChoice, takeNewChat } from "@/features/sessions/choices"
 import { useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName, relativeTime } from "@/lib/format"
+import { clock, goalElapsedMs, liveGoal } from "@/lib/goal"
+import { useNow } from "@/lib/use-now"
 import { hud } from "@/lib/hud"
 import { api, LOCAL } from "@/lib/api"
-import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate } from "./queries"
-import { configRole, parseConfigOptions } from "./config-options"
+import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, olderConversationPage, type ConversationPage } from "./queries"
+import { configRole, dangerousMode, parseConfigOptions } from "./config-options"
 import type { LogEntry, ThreadItem } from "./model"
-import { reduceLog } from "./reducer"
-import { latestUserPrompt, quoteMessage, ThreadView } from "./thread-view"
+import { reduceThread } from "./reducer"
+import { latestUserPrompt, quoteMessage, ThreadView, userImageSrc } from "./thread-view"
+import { GoalPill, GoalSheet, parseGoalCommand, useGoalActions } from "./goal-sheet"
+import { QueueChips } from "./queue-chips"
+import { subagentRunning } from "./subagent-card"
 import { ConversationInspector } from "./conversation-inspector"
-import { agentCommands, applyHint, filterAtHints, filterSlashHints, moveHint, type ComposerHint } from "./composer-hints"
+import { advertises, agentCommands, applyHint, cachedCommands, filterAtHints, filterSlashHints, moveHint, rememberCommands, type ComposerHint } from "./composer-hints"
 import { ComposerHintsMenu } from "./composer-hints-menu"
 import { listDiffChanges } from "./diff-summary"
-import { uploadConversationBlob, type PendingAttachment } from "./upload-blob"
+import { loadAttachments, revokePreview, saveAttachments, uploadConversationBlob, type PendingAttachment } from "./upload-blob"
 import { imageFilesFromClipboard, imageFilesFromList, promptRequest, retryPromptInput } from "./composer-attach"
 
 type UploadedAttachment = PendingAttachment & { name: string }
 type SendInput = {
   text: string
+  /** Interrupt the running turn and send this next. */
+  steer?: boolean
   attachments: (Pick<PendingAttachment, "sha" | "mime" | "width" | "height"> & { name?: string })[]
   resourceLink?: { sha: string; name: string }
   clearComposer: boolean
+  /** Last log seq when sent; a prompt after it is this message, so the optimistic copy goes. Unset when queued. */
+  optimisticAfter?: number
 }
 const draftKey = (machine: string, sessionId: string) => `agentpack:draft:${machine}/${sessionId}`
 function loadDraft(key: string) {
@@ -50,6 +60,23 @@ function currentPlan(items: ThreadItem[]): PlanEntry[] {
   }
   return plan
 }
+// Context used, as a ring. At 75 % it turns to the warning colour: compact before the agent does it mid-task.
+function ContextRing({ percent }: { percent: number }) {
+  const radius = 8
+  const length = 2 * Math.PI * radius
+  return (
+    <svg viewBox="0 0 20 20" className="size-4 -rotate-90" aria-hidden>
+      <circle cx="10" cy="10" r={radius} fill="none" stroke="var(--track)" strokeWidth="2.5" />
+      <circle
+        cx="10" cy="10" r={radius} fill="none" strokeWidth="2.5" strokeLinecap="round"
+        stroke={percent >= 75 ? "var(--warn)" : "var(--accent)"}
+        strokeDasharray={length} strokeDashoffset={length * (1 - percent / 100)}
+        style={{ transition: "stroke-dashoffset .6s ease-out" }}
+      />
+    </svg>
+  )
+}
+
 // Loaded on demand so the conversation UI stays out of the initial bundle.
 export default function ConversationPane({
   machine,
@@ -59,9 +86,12 @@ export default function ConversationPane({
   subtitle,
   onSwitchTerminal,
   readOnly: unavailable = false,
+  subagent: subagentId,
 }: {
   machine: string
   sessionId: string
+  /** A subagent open in the main view. */
+  subagent?: string
   info?: SessionInfo
   title?: string
   subtitle?: string
@@ -75,7 +105,18 @@ export default function ConversationPane({
   const [hintIndex, setHintIndex] = useState(0)
   const [hintsClosed, setHintsClosed] = useState(false)
   const stickToBottomRef = useRef(true)
-  const [attachments, setAttachments] = useState<UploadedAttachment[]>([])
+  const [attachments, setAttachmentsState] = useState<UploadedAttachment[]>(() =>
+    loadAttachments(`${draftKey(machine, sessionId)}:attachments`, (sha) => userImageSrc(machine, sessionId, sha)),
+  )
+  // Saved with the draft, so switching chats and coming back keeps them.
+  function setAttachments(update: (current: UploadedAttachment[]) => UploadedAttachment[]) {
+    setAttachmentsState((current) => {
+      const next = update(current)
+      for (const item of current) if (!next.includes(item)) revokePreview(item.previewUrl)
+      saveAttachments(`${draftKey(machine, sessionId)}:attachments`, next)
+      return next
+    })
+  }
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1240)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const composerInputRef = useRef<HTMLTextAreaElement>(null)
@@ -83,7 +124,16 @@ export default function ConversationPane({
   const [configValues, setConfigValues] = useState<Record<string, string | boolean>>({})
   const readOnly = unavailable || info?.reachable === false || Boolean(info?.archived_at)
   const live = !readOnly && info?.state.running === true
-  const { data: entries = [], error: conversationError } = useQuery({ ...conversationEventsQuery(machine, sessionId, live), retry: false })
+  const { data: tail, error: conversationError } = useQuery({ ...conversationEventsQuery(machine, sessionId, live), retry: false })
+  // Earlier pages, loaded as the thread scrolls up. Keyed, so another session never shows them.
+  const historyKey = `${machine}\0${sessionId}`
+  const [history, setHistory] = useState<{ key: string; entries: LogEntry[]; more: boolean; loading: boolean; error?: unknown }>()
+  const older = history?.key === historyKey ? history : undefined
+  const tailEntries = tail?.entries ?? []
+  const entries = joinHistory(older?.entries ?? [], tailEntries)
+  const hasOlder = (older ? older.more : Boolean(tail?.truncated)) && (entries[0]?.seq ?? 1) > 1
+  // Scroll height and offset before older entries were prepended, so the reader stays on the same line.
+  const scrollAnchorRef = useRef<{ height: number; top: number } | null>(null)
   const { data: configRaw, error: configError } = useQuery({
     queryKey: ["conversation-config", machine, sessionId],
     enabled: !readOnly,
@@ -98,10 +148,14 @@ export default function ConversationPane({
   const modelOption = selectOptions.find((option) => configRole(option) === "model")
   const effortOption = selectOptions.find((option) => configRole(option) === "effort")
   const extraOptions = configOptions.filter((option) => configRole(option) === "other")
+  const tailLoaded = tail !== undefined
   useEffect(() => {
-    if (!live || needsUpdate) return
+    if (!live || needsUpdate || !tailLoaded) return
+    const key = ["conversation", machine, sessionId]
     const url = new URL(`/api/sessions/${encodeURIComponent(sessionId)}/conversation`, location.origin)
     url.searchParams.set("stream", "1")
+    // Resume after the loaded tail; a reconnect replays from here and the seq check below drops repeats.
+    url.searchParams.set("since", String(queryClient.getQueryData<ConversationPage>(key)?.entries.at(-1)?.seq ?? 0))
     if (machine && machine !== LOCAL) url.searchParams.set("node", machine)
     const source = new EventSource(url)
     source.onmessage = (event) => {
@@ -112,21 +166,62 @@ export default function ConversationPane({
       } catch {
         return
       }
-      queryClient.setQueryData<LogEntry[]>(["conversation", machine, sessionId], (current) => {
-        const rows = current ?? []
-        if (rows.some((row) => row.seq === entry.seq)) return rows
-        return [...rows, entry]
+      queryClient.setQueryData<ConversationPage>(key, (current) => {
+        const rows = current?.entries ?? []
+        if (entry.seq <= (rows.at(-1)?.seq ?? 0)) return current
+        return { entries: [...rows, entry], truncated: current?.truncated ?? false }
       })
     }
     return () => source.close()
-  }, [live, machine, needsUpdate, queryClient, sessionId])
+  }, [live, machine, needsUpdate, queryClient, sessionId, tailLoaded])
 
-  const thread = reduceLog(entries)
+  const parent = reduceThread(historyKey, entries)
+  const subagent = subagentId ? parent.subagents?.[subagentId] : undefined
+  const thread = subagent?.thread ?? parent
+  // Entries already loaded on first paint are history and never animate.
+  const [animateAfter, setAnimateAfter] = useState<number>()
+  if (animateAfter === undefined && tail) setAnimateAfter(tail.entries.at(-1)?.seq ?? 0)
+  const closeSubagent = () => void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, sub: undefined }) })
+  const openSubagent = (id: string) => void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, sub: id }) })
+  useEffect(() => {
+    if (!subagentId) return
+    // Esc returns to the parent, unless a field or dialog is using it.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return
+      if ((event.target as HTMLElement | null)?.closest("input, textarea, [role=dialog], [role=menu]")) return
+      void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, sub: undefined }) })
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [subagentId, navigate])
   useEffect(() => {
     const element = threadScrollRef.current
-    if (!element || entries.length === 0) return
+    if (!element || tailEntries.length === 0) return
     if (stickToBottomRef.current) element.scrollTop = element.scrollHeight
-  }, [entries])
+  }, [tailEntries])
+  useLayoutEffect(() => {
+    const element = threadScrollRef.current
+    const anchor = scrollAnchorRef.current
+    if (!element || !anchor) return
+    scrollAnchorRef.current = null
+    element.scrollTop = anchor.top + element.scrollHeight - anchor.height
+  }, [older?.entries])
+
+  // Scrolling never retries a failed page; the Retry button does.
+  async function loadOlder(retry = false) {
+    const first = entries[0]
+    if (!first || !hasOlder || older?.loading || (older?.error && !retry)) return
+    const kept = older?.entries ?? []
+    setHistory({ key: historyKey, entries: kept, more: true, loading: true })
+    try {
+      const page = await olderConversationPage(machine, sessionId, first.seq)
+      const element = threadScrollRef.current
+      if (element) scrollAnchorRef.current = { height: element.scrollHeight, top: element.scrollTop }
+      setHistory({ key: historyKey, entries: [...page.entries, ...kept], more: page.truncated, loading: false })
+    } catch (error) {
+      setHistory({ key: historyKey, entries: kept, more: true, loading: false, error })
+    }
+  }
   useEffect(() => {
     try {
       const key = draftKey(machine, sessionId)
@@ -136,18 +231,44 @@ export default function ConversationPane({
       // Storage can be blocked; the draft then lives only in memory.
     }
   }, [draft, machine, sessionId])
+  // Opening a chat (the pane is keyed by session) puts the caret in the composer, unless focus is
+  // already in another field. Touch screens skip it so the keyboard does not cover the thread.
+  const composerShown = !readOnly && !subagentId
+  useEffect(() => {
+    if (!composerShown || !matchMedia("(pointer: fine)").matches) return
+    const active = document.activeElement
+    if (active && active !== document.body && !active.closest("a, [data-source-row]")) return
+    composerInputRef.current?.focus({ preventScroll: true })
+  }, [composerShown])
+  // The composer floats over the thread; the thread reserves exactly its height, so the last
+  // message sits a short gap above it however many attachments or lines the composer holds.
+  const composerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const composer = composerRef.current
+    const thread = threadScrollRef.current
+    if (!composer || !thread) return
+    const observer = new ResizeObserver(() => {
+      thread.style.setProperty("--composer-h", `${composer.offsetHeight}px`)
+      if (stickToBottomRef.current) thread.scrollTop = thread.scrollHeight
+    })
+    observer.observe(composer)
+    return () => {
+      observer.disconnect()
+      thread.style.removeProperty("--composer-h")
+    }
+  }, [composerShown])
   useEffect(() => {
     const input = composerInputRef.current
     if (!input) return
     input.style.height = "auto"
     input.style.height = `${Math.min(input.scrollHeight, 180)}px`
   }, [draft])
-  const plan = currentPlan(thread.items)
-  const planDone = plan.filter((entry) => entry.status === "completed").length
-  const currentStep =
-    plan.find((entry) => entry.status === "in_progress") ??
-    plan.find((entry) => entry.status === "pending") ??
-    plan.at(-1)
+  const plan = currentPlan(parent.items)
+  // The live record is the log; the session row is the fallback for chats whose log is not loaded.
+  const goal = parent.goal ?? (liveGoal(info?.goal) ? info?.goal : undefined)
+  const goalNow = useNow(goal?.state === "active")
+  const [goalSheet, setGoalSheet] = useState<{ objective: string }>()
+  const goalActions = useGoalActions(machine, sessionId)
   const setConfig = useMutation({
     mutationFn: ({ key, value }: { key: string; value: string | boolean }) =>
       api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/config`, {
@@ -157,20 +278,35 @@ export default function ConversationPane({
       }),
     onSuccess: (_, { key }) =>
       queryClient.invalidateQueries({ queryKey: ["conversation-config", machine, sessionId] }).then(() =>
-        setConfigValues(({ [key]: _drop, ...rest }) => rest),
+        setConfigValues((values) => withoutKey(values, key)),
       ),
     onError: (error, { key, value }) => {
-      setConfigValues(({ [key]: _drop, ...rest }) => rest)
+      setConfigValues((values) => withoutKey(values, key))
       hud.error(
         conversationErrorMessage(machine, `set ${key}`, error),
         conversationNeedsUpdate(error) ? undefined : () => setConfigValue(key, value),
       )
     },
   })
-  function setConfigValue(key: string, value: string | boolean) {
+  function setConfigValue(key: string, value: string | boolean, remember = true) {
     setConfigValues((current) => ({ ...current, [key]: value }))
     setConfig.mutate({ key, value })
+    const option = configOptions.find((candidate) => candidate.id === key)
+    // Model and effort carry over to the next chat started in this folder with this agent.
+    if (remember && info && option && (configRole(option) === "model" || configRole(option) === "effort")) rememberAgentChoice(info.directory, info.harness, key, value)
   }
+  // A chat New session just started takes the folder's remembered model and effort, once.
+  useEffect(() => {
+    if (!info || readOnly || configOptions.length === 0 || !takeNewChat(sessionId)) return
+    const remembered = loadAgentChoices(info.directory, info.harness)
+    for (const option of configOptions) {
+      const value = remembered[option.id]
+      const role = configRole(option)
+      if (value === undefined || value === option.value || (role !== "model" && role !== "effort")) continue
+      if (option.type === "select" && !option.items.some((item) => item.value === value)) continue
+      setConfigValue(option.id, value, false)
+    }
+  })
   const fork = useMutation({
     mutationFn: () => {
       if (!info?.agent_session_id || !info.agent_capabilities?.sessionCapabilities?.fork) {
@@ -200,6 +336,12 @@ export default function ConversationPane({
         conversationNeedsUpdate(error) ? undefined : () => cancelTurn.mutate(),
       ),
   })
+  const stopSubagent = useMutation({
+    mutationFn: (id: string) =>
+      api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/cancel`, { machine, method: "POST", body: { subagent: id } }),
+    onError: (error, id) =>
+      hud.error(conversationErrorMessage(machine, "stop the subagent", error), conversationNeedsUpdate(error) ? undefined : () => stopSubagent.mutate(id)),
+  })
   const send = useMutation({
     mutationFn: (input: SendInput) => {
       const request = promptRequest(
@@ -211,21 +353,25 @@ export default function ConversationPane({
       return api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/${request.path}`, {
         machine,
         method: "POST",
-        body: request.body,
+        body: input.steer ? { ...request.body, steer: true } : request.body,
       })
     },
-    onSuccess: (_, input) => {
-      if (input.clearComposer) {
-        setDraft("")
-        setAttachments([])
-      }
+    // The composer clears as the message is sent; a failure puts it back.
+    onMutate: (input) => {
+      if (!input.clearComposer) return
+      setDraft("")
+      setAttachments(() => [])
+    },
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["conversation", machine, sessionId] })
     },
-    onError: (error, input) =>
+    onError: (error, input) => {
+      if (input.clearComposer) setDraft((current) => current || input.text)
       hud.error(
-        conversationErrorMessage(machine, input.attachments.length > 1 ? "send multiple images" : "send a message", error),
+        conversationErrorMessage(machine, input.steer ? "steer the agent" : input.attachments.length > 1 ? "send multiple images" : "send a message", error),
         conversationNeedsUpdate(error) ? undefined : () => send.mutate(input),
-      ),
+      )
+    },
   })
   const upload = useMutation({
     mutationFn: (file: File) => uploadConversationBlob(machine, sessionId, file),
@@ -253,19 +399,51 @@ export default function ConversationPane({
       })
     }
   }
-  const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !send.isPending && !upload.isPending && !thread.needs_you && !needsUpdate
+  const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !send.isPending && !upload.isPending && !needsUpdate
+  // Enter sends, or queues while the agent works; steer interrupts the turn and sends this next.
+  function submit(steer = false) {
+    if (!canSend) return
+    const text = draft.trim()
+    const goalCommand = attachments.length === 0 ? parseGoalCommand(text) : undefined
+    if (goalCommand) {
+      setDraft("")
+      if (goalCommand.kind === "sheet") setGoalSheet({ objective: "" })
+      else if (goalCommand.kind === "action") goalActions.act.mutate(goalCommand.action)
+      else goalActions.set.mutate(
+        { goal: { objective: goalCommand.objective }, edit: false },
+        { onError: (error) => hud.error(conversationErrorMessage(machine, "set the goal", error)) },
+      )
+      return
+    }
+    // A message to an idle agent becomes the next prompt, so it can show before the gateway answers.
+    // Writing instead of answering an open question interrupts it, as in the Claude CLI.
+    send.mutate({ text, attachments, clearComposer: true, steer: (steer || parent.needs_you) && parent.working, optimisticAfter: parent.working ? undefined : entries.at(-1)?.seq ?? 0 })
+  }
+  function compact(focus?: string) {
+    if (!canCompact || readOnly) return
+    send.mutate({ text: focus ? `/compact ${focus}` : "/compact", attachments: [], clearComposer: false })
+  }
+  const advertised = agentCommands(entries)
+  const commands = advertised ?? cachedCommands(info?.harness ?? "")
+  const canCompact = advertises(commands, "compact")
+  useEffect(() => {
+    if (advertised && info?.harness) rememberCommands(info.harness, advertised)
+  }, [advertised, info?.harness])
   const diffPaths = listDiffChanges(thread.items).map((change) => change.path)
-  const slashHints = filterSlashHints(draft, agentCommands(entries)).filter((hint) => hint.value !== "/fork" || (canFork && !fork.isPending))
+  const slashHints = filterSlashHints(draft, commands).filter((hint) => hint.value !== "/fork" || (canFork && !fork.isPending))
   const atHints = filterAtHints(draft, diffPaths)
   const composerHints = hintsClosed ? [] : slashHints.length > 0 ? slashHints : atHints
   const activeHint = Math.min(hintIndex, Math.max(composerHints.length - 1, 0))
-  const hintTitle =
-    slashHints.length > 0 ? `Commands from ${harnessName(info?.harness ?? "agent")}` : "Files in this thread"
+  const hintTitle = slashHints.length > 0 ? "Commands" : "Files in this thread"
   function pickHint(hint: ComposerHint) {
     setHintIndex(0)
     if (hint.value === "/fork") {
       if (canFork && !fork.isPending) fork.mutate()
       setDraft("")
+      return
+    }
+    if (hint.value === "/goal" && draft.trim() === "/goal") {
+      setDraft("/goal ")
       return
     }
     if (hint.value === "/terminal") {
@@ -280,7 +458,7 @@ export default function ConversationPane({
     composerInputRef.current?.focus()
   }
   async function attachImages(files: File[]) {
-    if (readOnly || files.length === 0 || thread.needs_you || needsUpdate) return
+    if (readOnly || files.length === 0 || needsUpdate) return
     if (send.isPending) {
       hud.error("Wait for the message to finish sending before adding images.")
       return
@@ -301,8 +479,8 @@ export default function ConversationPane({
   const agentName = harnessName(info?.harness ?? "agent")
   const machineName = machines.find((candidate) => candidate.id === machine)?.name ?? machine
   const contextPercent =
-    thread.context_limit && thread.context_tokens !== undefined
-      ? Math.min(100, Math.round((thread.context_tokens / thread.context_limit) * 100))
+    parent.context_limit && parent.context_tokens !== undefined
+      ? Math.min(100, Math.round((parent.context_tokens / parent.context_limit) * 100))
       : undefined
 
 
@@ -311,12 +489,19 @@ export default function ConversationPane({
       <StatusSlot>
         {info && (
           <span>
-            {[harnessName(info.harness), info.mode || "default", contextPercent !== undefined ? `Context ${contextPercent}%` : "", thread.cost_usd ? `$${thread.cost_usd.toFixed(2)}` : ""].filter(Boolean).join(" · ")}
+            {[harnessName(info.harness), info.mode || "default", goal ? `Goal ${goal.state === "active" ? "" : `${goal.state} `}${clock(goalElapsedMs(goal, goalNow))}` : "", contextPercent !== undefined ? `Context ${contextPercent}%` : "", parent.cost_usd ? `$${parent.cost_usd.toFixed(2)}` : ""].filter(Boolean).join(" · ")}
           </span>
         )}
       </StatusSlot>
-      {title && <ToolbarTitle title={title} subtitle={subtitle} />}
+      {subagentId ? (
+        <ToolbarTitle title={`${title ?? agentName} › ${subagent?.title || "Subagent"}`} subtitle={subagent?.description ?? subtitle} />
+      ) : title && <ToolbarTitle title={title} subtitle={subtitle} />}
       <ToolbarSlot>
+        {subagentId && (
+          <Button type="button" variant="ghost" size="sm" aria-label="Back to the conversation" title="Back (Esc)" onClick={closeSubagent}>
+            <ArrowLeft aria-hidden /> Back
+          </Button>
+        )}
         <Button
           type="button"
           variant="ghost"
@@ -339,30 +524,77 @@ export default function ConversationPane({
           onScroll={(event) => {
             const el = event.currentTarget
             stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 160
+            // Fetch the previous page a screen before the reader reaches the top.
+            if (el.scrollTop < el.clientHeight) void loadOlder()
           }}
-          tabIndex={0} aria-label="Conversation" className="min-h-0 min-w-0 flex-1 overflow-auto px-(--s4) py-(--s4) pb-64">
+          tabIndex={0} aria-label="Conversation" className="min-h-0 min-w-0 flex-1 overflow-auto px-(--s4) pt-(--s4) pb-[calc(var(--composer-h,0px)+36px)]">
           <div className="mx-auto w-full max-w-180">
             {needsUpdate ? (
               <Banner tone="warn">
                 {machine === LOCAL ? "The gateway needs an update to show this conversation." : "This peer needs an update to show this conversation."}
               </Banner>
             ) : (
-              <ThreadView
-                items={thread.items}
-                machine={machine}
-                sessionId={sessionId}
-                readOnly={readOnly}
-                agent={agentName}
-                working={live && thread.working && !thread.needs_you}
-                onQuote={readOnly ? undefined : quoteReply}
-                onFork={canFork && !fork.isPending ? () => fork.mutate() : undefined}
-                onRetry={canRetry ? retryLastPrompt : undefined}
-              />
+              <>
+              {(hasOlder || older) && (
+                <div data-slot="earlier-history" className="mb-(--s5) flex min-h-(--row-h) items-center justify-center gap-(--s3) text-(length:--fs-sm) text-(--fg2)">
+                  {older?.loading ? (
+                    <><Spinner aria-hidden /> Loading earlier messages…</>
+                  ) : older?.error ? (
+                    conversationNeedsUpdate(older.error) ? (
+                      <span>{machine === LOCAL ? "Update the gateway" : "Update this peer"} to see earlier messages.</span>
+                    ) : (
+                      <>
+                        <span>{conversationErrorMessage(machine, "load earlier messages", older.error)}</span>
+                        <Button size="sm" onClick={() => void loadOlder(true)}>Retry</Button>
+                      </>
+                    )
+                  ) : hasOlder ? (
+                    <Button size="sm" variant="ghost" onClick={() => void loadOlder()}>Load earlier messages</Button>
+                  ) : (
+                    <span className="text-(--fg3)">Beginning of conversation</span>
+                  )}
+                </div>
+              )}
+              {subagentId && !subagent ? (
+                <p className="py-(--s7) text-center text-(length:--fs-sm) text-(--fg3)">This subagent isn't in the loaded part of the conversation.</p>
+              ) : (
+                <ThreadView
+                  items={subagent ? thread.items : withSending(thread.items, entries, send.isPending ? send.variables : undefined)}
+                  machine={machine}
+                  sessionId={sessionId}
+                  readOnly={readOnly}
+                  agent={subagent?.title || agentName}
+                  working={live && (subagent ? subagentRunning(subagent) && !thread.needs_you : thread.working && !thread.needs_you)}
+                  onQuote={readOnly || subagent ? undefined : quoteReply}
+                  onFork={!subagent && canFork && !fork.isPending ? () => fork.mutate() : undefined}
+                  onRetry={!subagent && canRetry ? retryLastPrompt : undefined}
+                  subagents={thread.subagents}
+                  lastTurn={thread.last_turn}
+                  turnStarted={thread.turn_started ?? subagent?.startedTs}
+                  animateAfter={animateAfter}
+                  onOpenSubagent={openSubagent}
+                  onStopSubagent={readOnly ? undefined : (id) => stopSubagent.mutate(id)}
+                />
+              )}
+              </>
             )}
           </div>
         </div>
-      {!readOnly && <div
-        className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-(--s4) pt-36 pb-(--s5)"
+      {!readOnly && subagent && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-(--s4) pb-(--s5)">
+          <div className="pointer-events-auto mx-auto flex w-full max-w-180 items-center gap-(--s3) rounded-(--r-sheet) bg-(--glass) px-(--s4) py-(--s2) text-(length:--fs-sm) shadow-(--shadow-composer) backdrop-blur-xl">
+            <span className="min-w-0 flex-1 truncate text-(--fg2)">{`${agentName} owns this conversation. Approvals and Stop work here.`}</span>
+            {subagentRunning(subagent) && subagent.cancellable && !subagent.id.startsWith("tool:") && (
+              <Button type="button" size="sm" disabled={stopSubagent.isPending} onClick={() => stopSubagent.mutate(subagent.id)}>
+                <Square aria-hidden className="fill-current" /> Stop
+              </Button>
+            )}
+            <Button type="button" size="sm" variant="ghost" onClick={closeSubagent}><ArrowLeft aria-hidden /> Back</Button>
+          </div>
+        </div>
+      )}
+      {!readOnly && !subagentId && <div
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-(--s4) pt-(--s7) pb-(--s5)"
         style={{ backgroundImage: "linear-gradient(to top, var(--window) 55%, transparent)" }}
         onDragOver={(event) => {
           if (event.dataTransfer.types.includes("Files")) event.preventDefault()
@@ -372,41 +604,15 @@ export default function ConversationPane({
           void attachImages(imageFilesFromList(event.dataTransfer.files))
         }}
       >
-          <div className="pointer-events-auto mx-auto flex w-full max-w-180 flex-col gap-(--s3)">
-            {plan.length > 0 && (
-              <details data-slot="plan-pill" className="group overflow-hidden rounded-(--r-sheet) bg-(--glass) shadow-(--shadow-composer) backdrop-blur-xl backdrop-saturate-[1.8]">
-                <summary className="flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) px-(--s4) py-(--s2) text-(length:--fs-sm) marker:content-none [&::-webkit-details-marker]:hidden">
-                  <span className="shrink-0 font-medium">{planDone} of {plan.length}</span>
-                  <span className="min-w-0 flex-1 truncate text-(--fg2)">{currentStep?.content}</span>
-                  <ChevronRight aria-hidden className="size-(--s4) shrink-0 text-(--fg3) transition-transform group-open:rotate-90" />
-                </summary>
-                <ol className="flex flex-col border-t-[0.5px] border-(--sep) px-(--s4) py-(--s2)">
-                  {plan.map((step, index) => {
-                    const completed = step.status === "completed"
-                    const active = step.status === "in_progress"
-                    const label = completed ? "Completed" : active ? "In progress" : "Pending"
-                    return (
-                      <li
-                        key={step.id ?? index}
-                        aria-label={`${label}: ${step.content ?? "Plan step"}`}
-                        className={`flex min-h-(--row-h) items-center gap-(--s3) text-(length:--fs-sm) ${completed ? "text-(--fg3) line-through" : active ? "font-medium text-(--fg)" : "text-(--fg2)"}`}
-                      >
-                        <span className={`grid size-(--s4) shrink-0 place-items-center ${completed ? "text-(--ok-word)" : active ? "text-(--accent)" : "text-(--fg3)"}`}>
-                          {completed ? (
-                            <Check aria-hidden className="size-(--s4)" />
-                          ) : active ? (
-                            <CircleDot aria-hidden className="size-(--s4) animate-spin motion-reduce:animate-none" />
-                          ) : (
-                            <Circle aria-hidden className="size-(--s3)" />
-                          )}
-                        </span>
-                        <span className="min-w-0">{step.content}</span>
-                      </li>
-                    )
-                  })}
-                </ol>
-              </details>
-            )}
+          <div ref={composerRef} className="pointer-events-auto mx-auto flex w-full max-w-180 flex-col gap-(--s3)">
+            <QueueChips queue={parent.queue ?? []} machine={machine} sessionId={sessionId} readOnly={readOnly || needsUpdate} />
+            <GoalPill
+              goal={goal}
+              plan={plan}
+              readOnly={readOnly || needsUpdate}
+              onEdit={() => setGoalSheet({ objective: goal?.objective ?? "" })}
+              onAction={(action) => goalActions.act.mutate(action)}
+            />
             <div className="flex flex-col gap-(--s1) rounded-[12px] bg-(--field) px-(--s3) pt-(--s3) pb-(--s2) shadow-(--shadow-composer) transition-shadow focus-within:shadow-[var(--shadow-composer),0_0_0_3px_var(--accent-soft)]">
               <div className="relative flex min-h-(--ctl-h) flex-col gap-(--s2)">
                 {attachments.map((item, index) => (
@@ -418,13 +624,13 @@ export default function ConversationPane({
                     </Button>
                   </div>
                 ))}
-                <ComposerHintsMenu id="composer-hints-list" activeIndex={activeHint} title={hintTitle} hints={composerHints} onPick={pickHint} />
+                <ComposerHintsMenu id="composer-hints-list" activeIndex={activeHint} title={hintTitle} hints={composerHints} onPick={pickHint} query={slashHints.length > 0 ? draft.slice(draft.lastIndexOf("\n") + 2) : ""} agentName={agentName} />
                 <textarea
                   ref={composerInputRef}
                   id="conversation-message"
                   aria-label="Message"
                   rows={1}
-                  placeholder={needsUpdate ? "Update this peer to open the conversation…" : `Message ${agentName}`}
+                  placeholder={needsUpdate ? "Update this peer to open the conversation…" : parent.working ? `Queue a message for ${agentName} (⌘↵ steers)` : `Message ${agentName}`}
                   value={draft}
                   disabled={needsUpdate}
                   aria-controls={composerHints.length > 0 ? "composer-hints-list" : undefined}
@@ -461,14 +667,14 @@ export default function ConversationPane({
                         return
                       }
                     }
-                    if (event.key === "Escape" && thread.working && !cancelTurn.isPending) {
+                    if (event.key === "Escape" && parent.working && !cancelTurn.isPending) {
                       event.preventDefault()
                       cancelTurn.mutate()
                       return
                     }
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault()
-                      if (canSend) send.mutate({ text: draft.trim(), attachments, clearComposer: true })
+                      submit(event.metaKey || event.ctrlKey)
                     }
                   }}
                   className="min-h-(--ctl-h) max-h-45 w-full resize-none border-0 bg-transparent px-(--s3) py-(--s2) text-(length:--fs) text-(--fg) outline-none placeholder:text-(--fg3)"
@@ -492,7 +698,7 @@ export default function ConversationPane({
                   size="icon"
                   variant="ghost"
                   aria-label="Attach image"
-                  disabled={send.isPending || upload.isPending || thread.needs_you || needsUpdate}
+                  disabled={send.isPending || upload.isPending || needsUpdate}
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <Plus aria-hidden />
@@ -502,7 +708,7 @@ export default function ConversationPane({
                   size="icon"
                   variant="ghost"
                   aria-label="Mention a file"
-                  disabled={thread.needs_you || needsUpdate}
+                  disabled={needsUpdate}
                   onClick={() => setDraft((current) => `${current}${current && !current.endsWith(" ") ? " " : ""}@`)}
                 >
                   <AtSign aria-hidden />
@@ -512,7 +718,7 @@ export default function ConversationPane({
                   size="icon"
                   variant="ghost"
                   aria-label="Commands"
-                  disabled={thread.needs_you || needsUpdate}
+                  disabled={needsUpdate}
                   onClick={() => setDraft("/")}
                 >
                   <Slash aria-hidden />
@@ -525,7 +731,7 @@ export default function ConversationPane({
                     onValueChange={(value) => setConfigValue(permissionsOption.id, value)}
                     // Stays usable while the agent waits on you: that is when switching to bypass helps.
                     disabled={setConfig.isPending || needsUpdate}
-                    items={permissionsOption.items}
+                    items={permissionsOption.items.map((item) => ({ ...item, danger: dangerousMode(item) }))}
                   />
                 )}
                 {(modelOption || effortOption || extraOptions.length > 0) && (
@@ -558,7 +764,7 @@ export default function ConversationPane({
                     <MenuContent align="end">
                       {modelOption && (
                         <>
-                          <p className="px-(--s3) py-(--s2) text-(length:--fs-xs) text-(--fg3)">Model</p>
+                          <p className="px-[11px] pt-(--s2) pb-(--s1) text-(length:--fs-xs) font-semibold text-(--fg3)">Model</p>
                           {modelOption.items.map((item) => {
                             const selected = (typeof configValues[modelOption.id] === "string" ? configValues[modelOption.id] : modelOption.value) === item.value
                             return (
@@ -566,7 +772,7 @@ export default function ConversationPane({
                                 key={item.value}
                                 role="menuitemradio"
                                 aria-checked={selected}
-                                icon={selected ? <Check aria-hidden /> : <span aria-hidden className="size-(--s4)" />}
+                                icon={selected ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
                                 disabled={setConfig.isPending || thread.needs_you || needsUpdate}
                                 onClick={() => setConfigValue(modelOption.id, item.value)}
                               >
@@ -578,8 +784,8 @@ export default function ConversationPane({
                       )}
                       {effortOption && (
                         <>
-                          {modelOption && <div role="separator" className="my-(--s2) h-px bg-(--sep)" />}
-                          <p className="px-(--s3) py-(--s2) text-(length:--fs-xs) text-(--fg3)">Effort</p>
+                          {modelOption && <div role="separator" className="mx-[11px] my-[5px] h-px bg-(--menu-sep)" />}
+                          <p className="px-[11px] pt-(--s2) pb-(--s1) text-(length:--fs-xs) font-semibold text-(--fg3)">Effort</p>
                           {effortOption.items.map((item) => {
                             const selected = (typeof configValues[effortOption.id] === "string" ? configValues[effortOption.id] : effortOption.value) === item.value
                             return (
@@ -587,7 +793,7 @@ export default function ConversationPane({
                                 key={item.value}
                                 role="menuitemradio"
                                 aria-checked={selected}
-                                icon={selected ? <Check aria-hidden /> : <span aria-hidden className="size-(--s4)" />}
+                                icon={selected ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
                                 disabled={setConfig.isPending || thread.needs_you || needsUpdate}
                                 onClick={() => setConfigValue(effortOption.id, item.value)}
                               >
@@ -601,12 +807,12 @@ export default function ConversationPane({
                         const current = configValues[option.id] ?? option.value
                         return (
                           <div key={option.id}>
-                            <div role="separator" className="my-(--s2) h-px bg-(--sep)" />
+                            <div role="separator" className="mx-[11px] my-[5px] h-px bg-(--menu-sep)" />
                             {option.type === "boolean" ? (
                               <MenuItem
                                 role="menuitemcheckbox"
                                 aria-checked={current === true}
-                                icon={current === true ? <Check aria-hidden /> : <span aria-hidden className="size-(--s4)" />}
+                                icon={current === true ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
                                 disabled={setConfig.isPending || thread.needs_you || needsUpdate}
                                 onClick={() => setConfigValue(option.id, current !== true)}
                               >
@@ -614,13 +820,13 @@ export default function ConversationPane({
                               </MenuItem>
                             ) : (
                               <>
-                                <p className="px-(--s3) py-(--s2) text-(length:--fs-xs) text-(--fg3)">{option.name}</p>
+                                <p className="px-[11px] pt-(--s2) pb-(--s1) text-(length:--fs-xs) font-semibold text-(--fg3)">{option.name}</p>
                                 {option.items.map((item) => (
                                   <MenuItem
                                     key={item.value}
                                     role="menuitemradio"
                                     aria-checked={current === item.value}
-                                    icon={current === item.value ? <Check aria-hidden /> : <span aria-hidden className="size-(--s4)" />}
+                                    icon={current === item.value ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
                                     disabled={setConfig.isPending || thread.needs_you || needsUpdate}
                                     onClick={() => setConfigValue(option.id, item.value)}
                                   >
@@ -635,7 +841,25 @@ export default function ConversationPane({
                     </MenuContent>
                   </Menu>
                 )}
-                {thread.working ? (
+                {contextPercent !== undefined && (
+                  <button
+                    type="button"
+                    data-slot="context-ring"
+                    aria-label={`Context ${contextPercent}% used${canCompact ? ". Compact" : ""}`}
+                    title={canCompact ? `Context ${contextPercent}% used. Click to compact; ⌥-click to choose what to keep.` : `Context ${contextPercent}% used. ${agentName} doesn't offer compaction.`}
+                    disabled={!canCompact || needsUpdate}
+                    onClick={(event) => {
+                      if (event.altKey) {
+                        setDraft("/compact ")
+                        composerInputRef.current?.focus()
+                      } else compact()
+                    }}
+                    className="grid size-6 shrink-0 place-items-center rounded-full hover:bg-(--hover) disabled:hover:bg-transparent"
+                  >
+                    <ContextRing percent={contextPercent} />
+                  </button>
+                )}
+                {parent.working && (
                   <Button
                     type="button"
                     size="icon"
@@ -647,13 +871,20 @@ export default function ConversationPane({
                   >
                     {cancelTurn.isPending ? <Spinner /> : <Square aria-hidden className="fill-current" />}
                   </Button>
-                ) : (
+                )}
+                {parent.working && canSend && (
+                  <Button type="button" size="sm" variant="ghost" title="Interrupt the agent and send this now (⌘↵)" onClick={() => submit(true)}>
+                    <CornerDownLeft aria-hidden /> Steer
+                  </Button>
+                )}
+                {(!parent.working || canSend) && (
                   <button
                     type="button"
                     disabled={!canSend}
-                    aria-label="Send"
+                    aria-label={parent.working ? "Queue" : "Send"}
+                    title={parent.working ? "Queue for after this turn (↵)" : "Send (↵)"}
                     className="ml-(--s2) grid size-6 shrink-0 place-items-center rounded-full bg-(--accent) text-(--accent-fg) disabled:bg-(--track) disabled:text-(--fg3) [&_svg]:size-(--s4)"
-                    onClick={() => send.mutate({ text: draft.trim(), attachments, clearComposer: true })}
+                    onClick={() => submit()}
                   >
                     <ArrowUp aria-hidden />
                   </button>
@@ -663,8 +894,37 @@ export default function ConversationPane({
           </div>
       </div>}
         </div>
-        <ConversationInspector thread={thread} info={info} machine={machine} machineName={machineName} open={inspectorOpen} sessionId={sessionId} readOnly={readOnly || needsUpdate} />
+        <ConversationInspector
+          thread={parent}
+          info={info}
+          machine={machine}
+          machineName={machineName}
+          open={inspectorOpen}
+          sessionId={sessionId}
+          readOnly={readOnly || needsUpdate}
+          goal={goal}
+          onGoalEdit={() => setGoalSheet({ objective: goal?.objective ?? "" })}
+          onGoalAction={(action) => goalActions.act.mutate(action)}
+          compact={canCompact ? compact : undefined}
+          compactReason={canCompact ? undefined : `${agentName} doesn't offer compaction.`}
+          onOpenSubagent={openSubagent}
+        />
+        <GoalSheet open={Boolean(goalSheet)} onOpenChange={(open) => !open && setGoalSheet(undefined)} machine={machine} sessionId={sessionId} goal={goal} initialObjective={goalSheet?.objective} />
       </div>
     </div>
   )
+}
+
+function withoutKey<T>(values: Record<string, T>, key: string): Record<string, T> {
+  const rest = { ...values }
+  delete rest[key]
+  return rest
+}
+
+// The message being sent, shown at the end of the thread until the log holds a prompt newer than the send.
+function withSending(items: ThreadItem[], entries: LogEntry[], sending: SendInput | undefined): ThreadItem[] {
+  const after = sending?.optimisticAfter
+  if (after === undefined || !sending?.text) return items
+  for (let i = entries.length - 1; i >= 0 && entries[i]!.seq > after; i--) if (entries[i]!.kind === "prompt") return items
+  return [...items, { kind: "user_message_chunk", data: { text: { text: sending.text } } }]
 }

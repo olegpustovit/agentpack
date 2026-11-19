@@ -172,6 +172,9 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 		return nil, err
 	}
 	merged = mcpPluginPlan.Entries
+	if merged, err = applyMCPCredentials(merged); err != nil {
+		return nil, err
+	}
 	var mcpProjections []base.MCPProjection
 	if len(merged) != 0 {
 		for _, candidate := range harnesses {

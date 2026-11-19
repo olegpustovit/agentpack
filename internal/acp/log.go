@@ -23,6 +23,8 @@ type EventLog struct {
 	truncated   bool
 	replaying   bool
 	entries     []LogEntry
+	subagents   map[string]bool // announced child session -> cancellable
+	changed     chan struct{}   // closed and replaced whenever readers have something new
 }
 
 // LogChanges contains durable updates, including replacements for coalesced chunks.
@@ -66,12 +68,14 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 	size := entrySize(entry)
 	if size < 0 || size > log.limit {
 		log.truncated = true
+		log.signal()
 		log.mu.Unlock()
 		return entry
 	}
 	persistence := log.persistence
 	if persistence != nil && persistence.err != nil {
 		log.truncated = true
+		log.signal()
 		log.mu.Unlock()
 		return entry
 	}
@@ -87,6 +91,7 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 		// Apply backpressure before a pending batch can grow beyond the memory budget.
 		log.flushChanges(persistence)
 	}
+	log.signal()
 	onAppend := log.onAppend
 	log.mu.Unlock()
 
@@ -94,6 +99,24 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 		onAppend(entry)
 	}
 	return entry
+}
+
+// Changed returns a channel that closes on the next append, restore or truncation.
+func (log *EventLog) Changed() <-chan struct{} {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if log.changed == nil {
+		log.changed = make(chan struct{})
+	}
+	return log.changed
+}
+
+// signal wakes Changed waiters. The caller holds mu.
+func (log *EventLog) signal() {
+	if log.changed != nil {
+		close(log.changed)
+		log.changed = nil
+	}
 }
 
 func (log *EventLog) SetOnAppend(onAppend func(LogEntry)) []LogEntry {
@@ -164,20 +187,34 @@ func (log *EventLog) Flush() error {
 	return log.persistence.err
 }
 
+// persistFlushDelay batches a burst of appends into one write transaction.
+const persistFlushDelay = 250 * time.Millisecond
+
+// persistLoop sleeps until an append, then flushes after persistFlushDelay; an idle log never wakes it.
 func (log *EventLog) persistLoop(persistence *eventLogPersistence) {
 	defer close(persistence.done)
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
+	flush := func() {
+		log.mu.Lock()
+		log.flushChanges(persistence)
+		log.mu.Unlock()
+	}
+	delay := time.NewTimer(persistFlushDelay)
+	delay.Stop()
 	for {
+		// Taken before flushing, so an append that races the flush still wakes the next wait.
+		changed := log.Changed()
+		flush()
 		select {
-		case <-ticker.C:
-			log.mu.Lock()
-			log.flushChanges(persistence)
-			log.mu.Unlock()
+		case <-changed:
 		case <-persistence.stop:
-			log.mu.Lock()
-			log.flushChanges(persistence)
-			log.mu.Unlock()
+			flush()
+			return
+		}
+		delay.Reset(persistFlushDelay)
+		select {
+		case <-delay.C:
+		case <-persistence.stop:
+			flush()
 			return
 		}
 	}
@@ -260,18 +297,15 @@ func (log *EventLog) Restore(entries []LogEntry, lastSeq int64, truncated bool) 
 		log.entries = append(log.entries, entry)
 		log.bytes += entrySize(entry)
 	}
+	log.signal()
 	return nil
 }
 
 func (log *EventLog) ReadSince(since int64) (out []LogEntry, truncated bool) {
 	log.mu.RLock()
 	defer log.mu.RUnlock()
-	for _, entry := range log.entries {
-		if entry.Seq > since {
-			out = append(out, entry)
-		}
-	}
-	return out, log.truncated
+	start, _ := slices.BinarySearchFunc(log.entries, since+1, func(entry LogEntry, seq int64) int { return cmp.Compare(entry.Seq, seq) })
+	return slices.Clone(log.entries[start:]), log.truncated
 }
 
 func (log *EventLog) Snapshot() []LogEntry {
@@ -280,6 +314,13 @@ func (log *EventLog) Snapshot() []LogEntry {
 	out := make([]LogEntry, len(log.entries))
 	copy(out, log.entries)
 	return out
+}
+
+// Seq is the sequence of the newest event; it moves on every append.
+func (log *EventLog) Seq() int64 {
+	log.mu.RLock()
+	defer log.mu.RUnlock()
+	return log.seq
 }
 
 func (log *EventLog) Truncated() bool {
@@ -292,6 +333,7 @@ func (log *EventLog) Truncated() bool {
 func (log *EventLog) MarkTruncated() {
 	log.mu.Lock()
 	log.truncated = true
+	log.signal()
 	log.mu.Unlock()
 }
 
@@ -303,13 +345,18 @@ func (log *EventLog) SetReplaying(replaying bool) {
 	log.mu.Unlock()
 }
 
+// maxCoalescedPayload caps how much old reply text is merged into one entry before older text is dropped instead.
+const maxCoalescedPayload = 64 << 10
+
 func (log *EventLog) coalesceDropOldest() {
 	if len(log.entries) == 0 {
 		return
 	}
 	if len(log.entries) > 1 {
 		first, second := log.entries[0], log.entries[1]
-		if first.Kind == second.Kind && first.Kind == "agent_message_chunk" {
+		// Bounded, because a merge re-encodes the head: an unbounded head grows to the whole budget and every
+		// streamed token would then re-encode megabytes.
+		if first.Kind == second.Kind && first.Kind == "agent_message_chunk" && len(first.Payload)+len(second.Payload) <= maxCoalescedPayload {
 			merged, err := mergeTextChunks(first.Payload, second.Payload)
 			candidate := second
 			candidate.Payload = merged
@@ -317,7 +364,8 @@ func (log *EventLog) coalesceDropOldest() {
 			candidateSize := entrySize(candidate)
 			if err == nil && candidateSize >= 0 && candidateSize <= log.limit {
 				log.bytes -= entrySize(first) + entrySize(second)
-				log.entries = append([]LogEntry{candidate}, log.entries[2:]...)
+				log.entries[1] = candidate
+				log.entries = log.entries[1:]
 				log.bytes += candidateSize
 				if log.persistence != nil {
 					log.persistence.put(candidate)
@@ -341,23 +389,24 @@ func entrySize(entry LogEntry) int {
 	return len(line) + 1
 }
 
+// mergeTextChunks joins two text chunks of the same speaker; chunks of different subagents never merge.
 func mergeTextChunks(a, b json.RawMessage) (json.RawMessage, error) {
-	var left, right struct {
-		Text struct {
+	type chunk struct {
+		Subagent string `json:"_subagent,omitempty"`
+		Text     struct {
 			Text string `json:"text"`
 		} `json:"text"`
 	}
+	var left, right chunk
 	if err := json.Unmarshal(a, &left); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(b, &right); err != nil {
 		return nil, err
 	}
-	merged := struct {
-		Text struct {
-			Text string `json:"text"`
-		} `json:"text"`
-	}{}
-	merged.Text.Text = left.Text.Text + right.Text.Text
-	return json.Marshal(merged)
+	if left.Subagent != right.Subagent {
+		return nil, errors.New("chunks belong to different subagents")
+	}
+	left.Text.Text += right.Text.Text
+	return json.Marshal(left)
 }

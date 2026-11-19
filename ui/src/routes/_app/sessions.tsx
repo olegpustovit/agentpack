@@ -1,14 +1,17 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router"
-import { z } from "zod"
+import { looseSearch } from "@/lib/search"
 import { ListDetail } from "@/features/shell/list-detail"
 import { SessionList } from "@/features/sessions/session-list"
 
 export const Route = createFileRoute("/_app/sessions")({
-  // Loose, so the child routes' own search keys (q, group, new) pass through this layout.
-  validateSearch: z.looseObject({
-    q: z.string().optional().catch(undefined),
-    group: z.string().optional().catch(undefined),
-    new: z.coerce.string().optional().catch(undefined),
+  // Loose, so the child routes' own search keys pass through this layout.
+  // machine and folder preselect where New session starts.
+  validateSearch: looseSearch({
+    q: "text",
+    group: "text",
+    new: "flag",
+    machine: "text",
+    folder: "text",
   }),
   component: () => (
     <ListDetail list={<SessionList />}>

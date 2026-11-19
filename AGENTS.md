@@ -20,13 +20,13 @@ Installer scripts must default to the user-owned `$HOME/.local/bin` directory on
 
 Headless model prompts and exact-response launch checks are optional local checks; account quotas or expired credentials must not block a release. The release workflow is the required validation for the package, installers, snapshot configuration, and published assets, and it is the only GitHub workflow: everything else runs locally (`make ci`, the `.githooks` gates, the `ui/` checks). Docs are not auto-published.
 
-The mode editor is a responsive Bubble Tea/Lip Gloss TUI, with the Rust `v0.3.12` Ratatui editor as its behavioral baseline: modes, capability tree, details, effective-state glyphs, tri-state and subtree edits, prompts, help, scrolling, terminal-native monochrome rendering, dirty confirmation, and atomic save must remain covered. At narrow terminal widths, prioritize readable panes over preserving three crushed columns.
+The gateway web UI is the only interactive interface; there is no terminal UI. Modes are edited with `ap mode list|show|create|delete|enable|disable|base`.
 
 ### Startup performance is a release requirement
 
 Benchmark cold setup and verified warm launches before and after changing launch, staging, or fingerprint code. Keep reproducible benchmarks and measured results in the repository. On the Linux ARM64 reference host, `BenchmarkMaterializationHome` must stay below 1 ms, `BenchmarkCodexSetup/cold` below 20 ms, and `BenchmarkCodexSetup/warm` below 1 ms (medians of five repeated runs; 32 MiB history fixture). Investigate regressions before release; these are setup budgets, excluding harness startup and downloads.
 
-Fingerprint only configuration and authored resources. Never recursively scan global chat histories, sessions, project runtime state, sockets, or logs merely because the launch workspace is the user's home. Preserve cache integrity checks, symlink validation, nonregular configuration rejection, and concurrent-launch validation when optimizing. See `docs/research/startup-performance.md` for the baseline and reproduction commands.
+Fingerprint only configuration and authored resources. Never recursively scan global chat histories, sessions, project runtime state, sockets, or logs merely because the launch workspace is the user's home. Preserve cache integrity checks, symlink validation, nonregular configuration rejection, and concurrent-launch validation when optimizing. See `docs/research/startup-performance.md` for the baseline and reproduction commands. Gateway idle cost (< 1% CPU, < 1 MB/s reads with no browser) and streaming latency budgets are in `docs/research/web-performance.md`; profile with the local-only `/api/debug/pprof/` route before changing event, registry or persistence loops.
 
 A launch stages only its own harness, so each harness returns to the generation its last launch built (`selectLaunchGeneration`); switching agents must not rebuild. Overlay harnesses (Cursor, Antigravity) and launches after them keep the published path, because the rebuild maintains the workspace links. Registry objects are content-addressed: `registry.memoized` validates each once per process while its replicated conflict position holds, because index reads run on every Library request and a peer's proxied read must finish well inside the gateway's limits.
 
@@ -65,6 +65,7 @@ All agentpack-owned terminal rendering is monochrome and terminal-agnostic: use 
 | **Legacy `network/sessions/`, `network/acp-session-owners/`, `network/recent.json`** | Gateway startup imports stopped workers, native ownership and recent folders into state.db. Imported files are removed only after commit; live-worker files, unreadable sources and image/support files remain. Hidden session rows retain immutable native ownership. |
 | **`$AGENTPACK_HOME/logs/YYYY-MM-DD.db`** | Private plain SQLite diagnostic events and deduplicated stacks, retained for five days. Ordinary events have a 256 MiB daily budget; error samples are preserved. |
 | **`$AGENTPACK_HOME/logs/spool/*.ndjson`** | Private CLI/worker diagnostics awaiting gateway ingestion; 16 MiB oldest-first budget. Successful foreground launches write no diagnostics. |
+| **`$AGENTPACK_HOME/mcp-credentials.json`** | Gateway-written list (ID, label, URL, approved plugins; never secrets) of the MCP connections of the account bound to this machine. Staging routes matching servers through `agentpack mcp-bridge`; the launch fingerprint includes it. |
 | **`$AGENTPACK_HOME/verified/<cache_key>.json`** | Proof that an entry matched its content hash while its files had this metadata. Launches reuse it instead of reading the package again. Losing it costs one full check. |
 | **`$AGENTPACK_HOME/local/<owner>/<repo>/…`** | Optional offline mirror; same slash layout as **`owner/repo/…`** specs. |
 | **`$AGENTPACK_HOME/projects/<hash>/cursor-overlay.manifest`** | Per-project Cursor overlay bookkeeping (not stored in the repo). |
@@ -85,6 +86,12 @@ reaches it, so starting `ap` is enough to be visible; a peer the owner removed
 stays removed. Session and limits UI reads use local replicated rows; live actions
 route to their owning node. Keep offline history readable and all live controls
 disabled. Altering a replicated table uses the migration `crsql-alter` marker.
+
+MCP connections (`mcp_credentials`, `mcp_credential_approvals`) deliberately
+replicate their secrets so one login serves every node; Library bindings stay
+local. A bridge reads a secret only through the local gateway for the bound
+account. Main (or the creating node) is the only refresher of a rotating
+refresh token; other nodes ask it over the mesh. See `docs/src/concepts/mcp.md`.
 
 `gateway main set` selects the Main gateway. Switching machines requires typing
 `switch`, cleanly stopping the old gateway and copying its `archive.db` and
@@ -209,7 +216,7 @@ Antigravity (`agy`) has no config-root override in the installed CLI and shares 
 
 ### ACP chat sessions
 
-Workers can run **`transport: "acp"`** agents (Claude, Codex, OpenCode, Cursor, Grok, OMP, Antigravity) with the same restart and detach semantics as terminal sessions. Session metadata adds **`conversation_state`** (`working` / **`needs_you`** / **`idle`**) and optional **`agent_session_id`**. The worker persists conversation events in state.db and keeps a byte-bounded replay tail; the gateway can read saved history without a live worker and proxies **`/api/sessions/{id}/conversation/*`**, **`GET /api/agent-sessions`**, and image **`/blobs/{sha}`** with the same auth and **`?node=`** routing as other session APIs. Shared reducers and fixtures: **`testdata/acp/full.jsonl`**, **`internal/acp`**, **`internal/hub`**, **`ui/src/features/conversation/`**. Bare **`agentpack`** and the installed **`ap`** binary open the **`ap`** hub TUI on a TTY. Its preview supports **`/help`**, **`/image`**, **`/reload`**, **`/sessions`**, permission/elicitation answers, and image prompts; image/file placeholders open through the OS default file handler by click or **`o`**. Downloaded images are cached under the OS user cache with a 100 MiB cap. Claude/Codex adapter specs and verified trees live under **`$AGENTPACK_HOME/adapters/`**; intact warm caches avoid registry lookups. See **`docs/src/guides/acp-sessions.md`** and **`ui/README.md`**.
+Workers can run **`transport: "acp"`** agents (Claude, Codex, OpenCode, Cursor, Grok, OMP, Antigravity) with the same restart and detach semantics as terminal sessions. Session metadata adds **`conversation_state`** (`working` / **`needs_you`** / **`idle`**) and optional **`agent_session_id`**. The worker persists conversation events in state.db and keeps a byte-bounded replay tail; the gateway can read saved history without a live worker and proxies **`/api/sessions/{id}/conversation/*`**, **`GET /api/agent-sessions`**, and image **`/blobs/{sha}`** with the same auth and **`?node=`** routing as other session APIs. Shared reducers and fixtures: **`testdata/acp/full.jsonl`**, **`internal/acp`**, **`ui/src/features/conversation/`**. Bare **`agentpack`** and the installed **`ap`** binary print the gateway URL and open the web UI on a TTY. Claude/Codex adapter specs and verified trees live under **`$AGENTPACK_HOME/adapters/`**; intact warm caches avoid registry lookups. See **`docs/src/guides/acp-sessions.md`** and **`ui/README.md`**.
 ACP limits: all writes to an existing ACP session require the recorded user and stable peer node identity (or the same local user/host); other actors may read logs and blobs but cannot mutate the session. Client MIME is ignored in favor of stored image bytes; storage is capped at 20 MiB per image and 100 MiB total or 128 files per session, with serialized uploads and a 30-second body-read deadline. ACP terminal output is capped at 4 MiB, nested terminal process groups are force-killed on release and worker shutdown, and an oversized unterminated frame closes its stream after 10 seconds.
 
 ## Gateway UI
@@ -217,7 +224,7 @@ ACP limits: all writes to an existing ACP session require the recorded user and 
 Gateway authentication uses email accounts. The first browser owner claims an
 unclaimed gateway; a legacy gateway requires its current password and preserves
 that hash. Unclaimed browsers may access only health/status, the claim endpoint
-and static UI. Start/status and the hub show `UNCLAIMED: open <url> now` until
+and static UI. Start/status and bare `ap` show `UNCLAIMED: open <url> now` until
 claimed. Keep first-time public access restricted until the owner is claimed.
 Browser cookies survive restarts and slide for thirty days; HTTPS uses
 `__Host-agentpack_session`, Secure, HttpOnly and SameSite=Strict. Disabling an
@@ -260,11 +267,14 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 | `/machines/$machine` | `q` |
 | `/limits` | `machine` |
 | `/settings` | none (redirects to `/settings/general`) |
-| `/settings/$pane` | none; `general`, `sharing`, `replication`, `diagnostics`, `appearance`, `account` |
+| `/settings/$pane` | none; `general`, `sharing`, `replication`, `connections`, `diagnostics`, `appearance`, `account` |
 
 - **Peers update on their own schedule.** The gateway routinely talks to older peers, so API reads tolerate them: a 404 means `Needs update`, never a raw error, and a response shape that changed is normalized in its query. This is runtime interoperability and is not covered by the pre-release rule. Test new endpoints against a peer without them.
 - **Never use `node` as a search param.** The Go handler treats `?node=` as a proxy instruction on `/api/` paths, and this rule stays in force anyway.
-- Validate search params with `.optional().catch(undefined)`, never `.catch("")`, which makes the param required on every `<Link>`. Apply defaults where the value is read.
+- Validate search params with `search()` / `looseSearch()` from `ui/src/lib/search.ts` (a string or absent; `"flag"` keys accept the parser's numbers). Never default them to `""`, which makes the param required on every `<Link>`. Apply defaults where the value is read. Response shapes are checked with the small readers in `ui/src/lib/validate.ts`; zod is not a dependency.
+- `bun run lint` fails when React Compiler skips any function (`scripts/check-compiler.ts`); rewrite the code rather than opt out.
+- The query cache persists to IndexedDB per UI build (`src/lib/persist.ts`); sign-out and any 401 must call `forgetQueries()`. `public/sw.js` caches only the shell and hashed assets, never `/api/`.
+- Live data is pushed: with `/api/events` connected, queries do not poll. A `state` event names the replicated tables it changed (`tables`) and the UI refetches only their readers.
 - Linkable overlays open from a search param (`new`, `install`, `restore`, `add`). Confirmations are local state.
 - **Alert model:** one surface per situation. Action finished: `Hud`, 4 s. Action failed with nothing open: `Hud` with `Retry`, until dismissed. Ongoing pane or terminal state: `Banner`. Irreversible action: `ConfirmAlert`. Form or server rejection: inline under the field. Do not use `notice()`, `*-status` lines or `window.confirm`.
 - **Size budgets** (`ui/scripts/check-size.ts`, run by every `bun run build`): main JS 170 KB gzip, initial CSS 30 KB, every lazy JS chunk 100 KB (the terminal included). Never raise a budget. The root route imports only `Button`, `Input`, `Tooltip` and `DropdownMenu`; dialogs, selects, the command palette and context menus load inside routes or through `React.lazy`.

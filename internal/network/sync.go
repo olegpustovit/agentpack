@@ -313,7 +313,7 @@ func (g *Gateway) runStateSync(ctx context.Context) {
 			<-p.done
 		}
 	}()
-	events, unsubscribe := g.subscribe()
+	events, unsubscribe := g.listen()
 	defer func() { unsubscribe() }()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -370,7 +370,7 @@ func (g *Gateway) runStateSync(ctx context.Context) {
 			case message, open := <-events:
 				if !open {
 					unsubscribe()
-					events, unsubscribe = g.subscribe()
+					events, unsubscribe = g.listen()
 				} else if message.Topic == "replication" && message.Node == "" {
 					break waitForTick
 				}
@@ -384,6 +384,8 @@ func (g *Gateway) runStateSync(ctx context.Context) {
 func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan struct{}, interval time.Duration, targetFor func(context.Context, string) (*url.URL, error)) {
 	delay := time.Second
 	client := &http.Client{Transport: tailnetTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// A peer failing the same way on every retry is recorded once; each record is a replicated write.
+	lastFailure := ""
 	for {
 		if !g.meshPeer(ctx, peer) {
 			return
@@ -395,6 +397,9 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 		var changed bool
 		if err == nil {
 			page, changed, err = pullState(pullCtx, g.auth.store, g.options.Library.Store, client, target)
+		}
+		if err == nil && changed {
+			g.credentialsChanged()
 		}
 		if err == nil {
 			archiveCtx, archiveEvent := obs.Start(pullCtx, "archive.edits", "relayed history")
@@ -424,8 +429,10 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 			contact.Lag = &zero
 		}
 		wait := interval
+		failure := ""
 		if err != nil {
-			contact.Error = err.Error()
+			failure = err.Error()
+			contact.Error = failure
 			contact.NeedsUpdate = errors.Is(err, errSyncNeedsUpdate)
 			event.Fail(err)
 			wait = min(delay, interval)
@@ -440,9 +447,10 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 				g.emitEvent(eventMessage{Topic: topic})
 			}
 		}
-		if err != nil || changed {
+		if err != nil && failure != lastFailure || changed {
 			event.End()
 		}
+		lastFailure = failure
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():

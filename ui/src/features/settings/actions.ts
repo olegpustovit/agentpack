@@ -1,4 +1,4 @@
-import { forgetLimits } from "@/features/limits/queries"
+import { forgetQueries } from "@/lib/persist"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { replicationQuery } from "@/features/library/queries"
@@ -95,7 +95,7 @@ export function useGatewayActions() {
     },
     onSuccess: () => {
       queryClient.clear()
-      forgetLimits()
+      forgetQueries()
       void navigate({ to: "/login" })
     },
     // A 401 means the session already ended; the unauthorized handler has sent the user to /login.

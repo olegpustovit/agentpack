@@ -3,11 +3,14 @@ package network
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/olegpustovit/agentpack/internal/acp"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -143,7 +146,7 @@ func TestEventsRelayPeerDirectEventsOnly(t *testing.T) {
 			relayed = append(relayed, msg)
 		}
 	}
-	if len(relayed) != 1 || relayed[0] != (eventMessage{Topic: "sessions", Node: "peer1"}) {
+	if len(relayed) != 1 || !reflect.DeepEqual(relayed[0], eventMessage{Topic: "sessions", Node: "peer1"}) {
 		t.Fatalf("relayed events = %+v, want exactly sessions from peer1", relayed)
 	}
 }
@@ -227,5 +230,82 @@ func TestEventsStreamClosesOnLogout(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("stream stayed open after logout")
+	}
+}
+
+func TestInternalListenersDoNotKeepPollersRunning(t *testing.T) {
+	var polls atomic.Int32
+	topic := eventTopic{name: "sessions", interval: time.Millisecond, digest: func(context.Context) (string, error) {
+		polls.Add(1)
+		return "", nil
+	}}
+	g := eventsGateway([]eventTopic{topic}, nil, nil)
+	heard, stopListening := g.listen()
+	defer stopListening()
+	time.Sleep(20 * time.Millisecond)
+	if polls.Load() != 0 {
+		t.Fatal("an internal listener started the pollers")
+	}
+	_, unsubscribe := g.subscribe()
+	for polls.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	g.emitEvent(eventMessage{Topic: "replication"})
+	for msg := range heard {
+		if msg.Topic == "replication" {
+			break
+		}
+	}
+	unsubscribe()
+	time.Sleep(5 * time.Millisecond)
+	settled := polls.Load()
+	time.Sleep(20 * time.Millisecond)
+	if polls.Load() != settled {
+		t.Fatal("pollers kept running for an internal listener after the last stream left")
+	}
+}
+
+func TestStateEventsNameTheTablesThatChanged(t *testing.T) {
+	auth, err := testGatewayAuth(t, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &Gateway{auth: auth}
+	before, err := auth.store.DBVersion(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertSession(t.Context(), auth.store.DB, SessionInfo{ID: "session-tables"}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := auth.store.DBVersion(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables := g.changedTables(t.Context(), strconv.FormatInt(before, 10), strconv.FormatInt(after, 10))
+	if len(tables) != 1 || tables[0] != "sessions" {
+		t.Fatalf("changed tables %v between %d and %d", tables, before, after)
+	}
+	if g.changedTables(t.Context(), "", "5") != nil {
+		t.Fatal("an unknown baseline must report unknown tables")
+	}
+}
+
+func TestStreamingProgressOnASessionRowIsNotASessionsChange(t *testing.T) {
+	auth, err := testGatewayAuth(t, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &Gateway{auth: auth}
+	if err := upsertSession(t.Context(), auth.store.DB, SessionInfo{ID: "session-stream"}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := auth.store.DBVersion(t.Context())
+	if err := persistConversationChanges(t.Context(), auth.store.DB, "session-stream", acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "agent_message_chunk", Payload: json.RawMessage(`{}`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := auth.store.DBVersion(t.Context())
+	if tables := g.changedTables(t.Context(), strconv.FormatInt(before, 10), strconv.FormatInt(after, 10)); !reflect.DeepEqual(tables, []string{"conversation_events"}) {
+		t.Fatalf("a streamed chunk reported %v", tables)
 	}
 }

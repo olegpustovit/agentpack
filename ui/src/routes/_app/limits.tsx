@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { z } from "zod"
+import { search } from "@/lib/search"
 import { LimitsView } from "@/features/limits/limits-view"
 
 export const Route = createFileRoute("/_app/limits")({
-  validateSearch: z.object({ machine: z.string().optional().catch(undefined) }),
+  validateSearch: search({ machine: "text" }),
   component: LimitsView,
 })

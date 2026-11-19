@@ -79,7 +79,7 @@ func unsupportedFields(raw json.RawMessage) []string {
 	var dropped []string
 	for field := range fields {
 		switch field {
-		case "type", "command", "args", "env", "url", "disabled", "headers", "cwd", "oauth", "auth", "scopes":
+		case "type", "command", "args", "env", "url", "disabled", "headers", "cwd", "oauth", "auth", "scopes", "credential":
 		default:
 			dropped = append(dropped, field)
 		}

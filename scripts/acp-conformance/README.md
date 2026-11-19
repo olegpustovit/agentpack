@@ -6,7 +6,7 @@ Optional local gate — **not CI**. Run:
 ./scripts/acp-conformance/run
 ```
 
-That checks shared `testdata/acp/full.jsonl` reducers (Go `internal/acp`, `internal/hub`, Vitest `reducer.test.ts`). With `AGENTPACK_ACP_PROBE_PROJECT` set to a synced project, it also sends one real prompt to each agent through the worker's ACP path (`TestLiveACPProbe`) and writes the log to `$TMPDIR/acp-<harness>.jsonl`. Committed transcripts under `testdata/acp/<harness>.jsonl` keep only the staged test skill in command lists; personal user-scope commands are removed.
+That checks shared `testdata/acp/full.jsonl` reducers (Go `internal/acp`, Vitest `reducer.test.ts`). With `AGENTPACK_ACP_PROBE_PROJECT` set to a synced project, it also sends one real prompt to each agent through the worker's ACP path (`TestLiveACPProbe`) and writes the log to `$TMPDIR/acp-<harness>.jsonl`. Committed transcripts under `testdata/acp/<harness>.jsonl` keep only the staged test skill in command lists; personal user-scope commands are removed.
 
 The probe does not stage: run the harness's launcher once in the project first (for example `CURSOR_AGENT_PATH=/bin/true agentpack agent`), because staging generations are shared and another harness's rebuild leaves Cursor's fake home and the Antigravity overlay to be refreshed by their own launch. `AGENTPACK_ACP_PROBE_IMAGE=<png>` sends an image the way the gateway stores an upload.
 

@@ -3,16 +3,11 @@ module github.com/olegpustovit/agentpack
 go 1.27.3
 
 require (
-	charm.land/bubbletea/v2 v2.1.1
 	charm.land/lipgloss/v2 v2.0.6
 	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/charmbracelet/fang v1.0.0
-	github.com/charmbracelet/ultraviolet v0.0.0-20261008173134-6b8d4baf91b4
-	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/charmbracelet/x/conpty v0.2.0
-	github.com/charmbracelet/x/exp/golden v0.0.0-20250806222409-83e3a29d542f
-	github.com/charmbracelet/x/vt v0.1.0
 	github.com/coder/acp-go-sdk v0.13.5
 	github.com/creack/pty v1.1.24
 	github.com/danieljoos/wincred v1.2.3
@@ -30,6 +25,7 @@ require (
 	github.com/tmaxmax/go-sse v0.11.0
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/crypto v0.58.0
+	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
@@ -43,10 +39,10 @@ require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.4.1 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
-	github.com/aymanbagabas/go-udiff v0.4.1 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
+	github.com/charmbracelet/ultraviolet v0.0.0-20261008173134-6b8d4baf91b4 // indirect
+	github.com/charmbracelet/x/ansi v0.11.9 // indirect
 	github.com/charmbracelet/x/exp/charmtone v0.0.0-20250603201427-c31516f43444 // indirect
-	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
@@ -96,7 +92,6 @@ require (
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb // indirect
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
 	golang.org/x/net v0.60.0 // indirect
-	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	golang.zx2c4.com/wireguard/windows v1.0.1 // indirect

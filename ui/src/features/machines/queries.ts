@@ -1,6 +1,5 @@
-import { useEffect } from "react"
 import { queryOptions, useQueries, useQuery, type UseQueryOptions } from "@tanstack/react-query"
-import { z } from "zod"
+import { array, boolean, number, object, optional, string } from "@/lib/validate"
 import { ApiError, LOCAL, api } from "@/lib/api"
 import type { Identity, TailnetNode, Topology } from "@/lib/api-types"
 import { useEventsConnected } from "@/features/events/use-events"
@@ -67,29 +66,35 @@ export function useDiscovering(): boolean {
   return useQuery(nodesQuery(live)).isPending
 }
 
-const topologySchema = z.object({
-  self: z.object({ id: z.string(), name: z.string(), os: z.string(), relay: z.string(), main: z.boolean().optional() }),
-  peers: z.array(
-    z.object({
-      id: z.string(),
-      main: z.boolean().optional(),
-      name: z.string(),
-      os: z.string(),
-      state: z.string(),
-      connection: z.string(),
-      relay: z.string(),
-      rtt_ms: z.number().nullish().transform((v) => v ?? undefined),
-      last_seen: z.string().nullish().transform((v) => v ?? undefined),
-      version: z.string().nullish().transform((v) => v ?? undefined),
-      sessions: z.number(),
+function parseTopology(raw: unknown): Topology {
+  const body = object(raw, "topology")
+  const self = object(body.self, "self")
+  return {
+    self: { id: string(self.id, "self.id"), name: string(self.name, "self.name"), os: string(self.os, "self.os"), relay: string(self.relay, "self.relay"), main: optional(self.main, "self.main", boolean) },
+    peers: array(body.peers, "peers").map((item, index) => {
+      const peer = object(item, `peers[${index}]`)
+      const at = (key: string) => `peers[${index}].${key}`
+      return {
+        id: string(peer.id, at("id")),
+        main: optional(peer.main, at("main"), boolean),
+        name: string(peer.name, at("name")),
+        os: string(peer.os, at("os")),
+        state: string(peer.state, at("state")),
+        connection: string(peer.connection, at("connection")),
+        relay: string(peer.relay, at("relay")),
+        rtt_ms: optional(peer.rtt_ms, at("rtt_ms"), number),
+        last_seen: optional(peer.last_seen, at("last_seen"), string),
+        version: optional(peer.version, at("version"), string),
+        sessions: number(peer.sessions, at("sessions")),
+      }
     }),
-  ),
-})
+  }
+}
 
 export const topologyQuery = (live: boolean) =>
   queryOptions({
     queryKey: ["topology"],
-    queryFn: async (): Promise<Topology> => topologySchema.parse(await api<unknown>("/api/topology")),
+    queryFn: async (): Promise<Topology> => parseTopology(await api<unknown>("/api/topology")),
     staleTime: 15 * 1000,
     refetchInterval: live ? false : 15 * 1000,
   })
@@ -108,9 +113,8 @@ export function useMachines(): Machine[] {
     if (identity && node.id === identity.node.id) continue
     found.push({ id: node.id, name: node.name, online: node.online, main: node.main, needsUpdate: node.needs_update })
   }
-  useEffect(() => {
-    for (const machine of found) seen.set(machine.id, machine)
-  })
+  // Idempotent, so recording during render is safe.
+  for (const machine of found) seen.set(machine.id, machine)
   const foundIds = new Set(found.map((machine) => machine.id))
   const offline = [...seen.values()]
     .filter((machine) => !foundIds.has(machine.id))

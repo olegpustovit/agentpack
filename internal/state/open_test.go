@@ -275,3 +275,29 @@ func TestPlainSQLiteSkipsExtensionPerConnection(t *testing.T) {
 		t.Fatalf("plain connection disabled state extension: %d %v", count, err)
 	}
 }
+
+func TestReopeningACurrentStoreTakesNoWriteLock(t *testing.T) {
+	home := t.TempDir()
+	first, err := Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	tx, err := first.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("UPDATE schema_meta SET version=version"); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	second, err := Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("reopen waited %s for another writer", elapsed)
+	}
+}

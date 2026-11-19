@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { z } from "zod"
+import { search } from "@/lib/search"
 import { MachineDetail } from "@/features/machines/machine-detail"
 
 export const Route = createFileRoute("/_app/machines/$machine")({
-  validateSearch: z.object({ q: z.string().optional().catch(undefined) }),
+  validateSearch: search({ q: "text" }),
   component: MachineRoute,
 })
 

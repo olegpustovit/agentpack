@@ -75,7 +75,11 @@ func TestKnownDirectoryRejectsReplacementUntilLocalLaunch(t *testing.T) {
 	if err := remember(home, info); err != nil {
 		t.Fatal(err)
 	}
-	gateway := Gateway{options: GatewayOptions{Home: home}}
+	auth, err := testGatewayAuth(t, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := Gateway{auth: auth, options: GatewayOptions{Home: home}}
 	if !gateway.knownDirectory(directory) {
 		t.Fatal("remembered folder rejected")
 	}
