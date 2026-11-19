@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from "react"
+import type { KeyboardEvent } from "react"
 import { Link } from "@tanstack/react-router"
 import { Archive, Asterisk, Check, createLucideIcon, Bot, Box, Braces, Copy, MousePointer2, Orbit, Package, Pencil, Pi, Plug, RotateCw, Save, Square, X, Zap, type LucideIcon } from "lucide-react"
 import { SourceRow } from "@/components/kit/list"
@@ -13,7 +13,7 @@ import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { basename, harnessName, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { lastActivity, rowKey, sessionDetail, sessionLabel, type ListedSession } from "./group"
-import { HOLD_MS, holdGlyph, sessionGlyphState, sessionStatusWord, type GlyphState } from "./session-status"
+import { sessionGlyphState, sessionStatusWord, useSteadyGlyph, type GlyphState } from "./session-status"
 import { sessionRules } from "./rules"
 
 export type RowActions = {
@@ -137,17 +137,6 @@ export function AgentTile({ harness, state, label, title, className, unread = fa
 
 // Re-renders once a held state expires, so the row settles without waiting for a refetch.
 // Only chats are held: a terminal session's state is its process, which never blips.
-function useHeld(key: string, state: GlyphState, chat: boolean): GlyphState {
-  const [, tick] = useState(0)
-  const shown = chat ? holdGlyph(key, state, Date.now()) : state
-  useEffect(() => {
-    if (shown === state) return
-    const timer = setTimeout(() => tick((count) => count + 1), HOLD_MS)
-    return () => clearTimeout(timer)
-  }, [shown, state])
-  return shown
-}
-
 // WebKit sends no contextmenu event for Shift+F10 or the context-menu key, so the key opens the menu itself.
 function openFromKeyboard(event: KeyboardEvent<HTMLElement>) {
   if (!(event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))) return
@@ -183,7 +172,7 @@ export function SessionRow({
 }) {
   const label = sessionLabel(session)
   const chat = session.transport === "acp"
-  const state = useHeld(rowKey(session), sessionGlyphState(session), chat)
+  const state = useSteadyGlyph(sessionGlyphState(session), chat)
   const word = state === "running" || state === "idle" ? stopping ? "Stopping…" : undefined : sessionStatusWord(session, stopping)
   const entries = group ? groupEntries(group) : menuEntries(session, selected, actions)
   const since = lastActivity(session)

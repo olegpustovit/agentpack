@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest"
+import { act, createElement } from "react"
+import { createRoot } from "react-dom/client"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import type { ListedSession } from "./group"
-import { HOLD_MS, holdGlyph, isUnread, sessionGlyphState, sessionStatusWord, type GlyphState } from "./session-status"
+import { HOLD_MS, isUnread, sessionGlyphState, sessionStatusWord, useSteadyGlyph, type GlyphState } from "./session-status"
 
 const base: ListedSession = {
   id: "s1",
@@ -67,29 +69,23 @@ describe("isUnread", () => {
   })
 })
 
-describe("holdGlyph", () => {
-  it("keeps working for HOLD_MS after the turn ends, then shows idle", () => {
-    const memory = new Map<string, { state: GlyphState; until?: number }>()
-    expect(holdGlyph("k", "running", 0, memory)).toBe("running")
-    expect(holdGlyph("k", "idle", 60_000, memory)).toBe("running")
-    expect(holdGlyph("k", "idle", 60_000 + HOLD_MS - 1, memory)).toBe("running")
-    expect(holdGlyph("k", "idle", 60_000 + HOLD_MS, memory)).toBe("idle")
-  })
-
-  it("never flashes stopped for a live chat during a refetch blip", () => {
-    const memory = new Map<string, { state: GlyphState; until?: number }>()
-    holdGlyph("k", "idle", 0, memory)
-    expect(holdGlyph("k", "stopped", 10, memory)).toBe("idle")
-    expect(holdGlyph("k", "idle", 20, memory)).toBe("idle")
-    expect(holdGlyph("k", "stopped", 5_000, memory)).toBe("idle")
-    expect(holdGlyph("k", "stopped", 5_000 + HOLD_MS, memory)).toBe("stopped")
-  })
-
-  it("a new turn inside the hold cancels it", () => {
-    const memory = new Map<string, { state: GlyphState; until?: number }>()
-    holdGlyph("k", "running", 0, memory)
-    holdGlyph("k", "idle", 100, memory)
-    expect(holdGlyph("k", "running", 200, memory)).toBe("running")
-    expect(holdGlyph("k", "idle", 10_000, memory)).toBe("running")
+describe("useSteadyGlyph", () => {
+  afterEach(() => vi.useRealTimers())
+  it("shows a finished turn as idle at once and a stop only once it lasts", () => {
+    vi.useFakeTimers()
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const shown: GlyphState[] = []
+    const Row = ({ state }: { state: GlyphState }) => (shown.push(useSteadyGlyph(state, true)), null)
+    const root = createRoot(document.createElement("div"))
+    const show = (state: GlyphState) => act(() => root.render(createElement(Row, { state })))
+    show("running")
+    show("idle")
+    expect(shown.at(-1)).toBe("idle")
+    act(() => vi.advanceTimersByTime(0))
+    show("stopped")
+    expect(shown.at(-1)).toBe("idle")
+    act(() => vi.advanceTimersByTime(HOLD_MS))
+    expect(shown.at(-1)).toBe("stopped")
+    act(() => root.unmount())
   })
 })

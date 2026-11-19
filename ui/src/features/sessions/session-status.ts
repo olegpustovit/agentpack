@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { lastActivity, type ListedSession } from "./group"
 
 // A chat "+" just started: the gateway answered and the agent is still coming up.
@@ -22,22 +23,17 @@ export function sessionGlyphState(session: ListedSession): "running" | "stopped"
 export type GlyphState = ReturnType<typeof sessionGlyphState>
 
 export const HOLD_MS = 1500
-const held = new Map<string, { state: GlyphState; until?: number }>()
 
-// A turn boundary or a refetch that briefly reads running=false must not flicker the row: the
-// last live state is kept for HOLD_MS after it ends. Module-level so a remount keeps it too.
-export function holdGlyph(key: string, state: GlyphState, now: number, memory = held): GlyphState {
-  const last = memory.get(key)
-  if (last && (state === "stopped" || (state === "idle" && last.state === "running"))) {
-    const until = last.until ?? now + HOLD_MS
-    if (now < until) {
-      memory.set(key, { state: last.state, until })
-      return last.state
-    }
-  }
-  if (state === "running" || state === "idle" || state === "needsYou") memory.set(key, { state })
-  else memory.delete(key)
-  return state
+// The server's state, shown as it is: a finished turn reads idle at once. The one exception is a
+// live chat reading "stopped" for a refetch while its worker is slow to answer, shown only once it lasts.
+export function useSteadyGlyph(state: GlyphState, chat: boolean): GlyphState {
+  const [shown, setShown] = useState(state)
+  const blip = chat && state === "stopped"
+  useEffect(() => {
+    const timer = setTimeout(() => setShown(state), blip ? HOLD_MS : 0)
+    return () => clearTimeout(timer)
+  }, [state, blip])
+  return blip ? shown : state
 }
 
 export function sessionStatusWord(session: ListedSession, stopping: boolean): string | undefined {
