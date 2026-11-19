@@ -153,6 +153,7 @@ func (g *Gateway) resolveSource(r *http.Request, public *url.URL) requestSource 
 	if public != nil && strings.EqualFold(source.host, public.Host) {
 		source.origin = public.Scheme + "://" + public.Host
 	} else if r.Host == g.origin.Host && !source.proxied && !forwardedHost {
+		// shortcut: with a non-loopback listener (--address 0.0.0.0, which needs AGENTPACK_PUBLIC_URL), a LAN client can name this Host; require a loopback peer there if that setup is ever used.
 		source.origin = g.origin.Scheme + "://" + g.origin.Host
 	}
 	return source
