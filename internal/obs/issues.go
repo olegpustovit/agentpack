@@ -232,10 +232,9 @@ func publishIssue(tx *sql.Tx, pending pendingIssue) error {
 			return err
 		}
 		delta := occurrence.Count - published
-		if delta < 0 {
-			return errors.New("diagnostic count moved backwards")
-		}
-		if delta == 0 {
+		// A crash can lose unsynced counter writes after their publication was recorded.
+		// Those increments are already counted; never refuse to start over them.
+		if delta <= 0 {
 			continue
 		}
 		trace, _ := hex.DecodeString(occurrence.Trace)

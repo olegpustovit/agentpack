@@ -382,3 +382,43 @@ func TestReplicatedIssuesCombineMachineCountsAndResolution(t *testing.T) {
 		}
 	}
 }
+
+// A crash can lose unsynced day-counter writes after their publication was recorded.
+// Reopening must not fail, and the already-published counts must not be double counted.
+func TestIssueCountersSurviveCrashLostDayCounterWrites(t *testing.T) {
+	home := t.TempDir()
+	canonical, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer canonical.Close()
+	options := StoreOptions{State: canonical, Metadata: Metadata{NodeID: "test-node"}}
+	logs, err := Open(home, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC()
+	for range 10 {
+		logs.Write(issueEvent(at, "v1.0.0"))
+	}
+	if err := logs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The published cursor is now ahead of what the day counter still holds.
+	if _, err := canonical.DB.Exec("UPDATE issue_log_cursors SET count=count+5"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		reopened, err := Open(home, options)
+		if err != nil {
+			t.Fatalf("reopen after lost counter writes: %v", err)
+		}
+		if err := reopened.Close(); err != nil {
+			t.Fatalf("close after lost counter writes: %v", err)
+		}
+	}
+	var count int
+	if err := canonical.Reader.QueryRow("SELECT sum(count) FROM issue_counts").Scan(&count); err != nil || count != 10 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+}

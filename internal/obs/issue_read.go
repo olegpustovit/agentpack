@@ -282,10 +282,8 @@ func readIssues(ctx context.Context, home, status, fingerprint string) ([]Issue,
 				issue := get(counter.Fingerprint, counter.Kind, counter.Title, time.UnixMilli(counter.FirstSeen).UTC())
 				for version, occurrence := range counter.Versions {
 					delta := occurrence.Count - published[dayKey+":"+version]
-					if delta < 0 {
-						return errors.New("diagnostic count moved backwards")
-					}
-					if delta == 0 {
+					// Counts lost to a crash after publication are already included; skip them.
+					if delta <= 0 {
 						continue
 					}
 					add(issue, counter.Node, delta, time.UnixMilli(occurrence.FirstSeen).UTC(), time.UnixMilli(occurrence.LastSeen).UTC(), version, occurrence.Trace)
