@@ -353,6 +353,8 @@ func (g *Gateway) Handler() http.Handler {
 			Transport      string `json:"transport,omitempty"`
 			AgentSessionID string `json:"agent_session_id,omitempty"`
 			Resume         string `json:"resume,omitempty"`
+			ParentID       string `json:"parent_id,omitempty"`
+			Tools          *bool  `json:"tools,omitempty"`
 		}
 		if !readJSON(w, r, &input) {
 			return
@@ -367,6 +369,8 @@ func (g *Gateway) Handler() http.Handler {
 		info, err := g.startSession(r.Context(), actor, SessionInfo{
 			Directory: input.Directory, Harness: input.Harness, Mode: input.Mode,
 			Transport: input.Transport, AgentSessionID: input.AgentSessionID,
+			// agentpack tools are on for new chats unless the request turns them off.
+			ParentID: input.ParentID, Tools: input.Transport == "acp" && (input.Tools == nil || *input.Tools),
 		}, "")
 		writeSessionStart(w, info, err)
 	})
@@ -387,14 +391,25 @@ func (g *Gateway) Handler() http.Handler {
 		if !ok {
 			actor = browserActor(g.auth.email(r))
 		}
+		var input struct {
+			ParentID string `json:"parent_id"`
+		}
+		// The body is optional: only agentpack tools name the chat a fork helps.
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
 		info, err := g.startSession(r.Context(), actor, SessionInfo{
 			Directory: record.Session.Directory,
 			Harness:   record.Session.Harness,
 			Mode:      record.Session.Mode,
 			Transport: "acp",
+			ParentID:  input.ParentID,
+			Tools:     record.Session.Tools,
 		}, record.Session.AgentSessionID)
 		writeSessionStart(w, info, err)
 	})
+	mux.HandleFunc("POST /api/sessions/{id}/tools", g.setChatTools)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
 		if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
 			return
@@ -663,6 +678,10 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		if g.mcp != nil && chatBearer(r) {
+			g.mcp.ServeHTTP(w, r) // a chat's own agentpack tools credential; see mcp_chat.go
+			return
+		}
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		local := g.localRequest(r)
 		publicOrigin, pinned := g.public.current()

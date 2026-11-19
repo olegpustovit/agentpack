@@ -258,7 +258,7 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	slices.Sort(names)
-	want := []string{"get_issue", "get_trace", "install_package", "list_issues", "list_nodes", "list_packages", "list_recent_folders", "list_sessions", "read_terminal", "resolve_issue", "restart_session", "start_session", "stop_session", "write_terminal"}
+	want := []string{"answer_question", "cancel", "fork_session", "get_attention", "get_issue", "get_limits", "get_trace", "get_usage", "install_package", "list_issues", "list_nodes", "list_packages", "list_recent_folders", "list_sessions", "read_conversation", "read_terminal", "resolve_issue", "respond_permission", "restart_session", "send_prompt", "start_session", "stop_session", "wait", "write_terminal"}
 	if !slices.Equal(names, want) {
 		t.Fatal("tool inventory", names)
 	}
@@ -275,7 +275,7 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 		return "session-test", nil
 	}
 	directory := filepath.Join(h.gateway.options.Home, "project")
-	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "start_session", Arguments: map[string]any{"directory": directory, "harness": "codex"}})
+	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "start_session", Arguments: map[string]any{"directory": directory, "agent": "codex", "terminal": true}})
 	if err != nil || !result.IsError || started.Load() != 0 {
 		t.Fatalf("unknown folder accepted: %v %+v", err, result)
 	}
@@ -285,7 +285,7 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 	if err := remember(h.gateway.options.Home, SessionInfo{Directory: directory, Harness: "codex"}); err != nil {
 		t.Fatal(err)
 	}
-	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "start_session", Arguments: map[string]any{"directory": directory, "harness": "codex"}})
+	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "start_session", Arguments: map[string]any{"directory": directory, "agent": "codex", "terminal": true}})
 	if err != nil || result.IsError || started.Load() != 1 {
 		t.Fatalf("known folder failed: %v %+v", err, result)
 	}

@@ -175,7 +175,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 		_ = a2cR.Close()
 		finishACPConversation(ctx, conv, client, clientConn)
 	}
-	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, "")
+	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, "", launch.tools)
 	log.SetReplaying(false)
 	if err != nil {
 		cleanup()
@@ -364,7 +364,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	})
 
 	done := startStep(ctx, "acp_handshake")
-	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, acpLaunch.AuthenticateMethodID)
+	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, acpLaunch.AuthenticateMethodID, launch.tools)
 	done(err)
 	log.SetReplaying(false)
 	if err != nil {
@@ -451,7 +451,7 @@ func initializeACPClient(ctx context.Context, conn *sdkacp.ClientSideConnection,
 	return initialize, nil
 }
 
-func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection, workspace, loadID, forkSessionID, authenticateMethodID string) (acpSessionSetup, error) {
+func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection, workspace, loadID, forkSessionID, authenticateMethodID string, tools chatTools) (acpSessionSetup, error) {
 	initCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if loadID != "" && forkSessionID != "" {
@@ -462,6 +462,7 @@ func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection
 		return acpSessionSetup{}, err
 	}
 	setup := acpSessionSetup{AgentCapabilities: agentCapabilitiesView(initialize.AgentCapabilities)}
+	servers := tools.servers(initialize.AgentCapabilities.McpCapabilities)
 	if forkSessionID != "" {
 		if initialize.AgentCapabilities.SessionCapabilities.Fork == nil {
 			return acpSessionSetup{}, errors.New("acp agent does not advertise session.fork")
@@ -469,7 +470,7 @@ func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection
 		resp, err := conn.UnstableForkSession(initCtx, sdkacp.UnstableForkSessionRequest{
 			SessionId:  sdkacp.SessionId(forkSessionID),
 			Cwd:        workspace,
-			McpServers: []sdkacp.UnstableMcpServer{},
+			McpServers: tools.unstableServers(initialize.AgentCapabilities.McpCapabilities),
 		})
 		if err != nil {
 			return acpSessionSetup{}, fmt.Errorf("acp session/fork: %w", err)
@@ -486,7 +487,7 @@ func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection
 		resp, err := conn.LoadSession(initCtx, sdkacp.LoadSessionRequest{
 			SessionId:  sdkacp.SessionId(loadID),
 			Cwd:        workspace,
-			McpServers: []sdkacp.McpServer{},
+			McpServers: servers,
 		})
 		if err != nil {
 			return acpSessionSetup{}, fmt.Errorf("acp session/load: %w", err)
@@ -498,7 +499,7 @@ func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection
 	}
 	resp, err := conn.NewSession(initCtx, sdkacp.NewSessionRequest{
 		Cwd:        workspace,
-		McpServers: []sdkacp.McpServer{},
+		McpServers: servers,
 	})
 	if err != nil {
 		return acpSessionSetup{}, fmt.Errorf("acp session/new: %w", err)

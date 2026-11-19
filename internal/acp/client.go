@@ -415,7 +415,7 @@ func permissionRequestPayload(requestID string, p sdkacp.RequestPermissionReques
 	}
 	options := make([]map[string]string, 0, len(p.Options))
 	for _, choice := range p.Options {
-		options = append(options, map[string]string{"id": string(choice.OptionId), "label": choice.Name})
+		options = append(options, map[string]string{"id": string(choice.OptionId), "label": choice.Name, "kind": string(choice.Kind)})
 	}
 	return mustJSON(map[string]any{
 		"requestId":  requestID,

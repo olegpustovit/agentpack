@@ -16,7 +16,8 @@ const sessionWriteColumns = `id,last_used,folder_id,name,directory,definition_ro
 	transport,agent_session_id,agent_capabilities,conversation_state,state,started_at,started_by,title`
 
 // goal and subagents are written only by the worker (worker_record_patch.go), so upserts never clobber them.
-const sessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at,goal,subagents,last_event_at"
+// parent_id and tools are set on insert only: tools is the gateway's switch (POST /tools).
+const sessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at,goal,subagents,last_event_at,parent_id,tools"
 
 func sessionValues(info SessionInfo) ([]any, error) {
 	if info.ID == "" {
@@ -41,7 +42,7 @@ func sessionValues(info SessionInfo) ([]any, error) {
 	return []any{info.ID, sessionTimestamp(info.LastUsed), info.FolderID, info.Name, info.Directory,
 		info.DefinitionRoot, info.Harness, info.Mode, info.Transport, info.AgentSessionID,
 		string(capabilities), info.ConversationState, string(terminal), sessionTimestamp(info.StartedAt),
-		string(owner), info.Title, email}, nil
+		string(owner), info.Title, email, info.ParentID, info.Tools}, nil
 }
 
 func upsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
@@ -49,8 +50,8 @@ func upsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
 	if err != nil {
 		return err
 	}
-	result, err := db.ExecContext(ctx, `INSERT INTO sessions (`+sessionWriteColumns+`,node_id,owner_email)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,`+state.LocalNodeSQL+`,?) ON CONFLICT(id) DO UPDATE SET
+	result, err := db.ExecContext(ctx, `INSERT INTO sessions (`+sessionWriteColumns+`,node_id,owner_email,parent_id,tools)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,`+state.LocalNodeSQL+`,?,?,?) ON CONFLICT(id) DO UPDATE SET
 		last_used=excluded.last_used,folder_id=excluded.folder_id,directory=excluded.directory,
 		definition_root=excluded.definition_root,harness=excluded.harness,mode=excluded.mode,
 		transport=excluded.transport,agent_session_id=excluded.agent_session_id,
@@ -76,7 +77,7 @@ func scanSession(row interface{ Scan(...any) error }) (SessionInfo, error) {
 	err := row.Scan(&info.ID, &lastUsed, &info.FolderID, &info.Name, &info.Directory,
 		&info.DefinitionRoot, &info.Harness, &info.Mode, &info.Transport, &info.AgentSessionID,
 		&capabilities, &info.ConversationState, &terminal, &startedAt, &owner, &info.Title, &info.NodeID, &endedAt, &archivedAt,
-		&goal, &subagents, &lastEvent)
+		&goal, &subagents, &lastEvent, &info.ParentID, &info.Tools)
 	if err != nil {
 		return info, err
 	}

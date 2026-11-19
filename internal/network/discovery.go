@@ -592,7 +592,7 @@ func peerRoute(method, path string) bool {
 	}
 	if len(parts) == 4 {
 		return method == "GET" && (parts[3] == "terminal" || parts[3] == "output" || parts[3] == "conversation") ||
-			method == "POST" && (parts[3] == "restart" || parts[3] == "stop" || parts[3] == "input" || parts[3] == "fork")
+			method == "POST" && (parts[3] == "restart" || parts[3] == "stop" || parts[3] == "input" || parts[3] == "fork" || parts[3] == "tools")
 	}
 	if parts[4] == "" || parts[4] == "." || parts[4] == ".." {
 		return false

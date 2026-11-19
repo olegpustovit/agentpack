@@ -337,7 +337,7 @@ func TestConversationStoreNativeLoadDoesNotDuplicateHistory(t *testing.T) {
 	agent.ReplayAgent.SetConnection(agent.conn)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	if _, err := initializeACPSession(ctx, connection, client.Root, "native", "", ""); err != nil {
+	if _, err := initializeACPSession(ctx, connection, client.Root, "native", "", "", chatTools{}); err != nil {
 		t.Fatal(err)
 	}
 	log.SetReplaying(false)

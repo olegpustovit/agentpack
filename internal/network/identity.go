@@ -24,6 +24,9 @@ type Actor struct {
 	User         string `json:"user,omitempty"`
 	Node         string `json:"node,omitempty"`
 	StableNodeID string `json:"stable_node_id,omitempty"` // Verified tailnet identity; Node is the display name.
+	// Agent is the harness of the chat that acted for this user through agentpack tools.
+	Agent string `json:"agent,omitempty"`
+	chat  string // the calling chat's session ID; never serialized
 }
 
 // identityCacheTTL bounds how often identity asks Tailscale for status.

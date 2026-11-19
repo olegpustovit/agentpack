@@ -92,11 +92,11 @@ func (session *ConversationSession) Attach(since int64) (entries []acp.LogEntry,
 func conversationState(thread acp.ThreadState) string {
 	switch {
 	case thread.NeedsYou:
-		return "needs_you"
+		return string(stateNeedsYou)
 	case thread.Working:
-		return "working"
+		return string(stateWorking)
 	default:
-		return "idle"
+		return string(stateIdle)
 	}
 }
 
