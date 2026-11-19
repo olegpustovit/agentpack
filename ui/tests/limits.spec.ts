@@ -40,6 +40,7 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/identity", (route) => route.fulfill({ json: identity }))
   await page.route("**/api/nodes", (route) => route.fulfill({ json: nodes }))
   await page.route("**/api/events", (route) => route.abort())
+  await page.route("**/api/usage?**", (route) => route.fulfill({ json: { hourly: [], sessions: [], samples: [] } }))
   await page.route("**/api/limits**", async (route) => {
     const machine = machineOf(route.request().url())
     if (route.request().url().includes("/refresh")) {
@@ -67,7 +68,7 @@ test("Refresh shows each machine's response before the slowest machine answers",
   gates.n3 = new Promise<void>((resolve) => (releaseSlow = resolve))
   refreshed = { local: [codex(61)], n3: [{ harness: "claude", state: "available", windows: [{ id: "session", label: "Claude session", remaining_percent: 5 }] }] }
 
-  await page.goto("/limits")
+  await page.goto("/usage/limits")
   await expect(grid(page).getByText("72% left")).toBeVisible()
 
   await page.getByRole("button", { name: "Refresh" }).click()
@@ -82,14 +83,17 @@ test("Refresh shows each machine's response before the slowest machine answers",
 
 test("returning to Limits within a minute makes no request and shows no loader", async ({ page }) => {
   const requests = limitRequests(page)
-  await page.goto("/limits")
+  await page.goto("/usage/limits")
   await expect(grid(page).getByText("72% left")).toBeVisible()
+  // Opening Limits nudges the peers, and each answer refetches the replicated read; let those finish.
+  await page.waitForLoadState("networkidle")
   const before = requests.length
 
   // Views on desktop, the tab bar on phone: the link is the only visible one with this name.
   await page.getByRole("link", { name: "Sessions", exact: true }).click()
   await expect(page).toHaveURL(/\/sessions/)
-  await page.getByRole("link", { name: "Limits", exact: true }).click()
+  await page.getByRole("link", { name: "Usage", exact: true }).click()
+  await page.getByRole("navigation", { name: "Usage" }).getByRole("link", { name: /^Limits/ }).click()
 
   await expect(grid(page).getByText("72% left")).toBeVisible()
   await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0)
@@ -98,7 +102,7 @@ test("returning to Limits within a minute makes no request and shows no loader",
 })
 
 test("unavailable providers sit in a dim card below the usable ones, and a missing login offers its command", async ({ page }) => {
-  await page.goto("/limits")
+  await page.goto("/usage/limits")
   await expect(grid(page).getByText("Signed out", { exact: true })).toBeVisible()
   await expect(grid(page).getByRole("button", { name: "Copy agentpack grok login" })).toBeVisible()
 
@@ -112,7 +116,7 @@ test("unavailable providers sit in a dim card below the usable ones, and a missi
 })
 
 test("rows from other machines sit under a disclosure", async ({ page }) => {
-  await page.goto("/limits")
+  await page.goto("/usage/limits")
   await expect(grid(page).getByText("72% left")).toBeVisible()
   await expect(grid(page).getByText("Peer weekly", { exact: true })).toHaveCount(0)
 
@@ -125,7 +129,7 @@ test("rows from other machines sit under a disclosure", async ({ page }) => {
 })
 
 test("the status bar shows the last limits update on Limits and nothing on Sessions", async ({ page }) => {
-  await page.goto("/limits")
+  await page.goto("/usage/limits")
   const status = page.getByRole("contentinfo", { includeHidden: true })
   await expect(status).toContainText(/Updated (now|\d+ seconds? ago|\d+ minutes? ago)/)
 
@@ -140,7 +144,7 @@ test("a slow remote machine does not delay the local replicated read", async ({ 
     if (machineOf(route.request().url()) === "n3") return new Promise<void>(() => {})
     return route.fallback()
   })
-  await page.goto("/limits")
+  await page.goto("/usage/limits")
   const grid = page.getByRole("region", { name: "Provider limits" })
   await expect(grid.locator('[data-provider="codex"]')).toBeVisible()
   const order = await grid.locator("[data-provider]").evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.provider))
@@ -150,7 +154,7 @@ test("a slow remote machine does not delay the local replicated read", async ({ 
 test("a phone shows limits as one full-width card, with nothing wider than the screen", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 })
   limits = { local: [], n2: [codex(70)], n3: [codex(40)] }
-  await page.goto("/limits")
+  await page.goto("/usage/limits")
   const card = page.getByRole("region", { name: "Codex" })
   await expect(card).toContainText("70% left")
   await expect(card).toContainText("Session")

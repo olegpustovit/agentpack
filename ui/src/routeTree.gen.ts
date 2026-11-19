@@ -16,6 +16,7 @@ import { Route as AppLibraryRouteImport } from './routes/_app/library'
 import { Route as AppLimitsRouteImport } from './routes/_app/limits'
 import { Route as AppMachinesRouteImport } from './routes/_app/machines'
 import { Route as AppSessionsRouteImport } from './routes/_app/sessions'
+import { Route as AppUsageRouteImport } from './routes/_app/usage'
 import { Route as AppLibraryIndexRouteImport } from './routes/_app/library/index'
 import { Route as AppMachinesIndexRouteImport } from './routes/_app/machines/index'
 import { Route as AppMachinesMachineRouteImport } from './routes/_app/machines/$machine'
@@ -23,10 +24,13 @@ import { Route as AppMachinesTopologyRouteImport } from './routes/_app/machines/
 import { Route as AppSessionsIndexRouteImport } from './routes/_app/sessions/index'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/index'
 import { Route as AppSettingsPaneRouteImport } from './routes/_app/settings/$pane'
+import { Route as AppUsageIndexRouteImport } from './routes/_app/usage/index'
+import { Route as AppUsageLimitsRouteImport } from './routes/_app/usage/limits'
 import { Route as AppLibraryAgentpackIdRouteImport } from './routes/_app/library/agentpack/$id'
 import { Route as AppLibraryMcpNameRouteImport } from './routes/_app/library/mcp/$name'
 import { Route as AppLibraryPackageSplatRouteImport } from './routes/_app/library/package/$'
 import { Route as AppSessionsMachineSessionIdRouteImport } from './routes/_app/sessions/$machine/$sessionId'
+import { Route as AppUsageKindIdRouteImport } from './routes/_app/usage/$kind/$id'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -60,6 +64,11 @@ const AppMachinesRoute = AppMachinesRouteImport.update({
 const AppSessionsRoute = AppSessionsRouteImport.update({
   id: '/sessions',
   path: '/sessions',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppUsageRoute = AppUsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
   getParentRoute: () => AppRoute,
 } as any)
 const AppLibraryIndexRoute = AppLibraryIndexRouteImport.update({
@@ -97,6 +106,16 @@ const AppSettingsPaneRoute = AppSettingsPaneRouteImport.update({
   path: '/settings/$pane',
   getParentRoute: () => AppRoute,
 } as any)
+const AppUsageIndexRoute = AppUsageIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppUsageRoute,
+} as any)
+const AppUsageLimitsRoute = AppUsageLimitsRouteImport.update({
+  id: '/limits',
+  path: '/limits',
+  getParentRoute: () => AppUsageRoute,
+} as any)
 const AppLibraryAgentpackIdRoute = AppLibraryAgentpackIdRouteImport.update({
   id: '/agentpack/$id',
   path: '/agentpack/$id',
@@ -118,6 +137,11 @@ const AppSessionsMachineSessionIdRoute =
     path: '/$machine/$sessionId',
     getParentRoute: () => AppSessionsRoute,
   } as any)
+const AppUsageKindIdRoute = AppUsageKindIdRouteImport.update({
+  id: '/$kind/$id',
+  path: '/$kind/$id',
+  getParentRoute: () => AppUsageRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -126,17 +150,21 @@ export interface FileRoutesByFullPath {
   '/limits': typeof AppLimitsRoute
   '/machines': typeof AppMachinesRouteWithChildren
   '/sessions': typeof AppSessionsRouteWithChildren
+  '/usage': typeof AppUsageRouteWithChildren
   '/machines/$machine': typeof AppMachinesMachineRoute
   '/machines/topology': typeof AppMachinesTopologyRoute
   '/settings/$pane': typeof AppSettingsPaneRoute
+  '/usage/limits': typeof AppUsageLimitsRoute
   '/library/': typeof AppLibraryIndexRoute
   '/machines/': typeof AppMachinesIndexRoute
   '/sessions/': typeof AppSessionsIndexRoute
   '/settings/': typeof AppSettingsIndexRoute
+  '/usage/': typeof AppUsageIndexRoute
   '/library/agentpack/$id': typeof AppLibraryAgentpackIdRoute
   '/library/mcp/$name': typeof AppLibraryMcpNameRoute
   '/library/package/$': typeof AppLibraryPackageSplatRoute
   '/sessions/$machine/$sessionId': typeof AppSessionsMachineSessionIdRoute
+  '/usage/$kind/$id': typeof AppUsageKindIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -145,14 +173,17 @@ export interface FileRoutesByTo {
   '/machines/$machine': typeof AppMachinesMachineRoute
   '/machines/topology': typeof AppMachinesTopologyRoute
   '/settings/$pane': typeof AppSettingsPaneRoute
+  '/usage/limits': typeof AppUsageLimitsRoute
   '/library': typeof AppLibraryIndexRoute
   '/machines': typeof AppMachinesIndexRoute
   '/sessions': typeof AppSessionsIndexRoute
   '/settings': typeof AppSettingsIndexRoute
+  '/usage': typeof AppUsageIndexRoute
   '/library/agentpack/$id': typeof AppLibraryAgentpackIdRoute
   '/library/mcp/$name': typeof AppLibraryMcpNameRoute
   '/library/package/$': typeof AppLibraryPackageSplatRoute
   '/sessions/$machine/$sessionId': typeof AppSessionsMachineSessionIdRoute
+  '/usage/$kind/$id': typeof AppUsageKindIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -163,17 +194,21 @@ export interface FileRoutesById {
   '/_app/limits': typeof AppLimitsRoute
   '/_app/machines': typeof AppMachinesRouteWithChildren
   '/_app/sessions': typeof AppSessionsRouteWithChildren
+  '/_app/usage': typeof AppUsageRouteWithChildren
   '/_app/machines/$machine': typeof AppMachinesMachineRoute
   '/_app/machines/topology': typeof AppMachinesTopologyRoute
   '/_app/settings/$pane': typeof AppSettingsPaneRoute
+  '/_app/usage/limits': typeof AppUsageLimitsRoute
   '/_app/library/': typeof AppLibraryIndexRoute
   '/_app/machines/': typeof AppMachinesIndexRoute
   '/_app/sessions/': typeof AppSessionsIndexRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
+  '/_app/usage/': typeof AppUsageIndexRoute
   '/_app/library/agentpack/$id': typeof AppLibraryAgentpackIdRoute
   '/_app/library/mcp/$name': typeof AppLibraryMcpNameRoute
   '/_app/library/package/$': typeof AppLibraryPackageSplatRoute
   '/_app/sessions/$machine/$sessionId': typeof AppSessionsMachineSessionIdRoute
+  '/_app/usage/$kind/$id': typeof AppUsageKindIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -184,17 +219,21 @@ export interface FileRouteTypes {
     | '/limits'
     | '/machines'
     | '/sessions'
+    | '/usage'
     | '/machines/$machine'
     | '/machines/topology'
     | '/settings/$pane'
+    | '/usage/limits'
     | '/library/'
     | '/machines/'
     | '/sessions/'
     | '/settings/'
+    | '/usage/'
     | '/library/agentpack/$id'
     | '/library/mcp/$name'
     | '/library/package/$'
     | '/sessions/$machine/$sessionId'
+    | '/usage/$kind/$id'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -203,14 +242,17 @@ export interface FileRouteTypes {
     | '/machines/$machine'
     | '/machines/topology'
     | '/settings/$pane'
+    | '/usage/limits'
     | '/library'
     | '/machines'
     | '/sessions'
     | '/settings'
+    | '/usage'
     | '/library/agentpack/$id'
     | '/library/mcp/$name'
     | '/library/package/$'
     | '/sessions/$machine/$sessionId'
+    | '/usage/$kind/$id'
   id:
     | '__root__'
     | '/'
@@ -220,17 +262,21 @@ export interface FileRouteTypes {
     | '/_app/limits'
     | '/_app/machines'
     | '/_app/sessions'
+    | '/_app/usage'
     | '/_app/machines/$machine'
     | '/_app/machines/topology'
     | '/_app/settings/$pane'
+    | '/_app/usage/limits'
     | '/_app/library/'
     | '/_app/machines/'
     | '/_app/sessions/'
     | '/_app/settings/'
+    | '/_app/usage/'
     | '/_app/library/agentpack/$id'
     | '/_app/library/mcp/$name'
     | '/_app/library/package/$'
     | '/_app/sessions/$machine/$sessionId'
+    | '/_app/usage/$kind/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -290,6 +336,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSessionsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/usage': {
+      id: '/_app/usage'
+      path: '/usage'
+      fullPath: '/usage'
+      preLoaderRoute: typeof AppUsageRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/library/': {
       id: '/_app/library/'
       path: '/'
@@ -339,6 +392,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsPaneRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/usage/': {
+      id: '/_app/usage/'
+      path: '/'
+      fullPath: '/usage/'
+      preLoaderRoute: typeof AppUsageIndexRouteImport
+      parentRoute: typeof AppUsageRoute
+    }
+    '/_app/usage/limits': {
+      id: '/_app/usage/limits'
+      path: '/limits'
+      fullPath: '/usage/limits'
+      preLoaderRoute: typeof AppUsageLimitsRouteImport
+      parentRoute: typeof AppUsageRoute
+    }
     '/_app/library/agentpack/$id': {
       id: '/_app/library/agentpack/$id'
       path: '/agentpack/$id'
@@ -366,6 +433,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/sessions/$machine/$sessionId'
       preLoaderRoute: typeof AppSessionsMachineSessionIdRouteImport
       parentRoute: typeof AppSessionsRoute
+    }
+    '/_app/usage/$kind/$id': {
+      id: '/_app/usage/$kind/$id'
+      path: '/$kind/$id'
+      fullPath: '/usage/$kind/$id'
+      preLoaderRoute: typeof AppUsageKindIdRouteImport
+      parentRoute: typeof AppUsageRoute
     }
   }
 }
@@ -418,11 +492,28 @@ const AppSessionsRouteWithChildren = AppSessionsRoute._addFileChildren(
   AppSessionsRouteChildren,
 )
 
+interface AppUsageRouteChildren {
+  AppUsageLimitsRoute: typeof AppUsageLimitsRoute
+  AppUsageIndexRoute: typeof AppUsageIndexRoute
+  AppUsageKindIdRoute: typeof AppUsageKindIdRoute
+}
+
+const AppUsageRouteChildren: AppUsageRouteChildren = {
+  AppUsageLimitsRoute: AppUsageLimitsRoute,
+  AppUsageIndexRoute: AppUsageIndexRoute,
+  AppUsageKindIdRoute: AppUsageKindIdRoute,
+}
+
+const AppUsageRouteWithChildren = AppUsageRoute._addFileChildren(
+  AppUsageRouteChildren,
+)
+
 interface AppRouteChildren {
   AppLibraryRoute: typeof AppLibraryRouteWithChildren
   AppLimitsRoute: typeof AppLimitsRoute
   AppMachinesRoute: typeof AppMachinesRouteWithChildren
   AppSessionsRoute: typeof AppSessionsRouteWithChildren
+  AppUsageRoute: typeof AppUsageRouteWithChildren
   AppSettingsPaneRoute: typeof AppSettingsPaneRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
 }
@@ -432,6 +523,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppLimitsRoute: AppLimitsRoute,
   AppMachinesRoute: AppMachinesRouteWithChildren,
   AppSessionsRoute: AppSessionsRouteWithChildren,
+  AppUsageRoute: AppUsageRouteWithChildren,
   AppSettingsPaneRoute: AppSettingsPaneRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
 }

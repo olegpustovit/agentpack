@@ -269,7 +269,9 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 | `/machines` | `q` (redirects to `/machines/topology`; phones show the machine list) |
 | `/machines/topology` | none |
 | `/machines/$machine` | `q` |
-| `/limits` | `machine` |
+| `/usage`, `/usage/$kind/$id` | `range` (`day`, `week`, `month`), `back`, `metric`; `kind` is `project`, `machine` or `agent` |
+| `/usage/limits` | same, plus `machine` |
+| `/limits` | `machine` (redirects to `/usage/limits`) |
 | `/settings` | none (redirects to `/settings/general`) |
 | `/settings/$pane` | none; `general`, `sharing`, `replication`, `connections`, `diagnostics`, `appearance`, `account` |
 

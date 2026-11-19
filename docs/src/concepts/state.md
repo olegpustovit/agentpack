@@ -16,6 +16,22 @@ are not replicated by state sync. Public Library objects, name history, heads, d
 replicate through the same state pages. Raw Library credential bindings and peer
 approvals stay local. Cache and blob bytes use separate verified transfers.
 
+## Usage counters
+
+The Usage tab reads three replicated sources. Each session row carries its model,
+turns, token counts and reported cost; `usage_hourly` sums the same counters per
+hour, machine, agent, project folder and model; `limit_samples` keeps each limit
+window's last reading per hour for a week. A machine writes only its own rows, so
+merging never loses an increment. Counters move in the same transaction that stores
+a new `turn_end` or cost update, and a replayed event counts nothing. Claude, Codex,
+OMP and Antigravity report tokens per turn; Grok reports tokens and cost in its own
+metadata; Claude and OMP report cost as a running total, stored as the difference
+from the previous total (a smaller total means the adapter restarted). Cursor
+reports neither, so its turns count without tokens, and an agent that reports no
+cost shows "—", never $0. Sessions from before the counters existed are not
+backfilled. A gateway re-reads an agent's limits after its turns, at most every five
+minutes per agent, and the Limits pane asks each online peer to refresh while open.
+
 ## Trust and enrollment
 
 A mesh member receives account password hashes and chat history. Enroll only
@@ -58,7 +74,7 @@ when its clock is ahead.
 
 ## Offline reads and live actions
 
-Sessions and limits use one local read across machines. An offline chat displays
+Sessions, limits and usage use one local read across machines. An offline chat displays
 `Offline, read-only`, keeps its history visible, and hides the composer. Permission
 answers, prompts, forks, restarts and terminal input need the owning machine.
 Renaming changes shared metadata and can be done while the owner is offline.

@@ -77,10 +77,33 @@ test.describe("kit styling", () => {
         { id: "c", label: "Out", remaining_percent: 2 },
       ] }] } }),
     )
-    await page.goto("/limits")
+    await page.goto("/usage/limits")
     const fill = (name: string) => page.getByRole("meter", { name: `${name} remaining` }).evaluate((meter) => getComputedStyle(meter).getPropertyValue("--meter"))
     await expect(page.getByRole("meter", { name: "Low remaining" })).toBeVisible()
     expect(new Set([await fill("Plenty"), await fill("Low"), await fill("Out")]).size).toBe(3)
+  })
+
+  test("the usage hero: one large number, a dashed average and a fixed colour per agent", async ({ page, browserName }) => {
+    test.skip(browserName !== "chromium", "layout only")
+    await desktop(page)
+    const hour = Math.floor(Date.now() / 3_600_000) * 3600
+    const row = (harness: string, output_tokens: number) => ({ hour, node_id: "gateway", harness, folder_id: "f", model: "", turns: 1, sessions: 1, input_tokens: 0, output_tokens, cache_read_tokens: 0, cache_write_tokens: 0, cost_micros: 0, agent_ms: 0 })
+    await page.route("**/api/usage?**", (route) => route.fulfill({ json: { hourly: [row("claude", 9000), row("codex", 3000)], sessions: [], samples: [] } }))
+    await page.goto("/usage")
+    const hero = page.locator('[data-slot="usage-hero"]')
+    await expect(hero).toContainText("12K")
+    expect(await style(hero.getByText("12K"), "font-size")).toBe("28px")
+    expect(await style(page.locator('[data-slot="chart-average"]'), "stroke-dasharray")).not.toBe("none")
+    // The legend swatch and the bar share the agent's token, so Claude reads the same colour everywhere.
+    const swatch = page.getByRole("list", { name: "Legend" }).getByRole("listitem").first().locator("span[aria-hidden]")
+    const claude = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--series-1").trim())
+    expect(claude).not.toBe("")
+    expect(await style(swatch, "background-color")).toBe(await page.evaluate((value) => {
+      const probe = document.createElement("span")
+      probe.style.backgroundColor = value
+      document.body.append(probe)
+      return getComputedStyle(probe).backgroundColor
+    }, claude))
   })
 
   test("the topology diagram is drawn at its own size", async ({ page, browserName }) => {

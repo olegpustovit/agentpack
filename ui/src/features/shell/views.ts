@@ -1,17 +1,17 @@
 import { linkOptions, useRouterState } from "@tanstack/react-router"
-import { Gauge, Library, Server, Settings, Terminal } from "lucide-react"
+import { ChartColumn, Library, Server, Settings, Terminal } from "lucide-react"
 
 export const views = [
   { id: "sessions", label: "Sessions", to: "/sessions", icon: Terminal },
   { id: "library", label: "Library", to: "/library", icon: Library },
   { id: "machines", label: "Machines", to: "/machines/topology", icon: Server },
-  { id: "limits", label: "Limits", to: "/limits", icon: Gauge },
+  { id: "usage", label: "Usage", to: "/usage", icon: ChartColumn },
 ] as const
 
 export const tabs = [...views, { id: "settings", label: "Settings", to: "/settings", icon: Settings }] as const
 
 // Views whose index is a list with a detail pane, and so get the sidebar toggle.
-export const listDetailViews = ["sessions", "library", "machines"]
+export const listDetailViews = ["sessions", "library", "machines", "usage"]
 
 export type LastSession = { machine: string; sessionId: string; search: { q?: string; group?: string } }
 

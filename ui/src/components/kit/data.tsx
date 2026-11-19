@@ -40,18 +40,28 @@ export function InspectorHead({
   );
 }
 
+// action sits at the trailing end of the title row: a Show All link or a segmented control.
 export function Section({
   title,
+  action,
   children,
   className,
 }: {
-  title: string;
+  title: ReactNode;
+  action?: ReactNode;
   children: ReactNode;
   className?: string;
 }) {
   return (
     <section className={cn("min-w-0 border-t-[0.5px] border-(--sep) pt-(--s4)", className)}>
-      <h2 className="mb-(--s3) text-(length:--fs-sm) font-semibold text-(--fg2)">{title}</h2>
+      {action ? (
+        <div className="mb-(--s3) flex min-h-(--ctl-h) min-w-0 items-center gap-(--s3)">
+          <h2 className="min-w-0 flex-1 truncate text-(length:--fs-sm) font-semibold text-(--fg2)">{title}</h2>
+          {action}
+        </div>
+      ) : (
+        <h2 className="mb-(--s3) text-(length:--fs-sm) font-semibold text-(--fg2)">{title}</h2>
+      )}
       {children}
     </section>
   );

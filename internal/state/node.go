@@ -33,7 +33,7 @@ func (s *Store) BindNode(ctx context.Context, id string) error {
 		if !strings.HasPrefix(old, "site:") {
 			return errors.New("state belongs to a different stable node identity")
 		}
-		for _, table := range []string{"node_settings", "limits", "sessions", "issue_counts", "mesh_nodes", "cache_locations", "blob_locations"} {
+		for _, table := range []string{"node_settings", "limits", "limit_samples", "usage_hourly", "sessions", "issue_counts", "mesh_nodes", "cache_locations", "blob_locations"} {
 			if _, err := tx.ExecContext(ctx, "UPDATE "+table+" SET node_id=? WHERE node_id=?", id, old); err != nil {
 				return fmt.Errorf("bind node in %s: %w", table, err)
 			}

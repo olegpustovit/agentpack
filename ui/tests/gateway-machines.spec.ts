@@ -70,7 +70,8 @@ test("recent folders retain unavailable reasons and only available paths can sta
 test("limits view shows each harness with partial failures and no raw CLI output", async ({ page }) => {
   await mockAPI(page)
   await page.goto("/")
-  await page.getByRole("link", { name: "Limits", exact: true }).click()
+  await page.getByRole("link", { name: "Usage", exact: true }).click()
+  await page.getByRole("navigation", { name: "Usage" }).getByRole("link", { name: /^Limits/ }).click()
 
   const grid = page.getByRole("region", { name: "Provider limits" })
   await expect(grid).toBeVisible()
@@ -90,8 +91,9 @@ test("limits shortcut opens the view and a passed reset is labelled refreshing",
   )
   await page.goto("/")
   // The shell binds ⌘4 through metaKey only, so Meta is the key on every platform.
-  await expect(page.getByRole("link", { name: "Limits", exact: true })).toBeVisible()
+  await expect(page.getByRole("link", { name: "Usage", exact: true })).toBeVisible()
   await page.keyboard.press("Meta+4")
+  await page.getByRole("navigation", { name: "Usage" }).getByRole("link", { name: /^Limits/ }).click()
 
   const grid = page.getByRole("region", { name: "Provider limits" })
   await expect(grid).toBeVisible()
@@ -157,7 +159,8 @@ test("limits automatically prefers capable nodes and refreshes every source", as
   await page.goto("/")
   // Four machines discovered: this one, two peers and the offline one.
   await expect(page.getByRole("contentinfo").getByRole("button", { name: "Connected · 4 machines · 1 offline" })).toBeVisible()
-  await page.getByRole("link", { name: "Limits", exact: true }).click()
+  await page.getByRole("link", { name: "Usage", exact: true }).click()
+  await page.getByRole("navigation", { name: "Usage" }).getByRole("link", { name: /^Limits/ }).click()
 
   const grid = page.getByRole("region", { name: "Provider limits" })
   const codex = grid.locator('[data-provider="codex"]')
@@ -172,10 +175,12 @@ test("limits automatically prefers capable nodes and refreshes every source", as
 
   // A machine without the CLI says nothing about the account, so it is not offered as another report.
   await expect(codex.getByRole("button", { name: "Other machines (1)" })).toHaveCount(0)
-  expect(calls.filter((call) => call.method === "GET").map((call) => call.node)).toEqual([null])
+  // Reads stay local; a peer's answer to the opening nudge may refetch that local read once more.
+  expect(new Set(calls.filter((call) => call.method === "GET").map((call) => call.node))).toEqual(new Set([null]))
 
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
-  await expect.poll(() => calls.filter((call) => call.method === "POST").map((call) => call.node).sort()).toEqual([null, "peer-1", "peer-3"].sort())
+  // Opening Limits already nudged each online peer once; Refresh asks every machine.
+  await expect.poll(() => calls.filter((call) => call.method === "POST").map((call) => call.node).sort()).toEqual([null, "peer-1", "peer-1", "peer-3", "peer-3"].sort())
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled()
 
   await page.setViewportSize({ width: 390, height: 844 })
@@ -206,7 +211,8 @@ test("limits labels replicated reports after machine discovery", async ({ page }
   })
 
   await page.goto("/")
-  await page.getByRole("link", { name: "Limits", exact: true }).click()
+  await page.getByRole("link", { name: "Usage", exact: true }).click()
+  await page.getByRole("navigation", { name: "Usage" }).getByRole("link", { name: /^Limits/ }).click()
   await expect(page.getByRole("contentinfo").getByRole("button", { name: "Connected · 2 machines" })).toBeVisible()
   await expect(page.getByRole("meter", { name: "Weekly remaining" })).toHaveAttribute("value", "63")
   await expect(page.locator('[data-provider="codex"]').locator("header")).toContainText("Kyiv grid")
@@ -288,7 +294,8 @@ test("Cursor CLI is included with separate usage buckets", async ({ page }) => {
     }),
   )
   await page.goto("/")
-  await page.getByRole("link", { name: "Limits", exact: true }).click()
+  await page.getByRole("link", { name: "Usage", exact: true }).click()
+  await page.getByRole("navigation", { name: "Usage" }).getByRole("link", { name: /^Limits/ }).click()
 
   await expect(page.getByRole("heading", { name: "Cursor CLI", exact: true })).toBeVisible()
   await expect(page.getByRole("meter", { name: "Auto models remaining" })).toHaveAttribute("value", "60")

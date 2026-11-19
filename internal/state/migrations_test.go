@@ -62,6 +62,8 @@ func TestSessionsMigrationDefaultsAndEventIdentity(t *testing.T) {
 		"owner_email": false, "ended_at": false, "hidden": false,
 		"last_seq": false, "last_event_at": false,
 		"conversation_truncated": false, "archived_at": false, "archived_seq": false, "title": false, "goal": false, "subagents": false,
+		"model": false, "turns": false, "output_tokens": false, "input_tokens": false,
+		"cache_read_tokens": false, "cache_write_tokens": false, "cost_micros": false,
 	}
 	rows, err := store.Reader.Query("PRAGMA table_info(sessions)")
 	if err != nil {

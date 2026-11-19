@@ -14,7 +14,7 @@ async function openFleet(page: Page) {
 }
 
 // Desktop shows the Views bar in the top toolbar; under 760 px the Tabs bar takes over. The Settings icon sits in the toolbar at every width.
-function viewLink(page: Page, label: "Sessions" | "Library" | "Machines" | "Limits" | "Settings") {
+function viewLink(page: Page, label: "Sessions" | "Library" | "Machines" | "Usage" | "Settings") {
   if (label === "Settings") return page.getByRole("link", { name: "Settings", exact: true }).first()
   return page
     .getByRole("navigation", { name: "Views" })
@@ -32,6 +32,7 @@ async function expectNoCrash(page: Page, errors: string[]) {
 const sessionsNav = (page: Page) => page.getByRole("navigation", { name: "Sessions" })
 const libraryNav = (page: Page) => page.getByRole("navigation", { name: "Library" })
 const limitsGrid = (page: Page) => page.getByRole("region", { name: "Provider limits" })
+const usageHero = (page: Page) => page.getByRole("region", { name: "Usage chart" })
 const topologyHeading = (page: Page) => page.getByRole("heading", { level: 1, name: "Topology" })
 const machineList = (page: Page) => page.getByRole("link", { name: "Topology", exact: true })
 const settingsNav = (page: Page) => page.getByRole("navigation", { name: "Settings sections" })
@@ -78,11 +79,11 @@ test("back and forward step through the views, with each view's URL", async ({ p
   await page.goto("/sessions")
   await expect(sessionsNav(page)).toBeVisible()
 
-  // Limits and Machines come before Settings; Machines opens its list, so the tab bar stays on screen on phones.
+  // Usage and Machines come before Settings; Machines opens its list, so the tab bar stays on screen on phones.
   const trail = [
     { label: "Sessions", url: "/sessions", rendered: sessionsNav },
     { label: "Library", url: "/library", rendered: libraryNav },
-    { label: "Limits", url: "/limits", rendered: limitsGrid },
+    { label: "Usage", url: "/usage", rendered: usageHero },
     { label: "Machines", url: "/machines/topology", rendered: topologyHeading },
     { label: "Settings", url: "/settings/general", rendered: settingsNav },
   ] as const
@@ -127,7 +128,7 @@ test("malformed library search falls back to the All filter", async ({ page }) =
 test("unknown limits search key is ignored", async ({ page }) => {
   const errors = trackPageErrors(page)
   await openFleet(page)
-  await page.goto("/limits?unexpected=1")
+  await page.goto("/usage/limits?unexpected=1")
   await expect(limitsGrid(page)).toBeVisible()
   await expectNoCrash(page, errors)
 })

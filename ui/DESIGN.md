@@ -22,6 +22,8 @@ The macOS kit for the gateway UI. Values live in `ui/src/index.css`; components 
 --danger-word: oklch(.76 .16 25);
 ```
 
+Charts use `--series-1` … `--series-6`, with light and dark values: one fixed colour per agent (Claude 1, Codex 2, Grok 3, Cursor 4, OMP 5, any other 6, which is `--fg3`), and the same slots in order for other series. Bars are thin and rounded, the average is a dashed `--fg3` rule, and the axis sits on the right.
+
 shadcn tokens map onto the kit tokens in the same file:
 
 ```css

@@ -6,8 +6,10 @@ type EventMessage = { topic: string; node?: string; tables?: string[] }
 
 // What each replicated table feeds. A state change refetches only these; chat tables feed the chat stream alone.
 const STATE_FAMILIES: Record<string, string[][]> = {
-  sessions: [["m", LOCAL, "sessions"]],
+  sessions: [["m", LOCAL, "sessions"], ["m", LOCAL, "usage"]],
   limits: [["m", LOCAL, "limits"]],
+  usage_hourly: [["m", LOCAL, "usage"]],
+  limit_samples: [["m", LOCAL, "usage"]],
   users: [["identity"]],
   node_settings: [["identity"], ["nodes"], ["topology"]],
   mesh_nodes: [["nodes"], ["topology"], ["replication"]],
@@ -22,7 +24,7 @@ const STATE_FAMILIES: Record<string, string[][]> = {
   mcp_credentials: [["mcp-credentials"]],
   mcp_credential_approvals: [["mcp-credentials"]],
 }
-const ALL_STATE_FAMILIES = [["identity"], ["topology"], ["m", LOCAL, "sessions"], ["m", LOCAL, "limits"], ["nodes"], ["diagnostics"], ["replication"], ["mcp-credentials"]]
+const ALL_STATE_FAMILIES = [["identity"], ["topology"], ["m", LOCAL, "sessions"], ["m", LOCAL, "limits"], ["m", LOCAL, "usage"], ["nodes"], ["diagnostics"], ["replication"], ["mcp-credentials"]]
 
 // Unknown tables, or an older gateway that sends none, refetch every family.
 export function stateFamilies(tables: string[] | undefined): string[][] {

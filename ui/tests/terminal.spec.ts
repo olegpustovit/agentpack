@@ -82,8 +82,8 @@ test("an IME event after typing sends only its own text, never the whole line ag
 test("the Sessions view reopens the terminal it left, with its grouping", async ({ page }) => {
   await stubWorker(page)
   await openRoute(page, "/sessions/local/s1?group=machine")
-  await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Limits", exact: true }).click()
-  await expect(page).toHaveURL(/\/limits/)
+  await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Usage", exact: true }).click()
+  await expect(page).toHaveURL(/\/usage/)
   await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Sessions", exact: true }).click()
   await expect(page).toHaveURL(/\/sessions\/local\/s1\?group=machine/)
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused()

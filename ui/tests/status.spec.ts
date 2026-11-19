@@ -41,7 +41,7 @@ test("connection popover lists machines and offers refresh and topology", async 
 
 test("limits and settings show no session text in the status bar", async ({ page }) => {
   await page.route("**/api/nodes", (route) => route.fulfill({ json: [] }))
-  for (const path of ["/limits", "/settings"]) {
+  for (const path of ["/usage/limits", "/settings"]) {
     await page.goto(path)
     await expect(page.getByRole("contentinfo").getByRole("button", { name: "Connected · 1 machine" })).toBeVisible()
     await expect(page.getByRole("contentinfo").getByText("Mouse:")).toHaveCount(0)

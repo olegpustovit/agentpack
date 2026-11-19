@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { LimitSnapshot, LimitWindow } from "@/lib/api-types"
-import { needsLogin, observedAt, providerGroups, remainingPercent, resetText, selectReport, untilText, type LimitReport } from "./model"
+import { needsLogin, observedAt, paceText, providerGroups, remainingPercent, resetText, runsOutAt, selectReport, untilText, type LimitReport } from "./model"
 
 const snapshot = (over: Partial<LimitSnapshot>): LimitSnapshot => ({
   harness: "codex",
@@ -129,5 +129,24 @@ describe("observedAt", () => {
     expect(observedAt([older, snapshot({})], 1)).toBe(Date.parse("2026-10-30T10:00:00Z"))
     expect(observedAt([], 1)).toBe(1)
     expect(observedAt([snapshot({ observed_at: "0001-01-01T00:00:00Z" })], 1)).toBe(1)
+  })
+})
+
+describe("runsOutAt", () => {
+  const now = Date.parse("2026-11-19T12:00:00Z")
+  const fiveHour = (remaining: number, resetMinutes: number) =>
+    window({ remaining_percent: remaining, duration_seconds: 5 * 3600, reset_at: new Date(now + resetMinutes * 60_000).toISOString() })
+
+  it("projects the pace since the window opened to its end", () => {
+    // 1 h in with half used: the other half lasts 1 h, well before the reset in 4 h.
+    expect(runsOutAt(fiveHour(50, 240), now)).toBe(now + 3_600_000)
+    expect(paceText(fiveHour(50, 240), now)).toEqual({ text: "Runs out in about 1 h 0 m at this pace", warn: true })
+    // 1 h in with 10% used lasts past the reset.
+    expect(runsOutAt(fiveHour(90, 240), now)).toBeUndefined()
+    expect(paceText(fiveHour(90, 240), now)).toEqual({ text: "On pace", warn: false })
+  })
+
+  it("says nothing without a window length", () => {
+    expect(paceText(window({ remaining_percent: 10 }), now)).toEqual({ text: "", warn: false })
   })
 })

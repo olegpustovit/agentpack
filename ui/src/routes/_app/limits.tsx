@@ -1,8 +1,10 @@
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, redirect } from "@tanstack/react-router"
 import { search } from "@/lib/search"
-import { LimitsView } from "@/features/limits/limits-view"
 
+// Limits moved into Usage; old links and bookmarks keep working.
 export const Route = createFileRoute("/_app/limits")({
   validateSearch: search({ machine: "text" }),
-  component: LimitsView,
+  beforeLoad: ({ search }) => {
+    throw redirect({ to: "/usage/limits", search, replace: true })
+  },
 })

@@ -61,12 +61,89 @@ func persistConversationChanges(ctx context.Context, db *sql.DB, id string, chan
 			if err != nil {
 				return fmt.Errorf("encode conversation entry %d: %w", entry.Seq, err)
 			}
+			usage, counts := acp.ParseUsage(entry)
+			// A replayed or rewritten event already counted when its row was first inserted.
+			if counts {
+				var exists bool
+				if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM conversation_events WHERE session_id=? AND seq=?)", id, entry.Seq).Scan(&exists); err != nil {
+					return err
+				}
+				counts = !exists
+			}
 			if _, err := insert.ExecContext(ctx, id, entry.Seq, string(body)); err != nil {
 				return err
+			}
+			if counts {
+				if err := recordUsage(ctx, tx, id, entry, usage); err != nil {
+					return fmt.Errorf("record usage of entry %d: %w", entry.Seq, err)
+				}
 			}
 		}
 		return nil
 	})
+}
+
+// recordUsage adds one new event's usage to its session and to this node's hour. Rows of this node have no
+// other writer, so the increments survive replication.
+func recordUsage(ctx context.Context, tx *sql.Tx, id string, entry acp.LogEntry, usage acp.Usage) error {
+	if usage.CostTotalMicros >= 0 {
+		// Stored as the difference from the previous total; a smaller total means the adapter started over.
+		var previous sql.NullString
+		err := tx.QueryRowContext(ctx, `SELECT body FROM conversation_events WHERE session_id=? AND seq<?
+			AND json_extract(body,'$.kind')='usage_update' AND json_extract(body,'$.payload.cost.amount') IS NOT NULL
+			AND json_extract(body,'$.payload._subagent') IS NULL ORDER BY seq DESC LIMIT 1`, id, entry.Seq).Scan(&previous)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		usage.CostMicros = usage.CostTotalMicros
+		var last acp.LogEntry
+		if previous.Valid && json.Unmarshal([]byte(previous.String), &last) == nil {
+			if before, ok := acp.ParseUsage(last); ok && before.CostTotalMicros >= 0 && before.CostTotalMicros <= usage.CostTotalMicros {
+				usage.CostMicros = usage.CostTotalMicros - before.CostTotalMicros
+			}
+		}
+	}
+	var agentMS int64
+	if entry.Kind == "turn_end" {
+		// Agent time runs from this turn's prompt; an autonomous cycle has none and adds no time.
+		var kind string
+		var at int64
+		err := tx.QueryRowContext(ctx, `SELECT json_extract(body,'$.kind'),json_extract(body,'$.ts') FROM conversation_events
+			WHERE session_id=? AND seq<? AND json_extract(body,'$.kind') IN ('prompt','turn_end') ORDER BY seq DESC LIMIT 1`, id, entry.Seq).Scan(&kind, &at)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if kind == "prompt" {
+			agentMS = max(0, entry.TS-at)
+		}
+	}
+	var harness, folder, model string
+	var turns int64
+	if err := tx.QueryRowContext(ctx, `UPDATE sessions SET turns=turns+?,input_tokens=input_tokens+?,output_tokens=output_tokens+?,
+		cache_read_tokens=cache_read_tokens+?,cache_write_tokens=cache_write_tokens+?,
+		cost_micros=CASE WHEN ?<0 THEN cost_micros ELSE max(cost_micros,0)+? END,model=CASE WHEN ?='' THEN model ELSE ? END
+		WHERE id=? RETURNING harness,folder_id,model,turns`,
+		usage.Turns, usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens,
+		usage.CostMicros, usage.CostMicros, usage.Model, usage.Model, id).Scan(&harness, &folder, &model, &turns); err != nil {
+		return err
+	}
+	if usage.Turns == 0 && usage.CostMicros <= 0 {
+		return nil
+	}
+	firstTurn := 0
+	if usage.Turns > 0 && turns == usage.Turns {
+		firstTurn = 1
+	}
+	hour := entry.TS / int64(time.Hour/time.Millisecond) * 3600
+	_, err := tx.ExecContext(ctx, `INSERT INTO usage_hourly(hour,node_id,harness,folder_id,model,turns,sessions,input_tokens,output_tokens,
+		cache_read_tokens,cache_write_tokens,cost_micros,agent_ms) VALUES (?,`+state.LocalNodeSQL+`,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(hour,node_id,harness,folder_id,model) DO UPDATE SET turns=turns+excluded.turns,sessions=sessions+excluded.sessions,
+		input_tokens=input_tokens+excluded.input_tokens,output_tokens=output_tokens+excluded.output_tokens,
+		cache_read_tokens=cache_read_tokens+excluded.cache_read_tokens,cache_write_tokens=cache_write_tokens+excluded.cache_write_tokens,
+		cost_micros=cost_micros+excluded.cost_micros,agent_ms=agent_ms+excluded.agent_ms`,
+		hour, harness, folder, model, usage.Turns, firstTurn, usage.InputTokens, usage.OutputTokens,
+		usage.CacheReadTokens, usage.CacheWriteTokens, max(usage.CostMicros, 0), agentMS)
+	return err
 }
 
 func storedConversationTail(ctx context.Context, db *sql.DB, id string, since int64) ([]acp.LogEntry, int64, bool, error) {

@@ -89,3 +89,34 @@ export const loginCommands: Record<string, string | undefined> = {
   codex: "agentpack codex login",
   grok: "agentpack grok login",
 }
+
+// The usable window with the least left across providers, which the sidebar and the Limits hero lead with.
+export function tightestWindow(groups: ProviderGroup[]): { group: ProviderGroup; window: LimitWindow; left: number } | undefined {
+  let best: { group: ProviderGroup; window: LimitWindow; left: number } | undefined
+  for (const group of groups) {
+    if (!group.usable) continue
+    for (const window of windowsOf(group.selected.snapshot)) {
+      const left = remainingPercent(window)
+      if (left !== undefined && (!best || left < best.left)) best = { group, window, left }
+    }
+  }
+  return best
+}
+
+// When the window runs out at the pace used since it opened; undefined when that is after its reset or unknown.
+export function runsOutAt(window: LimitWindow, now: number): number | undefined {
+  const reset = Date.parse(window.reset_at ?? "")
+  const left = remainingPercent(window)
+  if (!window.duration_seconds || Number.isNaN(reset) || left === undefined || reset <= now) return undefined
+  const elapsed = window.duration_seconds * 1000 - (reset - now)
+  const used = 100 - left
+  if (elapsed <= 0 || used <= 0) return undefined
+  const end = now + (left / used) * elapsed
+  return end < reset ? end : undefined
+}
+
+export function paceText(window: LimitWindow, now: number): { text: string; warn: boolean } {
+  const end = runsOutAt(window, now)
+  if (end !== undefined) return { text: `Runs out in about ${untilText(end - now)} at this pace`, warn: true }
+  return { text: window.duration_seconds && window.reset_at ? "On pace" : "", warn: false }
+}

@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -141,30 +142,173 @@ func (c *limitsCache) save(saved savedLimits) error {
 			return err
 		}
 	}
+	if err := writeLimitSamples(context.Background(), tx, node, saved.At, saved.Snapshots); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
-func collectLimits(ctx context.Context) []harness.LimitSnapshot {
-	probes := []func(context.Context) harness.LimitSnapshot{
-		func(ctx context.Context) harness.LimitSnapshot { return codex.ReadLimits(ctx, "") },
-		claude.ReadLimits,
-		agy.ReadLimits,
-		grok.ReadLimits,
-		opencode.ReadLimits,
-		cursor.ReadLimits,
-		omp.ReadLimits,
+// limitSampleRetention keeps a week of hourly readings; the Usage page draws the last day.
+const limitSampleRetention = 7 * 24 * time.Hour
+
+// writeLimitSamples keeps each window's last reading of the hour, for the burn line.
+func writeLimitSamples(ctx context.Context, tx *sql.Tx, node string, at time.Time, snapshots []harness.LimitSnapshot) error {
+	hour := at.Truncate(time.Hour).Unix()
+	for _, snapshot := range snapshots {
+		for _, window := range snapshot.Windows {
+			used := window.UsedPercent
+			if used == nil && window.RemainingPercent != nil {
+				used = new(100 - *window.RemainingPercent)
+			}
+			if used == nil {
+				continue
+			}
+			var reset int64
+			if window.ResetAt != nil {
+				reset = window.ResetAt.Unix()
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO limit_samples(hour,node_id,harness,window_id,used_percent,reset_at) VALUES (?,?,?,?,?,?)
+				ON CONFLICT(hour,node_id,harness,window_id) DO UPDATE SET used_percent=excluded.used_percent,reset_at=excluded.reset_at`,
+				hour, node, snapshot.Harness, window.ID, *used, reset); err != nil {
+				return err
+			}
+		}
 	}
-	snapshots := make([]harness.LimitSnapshot, len(probes))
+	_, err := tx.ExecContext(ctx, "DELETE FROM limit_samples WHERE node_id=? AND hour<?", node, at.Add(-limitSampleRetention).Unix())
+	return err
+}
+
+// limitProbes reads each provider CLI. Names match session harnesses, so a finished turn can refresh its own.
+var limitProbes = []struct {
+	harness string
+	read    func(context.Context) harness.LimitSnapshot
+}{
+	{"codex", func(ctx context.Context) harness.LimitSnapshot { return codex.ReadLimits(ctx, "") }},
+	{"claude", claude.ReadLimits},
+	{"agy", agy.ReadLimits},
+	{"grok", grok.ReadLimits},
+	{"opencode", opencode.ReadLimits},
+	{"cursor", cursor.ReadLimits},
+	{"omp", omp.ReadLimits},
+}
+
+func collectLimits(ctx context.Context) []harness.LimitSnapshot {
+	snapshots := make([]harness.LimitSnapshot, len(limitProbes))
 	var wg sync.WaitGroup
-	for index, probe := range probes {
+	for index, probe := range limitProbes {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			snapshots[index] = probe(ctx)
+			snapshots[index] = probe.read(ctx)
 		}()
 	}
 	wg.Wait()
 	return snapshots
+}
+
+func readLimitsOf(ctx context.Context, name string) (harness.LimitSnapshot, bool) {
+	for _, probe := range limitProbes {
+		if probe.harness == name {
+			ctx, cancel := context.WithTimeout(ctx, limitsProbeTimeout)
+			defer cancel()
+			return probe.read(ctx), true
+		}
+	}
+	return harness.LimitSnapshot{}, false
+}
+
+// limitsTurnGate is how often finished turns may re-read one agent's limits.
+const limitsTurnGate = 5 * time.Minute
+
+// turnLimits re-reads an agent's limits once its turns on this machine move, so every peer sees fresh
+// limits without anyone opening the page. Turns come from the session counters the event store keeps.
+type turnLimits struct {
+	store *state.Store
+	read  func(ctx context.Context, harness string) (harness.LimitSnapshot, bool)
+	now   func() time.Time
+	turns map[string]int64 // turns at the last refresh; nil until the first check records them
+}
+
+func (t *turnLimits) check(ctx context.Context) error {
+	rows, err := t.store.Reader.QueryContext(ctx, `SELECT s.harness,sum(s.turns),coalesce(max(l.collected_at),0) FROM sessions s
+		LEFT JOIN limits l ON l.node_id=s.node_id AND l.harness=s.harness
+		WHERE s.node_id=`+state.LocalNodeSQL+` AND s.turns>0 GROUP BY s.harness`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	first := t.turns == nil
+	if first {
+		t.turns = map[string]int64{}
+	}
+	var due []string
+	for rows.Next() {
+		var name string
+		var turns, collected int64
+		if err := rows.Scan(&name, &turns, &collected); err != nil {
+			return err
+		}
+		// Turns inside the gate stay unrecorded, so the first check after it still refreshes.
+		if first || turns != t.turns[name] && t.now().Sub(time.UnixMilli(collected)) >= limitsTurnGate {
+			if !first {
+				due = append(due, name)
+			}
+			t.turns[name] = turns
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for _, name := range due {
+		if snapshot, ok := t.read(ctx, name); ok {
+			if err := saveLimitSnapshot(ctx, t.store.DB, t.now(), snapshot); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// saveLimitSnapshot replaces one agent's row of this machine, leaving the others as collected.
+func saveLimitSnapshot(ctx context.Context, db *sql.DB, at time.Time, snapshot harness.LimitSnapshot) error {
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	return state.Transaction(ctx, db, func(tx *sql.Tx) error {
+		var node string
+		if err := tx.QueryRowContext(ctx, "SELECT node_id FROM local_node WHERE id=1").Scan(&node); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO limits(node_id,harness,snapshot,collected_at) VALUES (?,?,?,?)
+			ON CONFLICT(node_id,harness) DO UPDATE SET snapshot=excluded.snapshot,collected_at=excluded.collected_at`,
+			node, snapshot.Harness, string(data), at.UnixMilli()); err != nil {
+			return err
+		}
+		return writeLimitSamples(ctx, tx, node, at, []harness.LimitSnapshot{snapshot})
+	})
+}
+
+func (g *Gateway) runLimitsAfterTurns(ctx context.Context, interval time.Duration) {
+	if g.logs != nil {
+		node, _ := g.auth.store.NodeID(ctx)
+		ctx = obs.WithSink(ctx, g.logs, obs.BuildMetadata(g.options.Version, node, "gateway"))
+	}
+	turns := &turnLimits{store: g.auth.store, read: readLimitsOf, now: time.Now}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if err := turns.check(ctx); err != nil && ctx.Err() == nil {
+			_, event := obs.Start(ctx, "limits", "after_turn")
+			event.Fail(err)
+			event.End()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (g *Gateway) registerLimits(mux *http.ServeMux) {
@@ -204,6 +348,7 @@ func (g *Gateway) registerLimits(mux *http.ServeMux) {
 		}
 		writeJSON(w, map[string]any{"limits": cache.collect(r.Context(), limitsRefreshGate)})
 	})
+	mux.HandleFunc("GET /api/usage", g.serveUsage)
 }
 
 type meshLimit struct {

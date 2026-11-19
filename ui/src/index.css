@@ -105,6 +105,10 @@
   --menu-danger: oklch(.6 .19 25);
   --shadow-menu: 0 6px 20px oklch(0 0 0 / 45%), 0 0 0 .5px oklch(0 0 0 / 85%), inset 0 0 0 .5px oklch(1 0 0 / 22%);
 }
+/* Chart series (Usage): one fixed colour per agent, Screen Time style; 6 is "other". */
+:root { --series-1: #eb6834; --series-2: #2a78d6; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4; --series-6: var(--fg3); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme=light]) { --series-1: #d95926; --series-2: #3987e5; --series-3: #199e70; --series-4: #c98500; --series-5: #d0679a; } }
+:root[data-theme=dark] { --series-1: #d95926; --series-2: #3987e5; --series-3: #199e70; --series-4: #c98500; --series-5: #d0679a; }
 :root {
   --background: var(--window); --foreground: var(--fg);
   --card: var(--window); --card-foreground: var(--fg);
