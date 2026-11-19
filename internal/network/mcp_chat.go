@@ -773,34 +773,41 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		}
 		return nil, sessionView(info), nil
 	})
-	addTool(server, "get_usage", "Token, turn and cost usage for a time range, as the Usage page shows it. available is false when this gateway has no usage data.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-		From string `json:"from,omitempty" jsonschema:"Range start, RFC 3339; omit for the default range."`
+	addTool(server, "get_usage", "Token, turn and cost usage for a time range, as the Usage page shows it: hourly rows, sessions and limit samples.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		From string `json:"from,omitempty" jsonschema:"Range start, RFC 3339; omit for seven days before to."`
 		To   string `json:"to,omitempty" jsonschema:"Range end, RFC 3339; omit for now."`
 	}) (*mcp.CallToolResult, struct {
-		Available bool            `json:"available"`
-		Usage     json.RawMessage `json:"usage,omitempty"`
+		Usage json.RawMessage `json:"usage"`
 	}, error) {
 		var out struct {
-			Available bool            `json:"available"`
-			Usage     json.RawMessage `json:"usage,omitempty"`
+			Usage json.RawMessage `json:"usage"`
 		}
-		query := url.Values{}
-		for key, value := range map[string]string{"from": in.From, "to": in.To} {
-			if value != "" {
-				query.Set(key, value)
+		to, from := time.Now(), time.Time{}
+		for _, field := range []struct {
+			raw  string
+			into *time.Time
+		}{{in.To, &to}, {in.From, &from}} {
+			if field.raw == "" {
+				continue
 			}
+			parsed, err := time.Parse(time.RFC3339, field.raw)
+			if err != nil {
+				return nil, out, errors.New("from and to must be RFC 3339 times")
+			}
+			*field.into = parsed
 		}
+		if from.IsZero() {
+			from = to.AddDate(0, 0, -7)
+		}
+		query := url.Values{"from": {strconv.FormatInt(from.Unix(), 10)}, "to": {strconv.FormatInt(to.Unix(), 10)}}
 		response, err := m.do(ctx, "", "GET", "/api/usage?"+query.Encode(), nil)
-		if apiStatus(err) == http.StatusNotFound {
-			return nil, out, nil // a gateway without the Usage page
-		}
 		if err != nil {
 			return nil, out, err
 		}
 		if response.body.Len() > mcpResultLimit/3 {
 			return nil, out, errors.New("usage for this range is too large; narrow from and to")
 		}
-		out.Available, out.Usage = true, bytes.Clone(response.body.Bytes())
+		out.Usage = bytes.Clone(response.body.Bytes())
 		return nil, out, nil
 	})
 	addTool(server, "get_limits", "Plan limits each agent reported, per machine, from the replicated limits table.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpNodeInput) (*mcp.CallToolResult, mcpLimits, error) {

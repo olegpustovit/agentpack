@@ -221,7 +221,7 @@ The gateway serves its own MCP server at `/mcp` (see [Deploy the public gateway]
 | `send_prompt` | Sends a message; it queues behind a running turn and waits for a chat that is still starting. |
 | `respond_permission`, `answer_question` | Answer a request. Repeating an applied answer is a no-op. |
 | `cancel`, `fork_session` | Cancel a turn or one subagent; fork a chat (the agent's own fork of the whole conversation). |
-| `get_usage`, `get_limits` | Usage for a range (`available: false` on a gateway without the Usage page) and reported plan limits. Read-only. |
+| `get_usage`, `get_limits` | Usage for an RFC 3339 range (default: the last seven days) and reported plan limits. Read-only. |
 | `start_session` | Starts a chat (or, with `terminal`, a terminal session) and returns at once; an optional `prompt` is sent when the chat is ready. |
 
 ### agentpack tools inside a chat

@@ -128,8 +128,8 @@ func TestMCPToolsPublishTypedSchemas(t *testing.T) {
 		t.Fatalf("list_sessions: %+v", result)
 	}
 	result, text := callTool(t, session, "get_usage", map[string]any{})
-	if result.IsError || !strings.Contains(text, `"available":false`) {
-		t.Fatalf("missing usage endpoint must read as unavailable: %s", text)
+	if result.IsError || !strings.Contains(text, `"hourly"`) {
+		t.Fatalf("get_usage over the default range: %s", text)
 	}
 	chatFixture(t, h, "session-ask", "")
 	chatFixture(t, h, "session-read", "")
