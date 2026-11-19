@@ -353,6 +353,11 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 	addTool(server, "stop_session", "Terminate an agent session. Native-stdio sessions stop only their directly owned process. Unsaved conversation state may be lost.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpSessionInput) (*mcp.CallToolResult, struct {
 		Stopped bool `json:"stopped"`
 	}, error) {
+		if err := m.agentMayChange(ctx, in.Node, in.SessionID); err != nil {
+			return nil, struct {
+				Stopped bool `json:"stopped"`
+			}{}, err
+		}
 		out, err := callAPI[struct {
 			Stopped bool `json:"stopped"`
 		}](ctx, m, in.Node, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/stop", nil)
@@ -361,6 +366,11 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 	addTool(server, "restart_session", "Restart an agent using its original launch settings. Unsaved conversation state may be lost. Reuse operation_id when retrying this request.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpRestartInput) (*mcp.CallToolResult, struct {
 		Restarted bool `json:"restarted"`
 	}, error) {
+		if err := m.agentMayChange(ctx, in.Node, in.SessionID); err != nil {
+			return nil, struct {
+				Restarted bool `json:"restarted"`
+			}{}, err
+		}
 		out, err := callAPI[struct {
 			Restarted bool `json:"restarted"`
 		}](ctx, m, in.Node, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/restart", in.restartOperation)
@@ -378,6 +388,9 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 	}, error) {
 		type accepted = struct {
 			Accepted int `json:"accepted"`
+		}
+		if err := refuseAgentOnly(ctx); err != nil {
+			return nil, accepted{}, err
 		}
 		if len(in.Input) == 0 || len(in.Input) > chunkSize {
 			return nil, accepted{}, errors.New("input must contain 1 to 32768 bytes")
@@ -398,6 +411,11 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 	addTool(server, "install_package", "Install an agentpack package in a previously used folder and automatically restart affected running agents.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpInstallInput) (*mcp.CallToolResult, struct {
 		Installed bool `json:"installed"`
 	}, error) {
+		if err := refuseAgentOnly(ctx); err != nil {
+			return nil, struct {
+				Installed bool `json:"installed"`
+			}{}, err
+		}
 		out, err := callAPI[struct {
 			Installed bool `json:"installed"`
 		}](ctx, m, in.Node, "POST", "/api/packages", struct {

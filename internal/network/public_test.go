@@ -107,6 +107,11 @@ func TestPublicAccessOffPageRemembersCandidate(t *testing.T) {
 	if status := g.publicStatus(t.Context()); status.Enabled || status.Candidate != testPublicOrigin {
 		t.Fatalf("candidate: %+v", status)
 	}
+	// Funnel passes the visitor's own Host on; it must not nominate an address.
+	serve(handler, "GET", "http://127.0.0.1:7420/", "127.0.0.1:5000", map[string]string{"X-Forwarded-Host": "evil.example", "X-Forwarded-Proto": "https", "Tailscale-Funnel-Request": "?1"})
+	if status := g.publicStatus(t.Context()); status.Candidate != testPublicOrigin {
+		t.Fatalf("a Funnel visitor chose the candidate: %+v", status)
+	}
 	config := &ipn.ServeConfig{Foreground: map[string]*ipn.ServeConfig{"session": {
 		Web:         map[ipn.HostPort]*ipn.WebServerConfig{"box.tail.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:7420"}}}},
 		AllowFunnel: map[ipn.HostPort]bool{"box.tail.ts.net:443": true},
@@ -188,6 +193,11 @@ func TestPublicAccessVerifiesItselfBeforeEnabling(t *testing.T) {
 		{"another server", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, protectedResourceMetadata(testPublicOrigin))
 		}), "reachable"},
+		// A server that copies the request header back must not pass for this gateway.
+		{"echoes the probe", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Agentpack-Probe", r.Header.Get("X-Agentpack-Probe"))
+			writeJSON(w, protectedResourceMetadata(testPublicOrigin))
+		}), "reachable"},
 		{"host dropped", forward(false), "mcp"},
 		{"reaches itself", forward(true), ""},
 	} {
@@ -225,5 +235,26 @@ func TestPublicAccessVerifiesItselfBeforeEnabling(t *testing.T) {
 	}
 	if code, lines := setPublicRequest(t, g, "owner-token", `{"enabled":false}`); code != 200 || lines[0]["public"].(map[string]any)["enabled"] != false {
 		t.Fatalf("turn off: %d %v", code, lines)
+	}
+}
+
+func TestUnclaimedGatewayCannotBeClaimedFromTheInternetEvenWhenPinned(t *testing.T) {
+	home := t.TempDir()
+	auth, err := testUnclaimedAuth(t, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin, _ := url.Parse("http://127.0.0.1:7420")
+	g := &Gateway{auth: auth, store: auth.store, origin: origin, local: nodeRecord{Secret: strings.Repeat("p", 64)}, options: GatewayOptions{Home: home, PublicURL: testPublicOrigin}}
+	g.public.serve = func(context.Context) (*ipn.ServeConfig, error) { return nil, errors.New("no tailscale in tests") }
+	if err := g.loadPublic(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	proxied := map[string]string{"X-Forwarded-Host": "agentpack.example.com", "X-Forwarded-Proto": "https", "X-Forwarded-For": "203.0.113.9", "Origin": testPublicOrigin, "Content-Type": "application/json"}
+	if w := serve(g.Handler(), "POST", "http://127.0.0.1:7420/api/claim", "127.0.0.1:5000", proxied); w.Code == 200 {
+		t.Fatalf("claimed from the internet: %s", w.Body.String())
+	}
+	if w := serve(g.Handler(), "GET", "http://127.0.0.1:7420/api/status", "127.0.0.1:5000", proxied); w.Code != 200 || !strings.Contains(w.Body.String(), `"claimed":false`) {
+		t.Fatalf("deploy status check: %d %s", w.Code, w.Body.String())
 	}
 }

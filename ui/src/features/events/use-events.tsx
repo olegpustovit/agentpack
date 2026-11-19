@@ -6,7 +6,8 @@ type EventMessage = { topic: string; node?: string; tables?: string[] }
 
 // What each replicated table feeds. A state change refetches only these; chat tables feed the chat stream alone.
 const STATE_FAMILIES: Record<string, string[][]> = {
-  sessions: [["m", LOCAL, "sessions"], ["m", LOCAL, "usage"]],
+  // Usage counters arrive through usage_hourly, written in the same transaction as each turn.
+  sessions: [["m", LOCAL, "sessions"]],
   limits: [["m", LOCAL, "limits"]],
   usage_hourly: [["m", LOCAL, "usage"]],
   limit_samples: [["m", LOCAL, "usage"]],

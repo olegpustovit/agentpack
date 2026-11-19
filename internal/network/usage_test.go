@@ -160,3 +160,25 @@ func TestUsageRejectsUnboundedRanges(t *testing.T) {
 		t.Fatalf("empty usage: %d %s", recorder.Code, recorder.Body)
 	}
 }
+
+func TestUsageCostAfterWorkerRestartCountsTheNewProcessInFull(t *testing.T) {
+	store := testSessionStore(t, t.TempDir())
+	id := "session-restart"
+	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp", Harness: "claude"}); err != nil {
+		t.Fatal(err)
+	}
+	cost := func(seq int64, amount string) acp.LogChanges {
+		return acp.LogChanges{LastSeq: seq, Entries: []acp.LogEntry{{Seq: seq, TS: 3_600_000, Kind: "usage_update", Payload: json.RawMessage(`{"cost":{"amount":` + amount + `,"currency":"USD"}}`)}}}
+	}
+	if err := persistConversationChanges(t.Context(), store.DB, id, cost(1, "0.09")); err != nil {
+		t.Fatal(err)
+	}
+	// The worker restarted after seq 1; the new agent's first total (0.40) is not a delta from 0.09.
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, cost(2, "0.4"), 1); err != nil {
+		t.Fatal(err)
+	}
+	var session int64
+	if err := store.Reader.QueryRow("SELECT cost_micros FROM sessions WHERE id=?", id).Scan(&session); err != nil || session != 490_000 {
+		t.Fatalf("cost after restart: %d %v, want 490000", session, err)
+	}
+}

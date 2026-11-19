@@ -87,7 +87,8 @@ func (m *GatewayMCP) routes(mux *http.ServeMux) {
 // limited allows each client address 120 OAuth requests a minute, and all of them together 1200.
 func (m *GatewayMCP) limited(w http.ResponseWriter, r *http.Request) bool {
 	m.mu.Lock()
-	wait := m.window.take(time.Now(), sourceOf(r).client, 120, 1200)
+	client, local := limiterKey(r)
+	wait := m.window.take(time.Now(), client, 120, limiterCeiling(local, 1200))
 	m.mu.Unlock()
 	if wait == 0 {
 		return false
@@ -195,6 +196,12 @@ func (m *GatewayMCP) authorize(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'")
 		name := client.Client.ClientName
+		if clientMetadataURL(query.Get("client_id")) {
+			// A metadata document names itself; only its host is vouched for by HTTPS.
+			if parsed, err := url.Parse(query.Get("client_id")); err == nil {
+				name = parsed.Host
+			}
+		}
 		if name == "" {
 			name = "Your AI assistant"
 		}
@@ -468,7 +475,8 @@ func clientMetadataURL(id string) bool { return strings.HasPrefix(id, "https://"
 
 const clientMetadataLimit = 16 << 10
 
-var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+// Ranges a public-looking address can still reach private networks through.
+var privateRoutes = []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("64:ff9b::/96"), netip.MustParsePrefix("2002::/16")}
 
 // publicAddressOnly runs after DNS resolution, so a name that resolves to this machine, the LAN
 // or the tailnet is refused at connect time.
@@ -478,7 +486,8 @@ func publicAddressOnly(_, address string, _ syscall.RawConn) error {
 		return err
 	}
 	ip, err := netip.ParseAddr(host)
-	if err != nil || !ip.Unmap().IsGlobalUnicast() || ip.Unmap().IsPrivate() || cgnat.Contains(ip.Unmap()) {
+	ip = ip.Unmap()
+	if err != nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || slices.ContainsFunc(privateRoutes, func(route netip.Prefix) bool { return route.Contains(ip) }) {
 		return errors.New("client metadata host is not a public address")
 	}
 	return nil

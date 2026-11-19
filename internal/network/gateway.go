@@ -684,7 +684,7 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		local := g.localRequest(r)
-		publicOrigin, pinned := g.public.current()
+		publicOrigin, _ := g.public.current()
 		source := g.resolveSource(r, publicOrigin)
 		r = withRequestSource(r, source)
 		if g.serveProbe(w, r) {
@@ -692,7 +692,7 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		if !local && source.origin == "" {
 			if source.proxied && publicOrigin == nil {
-				g.servePublicOff(w, source)
+				g.servePublicOff(w, r, source)
 				return
 			}
 			http.Error(w, "unrecognized gateway host", 403)
@@ -703,9 +703,10 @@ func (g *Gateway) Handler() http.Handler {
 			authFailure(w, r, "account state unavailable", err)
 			return
 		}
-		// After an owner reset, a switched-on public origin closes until someone claims locally.
-		if !local && !claimed && !pinned && publicOrigin != nil && source.origin == publicOrigin.String() {
-			g.servePublicOff(w, source)
+		// An unclaimed gateway is claimed locally (or over SSH), never from the internet, even when
+		// pinned; status and health stay readable for deploy checks.
+		if !local && !claimed && publicOrigin != nil && source.origin == publicOrigin.String() && !(r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/api/status")) {
+			g.servePublicOff(w, r, source)
 			return
 		}
 		if peer, _ := r.Context().Value(replicaPeerKey{}).(string); peer != "" {

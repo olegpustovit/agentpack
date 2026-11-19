@@ -329,3 +329,21 @@ func TestUnclaimedGatewayLockdown(t *testing.T) {
 		t.Fatalf("local secret blocked: %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestLimiterKeyGroupsIPv6AndSparesTheLocalOrigin(t *testing.T) {
+	key := func(client string) (string, bool) {
+		r := httptest.NewRequest("POST", "http://127.0.0.1:7420/api/login", nil)
+		return limiterKey(withRequestSource(r, requestSource{client: client}))
+	}
+	a, _ := key("2001:db8:1:2::a")
+	b, _ := key("2001:db8:1:2:ffff::b")
+	if a != b || a != "2001:db8:1:2::/64" {
+		t.Fatalf("one /64 must share a key: %q %q", a, b)
+	}
+	if _, local := key("127.0.0.1"); !local {
+		t.Fatal("the loopback origin is local")
+	}
+	if got, local := key("203.0.113.9"); local || got != "203.0.113.9" {
+		t.Fatalf("internet client: %q %v", got, local)
+	}
+}

@@ -48,7 +48,12 @@ func TestChatStartAnswersBeforeTheAgentIsUp(t *testing.T) {
 func TestFailedChatStartKeepsTheErrorAndTheRow(t *testing.T) {
 	home := t.TempDir()
 	dir := seedFolder(t, home)
-	g, _ := identityGateway(t, home, func(context.Context, SessionInfo, string) (string, error) {
+	var g *Gateway
+	g, _ = identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+		// The worker failed after registering: it ended (and hid) its prompt-less row first.
+		if err := endSession(context.Background(), g.auth.store.DB, info.ID, TerminalState{ExitCode: 1}); err != nil {
+			t.Error(err)
+		}
 		return "", errors.New("pack sync failed")
 	})
 	info, err := g.startSession(context.Background(), LocalActor("local"), SessionInfo{Directory: dir, Harness: "claude", Mode: "default", Transport: "acp"}, "")

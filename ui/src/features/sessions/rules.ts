@@ -24,7 +24,8 @@ export function sessionRules(session: ListedSession) {
     reconnect: !offline && !nonInteractive,
     install: !offline,
     save: !offline,
-    archive: !offline,
+    // A starting chat's agent is on its way up; Stop it once it runs.
+    archive: !offline && !(session.conversation_state === "starting" && !session.ended_at),
   }
 }
 

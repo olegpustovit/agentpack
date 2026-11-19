@@ -44,8 +44,6 @@ type WorkerRecord struct {
 	PID     int         `json:"pid"`
 	Address string      `json:"address"`
 	Secret  string      `json:"secret"`
-	// ToolsToken is the bearer the chat's agent sends to the gateway's /mcp; see mcp_chat.go.
-	ToolsToken string `json:"tools_token,omitempty"`
 }
 
 // createSessionDirectory claims id (chosen by the gateway for an instant start) or a fresh one.
@@ -261,7 +259,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if _, err := rand.Read(secret[:]); err != nil {
 		return 1, fmt.Errorf("generate worker secret: %w", err)
 	}
-	record := WorkerRecord{Session: launch.Session, ID: filepath.Base(directory), PID: os.Getpid(), Address: listener.Addr().String(), Secret: hex.EncodeToString(secret[:]), ToolsToken: launch.tools.token}
+	record := WorkerRecord{Session: launch.Session, ID: filepath.Base(directory), PID: os.Getpid(), Address: listener.Addr().String(), Secret: hex.EncodeToString(secret[:])}
 	// An instant start stays "starting" in the row until the endpoint serves; see the patch after ready.
 	instant := launch.Session.ConversationState == "starting"
 	if launch.Transport == "acp" {

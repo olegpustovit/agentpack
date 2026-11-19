@@ -28,7 +28,8 @@ type publicAccess struct {
 	origin    *url.URL // nil while off
 	pinned    bool     // AGENTPACK_PUBLIC_URL
 	candidate string   // last HTTPS origin a loopback proxy forwarded while off
-	nonce     string   // pending self-probe
+	nonce     string   // pending self-probe: sent with the request
+	answer    string   // and what only this gateway answers, so a server echoing headers fails
 	probe     *url.URL // origin under verification
 	client    *http.Client
 	serve     func(context.Context) (*ipn.ServeConfig, error)
@@ -177,10 +178,11 @@ func secureRequest(r *http.Request) bool {
 const publicOffPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Public access is off</title><main class="auth-shell"><section class="auth-card"><h1>Public access is off</h1><p>This address forwards to an Agentpack gateway that only answers its own machine and tailnet. To use it, open Settings › Sharing on that machine and turn on Public access.</p></section></main></html>`
 
 // servePublicOff answers a proxied HTTPS request while public access is off, remembering its host.
-func (g *Gateway) servePublicOff(w http.ResponseWriter, source requestSource) {
-	if origin, err := parsePublicOrigin("https://" + source.host); err == nil {
+func (g *Gateway) servePublicOff(w http.ResponseWriter, r *http.Request, source requestSource) {
+	// Funnel passes the visitor's own Host on, so its candidate comes only from the serve config.
+	if origin, err := parsePublicOrigin("https://" + source.host); err == nil && r.Header.Get("Tailscale-Funnel-Request") == "" {
 		g.public.mu.Lock()
-		// shortcut: the newest forwarded host wins, so a catch-all proxy lets anyone propose one; the owner still reads it and the probe must reach this gateway.
+		// shortcut: the newest forwarded host wins, so a catch-all proxy lets anyone propose one; a relay to this gateway also passes the probe, so the owner must recognise the host. Upgrade to proxy-config detection if that proves too loose.
 		g.public.candidate = origin.String()
 		g.public.mu.Unlock()
 	}
@@ -198,12 +200,12 @@ func (g *Gateway) serveProbe(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	g.public.mu.Lock()
-	probe, expected := g.public.probe, g.public.nonce
+	probe, expected, answer := g.public.probe, g.public.nonce, g.public.answer
 	g.public.mu.Unlock()
 	if probe == nil || subtle.ConstantTimeCompare([]byte(nonce), []byte(expected)) != 1 {
 		return false
 	}
-	w.Header().Set("X-Agentpack-Probe", nonce)
+	w.Header().Set("X-Agentpack-Probe", answer)
 	writeJSON(w, protectedResourceMetadata(g.resolveSource(r, probe).origin))
 	return true
 }
@@ -299,19 +301,19 @@ func (g *Gateway) writePublic(ctx context.Context, origin *url.URL) error {
 // verifyPublic fetches the protected-resource metadata through origin over verified TLS. It
 // passes only when the answer carries this gateway's nonce and names origin's MCP resource.
 func (g *Gateway) verifyPublic(ctx context.Context, origin *url.URL, report func(publicCheck)) bool {
-	nonce := randomToken()
+	nonce, answer := randomToken(), randomToken()
 	g.public.mu.Lock()
 	if g.public.probe != nil {
 		g.public.mu.Unlock()
 		report(publicCheck{Check: "reachable", Detail: "another check is already running"})
 		return false
 	}
-	g.public.probe, g.public.nonce = origin, nonce
+	g.public.probe, g.public.nonce, g.public.answer = origin, nonce, answer
 	client := g.public.client
 	g.public.mu.Unlock()
 	defer func() {
 		g.public.mu.Lock()
-		g.public.probe, g.public.nonce = nil, ""
+		g.public.probe, g.public.nonce, g.public.answer = nil, "", ""
 		g.public.mu.Unlock()
 	}()
 	if client == nil {
@@ -335,7 +337,7 @@ func (g *Gateway) verifyPublic(ctx context.Context, origin *url.URL, report func
 		return false
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK || subtle.ConstantTimeCompare([]byte(response.Header.Get("X-Agentpack-Probe")), []byte(nonce)) != 1 {
+	if response.StatusCode != http.StatusOK || subtle.ConstantTimeCompare([]byte(response.Header.Get("X-Agentpack-Probe")), []byte(answer)) != 1 {
 		report(publicCheck{Check: "reachable", Detail: host + " answers, but not from this gateway"})
 		return false
 	}

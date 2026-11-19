@@ -70,3 +70,13 @@ func TestParseUsageIgnoresOtherEntries(t *testing.T) {
 		}
 	}
 }
+
+func TestParseUsageSkipsFailedTurnsAndUnreportedGrokCost(t *testing.T) {
+	if _, ok := ParseUsage(LogEntry{Kind: "turn_end", Payload: json.RawMessage(`{"stopReason":"error"}`)}); ok {
+		t.Fatal("a failed turn counted")
+	}
+	usage, ok := ParseUsage(LogEntry{Kind: "turn_end", Payload: json.RawMessage(`{"_meta":{"usage":{"inputTokens":10,"outputTokens":5}}}`)})
+	if !ok || usage.Turns != 1 || usage.CostMicros != -1 {
+		t.Fatalf("Grok turn without cost: %+v", usage)
+	}
+}

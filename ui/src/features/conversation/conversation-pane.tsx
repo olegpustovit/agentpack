@@ -123,10 +123,11 @@ export default function ConversationPane({
   const threadScrollRef = useRef<HTMLDivElement>(null)
   const [configValues, setConfigValues] = useState<Record<string, string | boolean>>({})
   const readOnly = unavailable || info?.reachable === false || Boolean(info?.archived_at)
-  // "+" opens the chat before the agent is up; until it is, a message is held here and sent on arrival.
+  // "+" opens the chat before the agent is up. A message sent meanwhile stays in the composer (and its
+  // saved draft, so leaving the chat loses nothing) and goes out once the agent runs.
   const starting = !readOnly && info?.conversation_state === "starting" && !info.ended_at
   const live = !readOnly && !starting && info?.state.running === true
-  const [held, setHeld] = useState<SendInput>()
+  const [held, setHeld] = useState(false)
   const { data: tail, error: conversationError } = useQuery({ ...conversationEventsQuery(machine, sessionId, live), retry: false })
   // Earlier pages, loaded as the thread scrolls up. Keyed, so another session never shows them.
   const historyKey = `${machine}\0${sessionId}`
@@ -405,13 +406,11 @@ export default function ConversationPane({
   // Images upload to the running agent, so a starting chat holds text only.
   const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !(starting && (attachments.length > 0 || held)) && !send.isPending && !upload.isPending && !needsUpdate
   useEffect(() => {
-    if (!held) return
-    if (live) send.mutate(held)
-    // A start that failed ends the row; the message goes back to the composer.
-    else if (info?.ended_at) setDraft((current) => current || held.text)
-    else return
-    setHeld(undefined)
-  }, [held, live, info?.ended_at, send])
+    if (!held || !live && !info?.ended_at) return
+    // A start that failed ends the row; the message simply stays in the composer.
+    if (live && draft.trim()) send.mutate({ text: draft.trim(), attachments: [], clearComposer: true, optimisticAfter: entries.at(-1)?.seq ?? 0 })
+    setHeld(false)
+  }, [held, live, info?.ended_at, send, draft, entries])
   // Enter sends, or queues while the agent works; steer interrupts the turn and sends this next.
   function submit(steer = false) {
     if (!canSend) return
@@ -428,8 +427,7 @@ export default function ConversationPane({
       return
     }
     if (starting) {
-      setHeld({ text, attachments: [], clearComposer: false, optimisticAfter: entries.at(-1)?.seq ?? 0 })
-      setDraft("")
+      setHeld(true)
       return
     }
     // A message to an idle agent becomes the next prompt, so it can show before the gateway answers.
@@ -576,7 +574,7 @@ export default function ConversationPane({
                 <p className="py-(--s7) text-center text-(length:--fs-sm) text-(--fg3)">This subagent isn't in the loaded part of the conversation.</p>
               ) : (
                 <ThreadView
-                  items={subagent ? thread.items : withSending(thread.items, entries, held ?? (send.isPending ? send.variables : undefined))}
+                  items={subagent ? thread.items : withSending(thread.items, entries, send.isPending ? send.variables : undefined)}
                   machine={machine}
                   sessionId={sessionId}
                   readOnly={readOnly}

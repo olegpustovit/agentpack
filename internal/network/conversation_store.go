@@ -20,6 +20,12 @@ import (
 )
 
 func persistConversationChanges(ctx context.Context, db *sql.DB, id string, changes acp.LogChanges) error {
+	return persistConversationChangesSince(ctx, db, id, changes, 0)
+}
+
+// persistConversationChangesSince is for a live log restored at restoredSeq: its agent process is new,
+// so a running cost total logged before then belongs to the previous process.
+func persistConversationChangesSince(ctx context.Context, db *sql.DB, id string, changes acp.LogChanges, restoredSeq int64) error {
 	return state.Transaction(ctx, db, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `UPDATE sessions SET last_seq=max(last_seq,?),last_event_at=?,
 			conversation_truncated=max(conversation_truncated,?) WHERE id=? AND archived_at=0 AND node_id=`+state.LocalNodeSQL,
@@ -74,7 +80,7 @@ func persistConversationChanges(ctx context.Context, db *sql.DB, id string, chan
 				return err
 			}
 			if counts {
-				if err := recordUsage(ctx, tx, id, entry, usage); err != nil {
+				if err := recordUsage(ctx, tx, id, entry, usage, restoredSeq); err != nil {
 					return fmt.Errorf("record usage of entry %d: %w", entry.Seq, err)
 				}
 			}
@@ -85,13 +91,13 @@ func persistConversationChanges(ctx context.Context, db *sql.DB, id string, chan
 
 // recordUsage adds one new event's usage to its session and to this node's hour. Rows of this node have no
 // other writer, so the increments survive replication.
-func recordUsage(ctx context.Context, tx *sql.Tx, id string, entry acp.LogEntry, usage acp.Usage) error {
+func recordUsage(ctx context.Context, tx *sql.Tx, id string, entry acp.LogEntry, usage acp.Usage, restoredSeq int64) error {
 	if usage.CostTotalMicros >= 0 {
 		// Stored as the difference from the previous total; a smaller total means the adapter started over.
 		var previous sql.NullString
-		err := tx.QueryRowContext(ctx, `SELECT body FROM conversation_events WHERE session_id=? AND seq<?
+		err := tx.QueryRowContext(ctx, `SELECT body FROM conversation_events WHERE session_id=? AND seq<? AND seq>?
 			AND json_extract(body,'$.kind')='usage_update' AND json_extract(body,'$.payload.cost.amount') IS NOT NULL
-			AND json_extract(body,'$.payload._subagent') IS NULL ORDER BY seq DESC LIMIT 1`, id, entry.Seq).Scan(&previous)
+			AND json_extract(body,'$.payload._subagent') IS NULL ORDER BY seq DESC LIMIT 1`, id, entry.Seq, restoredSeq).Scan(&previous)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -260,7 +266,7 @@ func newConversationLog(ctx context.Context, store *state.Store, id string, fail
 	err = log.EnableSink(func(changes acp.LogChanges) error {
 		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		err := persistConversationChanges(writeCtx, store.DB, id, changes)
+		err := persistConversationChangesSince(writeCtx, store.DB, id, changes, lastSeq)
 		if err != nil {
 			if err == errSessionArchived {
 				fail(err)

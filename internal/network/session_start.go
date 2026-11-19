@@ -67,6 +67,10 @@ func (g *Gateway) failStart(ctx context.Context, info SessionInfo, cause error) 
 		if err := log.Flush(); err != nil {
 			return err
 		}
+		// A worker that failed early already ended the row, and hid it for having no prompt yet.
+		if _, err := g.auth.store.DB.ExecContext(ctx, "UPDATE sessions SET hidden=0 WHERE id=? AND archived_at=0 AND node_id="+state.LocalNodeSQL, info.ID); err != nil {
+			return err
+		}
 		return endSession(ctx, g.auth.store.DB, info.ID, TerminalState{ExitCode: 1})
 	}()
 	if err != nil {

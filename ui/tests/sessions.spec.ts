@@ -156,12 +156,15 @@ test("+ starts a chat at once with the folder's last agent and holds a message u
   await composer.fill("check the budgets")
   await composer.press("Enter")
   await expect(page.getByText("Sends when Codex is ready")).toBeVisible()
+  // The message stays in the composer (and its saved draft) until it goes out.
+  await expect(composer).toHaveValue("check the budgets")
   expect(prompts).toHaveLength(0)
   reply = [...sessions, { ...starting, conversation_state: "idle", state: terminal(true) }]
   // Without live events the list polls every 15 s.
   await page.clock.runFor(16_000)
   await expect.poll(() => prompts).toEqual([{ text: "check the budgets" }])
   await expect(page.getByText("Sends when Codex is ready")).toBeHidden()
+  await expect(composer).toHaveValue("")
 })
 
 test("⌥-click on + lists the agents", async ({ page }) => {

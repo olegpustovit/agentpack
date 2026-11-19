@@ -1,8 +1,11 @@
 package network
 
 import (
+	"math"
 	"net/http"
+	"net/netip"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -32,8 +35,32 @@ func (c *clientWindow) take(now time.Time, client string, perClient, ceiling int
 	return 0
 }
 
+// limiterKey is who a request counts against: an IPv6 client by its /64, which one host can rotate
+// through freely. local is this machine's own loopback origin, which the internet cannot exhaust.
+func limiterKey(r *http.Request) (key string, local bool) {
+	address, err := netip.ParseAddr(sourceOf(r).client)
+	if err != nil {
+		return sourceOf(r).client, false
+	}
+	address = address.Unmap()
+	if address.Is6() {
+		prefix, _ := address.Prefix(64)
+		return prefix.String(), false
+	}
+	return address.String(), address.IsLoopback()
+}
+
+// limiterCeiling is the cap across all clients, which the local origin never shares.
+func limiterCeiling(local bool, ceiling int) int {
+	if local {
+		return math.MaxInt
+	}
+	return ceiling
+}
+
 func loginKeys(r *http.Request, email string) [2]string {
-	return [2]string{"email:" + email, "address:" + sourceOf(r).client}
+	key, _ := limiterKey(r)
+	return [2]string{"email:" + email, "address:" + key}
 }
 
 func retryAfter(w http.ResponseWriter, wait time.Duration) {
@@ -44,8 +71,13 @@ func (a *gatewayAuth) allowLogin(w http.ResponseWriter, r *http.Request, email s
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := a.now()
-	wait := a.attempts.take(now, sourceOf(r).client, 10, 100)
+	client, local := limiterKey(r)
+	wait := a.attempts.take(now, client, 10, limiterCeiling(local, 100))
 	for _, key := range loginKeys(r, email) {
+		// Failed internet logins must not lock the owner out of this machine's own UI.
+		if local && strings.HasPrefix(key, "email:") {
+			continue
+		}
 		if remaining := a.failures[key].until.Sub(now); remaining > wait {
 			wait = remaining
 		}

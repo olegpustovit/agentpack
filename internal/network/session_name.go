@@ -86,10 +86,12 @@ func HideSession(ctx context.Context, home, id string) error {
 		return err
 	}
 	defer store.Close()
-	if _, err := storedSession(ctx, store.Reader, id); err != nil {
+	info, err := storedSession(ctx, store.Reader, id)
+	if err != nil {
 		return err
 	}
-	if _, err := workerRecord(home, id); err == nil {
+	// A starting chat has no worker record yet, but its agent is on the way up.
+	if _, err := workerRecord(home, id); err == nil || info.ConversationState == "starting" && info.EndedAt.IsZero() {
 		return errSessionRunning
 	}
 	_, err = store.DB.ExecContext(ctx, "UPDATE sessions SET hidden=1 WHERE id=? AND hidden=0", id)

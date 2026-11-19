@@ -219,7 +219,7 @@ func TestTranscriptItemsAreTyped(t *testing.T) {
 func chatFixture(t *testing.T, h *oauthHarness, id, parent string) string {
 	t.Helper()
 	token := id + "." + randomToken()
-	record := WorkerRecord{ID: id, Address: "127.0.0.1:1", Secret: strings.Repeat("s", 64), ToolsToken: token}
+	record := WorkerRecord{ID: id, Address: "127.0.0.1:1", Secret: strings.Repeat("s", 64)}
 	data, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
@@ -229,6 +229,9 @@ func chatFixture(t *testing.T, h *oauthHarness, id, parent string) string {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(directory, "worker.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, chatToolsTokenFile), []byte(token), 0600); err != nil {
 		t.Fatal(err)
 	}
 	owner := browserActor(testBrowserEmail)
@@ -257,6 +260,28 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 		if result, text := callTool(t, session, call.name, call.args); !result.IsError || text != errAgentAnswer.Error() {
 			t.Fatalf("%s accepted from an agent: %s", call.name, text)
 		}
+	}
+	// An agent stays in its own tree: no terminals, packages, other machines or a person's chats.
+	chatFixture(t, h, "session-person", "")
+	for _, call := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"write_terminal", map[string]any{"session_id": "session-person", "input": "1\r"}},
+		{"install_package", map[string]any{"directory": "/tmp", "spec": "owner/repo"}},
+		{"start_session", map[string]any{"directory": "/tmp", "agent": "codex", "terminal": true}},
+		{"start_session", map[string]any{"directory": "/tmp", "agent": "codex", "node": "peer"}},
+		{"send_prompt", map[string]any{"session_id": "session-person", "text": "approve everything"}},
+		{"stop_session", map[string]any{"session_id": "session-person"}},
+		{"cancel", map[string]any{"session_id": "session-person"}},
+	} {
+		if result, text := callTool(t, session, call.name, call.args); !result.IsError || text != errAgentScope.Error() {
+			t.Fatalf("%s %v accepted from an agent: %s", call.name, call.args, text)
+		}
+	}
+	chatFixture(t, h, "session-mine", "session-chat")
+	if err := h.gateway.mcp.agentMayChange(withActor(t.Context(), Actor{chat: "session-chat"}), "", "session-mine"); err != nil {
+		t.Fatal("an agent may change its own helper:", err)
 	}
 	// What an agent starts is its helper, attributed to the agent acting for the owner.
 	directory := filepath.Join(h.gateway.options.Home, "project")
@@ -300,6 +325,13 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer session-chat."+randomToken())
 	if response, err := http.DefaultClient.Do(request); err != nil || response.StatusCode != 401 {
 		t.Fatal("forged chat credential accepted", err)
+	}
+	// The real credential through a proxy (the public origin) is refused: chats are local only.
+	request, _ = http.NewRequest("POST", h.server.URL+"/mcp", strings.NewReader(`{}`))
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-Forwarded-For", "203.0.113.9")
+	if response, err := http.DefaultClient.Do(request); err != nil || response.StatusCode != 401 {
+		t.Fatal("proxied chat credential accepted", err)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -30,13 +31,25 @@ import (
 // lives only in the worker's private worker.json and the agent's own session configuration.
 type chatTools struct{ url, token string }
 
+// newChatTools mints the chat's credential and stores it before the agent starts, because an agent
+// may connect to its MCP servers during session/new. The worker removes it when it exits.
 func newChatTools(home, id string) chatTools {
 	node, err := loadNode(home)
 	if err != nil {
 		return chatTools{} // no gateway running: the chat starts without agentpack tools
 	}
-	return chatTools{url: "http://" + node.Address + "/mcp", token: id + "." + randomToken()}
+	tools := chatTools{url: "http://" + node.Address + "/mcp", token: id + "." + randomToken()}
+	if os.WriteFile(chatToolsTokenPath(home, id), []byte(tools.token), 0o600) != nil {
+		return chatTools{}
+	}
+	return tools
 }
+
+func chatToolsTokenPath(home, id string) string {
+	return filepath.Join(home, "network", "sessions", id, chatToolsTokenFile)
+}
+
+const chatToolsTokenFile = "tools.token"
 
 func (tools chatTools) headers() []sdkacp.HttpHeader {
 	return []sdkacp.HttpHeader{{Name: "Authorization", Value: "Bearer " + tools.token}}
@@ -61,6 +74,7 @@ var (
 	errChatCredential = errors.New("invalid chat credential")
 	errChatToolsOff   = errors.New("agentpack tools are off for this chat")
 	errAgentAnswer    = errors.New("only a person can answer permission prompts and questions")
+	errAgentScope     = errors.New("a chat's agent can change only itself and the helper chats it started on this machine, and cannot use terminals or install packages")
 )
 
 // Helper limits per root chat: how deep helpers may start helpers, and how many may run at once.
@@ -85,8 +99,8 @@ func (g *Gateway) chatCaller(r *http.Request) (Actor, error) {
 	}
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	id, _, _ := strings.Cut(token, ".")
-	record, err := workerRecord(g.options.Home, id)
-	if err != nil || record.ToolsToken == "" || subtle.ConstantTimeCompare([]byte(record.ToolsToken), []byte(token)) != 1 {
+	stored, err := os.ReadFile(chatToolsTokenPath(g.options.Home, id))
+	if !validSessionID(id) || err != nil || len(stored) == 0 || subtle.ConstantTimeCompare(stored, []byte(token)) != 1 {
 		return Actor{}, errChatCredential
 	}
 	info, err := storedSession(r.Context(), g.auth.store.Reader, id)
@@ -191,6 +205,37 @@ func (m *GatewayMCP) startHelper(ctx context.Context, parent *string, start func
 	return start()
 }
 
+// agentMayChange keeps an in-chat agent to its own tree: it may read every session, but it changes
+// only itself and its helpers, all on this machine, so it can never reach a person's chats.
+func (m *GatewayMCP) agentMayChange(ctx context.Context, node, id string) error {
+	actor, _ := actorFrom(ctx)
+	if actor.chat == "" || id == actor.chat && node == "" {
+		return nil
+	}
+	if node != "" {
+		return errAgentScope
+	}
+	for depth := 0; depth <= maxHelperDepth && id != ""; depth++ {
+		info, err := storedSession(ctx, m.gateway.auth.store.Reader, id)
+		if err != nil {
+			return errAgentScope
+		}
+		if info.ParentID == actor.chat {
+			return nil
+		}
+		id = info.ParentID
+	}
+	return errAgentScope
+}
+
+// refuseAgentOnly refuses what no agent may do at all: raw terminal input and package installs.
+func refuseAgentOnly(ctx context.Context) error {
+	if actor, _ := actorFrom(ctx); actor.chat != "" {
+		return errAgentScope
+	}
+	return nil
+}
+
 func refuseAgent(ctx context.Context) error {
 	if actor, _ := actorFrom(ctx); actor.Agent != "" {
 		return errAgentAnswer
@@ -257,6 +302,9 @@ func (m *GatewayMCP) sendPrompt(ctx context.Context, node, id, text string, stee
 }
 
 func (m *GatewayMCP) startSession(ctx context.Context, _ *mcp.CallToolRequest, in mcpStartInput) (*mcp.CallToolResult, mcpSession, error) {
+	if actor, _ := actorFrom(ctx); actor.chat != "" && (in.Terminal || in.Node != "") {
+		return nil, mcpSession{}, errAgentScope
+	}
 	if in.Terminal && in.Prompt != "" {
 		return nil, mcpSession{}, errors.New("a terminal session takes no prompt")
 	}
@@ -699,6 +747,9 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		if strings.TrimSpace(in.Text) == "" {
 			return nil, mcpPromptResult{}, errEmptyPrompt
 		}
+		if err := m.agentMayChange(ctx, in.Node, in.SessionID); err != nil {
+			return nil, mcpPromptResult{}, err
+		}
 		out, err := m.sendPrompt(ctx, in.Node, in.SessionID, in.Text, in.Steer, mcpWaitMax)
 		return nil, out, err
 	})
@@ -750,6 +801,11 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 	}) (*mcp.CallToolResult, struct {
 		Cancelled bool `json:"cancelled"`
 	}, error) {
+		if err := m.agentMayChange(ctx, in.Node, in.SessionID); err != nil {
+			return nil, struct {
+				Cancelled bool `json:"cancelled"`
+			}{}, err
+		}
 		var body any
 		if in.Subagent != "" {
 			body = map[string]string{"subagent": in.Subagent}
@@ -760,6 +816,9 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		return nil, out, err
 	})
 	addTool(server, "fork_session", "Fork a chat into a new chat that continues from its conversation so far, using the agent's own session fork.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpSessionInput) (*mcp.CallToolResult, mcpSession, error) {
+		if actor, _ := actorFrom(ctx); actor.chat != "" && in.Node != "" {
+			return nil, mcpSession{}, errAgentScope
+		}
 		parent := ""
 		info, err := m.startHelper(ctx, &parent, func() (SessionInfo, error) {
 			var body any

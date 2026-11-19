@@ -30,7 +30,8 @@ export function useUsage() {
     previous,
     query,
     rows: hourly.filter(inWindow),
-    previousRows: hourly.filter((row) => bucketOf(previous, row.hour * 1000) >= 0),
+    // The current period has only run so far; compare it with the same stretch of the one before.
+    previousRows: hourly.filter((row) => bucketOf(previous, row.hour * 1000) >= 0 && (back > 0 || row.hour * 1000 < previous.starts[0]! + now - win.starts[0]!)),
   }
 }
 

@@ -21,18 +21,24 @@ type tokenCounts struct {
 	CachedRead  int64 `json:"cachedReadTokens"`
 	CachedWrite int64 `json:"cachedWriteTokens"`
 	// Grok's names; its input includes the cache reads.
-	CacheCreation int64 `json:"cacheCreationTokens"`
-	CostUSDTicks  int64 `json:"costUsdTicks"`
+	CacheCreation int64  `json:"cacheCreationTokens"`
+	CostUSDTicks  *int64 `json:"costUsdTicks"`
 }
 
 // ParseUsage normalizes the usage an agent reports in one log entry; ok is false when it reports none.
 // One shape per agent: ACP turn_end.usage (Claude, Codex, OMP, Antigravity), Grok's turn_end._meta,
 // and usage_update.cost, a running total (Claude, OMP). Cursor reports nothing, so its turns only count.
 func ParseUsage(entry LogEntry) (Usage, bool) {
+	usage := Usage{CostMicros: -1, CostTotalMicros: -1}
+	// Runs on every flushed event; only these two kinds carry usage, so skip decoding the rest.
+	if entry.Kind != "turn_end" && entry.Kind != "usage_update" {
+		return usage, false
+	}
 	var payload struct {
-		Subagent string       `json:"_subagent"`
-		Usage    *tokenCounts `json:"usage"`
-		Cost     *struct {
+		StopReason string       `json:"stopReason"`
+		Subagent   string       `json:"_subagent"`
+		Usage      *tokenCounts `json:"usage"`
+		Cost       *struct {
 			Amount   float64 `json:"amount"`
 			Currency string  `json:"currency"`
 		} `json:"cost"`
@@ -50,13 +56,16 @@ func ParseUsage(entry LogEntry) (Usage, bool) {
 			} `json:"quota"`
 		} `json:"_meta"`
 	}
-	usage := Usage{CostMicros: -1, CostTotalMicros: -1}
 	// A subagent's own running totals and turns belong to its child session, not this one.
 	if json.Unmarshal(entry.Payload, &payload) != nil || payload.Subagent != "" {
 		return usage, false
 	}
 	switch entry.Kind {
 	case "turn_end":
+		// A turn that failed before the agent ran (signed out, unreachable) did no work.
+		if payload.StopReason == "error" {
+			return usage, false
+		}
 		usage.Turns = 1
 		if counts := payload.Usage; counts != nil {
 			// Reasoning is billed as output.
@@ -66,7 +75,9 @@ func ParseUsage(entry LogEntry) (Usage, bool) {
 			usage.InputTokens, usage.OutputTokens = max(0, counts.Input-counts.CachedRead), counts.Output
 			usage.CacheReadTokens, usage.CacheWriteTokens = counts.CachedRead, counts.CacheCreation
 			// xAI bills in ticks of 1e-10 USD.
-			usage.CostMicros = counts.CostUSDTicks / 10_000
+			if counts.CostUSDTicks != nil {
+				usage.CostMicros = *counts.CostUSDTicks / 10_000
+			}
 		}
 		usage.Model = payload.Meta.ModelID
 		// Claude lists helper models (such as a title model) too; the one that did most of the work names the turn.

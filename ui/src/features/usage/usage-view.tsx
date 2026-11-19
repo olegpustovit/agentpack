@@ -52,7 +52,11 @@ export function UsageView({ view }: { view: View }) {
   const { metric, win, query, now } = usage
   const names = useNames(query.data)
   const [hover, setHover] = useState<number | null>(null)
-  const [pinned, setPinned] = useState<number | null>(null)
+  // A pinned bar belongs to one window; another range or period starts unpinned.
+  const windowKey = `${win.range}:${win.starts[0]}`
+  const [pin, setPin] = useState<{ key: string; index: number } | null>(null)
+  const pinned = pin?.key === windowKey ? pin.index : null
+  const setPinned = (index: number | null) => setPin(index === null ? null : { key: windowKey, index })
   const { kind: unit, label } = metrics[metric]
   const navigate = useNavigate()
 
