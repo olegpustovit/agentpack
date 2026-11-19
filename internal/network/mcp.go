@@ -24,9 +24,9 @@ import (
 
 // Closed sets are named types so schemaFor publishes them as enums and codemode clients get Literal types.
 type (
-	mcpAgent     string
+	mcpAgent  string
 	chatState string
-	waitUntil    string
+	waitUntil string
 )
 
 const (
@@ -42,7 +42,7 @@ const (
 )
 
 var (
-	chatStates       = []chatState{stateStarting, stateWorking, stateNeedsYou, stateIdle, stateStopped}
+	chatStates          = []chatState{stateStarting, stateWorking, stateNeedsYou, stateIdle, stateStopped}
 	waitConditions      = []waitUntil{untilNeedsYou, untilIdle, untilAny}
 	permissionDecisions = []sdkacp.PermissionOptionKind{sdkacp.PermissionOptionKindAllowOnce, sdkacp.PermissionOptionKindAllowAlways, sdkacp.PermissionOptionKindRejectOnce, sdkacp.PermissionOptionKindRejectAlways}
 )
@@ -72,7 +72,7 @@ var mcpTypeSchemas = map[reflect.Type]*jsonschema.Schema{
 	reflect.TypeFor[json.RawMessage]():             {},
 	reflect.TypeFor[map[string]any]():              {Types: []string{"null", "object"}},
 	reflect.TypeFor[mcpAgent]():                    enumSchema(mcpAgents()),
-	reflect.TypeFor[chatState]():                enumSchema(chatStates),
+	reflect.TypeFor[chatState]():                   enumSchema(chatStates),
 	reflect.TypeFor[waitUntil]():                   enumSchema(waitConditions),
 	reflect.TypeFor[sdkacp.PermissionOptionKind](): enumSchema(permissionDecisions),
 }
@@ -147,18 +147,18 @@ type mcpResolveIssueInput struct {
 
 // mcpSession is the compact session view every session tool returns.
 type mcpSession struct {
-	ID        string       `json:"id"`
-	NodeID    string       `json:"node_id,omitempty"`
-	Name      string       `json:"name,omitempty" jsonschema:"Name, or a chat's first prompt."`
-	Agent     string       `json:"agent"`
-	Directory string       `json:"directory"`
-	Mode      string       `json:"mode,omitempty"`
-	Chat      bool         `json:"chat" jsonschema:"A chat: read_conversation and send_prompt work on it."`
+	ID        string    `json:"id"`
+	NodeID    string    `json:"node_id,omitempty"`
+	Name      string    `json:"name,omitempty" jsonschema:"Name, or a chat's first prompt."`
+	Agent     string    `json:"agent"`
+	Directory string    `json:"directory"`
+	Mode      string    `json:"mode,omitempty"`
+	Chat      bool      `json:"chat" jsonschema:"A chat: read_conversation and send_prompt work on it."`
 	State     chatState `json:"state"`
-	ParentID  string       `json:"parent_id,omitempty" jsonschema:"The chat whose agent started this helper."`
-	Tools     bool         `json:"tools,omitempty" jsonschema:"The chat's agent may use agentpack tools."`
-	Reachable bool         `json:"reachable" jsonschema:"The machine answered recently; false means last-known state."`
-	LastUsed  time.Time    `json:"last_used,omitzero"`
+	ParentID  string    `json:"parent_id,omitempty" jsonschema:"The chat whose agent started this helper."`
+	Tools     bool      `json:"tools,omitempty" jsonschema:"The chat's agent may use agentpack tools."`
+	Reachable bool      `json:"reachable" jsonschema:"The machine answered recently; false means last-known state."`
+	LastUsed  time.Time `json:"last_used,omitzero"`
 }
 
 func sessionView(info SessionInfo) mcpSession {
