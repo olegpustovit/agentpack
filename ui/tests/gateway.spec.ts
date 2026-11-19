@@ -665,7 +665,7 @@ test("sessions and library show loaders until their requests finish", async ({ p
   await expect(page.getByRole("navigation", { name: "Library" }).locator('[data-slot="skeleton"]')).toHaveCount(0)
 })
 
-test("terminal renders a large replay promptly and accepts live output afterwards", async ({ page }) => {
+test("terminal renders a large replay promptly and accepts live output afterwards @timing", async ({ page }) => {
   await mockAPI(page)
   let socket: WebSocketRoute | undefined
   const replay = Buffer.from("history line\r\n".repeat(75000) + "\x1b[2J\x1b[HREPLAY READY\r\n")

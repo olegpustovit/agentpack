@@ -1,3 +1,4 @@
+import { availableParallelism } from "node:os"
 import { defineConfig, devices } from "@playwright/test"
 
 const origin = "http://127.0.0.1:4173"
@@ -7,7 +8,9 @@ const captures = "review-captures.spec.ts"
 export default defineConfig({
   testDir: "tests",
   fullyParallel: true,
-  workers: "100%",
+  // Every worker runs its own browser; past half the cores they only contend (same wall time, flaky timing
+  // tests), while a 4-core host keeps all four.
+  workers: Math.max(4, Math.floor(availableParallelism() / 2)),
   // Budgets, not guesses: see "Test budgets" in AGENTS.md. A test that needs more is a test to rewrite.
   timeout: 8_000,
   expect: { timeout: 5_000 },
@@ -19,7 +22,9 @@ export default defineConfig({
   use: { baseURL: origin, reducedMotion: "reduce", serviceWorkers: "block" },
   projects: [
     // Every behaviour runs once. The other two engines cover only what can differ on them.
-    { name: "chromium", testIgnore: process.env.CAPTURE ? [] : [captures], use: { ...devices["Desktop Chrome"] } },
+    { name: "chromium", testIgnore: process.env.CAPTURE ? [] : [captures], grepInvert: /@timing/, use: { ...devices["Desktop Chrome"] } },
+    // Real-time budgets measure the app, so they run alone after the rest instead of competing with every worker.
+    { name: "timing", grep: /@timing/, dependencies: ["chromium", "phone", "webkit"], use: { ...devices["Desktop Chrome"] } },
     {
       name: "phone",
       testMatch: ["shell.spec.ts"],

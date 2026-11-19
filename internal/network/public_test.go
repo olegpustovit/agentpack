@@ -58,6 +58,15 @@ func TestPublicURLKeepsLocalOriginAndForwardedHeadersNeedLoopback(t *testing.T) 
 	if w := serve(handler, "GET", "http://127.0.0.1:7420/api/sessions", "127.0.0.1:5000", proxied); w.Code != 200 {
 		t.Fatalf("public origin through a loopback proxy: %d %s", w.Code, w.Body.String())
 	}
+	// With a 0.0.0.0 listener, a LAN browser naming the listener's Host is not this machine.
+	wide := publicGateway(t, testPublicOrigin)
+	wide.origin, _ = url.Parse("http://0.0.0.0:7420")
+	if w := serve(wide.Handler(), "GET", "http://0.0.0.0:7420/api/sessions", "192.0.2.10:5000", map[string]string{"Cookie": "agentpack_session=owner-token"}); w.Code != 403 {
+		t.Fatalf("a LAN peer used the local origin: %d %s", w.Code, w.Body.String())
+	}
+	if w := serve(wide.Handler(), "GET", "http://0.0.0.0:7420/api/sessions", "127.0.0.1:5000", map[string]string{"Cookie": "agentpack_session=owner-token"}); w.Code != 200 {
+		t.Fatalf("this machine's browser: %d %s", w.Code, w.Body.String())
+	}
 	// The same headers from a non-loopback peer are ignored: the host is unrecognized.
 	if w := serve(handler, "GET", "http://gateway.internal/api/sessions", "192.0.2.10:5000", proxied); w.Code != 403 || !strings.Contains(w.Body.String(), "unrecognized gateway host") {
 		t.Fatalf("forwarded headers from a remote peer: %d %s", w.Code, w.Body.String())

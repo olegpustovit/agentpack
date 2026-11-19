@@ -152,11 +152,17 @@ func (g *Gateway) resolveSource(r *http.Request, public *url.URL) requestSource 
 	}
 	if public != nil && strings.EqualFold(source.host, public.Host) {
 		source.origin = public.Scheme + "://" + public.Host
-	} else if r.Host == g.origin.Host && !source.proxied && !forwardedHost {
-		// shortcut: with a non-loopback listener (--address 0.0.0.0, which needs AGENTPACK_PUBLIC_URL), a LAN client can name this Host; require a loopback peer there if that setup is ever used.
+	} else if r.Host == g.origin.Host && (loopback || !g.wideListener()) && !source.proxied && !forwardedHost {
+		// A 0.0.0.0 listener is reachable from the LAN, where any client can name this Host.
 		source.origin = g.origin.Scheme + "://" + g.origin.Host
 	}
 	return source
+}
+
+// wideListener is a gateway listening on a non-loopback address, which other machines can reach directly.
+func (g *Gateway) wideListener() bool {
+	address, err := netip.ParseAddrPort(g.origin.Host)
+	return err == nil && !address.Addr().IsLoopback()
 }
 
 func withRequestSource(r *http.Request, source requestSource) *http.Request {
