@@ -27,15 +27,15 @@ export async function uploadConversationBlob(
     throw new Error("invalid upload response")
   }
   if (!data.sha) throw new Error("invalid upload response")
-  const blobUrl = new URL(`/api/sessions/${encodeURIComponent(sessionId)}/blobs/${data.sha}`, location.origin)
-  if (machine && machine !== LOCAL) blobUrl.searchParams.set("node", machine)
   const bitmap = await loadImageSize(file)
   return {
     sha: data.sha,
     mime: file.type || "image/png",
     width: bitmap.width,
     height: bitmap.height,
-    previewUrl: blobUrl.pathname + blobUrl.search,
+    // The browser already has the bytes; a peer gateway may not know the blob's location yet.
+    // shortcut: never revoked, fine for a handful of attachments per page; revoke on remove if it grows.
+    previewUrl: URL.createObjectURL(file),
   }
 }
 

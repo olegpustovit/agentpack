@@ -544,6 +544,10 @@ func TestConversationReplayFromFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Peers only see the replicated row, so it must say the chat is live.
+	if stored, err := storedSession(context.Background(), testSessionStore(t, home).Reader, id); err != nil || !stored.State.Running {
+		t.Fatalf("replicated ACP session = %+v, %v; want running", stored.State, err)
+	}
 	response, err := workerRequest(context.Background(), record, http.MethodGet, "/conversation?since=0", "")
 	if err != nil {
 		t.Fatal(err)
