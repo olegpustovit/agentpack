@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -112,6 +113,9 @@ func readUsage(ctx context.Context, db *sql.DB, from, to int64) (report usageRep
 	if err != nil {
 		return report, err
 	}
+	if err = attributeWorktrees(ctx, tx, &report); err != nil {
+		return report, err
+	}
 	report.Samples, err = scanRows(ctx, tx, `SELECT hour,node_id,harness,window_id,used_percent,reset_at FROM limit_samples
 		WHERE hour>=? AND hour<? ORDER BY hour`,
 		func(row *sql.Rows, s *limitSample) error {
@@ -121,6 +125,62 @@ func readUsage(ctx context.Context, db *sql.DB, from, to int64) (report usageRep
 		return report, err
 	}
 	return report, tx.Commit()
+}
+
+// worktreeDirectory matches $AGENTPACK_HOME/worktrees/<16 hex>/<slug>, for rows from peers that
+// do not record worktree_of; their definition root stands in for the main folder.
+var worktreeDirectory = regexp.MustCompile(`[\\/]worktrees[\\/][0-9a-f]{16}[\\/][^\\/]+(?:[\\/]|$)`)
+
+// attributeWorktrees counts work done in a worktree under its main folder's project. A worktree
+// has its own folder identity, so its rows take the identity of the main folder's own sessions on
+// that node, or one named after the main folder when it has none.
+func attributeWorktrees(ctx context.Context, tx *sql.Tx, report *usageReport) error {
+	type folder struct{ node, id string }
+	type row struct{ node, id, directory, main, root string }
+	rows, err := scanRows(ctx, tx, `SELECT node_id,folder_id,directory,worktree_of,definition_root FROM sessions
+		WHERE folder_id<>'' AND (worktree_of<>'' OR (definition_root<>'' AND directory LIKE '%worktrees%'))`,
+		func(rows *sql.Rows, r *row) error { return rows.Scan(&r.node, &r.id, &r.directory, &r.main, &r.root) })
+	if err != nil {
+		return err
+	}
+	projects := map[folder]string{}    // worktree folder -> main folder's identity
+	mains := map[folder]string{}       // main folder's identity by node and path
+	directories := map[string]string{} // project identity -> main folder
+	for _, r := range rows {
+		if r.main == "" && worktreeDirectory.MatchString(r.directory) {
+			r.main = r.root
+		}
+		if r.main == "" {
+			continue
+		}
+		key := folder{r.node, r.main}
+		id, ok := mains[key]
+		if !ok {
+			err := tx.QueryRowContext(ctx, `SELECT folder_id FROM sessions WHERE node_id=? AND directory=? AND folder_id<>'' AND worktree_of=''
+				ORDER BY last_used DESC LIMIT 1`, r.node, r.main).Scan(&id)
+			if errors.Is(err, sql.ErrNoRows) {
+				id, err = "dir:"+r.main, nil
+			}
+			if err != nil {
+				return err
+			}
+			mains[key] = id
+		}
+		projects[folder{r.node, r.id}] = id
+		directories[id] = r.main
+	}
+	for i, hour := range report.Hourly {
+		if id, ok := projects[folder{hour.NodeID, hour.FolderID}]; ok {
+			report.Hourly[i].FolderID = id
+		}
+	}
+	// A session's directory names its project on the page, so a worktree session shows the main folder.
+	for i, session := range report.Sessions {
+		if id, ok := projects[folder{session.NodeID, session.FolderID}]; ok {
+			report.Sessions[i].FolderID, report.Sessions[i].Directory = id, directories[id]
+		}
+	}
+	return nil
 }
 
 // scanRows returns an empty slice rather than nil, so JSON readers always get an array.

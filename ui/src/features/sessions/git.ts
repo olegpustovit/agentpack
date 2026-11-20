@@ -137,10 +137,10 @@ export function isWorktreePath(directory: string): boolean {
   return WORKTREE_PATH.test(directory)
 }
 
-// The folder a session belongs to as a project: a worktree session counts under its main folder.
-// shortcut: a main folder whose definition root is a parent (monorepo) or an external environment
-// groups under that root; upgrade by recording the main folder on the session row.
-export function projectDirectory(session: { directory: string; definition_root?: string }): string {
+// The folder a session belongs to as a project: a worktree session counts under its main folder,
+// which the gateway records. Rows from older peers fall back to the worktree's definition root.
+export function projectDirectory(session: { directory: string; definition_root?: string; worktree_of?: string }): string {
+  if (session.worktree_of) return session.worktree_of
   return session.definition_root && isWorktreePath(session.directory) ? session.definition_root : session.directory
 }
 

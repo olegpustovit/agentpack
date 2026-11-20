@@ -193,6 +193,9 @@ func TestNewWorktreeSessionSharesTheProjectAndArchiveRemovesIt(t *testing.T) {
 	if !insideWorktrees(g.options.Home, info.Directory) || info.DefinitionRoot != main {
 		t.Fatalf("session %+v", info)
 	}
+	if stored, err := storedSession(t.Context(), g.auth.store.Reader, info.ID); err != nil || stored.WorktreeOf != main {
+		t.Fatalf("worktree_of %q %v", stored.WorktreeOf, err)
+	}
 	// A second chat continues in the same worktree; an arbitrary folder is refused.
 	other := startWorktreeChat(t, g, call, main, info.Directory)
 	if other.Directory != info.Directory {
@@ -274,6 +277,61 @@ func TestSessionGitCommitAndPullRequest(t *testing.T) {
 	w = call("POST", "/api/sessions/"+info.ID+"/git/pr", `{}`)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "https://github.com/o/r/compare/main...ap%2Freplay-offset?expand=1") {
 		t.Fatalf("compare: %d %s", w.Code, w.Body)
+	}
+}
+
+// A squash-merged pull request leaves no merge in the main folder; gh's MERGED state for the
+// commit the worktree has checked out is what lets archiving remove it.
+func TestArchiveRemovesWorktreeOfMergedPullRequest(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake gh is a shell script")
+	}
+	ttl := prCacheTTL
+	prCacheTTL = 0
+	t.Cleanup(func() { prCacheTTL = ttl })
+	g, main, call := worktreeGateway(t)
+	origin := t.TempDir()
+	git(t, origin, "init", "-q", "--bare")
+	git(t, main, "remote", "add", "origin", origin)
+	info := startWorktreeChat(t, g, call, main, "new")
+	write(t, filepath.Join(info.Directory, "feature.go"), "package x\n")
+	git(t, info.Directory, "add", "-A")
+	git(t, info.Directory, "commit", "-q", "-m", "feature")
+	git(t, info.Directory, "push", "-q", "-u", "origin", "ap/replay-offset")
+	head := git(t, info.Directory, "rev-parse", "HEAD")
+	bin := t.TempDir()
+	gh := func(state string) {
+		write(t, filepath.Join(bin, "gh"), "#!/bin/sh\necho '{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\""+state+"\",\"headRefOid\":\""+head+"\",\"statusCheckRollup\":[]}'\n")
+		if err := os.Chmod(filepath.Join(bin, "gh"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitPath, _ := exec.LookPath("git")
+	if err := os.Symlink(gitPath, filepath.Join(bin, "git")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	rowMerged := func() bool {
+		var body struct{ Worktrees []worktreeRow }
+		if err := json.Unmarshal(call("GET", "/api/worktrees", "").Body.Bytes(), &body); err != nil || len(body.Worktrees) != 1 {
+			t.Fatalf("worktrees %+v %v", body, err)
+		}
+		return body.Worktrees[0].Merged
+	}
+
+	gh("OPEN")
+	if rowMerged() {
+		t.Fatal("open pull request reads as merged")
+	}
+	gh("MERGED")
+	if !rowMerged() {
+		t.Fatal("merged pull request reads as unmerged")
+	}
+	if w := call("PATCH", "/api/sessions/"+info.ID, `{"hidden":true}`); w.Code != 200 {
+		t.Fatalf("archive: %d %s", w.Code, w.Body)
+	}
+	if _, err := os.Stat(info.Directory); !os.IsNotExist(err) {
+		t.Fatalf("worktree of a merged pull request kept: %v", err)
 	}
 }
 

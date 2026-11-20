@@ -930,8 +930,11 @@ func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInf
 	if err := authorizeACPResume(ctx, g.auth.store, actor, source); err != nil {
 		return SessionInfo{}, err
 	}
-	// A new worktree is accepted only when git lists it for a known main folder.
-	if !g.knownDirectory(info.Directory) && !g.knownWorktree(ctx, info.Directory) {
+	// A new worktree is accepted only when git lists it for a known main folder, which the row records.
+	info.WorktreeOf = ""
+	if main, _, err := worktreeMain(ctx, g.options.Home, info.Directory); err == nil && g.knownDirectory(main) {
+		info.WorktreeOf = main
+	} else if !g.knownDirectory(info.Directory) {
 		return SessionInfo{}, errors.New("choose a recent folder from this node")
 	}
 	local, err := g.auth.store.NodeID(ctx)

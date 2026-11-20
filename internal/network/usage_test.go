@@ -235,3 +235,42 @@ func TestLimitSamplesKeepTheHoursLastReadingForAWeekPerMachine(t *testing.T) {
 		t.Fatalf("another machine's samples were deleted: %v", got)
 	}
 }
+
+// Work in a worktree counts under its main folder's project: worktree_of names it, and a row
+// from an older peer without it falls back to the definition root of a worktree path.
+func TestUsageCountsWorktreesUnderTheirProject(t *testing.T) {
+	store := testSessionStore(t, t.TempDir())
+	main := "/src/app"
+	for _, info := range []SessionInfo{
+		{ID: "session-main", Directory: main, FolderID: "f-main"},
+		{ID: "session-new", Directory: "/home/u/.local/share/agentpack/worktrees/0123456789abcdef/fix", FolderID: "f-new", DefinitionRoot: "/src", WorktreeOf: main},
+		{ID: "session-old", Directory: "/home/u/.local/share/agentpack/worktrees/0123456789abcdef/old/sub", FolderID: "f-old", DefinitionRoot: main},
+		{ID: "session-orphan", Directory: "/w/worktrees/fedcba9876543210/x", FolderID: "f-orphan", WorktreeOf: "/src/gone"},
+		{ID: "session-other", Directory: "/src/other", FolderID: "f-other", DefinitionRoot: main},
+	} {
+		info.Harness, info.Transport = "claude", "acp"
+		if err := upsertSession(t.Context(), store.DB, info); err != nil {
+			t.Fatal(err)
+		}
+	}
+	local, _ := store.NodeID(t.Context())
+	report := usageReport{}
+	for _, id := range []string{"f-main", "f-new", "f-old", "f-orphan", "f-other"} {
+		report.Hourly = append(report.Hourly, usageHour{NodeID: local, FolderID: id})
+		report.Sessions = append(report.Sessions, usageSession{NodeID: local, FolderID: id, Directory: "d-" + id})
+	}
+	tx, err := store.Reader.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := attributeWorktrees(t.Context(), tx, &report); err != nil {
+		t.Fatal(err)
+	}
+	want := []struct{ folder, directory string }{{"f-main", "d-f-main"}, {"f-main", main}, {"f-main", main}, {"dir:/src/gone", "/src/gone"}, {"f-other", "d-f-other"}}
+	for i, w := range want {
+		if report.Hourly[i].FolderID != w.folder || report.Sessions[i].FolderID != w.folder || report.Sessions[i].Directory != w.directory {
+			t.Fatalf("row %d: hour %q session %+v, want %+v", i, report.Hourly[i].FolderID, report.Sessions[i], w)
+		}
+	}
+}
