@@ -40,3 +40,7 @@ sequence. The local persisted counter advances atomically with data and cursor.
 Writer connections are retired between transactions so the next native write
 reloads that counter. Never derive the high-water mark from surviving clock rows:
 overwriting the last row of an old version must not move a peer's cursor backward.
+
+push_keys holds this gateway's VAPID key pair and push_subscriptions the browser
+endpoints bound to an account. Both are local: a subscription belongs to the
+origin that created it, and its keys are secrets.

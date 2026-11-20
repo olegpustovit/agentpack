@@ -28,8 +28,11 @@ func TestReplicatedTablesTrackChangesAndLocalTablesStayLocal(t *testing.T) {
 			t.Fatalf("%s has no tracked changes: %d %v", table, count, err)
 		}
 	}
+	if _, err := store.DB.Exec("INSERT INTO push_keys(id,public_key,private_key) VALUES (1,'public','private'); INSERT INTO push_subscriptions(endpoint,email,p256dh,auth) VALUES ('https://push.example/1','member@example.com','key','secret')"); err != nil {
+		t.Fatal(err)
+	}
 	var local int
-	if err := store.Reader.QueryRow(`SELECT count(*) FROM crsql_changes WHERE "table" IN ('schema_meta','auth_sessions','oauth_clients','oauth_tokens','local_node','local_node_aliases','issue_log_cursors')`).Scan(&local); err != nil || local != 0 {
+	if err := store.Reader.QueryRow(`SELECT count(*) FROM crsql_changes WHERE "table" IN ('schema_meta','auth_sessions','oauth_clients','oauth_tokens','local_node','local_node_aliases','issue_log_cursors','push_keys','push_subscriptions')`).Scan(&local); err != nil || local != 0 {
 		t.Fatalf("private state became replicated: %d %v", local, err)
 	}
 	if _, err := store.DB.Exec("UPDATE sessions SET archived_at=123 WHERE id='session'"); err != nil {

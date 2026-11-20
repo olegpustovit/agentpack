@@ -34,3 +34,70 @@ self.addEventListener("fetch", (event) => {
   if (request.mode === "navigate") event.respondWith(cached(request, "/"))
   else if (url.pathname.startsWith("/assets/")) event.respondWith(caches.match(request).then((hit) => hit ?? cached(request, request)))
 })
+
+// Web Push (internal/network/push.go). Payloads carry labels and IDs only, never prompt or reply text.
+self.addEventListener("push", (event) => {
+  let data = {}
+  try {
+    data = event.data ? event.data.json() : {}
+  } catch {
+    data = {}
+  }
+  const actions = Array.isArray(data.actions) ? data.actions : []
+  event.waitUntil(
+    self.registration.showNotification(data.title || "agentpack", {
+      body: data.body || "",
+      tag: data.tag,
+      renotify: Boolean(data.tag),
+      icon: "/icon-192.png",
+      data,
+      actions: actions.map(({ action, title }) => ({ action, title })),
+    }),
+  )
+})
+
+self.addEventListener("notificationclick", (event) => {
+  const data = event.notification.data || {}
+  event.notification.close()
+  const choice = (data.actions || []).find((item) => item.action === event.action)
+  // Allow once / Deny answer in place; if the answer fails (already answered, signed out), open the session.
+  event.waitUntil(choice && data.session && data.request_id ? answer(data, choice).catch(() => focusSession(data)) : focusSession(data))
+})
+
+async function answer(data, choice) {
+  const url = new URL(`/api/sessions/${encodeURIComponent(data.session)}/conversation/permission`, location.origin)
+  if (data.machine && data.machine !== "local") url.searchParams.set("node", data.machine)
+  const response = await fetch(url, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ request_id: data.request_id, option_id: choice.option_id }),
+  })
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+}
+
+async function focusSession(data) {
+  const target = new URL(data.url || "/sessions", location.origin)
+  if (target.origin !== location.origin) return
+  const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true })
+  const open = windows.find((client) => new URL(client.url).origin === location.origin)
+  if (!open) return self.clients.openWindow(target.href)
+  await open.focus()
+  return open.navigate(target.href).catch(() => self.clients.openWindow(target.href))
+}
+
+// The browser rotated the subscription: hand the new endpoint to the gateway under the same account.
+self.addEventListener("pushsubscriptionchange", (event) => {
+  const options = event.oldSubscription && event.oldSubscription.options
+  if (!options) return
+  event.waitUntil(
+    self.registration.pushManager.subscribe(options).then((subscription) =>
+      fetch("/api/push/subscription", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(subscription.toJSON()),
+      }),
+    ),
+  )
+})

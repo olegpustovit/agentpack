@@ -6,6 +6,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
+	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/charmbracelet/fang v1.0.0
 	github.com/charmbracelet/x/conpty v0.2.0
 	github.com/coder/acp-go-sdk v0.13.5
@@ -58,6 +59,7 @@ require (
 	github.com/go-git/go-billy/v5 v5.9.0 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260820222146-c27c302e5fc3 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/hdevalence/ed25519consensus v0.2.0 // indirect
