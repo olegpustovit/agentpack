@@ -19,6 +19,9 @@ func TestReplicatedTablesTrackChangesAndLocalTablesStayLocal(t *testing.T) {
 		"issues":               "INSERT INTO issues(fingerprint,title,sample) VALUES ('error','Failed','{}')",
 		"issue_counts":         "INSERT INTO issue_counts(fingerprint,node_id,count) VALUES ('error','node',2)",
 		"archive_event_clocks": `INSERT INTO archive_event_clocks(pk,clock) VALUES (x'010901','{"cl":1,"version":1,"site":"AAAAAAAAAAAAAAAAAAAAAA=="}')`,
+		// Web Push keys and subscriptions replicate on purpose, secrets included: Main sends to every device.
+		"push_keys":          "INSERT INTO push_keys(public_key,private_key,created_at) VALUES ('public','private',1)",
+		"push_subscriptions": "INSERT INTO push_subscriptions(endpoint,email,p256dh,auth,public_key,created_node) VALUES ('https://push.example/1','member@example.com','key','secret','public','node')",
 	} {
 		if _, err := store.DB.Exec(statement); err != nil {
 			t.Fatalf("%s: %v", table, err)
@@ -28,11 +31,8 @@ func TestReplicatedTablesTrackChangesAndLocalTablesStayLocal(t *testing.T) {
 			t.Fatalf("%s has no tracked changes: %d %v", table, count, err)
 		}
 	}
-	if _, err := store.DB.Exec("INSERT INTO push_keys(id,public_key,private_key) VALUES (1,'public','private'); INSERT INTO push_subscriptions(endpoint,email,p256dh,auth) VALUES ('https://push.example/1','member@example.com','key','secret')"); err != nil {
-		t.Fatal(err)
-	}
 	var local int
-	if err := store.Reader.QueryRow(`SELECT count(*) FROM crsql_changes WHERE "table" IN ('schema_meta','auth_sessions','oauth_clients','oauth_tokens','local_node','local_node_aliases','issue_log_cursors','push_keys','push_subscriptions')`).Scan(&local); err != nil || local != 0 {
+	if err := store.Reader.QueryRow(`SELECT count(*) FROM crsql_changes WHERE "table" IN ('schema_meta','auth_sessions','oauth_clients','oauth_tokens','local_node','local_node_aliases','issue_log_cursors')`).Scan(&local); err != nil || local != 0 {
 		t.Fatalf("private state became replicated: %d %v", local, err)
 	}
 	if _, err := store.DB.Exec("UPDATE sessions SET archived_at=123 WHERE id='session'"); err != nil {

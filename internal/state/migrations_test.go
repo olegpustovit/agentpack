@@ -188,6 +188,43 @@ func TestConversationProgressMigrationPreservesSession(t *testing.T) {
 	}
 }
 
+func TestPushMigrationKeepsSubscriptionsWithTheirKey(t *testing.T) {
+	db, err := sql.Open(driverName, "file:"+filepath.ToSlash(filepath.Join(t.TempDir(), "state.db")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	previous := fstest.MapFS{}
+	names, err := fs.Glob(migrationFiles, "migrations/00[0-2][0-9]_*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	names = append(names, "migrations/0030_push.sql")
+	for _, name := range names {
+		body, err := migrationFiles.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous[name] = &fstest.MapFile{Data: body}
+	}
+	if err := migrate(context.Background(), db, previous); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO push_keys(id,public_key,private_key) VALUES (1,'public','private');
+ INSERT INTO push_subscriptions(endpoint,email,p256dh,auth,created_at) VALUES ('https://push.example/1','owner@example.com','key','secret',5)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(context.Background(), db, migrationFiles); err != nil {
+		t.Fatal(err)
+	}
+	var key, node, private string
+	var created int64
+	if err := db.QueryRow(`SELECT s.public_key,s.created_node,s.created_at,k.private_key FROM push_subscriptions s JOIN push_keys k USING(public_key)
+ WHERE s.endpoint='https://push.example/1' AND s.created_node=(SELECT node_id FROM local_node WHERE id=1)`).Scan(&key, &node, &created, &private); err != nil || key != "public" || private != "private" || created != 5 {
+		t.Fatalf("subscription lost its key: %q %q %d %v", key, node, created, err)
+	}
+}
+
 func TestBrokenMigrationRollsBack(t *testing.T) {
 	store, err := Open(t.TempDir())
 	if err != nil {

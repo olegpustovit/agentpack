@@ -93,6 +93,11 @@ local. A bridge reads a secret only through the local gateway for the bound
 account. Main (or the creating node) is the only refresher of a rotating
 refresh token; other nodes ask it over the mesh. See `docs/src/concepts/mcp.md`.
 
+Web Push keys and subscriptions (`push_keys`, `push_subscriptions`) also
+replicate their secrets: Main notifies every device, and without a Main each
+node notifies the subscriptions it created. The oldest key pair is current;
+each subscription signs with the key it was made with until its browser renews.
+
 `gateway main set` selects the Main gateway. Switching machines requires typing
 `switch`, cleanly stopping the old gateway and copying its `archive.db` and
 archived attachment directories, then running `gateway main archive-ready` on

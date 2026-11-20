@@ -77,6 +77,19 @@ export async function subscribePush(): Promise<PushSubscription> {
   return subscription
 }
 
+// The mesh shares one gateway key. When an older key from another gateway wins, renew a
+// subscription made with the losing key so it follows the current one.
+export async function renewPushSubscription(): Promise<void> {
+  const subscription = await currentPushSubscription()
+  const existing = subscription?.options.applicationServerKey
+  if (!existing || Notification.permission !== "granted") return
+  // Plain fetch: a signed-out page must not trip the app's sign-in redirect.
+  const response = await fetch("/api/push/key")
+  if (!response.ok) return
+  const { public_key } = (await response.json()) as { public_key?: unknown }
+  if (typeof public_key === "string" && !sameKey(new Uint8Array(existing), decodeKey(public_key))) await subscribePush()
+}
+
 export async function unsubscribePush(): Promise<void> {
   const subscription = await currentPushSubscription()
   if (!subscription) return

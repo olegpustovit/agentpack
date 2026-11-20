@@ -41,6 +41,7 @@ Writer connections are retired between transactions so the next native write
 reloads that counter. Never derive the high-water mark from surviving clock rows:
 overwriting the last row of an old version must not move a peer's cursor backward.
 
-push_keys holds this gateway's VAPID key pair and push_subscriptions the browser
-endpoints bound to an account. Both are local: a subscription belongs to the
-origin that created it, and its keys are secrets.
+push_keys and push_subscriptions replicate Web Push VAPID key pairs and browser
+endpoints, secrets included, so Main can notify every device. The oldest key pair
+(created_at, then public_key) is current; each subscription records the key it was
+made with, and its creating node for meshes without a Main.

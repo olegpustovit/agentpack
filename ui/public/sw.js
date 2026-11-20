@@ -87,17 +87,22 @@ async function focusSession(data) {
 }
 
 // The browser rotated the subscription: hand the new endpoint to the gateway under the same account.
+// It subscribes with the mesh's current key, which the gateway records for the new endpoint.
 self.addEventListener("pushsubscriptionchange", (event) => {
   const options = event.oldSubscription && event.oldSubscription.options
   if (!options) return
   event.waitUntil(
-    self.registration.pushManager.subscribe(options).then((subscription) =>
-      fetch("/api/push/subscription", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(subscription.toJSON()),
-      }),
-    ),
+    fetch("/api/push/key", { credentials: "same-origin" })
+      .then((response) => (response.ok ? response.json() : {}))
+      .catch(() => ({}))
+      .then(({ public_key }) => self.registration.pushManager.subscribe(public_key ? { userVisibleOnly: true, applicationServerKey: public_key } : options))
+      .then((subscription) =>
+        fetch("/api/push/subscription", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(subscription.toJSON()),
+        }),
+      ),
   )
 })

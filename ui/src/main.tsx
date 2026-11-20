@@ -42,7 +42,13 @@ setUnauthorizedHandler(() => {
 })
 
 // Secure origins only; on a plain-HTTP tailnet address registration fails and the app just loads from the network.
-if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js").catch(() => undefined)
+if ("serviceWorker" in navigator) {
+  void navigator.serviceWorker
+    .register("/sw.js")
+    .then(() => import("@/features/settings/push"))
+    .then((push) => push.renewPushSubscription())
+    .catch(() => undefined)
+}
 
 const build = entryBuildID || "dev"
 void restoreQueries(queryClient, build).finally(() => {

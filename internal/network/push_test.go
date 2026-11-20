@@ -14,10 +14,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // pushDevice is a browser subscription: it decrypts what the push service receives (RFC 8291).
@@ -227,5 +229,110 @@ func TestPushSubscriptionsAndTransitions(t *testing.T) {
 	}
 	if code := call("DELETE", "/api/push/subscription", `{"endpoint":"`+server.URL+`/member"}`, "member"); code != 401 {
 		t.Fatal("disabled account kept its login", code)
+	}
+}
+
+func TestPushMainSendsForEveryNode(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	service := &pushService{}
+	server := httptest.NewTLSServer(service)
+	defer server.Close()
+	g.push.client = server.Client()
+	testBrowserSession(t, g.auth, testBrowserEmail, "owner")
+	db := g.auth.store.DB
+	local, err := g.auth.store.NodeID(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, _, err := g.pushKeys(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A subscription that replicated from a laptop gateway, and one this gateway made.
+	laptop, here := newPushDevice(t), newPushDevice(t)
+	encode := base64.RawURLEncoding.EncodeToString
+	for _, device := range []struct {
+		device     pushDevice
+		path, node string
+	}{{laptop, "/laptop", "site:laptop"}, {here, "/here", local}} {
+		if _, err := db.Exec(`INSERT INTO push_subscriptions(endpoint,email,p256dh,auth,public_key,created_node,created_at) VALUES (?,?,?,?,?,?,?)`,
+			server.URL+device.path, testBrowserEmail, encode(device.device.key.PublicKey().Bytes()), encode(device.device.auth), public, device.node, time.Now().UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO sessions(id,directory,harness,transport,conversation_state,node_id) VALUES ('s','/w','claude','acp','working',?)`, local); err != nil {
+		t.Fatal(err)
+	}
+	transition := func() int {
+		t.Helper()
+		for _, state := range []string{"working", "needs_you"} {
+			if _, err := db.Exec(`UPDATE sessions SET conversation_state=?,last_seq=last_seq+1 WHERE id='s'`, state); err != nil {
+				t.Fatal(err)
+			}
+			count, err := g.pushPass(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state == "needs_you" {
+				return count
+			}
+		}
+		return 0
+	}
+	setMain := func(node string) {
+		t.Helper()
+		if _, err := db.Exec(`INSERT INTO mesh_settings(key,value) VALUES ('main_node',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Without a Main, each gateway notifies the devices it subscribed.
+	_, _ = g.pushPass(t.Context())
+	if count := transition(); count != 1 {
+		t.Fatal("no-Main fallback", count)
+	}
+	if _, requests := service.take(); len(requests) != 1 || requests[0].URL.Path != "/here" {
+		t.Fatal("no-Main fallback reached", requests)
+	}
+
+	// Main notifies every device; the laptop's device links through its own gateway to this node.
+	setMain(local)
+	if count, err := g.pushPass(t.Context()); err != nil || count != 0 {
+		t.Fatal("becoming Main re-announced", count, err)
+	}
+	if count := transition(); count != 2 {
+		t.Fatal("Main", count)
+	}
+	bodies, requests := service.take()
+	for i, request := range requests {
+		if request.URL.Path == "/laptop" {
+			if message := laptop.decrypt(t, bodies[i]); message.Machine != local || message.URL != "/sessions/"+url.PathEscape(local)+"/s" {
+				t.Fatalf("laptop link %+v", message)
+			}
+		} else if message := here.decrypt(t, bodies[i]); message.Machine != "local" {
+			t.Fatalf("local link %+v", message)
+		}
+	}
+
+	// Another node is Main: this one stays quiet.
+	setMain("site:laptop")
+	if count := transition(); count != 0 {
+		t.Fatal("non-Main sent", count)
+	}
+
+	// An older key pair from another node wins; existing subscriptions keep signing with their own.
+	setMain(local)
+	_, _ = g.pushPass(t.Context())
+	if _, err := db.Exec(`INSERT INTO push_keys(public_key,private_key,created_at) VALUES ('older','older-private',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if current, _, err := g.pushKeys(t.Context()); err != nil || current != "older" {
+		t.Fatal("older key did not win", current, err)
+	}
+	if count := transition(); count != 2 {
+		t.Fatal("after key change", count)
+	}
+	if _, requests := service.take(); !strings.Contains(requests[0].Header.Get("Authorization"), "k="+public) {
+		t.Fatal("subscription signed with another key", requests[0].Header.Get("Authorization"))
 	}
 }

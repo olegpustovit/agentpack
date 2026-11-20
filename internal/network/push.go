@@ -19,14 +19,11 @@ import (
 	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
-// Web Push. A browser subscribes through the gateway origin it is using; the subscription and
-// this gateway's VAPID keys stay in local, never-replicated tables. Every gateway watches the
-// replicated sessions table and notifies its own subscribers, so one subscription receives each
-// transition once, whichever machine runs the session.
-//
-// shortcut: subscriptions stay on the gateway that created them, so a phone subscribed through
-// a laptop gateway hears nothing while that laptop is off; forward subscriptions to Main when
-// that becomes a real complaint.
+// Web Push. A browser subscribes through the gateway origin it is using. VAPID key pairs and
+// subscriptions replicate, secrets included, like MCP connections: Main watches the replicated
+// sessions table and notifies every device, so a phone subscribed through a laptop still hears
+// while that laptop is off. Without a Main each gateway notifies the subscriptions it created.
+// Either way one subscription receives each transition once, whichever machine runs the session.
 
 const (
 	pushInterval     = 3 * time.Second
@@ -94,9 +91,20 @@ func (g *Gateway) registerPush(mux *http.ServeMux) {
 			http.Error(w, "invalid push subscription", http.StatusBadRequest)
 			return
 		}
-		if _, err := g.auth.store.DB.ExecContext(r.Context(), `INSERT INTO push_subscriptions(endpoint,email,p256dh,auth,created_at) VALUES (?,?,?,?,?)
- ON CONFLICT(endpoint) DO UPDATE SET email=excluded.email,p256dh=excluded.p256dh,auth=excluded.auth,created_at=excluded.created_at`,
-			input.Endpoint, email, input.Keys.P256dh, input.Keys.Auth, time.Now().UnixMilli()); err != nil {
+		public, _, err := g.pushKeys(r.Context())
+		if err != nil {
+			authFailure(w, r, "push keys unavailable", err)
+			return
+		}
+		node, err := g.auth.store.NodeID(r.Context())
+		if err != nil {
+			authFailure(w, r, "push subscription unavailable", err)
+			return
+		}
+		// The browser subscribed with the key GET /api/push/key returned: the current one.
+		if _, err := g.auth.store.DB.ExecContext(r.Context(), `INSERT INTO push_subscriptions(endpoint,email,p256dh,auth,public_key,created_node,created_at) VALUES (?,?,?,?,?,?,?)
+ ON CONFLICT(endpoint) DO UPDATE SET email=excluded.email,p256dh=excluded.p256dh,auth=excluded.auth,public_key=excluded.public_key,created_node=excluded.created_node,created_at=excluded.created_at`,
+			input.Endpoint, email, input.Keys.P256dh, input.Keys.Auth, public, node, time.Now().UnixMilli()); err != nil {
 			authFailure(w, r, "push subscription unavailable", err)
 			return
 		}
@@ -171,9 +179,13 @@ func validPushSubscription(input pushSubscription) bool {
 		len(input.Keys.P256dh) <= pushMaxKey && len(input.Keys.Auth) <= pushMaxKey
 }
 
-// pushKeys returns this gateway's VAPID key pair, creating it on first use.
+// currentPushKey picks the mesh's VAPID key pair. Nodes that each created one before they met
+// converge on the oldest, ties broken by public key.
+const currentPushKey = "SELECT public_key,private_key FROM push_keys ORDER BY created_at,public_key LIMIT 1"
+
+// pushKeys returns the mesh's current VAPID key pair, creating one on first use.
 func (g *Gateway) pushKeys(ctx context.Context) (public, private string, err error) {
-	err = g.auth.store.Reader.QueryRowContext(ctx, "SELECT public_key,private_key FROM push_keys WHERE id=1").Scan(&public, &private)
+	err = g.auth.store.Reader.QueryRowContext(ctx, currentPushKey).Scan(&public, &private)
 	if !errors.Is(err, sql.ErrNoRows) {
 		return public, private, err
 	}
@@ -181,23 +193,25 @@ func (g *Gateway) pushKeys(ctx context.Context) (public, private string, err err
 	if err != nil {
 		return "", "", err
 	}
-	if _, err = g.auth.store.DB.ExecContext(ctx, "INSERT OR IGNORE INTO push_keys(id,public_key,private_key) VALUES (1,?,?)", public, private); err != nil {
+	if _, err = g.auth.store.DB.ExecContext(ctx, "INSERT INTO push_keys(public_key,private_key,created_at) SELECT ?,?,? WHERE NOT EXISTS(SELECT 1 FROM push_keys)",
+		public, private, time.Now().UnixMilli()); err != nil {
 		return "", "", err
 	}
 	// A concurrent first request may have won; everyone uses the stored pair.
-	err = g.auth.store.DB.QueryRowContext(ctx, "SELECT public_key,private_key FROM push_keys WHERE id=1").Scan(&public, &private)
+	err = g.auth.store.DB.QueryRowContext(ctx, currentPushKey).Scan(&public, &private)
 	return public, private, err
 }
 
 type pushSubscriber struct {
-	endpoint, email, p256dh, auth string
+	endpoint, email, p256dh, auth, node, public, private string
 }
 
 // pushSubscribers lists subscriptions whose account is enabled and that were created after the
-// account's last sign-out everywhere or password change.
+// account's last sign-out everywhere or password change, with the key pair each was made with.
 func (g *Gateway) pushSubscribers(ctx context.Context, where string, args ...any) ([]pushSubscriber, error) {
-	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT s.endpoint,s.email,s.p256dh,s.auth FROM push_subscriptions s
- JOIN users u ON u.email=s.email WHERE u.disabled=0 AND s.created_at>=u.sessions_valid_after AND `+where, args...)
+	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT s.endpoint,s.email,s.p256dh,s.auth,s.created_node,k.public_key,k.private_key FROM push_subscriptions s
+ JOIN users u ON u.email=s.email JOIN push_keys k ON k.public_key=s.public_key
+ WHERE u.disabled=0 AND s.created_at>=u.sessions_valid_after AND `+where, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +219,7 @@ func (g *Gateway) pushSubscribers(ctx context.Context, where string, args ...any
 	var result []pushSubscriber
 	for rows.Next() {
 		var sub pushSubscriber
-		if err := rows.Scan(&sub.endpoint, &sub.email, &sub.p256dh, &sub.auth); err != nil {
+		if err := rows.Scan(&sub.endpoint, &sub.email, &sub.p256dh, &sub.auth, &sub.node, &sub.public, &sub.private); err != nil {
 			return nil, err
 		}
 		result = append(result, sub)
@@ -214,10 +228,6 @@ func (g *Gateway) pushSubscribers(ctx context.Context, where string, args ...any
 }
 
 func (g *Gateway) sendPush(ctx context.Context, sub pushSubscriber, message pushMessage) error {
-	public, private, err := g.pushKeys(ctx)
-	if err != nil {
-		return err
-	}
 	payload, err := json.Marshal(message)
 	if err != nil {
 		return err
@@ -229,7 +239,7 @@ func (g *Gateway) sendPush(ctx context.Context, sub pushSubscriber, message push
 		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	response, err := webpush.SendNotificationWithContext(ctx, payload, &webpush.Subscription{Endpoint: sub.endpoint, Keys: webpush.Keys{P256dh: sub.p256dh, Auth: sub.auth}},
-		&webpush.Options{HTTPClient: client, Subscriber: g.origin.Scheme + "://" + g.origin.Host, VAPIDPublicKey: public, VAPIDPrivateKey: private, TTL: pushTTL, Urgency: webpush.UrgencyHigh, Topic: pushTopic(message.Tag)})
+		&webpush.Options{HTTPClient: client, Subscriber: g.origin.Scheme + "://" + g.origin.Host, VAPIDPublicKey: sub.public, VAPIDPrivateKey: sub.private, TTL: pushTTL, Urgency: webpush.UrgencyHigh, Topic: pushTopic(message.Tag)})
 	if err != nil {
 		return errors.New("push service unreachable")
 	}
@@ -285,19 +295,33 @@ type pushSession struct {
 
 // pushPass sends one notification per new transition into needs_you or from working to idle.
 // The first pass after subscriptions appear only records a baseline, so a restart never
-// re-announces what is already waiting.
+// re-announces what is already waiting, and neither does becoming Main.
 func (g *Gateway) pushPass(ctx context.Context) (int, error) {
+	local, err := g.auth.store.NodeID(ctx)
+	if err != nil {
+		return 0, err
+	}
+	roles, err := g.auth.store.Main(ctx)
+	if err != nil {
+		return 0, err
+	}
+	// Main notifies every device. Without a Main each gateway notifies the devices it subscribed.
+	scope, scopeArgs := "1", []any{}
+	switch roles.MainNode {
+	case local:
+	case "":
+		scope, scopeArgs = "s.created_node=?", []any{local}
+	default:
+		g.push.seen = nil
+		return 0, nil
+	}
 	var subscribed bool
-	if err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM push_subscriptions)").Scan(&subscribed); err != nil {
+	if err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM push_subscriptions s WHERE "+scope+")", scopeArgs...).Scan(&subscribed); err != nil {
 		return 0, err
 	}
 	if !subscribed {
 		g.push.seen = nil
 		return 0, nil
-	}
-	local, err := g.auth.store.NodeID(ctx)
-	if err != nil {
-		return 0, err
 	}
 	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT id,node_id,name,directory,harness,conversation_state,owner_email,last_seq FROM sessions
  WHERE transport='acp' AND ended_at=0 AND archived_at=0 AND hidden=0`)
@@ -341,17 +365,24 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 			continue
 		}
 		g.push.sent[s.id] = key
-		message, err := g.pushMessageFor(ctx, s, kind, local)
+		message, err := g.pushMessageFor(ctx, s, kind)
 		if err != nil {
 			failures = append(failures, err)
 			continue
 		}
-		subs, err := g.pushSubscribers(ctx, "(s.email=? OR (?='' AND u.role='owner'))", s.owner, s.owner)
+		subs, err := g.pushSubscribers(ctx, "(s.email=? OR (?='' AND u.role='owner')) AND "+scope, append([]any{s.owner, s.owner}, scopeArgs...)...)
 		if err != nil {
 			failures = append(failures, err)
 			continue
 		}
 		for _, sub := range subs {
+			// The device opens the link on the gateway it subscribed through, which calls itself "local".
+			machine := s.node
+			if machine == sub.node || machine == "" {
+				machine = "local"
+			}
+			message.Machine = machine
+			message.URL = "/sessions/" + url.PathEscape(machine) + "/" + url.PathEscape(s.id)
 			if err := g.sendPush(ctx, sub, message); err != nil {
 				failures = append(failures, err)
 				continue
@@ -367,18 +398,14 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 	return sent, errors.Join(failures...)
 }
 
-func (g *Gateway) pushMessageFor(ctx context.Context, s pushSession, kind, local string) (pushMessage, error) {
-	machine := s.node
-	if machine == local || machine == "" {
-		machine = "local"
-	}
+// pushMessageFor leaves Machine and URL to the caller: they depend on the receiving device.
+func (g *Gateway) pushMessageFor(ctx context.Context, s pushSession, kind string) (pushMessage, error) {
 	label := s.name
 	if label == "" {
 		label = harness.DisplayName(harness.Target(s.agent))
 	}
 	folder := filepath.Base(filepath.Clean(s.directory))
-	message := pushMessage{Tag: "session:" + s.id, Session: s.id, Machine: machine,
-		URL: "/sessions/" + url.PathEscape(machine) + "/" + url.PathEscape(s.id)}
+	message := pushMessage{Tag: "session:" + s.id, Session: s.id}
 	if kind == "finished" {
 		message.Title = label + " finished"
 		message.Body = "Ready for review in " + folder

@@ -24,6 +24,9 @@ const STATE_FAMILIES: Record<string, string[][]> = {
   blob_locations: [],
   mcp_credentials: [["mcp-credentials"]],
   mcp_credential_approvals: [["mcp-credentials"]],
+  // Web Push state feeds no query: this device reads its subscription from the browser.
+  push_keys: [],
+  push_subscriptions: [],
 }
 const ALL_STATE_FAMILIES = [["identity"], ["topology"], ["m", LOCAL, "sessions"], ["m", LOCAL, "limits"], ["m", LOCAL, "usage"], ["nodes"], ["diagnostics"], ["replication"], ["mcp-credentials"]]
 
