@@ -327,7 +327,7 @@ function AgentsGrid({ machine, agents, limits }: { machine: Machine; agents: Mac
           <DataGridRow>
             <DataGridHeaderCell>Agent</DataGridHeaderCell>
             <DataGridHeaderCell className="w-24">Version</DataGridHeaderCell>
-            <DataGridHeaderCell className="w-44">Account</DataGridHeaderCell>
+            <DataGridHeaderCell className="w-64">Account</DataGridHeaderCell>
             <DataGridHeaderCell className="w-36">Limits</DataGridHeaderCell>
           </DataGridRow>
         </DataGridHead>
