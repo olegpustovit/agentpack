@@ -567,6 +567,7 @@ var peerPatterns = []string{
 	"DELETE /api/recent",
 	"GET /api/packages",
 	"POST /api/packages",
+	"POST /api/mcp/servers",
 	"GET /api/projects",
 	"GET /api/worktrees",
 	"POST /api/worktrees/remove",

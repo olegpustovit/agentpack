@@ -170,6 +170,46 @@ func TestGatewayPackageRestartChoice(t *testing.T) {
 	}
 }
 
+func TestGatewayInstallsMCPServerIntoRecentFolder(t *testing.T) {
+	home, directory := t.TempDir(), t.TempDir()
+	auth, err := testGatewayAuth(t, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remember(home, SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
+		t.Fatal(err)
+	}
+	origin, _ := url.Parse("http://127.0.0.1:7420")
+	var got []MCPServerInput
+	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{
+		Home: home,
+		InstallMCP: func(_ context.Context, gotDirectory string, server MCPServerInput, restart bool) error {
+			if gotDirectory != directory || !restart {
+				t.Fatalf("unexpected install into %s restart=%v", gotDirectory, restart)
+			}
+			got = append(got, server)
+			return nil
+		},
+	}}
+	post := func(body map[string]any) int {
+		data, _ := json.Marshal(body)
+		r := httptest.NewRequest("POST", origin.String()+"/api/mcp/servers", bytes.NewReader(data))
+		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
+		w := httptest.NewRecorder()
+		g.Handler().ServeHTTP(w, r)
+		return w.Code
+	}
+	if code := post(map[string]any{"directory": t.TempDir(), "name": "pw", "command": "npx"}); code != 400 || len(got) != 0 {
+		t.Fatalf("unknown folder: status %d, installs %v", code, got)
+	}
+	if code := post(map[string]any{"directory": directory, "name": "pw", "command": "npx", "args": []string{"-y", "@playwright/mcp"}}); code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	if len(got) != 1 || got[0].Name != "pw" || got[0].Command != "npx" || len(got[0].Args) != 2 {
+		t.Fatalf("installed %+v", got)
+	}
+}
+
 func TestGatewayPeerProxyOnlyForAPIAndUnknownAPIIsJSON404(t *testing.T) {
 	auth, err := testGatewayAuth(t, t.TempDir())
 	if err != nil {

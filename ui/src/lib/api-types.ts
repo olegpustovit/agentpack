@@ -228,8 +228,11 @@ export type CatalogItem = {
   source: string
   spec?: string
   command?: string
+  server?: MCPServerInput
   url?: string
 }
+// What POST /api/mcp/servers installs: a command with args, or a URL with a type.
+export type MCPServerInput = { name: string; command?: string; args?: string[]; url?: string; type?: string }
 export type CatalogSource = { name: string; count: number; error?: string }
 export type Catalog = { items: CatalogItem[]; sources: CatalogSource[] }
 

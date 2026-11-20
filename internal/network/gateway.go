@@ -39,11 +39,21 @@ type GatewayOptions struct {
 	Start                    func(context.Context, SessionInfo, string) (string, error)
 	Packages                 func(context.Context, string) (ProjectContents, error)
 	Install                  func(context.Context, string, string, bool) error
+	InstallMCP               func(context.Context, string, MCPServerInput, bool) error
 	Update                   func(ctx context.Context, version string) error
 	Library                  LibraryOptions
 	Assets                   http.Handler
 	Version                  string
 	UIBuildID                string
+}
+
+// MCPServerInput is what `agentpack mcp add` takes: a Command with Args, or a URL with a Type.
+type MCPServerInput struct {
+	Name    string   `json:"name"`
+	Command string   `json:"command,omitempty"`
+	Args    []string `json:"args,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	Type    string   `json:"type,omitempty"`
 }
 
 type nodeRecord struct {
@@ -695,6 +705,23 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 		respond(w, map[string]bool{"installed": true}, g.options.Install(r.Context(), input.Directory, input.Spec, input.Restart == nil || *input.Restart))
+	})
+	mux.HandleFunc("POST /api/mcp/servers", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			MCPServerInput
+			Directory string `json:"directory"`
+			Restart   *bool  `json:"restart"`
+		}
+		if !readJSON(w, r, &input) {
+			return
+		}
+		if !g.knownDirectory(input.Directory) || input.Name == "" {
+			http.Error(w, "choose a recent folder and MCP server", 400)
+			return
+		}
+		err := g.options.InstallMCP(r.Context(), input.Directory, input.MCPServerInput, input.Restart == nil || *input.Restart)
+		obs.From(r.Context()).Fail(err)
+		respond(w, map[string]bool{"installed": true}, err)
 	})
 	mux.HandleFunc("POST /api/node/stop", func(w http.ResponseWriter, r *http.Request) {
 		if err := SetGatewayEnabled(g.options.Home, false); err != nil {

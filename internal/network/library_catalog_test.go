@@ -105,3 +105,24 @@ func TestLibraryCatalogReportsAFailingSource(t *testing.T) {
 		t.Fatalf("catalog = %+v", result)
 	}
 }
+
+func TestLibraryCatalogFollowsRegistryCursorUpToTheCap(t *testing.T) {
+	var cursors []string
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cursors = append(cursors, r.URL.Query().Get("cursor"))
+		fmt.Fprintf(w, `{"servers":[{"server":{"name":"com.example/s%d","packages":[{"registryType":"pypi","identifier":"s","transport":{"type":"stdio"}}]}}],"metadata":{"nextCursor":"c%d"}}`, len(cursors), len(cursors))
+	}))
+	defer registry.Close()
+	c := &catalog{registry: registry.URL, client: registry.Client(), now: time.Now}
+	items, err := c.servers(context.Background(), "")
+	if err != nil || len(items) != registryPages || len(cursors) != registryPages || cursors[0] != "" || cursors[1] != "c1" {
+		t.Fatalf("items=%d cursors=%v err=%v", len(items), cursors, err)
+	}
+	if server := items[0].Server; server == nil || server.Name != "s1" || server.Command != "uvx" || len(server.Args) != 1 || server.Args[0] != "s" {
+		t.Fatalf("server = %+v", server)
+	}
+	cursors = nil
+	if items, err := c.servers(context.Background(), "s"); err != nil || len(items) != 1 || len(cursors) != 1 {
+		t.Fatalf("a search read %d pages, %d items, %v", len(cursors), len(items), err)
+	}
+}

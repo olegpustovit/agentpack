@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -22,20 +23,23 @@ const (
 	marketplaceRepo    = "claude-plugins-official"
 	marketplacePath    = ".claude-plugin/marketplace.json"
 	mcpRegistryServers = "https://registry.modelcontextprotocol.io/v0/servers"
+	// The unsearched listing follows nextCursor up to this many pages of 100; a search reads one page.
+	registryPages = 10
 )
 
 // CatalogItem is one installable entry from a trusted marketplace or the MCP Registry.
-// Plugins carry an add Spec; MCP servers carry the `agentpack mcp add` Command instead,
-// because the gateway has no MCP install route.
+// Plugins carry an add Spec; MCP servers carry the Server that POST /api/mcp/servers
+// installs and the equivalent `agentpack mcp add` Command.
 type CatalogItem struct {
-	Kind        string `json:"kind"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Publisher   string `json:"publisher,omitempty"`
-	Source      string `json:"source"`
-	Spec        string `json:"spec,omitempty"`
-	Command     string `json:"command,omitempty"`
-	URL         string `json:"url,omitempty"`
+	Kind        string          `json:"kind"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Publisher   string          `json:"publisher,omitempty"`
+	Source      string          `json:"source"`
+	Spec        string          `json:"spec,omitempty"`
+	Command     string          `json:"command,omitempty"`
+	Server      *MCPServerInput `json:"server,omitempty"`
+	URL         string          `json:"url,omitempty"`
 }
 
 type CatalogSource struct {
@@ -201,8 +205,8 @@ type registryServer struct {
 	} `json:"remotes"`
 }
 
-// servers returns one registry page, the newest version of each server, matching the search.
-// shortcut: one page of 100 without a search; follow nextCursor if people browse past it.
+// servers returns the newest version of each registry server matching the search: one page of
+// 100 for a search, up to registryPages pages without one.
 func (c *catalog) servers(ctx context.Context, search string) ([]CatalogItem, error) {
 	c.mu.Lock()
 	cached, ok := c.pages[search]
@@ -211,35 +215,29 @@ func (c *catalog) servers(ctx context.Context, search string) ([]CatalogItem, er
 		return cached.items, nil
 	}
 	query := url.Values{"limit": {"100"}, "version": {"latest"}}
+	pages := registryPages
 	if search != "" {
 		query.Set("search", search)
+		pages = 1
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.registry+"?"+query.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	request.Header.Set("Accept", "application/json")
-	response, err := c.client.Do(request)
-	if err != nil {
-		return staleOr(cached, ok, fmt.Errorf("MCP Registry: %w", err))
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return staleOr(cached, ok, fmt.Errorf("MCP Registry: %s", response.Status))
-	}
-	var body struct {
-		Servers []struct {
-			Server registryServer `json:"server"`
-		} `json:"servers"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(nil, response.Body, 8<<20)).Decode(&body); err != nil {
-		return staleOr(cached, ok, fmt.Errorf("MCP Registry: %w", err))
-	}
-	items := make([]CatalogItem, 0, len(body.Servers))
-	for _, entry := range body.Servers {
-		if item, ok := registryItem(entry.Server); ok {
-			items = append(items, item)
+	var items []CatalogItem
+	for page := 0; page < pages; page++ {
+		servers, next, err := c.registryPage(ctx, query)
+		if err != nil {
+			if page > 0 {
+				break // a later page failing still shows the servers already read
+			}
+			return staleOr(cached, ok, fmt.Errorf("MCP Registry: %w", err))
 		}
+		for _, server := range servers {
+			if item, ok := registryItem(server); ok {
+				items = append(items, item)
+			}
+		}
+		if next == "" {
+			break
+		}
+		query.Set("cursor", next)
 	}
 	c.mu.Lock()
 	// shortcut: a full map is emptied rather than evicted by age; fine for one person's searches.
@@ -251,6 +249,38 @@ func (c *catalog) servers(ctx context.Context, search string) ([]CatalogItem, er
 	return items, nil
 }
 
+func (c *catalog) registryPage(ctx context.Context, query url.Values) ([]registryServer, string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.registry+"?"+query.Encode(), nil)
+	if err != nil {
+		return nil, "", err
+	}
+	request.Header.Set("Accept", "application/json")
+	response, err := c.client.Do(request)
+	if err != nil {
+		return nil, "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, "", errors.New(response.Status)
+	}
+	var body struct {
+		Servers []struct {
+			Server registryServer `json:"server"`
+		} `json:"servers"`
+		Metadata struct {
+			NextCursor string `json:"nextCursor"`
+		} `json:"metadata"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(nil, response.Body, 8<<20)).Decode(&body); err != nil {
+		return nil, "", err
+	}
+	servers := make([]registryServer, 0, len(body.Servers))
+	for _, entry := range body.Servers {
+		servers = append(servers, entry.Server)
+	}
+	return servers, body.Metadata.NextCursor, nil
+}
+
 func staleOr(cached catalogPage, ok bool, err error) ([]CatalogItem, error) {
 	if ok {
 		return cached.items, nil
@@ -258,34 +288,48 @@ func staleOr(cached catalogPage, ok bool, err error) ([]CatalogItem, error) {
 	return nil, err
 }
 
-// registryItem builds the `agentpack mcp add` command for the first launcher agentpack can run.
+// registryItem picks the first launcher agentpack can run and the `agentpack mcp add` command for it.
 func registryItem(server registryServer) (CatalogItem, bool) {
 	short := server.Name[strings.LastIndex(server.Name, "/")+1:]
 	if short == "" {
 		return CatalogItem{}, false
 	}
 	publisher, _, _ := strings.Cut(server.Name, "/")
-	command := ""
+	var input *MCPServerInput
 	for _, pkg := range server.Packages {
-		runner := map[string]string{"npm": "npx --args -y", "pypi": "uvx --args"}[pkg.RegistryType]
-		if runner != "" && pkg.Transport.Type == "stdio" && pkg.Identifier != "" {
-			command = fmt.Sprintf("agentpack mcp add %s --command %s %s", shellWord(short), runner, shellWord(pkg.Identifier))
+		runner := map[string][]string{"npm": {"npx", "-y"}, "pypi": {"uvx"}}[pkg.RegistryType]
+		if runner != nil && pkg.Transport.Type == "stdio" && pkg.Identifier != "" {
+			input = &MCPServerInput{Name: short, Command: runner[0], Args: append(runner[1:], pkg.Identifier)}
 			break
 		}
 	}
-	if command == "" {
+	if input == nil {
 		for _, remote := range server.Remotes {
 			kind := map[string]string{"streamable-http": "http", "sse": "sse"}[remote.Type]
 			if kind != "" && remote.URL != "" && !strings.Contains(remote.URL, "{") {
-				command = fmt.Sprintf("agentpack mcp add %s --url %s --type %s", shellWord(short), shellWord(remote.URL), kind)
+				input = &MCPServerInput{Name: short, URL: remote.URL, Type: kind}
 				break
 			}
 		}
 	}
-	if command == "" {
+	if input == nil {
 		return CatalogItem{}, false
 	}
-	return CatalogItem{Kind: "mcp", Name: short, Description: server.Description, Publisher: publisher, Source: "MCP Registry", Command: command, URL: firstNonEmpty(server.WebsiteURL, server.Repository.URL)}, true
+	return CatalogItem{Kind: "mcp", Name: short, Description: server.Description, Publisher: publisher, Source: "MCP Registry", Command: mcpAddCommand(*input), Server: input, URL: firstNonEmpty(server.WebsiteURL, server.Repository.URL)}, true
+}
+
+// mcpAddCommand is the copyable equivalent of installing input.
+func mcpAddCommand(input MCPServerInput) string {
+	words := []string{"agentpack", "mcp", "add", input.Name}
+	if input.URL != "" {
+		words = append(words, "--url", input.URL, "--type", input.Type)
+	} else {
+		words = append(append(words, "--command", input.Command, "--args"), input.Args...)
+	}
+	for index, word := range words {
+		words[index] = shellWord(word)
+	}
+	return strings.Join(words, " ")
 }
 
 var plainShellWord = regexp.MustCompile(`^[A-Za-z0-9@/._:+-]+$`)

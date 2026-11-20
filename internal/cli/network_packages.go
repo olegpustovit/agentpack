@@ -131,6 +131,26 @@ func (runner Runner) restartChangedEnvironments(ctx context.Context, snapshots [
 }
 
 func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec string, restart bool) error {
+	return runner.changeNetworkProject(ctx, directory, restart, func(root string) error {
+		_, err := runner.Service.AddAll(ctx, root, spec, true)
+		return err
+	})
+}
+
+// installNetworkMCP is `agentpack mcp add` for a recent folder, from POST /api/mcp/servers.
+func (runner Runner) installNetworkMCP(ctx context.Context, directory string, input network.MCPServerInput, restart bool) error {
+	server, err := mcpServerFrom(input)
+	if err != nil {
+		return err
+	}
+	return runner.changeNetworkProject(ctx, directory, restart, func(root string) error {
+		return runner.addMCPServer(ctx, root, input.Name, server, false, true)
+	})
+}
+
+// changeNetworkProject applies a gateway install under the definition lock, captures the
+// project for the Library, and restarts the running agents the change affects.
+func (runner Runner) changeNetworkProject(ctx context.Context, directory string, restart bool, change func(root string) error) error {
 	packContext, err := resolveInvocationContext(Invocation{Global: Global{WorkspaceRoot: directory}}, true)
 	if err != nil {
 		return err
@@ -147,11 +167,11 @@ func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec 
 			return err
 		}
 	}
-	if _, err := runner.Service.AddAll(ctx, packContext.DefinitionRoot, spec, true); err != nil {
+	if err := change(packContext.DefinitionRoot); err != nil {
 		return err
 	}
 	if err := captureNetworkEnvironment(packContext.DefinitionRoot, directory, ""); err != nil {
-		return fmt.Errorf("package installed, but library capture failed: %w", err)
+		return fmt.Errorf("installed, but library capture failed: %w", err)
 	}
 	return runner.restartChangedEnvironments(ctx, before)
 }
