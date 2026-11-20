@@ -43,6 +43,10 @@ export function startSessionBody(input: {
   mode: string
   view: SessionView
   agentSessionId?: string
+  // "new" or the path of an existing worktree of directory; absent runs in the folder itself.
+  worktree?: string
+  worktreeName?: string
+  carry?: boolean
 }) {
   return {
     directory: input.directory,
@@ -50,6 +54,7 @@ export function startSessionBody(input: {
     mode: input.mode.trim(),
     transport: input.view === "chat" ? "acp" : "terminal",
     ...(input.agentSessionId ? { agent_session_id: input.agentSessionId } : {}),
+    ...(input.worktree ? { worktree: input.worktree, ...(input.worktreeName ? { worktree_name: input.worktreeName } : {}), ...(input.carry ? { carry: true } : {}) } : {}),
   }
 }
 

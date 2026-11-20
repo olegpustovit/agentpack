@@ -18,6 +18,7 @@ import type { GoalAction } from "./goal-sheet"
 import { subagentRunning, subagentStats } from "./subagent-card"
 import { fileLabel, groupByPath, listDiffChanges, reviewPrompt, type ReviewComment } from "./diff-summary"
 import { ToolDiffBody } from "./tool-diff"
+import { projectDirectory } from "@/features/sessions/git"
 
 type Draft = ReviewComment & { key: string }
 
@@ -51,6 +52,7 @@ export function ConversationInspector({
   onOpenSubagent,
   onSendComments,
   sendingComments,
+  git,
 }: {
   thread: ThreadState
   info?: SessionInfo
@@ -68,6 +70,8 @@ export function ConversationInspector({
   onOpenSubagent?: (id: string) => void
   onSendComments?: (text: string, sent: () => void) => void
   sendingComments?: boolean
+  /** Worktree and Pull request sections, shown above Session. */
+  git?: ReactNode
 }) {
   const subagents = Object.values(thread.subagents ?? {}).sort((a, b) => (b.startedTs ?? 0) - (a.startedTs ?? 0))
   const now = useNow(goal?.state === "active" || subagents.some(subagentRunning))
@@ -331,13 +335,14 @@ export function ConversationInspector({
             </div>
           </Section>
         )}
+        {git}
         {info && (
           <Section title="Session">
             <dl className="flex flex-col gap-(--s2)">
               <Row label="Agent">{harnessName(info.harness)}</Row>
               {startedBy && <Row label="Started by">{startedBy}</Row>}
               <Row label="Machine">{machineName ?? machine}</Row>
-              <Row label="Project">{info.directory.split("/").pop() || info.directory}</Row>
+              <Row label="Project">{projectDirectory(info).split("/").pop() || info.directory}</Row>
               <Row label="Mode">{info.mode || "default"}</Row>
             </dl>
             {info.transport === "acp" && (

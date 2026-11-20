@@ -26,6 +26,7 @@ import { GoalPill, parseGoalCommand, useGoalActions } from "./goal-sheet"
 import { QueueChips } from "./queue-chips"
 import { subagentRunning } from "./subagent-card"
 import { ConversationInspector } from "./conversation-inspector"
+import { GitInspectorSections, GitToolbarActions, branchLine, useSessionGit } from "./session-git"
 import { advertises, agentCommands, applyHint, cachedCommands, filterAtHints, filterSlashHints, moveHint, rememberCommands, type ComposerHint } from "./composer-hints"
 import { ComposerHintsMenu } from "./composer-hints-menu"
 import { listDiffChanges } from "./diff-summary"
@@ -457,6 +458,13 @@ export default function ConversationPane({
     // Writing instead of answering an open question interrupts it, as in the Claude CLI.
     send.mutate({ text, attachments, clearComposer: true, steer: (steer || parent.needs_you) && parent.working, optimisticAfter: parent.working ? undefined : entries.at(-1)?.seq ?? 0 })
   }
+  // A merge conflict goes back to the agent, which resolves it in its own worktree.
+  function askAgent(text: string) {
+    if (resumable) resume.mutate(text)
+    else send.mutate({ text, attachments: [], clearComposer: false })
+  }
+  const git = useSessionGit(machine, sessionId, info).data
+  const branch = branchLine(git)
   function compact(focus?: string) {
     if (!canCompact || readOnly) return
     send.mutate({ text: focus ? `/compact ${focus}` : "/compact", attachments: [], clearComposer: false })
@@ -534,8 +542,9 @@ export default function ConversationPane({
       </StatusSlot>
       {subagentId ? (
         <ToolbarTitle title={`${title ?? agentName} › ${subagent?.title || "Subagent"}`} subtitle={subagent?.description ?? subtitle} />
-      ) : title && <ToolbarTitle title={title} subtitle={subtitle} />}
+      ) : title && <ToolbarTitle title={title} subtitle={[subtitle, branch].filter(Boolean).join(" · ") || undefined} />}
       <ToolbarSlot>
+        {!subagentId && <GitToolbarActions machine={machine} sessionId={sessionId} info={info} git={git} readOnly={readOnly || needsUpdate} />}
         {subagentId && (
           <Button type="button" variant="ghost" size="sm" aria-label="Back to the conversation" title="Back (Esc)" onClick={closeSubagent}>
             <ArrowLeft aria-hidden /> Back
@@ -950,6 +959,7 @@ export default function ConversationPane({
           onOpenSubagent={openSubagent}
           onSendComments={(text, sent) => send.mutate({ text, attachments: [], clearComposer: false }, { onSuccess: sent })}
           sendingComments={send.isPending}
+          git={<GitInspectorSections machine={machine} sessionId={sessionId} git={git} readOnly={readOnly || needsUpdate} onAskRebase={askAgent} />}
         />
         {goalEditorLoaded && (
           <Suspense>

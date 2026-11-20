@@ -1,5 +1,6 @@
 import type { SessionInfo } from "@/lib/api-types"
 import { basename, harnessName, relativeTime } from "@/lib/format"
+import { projectDirectory } from "./git"
 
 export type GroupMode = "machine" | "project"
 
@@ -49,7 +50,7 @@ export function sessionDetail(session: ListedSession): string {
   const when = lastActivity(session)
   return [
     harnessName(session.harness),
-    basename(session.directory) || UNKNOWN_PROJECT,
+    basename(projectDirectory(session)) || UNKNOWN_PROJECT,
     session.machineName,
     started,
     when ? relativeTime(new Date(when)) : undefined,
@@ -84,7 +85,7 @@ function sortByLabel<T extends { label: string; key: string }>(items: T[]): T[] 
 export function groupSessions(sessions: ListedSession[], group: GroupMode): SessionGroup[] {
   const directoriesByFolder = new Map<string, Set<string>>()
   for (const session of sessions) {
-    const directory = trimSlashes(session.directory)
+    const directory = trimSlashes(projectDirectory(session))
     const key = `${session.machine}\0${basename(directory)}`
     directoriesByFolder.set(key, (directoriesByFolder.get(key) ?? new Set<string>()).add(directory))
   }
@@ -92,7 +93,7 @@ export function groupSessions(sessions: ListedSession[], group: GroupMode): Sess
   type Pending = Omit<SessionGroup, "subheads"> & { heads: Map<string, SessionSubhead> }
   const groups = new Map<string, Pending>()
   for (const session of sessions) {
-    const directory = trimSlashes(session.directory)
+    const directory = trimSlashes(projectDirectory(session))
     const folder = basename(directory)
     const byMachine = group === "machine"
     const groupKey = byMachine ? `machine\0${session.machine}` : `project\0${folder}`

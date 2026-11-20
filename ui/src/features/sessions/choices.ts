@@ -2,7 +2,7 @@ import type { SessionView } from "./rules"
 
 // Per-viewer conveniences: what New session last started in a folder, and the model and effort
 // last chosen there for each agent. Storage may be blocked; everything falls back to nothing.
-export type StartChoices = { harness?: string; mode?: string; view?: SessionView }
+export type StartChoices = { harness?: string; mode?: string; view?: SessionView; workspace?: "folder" | "new" }
 export type AgentChoices = Record<string, string | boolean>
 
 const startKey = (directory: string) => `agentpack.newSession.${directory}`
@@ -32,6 +32,7 @@ export function loadStartChoices(directory: string): StartChoices {
     harness: typeof saved.harness === "string" ? saved.harness : undefined,
     mode: typeof saved.mode === "string" ? saved.mode : undefined,
     view: saved.view === "chat" || saved.view === "terminal" ? saved.view : undefined,
+    workspace: saved.workspace === "folder" || saved.workspace === "new" ? saved.workspace : undefined,
   }
 }
 

@@ -48,6 +48,13 @@ describe("startSessionBody", () => {
     expect(startSessionBody({ ...base, view: "chat" })).toMatchObject({ transport: "acp" })
     expect(startSessionBody({ ...base, view: "terminal" })).toMatchObject({ transport: "terminal" })
   })
+
+  it("asks for a worktree only when one is chosen", () => {
+    const base = { directory: "/work/x", harness: "claude", mode: "default", view: "chat" as const }
+    expect(startSessionBody(base)).not.toHaveProperty("worktree")
+    expect(startSessionBody({ ...base, worktree: "new", worktreeName: "Fix it", carry: true })).toMatchObject({ worktree: "new", worktree_name: "Fix it", carry: true })
+    expect(startSessionBody({ ...base, worktree: "/h/worktrees/0123456789abcdef/x", carry: false })).not.toHaveProperty("carry")
+  })
 })
 
 describe("reusesOperationId", () => {

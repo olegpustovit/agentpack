@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from "react"
 import { Link } from "@tanstack/react-router"
-import { Archive, Asterisk, Check, createLucideIcon, Bot, Box, Braces, Copy, MousePointer2, Orbit, Package, Pencil, Pi, Plug, RotateCw, Save, Square, X, Zap, type LucideIcon } from "lucide-react"
+import { Archive, Asterisk, Check, createLucideIcon, Bot, Box, Braces, Copy, GitBranch, MousePointer2, Orbit, Package, Pencil, Pi, Plug, RotateCw, Save, Square, X, Zap, type LucideIcon } from "lucide-react"
 import { SourceRow } from "@/components/kit/list"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { SubagentSummary } from "@/lib/api-types"
@@ -13,6 +13,7 @@ import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { basename, harnessName, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { lastActivity, rowKey, sessionDetail, sessionLabel, type ListedSession } from "./group"
+import { isWorktreePath } from "./git"
 import { sessionGlyphState, sessionStatusWord, useSteadyGlyph, type GlyphState } from "./session-status"
 import { sessionRules } from "./rules"
 
@@ -212,6 +213,7 @@ export function SessionRow({
             <AgentTile className="ms-(--s6)" harness={session.harness} state={state} unread={unread} label={unread ? "Finished, unread" : stateWord} title={`${harnessName(session.harness)}, ${unread ? "Finished, unread" : stateWord}`} />
             {/* Not hit-testable: Safari adds its own tooltip to ellipsized text under the pointer, doubling the row's. */}
             <span className={cn("pointer-events-none min-w-0 flex-1 truncate", unread && "font-semibold")}>{label}</span>
+            {isWorktreePath(session.directory) && <GitBranch aria-label="In its own worktree" className="size-3 shrink-0 opacity-60" />}
             {/* One trailing item. The age is decoration: the tooltip has it. */}
             {word ? (
               <span className={cn(dimWord, state === "needsYou" && "font-medium text-(--warn-word)")}>{word}</span>

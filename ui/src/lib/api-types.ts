@@ -159,6 +159,8 @@ export type ProjectRow = {
   mcp: ProjectMCP[]
   modes: ProjectMode[]
   error: string
+  // The checkout's state; absent when the folder is not a Git repository or the peer predates it.
+  git?: { branch?: string; head: string; dirty: number }
 }
 
 export type LimitWindow = {

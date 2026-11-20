@@ -18,6 +18,16 @@ const laptop = "laptop"
 const vm = "vm"
 
 describe("groupSessions", () => {
+  it("a worktree session groups under its main folder's project", () => {
+    const worktree = { ...session("w", laptop, "laptop", "/home/me/.local/share/agentpack/worktrees/0123456789abcdef/replay-offset"), definition_root: "/work/agentpack" }
+    const groups = groupSessions([session("a", laptop, "laptop", "/work/agentpack"), worktree], "project")
+    expect(groups.map((group) => group.label)).toEqual(["agentpack"])
+    expect(groups[0]?.subheads.map((head) => head.sessions.map((item) => item.id))).toEqual([["a", "w"]])
+    // A monorepo subfolder that names its parent as definition root keeps its own folder.
+    const sub = { ...session("s", laptop, "laptop", "/work/mono/web"), definition_root: "/work/mono" }
+    expect(groupSessions([sub], "project").map((group) => group.label)).toEqual(["web"])
+  })
+
   it("machine mode: one group per machine, project subheads under it", () => {
     const groups = groupSessions(
       [
