@@ -94,7 +94,28 @@ func (p *pushService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if status == 0 {
 		status = http.StatusCreated
 	}
+	// Like Apple: the VAPID subject must be an https: or mailto: contact, never the loopback origin.
+	if !vapidSubjectValid(r.Header.Get("Authorization")) {
+		status = http.StatusForbidden
+	}
 	w.WriteHeader(status)
+}
+
+func vapidSubjectValid(authorization string) bool {
+	token, _, _ := strings.Cut(strings.TrimPrefix(authorization, "vapid t="), ",")
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	claims, err := base64.RawURLEncoding.DecodeString(parts[1])
+	var jwt struct {
+		Sub string `json:"sub"`
+	}
+	if err != nil || json.Unmarshal(claims, &jwt) != nil {
+		return false
+	}
+	contact, err := url.Parse(jwt.Sub)
+	return err == nil && (contact.Scheme == "https" && contact.Host != "" && !strings.HasPrefix(contact.Hostname(), "127.") || contact.Scheme == "mailto" && strings.Contains(contact.Opaque, "@"))
 }
 
 func (p *pushService) take() ([][]byte, []*http.Request) {
