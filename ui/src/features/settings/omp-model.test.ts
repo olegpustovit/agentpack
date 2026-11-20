@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  quickRoles,
   effectiveValue,
   formatRoleModel,
   isChanged,
@@ -88,4 +89,14 @@ it("names the machines whose models lack a provider, ignoring unknown ones", () 
     { id: "n3", name: "offline" },
   ]
   expect(missingMachines("anthropic", machines).map((machine) => machine.name)).toEqual(["laptop"])
+})
+
+describe("quickRoles", () => {
+  it("offers the roles whose model the chat can switch to", () => {
+    const settings = { version: "", schema: [], values: { modelRoles: { default: "anthropic/opus:high" } }, network: { "modelRoles.smol": "anthropic/haiku:low", "modelRoles.slow": "openai/gpt:xhigh" } }
+    expect(quickRoles(settings as never, ["anthropic/opus", "anthropic/haiku"])).toEqual([
+      { id: "default", name: "Default", selector: "anthropic/opus", level: "high" },
+      { id: "smol", name: "Fast", selector: "anthropic/haiku", level: "low" },
+    ])
+  })
 })

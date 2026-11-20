@@ -248,3 +248,13 @@ export function withOverride(settings: OmpSettings, key: string, value: unknown)
   if (value !== undefined) network[key] = value
   return { ...settings, network }
 }
+
+export type QuickRole = { id: string; name: string; selector: string; level: string }
+
+// Roles a chat can switch to: those with a model the chat's agent offers.
+export function quickRoles(settings: OmpSettings, models: string[]): QuickRole[] {
+  return chatRoles.flatMap((role) => {
+    const model = parseRoleModel(effectiveValue(settings, roleKey(role.id)))
+    return model && models.includes(model.selector) ? [{ ...role, selector: model.selector, level: model.level }] : []
+  })
+}

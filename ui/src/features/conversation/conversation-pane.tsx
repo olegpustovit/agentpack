@@ -17,6 +17,7 @@ import { clock, goalElapsedMs, liveGoal } from "@/lib/goal"
 import { useNow } from "@/lib/use-now"
 import { hud } from "@/lib/hud"
 import { api, ApiError, LOCAL } from "@/lib/api"
+import { ompSettingsQuery, quickRoles } from "@/features/settings/omp-model"
 import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, olderConversationPage, type ConversationPage } from "./queries"
 import { configRole, dangerousMode, parseConfigOptions } from "./config-options"
 import type { LogEntry, ThreadItem } from "./model"
@@ -158,6 +159,9 @@ export default function ConversationPane({
   const selectOptions = configOptions.filter((option) => option.type === "select")
   const permissionsOption = selectOptions.find((option) => configRole(option) === "permissions")
   const modelOption = selectOptions.find((option) => configRole(option) === "model")
+  // An Oh My Pi chat can switch to a role's model (and thinking) from the network-wide settings.
+  const ompSettings = useQuery({ ...ompSettingsQuery, enabled: live && info?.harness === "omp" }).data
+  const roles = ompSettings && modelOption ? quickRoles(ompSettings, modelOption.items.map((item) => item.value)) : []
   const effortOption = selectOptions.find((option) => configRole(option) === "effort")
   const extraOptions = configOptions.filter((option) => configRole(option) === "other")
   const tailLoaded = tail !== undefined
@@ -814,7 +818,27 @@ export default function ConversationPane({
                         </Button>
                       }
                     />
-                    <MenuContent align="end">
+                    <MenuContent align="end" className={roles.length > 0 ? "min-w-72" : undefined}>
+                      {roles.length > 0 && modelOption && (
+                        <>
+                          <p className="px-[11px] pt-(--s2) pb-(--s1) text-(length:--fs-xs) font-semibold text-(--fg3)">Roles</p>
+                          {roles.map((role) => (
+                            <MenuItem
+                              key={role.id}
+                              icon={<span aria-hidden className="size-[15px]" />}
+                              disabled={setConfig.isPending || thread.needs_you || needsUpdate}
+                              onClick={() => {
+                                setConfigValue(modelOption.id, role.selector)
+                                if (role.level && effortOption?.items.some((item) => item.value === role.level)) setConfigValue(effortOption.id, role.level)
+                              }}
+                            >
+                              {role.name}
+                              <span className="ms-auto ps-(--s4) text-(--fg3)">{[modelOption.items.find((item) => item.value === role.selector)?.label ?? role.selector, role.level].filter(Boolean).join(" · ")}</span>
+                            </MenuItem>
+                          ))}
+                          <div role="separator" className="mx-[11px] my-[5px] h-px bg-(--menu-sep)" />
+                        </>
+                      )}
                       {modelOption && (
                         <>
                           <p className="px-[11px] pt-(--s2) pb-(--s1) text-(length:--fs-xs) font-semibold text-(--fg3)">Model</p>

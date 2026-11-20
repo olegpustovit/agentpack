@@ -632,3 +632,30 @@ test("a message to a stopped chat resumes that chat", async ({ page }) => {
   await expect(page).toHaveURL(/\/sessions\/local\/chat-one/)
   await expect(page.getByPlaceholder(/Starting/)).toBeVisible()
 })
+
+test("an Oh My Pi chat switches to a role's model and thinking from the model menu", async ({ page }) => {
+  const posted: Record<string, unknown>[] = []
+  await page.route("**/api/sessions", (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    return route.fulfill({ json: [{ ...session, id: "chat-one", harness: "omp", transport: "acp" }] })
+  })
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: "", contentType: "application/x-ndjson" }))
+  await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({
+    json: {
+      configOptions: [
+        { type: "select", id: "model", name: "Model", category: "model", currentValue: "anthropic/opus", options: [{ value: "anthropic/opus", name: "Claude Opus" }, { value: "anthropic/haiku", name: "Claude Haiku" }] },
+        { type: "select", id: "thinking", name: "Thinking", category: "thought_level", currentValue: "high", options: [{ value: "low", name: "Low" }, { value: "high", name: "High" }] },
+      ],
+    },
+  }))
+  await page.route("**/api/omp/settings", (route) => route.fulfill({ json: { version: "18.20.2", schema: [], values: {}, network: { "modelRoles.smol": "anthropic/haiku:low", "modelRoles.slow": "openai/gpt:xhigh" } } }))
+  await page.route("**/api/sessions/*/conversation/config", (route) => {
+    posted.push(route.request().postDataJSON() as Record<string, unknown>)
+    return route.fulfill({ json: { accepted: true } })
+  })
+  await page.goto("/sessions/local/chat-one")
+  await page.getByRole("button", { name: "Model and effort" }).click()
+  await expect(page.getByRole("menuitem", { name: /Thinking/ })).toHaveCount(0)
+  await page.getByRole("menuitem", { name: /^Fast/ }).click()
+  await expect.poll(() => posted).toEqual([{ key: "model", value: "anthropic/haiku" }, { key: "thinking", value: "low" }])
+})
