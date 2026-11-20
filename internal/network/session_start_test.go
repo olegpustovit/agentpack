@@ -158,7 +158,7 @@ func TestResumeRestartsAStoppedChatUnderItsOwnID(t *testing.T) {
 	})
 	stuckChat(t, g, seedFolder(t, home), "session-dead")
 	info, err := g.resumeSession(context.Background(), "session-dead", "")
-	if err != nil || info.ID != "session-dead" || info.ConversationState != "starting" {
+	if err != nil || info.ID != "session-dead" || info.ConversationState != "starting" || !info.Reachable {
 		t.Fatalf("resume: %+v, %v", info, err)
 	}
 	g.starting.Wait()

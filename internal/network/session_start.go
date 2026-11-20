@@ -103,6 +103,7 @@ func (g *Gateway) resumeSession(ctx context.Context, id, prompt string) (Session
 	}
 	info.ConversationState = "starting"
 	info.EndedAt = time.Time{}
+	info.Reachable = true
 	info.LastUsed = time.Now().UTC()
 	g.startInBackground(ctx, info, "", prompt)
 	return info, nil
