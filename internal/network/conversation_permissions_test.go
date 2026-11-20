@@ -67,3 +67,49 @@ func TestAgentWithoutModesGetsAgentpackPermissions(t *testing.T) {
 		t.Fatal("accepted a mode agentpack does not offer")
 	}
 }
+
+func TestAgentpackBypassExtendsNativePermissionModes(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		name := "config options"
+		if legacy {
+			name = "legacy modes"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			var calls []string
+			broker := acp.NewBroker(nil, nil, nil, func(_ context.Context, key, value string) error {
+				calls = append(calls, key+"="+value)
+				return nil
+			})
+			session := NewConversationSession(acp.NewEventLog(0), broker)
+			session.clientMode = "default"
+			key := "mode"
+			if legacy {
+				session.SetModes([]byte(`{"currentModeId":"auto","availableModes":[{"id":"auto","name":"Auto"},{"id":"plan","name":"Plan"}]}`))
+			} else {
+				key = "permissions"
+				session.SetConfigOptions([]byte(`[{"id":"permissions","category":"mode","type":"select","currentValue":"auto","options":[{"value":"auto","name":"Auto"},{"value":"plan","name":"Plan"}]},{"id":"model","type":"select"}]`))
+			}
+			config := string(session.ConfigJSON())
+			if session.BypassingPermissions() || !strings.Contains(config, `"currentValue":"auto"`) ||
+				!strings.Contains(config, `"name":"Plan"`) || !strings.Contains(config, `"name":"Bypass Permissions"`) {
+				t.Fatalf("initial config %s", config)
+			}
+			var remembered string
+			session.permissionChange = func(mode string) { remembered = mode }
+			if err := session.SetConfigOption(ctx, key, []byte(`"bypassPermissions"`)); err != nil {
+				t.Fatal(err)
+			}
+			if !session.BypassingPermissions() || remembered != "bypassPermissions" || len(calls) != 0 ||
+				!strings.Contains(string(session.ConfigJSON()), `"currentValue":"bypassPermissions"`) {
+				t.Fatalf("bypass config %s, requests %q, remembered %q", session.ConfigJSON(), calls, remembered)
+			}
+			if err := session.SetConfigOption(ctx, key, []byte(`"plan"`)); err != nil {
+				t.Fatal(err)
+			}
+			if session.BypassingPermissions() || remembered != "plan" || len(calls) != 1 || calls[0] != key+`="plan"` {
+				t.Fatalf("bypassing %v, requests %q, remembered %q", session.BypassingPermissions(), calls, remembered)
+			}
+		})
+	}
+}

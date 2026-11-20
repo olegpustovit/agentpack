@@ -8,5 +8,5 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	if err != nil {
 		return base.ACPLaunch{}, err
 	}
-	return base.ACPLaunch{Cmd: command, NoPermissionModes: true}, nil
+	return base.ACPLaunch{Cmd: command, ClientPermissionBypass: true}, nil
 }

@@ -404,7 +404,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	conv.SetConfigOptions(setup.ConfigOptions)
 	conv.SetModes(setup.Modes)
 	conv.SetAgentCapabilities(setup.AgentCapabilities)
-	if key, _ := conv.permissionMode(); acpLaunch.NoPermissionModes && key == "" {
+	if acpLaunch.ClientPermissionBypass {
 		conv.mu.Lock()
 		conv.clientMode = "default"
 		conv.mu.Unlock()
