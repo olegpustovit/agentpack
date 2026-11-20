@@ -41,6 +41,21 @@ Launch, staging and fingerprint code were not changed. Five runs each, medians:
 
 Measured over 60 s after deploying, with live sessions and mesh peers: the development gateway reads 93 KB/s at 0.45% CPU (it was 1.6 MB/s until the Library cache keyed on the registry clock tables instead of the database-wide version, which every streamed flush moves). oracle-vm reads 55 KB/s at 0.43% CPU. The public gateway serves `/sw.js`; a fresh gateway driven in Chromium registered it, cached the shell and every first-paint asset, painted an offline reload in 45 ms and never served `/api/` from cache. `/api/debug/pprof/` answers 401 from the public URL. Against a real Claude agent through the development gateway, the prompt POST was acknowledged in 13 ms (it always took 2,000 ms), a second prompt sent while the agent worked was queued in 3 ms, and both replies arrived through the pushed stream.
 
+## After the audit milestones (2026-11-20)
+
+Same x86_64 development host and reproduction (copied `state.db` of 163 MB plus 17 MB WAL, sharing off, 60 s after a 15 s warm-up), with machine detail, worktrees, git state, notifications and Web Push merged:
+
+| Metric | Result | Budget |
+| --- | ---: | ---: |
+| Idle gateway CPU | 0.05% | < 1% |
+| Idle gateway read I/O | 5 KB/s | < 1 MB/s |
+| `GET /api/machine`, first call (seven agent CLIs probed in parallel) | 463 ms | — |
+| `GET /api/machine`, repeat (versions cached per binary path, size and mtime) | 0.7 ms | — |
+| `GET /api/version/latest` (GitHub, then cached 15 min for display and updater) | 290 ms | — |
+| `BenchmarkMaterializationHome` / `BenchmarkCodexSetup/cold` / `warm`, medians of three | 0.29 / 7.5 / 0.12 ms | 1 / 20 / 1 ms |
+
+The push sender polls every 3 s only while a subscription exists; with none it does no work. Not re-measured on the ARM64 reference host.
+
 ## Reproduce
 
 ```sh
