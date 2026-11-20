@@ -447,10 +447,8 @@ func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record Work
 		return true
 	}
 	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotFound {
-		http.Error(w, "Needs update", http.StatusNotFound)
-		return true
-	}
+	// A worker's 404 passes through as is: Go's "404 page not found" tells the UI the worker needs
+	// an update, and anything else ("no goal is set") is the worker's own answer.
 	for _, key := range []string{"Content-Type", "X-Agentpack-Truncated", "ETag"} {
 		if value := response.Header.Get(key); value != "" {
 			w.Header().Set(key, value)

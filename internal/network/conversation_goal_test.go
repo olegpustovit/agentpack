@@ -1,6 +1,7 @@
 package network
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -243,4 +244,25 @@ func TestStopDuringUnpromptedNativeGoalPauses(t *testing.T) {
 	if prompt := agent.nextPrompt(t); prompt.Text != "/goal pause" {
 		t.Fatalf("prompt = %q", prompt.Text)
 	}
+}
+
+// A long chat's goal update can lie before the replayed tail; the saved row restores it, so the
+// person can still clear it.
+func TestGoalBeyondTheReplayedTailIsRestoredAndClears(t *testing.T) {
+	session, agent := newFakeAgentSession(t)
+	session.restoreGoal(&Goal{Objective: "ship it", State: "active", Engine: "native"})
+	if session.goal == nil || session.goal.Objective != "ship it" {
+		t.Fatalf("goal = %+v", session.goal)
+	}
+	session.restoreGoal(&Goal{Objective: "older", State: "active"}) // the transcript's own goal wins
+	if session.goal.Objective != "ship it" {
+		t.Fatalf("goal replaced: %+v", session.goal)
+	}
+	if err := session.ClearGoal(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if input := agent.nextPrompt(t); input.Text != "/goal clear" {
+		t.Fatalf("sent %q", input.Text)
+	}
+	agent.turns <- fakeTurn{}
 }

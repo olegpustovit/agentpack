@@ -458,6 +458,19 @@ func (session *ConversationSession) UpdateGoal(ctx context.Context, change GoalC
 	return nil
 }
 
+// restoreGoal adopts the goal saved on the session row when replaying the transcript found none:
+// replay reads only a bounded tail, so a long chat's last goal update can lie before it.
+func (session *ConversationSession) restoreGoal(saved *Goal) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if saved == nil || saved.State == "cleared" || session.goal != nil || session.goalCleared != nil {
+		return
+	}
+	goal := *saved
+	session.goal = &goal
+	session.goalPublished = string(mustRawJSON(&goal))
+}
+
 func (session *ConversationSession) ClearGoal(ctx context.Context) error {
 	session.mu.Lock()
 	goal := session.goal

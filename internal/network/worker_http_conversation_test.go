@@ -231,10 +231,14 @@ func TestConversationSnapshotRespectsGatewayByteBoundary(t *testing.T) {
 	})
 }
 
-func TestConversationPromptImagesProxyMapsOldPeer404ToNeedsUpdate(t *testing.T) {
+func TestConversationProxyPassesWorker404sThrough(t *testing.T) {
 	var gotPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
+		if r.URL.Path == "/conversation/goal" {
+			http.Error(w, "no goal is set", http.StatusNotFound)
+			return
+		}
 		http.NotFound(w, r)
 	}))
 	defer upstream.Close()
@@ -246,8 +250,15 @@ func TestConversationPromptImagesProxyMapsOldPeer404ToNeedsUpdate(t *testing.T) 
 	)
 	response := httptest.NewRecorder()
 	proxyWorkerConversation(response, request, WorkerRecord{Address: strings.TrimPrefix(upstream.URL, "http://")}, "/prompt/images")
-	if gotPath != "/conversation/prompt/images" || response.Code != http.StatusNotFound || response.Body.String() != "Needs update\n" {
+	// An older worker without the route: the UI reads Go's own text as Needs update.
+	if gotPath != "/conversation/prompt/images" || response.Code != http.StatusNotFound || response.Body.String() != "404 page not found\n" {
 		t.Fatalf("peer path=%q response=%d %q", gotPath, response.Code, response.Body.String())
+	}
+	// The worker's own 404 keeps its reason, never "Needs update".
+	response = httptest.NewRecorder()
+	proxyWorkerConversation(response, httptest.NewRequest(http.MethodDelete, "/api/sessions/session-peer/conversation/goal", nil), WorkerRecord{Address: strings.TrimPrefix(upstream.URL, "http://")}, "/goal")
+	if response.Code != http.StatusNotFound || response.Body.String() != "no goal is set\n" {
+		t.Fatalf("goal response=%d %q", response.Code, response.Body.String())
 	}
 }
 

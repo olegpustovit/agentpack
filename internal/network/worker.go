@@ -344,6 +344,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		}
 	}
 	wireConversation := func(current *ConversationSession) {
+		current.restoreGoal(launch.Session.Goal)
 		current.mu.Lock()
 		current.titleChange = persistTitle
 		current.goalChange = func(goal *Goal) {
