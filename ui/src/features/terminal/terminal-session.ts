@@ -382,6 +382,8 @@ export class TerminalSession {
       this.paste()
       return false
     }
+    // Ctrl+Shift+K opens the command palette (the shell handles it); Ctrl+K stays the shell's kill-line.
+    if (event.ctrlKey && event.shiftKey && key === "k") return false
     // With a selection, Ctrl/⌘+C is a copy: letting the browser copy event reach xterm.
     if ((event.ctrlKey || event.metaKey) && key === "c" && term.hasSelection()) return false
     return true

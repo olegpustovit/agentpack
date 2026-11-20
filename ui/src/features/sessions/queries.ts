@@ -2,6 +2,8 @@ import { queryOptions } from "@tanstack/react-query"
 import { array, object, optional, string } from "@/lib/validate"
 import { api, LOCAL } from "@/lib/api"
 import type { ProjectRow, SessionInfo } from "@/lib/api-types"
+import { useMachines, useReplicatedQueries } from "@/features/machines/queries"
+import type { ListedSession } from "./group"
 
 // Go sends a nil slice as null, and a peer may predate a field. Unknown fields pass through.
 function parseProjects(raw: unknown): ProjectRow[] {
@@ -38,3 +40,18 @@ export const projectsQuery = (machine: string, live = true) =>
     staleTime: 5 * 60 * 1000,
     refetchInterval: live ? false : 60 * 1000,
   })
+
+// Every machine's sessions as the sidebar lists them. Offline rows are last-known.
+export function useListedSessions() {
+  const machines = useMachines()
+  const queries = useReplicatedQueries(sessionsQuery)
+  const sessions: ListedSession[] = machines.flatMap((machine) =>
+    (queries.byMachine[machine.id]?.data ?? []).map((session) => ({
+      ...session,
+      machine: machine.id,
+      machineName: machine.name,
+      offline: session.reachable === false || !machine.online,
+    })),
+  )
+  return { machines, queries, sessions }
+}

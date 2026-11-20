@@ -2,7 +2,7 @@ import { act, createElement } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { ListedSession } from "./group"
-import { HOLD_MS, isUnread, sessionGlyphState, sessionStatusWord, useSteadyGlyph, type GlyphState } from "./session-status"
+import { HOLD_MS, isUnread, nextNeedsYou, sessionGlyphState, sessionStatusWord, useSteadyGlyph, type GlyphState } from "./session-status"
 
 const base: ListedSession = {
   id: "s1",
@@ -67,6 +67,16 @@ describe("isUnread", () => {
     expect(isUnread(active, at("2026-01-01T00:00:30Z"))).toBe(true)
     expect(isUnread(active, at("2026-01-01T00:01:00Z"))).toBe(false)
   })
+})
+
+it("nextNeedsYou cycles through waiting sessions after the open one", () => {
+  const waiting = (id: string) => ({ ...base, id, conversation_state: "needs_you" })
+  const list = [waiting("a"), { ...base, id: "b", conversation_state: "working" }, waiting("c")]
+  expect(nextNeedsYou(list, undefined)?.id).toBe("a")
+  expect(nextNeedsYou(list, "local:b")?.id).toBe("a")
+  expect(nextNeedsYou(list, "local:a")?.id).toBe("c")
+  expect(nextNeedsYou(list, "local:c")?.id).toBe("a")
+  expect(nextNeedsYou([list[1]!], undefined)).toBeUndefined()
 })
 
 describe("useSteadyGlyph", () => {

@@ -7,22 +7,22 @@ import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem } from
 import { ConfirmAlert, ConfirmAlertContent, RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useEventsConnected } from "@/features/events/use-events"
-import { nodesQuery, useReplicatedQueries, useMachines } from "@/features/machines/queries"
+import { nodesQuery } from "@/features/machines/queries"
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { terminalPool } from "@/features/terminal/pool"
 import { rememberSession } from "@/features/shell/views"
-import { api, LOCAL } from "@/lib/api"
-import type { SessionInfo } from "@/lib/api-types"
+import { LOCAL } from "@/lib/api"
 import { basename, harnessName, plural } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { useSessionCommands } from "./actions"
 import { groupSessions, matchesSession, nestHelpers, rowKey, sessionLabel, type GroupMode, type ListedSession, type SessionSubhead } from "./group"
 import { NewSessionSheet } from "./new-session-sheet"
-import { loadStartChoices, markNewChat, saveStartChoices } from "./choices"
-import { agentIds, defaultAgent, sessionRules, startSessionBody } from "./rules"
-import { sessionsQuery } from "./queries"
+import { loadStartChoices } from "./choices"
+import { agentIds, defaultAgent, sessionRules } from "./rules"
+import { useListedSessions } from "./queries"
+import { useStartSession } from "./start"
 import { isUnread, loadSeen, saveSeen, sessionGlyphState } from "./session-status"
 import { SessionRow, SubagentRow, type GroupActions, type RowActions } from "./session-row"
 import { RowSheet, type SheetState } from "./session-sheets"
@@ -48,8 +48,7 @@ function withSearch(href: string, patch: Record<string, string | undefined>): st
 }
 
 export function SessionList() {
-  const machines = useMachines()
-  const queries = useReplicatedQueries(sessionsQuery)
+  const { machines, queries, sessions } = useListedSessions()
   const live = useEventsConnected()
   const discovery = useQuery(nodesQuery(live))
   const queryClient = useQueryClient()
@@ -78,14 +77,6 @@ export function SessionList() {
   const routeKey = params.machine && params.sessionId ? `${params.machine}:${params.sessionId}` : undefined
   const selectedKey = cursor?.from === routeKey ? cursor?.key : routeKey
 
-  const sessions: ListedSession[] = machines.flatMap((machine) =>
-    (queries.byMachine[machine.id]?.data ?? []).map((session) => ({
-      ...session,
-      machine: machine.id,
-      machineName: machine.name,
-      offline: session.reachable === false || !machine.online,
-    })),
-  )
   const query = search.q ?? ""
   const shown = sessions.filter((session) => matchesSession(session, query))
   // Pinned above the machine and project groups, and listed only there.
@@ -430,22 +421,18 @@ function SessionConfirm({ confirm, onConfirm }: { confirm: Confirm; onConfirm: (
 // "+" starts a chat in this subhead's folder at once with its last agent; ⌥-click or right-click picks
 // another. Revealed on hover; always shown on touch. ⌘N still opens the full New session sheet.
 function NewInFolder({ head }: { head: SessionSubhead }) {
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const folder = basename(head.directory) || head.directory
   const machineName = head.sessions[0]?.machineName ?? head.machine
   const usual = defaultAgent(loadStartChoices(head.directory), head.sessions)
-  const start = useMutation({
-    mutationFn: (agent: { harness: string; mode: string }) =>
-      api<SessionInfo>("/api/sessions", { machine: head.machine, method: "POST", body: startSessionBody({ directory: head.directory, ...agent, view: "chat" }) }),
-    onSuccess: (info, agent) => {
-      saveStartChoices(head.directory, { ...agent, view: "chat" })
-      markNewChat(info.id)
-      void queryClient.invalidateQueries({ queryKey: sessionsQuery(head.machine, false).queryKey })
-      void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: head.machine, sessionId: info.id } })
-    },
-    onError: (error, agent) => hud.error(`Could not start ${harnessName(agent.harness)}: ${error instanceof Error ? error.message : String(error)}`, () => start.mutate(agent)),
-  })
+  const mutation = useStartSession()
+  const start = {
+    isPending: mutation.isPending,
+    mutate: (agent: { harness: string; mode: string }) =>
+      mutation.mutate(
+        { machine: head.machine, directory: head.directory, ...agent, view: "chat" },
+        { onError: (error) => hud.error(`Could not start ${harnessName(agent.harness)}: ${error instanceof Error ? error.message : String(error)}`, () => start.mutate(agent)) },
+      ),
+  }
   const label = head.offline ? `${machineName} is offline` : `New ${harnessName(usual.harness)} chat in ${folder} on ${machineName}`
   const className = cn(
     buttonVariants({ variant: "ghost", size: "icon" }),
