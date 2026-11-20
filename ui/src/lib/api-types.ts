@@ -45,6 +45,8 @@ export type SessionInfo = {
   title?: string
   directory: string
   definition_root?: string
+  // Main folder of the agentpack worktree the session runs in. Older peers omit it.
+  worktree_of?: string
   folder_id?: string
   harness: string
   mode: string

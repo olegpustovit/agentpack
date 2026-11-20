@@ -61,7 +61,7 @@ func TestSessionsMigrationDefaultsAndEventIdentity(t *testing.T) {
 		"started_at": false, "started_by": false, "node_id": false,
 		"owner_email": false, "ended_at": false, "hidden": false,
 		"last_seq": false, "last_event_at": false,
-		"conversation_truncated": false, "archived_at": false, "archived_seq": false, "title": false, "goal": false, "subagents": false, "parent_id": false, "tools": false,
+		"conversation_truncated": false, "archived_at": false, "archived_seq": false, "title": false, "goal": false, "subagents": false, "parent_id": false, "tools": false, "worktree_of": false,
 		"model": false, "turns": false, "output_tokens": false, "input_tokens": false,
 		"cache_read_tokens": false, "cache_write_tokens": false, "cost_micros": false,
 	}

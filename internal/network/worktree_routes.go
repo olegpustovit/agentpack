@@ -172,7 +172,7 @@ func (g *Gateway) worktreeRow(ctx context.Context, path string, sessions []Sessi
 	}
 	row.Base, _ = gitLine(ctx, main, "symbolic-ref", "--short", "-q", "HEAD")
 	if mainHead, err := gitLine(ctx, main, "rev-parse", "HEAD"); err == nil && row.Head != "" {
-		row.Merged = merged(ctx, path, mainHead, row.Head)
+		row.Merged = merged(ctx, path, mainHead, row.Head) || pullRequestMerged(ctx, path, row.worktreeStatus)
 		if row.Upstream != "" {
 			row.Unpushed = row.Ahead
 		} else {
@@ -259,6 +259,7 @@ type pullRequest struct {
 	URL    string       `json:"url"`
 	State  string       `json:"state"`
 	Checks checkSummary `json:"checks"`
+	head   string
 }
 
 type sessionGit struct {
@@ -387,6 +388,20 @@ func cachedPullRequest(ctx context.Context, dir, branch string) *pullRequest {
 	return pr
 }
 
+// pullRequestMerged is how a squash or rebase merge shows, which leaves no merge in the local
+// branch: the branch was pushed, gh reports its pull request merged, and the commit checked out
+// is one the pull request contained. Without gh it is false.
+func pullRequestMerged(ctx context.Context, dir string, status worktreeStatus) bool {
+	if status.Branch == "" || status.Upstream == "" || status.Head == "" {
+		return false
+	}
+	if _, err := exec.LookPath("gh"); err != nil {
+		return false
+	}
+	pr := cachedPullRequest(ctx, dir, status.Branch)
+	return pr != nil && pr.State == "MERGED" && pr.head != "" && merged(ctx, dir, pr.head, status.Head)
+}
+
 func forgetPullRequest(dir, branch string) {
 	prMu.Lock()
 	delete(prCache, dir+"\x00"+branch)
@@ -410,7 +425,7 @@ func runGH(ctx context.Context, timeout time.Duration, dir string, args ...strin
 }
 
 func viewPullRequest(ctx context.Context, dir, branch string) *pullRequest {
-	out, err := runGH(ctx, ghTimeout, dir, "pr", "view", branch, "--json", "number,url,state,statusCheckRollup")
+	out, err := runGH(ctx, ghTimeout, dir, "pr", "view", branch, "--json", "number,url,state,headRefOid,statusCheckRollup")
 	if err != nil {
 		return nil
 	}
@@ -418,6 +433,7 @@ func viewPullRequest(ctx context.Context, dir, branch string) *pullRequest {
 		Number int    `json:"number"`
 		URL    string `json:"url"`
 		State  string `json:"state"`
+		Head   string `json:"headRefOid"`
 		Checks []struct {
 			Status     string `json:"status"`
 			Conclusion string `json:"conclusion"`
@@ -427,7 +443,7 @@ func viewPullRequest(ctx context.Context, dir, branch string) *pullRequest {
 	if json.Unmarshal([]byte(out), &body) != nil || body.Number == 0 {
 		return nil
 	}
-	pr := &pullRequest{Number: body.Number, URL: body.URL, State: body.State}
+	pr := &pullRequest{Number: body.Number, URL: body.URL, State: body.State, head: body.Head}
 	for _, check := range body.Checks {
 		pr.Checks.Total++
 		// Check runs report status and conclusion; commit statuses report state.
@@ -578,9 +594,8 @@ func (g *Gateway) serveSessionMerge(w http.ResponseWriter, r *http.Request) {
 }
 
 // removeArchivedWorktree runs after a session is archived: its worktree goes when no other
-// session uses it, it has no changes and its commits are already on the main folder's branch.
-// shortcut: "pushed and its PR merged" is not checked, upgrade when squash-merged PRs leave
-// worktrees behind often enough to matter.
+// session uses it, it has no changes and its commits are on the main folder's branch or in a
+// merged pull request.
 func (g *Gateway) removeArchivedWorktree(ctx context.Context, info SessionInfo) {
 	if !insideWorktrees(g.options.Home, info.Directory) {
 		return
@@ -607,7 +622,7 @@ func (g *Gateway) removeArchivedWorktree(ctx context.Context, info SessionInfo) 
 		return
 	}
 	mainHead, err := gitLine(ctx, main, "rev-parse", "HEAD")
-	if err != nil || !merged(ctx, root, mainHead, "HEAD") {
+	if (err != nil || !merged(ctx, root, mainHead, "HEAD")) && !pullRequestMerged(ctx, root, status) {
 		return
 	}
 	if _, err := runGit(ctx, gitTimeout, main, "worktree", "remove", root); err != nil {

@@ -19,6 +19,7 @@ describe("worktrees", () => {
     const directory = "/home/me/.local/share/agentpack/worktrees/0123456789abcdef/x/web"
     expect(isWorktreePath(directory)).toBe(true)
     expect(projectDirectory({ directory, definition_root: "/work/app" })).toBe("/work/app")
+    expect(projectDirectory({ directory, definition_root: "/work", worktree_of: "/work/app/web" })).toBe("/work/app/web")
     expect(projectDirectory({ directory: "/work/app/web", definition_root: "/work/app" })).toBe("/work/app/web")
     expect(worktreeFolderInProject(row({}), "/work/app/web")).toBe(true)
     expect(worktreeFolderInProject(row({}), "/work/application")).toBe(false)
