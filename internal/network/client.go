@@ -206,7 +206,7 @@ func StartWorker(ctx context.Context, home, executable string, launch WorkerLaun
 	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		return "", err
 	}
-	log, err := os.OpenFile(filepath.Join(directory, "workers.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	log, err := os.OpenFile(filepath.Join(directory, "workers.log"), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0600)
 	if err != nil {
 		return "", err
 	}
@@ -215,9 +215,13 @@ func StartWorker(ctx context.Context, home, executable string, launch WorkerLaun
 	trace := obs.ParseTraceParent(obs.TraceParent(ctx))
 	command.Env = append(os.Environ(), "AGENTPACK_TRACE="+trace.ID)
 	ConfigureDetached(command)
-	// The log is shared by every worker; the tail of this one's stderr explains an early exit.
-	var stderr workerStderr
-	command.Stderr = io.MultiWriter(log, &stderr)
+	// The worker outlives the gateway, so its stderr must be the file itself: a pipe read by this
+	// process breaks when the gateway stops and the worker's next log line kills it with SIGPIPE.
+	logStart, err := log.Seek(0, io.SeekEnd)
+	if err != nil {
+		return "", err
+	}
+	command.Stderr = log
 	input, err := command.StdinPipe()
 	if err != nil {
 		return "", err
@@ -281,6 +285,9 @@ func StartWorker(ctx context.Context, home, executable string, launch WorkerLaun
 				case <-done:
 				case <-time.After(2 * time.Second):
 				}
+				// shortcut: the log is shared, so another worker's line written meanwhile could be read instead.
+				var stderr workerStderr
+				_, _ = io.Copy(&stderr, io.NewSectionReader(log, logStart, 1<<20))
 				if reason := stderr.lastLine(); reason != "" {
 					return "", errors.New(reason)
 				}

@@ -140,11 +140,12 @@ export default function ConversationPane({
   const scrollAnchorRef = useRef<{ height: number; top: number } | null>(null)
   const { data: configRaw, error: configError } = useQuery({
     queryKey: ["conversation-config", machine, sessionId],
-    enabled: !readOnly && !starting,
+    // Only a running agent has options; a stopped chat has no worker, and its 404 is not a version gap.
+    enabled: live,
     queryFn: () => api<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/config-options`, { machine }),
     retry: false,
   })
-  const needsUpdate = conversationNeedsUpdate(conversationError, readOnly ? undefined : configError)
+  const needsUpdate = conversationNeedsUpdate(conversationError, live ? configError : undefined)
   const archiveUnavailable = archiveUnavailableMessage(conversationError)
   const configOptions = parseConfigOptions(configRaw)
   const selectOptions = configOptions.filter((option) => option.type === "select")

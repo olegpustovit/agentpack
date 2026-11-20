@@ -4,10 +4,14 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/harness/codex"
+	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
@@ -108,5 +112,44 @@ func startNativePresenceGateway(t *testing.T, home string) {
 		case <-ready.Done():
 			t.Fatal("gateway did not start")
 		}
+	}
+}
+
+// A folder that holds its own agentpack.toml records no definition root. A chat
+// started there must stage that folder before the worker launches the agent;
+// otherwise Codex gets a CODEX_HOME that was never built.
+func TestRemoteChatStagesFolderWithoutDefinitionRoot(t *testing.T) {
+	home, directory := t.TempDir(), t.TempDir()
+	t.Setenv("AGENTPACK_HOME", home)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	if err := manifest.WriteStub(directory, "test", "0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(directory, "test", "0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	folder, err := network.FolderIdentity(directory)
+	if err != nil {
+		t.Skip(err)
+	}
+	store, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec("INSERT INTO sessions(id,node_id,directory,harness,folder_id) VALUES ('session-known',(SELECT node_id FROM local_node WHERE id=1),?,'codex',?)", directory, folder); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The worker cannot start from a missing executable; the sync before it is what is tested.
+	_, _ = Runner{}.startRemoteSession(context.Background(), home, filepath.Join(t.TempDir(), "missing"), network.SessionInfo{Harness: "codex", Directory: directory, Transport: "acp"}, "")
+	codexHome, err := codex.CurrentHome(directory, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(codexHome, "config.toml")); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("Codex home %s was not staged: %v", codexHome, err)
 	}
 }

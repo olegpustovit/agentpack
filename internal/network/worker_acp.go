@@ -369,7 +369,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	log.SetReplaying(false)
 	if err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, nil, explainACPAuthRequired(err, harness.ID())
 	}
 	connMu.Lock()
 	sessID = sdkacp.SessionId(setup.AgentSessionID)
@@ -508,6 +508,25 @@ func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection
 	setup.ConfigOptions = marshalConfigOptions(resp.ConfigOptions)
 	setup.Modes = marshalSessionModes(resp.Modes)
 	return setup, nil
+}
+
+// explainACPAuthRequired turns an agent's bare "Authentication required" into what to do about it:
+// a chat cannot run a login flow, so the agent must be signed in from a terminal on this machine.
+func explainACPAuthRequired(err error, target base.Target) error {
+	var request *sdkacp.RequestError
+	if !errors.As(err, &request) || request.Code != sdkacp.NewAuthRequired(nil).Code {
+		return err
+	}
+	name := base.DisplayName(target)
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "this machine"
+	}
+	command := "ap " + string(target)
+	if target == base.Cursor {
+		command = "ap agent"
+	}
+	return fmt.Errorf("%s is not signed in on %s. Run %s in a terminal there, sign in, then start the chat again: %w", name, host, command, err)
 }
 
 func marshalConfigOptions(opts []sdkacp.SessionConfigOption) json.RawMessage {

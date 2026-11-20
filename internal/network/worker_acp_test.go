@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -719,5 +720,17 @@ func TestConversationStreamPushesAppendsWithoutPolling(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("append never reached the stream")
+	}
+}
+
+func TestACPAuthRequiredSaysHowToSignIn(t *testing.T) {
+	cause := fmt.Errorf("acp session/new: %w", sdkacp.NewAuthRequired(nil))
+	err := explainACPAuthRequired(cause, base.Agy)
+	if !strings.Contains(err.Error(), "Antigravity is not signed in") || !strings.Contains(err.Error(), "ap agy") || !errors.Is(err, cause) {
+		t.Fatalf("auth-required error not explained: %v", err)
+	}
+	other := errors.New("acp session/new: boom")
+	if explainACPAuthRequired(other, base.Agy) != other {
+		t.Fatal("unrelated error rewritten")
 	}
 }

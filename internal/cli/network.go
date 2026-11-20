@@ -178,6 +178,13 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 	if !known {
 		return "", errors.New("folder has not been used before; launch an agent locally before starting it remotely")
 	}
+	// A folder that holds its own agentpack.toml records no separate definition root. The worker
+	// then stages and launches from the folder itself, so the pre-launch sync must use it too; an
+	// empty root would stage the gateway's working directory and leave the agent's home unbuilt.
+	definitionRoot := info.DefinitionRoot
+	if definitionRoot == "" {
+		definitionRoot = info.Directory
+	}
 	if info.Transport == "acp" {
 		target, ok := launcherTarget(info.Harness)
 		if !ok {
@@ -187,7 +194,7 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 		if modeName == "" {
 			modeName = mode.DefaultName
 		}
-		if _, _, err := runner.Service.SyncForLaunchOptions(ctx, info.DefinitionRoot, packSync.SyncOptions{
+		if _, _, err := runner.Service.SyncForLaunchOptions(ctx, definitionRoot, packSync.SyncOptions{
 			Mode: modeName, Target: &target, WorkspaceRoot: info.Directory,
 		}); err != nil {
 			return "", err

@@ -110,7 +110,7 @@ func TestEndingAChatSettlesAStaleState(t *testing.T) {
 func TestWorkerThatExitsEarlyReportsItsOwnError(t *testing.T) {
 	home := t.TempDir()
 	script := filepath.Join(t.TempDir(), "worker")
-	body := "#!/bin/sh\ncat >/dev/null\nprintf '          \\n   \\033[1mERROR\\033[0m  \\n          \\n  Acp session/new: Authentication required.\\n' >&2\nexit 1\n"
+	body := "#!/bin/sh\ncat >/dev/null\n[ -p /dev/stderr ] && { echo 'stderr is a pipe that dies with the gateway' >&2; exit 1; }\nprintf '          \\n   \\033[1mERROR\\033[0m  \\n          \\n  Acp session/new: Authentication required.\\n' >&2\nexit 1\n"
 	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
 		t.Fatal(err)
 	}

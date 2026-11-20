@@ -555,3 +555,19 @@ test("a sent message shows before the gateway answers, and a failure puts it bac
   await expect(message).toHaveValue("ship the fix")
   await expect(thread.getByText("ship the fix")).toHaveCount(0)
 })
+
+test("a stopped chat shows why it stopped, not an update banner", async ({ page }) => {
+  await page.route("**/api/sessions", (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    return route.fulfill({ json: [{ ...session, id: "chat-one", harness: "agy", transport: "acp", ended_at: session.started_at, state: { ...session.state, running: false, exit_code: 1 } }] })
+  })
+  const notice = { sessionUpdate: "notice", severity: "error", title: "Could not start agy", description: "Antigravity is not signed in on gigacomp." }
+  await page.route("**/api/sessions/*/conversation**", (route) =>
+    route.fulfill({ body: `${JSON.stringify({ seq: 1, ts: 1, kind: "notice", payload: notice })}\n`, contentType: "application/x-ndjson" }),
+  )
+  // A stopped chat has no worker, so the gateway has nothing to answer options with.
+  await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ status: 404, body: "session unavailable" }))
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByText("Antigravity is not signed in on gigacomp.")).toBeVisible()
+  await expect(page.getByText(/needs an update/)).toHaveCount(0)
+})
