@@ -1,7 +1,8 @@
 import { availableParallelism } from "node:os"
 import { defineConfig, devices } from "@playwright/test"
 
-// Parallel checkouts each pick a port, since an existing preview server is reused.
+// Parallel checkouts each pick a port, since an existing preview server is reused. WebKit refuses
+// some ports (4190, for one); 42xx works.
 const port = process.env.E2E_PORT ?? "4173"
 const origin = `http://127.0.0.1:${port}`
 // Screenshots for design review, not assertions: `bun run capture`.
