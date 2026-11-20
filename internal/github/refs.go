@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -138,6 +139,43 @@ func githubJSON(ctx context.Context, client *http.Client, endpoint string, desti
 		return fmt.Errorf("GitHub API JSON: %w", err)
 	}
 	return nil
+}
+
+// RepoFile reads one file from a repository's default branch, cached in index.db for ttl.
+// A failed refresh falls back to the cached copy. shortcut: the contents API inlines files
+// up to 1 MB only; switch to the raw media type if a catalog file outgrows that.
+func RepoFile(ctx context.Context, client *http.Client, owner, repo, path string, ttl time.Duration) ([]byte, error) {
+	key := fileCacheKey(owner, repo, path)
+	var cached cachedFile
+	found, err := readMetadata(fileCacheBucket, key, &cached)
+	if err != nil {
+		return nil, err
+	}
+	if found && isFresh(cached.CheckedAtUnix, ttl) {
+		return cached.Content, nil
+	}
+	var body struct {
+		Content  string `json:"content"`
+		Encoding string `json:"encoding"`
+	}
+	restErr := githubJSON(ctx, client, fmt.Sprintf("/repos/%s/%s/contents/%s", owner, repo, strings.Trim(path, "/")), &body)
+	if restErr == nil && body.Encoding != "base64" {
+		restErr = fmt.Errorf("GitHub API: %s/%s/%s is not inlined (encoding %q)", owner, repo, path, body.Encoding)
+	}
+	var content []byte
+	if restErr == nil {
+		content, restErr = base64.StdEncoding.DecodeString(strings.ReplaceAll(body.Content, "\n", ""))
+	}
+	if restErr != nil {
+		if found {
+			return cached.Content, nil
+		}
+		return nil, withAccessHint(restErr, owner, repo)
+	}
+	if err := writeMetadata(fileCacheBucket, key, cachedFile{Content: content, CheckedAtUnix: time.Now().Unix()}); err != nil {
+		return nil, err
+	}
+	return content, nil
 }
 
 func resolveRefWithGit(ctx context.Context, owner, repo, gitRef string) (string, error) {

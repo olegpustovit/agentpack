@@ -1,6 +1,6 @@
 import { useDeferredValue, useState } from "react"
 import { Link, getRouteApi, useMatchRoute } from "@tanstack/react-router"
-import { Boxes, Plug, Puzzle, RefreshCw, Sparkles, type LucideIcon } from "lucide-react"
+import { Boxes, Compass, Plug, Puzzle, RefreshCw, Sparkles, type LucideIcon } from "lucide-react"
 import { PopupSelect } from "@/components/kit/forms"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
@@ -111,7 +111,10 @@ export function LibraryList() {
   const projects = useMachineQueries(projectsQuery)
   const search = route.useSearch()
   const navigate = route.useNavigate()
-  const adding = search.add === "1"
+  // ?add=1 opens an empty sheet; any other value is a spec to fill in, as Discover's Install… sends.
+  const adding = search.add !== undefined
+  const matchRoute = useMatchRoute()
+  const discovering = Boolean(matchRoute({ to: "/library/discover" }))
   const [saving, setSaving] = useState(false)
 
   const filter = parseFilter(search.type)
@@ -209,6 +212,10 @@ export function LibraryList() {
       </div>
 
       <SourceList aria-label="Library" className="min-h-0 flex-1">
+        <SourceRow render={<Link to="/library/discover" search={true} />} selected={discovering}>
+          <Compass aria-hidden className="shrink-0 text-(--fg2) sel:text-(--accent-fg)" />
+          <span className="min-w-0 flex-1 truncate">Discover</span>
+        </SourceRow>
         <PendingInstalls />
         {stale.length > 0 && <Banner>{`${stale.map((machine) => machine.name).join(", ")} ${stale.length === 1 ? "needs" : "need"} an update to show the library.`}</Banner>}
         {machines.map((machine) => {
@@ -247,6 +254,7 @@ export function LibraryList() {
       <SaveAgentpackSheet open={saving} onOpenChange={setSaving} />
       <AddPackageSheet
         open={adding}
+        initialSpec={search.add === "1" ? undefined : search.add}
         onOpenChange={(open) => {
           if (!open) void navigate({ search: (prev) => ({ ...prev, add: undefined }), replace: true })
         }}
