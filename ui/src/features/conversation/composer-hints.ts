@@ -42,21 +42,43 @@ export function advertises(commands: AgentCommand[], name: string): boolean {
   return commands.some((command) => command.name === name)
 }
 
-// The /word being typed at the start of the draft's last line, if any.
-function slashQuery(draft: string): string | undefined {
-  const line = draft.slice(draft.lastIndexOf("\n") + 1)
-  return /^\/\S*$/.test(line) ? line.slice(1).toLowerCase() : undefined
+// The /word ending at the caret (`before` is the draft up to it). The gateway runs its own commands
+// only at the start of a line; the agent's commands also work mid-sentence.
+export function slashQuery(before: string): { query: string; lineStart: boolean } | undefined {
+  const match = /(^|\s)\/(\S*)$/.exec(before)
+  if (!match) return undefined
+  return { query: match[2]!.toLowerCase(), lineStart: match[1] === "" || match[1] === "\n" }
 }
 
-export function filterSlashHints(draft: string, commands: AgentCommand[] = []): ComposerHint[] {
-  const query = slashQuery(draft)
-  if (query === undefined) return []
+export function filterSlashHints(before: string, commands: AgentCommand[] = []): ComposerHint[] {
+  const slash = slashQuery(before)
+  if (!slash) return []
   const fromAgent = commands.flatMap((command) =>
     command.name && !gatewayOwned.has(command.name) && !(command.name === "compact")
       ? [{ value: `/${command.name}`, description: command.description ?? "", hint: command.input?.hint ?? undefined, source: "agent" as const }]
       : [],
   )
-  return [...gatewayCommands, ...fromAgent].filter((item) => item.value.slice(1).toLowerCase().includes(query)).slice(0, 50)
+  return [...(slash.lineStart ? gatewayCommands : []), ...fromAgent].filter((item) => item.value.slice(1).toLowerCase().includes(slash.query)).slice(0, 50)
+}
+
+const gatewayNames = new Set(gatewayCommands.map((command) => command.value.slice(1)))
+
+// Splits the draft so the composer can mark every command it would run, by the same rules as the hints.
+export function commandSpans(draft: string, commands: AgentCommand[]): { text: string; command: boolean }[] {
+  const agent = new Set(commands.flatMap((command) => (command.name ? [command.name] : [])))
+  const spans: { text: string; command: boolean }[] = []
+  let last = 0
+  for (const match of draft.matchAll(/(^|\s)\/(\S+)/g)) {
+    const name = match[2]!
+    const lineStart = match[1] === "" || match[1] === "\n"
+    if (!agent.has(name) && !(lineStart && gatewayNames.has(name))) continue
+    const start = match.index + match[1]!.length
+    if (start > last) spans.push({ text: draft.slice(last, start), command: false })
+    spans.push({ text: `/${name}`, command: true })
+    last = start + name.length + 1
+  }
+  if (last < draft.length) spans.push({ text: draft.slice(last), command: false })
+  return spans
 }
 
 export function filterAtHints(draft: string, paths: string[]): ComposerHint[] {
@@ -71,13 +93,14 @@ export function filterAtHints(draft: string, paths: string[]): ComposerHint[] {
     .map((path) => ({ value: `@${path}`, description: path }))
 }
 
-export function applyHint(draft: string, hint: ComposerHint): string {
+// Replaces the fragment ending at the caret; `before` is the draft up to it.
+export function applyHint(before: string, hint: ComposerHint): string {
   if (hint.value.startsWith("@")) {
-    const at = draft.lastIndexOf("@")
-    if (at < 0) return `${draft}${hint.value} `
-    return `${draft.slice(0, at)}${hint.value} `
+    const at = before.lastIndexOf("@")
+    if (at < 0) return `${before}${hint.value} `
+    return `${before.slice(0, at)}${hint.value} `
   }
-  return `${draft.slice(0, draft.lastIndexOf("\n") + 1)}${hint.value} `
+  return before.replace(/\/\S*$/, `${hint.value} `)
 }
 
 // Wraps around so ↑ on the first row lands on the last.
