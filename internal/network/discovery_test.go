@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -353,7 +354,7 @@ func TestLibraryPeerRoutesCoverConflictsAndVersions(t *testing.T) {
 		{"POST", "/api/library/agentpacks/abc/conflict", false},
 		{"GET", "/api/library/agentpacks/abc/resolve", false},
 	} {
-		if got := libraryPeerRoute(test.method, test.path); got != test.want {
+		if got := peerRoute(test.method, test.path); got != test.want {
 			t.Errorf("%s %s: got %v", test.method, test.path, got)
 		}
 	}
@@ -373,5 +374,48 @@ func TestNameFromTailnetNamesOnlyUnnamedPeers(t *testing.T) {
 	nameFromTailnet(nodes, status)
 	if nodes["nA"].Name != "gigacomp" || nodes["nB"].Name != "kept" || nodes["nC"].Name != "nC" {
 		t.Fatalf("names = %v", nodes)
+	}
+}
+
+// A session route the gateway registers is either reachable through a peer or
+// named here as local-only, so a new route cannot silently fail remotely.
+func TestPeerPatternsCoverSessionRoutes(t *testing.T) {
+	localOnly := map[string]bool{"GET /api/sessions/{id}": true}
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := regexp.MustCompile(`"((?:GET|POST|PATCH|DELETE|PUT) /api/sessions/\{id\}[^"]*)"`)
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		source, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, match := range route.FindAllStringSubmatch(string(source), -1) {
+			if !localOnly[match[1]] && !slices.Contains(peerPatterns, match[1]) {
+				t.Errorf("%s registers %q without a peer route; add it to peerPatterns or localOnly", file, match[1])
+			}
+		}
+	}
+	for _, pattern := range peerPatterns {
+		method, path, _ := strings.Cut(pattern, " ")
+		path = strings.NewReplacer("{cache_key}", strings.Repeat("a", 64), "{trace}", "0123456789abcdef0123456789abcdef", "{sha}", strings.Repeat("b", 64)).Replace(path)
+		path = regexp.MustCompile(`\{[^}]+\}`).ReplaceAllString(path, "x")
+		if !peerRoute(method, path) {
+			t.Errorf("peerRoute rejects its own pattern %s (%s %s)", pattern, method, path)
+		}
+	}
+	for _, path := range []string{"/api/sessions/x/resume", "/api/sessions/x/conversation/revert"} {
+		if !peerRoute("POST", path) || peerRoute("GET", path) || peerRoute("HEAD", path) {
+			t.Errorf("POST %s must be the only peer method", path)
+		}
+	}
+	for _, path := range []string{"/api/sessions//resume", "/api/sessions/../resume", `/api/sessions/a\b/stop`, "/api/sessions/x/stop/", "/api//sessions"} {
+		if peerRoute("POST", path) || peerRoute("GET", path) {
+			t.Errorf("unclean path %q passes", path)
+		}
 	}
 }

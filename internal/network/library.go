@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/github"
@@ -187,32 +186,4 @@ func libraryResponse(w http.ResponseWriter, value any, err error) {
 		return
 	}
 	respond(w, value, err)
-}
-
-func libraryPeerRoute(method, path string) bool {
-	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(parts) < 3 || parts[0] != "api" || parts[1] != "library" {
-		return false
-	}
-	for _, part := range parts {
-		if part == "" || part == "." || part == ".." {
-			return false
-		}
-	}
-	if len(parts) == 3 {
-		if parts[2] == "draft-state" {
-			return method == "POST"
-		}
-		return method == "GET" && (parts[2] == "packages" || parts[2] == "agentpacks") || method == "POST" && (parts[2] == "agentpacks" || parts[2] == "latest")
-	}
-	if parts[2] != "agentpacks" {
-		return false
-	}
-	if len(parts) == 4 {
-		return method == "GET" || method == "PATCH" || method == "DELETE"
-	}
-	if len(parts) == 5 {
-		return method == "GET" && parts[4] == "conflict" || method == "POST" && parts[4] == "resolve"
-	}
-	return len(parts) == 7 && parts[4] == "revisions" && (method == "GET" && parts[6] == "restore-preview" || method == "POST" && parts[6] == "restore")
 }

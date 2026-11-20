@@ -535,79 +535,110 @@ func (g *Gateway) meshNodes(ctx context.Context, discovered []TailnetNode) ([]Ta
 	return result, nil
 }
 
+// peerPatterns lists every gateway route a peer may call, for itself or for a
+// browser that routes a request with ?node=. A route the web UI calls for a
+// remote machine must be listed here, or it fails with "route unavailable on
+// remote nodes"; TestPeerPatternsCoverSessionRoutes enforces that for sessions.
+var peerPatterns = []string{
+	"GET /api/cache/{cache_key}",
+	"POST /api/logs/ingest",
+	"GET /api/logs/trace/{trace}",
+	"GET /api/sync/changes",
+	"GET /api/sync/events",
+
+	"GET /api/library/packages",
+	"GET /api/library/agentpacks",
+	"POST /api/library/agentpacks",
+	"POST /api/library/latest",
+	"POST /api/library/draft-state",
+	"GET /api/library/agentpacks/{id}",
+	"PATCH /api/library/agentpacks/{id}",
+	"DELETE /api/library/agentpacks/{id}",
+	"GET /api/library/agentpacks/{id}/conflict",
+	"POST /api/library/agentpacks/{id}/resolve",
+	"GET /api/library/agentpacks/{id}/revisions/{revision}/restore-preview",
+	"POST /api/library/agentpacks/{id}/revisions/{revision}/restore",
+
+	"GET /api/identity",
+	"GET /api/machine",
+	"GET /api/events",
+	"GET /api/agent-sessions",
+	"GET /api/recent",
+	"DELETE /api/recent",
+	"GET /api/packages",
+	"POST /api/packages",
+	"GET /api/projects",
+	"GET /api/limits",
+	"POST /api/limits/refresh",
+	"GET /api/node/update",
+	"POST /api/node/update",
+	"POST /api/mcp/credentials/{id}/refresh",
+
+	"GET /api/sessions",
+	"POST /api/sessions",
+	"PATCH /api/sessions/{id}",
+	"GET /api/sessions/{id}/terminal",
+	"GET /api/sessions/{id}/output",
+	"GET /api/sessions/{id}/conversation",
+	"GET /api/sessions/{id}/blobs/{sha}",
+	"POST /api/sessions/{id}/restart",
+	"POST /api/sessions/{id}/resume",
+	"POST /api/sessions/{id}/stop",
+	"POST /api/sessions/{id}/input",
+	"POST /api/sessions/{id}/fork",
+	"POST /api/sessions/{id}/tools",
+	"GET /api/sessions/{id}/conversation/config-options",
+	"POST /api/sessions/{id}/conversation/prompt",
+	"POST /api/sessions/{id}/conversation/prompt/images",
+	"POST /api/sessions/{id}/conversation/permission",
+	"POST /api/sessions/{id}/conversation/cancel",
+	"POST /api/sessions/{id}/conversation/elicitation",
+	"POST /api/sessions/{id}/conversation/config",
+	"POST /api/sessions/{id}/conversation/blobs",
+	"POST /api/sessions/{id}/conversation/revert",
+	"POST /api/sessions/{id}/conversation/goal",
+	"PATCH /api/sessions/{id}/conversation/goal",
+	"DELETE /api/sessions/{id}/conversation/goal",
+	"PATCH /api/sessions/{id}/conversation/queue/{queueId}",
+	"DELETE /api/sessions/{id}/conversation/queue/{queueId}",
+	"POST /api/sessions/{id}/conversation/queue/{queueId}/steer",
+}
+
+var peerMux = sync.OnceValue(func() *http.ServeMux {
+	mux := http.NewServeMux()
+	for _, pattern := range peerPatterns {
+		mux.HandleFunc(pattern, func(http.ResponseWriter, *http.Request) {})
+	}
+	return mux
+})
+
+// peerRoute reports whether a peer may call method and path: a clean path
+// matching one of peerPatterns, whose content-addressed segments are valid.
 func peerRoute(method, path string) bool {
-	if method == http.MethodGet && strings.HasPrefix(path, "/api/cache/") {
-		return cache.ValidKey(strings.TrimPrefix(path, "/api/cache/"))
-	}
-	if method == http.MethodPost && path == "/api/logs/ingest" {
-		return true
-	}
-	if method == http.MethodGet && strings.HasPrefix(path, "/api/logs/trace/") {
-		trace := strings.TrimPrefix(path, "/api/logs/trace/")
-		decoded, err := hex.DecodeString(trace)
-		return err == nil && len(decoded) == 16 && strings.Trim(trace, "0") != ""
-	}
-	if method == http.MethodGet && (path == "/api/sync/changes" || path == "/api/sync/events") {
-		return true
-	}
-	if libraryPeerRoute(method, path) {
-		return true
-	}
-	if method == "DELETE" && path == "/api/recent" {
-		return true
-	}
-	if method == "GET" && (path == "/api/identity" || path == "/api/events" || path == "/api/agent-sessions") {
-		return true
-	}
-	if method == "GET" && (path == "/api/sessions" || path == "/api/recent" || path == "/api/packages" || path == "/api/projects" || path == "/api/limits") {
-		return true
-	}
-	if method == "POST" && (path == "/api/sessions" || path == "/api/packages" || path == "/api/limits/refresh") {
-		return true
-	}
-	if (method == "GET" || method == "POST") && path == "/api/node/update" {
-		return true
-	}
-	if method == "POST" && strings.HasPrefix(path, "/api/mcp/credentials/") && strings.HasSuffix(path, "/refresh") && strings.Count(path, "/") == 5 {
-		return true
-	}
-	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	conversation := len(parts) >= 5 && parts[0] == "api" && parts[1] == "sessions" &&
-		validPeerSessionID(parts[2]) && parts[3] == "conversation"
-	if len(parts) == 6 {
-		return conversation && (method == "POST" && parts[4] == "prompt" && parts[5] == "images" ||
-			(method == "PATCH" || method == "DELETE") && parts[4] == "queue" && validPeerSessionID(parts[5]))
-	}
-	if len(parts) == 7 {
-		return conversation && method == "POST" && parts[4] == "queue" && validPeerSessionID(parts[5]) && parts[6] == "steer"
-	}
-	if conversation && len(parts) == 5 && parts[4] == "goal" {
-		return method == "POST" || method == "PATCH" || method == "DELETE"
-	}
-	if len(parts) == 3 && parts[0] == "api" && parts[1] == "sessions" && validPeerSessionID(parts[2]) {
-		return method == "PATCH"
-	}
-	if (len(parts) != 4 && len(parts) != 5) || parts[0] != "api" || parts[1] != "sessions" || !validPeerSessionID(parts[2]) {
+	if method == http.MethodHead || !strings.HasPrefix(path, "/api/") {
 		return false
 	}
-	if len(parts) == 4 {
-		return method == "GET" && (parts[3] == "terminal" || parts[3] == "output" || parts[3] == "conversation") ||
-			method == "POST" && (parts[3] == "restart" || parts[3] == "stop" || parts[3] == "input" || parts[3] == "fork" || parts[3] == "tools")
+	parts := strings.Split(path[1:], "/")
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." || strings.Contains(part, `\`) {
+			return false
+		}
 	}
-	if parts[4] == "" || parts[4] == "." || parts[4] == ".." {
+	_, pattern := peerMux().Handler(&http.Request{Method: method, URL: &url.URL{Path: path}})
+	last := parts[len(parts)-1]
+	switch pattern {
+	case "":
 		return false
-	}
-	if parts[3] == "blobs" && method == "GET" {
-		_, err := validateBlobSHA(parts[4])
+	case "GET /api/cache/{cache_key}":
+		return cache.ValidKey(last)
+	case "GET /api/logs/trace/{trace}":
+		decoded, err := hex.DecodeString(last)
+		return err == nil && len(decoded) == 16 && strings.Trim(last, "0") != ""
+	case "GET /api/sessions/{id}/blobs/{sha}":
+		_, err := validateBlobSHA(last)
 		return err == nil
 	}
-	if parts[3] != "conversation" {
-		return false
-	}
-	if method == "GET" {
-		return parts[4] == "config-options"
-	}
-	return method == "POST" && (parts[4] == "prompt" || parts[4] == "permission" || parts[4] == "cancel" || parts[4] == "elicitation" || parts[4] == "config" || parts[4] == "blobs")
+	return true
 }
 
 func validPeerSessionID(id string) bool {
