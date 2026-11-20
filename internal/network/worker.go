@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -48,13 +49,22 @@ type WorkerRecord struct {
 
 // createSessionDirectory claims id (chosen by the gateway for an instant start) or a fresh one.
 func createSessionDirectory(root, id string) (string, error) {
+	claimed := id != ""
 	if id == "" {
 		id = newSessionID()
 	} else if !validSessionID(id) {
 		return "", errors.New("invalid session ID")
 	}
 	directory := filepath.Join(root, id)
-	return directory, os.Mkdir(directory, 0700)
+	err := os.Mkdir(directory, 0700)
+	// A resumed chat reuses its directory (it keeps the chat's images); the gateway's claim on the row
+	// guarantees no other worker owns it, and an endpoint file would mean one still does.
+	if errors.Is(err, fs.ErrExist) && claimed {
+		if _, statErr := os.Lstat(filepath.Join(directory, "worker.json")); errors.Is(statErr, fs.ErrNotExist) {
+			err = nil
+		}
+	}
+	return directory, err
 }
 
 func newSessionID() string { return "session-" + rand.Text() }
@@ -201,7 +211,11 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		launch.Session.Transport = "acp"
 	}
 	pending := launch.Session
-	pending.AgentSessionID = ""
+	// A new claim on an agent session is recorded only once its owner is verified; a resumed chat's
+	// row already holds it, and keeps it so a failed start can be resumed again.
+	if stored, err := storedSession(ctx, store.Reader, launch.Session.ID); err != nil || stored.AgentSessionID != pending.AgentSessionID {
+		pending.AgentSessionID = ""
+	}
 	if err := upsertSession(ctx, store.DB, pending); err != nil {
 		return 1, fmt.Errorf("register session: %w", err)
 	}

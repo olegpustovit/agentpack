@@ -119,3 +119,69 @@ func TestWorkerThatExitsEarlyReportsItsOwnError(t *testing.T) {
 		t.Fatalf("start error: %v", err)
 	}
 }
+
+// stuckChat is a chat whose worker died mid-turn: ended, yet still working with a subagent.
+func stuckChat(t *testing.T, g *Gateway, dir, id string) {
+	t.Helper()
+	ctx := context.Background()
+	info := SessionInfo{ID: id, Directory: dir, Harness: "claude", Mode: "default", Transport: "acp", AgentSessionID: "agent-1", ConversationState: "working", State: TerminalState{Running: true, ExitCode: -1}}
+	if err := upsertSession(ctx, g.auth.store.DB, info); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.auth.store.DB.Exec(`UPDATE sessions SET ended_at=1,subagents='[{"id":"a"}]' WHERE id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReaperSettlesAChatWhoseWorkerDied(t *testing.T) {
+	home := t.TempDir()
+	g, _ := identityGateway(t, home, nil)
+	stuckChat(t, g, seedFolder(t, home), "session-dead")
+	g.reapStoppedChats(context.Background())
+	g.reapStoppedChats(context.Background()) // settled once, not again
+	stored, err := storedSession(context.Background(), g.auth.store.Reader, "session-dead")
+	if err != nil || stored.ConversationState != "idle" || stored.State.Running || len(stored.Subagents) != 0 {
+		t.Fatalf("settled row: %+v, %v", stored, err)
+	}
+	entries, _, _, err := storedConversationTail(context.Background(), g.auth.store.Reader, "session-dead", 0)
+	if err != nil || len(entries) != 2 || entries[0].Kind != "notice" || entries[1].Kind != "agent_exit" {
+		t.Fatalf("transcript %+v, %v", entries, err)
+	}
+}
+
+func TestResumeRestartsAStoppedChatUnderItsOwnID(t *testing.T) {
+	home := t.TempDir()
+	launched := make(chan SessionInfo, 2)
+	g, _ := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+		launched <- info
+		return info.ID, nil
+	})
+	stuckChat(t, g, seedFolder(t, home), "session-dead")
+	info, err := g.resumeSession(context.Background(), "session-dead", "")
+	if err != nil || info.ID != "session-dead" || info.ConversationState != "starting" {
+		t.Fatalf("resume: %+v, %v", info, err)
+	}
+	g.starting.Wait()
+	if got := <-launched; got.ID != "session-dead" || got.AgentSessionID != "agent-1" || got.ConversationState != "starting" {
+		t.Fatalf("worker launch %+v", got)
+	}
+	if _, err := g.resumeSession(context.Background(), "session-dead", ""); !errors.Is(err, errResumeConflict) {
+		t.Fatalf("second resume: %v", err)
+	}
+}
+
+func TestResumedWorkerReclaimsItsDirectoryOnlyWhenNoWorkerOwnsIt(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "session-old"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := createSessionDirectory(root, "session-old"); err != nil {
+		t.Fatalf("reclaim: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "session-old", "worker.json"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := createSessionDirectory(root, "session-old"); err == nil {
+		t.Fatal("reclaimed a directory a worker owns")
+	}
+}

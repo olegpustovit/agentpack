@@ -54,6 +54,7 @@ type nodeRecord struct {
 type Gateway struct {
 	options        GatewayOptions
 	starting       sync.WaitGroup // chats launching in the background; tests wait on it
+	chatLifecycle  sync.Mutex     // serializes resume claims with settling dead chats
 	store          *state.Store
 	logs           *obs.Store
 	auth           *gatewayAuth
@@ -142,7 +143,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if err := gateway.loadPublic(context.Background()); err != nil {
 		return err
 	}
-	gateway.importLegacySessions(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
+	gateway.reapStoppedChats(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
 	gateway.endLeftoverStarts(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
 	gateway.mcp, err = NewGatewayMCP(gateway)
 	if err != nil {
@@ -152,7 +153,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	for _, task := range []struct {
 		name string
 		run  func(context.Context)
-	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}} {
+	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}} {
 		background.Add(1)
 		obs.Go(task.name, func() { defer background.Done(); task.run(ctx) })
 	}
@@ -483,6 +484,30 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 		writeJSON(w, map[string]bool{"restarted": true})
+	})
+	mux.HandleFunc("POST /api/sessions/{id}/resume", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Text string `json:"text"`
+		}
+		if !readJSON(w, r, &input) {
+			return
+		}
+		if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
+			return
+		}
+		info, err := g.resumeSession(r.Context(), r.PathValue("id"), input.Text)
+		switch {
+		case errors.Is(err, errSessionNotFound):
+			http.Error(w, "session not found", http.StatusNotFound)
+		case errors.Is(err, errResumeConflict):
+			http.Error(w, errResumeConflict.Error(), http.StatusConflict)
+		case errors.Is(err, errNotResumable):
+			http.Error(w, errNotResumable.Error(), http.StatusBadRequest)
+		case err != nil:
+			http.Error(w, "Couldn't resume the chat.", http.StatusInternalServerError)
+		default:
+			writeJSON(w, publicSession(info))
+		}
 	})
 	mux.HandleFunc("GET /api/agent-sessions", g.serveAgentSessions)
 	mux.HandleFunc("GET /api/sessions/{id}/terminal", g.terminal)

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { ArrowLeft, ArrowUp, AtSign, Check, ChevronDown, CornerDownLeft, PanelRight, Plus, Slash, Square } from "lucide-react"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
 import { Banner, Spinner } from "@/components/kit/feedback"
@@ -10,7 +10,6 @@ import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { StatusSlot } from "@/features/status/status-bar"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { loadAgentChoices, rememberAgentChoice, takeNewChat } from "@/features/sessions/choices"
-import { resumeChat, takeCarried } from "@/features/sessions/actions"
 import { useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName, relativeTime } from "@/lib/format"
@@ -23,7 +22,7 @@ import { configRole, dangerousMode, parseConfigOptions } from "./config-options"
 import type { LogEntry, ThreadItem } from "./model"
 import { reduceThread } from "./reducer"
 import { latestUserPrompt, quoteMessage, ThreadView, userImageSrc } from "./thread-view"
-import { GoalPill, GoalSheet, parseGoalCommand, useGoalActions } from "./goal-sheet"
+import { GoalPill, parseGoalCommand, useGoalActions } from "./goal-sheet"
 import { QueueChips } from "./queue-chips"
 import { subagentRunning } from "./subagent-card"
 import { ConversationInspector } from "./conversation-inspector"
@@ -44,6 +43,7 @@ type SendInput = {
   /** Last log seq when sent; a prompt after it is this message, so the optimistic copy goes. Unset when queued. */
   optimisticAfter?: number
 }
+const GoalSheet = lazy(() => import("./goal-editor").then((module) => ({ default: module.GoalSheet })))
 const draftKey = (machine: string, sessionId: string) => `agentpack:draft:${machine}/${sessionId}`
 function loadDraft(key: string) {
   try {
@@ -102,9 +102,7 @@ export default function ConversationPane({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const machines = useMachines()
-  // The message that resumed a stopped chat goes out once this chat runs.
-  const [carriedText] = useState(() => takeCarried(sessionId))
-  const [draft, setDraft] = useState(() => carriedText ?? loadDraft(draftKey(machine, sessionId)))
+  const [draft, setDraft] = useState(() => loadDraft(draftKey(machine, sessionId)))
   const [hintIndex, setHintIndex] = useState(0)
   const [hintsClosed, setHintsClosed] = useState(false)
   const stickToBottomRef = useRef(true)
@@ -130,10 +128,10 @@ export default function ConversationPane({
   // saved draft, so leaving the chat loses nothing) and goes out once the agent runs.
   const starting = !readOnly && info?.conversation_state === "starting" && !info.ended_at
   const live = !readOnly && !starting && info?.state.running === true
-  // A stopped chat resumes its agent conversation in a new chat on the next message; an agent that
-  // cannot reload one says so when that chat starts.
+  // A stopped chat comes back on its next message: the gateway restarts it under the same ID, reloads
+  // the agent's conversation and sends the message once it runs.
   const resumable = !readOnly && !starting && !live && Boolean(info?.ended_at && info.agent_session_id)
-  const [held, setHeld] = useState(carriedText !== undefined)
+  const [held, setHeld] = useState(false)
   const { data: tail, error: conversationError } = useQuery({ ...conversationEventsQuery(machine, sessionId, live), retry: false })
   // Earlier pages, loaded as the thread scrolls up. Keyed, so another session never shows them.
   const historyKey = `${machine}\0${sessionId}`
@@ -279,6 +277,9 @@ export default function ConversationPane({
   const goal = parent.goal ?? (liveGoal(info?.goal) ? info?.goal : undefined)
   const goalNow = useNow(goal?.state === "active")
   const [goalSheet, setGoalSheet] = useState<{ objective: string }>()
+  // The editor loads on first open and then stays mounted, so closing it still animates.
+  const [goalEditorLoaded, setGoalEditorLoaded] = useState(false)
+  if (goalSheet && !goalEditorLoaded) setGoalEditorLoaded(true)
   const goalActions = useGoalActions(machine, sessionId)
   const setConfig = useMutation({
     mutationFn: ({ key, value }: { key: string; value: string | boolean }) =>
@@ -384,6 +385,15 @@ export default function ConversationPane({
       )
     },
   })
+  const resume = useMutation({
+    mutationFn: (text: string) => api(`/api/sessions/${encodeURIComponent(sessionId)}/resume`, { machine, method: "POST", body: { text } }),
+    onMutate: () => setDraft(""),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: sessionsQuery(machine, false).queryKey }),
+    onError: (error, text) => {
+      setDraft((current) => current || text)
+      hud.error(conversationErrorMessage(machine, "resume the chat", error))
+    },
+  })
   const upload = useMutation({
     mutationFn: (file: File) => uploadConversationBlob(machine, sessionId, file),
     onError: (error, file) =>
@@ -437,10 +447,8 @@ export default function ConversationPane({
       setHeld(true)
       return
     }
-    if (resumable && info) {
-      setDraft("")
-      void resumeChat(queryClient, machine, info, text).then((id) =>
-        id ? navigate({ to: "/sessions/$machine/$sessionId", params: { machine, sessionId: id } }) : setDraft(text))
+    if (resumable) {
+      resume.mutate(text)
       return
     }
     // A message to an idle agent becomes the next prompt, so it can show before the gateway answers.
@@ -938,7 +946,11 @@ export default function ConversationPane({
           compactReason={canCompact ? undefined : `${agentName} doesn't offer compaction.`}
           onOpenSubagent={openSubagent}
         />
-        <GoalSheet open={Boolean(goalSheet)} onOpenChange={(open) => !open && setGoalSheet(undefined)} machine={machine} sessionId={sessionId} goal={goal} initialObjective={goalSheet?.objective} />
+        {goalEditorLoaded && (
+          <Suspense>
+            <GoalSheet open={Boolean(goalSheet)} onOpenChange={(open) => !open && setGoalSheet(undefined)} machine={machine} sessionId={sessionId} goal={goal} initialObjective={goalSheet?.objective} />
+          </Suspense>
+        )}
       </div>
     </div>
   )

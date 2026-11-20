@@ -153,8 +153,8 @@ func endSession(ctx context.Context, db *sql.DB, id string, terminal TerminalSta
 	if err != nil {
 		return err
 	}
-	// A stopped chat has no turn or answerable request left, whatever its last state said.
-	if _, err = db.ExecContext(ctx, "UPDATE sessions SET ended_at=?,state=?,conversation_state=CASE WHEN transport='acp' THEN 'idle' ELSE conversation_state END WHERE id=? AND node_id="+state.LocalNodeSQL+" AND ended_at=0", time.Now().UnixNano(), string(body), id); err != nil {
+	// A stopped chat has no turn, answerable request or running subagent left, whatever its last state said.
+	if _, err = db.ExecContext(ctx, "UPDATE sessions SET ended_at=?,state=?,conversation_state=CASE WHEN transport='acp' THEN 'idle' ELSE conversation_state END,subagents='' WHERE id=? AND node_id="+state.LocalNodeSQL+" AND ended_at=0", time.Now().UnixNano(), string(body), id); err != nil {
 		return err
 	}
 	// A chat that ended before its first message has nothing to keep in the list, unless it failed to start.
