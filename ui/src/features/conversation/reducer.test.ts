@@ -267,6 +267,16 @@ describe("reduceLog subagents", () => {
     expect(state.subagents?.["tool:t1"]).toMatchObject({ toolCallId: "t1", tools: 1 })
     expect(state.items.map((item) => item.kind)).toEqual(["tool", "subagent"])
   })
+
+  it("does not show a subagent from a settings broadcast alone", () => {
+    // Its work lies before the loaded tail; only a worker restart's config update is in it.
+    const state = reduceLog([
+      { seq: 6140, ts: 1, kind: "config_option_update", payload: { _subagent: "a1", configOptions: [] } },
+      { seq: 6141, ts: 2, kind: "agent_message_chunk", payload: { text: { text: "parent" } } },
+    ])
+    expect(state.subagents).toBeUndefined()
+    expect(state.items.map((item) => item.kind)).toEqual(["agent_message_chunk"])
+  })
 })
 
 describe("reduceLog queue, goal and turns", () => {

@@ -154,6 +154,9 @@ class ThreadReducer {
     // Answers are logged by the gateway without a child stamp; each child resolves its own request by id.
     if (!nested && (entry.kind === "permission_result" || entry.kind === "elicitation_result")) for (const reducer of this.children.values()) reducer.apply(entry)
     const sub = nested ? undefined : subagentOf(entry.payload)
+    // A settings broadcast is not activity: on its own it would show a finished subagent whose
+    // work lies before the loaded tail as an empty card.
+    if (sub && entry.kind === "config_option_update" && !this.meta.has(sub)) return
     if (sub) {
       let reducer = this.children.get(sub)
       if (!reducer) this.children.set(sub, (reducer = new ThreadReducer(true)))
