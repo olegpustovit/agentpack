@@ -10,6 +10,7 @@ import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { StatusSlot } from "@/features/status/status-bar"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { loadAgentChoices, rememberAgentChoice, takeNewChat } from "@/features/sessions/choices"
+import { resumeChat, takeCarried } from "@/features/sessions/actions"
 import { useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName, relativeTime } from "@/lib/format"
@@ -101,7 +102,9 @@ export default function ConversationPane({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const machines = useMachines()
-  const [draft, setDraft] = useState(() => loadDraft(draftKey(machine, sessionId)))
+  // The message that resumed a stopped chat goes out once this chat runs.
+  const [carriedText] = useState(() => takeCarried(sessionId))
+  const [draft, setDraft] = useState(() => carriedText ?? loadDraft(draftKey(machine, sessionId)))
   const [hintIndex, setHintIndex] = useState(0)
   const [hintsClosed, setHintsClosed] = useState(false)
   const stickToBottomRef = useRef(true)
@@ -127,7 +130,10 @@ export default function ConversationPane({
   // saved draft, so leaving the chat loses nothing) and goes out once the agent runs.
   const starting = !readOnly && info?.conversation_state === "starting" && !info.ended_at
   const live = !readOnly && !starting && info?.state.running === true
-  const [held, setHeld] = useState(false)
+  // A stopped chat resumes its agent conversation in a new chat on the next message; an agent that
+  // cannot reload one says so when that chat starts.
+  const resumable = !readOnly && !starting && !live && Boolean(info?.ended_at && info.agent_session_id)
+  const [held, setHeld] = useState(carriedText !== undefined)
   const { data: tail, error: conversationError } = useQuery({ ...conversationEventsQuery(machine, sessionId, live), retry: false })
   // Earlier pages, loaded as the thread scrolls up. Keyed, so another session never shows them.
   const historyKey = `${machine}\0${sessionId}`
@@ -405,7 +411,7 @@ export default function ConversationPane({
     }
   }
   // Images upload to the running agent, so a starting chat holds text only.
-  const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !(starting && (attachments.length > 0 || held)) && !send.isPending && !upload.isPending && !needsUpdate
+  const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !(starting && (attachments.length > 0 || held)) && !send.isPending && !upload.isPending && !needsUpdate && !(resumable && attachments.length > 0)
   useEffect(() => {
     if (!held || !live && !info?.ended_at) return
     // A start that failed ends the row; the message simply stays in the composer.
@@ -429,6 +435,12 @@ export default function ConversationPane({
     }
     if (starting) {
       setHeld(true)
+      return
+    }
+    if (resumable && info) {
+      setDraft("")
+      void resumeChat(queryClient, machine, info, text).then((id) =>
+        id ? navigate({ to: "/sessions/$machine/$sessionId", params: { machine, sessionId: id } }) : setDraft(text))
       return
     }
     // A message to an idle agent becomes the next prompt, so it can show before the gateway answers.

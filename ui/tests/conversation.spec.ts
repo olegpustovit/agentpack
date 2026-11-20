@@ -571,3 +571,28 @@ test("a stopped chat shows why it stopped, not an update banner", async ({ page 
   await expect(page.getByText("Antigravity is not signed in on gigacomp.")).toBeVisible()
   await expect(page.getByText(/needs an update/)).toHaveCount(0)
 })
+
+test("a message to a stopped chat resumes it in a new chat and sends there", async ({ page }) => {
+  const stopped = { ...session, id: "chat-one", transport: "acp", agent_session_id: "agent-1", agent_capabilities: { loadSession: true }, ended_at: session.started_at, state: { ...session.state, running: false } }
+  const resumed = { ...stopped, id: "chat-two", ended_at: undefined, state: { ...session.state, running: true } }
+  let started: unknown
+  let prompt: unknown
+  await page.route("**/api/sessions", (route) => {
+    if (route.request().method() === "POST") {
+      started = route.request().postDataJSON()
+      return route.fulfill({ json: resumed })
+    }
+    return route.fulfill({ json: started ? [stopped, resumed] : [stopped] })
+  })
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: "", contentType: "application/x-ndjson" }))
+  await page.route("**/api/sessions/chat-two/conversation/prompt", (route) => {
+    prompt = route.request().postDataJSON()
+    return route.fulfill({ json: {} })
+  })
+  await page.goto("/sessions/local/chat-one")
+  await page.getByRole("textbox", { name: /message/i }).fill("continue")
+  await page.keyboard.press("Enter")
+  await expect(page).toHaveURL(/\/sessions\/local\/chat-two/)
+  expect(started).toMatchObject({ agent_session_id: "agent-1", transport: "acp" })
+  await expect.poll(() => prompt).toMatchObject({ text: "continue" })
+})

@@ -5,6 +5,7 @@ import { hud } from "@/lib/hud"
 import { rowKey, sessionLabel, type ListedSession } from "./group"
 import { sessionsQuery } from "./queries"
 import { reusesOperationId } from "./rules"
+import type { SessionInfo } from "@/lib/api-types"
 
 // An older gateway has no switch.
 export function toolsError(error: unknown): string {
@@ -88,4 +89,30 @@ function sessionCommands(queryClient: QueryClient, operations: Map<string, strin
   }
 
   return { stop, restart, archive, setTools }
+}
+
+// The message that resumed a stopped chat; the new chat sends it once it runs.
+let carried: { id: string; text: string } | undefined
+
+// Resumes a stopped chat's agent conversation in a new chat that sends text first; undefined if it failed.
+export async function resumeChat(queryClient: QueryClient, machine: string, info: SessionInfo, text: string): Promise<string | undefined> {
+  try {
+    const next = await api<SessionInfo>("/api/sessions", {
+      machine,
+      method: "POST",
+      body: { directory: info.directory, harness: info.harness, mode: info.mode, transport: "acp", agent_session_id: info.agent_session_id },
+    })
+    carried = { id: next.id, text }
+    await queryClient.invalidateQueries({ queryKey: sessionsQuery(machine, false).queryKey })
+    return next.id
+  } catch (error) {
+    hud.error(`Couldn't resume the chat: ${errorText(error)}`)
+    return undefined
+  }
+}
+
+export function takeCarried(id: string): string | undefined {
+  const text = carried?.id === id ? carried.text : undefined
+  if (text !== undefined) carried = undefined
+  return text
 }
