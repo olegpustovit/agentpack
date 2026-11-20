@@ -77,7 +77,7 @@ test("arrow keys open each session at once and leave one history entry", async (
   expect(await page.evaluate(() => history.length)).toBe(before + 1)
 })
 
-test("New session posts Cursor CLI as the agent harness", async ({ page }) => {
+test("New session posts Cursor CLI as the agent harness and sends the first message once it is up", async ({ page }) => {
   const project = {
     directory: "/home/oleg/agentpack",
     name: "agentpack",
@@ -90,19 +90,35 @@ test("New session posts Cursor CLI as the agent harness", async ({ page }) => {
     mcp: [],
     error: "",
   }
+  await page.clock.install()
   await page.route("**/api/projects", (route) => route.fulfill({ json: [project] }))
+  const starting = { ...sessions[0], id: "s9", harness: "agent", transport: "acp", conversation_state: "starting", state: terminal(false) }
   // Only the POST is answered here; GET falls through to the shared sessions mock.
   await page.route(/\/api\/sessions(\?.*)?$/, (route) => {
     if (route.request().method() !== "POST") return route.fallback()
-    return route.fulfill({ json: { ...sessions[0], id: "s9" } })
+    reply = [...sessions, starting]
+    return route.fulfill({ json: starting })
+  })
+  const prompts: unknown[] = []
+  await page.route("**/api/sessions/s9/conversation/prompt", (route) => {
+    prompts.push(route.request().postDataJSON())
+    return route.fulfill({ json: {} })
   })
 
   await page.goto("/sessions?new=1")
   await page.getByRole("group", { name: "Agent" }).getByRole("button", { name: "Cursor CLI" }).click()
+  await page.getByRole("textbox", { name: "First message" }).fill("tidy the overlay")
   const posted = page.waitForRequest((request) => request.method() === "POST" && /\/api\/sessions$/.test(request.url()))
   await page.getByRole("button", { name: "Start session" }).click()
   const body = (await posted).postDataJSON()
   expect(body).toMatchObject({ directory: "/home/oleg/agentpack", harness: "agent" })
+
+  // The first message waits in the composer and goes out only once the agent is up.
+  await expect(page.getByText("Sends when Cursor CLI is ready")).toBeVisible()
+  expect(prompts).toHaveLength(0)
+  reply = [...sessions, { ...starting, conversation_state: "idle", state: terminal(true) }]
+  await page.clock.runFor(16_000)
+  await expect.poll(() => prompts).toEqual([{ text: "tidy the overlay" }])
 })
 
 test("New session shows what the chosen mode loads", async ({ page }) => {

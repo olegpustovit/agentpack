@@ -48,21 +48,41 @@ export function rememberAgentChoice(directory: string, harness: string, key: str
   write(agentKey(directory, harness), { ...loadAgentChoices(directory, harness), [key]: value })
 }
 
-// A chat New session just started takes the folder's remembered model and effort once.
-export function markNewChat(sessionId: string) {
+// A chat New session just started takes the folder's remembered model and effort once. Its first
+// message waits under the same key (as a JSON string) until the chat sends it.
+export function markNewChat(sessionId: string, firstMessage = "") {
   try {
-    sessionStorage.setItem(`${PENDING}.${sessionId}`, "1")
+    sessionStorage.setItem(`${PENDING}.${sessionId}`, JSON.stringify(firstMessage))
   } catch {
-    // Nothing is applied; the agent's defaults stand.
+    // Nothing is applied; the agent's defaults stand and the message is lost.
   }
 }
 
 export function takeNewChat(sessionId: string): boolean {
   try {
-    const pending = sessionStorage.getItem(`${PENDING}.${sessionId}`) === "1"
+    const pending = sessionStorage.getItem(`${PENDING}.${sessionId}`) !== null
     sessionStorage.removeItem(`${PENDING}.${sessionId}`)
     return pending
   } catch {
     return false
+  }
+}
+
+// Read without consuming, so a remount (or React's double render) still finds it until it is sent.
+export function firstMessage(sessionId: string): string {
+  try {
+    const value: unknown = JSON.parse(sessionStorage.getItem(`${PENDING}.${sessionId}`) ?? "null")
+    return typeof value === "string" ? value : ""
+  } catch {
+    return ""
+  }
+}
+
+// Sent (or the start failed and it stays in the composer): it must never go out twice.
+export function clearFirstMessage(sessionId: string) {
+  try {
+    if (sessionStorage.getItem(`${PENDING}.${sessionId}`) !== null) sessionStorage.setItem(`${PENDING}.${sessionId}`, JSON.stringify(""))
+  } catch {
+    // Storage blocked: nothing was stored either.
   }
 }

@@ -274,7 +274,7 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 | `/usage/limits` | same, plus `machine` |
 | `/limits` | `machine` (redirects to `/usage/limits`) |
 | `/settings` | none (redirects to `/settings/general`) |
-| `/settings/$pane` | none; `general`, `sharing`, `replication`, `connections`, `diagnostics`, `appearance`, `account` |
+| `/settings/$pane` | none; `general`, `notifications`, `sharing`, `replication`, `connections`, `diagnostics`, `appearance`, `account` |
 
 - **Peers update on their own schedule.** The gateway routinely talks to older peers, so API reads tolerate them: a 404 means `Needs update`, never a raw error, and a response shape that changed is normalized in its query. This is runtime interoperability and is not covered by the pre-release rule. Test new endpoints against a peer without them.
 - **Never use `node` as a search param.** The Go handler treats `?node=` as a proxy instruction on `/api/` paths, and this rule stays in force anyway.

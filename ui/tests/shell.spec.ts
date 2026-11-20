@@ -16,7 +16,7 @@ test("sidebar toggle is on every list-detail view and survives view switch and r
   const toggle = page.getByRole("button", { name: "Toggle sidebar" })
   const sidebar = page.getByRole("region", { name: "Sidebar" })
 
-  for (const path of ["/sessions", "/library", "/machines"]) {
+  for (const path of ["/sessions", "/library", "/machines", "/settings/general"]) {
     await page.goto(path)
     await expect(toggle).toBeVisible()
     await expect(toggle).toHaveAttribute("aria-expanded", "true")
@@ -34,6 +34,14 @@ test("sidebar toggle is on every list-detail view and survives view switch and r
   await page.reload()
   await expect(toggle).toHaveAttribute("aria-expanded", "false")
   await expect(sidebar).toBeHidden()
+})
+
+test("the tab title counts the sessions that need you", async ({ page }) => {
+  const state = { interactive: true, running: true, restarting: false, rows: 30, columns: 100, exit_code: 0 }
+  const chat = { id: "s1", directory: "/w/alpha", harness: "claude", mode: "default", transport: "acp", conversation_state: "needs_you", state }
+  await page.route(/\/api\/sessions(\?.*)?$/, (route) => route.fulfill({ json: [chat, { ...chat, id: "s2", conversation_state: "idle" }] }))
+  await page.goto("/settings/general")
+  await expect(page).toHaveTitle("(1) Agentpack")
 })
 
 test("390 px shows all five tabs, none covered", async ({ page }) => {

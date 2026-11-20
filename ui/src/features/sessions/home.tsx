@@ -5,6 +5,7 @@ import { Empty } from "@/components/kit/feedback"
 import { FieldError, PopupSelect } from "@/components/kit/forms"
 import { GroupHeader } from "@/components/kit/list"
 import { Button, buttonVariants } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { conversationEventsQuery } from "@/features/conversation/queries"
 import { reduceLog } from "@/features/conversation/reducer"
 import { ElicitationCard, PermissionCard } from "@/features/conversation/thread-view"
@@ -132,8 +133,9 @@ function WaitingItem({ session, now }: { session: ListedSession; now: number }) 
 }
 
 // Project, machine and agent pickers over the projects query, defaulting to the last choices; Start opens the new session.
-// shortcut: no task text; add a first-message field once New session sends one (M2).
+// The task text is the chat's first message, sent once the agent is up, as from New session.
 function TaskBar() {
+  const [task, setTask] = useState("")
   const { machines } = useListedSessions()
   const projectQueries = useMachineQueries(projectsQuery)
   const start = useStartSession()
@@ -159,12 +161,15 @@ function TaskBar() {
       className="flex flex-col gap-(--s3)"
       onSubmit={(event) => {
         event.preventDefault()
-        if (place && ok) start.mutate({ machine: place.machine, directory: place.row.directory, harness: harnessId, mode, view })
+        if (place && ok) start.mutate({ machine: place.machine, directory: place.row.directory, harness: harnessId, mode, view, prompt: task })
       }}
     >
       <div className="flex min-w-0 flex-wrap items-center gap-(--s3) rounded-(--r-sheet) bg-(--window) p-(--s4) shadow-(--shadow-card)">
         {project && place ? (
           <>
+            {view === "chat" && (
+              <Input aria-label="Task" placeholder="Describe a task" value={task} onChange={(event) => setTask(event.currentTarget.value)} className="basis-full" />
+            )}
             <PopupSelect
               label="Project"
               value={project.key}
@@ -199,6 +204,7 @@ function TaskBar() {
           Starts {harnessName(harnessId)} in <b className="font-semibold text-(--fg)">{project.name}</b> on <b className="font-semibold text-(--fg)">{place.machineName}</b>
           {mode !== "default" && ` · ${mode}`}
           {view === "terminal" && " · Terminal"}
+          {view === "chat" && task.trim() && " · sends the task"}
         </p>
       )}
       {start.error && <FieldError>{start.error.message}</FieldError>}

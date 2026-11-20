@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
 import { api, ApiError } from "@/lib/api"
 import type { AgentSession, ProjectRow } from "@/lib/api-types"
-import { basename, harnessName, plural, shortAge } from "@/lib/format"
+import { basename, harnessName, plural, relativeTime, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { projectsQuery } from "./queries"
 import { agentIds, canStart, defaultAgent, mergeProjects, modeChoices, modeEffect, placeKey, placeLabel, placeProblem, type MergedProject, type SessionView } from "./rules"
@@ -68,6 +68,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   const [mode, setMode] = useState<string | null>(null)
   const [chosenView, setView] = useState<SessionView | null>(null)
   const [resumeId, setResumeId] = useState("")
+  const [prompt, setPrompt] = useState("")
   const [query, setQuery] = useState("")
 
   // A folder opened from the sidebar is offered even before (or without) the machine listing it.
@@ -138,7 +139,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   function submit(event: FormEvent) {
     event.preventDefault()
     if (place && row && !blocked) {
-      start.mutate({ machine: place.machine, directory: row.directory, harness: harnessId, mode: modeValue, view, agentSessionId: resumeId || undefined })
+      start.mutate({ machine: place.machine, directory: row.directory, harness: harnessId, mode: modeValue, view, agentSessionId: resumeId || undefined, prompt })
     }
   }
 
@@ -248,12 +249,25 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
                 </div>
               </div>
 
+              {view === "chat" && !resumeId && (
+                <Choice label="First message" note="optional, sent when the agent is ready">
+                  <textarea
+                    aria-label="First message"
+                    rows={3}
+                    value={prompt}
+                    onChange={(event) => setPrompt(event.currentTarget.value)}
+                    placeholder="Describe the task"
+                    className="w-full resize-y rounded-(--r-ctl) border-[0.5px] border-(--sep) bg-(--field) px-(--s3) py-(--s2) text-(length:--fs) outline-none focus:ring-2 focus:ring-(--accent-soft)"
+                  />
+                </Choice>
+              )}
+
               <Choice label="Agent">
                 <div role="group" aria-label="Agent" className="flex flex-wrap gap-(--s2)">
                   {agentIds.map((id) => {
                     const used = row.launches.find((launch) => launch.harness === id)
                     return (
-                      <Button key={id} type="button" variant={id === harnessId ? "primary" : "default"} aria-pressed={id === harnessId} onClick={() => { setHarness(id); setResumeId("") }}>
+                      <Button key={id} type="button" variant={id === harnessId ? "primary" : "default"} aria-pressed={id === harnessId} title={used ? `Last used ${relativeTime(new Date(used.last_used), now)}` : undefined} onClick={() => { setHarness(id); setResumeId("") }}>
                         {harnessName(id)}
                         {used && <span className="text-(length:--fs-xs) opacity-70">{shortAge(new Date(used.last_used), now)}</span>}
                       </Button>
@@ -323,6 +337,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
                 <b className="font-semibold text-(--fg)">{harnessName(harnessId)}</b> · {modeValue} · {view === "chat" ? "Chat" : "Terminal"} in{" "}
                 <b className="font-semibold text-(--fg)">{project.name}</b> on <b className="font-semibold text-(--fg)">{machineName}</b>
                 {resumeId && " · resumes a conversation"}
+                {view === "chat" && !resumeId && prompt.trim() && " · sends the first message"}
               </>
             )}
           </p>

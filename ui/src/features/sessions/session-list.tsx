@@ -18,6 +18,7 @@ import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { useSessionCommands } from "./actions"
 import { groupSessions, matchesSession, nestHelpers, rowKey, sessionLabel, type GroupMode, type ListedSession, type SessionSubhead } from "./group"
+import { NotifyOffer } from "@/features/shell/attention"
 import { NewSessionSheet } from "./new-session-sheet"
 import { loadStartChoices } from "./choices"
 import { agentIds, defaultAgent, sessionRules } from "./rules"
@@ -321,6 +322,7 @@ export function SessionList() {
         onClick={onClick}
         onContextMenu={onContextMenu}
       >
+        <NotifyOffer />
         {discovery.error && <Banner tone="warn">{`Can't look for other machines: ${discovery.error.message}`}</Banner>}
         {machines.map((machine) => {
           const error = !outdated.includes(machine) && queries.errors[machine.id]
@@ -342,26 +344,34 @@ export function SessionList() {
             {needsYou.map((session) => renderRow(session))}
           </div>
         )}
-        {groups.map((group) => (
-          <div key={group.key}>
-            <GroupHeader>
-              {groupMode === "machine" ? group.key === LOCAL ? <Laptop aria-hidden /> : <Server aria-hidden /> : <Folder aria-hidden />}
-              <span className="min-w-0 flex-1 truncate">{group.label}</span>
-              {groupMode === "machine" && <span className="shrink-0 font-normal text-(--fg3)">{group.offline ? "Offline" : "Online"}</span>}
-            </GroupHeader>
-            {group.subheads.map((head) => (
-              <div key={head.key}>
-                <GroupHeader className="group/head ps-(--s5) font-normal">
-                  {groupMode === "machine" ? <Folder aria-hidden /> : <Server aria-hidden />}
-                  <span className="min-w-0 truncate">{head.label}</span>
-                  {head.parent && <span className="ms-(--s2) shrink-0 text-(--fg3)">{head.parent}</span>}
-                  <NewInFolder head={head} />
-                </GroupHeader>
-                {nestHelpers(head.sessions).map(({ session, nested }) => renderRow(session, nested))}
-              </div>
-            ))}
-          </div>
-        ))}
+        {groups.map((group) => {
+          // One folder on one machine needs no second header row: its label and "+" join the group's.
+          const only = group.subheads.length === 1 ? group.subheads[0] : undefined
+          return (
+            <div key={group.key}>
+              <GroupHeader className={cn(only && "group/head")}>
+                {groupMode === "machine" ? group.key === LOCAL ? <Laptop aria-hidden /> : <Server aria-hidden /> : <Folder aria-hidden />}
+                <span className="min-w-0 truncate">{group.label}</span>
+                {only && <span className="min-w-0 truncate font-normal text-(--fg3)">{`· ${only.label}`}</span>}
+                <span className="flex-1" />
+                {groupMode === "machine" && <span className="shrink-0 font-normal text-(--fg3)">{group.offline ? "Offline" : "Online"}</span>}
+                {only && <NewInFolder head={only} />}
+              </GroupHeader>
+              {only && nestHelpers(only.sessions).map(({ session, nested }) => renderRow(session, nested))}
+              {!only && group.subheads.map((head) => (
+                <div key={head.key}>
+                  <GroupHeader className="group/head ps-(--s5) font-normal">
+                    {groupMode === "machine" ? <Folder aria-hidden /> : <Server aria-hidden />}
+                    <span className="min-w-0 truncate">{head.label}</span>
+                    {head.parent && <span className="ms-(--s2) shrink-0 text-(--fg3)">{head.parent}</span>}
+                    <NewInFolder head={head} />
+                  </GroupHeader>
+                  {nestHelpers(head.sessions).map(({ session, nested }) => renderRow(session, nested))}
+                </div>
+              ))}
+            </div>
+          )
+        })}
       </nav>
 
       <RowSheet sheet={sheet} onClose={() => setSheet(null)} />

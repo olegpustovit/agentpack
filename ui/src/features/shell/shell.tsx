@@ -10,6 +10,7 @@ import { StatusBar, StatusProvider } from "@/features/status/status-bar"
 import { AppWindow, Toolbar, ToolbarButton } from "@/components/kit/window"
 import { buttonVariants } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { useAttention } from "./attention"
 import { useIsPhone } from "./use-is-phone"
 import { useSidebar } from "./sidebar"
 import { listDetailViews, tabs, useRoutePosition, viewLink, views } from "./views"
@@ -17,6 +18,7 @@ import { ToolbarProvider, ToolbarTarget, ToolbarTitleTarget } from "./toolbar-sl
 
 export function AppShell({ children }: { children: ReactNode }) {
   useShellShortcuts()
+  useAttention()
   return (
     <StatusProvider>
       <ToolbarProvider>

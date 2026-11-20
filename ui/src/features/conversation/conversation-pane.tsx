@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { StatusSlot } from "@/features/status/status-bar"
 import { sessionsQuery } from "@/features/sessions/queries"
-import { loadAgentChoices, rememberAgentChoice, takeNewChat } from "@/features/sessions/choices"
+import { clearFirstMessage, firstMessage, loadAgentChoices, rememberAgentChoice, takeNewChat } from "@/features/sessions/choices"
 import { useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName, relativeTime } from "@/lib/format"
@@ -102,7 +102,7 @@ export default function ConversationPane({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const machines = useMachines()
-  const [draft, setDraft] = useState(() => loadDraft(draftKey(machine, sessionId)))
+  const [draft, setDraft] = useState(() => loadDraft(draftKey(machine, sessionId)) || firstMessage(sessionId))
   const [hintIndex, setHintIndex] = useState(0)
   const [hintsClosed, setHintsClosed] = useState(false)
   const stickToBottomRef = useRef(true)
@@ -131,7 +131,8 @@ export default function ConversationPane({
   // A stopped chat comes back on its next message: the gateway restarts it under the same ID, reloads
   // the agent's conversation and sends the message once it runs.
   const resumable = !readOnly && !starting && !live && Boolean(info?.ended_at && info.agent_session_id)
-  const [held, setHeld] = useState(false)
+  // A first message from New session waits in the composer, held like one typed while starting.
+  const [held, setHeld] = useState(() => firstMessage(sessionId) !== "")
   const { data: tail, error: conversationError } = useQuery({ ...conversationEventsQuery(machine, sessionId, live), retry: false })
   // Earlier pages, loaded as the thread scrolls up. Keyed, so another session never shows them.
   const historyKey = `${machine}\0${sessionId}`
@@ -426,8 +427,9 @@ export default function ConversationPane({
     if (!held || !live && !info?.ended_at) return
     // A start that failed ends the row; the message simply stays in the composer.
     if (live && draft.trim()) send.mutate({ text: draft.trim(), attachments: [], clearComposer: true, optimisticAfter: entries.at(-1)?.seq ?? 0 })
+    clearFirstMessage(sessionId)
     setHeld(false)
-  }, [held, live, info?.ended_at, send, draft, entries])
+  }, [held, live, info?.ended_at, send, draft, entries, sessionId])
   // Enter sends, or queues while the agent works; steer interrupts the turn and sends this next.
   function submit(steer = false) {
     if (!canSend) return
@@ -522,10 +524,11 @@ export default function ConversationPane({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-(--window)">
+      {/* The composer ring and an open inspector already show context, so the status bar adds it only while the inspector is closed. */}
       <StatusSlot>
         {info && (
           <span>
-            {[harnessName(info.harness), info.mode || "default", goal ? `Goal ${goal.state === "active" ? "" : `${goal.state} `}${clock(goalElapsedMs(goal, goalNow))}` : "", contextPercent !== undefined ? `Context ${contextPercent}%` : "", parent.cost_usd ? `$${parent.cost_usd.toFixed(2)}` : ""].filter(Boolean).join(" · ")}
+            {[harnessName(info.harness), info.mode || "default", goal ? `Goal ${goal.state === "active" ? "" : `${goal.state} `}${clock(goalElapsedMs(goal, goalNow))}` : "", contextPercent !== undefined && !inspectorOpen ? `Context ${contextPercent}%` : "", parent.cost_usd ? `$${parent.cost_usd.toFixed(2)}` : ""].filter(Boolean).join(" · ")}
           </span>
         )}
       </StatusSlot>
