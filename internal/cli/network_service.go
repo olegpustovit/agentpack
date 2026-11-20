@@ -78,25 +78,8 @@ func (runner Runner) runNetworkService(ctx context.Context, args []string) (int,
 	if action != "status" {
 		// Graceful IPC leaves independent session workers alive on every platform.
 		if _, err := network.NodeRequest(ctx, home, "GET", "/healthz"); err == nil {
-			if _, err = network.NodeRequest(ctx, home, "POST", "/api/node/stop"); err != nil {
+			if err = network.StopGateway(ctx, home); err != nil {
 				return 1, err
-			}
-			deadline := time.NewTimer(8 * time.Second)
-			defer deadline.Stop()
-			ticker := time.NewTicker(100 * time.Millisecond)
-			defer ticker.Stop()
-		wait:
-			for {
-				select {
-				case <-ctx.Done():
-					return 1, ctx.Err()
-				case <-deadline.C:
-					return 1, errors.New("gateway did not stop; sessions were left running")
-				case <-ticker.C:
-					if _, err = network.NodeRequest(ctx, home, "GET", "/healthz"); err != nil {
-						break wait
-					}
-				}
 			}
 		}
 	}

@@ -124,14 +124,17 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 			return 1, err
 		}
 		return 0, runner.printGatewayClaim(ctx, home)
-	case "stop", "status", "stop-agents":
-		method, path := "GET", "/api/sessions"
-		if action == "stop" {
-			if err := network.SetGatewayEnabled(home, false); err != nil {
-				return 1, err
-			}
-			method, path = "POST", "/api/node/stop"
+	case "stop":
+		if err := network.SetGatewayEnabled(home, false); err != nil {
+			return 1, err
 		}
+		if err := network.StopGateway(ctx, home); err != nil {
+			return 1, err
+		}
+		fmt.Fprintln(runner.Stdout, `{"stopping":true}`)
+		return 0, nil
+	case "status", "stop-agents":
+		method, path := "GET", "/api/sessions"
 		if action == "stop-agents" {
 			method, path = "POST", "/api/node/stop-agents"
 		}

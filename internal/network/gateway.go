@@ -1136,6 +1136,21 @@ func NodeRequestStream(ctx context.Context, home, method, path string, dst io.Wr
 	return nil
 }
 
+// StopGateway asks the gateway to stop and waits until its process has exited, which it shows by
+// releasing gateway.lock; its listener closes earlier, so a start right after could still collide.
+func StopGateway(ctx context.Context, home string) error {
+	if _, err := NodeRequest(ctx, home, "POST", "/api/node/stop"); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	lock := flock.New(filepath.Join(home, "network", "gateway.lock"))
+	if ok, err := lock.TryLockContext(ctx, 100*time.Millisecond); !ok {
+		return errors.Join(errors.New("gateway did not stop; sessions were left running"), err)
+	}
+	return lock.Unlock()
+}
+
 func EnsureNode(ctx context.Context, home, executable string) error {
 	if enabled, err := GatewayEnabled(home); err != nil {
 		return err
