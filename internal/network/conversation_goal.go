@@ -248,6 +248,30 @@ func (session *ConversationSession) applyNativeGoal(raw json.RawMessage, now int
 	session.goalDirty = true
 }
 
+// followNativeGoal ends a native goal when the agent stops on its own, since no adapter reports it to
+// us: Claude's /goal ends its turn, Codex keeps going without a prompt until its thread is idle.
+// Unprompted work after that (Codex continuing) revives it. The caller holds mu.
+func (session *ConversationSession) followNativeGoal(entry acp.LogEntry, state string) {
+	goal := session.goal
+	if goal == nil || goal.Engine != "native" {
+		return
+	}
+	switch {
+	case state == string(stateIdle) && session.state == string(stateWorking) && goal.State == "active" && session.userCancelled:
+		// A prompted turn is paused by finishTurn; unprompted work has no turn to finish.
+		setGoalState(goal, "paused", "stopped by the user", entry.TS)
+		session.goalDirty, session.goalPauseDue = true, !session.running
+	case state == string(stateIdle) && session.state == string(stateWorking) && goal.State == "active" &&
+		session.stopReason != "error" && session.stopReason != "failed" && session.stopReason != "cancelled":
+		setGoalState(goal, "met", "the agent finished", entry.TS)
+		session.goalSettled, session.goalDirty = true, true
+	case state == string(stateWorking) && entry.Kind != "prompt" && goal.State == "met" && session.goalSettled:
+		setGoalState(goal, "active", "", entry.TS)
+		goal.LastReason = ""
+		session.goalSettled, session.goalDirty = false, true
+	}
+}
+
 // finishTurn counts a goal turn and applies the stop rules once the agent's turn has ended.
 func (session *ConversationSession) finishTurn(ctx context.Context, err error) {
 	session.mu.Lock()
@@ -360,7 +384,7 @@ func (session *ConversationSession) SetGoal(ctx context.Context, objective, chec
 	}
 	session.goal = &Goal{Objective: objective, Checks: checks, State: "active", Engine: engine,
 		StartedAt: now, ResumedAt: now, Limits: limits, UpdatedAt: now}
-	session.goalBlocked, session.goalIdle = 0, 0
+	session.goalBlocked, session.goalIdle, session.goalSettled = 0, 0, false
 	session.mu.Unlock()
 	session.publishGoal()
 	if engine == "native" {

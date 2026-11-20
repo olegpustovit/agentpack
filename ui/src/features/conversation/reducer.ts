@@ -322,6 +322,14 @@ class ThreadReducer {
         this.goal = next.state === "cleared" ? undefined : next
         break
       }
+      case "session_info_update": {
+        // Codex keeps working on a goal with no prompt or turn_end; its thread status is the only edge.
+        const status = (entry.payload as { _meta?: { codex?: { threadStatus?: { type?: string } } } })._meta?.codex?.threadStatus?.type
+        if (this.turn) break
+        if (status === "active") state.working = !state.needs_you
+        if (status === "idle") state.working = false
+        break
+      }
       case "turn_end": {
         state.working = false
         const turn = this.turn

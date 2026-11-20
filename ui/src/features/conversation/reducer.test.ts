@@ -181,6 +181,14 @@ describe("reduceLog", () => {
     expect(reduceLog([...cycle, { seq: 4, ts: 4, kind: "usage_update", payload: origin }]).working).toBe(false)
     expect(reduceLog([...cycle, { seq: 4, ts: 4, kind: "prompt", payload: {} }, { seq: 5, ts: 5, kind: "usage_update", payload: origin }]).working).toBe(true)
   })
+
+  it("bounds Codex's unprompted goal work by its thread status, but not inside a user turn", () => {
+    const thread = (seq: number, type: string): LogEntry => ({ seq, ts: seq, kind: "session_info_update", payload: { _meta: { codex: { threadStatus: { type } } } } })
+    const ended: LogEntry[] = [{ seq: 1, ts: 1, kind: "prompt", payload: { text: { text: "/goal ship" } } }, { seq: 2, ts: 2, kind: "turn_end", payload: {} }]
+    expect(reduceLog([...ended, thread(3, "active")]).working).toBe(true)
+    expect(reduceLog([...ended, thread(3, "active"), thread(4, "idle")]).working).toBe(false)
+    expect(reduceLog([ended[0]!, thread(2, "idle")]).working).toBe(true)
+  })
   it("clears working after agent_exit", () => {
     const entries: LogEntry[] = [
       { seq: 1, ts: 1, kind: "prompt", payload: { text: "hi" } },

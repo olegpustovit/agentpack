@@ -179,6 +179,27 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 		} else if usage.CostUSD != nil {
 			state.CostUSD = *usage.CostUSD
 		}
+	case "session_info_update":
+		// Codex keeps working on a goal with no prompt or turn_end; its thread status is the only edge.
+		if !reducer.inTurn && !child && bytes.Contains(entry.Payload, []byte(`"threadStatus"`)) {
+			var update struct {
+				Meta struct {
+					Codex struct {
+						ThreadStatus struct {
+							Type string `json:"type"`
+						} `json:"threadStatus"`
+					} `json:"codex"`
+				} `json:"_meta"`
+			}
+			if json.Unmarshal(entry.Payload, &update) == nil {
+				switch update.Meta.Codex.ThreadStatus.Type {
+				case "active":
+					state.Working = !state.NeedsYou
+				case "idle":
+					state.Working = false
+				}
+			}
+		}
 	case "turn_end", "agent_exit":
 		// A failed or cancelled turn leaves its permissions and questions unanswerable; only a URL
 		// elicitation (an MCP sign-in) can outlive a turn, and it ends with the agent.

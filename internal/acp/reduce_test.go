@@ -346,4 +346,14 @@ func TestThreadReducerAutonomousCycleEnds(t *testing.T) {
 	if !reducer.Apply(LogEntry{Kind: "usage_update", Payload: origin}).Working {
 		t.Fatal("an origin-stamped usage inside a user turn must not clear working")
 	}
+	thread := func(status string) LogEntry {
+		return LogEntry{Kind: "session_info_update", Payload: json.RawMessage(`{"_meta":{"codex":{"threadStatus":{"type":"` + status + `"}}}}`)}
+	}
+	if !reducer.Apply(thread("idle")).Working {
+		t.Fatal("Codex's idle thread inside a user turn must not clear working")
+	}
+	reducer.Apply(LogEntry{Kind: "turn_end", Payload: json.RawMessage(`{}`)})
+	if !reducer.Apply(thread("active")).Working || reducer.Apply(thread("idle")).Working {
+		t.Fatal("Codex's thread status should bound its unprompted goal work")
+	}
 }

@@ -186,3 +186,61 @@ func TestGoalAndSubagentsPersistOnSessionRow(t *testing.T) {
 		t.Fatalf("cleared goal = %+v", stored.Goal)
 	}
 }
+
+// Codex reports no goal status to a plain ACP client: after the /goal turn it keeps working with no
+// prompt and only its thread status says when it stops.
+func TestNativeGoalFollowsUnpromptedWork(t *testing.T) {
+	session, agent := newFakeAgentSession(t, entry("available_commands_update", map[string]any{
+		"sessionUpdate": "available_commands_update", "availableCommands": []map[string]string{{"name": "goal", "description": "goal"}},
+	}))
+	thread := func(status string) {
+		agent.log.Append("session_info_update", 2, mustRawJSON(map[string]any{"sessionUpdate": "session_info_update",
+			"_meta": map[string]any{"codex": map[string]any{"threadStatus": map[string]string{"type": status}}}}))
+	}
+	if err := session.SetGoal(t.Context(), "ship it", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	agent.nextPrompt(t)
+	agent.turns <- fakeTurn{}
+	agent.goalUntil(t, goalIn("met")) // Claude's /goal ends here
+	thread("active")
+	agent.goalUntil(t, goalIn("active"))
+	thread("idle")
+	goal := agent.goalUntil(t, goalIn("met"))
+	session.mu.Lock()
+	state := session.state
+	session.mu.Unlock()
+	if state != "idle" || goal.LastReason != "the agent finished" {
+		t.Fatalf("state %q goal %+v", state, goal)
+	}
+	agent.log.Append("prompt", 3, mustRawJSON(map[string]any{"text": map[string]string{"text": "thanks"}}))
+	session.mu.Lock()
+	revived := session.goal.State != "met"
+	session.mu.Unlock()
+	if revived {
+		t.Fatal("a user prompt revived a met goal")
+	}
+}
+
+func TestStopDuringUnpromptedNativeGoalPauses(t *testing.T) {
+	session, agent := newFakeAgentSession(t, entry("available_commands_update", map[string]any{
+		"sessionUpdate": "available_commands_update", "availableCommands": []map[string]string{{"name": "goal", "description": "goal"}},
+	}))
+	if err := session.SetGoal(t.Context(), "ship it", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	agent.nextPrompt(t)
+	agent.turns <- fakeTurn{}
+	agent.goalUntil(t, goalIn("met"))
+	agent.log.Append("agent_message_chunk", 2, mustRawJSON(map[string]any{"text": map[string]string{"text": "still going"}}))
+	agent.goalUntil(t, goalIn("active"))
+	if err := session.Cancel(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	agent.log.Append("session_info_update", 3, mustRawJSON(map[string]any{"sessionUpdate": "session_info_update",
+		"_meta": map[string]any{"codex": map[string]any{"threadStatus": map[string]string{"type": "idle"}}}}))
+	agent.goalUntil(t, goalIn("paused"))
+	if prompt := agent.nextPrompt(t); prompt.Text != "/goal pause" {
+		t.Fatalf("prompt = %q", prompt.Text)
+	}
+}

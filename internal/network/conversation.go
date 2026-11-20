@@ -52,6 +52,8 @@ type ConversationSession struct {
 	goalCleared     *Goal // the last goal, kept to log its "cleared" state
 	goalPublished   string
 	goalDirty       bool // the agent reported a native goal snapshot
+	goalSettled     bool // the native goal was marked met because the agent went idle
+	goalPauseDue    bool // the user stopped unprompted native goal work; tell the agent to pause
 	goalPublishMu   sync.Mutex
 	goalChange      func(*Goal)
 	nativeGoal      bool // the agent advertises a /goal command
@@ -110,10 +112,13 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	}
 	state := conversationState(session.reducer.Apply(entry))
 	changed := state != session.state
+	if changed {
+		session.followNativeGoal(entry, state)
+	}
 	session.state = state
 	titleChange, title := session.titleChange, agentTitle(entry)
-	goalDirty := session.goalDirty
-	session.goalDirty = false
+	goalDirty, pause := session.goalDirty, session.goalPauseDue
+	session.goalDirty, session.goalPauseDue = false, false
 	subagents, subagentsChanged := session.applySubagent(entry)
 	subagentsChange := session.subagentsChange
 	session.mu.Unlock()
@@ -126,6 +131,9 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	if goalDirty {
 		// Appending from inside a log callback would deadlock; publish once this entry is done.
 		obs.Go("acp.goal_publish", session.publishGoal)
+	}
+	if pause {
+		obs.Go("acp.goal_pause", func() { _, _, _ = session.Submit(context.Background(), acp.PromptInput{Text: "/goal pause"}, false) })
 	}
 	if changed {
 		session.publishState()
@@ -315,7 +323,7 @@ func (session *ConversationSession) observeEntry(entry acp.LogEntry) {
 func (session *ConversationSession) Cancel(ctx context.Context) error {
 	session.mu.Lock()
 	broker := session.broker
-	if session.running {
+	if session.running || session.goal != nil && session.goal.Engine == "native" && session.goal.State == "active" {
 		session.userCancelled = true
 	}
 	session.mu.Unlock()
