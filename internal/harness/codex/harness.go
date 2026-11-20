@@ -50,7 +50,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 			arguments = append(arguments[:1], append([]string{flag}, arguments[1:]...)...)
 		}
 	}
-	binary, err := base.ResolveBinary("CODEX_PATH", "codex")
+	binary, err := base.ResolveBinary(base.Codex.Binary())
 	if err != nil {
 		return nil, err
 	}

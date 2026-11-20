@@ -136,7 +136,7 @@ func ComputeLaunchDigest(projectRoot, workspace string, effective mode.Effective
 			}
 			hash.Write([]byte("opencode_native_inputs\x00" + nativeInputs))
 		}
-		binary, err := base.ResolveBinary("OPENCODE_PATH", "opencode")
+		binary, err := base.ResolveBinary(base.OpenCode.Binary())
 		if err == nil {
 			if resolved, resolveErr := filepath.EvalSymlinks(binary); resolveErr == nil {
 				binary = resolved

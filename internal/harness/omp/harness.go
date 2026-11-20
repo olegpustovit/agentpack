@@ -85,7 +85,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	binary, err := base.ResolveBinary("OMP_PATH", "omp")
+	binary, err := base.ResolveBinary(base.OMP.Binary())
 	if err != nil {
 		return nil, err
 	}

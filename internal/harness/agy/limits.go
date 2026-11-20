@@ -33,7 +33,7 @@ type usageReport struct {
 // own buckets because model families do not share allowances.
 func ReadLimits(ctx context.Context) base.LimitSnapshot {
 	snapshot := base.LimitSnapshot{Harness: "agy", State: base.LimitStateError, Source: limitsSource, ObservedAt: time.Now().UTC()}
-	exe, err := base.LookPathEnv("AGY_PATH", "agy")
+	exe, err := base.LookPathEnv(base.Agy.Binary())
 	if err != nil {
 		snapshot.State = base.LimitStateUnsupported
 		snapshot.Error = "agy CLI not found"

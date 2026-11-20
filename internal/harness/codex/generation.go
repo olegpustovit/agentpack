@@ -279,7 +279,7 @@ func canRetireGeneration(home string) bool {
 	if err != nil || !empty {
 		return false
 	}
-	binary, err := base.ResolveBinary("CODEX_PATH", "codex")
+	binary, err := base.ResolveBinary(base.Codex.Binary())
 	if err != nil {
 		return false
 	}

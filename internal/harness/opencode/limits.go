@@ -31,7 +31,7 @@ type usageLimitsResponse struct {
 // It only reads usage and sends no inference turns.
 func ReadLimits(ctx context.Context) base.LimitSnapshot {
 	snapshot := base.LimitSnapshot{Harness: "opencode", State: base.LimitStateError, Source: limitsSource, ObservedAt: time.Now().UTC()}
-	exe, err := base.LookPathEnv("OPENCODE_PATH", "opencode")
+	exe, err := base.LookPathEnv(base.OpenCode.Binary())
 	if err != nil {
 		snapshot.State = base.LimitStateUnsupported
 		snapshot.Error = "opencode CLI not found"

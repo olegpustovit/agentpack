@@ -141,7 +141,7 @@ test("the fleet's install rows total at most 12 across machines", async ({ page 
   let rows = 0
   for (const machine of ["local", "peer-1", "peer-2"]) {
     await page.goto(`/machines/${machine}`)
-    const grid = page.locator('[aria-label="Projects and pinned packages"] tbody tr')
+    const grid = page.locator('table[aria-label="Projects"] tbody tr')
     await expect(grid.first()).toBeVisible()
     rows += await grid.count()
   }

@@ -1,5 +1,4 @@
 import { Link, useMatchRoute, useNavigate, useSearch } from "@tanstack/react-router"
-import { useQuery } from "@tanstack/react-query"
 import { Badge } from "@/components/ui/badge"
 import { Network } from "lucide-react"
 import { GroupHeader, SearchField, SourceList, SourceRow } from "@/components/kit/list"
@@ -8,7 +7,7 @@ import { sessionsQuery, projectsQuery } from "@/features/sessions/queries"
 import { StatusSlot } from "@/features/status/status-bar"
 import { LOCAL } from "@/lib/api"
 import { plural } from "@/lib/format"
-import { compareAgentpackVersions, latestAgentpackVersionQuery, topologyQuery, useDiscovering, useMachineQueries, useReplicatedQueries, useMachines, type Machine, type MachineQuery } from "./queries"
+import { useAgentpackVersions, useDiscovering, useMachineQueries, useReplicatedQueries, useMachines, type Machine, type MachineQuery } from "./queries"
 
 export function MachineRow({ machine, sessions, needsUpdate }: { machine: Machine; sessions?: number; needsUpdate?: boolean }) {
   const matchRoute = useMatchRoute()
@@ -33,10 +32,9 @@ function countRows(byMachine: Record<string, MachineQuery<unknown[]>>): number {
 
 export function MachineList() {
   const machines = useMachines()
-  const latest = useQuery(latestAgentpackVersionQuery).data
-  const versions = useQuery(topologyQuery(false)).data
   const projects = useMachineQueries(projectsQuery)
   const sessions = useReplicatedQueries(sessionsQuery)
+  const versionOf = useAgentpackVersions()
   const matchRoute = useMatchRoute()
   const topology = matchRoute({ to: "/machines/topology" })
   const discovering = useDiscovering()
@@ -61,11 +59,9 @@ export function MachineList() {
         </SourceRow>
         <GroupHeader className="mt-(--s3)">Machines</GroupHeader>
         {discovering && <p className="px-(--s3) py-(--s2) text-(length:--fs-sm) text-(--fg2)">Discovering connected machines</p>}
-        {machines.filter((machine) => machine.name.toLowerCase().includes(needle)).map((machine) => {
-          const version = versions?.peers.find((peer) => peer.id === machine.id)?.version
-          const isOlder = !!latest && !!version && compareAgentpackVersions(version, latest.version) < 0
-          return <MachineRow key={machine.id} machine={machine} sessions={sessions.byMachine[machine.id]?.data?.length} needsUpdate={projects.byMachine[machine.id]?.needsUpdate || isOlder} />
-        })}
+        {machines.filter((machine) => machine.name.toLowerCase().includes(needle)).map((machine) => (
+          <MachineRow key={machine.id} machine={machine} sessions={sessions.byMachine[machine.id]?.data?.length} needsUpdate={projects.byMachine[machine.id]?.needsUpdate || versionOf(machine.id).outdated} />
+        ))}
       </SourceList>
     </div>
   )

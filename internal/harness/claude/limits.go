@@ -19,7 +19,7 @@ var usageLine = regexp.MustCompile(`^(Current [^:]+):\s*([0-9]+(?:\.[0-9]+)?)%\s
 // windows it prints. Reset times are kept as the CLI's own prose, never converted to clock values.
 func ReadLimits(ctx context.Context) base.LimitSnapshot {
 	snapshot := base.LimitSnapshot{Harness: "claude", State: base.LimitStateError, Source: limitsSource, ObservedAt: time.Now().UTC()}
-	exe, err := base.LookPathEnv("CLAUDE_CODE_PATH", "claude")
+	exe, err := base.LookPathEnv(base.Claude.Binary())
 	if err != nil {
 		snapshot.State = base.LimitStateUnsupported
 		snapshot.Error = "claude CLI not found"

@@ -60,6 +60,16 @@ export function fleetSessions(machine: string) {
   )
 }
 
+export const machineInfo = {
+  version: "0.9.2", os: "linux", arch: "arm64", cores: 8, memory: 31 * 1024 ** 3, disk_free: 120 * 1024 ** 3, disk_total: 200 * 1024 ** 3,
+  agents: [
+    { harness: "claude", installed: true, version: "2.1.140" },
+    { harness: "codex", installed: true, version: "0.161.0" },
+    { harness: "grok", installed: true, version: "0.2.14" },
+    { harness: "cursor", installed: false },
+  ],
+}
+
 // Legacy mockAPI shape: routes the API, records every request, and returns the record.
 // `fleet` switches the list endpoints to the audit fixture; `node` selects the machine in each reply.
 export async function mockAPI(page: Page, { authenticated = true, unclaimed = false, fleet = false }: { authenticated?: boolean; unclaimed?: boolean; fleet?: boolean } = {}) {
@@ -98,6 +108,7 @@ export async function mockAPI(page: Page, { authenticated = true, unclaimed = fa
     else if (url.pathname === "/api/limits") {
       data = { limits: [{ harness: "codex", state: "available", source: "codex app-server account/rateLimits/read", observed_at: new Date().toISOString(), windows: [{ id: "codex/primary", label: "Codex 5h", used_percent: 28, remaining_percent: 72, reset_at: "2026-10-30T16:10:00Z" }] }, { harness: "grok", state: "error", source: "grok agent stdio _x.ai/billing", observed_at: new Date().toISOString(), error: "grok billing: authentication required", windows: [] }] }
     } else if (url.pathname === "/api/usage") data = { hourly: [], sessions: [], samples: [] }
+    else if (url.pathname === "/api/machine") data = machineInfo
     else if (url.pathname.includes("/conversation")) {
       if (url.pathname.endsWith("/config-options")) return route.fulfill({ json: [] })
       if (req.method() === "GET" && !url.pathname.includes("/blobs/")) return route.fulfill({ body: "", contentType: "application/x-ndjson" })

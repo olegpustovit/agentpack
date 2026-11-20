@@ -44,6 +44,61 @@ export function compareAgentpackVersions(left: string, right: string): number {
   return a.pre ? -1 : 1
 }
 
+export type MachineAgent = { harness: string; installed: boolean; version?: string }
+export type MachineInfo = {
+  version: string
+  os: string
+  arch: string
+  cores: number
+  memory?: number
+  disk_free?: number
+  disk_total?: number
+  agents: MachineAgent[]
+}
+
+function parseMachineInfo(raw: unknown): MachineInfo {
+  const body = object(raw, "machine")
+  return {
+    version: string(body.version, "version"),
+    os: string(body.os, "os"),
+    arch: string(body.arch, "arch"),
+    cores: number(body.cores, "cores"),
+    memory: optional(body.memory, "memory", number),
+    disk_free: optional(body.disk_free, "disk_free", number),
+    disk_total: optional(body.disk_total, "disk_total", number),
+    agents: array(body.agents, "agents").map((item, index) => {
+      const agent = object(item, `agents[${index}]`)
+      return {
+        harness: string(agent.harness, `agents[${index}].harness`),
+        installed: boolean(agent.installed, `agents[${index}].installed`),
+        version: optional(agent.version, `agents[${index}].version`, string),
+      }
+    }),
+  }
+}
+
+// System facts and agent CLI versions, read on the machine itself. A peer without the route answers 404.
+export const machineInfoQuery = (machine: string) =>
+  queryOptions({
+    queryKey: ["m", machine, "machine"],
+    queryFn: async () => parseMachineInfo(await api<unknown>("/api/machine", { machine })),
+    staleTime: 60 * 1000,
+    retry: (count, error) => !(error instanceof ApiError && error.status === 404) && count < 2,
+  })
+
+// The running version comes from identity for this machine and from topology for peers, so the
+// list and the detail page agree, and this machine is flagged too.
+export function useAgentpackVersions(): (machine: string) => { version?: string; latest?: string; outdated: boolean } {
+  const live = useEventsConnected()
+  const local = useQuery(identityQuery).data?.node.version
+  const peers = useQuery(topologyQuery(live)).data?.peers
+  const latest = useQuery(latestAgentpackVersionQuery).data?.version
+  return (machine) => {
+    const version = machine === LOCAL ? local : peers?.find((peer) => peer.id === machine)?.version
+    return { version, latest, outdated: !!version && !!latest && compareAgentpackVersions(version, latest) < 0 }
+  }
+}
+
 // A peer's identity is proxied through the gateway, so OS and version come from the machine itself.
 export const machineIdentityQuery = (machine: string) =>
   queryOptions({

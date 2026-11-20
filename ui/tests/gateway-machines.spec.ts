@@ -6,7 +6,7 @@ import { mockAPI, projectRow } from "./helpers"
 
 function machineRow(page: Page, name: string): Locator {
   return page
-    .getByRole("table", { name: "Projects and pinned packages" })
+    .getByRole("table", { name: "Projects", exact: true })
     .locator("tbody tr")
     .filter({ has: page.getByText(name, { exact: true }) })
 }

@@ -33,7 +33,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	if allowsTrust(arguments) && !base.HasAny(arguments, "--trust") {
 		arguments = append([]string{"--trust"}, arguments...)
 	}
-	binary, err := base.ResolveBinary("CURSOR_AGENT_PATH", "cursor-agent")
+	binary, err := base.ResolveBinary(base.Cursor.Binary())
 	if err != nil {
 		return nil, err
 	}

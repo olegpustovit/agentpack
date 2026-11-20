@@ -34,7 +34,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	binary, err := base.ResolveBinary("OPENCODE_PATH", "opencode")
+	binary, err := base.ResolveBinary(base.OpenCode.Binary())
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +214,7 @@ func userConfigRoot(home string, major int) (string, error) {
 var versionCache sync.Map
 
 func nativeMajor() int {
-	binary, err := base.ResolveBinary("OPENCODE_PATH", "opencode")
+	binary, err := base.ResolveBinary(base.OpenCode.Binary())
 	if err != nil {
 		return 0
 	}

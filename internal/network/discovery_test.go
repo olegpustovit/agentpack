@@ -87,7 +87,7 @@ func TestTailnetTargetsAndRoutesAreBounded(t *testing.T) {
 			t.Fatalf("unsafe route %s", path)
 		}
 	}
-	if !peerRoute("GET", "/api/sessions/x/terminal") || !peerRoute("POST", "/api/sessions/x/restart") || !peerRoute("POST", "/api/node/update") {
+	if !peerRoute("GET", "/api/sessions/x/terminal") || !peerRoute("POST", "/api/sessions/x/restart") || !peerRoute("POST", "/api/node/update") || !peerRoute("GET", "/api/machine") {
 		t.Fatal("terminal routes unavailable")
 	}
 	routes := []struct{ method, path string }{

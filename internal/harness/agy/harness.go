@@ -32,7 +32,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	if ctx.Yolo {
 		arguments = base.PrependOnce(arguments, "--dangerously-skip-permissions")
 	}
-	binary, err := base.ResolveBinary("AGY_PATH", "agy")
+	binary, err := base.ResolveBinary(base.Agy.Binary())
 	if err != nil {
 		return nil, err
 	}

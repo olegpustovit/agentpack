@@ -11,7 +11,7 @@ import (
 
 func ReadLimits(ctx context.Context) base.LimitSnapshot {
 	snapshot := base.LimitSnapshot{Harness: "omp", State: base.LimitStateError, Source: "omp usage --json --no-extensions", ObservedAt: time.Now().UTC()}
-	binary, err := base.LookPathEnv("OMP_PATH", "omp")
+	binary, err := base.LookPathEnv(base.OMP.Binary())
 	if err != nil {
 		snapshot.State, snapshot.Error = base.LimitStateUnsupported, "omp CLI not found"
 		return snapshot

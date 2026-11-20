@@ -34,7 +34,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	if ctx.Yolo {
 		arguments = base.PrependOnce(arguments, "--always-approve")
 	}
-	binary, err := base.ResolveBinary("GROK_PATH", "grok")
+	binary, err := base.ResolveBinary(base.Grok.Binary())
 	if err != nil {
 		return nil, err
 	}

@@ -39,7 +39,7 @@ type GatewayOptions struct {
 	Start                    func(context.Context, SessionInfo, string) (string, error)
 	Packages                 func(context.Context, string) (ProjectContents, error)
 	Install                  func(context.Context, string, string, bool) error
-	Update                   func(context.Context) error
+	Update                   func(ctx context.Context, version string) error
 	Library                  LibraryOptions
 	Assets                   http.Handler
 	Version                  string
@@ -260,9 +260,16 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		writeJSON(w, map[string]string{"state": state, "error": g.updateError})
 	})
+	mux.HandleFunc("GET /api/machine", g.machine)
 	mux.HandleFunc("POST /api/node/update", func(w http.ResponseWriter, r *http.Request) {
 		if g.options.Update == nil {
 			http.Error(w, "gateway updates are unavailable", http.StatusNotImplemented)
+			return
+		}
+		// Installs this machine's view of the latest release, never a version the caller names.
+		version, _, err := fetchLatestRelease(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 		g.updateMu.Lock()
@@ -274,20 +281,22 @@ func (g *Gateway) Handler() http.Handler {
 		g.updating = true
 		g.updateError = ""
 		g.updateMu.Unlock()
-		go func() {
-			defer func() {
-				g.updateMu.Lock()
-				g.updating = false
-				g.updateMu.Unlock()
-			}()
-			if err := g.options.Update(context.Background()); err != nil {
-				g.updateMu.Lock()
-				g.updateError = err.Error()
-				g.updateMu.Unlock()
-				log.Printf("gateway update failed: %v", err)
+		obs.Go("gateway.update", func() {
+			ctx, event := obs.Start(obs.WithRecording(context.Background(), r.Context()), "gateway", "update")
+			event.Set("target_version", version)
+			err := g.options.Update(ctx, version)
+			if err != nil {
+				event.Fail(err)
 			}
-		}()
-		writeJSON(w, map[string]bool{"started": true})
+			event.End()
+			g.updateMu.Lock()
+			g.updating = false
+			if err != nil {
+				g.updateError = err.Error()
+			}
+			g.updateMu.Unlock()
+		})
+		writeJSON(w, map[string]any{"started": true, "version": version})
 	})
 	mux.HandleFunc("POST /api/claim", g.auth.claim)
 	mux.HandleFunc("POST /api/login", g.auth.login)

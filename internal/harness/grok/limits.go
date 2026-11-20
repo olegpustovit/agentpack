@@ -38,7 +38,7 @@ type billingEnvelope struct {
 // browser-auth calls. A wallet without a utilization value is not reported as 0% usage.
 func ReadLimits(ctx context.Context) base.LimitSnapshot {
 	snapshot := base.LimitSnapshot{Harness: "grok", State: base.LimitStateError, Source: limitsSource, ObservedAt: time.Now().UTC()}
-	exe, err := base.ResolveBinary("GROK_PATH", "grok")
+	exe, err := base.ResolveBinary(base.Grok.Binary())
 	if err != nil {
 		snapshot.State = base.LimitStateUnsupported
 		snapshot.Error = "grok CLI not found"

@@ -25,6 +25,27 @@ func ParseTarget(value string) (Target, error) {
 	return "", fmt.Errorf("unknown harness target %q", value)
 }
 
+// Binary names the environment override and default program for the agent's CLI.
+func (target Target) Binary() (environment, program string) {
+	switch target {
+	case Claude:
+		return "CLAUDE_CODE_PATH", "claude"
+	case Cursor:
+		return "CURSOR_AGENT_PATH", "cursor-agent"
+	case Codex:
+		return "CODEX_PATH", "codex"
+	case OpenCode:
+		return "OPENCODE_PATH", "opencode"
+	case Grok:
+		return "GROK_PATH", "grok"
+	case Agy:
+		return "AGY_PATH", "agy"
+	case OMP:
+		return "OMP_PATH", "omp"
+	}
+	return "", string(target)
+}
+
 func (target Target) UsesWorkspaceOverlay() bool { return target == Cursor || target == Agy }
 
 func (target Target) RawPluginSubdirs() []string {

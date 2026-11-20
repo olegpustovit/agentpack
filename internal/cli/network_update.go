@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,38 +14,23 @@ import (
 	"time"
 )
 
-func (runner Runner) updateGateway(ctx context.Context) error {
+// updateGateway installs version with the release installer and restarts the gateway service.
+func (runner Runner) updateGateway(ctx context.Context, version string) error {
 	client := &http.Client{Timeout: 30 * time.Second}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/olegpustovit/agentpack/releases/latest", nil)
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Accept", "application/vnd.github+json")
-	response, err := client.Do(request)
-	if err != nil {
-		return fmt.Errorf("check the latest Agentpack release: %w", err)
-	}
-	var release struct {
-		Tag string `json:"tag_name"`
-	}
-	err = json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&release)
-	response.Body.Close()
-	if err != nil || response.StatusCode != http.StatusOK || !strings.HasPrefix(release.Tag, "v") {
-		return errors.New("GitHub returned invalid latest release metadata")
-	}
+	tag := "v" + version
 	executable, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	installerURL := "https://github.com/olegpustovit/agentpack/releases/download/" + release.Tag + "/agentpack-installer.sh"
+	installerURL := "https://github.com/olegpustovit/agentpack/releases/download/" + tag + "/agentpack-installer.sh"
 	if runtime.GOOS == "windows" {
-		installerURL = "https://github.com/olegpustovit/agentpack/releases/download/" + release.Tag + "/agentpack-installer.ps1"
+		installerURL = "https://github.com/olegpustovit/agentpack/releases/download/" + tag + "/agentpack-installer.ps1"
 	}
-	request, err = http.NewRequestWithContext(ctx, http.MethodGet, installerURL, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, installerURL, nil)
 	if err != nil {
 		return err
 	}
-	response, err = client.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return fmt.Errorf("download the release installer: %w", err)
 	}
@@ -55,7 +39,6 @@ func (runner Runner) updateGateway(ctx context.Context) error {
 	if err != nil || response.StatusCode != http.StatusOK {
 		return errors.New("could not download the release installer")
 	}
-	version := strings.TrimPrefix(release.Tag, "v")
 	installDir := filepath.Dir(executable)
 	var command *exec.Cmd
 	if runtime.GOOS == "windows" {

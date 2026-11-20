@@ -21,7 +21,7 @@ func nativeUserRoots(home string) []string {
 }
 
 func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
-	binary, err := base.ResolveBinary("CLAUDE_CODE_PATH", "claude")
+	binary, err := base.ResolveBinary(base.Claude.Binary())
 	if err != nil {
 		return nil, err
 	}

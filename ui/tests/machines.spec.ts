@@ -8,7 +8,7 @@ const nodes = [
 ]
 const topology = {
   self: { id: "n1", name: "host-a", os: "linux", relay: "" },
-  peers: [{ id: "n2", name: "oracle-vm", os: "linux", state: "active", connection: "direct", relay: "", sessions: 0 }],
+  peers: [{ id: "n2", name: "oracle-vm", os: "linux", state: "active", connection: "direct", relay: "", rtt_ms: 14, version: "0.9.1", sessions: 1 }],
 }
 
 const alpha = { module: "github.com/acme/alpha", commit: "abcdef1234567890", content_hash: "", cache_key: "", kind: "skill", name: "alpha", url: "", direct: true }
@@ -45,7 +45,13 @@ const sessions: Record<string, unknown[]> = {
   n2: [session("s2", "/srv/oracle")],
 }
 
+const machineInfo = {
+  version: "0.9.1", os: "linux", arch: "arm64", cores: 8, memory: 31 * 1024 ** 3, disk_free: 120 * 1024 ** 3, disk_total: 200 * 1024 ** 3,
+  agents: [{ harness: "claude", installed: true, version: "2.1.140" }, { harness: "cursor", installed: false }],
+}
+
 let deletes: { method: string; url: string; body: unknown }[] = []
+let updates: string[] = []
 
 function machineOf(url: string): string {
   return new URL(url).searchParams.get("node") ?? "local"
@@ -53,6 +59,14 @@ function machineOf(url: string): string {
 
 test.beforeEach(async ({ page }) => {
   deletes = []
+  updates = []
+  await page.route("**/api/version/latest", (route) => route.fulfill({ json: { version: "0.9.2", url: "" } }))
+  await page.route(/\/api\/machine(\?.*)?$/, (route) => route.fulfill({ json: machineInfo }))
+  await page.route(/\/api\/node\/update(\?.*)?$/, (route) => {
+    if (route.request().method() === "POST") updates.push(machineOf(route.request().url()))
+    return route.fulfill({ json: route.request().method() === "POST" ? { started: true, version: "0.9.2" } : { state: "idle", error: "" } })
+  })
+  await page.route(/\/api\/limits(\?.*)?$/, (route) => route.fulfill({ json: { limits: [] } }))
   await page.route("**/api/config", (route) => route.fulfill({ json: { ui_build_id: "test-build" } }))
   await page.route("**/api/status", (route) => route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }))
   await page.route(/\/api\/identity(\?.*)?$/, (route) => route.fulfill({ json: machineOf(route.request().url()) === "n2" ? peer : local }))
@@ -70,18 +84,27 @@ test.beforeEach(async ({ page }) => {
 })
 
 function matrix(page: Page) {
-  return page.getByRole("table", { name: "Projects and pinned packages" })
+  return page.getByRole("table", { name: "Projects", exact: true })
 }
 
-test("machine detail has one matrix row per project with 7-character pins", async ({ page }) => {
+test("machine detail shows its agents, system, projects and updates an outdated peer", async ({ page }) => {
   await page.goto("/machines/n2")
+
+  await expect(page.getByText("Online · direct, 14 ms · 1 session running")).toBeVisible()
+  const agents = page.getByRole("table", { name: "Agents" })
+  await expect(agents.locator("tbody tr").filter({ hasText: "Claude" })).toContainText("2.1.140")
+  await expect(agents.locator("tbody tr").filter({ hasText: "Cursor" })).toContainText("Not installed")
+  await expect(page.getByText("linux arm64 · 8 cores · 31 GB")).toBeVisible()
 
   const rows = matrix(page).locator("tbody tr")
   await expect(rows).toHaveCount(2)
   await expect(rows.nth(0)).toContainText("oracle")
+  await expect(rows.nth(0)).toContainText("1 working")
   await expect(rows.nth(1)).toContainText("api")
-  await expect(matrix(page)).toContainText("abcdef1")
-  await expect(matrix(page)).not.toContainText("abcdef12")
+
+  await page.getByRole("button", { name: "Update to 0.9.2" }).click()
+  await expect.poll(() => updates).toEqual(["n2"])
+  await expect(page.getByRole("button", { name: "Updating…" })).toBeDisabled()
 })
 
 test("Forget on a peer asks first, then deletes that folder on that peer", async ({ page }) => {

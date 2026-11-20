@@ -46,7 +46,7 @@ func ProbeBundle(ctx context.Context, bundleDir, workspace, sourceID, lockDigest
 		plan = packaged[0]
 	}
 	expected := plan.Skills
-	exe, err := base.LookPathEnv("CLAUDE_CODE_PATH", "claude")
+	exe, err := base.LookPathEnv(base.Claude.Binary())
 	if err != nil {
 		return environment.Receipt{}, err
 	}

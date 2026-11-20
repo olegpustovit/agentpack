@@ -405,6 +405,7 @@ test.describe("a peer on an older version", () => {
     // It ignores ?include=revisions and has no /api/projects.
     await page.route("**/api/library/agentpacks**", unlessPeer([], [{ id: "bare", name: "bare-pack", revisions: ["r1"], heads: ["r1"] }]))
     await page.route("**/api/projects**", unlessPeer([], "404 page not found", 404))
+    await page.route("**/api/machine?**", unlessPeer({}, "404 page not found", 404))
   }
 
   test("the Library lists its bare agentpacks instead of crashing", async ({ page }) => {
@@ -416,7 +417,7 @@ test.describe("a peer on an older version", () => {
   test("Machines asks for an update, with no raw 404", async ({ page }) => {
     await oldPeer(page)
     await page.goto("/machines/old")
-    await expect(page.getByRole("alert")).toContainText("Update Agentpack on main to restore machine details.")
+    await expect(page.getByRole("alert")).toContainText("Update Agentpack on main to see its agents and system details.")
     await expect(page.getByText("404")).toHaveCount(0)
   })
 })
