@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { api, ApiError, routeMissing } from "./api"
+import { api, ApiError, responseError, routeMissing } from "./api"
 
 const page = '<!DOCTYPE html> <!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US"> <![endif]-->'
 
@@ -43,5 +43,13 @@ describe("api errors", () => {
     await expect(api("/api/projects")).rejects.toThrow("The machine didn't answer. It may be offline or restarting.")
     respond("context canceled", 500)
     await expect(api("/api/projects")).rejects.toThrow("Something went wrong on the machine. Try again.")
+  })
+})
+
+describe("responseError", () => {
+  it("replaces a proxy's HTML error page with a sentence", () => {
+    const error = responseError(new Response(null, { status: 502 }), "<!DOCTYPE html><html><body>Cloudflare</body></html>")
+    expect(error.message).not.toContain("<")
+    expect(error.status).toBe(502)
   })
 })

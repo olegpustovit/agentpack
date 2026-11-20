@@ -1,4 +1,4 @@
-import { LOCAL } from "@/lib/api"
+import { LOCAL, responseError } from "@/lib/api"
 
 export type PendingAttachment = {
   sha: string
@@ -17,9 +17,8 @@ export async function uploadConversationBlob(
   if (machine && machine !== LOCAL) url.searchParams.set("node", machine)
   const res = await fetch(url, { method: "POST", body: file, headers: { "Content-Type": file.type || "application/octet-stream" } })
   const text = await res.text()
-  if (!res.ok) {
-    throw new Error(text || "could not upload image")
-  }
+  // A proxy's error page (Cloudflare during a restart) must not reach the person as HTML.
+  if (!res.ok) throw responseError(res, text)
   let data: { sha?: string }
   try {
     data = JSON.parse(text) as { sha?: string }
