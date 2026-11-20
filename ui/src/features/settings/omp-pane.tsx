@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { errorText } from "@/features/library/mutations"
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
-import { api, routeMissing } from "@/lib/api"
+import { api, LOCAL, routeMissing } from "@/lib/api"
 import { hud } from "@/lib/hud"
 import {
   chatRoles,
@@ -58,20 +58,20 @@ function useOmpSetting(key: string) {
   return useMutation<unknown, Error, { value?: unknown }, { previous?: OmpSettings }>({
     mutationFn: ({ value }) => (value === undefined ? api(path, { method: "DELETE" }) : api(path, { method: "PUT", body: { value } })),
     onMutate: async ({ value }) => {
-      await queryClient.cancelQueries({ queryKey: ompSettingsQuery.queryKey })
-      const previous = queryClient.getQueryData(ompSettingsQuery.queryKey)
-      if (previous) queryClient.setQueryData(ompSettingsQuery.queryKey, withOverride(previous, key, value))
+      await queryClient.cancelQueries({ queryKey: ompSettingsQuery(LOCAL).queryKey })
+      const previous = queryClient.getQueryData(ompSettingsQuery(LOCAL).queryKey)
+      if (previous) queryClient.setQueryData(ompSettingsQuery(LOCAL).queryKey, withOverride(previous, key, value))
       return { previous }
     },
     onError: (_error, _input, context) => {
-      if (context?.previous) queryClient.setQueryData(ompSettingsQuery.queryKey, context.previous)
+      if (context?.previous) queryClient.setQueryData(ompSettingsQuery(LOCAL).queryKey, context.previous)
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ompSettingsQuery.queryKey }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ompSettingsQuery(LOCAL).queryKey }),
   })
 }
 
 export function OmpPane() {
-  const settings = useQuery(ompSettingsQuery)
+  const settings = useQuery(ompSettingsQuery(LOCAL))
   const machines = useMachines()
   const models = useMachineQueries(ompModelsQuery)
   const [tab, setTab] = useState("roles")

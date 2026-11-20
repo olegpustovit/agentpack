@@ -79,10 +79,12 @@ export function readOmpModels(value: unknown): OmpModel[] {
   })
 }
 
-export const ompSettingsQuery = queryOptions({
-  queryKey: ["omp-settings"],
-  queryFn: async () => readOmpSettings(await api<unknown>("/api/omp/settings")),
-})
+// Values are each machine's own; the network rows are the same everywhere.
+export const ompSettingsQuery = (machine: string) =>
+  queryOptions({
+    queryKey: ["omp-settings", machine],
+    queryFn: async () => readOmpSettings(await api<unknown>("/api/omp/settings", { machine })),
+  })
 
 export const ompModelsQuery = (machine: string) =>
   queryOptions({

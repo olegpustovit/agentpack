@@ -159,8 +159,8 @@ export default function ConversationPane({
   const selectOptions = configOptions.filter((option) => option.type === "select")
   const permissionsOption = selectOptions.find((option) => configRole(option) === "permissions")
   const modelOption = selectOptions.find((option) => configRole(option) === "model")
-  // An Oh My Pi chat can switch to a role's model (and thinking) from the network-wide settings.
-  const ompSettings = useQuery({ ...ompSettingsQuery, enabled: live && info?.harness === "omp" }).data
+  // An Oh My Pi chat can switch to a role's model (and thinking), as set on the machine running it.
+  const ompSettings = useQuery({ ...ompSettingsQuery(machine), enabled: live && info?.harness === "omp", retry: false }).data
   const roles = ompSettings && modelOption ? quickRoles(ompSettings, modelOption.items.map((item) => item.value)) : []
   const effortOption = selectOptions.find((option) => configRole(option) === "effort")
   const extraOptions = configOptions.filter((option) => configRole(option) === "other")
