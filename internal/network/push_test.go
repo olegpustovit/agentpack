@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -107,6 +108,9 @@ func TestPushSubscriptionsAndTransitions(t *testing.T) {
 	server := httptest.NewTLSServer(service)
 	defer server.Close()
 	g.push.client = server.Client()
+	previous := pushServices
+	pushServices = append(slices.Clone(pushServices), "127.0.0.1")
+	t.Cleanup(func() { pushServices = previous })
 	testBrowserSession(t, g.auth, testBrowserEmail, "owner")
 	testBrowserSession(t, g.auth, "member@example.com", "member")
 	handler := g.Handler()
@@ -126,6 +130,9 @@ func TestPushSubscriptionsAndTransitions(t *testing.T) {
 	}
 	if code := call("POST", "/api/push/subscription", owner.subscription("http://push.example/owner"), "owner"); code != 400 {
 		t.Fatal("plain HTTP endpoint", code)
+	}
+	if code := call("POST", "/api/push/subscription", owner.subscription("https://metadata.internal/owner"), "owner"); code != 400 {
+		t.Fatal("endpoint outside the browser push services", code)
 	}
 	if code := call("POST", "/api/push/subscription", owner.subscription(server.URL+"/owner"), "owner"); code != 204 {
 		t.Fatal("subscribe", code)

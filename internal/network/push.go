@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/SherClockHolmes/webpush-go"
@@ -150,9 +151,22 @@ func (g *Gateway) registerPush(mux *http.ServeMux) {
 	})
 }
 
+// pushServices are the browser vendors' push hosts. Any other endpoint would let a signed-in
+// account make the gateway post to an address of its choosing. Tests add their own server.
+var pushServices = []string{"fcm.googleapis.com", "android.googleapis.com", "push.services.mozilla.com", "push.apple.com", "notify.windows.com"}
+
+func knownPushService(host string) bool {
+	for _, service := range pushServices {
+		if host == service || strings.HasSuffix(host, "."+service) {
+			return true
+		}
+	}
+	return false
+}
+
 func validPushSubscription(input pushSubscription) bool {
 	endpoint, err := url.Parse(input.Endpoint)
-	return err == nil && endpoint.Scheme == "https" && endpoint.Host != "" && endpoint.User == nil &&
+	return err == nil && endpoint.Scheme == "https" && knownPushService(endpoint.Hostname()) && endpoint.User == nil &&
 		len(input.Endpoint) <= pushMaxEndpoint && input.Keys.P256dh != "" && input.Keys.Auth != "" &&
 		len(input.Keys.P256dh) <= pushMaxKey && len(input.Keys.Auth) <= pushMaxKey
 }
