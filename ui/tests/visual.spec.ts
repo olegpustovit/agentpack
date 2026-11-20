@@ -243,6 +243,35 @@ test.describe("conversation pane", () => {
     await expect(compaction).toContainText("Compaction summary retained.")
   })
 
+  test("reviewing a changed file widens the inspector and sends line comments as one prompt", async ({ page }) => {
+    await desktop(page)
+    await page.route("**/api/sessions", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({ json: [{ ...session, transport: "acp" }] })
+    })
+    await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: composerFixture, contentType: "application/x-ndjson" }))
+    const prompts: unknown[] = []
+    await page.route("**/api/sessions/*/conversation/prompt", (route) => {
+      prompts.push(route.request().postDataJSON())
+      return route.fulfill({ json: {} })
+    })
+    await page.goto("/sessions/local/local-one")
+    const inspector = page.locator('[data-slot="conversation-inspector"]')
+    expect(await style(inspector, "width")).toBe("272px")
+    await inspector.getByRole("button", { name: /terminal_client\.go/ }).click()
+    expect(await style(inspector, "width")).toBe("480px")
+    const line = inspector.locator('[data-slot="inspector-diff"] .group').last()
+    const add = line.locator('[data-slot="diff-comment-add"]')
+    expect(await style(add, "opacity")).toBe("0")
+    await line.hover()
+    await expect.poll(() => style(add, "opacity")).toBe("1")
+    await add.click()
+    await inspector.getByRole("textbox", { name: "Comment on internal/network/terminal_client.go:1" }).fill("Clamp the offset.")
+    await inspector.getByRole("button", { name: "Add comment" }).click()
+    await inspector.getByRole("button", { name: "Send 1 comment to Claude" }).click()
+    await expect.poll(() => prompts).toEqual([{ text: "internal/network/terminal_client.go:1: Clamp the offset." }])
+    await expect(inspector.getByRole("button", { name: /Send 1 comment/ })).toHaveCount(0)
+  })
 
   test("sidebar status dot: accent arc while working, solid dot when finished unread, warn for needs you", async ({ page }) => {
     await desktop(page)

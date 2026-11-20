@@ -16,7 +16,10 @@ import { cn } from "@/lib/utils"
 import type { ThreadState } from "./model"
 import type { GoalAction } from "./goal-sheet"
 import { subagentRunning, subagentStats } from "./subagent-card"
-import { fileLabel, groupByPath, listDiffChanges } from "./diff-summary"
+import { fileLabel, groupByPath, listDiffChanges, reviewPrompt, type ReviewComment } from "./diff-summary"
+import { ToolDiffBody } from "./tool-diff"
+
+type Draft = ReviewComment & { key: string }
 
 // Inspector rows are label left, value right: the pane is too narrow for the settings two-column form.
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -46,6 +49,8 @@ export function ConversationInspector({
   compact,
   compactReason,
   onOpenSubagent,
+  onSendComments,
+  sendingComments,
 }: {
   thread: ThreadState
   info?: SessionInfo
@@ -61,6 +66,8 @@ export function ConversationInspector({
   compact?: () => void
   compactReason?: string
   onOpenSubagent?: (id: string) => void
+  onSendComments?: (text: string, sent: () => void) => void
+  sendingComments?: boolean
 }) {
   const subagents = Object.values(thread.subagents ?? {}).sort((a, b) => (b.startedTs ?? 0) - (a.startedTs ?? 0))
   const now = useNow(goal?.state === "active" || subagents.some(subagentRunning))
@@ -82,7 +89,68 @@ export function ConversationInspector({
   const [confirming, setConfirming] = useState(false)
   const [revertError, setRevertError] = useState<string>()
   const lastTurn = Math.max(0, ...all.map((c) => c.turn))
-  const changes = groupByPath(scope === "turn" ? all.filter((c) => c.turn === lastTurn) : all)
+  const scoped = scope === "turn" ? all.filter((c) => c.turn === lastTurn) : all
+  const changes = groupByPath(scoped)
+  // The selected file's edits in scope; switching scope away from it closes the review.
+  const [selected, setSelected] = useState<string>()
+  const selectedBlocks = scoped.filter((c) => c.path === selected).map((c) => c.block)
+  const reviewing = selectedBlocks.length > 0
+  // Drafts are pane state: the pane is keyed by session, so they never leak between sessions.
+  const [comments, setComments] = useState<Draft[]>([])
+  const [editing, setEditing] = useState<Draft>()
+  const agentName = info ? harnessName(info.harness) : "the agent"
+  const canSendComments = Boolean(onSendComments) && comments.length > 0 && !readOnly && !thread.needs_you && !sendingComments
+  function saveDraft() {
+    if (!editing) return
+    const rest = comments.filter((c) => c.key !== editing.key)
+    setComments(editing.text.trim() ? [...rest, editing] : rest)
+    setEditing(undefined)
+  }
+  function draftFor(key: string) {
+    if (editing?.key === key) {
+      return (
+        <div data-slot="diff-comment-draft" className="mx-(--s2) my-(--s2) flex flex-col gap-(--s2) rounded-(--r-pop) border-[0.5px] border-(--sep) bg-(--window) p-(--s3)">
+          <textarea
+            aria-label={`Comment on ${editing.path}:${editing.line}`}
+            rows={2}
+            autoFocus
+            value={editing.text}
+            className="min-h-12 w-full resize-y rounded-(--r-ctl) border-[0.5px] border-(--sep) bg-(--control) px-(--s3) py-(--s2) text-(length:--fs-sm) text-(--fg) outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            onChange={(event) => setEditing({ ...editing, text: event.currentTarget.value })}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setEditing(undefined)
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault()
+                saveDraft()
+              }
+            }}
+          />
+          <div className="flex items-center justify-end gap-(--s2)">
+            <span className="mr-auto text-(length:--fs-xs) text-(--fg2)">Comments go to {agentName} together.</span>
+            <Button type="button" size="sm" onClick={() => setEditing(undefined)}>
+              Cancel
+            </Button>
+            <Button type="button" size="sm" variant="primary" disabled={!editing.text.trim()} onClick={saveDraft}>
+              Add comment
+            </Button>
+          </div>
+        </div>
+      )
+    }
+    const saved = comments.find((c) => c.key === key)
+    if (!saved) return undefined
+    return (
+      <div data-slot="diff-comment" className="mx-(--s2) my-(--s1) flex items-start gap-(--s2) rounded-(--r-pop) border-[0.5px] border-(--sep) bg-(--window) px-(--s3) py-(--s2) text-(length:--fs-sm) text-(--fg)">
+        <p className="min-w-0 flex-1 whitespace-pre-wrap break-words">{saved.text}</p>
+        <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(saved)}>
+          Edit
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => setComments(comments.filter((c) => c.key !== key))}>
+          Remove
+        </Button>
+      </div>
+    )
+  }
   return (
     <aside
       data-slot="conversation-inspector"
@@ -93,7 +161,7 @@ export function ConversationInspector({
         open ? "flex" : "hidden",
         open && "max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0 max-[1040px]:z-30 max-[1040px]:max-w-[calc(100vw-64px)]",
       )}
-      style={{ "--inspector-w": "272px" } as CSSProperties}
+      style={{ "--inspector-w": reviewing ? "480px" : "272px" } as CSSProperties}
     >
       <div id="conversation-inspector-content" className="flex min-w-0 flex-col gap-(--s6) text-(length:--fs-sm)">
         {thread.context_limit !== undefined && thread.context_tokens !== undefined && (
@@ -174,8 +242,15 @@ export function ConversationInspector({
                       <button
                         type="button"
                         title={change.path}
-                        className="flex w-full min-w-0 items-center gap-(--s2) rounded-(--r-row) px-(--s2) py-(--s1) text-left hover:bg-(--hover)"
+                        aria-pressed={reviewing && selected === change.path}
+                        className="flex w-full min-w-0 items-center gap-(--s2) rounded-(--r-row) px-(--s2) py-(--s1) text-left hover:bg-(--hover) aria-pressed:bg-(--sel-inactive)"
                         onClick={() => {
+                          if (reviewing && selected === change.path) {
+                            setSelected(undefined)
+                            return
+                          }
+                          setSelected(change.path)
+                          setEditing(undefined)
                           const target = document.getElementById(change.anchor)
                           if (target) {
                             target.scrollIntoView({ behavior: "smooth", block: "center" })
@@ -197,6 +272,36 @@ export function ConversationInspector({
                   )
                 })}
               </ul>
+              {reviewing && (
+                // shortcut: line numbers count from the start of each edit, because ACP diffs carry no file offset;
+                // switch to file lines once the gateway records where each edit starts.
+                <div data-slot="inspector-diff">
+                  <ToolDiffBody
+                    content={selectedBlocks}
+                    // Line keys count blocks within this view, so they are qualified by scope and file.
+                    review={{
+                      onComment: (key, target) => {
+                        const full = `${scope}:${selected}#${key}`
+                        setEditing({ key: full, ...target, text: comments.find((c) => c.key === full)?.text ?? "" })
+                      },
+                      after: (key) => draftFor(`${scope}:${selected}#${key}`),
+                    }}
+                  />
+                </div>
+              )}
+              {comments.length > 0 && (
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="primary"
+                    disabled={!canSendComments}
+                    onClick={() => onSendComments?.(reviewPrompt(comments), () => setComments([]))}
+                  >
+                    Send {comments.length} {comments.length === 1 ? "comment" : "comments"} to {agentName}
+                  </Button>
+                </div>
+              )}
               {scope === "turn" && lastTurn > 0 && sessionId && (
                 <>
                   <Button type="button" size="sm" className="self-start" disabled={readOnly} onClick={() => setConfirming(true)}>

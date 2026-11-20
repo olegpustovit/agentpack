@@ -945,6 +945,8 @@ export default function ConversationPane({
           compact={canCompact ? compact : undefined}
           compactReason={canCompact ? undefined : `${agentName} doesn't offer compaction.`}
           onOpenSubagent={openSubagent}
+          onSendComments={(text, sent) => send.mutate({ text, attachments: [], clearComposer: false }, { onSuccess: sent })}
+          sendingComments={send.isPending}
         />
         {goalEditorLoaded && (
           <Suspense>

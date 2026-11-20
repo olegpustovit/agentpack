@@ -57,26 +57,66 @@ function DiffLine({
   lineNo,
   sign,
   children,
+  onComment,
+  after,
 }: {
   kind: "del" | "add"
   lineNo: number
   sign: string
   children: ReactNode
+  onComment?: () => void
+  after?: ReactNode
 }) {
   const tone = kind === "del" ? "bg-(--del) text-(--danger-word)" : "bg-(--add) text-(--ok-word)"
   return (
-    <div className={`grid grid-cols-[2.5rem_1rem_1fr] gap-(--s2) px-(--s2) py-px font-(family-name:--mono) text-(length:--fs-xs) tabular-nums ${tone}`}>
-      <span className="text-right text-(--fg3)">{lineNo}</span>
-      <span>{sign}</span>
-      <span className="min-w-0 whitespace-pre-wrap break-words">{children}</span>
-    </div>
+    <>
+      <div className={`group relative grid grid-cols-[2.5rem_1rem_1fr] gap-(--s2) px-(--s2) py-px font-(family-name:--mono) text-(length:--fs-xs) tabular-nums ${tone}`}>
+        <span className="text-right text-(--fg3)">{lineNo}</span>
+        <span>{sign}</span>
+        <span className="min-w-0 whitespace-pre-wrap break-words">{children}</span>
+        {onComment && (
+          <button
+            type="button"
+            aria-label={`Comment on line ${lineNo}`}
+            data-slot="diff-comment-add"
+            className="absolute inset-y-0 left-0 flex w-(--s5) items-center justify-center rounded-(--r-row) bg-(--accent) text-(length:--fs-xs) text-white opacity-0 outline-none group-hover:opacity-100 focus-visible:opacity-100"
+            onClick={onComment}
+          >
+            +
+          </button>
+        )}
+      </div>
+      {after}
+    </>
   )
 }
 
-function diffBlock(oldText: string, newText: string, language?: string): ReactNode[] {
+// Review hooks for one rendered diff. `key` names a line within this ToolDiffBody: block index, side and number.
+export type DiffReview = {
+  onComment: (key: string, target: { path: string; line: number }) => void
+  after: (key: string) => ReactNode
+}
+
+function diffBlock(oldText: string, newText: string, language?: string, review?: { path: string; index: number; hooks: DiffReview }): ReactNode[] {
   const rows: ReactNode[] = []
   let oldNum = 1
   let newNum = 1
+  const push = (kind: "del" | "add", lineNo: number, children: ReactNode) => {
+    const key = `${kind === "del" ? "d" : "a"}-${lineNo}`
+    const reviewKey = review ? `${review.index}:${key}` : ""
+    rows.push(
+      <DiffLine
+        key={key}
+        kind={kind}
+        lineNo={lineNo}
+        sign={kind === "del" ? "−" : "+"}
+        onComment={review && (() => review.hooks.onComment(reviewKey, { path: review.path, line: lineNo }))}
+        after={review?.hooks.after(reviewKey)}
+      >
+        {children}
+      </DiffLine>,
+    )
+  }
   const changes = diffLines(oldText, newText)
   for (let index = 0; index < changes.length; index++) {
     const part = changes[index]!
@@ -89,74 +129,41 @@ function diffBlock(oldText: string, newText: string, language?: string): ReactNo
         const oldLine = oldLines[line]
         const newLine = newLines[line]
         if (oldLine !== undefined && newLine !== undefined) {
-          rows.push(
-            <DiffLine key={`d-${oldNum}`} kind="del" lineNo={oldNum} sign="−">
-              {delWords(oldLine, newLine, language)}
-            </DiffLine>,
-          )
-          oldNum++
-          rows.push(
-            <DiffLine key={`a-${newNum}`} kind="add" lineNo={newNum} sign="+">
-              {addWords(oldLine, newLine, language)}
-            </DiffLine>,
-          )
-          newNum++
+          push("del", oldNum++, delWords(oldLine, newLine, language))
+          push("add", newNum++, addWords(oldLine, newLine, language))
         } else if (oldLine !== undefined) {
-          rows.push(
-            <DiffLine key={`d-${oldNum}`} kind="del" lineNo={oldNum} sign="−">
-              {highlighted(oldLine, language)}
-            </DiffLine>,
-          )
-          oldNum++
+          push("del", oldNum++, highlighted(oldLine, language))
         } else if (newLine !== undefined) {
-          rows.push(
-            <DiffLine key={`a-${newNum}`} kind="add" lineNo={newNum} sign="+">
-              {highlighted(newLine, language)}
-            </DiffLine>,
-          )
-          newNum++
+          push("add", newNum++, highlighted(newLine, language))
         }
       }
       index++
       continue
     }
     if (part.removed) {
-      for (const line of trimSplit(part.value)) {
-        rows.push(
-          <DiffLine key={`d-${oldNum}`} kind="del" lineNo={oldNum} sign="−">
-            {highlighted(line, language)}
-          </DiffLine>,
-        )
-        oldNum++
-      }
+      for (const line of trimSplit(part.value)) push("del", oldNum++, highlighted(line, language))
       continue
     }
     if (part.added) {
-      for (const line of trimSplit(part.value)) {
-        rows.push(
-          <DiffLine key={`a-${newNum}`} kind="add" lineNo={newNum} sign="+">
-            {highlighted(line, language)}
-          </DiffLine>,
-        )
-        newNum++
-      }
+      for (const line of trimSplit(part.value)) push("add", newNum++, highlighted(line, language))
     }
   }
   return rows
 }
 
-export function ToolDiffBody({ content, toolId }: { content: ToolDiffBlock[] | undefined; toolId?: string }) {
+// With `review` this is the inspector's copy, which is not a scroll target, so it carries no anchor id.
+export function ToolDiffBody({ content, toolId, review }: { content: ToolDiffBlock[] | undefined; toolId?: string; review?: DiffReview }) {
   const diffs = (content ?? []).filter((block) => block.type === "diff" && (block.oldText || block.newText))
   if (diffs.length === 0) return null
   return (
     <div className="mt-(--s2) flex flex-col gap-(--s3)">
       {diffs.map((block, index) => (
-        <div key={index} id={block.path ? diffAnchorId(block.path, toolId) : undefined} data-slot="tool-diff" className="flex flex-col overflow-hidden rounded-(--r-pop) bg-(--window) shadow-(--shadow-card)">
+        <div key={index} id={block.path && !review ? diffAnchorId(block.path, toolId) : undefined} data-slot="tool-diff" className="flex flex-col overflow-hidden rounded-(--r-pop) bg-(--window) shadow-(--shadow-card)">
           {block.path && (
             <p className="border-b-[0.5px] border-(--sep) bg-(--code) px-(--s3) py-(--s2) font-(family-name:--mono) text-(length:--fs-xs) text-(--fg2)">{block.path}</p>
           )}
           <div className="flex flex-col gap-px overflow-x-auto py-(--s1)">
-            {diffBlock(block.oldText ?? "", block.newText ?? "", diffLanguage(block.path))}
+            {diffBlock(block.oldText ?? "", block.newText ?? "", diffLanguage(block.path), review && { path: block.path?.trim() || "change", index, hooks: review })}
           </div>
         </div>
       ))}

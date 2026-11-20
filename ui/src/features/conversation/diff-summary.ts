@@ -6,6 +6,7 @@ export type DiffChange = {
   del: number
   toolId?: string
   turn: number
+  block: ToolDiffBlock
 }
 
 function lineCount(text: string | undefined): number {
@@ -28,7 +29,7 @@ export function listDiffChanges(items: ThreadItem[]): DiffChange[] {
       if ((block as ToolDiffBlock).type !== "diff") continue
       const diff = block as ToolDiffBlock
       const path = diff.path?.trim() || "change"
-      out.push({ path, add: lineCount(diff.newText), del: lineCount(diff.oldText), toolId: tool.toolCallId, turn })
+      out.push({ path, add: lineCount(diff.newText), del: lineCount(diff.oldText), toolId: tool.toolCallId, turn, block: diff })
     }
   }
   return out
@@ -60,4 +61,14 @@ export function fileLabel(path: string, project?: string): { name: string; folde
   const relative = root && path.startsWith(root + "/") ? path.slice(root.length + 1) : path
   const cut = relative.lastIndexOf("/")
   return cut < 0 ? { name: relative, folder: "" } : { name: relative.slice(cut + 1), folder: relative.slice(0, cut) }
+}
+
+export type ReviewComment = { path: string; line: number; text: string }
+
+// One prompt for every queued review comment, one `path:line: comment` line each, in the order queued.
+export function reviewPrompt(comments: ReviewComment[]): string {
+  return comments
+    .filter((comment) => comment.text.trim())
+    .map((comment) => `${comment.path}:${comment.line}: ${comment.text.trim().replace(/\s*\n\s*/g, " ")}`)
+    .join("\n")
 }

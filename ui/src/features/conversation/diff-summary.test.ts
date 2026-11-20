@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { diffAnchorId, fileLabel, groupByPath, listDiffChanges } from "./diff-summary"
+import { diffAnchorId, fileLabel, groupByPath, listDiffChanges, reviewPrompt } from "./diff-summary"
 import type { ThreadItem } from "./model"
 
 describe("listDiffChanges", () => {
@@ -20,7 +20,7 @@ describe("listDiffChanges", () => {
       },
     ]
     expect(listDiffChanges(items)).toEqual([
-      { path: "internal/network/terminal_client.go", add: 2, del: 1, toolId: undefined, turn: 0 },
+      expect.objectContaining({ path: "internal/network/terminal_client.go", add: 2, del: 1, toolId: undefined, turn: 0 }),
     ])
   })
 })
@@ -59,5 +59,17 @@ describe("fileLabel", () => {
     expect(fileLabel("/home/u/p/go.mod", "/home/u/p")).toEqual({ name: "go.mod", folder: "" })
     expect(fileLabel("/etc/hosts", "/home/u/p")).toEqual({ name: "hosts", folder: "/etc" })
     expect(fileLabel("README.md")).toEqual({ name: "README.md", folder: "" })
+  })
+})
+
+describe("reviewPrompt", () => {
+  it("sends one path:line line per comment, flattened and without blanks", () => {
+    expect(
+      reviewPrompt([
+        { path: "internal/network/terminal_client.go", line: 212, text: "Clamp the offset.\nLast() can be ahead." },
+        { path: "a.go", line: 3, text: "  " },
+        { path: "replay.go", line: 1, text: " Rename this. " },
+      ]),
+    ).toBe("internal/network/terminal_client.go:212: Clamp the offset. Last() can be ahead.\nreplay.go:1: Rename this.")
   })
 })
