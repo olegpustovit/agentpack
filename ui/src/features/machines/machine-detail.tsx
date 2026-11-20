@@ -11,6 +11,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useEventsConnected } from "@/features/events/use-events"
 import { AddPackageSheet } from "@/features/library/add-package-sheet"
 import { limitsQuery } from "@/features/limits/queries"
+import { replicationQuery } from "@/features/library/queries"
+import { replicationStatus } from "@/features/settings/model"
+import { settingsQuery } from "@/features/settings/queries"
 import { needsLogin, remainingPercent, usable, windowsOf } from "@/features/limits/model"
 import { NewSessionSheet } from "@/features/sessions/new-session-sheet"
 import { projectsQuery, sessionsQuery } from "@/features/sessions/queries"
@@ -56,6 +59,8 @@ function MachineView({ machine }: { machine: Machine }) {
   const projects = useQuery({ ...projectsQuery(machine.id), enabled: machine.online })
   const sessions = useReplicatedQueries(sessionsQuery).byMachine[machine.id]?.data ?? []
   const limits = useReplicatedQueries(limitsQuery).byMachine[machine.id]?.data ?? []
+  const replication = useQuery({ ...replicationQuery, enabled: machine.id !== LOCAL })
+  const settings = useQuery({ ...settingsQuery, enabled: machine.id === LOCAL })
   const [action, setAction] = useState<Action | null>(null)
   const [forgetting, setForgetting] = useState<ProjectRow | null>(null)
   // The version the machine ran when Update was pressed; the update is done once it reports another.
@@ -173,6 +178,19 @@ function MachineView({ machine }: { machine: Machine }) {
               {version ?? "—"}
               {outdated && <span className="text-(--fg2)">{` · ${latest} available`}</span>}
             </KeyValue>
+            {machine.id !== LOCAL && replication.data && (
+              <KeyValue label="Replication">
+                {replicationStatus({ id: machine.id, name: machine.name, online: machine.online }, replication.data.peers?.find((replica) => replica.node === machine.id))}
+                {replication.data.contacts?.[machine.id]?.last_sync && (
+                  <span className="text-(--fg2)">{` · synced ${relativeTime(new Date(replication.data.contacts[machine.id]!.last_sync!))}`}</span>
+                )}
+              </KeyValue>
+            )}
+            {settings.data && (
+              <KeyValue label="Sharing">
+                {settings.data.sharing_enabled ? settings.data.allowed_peers?.join(", ") || "On" : "Off"}
+              </KeyValue>
+            )}
             {peer?.last_seen && !machine.online && <KeyValue label="Last seen">{relativeTime(new Date(peer.last_seen))}</KeyValue>}
           </dl>
         </Section>
