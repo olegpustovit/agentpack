@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -176,6 +177,23 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 			known = true
 			info.DefinitionRoot = entry.DefinitionRoot
 			break
+		}
+	}
+	// A fresh worktree has no launch yet: git must list it for a main folder launched here, whose
+	// definition root it then shares.
+	if !known {
+		main, err := network.WorktreeMain(ctx, home, info.Directory)
+		for _, entry := range recent {
+			if err != nil {
+				break
+			}
+			if entry.Directory == main && entry.FolderID != "" {
+				if identity, err := network.FolderIdentity(main); err == nil && identity == entry.FolderID {
+					known = true
+					info.DefinitionRoot = cmp.Or(entry.DefinitionRoot, main)
+				}
+				break
+			}
 		}
 	}
 	if !known {

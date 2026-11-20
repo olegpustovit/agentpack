@@ -231,6 +231,7 @@ func (g *Gateway) Handler() http.Handler {
 	g.registerLimits(mux)
 	g.registerDiagnostics(mux)
 	g.registerMCPCredentials(mux)
+	g.registerWorktrees(mux)
 	mux.HandleFunc("POST /api/telemetry", g.telemetry)
 	// Profiles reveal memory contents, so only this machine's CLI may read them; peers and browsers never can.
 	mux.HandleFunc("GET /api/debug/pprof/{name...}", func(w http.ResponseWriter, r *http.Request) {
@@ -367,6 +368,10 @@ func (g *Gateway) Handler() http.Handler {
 			Resume         string `json:"resume,omitempty"`
 			ParentID       string `json:"parent_id,omitempty"`
 			Tools          *bool  `json:"tools,omitempty"`
+			// Worktree is "new" or an existing worktree of Directory; Carry brings uncommitted changes.
+			Worktree     string `json:"worktree,omitempty"`
+			WorktreeName string `json:"worktree_name,omitempty"`
+			Carry        bool   `json:"carry,omitempty"`
 		}
 		if !readJSON(w, r, &input) {
 			return
@@ -374,12 +379,26 @@ func (g *Gateway) Handler() http.Handler {
 		if input.Resume != "" && input.AgentSessionID == "" {
 			input.AgentSessionID = input.Resume
 		}
+		definitionRoot := ""
+		if input.Worktree != "" {
+			if input.AgentSessionID != "" {
+				http.Error(w, "a resumed conversation keeps its own folder", http.StatusBadRequest)
+				return
+			}
+			main := filepath.Clean(input.Directory)
+			directory, err := g.newSessionWorktree(r.Context(), main, input.Worktree, input.WorktreeName, input.Carry)
+			if err != nil {
+				gitFailure(w, r, http.StatusUnprocessableEntity, err, map[string]any{"field": "worktree"})
+				return
+			}
+			input.Directory, definitionRoot = directory, g.definitionRootFor(r.Context(), main)
+		}
 		actor, ok := actorFrom(r.Context())
 		if !ok {
 			actor = browserActor(g.auth.email(r))
 		}
 		info, err := g.startSession(r.Context(), actor, SessionInfo{
-			Directory: input.Directory, Harness: input.Harness, Mode: input.Mode,
+			Directory: input.Directory, DefinitionRoot: definitionRoot, Harness: input.Harness, Mode: input.Mode,
 			Transport: input.Transport, AgentSessionID: input.AgentSessionID,
 			// agentpack tools are on for new chats unless the request turns them off.
 			ParentID: input.ParentID, Tools: input.Transport == "acp" && (input.Tools == nil || *input.Tools),
@@ -412,12 +431,13 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 		info, err := g.startSession(r.Context(), actor, SessionInfo{
-			Directory: record.Session.Directory,
-			Harness:   record.Session.Harness,
-			Mode:      record.Session.Mode,
-			Transport: "acp",
-			ParentID:  input.ParentID,
-			Tools:     record.Session.Tools,
+			Directory:      record.Session.Directory,
+			DefinitionRoot: record.Session.DefinitionRoot,
+			Harness:        record.Session.Harness,
+			Mode:           record.Session.Mode,
+			Transport:      "acp",
+			ParentID:       input.ParentID,
+			Tools:          record.Session.Tools,
 		}, record.Session.AgentSessionID)
 		writeSessionStart(w, info, err)
 	})
@@ -440,7 +460,11 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 		if input.Hidden != nil && *input.Hidden {
+			archived, _ := storedSession(r.Context(), g.auth.store.Reader, r.PathValue("id"))
 			err := HideSession(r.Context(), g.options.Home, r.PathValue("id"))
+			if err == nil {
+				g.removeArchivedWorktree(r.Context(), archived)
+			}
 			switch {
 			case errors.Is(err, errSessionNotFound):
 				http.Error(w, "session not found", http.StatusNotFound)
@@ -906,7 +930,8 @@ func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInf
 	if err := authorizeACPResume(ctx, g.auth.store, actor, source); err != nil {
 		return SessionInfo{}, err
 	}
-	if !g.knownDirectory(info.Directory) {
+	// A new worktree is accepted only when git lists it for a known main folder.
+	if !g.knownDirectory(info.Directory) && !g.knownWorktree(ctx, info.Directory) {
 		return SessionInfo{}, errors.New("choose a recent folder from this node")
 	}
 	local, err := g.auth.store.NodeID(ctx)

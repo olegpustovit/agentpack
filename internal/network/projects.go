@@ -68,6 +68,48 @@ type ProjectRow struct {
 	MCP               []ProjectMCP     `json:"mcp"`
 	Modes             []ProjectMode    `json:"modes"`
 	Error             string           `json:"error"`
+	// Git is the folder's checkout state; absent when it is not a repository or git is missing.
+	Git *ProjectGit `json:"git,omitempty"`
+}
+
+type ProjectGit struct {
+	Branch string `json:"branch,omitempty"`
+	Head   string `json:"head"`
+	Dirty  int    `json:"dirty"`
+}
+
+// projectGit reads one git status per folder, reused for 30 s across project reads.
+func projectGit(ctx context.Context, directory string) *ProjectGit {
+	projectGitMu.Lock()
+	cached, ok := projectGitCache[directory]
+	projectGitMu.Unlock()
+	if ok && time.Since(cached.at) < 30*time.Second {
+		return cached.git
+	}
+	var git *ProjectGit
+	if status, err := readStatus(ctx, directory); err == nil && status.Head != "" {
+		git = &ProjectGit{Branch: status.Branch, Head: status.Head, Dirty: status.Dirty}
+	}
+	projectGitMu.Lock()
+	projectGitCache[directory] = struct {
+		at  time.Time
+		git *ProjectGit
+	}{time.Now(), git}
+	projectGitMu.Unlock()
+	return git
+}
+
+var (
+	projectGitMu    sync.Mutex
+	projectGitCache = map[string]struct {
+		at  time.Time
+		git *ProjectGit
+	}{}
+)
+
+// withoutWorktrees drops agentpack's worktrees: they belong to their main folder's project.
+func withoutWorktrees(home string, folders []RecentFolder) []RecentFolder {
+	return slices.DeleteFunc(folders, func(folder RecentFolder) bool { return insideWorktrees(home, folder.Directory) })
 }
 
 const projectReadConcurrency = 4
@@ -80,7 +122,7 @@ func Projects(ctx context.Context, home string, contents func(context.Context, s
 	if err != nil {
 		return nil, err
 	}
-	return projectRows(ctx, folders, contents)
+	return projectRows(ctx, withoutWorktrees(home, folders), contents)
 }
 
 func (g *Gateway) projects(ctx context.Context) ([]ProjectRow, error) {
@@ -88,7 +130,26 @@ func (g *Gateway) projects(ctx context.Context) ([]ProjectRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	return projectRows(ctx, recentFolders(recent), g.options.Packages)
+	rows, err := projectRows(ctx, withoutWorktrees(g.options.Home, recentFolders(recent)), g.options.Packages)
+	if err != nil || !gitAvailable() {
+		return rows, err
+	}
+	slots := make(chan struct{}, projectReadConcurrency)
+	var wg sync.WaitGroup
+	for i := range rows {
+		if !rows[i].Available {
+			continue
+		}
+		wg.Add(1)
+		go func(row *ProjectRow) {
+			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			row.Git = projectGit(ctx, row.Directory)
+		}(&rows[i])
+	}
+	wg.Wait()
+	return rows, nil
 }
 
 func projectRows(ctx context.Context, folders []RecentFolder, contents func(context.Context, string) (ProjectContents, error)) ([]ProjectRow, error) {

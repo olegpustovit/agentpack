@@ -90,7 +90,7 @@ func (g *Gateway) resumeSession(ctx context.Context, id, prompt string) (Session
 	if info.NodeID != local || info.Transport != "acp" || info.AgentSessionID == "" || !info.ArchivedAt.IsZero() {
 		return SessionInfo{}, errNotResumable
 	}
-	if !g.knownDirectory(info.Directory) {
+	if !g.knownDirectory(info.Directory) && !g.knownWorktree(ctx, info.Directory) {
 		return SessionInfo{}, errors.New("choose a recent folder from this node")
 	}
 	// The claim is atomic, so two resumes cannot start two workers for one chat.
