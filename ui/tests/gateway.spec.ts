@@ -175,7 +175,7 @@ test("session hierarchy has icons and keeps collapsed groups through refresh", a
   await expect(row.getByRole("img", { name: "Running" })).toBeVisible()
   await expect(subhead).toBeVisible()
   const indent = async () => {
-    const rowLeft = await row.getByText("Claude", { exact: true }).evaluate((el) => el.getBoundingClientRect().left)
+    const rowLeft = await row.getByText("Terminal · Claude", { exact: true }).evaluate((el) => el.getBoundingClientRect().left)
     const headLeft = await subhead.getByText("my-project", { exact: true }).evaluate((el) => el.getBoundingClientRect().left)
     return rowLeft - headLeft
   }
@@ -468,16 +468,16 @@ test("restarting keeps the same operation ID after ambiguous failures", async ({
     await page.getByRole("alertdialog").getByRole("button", { name: "Restart agent" }).click()
   }
   await restart()
-  await expect(page.getByText(/Couldn't restart Claude on Gateway machine: (Failed to fetch|Load failed)/)).toBeVisible()
+  await expect(page.getByText(/Couldn't restart Terminal · Claude on Gateway machine: (Failed to fetch|Load failed)/)).toBeVisible()
   await restart()
-  await expect(page.getByText("Couldn't restart Claude on Gateway machine: Worker response unavailable")).toBeVisible()
+  await expect(page.getByText("Couldn't restart Terminal · Claude on Gateway machine: Worker response unavailable")).toBeVisible()
   await restart()
   await expect.poll(() => ids.length).toBe(3)
   await expect(page.getByText("Agent restart requested", { exact: true })).toBeVisible()
   expect(ids[1]).toBe(ids[0])
   expect(ids[2]).toBe(ids[0])
   await restart()
-  await expect(page.getByText("Couldn't restart Claude on Gateway machine: Restart rejected")).toBeVisible()
+  await expect(page.getByText("Couldn't restart Terminal · Claude on Gateway machine: Restart rejected")).toBeVisible()
   expect(ids[3]).not.toBe(ids[2])
   await restart()
   await expect.poll(() => ids.length).toBe(5)

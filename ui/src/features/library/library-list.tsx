@@ -9,7 +9,7 @@ import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem, Sourc
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
 import { projectsQuery } from "@/features/sessions/queries"
 import { StatusSlot } from "@/features/status/status-bar"
-import { plural, shortHash } from "@/lib/format"
+import { plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { installedIn } from "./inspect"
 import { agentpacksQuery, packagesQuery } from "./queries"
@@ -51,16 +51,17 @@ const sortItems: { value: LibrarySort; label: string }[] = [
 
 const glyphs: Record<LibraryType, LucideIcon> = { skill: Sparkles, plugin: Puzzle, mcp: Plug, agentpack: Boxes }
 
-// Second line. Only real fields: commit, project count, machines (or launcher and pin for MCP).
+// Second line. Only real fields: project count first, then versions and machines (or launcher and pin for MCP).
+// The commit is in the inspector; a hash in every row pushed the useful part out of view.
 function detailLine(item: LibraryItem, updatable: boolean): string {
   const projects = plural(item.projects.length, "project")
   if (item.type === "mcp") {
     return [item.launcher, item.version ? `pinned ${item.version}` : "unpinned", projects].filter(Boolean).join(" · ")
   }
   if (item.type === "agentpack") {
-    return [item.conflict ? "Conflict" : shortHash(item.commit), plural(item.revisions, "revision"), item.machines.join(", ")].filter(Boolean).join(" · ")
+    return [item.conflict && "Conflict", plural(item.revisions, "revision"), item.machines.join(", ")].filter(Boolean).join(" · ")
   }
-  return [updatable ? "Update available" : item.versions > 1 ? plural(item.versions, "version") : shortHash(item.commit), projects, item.machines.join(", ")].filter(Boolean).join(" · ")
+  return [projects, updatable ? "Update available" : item.versions > 1 && plural(item.versions, "version"), item.machines.join(", ")].filter(Boolean).join(" · ")
 }
 
 function McpLogin({ item }: { item: MCPItem }) {

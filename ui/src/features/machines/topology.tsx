@@ -77,7 +77,8 @@ export function TopologyView() {
       name: peer.name,
       os: peer.os,
       state: stateWord(peer.state),
-      path: peer.state === "reachable" ? edgeOf(peer).label : "—",
+      // Tailscale often reports no path; the column header explains the dash once.
+      path: peer.state === "reachable" && (peer.connection === "direct" || peer.connection === "relay") ? edgeOf(peer).label : "—",
       // A reachable peer that reports no version predates the field, so it needs an update.
       version: peer.state === "reachable" ? peer.version || "Needs update" : "",
       sessions: count(peer.id, peer.sessions),
@@ -134,7 +135,7 @@ export function TopologyView() {
                 <DataGridHeaderCell className="w-44">Machine</DataGridHeaderCell>
                 <DataGridHeaderCell className="w-24">OS</DataGridHeaderCell>
                 <DataGridHeaderCell className="w-32">State</DataGridHeaderCell>
-                <DataGridHeaderCell className="w-28">Path</DataGridHeaderCell>
+                <DataGridHeaderCell className="w-28" title="Direct or relay, as Tailscale reports it. — means Tailscale did not say.">Path</DataGridHeaderCell>
                 <DataGridHeaderCell className="w-28">Version</DataGridHeaderCell>
                 <DataGridHeaderCell className="w-24">Sessions</DataGridHeaderCell>
                 <DataGridHeaderCell>Reason</DataGridHeaderCell>
@@ -144,12 +145,12 @@ export function TopologyView() {
               {rows.map((row) => (
                 <DataGridRow key={row.id}>
                   <DataGridCell><span className="inline-flex items-center gap-(--s2)">{row.name}{row.main && <Badge variant="secondary">Main</Badge>}</span></DataGridCell>
-                  <DataGridCell>{row.os}</DataGridCell>
+                  <DataGridCell>{row.os || "—"}</DataGridCell>
                   <DataGridCell>{row.state}</DataGridCell>
                   <DataGridCell>{row.path}</DataGridCell>
                   <DataGridCell>{row.version || "—"}</DataGridCell>
                   <DataGridCell>{row.sessions ?? "—"}</DataGridCell>
-                  <DataGridCell>{row.reason}</DataGridCell>
+                  <DataGridCell>{row.reason || "—"}</DataGridCell>
                 </DataGridRow>
               ))}
             </tbody>

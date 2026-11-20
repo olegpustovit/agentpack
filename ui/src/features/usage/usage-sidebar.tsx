@@ -41,7 +41,7 @@ export function UsageSidebar() {
         <SourceRow render={<Link to="/usage/limits" search={true} />} selected={Boolean(matchRoute({ to: "/usage/limits" }))}>
           <Gauge aria-hidden className="shrink-0 text-(--fg2) sel:text-(--accent-fg)" />
           <span className="min-w-0 flex-1 truncate">Limits</span>
-          {tightest && <span className={cn(trailing, tightest.left <= 20 && "text-(--warn-word)")}>{`${Math.round(100 - tightest.left)}%`}</span>}
+          {tightest && <span className={cn(trailing, tightest.left <= 20 && "text-(--warn-word)")} title={`${Math.round(tightest.left)}% left`}>{`${Math.round(tightest.left)}%`}</span>}
         </SourceRow>
         {groups.map((group) => {
           const entries = [...totalsBy(rows, metric, group.key)].filter(([id]) => names.of(group.kind, id).toLowerCase().includes(needle)).sort((a, b) => b[1] - a[1])

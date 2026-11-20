@@ -30,8 +30,9 @@ export function rowKey(session: ListedSession): string {
   return `${session.machine}:${session.id}`
 }
 
+// An unnamed terminal says what it is, so it never reads like a chat with that agent.
 export function sessionLabel(session: ListedSession): string {
-  return session.name || session.title || harnessName(session.harness)
+  return session.name || session.title || (session.transport === "acp" ? harnessName(session.harness) : `Terminal · ${harnessName(session.harness)}`)
 }
 
 // When the row last changed: conversation activity, else the launch.

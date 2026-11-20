@@ -87,6 +87,11 @@ describe("subhead targets", () => {
     const [group] = groupSessions([session("a", vm, "vm", "/srv/agentpack/", true)], "project")
     expect(group!.subheads[0]).toMatchObject({ machine: vm, directory: "/srv/agentpack", offline: true })
   })
+
+  it("gives a project on one machine a single subhead, which the list folds into the project row", () => {
+    const groups = groupSessions([session("a", laptop, "laptop", "/work/oracle"), session("b", laptop, "laptop", "/work/oracle")], "project")
+    expect(groups[0]?.subheads.map((head) => [head.label, head.sessions.length])).toEqual([["laptop", 2]])
+  })
 })
 
 describe("matchesSession", () => {
@@ -104,7 +109,8 @@ describe("sessionLabel", () => {
     const base = session("a", laptop, "laptop", "/work/x")
     expect(sessionLabel({ ...base, name: "Mine", title: "Fix it" })).toBe("Mine")
     expect(sessionLabel({ ...base, title: "Fix it" })).toBe("Fix it")
-    expect(sessionLabel(base)).toBe("Claude")
+    expect(sessionLabel({ ...base, transport: "acp" })).toBe("Claude")
+    expect(sessionLabel(base)).toBe("Terminal · Claude")
     expect(matchesSession({ ...base, title: "Fix terminal replay" }, "replay")).toBe(true)
   })
 })

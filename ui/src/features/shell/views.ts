@@ -10,8 +10,9 @@ export const views = [
 
 export const tabs = [...views, { id: "settings", label: "Settings", to: "/settings", icon: Settings }] as const
 
-// Views whose index is a list with a detail pane, and so get the sidebar toggle.
-export const listDetailViews = ["sessions", "library", "machines", "usage"]
+// Views with a source list beside a detail pane, and so get the sidebar toggle. Settings counts,
+// so the view switcher stays put when entering it.
+export const listDetailViews = ["sessions", "library", "machines", "usage", "settings"]
 
 export type LastSession = { machine: string; sessionId: string; search: { q?: string; group?: string } }
 
