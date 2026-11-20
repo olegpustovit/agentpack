@@ -21,6 +21,7 @@ import { api, ApiError, LOCAL } from "@/lib/api"
 import type { LimitSnapshot, ProjectRow, SessionInfo } from "@/lib/api-types"
 import { basename, harnessName, plural, relativeTime, shortAge } from "@/lib/format"
 import { hud } from "@/lib/hud"
+import { WorktreesSection } from "./worktrees-section"
 import { compareAgentpackVersions, machineInfoQuery, machineUpdateQuery, topologyQuery, useAgentpackVersions, useMachines, useReplicatedQueries, type Machine, type MachineAgent } from "./queries"
 
 type Action = { kind: "new" | "install"; project?: ProjectRow }
@@ -269,6 +270,7 @@ function MachineView({ machine }: { machine: Machine }) {
             </DataGrid>
           )}
         </Section>
+        <WorktreesSection machine={machine.id} online={machine.online} />
       </Inspector>
 
       <NewSessionSheet

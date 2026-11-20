@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react"
 import { Autocomplete } from "@base-ui/react/autocomplete"
 import { useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { GitFork, Plus, Search, Settings, Square, Minimize2 } from "lucide-react"
+import { GitFork, GitPullRequest, Plus, Search, Settings, Square, Minimize2 } from "lucide-react"
 import { Kbd } from "@/components/kit/feedback"
 import { menuRow, menuSurface } from "@/components/kit/overlays"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
@@ -10,10 +10,11 @@ import type { ConversationPage } from "@/features/conversation/queries"
 import { advertises, agentCommands, cachedCommands } from "@/features/conversation/composer-hints"
 import { useSessionCommands } from "@/features/sessions/actions"
 import { rowKey, sessionLabel, type ListedSession } from "@/features/sessions/group"
+import { isWorktreePath } from "@/features/sessions/git"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { sessionRules } from "@/features/sessions/rules"
 import { sessionGlyphState } from "@/features/sessions/session-status"
-import { api } from "@/lib/api"
+import { api, ApiError } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { basename, harnessName } from "@/lib/format"
 import { hud } from "@/lib/hud"
@@ -141,6 +142,24 @@ export default function CommandPalette({
               void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: session.machine, sessionId: next.id } })
             },
             (error: unknown) => hud.error(`Couldn't fork ${sessionLabel(session)}: ${error instanceof Error ? error.message : String(error)}`),
+          ),
+      })
+    }
+    // Offered for a session in its own worktree, as the toolbar does; the gateway pushes then opens the PR.
+    if (!session.offline && isWorktreePath(session.directory) && !session.archived_at) {
+      list.push({
+        id: "pull-request",
+        group: "This session",
+        label: "Create pull request",
+        icon: <GitPullRequest aria-hidden />,
+        run: () =>
+          void api<{ url?: string; created: boolean }>(`/api/sessions/${encodeURIComponent(session.id)}/git/pr`, { machine: session.machine, method: "POST", body: {} }).then(
+            (result) => {
+              void queryClient.invalidateQueries({ queryKey: ["m", session.machine, "session-git", session.id] })
+              if (result.url) window.open(result.url, "_blank", "noopener,noreferrer")
+              else hud.success("Branch pushed")
+            },
+            (error: unknown) => hud.error(`Couldn't create a pull request for ${sessionLabel(session)}: ${error instanceof ApiError && error.status === 404 ? "Needs update" : error instanceof Error ? error.message : String(error)}`),
           ),
       })
     }

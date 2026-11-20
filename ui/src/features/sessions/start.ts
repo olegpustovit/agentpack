@@ -7,16 +7,18 @@ import { sessionsQuery } from "./queries"
 import { startSessionBody, type SessionView } from "./rules"
 
 // `prompt` is a new chat's first message, which the chat sends once the agent is up.
-export type StartInput = { machine: string; directory: string; harness: string; mode: string; view: SessionView; agentSessionId?: string; prompt?: string }
+// `worktree` is "new", an existing worktree of directory, or "" for the folder itself (remembered as the
+// choice); a new worktree's branch is named from the prompt.
+export type StartInput = { machine: string; directory: string; harness: string; mode: string; view: SessionView; agentSessionId?: string; prompt?: string; worktree?: string; carry?: boolean }
 
 // Starts a session and opens it. Shared by New session, the folder "+" and the Sessions home task bar.
 export function useStartSession() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (input: StartInput) => api<SessionInfo>("/api/sessions", { machine: input.machine, method: "POST", body: startSessionBody(input) }),
+    mutationFn: (input: StartInput) => api<SessionInfo>("/api/sessions", { machine: input.machine, method: "POST", body: startSessionBody({ ...input, worktreeName: input.prompt?.trim() }) }),
     onSuccess: (info, input) => {
-      saveStartChoices(input.directory, { harness: input.harness, mode: input.mode, view: input.view })
+      saveStartChoices(input.directory, { harness: input.harness, mode: input.mode, view: input.view, ...(input.worktree !== undefined && { workspace: input.worktree ? "new" : "folder" }) })
       // Terminal takes no prompt, as in MCP start_session.
       if (input.view === "chat" && !input.agentSessionId) markNewChat(info.id, input.prompt?.trim())
       void queryClient.invalidateQueries({ queryKey: sessionsQuery(input.machine, false).queryKey })

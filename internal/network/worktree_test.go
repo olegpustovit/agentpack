@@ -256,7 +256,7 @@ func TestSessionGitCommitAndPullRequest(t *testing.T) {
 		t.Fatalf("empty commit: %d %s", w.Code, w.Body)
 	}
 	w = call("GET", "/api/sessions/"+info.ID+"/git", "")
-	if err := json.Unmarshal(w.Body.Bytes(), &state); err != nil || state.Ahead != 1 || state.Merged {
+	if err := json.Unmarshal(w.Body.Bytes(), &state); err != nil || state.Ahead != 1 || state.Merged || state.Added != 1 {
 		t.Fatalf("after commit %s", w.Body)
 	}
 	w = call("POST", "/api/sessions/"+info.ID+"/git/pr", `{}`)

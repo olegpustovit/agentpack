@@ -311,3 +311,29 @@ test("Sessions home answers a waiting chat's permission, then ⌘J and ⌘K jump
   await page.keyboard.press("Enter")
   await expect(page).toHaveURL(/\/sessions\/local\/s2$/)
 })
+
+test("New worktree starts the chat on its own branch and brings uncommitted changes", async ({ page }) => {
+  const project = { directory: "/home/oleg/agentpack", name: "agentpack", folder_id: "f1", available: true, unavailable_reason: "", last_used: twoHoursAgo, launches: [], packages: [], mcp: [], error: "", git: { branch: "main", head: "abc", dirty: 2 } }
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [project] }))
+  await page.route("**/api/worktrees", (route) => route.fulfill({ json: { git: true, worktrees: [] } }))
+  await page.goto("/sessions?new=1")
+  // s1 already runs in this folder, so a new worktree is the default.
+  await expect(page.getByText("1 other agent is working in agentpack.", { exact: false })).toBeVisible()
+  await page.getByRole("textbox", { name: "First message" }).fill("Fix the cache")
+  await expect(page.getByText("Branch ap/fix-the-cache from main.", { exact: false })).toBeVisible()
+  await expect(page.getByRole("checkbox", { name: /Bring 2 uncommitted changes/ })).toBeChecked()
+  const posted = page.waitForRequest((request) => request.method() === "POST" && /\/api\/sessions$/.test(request.url()))
+  await page.getByRole("button", { name: "Start session" }).click()
+  expect((await posted).postDataJSON()).toMatchObject({ directory: "/home/oleg/agentpack", worktree: "new", worktree_name: "Fix the cache", carry: true })
+})
+
+test("New worktree reads Needs update on a gateway without worktrees", async ({ page }) => {
+  const project = { directory: "/home/oleg/agentpack", name: "agentpack", folder_id: "f1", available: true, unavailable_reason: "", last_used: twoHoursAgo, launches: [], packages: [], mcp: [], error: "" }
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [project] }))
+  await page.route("**/api/worktrees", (route) => route.fulfill({ status: 404, json: { error: "not found" } }))
+  await page.goto("/sessions?new=1")
+  await expect(page.getByText("New worktree · Needs update")).toBeVisible()
+  const posted = page.waitForRequest((request) => request.method() === "POST" && /\/api\/sessions$/.test(request.url()))
+  await page.getByRole("button", { name: "Start session" }).click()
+  expect((await posted).postDataJSON()).not.toHaveProperty("worktree")
+})

@@ -19,6 +19,7 @@ import { projectsQuery, useListedSessions } from "./queries"
 import { agentIds, canStart, defaultAgent, mergeProjects, placeLabel } from "./rules"
 import { isUnread, loadSeen, sessionGlyphState } from "./session-status"
 import { useStartSession } from "./start"
+import { projectDirectory, sessionGitQuery } from "./git"
 
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
 
@@ -50,9 +51,9 @@ export function SessionsHome() {
         )}
         {ready.length > 0 && (
           <Section title={`Ready for review · ${ready.length}`}>
-            {/* shortcut: no +/− per session; comes with the git work (M7). */}
             {ready.map((session) => (
               <HomeRow key={rowKey(session)} session={session} now={now} unread>
+                <DiffStat session={session} />
                 <Link to="/sessions/$machine/$sessionId" params={{ machine: session.machine, sessionId: session.id }} search={true} className={buttonVariants({ size: "sm" })}>
                   Review
                 </Link>
@@ -92,10 +93,22 @@ function HomeRow({ session, now, unread, children }: { session: ListedSession; n
         {sessionLabel(session)}
       </Link>
       <span className="shrink-0 text-(length:--fs-sm) text-(--fg2)">
-        {[basename(session.directory), session.machineName, when && `active ${shortAge(new Date(when), now)}`].filter(Boolean).join(" · ")}
+        {[basename(projectDirectory(session)), session.machineName, when && `active ${shortAge(new Date(when), now)}`].filter(Boolean).join(" · ")}
       </span>
       {children}
     </li>
+  )
+}
+
+// Lines changed since the session's branch left its base, read on the machine running it. A peer
+// without the route (404) or a folder outside a repository shows nothing.
+function DiffStat({ session }: { session: ListedSession }) {
+  const { data } = useQuery({ ...sessionGitQuery(session.machine, session.id, `${session.conversation_state ?? ""}:${session.ended_at ?? ""}`), enabled: !session.offline })
+  if (!data?.available || data.added + data.deleted === 0) return null
+  return (
+    <span className="shrink-0 text-(length:--fs-xs) tabular-nums" aria-label={`${data.added} lines added, ${data.deleted} removed`}>
+      <span className="text-(--ok-word)">+{data.added}</span> <span className="text-(--danger-word)">−{data.deleted}</span>
+    </span>
   )
 }
 

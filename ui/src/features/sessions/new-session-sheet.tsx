@@ -6,14 +6,15 @@ import { Kbd } from "@/components/kit/feedback"
 import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
 import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
-import { useMachineQueries, useMachines } from "@/features/machines/queries"
+import { useMachineQueries, useMachines, useReplicatedQueries } from "@/features/machines/queries"
 import { api, ApiError } from "@/lib/api"
 import type { AgentSession, ProjectRow } from "@/lib/api-types"
 import { basename, harnessName, plural, relativeTime, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { projectsQuery } from "./queries"
 import { agentIds, canStart, defaultAgent, mergeProjects, modeChoices, modeEffect, placeKey, placeLabel, placeProblem, type MergedProject, type SessionView } from "./rules"
 import { useStartSession } from "./start"
+import { branchSlug, projectDirectory, worktreeFolderInProject, worktreesQuery } from "./git"
+import { projectsQuery, sessionsQuery } from "./queries"
 
 // Harness ids the gateway starts.
 const DAY = 24 * 60 * 60 * 1000
@@ -70,6 +71,8 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   const [resumeId, setResumeId] = useState("")
   const [prompt, setPrompt] = useState("")
   const [query, setQuery] = useState("")
+  const [chosenWorkspace, setWorkspace] = useState<string | null>(null)
+  const [carry, setCarry] = useState(true)
 
   // A folder opened from the sidebar is offered even before (or without) the machine listing it.
   const rows: Record<string, ProjectRow[] | undefined> = {}
@@ -112,10 +115,26 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
     retry: false,
   })
 
+  // Workspace: the folder itself, a new worktree, or a live worktree of this project (its path).
+  const worktrees = useQuery({ ...worktreesQuery(place?.machine ?? ""), enabled: Boolean(place?.online && row?.available) })
+  const worktreesNeedUpdate = worktrees.error instanceof ApiError && worktrees.error.status === 404
+  const machineSessions = useReplicatedQueries(sessionsQuery).byMachine[place?.machine ?? ""]?.data ?? []
+  const folder = row?.directory.replace(/[\\/]+$/, "")
+  const othersHere = machineSessions.filter((item) => item.state?.running && !item.ended_at && projectDirectory(item).replace(/[\\/]+$/, "") === folder)
+  const projectWorktrees = row ? (worktrees.data?.worktrees ?? []).filter((item) => !item.orphaned && item.branch && worktreeFolderInProject(item, row.directory)) : []
+  const canWorktree = Boolean(row?.git) && worktrees.data?.git === true && !resumeId
+  const showWorkspace = Boolean(row?.git) || worktreesNeedUpdate
+  const workspace = !canWorktree ? "folder" : chosenWorkspace ?? remembered.workspace ?? (othersHere.length > 0 ? "new" : "folder")
+  const dirty = row?.git?.dirty ?? 0
+  const continued = projectWorktrees.find((item) => item.path === workspace)
+
   const start = useStartSession()
+  // A worktree that could not be made is reported under Workspace; nothing started.
+  const worktreeError = start.error instanceof ApiError && start.error.status === 422 ? start.error.message : undefined
 
   function chooseProject(next: MergedProject) {
     setProjectKey(next.key)
+    setWorkspace(null)
     setChosenPlace(null)
     setHarness(null)
     setMode(null)
@@ -125,6 +144,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   // The agent stays as chosen; mode and conversation belong to the folder on that machine.
   function choosePlace(next: string) {
     setChosenPlace(next)
+    setWorkspace(null)
     setMode(null)
     setResumeId("")
   }
@@ -139,7 +159,17 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   function submit(event: FormEvent) {
     event.preventDefault()
     if (place && row && !blocked) {
-      start.mutate({ machine: place.machine, directory: row.directory, harness: harnessId, mode: modeValue, view, agentSessionId: resumeId || undefined, prompt })
+      start.mutate({
+        machine: place.machine,
+        directory: row.directory,
+        harness: harnessId,
+        mode: modeValue,
+        view,
+        agentSessionId: resumeId || undefined,
+        prompt,
+        worktree: !canWorktree ? undefined : workspace === "folder" ? "" : workspace,
+        carry: workspace === "new" && dirty > 0 && carry,
+      })
     }
   }
 
@@ -298,6 +328,49 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
                 </Choice>
               </div>
 
+              {showWorkspace && (
+                <Choice label="Workspace">
+                  <SegmentedControl
+                    value={[workspace === "folder" ? "folder" : "new"]}
+                    onValueChange={(value) => (value[0] === "folder" || value[0] === "new") && setWorkspace(value[0])}
+                    aria-label="Workspace"
+                    className="w-full"
+                  >
+                    <SegmentedControlItem value="folder" className="flex-1">
+                      This folder
+                    </SegmentedControlItem>
+                    <SegmentedControlItem value="new" className="flex-1" disabled={!canWorktree} title={worktreesNeedUpdate ? `Update Agentpack on ${machineName} to use worktrees` : resumeId ? "A resumed conversation keeps its folder" : undefined}>
+                      {worktreesNeedUpdate ? "New worktree · Needs update" : "New worktree"}
+                    </SegmentedControlItem>
+                  </SegmentedControl>
+                  {canWorktree && projectWorktrees.length > 0 && (
+                    <div role="group" aria-label="Existing worktrees" className="flex flex-wrap gap-(--s2)">
+                      {projectWorktrees.map((item) => (
+                        <Button key={item.path} type="button" size="sm" variant={item.path === workspace ? "primary" : "default"} aria-pressed={item.path === workspace} title={item.path} onClick={() => setWorkspace(item.path)}>
+                          Continue in {item.branch}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-(length:--fs-sm) text-(--fg2)">
+                    {workspace === "new"
+                      ? `Branch ap/${branchSlug(prompt)} from ${row.git?.branch || "the current commit"}.`
+                      : continued
+                        ? `Shares ${continued.branch} with ${plural(continued.sessions.length, "other session")}.`
+                        : "Runs in the folder itself."}
+                    {othersHere.length > 0 && ` ${plural(othersHere.length, "other agent")} ${othersHere.length === 1 ? "is" : "are"} working in ${project.name}.`}
+                  </p>
+                  {workspace === "new" && dirty > 0 && (
+                    <label className="flex items-center gap-(--s3) text-(length:--fs-sm)">
+                      <input type="checkbox" checked={carry} onChange={(event) => setCarry(event.currentTarget.checked)} className="accent-(--accent)" />
+                      Bring {plural(dirty, "uncommitted change")}
+                      <span className="text-(--fg3)">· untracked files stay behind</span>
+                    </label>
+                  )}
+                  {worktreeError && <FieldError>{worktreeError}</FieldError>}
+                </Choice>
+              )}
+
               {contentsLoading ? (
                 <p className="text-(--fg2)">Loading what this folder loads on {machineName}…</p>
               ) : (
@@ -329,7 +402,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
 
       <footer className="flex min-w-0 flex-col gap-(--s3) border-t-[0.5px] border-(--sep) bg-(--sidebar) px-(--s6) py-(--s4)">
         {place && hint && <p className="text-(length:--fs-sm) text-(--fg2)">{hint}</p>}
-        {start.error && <FieldError>{start.error.message}</FieldError>}
+        {start.error && !worktreeError && <FieldError>{start.error.message}</FieldError>}
         <div className="flex min-w-0 items-center gap-(--s4) max-[760px]:flex-col max-[760px]:items-stretch">
           <p className="min-w-0 flex-1 truncate text-(length:--fs-sm) text-(--fg2)" aria-live="polite">
             {project && place && (
@@ -337,6 +410,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
                 <b className="font-semibold text-(--fg)">{harnessName(harnessId)}</b> · {modeValue} · {view === "chat" ? "Chat" : "Terminal"} in{" "}
                 <b className="font-semibold text-(--fg)">{project.name}</b> on <b className="font-semibold text-(--fg)">{machineName}</b>
                 {resumeId && " · resumes a conversation"}
+                {workspace === "new" ? " · new worktree" : continued ? ` · in ${continued.branch}` : ""}
                 {view === "chat" && !resumeId && prompt.trim() && " · sends the first message"}
               </>
             )}

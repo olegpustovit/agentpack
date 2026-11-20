@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -270,6 +271,8 @@ type sessionGit struct {
 	Path     string       `json:"path,omitempty"`
 	Main     string       `json:"main,omitempty"`
 	Merged   bool         `json:"merged"`
+	Added    int          `json:"added"`
+	Deleted  int          `json:"deleted"`
 	GH       bool         `json:"gh"`
 	PR       *pullRequest `json:"pr,omitempty"`
 }
@@ -301,15 +304,25 @@ func (g *Gateway) readSessionGit(ctx context.Context, info SessionInfo) sessionG
 		return result
 	}
 	result.Available, result.worktreeStatus = true, status
+	// Lines changed: a worktree against where it left the main folder, a shared folder uncommitted only.
+	since := "HEAD"
 	if main, root, err := worktreeMain(ctx, g.options.Home, info.Directory); err == nil {
 		result.Worktree, result.Path, result.Main = true, root, main
 		result.Base, _ = gitLine(ctx, main, "symbolic-ref", "--short", "-q", "HEAD")
 		if mainHead, err := gitLine(ctx, main, "rev-parse", "HEAD"); err == nil && status.Head != "" {
 			result.Ahead, result.Behind, _ = aheadBehind(ctx, root, mainHead, "HEAD")
 			result.Merged = merged(ctx, root, mainHead, status.Head)
+			if fork, err := gitLine(ctx, root, "merge-base", mainHead, "HEAD"); err == nil {
+				since = fork
+			}
 		}
 	} else if status.Upstream != "" {
 		result.Base = status.Upstream
+	}
+	if status.Head != "" {
+		if stat, err := gitLine(ctx, info.Directory, "diff", "--shortstat", since); err == nil {
+			result.Added, result.Deleted = shortstat(stat)
+		}
 	}
 	if _, err := exec.LookPath("gh"); err == nil {
 		result.GH = true
@@ -318,6 +331,21 @@ func (g *Gateway) readSessionGit(ctx context.Context, info SessionInfo) sessionG
 		}
 	}
 	return result
+}
+
+var shortstatNumber = regexp.MustCompile(`(\d+) (insertion|deletion)`)
+
+// shortstat reads "3 files changed, 10 insertions(+), 2 deletions(-)".
+func shortstat(line string) (added, deleted int) {
+	for _, match := range shortstatNumber.FindAllStringSubmatch(line, -1) {
+		n, _ := strconv.Atoi(match[1])
+		if match[2] == "insertion" {
+			added = n
+		} else {
+			deleted = n
+		}
+	}
+	return added, deleted
 }
 
 func (g *Gateway) serveSessionGit(w http.ResponseWriter, r *http.Request) {

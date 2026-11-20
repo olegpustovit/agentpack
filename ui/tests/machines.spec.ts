@@ -107,6 +107,26 @@ test("machine detail shows its agents, system, projects and updates an outdated 
   await expect(page.getByRole("button", { name: "Updating…" })).toBeDisabled()
 })
 
+test("the machine lists its worktrees and removes one after naming what it discards", async ({ page }) => {
+  const worktree = (branch: string, patch: object) => ({ path: `/h/worktrees/0123456789abcdef/${branch}`, main: "/srv/oracle", branch: `ap/${branch}`, head: "abc", dirty: 0, untracked: 0, unpushed: 0, merged: false, orphaned: false, sessions: [], running: 0, size: 5 * 1024 ** 2, ...patch })
+  const removed: unknown[] = []
+  await page.route(/\/api\/worktrees(\?.*)?$/, (route) => route.fulfill({ json: { git: true, worktrees: [worktree("cache", { dirty: 2, untracked: 1, unpushed: 2 }), worktree("done", { merged: true })] } }))
+  await page.route(/\/api\/worktrees\/remove(\?.*)?$/, (route) => {
+    removed.push({ url: route.request().url(), body: route.request().postDataJSON() })
+    return route.fulfill({ json: { removed: true } })
+  })
+  await page.goto("/machines/n2")
+
+  const rows = page.getByRole("table", { name: "Worktrees" }).locator("tbody tr")
+  await expect(rows.nth(0)).toContainText("3 uncommitted files · 2 commits not pushed")
+  await expect(rows.nth(1)).toContainText("Merged")
+  await rows.nth(0).getByRole("button", { name: "Remove…" }).click()
+  const confirm = page.getByRole("alertdialog")
+  await expect(confirm).toContainText("Discard 3 uncommitted files?")
+  await confirm.getByRole("button", { name: "Discard and remove" }).click()
+  await expect.poll(() => removed).toEqual([{ url: expect.stringContaining("node=n2"), body: { path: "/h/worktrees/0123456789abcdef/cache", discard: true } }])
+})
+
 test("Forget on a peer asks first, then deletes that folder on that peer", async ({ page }) => {
   await page.goto("/machines/n2")
 

@@ -22,6 +22,8 @@ export type SessionGit = {
   worktree: boolean
   path?: string
   merged: boolean
+  added: number
+  deleted: number
   gh: boolean
   pr?: PullRequest
 }
@@ -45,6 +47,8 @@ export function parseSessionGit(raw: unknown): SessionGit {
     worktree: optional(body.worktree, "worktree", boolean) ?? false,
     path: optional(body.path, "path", string),
     merged: optional(body.merged, "merged", boolean) ?? false,
+    added: count("added"),
+    deleted: count("deleted"),
     gh: optional(body.gh, "gh", boolean) ?? false,
     pr:
       pr && checks
@@ -156,4 +160,12 @@ export function worktreeState(row: WorktreeRow): string {
   if (row.unpushed > 0 && !row.merged) parts.push(`${plural(row.unpushed, "commit")} not pushed`)
   if (parts.length === 0) parts.push(row.merged ? "Merged" : "Clean")
   return parts.join(" · ")
+}
+
+// The branch name the gateway makes from a first message (worktreeSlug in worktree.go).
+export function branchSlug(prompt: string): string {
+  const words = prompt.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6)
+  let slug = words.join("-").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+  if (slug.length > 40) slug = slug.slice(0, 40).replace(/-+$/, "")
+  return slug || "session-…"
 }
