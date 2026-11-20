@@ -1,5 +1,6 @@
-import type { GoalState } from "@/lib/api-types"
-import type { CompactionPayload, LogEntry, QueuedPrompt, Subagent, ThreadItem, ThreadState, UserMessagePayload } from "./model"
+import type { GoalState, SessionInfo } from "@/lib/api-types"
+import { harnessName } from "@/lib/format"
+import type { CompactionPayload, LogEntry, QueuedPrompt, Subagent, ThreadItem, ThreadState, ToolPayload, UserMessagePayload } from "./model"
 
 // Entries from a subagent carry its session id (or "tool:<id>" for agents that only tag the parent tool call).
 function subagentOf(payload: unknown): string | undefined {
@@ -439,4 +440,41 @@ function patchCompaction(state: ThreadState, compactionId: string, patch: Partia
     const item = items[i]!
     if (item.kind === "compaction" && (item.data as CompactionPayload).compactionId === compactionId) items[i] = { ...item, data: { ...(item.data as object), ...patch } }
   }
+}
+
+// Helper chats this chat's agent started with agentpack tools become cards on the tool call that
+// started them: the call whose result names the helper, else (agents such as Antigravity send no
+// MCP result) the first unclaimed helper started after a run_helper, start_session or fork_session
+// call. Open and Stop act on the helper chat itself, whose id follows "helper:".
+export function helperSubagents(items: ThreadItem[], helpers: SessionInfo[]): Record<string, Subagent> {
+  const out: Record<string, Subagent> = {}
+  if (helpers.length === 0) return out
+  const started = (session: SessionInfo) => (session.started_at ? Date.parse(session.started_at) : 0)
+  const byStart = [...helpers].sort((a, b) => started(a) - started(b))
+  for (const item of items) {
+    const tool = item.kind === "tool" ? (item.data as ToolPayload) : undefined
+    if (!tool?.toolCallId) continue
+    const free = byStart.filter((session) => !out[`helper:${session.id}`])
+    const result = JSON.stringify([tool.rawOutput, tool.content, tool.output])
+    const helper =
+      free.find((session) => result.includes(session.id)) ??
+      // The worker and the helper share a clock; a second of slack covers the log's own timestamping.
+      (/run_helper|start_session|fork_session/.test(tool.title ?? "") ? free.find((session) => started(session) >= (item.ts ?? 0) - 1000) : undefined)
+    if (!helper) continue
+    const running = !helper.ended_at && helper.state.running && helper.conversation_state !== "idle"
+    const needsYou = running && helper.conversation_state === "needs_you"
+    out[`helper:${helper.id}`] = {
+      id: `helper:${helper.id}`,
+      title: helper.name || helper.title || "Helper chat",
+      description: `${harnessName(helper.harness)} helper chat${needsYou ? " · needs you" : ""}`,
+      state: running ? "working" : "idle",
+      cancellable: running,
+      toolCallId: tool.toolCallId,
+      startedTs: started(helper) || undefined,
+      endTs: running ? undefined : Date.parse(helper.ended_at ?? helper.last_event_at ?? "") || undefined,
+      thread: { items: [], needs_you: needsYou, working: running },
+      tools: 0,
+    }
+  }
+  return out
 }

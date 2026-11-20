@@ -481,3 +481,24 @@ func TestChatToolsStdioBridgeReachesTheGateway(t *testing.T) {
 		t.Fatal("a chat without a token file got a bridge")
 	}
 }
+
+func TestHelperReplyEndsAtTheFirstTurn(t *testing.T) {
+	entries := []acp.LogEntry{
+		{Seq: 1, Kind: "prompt", Payload: json.RawMessage(`{"text":{"text":"Find the bug"}}`)},
+		{Seq: 2, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"Looking"}}`)},
+		{Seq: 3, Kind: "tool_call", Payload: json.RawMessage(`{"toolCallId":"t1","title":"grep"}`)},
+		{Seq: 4, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"_subagent":"c1","text":{"text":"child"}}`)},
+		{Seq: 5, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"It is "}}`)},
+		{Seq: 6, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"line 4."}}`)},
+	}
+	if done, reply := helperReply(entries); done || reply != "Looking\n\nIt is line 4." {
+		t.Fatalf("running: done=%v reply=%q", done, reply)
+	}
+	entries = append(entries,
+		acp.LogEntry{Seq: 7, Kind: "turn_end", Payload: json.RawMessage(`{"stopReason":"end_turn"}`)},
+		acp.LogEntry{Seq: 8, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"next turn"}}`)},
+	)
+	if done, reply := helperReply(entries); !done || reply != "Looking\n\nIt is line 4." {
+		t.Fatalf("ended: done=%v reply=%q", done, reply)
+	}
+}

@@ -334,6 +334,14 @@ test.describe("conversation pane", () => {
     const message = page.getByRole("textbox", { name: "Message" })
     await message.fill("/ter")
     await expect(page.locator('[data-slot="composer-hints"]')).toContainText("/terminal")
+    // A command is marked behind the textarea, aligned with the text it covers.
+    await message.fill("/terminal now")
+    const mark = page.locator("mark[data-command]")
+    await expect(mark).toHaveText("/terminal")
+    expect(await style(mark, "background-color")).not.toBe("rgba(0, 0, 0, 0)")
+    expect(await style(mark, "color")).toBe("rgba(0, 0, 0, 0)")
+    const [markBox, inputBox] = [await mark.boundingBox(), await message.boundingBox()]
+    expect(Math.abs(markBox!.y - inputBox!.y - Number.parseFloat(await style(message, "padding-top")))).toBeLessThan(4)
     await message.fill("")
     await page.getByRole("button", { name: "Mention a file" }).click()
     await expect(page.locator('[data-slot="composer-hints"]')).toContainText("terminal_client.go")

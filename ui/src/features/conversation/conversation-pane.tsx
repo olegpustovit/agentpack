@@ -22,14 +22,14 @@ import { ompSettingsQuery, quickRoles } from "@/features/settings/omp-model"
 import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, olderConversationPage, type ConversationPage } from "./queries"
 import { configRole, dangerousMode, parseConfigOptions } from "./config-options"
 import type { LogEntry, ThreadItem } from "./model"
-import { reduceThread } from "./reducer"
+import { helperSubagents, reduceThread } from "./reducer"
 import { latestUserPrompt, quoteMessage, ThreadView, userImageSrc } from "./thread-view"
 import { GoalPill, parseGoalCommand, useGoalActions } from "./goal-sheet"
 import { QueueChips } from "./queue-chips"
 import { subagentRunning } from "./subagent-card"
 import { ConversationInspector } from "./conversation-inspector"
 import { GitInspectorSections, GitToolbarActions, branchLine, useSessionGit } from "./session-git"
-import { advertises, agentCommands, applyHint, cachedCommands, filterAtHints, filterSlashHints, moveHint, rememberCommands, type ComposerHint } from "./composer-hints"
+import { advertises, agentCommands, applyHint, cachedCommands, commandSpans, filterAtHints, filterSlashHints, moveHint, rememberCommands, slashQuery, type ComposerHint } from "./composer-hints"
 import { ComposerHintsMenu } from "./composer-hints-menu"
 import { listDiffChanges } from "./diff-summary"
 import { loadAttachments, revokePreview, saveAttachments, uploadConversationBlob, type PendingAttachment } from "./upload-blob"
@@ -91,8 +91,11 @@ export default function ConversationPane({
   onSwitchTerminal,
   readOnly: unavailable = false,
   subagent: subagentId,
+  helpers = [],
 }: {
   machine: string
+  /** Helper chats this chat's agent started. */
+  helpers?: SessionInfo[]
   sessionId: string
   /** A subagent open in the main view. */
   subagent?: string
@@ -108,6 +111,9 @@ export default function ConversationPane({
   const [draft, setDraft] = useState(() => loadDraft(draftKey(machine, sessionId)) || firstMessage(sessionId))
   const [hintIndex, setHintIndex] = useState(0)
   const [hintsClosed, setHintsClosed] = useState(false)
+  // The caret, valid only for the draft it was read from; a draft set by code puts it at the end.
+  const [caret, setCaret] = useState<{ draft: string; at: number }>()
+  const backdropRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
   const [attachments, setAttachmentsState] = useState<UploadedAttachment[]>(() =>
     loadAttachments(`${draftKey(machine, sessionId)}:attachments`, (sha) => userImageSrc(machine, sessionId, sha)),
@@ -199,7 +205,10 @@ export default function ConversationPane({
   const [animateAfter, setAnimateAfter] = useState<number>()
   if (animateAfter === undefined && tail) setAnimateAfter(tail.entries.at(-1)?.seq ?? 0)
   const closeSubagent = () => void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, sub: undefined }) })
-  const openSubagent = (id: string) => void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, sub: id }) })
+  const openSubagent = (id: string) =>
+    id.startsWith("helper:")
+      ? void navigate({ to: "/sessions/$machine/$sessionId", params: { machine, sessionId: id.slice("helper:".length) } })
+      : void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, sub: id }) })
   useEffect(() => {
     if (!subagentId) return
     // Esc returns to the parent, unless a field or dialog is using it.
@@ -358,7 +367,9 @@ export default function ConversationPane({
   })
   const stopSubagent = useMutation({
     mutationFn: (id: string) =>
-      api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/cancel`, { machine, method: "POST", body: { subagent: id } }),
+      id.startsWith("helper:")
+        ? api(`/api/sessions/${encodeURIComponent(id.slice("helper:".length))}/conversation/cancel`, { machine, method: "POST" })
+        : api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/cancel`, { machine, method: "POST", body: { subagent: id } }),
     onError: (error, id) =>
       hud.error(conversationErrorMessage(machine, "stop the subagent", error), conversationNeedsUpdate(error) ? undefined : () => stopSubagent.mutate(id)),
   })
@@ -514,8 +525,11 @@ export default function ConversationPane({
     if (advertised && info?.harness) rememberCommands(info.harness, advertised)
   }, [advertised, info?.harness])
   const diffPaths = listDiffChanges(thread.items).map((change) => change.path)
-  const slashHints = filterSlashHints(draft, commands).filter((hint) => hint.value !== "/fork" || (canFork && !fork.isPending))
-  const atHints = filterAtHints(draft, diffPaths)
+  const caretAt = caret?.draft === draft ? caret.at : draft.length
+  const beforeCaret = draft.slice(0, caretAt)
+  const slashHints = filterSlashHints(beforeCaret, commands).filter((hint) => hint.value !== "/fork" || (canFork && !fork.isPending))
+  const atHints = filterAtHints(beforeCaret, diffPaths)
+  const spans = draft.includes("/") ? commandSpans(draft, commands) : []
   const composerHints = hintsClosed ? [] : slashHints.length > 0 ? slashHints : atHints
   const activeHint = Math.min(hintIndex, Math.max(composerHints.length - 1, 0))
   const hintTitle = slashHints.length > 0 ? "Commands" : "Files in this thread"
@@ -535,7 +549,12 @@ export default function ConversationPane({
       setDraft("")
       return
     }
-    setDraft(applyHint(draft, hint))
+    const head = applyHint(beforeCaret, hint)
+    const tail = draft.slice(caretAt)
+    const next = head + (tail.startsWith(" ") ? tail.slice(1) : tail)
+    setDraft(next)
+    setCaret({ draft: next, at: head.length })
+    requestAnimationFrame(() => composerInputRef.current?.setSelectionRange(head.length, head.length))
   }
   function quoteReply(text: string) {
     setDraft((current) => `${current}${current ? "\n\n" : ""}${quoteMessage(text)}\n`)
@@ -654,7 +673,7 @@ export default function ConversationPane({
                   onQuote={readOnly || subagent ? undefined : quoteReply}
                   onFork={!subagent && canFork && !fork.isPending ? () => fork.mutate() : undefined}
                   onRetry={!subagent && canRetry ? retryLastPrompt : undefined}
-                  subagents={thread.subagents}
+                  subagents={subagent ? thread.subagents : { ...thread.subagents, ...helperSubagents(thread.items, helpers) }}
                   lastTurn={thread.last_turn}
                   turnStarted={thread.turn_started ?? subagent?.startedTs}
                   animateAfter={animateAfter}
@@ -712,7 +731,14 @@ export default function ConversationPane({
                     </Button>
                   </div>
                 ))}
-                <ComposerHintsMenu id="composer-hints-list" activeIndex={activeHint} title={hintTitle} hints={composerHints} onPick={pickHint} query={slashHints.length > 0 ? draft.slice(draft.lastIndexOf("\n") + 2) : ""} agentName={agentName} />
+                <ComposerHintsMenu id="composer-hints-list" activeIndex={activeHint} title={hintTitle} hints={composerHints} onPick={pickHint} query={slashQuery(beforeCaret)?.query ?? ""} agentName={agentName} />
+                <div className="relative">
+                {spans.some((span) => span.command) && (
+                  // Marks commands behind the transparent textarea, which cannot style its own text.
+                  <div ref={backdropRef} aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden px-(--s3) py-(--s2) text-(length:--fs) wrap-break-word whitespace-pre-wrap text-transparent">
+                    {spans.map((span, index) => span.command ? <mark key={index} data-command className="rounded-[3px] bg-(--accent-soft) text-transparent">{span.text}</mark> : span.text)}{" "}
+                  </div>
+                )}
                 <textarea
                   ref={composerInputRef}
                   id="conversation-message"
@@ -723,8 +749,11 @@ export default function ConversationPane({
                   disabled={needsUpdate}
                   aria-controls={composerHints.length > 0 ? "composer-hints-list" : undefined}
                   aria-activedescendant={composerHints.length > 0 ? `composer-hints-list-${activeHint}` : undefined}
+                  onScroll={(event) => { if (backdropRef.current) backdropRef.current.scrollTop = event.currentTarget.scrollTop }}
+                  onSelect={(event) => setCaret({ draft: event.currentTarget.value, at: event.currentTarget.selectionStart })}
                   onChange={(event) => {
                     setDraft(event.currentTarget.value)
+                    setCaret({ draft: event.currentTarget.value, at: event.currentTarget.selectionStart })
                     setHintIndex(0)
                     setHintsClosed(false)
                   }}
@@ -765,8 +794,9 @@ export default function ConversationPane({
                       submit(event.metaKey || event.ctrlKey)
                     }
                   }}
-                  className="min-h-(--ctl-h) max-h-45 w-full resize-none border-0 bg-transparent px-(--s3) py-(--s2) text-(length:--fs) text-(--fg) outline-none placeholder:text-(--fg3)"
+                  className="relative block min-h-(--ctl-h) max-h-45 w-full resize-none border-0 bg-transparent px-(--s3) py-(--s2) text-(length:--fs) text-(--fg) outline-none placeholder:text-(--fg3)"
                 />
+                </div>
               </div>
               <div className="flex flex-wrap items-center gap-(--s1)">
                 <input
