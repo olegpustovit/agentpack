@@ -1,7 +1,9 @@
 import { availableParallelism } from "node:os"
 import { defineConfig, devices } from "@playwright/test"
 
-const origin = "http://127.0.0.1:4173"
+// Parallel checkouts each pick a port, since an existing preview server is reused.
+const port = process.env.E2E_PORT ?? "4173"
+const origin = `http://127.0.0.1:${port}`
 // Screenshots for design review, not assertions: `bun run capture`.
 const captures = "review-captures.spec.ts"
 
@@ -33,7 +35,7 @@ export default defineConfig({
     { name: "webkit", testMatch: ["terminal.spec.ts", "visual.spec.ts"], grep: /kit styling|drag|click with app mouse|wheel/, use: { ...devices["Desktop Safari"] } },
   ],
   webServer: {
-    command: "vite preview --host 127.0.0.1 --port 4173 --strictPort",
+    command: `vite preview --host 127.0.0.1 --port ${port} --strictPort`,
     url: origin,
     // Reuse a preview server that is already up, so parallel runs share one dist and CI=true does not block them.
     reuseExistingServer: true,
