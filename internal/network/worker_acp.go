@@ -225,19 +225,35 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		conn            *sdkacp.ClientSideConnection
 		sessID          sdkacp.SessionId
 		imageCapability bool
+		handoff         string
 	)
+	// A fresh agent on a chat with history took it over from another agent: it gets that history once.
+	if launch.Session.AgentSessionID == "" && launch.ForkSessionID == "" {
+		handoff = handoffContext(log.Snapshot())
+	}
 	broker := acp.NewBroker(
 		func(ctx context.Context, input acp.PromptInput) (result error) {
 			defer func() { result = errors.Join(result, log.Flush()) }()
 			connMu.Lock()
-			c, sid, images := conn, sessID, imageCapability
+			c, sid, images, earlier := conn, sessID, imageCapability, handoff
+			handoff = ""
 			connMu.Unlock()
+			defer func() {
+				if result != nil && earlier != "" {
+					connMu.Lock()
+					handoff = earlier
+					connMu.Unlock()
+				}
+			}()
 			if c == nil {
 				return errors.New("acp session not ready")
 			}
 			blocks, loggedInput, err := promptContentBlocks(sessionDir, input, images)
 			if err != nil {
 				return err
+			}
+			if earlier != "" {
+				blocks = append([]sdkacp.ContentBlock{sdkacp.TextBlock(earlier)}, blocks...)
 			}
 			log.Append("prompt", time.Now().UnixMilli(), promptLogPayload(loggedInput))
 			if err := log.Flush(); err != nil {
@@ -384,6 +400,11 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	conv.SetConfigOptions(setup.ConfigOptions)
 	conv.SetModes(setup.Modes)
 	conv.SetAgentCapabilities(setup.AgentCapabilities)
+	if key, _ := conv.permissionMode(); acpLaunch.NoPermissionModes && key == "" {
+		conv.mu.Lock()
+		conv.clientMode = "default"
+		conv.mu.Unlock()
+	}
 	return conv, cleanup, nil
 }
 

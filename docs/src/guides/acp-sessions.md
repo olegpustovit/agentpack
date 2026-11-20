@@ -60,6 +60,12 @@ Session stop/restart are distinct from turn cancel: stop terminates the ACP adap
 The wire log stores raw ACP `session/update` kinds plus agentpack kinds such as `permission_request` and `turn_end`. Shared fixtures live in `testdata/acp/full.jsonl`; reducers in Go (`internal/acp`) and the gateway UI (`ui/src/features/conversation/reducer.ts`) must stay aligned. Optional local check: `./scripts/acp-conformance/run`.
 The script does not launch agents. It reports missing `testdata/acp/<harness>.jsonl` transcripts; recording them requires owner-authorized live prompts and terminal captures and may incur provider usage.
 
+## Switching agents and permissions
+
+The agent button in the composer continues a chat with another agent (`POST /api/sessions/{id}/harness`). The old agent stops; the chat keeps its ID and transcript, and the new agent starts a fresh session whose first prompt carries the newest 96 KiB of that transcript (messages and tool titles, no thoughts or subagent output). Enter on an empty composer sends the first queued message now.
+
+The permission mode last chosen for an agent is stored network-wide in `mesh_settings` (`permission_mode.<harness>`) and applied to every chat of that agent when it starts or resumes. Antigravity's ACP server offers no permission modes, so agentpack offers Ask and Bypass Permissions for it and answers its permission requests itself in Bypass.
+
 ## Opening the web UI
 
 On a TTY, bare `agentpack` and the `ap` symlink (installed beside the binary) print the running gateway's URL and open it in the default browser; inside an agent session they only print it. Chats, permission answers, queued prompts, goals and image attachments all live in the gateway web UI. When no gateway is running, the command says to start one with `ap gateway start`.

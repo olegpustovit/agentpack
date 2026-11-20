@@ -343,6 +343,8 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			event.End()
 		}
 	}
+	// The permission mode last chosen for this agent, on any chat and machine of the network.
+	permissionSettingKey := "permission_mode." + launch.Session.Harness
 	wireConversation := func(current *ConversationSession) {
 		current.restoreGoal(launch.Session.Goal)
 		current.mu.Lock()
@@ -353,7 +355,15 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		current.subagentsChange = func(subagents []SubagentSummary) {
 			persistSessionJSON(context.Background(), store.DB, record.ID, "subagents", subagents, len(subagents) == 0)
 		}
+		current.permissionChange = func(mode string) {
+			if _, err := store.DB.ExecContext(context.Background(), "INSERT INTO mesh_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", permissionSettingKey, mode); err != nil {
+				_, event := obs.Start(ctx, "worker", "remember_permissions")
+				event.Fail(err)
+				event.End()
+			}
+		}
 		current.mu.Unlock()
+		current.applyRememberedPermissions(ctx, store, permissionSettingKey)
 	}
 	if conversation != nil {
 		wireConversation(conversation)

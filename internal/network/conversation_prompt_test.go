@@ -186,3 +186,29 @@ func TestConversationSessionReportsTheAgentsTitle(t *testing.T) {
 		t.Fatalf("titles = %q", titles)
 	}
 }
+
+func TestHandoffContextCarriesTheChatOnlyOnceAnAgentReplied(t *testing.T) {
+	entry := func(seq int64, kind, body string) acp.LogEntry {
+		return acp.LogEntry{Seq: seq, Kind: kind, Payload: []byte(body)}
+	}
+	prompt := entry(1, "prompt", `{"text":{"text":"fix the login"}}`)
+	if got := handoffContext([]acp.LogEntry{prompt, entry(2, "notice", `{"title":"Could not start claude"}`)}); got != "" {
+		t.Fatalf("unanswered chat handed off %q", got)
+	}
+	got := handoffContext([]acp.LogEntry{
+		prompt,
+		entry(2, "agent_thought_chunk", `{"text":{"text":"secret thinking"}}`),
+		entry(3, "agent_message_chunk", `{"text":{"text":"Looking"}}`),
+		entry(4, "agent_message_chunk", `{"text":{"text":" now."}}`),
+		entry(5, "tool_call", `{"toolCallId":"t1","title":"Read login.go"}`),
+		entry(6, "agent_message_chunk", `{"text":{"text":"from a helper"},"_subagent":"s1"}`),
+	})
+	for _, want := range []string{"User: fix the login", "Assistant: Looking now.", "Assistant used a tool: Read login.go", "<previous_transcript>"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("handoff missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "secret thinking") || strings.Contains(got, "from a helper") {
+		t.Fatalf("handoff carries thoughts:\n%s", got)
+	}
+}

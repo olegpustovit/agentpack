@@ -598,6 +598,7 @@ var peerPatterns = []string{
 	"POST /api/sessions/{id}/stop",
 	"POST /api/sessions/{id}/input",
 	"POST /api/sessions/{id}/fork",
+	"POST /api/sessions/{id}/harness",
 	"POST /api/sessions/{id}/tools",
 	"GET /api/sessions/{id}/git",
 	"POST /api/sessions/{id}/git/commit",

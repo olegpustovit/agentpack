@@ -188,6 +188,24 @@ func TestResumeRestartsAStoppedChatUnderItsOwnID(t *testing.T) {
 	}
 }
 
+func TestSwitchHarnessContinuesTheChatWithAFreshAgent(t *testing.T) {
+	home := t.TempDir()
+	launched := make(chan SessionInfo, 1)
+	g, _ := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+		launched <- info
+		return info.ID, nil
+	})
+	stuckChat(t, g, seedFolder(t, home), "session-dead")
+	info, err := g.switchHarness(context.Background(), "session-dead", "codex")
+	if err != nil || info.ID != "session-dead" || info.Harness != "codex" || info.AgentSessionID != "" {
+		t.Fatalf("switch: %+v, %v", info, err)
+	}
+	g.starting.Wait()
+	if got := <-launched; got.Harness != "codex" || got.AgentSessionID != "" {
+		t.Fatalf("worker launch %+v", got)
+	}
+}
+
 func TestResumedWorkerReclaimsItsDirectoryOnlyWhenNoWorkerOwnsIt(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "session-old"), 0o700); err != nil {

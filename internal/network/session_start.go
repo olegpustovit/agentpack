@@ -119,6 +119,42 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt string) (SessionIn
 	return info, nil
 }
 
+// switchHarness hands a chat to another agent. The old agent stops; a fresh session of the new one
+// continues the same transcript, and its first prompt carries what came before (handoffContext).
+func (g *Gateway) switchHarness(ctx context.Context, id, harness string) (SessionInfo, error) {
+	info, err := storedSession(ctx, g.auth.store.Reader, id)
+	if err != nil {
+		return SessionInfo{}, err
+	}
+	if info.Transport != "acp" || !info.ArchivedAt.IsZero() {
+		return SessionInfo{}, errNotResumable
+	}
+	if info.EndedAt.IsZero() {
+		if err := StopWorker(ctx, g.options.Home, id); err != nil {
+			return SessionInfo{}, err
+		}
+		// The worker ends the row as it exits, just after it answers the stop.
+		for deadline := time.Now().Add(15 * time.Second); info.EndedAt.IsZero() && time.Now().Before(deadline); {
+			select {
+			case <-ctx.Done():
+				return SessionInfo{}, ctx.Err()
+			case <-time.After(100 * time.Millisecond):
+			}
+			if info, err = storedSession(ctx, g.auth.store.Reader, id); err != nil {
+				return SessionInfo{}, err
+			}
+		}
+	}
+	result, err := g.auth.store.DB.ExecContext(ctx, "UPDATE sessions SET harness=?,agent_session_id='',agent_capabilities='' WHERE id=? AND ended_at>0 AND archived_at=0 AND node_id="+state.LocalNodeSQL, harness, id)
+	if err != nil {
+		return SessionInfo{}, err
+	}
+	if switched, err := result.RowsAffected(); err != nil || switched != 1 {
+		return SessionInfo{}, errors.Join(errResumeConflict, err)
+	}
+	return g.resumeSession(ctx, id, "")
+}
+
 // failStart leaves the error in the chat's transcript and ends the row. The notice also keeps the
 // row listed, which an empty chat otherwise would not be.
 func (g *Gateway) failStart(ctx context.Context, info SessionInfo, cause error) {

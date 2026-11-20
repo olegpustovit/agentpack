@@ -502,6 +502,34 @@ test("Enter queues while the agent works and ⌘Enter steers", async ({ page }) 
   await message.press("ControlOrMeta+Enter")
   await expect.poll(() => posts.length).toBe(2)
   expect(posts[1]).toMatchObject({ text: "steer me", steer: true })
+  let steered = ""
+  await page.route("**/api/sessions/*/conversation/queue/*/steer", (route) => {
+    steered = route.request().url()
+    return route.fulfill({ json: { accepted: true } })
+  })
+  await message.fill("")
+  await message.press("Enter")
+  await expect.poll(() => steered).toContain("/queue/q1/steer")
+  expect(posts).toHaveLength(2)
+})
+
+test("the composer continues a chat with another agent", async ({ page }) => {
+  let body: unknown
+  await page.route("**/api/sessions", (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    return route.fulfill({ json: [{ ...session, id: "chat-one", transport: "acp", harness: "claude" }] })
+  })
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: "", contentType: "application/x-ndjson" }))
+  await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+  await page.route("**/api/sessions/chat-one/harness", (route) => {
+    body = route.request().postDataJSON()
+    return route.fulfill({ json: { ...session, id: "chat-one", transport: "acp", harness: "codex" } })
+  })
+  await page.goto("/sessions/local/chat-one")
+  await page.getByRole("button", { name: "Claude", exact: true }).click()
+  await expect(page.getByRole("menuitemradio", { name: "Claude" })).toBeDisabled()
+  await page.getByRole("menuitemradio", { name: "Codex" }).click()
+  await expect.poll(() => body).toEqual({ harness: "codex" })
 })
 
 test("a chat New session starts takes the folder's last model once", async ({ page }) => {

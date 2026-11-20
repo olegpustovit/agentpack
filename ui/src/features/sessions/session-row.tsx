@@ -223,7 +223,7 @@ export function SessionRow({
               <span aria-hidden className={dimWord}>{age}</span>
             )}
           </SourceRow>
-          <TooltipContent side="right" align="start" className="flex-col items-start gap-0">
+          <TooltipContent side="right" className="flex-col items-start gap-0">
             <strong className="font-semibold">{label}</strong>
             <span>{detail}</span>
             <span>{sessionDetail(session).split(" · ").slice(3).join(" · ")}</span>

@@ -13,6 +13,9 @@ type ACPLaunch struct {
 	AuthenticateMethodID string
 	Rewrite              func([]byte) []byte
 	AdaptAgent           func([]byte) AgentAdaptResult
+	// NoPermissionModes: the agent offers no permission modes, so agentpack offers Ask and Bypass
+	// Permissions itself and answers the agent's permission requests in Bypass.
+	NoPermissionModes bool
 }
 
 // LogKind is one synthetic event-log row produced by AdaptAgent.

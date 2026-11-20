@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 // ConversationSession is the worker-side ACP conversation view.
@@ -30,6 +32,8 @@ type ConversationSession struct {
 	agentSessionID    string
 	stateChange       func(string)
 	titleChange       func(string) // the agent named the chat (session_info_update)
+	permissionChange  func(string) // someone chose a permission mode; remembered for the agent
+	clientMode        string       // agentpack's own permission mode for an agent without modes; "" when unused
 	publishedState    string
 	lastSeq           int64
 	toolCalls         uint64
@@ -208,24 +212,77 @@ var bypassModes = map[string]bool{"bypassPermissions": true}
 
 // BypassingPermissions reports whether the agent's current mode is one where the user is never asked.
 func (session *ConversationSession) BypassingPermissions() bool {
+	_, value := session.permissionMode()
+	return bypassModes[value]
+}
+
+// applyRememberedPermissions puts a starting agent in the permission mode last chosen for it.
+// An agent that does not offer that mode keeps its own.
+func (session *ConversationSession) applyRememberedPermissions(ctx context.Context, store *state.Store, settingKey string) {
+	var mode string
+	if err := store.Reader.QueryRowContext(ctx, "SELECT value FROM mesh_settings WHERE key=?", settingKey).Scan(&mode); err != nil || mode == "" {
+		return
+	}
+	key, current := session.permissionMode()
+	if key == "" || current == mode {
+		return
+	}
+	session.mu.Lock()
+	broker, local := session.broker, session.clientMode != ""
+	session.mu.Unlock()
+	set := func() error { return broker.SetConfig(ctx, key, string(mustRawJSON(mode))) }
+	if local {
+		set = func() error { return session.setClientMode(mode) }
+	}
+	if err := set(); err != nil {
+		_, event := obs.Start(ctx, "worker", "apply_permissions")
+		event.Set("mode", mode)
+		event.Fail(err)
+		event.End()
+	}
+}
+
+// clientModes are the permission modes agentpack offers for an agent without its own.
+var clientModes = []map[string]string{{"value": "default", "name": "Ask"}, {"value": "bypassPermissions", "name": "Bypass Permissions"}}
+
+func (session *ConversationSession) setClientMode(value any) error {
+	mode, _ := value.(string)
+	if !slices.ContainsFunc(clientModes, func(item map[string]string) bool { return item["value"] == mode }) {
+		return errors.New("unknown permission mode")
+	}
+	session.mu.Lock()
+	session.clientMode = mode
+	session.mu.Unlock()
+	return nil
+}
+
+// permissionMode is the ID of the agent's permission option ("mode" for agents that only list
+// modes) and its current value; both are empty when the agent has none.
+func (session *ConversationSession) permissionMode() (key, value string) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if session.clientMode != "" {
+		return "mode", session.clientMode
+	}
 	var options []struct {
+		ID           string          `json:"id"`
 		Category     string          `json:"category"`
 		CurrentValue json.RawMessage `json:"currentValue"`
 	}
 	if json.Unmarshal(session.configOptions, &options) == nil {
 		for _, option := range options {
-			var value string
 			if option.Category == "mode" && json.Unmarshal(option.CurrentValue, &value) == nil {
-				return bypassModes[value]
+				return option.ID, value
 			}
 		}
 	}
 	var modes struct {
 		CurrentModeID string `json:"currentModeId"`
 	}
-	return json.Unmarshal(session.modes, &modes) == nil && bypassModes[modes.CurrentModeID]
+	if json.Unmarshal(session.modes, &modes) == nil && modes.CurrentModeID != "" {
+		return "mode", modes.CurrentModeID
+	}
+	return "", ""
 }
 
 func (session *ConversationSession) ConversationState() string {
@@ -394,9 +451,21 @@ func (session *ConversationSession) SetConfigOption(ctx context.Context, key str
 		return errors.New("config value must be a string or boolean")
 	}
 	session.mu.Lock()
-	broker := session.broker
+	broker, remember, local := session.broker, session.permissionChange, session.clientMode != "" && key == "mode"
 	session.mu.Unlock()
-	return broker.SetConfig(ctx, key, string(value))
+	if local {
+		if err := session.setClientMode(configValue); err != nil {
+			return err
+		}
+	} else if err := broker.SetConfig(ctx, key, string(value)); err != nil {
+		return err
+	}
+	if mode, ok := configValue.(string); ok && remember != nil {
+		if permissions, _ := session.permissionMode(); key == permissions {
+			remember(mode)
+		}
+	}
+	return nil
 }
 
 func (session *ConversationSession) SetConfigOptions(raw json.RawMessage) {
@@ -420,11 +489,20 @@ func (session *ConversationSession) SetAgentCapabilities(capabilities *AgentCapa
 func (session *ConversationSession) ConfigJSON() json.RawMessage {
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	options := session.configOptions
+	if session.clientMode != "" {
+		var list []json.RawMessage
+		_ = json.Unmarshal(options, &list) // no options yet: the permission option is the only one
+		options, _ = json.Marshal(append(list, mustRawJSON(map[string]any{
+			"id": "mode", "name": "Permissions", "category": "mode", "type": "select",
+			"currentValue": session.clientMode, "options": clientModes,
+		})))
+	}
 	raw, _ := json.Marshal(struct {
 		ConfigOptions json.RawMessage `json:"configOptions,omitempty"`
 		Modes         json.RawMessage `json:"modes,omitempty"`
 	}{
-		ConfigOptions: session.configOptions,
+		ConfigOptions: options,
 		Modes:         session.modes,
 	})
 	return raw

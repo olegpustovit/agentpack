@@ -9,7 +9,8 @@ import { Button } from "@/components/ui/button"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { StatusSlot } from "@/features/status/status-bar"
 import { sessionsQuery } from "@/features/sessions/queries"
-import { clearFirstMessage, firstMessage, loadAgentChoices, rememberAgentChoice, takeNewChat } from "@/features/sessions/choices"
+import { clearFirstMessage, firstMessage, loadAgentChoices, markNewChat, rememberAgentChoice, takeNewChat } from "@/features/sessions/choices"
+import { agentIds } from "@/features/sessions/rules"
 import { useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName, relativeTime } from "@/lib/format"
@@ -403,6 +404,30 @@ export default function ConversationPane({
       hud.error(old ? `${machine === LOCAL ? "Gateway" : "Peer"} needs an update to restart this chat.` : conversationErrorMessage(machine, "resume the chat", error))
     },
   })
+  // The chat carries on with another agent, which gets the transcript with the next message.
+  const switchAgent = useMutation({
+    mutationFn: (harness: string) => api(`/api/sessions/${encodeURIComponent(sessionId)}/harness`, { machine, method: "POST", body: { harness } }),
+    onSuccess: (_, harness) => {
+      markNewChat(sessionId)
+      hud.success(`Continuing with ${harnessName(harness)}`)
+      return queryClient.invalidateQueries({ queryKey: sessionsQuery(machine, false).queryKey })
+    },
+    onError: (error, harness) =>
+      hud.error(
+        conversationErrorMessage(machine, `switch to ${harnessName(harness)}`, error),
+        conversationNeedsUpdate(error) ? undefined : () => switchAgent.mutate(harness),
+      ),
+  })
+  const steerQueued = useMutation({
+    mutationFn: (queueId: string) =>
+      api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/queue/${encodeURIComponent(queueId)}/steer`, { machine, method: "POST" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["conversation", machine, sessionId] }),
+    onError: (error, queueId) =>
+      hud.error(
+        conversationErrorMessage(machine, "steer with the queued message", error),
+        conversationNeedsUpdate(error) ? undefined : () => steerQueued.mutate(queueId),
+      ),
+  })
   const upload = useMutation({
     mutationFn: (file: File) => uploadConversationBlob(machine, sessionId, file),
     onError: (error, file) =>
@@ -439,7 +464,13 @@ export default function ConversationPane({
     setHeld(false)
   }, [held, live, info?.ended_at, send, draft, entries, sessionId])
   // Enter sends, or queues while the agent works; steer interrupts the turn and sends this next.
+  const nextQueued = parent.queue?.find((item) => !item.steer)
   function submit(steer = false) {
+    // Enter on an empty composer sends the waiting message now.
+    if (nextQueued && !draft.trim() && attachments.length === 0 && !readOnly && !needsUpdate && !steerQueued.isPending) {
+      steerQueued.mutate(nextQueued.queueId)
+      return
+    }
     if (!canSend) return
     const text = draft.trim()
     const goalCommand = attachments.length === 0 ? parseGoalCommand(text) : undefined
@@ -687,7 +718,7 @@ export default function ConversationPane({
                   id="conversation-message"
                   aria-label="Message"
                   rows={1}
-                  placeholder={needsUpdate ? "Update this peer to open the conversation…" : starting ? `Starting ${agentName}…` : parent.working ? `Queue a message for ${agentName} (⌘↵ steers)` : `Message ${agentName}`}
+                  placeholder={needsUpdate ? "Update this peer to open the conversation…" : starting ? `Starting ${agentName}…` : nextQueued ? "Queue another message, or press ↵ to steer with the queued one" : parent.working ? `Queue a message for ${agentName} (⌘↵ steers)` : `Message ${agentName}`}
                   value={draft}
                   disabled={needsUpdate}
                   aria-controls={composerHints.length > 0 ? "composer-hints-list" : undefined}
@@ -781,6 +812,33 @@ export default function ConversationPane({
                   <Slash aria-hidden />
                 </Button>
                 <span className="min-w-0 flex-1" />
+                {!readOnly && info?.transport === "acp" && (
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <Button type="button" size="sm" variant="ghost" title="Continue this chat with another agent" disabled={switchAgent.isPending || starting || needsUpdate} className="gap-(--s2)">
+                          {agentName}
+                          <ChevronDown aria-hidden />
+                        </Button>
+                      }
+                    />
+                    <MenuContent align="end">
+                      <p className="px-[11px] pt-(--s2) pb-(--s1) text-(length:--fs-xs) font-semibold text-(--fg3)">Continue with</p>
+                      {agentIds.map((id) => (
+                        <MenuItem
+                          key={id}
+                          role="menuitemradio"
+                          aria-checked={id === info.harness}
+                          icon={id === info.harness ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
+                          disabled={id === info.harness}
+                          onClick={() => switchAgent.mutate(id)}
+                        >
+                          {harnessName(id)}
+                        </MenuItem>
+                      ))}
+                    </MenuContent>
+                  </Menu>
+                )}
                 {permissionsOption && (
                   <PopupSelect
                     label="Permissions"

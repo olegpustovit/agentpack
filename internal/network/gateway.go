@@ -456,6 +456,34 @@ func (g *Gateway) Handler() http.Handler {
 		}, record.Session.AgentSessionID)
 		writeSessionStart(w, info, err)
 	})
+	mux.HandleFunc("POST /api/sessions/{id}/harness", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Harness string `json:"harness"`
+		}
+		if !readJSON(w, r, &input) {
+			return
+		}
+		if _, err := harnessTarget(input.Harness); err != nil {
+			http.Error(w, "unknown agent", http.StatusBadRequest)
+			return
+		}
+		if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
+			return
+		}
+		info, err := g.switchHarness(r.Context(), r.PathValue("id"), input.Harness)
+		switch {
+		case errors.Is(err, errSessionNotFound):
+			http.Error(w, "session not found", http.StatusNotFound)
+		case errors.Is(err, errResumeConflict):
+			http.Error(w, errResumeConflict.Error(), http.StatusConflict)
+		case errors.Is(err, errNotResumable):
+			http.Error(w, errNotResumable.Error(), http.StatusBadRequest)
+		case err != nil:
+			http.Error(w, "Couldn't switch the chat's agent.", http.StatusInternalServerError)
+		default:
+			writeJSON(w, publicSession(info))
+		}
+	})
 	mux.HandleFunc("POST /api/sessions/{id}/tools", g.setChatTools)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
 		if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
