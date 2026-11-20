@@ -192,7 +192,7 @@ func TestHandoffContextCarriesTheChatOnlyOnceAnAgentReplied(t *testing.T) {
 		return acp.LogEntry{Seq: seq, Kind: kind, Payload: []byte(body)}
 	}
 	prompt := entry(1, "prompt", `{"text":{"text":"fix the login"}}`)
-	if got := handoffContext([]acp.LogEntry{prompt, entry(2, "notice", `{"title":"Could not start claude"}`)}); got != "" {
+	if got := handoffContext([]acp.LogEntry{prompt, entry(2, "notice", `{"title":"Could not start claude"}`)}, ""); got != "" {
 		t.Fatalf("unanswered chat handed off %q", got)
 	}
 	got := handoffContext([]acp.LogEntry{
@@ -202,7 +202,7 @@ func TestHandoffContextCarriesTheChatOnlyOnceAnAgentReplied(t *testing.T) {
 		entry(4, "agent_message_chunk", `{"text":{"text":" now."}}`),
 		entry(5, "tool_call", `{"toolCallId":"t1","title":"Read login.go"}`),
 		entry(6, "agent_message_chunk", `{"text":{"text":"from a helper"},"_subagent":"s1"}`),
-	})
+	}, "")
 	for _, want := range []string{"User: fix the login", "Assistant: Looking now.", "Assistant used a tool: Read login.go", "<previous_transcript>"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("handoff missing %q:\n%s", want, got)
@@ -210,5 +210,20 @@ func TestHandoffContextCarriesTheChatOnlyOnceAnAgentReplied(t *testing.T) {
 	}
 	if strings.Contains(got, "secret thinking") || strings.Contains(got, "from a helper") {
 		t.Fatalf("handoff carries thoughts:\n%s", got)
+	}
+}
+
+func TestLongHandoffPointsAtTheStoredHistory(t *testing.T) {
+	long := strings.Repeat("x", handoffToolsBudget)
+	entries := []acp.LogEntry{
+		{Seq: 1, Kind: "prompt", Payload: []byte(`{"text":{"text":"oldest question"}}`)},
+		{Seq: 2, Kind: "agent_message_chunk", Payload: []byte(`{"text":{"text":"` + long + `"}}`)},
+	}
+	got := handoffContext(entries, "session-1")
+	if strings.Contains(got, "oldest question") || !strings.Contains(got, "read_conversation tool, session_id session-1") {
+		t.Fatalf("handoff:\n%.300s", got)
+	}
+	if got := handoffContext(entries, ""); !strings.Contains(got, "oldest question") || strings.Contains(got, "read_conversation") {
+		t.Fatalf("without tools the whole transcript fits:\n%.300s", got)
 	}
 }

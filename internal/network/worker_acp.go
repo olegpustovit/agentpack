@@ -229,7 +229,11 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	)
 	// A fresh agent on a chat with history took it over from another agent: it gets that history once.
 	if launch.Session.AgentSessionID == "" && launch.ForkSessionID == "" {
-		handoff = handoffContext(log.Snapshot())
+		reader := ""
+		if launch.Session.Tools && launch.tools.token != "" {
+			reader = launch.Session.ID
+		}
+		handoff = handoffContext(log.Snapshot(), reader)
 	}
 	broker := acp.NewBroker(
 		func(ctx context.Context, input acp.PromptInput) (result error) {

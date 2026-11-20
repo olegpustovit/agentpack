@@ -62,7 +62,7 @@ The script does not launch agents. It reports missing `testdata/acp/<harness>.js
 
 ## Switching agents and permissions
 
-The agent button in the composer continues a chat with another agent (`POST /api/sessions/{id}/harness`). The old agent stops; the chat keeps its ID and transcript, and the new agent starts a fresh session whose first prompt carries the newest 96 KiB of that transcript (messages and tool titles, no thoughts or subagent output). Enter on an empty composer sends the first queued message now.
+The agent button in the composer continues a chat with another agent (`POST /api/sessions/{id}/harness`). The old agent stops; the chat keeps its ID and transcript, and the new agent starts a fresh session whose first prompt carries that transcript (messages and tool titles, no thoughts or subagent output). With agentpack tools on, only the newest 32 KiB is inlined and the prompt names the `read_conversation` tool and session ID for the rest, which stays in `state.db`; without tools the newest 96 KiB is inlined. Enter on an empty composer sends the first queued message now.
 
 The permission mode last chosen for an agent is stored network-wide in `mesh_settings` (`permission_mode.<harness>`) and applied to every chat of that agent when it starts or resumes. Antigravity's ACP server offers no permission modes, so agentpack offers Ask and Bypass Permissions for it and answers its permission requests itself in Bypass.
 
