@@ -63,8 +63,9 @@ type nodeRecord struct {
 
 type Gateway struct {
 	options        GatewayOptions
-	starting       sync.WaitGroup // chats launching in the background; tests wait on it
-	chatLifecycle  sync.Mutex     // serializes resume claims with settling dead chats
+	starting       sync.WaitGroup       // chats launching in the background; tests wait on it
+	chatLifecycle  sync.Mutex           // serializes resume claims with settling dead chats
+	autoResumed    map[string]time.Time // chats the reaper resumed; guarded by chatLifecycle
 	store          *state.Store
 	logs           *obs.Store
 	auth           *gatewayAuth
@@ -85,9 +86,11 @@ type Gateway struct {
 	identityAt     time.Time
 	identitySelf   tailnetSelf
 	events         eventHub
+	agents         agentAccounts
 	tailnet        tailnetCache
 	mcpBroker      mcpBroker
 	push           pushWatch
+	omp            ompSettings
 }
 
 // browserPingInterval keeps idle terminal connections alive through proxies. Tests shorten it.
@@ -164,7 +167,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	for _, task := range []struct {
 		name string
 		run  func(context.Context)
-	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}, {"gateway.push", func(ctx context.Context) { gateway.runPush(ctx, pushInterval) }}} {
+	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}, {"gateway.push", func(ctx context.Context) { gateway.runPush(ctx, pushInterval) }}, {"gateway.omp_settings", func(ctx context.Context) { gateway.runOMPSettings(ctx, 30*time.Second) }}} {
 		background.Add(1)
 		obs.Go(task.name, func() { defer background.Done(); task.run(ctx) })
 	}
@@ -239,9 +242,11 @@ func (g *Gateway) Handler() http.Handler {
 	g.registerStateSync(mux)
 	mux.HandleFunc("GET /api/cache/{cache_key}", g.serveCache)
 	g.registerLimits(mux)
+	g.registerAgents(mux)
 	g.registerDiagnostics(mux)
 	g.registerMCPCredentials(mux)
 	g.registerWorktrees(mux)
+	g.registerOMP(mux)
 	mux.HandleFunc("POST /api/telemetry", g.telemetry)
 	// Profiles reveal memory contents, so only this machine's CLI may read them; peers and browsers never can.
 	mux.HandleFunc("GET /api/debug/pprof/{name...}", func(w http.ResponseWriter, r *http.Request) {

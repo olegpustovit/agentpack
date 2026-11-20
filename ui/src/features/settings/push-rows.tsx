@@ -4,14 +4,14 @@ import { FieldError } from "@/components/kit/forms"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { errorText } from "@/features/library/mutations"
-import { ApiError } from "@/lib/api"
+import { routeMissing } from "@/lib/api"
 import { hud } from "@/lib/hud"
 import { Row } from "./panes"
 import { currentPushSubscription, pushBlocker, pushBlockerText, subscribePush, testPush, unsubscribePush } from "./push"
 
 function pushError(error: unknown): string {
   // An older gateway build has no push routes.
-  if (error instanceof ApiError && error.status === 404) return "This gateway needs an update for push notifications."
+  if (routeMissing(error)) return "This gateway needs an update for push notifications."
   return errorText(error)
 }
 
@@ -31,8 +31,8 @@ export function PushRows() {
     }
   }, [])
   const change = useMutation({
-    mutationFn: async (on: boolean) => {
-      if (on) return subscribePush()
+    mutationFn: async ({ permission }: { on: boolean; permission?: Promise<NotificationPermission> }) => {
+      if (permission) return subscribePush(permission)
       await unsubscribePush()
       return null
     },
@@ -51,9 +51,9 @@ export function PushRows() {
     <Row label="Push to this device" htmlFor="push-device">
       <Switch
         id="push-device"
-        checked={change.isPending ? Boolean(change.variables) : on}
+        checked={change.isPending ? Boolean(change.variables?.on) : on}
         disabled={Boolean(blocker) || subscription === undefined || change.isPending}
-        onCheckedChange={(next) => change.mutate(next)}
+        onCheckedChange={(next) => change.mutate({ on: next, permission: next ? Notification.requestPermission() : undefined })}
       />
       <span className="text-(length:--fs-sm) text-(--fg2)">
         {blocker ? "Unavailable" : on ? "On. Arrives even with every tab closed" : "Off"}

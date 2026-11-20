@@ -60,9 +60,10 @@ export async function currentPushSubscription(): Promise<PushSubscription | null
   return (await found?.pushManager.getSubscription()) ?? null
 }
 
-// Asks for permission when needed, then registers this browser with the gateway.
-export async function subscribePush(): Promise<PushSubscription> {
-  if ((await Notification.requestPermission()) !== "granted") throw new Error(pushBlockerText.denied)
+// Registers this browser with the gateway. Safari prompts only when the permission request starts
+// inside the click itself, so a toggle passes the request it started there.
+export async function subscribePush(permission: Promise<NotificationPermission> = Notification.requestPermission()): Promise<PushSubscription> {
+  if ((await permission) !== "granted") throw new Error(pushBlockerText.denied)
   const { public_key } = await api<{ public_key: string }>("/api/push/key")
   const reg = await registration()
   let subscription = await reg.pushManager.getSubscription()

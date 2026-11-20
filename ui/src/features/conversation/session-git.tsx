@@ -5,7 +5,7 @@ import { Section } from "@/components/kit/data"
 import { FieldError } from "@/components/kit/forms"
 import { ConfirmAlert, ConfirmAlertContent, Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
-import { ApiError, api } from "@/lib/api"
+import { ApiError, api, routeMissing } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { plural } from "@/lib/format"
 import { hud } from "@/lib/hud"
@@ -14,7 +14,7 @@ import { sessionGitQuery, type SessionGit } from "@/features/sessions/git"
 const gitPath = (sessionId: string, action: string): `/api/${string}` => `/api/sessions/${encodeURIComponent(sessionId)}/git/${action}`
 
 function failure(error: unknown, fallback: string): string {
-  if (error instanceof ApiError && error.status === 404) return "Needs update"
+  if (routeMissing(error)) return "Needs update"
   return error instanceof Error ? error.message : fallback
 }
 
@@ -51,7 +51,7 @@ function useGitActions(machine: string, sessionId: string) {
       if (result.url) window.open(result.url, "_blank", "noopener,noreferrer")
       else if (!result.created) hud.success("Branch pushed")
     },
-    onError: (error) => hud.error(failure(error, "Couldn't create the pull request."), error instanceof ApiError && error.status === 404 ? undefined : () => pr.mutate()),
+    onError: (error) => hud.error(failure(error, "Couldn't create the pull request."), routeMissing(error) ? undefined : () => pr.mutate()),
   })
   const merge = useMutation({
     mutationFn: () => api<{ merged: boolean }>(gitPath(sessionId, "merge"), { machine, method: "POST", body: {} }),

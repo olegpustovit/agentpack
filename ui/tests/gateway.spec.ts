@@ -699,12 +699,23 @@ test("failed session reads stay distinct from an empty session list", async ({ p
 })
 test("New Session disables Chat when the peer lacks ACP endpoints", async ({ page }) => {
   await mockAPI(page)
-  await page.route("**/api/agent-sessions**", (route) => route.fulfill({ status: 404, body: "route unavailable" }))
+  await page.route("**/api/agent-sessions**", (route) => route.fulfill({ status: 404, body: "404 page not found" }))
   await page.goto("/sessions?new=1")
   await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeDisabled()
   await expect(page.getByText("Update Agentpack on Gateway machine before starting Chat. Terminal remains available.")).toBeVisible()
   await expect(page.getByRole("button", { name: "Terminal", exact: true })).toBeEnabled()
   await expect(page.getByRole("button", { name: "Start session" })).toBeDisabled()
+})
+
+test("New Session says when the agent isn't signed in, without blocking the start", async ({ page }) => {
+  await mockAPI(page)
+  await page.route("**/api/agents", (route) => route.fulfill({ json: { agents: [{ harness: "codex", installed: true, signed_in: false, methods: [{ id: "chatgpt", label: "ChatGPT account" }] }] } }))
+  await page.route("**/api/agent-sessions**", (route) => route.fulfill({ status: 500, body: "acp session/list: Authentication required" }))
+  await page.goto("/sessions?new=1")
+  await expect(page.getByText("Codex isn't signed in on Gateway machine.")).toBeVisible()
+  await expect(page.getByRole("link", { name: "Sign in…" })).toHaveAttribute("href", "/machines/local")
+  await expect(page.getByText(/Couldn't load conversations/)).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Start session" })).toBeEnabled()
 })
 
 test("New Session explains the Node requirement for ACP chat", async ({ page }) => {

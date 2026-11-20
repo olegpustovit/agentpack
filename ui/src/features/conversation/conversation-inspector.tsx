@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { useSessionCommands } from "@/features/sessions/actions"
 import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
-import { api, ApiError } from "@/lib/api"
+import { api, routeMissing } from "@/lib/api"
 import type { GoalState, SessionInfo } from "@/lib/api-types"
 import { clock, goalElapsedMs, goalStateWords } from "@/lib/goal"
 import { useNow } from "@/lib/use-now"
@@ -324,7 +324,7 @@ export function ConversationInspector({
                           api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/revert`, { machine, method: "POST", body: { turn: lastTurn } }).then(
                             () => hud.success(`Reverted turn ${lastTurn}`),
                             (error: unknown) =>
-                              setRevertError(error instanceof ApiError && error.status === 404 ? "Needs update" : error instanceof Error ? error.message : "Couldn't revert this turn."),
+                              setRevertError(routeMissing(error) ? "Needs update" : error instanceof Error ? error.message : "Couldn't revert this turn."),
                           )
                         }}
                       />

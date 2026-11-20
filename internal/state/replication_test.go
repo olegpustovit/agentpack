@@ -22,6 +22,7 @@ func TestReplicatedTablesTrackChangesAndLocalTablesStayLocal(t *testing.T) {
 		// Web Push keys and subscriptions replicate on purpose, secrets included: Main sends to every device.
 		"push_keys":          "INSERT INTO push_keys(public_key,private_key,created_at) VALUES ('public','private',1)",
 		"push_subscriptions": "INSERT INTO push_subscriptions(endpoint,email,p256dh,auth,public_key,created_node) VALUES ('https://push.example/1','member@example.com','key','secret','public','node')",
+		"omp_settings":       `INSERT INTO omp_settings(key,value) VALUES ('edit.mode','"patch"')`,
 	} {
 		if _, err := store.DB.Exec(statement); err != nil {
 			t.Fatalf("%s: %v", table, err)

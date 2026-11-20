@@ -4,7 +4,7 @@ import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, 
 import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
 import { worktreeState, worktreesQuery, type WorktreeRow } from "@/features/sessions/git"
-import { ApiError, api } from "@/lib/api"
+import { api, routeMissing } from "@/lib/api"
 import { basename, plural } from "@/lib/format"
 import { hud } from "@/lib/hud"
 
@@ -35,7 +35,7 @@ export function WorktreesSection({ machine, online }: { machine: string; online:
     },
     onError: (error, row) => hud.error(`Couldn't push ${row.branch}: ${error.message}`, () => push.mutate(row)),
   })
-  const needsUpdate = worktrees.error instanceof ApiError && worktrees.error.status === 404
+  const needsUpdate = routeMissing(worktrees.error)
   const rows = worktrees.data?.worktrees ?? []
   if (!needsUpdate && rows.length === 0) return null
   const changed = removing ? removing.dirty + removing.untracked : 0

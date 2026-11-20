@@ -14,7 +14,7 @@ import { isWorktreePath } from "@/features/sessions/git"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { sessionRules } from "@/features/sessions/rules"
 import { sessionGlyphState } from "@/features/sessions/session-status"
-import { api, ApiError } from "@/lib/api"
+import { api, routeMissing } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { basename, harnessName } from "@/lib/format"
 import { hud } from "@/lib/hud"
@@ -159,7 +159,7 @@ export default function CommandPalette({
               if (result.url) window.open(result.url, "_blank", "noopener,noreferrer")
               else hud.success("Branch pushed")
             },
-            (error: unknown) => hud.error(`Couldn't create a pull request for ${sessionLabel(session)}: ${error instanceof ApiError && error.status === 404 ? "Needs update" : error instanceof Error ? error.message : String(error)}`),
+            (error: unknown) => hud.error(`Couldn't create a pull request for ${sessionLabel(session)}: ${routeMissing(error) ? "Needs update" : error instanceof Error ? error.message : String(error)}`),
           ),
       })
     }

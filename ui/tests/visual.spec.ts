@@ -430,7 +430,8 @@ test.describe("a peer on an older version", () => {
     await desktop(page)
     await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "old", name: "main", online: true }] }))
     const unlessPeer = (json: unknown, peerJson: unknown, status = 200) => (route: Route) =>
-      new URL(route.request().url()).searchParams.has("node") ? route.fulfill({ status, json: peerJson }) : route.fulfill({ json })
+      // Go's mux answers a missing route in plain text, not JSON.
+      new URL(route.request().url()).searchParams.has("node") ? route.fulfill(typeof peerJson === "string" ? { status, body: peerJson } : { status, json: peerJson }) : route.fulfill({ json })
     // It ignores ?include=revisions and has no /api/projects.
     await page.route("**/api/library/agentpacks**", unlessPeer([], [{ id: "bare", name: "bare-pack", revisions: ["r1"], heads: ["r1"] }]))
     await page.route("**/api/projects**", unlessPeer([], "404 page not found", 404))

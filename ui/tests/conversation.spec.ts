@@ -572,6 +572,48 @@ test("a stopped chat shows why it stopped, not an update banner", async ({ page 
   await expect(page.getByText(/needs an update/)).toHaveCount(0)
 })
 
+test("a chat whose agent isn't signed in signs it in and then starts", async ({ page }) => {
+  await page.clock.install()
+  await page.route("**/api/sessions", (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    return route.fulfill({ json: [{ ...session, id: "chat-one", harness: "agy", transport: "acp", ended_at: session.started_at, state: { ...session.state, running: false, exit_code: 1 } }] })
+  })
+  const notice = { sessionUpdate: "notice", severity: "error", title: "Could not start agy", description: "Antigravity is not signed in on gigacomp.", code: "auth_required", harness: "agy", methods: [{ id: "google", label: "Google account" }] }
+  await page.route("**/api/sessions/*/conversation**", (route) =>
+    route.fulfill({ body: `${JSON.stringify({ seq: 1, ts: 1, kind: "notice", payload: notice })}\n`, contentType: "application/x-ndjson" }),
+  )
+  const step = { id: "login-1", url: "https://accounts.google.com/o/oauth2/auth?x=1", input: "url", state: "waiting" }
+  let started: unknown, pasted: unknown, resumed: unknown
+  let signedIn = false
+  await page.route("**/api/agents/agy/login", (route) => {
+    started = route.request().postDataJSON()
+    return route.fulfill({ json: step })
+  })
+  await page.route("**/api/agents/agy/login/login-1", (route) => {
+    if (route.request().method() === "POST") {
+      pasted = route.request().postDataJSON()
+      signedIn = true
+    }
+    return route.fulfill({ json: { ...step, state: signedIn ? "done" : "waiting" } })
+  })
+  await page.route("**/api/sessions/chat-one/resume", (route) => {
+    resumed = route.request().postDataJSON()
+    return route.fulfill({ json: { ...session, id: "chat-one", harness: "agy", transport: "acp", conversation_state: "starting" } })
+  })
+  await page.goto("/sessions/local/chat-one")
+  await page.getByRole("textbox", { name: "Message" }).fill("hello agy")
+  const card = page.getByRole("group", { name: "Sign in to Antigravity" })
+  await expect(card).toContainText("Antigravity is not signed in on gigacomp.")
+  await card.getByRole("button", { name: "Sign in with Google account" }).click()
+  expect(started).toEqual({ method: "google" })
+  await expect(card.getByRole("link", { name: "Open sign-in page" })).toHaveAttribute("href", step.url)
+  await card.getByLabel(/Paste the address the page lands on/).fill("https://antigravity.google/oauth-callback?code=abc")
+  await card.getByRole("button", { name: "Continue" }).click()
+  await expect.poll(() => pasted).toEqual({ input: "https://antigravity.google/oauth-callback?code=abc" })
+  await page.clock.runFor(2500)
+  await expect.poll(() => resumed).toEqual({ text: "hello agy" })
+})
+
 test("a message to a stopped chat resumes that chat", async ({ page }) => {
   const stopped = { ...session, id: "chat-one", transport: "acp", agent_session_id: "agent-1", ended_at: session.started_at, state: { ...session.state, running: false } }
   let resumed: unknown

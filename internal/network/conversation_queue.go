@@ -201,6 +201,7 @@ func (session *ConversationSession) runTurns(ctx context.Context, input *acp.Pro
 			first = nil
 		}
 		session.finishTurn(ctx, err)
+		session.retryAfterNetworkDrop(err)
 		input = nil
 	}
 }

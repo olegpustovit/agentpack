@@ -48,6 +48,9 @@ type ConversationSession struct {
 	userCancelled   bool // the user stopped the running turn
 	archived        bool
 	now             func() time.Time
+	after           func(time.Duration, func()) // schedules network retries; tests replace it
+	networkRetries  int                         // retries since the last turn that reached the agent's service
+	turnsEnded      int                         // a retry is dropped when another turn ended meanwhile
 	goal            *Goal
 	goalCleared     *Goal // the last goal, kept to log its "cleared" state
 	goalPublished   string
@@ -160,6 +163,13 @@ func agentTitle(entry acp.LogEntry) string {
 
 // applyConfigUpdate keeps the cached options in step with the agent. The caller holds mu.
 func (session *ConversationSession) applyConfigUpdate(entry acp.LogEntry) {
+	// A helper's options (one model, its own mode) describe the helper, not the chat.
+	var origin struct {
+		Subagent string `json:"_subagent"`
+	}
+	if json.Unmarshal(entry.Payload, &origin) == nil && origin.Subagent != "" {
+		return
+	}
 	switch entry.Kind {
 	case "config_option_update":
 		var update struct {

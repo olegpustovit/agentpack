@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/kit/feedback"
 import { api, LOCAL } from "@/lib/api"
-import { hud } from "@/lib/hud"
+import { copyText } from "@/lib/hud"
+import { SignInCard } from "@/features/agents/sign-in"
 import { cn } from "@/lib/utils"
 import type { GoalState } from "@/lib/api-types"
 import { clock, goalStateWords } from "@/lib/goal"
@@ -126,13 +127,6 @@ export function latestUserPrompt(items: ThreadItem[]): UserMessagePayload | unde
     if (item.kind === "user_message_chunk") return item.data as UserMessagePayload
   }
   return undefined
-}
-
-function copyText(text: string) {
-  ;(navigator.clipboard?.writeText(text) ?? Promise.reject()).then(
-    () => hud.success("Copied"),
-    () => hud.error("Couldn't copy. Select the text and copy it manually."),
-  )
 }
 
 function toolIcon(kind?: string) {
@@ -656,6 +650,7 @@ function ThreadItemView({
   onQuote,
   onFork,
   onRetry,
+  onSignedIn,
   next,
   last,
   streaming,
@@ -669,6 +664,7 @@ function ThreadItemView({
   onQuote?: (text: string) => void
   onFork?: () => void
   onRetry?: () => void
+  onSignedIn?: () => void
   /** ts of the item after this one; a thought lasted until then. */
   next?: number
   last?: boolean
@@ -692,6 +688,9 @@ function ThreadItemView({
       return <CompactionBlock item={item} />
     case "divider": {
       const notice = item.data as NoticePayload
+      if (notice.code === "auth_required" && notice.harness && onSignedIn) {
+        return <SignInCard machine={machine} harness={notice.harness} methods={Array.isArray(notice.methods) ? notice.methods : undefined} reason={notice.description ?? undefined} onSignedIn={onSignedIn} />
+      }
       return (
         <div data-slot="conversation-divider" className="flex flex-col gap-(--s1) text-center text-(length:--fs-xs) text-(--fg3)">
           {notice.title && <p className="font-medium text-(--fg2)">{notice.title}</p>}
@@ -829,6 +828,7 @@ export function ThreadView({
   animateAfter,
   onOpenSubagent,
   onStopSubagent,
+  onSignedIn,
 }: {
   readOnly?: boolean
   agent?: string
@@ -846,6 +846,8 @@ export function ThreadView({
   animateAfter?: number
   onOpenSubagent?: (id: string) => void
   onStopSubagent?: (id: string) => void
+  /** Starts the chat once its agent is signed in; only the latest sign-in notice offers it. */
+  onSignedIn?: () => void
 }) {
   if (items.length === 0) {
     return working ? <LiveLine items={items} subagents={subagents} turnStarted={turnStarted} /> : <p className="py-(--s7) text-center text-(length:--fs-sm) text-(--fg3)">No messages yet.</p>
@@ -853,6 +855,7 @@ export function ThreadView({
   const retry = latestUserPrompt(items) && onRetry ? onRetry : undefined
   const lastAgent = items.findLast((item) => item.kind === "agent_message_chunk")
   const compacted = items.some((item) => item.kind === "compaction")
+  const signIn = items.findLast((item) => item.kind === "divider" && (item.data as NoticePayload).code === "auth_required")
   const fresh = (item: ThreadItem) => animateAfter !== undefined && item.seq !== undefined && item.seq > animateAfter
   const permission = (item: ThreadItem) => (
     <fieldset disabled={readOnly} className="min-w-0">
@@ -909,6 +912,7 @@ export function ThreadView({
               onQuote={onQuote}
               onFork={onFork}
               onRetry={isLastAgent ? retry : undefined}
+              onSignedIn={entry === signIn ? onSignedIn : undefined}
               next={nextTs.get(entry)}
               last={isLastAgent && !working}
               streaming={isLastAgent && working}

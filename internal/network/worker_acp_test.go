@@ -723,10 +723,10 @@ func TestConversationStreamPushesAppendsWithoutPolling(t *testing.T) {
 	}
 }
 
-func TestACPAuthRequiredSaysHowToSignIn(t *testing.T) {
+func TestACPAuthRequiredNamesAgentAndMachine(t *testing.T) {
 	cause := fmt.Errorf("acp session/new: %w", sdkacp.NewAuthRequired(nil))
 	err := explainACPAuthRequired(cause, base.Agy)
-	if !strings.Contains(err.Error(), "Antigravity is not signed in") || !strings.Contains(err.Error(), "ap agy") || !errors.Is(err, cause) {
+	if !strings.HasPrefix(err.Error(), "Antigravity"+notSignedIn) || strings.Contains(err.Error(), "acp") {
 		t.Fatalf("auth-required error not explained: %v", err)
 	}
 	other := errors.New("acp session/new: boom")

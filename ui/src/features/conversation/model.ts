@@ -107,6 +107,11 @@ export type NoticePayload = {
   severity?: string
   title?: string
   description?: string | null
+  /** "auth_required" when the agent must sign in before the chat can start. */
+  code?: string
+  harness?: string
+  /** The agent's ways to sign in, so the card needs no round trip. */
+  methods?: { id: string; label: string }[]
 }
 
 export type CompactionPayload = {

@@ -1,6 +1,6 @@
 import { queryOptions, useQueries, useQuery, type UseQueryOptions } from "@tanstack/react-query"
 import { array, boolean, number, object, optional, string } from "@/lib/validate"
-import { ApiError, LOCAL, api } from "@/lib/api"
+import { ApiError, LOCAL, api, routeMissing } from "@/lib/api"
 import type { Identity, TailnetNode, Topology } from "@/lib/api-types"
 import { useEventsConnected } from "@/features/events/use-events"
 
@@ -219,7 +219,7 @@ export function useMachineQueries<T>(
           error,
           stale: !machine.online || result?.isStale === true,
           pending,
-          needsUpdate: machine.id !== LOCAL && error instanceof ApiError && error.status === 404,
+          needsUpdate: machine.id !== LOCAL && routeMissing(error),
           updatedAt: result?.dataUpdatedAt ?? 0,
         }
       })

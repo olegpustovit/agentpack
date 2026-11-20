@@ -16,7 +16,7 @@ import { harnessName, relativeTime } from "@/lib/format"
 import { clock, goalElapsedMs, liveGoal } from "@/lib/goal"
 import { useNow } from "@/lib/use-now"
 import { hud } from "@/lib/hud"
-import { api, LOCAL } from "@/lib/api"
+import { api, ApiError, LOCAL } from "@/lib/api"
 import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, olderConversationPage, type ConversationPage } from "./queries"
 import { configRole, dangerousMode, parseConfigOptions } from "./config-options"
 import type { LogEntry, ThreadItem } from "./model"
@@ -131,7 +131,8 @@ export default function ConversationPane({
   const live = !readOnly && !starting && info?.state.running === true
   // A stopped chat comes back on its next message: the gateway restarts it under the same ID, reloads
   // the agent's conversation and sends the message once it runs.
-  const resumable = !readOnly && !starting && !live && Boolean(info?.ended_at && info.agent_session_id)
+  // One that never started (its agent wasn't signed in, say) starts fresh the same way.
+  const resumable = !readOnly && !starting && !live && Boolean(info?.ended_at)
   // A first message from New session waits in the composer, held like one typed while starting.
   const [held, setHeld] = useState(() => firstMessage(sessionId) !== "")
   const { data: tail, error: conversationError } = useQuery({ ...conversationEventsQuery(machine, sessionId, live), retry: false })
@@ -393,7 +394,9 @@ export default function ConversationPane({
     onSuccess: () => queryClient.invalidateQueries({ queryKey: sessionsQuery(machine, false).queryKey }),
     onError: (error, text) => {
       setDraft((current) => current || text)
-      hud.error(conversationErrorMessage(machine, "resume the chat", error))
+      // An older peer can't start a chat whose agent never started.
+      const old = error instanceof ApiError && error.status === 400 && error.message === "This chat cannot be resumed."
+      hud.error(old ? `${machine === LOCAL ? "Gateway" : "Peer"} needs an update to restart this chat.` : conversationErrorMessage(machine, "resume the chat", error))
     },
   })
   const upload = useMutation({
@@ -622,6 +625,7 @@ export default function ConversationPane({
                   animateAfter={animateAfter}
                   onOpenSubagent={openSubagent}
                   onStopSubagent={readOnly ? undefined : (id) => stopSubagent.mutate(id)}
+                  onSignedIn={!subagent && resumable ? () => resume.mutate(draft.trim()) : undefined}
                 />
               )}
               {held && <p className="flex items-center justify-end gap-(--s2) text-(length:--fs-xs) text-(--fg3)"><Spinner aria-hidden />Sends when {harnessName(info?.harness ?? "agent")} is ready</p>}
@@ -887,6 +891,12 @@ export default function ConversationPane({
                           </div>
                         )
                       })}
+                      {info?.harness === "omp" && (
+                        <>
+                          <div role="separator" className="mx-[11px] my-[5px] h-px bg-(--menu-sep)" />
+                          <MenuItem onClick={() => void navigate({ to: "/settings/$pane", params: { pane: "omp" } })}>Oh My Pi settings…</MenuItem>
+                        </>
+                      )}
                     </MenuContent>
                   </Menu>
                 )}

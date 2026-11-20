@@ -133,19 +133,37 @@ func stuckChat(t *testing.T, g *Gateway, dir, id string) {
 	}
 }
 
-func TestReaperSettlesAChatWhoseWorkerDied(t *testing.T) {
+func TestReaperSettlesAChatWhoseWorkerDiedAndResumesItOnce(t *testing.T) {
 	home := t.TempDir()
-	g, _ := identityGateway(t, home, nil)
+	launched := make(chan SessionInfo, 2)
+	var g *Gateway
+	g, _ = identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+		launched <- info
+		// The resumed agent dies at once, like a machine that drops off again.
+		_, err := g.auth.store.DB.Exec(`UPDATE sessions SET ended_at=2,conversation_state='working' WHERE id=?`, info.ID)
+		return info.ID, err
+	})
 	stuckChat(t, g, seedFolder(t, home), "session-dead")
 	g.reapStoppedChats(context.Background())
-	g.reapStoppedChats(context.Background()) // settled once, not again
+	g.starting.Wait()
+	if got := <-launched; got.ID != "session-dead" || got.AgentSessionID != "agent-1" {
+		t.Fatalf("resumed %+v", got)
+	}
+	// Dying again inside the window settles the chat and leaves it for the person.
+	g.reapStoppedChats(context.Background())
+	g.starting.Wait()
+	select {
+	case got := <-launched:
+		t.Fatalf("resumed twice: %+v", got)
+	default:
+	}
 	stored, err := storedSession(context.Background(), g.auth.store.Reader, "session-dead")
 	if err != nil || stored.ConversationState != "idle" || stored.State.Running || len(stored.Subagents) != 0 {
 		t.Fatalf("settled row: %+v, %v", stored, err)
 	}
-	entries, _, _, err := storedConversationTail(context.Background(), g.auth.store.Reader, "session-dead", 0)
-	if err != nil || len(entries) != 2 || entries[0].Kind != "notice" || entries[1].Kind != "agent_exit" {
-		t.Fatalf("transcript %+v, %v", entries, err)
+	var body string
+	if err := g.auth.store.Reader.QueryRow("SELECT group_concat(body) FROM conversation_events WHERE session_id=?", "session-dead").Scan(&body); err != nil || !strings.Contains(body, "resumes by itself") || !strings.Contains(body, "Send a message to resume") {
+		t.Fatalf("transcript %q, %v", body, err)
 	}
 }
 
@@ -183,5 +201,37 @@ func TestResumedWorkerReclaimsItsDirectoryOnlyWhenNoWorkerOwnsIt(t *testing.T) {
 	}
 	if _, err := createSessionDirectory(root, "session-old"); err == nil {
 		t.Fatal("reclaimed a directory a worker owns")
+	}
+}
+
+// A chat whose agent was not signed in records a sign-in notice, and after the sign-in it starts
+// fresh under its own ID even though the agent never made a session.
+func TestSignInFailureMarksTheNoticeAndTheChatStartsLater(t *testing.T) {
+	home := t.TempDir()
+	dir := seedFolder(t, home)
+	launches := 0
+	launched := make(chan SessionInfo, 1)
+	g, _ := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+		if launches++; launches == 1 {
+			return "", errors.New("Antigravity" + notSignedIn + "gigacomp.")
+		}
+		launched <- info
+		return info.ID, nil
+	})
+	info, err := g.startSession(context.Background(), LocalActor("local"), SessionInfo{Directory: dir, Harness: "agy", Mode: "default", Transport: "acp"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.starting.Wait()
+	var body string
+	if err := g.auth.store.Reader.QueryRow("SELECT group_concat(body) FROM conversation_events WHERE session_id=?", info.ID).Scan(&body); err != nil || !strings.Contains(body, `"code":"auth_required"`) || !strings.Contains(body, `"harness":"agy"`) || !strings.Contains(body, `"id":"google"`) {
+		t.Fatalf("transcript %q, %v", body, err)
+	}
+	if _, err := g.resumeSession(context.Background(), info.ID, "hello"); err != nil {
+		t.Fatalf("resume after sign-in: %v", err)
+	}
+	g.starting.Wait()
+	if got := <-launched; got.ID != info.ID || got.AgentSessionID != "" {
+		t.Fatalf("worker launch %+v", got)
 	}
 }

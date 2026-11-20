@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
 import { projectsQuery } from "@/features/sessions/queries"
 import { SaveForm } from "@/features/sessions/session-sheets"
-import { ApiError } from "@/lib/api"
+import { routeMissing } from "@/lib/api"
 import type { MCPServerInput } from "@/lib/api-types"
 import { basename, plural } from "@/lib/format"
 import { hud } from "@/lib/hud"
@@ -117,7 +117,7 @@ function InstallMCPForm({ server, onDone }: { server: MCPServerInput; onDone: ()
     install.mutate()
   }
 
-  const failure = install.error instanceof ApiError && install.error.status === 404 ? "Needs update" : install.error && errorText(install.error)
+  const failure = routeMissing(install.error) ? "Needs update" : install.error && errorText(install.error)
   return (
     <form onSubmit={submit} className="contents">
       <SheetTitle>{`Install ${server.name}`}</SheetTitle>

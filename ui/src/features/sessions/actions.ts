@@ -1,6 +1,6 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { useState } from "react"
-import { api, ApiError } from "@/lib/api"
+import { api, routeMissing } from "@/lib/api"
 import { hud } from "@/lib/hud"
 import { rowKey, sessionLabel, type ListedSession } from "./group"
 import { sessionsQuery } from "./queries"
@@ -8,7 +8,7 @@ import { reusesOperationId } from "./rules"
 
 // An older gateway has no switch.
 export function toolsError(error: unknown): string {
-  return error instanceof ApiError && error.status === 404 ? "Needs update" : errorText(error)
+  return routeMissing(error) ? "Needs update" : errorText(error)
 }
 
 function errorText(error: unknown): string {

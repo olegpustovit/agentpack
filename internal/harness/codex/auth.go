@@ -224,19 +224,8 @@ func finishIsolatedLoginHome(loginHome, staged string) error {
 	if !validAuthData(data) {
 		return fmt.Errorf("Codex login wrote invalid auth in %s; left it for recovery", loginHome)
 	}
-	native, ok := nativeHome()
-	if !ok {
-		return fmt.Errorf("cannot find native Codex home to persist login from %s", loginHome)
-	}
-	destination, err := sharedAuthSource(native)
+	native, err := persistLogin(data)
 	if err != nil {
-		return err
-	}
-	shared, err := paths.SharedCodexAuthPath()
-	if err != nil {
-		return err
-	}
-	if err := installAuthData(destination, shared, data); err != nil {
 		return fmt.Errorf("persist Codex login from %s: %w", loginHome, err)
 	}
 	if err := prepareAuth(native, staged); err != nil {
@@ -248,6 +237,23 @@ func finishIsolatedLoginHome(loginHome, staged string) error {
 		}
 	}
 	return os.RemoveAll(loginHome)
+}
+
+// persistLogin installs a fresh login's auth.json as the credential every staged home shares.
+func persistLogin(data []byte) (string, error) {
+	native, ok := nativeHome()
+	if !ok {
+		return "", fmt.Errorf("cannot find the native Codex home")
+	}
+	destination, err := sharedAuthSource(native)
+	if err != nil {
+		return "", err
+	}
+	shared, err := paths.SharedCodexAuthPath()
+	if err != nil {
+		return "", err
+	}
+	return native, installAuthData(destination, shared, data)
 }
 
 func installAuthData(destination, shared string, data []byte) error {
@@ -391,6 +397,12 @@ func finishAuthLaunch(ctxHome string, arguments []string) error {
 		}
 		return nil
 	}
+	return logoutShared()
+}
+
+// logoutShared removes the credential every staged home shares and records the logout, so a stale
+// keyring entry cannot sign Codex back in.
+func logoutShared() error {
 	if native, ok := nativeHome(); ok {
 		nativeAuth := filepath.Join(native, "auth.json")
 		if _, err := os.Stat(nativeAuth); os.IsNotExist(err) {

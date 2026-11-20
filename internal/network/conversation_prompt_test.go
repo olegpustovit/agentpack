@@ -166,6 +166,11 @@ func TestConversationSessionFollowsAgentOptionAndModeUpdates(t *testing.T) {
 	if got := string(session.ConfigJSON()); !strings.Contains(got, `"currentValue":"plan"`) {
 		t.Fatalf("option update not applied: %s", got)
 	}
+	log.Append("config_option_update", 3, []byte(`{"_subagent":"child","configOptions":[{"id":"model","category":"model","type":"select","currentValue":"haiku"}]}`))
+	log.Append("current_mode_update", 4, []byte(`{"_subagent":"child","sessionUpdate":"current_mode_update","currentModeId":"default"}`))
+	if got := string(session.ConfigJSON()); strings.Contains(got, "haiku") || !strings.Contains(got, `"currentValue":"plan"`) {
+		t.Fatalf("subagent update replaced the chat's options: %s", got)
+	}
 }
 
 func TestConversationSessionReportsTheAgentsTitle(t *testing.T) {

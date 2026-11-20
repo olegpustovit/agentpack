@@ -7,9 +7,10 @@ import { ListDetail } from "@/features/shell/list-detail"
 import { ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { SourceList, SourceRow } from "@/components/kit/list"
+import { cn } from "@/lib/utils"
 import { AccountPane } from "./account-pane"
 import { NotificationsPane } from "./notifications-pane"
-import { AppearancePane, ConnectionsPane, DiagnosticsPane, GeneralPane, SharingPane } from "./panes"
+import { AppearancePane, ConnectionsPane, DiagnosticsPane, GeneralPane, OmpPane, SharingPane } from "./panes"
 import { ReplicationPane } from "./replication-pane"
 
 const sections = [
@@ -18,6 +19,8 @@ const sections = [
   { id: "sharing", label: "Sharing", view: SharingPane },
   { id: "replication", label: "Replication", view: ReplicationPane },
   { id: "connections", label: "Connections", view: ConnectionsPane },
+  // Role tables need more than the 640 px form width.
+  { id: "omp", label: "Oh My Pi", view: OmpPane, wide: true },
   { id: "diagnostics", label: "Diagnostics", view: DiagnosticsPane },
   { id: "appearance", label: "Appearance", view: AppearancePane },
   { id: "account", label: "Account", view: AccountPane },
@@ -46,7 +49,7 @@ export function SettingsView({ pane }: { pane: string }) {
     </SourceList>
   )
   const body = (
-    <div className="flex h-full min-h-0 max-w-160 min-w-0 flex-1 flex-col gap-(--s6) overflow-y-auto p-(--s6)">
+    <div className={cn("flex h-full min-h-0 min-w-0 flex-1 flex-col gap-(--s6) overflow-y-auto p-(--s6)", current && "wide" in current ? "max-w-270" : "max-w-160")}>
       {current ? (
         <Suspense fallback={<RowSkeleton lines={2} />}><current.view /></Suspense>
       ) : (

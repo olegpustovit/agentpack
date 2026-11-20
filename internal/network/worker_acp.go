@@ -510,24 +510,24 @@ func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection
 	return setup, nil
 }
 
-// explainACPAuthRequired turns an agent's bare "Authentication required" into what to do about it:
-// a chat cannot run a login flow, so the agent must be signed in from a terminal on this machine.
+// explainACPAuthRequired turns an agent's bare "Authentication required" into a sentence that names
+// the agent and machine; the chat then offers to sign the agent in.
 func explainACPAuthRequired(err error, target base.Target) error {
 	var request *sdkacp.RequestError
 	if !errors.As(err, &request) || request.Code != sdkacp.NewAuthRequired(nil).Code {
 		return err
 	}
-	name := base.DisplayName(target)
 	host, _ := os.Hostname()
 	if host == "" {
 		host = "this machine"
 	}
-	command := "ap " + string(target)
-	if target == base.Cursor {
-		command = "ap agent"
-	}
-	return fmt.Errorf("%s is not signed in on %s. Run %s in a terminal there, sign in, then start the chat again: %w", name, host, command, err)
+	// The gateway reads this sentence from the worker's last line to offer a sign-in; see failStart.
+	// No final period: the CLI's error renderer ends the sentence.
+	return errors.New(base.DisplayName(target) + notSignedIn + host)
 }
+
+// notSignedIn joins an agent's name and a machine's in the start failure of an agent that needs a sign-in.
+const notSignedIn = " is not signed in on "
 
 func marshalConfigOptions(opts []sdkacp.SessionConfigOption) json.RawMessage {
 	if opts == nil {

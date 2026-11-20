@@ -38,6 +38,27 @@ test("forgetting a recent folder does not stop a session", async ({ page }) => {
 })
 
 // Moved from Recent folders to Machines: unavailable folders keep their reason and cannot start a session.
+test("an agent signs out from the machine page after a confirmation", async ({ page }) => {
+  await mockAPI(page)
+  let signedIn = true
+  let loggedOut = 0
+  await page.route("**/api/agents", (route) =>
+    route.fulfill({ json: { agents: [{ harness: "codex", installed: true, signed_in: signedIn, label: signedIn ? "dev@example.com" : undefined, sign_out: signedIn, methods: [{ id: "chatgpt", label: "ChatGPT account" }] }] } }),
+  )
+  await page.route("**/api/agents/codex/logout", (route) => {
+    loggedOut++
+    signedIn = false
+    return route.fulfill({ json: { signed_out: true } })
+  })
+  await page.goto("/machines/local")
+  await page.getByRole("button", { name: "Sign out…" }).click()
+  const confirm = page.getByRole("alertdialog")
+  await expect(confirm).toContainText("Sign Codex out on Gateway machine?")
+  await confirm.getByRole("button", { name: "Sign out" }).click()
+  await expect(page.getByText("Not signed in")).toBeVisible()
+  expect(loggedOut).toBe(1)
+})
+
 test("recent folders retain unavailable reasons and only available paths can start", async ({ page }) => {
   await mockAPI(page)
   await page.route(projectsPath, (route) =>

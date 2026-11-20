@@ -15,7 +15,7 @@ describe("conversation peer compatibility", () => {
     expect(archiveUnavailableMessage(new ApiError("worker offline", 503))).toBeUndefined()
   })
   it("maps missing conversation endpoints to Needs update", () => {
-    const missing = new ApiError("missing", 404)
+    const missing = new ApiError("404 page not found", 404)
     expect(conversationNeedsUpdate(missing)).toBe(true)
     expect(conversationErrorMessage("remote", "show conversations", missing)).toBe("Peer needs an update to show conversations.")
     expect(conversationNeedsUpdate(new ApiError("failed", 500), new Error("network"))).toBe(false)

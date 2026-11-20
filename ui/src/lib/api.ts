@@ -10,6 +10,12 @@ export class ApiError extends Error {
   }
 }
 
+// A 404 from a router without the route (an older gateway or worker), not a missing record.
+// The gateway's /api/ fallback says "not found"; Go's default mux says "404 page not found".
+export function routeMissing(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 404 && (error.message === "not found" || error.message === "404 page not found")
+}
+
 export const LOCAL = "local"
 
 let onUnauthorized = () => {}
@@ -27,6 +33,20 @@ const technical = /\b(dial tcp|context (canceled|deadline exceeded)|EOF|connecti
 export function readableError(text: string, status: number): string {
   if (!technical.test(text)) return text
   return status >= 502 && status <= 504 ? "The machine didn't answer. It may be offline or restarting." : "Something went wrong on the machine. Try again."
+}
+
+// The error a failed response carries: the gateway's JSON error, or its plain text.
+export function responseError(res: Response, text: string): ApiError {
+  let error = ""
+  try {
+    const data: unknown = JSON.parse(text)
+    if (data && typeof data === "object" && "error" in data && typeof data.error === "string") error = data.error
+  } catch {
+    // Not JSON.
+  }
+  // A proxy in front of the gateway can answer with its own error page.
+  if (!error) error = /^\s*<(!doctype|html)/i.test(text) ? unreachableMessage(res.status) : text.slice(0, 200) || res.statusText
+  return new ApiError(readableError(error.trim(), res.status), res.status)
 }
 
 // Mutations must pass `machine` explicitly; there is no default target.
@@ -60,24 +80,13 @@ export async function api<T>(
     if (res.ok) recordAPI(method, path, traceparent, 0, error)
     throw error
   })
-  let data: unknown
-  try {
-    data = text ? JSON.parse(text) : undefined
-  } catch {
-    data = undefined
-  }
   if (res.status === 401 && path !== "/api/login" && path !== "/api/claim") onUnauthorized()
-  if (!res.ok) {
-    const error =
-      data && typeof data === "object" && "error" in data && typeof data.error === "string"
-        ? data.error
-        : // A proxy in front of the gateway can answer with its own error page.
-          /^\s*<(!doctype|html)/i.test(text)
-          ? unreachableMessage(res.status)
-          : text.slice(0, 200) || res.statusText
-    throw new ApiError(readableError(error.trim(), res.status), res.status)
+  if (!res.ok) throw responseError(res, text)
+  try {
+    return (text ? JSON.parse(text) : undefined) as T
+  } catch {
+    return undefined as T
   }
-  return data as T
 }
 
 // POSTs body and hands each NDJSON line to onLine as it arrives, so a slow check reports progress.

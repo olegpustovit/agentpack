@@ -45,3 +45,6 @@ push_keys and push_subscriptions replicate Web Push VAPID key pairs and browser
 endpoints, secrets included, so Main can notify every device. The oldest key pair
 (created_at, then public_key) is current; each subscription records the key it was
 made with, and its creating node for meshes without a Main.
+
+omp_settings replicates network-wide Oh My Pi settings, one sparse JSON row per changed key.
+Each gateway renders the rows into its own `omp/settings.yml` overlay.

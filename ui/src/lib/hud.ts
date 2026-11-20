@@ -47,3 +47,10 @@ export const hud = {
     )
   },
 }
+
+export function copyText(text: string) {
+  ;(navigator.clipboard?.writeText(text) ?? Promise.reject()).then(
+    () => hud.success("Copied"),
+    () => hud.error("Couldn't copy. Select the text and copy it manually."),
+  )
+}

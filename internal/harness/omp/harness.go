@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -90,6 +91,12 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 		return nil, err
 	}
 	args := []string{"--plugin-dir", root}
+	// Before the caller's arguments: --config is repeatable and later overlays win.
+	if overlay, err := OverlayPath(); err == nil && !slices.Contains(ctx.Arguments, overlay) {
+		if _, err := os.Stat(overlay); err == nil {
+			args = append(args, "--config", overlay)
+		}
+	}
 	if ctx.Yolo {
 		args = append(args, "--yolo")
 	}

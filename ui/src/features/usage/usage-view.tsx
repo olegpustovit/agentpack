@@ -10,7 +10,7 @@ import { LimitsSummary } from "@/features/limits/limits-view"
 import { AgentTile } from "@/features/sessions/session-row"
 import { StatusSlot } from "@/features/status/status-bar"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
-import { ApiError } from "@/lib/api"
+import { routeMissing } from "@/lib/api"
 import { basename, plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import {
@@ -79,7 +79,7 @@ export function UsageView({ view }: { view: View }) {
       <ToolbarTitle title={title} subtitle={`${subtitle[view.kind]} · ${period}`} />
       <RangeControls range={usage.range} back={usage.back} period={period} />
       <StatusSlot>{`${plural(sessions.length, "session")} · ${fmt(rows.reduce((sum, row) => sum + row.output_tokens, 0))} output tokens · ${period.toLowerCase()}`}</StatusSlot>
-      {query.error instanceof ApiError && query.error.status === 404 ? (
+      {routeMissing(query.error) ? (
         <Banner tone="warn">This gateway needs an update to show usage.</Banner>
       ) : (
         query.error && <Banner tone="danger">{`Couldn't load usage: ${query.error.message}`}</Banner>

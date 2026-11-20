@@ -80,6 +80,25 @@ The gateway reads `omp usage --json --no-extensions` without inference calls.
 Provider/account windows stay separate; unavailable percentages remain unknown.
 Native OMP usage caches may be updated by this command.
 
+## Network-wide settings
+
+Settings → Oh My Pi in the web UI edits one OMP configuration shared by every
+machine in the mesh. Each change is checked with `omp config set` in a
+throwaway agent directory, then stored in the replicated `omp_settings` table
+of state.db. Only changed keys are stored. Every gateway renders the table into
+`$AGENTPACK_HOME/omp/settings.yml`, and every OMP launch (terminal and chat)
+passes that file to `omp --config` ahead of your own arguments. Your own
+`--config` overlays still win. Resetting a key deletes its row, so the
+machine's own `~/.omp` value or OMP's default applies again. Agentpack never
+writes `~/.omp`.
+
+The page offers the rows of OMP's own `/settings` panel except Appearance and
+credentials, plus the model roles, presets and cycle order. The schema is
+generated from the OMP sources for the pinned release named in
+`internal/harness/omp/settings-ui.json`. To regenerate it for a new release, run
+`OMP_SOURCE=<oh-my-pi checkout at that tag> go test ./internal/harness/omp -run TestGenerateSettingsUI`
+with that release's `omp` installed.
+
 ## Validation
 
 The integration targets OMP 18.14.0. Run the native discovery fixture with:

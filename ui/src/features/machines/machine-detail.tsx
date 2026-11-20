@@ -5,11 +5,13 @@ import { Package, Plus, Server, SquareTerminal, Trash2 } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Inspector, InspectorHead, KeyValue, Meter, Section } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { StatusGlyph } from "@/components/kit/status-dot"
-import { ConfirmAlert, ConfirmAlertContent, RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
+import { ConfirmAlert, ConfirmAlertContent, Sheet, SheetContent, SheetDescription, SheetTitle, RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
 import { ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useEventsConnected } from "@/features/events/use-events"
 import { AddPackageSheet } from "@/features/library/add-package-sheet"
+import { agentsQuery } from "@/features/agents/queries"
+import { SignIn } from "@/features/agents/sign-in"
 import { limitsQuery } from "@/features/limits/queries"
 import { replicationQuery } from "@/features/library/queries"
 import { replicationStatus } from "@/features/settings/model"
@@ -17,7 +19,7 @@ import { settingsQuery } from "@/features/settings/queries"
 import { needsLogin, remainingPercent, usable, windowsOf } from "@/features/limits/model"
 import { NewSessionSheet } from "@/features/sessions/new-session-sheet"
 import { projectsQuery, sessionsQuery } from "@/features/sessions/queries"
-import { api, ApiError, LOCAL } from "@/lib/api"
+import { api, LOCAL, routeMissing } from "@/lib/api"
 import type { LimitSnapshot, ProjectRow, SessionInfo } from "@/lib/api-types"
 import { basename, harnessName, plural, relativeTime, shortAge } from "@/lib/format"
 import { hud } from "@/lib/hud"
@@ -71,7 +73,7 @@ function MachineView({ machine }: { machine: Machine }) {
   const latest = known.latest
   const version = info.data?.version ?? known.version
   const outdated = !!version && !!latest && compareAgentpackVersions(version, latest) < 0
-  const needsUpdate = machine.id !== LOCAL && [projects.error, info.error].some((error) => error instanceof ApiError && error.status === 404)
+  const needsUpdate = machine.id !== LOCAL && [projects.error, info.error].some(routeMissing)
   const updating = updatingFrom !== undefined || updateStatus.data?.state === "running"
 
   const update = useMutation({
@@ -156,7 +158,7 @@ function MachineView({ machine }: { machine: Machine }) {
 
         <Section title="Agents">
           {machine.online && info.isPending && <RowSkeleton lines={2} />}
-          {info.data && <AgentsGrid agents={info.data.agents} limits={limits} />}
+          {info.data && <AgentsGrid machine={machine} agents={info.data.agents} limits={limits} />}
           {!machine.online && !info.data && <p className="text-(--fg2)">Agents are shown while {machine.name} is online.</p>}
         </Section>
 
@@ -303,45 +305,102 @@ function MachineView({ machine }: { machine: Machine }) {
   )
 }
 
-function AgentsGrid({ agents, limits }: { agents: MachineAgent[]; limits: LimitSnapshot[] }) {
+function AgentsGrid({ machine, agents, limits }: { machine: Machine; agents: MachineAgent[]; limits: LimitSnapshot[] }) {
+  // A peer without /api/agents falls back to what its limit probes imply.
+  const queryClient = useQueryClient()
+  const accounts = useQuery({ ...agentsQuery(machine.id), enabled: machine.online }).data
+  const [signingIn, setSigningIn] = useState<string>()
+  const [signingOut, setSigningOut] = useState<string>()
+  const signOut = useMutation({
+    mutationFn: (harness: string) => api(`/api/agents/${encodeURIComponent(harness)}/logout`, { machine: machine.id, method: "POST" }),
+    onSuccess: (_, harness) => {
+      hud.success(`Signed ${harnessName(harness)} out on ${machine.name}`)
+      void queryClient.invalidateQueries({ queryKey: agentsQuery(machine.id).queryKey })
+    },
+    onError: (error, harness) => hud.error(`Couldn't sign ${harnessName(harness)} out on ${machine.name}: ${routeMissing(error) ? "needs an update" : error.message}`, routeMissing(error) ? undefined : () => signOut.mutate(harness)),
+  })
+  const signingInAccount = accounts?.find((account) => account.harness === signingIn)
   return (
-    <DataGrid aria-label="Agents" className="min-w-100">
-      <DataGridHead>
-        <DataGridRow>
-          <DataGridHeaderCell>Agent</DataGridHeaderCell>
-          <DataGridHeaderCell className="w-24">Version</DataGridHeaderCell>
-          <DataGridHeaderCell className="w-28">Signed in</DataGridHeaderCell>
-          <DataGridHeaderCell className="w-36">Limits</DataGridHeaderCell>
-        </DataGridRow>
-      </DataGridHead>
-      <tbody>
-        {agents.map((agent) => {
-          const snapshot = limits.find((item) => item.harness === agent.harness)
-          const left = snapshot && usable(snapshot)
-            ? Math.min(...windowsOf(snapshot).map((window) => remainingPercent(window) ?? 100))
-            : undefined
-          const signedIn = !agent.installed || !snapshot ? undefined : needsLogin(snapshot) ? "Needs login" : usable(snapshot) ? "Yes" : undefined
-          return (
-            <DataGridRow key={agent.harness}>
-              <DataGridCell>{harnessName(agent.harness)}</DataGridCell>
-              <DataGridCell className={agent.installed ? "tabular-nums" : "text-(--fg3)"}>{agent.installed ? agent.version || "—" : "Not installed"}</DataGridCell>
-              <DataGridCell>
-                {signedIn === "Needs login" ? (
-                  <span className="flex items-center gap-(--s2)"><StatusGlyph state="needsYou" />Needs login</span>
-                ) : signedIn ?? (agent.installed && <span className="text-(--fg3)">—</span>)}
-              </DataGridCell>
-              <DataGridCell>
-                {left !== undefined ? (
-                  <span className="flex items-center gap-(--s2)">
-                    <span className="w-16 shrink-0"><Meter value={left} label={`${harnessName(agent.harness)} limit left`} /></span>
-                    {`${Math.round(left)}% left`}
-                  </span>
-                ) : agent.installed ? <span className="text-(--fg3)">—</span> : null}
-              </DataGridCell>
-            </DataGridRow>
-          )
-        })}
-      </tbody>
-    </DataGrid>
+    <>
+      <DataGrid aria-label="Agents" className="min-w-100">
+        <DataGridHead>
+          <DataGridRow>
+            <DataGridHeaderCell>Agent</DataGridHeaderCell>
+            <DataGridHeaderCell className="w-24">Version</DataGridHeaderCell>
+            <DataGridHeaderCell className="w-44">Account</DataGridHeaderCell>
+            <DataGridHeaderCell className="w-36">Limits</DataGridHeaderCell>
+          </DataGridRow>
+        </DataGridHead>
+        <tbody>
+          {agents.map((agent) => {
+            const snapshot = limits.find((item) => item.harness === agent.harness)
+            const account = accounts?.find((item) => item.harness === agent.harness)
+            const left = snapshot && usable(snapshot)
+              ? Math.min(...windowsOf(snapshot).map((window) => remainingPercent(window) ?? 100))
+              : undefined
+            const signedIn = !agent.installed || !snapshot ? undefined : needsLogin(snapshot) ? "Needs login" : usable(snapshot) ? "Yes" : undefined
+            return (
+              <DataGridRow key={agent.harness}>
+                <DataGridCell>{harnessName(agent.harness)}</DataGridCell>
+                <DataGridCell className={agent.installed ? "tabular-nums" : "text-(--fg3)"}>{agent.installed ? agent.version || "—" : "Not installed"}</DataGridCell>
+                <DataGridCell>
+                  {account?.installed ? (
+                    account.signedIn ? (
+                      <span className="flex min-w-0 items-center gap-(--s2)">
+                        <span className="truncate" title={account.label}>{account.label || "Signed in"}</span>
+                        {account.signOut && (
+                          <Button type="button" size="sm" variant="ghost" className="shrink-0" disabled={signOut.isPending && signOut.variables === agent.harness} onClick={() => setSigningOut(agent.harness)}>Sign out…</Button>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-(--s2)">
+                        <StatusGlyph state="needsYou" />
+                        <span className="text-(--fg2)">Not signed in</span>
+                        {account.methods.length > 0 && (
+                          <Button type="button" size="sm" variant="ghost" onClick={() => setSigningIn(agent.harness)}>Sign in…</Button>
+                        )}
+                      </span>
+                    )
+                  ) : signedIn === "Needs login" ? (
+                    <span className="flex items-center gap-(--s2)"><StatusGlyph state="needsYou" />Needs login</span>
+                  ) : signedIn ?? (agent.installed && <span className="text-(--fg3)">—</span>)}
+                </DataGridCell>
+                <DataGridCell>
+                  {left !== undefined ? (
+                    <span className="flex items-center gap-(--s2)">
+                      <span className="w-16 shrink-0"><Meter value={left} label={`${harnessName(agent.harness)} limit left`} /></span>
+                      {`${Math.round(left)}% left`}
+                    </span>
+                  ) : agent.installed ? <span className="text-(--fg3)">—</span> : null}
+                </DataGridCell>
+              </DataGridRow>
+            )
+          })}
+        </tbody>
+      </DataGrid>
+      <ConfirmAlert open={signingOut !== undefined} onOpenChange={(open) => { if (!open) setSigningOut(undefined) }}>
+        {signingOut && (
+          <ConfirmAlertContent
+            title={`Sign ${harnessName(signingOut)} out on ${machine.name}?`}
+            description={`New chats with ${harnessName(signingOut)} on ${machine.name} will ask you to sign in again. Running chats keep their session until they stop.`}
+            destructiveLabel="Sign out"
+            onConfirm={() => {
+              const harness = signingOut
+              setSigningOut(undefined)
+              signOut.mutate(harness)
+            }}
+          />
+        )}
+      </ConfirmAlert>
+      <Sheet open={signingIn !== undefined} onOpenChange={(open) => !open && setSigningIn(undefined)}>
+        {signingIn && (
+          <SheetContent>
+            <SheetTitle>Sign in to {harnessName(signingIn)}</SheetTitle>
+            <SheetDescription>The sign-in runs on {machine.name}, and the login stays there.</SheetDescription>
+            <SignIn machine={machine.id} machineName={machine.name} harness={signingIn} methods={signingInAccount?.methods ?? []} />
+          </SheetContent>
+        )}
+      </Sheet>
+    </>
   )
 }

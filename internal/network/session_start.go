@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
@@ -78,7 +80,14 @@ func (g *Gateway) resumeSession(ctx context.Context, id, prompt string) (Session
 	g.chatLifecycle.Lock()
 	defer g.chatLifecycle.Unlock()
 	// A worker that died without ending its row is settled first, so the claim below sees it stopped.
+	// The person's own message resumes this chat, so the reaper doesn't resume it too.
+	g.autoResume(id)
 	g.reapStoppedChats(ctx)
+	return g.claimResume(ctx, id, prompt)
+}
+
+// claimResume restarts a stopped chat; the caller holds chatLifecycle.
+func (g *Gateway) claimResume(ctx context.Context, id, prompt string) (SessionInfo, error) {
 	info, err := storedSession(ctx, g.auth.store.Reader, id)
 	if err != nil {
 		return SessionInfo{}, err
@@ -87,7 +96,8 @@ func (g *Gateway) resumeSession(ctx context.Context, id, prompt string) (Session
 	if err != nil {
 		return SessionInfo{}, err
 	}
-	if info.NodeID != local || info.Transport != "acp" || info.AgentSessionID == "" || !info.ArchivedAt.IsZero() {
+	// A chat whose agent never started (it wasn't signed in, say) has no agent session; it starts fresh.
+	if info.NodeID != local || info.Transport != "acp" || !info.ArchivedAt.IsZero() {
 		return SessionInfo{}, errNotResumable
 	}
 	if !g.knownDirectory(info.Directory) && !g.knownWorktree(ctx, info.Directory) {
@@ -113,7 +123,12 @@ func (g *Gateway) resumeSession(ctx context.Context, id, prompt string) (Session
 // row listed, which an empty chat otherwise would not be.
 func (g *Gateway) failStart(ctx context.Context, info SessionInfo, cause error) {
 	err := func() error {
-		if err := recordStop(ctx, g.auth.store, info.ID, fmt.Sprintf("Could not start %s", info.Harness), cause.Error()); err != nil {
+		notice := map[string]any{"title": fmt.Sprintf("Could not start %s", info.Harness), "description": cause.Error()}
+		// The chat offers a sign-in in place of the error, with the agent's ways to sign in.
+		if strings.Contains(cause.Error(), notSignedIn) {
+			notice["code"], notice["harness"], notice["methods"] = "auth_required", info.Harness, loginMethods(info.Harness)
+		}
+		if err := recordStop(ctx, g.auth.store, info.ID, notice); err != nil {
 			return err
 		}
 		// A worker that failed early already ended the row, and hid it for having no prompt yet.
@@ -131,13 +146,14 @@ func (g *Gateway) failStart(ctx context.Context, info SessionInfo, cause error) 
 }
 
 // recordStop ends a chat's transcript with why it stopped. Only call it while no worker writes the log.
-func recordStop(ctx context.Context, store *state.Store, id, title, description string) error {
+func recordStop(ctx context.Context, store *state.Store, id string, notice map[string]any) error {
 	log, err := newConversationLog(ctx, store, id, func(error) {})
 	if err != nil {
 		return err
 	}
 	now := time.Now().UnixMilli()
-	log.Append("notice", now, mustRawJSON(map[string]string{"sessionUpdate": "notice", "severity": "error", "title": title, "description": description}))
+	notice["sessionUpdate"], notice["severity"] = "notice", "error"
+	log.Append("notice", now, mustRawJSON(notice))
 	log.Append("agent_exit", now, json.RawMessage(`{}`))
 	return log.Flush()
 }
@@ -149,8 +165,16 @@ func (g *Gateway) reapStoppedChats(ctx context.Context) {
 	g.importLegacySessions(ctx)
 	rows, err := querySessions(ctx, g.auth.store.Reader, "SELECT "+sessionColumns+` FROM sessions WHERE transport='acp' AND ended_at>0 AND archived_at=0 AND node_id=`+state.LocalNodeSQL+`
  AND (conversation_state<>'idle' OR subagents<>'' OR json_extract(state,'$.running'))`)
+	var resume []string
 	for _, info := range rows {
-		err = errors.Join(err, recordStop(ctx, g.auth.store, info.ID, fmt.Sprintf("%s stopped", info.Harness), "Its process ended before the turn finished. Send a message to resume the chat."))
+		// A turn cut off by sleep, a reboot or a crash carries on by itself, once per stop window.
+		auto := info.ConversationState == "working" && info.AgentSessionID != "" && g.autoResume(info.ID)
+		description := "Its process ended before the turn finished. Send a message to resume the chat."
+		if auto {
+			description = "Its process ended before the turn finished, so the chat resumes by itself."
+			resume = append(resume, info.ID)
+		}
+		err = errors.Join(err, recordStop(ctx, g.auth.store, info.ID, map[string]any{"title": fmt.Sprintf("%s stopped", info.Harness), "description": description}))
 		info.State.Running, info.State.Restarting = false, false
 		body, marshalErr := json.Marshal(info.State)
 		if marshalErr == nil {
@@ -158,11 +182,34 @@ func (g *Gateway) reapStoppedChats(ctx context.Context) {
 		}
 		err = errors.Join(err, marshalErr)
 	}
+	for _, id := range resume {
+		if _, resumeErr := g.claimResume(ctx, id, autoResumePrompt); resumeErr != nil && !errors.Is(resumeErr, errResumeConflict) {
+			err = errors.Join(err, resumeErr)
+		}
+	}
 	if err != nil {
 		_, event := obs.Start(ctx, "gateway", "reap_stopped_chats")
 		event.Fail(err)
 		event.End()
 	}
+}
+
+const autoResumePrompt = "Your last turn was cut off because this machine went offline or restarted. Continue where you left off."
+
+// autoResumeWindow keeps a chat whose agent dies again right after resuming from resuming forever.
+const autoResumeWindow = 10 * time.Minute
+
+// autoResume reports whether a chat may resume by itself now, and records that it did.
+func (g *Gateway) autoResume(id string) bool {
+	if at, ok := g.autoResumed[id]; ok && time.Since(at) < autoResumeWindow {
+		return false
+	}
+	if g.autoResumed == nil {
+		g.autoResumed = map[string]time.Time{}
+	}
+	maps.DeleteFunc(g.autoResumed, func(_ string, at time.Time) bool { return time.Since(at) >= autoResumeWindow })
+	g.autoResumed[id] = time.Now()
+	return true
 }
 
 // runReaper notices workers that died while this gateway runs.

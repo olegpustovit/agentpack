@@ -1,13 +1,15 @@
 import { useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react"
 import { loadStartChoices } from "./choices"
 import { useQuery } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import { FieldError, PopupSelect } from "@/components/kit/forms"
 import { Kbd } from "@/components/kit/feedback"
 import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
 import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
 import { useMachineQueries, useMachines, useReplicatedQueries } from "@/features/machines/queries"
-import { api, ApiError } from "@/lib/api"
+import { agentsQuery } from "@/features/agents/queries"
+import { api, ApiError, routeMissing } from "@/lib/api"
 import type { AgentSession, ProjectRow } from "@/lib/api-types"
 import { basename, harnessName, plural, relativeTime, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -20,19 +22,19 @@ import { projectsQuery, sessionsQuery } from "./queries"
 const DAY = 24 * 60 * 60 * 1000
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
 
-function chatUnavailableReason(error: unknown, machine: string, harness: string): string | undefined {
-  if (error instanceof ApiError && error.status === 404) {
+function chatUnavailableReason(error: unknown, machine: string): string | undefined {
+  if (routeMissing(error)) {
     return `Update Agentpack on ${machine} before starting Chat. Terminal remains available.`
   }
   const message = error instanceof Error ? error.message : ""
   if (message.includes("Node.js is required for ACP chat")) {
     return `Install Node.js on ${machine} to use Chat, or choose Terminal.`
   }
-  if (harness === "grok" && /authentication required|login required/i.test(message)) {
-    return `Sign in to ${harnessName(harness)} on ${machine} before using Chat, or choose Terminal.`
-  }
   return undefined
 }
+
+// An agent that isn't signed in can't list its past chats; the sign-in line below covers it.
+const signInError = (error: unknown) => error instanceof Error && /authentication required|login required|not signed in/i.test(error.message)
 
 // Opened from ?new=1, optionally with ?machine= and ?folder= from a sidebar folder.
 // The form mounts only while open, so each open starts from the defaults.
@@ -102,6 +104,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   const machineName = place?.machineName ?? "this machine"
   const startable = place ? canStart(place) : false
 
+  const accounts = useQuery({ ...agentsQuery(place?.machine ?? ""), enabled: Boolean(place?.online) })
   const pastSessions = useQuery({
     queryKey: ["agent-sessions", place?.machine, row?.directory, harnessId, modeValue],
     queryFn: async () => {
@@ -117,7 +120,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
 
   // Workspace: the folder itself, a new worktree, or a live worktree of this project (its path).
   const worktrees = useQuery({ ...worktreesQuery(place?.machine ?? ""), enabled: Boolean(place?.online && row?.available) })
-  const worktreesNeedUpdate = worktrees.error instanceof ApiError && worktrees.error.status === 404
+  const worktreesNeedUpdate = routeMissing(worktrees.error)
   const machineSessions = useReplicatedQueries(sessionsQuery).byMachine[place?.machine ?? ""]?.data ?? []
   const folder = row?.directory.replace(/[\\/]+$/, "")
   const othersHere = machineSessions.filter((item) => item.state?.running && !item.ended_at && projectDirectory(item).replace(/[\\/]+$/, "") === folder)
@@ -181,7 +184,8 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   }
 
   // One reason at a time, most blocking first.
-  const chatUnavailableHint = chatUnavailableReason(pastSessions.error, machineName, harnessId)
+  const chatUnavailableHint = chatUnavailableReason(pastSessions.error, machineName)
+  const account = accounts.data?.find((item) => item.harness === harnessId)
   const placeError = placeQuery?.error
   let hint: string | undefined
   if (online.length === 0) hint = "No machine is online."
@@ -191,7 +195,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   else if (placeError) hint = `Couldn't load projects from ${machineName}: ${placeError.message}`
   else if (!projectQueries.firstLoadPending && projects.length === 0) hint = "Run an agent in a folder on a machine first, for example agentpack claude. It then appears here."
   else if (chatUnavailableHint) hint = chatUnavailableHint
-  else if (view === "chat" && pastSessions.error) hint = `Couldn't load conversations: ${(pastSessions.error as Error).message}`
+  else if (view === "chat" && pastSessions.error && !signInError(pastSessions.error)) hint = `Couldn't load conversations: ${(pastSessions.error as Error).message}`
   const blocked = !startable || start.isPending || (view === "chat" && Boolean(chatUnavailableHint))
   const failedMachines = machines.filter((machine) => machine.online && projectQueries.byMachine[machine.id]?.error)
 
@@ -402,6 +406,13 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
 
       <footer className="flex min-w-0 flex-col gap-(--s3) border-t-[0.5px] border-(--sep) bg-(--sidebar) px-(--s6) py-(--s4)">
         {place && hint && <p className="text-(length:--fs-sm) text-(--fg2)">{hint}</p>}
+        {place && !hint && account?.installed && !account.signedIn && (
+          <p className="text-(length:--fs-sm) text-(--fg2)">
+            {harnessName(harnessId)} isn't signed in on {machineName}.{" "}
+            <Link to="/machines/$machine" params={{ machine: place.machine }} className="text-(--accent) underline-offset-2 hover:underline">Sign in…</Link>
+            {view === "chat" ? " or start anyway: the chat asks you to sign in." : null}
+          </p>
+        )}
         {start.error && !worktreeError && <FieldError>{start.error.message}</FieldError>}
         <div className="flex min-w-0 items-center gap-(--s4) max-[760px]:flex-col max-[760px]:items-stretch">
           <p className="min-w-0 flex-1 truncate text-(length:--fs-sm) text-(--fg2)" aria-live="polite">

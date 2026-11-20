@@ -1,4 +1,4 @@
-import { ApiError, LOCAL } from "@/lib/api"
+import { ApiError, LOCAL, responseError, routeMissing } from "@/lib/api"
 import type { LogEntry } from "./model"
 
 class ArchiveUnavailableError extends ApiError {
@@ -24,7 +24,7 @@ async function conversationLog(machine: string, sessionId: string, before = 0): 
     if (res.status === 503 && text.trim() === "archive unavailable") {
       throw new ArchiveUnavailableError(res.headers.get("X-Agentpack-Archive-Main") || "main gateway")
     }
-    throw new ApiError(text.slice(0, 200) || res.statusText, res.status)
+    throw responseError(res, text)
   }
   const entries: LogEntry[] = []
   for (const line of text.split("\n")) {
@@ -38,7 +38,7 @@ async function conversationLog(machine: string, sessionId: string, before = 0): 
 // with its newest tail, which reads as Needs update rather than as duplicated messages.
 export async function olderConversationPage(machine: string, sessionId: string, before: number): Promise<ConversationPage> {
   const page = await conversationLog(machine, sessionId, before)
-  if (page.entries.some((entry) => entry.seq >= before)) throw new ApiError("earlier history needs an update", 404)
+  if (page.entries.some((entry) => entry.seq >= before)) throw new ApiError("404 page not found", 404)
   return page
 }
 
@@ -56,7 +56,7 @@ export function conversationEventsQuery(machine: string, sessionId: string, _liv
   }
 }
 export function conversationNeedsUpdate(...errors: unknown[]): boolean {
-  return errors.some((error) => error instanceof ApiError && error.status === 404)
+  return errors.some(routeMissing)
 }
 export function conversationErrorMessage(machine: string, action: string, error: unknown): string {
   if (conversationNeedsUpdate(error)) {

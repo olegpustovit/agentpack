@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { api } from "./api"
+import { api, ApiError, routeMissing } from "./api"
 
 const page = '<!DOCTYPE html> <!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US"> <![endif]-->'
 
@@ -28,6 +28,13 @@ describe("api errors", () => {
     await expect(api("/api/projects")).rejects.toThrow("remote node connection failed")
     respond(JSON.stringify({ error: "not found" }), 404)
     await expect(api("/api/projects")).rejects.toThrow("not found")
+  })
+
+  it("reads only a router's 404 as a missing route", () => {
+    expect(routeMissing(new ApiError("not found", 404))).toBe(true)
+    expect(routeMissing(new ApiError("404 page not found", 404))).toBe(true)
+    expect(routeMissing(new ApiError("session unavailable", 404))).toBe(false)
+    expect(routeMissing(new ApiError("not found", 500))).toBe(false)
   })
 
   it("replaces Go and network errors with plain words", async () => {
