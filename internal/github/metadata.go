@@ -100,3 +100,14 @@ func refCacheKey(owner, repo, gitRef string) []byte {
 func repoCacheKey(owner, repo string) []byte {
 	return []byte(strings.ToLower(strings.TrimSpace(owner)) + "\x00" + strings.ToLower(strings.TrimSpace(repo)))
 }
+
+var fileCacheBucket = []byte("github_file_cache")
+
+type cachedFile struct {
+	Content       []byte `json:"content"`
+	CheckedAtUnix int64  `json:"checked_at_unix"`
+}
+
+func fileCacheKey(owner, repo, path string) []byte {
+	return []byte(string(repoCacheKey(owner, repo)) + "\x00" + strings.Trim(path, "/"))
+}

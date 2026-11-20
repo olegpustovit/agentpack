@@ -1,6 +1,6 @@
 import { queryOptions } from "@tanstack/react-query"
 import { api } from "@/lib/api"
-import type { Agentpack, AgentpackWithRevisions, AgentpackConflict, Draft, LatestVersion, Package, ReplicationPeers } from "@/lib/api-types"
+import type { Agentpack, AgentpackWithRevisions, Catalog, AgentpackConflict, Draft, LatestVersion, Package, ReplicationPeers } from "@/lib/api-types"
 
 const FIVE_MINUTES = 5 * 60 * 1000
 
@@ -21,6 +21,19 @@ export const agentpacksQuery = (machine: string) =>
     queryKey: ["m", machine, "library", "agentpacks"],
     queryFn: async () => (await api<(AgentpackWithRevisions | Agentpack)[]>("/api/library/agentpacks?include=revisions", { machine })).map(withRevisions),
     staleTime: FIVE_MINUTES,
+  })
+
+// Public sources, read through this gateway only: the server caches them for a day.
+export const catalogQuery = (q: string) =>
+  queryOptions({
+    queryKey: ["library", "catalog", q],
+    queryFn: async (): Promise<Catalog> => {
+      const value = await api<Partial<Catalog> | undefined>("/api/library/catalog", q ? { query: { q } } : {})
+      const items = Array.isArray(value?.items) ? value.items.filter((item) => typeof item?.name === "string" && (item.kind === "plugin" || item.kind === "mcp")) : []
+      return { items, sources: Array.isArray(value?.sources) ? value.sources : [] }
+    },
+    staleTime: 60 * 60 * 1000,
+    placeholderData: (previous) => previous,
   })
 
 export const draftsQuery = queryOptions({

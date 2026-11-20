@@ -18,6 +18,7 @@ import { Route as AppMachinesRouteImport } from './routes/_app/machines'
 import { Route as AppSessionsRouteImport } from './routes/_app/sessions'
 import { Route as AppUsageRouteImport } from './routes/_app/usage'
 import { Route as AppLibraryIndexRouteImport } from './routes/_app/library/index'
+import { Route as AppLibraryDiscoverRouteImport } from './routes/_app/library/discover'
 import { Route as AppMachinesIndexRouteImport } from './routes/_app/machines/index'
 import { Route as AppMachinesMachineRouteImport } from './routes/_app/machines/$machine'
 import { Route as AppMachinesTopologyRouteImport } from './routes/_app/machines/topology'
@@ -74,6 +75,11 @@ const AppUsageRoute = AppUsageRouteImport.update({
 const AppLibraryIndexRoute = AppLibraryIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AppLibraryRoute,
+} as any)
+const AppLibraryDiscoverRoute = AppLibraryDiscoverRouteImport.update({
+  id: '/discover',
+  path: '/discover',
   getParentRoute: () => AppLibraryRoute,
 } as any)
 const AppMachinesIndexRoute = AppMachinesIndexRouteImport.update({
@@ -151,6 +157,7 @@ export interface FileRoutesByFullPath {
   '/machines': typeof AppMachinesRouteWithChildren
   '/sessions': typeof AppSessionsRouteWithChildren
   '/usage': typeof AppUsageRouteWithChildren
+  '/library/discover': typeof AppLibraryDiscoverRoute
   '/machines/$machine': typeof AppMachinesMachineRoute
   '/machines/topology': typeof AppMachinesTopologyRoute
   '/settings/$pane': typeof AppSettingsPaneRoute
@@ -170,6 +177,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/limits': typeof AppLimitsRoute
+  '/library/discover': typeof AppLibraryDiscoverRoute
   '/machines/$machine': typeof AppMachinesMachineRoute
   '/machines/topology': typeof AppMachinesTopologyRoute
   '/settings/$pane': typeof AppSettingsPaneRoute
@@ -195,6 +203,7 @@ export interface FileRoutesById {
   '/_app/machines': typeof AppMachinesRouteWithChildren
   '/_app/sessions': typeof AppSessionsRouteWithChildren
   '/_app/usage': typeof AppUsageRouteWithChildren
+  '/_app/library/discover': typeof AppLibraryDiscoverRoute
   '/_app/machines/$machine': typeof AppMachinesMachineRoute
   '/_app/machines/topology': typeof AppMachinesTopologyRoute
   '/_app/settings/$pane': typeof AppSettingsPaneRoute
@@ -220,6 +229,7 @@ export interface FileRouteTypes {
     | '/machines'
     | '/sessions'
     | '/usage'
+    | '/library/discover'
     | '/machines/$machine'
     | '/machines/topology'
     | '/settings/$pane'
@@ -239,6 +249,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/limits'
+    | '/library/discover'
     | '/machines/$machine'
     | '/machines/topology'
     | '/settings/$pane'
@@ -263,6 +274,7 @@ export interface FileRouteTypes {
     | '/_app/machines'
     | '/_app/sessions'
     | '/_app/usage'
+    | '/_app/library/discover'
     | '/_app/machines/$machine'
     | '/_app/machines/topology'
     | '/_app/settings/$pane'
@@ -348,6 +360,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/library/'
       preLoaderRoute: typeof AppLibraryIndexRouteImport
+      parentRoute: typeof AppLibraryRoute
+    }
+    '/_app/library/discover': {
+      id: '/_app/library/discover'
+      path: '/discover'
+      fullPath: '/library/discover'
+      preLoaderRoute: typeof AppLibraryDiscoverRouteImport
       parentRoute: typeof AppLibraryRoute
     }
     '/_app/machines/': {
@@ -445,6 +464,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppLibraryRouteChildren {
+  AppLibraryDiscoverRoute: typeof AppLibraryDiscoverRoute
   AppLibraryIndexRoute: typeof AppLibraryIndexRoute
   AppLibraryAgentpackIdRoute: typeof AppLibraryAgentpackIdRoute
   AppLibraryMcpNameRoute: typeof AppLibraryMcpNameRoute
@@ -452,6 +472,7 @@ interface AppLibraryRouteChildren {
 }
 
 const AppLibraryRouteChildren: AppLibraryRouteChildren = {
+  AppLibraryDiscoverRoute: AppLibraryDiscoverRoute,
   AppLibraryIndexRoute: AppLibraryIndexRoute,
   AppLibraryAgentpackIdRoute: AppLibraryAgentpackIdRoute,
   AppLibraryMcpNameRoute: AppLibraryMcpNameRoute,

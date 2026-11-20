@@ -54,6 +54,38 @@ func TestResolveRefAndListTagsUseRESTAndPersist(t *testing.T) {
 	}
 }
 
+func TestRepoFileCachesAndFallsBack(t *testing.T) {
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	calls := 0
+	failing := false
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		calls++
+		if failing || request.URL.Path != "/repos/o/r/contents/.claude-plugin/marketplace.json" {
+			http.Error(response, "nope", http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprint(response, `{"encoding":"base64","content":"eyJwbHVn\naW5zIjpbXX0=\n"}`)
+	}))
+	defer server.Close()
+	previous := apiRoot
+	apiRoot = server.URL
+	defer func() { apiRoot = previous }()
+	for range 2 {
+		got, err := RepoFile(context.Background(), server.Client(), "o", "r", ".claude-plugin/marketplace.json", time.Hour)
+		if err != nil || string(got) != `{"plugins":[]}` {
+			t.Fatalf("RepoFile() = %q, %v", got, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("fresh cache still fetched: %d calls", calls)
+	}
+	failing = true
+	got, err := RepoFile(context.Background(), server.Client(), "o", "r", ".claude-plugin/marketplace.json", 0)
+	if err != nil || string(got) != `{"plugins":[]}` || calls != 2 {
+		t.Fatalf("stale fallback = %q, %v after %d calls", got, err, calls)
+	}
+}
+
 func TestLSRemoteParsingPrefersPeeledTags(t *testing.T) {
 	t.Parallel()
 	base := "a123456789abcdef0123456789abcdef01234567"

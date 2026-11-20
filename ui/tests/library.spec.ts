@@ -82,13 +82,13 @@ test.beforeEach(async ({ page }) => {
 test("type and search survive reload and filter the list", async ({ page }) => {
   await page.goto("/library?type=mcp&q=foo")
   const list = page.getByRole("navigation", { name: "Library" })
-  await expect(list.getByRole("link")).toHaveCount(1)
+  await expect(list.getByRole("link").filter({ hasNotText: "Discover" })).toHaveCount(1)
   await expect(list.getByRole("link", { name: /foo-tools/ })).toBeVisible()
   await expect(page.getByRole("searchbox", { name: "Search library" })).toHaveValue("foo")
 
   await page.reload()
   await expect(page).toHaveURL(/\/library\?type=mcp&q=foo$/)
-  await expect(list.getByRole("link")).toHaveCount(1)
+  await expect(list.getByRole("link").filter({ hasNotText: "Discover" })).toHaveCount(1)
   await expect(list.getByRole("link", { name: /foo-tools/ })).toBeVisible()
 })
 
@@ -110,7 +110,7 @@ test("typing in search writes q to the URL", async ({ page }) => {
   const list = page.getByRole("navigation", { name: "Library" })
   await page.getByRole("searchbox", { name: "Search library" }).pressSequentially("bar")
   await expect(page).toHaveURL(/\/library\?q=bar$/)
-  await expect(list.getByRole("link")).toHaveCount(1)
+  await expect(list.getByRole("link").filter({ hasNotText: "Discover" })).toHaveCount(1)
   await expect(list.getByRole("link", { name: /bar/ })).toBeVisible()
 })
 
@@ -118,6 +118,28 @@ test("selecting a row opens its detail and keeps the query", async ({ page }) =>
   await page.goto("/library?type=mcp&q=foo")
   await page.getByRole("navigation", { name: "Library" }).getByRole("link", { name: /foo-tools/ }).click()
   await expect(page).toHaveURL(/\/library\/mcp\/foo-tools\?type=mcp&q=foo$/)
+})
+
+test("Discover lists the catalog and Install… opens Add package with the spec filled in", async ({ page }) => {
+  await page.route(/\/api\/library\/catalog(\?.*)?$/, (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          { kind: "plugin", name: "hookify", description: "Turns corrections into hooks.", publisher: "Anthropic", source: "claude-plugins-official", spec: "github.com/anthropics/claude-plugins-official/plugins/hookify" },
+          { kind: "mcp", name: "foo-tools", source: "MCP Registry", command: "agentpack mcp add foo-tools --command npx --args -y @acme/foo-tools" },
+        ],
+        sources: [{ name: "claude-plugins-official", count: 1 }, { name: "MCP Registry", count: 1, error: "502 Bad Gateway" }],
+      },
+    }),
+  )
+  await page.goto("/library")
+  await page.getByRole("navigation", { name: "Library" }).getByRole("link", { name: "Discover" }).click()
+  await expect(page).toHaveURL(/\/library\/discover$/)
+  const catalog = page.getByRole("list", { name: "Catalog" })
+  await expect(catalog.getByRole("listitem").filter({ hasText: "foo-tools" })).toContainText("In 2 projects")
+  await expect(page.getByText("Couldn't reach MCP Registry: 502 Bad Gateway")).toBeVisible()
+  await catalog.getByRole("button", { name: "Install hookify…" }).click()
+  await expect(page.getByRole("dialog").getByLabel("Package", { exact: true })).toHaveValue("github.com/anthropics/claude-plugins-official/plugins/hookify")
 })
 
 test("sort popup writes sort to the URL", async ({ page }) => {

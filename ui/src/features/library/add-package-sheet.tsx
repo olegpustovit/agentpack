@@ -16,22 +16,24 @@ import type { PackageItem } from "./model"
 import { errorText, installPackage } from "./mutations"
 import { useLibrary } from "./use-library"
 
-// Opened from ?add=1 on the Library, or from a project row with that project preselected.
+// Opened from ?add=1 (or ?add=<spec> from Discover) on the Library, or from a project row with that project preselected.
 export function AddPackageSheet({
   open,
   initialMachine,
   initialDirectory,
+  initialSpec,
   onOpenChange,
 }: {
   open: boolean
   initialMachine?: string
   initialDirectory?: string
+  initialSpec?: string
   onOpenChange: (open: boolean) => void
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent>
-        <AddPackageForm onDone={() => onOpenChange(false)} initialMachine={initialMachine} initialDirectory={initialDirectory} />
+        <AddPackageForm onDone={() => onOpenChange(false)} initialMachine={initialMachine} initialDirectory={initialDirectory} initialSpec={initialSpec} />
       </SheetContent>
     </Sheet>
   )
@@ -75,12 +77,12 @@ export function SaveAgentpackSheet({ open, onOpenChange }: { open: boolean; onOp
   )
 }
 
-function AddPackageForm({ onDone, initialMachine, initialDirectory }: { onDone: () => void; initialMachine?: string; initialDirectory?: string }) {
+function AddPackageForm({ onDone, initialMachine, initialDirectory, initialSpec }: { onDone: () => void; initialMachine?: string; initialDirectory?: string; initialSpec?: string }) {
   const queryClient = useQueryClient()
   const machines = useMachines()
   const { items } = useLibrary()
   const projects = useMachineQueries(projectsQuery)
-  const [spec, setSpec] = useState("")
+  const [spec, setSpec] = useState(initialSpec ?? "")
   const [picked, setPicked] = useState<Record<string, boolean>>({})
   const [restart, setRestart] = useState(true)
   const [choice, setChoice] = useState<string | undefined>(initialMachine && initialDirectory ? `${initialMachine}\0${initialDirectory}` : undefined)

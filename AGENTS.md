@@ -265,6 +265,7 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 | `/library` | `q`, `type`, `sort`, `add` |
 | `/library/package/$` | same, plus `install` |
 | `/library/mcp/$name` | same |
+| `/library/discover` | same; Install… sets `add` to the spec |
 | `/library/agentpack/$id` | same, plus `revision`, `restore` |
 | `/machines` | `q` (redirects to `/machines/topology`; phones show the machine list) |
 | `/machines/topology` | none |
