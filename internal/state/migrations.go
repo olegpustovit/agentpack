@@ -38,19 +38,20 @@ func migrate(ctx context.Context, db *sql.DB, source fs.FS) error {
 	if conn.QueryRowContext(ctx, "SELECT CASE WHEN count(*)=1 THEN max(version) END FROM schema_meta").Scan(&current) == nil && current == len(files) {
 		return nil
 	}
+	contents := make([]string, len(files))
 	for i, name := range files {
-		contents, err := fs.ReadFile(source, name)
+		data, err := fs.ReadFile(source, name)
 		if err != nil {
 			return err
 		}
-		if err := migrateOne(ctx, conn, i+1, len(files), string(contents)); err != nil {
-			return fmt.Errorf("state migration %s: %w", name, err)
-		}
+		contents[i] = string(data)
 	}
-	return nil
+	return migratePending(ctx, conn, files, contents)
 }
 
-func migrateOne(ctx context.Context, conn *sql.Conn, version, latest int, contents string) (err error) {
+// migratePending applies every missing migration in one transaction: one sync instead of one per
+// migration, so a fresh database opens several times faster, and a failed upgrade leaves the old version.
+func migratePending(ctx context.Context, conn *sql.Conn, files, contents []string) (err error) {
 	// Serialise version checks with other gateways/workers before reading the version.
 	if _, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return err
@@ -75,30 +76,33 @@ func migrateOne(ctx context.Context, conn *sql.Conn, version, latest int, conten
 			return fmt.Errorf("invalid state schema version")
 		}
 	}
+	latest := len(contents)
 	if current > latest {
 		return fmt.Errorf("state schema %d requires a newer agentpack (supports %d)", current, latest)
 	}
-	if current < version {
-		if current != version-1 {
-			return fmt.Errorf("state schema %d cannot apply migration %d", current, version)
-		}
-		first, _, _ := strings.Cut(contents, "\n")
+	if current == latest {
+		_, err = conn.ExecContext(ctx, "COMMIT")
+		committed = err == nil
+		return err
+	}
+	for version := current + 1; version <= latest; version++ {
+		first, _, _ := strings.Cut(contents[version-1], "\n")
 		if table, alters := strings.CutPrefix(first, "-- crsql-alter: "); alters {
-			err = alterCRR(ctx, conn, strings.TrimSpace(table), contents)
+			err = alterCRR(ctx, conn, strings.TrimSpace(table), contents[version-1])
 		} else {
-			_, err = conn.ExecContext(ctx, contents)
+			_, err = conn.ExecContext(ctx, contents[version-1])
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("state migration %s: %w", files[version-1], err)
 		}
-		if version == 1 {
-			_, err = conn.ExecContext(ctx, "INSERT INTO schema_meta(version) VALUES (?)", version)
-		} else {
-			_, err = conn.ExecContext(ctx, "UPDATE schema_meta SET version = ?", version)
-		}
-		if err != nil {
-			return err
-		}
+	}
+	if current == 0 {
+		_, err = conn.ExecContext(ctx, "INSERT INTO schema_meta(version) VALUES (?)", latest)
+	} else {
+		_, err = conn.ExecContext(ctx, "UPDATE schema_meta SET version = ?", latest)
+	}
+	if err != nil {
+		return err
 	}
 	if _, err = conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return err
