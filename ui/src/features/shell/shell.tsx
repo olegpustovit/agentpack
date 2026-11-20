@@ -1,9 +1,11 @@
 import type { ReactNode } from "react"
-import { useEffect } from "react"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { lazy, Suspense, useEffect, useState } from "react"
+import { Link, useNavigate, useParams } from "@tanstack/react-router"
 import { ChevronLeft, PanelLeft, Settings } from "lucide-react"
 import { Announcement, Hud } from "@/components/kit/feedback"
 import { useDiscovering } from "@/features/machines/queries"
+import { useListedSessions } from "@/features/sessions/queries"
+import { nextNeedsYou } from "@/features/sessions/session-status"
 import { StatusBar, StatusProvider } from "@/features/status/status-bar"
 import { AppWindow, Toolbar, ToolbarButton } from "@/components/kit/window"
 import { buttonVariants } from "@/components/ui/button"
@@ -24,6 +26,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <TabBar />
           <StatusBar />
           <Hud />
+          <ShellCommands />
         </AppWindow>
       </ToolbarProvider>
     </StatusProvider>
@@ -52,6 +55,51 @@ function useShellShortcuts() {
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [navigate, toggle])
+}
+
+// Loaded on first open, so the palette stays out of the initial bundle.
+const CommandPalette = lazy(() => import("./command-palette"))
+const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
+
+// ⌘K opens the palette; elsewhere Ctrl+K, or Ctrl+Shift+K in a terminal, where Ctrl+K is the shell's kill-line.
+// ? outside a text field lists shortcuts. ⌘J opens the next session that needs you.
+function ShellCommands() {
+  const navigate = useNavigate()
+  const { sessions } = useListedSessions()
+  const params = useParams({ strict: false })
+  const openKey = params.machine && params.sessionId ? `${params.machine}:${params.sessionId}` : undefined
+  // The palette's starting query while open; null while closed.
+  const [palette, setPalette] = useState<string | null>(null)
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as Element | null
+      const inTerminal = Boolean(target?.closest?.(".xterm"))
+      const key = event.key.toLowerCase()
+      if (key === "k" && !event.altKey && (isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey && (event.shiftKey || !inTerminal))) {
+        event.preventDefault()
+        setPalette((current) => (current === null ? "" : null))
+        return
+      }
+      if (key === "j" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && (event.metaKey || !inTerminal)) {
+        event.preventDefault()
+        const next = nextNeedsYou(sessions, openKey)
+        if (next) void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: next.machine, sessionId: next.id } })
+        return
+      }
+      if (event.key === "?" && !event.metaKey && !event.ctrlKey && !event.altKey && !inTerminal && !target?.closest?.("input, textarea, select, [contenteditable='true']")) {
+        event.preventDefault()
+        setPalette("?")
+      }
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [navigate, sessions, openKey])
+  if (palette === null) return null
+  return (
+    <Suspense fallback={null}>
+      <CommandPalette initialQuery={palette} sessions={sessions} openKey={openKey} onClose={() => setPalette(null)} />
+    </Suspense>
+  )
 }
 
 function AppToolbar() {

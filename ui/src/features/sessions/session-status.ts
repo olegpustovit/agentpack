@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { lastActivity, type ListedSession } from "./group"
+import { lastActivity, rowKey, type ListedSession } from "./group"
 
 // A chat "+" just started: the gateway answered and the agent is still coming up.
 export function isStarting(session: Pick<ListedSession, "conversation_state" | "ended_at">): boolean {
@@ -46,6 +46,13 @@ export function sessionStatusWord(session: ListedSession, stopping: boolean): st
   if (session.conversation_state === "needs_you") return "Needs you"
   if (session.state.running) return undefined
   return "Stopped"
+}
+
+// ⌘J: the session after the open one that waits on you, in list order, wrapping around.
+export function nextNeedsYou(sessions: ListedSession[], openKey: string | undefined): ListedSession | undefined {
+  const waiting = sessions.filter((session) => sessionGlyphState(session) === "needsYou")
+  const at = waiting.findIndex((session) => rowKey(session) === openKey)
+  return waiting[(at + 1) % waiting.length]
 }
 
 // Idle chat with activity newer than the last time this browser opened it (or the first-visit baseline).

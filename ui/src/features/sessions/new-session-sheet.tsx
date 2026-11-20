@@ -1,7 +1,6 @@
 import { useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react"
-import { loadStartChoices, markNewChat, saveStartChoices } from "./choices"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
+import { loadStartChoices } from "./choices"
+import { useQuery } from "@tanstack/react-query"
 import { FieldError, PopupSelect } from "@/components/kit/forms"
 import { Kbd } from "@/components/kit/feedback"
 import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
@@ -9,11 +8,12 @@ import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from 
 import { Button } from "@/components/ui/button"
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
 import { api, ApiError } from "@/lib/api"
-import type { AgentSession, ProjectRow, SessionInfo } from "@/lib/api-types"
+import type { AgentSession, ProjectRow } from "@/lib/api-types"
 import { basename, harnessName, plural, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { sessionsQuery, projectsQuery } from "./queries"
-import { agentIds, canStart, defaultAgent, mergeProjects, modeChoices, modeEffect, placeKey, placeLabel, placeProblem, startSessionBody, type MergedProject, type SessionView } from "./rules"
+import { projectsQuery } from "./queries"
+import { agentIds, canStart, defaultAgent, mergeProjects, modeChoices, modeEffect, placeKey, placeLabel, placeProblem, type MergedProject, type SessionView } from "./rules"
+import { useStartSession } from "./start"
 
 // Harness ids the gateway starts.
 const DAY = 24 * 60 * 60 * 1000
@@ -58,8 +58,6 @@ export function NewSessionSheet({
 }
 
 function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?: string; initialDirectory?: string }) {
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const machines = useMachines()
   const projectQueries = useMachineQueries(projectsQuery)
   const online = machines.filter((machine) => machine.online)
@@ -113,16 +111,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
     retry: false,
   })
 
-  const start = useMutation({
-    mutationFn: (input: { machine: string; directory: string; harness: string; mode: string; view: SessionView; agentSessionId?: string }) =>
-      api<SessionInfo>("/api/sessions", { machine: input.machine, method: "POST", body: startSessionBody(input) }),
-    onSuccess: (info, input) => {
-      saveStartChoices(input.directory, { harness: input.harness, mode: input.mode, view: input.view })
-      if (input.view === "chat" && !input.agentSessionId) markNewChat(info.id)
-      void queryClient.invalidateQueries({ queryKey: sessionsQuery(input.machine, false).queryKey })
-      void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: input.machine, sessionId: info.id } })
-    },
-  })
+  const start = useStartSession()
 
   function chooseProject(next: MergedProject) {
     setProjectKey(next.key)

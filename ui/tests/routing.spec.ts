@@ -152,7 +152,8 @@ test("an unauthenticated deep link redirects to login", async ({ page }) => {
 test("views with nothing selected say what to do", async ({ page }) => {
   await openFleet(page)
   await page.goto("/sessions")
-  await expect(page.getByText("Select a session")).toBeVisible()
+  await expect(page.getByRole("form", { name: "Start a task" })).toBeVisible()
+  await expect(page.getByText("Nothing waiting")).toBeVisible()
   await page.goto("/library")
   await expect(page.getByText("Select an item")).toBeVisible()
 })

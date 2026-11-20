@@ -288,7 +288,7 @@ function ToolGroup({ tools }: { tools: ThreadItem[] }) {
   )
 }
 
-function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem; machine: string; sessionId: string }) {
+export function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem; machine: string; sessionId: string }) {
   const ask = item.data as ElicitationPayload & { optionIds?: string[]; allowMultiple?: boolean }
   const [selected, setSelected] = useState<string[]>([])
   const queryClient = useQueryClient()
