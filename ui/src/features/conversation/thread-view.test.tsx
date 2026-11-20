@@ -111,6 +111,20 @@ describe("conversation message actions", () => {
     expect(container.querySelector('[data-slot="tool-input"]')!.textContent).toBe("pattern: replay")
   })
 
+  it("keeps agent and user message text selectable inside the context menu trigger", () => {
+    act(() => root.render(createElement(ThreadView, {
+      items,
+      machine: "local",
+      sessionId: "session-1",
+    })))
+    const triggers = [...container.querySelectorAll<HTMLElement>('[data-slot="context-menu-trigger"]')]
+    expect(triggers).toHaveLength(2)
+    for (const trigger of triggers) {
+      expect(trigger.classList.contains("select-none")).toBe(false)
+      expect(trigger.classList.contains("select-text")).toBe(true)
+    }
+  })
+
   it("shows the pending permission inline and finds the newest one", () => {
     const perm = (requestId: string, resolved?: boolean): ThreadItem => ({ kind: "permission", data: { requestId, tool: "Bash", resolved } })
     const list = [perm("a"), perm("b"), perm("c", true)]

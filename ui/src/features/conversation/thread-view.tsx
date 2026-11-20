@@ -543,7 +543,7 @@ function MessageContextMenu({
   if (!text.trim()) return children
   return (
     <RowContextMenu>
-      <RowContextMenuTrigger className="min-w-0">{children}</RowContextMenuTrigger>
+      <RowContextMenuTrigger className="min-w-0 select-text">{children}</RowContextMenuTrigger>
       <RowContextMenuContent>
         <RowContextMenuItem icon={<Copy aria-hidden />} onClick={() => copyText(text)}>
           Copy
