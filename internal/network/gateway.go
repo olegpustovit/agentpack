@@ -667,7 +667,7 @@ func (g *Gateway) Handler() http.Handler {
 	})
 	for _, route := range []string{
 		"PATCH /queue/{queueId}", "DELETE /queue/{queueId}", "POST /queue/{queueId}/steer",
-		"POST /goal", "PATCH /goal", "DELETE /goal",
+		"POST /goal", "PATCH /goal",
 	} {
 		method, suffix, _ := strings.Cut(route, " ")
 		mux.HandleFunc(method+" /api/sessions/{id}/conversation"+suffix, func(w http.ResponseWriter, r *http.Request) {
@@ -682,6 +682,7 @@ func (g *Gateway) Handler() http.Handler {
 			proxyWorkerConversation(w, r, record, strings.Replace(suffix, "{queueId}", url.PathEscape(r.PathValue("queueId")), 1))
 		})
 	}
+	mux.HandleFunc("DELETE /api/sessions/{id}/conversation/goal", g.clearGoal)
 	mux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}", g.serveBlob)
 	mux.HandleFunc("GET /api/packages", func(w http.ResponseWriter, r *http.Request) {
 		directory := r.URL.Query().Get("directory")
