@@ -41,7 +41,8 @@ func newPushDevice(t *testing.T) pushDevice {
 
 func (d pushDevice) subscription(endpoint string) string {
 	encode := base64.RawURLEncoding.EncodeToString
-	return `{"endpoint":"` + endpoint + `","keys":{"p256dh":"` + encode(d.key.PublicKey().Bytes()) + `","auth":"` + encode(d.auth) + `"}}`
+	// Shaped like PushSubscription.toJSON(), expirationTime included.
+	return `{"endpoint":"` + endpoint + `","expirationTime":null,"keys":{"p256dh":"` + encode(d.key.PublicKey().Bytes()) + `","auth":"` + encode(d.auth) + `"}}`
 }
 
 func (d pushDevice) decrypt(t *testing.T, body []byte) pushMessage {

@@ -41,8 +41,9 @@ type pushWatch struct {
 }
 
 type pushSubscription struct {
-	Endpoint string `json:"endpoint"`
-	Keys     struct {
+	Endpoint       string `json:"endpoint"`
+	ExpirationTime *int64 `json:"expirationTime"` // sent by every browser; unused
+	Keys           struct {
 		P256dh string `json:"p256dh"`
 		Auth   string `json:"auth"`
 	} `json:"keys"`
