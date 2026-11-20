@@ -1,5 +1,5 @@
 import { api } from "@/lib/api"
-import type { Agentpack, Draft, PackagePin, Revision } from "@/lib/api-types"
+import type { Agentpack, Draft, MCPServerInput, PackagePin, Revision } from "@/lib/api-types"
 
 // Shapes from internal/network/library*.go and internal/registry/drafts.go.
 export type PackageDiff = { add: string[]; update: string[]; remove: string[]; mode?: string }
@@ -36,6 +36,10 @@ export type SaveRevisionInput = {
 // `machine` is the gateway id ("local" for this gateway). The api helper omits `node` for it.
 export function installPackage(machine: string, directory: string, spec: string, restart: boolean) {
   return api<{ installed: boolean }>("/api/packages", { machine, body: { directory, spec, restart } })
+}
+
+export function installMCP(machine: string, directory: string, server: MCPServerInput, restart: boolean) {
+  return api<{ installed: boolean }>("/api/mcp/servers", { machine, body: { ...server, directory, restart } })
 }
 
 export function restorePreview(machine: string, packId: string, revisionId: string, directory: string) {

@@ -2,10 +2,13 @@ package cli
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/olegpustovit/agentpack/internal/network"
 )
 
 func TestParseMCPAdd(t *testing.T) {
@@ -73,5 +76,28 @@ func TestMCPAddRemoteWritesManifest(t *testing.T) {
 	lock, _ := os.ReadFile(filepath.Join(root, "pack.lock"))
 	if !strings.Contains(string(lock), "launcher = 'remote'") || !strings.Contains(string(lock), "unpinnable") || strings.Contains(string(lock), "X-Key") {
 		t.Fatalf("pack.lock:\n%s", lock)
+	}
+}
+
+func TestGatewayMCPInstallMatchesMCPAdd(t *testing.T) {
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	root := t.TempDir()
+	runner := NewRunner()
+	runner.Stdout, runner.Stderr = io.Discard, io.Discard
+	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "init"}); err != nil || code != 0 {
+		t.Fatalf("init code=%d err=%v", code, err)
+	}
+	for _, bad := range []network.MCPServerInput{{Name: "x"}, {Name: "x", Command: "npx", URL: "https://e.com"}, {Name: "x", Command: "npx", Type: "sse"}, {Name: "x", URL: "https://e.com", Args: []string{"a"}}} {
+		if err := runner.installNetworkMCP(context.Background(), root, bad, false); err == nil {
+			t.Fatalf("accepted %+v", bad)
+		}
+	}
+	if err := runner.installNetworkMCP(context.Background(), root, network.MCPServerInput{Name: "rf", URL: "https://e.com/mcp"}, false); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(root, "agentpack.toml"))
+	lock, _ := os.ReadFile(filepath.Join(root, "pack.lock"))
+	if !strings.Contains(string(raw), `type = "http"`) || !strings.Contains(string(raw), `url = "https://e.com/mcp"`) || !strings.Contains(string(lock), "launcher = 'remote'") {
+		t.Fatalf("agentpack.toml:\n%s\npack.lock:\n%s", raw, lock)
 	}
 }

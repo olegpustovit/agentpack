@@ -9,11 +9,13 @@ import { Input } from "@/components/ui/input"
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
 import { projectsQuery } from "@/features/sessions/queries"
 import { SaveForm } from "@/features/sessions/session-sheets"
+import { ApiError } from "@/lib/api"
+import type { MCPServerInput } from "@/lib/api-types"
 import { basename, plural } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { destinationState } from "./install-state"
 import type { PackageItem } from "./model"
-import { errorText, installPackage } from "./mutations"
+import { errorText, installMCP, installPackage } from "./mutations"
 import { useLibrary } from "./use-library"
 
 // Opened from ?add=1 (or ?add=<spec> from Discover) on the Library, or from a project row with that project preselected.
@@ -74,6 +76,76 @@ export function SaveAgentpackSheet({ open, onOpenChange }: { open: boolean; onOp
         )}
       </SheetContent>
     </Sheet>
+  )
+}
+
+// Install an MCP server from Discover into a project on an online machine.
+export function InstallMCPSheet({ server, onOpenChange }: { server?: MCPServerInput; onOpenChange: (open: boolean) => void }) {
+  return (
+    <Sheet open={Boolean(server)} onOpenChange={onOpenChange}>
+      <SheetContent>{server && <InstallMCPForm server={server} onDone={() => onOpenChange(false)} />}</SheetContent>
+    </Sheet>
+  )
+}
+
+function InstallMCPForm({ server, onDone }: { server: MCPServerInput; onDone: () => void }) {
+  const queryClient = useQueryClient()
+  const machines = useMachines()
+  const projects = useMachineQueries(projectsQuery)
+  const [choice, setChoice] = useState<string>()
+  const [restart, setRestart] = useState(true)
+  const eligible = machines.filter((machine) => machine.online).flatMap((machine) =>
+    (projects.byMachine[machine.id]?.data ?? [])
+      .filter((project) => project.available)
+      .map((project) => ({ value: `${machine.id}\0${project.directory}`, label: `${machine.name} · ${project.name || basename(project.directory)}`, machine: machine.id, project })),
+  )
+  const current = eligible.find((entry) => entry.value === choice) ?? eligible[0]
+  const install = useMutation({
+    mutationFn: () => {
+      if (!current) throw new Error("Choose a project to install into.")
+      return installMCP(current.machine, current.project.directory, server, restart)
+    },
+    onSuccess: async () => {
+      if (current) await queryClient.invalidateQueries({ queryKey: projectsQuery(current.machine).queryKey })
+      hud.success(`Added ${server.name}`)
+      onDone()
+    },
+  })
+
+  function submit(event: FormEvent) {
+    event.preventDefault()
+    install.mutate()
+  }
+
+  const failure = install.error instanceof ApiError && install.error.status === 404 ? "Needs update" : install.error && errorText(install.error)
+  return (
+    <form onSubmit={submit} className="contents">
+      <SheetTitle>{`Install ${server.name}`}</SheetTitle>
+      <SheetDescription>{server.url ? server.url : [server.command, ...(server.args ?? [])].join(" ")}</SheetDescription>
+      {!current ? (
+        <Empty title="No project to install into">Projects appear here after an agent runs in them on an online machine.</Empty>
+      ) : (
+        <FieldGrid>
+          <Field>
+            <FieldLabel>Project</FieldLabel>
+            <PopupSelect label="Project" value={current.value} items={eligible} onValueChange={setChoice} />
+          </Field>
+          <Field>
+            <span aria-hidden className="w-30 shrink-0" />
+            <label className="flex items-center gap-(--s3) text-(length:--fs-sm)">
+              <Checkbox checked={restart} onCheckedChange={setRestart} />
+              Restart affected agents
+            </label>
+          </Field>
+        </FieldGrid>
+      )}
+      {failure && <FieldError>{`Couldn't install ${server.name}: ${failure}`}</FieldError>}
+      <SheetActions>
+        <Button type="submit" variant="primary" disabled={!current || install.isPending}>
+          {install.isPending ? "Installing…" : "Install"}
+        </Button>
+      </SheetActions>
+    </form>
   )
 }
 

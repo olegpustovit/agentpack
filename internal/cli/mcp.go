@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mcp"
+	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/staging"
 )
 
@@ -27,13 +29,7 @@ func (runner Runner) runMCP(ctx context.Context, root string, arguments []string
 		if err != nil {
 			return err
 		}
-		if err := manifest.AddMCPServer(root, name, server); err != nil {
-			return err
-		}
-		if !quiet {
-			fmt.Fprintf(runner.Stdout, "Added MCP server %q to agentpack.toml\n", name)
-		}
-		return runner.Service.RefreshMCPRecords(ctx, root, true, allowUnpinned)
+		return runner.addMCPServer(ctx, root, name, server, allowUnpinned, quiet)
 	case "remove":
 		if len(args) != 1 {
 			return fmt.Errorf("mcp remove requires one name")
@@ -84,6 +80,35 @@ func (runner Runner) runMCP(ctx context.Context, root string, arguments []string
 	default:
 		return fmt.Errorf("unknown mcp action %q", action)
 	}
+}
+
+// addMCPServer writes the server to agentpack.toml and records it in pack.lock;
+// `mcp add` and the gateway's MCP install both use it.
+func (runner Runner) addMCPServer(ctx context.Context, root, name string, server mcp.Server, allowUnpinned, quiet bool) error {
+	if err := manifest.AddMCPServer(root, name, server); err != nil {
+		return err
+	}
+	if !quiet {
+		fmt.Fprintf(runner.Stdout, "Added MCP server %q to agentpack.toml\n", name)
+	}
+	return runner.Service.RefreshMCPRecords(ctx, root, true, allowUnpinned)
+}
+
+// mcpServerFrom applies parseMCPAdd's rules to the gateway's structured input.
+func mcpServerFrom(input network.MCPServerInput) (mcp.Server, error) {
+	switch {
+	case (input.Command == "") == (input.URL == ""):
+		return mcp.Server{}, fmt.Errorf("an MCP server needs exactly one of a command or a URL")
+	case input.URL != "":
+		if len(input.Args) != 0 {
+			return mcp.Server{}, fmt.Errorf("arguments apply to command servers only")
+		}
+		serverType := cmp.Or(input.Type, "http")
+		return mcp.Server{Type: &serverType, URL: &input.URL}, nil
+	case input.Type != "":
+		return mcp.Server{}, fmt.Errorf("a type applies to URL servers only")
+	}
+	return mcp.Server{Command: &input.Command, Args: input.Args}, nil
 }
 
 // parseMCPAdd reads the flags of `mcp add NAME`: a local server (--command,

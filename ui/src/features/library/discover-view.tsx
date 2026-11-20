@@ -6,9 +6,10 @@ import { Inspector, InspectorHead } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { Button } from "@/components/ui/button"
-import type { CatalogItem } from "@/lib/api-types"
+import type { CatalogItem, MCPServerInput } from "@/lib/api-types"
 import { hud } from "@/lib/hud"
 import { plural } from "@/lib/format"
+import { InstallMCPSheet } from "./add-package-sheet"
 import { catalogQuery } from "./queries"
 import { useLibrary } from "./use-library"
 
@@ -40,6 +41,7 @@ export function DiscoverView() {
   const catalog = useQuery(catalogQuery(query))
   const { items: library } = useLibrary()
   const [kind, setKind] = useState<Kind>("all")
+  const [installing, setInstalling] = useState<MCPServerInput>()
 
   // How many projects already pin each catalog entry, so installed ones say so instead of offering Install.
   const projects = new Map<string, number>()
@@ -102,12 +104,21 @@ export function DiscoverView() {
                 <Button type="button" aria-label={`Install ${item.name}…`} onClick={() => void navigate({ search: (prev) => ({ ...prev, add: item.spec }) })}>
                   Install…
                 </Button>
-              ) : item.command ? (
-                <Button type="button" aria-label={`Copy the command that adds ${item.name}`} title={item.command} onClick={() => copy(item.command!)}>
-                  <Copy aria-hidden />
-                  Copy command
-                </Button>
-              ) : null}
+              ) : (
+                <span className="flex shrink-0 gap-(--s2)">
+                  {item.command && (
+                    <Button type="button" variant="ghost" aria-label={`Copy the command that adds ${item.name}`} title={item.command} onClick={() => copy(item.command!)}>
+                      <Copy aria-hidden />
+                      Copy command
+                    </Button>
+                  )}
+                  {item.server && (
+                    <Button type="button" aria-label={`Install ${item.name}…`} onClick={() => setInstalling(item.server)}>
+                      Install…
+                    </Button>
+                  )}
+                </span>
+              )}
             </li>
           )
         })}
@@ -117,6 +128,7 @@ export function DiscoverView() {
           {needle ? "Try another search." : "The catalog sources returned nothing."}
         </Empty>
       )}
+      <InstallMCPSheet server={installing} onOpenChange={(open) => !open && setInstalling(undefined)} />
     </Inspector>
   )
 }

@@ -111,6 +111,7 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 			return contents, nil
 		}
 		options.Install = runner.installNetworkPackage
+		options.InstallMCP = runner.installNetworkMCP
 		options.Library, err = runner.networkLibrary(home)
 		if err != nil {
 			return 1, err

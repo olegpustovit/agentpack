@@ -142,6 +142,33 @@ test("Discover lists the catalog and Install… opens Add package with the spec 
   await expect(page.getByRole("dialog").getByLabel("Package", { exact: true })).toHaveValue("github.com/anthropics/claude-plugins-official/plugins/hookify")
 })
 
+test("Discover installs an MCP server into a chosen project; an older peer reads Needs update", async ({ page }) => {
+  const server = { name: "new-server", command: "npx", args: ["-y", "@acme/new-server"] }
+  await page.route(/\/api\/library\/catalog(\?.*)?$/, (route) =>
+    route.fulfill({ json: { items: [{ kind: "mcp", name: "new-server", source: "MCP Registry", command: "agentpack mcp add new-server --command npx --args -y @acme/new-server", server }], sources: [] } }),
+  )
+  const posted: { node: string; body: unknown }[] = []
+  await page.route(/\/api\/mcp\/servers(\?.*)?$/, (route) => {
+    const node = machineOf(route.request().url())
+    posted.push({ node, body: route.request().postDataJSON() })
+    return node === "n2" ? route.fulfill({ status: 404, body: "404 page not found" }) : route.fulfill({ json: { installed: true } })
+  })
+  await page.goto("/library/discover")
+  const row = page.getByRole("list", { name: "Catalog" }).getByRole("listitem").filter({ hasText: "new-server" })
+  await expect(row.getByRole("button", { name: "Copy the command that adds new-server" })).toBeVisible()
+  await row.getByRole("button", { name: "Install new-server…" }).click()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByRole("combobox", { name: "Project" }).click()
+  await page.getByRole("option", { name: /oracle/ }).click()
+  await dialog.getByRole("button", { name: "Install", exact: true }).click()
+  await expect(dialog).toContainText("Couldn't install new-server: Needs update")
+  await dialog.getByRole("combobox", { name: "Project" }).click()
+  await page.getByRole("option", { name: /agentpack/ }).click()
+  await dialog.getByRole("button", { name: "Install", exact: true }).click()
+  await expect(dialog).toBeHidden()
+  expect(posted.at(-1)).toEqual({ node: "local", body: { ...server, directory: "/home/oleg/agentpack", restart: true } })
+})
+
 test("sort popup writes sort to the URL", async ({ page }) => {
   await page.goto("/library")
   await page.getByRole("combobox", { name: "Sort" }).click()
