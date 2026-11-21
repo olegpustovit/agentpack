@@ -293,13 +293,18 @@ export function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem
         body: { elicitation_id: ask.elicitationId, value },
       }),
   })
+  const submitted = answer.isPending || answer.isSuccess ? answer.variables : undefined
   const result = ask.result
   // Older workers logged the URL as the prompt.
   const link = ask.agentElicitationId ? ask.url ?? ask.prompt : undefined
   return (
     <div data-slot="elicitation-card" className="rounded-(--r-sheet) border-[0.5px] border-(--warn) bg-(--window) px-(--s5) pt-(--s5) pb-(--s4) shadow-(--shadow-card)">
       <p className="text-(length:--fs) font-semibold text-(--fg)">{ask.prompt ?? "Input needed"}</p>
-      {ask.resolved ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">Answered: {answerSummary(ask, result?.value)}</p> : ask.inactive ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">No longer active</p> : ask.fields?.length ? (
+      {ask.resolved ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">Answered: {answerSummary(ask, result?.value)}</p> : ask.inactive ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">No longer active</p> : submitted !== undefined ? (
+        <p role="status" className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">
+          {answer.isPending ? "Sending answer…" : `Answered: ${answerSummary(ask, submitted)}`}
+        </p>
+      ) : ask.fields?.length ? (
         <ElicitationForm fields={ask.fields} disabled={!ask.elicitationId || answer.isPending} onSubmit={(value) => answer.mutate(value)} />
       ) : link !== undefined ? (
         <div className="mt-(--s3) flex flex-wrap items-center gap-(--s2)">
@@ -487,13 +492,18 @@ export function PermissionCard({
   })
   const open = !readOnly && !perm.resolved && !perm.inactive
   const options = perm.options ?? []
-  if (perm.resolved || perm.inactive) {
-    const chosen = options.find((option) => option.id === perm.result?.optionId)
-    const answerLabel = chosen ? optionLabel(chosen) : perm.result?.optionId
+  const submitted = answer.isPending || answer.isSuccess ? answer.variables : undefined
+  if (perm.resolved || perm.inactive || submitted !== undefined) {
+    const id = perm.resolved ? perm.result?.optionId : submitted
+    const chosen = options.find((option) => option.id === id)
+    const answerLabel = chosen ? optionLabel(chosen) : id
+    const status = perm.inactive && !perm.resolved ? "No longer active"
+      : answer.isPending && !perm.resolved ? "Sending answer…"
+      : `Answered: ${answerLabel ?? "—"}`
     return (
       <p data-slot="permission-card" className="flex min-h-(--row-h) items-center gap-(--s3) text-(length:--fs-sm) text-(--fg3)">
         <Lock aria-hidden className="size-3.5 shrink-0" />
-        <span className="min-w-0 truncate">{perm.resolved ? `Answered: ${answerLabel ?? "—"}` : "No longer active"}{perm.summary ? ` · ${perm.summary}` : ""}</span>
+        <span role="status" className="min-w-0 truncate">{status}{perm.summary ? ` · ${perm.summary}` : ""}</span>
       </p>
     )
   }

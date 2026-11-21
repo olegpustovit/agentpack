@@ -331,6 +331,22 @@ test("a streamed permission result resolves the card without another snapshot", 
   expect(snapshots).toBe(before)
 })
 
+test("a failed permission answer restores the choices", async ({ page }) => {
+  let release!: () => void
+  const response = new Promise<void>((resolve) => { release = resolve })
+  await page.route("**/api/sessions/*/conversation/permission", async (route) => {
+    await response
+    await route.fulfill({ status: 409, body: "Answer rejected" })
+  })
+  await page.goto("/sessions/local/chat-one")
+  const allow = page.getByRole("button", { name: "Allow once" })
+  await allow.click()
+  await expect(page.getByText("Sending answer…")).toBeVisible()
+  await expect(allow).toHaveCount(0)
+  release()
+  await expect(allow).toBeEnabled()
+})
+
 test("escape closes message context menu without posting permission", async ({ page }) => {
   let permissionPosts = 0
   await page.route("**/api/sessions/*/conversation/permission", (route) => {
