@@ -328,32 +328,36 @@ export default function ConversationPane({
   async function loadOlder(retry = false, complete?: (loaded: LogEntry[]) => boolean) {
     const first = entries[0]
     if (!first || !hasOlder || older?.loading || (older?.error && !retry)) return
-    let kept = older?.entries ?? []
+    const previous = older?.entries ?? []
+    let kept = previous
     let before = first.seq
     setHistory({ key: historyKey, entries: kept, more: true, loading: true })
-    try {
-      let more: boolean
-      let loaded: LogEntry[]
-      do {
-        const page = await olderConversationPage(machine, sessionId, before)
-        kept = [...page.entries, ...kept]
-        loaded = joinHistory(kept, tailEntries)
-        const next = page.entries[0]?.seq
-        more = page.truncated && next !== undefined && next > 1 && next < before
-        before = next ?? before
-      } while (more && complete && !complete(loaded))
-      const element = threadScrollRef.current
-      if (element) scrollAnchorRef.current = { height: element.scrollHeight, top: element.scrollTop }
-      setHistory({ key: historyKey, entries: kept, more, loading: false })
-      return loaded
-    } catch (error) {
-      setHistory({ key: historyKey, entries: older?.entries ?? [], more: true, loading: false, error })
-    }
+    let more: boolean
+    let loaded: LogEntry[]
+    do {
+      let page: ConversationPage
+      try {
+        page = await olderConversationPage(machine, sessionId, before)
+      } catch (error) {
+        setHistory({ key: historyKey, entries: previous, more: true, loading: false, error })
+        return
+      }
+      kept = [...page.entries, ...kept]
+      loaded = joinHistory(kept, tailEntries)
+      const next = page.entries[0]?.seq
+      more = page.truncated && next !== undefined && next > 1 && next < before
+      before = next ?? before
+    } while (more && complete && !complete(loaded))
+    const element = threadScrollRef.current
+    if (element) scrollAnchorRef.current = { height: element.scrollHeight, top: element.scrollTop }
+    setHistory({ key: historyKey, entries: kept, more, loading: false })
+    return loaded
   }
   useEffect(() => {
+    const save = draft && recalledPrompt.current?.text !== draft
     try {
       const key = draftKey(machine, sessionId)
-      if (draft && recalledPrompt.current?.text !== draft) sessionStorage.setItem(key, draft)
+      if (save) sessionStorage.setItem(key, draft)
       else sessionStorage.removeItem(key)
     } catch {
       // Storage can be blocked; the draft then lives only in memory.
