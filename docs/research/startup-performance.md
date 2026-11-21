@@ -161,3 +161,12 @@ CGO_ENABLED=1 CGO_LDFLAGS=-lunwind GOOS=linux GOARCH=arm64 \
 # On the reference host
 /tmp/agentpack-launch-bench -test.run '^$' -test.bench '^Benchmark(MaterializationHome|CodexSetup)$' -test.count 5 -test.benchtime 150ms
 ```
+
+After moving Claude's project sync into the worker, the same five-run launch
+benchmarks measured 0.319 ms for materialization, 7.681 ms for cold Codex
+setup, and 0.140 ms for warm Codex setup on amd64. On the ARM64 reference
+host, the medians were 0.649 ms, 15.562 ms, and 0.289 ms respectively. All
+three ARM64 measurements remained within budget. These figures measure
+staging and generation selection. A separate smoke check confirmed that
+Claude ACP 0.100.0 returns an initialize response in a temporary workspace
+with no staged project configuration.
