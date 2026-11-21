@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,7 +21,7 @@ func revertFixture(t *testing.T, dir, path string, oldText string, created bool)
 	if created {
 		old = ""
 	}
-	log.Append("tool_call", 2, []byte(`{"toolCallId":"t1","content":[{"type":"diff","path":"`+path+`",`+old+`"newText":"new"}]}`))
+	log.Append("tool_call", 2, []byte(`{"toolCallId":"t1","content":[{"type":"diff","path":`+strconv.Quote(path)+`,`+old+`"newText":"new"}]}`))
 	log.Append("turn_end", 3, []byte(`{}`))
 	conv := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
 	conv.workspace = dir
@@ -48,7 +50,7 @@ func TestRevertTurn(t *testing.T) {
 	if got, _ := os.ReadFile(edited); string(got) != "old" {
 		t.Fatalf("content = %q", got)
 	}
-	if info, _ := os.Stat(edited); info.Mode().Perm() != 0o640 {
+	if info, _ := os.Stat(edited); runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
 		t.Fatalf("mode = %v", info.Mode())
 	}
 	if w := postRevert(revertFixture(t, dir, "b.txt", "", true)); w.Code != 200 {

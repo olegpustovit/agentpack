@@ -3,6 +3,7 @@ package agy
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
@@ -33,6 +34,9 @@ func TestPrepareWritesManifestAndAttributionRule(t *testing.T) {
 func TestACPLaunchConfiguresClientBypassAndUnpromptedSettle(t *testing.T) {
 	bin := t.TempDir()
 	script := filepath.Join(bin, "agy")
+	if runtime.GOOS == "windows" {
+		script += ".exe"
+	}
 	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}

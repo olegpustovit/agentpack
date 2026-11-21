@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,7 +158,7 @@ func TestTerminalPoolReleaseKillsStubbornProcessGroup(t *testing.T) {
 	}
 	pool := NewTerminalPool()
 	id, err := pool.create(t.TempDir(), nil, sdkacp.CreateTerminalRequest{
-		Command: "sh", Args: []string{"-c", "trap '' TERM; sleep 30"},
+		Command: "sh", Args: []string{"-c", "trap '' TERM; echo ready; sleep 30"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -174,6 +175,13 @@ func TestTerminalPoolReleaseKillsStubbornProcessGroup(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	for !strings.Contains(term.snapshot().Output, "ready") {
+		select {
+		case <-ctx.Done():
+			t.Fatal("terminal did not install its signal trap")
+		case <-time.After(time.Millisecond):
+		}
+	}
 	if err := pool.release(ctx, id); err != nil {
 		t.Fatal(err)
 	}

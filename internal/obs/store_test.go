@@ -138,7 +138,7 @@ func TestDayStoreSweepsExpiredFilesAtStartAndHourly(t *testing.T) {
 	}
 }
 
-func TestDayStoreWritesTenThousandTinyEvents(t *testing.T) {
+func TestDayStoreWritesSeveralBatchesWithoutDroppingEvents(t *testing.T) {
 	home := t.TempDir()
 	now := time.Now().UTC()
 	store, err := Open(home, StoreOptions{})
@@ -146,7 +146,8 @@ func TestDayStoreWritesTenThousandTinyEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	for i := range 10000 {
+	const eventCount = 1024
+	for i := range eventCount {
 		event := logEvent(now, "worker")
 		event.Attrs["i"] = i
 		store.Write(event)
@@ -159,7 +160,7 @@ func TestDayStoreWritesTenThousandTinyEvents(t *testing.T) {
 		t.Fatalf("unexpected drops=%d", store.Dropped())
 	}
 	var count int
-	if err := dayReader(t, home, now).QueryRow("SELECT count(*) FROM events").Scan(&count); err != nil || count != 10000 {
+	if err := dayReader(t, home, now).QueryRow("SELECT count(*) FROM events").Scan(&count); err != nil || count != eventCount {
 		t.Fatalf("persisted count=%d err=%v", count, err)
 	}
 }

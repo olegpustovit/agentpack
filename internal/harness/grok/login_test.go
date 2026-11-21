@@ -11,6 +11,7 @@ import (
 func TestLogoutOutranksADirectLogin(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("AGENTPACK_HOME", filepath.Join(home, "ap"))
 	t.Setenv("GROK_PATH", os.Args[0])
 	native := filepath.Join(home, ".grok", "auth.json")

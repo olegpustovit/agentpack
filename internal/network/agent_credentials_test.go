@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ func TestAgentCredentialsShareTheNewestSignIn(t *testing.T) {
 	// A machine without the file gets it, with the publisher's time so it is not published back.
 	os.Remove(path)
 	g.syncAgentCredentials(ctx)
-	if info, err := os.Stat(path); read() != `{"a":1}` || err != nil || info.Mode().Perm() != 0o600 || !info.ModTime().Equal(base) {
+	if info, err := os.Stat(path); read() != `{"a":1}` || err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) || !info.ModTime().Equal(base) {
 		t.Fatalf("shared sign-in not installed: %q %v", read(), err)
 	}
 
