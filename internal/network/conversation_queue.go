@@ -1,16 +1,24 @@
 package network
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 // A prompt sent while a turn runs waits in worker memory. Its queued_prompt and dequeued_prompt
@@ -25,6 +33,154 @@ var (
 	errNotQueued   = errors.New("prompt is not queued")
 	errEmptyPrompt = errors.New("text or image is required")
 )
+
+// The lock covers the only time the gateway and worker can both own the conversation log.
+func lockPromptHandoff(ctx context.Context, directory string) (*flock.Flock, error) {
+	lock := flock.New(filepath.Join(directory, "prompt.lock"))
+	locked, err := lock.TryLockContext(ctx, 10*time.Millisecond)
+	if err != nil {
+		return nil, err
+	}
+	if !locked {
+		return nil, errors.New("prompt handoff lock unavailable")
+	}
+	return lock, nil
+}
+
+func (g *Gateway) servePrompt(w http.ResponseWriter, r *http.Request) {
+	ctx, id := r.Context(), r.PathValue("id")
+	suffix := "/prompt"
+	if strings.HasSuffix(r.URL.Path, "/images") {
+		suffix = "/prompt/images"
+	}
+	if record, err := g.workerRecord(ctx, id); err == nil {
+		if authorizeACPWrite(w, r, record.Session) {
+			proxyWorkerConversation(w, r, record, suffix)
+		}
+		return
+	}
+	info, err := storedSession(ctx, g.auth.store.Reader, id)
+	if err != nil || info.Transport != "acp" || !validSessionID(id) {
+		http.Error(w, "session unavailable", http.StatusNotFound)
+		return
+	}
+	if !authorizeACPWrite(w, r, info) {
+		return
+	}
+	if info.ConversationState != "starting" || !info.EndedAt.IsZero() {
+		http.Error(w, "session unavailable", http.StatusNotFound)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	prompt, steer, ok := readPromptRequest(w, r)
+	if !ok {
+		return
+	}
+	directory := filepath.Join(g.options.Home, "network", "sessions", id)
+	if err := paths.EnsurePrivateDirectory(directory); err != nil {
+		promptQueueError(w, r, err)
+		return
+	}
+	lock, err := lockPromptHandoff(ctx, directory)
+	if err != nil {
+		promptQueueError(w, r, err)
+		return
+	}
+	if record, err := g.workerRecord(ctx, id); err == nil {
+		_ = lock.Close()
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		if authorizeACPWrite(w, r, record.Session) {
+			proxyWorkerConversation(w, r, record, suffix)
+		}
+		return
+	}
+	defer lock.Close()
+	if prompt.QueueID == "" {
+		prompt.QueueID = rand.Text()
+	}
+	store := g.auth.store
+	seen, err := storedPromptID(ctx, store, id, prompt.QueueID)
+	if err != nil {
+		promptQueueError(w, r, err)
+		return
+	}
+	if !seen {
+		item := queuedPrompt{ID: prompt.QueueID, Input: prompt, Steer: steer}
+		err := state.Transaction(ctx, store.DB, func(tx *sql.Tx) error {
+			return appendStartingPrompt(ctx, tx, id, item)
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "session unavailable", http.StatusConflict)
+			return
+		}
+		if err != nil {
+			promptQueueError(w, r, err)
+			return
+		}
+	}
+
+	writePromptAccepted(w, prompt.QueueID)
+}
+
+func appendStartingPrompt(ctx context.Context, tx *sql.Tx, id string, item queuedPrompt) error {
+	now := time.Now()
+	entry := acp.LogEntry{TS: now.UnixMilli(), Kind: "queued_prompt", Payload: queuedPromptPayload(item)}
+	err := tx.QueryRowContext(ctx, `UPDATE sessions SET last_seq=last_seq+1,last_event_at=?
+		WHERE id=? AND conversation_state='starting' AND ended_at=0 AND archived_at=0 AND node_id=`+state.LocalNodeSQL+` RETURNING last_seq`,
+		now.UnixNano(), id).Scan(&entry.Seq)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, "INSERT INTO conversation_events(session_id,seq,body) VALUES (?,?,?)", id, entry.Seq, string(mustRawJSON(entry)))
+	return err
+}
+
+func promptQueueError(w http.ResponseWriter, r *http.Request, err error) {
+	if event := obs.From(r.Context()); event != nil {
+		event.Fail(err)
+	}
+	http.Error(w, "could not queue prompt", http.StatusServiceUnavailable)
+}
+
+// A long transcript can push a still-queued prompt out of the worker's bounded replay tail.
+func restorePendingQueue(ctx context.Context, db *sql.DB, id string, conversation *ConversationSession) error {
+	if !conversation.log.Truncated() {
+		return nil
+	}
+	rows, err := db.QueryContext(ctx, `SELECT queued.body FROM conversation_events queued
+		WHERE queued.session_id=? AND json_valid(queued.body)
+		AND json_extract(queued.body, '$.kind')='queued_prompt'
+		AND NOT EXISTS (
+			SELECT 1 FROM conversation_events finished WHERE finished.session_id=queued.session_id
+			AND json_valid(finished.body)
+			AND json_extract(finished.body, '$.kind') IN ('queued_prompt','prompt','dequeued_prompt')
+			AND json_extract(finished.body, '$.kind') IN ('prompt','dequeued_prompt')
+			AND json_extract(finished.body, '$.payload.queueId')=json_extract(queued.body, '$.payload.queueId')
+			AND finished.seq>queued.seq
+		) ORDER BY queued.seq`, id)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	conversation.queue = nil
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return err
+		}
+		var entry acp.LogEntry
+		if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+			return err
+		}
+		conversation.replayEntry(entry)
+	}
+	return rows.Err()
+}
 
 func (session *ConversationSession) clock() time.Time {
 	if session.now != nil {
@@ -50,12 +206,23 @@ func (session *ConversationSession) closedErr() error {
 func (session *ConversationSession) Submit(ctx context.Context, input acp.PromptInput, steer bool) (queueID string, first <-chan error, err error) {
 	session.queueMu.Lock()
 	defer session.queueMu.Unlock()
+	if input.QueueID != "" {
+		if _, seen := session.seenPrompts[input.QueueID]; seen {
+			return input.QueueID, nil, nil
+		}
+		if session.promptStored != nil {
+			stored, err := session.promptStored(ctx, input.QueueID)
+			if stored || err != nil {
+				return input.QueueID, nil, err
+			}
+		}
+	}
 	session.mu.Lock()
 	if err := session.closedErr(); err != nil {
 		session.mu.Unlock()
 		return "", nil, err
 	}
-	if !session.running && len(session.queue) == 0 {
+	if input.QueueID == "" && !session.starting && !session.running && len(session.queue) == 0 {
 		session.running, session.userCancelled = true, false
 		session.mu.Unlock()
 		result := make(chan error, 1)
@@ -63,22 +230,36 @@ func (session *ConversationSession) Submit(ctx context.Context, input acp.Prompt
 		obs.Go("acp.turns", func() { session.runTurns(ctx, &input, result) })
 		return "", result, nil
 	}
-	item := queuedPrompt{ID: rand.Text(), Input: input, Steer: steer}
+	item := queuedPrompt{ID: input.QueueID, Input: input, Steer: steer}
+	if item.ID == "" {
+		item.ID = rand.Text()
+		if session.starting {
+			item.Input.QueueID = item.ID
+		}
+	}
+	session.mu.Unlock()
+	session.log.Append("queued_prompt", session.clock().UnixMilli(), queuedPromptPayload(item))
+	if item.Input.QueueID != "" {
+		if err := session.log.Flush(); err != nil {
+			return "", nil, err
+		}
+		session.seenPrompts[item.ID] = struct{}{}
+	}
+	session.mu.Lock()
 	session.queue = placeQueued(session.queue, item)
 	running := session.running
 	session.mu.Unlock()
-	session.afterQueued(ctx, item, running)
+	session.afterQueued(ctx, item.Steer, running)
 	return item.ID, nil, nil
 }
 
-// afterQueued records a queue change and interrupts the turn for a steer. The caller holds queueMu.
-func (session *ConversationSession) afterQueued(ctx context.Context, item queuedPrompt, running bool) {
-	session.log.Append("queued_prompt", session.clock().UnixMilli(), queuedPromptPayload(item))
+// afterQueued starts the queue or interrupts the current turn for a steer. The caller holds queueMu.
+func (session *ConversationSession) afterQueued(ctx context.Context, steer, running bool) {
 	if !running {
 		session.maybeDrain()
 		return
 	}
-	if !item.Steer {
+	if !steer {
 		return
 	}
 	session.log.Append("notice", session.clock().UnixMilli(), mustRawJSON(map[string]string{
@@ -164,7 +345,8 @@ func (session *ConversationSession) SteerQueued(ctx context.Context, id string) 
 	session.queue = placeQueued(session.queue, item)
 	running := session.running
 	session.mu.Unlock()
-	session.afterQueued(ctx, item, running)
+	session.log.Append("queued_prompt", session.clock().UnixMilli(), queuedPromptPayload(item))
+	session.afterQueued(ctx, item.Steer, running)
 	return nil
 }
 
@@ -194,6 +376,9 @@ func (session *ConversationSession) runTurns(ctx context.Context, input *acp.Pro
 			})
 		}
 		err := session.Prompt(turnCtx, *input)
+		if err != nil && input.QueueID != "" {
+			session.logDequeued(input.QueueID, "failed")
+		}
 		if first != nil {
 			if !accepted {
 				first <- err
@@ -226,14 +411,16 @@ func (session *ConversationSession) nextPrompt() (acp.PromptInput, bool) {
 	item := session.queue[0]
 	session.queue = session.queue[1:]
 	session.mu.Unlock()
-	session.logDequeued(item.ID, "sent")
+	if item.Input.QueueID == "" {
+		session.logDequeued(item.ID, "sent")
+	}
 	return item.Input, true
 }
 
 // maybeDrain starts the turn loop when the agent is free and a queued prompt or goal turn is due.
 func (session *ConversationSession) maybeDrain() {
 	session.mu.Lock()
-	start := !session.running && session.closedErr() == nil && session.state != "needs_you" &&
+	start := !session.starting && !session.running && session.closedErr() == nil && session.state != "needs_you" &&
 		(len(session.queue) > 0 || session.goalWantsTurn())
 	if start {
 		session.running = true
@@ -245,7 +432,12 @@ func (session *ConversationSession) maybeDrain() {
 }
 
 // ResumeTurns delivers prompts a restarted worker found queued, and continues an active goal.
-func (session *ConversationSession) ResumeTurns() { session.maybeDrain() }
+func (session *ConversationSession) ResumeTurns() {
+	session.mu.Lock()
+	session.starting = false
+	session.mu.Unlock()
+	session.maybeDrain()
+}
 
 func queuedPromptPayload(item queuedPrompt) json.RawMessage {
 	var body map[string]any
@@ -260,7 +452,8 @@ func queuedPromptPayload(item queuedPrompt) json.RawMessage {
 // promptInputFromLog reverses promptLogPayload so a restarted worker can still send a queued prompt.
 func promptInputFromLog(payload json.RawMessage) (acp.PromptInput, error) {
 	var body struct {
-		Text *struct {
+		QueueID string `json:"queueId"`
+		Text    *struct {
 			Text string `json:"text"`
 		} `json:"text"`
 		Image *struct {
@@ -279,6 +472,7 @@ func promptInputFromLog(payload json.RawMessage) (acp.PromptInput, error) {
 	if err := json.Unmarshal(payload, &body); err != nil {
 		return input, err
 	}
+	input.QueueID = body.QueueID
 	sha := func(blob string) string { return strings.TrimPrefix(blob, "sha256:") }
 	if body.Text != nil {
 		input.Text = body.Text.Text
@@ -314,12 +508,14 @@ func (session *ConversationSession) replayEntry(entry acp.LogEntry) {
 		if err != nil {
 			return
 		}
+		session.seenPrompts[meta.QueueID] = struct{}{}
 		session.queue = placeQueued(session.queue, queuedPrompt{ID: meta.QueueID, Input: input, Steer: meta.Steer})
-	case "dequeued_prompt":
+	case "prompt", "dequeued_prompt":
 		var meta struct {
 			QueueID string `json:"queueId"`
 		}
-		if json.Unmarshal(entry.Payload, &meta) == nil {
+		if json.Unmarshal(entry.Payload, &meta) == nil && meta.QueueID != "" {
+			session.seenPrompts[meta.QueueID] = struct{}{}
 			session.queue = slices.DeleteFunc(session.queue, func(queued queuedPrompt) bool { return queued.ID == meta.QueueID })
 		}
 	case "goal_update":

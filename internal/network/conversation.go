@@ -48,6 +48,9 @@ type ConversationSession struct {
 	// changes with their log entries; it is taken before mu and never inside a log callback.
 	queueMu                sync.Mutex
 	queue                  []queuedPrompt
+	seenPrompts            map[string]struct{}
+	starting               bool
+	promptStored           func(context.Context, string) (bool, error)
 	running                bool // a turn loop owns the agent
 	userCancelled          bool // the user stopped the running turn
 	archived               bool
@@ -85,7 +88,7 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 	if log == nil {
 		log = acp.NewEventLog(0)
 	}
-	session := &ConversationSession{log: log, broker: broker, state: "idle", initialized: make(chan struct{})}
+	session := &ConversationSession{log: log, broker: broker, state: "idle", initialized: make(chan struct{}), seenPrompts: make(map[string]struct{})}
 	session.reducer.StateOnly = true
 	entries := log.SetOnAppend(session.applyLogEntry)
 	for _, entry := range entries {

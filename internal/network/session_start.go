@@ -3,6 +3,7 @@ package network
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
@@ -28,6 +30,7 @@ type chatStartRequest struct {
 	AgentSessionID string `json:"agent_session_id,omitempty"`
 	Resume         string `json:"resume,omitempty"`
 	ParentID       string `json:"parent_id,omitempty"`
+	FirstMessage   string `json:"first_message,omitempty"`
 	Tools          *bool  `json:"tools,omitempty"`
 	// Worktree is "new" or an existing worktree of Directory; Carry brings uncommitted changes.
 	Worktree     string `json:"worktree,omitempty"`
@@ -95,8 +98,13 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatSta
 			return err
 		}
 		inserted = true
-		_, err = tx.ExecContext(ctx, "INSERT INTO session_start_requests VALUES (?,?)", info.ID, fingerprint[:])
-		return err
+		if _, err := tx.ExecContext(ctx, "INSERT INTO session_start_requests VALUES (?,?)", info.ID, fingerprint[:]); err != nil {
+			return err
+		}
+		if prompt := strings.TrimSpace(input.FirstMessage); prompt != "" {
+			return appendStartingPrompt(ctx, tx, info.ID, queuedPrompt{ID: token, Input: acp.PromptInput{Text: prompt, QueueID: token}})
+		}
+		return nil
 	})
 	if err != nil {
 		return SessionInfo{}, err
@@ -108,7 +116,7 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatSta
 		}
 		return existing, err
 	}
-	g.startInBackground(ctx, info, "", "", &input)
+	g.startInBackground(ctx, info, "", &input)
 	return info, nil
 }
 
@@ -145,13 +153,12 @@ func (g *Gateway) launchSession(ctx context.Context, info SessionInfo, forkSessi
 	if err := upsertSession(ctx, g.auth.store.DB, info); err != nil {
 		return SessionInfo{}, err
 	}
-	g.startInBackground(ctx, info, forkSessionID, "", nil)
+	g.startInBackground(ctx, info, forkSessionID, nil)
 	return info, nil
 }
 
-// startInBackground launches the worker for a "starting" chat row, then sends prompt if there is one;
-// a failure ends the row with the reason.
-func (g *Gateway) startInBackground(ctx context.Context, info SessionInfo, forkSessionID, prompt string, request *chatStartRequest) {
+// startInBackground prepares the worker for a starting chat. A failure ends the row with the reason.
+func (g *Gateway) startInBackground(ctx context.Context, info SessionInfo, forkSessionID string, request *chatStartRequest) {
 	background := context.WithoutCancel(ctx)
 	g.starting.Add(1)
 	obs.Go("gateway.start_session", func() {
@@ -182,16 +189,6 @@ func (g *Gateway) startInBackground(ctx context.Context, info SessionInfo, forkS
 			event.Fail(err)
 			event.End()
 			g.failStart(background, info, err)
-			return
-		}
-		if prompt == "" {
-			return
-		}
-		if err := ConversationPrompt(background, g.options.Home, info.ID, prompt); err != nil {
-			_, event := obs.Start(background, "gateway", "resume_prompt")
-			event.Set("session_id", info.ID)
-			event.Fail(err)
-			event.End()
 		}
 	})
 }
@@ -231,18 +228,28 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt string) (SessionIn
 		return SessionInfo{}, errors.New("choose a recent folder from this node")
 	}
 	// The claim is atomic, so two resumes cannot start two workers for one chat.
-	result, err := g.auth.store.DB.ExecContext(ctx, "UPDATE sessions SET conversation_state='starting',ended_at=0 WHERE id=? AND ended_at>0 AND archived_at=0 AND node_id="+state.LocalNodeSQL, id)
+	err = state.Transaction(ctx, g.auth.store.DB, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, "UPDATE sessions SET conversation_state='starting',ended_at=0 WHERE id=? AND ended_at>0 AND archived_at=0 AND node_id="+state.LocalNodeSQL, id)
+		if err != nil {
+			return err
+		}
+		if claimed, err := result.RowsAffected(); err != nil || claimed != 1 {
+			return errors.Join(errResumeConflict, err)
+		}
+		if prompt != "" {
+			queueID := rand.Text()
+			return appendStartingPrompt(ctx, tx, id, queuedPrompt{ID: queueID, Input: acp.PromptInput{Text: prompt, QueueID: queueID}})
+		}
+		return nil
+	})
 	if err != nil {
 		return SessionInfo{}, err
-	}
-	if claimed, err := result.RowsAffected(); err != nil || claimed != 1 {
-		return SessionInfo{}, errors.Join(errResumeConflict, err)
 	}
 	info.ConversationState = "starting"
 	info.EndedAt = time.Time{}
 	info.Reachable = true
 	info.LastUsed = time.Now().UTC()
-	g.startInBackground(ctx, info, "", prompt, nil)
+	g.startInBackground(ctx, info, "", nil)
 	return info, nil
 }
 

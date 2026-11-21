@@ -53,7 +53,7 @@ type restartOperation struct {
 	OperationID string `json:"operation_id" jsonschema:"Unique restart operation ID (16 to 128 letters, digits, hyphens or underscores). Reuse it when retrying the same restart; use a new ID for a new restart."`
 }
 
-func validRestartID(id string) bool {
+func validOperationID(id string) bool {
 	return len(id) >= 16 && len(id) <= 128 && strings.IndexFunc(id, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_')
 	}) == -1
@@ -125,7 +125,7 @@ func (worker *WorkerHTTP) watch(session *Session) {
 // Restart keeps the private endpoint stable while replacing the agent process.
 // Terminal attachments reconnect to the new PTY; ACP clients retain the worker endpoint.
 func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (result error) {
-	if !validRestartID(operationID) {
+	if !validOperationID(operationID) {
 		return errors.New("restart requires a valid operation_id")
 	}
 	worker.lifecycle.Lock()
@@ -310,7 +310,7 @@ func WorkerHandler(ctx context.Context, session *Session, conversation *Conversa
 	}
 	mux.HandleFunc("POST /restart", func(w http.ResponseWriter, r *http.Request) {
 		operationID := r.Header.Get("Idempotency-Key")
-		if !validRestartID(operationID) {
+		if !validOperationID(operationID) {
 			http.Error(w, "restart requires a valid Idempotency-Key", http.StatusBadRequest)
 			return
 		}

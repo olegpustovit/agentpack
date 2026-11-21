@@ -8,8 +8,9 @@ import { PopupSelect } from "@/components/kit/forms"
 import { Button } from "@/components/ui/button"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { StatusSlot } from "@/features/status/status-bar"
+import { pendingChatClaim } from "@/features/sessions/start"
 import { sessionsQuery } from "@/features/sessions/queries"
-import { clearFirstMessage, firstMessage, loadAgentChoices, markNewChat, rememberAgentChoice, takeNewChat } from "@/features/sessions/choices"
+import { loadAgentChoices, markNewChat, rememberAgentChoice, takeNewChat } from "@/features/sessions/choices"
 import { agentIds } from "@/features/sessions/rules"
 import { useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
@@ -17,6 +18,7 @@ import { harnessName, relativeTime } from "@/lib/format"
 import { clock, goalElapsedMs, liveGoal } from "@/lib/goal"
 import { useNow } from "@/lib/use-now"
 import { cacheBuildID, restoreChatQuery, trackStreamingQuery } from "@/lib/persist"
+import { newIntentID } from "@/lib/intent"
 import { hud } from "@/lib/hud"
 import { api, ApiError, LOCAL } from "@/lib/api"
 import { ompSettingsQuery, quickRoles } from "@/features/settings/omp-model"
@@ -44,9 +46,9 @@ type SendInput = {
   attachments: (Pick<PendingAttachment, "sha" | "mime" | "width" | "height"> & { name?: string })[]
   resourceLink?: { sha: string; name: string }
   clearComposer: boolean
-  /** Last log seq when sent; a prompt after it is this message, so the optimistic copy goes. Unset when queued. */
-  optimisticAfter?: number
 }
+type PromptIntent = SendInput & { id: string }
+
 const GoalSheet = lazy(() => import("./goal-editor").then((module) => ({ default: module.GoalSheet })))
 const draftKey = (machine: string, sessionId: string) => `agentpack:draft:${machine}/${sessionId}`
 function loadDraft(key: string) {
@@ -109,7 +111,7 @@ export default function ConversationPane({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const machines = useMachines()
-  const [draft, setDraft] = useState(() => loadDraft(draftKey(machine, sessionId)) || firstMessage(sessionId))
+  const [draft, setDraft] = useState(() => loadDraft(draftKey(machine, sessionId)))
   const [hintIndex, setHintIndex] = useState(0)
   const [hintsClosed, setHintsClosed] = useState(false)
   // The caret, valid only for the draft it was read from; a draft set by code puts it at the end.
@@ -134,16 +136,13 @@ export default function ConversationPane({
   const threadScrollRef = useRef<HTMLDivElement>(null)
   const [configValues, setConfigValues] = useState<Record<string, string | boolean>>({})
   const readOnly = unavailable || info?.reachable === false || Boolean(info?.archived_at)
-  // "+" opens the chat before the agent is up. A message sent meanwhile stays in the composer (and its
-  // saved draft, so leaving the chat loses nothing) and goes out once the agent runs.
+  // A starting chat accepts text before the worker completes its handshake.
   const starting = !readOnly && info?.conversation_state === "starting" && !info.ended_at
   const live = !readOnly && !starting && info?.state.running === true
   // A stopped chat comes back on its next message: the gateway restarts it under the same ID, reloads
   // the agent's conversation and sends the message once it runs.
   // One that never started (its agent wasn't signed in, say) starts fresh the same way.
   const resumable = !readOnly && !starting && !live && Boolean(info?.ended_at)
-  // A first message from New session waits in the composer, held like one typed while starting.
-  const [held, setHeld] = useState(() => firstMessage(sessionId) !== "")
   const [streamConnected, setStreamConnected] = useState(false)
   const { data: tail, error: conversationError } = useQuery({
     ...conversationEventsQuery(machine, sessionId),
@@ -184,8 +183,9 @@ export default function ConversationPane({
   const effortOption = selectOptions.find((option) => configRole(option) === "effort")
   const extraOptions = configOptions.filter((option) => configRole(option) === "other")
   const tailLoaded = tail !== undefined
+  const streamReady = live || (starting && info?.provisionalStart !== "claim")
   useEffect(() => {
-    if (!live || needsUpdate || !tailLoaded) return
+    if (!streamReady || needsUpdate || !tailLoaded) return
     const key = ["conversation", machine, sessionId]
     let source: EventSource | undefined
     let untrack: (() => void) | undefined
@@ -234,7 +234,7 @@ export default function ConversationPane({
       document.removeEventListener("visibilitychange", syncVisibility)
       close()
     }
-  }, [live, machine, needsUpdate, queryClient, sessionId, tailLoaded])
+  }, [streamReady, machine, needsUpdate, queryClient, sessionId, tailLoaded])
 
   const parent = reduceThread(historyKey, entries)
   const subagent = subagentId ? parent.subagents?.[subagentId] : undefined
@@ -408,27 +408,44 @@ export default function ConversationPane({
     onError: (error, id) =>
       hud.error(conversationErrorMessage(machine, "stop the subagent", error), conversationNeedsUpdate(error) ? undefined : () => stopSubagent.mutate(id)),
   })
+  const [pendingSends, setPendingSends] = useState<PromptIntent[]>([])
+  useEffect(() => {
+    if (!pendingSends.length) return
+    const received = confirmedPrompts(entries)
+    const pending = pendingSends.filter((item) => !received.has(item.id))
+    if (pending.length !== pendingSends.length) setPendingSends(pending)
+  }, [entries, pendingSends])
+  const discardSend = (id: string) => setPendingSends((pending) => pending.filter((item) => item.id !== id))
   const send = useMutation({
-    mutationFn: (input: SendInput) => {
+    scope: { id: sessionId },
+    mutationFn: async (input: PromptIntent) => {
+      const claimed = await pendingChatClaim(sessionId)
+      const target = claimed?.id ?? sessionId
       const request = promptRequest(
         input.text,
         input.attachments,
         info?.agent_capabilities?.promptCapabilities?.image === true,
         input.resourceLink,
       )
-      return api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/${request.path}`, {
+      return api<{ queued?: string }>(`/api/sessions/${encodeURIComponent(target)}/conversation/${request.path}`, {
         machine,
         method: "POST",
+        idempotencyKey: input.id,
         body: input.steer ? { ...request.body, steer: true } : request.body,
       })
     },
     // The composer clears as the message is sent; a failure puts it back.
     onMutate: (input) => {
+      setPendingSends((pending) => [...pending.filter((item) => item.id !== input.id), input])
       if (!input.clearComposer) return
       setDraft("")
       setAttachments(() => [])
     },
+    onSuccess: (result, input) => {
+      if (result?.queued !== input.id) discardSend(input.id)
+    },
     onError: (error, input) => {
+      discardSend(input.id)
       if (input.clearComposer) setDraft((current) => current || input.text)
       hud.error(
         conversationErrorMessage(machine, input.steer ? "steer the agent" : input.attachments.length > 1 ? "send multiple images" : "send a message", error),
@@ -436,9 +453,11 @@ export default function ConversationPane({
       )
     },
   })
+  const submitPrompt = (input: SendInput, options?: Parameters<typeof send.mutate>[1]) =>
+    send.mutate({ ...input, id: newIntentID() }, options)
   const resume = useMutation({
     mutationFn: (text: string) => api(`/api/sessions/${encodeURIComponent(sessionId)}/resume`, { machine, method: "POST", body: { text } }),
-    onMutate: () => setDraft(""),
+    onMutate: (text) => { if (text) setDraft("") },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: sessionsQuery(machine, false).queryKey }),
     onError: (error, text) => {
       setDraft((current) => current || text)
@@ -487,7 +506,7 @@ export default function ConversationPane({
   const canFork = !readOnly && Boolean(!needsUpdate && info?.agent_session_id && info.agent_capabilities?.sessionCapabilities?.fork)
   function retryLastPrompt() {
     if (retryInput && canRetry) {
-      send.mutate({
+      submitPrompt({
         text: retryInput.text,
         attachments: retryInput.attachments,
         resourceLink: retryInput.resourceLink,
@@ -495,17 +514,11 @@ export default function ConversationPane({
       })
     }
   }
-  // Images upload to the running agent, so a starting chat holds text only.
-  const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !(starting && (attachments.length > 0 || held)) && !send.isPending && !upload.isPending && !needsUpdate && !(resumable && attachments.length > 0)
-  useEffect(() => {
-    if (!held || !live && !info?.ended_at) return
-    // A start that failed ends the row; the message simply stays in the composer.
-    if (live && draft.trim()) send.mutate({ text: draft.trim(), attachments: [], clearComposer: true, optimisticAfter: entries.at(-1)?.seq ?? 0 })
-    clearFirstMessage(sessionId)
-    setHeld(false)
-  }, [held, live, info?.ended_at, send, draft, entries, sessionId])
-  // Enter sends, or queues while the agent works; steer interrupts the turn and sends this next.
+  // Images upload to the running agent, so a starting chat accepts text.
+  const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !upload.isPending && !needsUpdate && !((starting || resumable) && attachments.length > 0) && !(resumable && resume.isPending)
+
   const nextQueued = parent.queue?.find((item) => !item.steer)
+
   function submit(steer = false) {
     // Enter on an empty composer sends the waiting message now.
     if (nextQueued && !draft.trim() && attachments.length === 0 && !readOnly && !needsUpdate && !steerQueued.isPending) {
@@ -525,28 +538,23 @@ export default function ConversationPane({
       )
       return
     }
-    if (starting) {
-      setHeld(true)
-      return
-    }
     if (resumable) {
       resume.mutate(text)
       return
     }
-    // A message to an idle agent becomes the next prompt, so it can show before the gateway answers.
-    // Writing instead of answering an open question interrupts it, as in the Claude CLI.
-    send.mutate({ text, attachments, clearComposer: true, steer: (steer || parent.needs_you) && parent.working, optimisticAfter: parent.working ? undefined : entries.at(-1)?.seq ?? 0 })
+      // Writing instead of answering an open question interrupts it, as in the Claude CLI.
+    submitPrompt({ text, attachments, clearComposer: true, steer: (steer || parent.needs_you) && parent.working })
   }
   // A merge conflict goes back to the agent, which resolves it in its own worktree.
   function askAgent(text: string) {
     if (resumable) resume.mutate(text)
-    else send.mutate({ text, attachments: [], clearComposer: false })
+    else submitPrompt({ text, attachments: [], clearComposer: false })
   }
   const git = useSessionGit(machine, sessionId, info).data
   const branch = branchLine(git)
   function compact(focus?: string) {
     if (!canCompact || readOnly) return
-    send.mutate({ text: focus ? `/compact ${focus}` : "/compact", attachments: [], clearComposer: false })
+    submitPrompt({ text: focus ? `/compact ${focus}` : "/compact", attachments: [], clearComposer: false })
   }
   const advertised = agentCommands(entries)
   const commands = advertised ?? cachedCommands(info?.harness ?? "")
@@ -694,7 +702,7 @@ export default function ConversationPane({
                 <p className="py-(--s7) text-center text-(length:--fs-sm) text-(--fg3)">This subagent isn't in the loaded part of the conversation.</p>
               ) : (
                 <ThreadView
-                  items={subagent ? thread.items : withSending(thread.items, entries, send.isPending ? send.variables : undefined)}
+                  items={subagent ? thread.items : withSending(thread.items, entries, pendingSends)}
                   machine={machine}
                   sessionId={sessionId}
                   readOnly={readOnly}
@@ -712,7 +720,6 @@ export default function ConversationPane({
                   onSignedIn={!subagent && resumable ? () => resume.mutate(draft.trim()) : undefined}
                 />
               )}
-              {held && <p className="flex items-center justify-end gap-(--s2) text-(length:--fs-xs) text-(--fg3)"><Spinner aria-hidden />Sends when {harnessName(info?.harness ?? "agent")} is ready</p>}
               </>
             )}
           </div>
@@ -1109,7 +1116,7 @@ export default function ConversationPane({
           compact={canCompact ? compact : undefined}
           compactReason={canCompact ? undefined : `${agentName} doesn't offer compaction.`}
           onOpenSubagent={openSubagent}
-          onSendComments={(text, sent) => send.mutate({ text, attachments: [], clearComposer: false }, { onSuccess: sent })}
+          onSendComments={(text, sent) => submitPrompt({ text, attachments: [], clearComposer: false }, { onSuccess: sent })}
           sendingComments={send.isPending}
           git={<GitInspectorSections machine={machine} sessionId={sessionId} git={git} readOnly={readOnly || needsUpdate} onAskRebase={askAgent} />}
         />
@@ -1129,10 +1136,20 @@ function withoutKey<T>(values: Record<string, T>, key: string): Record<string, T
   return rest
 }
 
-// The message being sent, shown at the end of the thread until the log holds a prompt newer than the send.
-function withSending(items: ThreadItem[], entries: LogEntry[], sending: SendInput | undefined): ThreadItem[] {
-  const after = sending?.optimisticAfter
-  if (after === undefined || !sending?.text) return items
-  for (let i = entries.length - 1; i >= 0 && entries[i]!.seq > after; i--) if (entries[i]!.kind === "prompt") return items
-  return [...items, { kind: "user_message_chunk", data: { text: { text: sending.text } } }]
+function confirmedPrompts(entries: LogEntry[]): Set<string> {
+  const received = new Set<string>()
+  for (const { kind, payload } of entries) {
+    if (kind !== "prompt" && kind !== "queued_prompt" && kind !== "dequeued_prompt") continue
+    const id = (payload as { queueId?: string }).queueId
+    if (id) received.add(id)
+  }
+  return received
+}
+
+function withSending(items: ThreadItem[], entries: LogEntry[], sending: PromptIntent[]): ThreadItem[] {
+  if (!sending.length) return items
+  const received = confirmedPrompts(entries)
+  return [...items, ...sending.filter((item) => item.text && !received.has(item.id)).map((item): ThreadItem =>
+    ({ kind: "user_message_chunk", data: { text: { text: item.text } } }),
+  )]
 }

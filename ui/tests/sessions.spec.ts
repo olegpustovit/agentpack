@@ -77,7 +77,7 @@ test("arrow keys open each session at once and leave one history entry", async (
   expect(await page.evaluate(() => history.length)).toBe(before + 1)
 })
 
-test("New session posts Cursor CLI as the agent harness and sends the first message once it is up", async ({ page }) => {
+test("New session claims a Cursor CLI chat together with its first message", async ({ page }) => {
   const project = {
     directory: "/home/oleg/agentpack",
     name: "agentpack",
@@ -90,7 +90,6 @@ test("New session posts Cursor CLI as the agent harness and sends the first mess
     mcp: [],
     error: "",
   }
-  await page.clock.install()
   await page.route("**/api/projects", (route) => route.fulfill({ json: [project] }))
   const starting = { ...sessions[0], id: "s9", harness: "agent", transport: "acp", conversation_state: "starting", state: terminal(false) }
   // Only the POST is answered here; GET falls through to the shared sessions mock.
@@ -99,11 +98,10 @@ test("New session posts Cursor CLI as the agent harness and sends the first mess
     reply = [...sessions, starting]
     return route.fulfill({ json: starting })
   })
-  const prompts: unknown[] = []
-  await page.route("**/api/sessions/s9/conversation/prompt", (route) => {
-    prompts.push(route.request().postDataJSON())
-    return route.fulfill({ json: {} })
-  })
+  await page.route("**/api/sessions/s9/conversation", (route) => route.fulfill({
+    body: '{"seq":1,"ts":1,"kind":"queued_prompt","payload":{"queueId":"new-chat","text":{"text":"tidy the overlay"}}}\n',
+    contentType: "application/x-ndjson",
+  }))
 
   await page.goto("/sessions?new=1")
   await page.getByRole("group", { name: "Agent" }).getByRole("button", { name: "Cursor CLI" }).click()
@@ -111,14 +109,8 @@ test("New session posts Cursor CLI as the agent harness and sends the first mess
   const posted = page.waitForRequest((request) => request.method() === "POST" && /\/api\/sessions$/.test(request.url()))
   await page.getByRole("button", { name: "Start session" }).click()
   const body = (await posted).postDataJSON()
-  expect(body).toMatchObject({ directory: "/home/oleg/agentpack", harness: "agent" })
-
-  // The first message waits in the composer and goes out only once the agent is up.
-  await expect(page.getByText("Sends when Cursor CLI is ready")).toBeVisible()
-  expect(prompts).toHaveLength(0)
-  reply = [...sessions, { ...starting, conversation_state: "idle", state: terminal(true) }]
-  await page.clock.runFor(16_000)
-  await expect.poll(() => prompts).toEqual([{ text: "tidy the overlay" }])
+  expect(body).toMatchObject({ directory: "/home/oleg/agentpack", harness: "agent", first_message: "tidy the overlay" })
+  await expect(page.getByText("tidy the overlay", { exact: true })).toBeVisible()
 })
 
 test("New session shows what the chosen mode loads", async ({ page }) => {
@@ -147,7 +139,6 @@ test("New session shows what the chosen mode loads", async ({ page }) => {
 })
 
 test("+ opens the composer while the chat claim is still in flight", async ({ page }) => {
-  await page.clock.install()
   let posted: { id: string } | undefined
   let release!: () => void
   const heldResponse = new Promise<void>((resolve) => { release = resolve })
@@ -160,10 +151,11 @@ test("+ opens the composer while the chat claim is still in flight", async ({ pa
     reply = [...sessions, info]
     return route.fulfill({ json: info })
   })
-  const prompts: unknown[] = []
+  const prompts: Array<{ body: unknown; id?: string }> = []
   await page.route("**/api/sessions/*/conversation/prompt", (route) => {
-    prompts.push(route.request().postDataJSON())
-    return route.fulfill({ json: {} })
+    const id = route.request().headers()["idempotency-key"]
+    prompts.push({ body: route.request().postDataJSON(), id })
+    return route.fulfill({ json: { accepted: true, queued: id } })
   })
   await page.goto("/sessions")
   await page.getByRole("button", { name: "New Codex chat in oracle on host-a" }).click()
@@ -177,16 +169,17 @@ test("+ opens the composer while the chat claim is still in flight", async ({ pa
   await expect(composer).toHaveAttribute("placeholder", "Starting Codex…")
   await composer.fill("check the budgets")
   await composer.press("Enter")
-  await expect(page.getByText("Sends when Codex is ready")).toBeVisible()
-  expect(prompts).toHaveLength(0)
-  const claimed = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/sessions" && response.request().method() === "POST")
-  release()
-  await claimed
-  reply = [...sessions, { ...starting, id: posted!.id, conversation_state: "idle", state: terminal(true) }]
-  await page.clock.runFor(16_000)
-  await expect.poll(() => prompts).toEqual([{ text: "check the budgets" }])
-  await expect(page.getByText("Sends when Codex is ready")).toBeHidden()
+  await expect(page.getByText("check the budgets", { exact: true })).toBeVisible()
   await expect(composer).toHaveValue("")
+  await composer.fill("then confirm the results")
+  await composer.press("Enter")
+  await expect(page.getByText("then confirm the results", { exact: true })).toBeVisible()
+  expect(prompts).toHaveLength(0)
+  release()
+  await expect.poll(() => prompts.map(({ body }) => body)).toEqual([
+    { text: "check the budgets" }, { text: "then confirm the results" },
+  ])
+  expect(new Set(prompts.map(({ id }) => id)).size).toBe(2)
 })
 
 test("⌥-click on + lists the agents and can start one in a new worktree", async ({ page }) => {

@@ -21,6 +21,9 @@ const maxPromptImages = 32
 
 func promptLogPayload(input acp.PromptInput) json.RawMessage {
 	body := map[string]any{}
+	if input.QueueID != "" {
+		body["queueId"] = input.QueueID
+	}
 	if input.Text != "" {
 		body["text"] = map[string]string{"text": input.Text}
 	}

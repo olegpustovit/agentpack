@@ -342,7 +342,7 @@ func StopWorker(ctx context.Context, home, id string) error {
 }
 
 func RestartWorker(ctx context.Context, home, id, operationID string) error {
-	if !validRestartID(operationID) {
+	if !validOperationID(operationID) {
 		return errors.New("restart requires a valid operation_id")
 	}
 	return controlWorker(ctx, home, id, "restart", operationID)

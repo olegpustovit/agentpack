@@ -78,113 +78,8 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			}
 		}
 	})
-	mux.HandleFunc("POST /conversation/prompt", func(w http.ResponseWriter, r *http.Request) {
-		var input struct {
-			Text  string `json:"text"`
-			Image *struct {
-				Sha    string `json:"sha"`
-				Mime   string `json:"mime"`
-				Width  int    `json:"width"`
-				Height int    `json:"height"`
-			} `json:"image"`
-			ResourceLink *struct {
-				Sha  string `json:"sha"`
-				Name string `json:"name"`
-			} `json:"resource_link"`
-			Steer bool `json:"steer"`
-		}
-		if !readJSON(w, r, &input) {
-			return
-		}
-		if input.Image != nil && input.ResourceLink != nil {
-			http.Error(w, "choose an image or a resource link", http.StatusBadRequest)
-			return
-		}
-		prompt := acp.PromptInput{Text: strings.TrimSpace(input.Text)}
-		if input.Image != nil && input.Image.Sha != "" {
-			sha, err := validateBlobSHA(input.Image.Sha)
-			if err != nil {
-				http.Error(w, "invalid image sha", http.StatusBadRequest)
-				return
-			}
-			prompt.Image = &acp.PromptImage{
-				Sha:   sha,
-				Width: input.Image.Width, Height: input.Image.Height,
-			}
-		}
-		if input.ResourceLink != nil {
-			sha, err := validateBlobSHA(input.ResourceLink.Sha)
-			if err != nil {
-				http.Error(w, "invalid resource link sha", http.StatusBadRequest)
-				return
-			}
-			prompt.ResourceLink = &acp.PromptResourceLink{Sha: sha, Name: input.ResourceLink.Name}
-		}
-		if prompt.Text == "" && prompt.Image == nil && prompt.ResourceLink == nil {
-			http.Error(w, "text or image is required", http.StatusBadRequest)
-			return
-		}
-		queued, err := startPrompt(r.Context(), worker.conversationSession(), prompt, input.Steer)
-		if err != nil {
-			message := "could not send prompt"
-			if errors.Is(err, errSessionArchived) {
-				message = "archived"
-			}
-			http.Error(w, message, http.StatusConflict)
-			return
-		}
-		worker.setTitle(r.Context(), prompt.Text)
-		writePromptAccepted(w, queued)
-	})
-	mux.HandleFunc("POST /conversation/prompt/images", func(w http.ResponseWriter, r *http.Request) {
-		var input struct {
-			Text   string `json:"text"`
-			Images []struct {
-				Sha    string `json:"sha"`
-				Name   string `json:"name"`
-				Width  int    `json:"width"`
-				Height int    `json:"height"`
-			} `json:"images"`
-			Steer bool `json:"steer"`
-		}
-		if !readJSON(w, r, &input) {
-			return
-		}
-		if input.Images == nil {
-			http.Error(w, "images must be an array", http.StatusBadRequest)
-			return
-		}
-		if len(input.Images) > maxPromptImages {
-			http.Error(w, "too many images", http.StatusBadRequest)
-			return
-		}
-		prompt := acp.PromptInput{Text: strings.TrimSpace(input.Text), Images: make([]acp.PromptImage, 0, len(input.Images))}
-		for _, image := range input.Images {
-			sha, err := validateBlobSHA(image.Sha)
-			if err != nil || image.Width < 0 || image.Height < 0 {
-				http.Error(w, "invalid image", http.StatusBadRequest)
-				return
-			}
-			prompt.Images = append(prompt.Images, acp.PromptImage{
-				Sha: sha, Name: sanitizePromptImageName(image.Name), Width: image.Width, Height: image.Height,
-			})
-		}
-		if prompt.Text == "" && len(prompt.Images) == 0 {
-			http.Error(w, "text or image is required", http.StatusBadRequest)
-			return
-		}
-		queued, err := startPrompt(r.Context(), worker.conversationSession(), prompt, input.Steer)
-		if err != nil {
-			message := "could not send prompt"
-			if errors.Is(err, errSessionArchived) {
-				message = "archived"
-			}
-			http.Error(w, message, http.StatusConflict)
-			return
-		}
-		worker.setTitle(r.Context(), prompt.Text)
-		writePromptAccepted(w, queued)
-	})
+	mux.HandleFunc("POST /conversation/prompt", worker.receivePrompt)
+	mux.HandleFunc("POST /conversation/prompt/images", worker.receivePrompt)
 	worker.registerQueueAndGoal(mux)
 	mux.HandleFunc("POST /conversation/permission", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -327,6 +222,129 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 	})
 }
 
+func (worker *WorkerHTTP) receivePrompt(w http.ResponseWriter, r *http.Request) {
+	conv := worker.conversationSession()
+	if conv == nil {
+		http.Error(w, "conversation unavailable", http.StatusNotFound)
+		return
+	}
+	prompt, steer, ok := readPromptRequest(w, r)
+	if !ok {
+		return
+	}
+	queued, err := startPrompt(r.Context(), conv, prompt, steer)
+	if err != nil {
+		message := "could not send prompt"
+		if errors.Is(err, errSessionArchived) {
+			message = "archived"
+		}
+		http.Error(w, message, http.StatusConflict)
+		return
+	}
+	worker.setTitle(r.Context(), prompt.Text)
+	writePromptAccepted(w, queued)
+}
+
+func readPromptRequest(w http.ResponseWriter, r *http.Request) (acp.PromptInput, bool, bool) {
+	if strings.HasSuffix(r.URL.Path, "/images") {
+		return readPromptImages(w, r)
+	}
+	var input struct {
+		Text  string `json:"text"`
+		Image *struct {
+			Sha    string `json:"sha"`
+			Mime   string `json:"mime"`
+			Width  int    `json:"width"`
+			Height int    `json:"height"`
+		} `json:"image"`
+		ResourceLink *struct {
+			Sha  string `json:"sha"`
+			Name string `json:"name"`
+		} `json:"resource_link"`
+		Steer bool `json:"steer"`
+	}
+	if !readJSON(w, r, &input) {
+		return acp.PromptInput{}, false, false
+	}
+	if input.Image != nil && input.ResourceLink != nil {
+		http.Error(w, "choose an image or a resource link", http.StatusBadRequest)
+		return acp.PromptInput{}, false, false
+	}
+	prompt := acp.PromptInput{Text: strings.TrimSpace(input.Text), QueueID: r.Header.Get("Idempotency-Key")}
+	if input.Image != nil && input.Image.Sha != "" {
+		sha, err := validateBlobSHA(input.Image.Sha)
+		if err != nil {
+			http.Error(w, "invalid image sha", http.StatusBadRequest)
+			return acp.PromptInput{}, false, false
+		}
+		prompt.Image = &acp.PromptImage{
+			Sha:   sha,
+			Width: input.Image.Width, Height: input.Image.Height,
+		}
+	}
+	if input.ResourceLink != nil {
+		sha, err := validateBlobSHA(input.ResourceLink.Sha)
+		if err != nil {
+			http.Error(w, "invalid resource link sha", http.StatusBadRequest)
+			return acp.PromptInput{}, false, false
+		}
+		prompt.ResourceLink = &acp.PromptResourceLink{Sha: sha, Name: input.ResourceLink.Name}
+	}
+	if prompt.Text == "" && prompt.Image == nil && prompt.ResourceLink == nil {
+		http.Error(w, "text or image is required", http.StatusBadRequest)
+		return acp.PromptInput{}, false, false
+	}
+	if prompt.QueueID != "" && !validOperationID(prompt.QueueID) {
+		http.Error(w, "invalid Idempotency-Key", http.StatusBadRequest)
+		return acp.PromptInput{}, false, false
+	}
+	return prompt, input.Steer, true
+}
+
+func readPromptImages(w http.ResponseWriter, r *http.Request) (acp.PromptInput, bool, bool) {
+	var input struct {
+		Text   string `json:"text"`
+		Images []struct {
+			Sha    string `json:"sha"`
+			Name   string `json:"name"`
+			Width  int    `json:"width"`
+			Height int    `json:"height"`
+		} `json:"images"`
+		Steer bool `json:"steer"`
+	}
+	if !readJSON(w, r, &input) {
+		return acp.PromptInput{}, false, false
+	}
+	if input.Images == nil {
+		http.Error(w, "images must be an array", http.StatusBadRequest)
+		return acp.PromptInput{}, false, false
+	}
+	if len(input.Images) > maxPromptImages {
+		http.Error(w, "too many images", http.StatusBadRequest)
+		return acp.PromptInput{}, false, false
+	}
+	prompt := acp.PromptInput{Text: strings.TrimSpace(input.Text), QueueID: r.Header.Get("Idempotency-Key"), Images: make([]acp.PromptImage, 0, len(input.Images))}
+	for _, image := range input.Images {
+		sha, err := validateBlobSHA(image.Sha)
+		if err != nil || image.Width < 0 || image.Height < 0 {
+			http.Error(w, "invalid image", http.StatusBadRequest)
+			return acp.PromptInput{}, false, false
+		}
+		prompt.Images = append(prompt.Images, acp.PromptImage{
+			Sha: sha, Name: sanitizePromptImageName(image.Name), Width: image.Width, Height: image.Height,
+		})
+	}
+	if prompt.Text == "" && len(prompt.Images) == 0 {
+		http.Error(w, "text or image is required", http.StatusBadRequest)
+		return acp.PromptInput{}, false, false
+	}
+	if prompt.QueueID != "" && !validOperationID(prompt.QueueID) {
+		http.Error(w, "invalid Idempotency-Key", http.StatusBadRequest)
+		return acp.PromptInput{}, false, false
+	}
+	return prompt, input.Steer, true
+}
+
 func (worker *WorkerHTTP) serveConversationSSE(w http.ResponseWriter, r *http.Request, conv *ConversationSession) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -434,6 +452,9 @@ func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record Work
 		request.Header.Set("If-None-Match", match)
 	}
 	if sendsBody {
+		if key := r.Header.Get("Idempotency-Key"); key != "" {
+			request.Header.Set("Idempotency-Key", key)
+		}
 		contentType := "application/json"
 		if suffix == "/blobs" {
 			contentType = r.Header.Get("Content-Type")

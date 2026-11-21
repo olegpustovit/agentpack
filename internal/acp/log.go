@@ -22,6 +22,7 @@ type EventLog struct {
 	bytes       int
 	truncated   bool
 	replaying   bool
+	closed      bool
 	entries     []LogEntry
 	subagents   map[string]bool // announced child session -> cancellable
 	changed     chan struct{}   // closed and replaced whenever readers have something new
@@ -58,7 +59,7 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 	log.notifyMu.Lock()
 	defer log.notifyMu.Unlock()
 	log.mu.Lock()
-	if log.replaying && kind != "agent_exit" {
+	if log.closed || log.replaying && kind != "agent_exit" && kind != "queued_prompt" {
 		log.mu.Unlock()
 		return LogEntry{}
 	}
@@ -173,6 +174,7 @@ func (log *EventLog) Close() error {
 	log.mu.Lock()
 	defer log.mu.Unlock()
 	log.persistence = nil
+	log.closed = true
 	return persistence.err
 }
 
@@ -180,6 +182,9 @@ func (log *EventLog) Close() error {
 func (log *EventLog) Flush() error {
 	log.mu.Lock()
 	defer log.mu.Unlock()
+	if log.closed {
+		return errors.New("event log closed")
+	}
 	if log.persistence == nil {
 		return nil
 	}

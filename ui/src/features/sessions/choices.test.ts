@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { clearFirstMessage, firstMessage, loadAgentChoices, loadStartChoices, markNewChat, rememberAgentChoice, saveStartChoices, takeNewChat } from "./choices"
+import { loadAgentChoices, loadStartChoices, markNewChat, rememberAgentChoice, saveStartChoices, takeNewChat } from "./choices"
 
 describe("remembered new-session choices", () => {
   afterEach(() => {
@@ -28,14 +28,4 @@ describe("remembered new-session choices", () => {
     expect(takeNewChat("s1")).toBe(false)
   })
 
-  it("keeps a first message until it is sent, and still applies choices after", () => {
-    markNewChat("s2", "fix the tests")
-    expect(firstMessage("s2")).toBe("fix the tests")
-    expect(firstMessage("s2")).toBe("fix the tests")
-    clearFirstMessage("s2")
-    expect(firstMessage("s2")).toBe("")
-    expect(takeNewChat("s2")).toBe(true)
-    markNewChat("s3")
-    expect(firstMessage("s3")).toBe("")
-  })
 })

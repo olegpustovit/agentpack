@@ -33,6 +33,7 @@ type PromptResourceLink struct {
 
 // PromptInput is a user message sent to the agent.
 type PromptInput struct {
+	QueueID      string
 	Text         string
 	Image        *PromptImage
 	Images       []PromptImage

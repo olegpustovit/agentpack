@@ -28,7 +28,8 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
-func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir string, log *acp.EventLog) (conversation *ConversationSession, cleanup func(), result error) {
+func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir string, conv *ConversationSession) (conversation *ConversationSession, cleanup func(), result error) {
+	log := conv.log
 	defer func() {
 		if result != nil {
 			closeACPEventLog(log)
@@ -58,7 +59,8 @@ func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir s
 				log.Append(entry.Kind, entry.TS, entry.Payload)
 			}
 		}
-		return NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil)), func() { closeACPEventLog(log) }, nil
+		conv.broker = acp.NewBroker(nil, nil, nil, nil)
+		return conv, func() { closeACPEventLog(log) }, nil
 	case "2":
 		fixture := os.Getenv("AGENTPACK_TEST_ACP_FIXTURE")
 		if fixture == "" {
@@ -68,7 +70,7 @@ func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir s
 		if err != nil {
 			return nil, nil, err
 		}
-		return startACPReplayAgent(ctx, launch, sessionDir, entries, log)
+		return startACPReplayAgent(ctx, launch, sessionDir, entries, conv)
 	}
 
 	target, err := harnessTarget(launch.Session.Harness)
@@ -91,10 +93,11 @@ func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir s
 	if err != nil {
 		return nil, nil, err
 	}
-	return startACPAgentProcess(ctx, launch, launchCtx, harness, acpLaunch, sessionDir, log)
+	return startACPAgentProcess(ctx, launch, launchCtx, harness, acpLaunch, sessionDir, conv)
 }
 
-func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir string, entries []acp.LogEntry, log *acp.EventLog) (*ConversationSession, func(), error) {
+func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir string, entries []acp.LogEntry, conv *ConversationSession) (*ConversationSession, func(), error) {
+	log := conv.log
 	workspace := launch.Session.Directory
 	if workspace == "" {
 		workspace = launch.Directory
@@ -147,10 +150,13 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 		nil,
 		brokerSetConfigOption(&connMu, &conn, &sessID, log),
 	)
-	conv := NewConversationSession(log, broker)
+	conv.mu.Lock()
+	conv.broker = broker
 	conv.workspace = workspace
 	conv.agentExited = false
-	log.SetReplaying(launch.Session.AgentSessionID != "" && conv.lastSeq > 0)
+	replaying := launch.Session.AgentSessionID != "" && conv.lastSeq > 0
+	conv.mu.Unlock()
+	log.SetReplaying(replaying)
 	defer log.SetReplaying(false)
 	client := acp.NewHarnessClient(workspace, nil, log, broker)
 	client.AutoApprove = conv.BypassingPermissions
@@ -195,7 +201,8 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 	return conv, cleanup, nil
 }
 
-func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx base.LaunchContext, harness base.Harness, acpLaunch base.ACPLaunch, sessionDir string, log *acp.EventLog) (*ConversationSession, func(), error) {
+func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx base.LaunchContext, harness base.Harness, acpLaunch base.ACPLaunch, sessionDir string, conv *ConversationSession) (*ConversationSession, func(), error) {
+	log := conv.log
 	cmd := acpLaunch.Cmd
 	if cmd == nil {
 		return nil, nil, errors.New("harness ACP launch returned nil command")
@@ -287,10 +294,13 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		nil,
 		brokerSetConfigOption(&connMu, &conn, &sessID, log),
 	)
-	conv := NewConversationSession(log, broker)
+	conv.mu.Lock()
+	conv.broker = broker
 	conv.workspace = workspace
 	conv.agentExited = false
-	log.SetReplaying(launch.Session.AgentSessionID != "" && conv.lastSeq > 0)
+	replaying := launch.Session.AgentSessionID != "" && conv.lastSeq > 0
+	conv.mu.Unlock()
+	log.SetReplaying(replaying)
 	defer log.SetReplaying(false)
 	client := acp.NewHarnessClient(workspace, nil, log, broker)
 	client.AutoApprove = conv.BypassingPermissions

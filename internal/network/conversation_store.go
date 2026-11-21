@@ -395,3 +395,12 @@ func writeConversationSSE(w io.Writer, entry acp.LogEntry) error {
 	_, err = message.WriteTo(w)
 	return err
 }
+
+func storedPromptID(ctx context.Context, store *state.Store, session, id string) (bool, error) {
+	var exists bool
+	err := store.Reader.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM conversation_events WHERE session_id=? AND json_extract(body, '$.payload.queueId')=?
+		AND json_valid(body) AND json_extract(body, '$.kind') IN ('queued_prompt', 'prompt', 'dequeued_prompt')
+	)`, session, id).Scan(&exists)
+	return exists, err
+}

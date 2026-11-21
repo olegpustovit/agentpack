@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
@@ -219,8 +220,78 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if err := upsertSession(ctx, store.DB, pending); err != nil {
 		return 1, fmt.Errorf("register session: %w", err)
 	}
+	var server *http.Server
+	defer func() {
+		stop, cancel := context.WithTimeout(context.Background(), workerStopGrace)
+		if handler != nil {
+			_ = handler.Stop(stop)
+		} else if session != nil {
+			_ = session.Stop(stop)
+		}
+		cancel()
+		if server != nil {
+			drain, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = server.Shutdown(drain)
+			if handler != nil {
+				_ = handler.Shutdown(drain)
+			}
+			_ = server.Close()
+		}
+	}()
+	var secret [32]byte
+	if _, err := rand.Read(secret[:]); err != nil {
+		return 1, fmt.Errorf("generate worker secret: %w", err)
+	}
+	record := WorkerRecord{Session: launch.Session, ID: filepath.Base(directory), PID: os.Getpid(), Address: listener.Addr().String(), Secret: hex.EncodeToString(secret[:])}
+	lookupPrompt := func(ctx context.Context, id string) (bool, error) {
+		return storedPromptID(ctx, store, record.ID, id)
+	}
+	var readyHTTP atomic.Pointer[WorkerHTTP]
+	serveDone := make(chan error, 1)
+	serve := func(httpHandler http.Handler) {
+		server = &http.Server{Handler: httpHandler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
+		obs.Go("worker.http", func() { serveDone <- server.Serve(listener) })
+	}
 	if launch.Transport == "acp" {
-		log, err := newConversationLog(ctx, store, launch.Session.ID, cancelWorker)
+		lock, err := lockPromptHandoff(ctx, directory)
+		if err != nil {
+			return 1, err
+		}
+		var prepared *ConversationSession
+		err = func() error {
+			defer lock.Close()
+			log, err := newConversationLog(ctx, store, launch.Session.ID, cancelWorker)
+			if err != nil {
+				return err
+			}
+			prepared = NewConversationSession(log, nil)
+			if err := restorePendingQueue(ctx, store.Reader, record.ID, prepared); err != nil {
+				return errors.Join(err, log.Close())
+			}
+			prepared.starting, prepared.agentExited, prepared.promptStored = true, false, lookupPrompt
+			bootstrap, err := WorkerHandler(ctx, nil, prepared, record.Secret, directory)
+			if err != nil {
+				return errors.Join(err, log.Close())
+			}
+			bootstrap.stateStore = store
+			if err := publishWorkerEndpoint(directory, record); err != nil {
+				return errors.Join(err, log.Close())
+			}
+			serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if active := readyHTTP.Load(); active != nil {
+					active.ServeHTTP(w, r)
+					return
+				}
+				switch r.Method + " " + r.URL.Path {
+				case "GET /conversation", "POST /conversation/prompt", "POST /conversation/prompt/images":
+					bootstrap.ServeHTTP(w, r)
+				default:
+					http.Error(w, "agent is starting", http.StatusServiceUnavailable)
+				}
+			}))
+			return nil
+		}()
 		if err != nil {
 			return 1, err
 		}
@@ -228,7 +299,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		if launch.tools.close != nil {
 			defer launch.tools.close()
 		}
-		conversation, acpCleanup, err = startACPConversation(startCtx, launch, directory, log)
+		conversation, acpCleanup, err = startACPConversation(startCtx, launch, directory, prepared)
 		if err != nil {
 			return 1, err
 		}
@@ -255,28 +326,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			return 1, err
 		}
 	}
-	var server *http.Server
-	defer func() {
-		stop, cancel := context.WithTimeout(context.Background(), workerStopGrace)
-		if handler != nil {
-			_ = handler.Stop(stop)
-		} else if session != nil {
-			_ = session.Stop(stop)
-		}
-		cancel()
-		if server != nil {
-			drain, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = server.Shutdown(drain)
-			_ = handler.Shutdown(drain)
-			_ = server.Close()
-		}
-	}()
-	var secret [32]byte
-	if _, err := rand.Read(secret[:]); err != nil {
-		return 1, fmt.Errorf("generate worker secret: %w", err)
-	}
-	record := WorkerRecord{Session: launch.Session, ID: filepath.Base(directory), PID: os.Getpid(), Address: listener.Addr().String(), Secret: hex.EncodeToString(secret[:])}
+	record.Session = launch.Session
 	// An instant start stays "starting" in the row until the endpoint serves; see the patch after ready.
 	instant := launch.Session.ConversationState == "starting"
 	if launch.Transport == "acp" {
@@ -296,19 +346,10 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if err := upsertSession(ctx, store.DB, record.Session); err != nil {
 		return 1, fmt.Errorf("register session: %w", err)
 	}
-	endpoint := record
-	endpoint.Session = SessionInfo{}
-	data, err := json.Marshal(endpoint)
-	if err != nil {
-		return 1, err
-	}
-	// Publish a complete record; node discovery ignores temporary files.
-	temporary := filepath.Join(directory, "worker.tmp")
-	if err := os.WriteFile(temporary, data, 0o600); err != nil {
-		return 1, fmt.Errorf("write worker record: %w", err)
-	}
-	if err := os.Rename(temporary, filepath.Join(directory, "worker.json")); err != nil {
-		return 1, fmt.Errorf("publish worker record: %w", err)
+	if server == nil {
+		if err := publishWorkerEndpoint(directory, record); err != nil {
+			return 1, err
+		}
 	}
 	var stateWriteWarning sync.Once
 	persistConversationState := func(current *ConversationSession) func(string) {
@@ -346,6 +387,9 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	// The permission mode last chosen for this agent, on any chat and machine of the network.
 	permissionSettingKey := "permission_mode." + launch.Session.Harness
 	wireConversation := func(current *ConversationSession) {
+		current.queueMu.Lock()
+		current.promptStored = lookupPrompt
+		current.queueMu.Unlock()
 		current.restoreGoal(launch.Session.Goal)
 		current.mu.Lock()
 		current.titleChange = persistTitle
@@ -402,7 +446,11 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			if err != nil {
 				return err
 			}
-			next, cleanup, err := startACPConversation(obs.WithRecording(ctx, handler.diagnostics), launch, directory, log)
+			prepared := NewConversationSession(log, nil)
+			if err := restorePendingQueue(ctx, store.Reader, record.ID, prepared); err != nil {
+				return errors.Join(err, log.Close())
+			}
+			next, cleanup, err := startACPConversation(obs.WithRecording(ctx, handler.diagnostics), launch, directory, prepared)
 			if err != nil {
 				return err
 			}
@@ -432,9 +480,11 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			return nil
 		}
 	}
-	server = &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
-	serveDone := make(chan error, 1)
-	obs.Go("worker.http", func() { serveDone <- server.Serve(listener) })
+	if server == nil {
+		serve(handler)
+	} else {
+		readyHTTP.Store(handler)
+	}
 	if err := ready(record.ID); err != nil {
 		return 1, fmt.Errorf("announce worker: %w", err)
 	}
@@ -467,4 +517,22 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		code, err := handler.current().Wait(context.Background())
 		return code, errors.Join(err, handler.err)
 	}
+}
+
+func publishWorkerEndpoint(directory string, record WorkerRecord) error {
+	endpoint := record
+	endpoint.Session = SessionInfo{}
+	data, err := json.Marshal(endpoint)
+	if err != nil {
+		return err
+	}
+	// Publish a complete record; node discovery ignores temporary files.
+	temporary := filepath.Join(directory, "worker.tmp")
+	if err := os.WriteFile(temporary, data, 0o600); err != nil {
+		return fmt.Errorf("write worker record: %w", err)
+	}
+	if err := os.Rename(temporary, filepath.Join(directory, "worker.json")); err != nil {
+		return fmt.Errorf("publish worker record: %w", err)
+	}
+	return nil
 }

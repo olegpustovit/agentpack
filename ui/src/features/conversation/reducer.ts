@@ -354,6 +354,7 @@ class ThreadReducer {
         deactivate(state, (item, data) => item.kind === "permission" ? !!data?.requestId : item.kind === "elicitation" && !!data?.elicitationId)
         break
       case "prompt":
+        queue.delete((entry.payload as { queueId?: string }).queueId ?? "")
         state.working = true
         this.turn = { ts: entry.ts, tokens: state.context_tokens, cost: state.cost_usd }
         state.items.push({ kind: "user_message_chunk", data: entry.payload })

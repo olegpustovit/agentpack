@@ -2,12 +2,18 @@ package network
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/acp"
 )
 
 func TestChatStartAnswersBeforeTheAgentIsUp(t *testing.T) {
@@ -108,6 +114,9 @@ func TestEndingAChatSettlesAStaleState(t *testing.T) {
 }
 
 func TestWorkerThatExitsEarlyReportsItsOwnError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fixture checks Unix stderr file semantics")
+	}
 	home := t.TempDir()
 	script := filepath.Join(t.TempDir(), "worker")
 	body := "#!/bin/sh\ncat >/dev/null\n[ -p /dev/stderr ] && { echo 'stderr is a pipe that dies with the gateway' >&2; exit 1; }\nprintf '          \\n   \\033[1mERROR\\033[0m  \\n          \\n  Acp session/new: Authentication required.\\n' >&2\nexit 1\n"
@@ -251,5 +260,64 @@ func TestSignInFailureMarksTheNoticeAndTheChatStartsLater(t *testing.T) {
 	g.starting.Wait()
 	if got := <-launched; got.ID != info.ID || got.AgentSessionID != "" {
 		t.Fatalf("worker launch %+v", got)
+	}
+}
+
+func TestStartingChatPersistsThreePromptsBeforeTheWorkerExists(t *testing.T) {
+	home := t.TempDir()
+	dir := seedFolder(t, home)
+	release := make(chan struct{})
+	g, origin := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+		<-release
+		return info.ID, nil
+	})
+	defer close(release)
+	actor := browserActor(testBrowserEmail)
+	input := chatStartRequest{ID: "session-d7148a740d2c495991c792576427836d", Directory: dir,
+		Harness: "claude", Mode: "default", Transport: "acp", FirstMessage: "one"}
+	if _, err := g.claimChatStart(t.Context(), actor, input); err != nil {
+		t.Fatal(err)
+	}
+	submit := func(text, key string) {
+		r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/sessions/"+input.ID+"/conversation/prompt", strings.NewReader(string(mustRawJSON(map[string]string{"text": text}))))
+		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
+		r.Header.Set("Idempotency-Key", key)
+		r = r.WithContext(withActor(r.Context(), actor))
+		w := httptest.NewRecorder()
+		g.Handler().ServeHTTP(w, r)
+		var result struct {
+			Queued string `json:"queued"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != http.StatusOK || result.Queued != key {
+			t.Fatalf("queue response = %d %s", w.Code, w.Body.String())
+		}
+	}
+	submit("two", "request-000000002")
+	submit("three", "request-000000003")
+	submit("two", "request-000000002")
+	entries, seq, _, err := storedConversationTail(t.Context(), g.auth.store.Reader, input.ID, 0)
+	if err != nil || seq != 3 || len(entries) != 3 {
+		t.Fatalf("persisted queue = %+v seq=%d err=%v", entries, seq, err)
+	}
+	session, agent := newFakeAgentSession(t, entries...)
+	session.ResumeTurns()
+	for _, want := range []string{"one", "two", "three"} {
+		if got := agent.nextPrompt(t); got.Text != want {
+			t.Fatalf("drained %q, want %q", got.Text, want)
+		}
+		agent.turns <- fakeTurn{}
+	}
+	var prompts int
+	for _, entry := range agent.log.Snapshot() {
+		if entry.Kind == "prompt" {
+			prompts++
+			var body acp.PromptInput
+			if body, err = promptInputFromLog(entry.Payload); err != nil || body.QueueID == "" {
+				t.Fatalf("prompt omitted its queue ID: %s", entry.Payload)
+			}
+		}
+	}
+	if prompts != 3 {
+		t.Fatalf("agent received %d prompts", prompts)
 	}
 }

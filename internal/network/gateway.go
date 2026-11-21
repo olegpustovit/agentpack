@@ -545,7 +545,7 @@ func (g *Gateway) Handler() http.Handler {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		if !validRestartID(input.OperationID) {
+		if !validOperationID(input.OperationID) {
 			http.Error(w, "restart requires a valid operation_id", http.StatusBadRequest)
 			return
 		}
@@ -596,28 +596,8 @@ func (g *Gateway) Handler() http.Handler {
 		g.terminalData(w, r)
 	})
 	mux.HandleFunc("GET /api/sessions/{id}/conversation", g.serveConversation)
-	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", func(w http.ResponseWriter, r *http.Request) {
-		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusNotFound)
-			return
-		}
-		if !authorizeACPWrite(w, r, record.Session) {
-			return
-		}
-		proxyWorkerConversation(w, r, record, "/prompt")
-	})
-	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", func(w http.ResponseWriter, r *http.Request) {
-		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusNotFound)
-			return
-		}
-		if !authorizeACPWrite(w, r, record.Session) {
-			return
-		}
-		proxyWorkerConversation(w, r, record, "/prompt/images")
-	})
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", g.servePrompt)
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", g.servePrompt)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/permission", func(w http.ResponseWriter, r *http.Request) {
 		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {

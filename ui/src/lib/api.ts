@@ -52,7 +52,7 @@ export function responseError(res: Response, text: string): ApiError {
 // Mutations must pass `machine` explicitly; there is no default target.
 export async function api<T>(
   path: `/api/${string}`,
-  opts: { machine?: string; method?: string; body?: unknown; query?: Record<string, string> } = {},
+  opts: { machine?: string; method?: string; body?: unknown; query?: Record<string, string>; idempotencyKey?: string } = {},
 ): Promise<T> {
   const url = new URL(path, location.origin)
   if (opts.machine && opts.machine !== LOCAL) url.searchParams.set("node", opts.machine)
@@ -64,11 +64,14 @@ export async function api<T>(
   const hasBody = opts.body !== undefined
   const method = opts.method ?? (hasBody ? "POST" : "GET")
   const traceparent = traceRequest()
+  const headers = new Headers({ traceparent })
+  if (hasBody) headers.set("Content-Type", "application/json")
+  if (opts.idempotencyKey) headers.set("Idempotency-Key", opts.idempotencyKey)
   let res: Response
   try {
     res = await fetch(url, {
       method,
-      headers: hasBody ? { "Content-Type": "application/json", traceparent } : { traceparent },
+      headers,
       body: hasBody ? JSON.stringify(opts.body) : undefined,
     })
   } catch (error) {

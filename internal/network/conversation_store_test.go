@@ -374,7 +374,7 @@ func TestConversationStoreRestartAcceptsPromptAfterOldExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
-	conversation, cleanup, err := startACPReplayAgent(t.Context(), WorkerLaunch{Directory: directory, Session: SessionInfo{Directory: directory}}, directory, nil, log)
+	conversation, cleanup, err := startACPReplayAgent(t.Context(), WorkerLaunch{Directory: directory, Session: SessionInfo{Directory: directory}}, directory, nil, NewConversationSession(log, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +407,7 @@ func TestConversationStoreStopKeepsFinalTurnEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
-	conversation, cleanup, err := startACPReplayAgent(t.Context(), WorkerLaunch{Directory: directory, Session: SessionInfo{Directory: directory}}, directory, fixture, log)
+	conversation, cleanup, err := startACPReplayAgent(t.Context(), WorkerLaunch{Directory: directory, Session: SessionInfo{Directory: directory}}, directory, fixture, NewConversationSession(log, nil))
 	if err != nil {
 		t.Fatal(err)
 	}

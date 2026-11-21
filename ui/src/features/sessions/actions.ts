@@ -1,6 +1,7 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { api, routeMissing } from "@/lib/api"
+import { newIntentID } from "@/lib/intent"
 import { hud } from "@/lib/hud"
 import { rowKey, sessionLabel, type ListedSession } from "./group"
 import { sessionsQuery } from "./queries"
@@ -42,8 +43,7 @@ function sessionCommands(queryClient: QueryClient, operations: Map<string, strin
 
   async function restart(session: ListedSession): Promise<void> {
     const key = rowKey(session)
-    // crypto.randomUUID does not exist on plain-HTTP gateway origins; getRandomValues does.
-    const operationId = operations.get(key) ?? Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("")
+    const operationId = operations.get(key) ?? newIntentID()
     operations.set(key, operationId)
     try {
       await api(`/api/sessions/${encodeURIComponent(session.id)}/restart`, {

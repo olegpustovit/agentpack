@@ -237,3 +237,46 @@ func TestQueueRoutes(t *testing.T) {
 	}
 	agent.turns <- fakeTurn{}
 }
+
+func TestClientPromptIDIsAcceptedOnceAcrossReplay(t *testing.T) {
+	input := acp.PromptInput{Text: "one message", QueueID: "eab4f2c19b624b48ae06bbbc5e107d17"}
+	session, agent := newFakeAgentSession(t)
+	for range 2 {
+		id, _, err := session.Submit(t.Context(), input, false)
+		if err != nil || id != input.QueueID {
+			t.Fatalf("submit = %q, %v", id, err)
+		}
+	}
+	if got := agent.nextPrompt(t); got.Text != input.Text || got.QueueID != input.QueueID {
+		t.Fatalf("prompt = %+v, want %+v", got, input)
+	}
+	agent.turns <- fakeTurn{}
+	restarted, next := newFakeAgentSession(t, agent.log.Snapshot()...)
+	if id, _, err := restarted.Submit(t.Context(), input, false); err != nil || id != input.QueueID {
+		t.Fatalf("retry = %q, %v", id, err)
+	}
+	if len(restarted.queue) != 0 || len(next.prompts) != 0 {
+		t.Fatal("replayed prompt was queued or sent twice")
+	}
+}
+
+func TestClientPromptLookupSurvivesADroppedReplayTail(t *testing.T) {
+	store := testSessionStore(t, t.TempDir())
+	id := "session-stored-intent"
+	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+		t.Fatal(err)
+	}
+	input := acp.PromptInput{Text: "first message", QueueID: "5a6057ea65564edfb5222d0c394e0b43"}
+	logged := entry("prompt", json.RawMessage(promptLogPayload(input)))
+	logged.Seq = 1
+	if err := persistConversationChanges(t.Context(), store.DB, id, acp.LogChanges{Entries: []acp.LogEntry{logged}, LastSeq: 1}); err != nil {
+		t.Fatal(err)
+	}
+	session, agent := newFakeAgentSession(t)
+	session.promptStored = func(ctx context.Context, key string) (bool, error) {
+		return storedPromptID(ctx, store, id, key)
+	}
+	if id, _, err := session.Submit(t.Context(), input, false); err != nil || id != input.QueueID || len(agent.log.Snapshot()) != 0 {
+		t.Fatalf("retry of an old prompt wrote a new event: id=%q err=%v log=%v", id, err, logKinds(agent.log))
+	}
+}
