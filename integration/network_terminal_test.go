@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/gorilla/websocket"
 	"net/http"
 	"os"
 	"os/exec"
@@ -16,7 +15,9 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/gorilla/websocket"
 	"github.com/olegpustovit/agentpack/internal/network"
+	"golang.org/x/sys/unix"
 )
 
 func TestCompiledCLISharedTerminalSurvivesGatewayAndRestart(t *testing.T) {
@@ -64,6 +65,12 @@ func TestCompiledCLISharedTerminalSurvivesGatewayAndRestart(t *testing.T) {
 	}()
 	exited := make(chan error, 1)
 	go func() { exited <- command.Wait() }()
+	var worker network.WorkerRecord
+	t.Cleanup(func() {
+		stopTestGateway(t, home)
+		_ = command.Process.Kill()
+		terminal.Close()
+	})
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -71,9 +78,15 @@ func TestCompiledCLISharedTerminalSurvivesGatewayAndRestart(t *testing.T) {
 		for _, session := range sessions {
 			_ = network.StopWorker(ctx, home, session.ID)
 		}
-		stopTestGateway(t, home)
-		_ = command.Process.Kill()
-		terminal.Close()
+		// The worker can still flush its diagnostic spool after the terminal disconnects.
+		for worker.PID > 0 && unix.Kill(worker.PID, 0) == nil {
+			select {
+			case <-ctx.Done():
+				t.Error("worker did not exit before cleanup")
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
 	})
 	rendered := false
 	readUntil := func(want string) {
@@ -110,6 +123,13 @@ func TestCompiledCLISharedTerminalSurvivesGatewayAndRestart(t *testing.T) {
 		t.Fatalf("sessions: %+v %v", sessions, err)
 	}
 	id := sessions[0].ID
+	endpoint, err := os.ReadFile(filepath.Join(home, "network", "sessions", id, "worker.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(endpoint, &worker); err != nil || worker.PID <= 0 {
+		t.Fatalf("invalid worker endpoint PID: %v", err)
+	}
 	if !sessions[0].State.SharedInput {
 		t.Fatal("session does not support shared input")
 	}
