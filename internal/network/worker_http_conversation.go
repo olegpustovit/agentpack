@@ -153,17 +153,6 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 		writeJSON(w, map[string]bool{"accepted": true})
 	})
 	mux.HandleFunc("POST /conversation/config", worker.receiveConfig)
-	mux.HandleFunc("GET /conversation/config-options", func(w http.ResponseWriter, r *http.Request) {
-		conv := worker.conversationSession()
-		if conv == nil {
-			http.Error(w, "conversation unavailable", http.StatusNotFound)
-			return
-		}
-		raw := conv.ConfigJSON()
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(raw)
-	})
 	mux.HandleFunc("GET /blobs/{sha}", func(w http.ResponseWriter, r *http.Request) {
 		serveSessionBlob(w, r, worker.sessionDir, r.PathValue("sha"))
 	})

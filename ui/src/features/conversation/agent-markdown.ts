@@ -98,3 +98,22 @@ export function highlightCode(text: string, language: string): string {
     ALLOWED_ATTR: ["class"],
   })
 }
+
+// Split sanitized token spans into balanced lines. Highlighting sees multiline tokens in context.
+export function highlightCodeLines(text: string, language: string): string[] {
+  const template = document.createElement("template")
+  template.innerHTML = highlightCode(text, language)
+  const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;")
+  const split = (node: Node): string[] => {
+    if (node.nodeType === Node.TEXT_NODE) return (node.textContent ?? "").split("\n").map(escape)
+    const lines = [""]
+    for (const child of node.childNodes) {
+      const [first, ...rest] = split(child)
+      lines[lines.length - 1] += first ?? ""
+      lines.push(...rest)
+    }
+    const classes = node instanceof HTMLSpanElement ? node.className : ""
+    return classes ? lines.map((line) => `<span class="${escape(classes)}">${line}</span>`) : lines
+  }
+  return split(template.content)
+}

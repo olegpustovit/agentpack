@@ -16,6 +16,8 @@ function lineCount(text: string | undefined): number {
   return lines.length
 }
 
+const diffLineCounts = new WeakMap<ToolDiffBlock, { add: number; del: number }>()
+
 // Turn numbering: a turn starts at every reduced item of kind "prompt" or "user_message_chunk" (1-based);
 // a tool item belongs to the latest turn. Mirrors revertPlan in internal/network/conversation_revert.go.
 export function listDiffChanges(items: ThreadItem[]): DiffChange[] {
@@ -29,7 +31,12 @@ export function listDiffChanges(items: ThreadItem[]): DiffChange[] {
       if ((block as ToolDiffBlock).type !== "diff") continue
       const diff = block as ToolDiffBlock
       const path = diff.path?.trim() || "change"
-      out.push({ path, add: lineCount(diff.newText), del: lineCount(diff.oldText), toolId: tool.toolCallId, turn, block: diff })
+      let counts = diffLineCounts.get(diff)
+      if (!counts) {
+        counts = { add: lineCount(diff.newText), del: lineCount(diff.oldText) }
+        diffLineCounts.set(diff, counts)
+      }
+      out.push({ path, ...counts, toolId: tool.toolCallId, turn, block: diff })
     }
   }
   return out

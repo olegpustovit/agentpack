@@ -570,8 +570,8 @@ func TestConversationReplayFromFixture(t *testing.T) {
 		}
 		entries = append(entries, json.RawMessage(line))
 	}
-	if len(entries) != 32 {
-		t.Fatalf("got %d log lines, want 32", len(entries))
+	if len(entries) != 33 {
+		t.Fatalf("got %d log lines, want 33", len(entries))
 	}
 	var first struct {
 		Kind string `json:"kind"`
@@ -583,13 +583,6 @@ func TestConversationReplayFromFixture(t *testing.T) {
 	if first.Kind != "agent_message_chunk" || first.Seq != 1 {
 		t.Fatalf("first entry %+v", first)
 	}
-	configResp, err := workerRequest(context.Background(), record, http.MethodGet, "/conversation/config-options", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer configResp.Body.Close()
-	if configResp.StatusCode != http.StatusOK {
-		t.Fatalf("config-options status %s", configResp.Status)
-	}
+
 	cancel()
 }

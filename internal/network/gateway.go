@@ -234,7 +234,7 @@ func (g *Gateway) Handler() http.Handler {
 		buildID = uiBuildID(files)
 	}
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"ui_build_id": buildID, "conversation_events": true})
+		writeJSON(w, map[string]any{"ui_build_id": buildID, "conversation_events": true, "conversation_config_log": true})
 	})
 	g.registerSettings(mux)
 	g.registerPush(mux)
@@ -644,14 +644,6 @@ func (g *Gateway) Handler() http.Handler {
 		proxyWorkerConversation(w, r, record, "/elicitation")
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/config", g.serveWantedConfig)
-	mux.HandleFunc("GET /api/sessions/{id}/conversation/config-options", func(w http.ResponseWriter, r *http.Request) {
-		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusNotFound)
-			return
-		}
-		proxyWorkerConversation(w, r, record, "/config-options")
-	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/blobs", func(w http.ResponseWriter, r *http.Request) {
 		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {

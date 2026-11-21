@@ -23,6 +23,8 @@ export type ThreadState = {
   items: ThreadItem[]
   needs_you: boolean
   working: boolean
+  agentConfig?: { configOptions?: unknown; modes?: unknown }
+  agentMode?: string
   plan_kind?: string
   context_tokens?: number
   context_limit?: number

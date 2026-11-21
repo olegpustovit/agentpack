@@ -21,6 +21,7 @@ import { cacheBuildID, restoreChatQuery, trackStreamingQuery } from "@/lib/persi
 import { newIntentID } from "@/lib/intent"
 import { hud } from "@/lib/hud"
 import { api, ApiError, LOCAL } from "@/lib/api"
+import { configQuery } from "@/lib/config"
 import { ompSettingsQuery, quickRoles } from "@/features/settings/omp-model"
 import { agentSnapshotQuery, archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, mergeConversationPages, olderConversationPage, type ConversationPage } from "./queries"
 import { configRole, dangerousMode, parseConfigOptions } from "./config-options"
@@ -164,17 +165,24 @@ export default function ConversationPane({
   const hasOlder = (older ? older.more : Boolean(tail?.truncated)) && (entries[0]?.seq ?? 1) > 1
   // Scroll height and offset before older entries were prepended, so the reader stays on the same line.
   const scrollAnchorRef = useRef<{ height: number; top: number } | null>(null)
-  const { data: configRaw, error: configError } = useQuery({
+  const parent = reduceThread(historyKey, entries)
+  const logConfig = useQuery(configQuery).data?.conversation_config_log === true
+  const { data: legacyConfig, error: configError } = useQuery({
     queryKey: ["conversation-config", machine, sessionId],
     // Only a running agent has options; a stopped chat has no worker, and its 404 is not a version gap.
-    enabled: live,
+    enabled: live && !logConfig,
     queryFn: () => api<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/config-options`, { machine }),
     retry: false,
   })
-  const needsUpdate = conversationNeedsUpdate(conversationError, live ? configError : undefined)
+  const needsUpdate = conversationNeedsUpdate(conversationError, live && !logConfig ? configError : undefined)
   const archiveUnavailable = archiveUnavailableMessage(conversationError)
   const snapshot = useQuery(agentSnapshotQuery(machine, info)).data
-  const configOptions = parseConfigOptions(configRaw ?? snapshot?.config)
+  const configRaw = parent.agentConfig ?? legacyConfig ?? snapshot?.config
+  const configOptions = parseConfigOptions(configRaw).map((option) =>
+    option.type === "select" && configRole(option) === "permissions" && parent.agentMode && option.items.some((item) => item.value === parent.agentMode)
+      ? { ...option, value: parent.agentMode }
+      : option,
+  )
   const provisionalConfig = starting && configOptions.length > 0
   const selectOptions = configOptions.filter((option) => option.type === "select")
   const permissionsOption = selectOptions.find((option) => configRole(option) === "permissions")
@@ -262,7 +270,6 @@ export default function ConversationPane({
     }
   }, [legacyStream, machine, needsUpdate, queryClient, sessionId, streamReady, subscribe, tailLoaded])
 
-  const parent = reduceThread(historyKey, entries)
   const subagent = subagentId ? parent.subagents?.[subagentId] : undefined
   const thread = subagent?.thread ?? parent
   // Entries already loaded on first paint are history and never animate.
@@ -286,7 +293,7 @@ export default function ConversationPane({
   }, [subagentId, navigate])
   useLayoutEffect(() => {
     const element = threadScrollRef.current
-    if (!element || tailEntries.length === 0) return
+    if (!element || tailEntries.length === 0 || element.querySelector("[data-thread-virtual]")) return
     if (stickToBottomRef.current) element.scrollTop = element.scrollHeight
   }, [tailEntries])
   useLayoutEffect(() => {
@@ -294,6 +301,7 @@ export default function ConversationPane({
     const anchor = scrollAnchorRef.current
     if (!element || !anchor) return
     scrollAnchorRef.current = null
+    if (element.querySelector("[data-thread-virtual]")) return
     element.scrollTop = anchor.top + element.scrollHeight - anchor.height
   }, [older?.entries])
 
@@ -372,7 +380,7 @@ export default function ConversationPane({
       })
     },
     onSuccess: (_, { key }) => {
-      if (!starting) {
+      if (!starting && !logConfig) {
         return queryClient.invalidateQueries({ queryKey: ["conversation-config", machine, sessionId] }).then(() =>
           setConfigValues((values) => withoutKey(values, key)),
         )
@@ -391,8 +399,8 @@ export default function ConversationPane({
     setConfig.mutate({ key, value })
   }
   useEffect(() => {
-    if (live && !setConfig.isPending && configRaw !== undefined) setConfigValues((values) => Object.keys(values).length ? {} : values)
-  }, [configRaw, live, setConfig.isPending])
+    if (live && configRaw !== undefined) setConfigValues((values) => Object.keys(values).length ? {} : values)
+  }, [configRaw, live, parent.agentMode])
 
   const fork = useMutation({
     mutationFn: () => {
@@ -717,6 +725,7 @@ export default function ConversationPane({
                 <p className="py-(--s7) text-center text-(length:--fs-sm) text-(--fg3)">This subagent isn't in the loaded part of the conversation.</p>
               ) : (
                 <ThreadView
+                  scrollRef={threadScrollRef}
                   items={subagent ? thread.items : withSending(thread.items, entries, pendingSends)}
                   machine={machine}
                   sessionId={sessionId}

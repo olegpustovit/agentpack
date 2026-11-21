@@ -819,3 +819,22 @@ test("a live conversation uses the shared events connection", async ({ page }) =
   expect(cursors[0]).toBe("5")
   expect(perChatStreams).toBe(0)
 })
+
+test("a long conversation starts at the latest turn and renders only nearby rows", async ({ page }) => {
+  await page.route("**/api/sessions", (route) => route.fulfill({
+    json: [{ ...session, id: "chat-one", transport: "acp", state: { ...session.state, running: false } }],
+  }))
+  const longChat = Array.from({ length: 120 }, (_, index) => [
+    { seq: index * 3 + 1, ts: index * 3, kind: "prompt", payload: { text: { text: `Question ${index}` } } },
+    { seq: index * 3 + 2, ts: index * 3 + 1, kind: "agent_message_chunk", payload: { text: { text: `Reply number ${index}` } } },
+    { seq: index * 3 + 3, ts: index * 3 + 2, kind: "turn_end", payload: {} },
+  ]).flat().map((entry) => JSON.stringify(entry)).join("\n")
+  await page.route("**/api/sessions/chat-one/conversation", (route) => route.fulfill({
+    body: longChat, contentType: "application/x-ndjson",
+  }))
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByText("Reply number 119", { exact: true })).toBeInViewport()
+  expect(await page.locator("[data-thread-virtual] > [data-index]").count()).toBeLessThan(50)
+  await page.getByLabel("Conversation", { exact: true }).evaluate((element) => { element.scrollTop = 0 })
+  await expect(page.getByText("Question 0", { exact: true })).toBeInViewport()
+})

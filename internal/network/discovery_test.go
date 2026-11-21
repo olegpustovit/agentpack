@@ -97,7 +97,6 @@ func TestTailnetTargetsAndRoutesAreBounded(t *testing.T) {
 	routes := []struct{ method, path string }{
 		{"GET", "/api/agent-sessions"},
 		{"GET", "/api/sessions/x/conversation"},
-		{"GET", "/api/sessions/x/conversation/config-options"},
 		{"POST", "/api/sessions/x/conversation/prompt"},
 		{"POST", "/api/sessions/x/conversation/prompt/images"},
 		{"POST", "/api/sessions/x/conversation/cancel"},

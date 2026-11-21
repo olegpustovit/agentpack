@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { useEffect, useState } from "react"
+import { Activity, useEffect, useState } from "react"
 import { search } from "@/lib/search"
 import { conversationEventsQuery } from "@/features/conversation/queries"
 import { useEventsConnected } from "@/features/events/use-events"
@@ -64,7 +64,8 @@ function SessionRoute() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const live = useEventsConnected()
-  const host = useMachines().find((item) => item.id === machine)
+  const machines = useMachines()
+  const host = machines.find((item) => item.id === machine)
   const { data } = useQuery(sessionsQuery(machine, live))
   const info = data?.find((session) => session.id === sessionId)
   const stale = info?.reachable === false || host?.online === false
@@ -97,6 +98,15 @@ function SessionRoute() {
     },
     onError: (error) => hud.error(`Couldn't start session: ${(error as Error).message}`),
   })
+  const [warmChats, setWarmChats] = useState<Array<{ machine: string; sessionId: string }>>([])
+  const acp = info?.transport === "acp"
+  useEffect(() => {
+    if (!acp || message) return
+    setWarmChats((current) => {
+      if (current[0]?.machine === machine && current[0]?.sessionId === sessionId) return current
+      return [{ machine, sessionId }, ...current.filter((chat) => chat.machine !== machine || chat.sessionId !== sessionId)].slice(0, 3)
+    })
+  }, [acp, machine, message, sessionId])
   const paneFailed = usePane(info?.transport === "acp" ? "conversation" : info || data ? "terminal" : undefined)
   if (message) return <UnavailableTerminal message={message} />
   // The pane depends on the transport, so wait for the list rather than guess Terminal
@@ -104,29 +114,38 @@ function SessionRoute() {
   if (!data && !stale) return <PaneLoading label="Loading session…" />
   const title = listed && sessionLabel(listed)
   const subtitle = listed && sessionDetail(listed).split(" · ").slice(listed.name ? 0 : 1).join(" · ")
-  const acp = info?.transport === "acp"
   const ConversationPane = panes.conversation
   const TerminalPane = panes.terminal
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1">
-        {acp && ConversationPane ? (
-          <ConversationPane
-            key={`${machine}/${sessionId}`}
-            machine={machine}
-            sessionId={sessionId}
-            info={info}
-            subagent={sub}
-            helpers={data?.filter((session) => session.parent_id === sessionId)}
-            readOnly={stale}
-            title={title || undefined}
-            subtitle={subtitle || undefined}
-            onSwitchTerminal={() => {
-              if (stale || info?.archived_at || viewSwitchNeedsResume(info)) return
-              switchView.mutate("terminal")
-            }}
-          />
-        ) : !acp && TerminalPane ? (
+        {ConversationPane && [
+          ...(acp ? [{ machine, sessionId }] : []),
+          ...warmChats.filter((chat) => chat.machine !== machine || chat.sessionId !== sessionId),
+        ].slice(0, 3).map((chat) => {
+          const visible = chat.machine === machine && chat.sessionId === sessionId
+          const chatInfo = visible ? info : data?.find((session) => session.id === chat.sessionId)
+          if (!chatInfo || chatInfo.transport !== "acp") return null
+          return (
+            <Activity key={`${chat.machine}/${chat.sessionId}`} mode={visible ? "visible" : "hidden"}>
+              <ConversationPane
+                machine={chat.machine}
+                sessionId={chat.sessionId}
+                info={chatInfo}
+                subagent={visible ? sub : undefined}
+                helpers={data?.filter((session) => session.parent_id === chat.sessionId)}
+                readOnly={chatInfo.reachable === false || machines.find((item) => item.id === chat.machine)?.online === false}
+                title={visible ? title || undefined : undefined}
+                subtitle={visible ? subtitle || undefined : undefined}
+                onSwitchTerminal={visible ? () => {
+                  if (stale || info?.archived_at || viewSwitchNeedsResume(chatInfo)) return
+                  switchView.mutate("terminal")
+                } : undefined}
+              />
+            </Activity>
+          )
+        })}
+        {acp && ConversationPane ? null : !acp && TerminalPane ? (
           <TerminalPane
             key={`${machine}/${sessionId}`}
             machine={machine}

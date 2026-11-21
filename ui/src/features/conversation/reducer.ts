@@ -310,6 +310,17 @@ class ThreadReducer {
         } else if (to && meta.has(to)) this.child(to, entry)
         break
       }
+      case "agent_configuration":
+        state.agentConfig = entry.payload as ThreadState["agentConfig"]
+        state.agentMode = undefined
+        break
+      case "config_option_update":
+        state.agentConfig = { ...state.agentConfig, configOptions: (entry.payload as { configOptions?: unknown }).configOptions }
+        state.agentMode = undefined
+        break
+      case "current_mode_update":
+        state.agentMode = (entry.payload as { currentModeId?: string }).currentModeId
+        break
       case "queued_prompt": {
         const queued = entry.payload as QueuedPrompt
         if (queued.queueId) queue.set(queued.queueId, queued)

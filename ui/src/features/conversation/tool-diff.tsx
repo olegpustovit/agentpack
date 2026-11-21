@@ -1,7 +1,7 @@
 import { diffLines, diffWordsWithSpace } from "diff"
 import type { ReactNode } from "react"
 import type { ToolDiffBlock } from "./model"
-import { highlightCode } from "./agent-markdown"
+import { highlightCodeLines } from "./agent-markdown"
 import { diffAnchorId } from "./diff-summary"
 
 function trimSplit(text: string): string[] {
@@ -10,36 +10,60 @@ function trimSplit(text: string): string[] {
   return lines
 }
 
-function highlighted(text: string, language?: string): ReactNode {
-  return language ? <span dangerouslySetInnerHTML={{ __html: highlightCode(text, language) }} /> : text
+const MAX_DIFF_ROWS = 400
+
+function highlighted(lines: string[], language?: string): string[] | undefined {
+  const text = lines.join("\n")
+  return language && text.length <= 200_000 ? highlightCodeLines(text, language) : undefined
 }
 
-function delWords(oldLine: string, newLine: string, language?: string): ReactNode {
-  return diffWordsWithSpace(oldLine, newLine)
-    .filter((part) => !part.added)
-    .map((part, index) =>
-      part.removed ? (
-        <mark key={index} className="rounded-(--r-row) bg-(--del-strong) px-px text-inherit">
-          {highlighted(part.value, language)}
-        </mark>
-      ) : (
-        highlighted(part.value, language)
-      ),
-    )
+function codeLine(text: string, html: string | undefined): ReactNode {
+  return html === undefined ? text : <span dangerouslySetInnerHTML={{ __html: html }} />
 }
 
-function addWords(oldLine: string, newLine: string, language?: string): ReactNode {
-  return diffWordsWithSpace(oldLine, newLine)
-    .filter((part) => !part.removed)
-    .map((part, index) =>
-      part.added ? (
-        <mark key={index} className="rounded-(--r-row) bg-(--add-strong) px-px text-inherit">
-          {highlighted(part.value, language)}
-        </mark>
-      ) : (
-        highlighted(part.value, language)
-      ),
+function markedWords(oldLine: string, newLine: string, remove: boolean, html?: string): ReactNode {
+  const text = remove ? oldLine : newLine
+  if (oldLine.length + newLine.length > 8192) return codeLine(text, html)
+  const className = `rounded-(--r-row) ${remove ? "bg-(--del-strong)" : "bg-(--add-strong)"} px-px text-inherit`
+  const parts = diffWordsWithSpace(oldLine, newLine).filter((part) => remove ? !part.added : !part.removed)
+  if (html === undefined) {
+    return parts.map((part, index) =>
+      (remove ? part.removed : part.added) ? <mark key={index} className={className}>{part.value}</mark> : part.value,
     )
+  }
+  const template = document.createElement("template")
+  template.innerHTML = html
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT)
+  const nodes: Text[] = []
+  while (walker.nextNode()) nodes.push(walker.currentNode as Text)
+  let partIndex = 0
+  let partOffset = 0
+  for (const node of nodes) {
+    const replacement = document.createDocumentFragment()
+    let offset = 0
+    while (offset < node.length) {
+      const part = parts[partIndex]
+      if (!part) return codeLine(text, html)
+      const size = Math.min(part.value.length - partOffset, node.length - offset)
+      const value = node.data.slice(offset, offset + size)
+      if (remove ? part.removed : part.added) {
+        const mark = document.createElement("mark")
+        mark.className = className
+        mark.textContent = value
+        replacement.append(mark)
+      } else {
+        replacement.append(value)
+      }
+      offset += size
+      partOffset += size
+      if (partOffset === part.value.length) {
+        partIndex++
+        partOffset = 0
+      }
+    }
+    node.replaceWith(replacement)
+  }
+  return codeLine(text, template.innerHTML)
 }
 
 function diffLanguage(path?: string): string | undefined {
@@ -118,35 +142,45 @@ function diffBlock(oldText: string, newText: string, language?: string, review?:
     )
   }
   const changes = diffLines(oldText, newText)
-  for (let index = 0; index < changes.length; index++) {
+  for (let index = 0; index < changes.length && rows.length < MAX_DIFF_ROWS; index++) {
     const part = changes[index]!
     const next = changes[index + 1]
     if (part.removed && next?.added) {
-      const oldLines = trimSplit(part.value)
-      const newLines = trimSplit(next.value)
+      const remaining = MAX_DIFF_ROWS - rows.length
+      const oldLines = trimSplit(part.value).slice(0, remaining)
+      const newLines = trimSplit(next.value).slice(0, remaining)
+      const oldHighlight = highlighted(oldLines, language)
+      const newHighlight = highlighted(newLines, language)
       const pairs = Math.max(oldLines.length, newLines.length)
-      for (let line = 0; line < pairs; line++) {
+      for (let line = 0; line < pairs && rows.length < MAX_DIFF_ROWS; line++) {
         const oldLine = oldLines[line]
         const newLine = newLines[line]
         if (oldLine !== undefined && newLine !== undefined) {
-          push("del", oldNum++, delWords(oldLine, newLine, language))
-          push("add", newNum++, addWords(oldLine, newLine, language))
+          push("del", oldNum++, markedWords(oldLine, newLine, true, oldHighlight?.[line]))
+          if (rows.length < MAX_DIFF_ROWS) push("add", newNum++, markedWords(oldLine, newLine, false, newHighlight?.[line]))
         } else if (oldLine !== undefined) {
-          push("del", oldNum++, highlighted(oldLine, language))
+          push("del", oldNum++, codeLine(oldLine, oldHighlight?.[line]))
         } else if (newLine !== undefined) {
-          push("add", newNum++, highlighted(newLine, language))
+          push("add", newNum++, codeLine(newLine, newHighlight?.[line]))
         }
       }
       index++
       continue
     }
     if (part.removed) {
-      for (const line of trimSplit(part.value)) push("del", oldNum++, highlighted(line, language))
+      const lines = trimSplit(part.value).slice(0, MAX_DIFF_ROWS - rows.length)
+      const content = highlighted(lines, language)
+      lines.forEach((line, index) => push("del", oldNum++, codeLine(line, content?.[index])))
       continue
     }
     if (part.added) {
-      for (const line of trimSplit(part.value)) push("add", newNum++, highlighted(line, language))
+      const lines = trimSplit(part.value).slice(0, MAX_DIFF_ROWS - rows.length)
+      const content = highlighted(lines, language)
+      lines.forEach((line, index) => push("add", newNum++, codeLine(line, content?.[index])))
     }
+  }
+  if (rows.length >= MAX_DIFF_ROWS) {
+    rows.push(<p key="limit" className="px-(--s3) py-(--s2) text-(length:--fs-xs) text-(--fg3)">Showing the first {MAX_DIFF_ROWS} changed lines</p>)
   }
   return rows
 }

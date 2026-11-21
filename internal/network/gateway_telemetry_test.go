@@ -135,7 +135,7 @@ func TestPublicUIConfiguration(t *testing.T) {
 	r := httptest.NewRequest("GET", origin.String()+"/api/config", nil)
 	r.Header.Set("If-None-Match", "*")
 	g.Handler().ServeHTTP(w, r)
-	if w.Code != 200 || w.Header().Get("ETag") != "" || w.Header().Get("Cache-Control") != "no-store" || strings.TrimSpace(w.Body.String()) != `{"ui_build_id":"EntryHash"}` {
+	if w.Code != 200 || w.Header().Get("ETag") != "" || w.Header().Get("Cache-Control") != "no-store" || strings.TrimSpace(w.Body.String()) != `{"conversation_config_log":true,"conversation_events":true,"ui_build_id":"EntryHash"}` {
 		t.Fatalf("public config %d %s %s", w.Code, w.Header(), w.Body.String())
 	}
 }

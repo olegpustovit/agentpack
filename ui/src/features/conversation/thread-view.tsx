@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from "react"
+import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react"
 import { useMutation } from "@tanstack/react-query"
+import { elementScroll, observeElementOffset, observeElementRect, Virtualizer, type VirtualItem } from "@tanstack/virtual-core"
 import { BookOpen, Check, ChevronRight, Copy, ExternalLink, Flag, Folder, GitFork, Globe, Pencil, Lock, Quote, RotateCcw, Search, Sparkles, SquareTerminal, Wrench } from "lucide-react"
 import { RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -820,6 +821,8 @@ export function turnMeta(turn: ThreadState["last_turn"], ts?: number): string {
   return parts.filter(Boolean).join(" · ")
 }
 
+const noSubagents: Record<string, Subagent> = {}
+
 export function ThreadView({
   items,
   machine,
@@ -830,13 +833,14 @@ export function ThreadView({
   readOnly,
   agent,
   working,
-  subagents = {},
+  subagents = noSubagents,
   lastTurn,
   turnStarted,
   animateAfter,
   onOpenSubagent,
   onStopSubagent,
   onSignedIn,
+  scrollRef,
 }: {
   readOnly?: boolean
   agent?: string
@@ -856,10 +860,8 @@ export function ThreadView({
   onStopSubagent?: (id: string) => void
   /** Starts the chat once its agent is signed in; only the latest sign-in notice offers it. */
   onSignedIn?: () => void
+  scrollRef?: RefObject<HTMLDivElement | null>
 }) {
-  if (items.length === 0) {
-    return working ? <LiveLine items={items} subagents={subagents} turnStarted={turnStarted} /> : <p className="py-(--s7) text-center text-(length:--fs-sm) text-(--fg3)">No messages yet.</p>
-  }
   const retry = latestUserPrompt(items) && onRetry ? onRetry : undefined
   const lastAgent = items.findLast((item) => item.kind === "agent_message_chunk")
   const compacted = items.some((item) => item.kind === "compaction")
@@ -871,65 +873,159 @@ export function ThreadView({
     </fieldset>
   )
   const entries = groupItems(items, subagents)
+  const virtual = scrollRef !== undefined && entries.length > 80
+  const listRef = useRef<HTMLDivElement>(null)
+  const [scrollMargin, setScrollMargin] = useState(0)
+  const virtualizer = useRef<Virtualizer<HTMLDivElement, HTMLDivElement> | null>(null)
+  const previousOffset = useRef<number | null>(null)
+  const [layout, setLayout] = useState<{ rows: VirtualItem[]; height: number }>({ rows: [], height: 0 })
+  useLayoutEffect(() => {
+    const options = {
+      enabled: false, count: 0,
+      getScrollElement: () => null,
+      estimateSize: () => 96,
+      observeElementRect,
+      observeElementOffset,
+      scrollToFn: elementScroll,
+      onChange: (instance: Virtualizer<HTMLDivElement, HTMLDivElement>) => {
+        const rows = instance.getVirtualItems()
+        const height = instance.getTotalSize()
+        setLayout((current) => {
+          if (current.height !== height || current.rows.length !== rows.length) return { rows, height }
+          return rows.every((row, index) => {
+            const previous = current.rows[index]!
+            return row.key === previous.key && row.index === previous.index && row.start === previous.start && row.size === previous.size
+          }) ? current : { rows, height }
+        })
+      },
+    }
+    const instance = new Virtualizer<HTMLDivElement, HTMLDivElement>(options)
+    virtualizer.current = instance
+    const dispose = instance._didMount()
+    return () => {
+      if (instance.options.enabled) previousOffset.current = instance.scrollOffset
+      dispose()
+      virtualizer.current = null
+    }
+  }, [])
+  useLayoutEffect(() => {
+    const instance = virtualizer.current
+    if (!instance) return
+    instance.setOptions({
+      ...instance.options,
+      enabled: virtual,
+      count: entries.length,
+      getScrollElement: () => scrollRef?.current ?? null,
+      overscan: 8,
+      anchorTo: "end",
+      followOnAppend: true,
+      scrollMargin,
+      getItemKey: (index) => {
+        const entry = entries[index]!
+        const item = Array.isArray(entry) ? entry[0] : "cards" in entry ? entry.cards[0]?.item : entry
+        return item?.seq ?? `pending-${index}`
+      },
+    })
+    instance._willUpdate()
+    if (virtual) instance.options.onChange?.(instance, false)
+  }, [entries, scrollMargin, scrollRef, virtual])
+  useLayoutEffect(() => {
+    const list = listRef.current
+    const viewport = scrollRef?.current
+    if (!virtual || !list || !viewport) return
+    const measure = () => setScrollMargin(list.getBoundingClientRect().top - viewport.getBoundingClientRect().top + viewport.scrollTop)
+    measure()
+    const before = list.parentElement?.previousElementSibling
+    const observer = new ResizeObserver(measure)
+    observer.observe(viewport)
+    if (before) observer.observe(before)
+    return () => observer.disconnect()
+  }, [scrollRef, virtual])
+  const canAnchor = virtual && layout.height > 0
+  useLayoutEffect(() => {
+    if (!canAnchor) return
+    const instance = virtualizer.current
+    if (previousOffset.current === null) instance?.scrollToEnd()
+    else instance?.scrollToOffset(previousOffset.current)
+  }, [canAnchor])
+  if (items.length === 0) {
+    return working ? <LiveLine items={items} subagents={subagents} turnStarted={turnStarted} /> : <p className="py-(--s7) text-center text-(length:--fs-sm) text-(--fg3)">No messages yet.</p>
+  }
+
   // Each item's successor timestamp, found once instead of searching the list per item.
   const nextTs = new Map<ThreadItem, number | undefined>()
   for (let i = 0; i < items.length; i++) nextTs.set(items[i]!, items[i + 1]?.ts)
+  const renderEntry = (entry: (typeof entries)[number], index: number) => {
+    if (Array.isArray(entry)) {
+      return (
+        <div key={entry[0]!.seq ?? index} className={cn("thread-item", fresh(entry.at(-1)!) && "tool-enter")}>
+          <ToolGroup tools={entry} fresh={fresh} />
+        </div>
+      )
+    }
+    if ("cards" in entry) {
+      const running = entry.cards.filter(({ subagent }) => subagentRunning(subagent)).length
+      return (
+        <div key={entry.cards[0]!.item.seq ?? index} data-slot="subagent-group" className={`flex flex-col gap-(--s2) ${fresh(entry.cards[0]!.item) ? "thread-enter" : ""}`}>
+          {entry.cards.length > 1 && (
+            <p className="text-(length:--fs-xs) text-(--fg3)">
+              {running > 0 ? `Running ${entry.cards.length} subagents in parallel` : `${entry.cards.length} subagents`}
+            </p>
+          )}
+          {entry.cards.map(({ subagent, item }) => (
+            <SubagentCard
+              key={subagent.id}
+              subagent={subagent}
+              toolTitle={item.kind === "tool" ? (item.data as ToolPayload).title : undefined}
+              renderPermission={permission}
+              onOpen={onOpenSubagent ? () => onOpenSubagent(subagent.id) : undefined}
+              onStop={!readOnly && onStopSubagent && !subagent.id.startsWith("tool:") ? () => onStopSubagent(subagent.id) : undefined}
+            />
+          ))}
+        </div>
+      )
+    }
+    // The compaction block is the one divider for a compaction; the notice would repeat it.
+    if (compacted && entry.kind === "divider" && (entry.data as NoticePayload).title === "Context compacted") return null
+    const isLastAgent = entry === lastAgent
+    return (
+      <div key={entry.seq ?? index} className={cn("thread-item", fresh(entry) && (entry.kind === "tool" ? "tool-enter" : "thread-enter"))}>
+        <ThreadItemView
+          item={entry}
+          machine={machine}
+          sessionId={sessionId}
+          readOnly={readOnly}
+          agent={agent}
+          onQuote={onQuote}
+          onFork={onFork}
+          onRetry={isLastAgent ? retry : undefined}
+          onSignedIn={entry === signIn ? onSignedIn : undefined}
+          next={nextTs.get(entry)}
+          last={isLastAgent && !working}
+          streaming={isLastAgent && working}
+          fresh={fresh(entry)}
+          meta={isLastAgent && !working ? turnMeta(lastTurn, entry.ts) : undefined}
+        />
+      </div>
+    )
+  }
   return (
     <div className="flex flex-col gap-(--s4)">
-      {entries.map((entry, index) => {
-        if (Array.isArray(entry)) {
-          return (
-            <div key={entry[0]!.seq ?? index} className={cn("thread-item", fresh(entry.at(-1)!) && "tool-enter")}>
-              <ToolGroup tools={entry} fresh={fresh} />
+      {virtual ? (
+        <div ref={listRef} data-thread-virtual className="relative" style={{ height: layout.height }}>
+          {layout.rows.map((row) => (
+            <div
+              key={row.key}
+              data-index={row.index}
+              ref={(node) => virtualizer.current?.measureElement(node)}
+              className="absolute inset-x-0 top-0 pb-(--s4)"
+              style={{ transform: `translateY(${row.start - scrollMargin}px)` }}
+            >
+              {renderEntry(entries[row.index]!, row.index)}
             </div>
-          )
-        }
-        if ("cards" in entry) {
-          const running = entry.cards.filter(({ subagent }) => subagentRunning(subagent)).length
-          return (
-            <div key={entry.cards[0]!.item.seq ?? index} data-slot="subagent-group" className={`flex flex-col gap-(--s2) ${fresh(entry.cards[0]!.item) ? "thread-enter" : ""}`}>
-              {entry.cards.length > 1 && (
-                <p className="text-(length:--fs-xs) text-(--fg3)">
-                  {running > 0 ? `Running ${entry.cards.length} subagents in parallel` : `${entry.cards.length} subagents`}
-                </p>
-              )}
-              {entry.cards.map(({ subagent, item }) => (
-                <SubagentCard
-                  key={subagent.id}
-                  subagent={subagent}
-                  toolTitle={item.kind === "tool" ? (item.data as ToolPayload).title : undefined}
-                  renderPermission={permission}
-                  onOpen={onOpenSubagent ? () => onOpenSubagent(subagent.id) : undefined}
-                  onStop={!readOnly && onStopSubagent && !subagent.id.startsWith("tool:") ? () => onStopSubagent(subagent.id) : undefined}
-                />
-              ))}
-            </div>
-          )
-        }
-        // The compaction block is the one divider for a compaction; the notice would repeat it.
-        if (compacted && entry.kind === "divider" && (entry.data as NoticePayload).title === "Context compacted") return null
-        const isLastAgent = entry === lastAgent
-        return (
-          <div key={entry.seq ?? index} className={cn("thread-item", fresh(entry) && (entry.kind === "tool" ? "tool-enter" : "thread-enter"))}>
-            <ThreadItemView
-              item={entry}
-              machine={machine}
-              sessionId={sessionId}
-              readOnly={readOnly}
-              agent={agent}
-              onQuote={onQuote}
-              onFork={onFork}
-              onRetry={isLastAgent ? retry : undefined}
-              onSignedIn={entry === signIn ? onSignedIn : undefined}
-              next={nextTs.get(entry)}
-              last={isLastAgent && !working}
-              streaming={isLastAgent && working}
-              fresh={fresh(entry)}
-              meta={isLastAgent && !working ? turnMeta(lastTurn, entry.ts) : undefined}
-            />
-          </div>
-        )
-      })}
+          ))}
+        </div>
+      ) : entries.map(renderEntry)}
       {working && <LiveLine items={items} subagents={subagents} turnStarted={turnStarted} />}
     </div>
   )
