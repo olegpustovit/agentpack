@@ -22,7 +22,8 @@ func revertFixture(t *testing.T, dir, path string, oldText string, created bool)
 		old = ""
 	}
 	log.Append("tool_call", 2, []byte(`{"toolCallId":"t1","content":[{"type":"diff","path":`+strconv.Quote(path)+`,`+old+`"newText":"new"}]}`))
-	log.Append("turn_end", 3, []byte(`{}`))
+	log.Append("tool_call_update", 3, []byte(`{"toolCallId":"t1","status":"completed"}`))
+	log.Append("turn_end", 4, []byte(`{}`))
 	conv := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
 	conv.workspace = dir
 	return &WorkerHTTP{conversation: conv}

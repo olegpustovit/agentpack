@@ -75,7 +75,7 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 		}
 		id := toolID(entry.Payload)
 		if idx, ok := tools[id]; ok {
-			state.Items[idx].Data = entry.Payload
+			state.Items[idx].Data = mergeToolUpdate(state.Items[idx].Data, entry.Payload)
 		} else {
 			state.Items = append(state.Items, ThreadItem{Kind: "tool", Data: entry.Payload})
 		}
@@ -465,6 +465,23 @@ func (state *ThreadState) appendChunk(entry LogEntry) {
 		return
 	}
 	last.Data = merged
+}
+
+// Tool updates carry only changed fields. A status update preserves the diff from the call.
+func mergeToolUpdate(previous, update json.RawMessage) json.RawMessage {
+	merged := make(map[string]json.RawMessage)
+	_ = json.Unmarshal(previous, &merged)
+	if merged == nil {
+		return update
+	}
+	if err := json.Unmarshal(update, &merged); err != nil || merged == nil {
+		return previous
+	}
+	body, err := json.Marshal(merged)
+	if err != nil {
+		return previous
+	}
+	return body
 }
 
 func toolID(payload json.RawMessage) string {
