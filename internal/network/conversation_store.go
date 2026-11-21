@@ -81,6 +81,12 @@ func persistConversationChangesSince(ctx context.Context, db *sql.DB, id string,
 			if _, err := insert.ExecContext(ctx, id, entry.Seq, string(body)); err != nil {
 				return err
 			}
+			if entry.Kind == "agent_exit" && entry.Seq > restoredSeq {
+				if _, err := tx.ExecContext(ctx, `UPDATE sessions SET state=json_set(state,'$.running',json('false'))
+					WHERE id=? AND json_extract(state,'$.running')=1`, id); err != nil {
+					return err
+				}
+			}
 			if counts {
 				if err := recordUsage(ctx, tx, id, entry, usage, restoredSeq); err != nil {
 					return fmt.Errorf("record usage of entry %d: %w", entry.Seq, err)

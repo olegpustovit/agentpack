@@ -44,12 +44,14 @@ func (g *Gateway) meshSessions(ctx context.Context, node string) ([]SessionInfo,
 	if err != nil {
 		return nil, err
 	}
-	localEntries := slices.DeleteFunc(slices.Clone(entries), func(info SessionInfo) bool { return info.NodeID != local || !info.EndedAt.IsZero() })
+	localEntries := slices.DeleteFunc(slices.Clone(entries), func(info SessionInfo) bool {
+		return info.NodeID != local || info.Transport == "acp" || !info.EndedAt.IsZero()
+	})
 	states := workerStates(ctx, g.options.Home, localEntries)
 	for i := range entries {
 		info := &entries[i]
 		info.Reachable, info.LastSync = g.nodeContact(info.NodeID, local)
-		if info.NodeID == local {
+		if info.NodeID == local && info.Transport != "acp" {
 			if terminal, ok := states[info.ID]; ok {
 				info.State = terminal
 			} else {

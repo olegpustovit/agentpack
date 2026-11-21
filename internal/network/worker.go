@@ -315,7 +315,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		launch.Session.AgentSessionID = conversation.agentSessionID
 		launch.Session.AgentCapabilities = conversation.AgentCapabilitiesView()
 		// Other gateways read this replicated row to decide whether the chat is live.
-		launch.Session.State = TerminalState{Running: true, ExitCode: -1}
+		launch.Session.State = TerminalState{Running: !conversation.AgentExited(), ExitCode: -1}
 		if err := rememberACPConversationOwner(ctx, store, launch.Session, launch.Directory); err != nil {
 			return 1, fmt.Errorf("persist ACP session owner: %w", err)
 		}
@@ -476,6 +476,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			launch.Session.AgentSessionID = next.agentSessionID
 			launch.Session.AgentCapabilities = next.AgentCapabilitiesView()
 			launch.Session.ConversationState = next.ConversationState()
+			launch.Session.State.Running = !next.AgentExited()
 			if err := upsertSession(ctx, store.DB, launch.Session); err != nil {
 				if cleanup != nil {
 					cleanup()

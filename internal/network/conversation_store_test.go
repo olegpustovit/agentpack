@@ -363,11 +363,14 @@ func TestConversationStoreNativeLoadDoesNotDuplicateHistory(t *testing.T) {
 func TestConversationStoreRestartAcceptsPromptAfterOldExit(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-restart"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp", State: TerminalState{Running: true, ExitCode: -1}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := persistConversationChanges(t.Context(), store.DB, id, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "agent_exit", Payload: json.RawMessage(`{}`)}}}); err != nil {
 		t.Fatal(err)
+	}
+	if info, err := storedSession(t.Context(), store.Reader, id); err != nil || info.State.Running {
+		t.Fatalf("stored state after exit = %+v, err = %v", info.State, err)
 	}
 	log, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) })
 	if err != nil {
