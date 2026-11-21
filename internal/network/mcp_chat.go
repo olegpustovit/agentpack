@@ -591,7 +591,7 @@ func (m *GatewayMCP) waiting(ctx context.Context, id string) []mcpTranscriptItem
 	if err != nil {
 		return nil // the session item still says it needs you
 	}
-	reducer := acp.ThreadReducer{StateOnly: true}
+	var reducer acp.ThreadReducer
 	var thread acp.ThreadState
 	for _, entry := range entries {
 		thread = reducer.Apply(entry)

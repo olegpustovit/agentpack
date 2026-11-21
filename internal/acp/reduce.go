@@ -24,11 +24,10 @@ type ThreadState struct {
 	CostUSD       float64      `json:"cost_usd,omitempty"`
 }
 
-// ThreadReducer applies conversation entries without rescanning the full log.
+// ThreadReducer applies conversation entries and retains only outstanding requests.
+// ReduceLog also keeps the transcript items needed for full replay.
 type ThreadReducer struct {
-	// StateOnly keeps only what Working and NeedsYou need: unanswered requests. A worker never
-	// renders the thread, so it skips message text, tools and plans and its memory stays bounded.
-	StateOnly   bool
+	keepItems   bool
 	state       ThreadState
 	tools       map[toolInputKey]int
 	compactions map[string]int
@@ -38,10 +37,6 @@ type ThreadReducer struct {
 
 func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 	state := &reducer.state
-	if reducer.tools == nil {
-		reducer.tools = map[toolInputKey]int{}
-	}
-	tools := reducer.tools
 	// Some agents (Antigravity) echo the prompt back as a user chunk; the prompt item already shows it.
 	echo := reducer.afterPrompt && entry.Kind == "user_message_chunk"
 	reducer.afterPrompt = entry.Kind == "prompt" || echo
@@ -52,35 +47,38 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 	child := bytes.Contains(entry.Payload, []byte(`"`+SubagentKey+`"`)) && payloadSubagent(entry.Payload) != ""
 	switch entry.Kind {
 	case "agent_message_chunk", "user_message_chunk", "agent_thought_chunk":
-		if !reducer.StateOnly {
+		if reducer.keepItems {
 			state.appendChunk(entry)
 		}
 		if entry.Kind != "user_message_chunk" && !state.NeedsYou && !child {
 			state.Working = true
 		}
 	case "tool_call":
-		id := toolKey(entry.Payload)
-		if !reducer.StateOnly {
+		if reducer.keepItems {
+			id := toolKey(entry.Payload)
 			state.Items = append(state.Items, ThreadItem{Kind: "tool", Data: expandToolDiffs(entry.Payload)})
 			if id.call != "" {
-				tools[id] = len(state.Items) - 1
+				if reducer.tools == nil {
+					reducer.tools = map[toolInputKey]int{}
+				}
+				reducer.tools[id] = len(state.Items) - 1
 			}
 		}
 		if !state.NeedsYou && !child {
 			state.Working = true
 		}
 	case "tool_call_update":
-		if reducer.StateOnly {
+		if !reducer.keepItems {
 			break
 		}
 		id := toolKey(entry.Payload)
-		if idx, ok := tools[id]; ok {
+		if idx, ok := reducer.tools[id]; ok {
 			state.Items[idx].Data = mergeToolUpdate(state.Items[idx].Data, entry.Payload)
 		} else {
 			state.Items = append(state.Items, ThreadItem{Kind: "tool", Data: expandToolDiffs(entry.Payload)})
 		}
 	case "plan":
-		if !reducer.StateOnly {
+		if reducer.keepItems {
 			state.Items = append(state.Items, ThreadItem{Kind: "plan", Data: entry.Payload})
 		}
 		var plan struct {
@@ -129,15 +127,15 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 		resolveRequest(state.Items, "elicitation", "elicitationId", entry.Payload)
 		state.NeedsYou = hasOutstandingRequests(state.Items)
 	case "notice":
-		if !reducer.StateOnly {
+		if reducer.keepItems {
 			state.Items = append(state.Items, ThreadItem{Kind: "divider", Data: noticeViewPayload(entry.Payload)})
 		}
 	case "compaction_update":
-		if !reducer.StateOnly {
+		if reducer.keepItems {
 			reducer.updateCompaction(entry.Payload)
 		}
 	case "compaction_summary_chunk":
-		if !reducer.StateOnly {
+		if reducer.keepItems {
 			reducer.appendCompactionSummary(entry.Payload)
 		}
 	case "usage_update":
@@ -215,11 +213,11 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 	case "prompt":
 		state.Working = true
 		reducer.inTurn = true
-		if !reducer.StateOnly {
+		if reducer.keepItems {
 			state.Items = append(state.Items, ThreadItem{Kind: "user_message_chunk", Data: entry.Payload})
 		}
 	}
-	if reducer.StateOnly {
+	if !reducer.keepItems {
 		state.Items = slices.DeleteFunc(state.Items, func(item ThreadItem) bool { return !isOutstandingRequest(item) })
 	}
 	return reducer.state
@@ -227,7 +225,7 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 
 // ReduceLog folds append-only log entries into a thread view.
 func ReduceLog(entries []LogEntry) ThreadState {
-	var reducer ThreadReducer
+	reducer := ThreadReducer{keepItems: true}
 	for _, entry := range entries {
 		reducer.Apply(entry)
 	}

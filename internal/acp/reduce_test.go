@@ -118,7 +118,7 @@ func TestThreadReducerNoticeAndCompactionSummary(t *testing.T) {
 		{Kind: "compaction_summary_chunk", Payload: json.RawMessage(`{"sessionUpdate":"compaction_summary_chunk","compactionId":"cmp_1","content":{"type":"text","text":"old "}}`)},
 		{Kind: "compaction_summary_chunk", Payload: json.RawMessage(`{"sessionUpdate":"compaction_summary_chunk","compactionId":"cmp_1","content":{"type":"text","text":"summary"}}`)},
 	}
-	var reducer ThreadReducer
+	reducer := ThreadReducer{keepItems: true}
 	for _, entry := range entries {
 		reducer.Apply(entry)
 	}
@@ -267,7 +267,7 @@ func TestReduceLogCancelledTurnReleasesQuestion(t *testing.T) {
 }
 
 func TestThreadReducerAppliesUpdatesIncrementally(t *testing.T) {
-	var reducer ThreadReducer
+	reducer := ThreadReducer{keepItems: true}
 	if state := reducer.Apply(LogEntry{Kind: "prompt", Payload: json.RawMessage(`{"text":"hello"}`)}); !state.Working {
 		t.Fatal("prompt did not mark the thread working")
 	}
@@ -302,13 +302,13 @@ func TestReduceLogFailedTurnRetiresItsPermission(t *testing.T) {
 	}
 }
 
-func TestStateOnlyReducerMatchesFullStateWithBoundedItems(t *testing.T) {
+func TestThreadReducerMatchesFullStateWithBoundedItems(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "acp", "full.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var full, lean ThreadReducer
-	lean.StateOnly = true
+	full := ThreadReducer{keepItems: true}
+	var lean ThreadReducer
 	for line := range splitLines(data) {
 		if line == "" {
 			continue

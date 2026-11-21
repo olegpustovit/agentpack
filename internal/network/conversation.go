@@ -93,7 +93,6 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 		log = acp.NewEventLog(0)
 	}
 	session := &ConversationSession{log: log, broker: broker, state: "idle", initialized: make(chan struct{}), seenPrompts: make(map[string]struct{})}
-	session.reducer.StateOnly = true
 	entries := log.SetOnAppend(session.applyLogEntry)
 	for _, entry := range entries {
 		session.observeEntry(entry)
