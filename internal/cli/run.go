@@ -23,7 +23,7 @@ import (
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
-var Version = "0.14.0"
+var Version = "0.14.1"
 
 // workerMemoryLimit is a soft GC target for session workers; GOMEMLIMIT overrides it.
 const workerMemoryLimit = 64 << 20
