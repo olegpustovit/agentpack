@@ -17,6 +17,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/state"
+	"golang.org/x/sync/singleflight"
 )
 
 func (g *Gateway) registerWorktrees(mux *http.ServeMux) {
@@ -298,7 +299,12 @@ func (g *Gateway) readSessionGit(ctx context.Context, info SessionInfo) sessionG
 	if !gitAvailable() {
 		return result
 	}
+	var main, root string
+	var worktreeErr error
+	var checks sync.WaitGroup
+	checks.Go(func() { main, root, worktreeErr = worktreeMain(ctx, g.options.Home, info.Directory) })
 	status, err := readStatus(ctx, info.Directory)
+	checks.Wait()
 	if err != nil {
 		result.Removed = insideWorktrees(g.options.Home, info.Directory)
 		result.Worktree = result.Removed
@@ -307,14 +313,17 @@ func (g *Gateway) readSessionGit(ctx context.Context, info SessionInfo) sessionG
 	result.Available, result.worktreeStatus = true, status
 	// Lines changed: a worktree against where it left the main folder, a shared folder uncommitted only.
 	since := "HEAD"
-	if main, root, err := worktreeMain(ctx, g.options.Home, info.Directory); err == nil {
+	if worktreeErr == nil {
 		result.Worktree, result.Path, result.Main = true, root, main
-		result.Base, _ = gitLine(ctx, main, "symbolic-ref", "--short", "-q", "HEAD")
-		if mainHead, err := gitLine(ctx, main, "rev-parse", "HEAD"); err == nil && status.Head != "" {
-			result.Ahead, result.Behind, _ = aheadBehind(ctx, root, mainHead, "HEAD")
-			result.Merged = merged(ctx, root, mainHead, status.Head)
-			if fork, err := gitLine(ctx, root, "merge-base", mainHead, "HEAD"); err == nil {
-				since = fork
+		var mainHead string
+		checks.Go(func() { result.Base, _ = gitLine(ctx, main, "symbolic-ref", "--short", "-q", "HEAD") })
+		checks.Go(func() { mainHead, _ = gitLine(ctx, main, "rev-parse", "HEAD") })
+		checks.Wait()
+		if mainHead != "" && status.Head != "" {
+			graph := worktreeCommitGraph(ctx, root, mainHead, status.Head)
+			result.Ahead, result.Behind, result.Merged = graph.ahead, graph.behind, graph.fork == status.Head
+			if graph.fork != "" {
+				since = graph.fork
 			}
 		}
 	} else if status.Upstream != "" {
@@ -328,10 +337,45 @@ func (g *Gateway) readSessionGit(ctx context.Context, info SessionInfo) sessionG
 	if _, err := exec.LookPath("gh"); err == nil {
 		result.GH = true
 		if status.Branch != "" {
-			result.PR = cachedPullRequest(ctx, info.Directory, status.Branch)
+			result.PR = g.backgroundPullRequest(ctx, info.Directory, status.Branch)
 		}
 	}
 	return result
+}
+
+type commitGraph struct {
+	ahead, behind int
+	fork          string
+}
+
+var commitGraphs struct {
+	sync.Mutex
+	byHead map[[2]string]commitGraph
+}
+
+func worktreeCommitGraph(ctx context.Context, dir, main, head string) commitGraph {
+	key := [2]string{main, head}
+	commitGraphs.Lock()
+	cached, ok := commitGraphs.byHead[key]
+	commitGraphs.Unlock()
+	if ok {
+		return cached
+	}
+	var graph commitGraph
+	var countErr, forkErr error
+	var checks sync.WaitGroup
+	checks.Go(func() { graph.ahead, graph.behind, countErr = aheadBehind(ctx, dir, main, head) })
+	checks.Go(func() { graph.fork, forkErr = gitLine(ctx, dir, "merge-base", main, head) })
+	checks.Wait()
+	if countErr == nil && forkErr == nil {
+		commitGraphs.Lock()
+		if len(commitGraphs.byHead) >= 128 || commitGraphs.byHead == nil {
+			commitGraphs.byHead = make(map[[2]string]commitGraph)
+		}
+		commitGraphs.byHead[key] = graph
+		commitGraphs.Unlock()
+	}
+	return graph
 }
 
 var shortstatNumber = regexp.MustCompile(`(\d+) (insertion|deletion)`)
@@ -358,8 +402,9 @@ func (g *Gateway) serveSessionGit(w http.ResponseWriter, r *http.Request) {
 }
 
 var (
-	prMu    sync.Mutex
-	prCache = map[string]struct {
+	prMu      sync.Mutex
+	prRefresh singleflight.Group
+	prCache   = map[string]struct {
 		at time.Time
 		pr *pullRequest
 	}{}
@@ -367,6 +412,24 @@ var (
 	ghTimeout  = 5 * time.Second
 	prCacheTTL = 30 * time.Second
 )
+
+// Git status is visible immediately; a changed PR refreshes the active inspector through /api/events.
+func (g *Gateway) backgroundPullRequest(ctx context.Context, dir, branch string) *pullRequest {
+	key := dir + "\x00" + branch
+	prMu.Lock()
+	cached, found := prCache[key]
+	prMu.Unlock()
+	if !found || time.Since(cached.at) >= prCacheTTL {
+		_ = prRefresh.DoChan(key, func() (any, error) {
+			next := cachedPullRequest(context.WithoutCancel(ctx), dir, branch)
+			if cached.pr == nil && next != nil || cached.pr != nil && (next == nil || *cached.pr != *next) {
+				g.emitEvent(eventMessage{Topic: "session-git"})
+			}
+			return nil, nil
+		})
+	}
+	return cached.pr
+}
 
 // cachedPullRequest asks gh for the branch's pull request, at most every 30 s per branch.
 // A failure (no PR, no login, no network) reads as no pull request.
