@@ -524,6 +524,12 @@ export default function ConversationPane({
       )
     },
   })
+  const restartAfterSignIn = useIntent({
+    request: (_input: void, id) => api(`/api/sessions/${encodeURIComponent(sessionId)}/restart`, {
+      machine, body: { operation_id: id },
+    }),
+    failed: (error, _input, retry) => hud.error(conversationErrorMessage(machine, "restart the agent after sign-in", error), retry),
+  })
   // The chat carries on with another agent, which gets the transcript with the next message.
   const switchAgent = useIntent({
     request: (harness: string, idempotencyKey) =>
@@ -765,7 +771,10 @@ export default function ConversationPane({
                   animateAfter={animateAfter}
                   onOpenSubagent={openSubagent}
                   onStopSubagent={readOnly ? undefined : (id) => stopSubagent.mutate(id)}
-                  onSignedIn={!subagent && resumable ? () => resume.mutate(draft.trim()) : undefined}
+                  authHarness={info?.harness}
+                  onSignedIn={!subagent && !readOnly && (resumable || live)
+                    ? () => resumable ? resume.mutate(draft.trim()) : restartAfterSignIn.mutate()
+                    : undefined}
                 />
               )}
               </>

@@ -202,7 +202,7 @@ export function SignInCard({ machine, harness, methods, reason, onSignedIn }: { 
         </span>
         <div className="min-w-0 flex-1">
           <p className="pt-(--s1) text-(length:--fs) font-semibold text-(--fg)">{reason || `${name} isn't signed in on ${machineName}.`}</p>
-          <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">Sign in to start this chat. Your message stays in the composer and goes out once you're in.</p>
+          <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">Sign in to continue this chat.</p>
           <div className="mt-(--s4)">
             {known?.length ? (
               <SignIn machine={machine} machineName={machineName} harness={harness} methods={known} onSignedIn={onSignedIn} />

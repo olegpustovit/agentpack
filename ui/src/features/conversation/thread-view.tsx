@@ -711,7 +711,7 @@ function ThreadItemView({
       return <CompactionBlock item={item} />
     case "divider": {
       const notice = item.data as NoticePayload
-      if (notice.code === "auth_required" && notice.harness && onSignedIn) {
+      if (notice.harness && onSignedIn) {
         return <SignInCard machine={machine} harness={notice.harness} methods={Array.isArray(notice.methods) ? notice.methods : undefined} reason={notice.description ?? undefined} onSignedIn={onSignedIn} />
       }
       return (
@@ -854,6 +854,7 @@ export function ThreadView({
   onOpenSubagent,
   onStopSubagent,
   onSignedIn,
+  authHarness,
   scrollRef,
 }: {
   readOnly?: boolean
@@ -874,12 +875,17 @@ export function ThreadView({
   onStopSubagent?: (id: string) => void
   /** Starts the chat once its agent is signed in; only the latest sign-in notice offers it. */
   onSignedIn?: () => void
+  authHarness?: string
   scrollRef?: RefObject<HTMLDivElement | null>
 }) {
   const retry = latestUserPrompt(items) && onRetry ? onRetry : undefined
   const lastAgent = items.findLast((item) => item.kind === "agent_message_chunk")
   const compacted = items.some((item) => item.kind === "compaction")
-  const signIn = items.findLast((item) => item.kind === "divider" && (item.data as NoticePayload).code === "auth_required")
+  const signIn = items.findLast((item) => {
+    if (item.kind !== "divider") return false
+    const notice = item.data as NoticePayload
+    return notice.code === "auth_required" || (notice.title === "The agent could not run this prompt" && notice.description?.includes("Authentication required"))
+  })
   const fresh = (item: ThreadItem) => animateAfter !== undefined && item.seq !== undefined && item.seq > animateAfter
   const permission = (item: ThreadItem) => (
     <fieldset disabled={readOnly} className="min-w-0">
@@ -935,7 +941,8 @@ export function ThreadView({
       followOnAppend: true,
       scrollMargin,
       getItemKey: (index) => {
-        const entry = entries[index]!
+        const entry = entries[index]
+        if (!entry) return `pending-${index}`
         const item = Array.isArray(entry) ? entry[0] : "cards" in entry ? entry.cards[0]?.item : entry
         return item?.seq ?? `pending-${index}`
       },
@@ -1005,7 +1012,9 @@ export function ThreadView({
     return (
       <div key={entry.seq ?? index} className={cn("thread-item", fresh(entry) && (entry.kind === "tool" ? "tool-enter" : "thread-enter"))}>
         <ThreadItemView
-          item={entry}
+          item={entry === signIn && authHarness && !(entry.data as NoticePayload).harness
+            ? { ...entry, data: { ...(entry.data as NoticePayload), harness: authHarness, description: "Sign in again to continue this chat." } }
+            : entry}
           machine={machine}
           sessionId={sessionId}
           readOnly={readOnly}
@@ -1027,7 +1036,7 @@ export function ThreadView({
     <div className="flex flex-col gap-(--s4)">
       {virtual ? (
         <div ref={listRef} data-thread-virtual className="relative" style={{ height: layout.height }}>
-          {layout.rows.map((row) => (
+          {layout.rows.filter((row) => entries[row.index] !== undefined).map((row) => (
             <div
               key={row.key}
               data-index={row.index}

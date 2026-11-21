@@ -167,29 +167,35 @@ func (g *Gateway) launchSession(ctx context.Context, info SessionInfo, forkSessi
 }
 
 // startInBackground prepares the worker for a starting chat. A failure ends the row with the reason.
+const chatStartTimeout = 2 * time.Minute
+
 func (g *Gateway) startInBackground(ctx context.Context, info SessionInfo, forkSessionID string, request *chatStartRequest) {
 	background := context.WithoutCancel(ctx)
+	g.startingChats.Store(info.ID, struct{}{})
 	g.starting.Add(1)
 	obs.Go("gateway.start_session", func() {
 		defer g.starting.Done()
+		defer g.startingChats.Delete(info.ID)
+		startCtx, cancel := context.WithTimeout(background, chatStartTimeout)
+		defer cancel()
 		var err error
 		if request != nil && request.Worktree != "" {
 			main := info.Directory
-			info.Directory, err = g.newSessionWorktree(background, main, request.Worktree, request.WorktreeName, request.Carry)
+			info.Directory, err = g.newSessionWorktree(startCtx, main, request.Worktree, request.WorktreeName, request.Carry)
 			if err == nil {
 				info.FolderID, err = FolderIdentity(info.Directory)
 			}
 			if err == nil {
-				info.WorktreeOf, _, err = worktreeMain(background, g.options.Home, info.Directory)
+				info.WorktreeOf, _, err = worktreeMain(startCtx, g.options.Home, info.Directory)
 			}
 			if err == nil {
-				info.DefinitionRoot = g.definitionRootFor(background, main)
-				_, err = g.auth.store.DB.ExecContext(background, "UPDATE sessions SET directory=?,folder_id=?,worktree_of=?,definition_root=? WHERE id=? AND node_id="+state.LocalNodeSQL,
+				info.DefinitionRoot = g.definitionRootFor(startCtx, main)
+				_, err = g.auth.store.DB.ExecContext(startCtx, "UPDATE sessions SET directory=?,folder_id=?,worktree_of=?,definition_root=? WHERE id=? AND node_id="+state.LocalNodeSQL,
 					info.Directory, info.FolderID, info.WorktreeOf, info.DefinitionRoot, info.ID)
 			}
 		}
 		if err == nil {
-			_, err = g.options.Start(background, info, forkSessionID)
+			_, err = g.options.Start(startCtx, info, forkSessionID)
 		}
 		if err != nil {
 			_, event := obs.Start(background, "gateway", "start_session")
@@ -260,12 +266,16 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (
 			return info, err
 		}
 	}
+	if info.EndedAt.IsZero() {
+		return SessionInfo{}, errResumeConflict
+	}
 	if !g.knownDirectory(info.Directory) && !g.knownWorktree(ctx, info.Directory) {
 		return SessionInfo{}, errors.New("choose a recent folder from this node")
 	}
 	// The claim is atomic, so two resumes cannot start two workers for one chat.
+	now := time.Now().UTC()
 	err = state.Transaction(ctx, g.auth.store.DB, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, "UPDATE sessions SET conversation_state='starting',ended_at=0 WHERE id=? AND ended_at>0 AND archived_at=0 AND node_id="+state.LocalNodeSQL, id)
+		result, err := tx.ExecContext(ctx, "UPDATE sessions SET conversation_state='starting',ended_at=0,last_used=? WHERE id=? AND ended_at>0 AND archived_at=0 AND node_id="+state.LocalNodeSQL, sessionTimestamp(now), id)
 		if err != nil {
 			return err
 		}
@@ -286,7 +296,7 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (
 	info.ConversationState = "starting"
 	info.EndedAt = time.Time{}
 	info.Reachable = true
-	info.LastUsed = time.Now().UTC()
+	info.LastUsed = now
 	g.startInBackground(ctx, info, "", nil)
 	return info, nil
 }
@@ -371,10 +381,21 @@ func recordStop(ctx context.Context, store *state.Store, id string, notice map[s
 // holds chatLifecycle, so a resume cannot claim a row this is writing.
 func (g *Gateway) reapStoppedChats(ctx context.Context) {
 	g.reapWorkerEndpoints(ctx)
-	rows, err := querySessions(ctx, g.auth.store.Reader, "SELECT "+sessionColumns+` FROM sessions WHERE transport='acp' AND ended_at>0 AND archived_at=0 AND node_id=`+state.LocalNodeSQL+`
- AND (conversation_state<>'idle' OR subagents<>'' OR json_extract(state,'$.running'))`)
+	rows, err := querySessions(ctx, g.auth.store.Reader, "SELECT "+sessionColumns+` FROM sessions WHERE transport='acp' AND archived_at=0 AND node_id=`+state.LocalNodeSQL+`
+ AND ((ended_at>0 AND (conversation_state<>'idle' OR subagents<>'' OR json_extract(state,'$.running')))
+ OR (ended_at=0 AND conversation_state='starting' AND last_used<?))`, sessionTimestamp(time.Now().Add(-chatStartTimeout)))
 	var resume []string
 	for _, info := range rows {
+		if info.EndedAt.IsZero() {
+			// The previous gateway can exit before its start writes a worker endpoint.
+			if _, active := g.startingChats.Load(info.ID); !active {
+				_, endpointErr := workerRecord(g.options.Home, info.ID)
+				if errors.Is(endpointErr, fs.ErrNotExist) {
+					g.failStart(ctx, info, errors.New("Startup was interrupted before the agent connected. Send a message to try again."))
+				}
+			}
+			continue
+		}
 		// A turn cut off by sleep, a reboot or a crash carries on by itself, once per stop window.
 		auto := info.ConversationState == "working" && info.AgentSessionID != "" && g.autoResume(info.ID)
 		description := "Its process ended before the turn finished. Send a message to resume the chat."

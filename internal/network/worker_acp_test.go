@@ -641,10 +641,10 @@ func TestRunWorkerACPRestartAndStop(t *testing.T) {
 func TestFailedPromptEndsTheTurnWithANotice(t *testing.T) {
 	log := acp.NewEventLog(0)
 	log.Append("prompt", 1, json.RawMessage(`{"text":"hi"}`))
-	logFailedTurn(log, errors.New("Authentication required"))
+	logFailedTurn(log, "claude", sdkacp.NewAuthRequired(nil))
 	entries := log.Snapshot()
 	state := acp.ReduceLog(entries)
-	if state.Working || len(entries) != 3 || entries[1].Kind != "notice" || !strings.Contains(string(entries[1].Payload), "Authentication required") {
+	if state.Working || len(entries) != 3 || entries[1].Kind != "notice" || !strings.Contains(string(entries[1].Payload), `"code":"auth_required"`) || !strings.Contains(string(entries[1].Payload), `"id":"claudeai"`) {
 		t.Fatalf("working=%v entries=%v", state.Working, entries)
 	}
 }

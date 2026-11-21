@@ -155,7 +155,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 			if err == nil {
 				log.Append("turn_end", time.Now().UnixMilli(), mustRawJSON(response))
 			} else {
-				logFailedTurn(log, err)
+				logFailedTurn(log, launch.Session.Harness, err)
 			}
 			return err
 		},
@@ -300,7 +300,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 			if err == nil {
 				log.Append("turn_end", time.Now().UnixMilli(), mustRawJSON(response))
 			} else {
-				logFailedTurn(log, err)
+				logFailedTurn(log, launch.Session.Harness, err)
 			}
 			return err
 		},
@@ -1120,18 +1120,21 @@ func mustRawJSON(v any) json.RawMessage {
 
 // logFailedTurn ends a turn the agent refused, such as one that needs a
 // sign-in, so viewers see why instead of a turn that never ends.
-func logFailedTurn(log *acp.EventLog, err error) {
+func logFailedTurn(log *acp.EventLog, harness string, err error) {
 	now := time.Now().UnixMilli()
 	description := err.Error()
 	if errors.Is(err, context.Canceled) || strings.Contains(description, "context canceled") || strings.Contains(description, "Request cancelled") {
 		description = "The request to the agent was interrupted before it finished. Send the message again."
 	}
-	if strings.Contains(description, "Authentication required") {
-		// OpenCode's default ACP model needs an OpenCode sign-in even when other providers are signed in.
-		description += ". Choose a model you are signed in to with Model in the composer, or sign in with the agent."
+	notice := map[string]any{"sessionUpdate": "notice", "severity": "error", "title": "The agent could not run this prompt", "description": description}
+	var request *sdkacp.RequestError
+	if errors.As(err, &request) && request.Code == sdkacp.NewAuthRequired(nil).Code {
+		notice["code"], notice["harness"], notice["methods"] = "auth_required", harness, loginMethods(harness)
+		notice["description"] = base.DisplayName(base.Target(harness)) + " needs you to sign in again."
+		if harness == "opencode" {
+			notice["description"] = "Sign in again or choose a model you are already signed in to."
+		}
 	}
-	log.Append("notice", now, mustRawJSON(map[string]any{
-		"sessionUpdate": "notice", "severity": "error", "title": "The agent could not run this prompt", "description": description,
-	}))
+	log.Append("notice", now, mustRawJSON(notice))
 	log.Append("turn_end", now, mustRawJSON(map[string]any{"stopReason": "error"}))
 }

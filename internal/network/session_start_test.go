@@ -368,3 +368,56 @@ func TestStopRetryDoesNotStopReplacementWorker(t *testing.T) {
 		t.Fatalf("new request did not stop replacement: stops=%d err=%v", stops.Load(), err)
 	}
 }
+
+func TestReaperSettlesInterruptedChatStart(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	ctx := t.Context()
+	old := time.Now().Add(-3 * time.Minute)
+	for _, id := range []string{"session-orphan", "session-in-flight"} {
+		if err := upsertSession(ctx, g.auth.store.DB, SessionInfo{ID: id, Harness: "codex", Transport: "acp", ConversationState: "starting", StartedAt: old, LastUsed: old}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	g.startingChats.Store("session-in-flight", struct{}{})
+	g.reapStoppedChats(ctx)
+	orphan, err := storedSession(ctx, g.auth.store.Reader, "session-orphan")
+	if err != nil || orphan.EndedAt.IsZero() {
+		t.Fatalf("interrupted start stayed active: %v", err)
+	}
+	active, err := storedSession(ctx, g.auth.store.Reader, "session-in-flight")
+	if err != nil || !active.EndedAt.IsZero() {
+		t.Fatalf("reaper settled an active start: %v", err)
+	}
+}
+
+func TestOwnerCanArchiveStoppedImportedRecent(t *testing.T) {
+	g, origin := identityGateway(t, t.TempDir(), nil)
+	ctx := t.Context()
+	id := "session-legacy-recent-example"
+	if err := upsertSession(ctx, g.auth.store.DB, SessionInfo{ID: id, Harness: "codex", Transport: "acp", StartedBy: &Actor{Kind: "peer", User: "old-owner"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := endSession(ctx, g.auth.store.DB, id, TerminalState{}); err != nil {
+		t.Fatal(err)
+	}
+	for index, test := range []struct {
+		user string
+		body string
+		want int
+	}{
+		{"member@example.com", `{"hidden":true}`, http.StatusForbidden},
+		{testBrowserEmail, `{"name":"renamed"}`, http.StatusForbidden},
+		{testBrowserEmail, `{"hidden":true}`, http.StatusOK},
+	} {
+		token := test.user + string(rune('0'+index))
+		testBrowserSession(t, g.auth, test.user, token)
+		req := httptest.NewRequest(http.MethodPatch, origin.String()+"/api/sessions/"+id, strings.NewReader(test.body))
+		req.Header.Set("Origin", origin.String())
+		req.AddCookie(&http.Cookie{Name: "agentpack_session", Value: token})
+		res := httptest.NewRecorder()
+		g.Handler().ServeHTTP(res, req)
+		if res.Code != test.want {
+			t.Fatalf("%s %s: status %d, want %d (%s)", test.user, test.body, res.Code, test.want, res.Body.String())
+		}
+	}
+}

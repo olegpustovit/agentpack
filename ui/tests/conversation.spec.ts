@@ -714,6 +714,44 @@ test("a stopped chat shows why it stopped, not an update banner", async ({ page 
   await expect(page.getByText(/needs an update/)).toHaveCount(0)
 })
 
+test("expired Claude sign-in restarts the running chat after the code is submitted", async ({ page }) => {
+  await page.clock.install()
+  const step = { id: "claude-login", url: "https://claude.ai/oauth/authorize", input: "code", state: "waiting" }
+  const notice = {
+    seq: 3, ts: 3, kind: "notice", payload: {
+      title: "The agent could not run this prompt",
+      description: '{"code":-32000,"message":"Authentication required"}',
+    },
+  }
+  await page.route("**/api/sessions", (route) => route.fulfill({
+    json: [{ ...session, id: "chat-one", harness: "claude", transport: "acp", conversation_state: "idle", state: { ...session.state, running: true } }],
+  }))
+  await page.route("**/api/sessions/chat-one/conversation", (route) => route.fulfill({
+    body: JSON.stringify(notice) + "\n", contentType: "application/x-ndjson",
+  }))
+  await page.route("**/api/agents", (route) => route.fulfill({
+    json: { agents: [{ harness: "claude", installed: true, signed_in: false, methods: [{ id: "claudeai", label: "Claude account" }] }] },
+  }))
+  await page.route("**/api/agents/claude/login", (route) => route.fulfill({ json: step }))
+  let pasted: unknown, restarted: unknown
+  await page.route("**/api/agents/claude/login/claude-login", (route) => {
+    if (route.request().method() === "POST") pasted = route.request().postDataJSON()
+    return route.fulfill({ json: { ...step, state: pasted ? "done" : "waiting" } })
+  })
+  await page.route("**/api/sessions/chat-one/restart", (route) => {
+    restarted = route.request().postDataJSON()
+    return route.fulfill({ json: { restarted: true } })
+  })
+  await page.goto("/sessions/local/chat-one")
+  const card = page.getByRole("group", { name: "Sign in to Claude" })
+  await card.getByRole("button", { name: "Sign in with Claude account" }).click()
+  await card.getByLabel(/Paste the code/).fill("test-code")
+  await card.getByRole("button", { name: "Continue" }).click()
+  await expect.poll(() => pasted).toEqual({ input: "test-code" })
+  await page.clock.runFor(2500)
+  await expect.poll(() => restarted).toEqual({ operation_id: expect.stringMatching(/^[a-f0-9]{32}$/) })
+})
+
 test("a chat whose agent isn't signed in signs it in and then starts", async ({ page }) => {
   await page.clock.install()
   await page.route("**/api/sessions", (route) => {
@@ -934,6 +972,20 @@ test("a long conversation starts at the latest turn and renders only nearby rows
   expect(await page.locator("[data-thread-virtual] > [data-index]").count()).toBeLessThan(50)
   await page.getByLabel("Conversation", { exact: true }).evaluate((element) => { element.scrollTop = 0 })
   await expect(page.getByText("Question 0", { exact: true })).toBeInViewport()
+  const conversation = page.getByLabel("Conversation", { exact: true })
+  await conversation.evaluate((element) => { element.scrollTop = element.scrollHeight })
+  const message = page.getByRole("textbox", { name: "Message" })
+  let fail!: () => void
+  await page.route("**/api/sessions/chat-one/conversation/prompt", (route) => new Promise<void>((resolve) => {
+    fail = () => resolve(route.fulfill({ status: 500, body: "agent unavailable" }))
+  }))
+  await message.fill("Pending at the end")
+  await message.press("Enter")
+  await expect(conversation.getByText("Pending at the end")).toBeVisible()
+  fail()
+  await expect(message).toHaveValue("Pending at the end")
+  await expect(conversation.getByText("Reply number 119", { exact: true })).toBeVisible()
+  await expect(page.getByText(/This view couldn't be shown/)).toHaveCount(0)
 })
 
 test("chat stream stays responsive over ten simulated seconds @timing", async ({ page, browserName }) => {

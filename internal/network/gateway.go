@@ -63,6 +63,7 @@ type nodeRecord struct {
 
 type Gateway struct {
 	options        GatewayOptions
+	startingChats  sync.Map
 	starting       sync.WaitGroup       // chats launching in the background; tests wait on it
 	chatLifecycle  sync.Mutex           // serializes resume claims with settling dead chats
 	autoResumed    map[string]time.Time // chats the reaper resumed; guarded by chatLifecycle
@@ -509,14 +510,25 @@ func (g *Gateway) Handler() http.Handler {
 		respond(w, map[string]bool{"stopped": true}, g.stopSession(r.Context(), r.PathValue("id"), requestID))
 	})
 	mux.HandleFunc("PATCH /api/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
-			return
-		}
 		var input struct {
 			Name   *string `json:"name"`
 			Hidden *bool   `json:"hidden"`
 		}
 		if !readJSON(w, r, &input) {
+			return
+		}
+		id := r.PathValue("id")
+		legacyArchive := false
+		if input.Hidden != nil && *input.Hidden && strings.HasPrefix(id, "session-legacy-recent-") {
+			info, err := storedSession(r.Context(), g.auth.store.Reader, id)
+			node, nodeErr := g.auth.store.NodeID(r.Context())
+			legacyArchive = err == nil && nodeErr == nil && info.NodeID == node && info.StartedBy != nil && info.StartedBy.Kind == "peer" && !info.EndedAt.IsZero() && info.ArchivedAt.IsZero()
+		}
+		if legacyArchive {
+			if !g.ownerOnly(w, r) {
+				return
+			}
+		} else if !g.authorizeACPWriteByID(w, r, id) {
 			return
 		}
 		if input.Hidden != nil && *input.Hidden {
