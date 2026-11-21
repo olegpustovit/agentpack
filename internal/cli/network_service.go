@@ -37,7 +37,7 @@ func gatewayServiceAvailable(ctx context.Context, goos string) bool {
 	defer cancel()
 	switch goos {
 	case "linux":
-		return exec.CommandContext(ctx, "systemctl", "--user", "show-environment").Run() == nil
+		return exec.CommandContext(ctx, "systemctl", "--user", "show-environment").Run() == nil && userManagerSharesNetwork(ctx)
 	case "darwin":
 		return exec.CommandContext(ctx, "launchctl", "print", "gui/"+strconv.Itoa(os.Getuid())).Run() == nil
 	case "windows":
@@ -45,6 +45,23 @@ func gatewayServiceAvailable(ctx context.Context, goos string) bool {
 	default:
 		return false
 	}
+}
+
+// userManagerSharesNetwork reports whether the systemd user manager runs in this process's network
+// namespace. Some WSL setups start it in another one, where the tailnet address and the loopback
+// endpoint the CLI dials do not exist; the gateway then runs as a detached process instead.
+// A namespace this process cannot read belongs to another user namespace, so it is not shared.
+func userManagerSharesNetwork(ctx context.Context) bool {
+	output, err := exec.CommandContext(ctx, "systemctl", "show", "-p", "MainPID", "--value", "user@"+strconv.Itoa(os.Getuid())+".service").Output()
+	if err != nil {
+		return false
+	}
+	manager, err := os.Readlink("/proc/" + strings.TrimSpace(string(output)) + "/ns/net")
+	if err != nil {
+		return false
+	}
+	own, err := os.Readlink("/proc/self/ns/net")
+	return err == nil && own == manager
 }
 
 func (runner Runner) startGateway(ctx context.Context, home, executable string) error {
