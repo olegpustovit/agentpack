@@ -3,6 +3,7 @@ package harness
 import (
 	"encoding/json"
 	"os/exec"
+	"time"
 )
 
 // ACPLaunch starts an ACP-speaking agent subprocess. Rewrite adjusts client→agent
@@ -15,6 +16,10 @@ type ACPLaunch struct {
 	AdaptAgent           func([]byte) AgentAdaptResult
 	// ClientPermissionBypass lets Agentpack offer Bypass Permissions and answer ACP approval requests.
 	ClientPermissionBypass bool
+	// UnpromptedUsageSettle closes an unprompted cycle with a synthetic turn_end after a
+	// parent usage_update stays quiet for this long (Antigravity's background-task wakeups
+	// stream session/update notifications with no session/prompt RPC or idle signal).
+	UnpromptedUsageSettle time.Duration
 }
 
 // LogKind is one synthetic event-log row produced by AdaptAgent.

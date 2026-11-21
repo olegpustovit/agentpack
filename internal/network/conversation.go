@@ -46,33 +46,39 @@ type ConversationSession struct {
 
 	// Queue and goal state (conversation_queue.go, conversation_goal.go). queueMu orders queue
 	// changes with their log entries; it is taken before mu and never inside a log callback.
-	queueMu         sync.Mutex
-	queue           []queuedPrompt
-	running         bool // a turn loop owns the agent
-	userCancelled   bool // the user stopped the running turn
-	archived        bool
-	now             func() time.Time
-	after           func(time.Duration, func()) // schedules network retries; tests replace it
-	networkRetries  int                         // retries since the last turn that reached the agent's service
-	turnsEnded      int                         // a retry is dropped when another turn ended meanwhile
-	goal            *Goal
-	goalCleared     *Goal // the last goal, kept to log its "cleared" state
-	goalPublished   string
-	goalDirty       bool // the agent reported a native goal snapshot
-	goalSettled     bool // the native goal was marked met because the agent went idle
-	goalPauseDue    bool // the user stopped unprompted native goal work; tell the agent to pause
-	goalPublishMu   sync.Mutex
-	goalChange      func(*Goal)
-	nativeGoal      bool // the agent advertises a /goal command
-	turnText        []byte
-	turnTools       int
-	goalBlocked     int
-	goalIdle        int
-	usageUsed       int64
-	usageCost       float64
-	subagents       map[string]*subagentState
-	subagentsSaved  string
-	subagentsChange func([]SubagentSummary)
+	queueMu                sync.Mutex
+	queue                  []queuedPrompt
+	running                bool // a turn loop owns the agent
+	userCancelled          bool // the user stopped the running turn
+	archived               bool
+	now                    func() time.Time
+	after                  func(time.Duration, func()) // schedules network retries; tests replace it
+	networkRetries         int                         // retries since the last turn that reached the agent's service
+	turnsEnded             int                         // a retry is dropped when another turn ended meanwhile
+	goal                   *Goal
+	goalCleared            *Goal // the last goal, kept to log its "cleared" state
+	goalPublished          string
+	goalDirty              bool // the agent reported a native goal snapshot
+	goalSettled            bool // the native goal was marked met because the agent went idle
+	goalPauseDue           bool // the user stopped unprompted native goal work; tell the agent to pause
+	goalPublishMu          sync.Mutex
+	goalChange             func(*Goal)
+	nativeGoal             bool // the agent advertises a /goal command
+	turnText               []byte
+	turnTools              int
+	goalBlocked            int
+	goalIdle               int
+	usageUsed              int64
+	usageCost              float64
+	subagents              map[string]*subagentState
+	subagentsSaved         string
+	subagentsChange        func([]SubagentSummary)
+	unpromptedUsageSettle  time.Duration // quiet delay after an unprompted usage_update before closing the cycle
+	inPromptTurn           bool
+	lastParentKind         string
+	unpromptedUsagePending bool
+	settleGen              uint64
+	settleTimer            *time.Timer
 }
 
 func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *ConversationSession {
@@ -123,12 +129,21 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 		session.followNativeGoal(entry, state)
 	}
 	session.state = state
+	var settleDelay time.Duration
+	var settleGen uint64
+	var settleAfter func(time.Duration, func())
+	if entry.Kind == "usage_update" && entrySubagent(entry.Payload) == "" {
+		settleDelay, settleGen, settleAfter = session.unpromptedSettlePlan()
+	}
 	titleChange, title := session.titleChange, agentTitle(entry)
 	goalDirty, pause := session.goalDirty, session.goalPauseDue
 	session.goalDirty, session.goalPauseDue = false, false
 	subagents, subagentsChanged := session.applySubagent(entry)
 	subagentsChange := session.subagentsChange
 	session.mu.Unlock()
+	if settleDelay > 0 {
+		session.scheduleUnpromptedSettle(settleDelay, settleGen, "end_turn", settleAfter)
+	}
 	if titleChange != nil && title != "" {
 		titleChange(title)
 	}
@@ -168,10 +183,7 @@ func agentTitle(entry acp.LogEntry) string {
 // applyConfigUpdate keeps the cached options in step with the agent. The caller holds mu.
 func (session *ConversationSession) applyConfigUpdate(entry acp.LogEntry) {
 	// A helper's options (one model, its own mode) describe the helper, not the chat.
-	var origin struct {
-		Subagent string `json:"_subagent"`
-	}
-	if json.Unmarshal(entry.Payload, &origin) == nil && origin.Subagent != "" {
+	if entrySubagent(entry.Payload) != "" {
 		return
 	}
 	switch entry.Kind {
@@ -368,6 +380,29 @@ func (session *ConversationSession) Prompt(ctx context.Context, input acp.Prompt
 func (session *ConversationSession) observeEntry(entry acp.LogEntry) {
 	session.lastSeq = entry.Seq
 	session.observeGoalEntry(entry)
+	if entrySubagent(entry.Payload) == "" {
+		switch entry.Kind {
+		case "prompt":
+			session.inPromptTurn = true
+			session.lastParentKind = "prompt"
+			session.unpromptedUsagePending = false
+			session.advanceSettle()
+		case "turn_end", "agent_exit":
+			session.inPromptTurn = false
+			session.lastParentKind = entry.Kind
+			session.unpromptedUsagePending = false
+			session.advanceSettle()
+		case "agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update",
+			"permission_request", "permission_result", "elicitation", "elicitation_result":
+			session.lastParentKind = entry.Kind
+			session.unpromptedUsagePending = false
+			session.advanceSettle()
+		case "usage_update":
+			session.advanceSettle()
+			session.unpromptedUsagePending = !session.inPromptTurn &&
+				(session.lastParentKind == "agent_message_chunk" || session.lastParentKind == "agent_thought_chunk")
+		}
+	}
 	switch entry.Kind {
 	case "tool_call":
 		session.toolCalls++
@@ -397,8 +432,93 @@ func (session *ConversationSession) Cancel(ctx context.Context) error {
 	if session.running || session.goal != nil && session.goal.Engine == "native" && session.goal.State == "active" {
 		session.userCancelled = true
 	}
+	var settleDelay time.Duration
+	var settleGen uint64
+	var settleAfter func(time.Duration, func())
+	if session.unpromptedUsageSettle > 0 && !session.running && !session.inPromptTurn &&
+		session.state == string(stateWorking) && session.closedErr() == nil {
+		session.advanceSettle()
+		settleDelay, settleGen, settleAfter = session.unpromptedUsageSettle, session.settleGen, session.after
+	}
 	session.mu.Unlock()
-	return broker.Cancel(ctx)
+	err := broker.Cancel(ctx)
+	if err == nil && settleDelay > 0 {
+		session.scheduleUnpromptedSettle(settleDelay, settleGen, "cancelled", settleAfter)
+	}
+	return err
+}
+
+// SetUnpromptedUsageSettle enables closing an unprompted cycle with a synthetic turn_end once
+// a parent usage_update stays quiet for delay (longer after thought-only steps).
+func (session *ConversationSession) SetUnpromptedUsageSettle(delay time.Duration) {
+	session.mu.Lock()
+	session.unpromptedUsageSettle = delay
+	settleDelay, settleGen, settleAfter := session.unpromptedSettlePlan()
+	session.mu.Unlock()
+	if settleDelay > 0 {
+		session.scheduleUnpromptedSettle(settleDelay, settleGen, "end_turn", settleAfter)
+	}
+}
+
+// unpromptedSettlePlan returns the delay and generation to watch when an unprompted cycle
+// reached a quiet usage_update. The caller holds mu.
+func (session *ConversationSession) unpromptedSettlePlan() (time.Duration, uint64, func(time.Duration, func())) {
+	if session.unpromptedUsageSettle <= 0 || !session.unpromptedUsagePending ||
+		session.running || session.inPromptTurn || session.state != string(stateWorking) || session.closedErr() != nil {
+		return 0, 0, nil
+	}
+	delay := session.unpromptedUsageSettle
+	if session.lastParentKind != "agent_message_chunk" {
+		delay = max(15*time.Second, delay*8)
+	}
+	return delay, session.settleGen, session.after
+}
+
+// advanceSettle invalidates any pending unprompted settle timer. The caller holds mu.
+func (session *ConversationSession) advanceSettle() {
+	session.settleGen++
+	if session.settleTimer != nil {
+		session.settleTimer.Stop()
+		session.settleTimer = nil
+	}
+}
+
+func (session *ConversationSession) scheduleUnpromptedSettle(delay time.Duration, gen uint64, stopReason string, after func(time.Duration, func())) {
+	run := func() {
+		session.writes.RLock()
+		defer session.writes.RUnlock()
+		session.mu.Lock()
+		if session.settleGen != gen || session.running || session.inPromptTurn ||
+			session.state != string(stateWorking) || session.closedErr() != nil {
+			session.mu.Unlock()
+			return
+		}
+		session.advanceSettle()
+		session.unpromptedUsagePending = false
+		log, now := session.log, session.clock().UnixMilli()
+		session.mu.Unlock()
+		log.Append("turn_end", now, mustRawJSON(map[string]string{"stopReason": stopReason}))
+	}
+	if after != nil {
+		after(delay, run)
+		return
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.settleGen != gen || session.closedErr() != nil {
+		return
+	}
+	session.settleTimer = time.AfterFunc(delay, run)
+}
+
+func entrySubagent(payload json.RawMessage) string {
+	var origin struct {
+		Subagent string `json:"_subagent"`
+	}
+	if json.Unmarshal(payload, &origin) == nil {
+		return origin.Subagent
+	}
+	return ""
 }
 
 func (session *ConversationSession) AnswerPermission(ctx context.Context, requestID, optionID string) error {

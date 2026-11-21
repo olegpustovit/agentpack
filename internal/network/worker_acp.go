@@ -409,6 +409,9 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		conv.clientMode = "default"
 		conv.mu.Unlock()
 	}
+	if acpLaunch.UnpromptedUsageSettle > 0 {
+		conv.SetUnpromptedUsageSettle(acpLaunch.UnpromptedUsageSettle)
+	}
 	return conv, cleanup, nil
 }
 

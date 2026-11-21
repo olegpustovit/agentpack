@@ -29,3 +29,23 @@ func TestPrepareWritesManifestAndAttributionRule(t *testing.T) {
 		}
 	}
 }
+
+func TestACPLaunchConfiguresClientBypassAndUnpromptedSettle(t *testing.T) {
+	bin := t.TempDir()
+	script := filepath.Join(bin, "agy")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	project := t.TempDir()
+	got, err := acpLaunch(base.LaunchContext{ProjectRoot: project, WorkspaceRoot: project, Mode: mode.ImplicitEffective()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ClientPermissionBypass {
+		t.Fatal("ClientPermissionBypass = false, want true")
+	}
+	if got.UnpromptedUsageSettle <= 0 {
+		t.Fatalf("UnpromptedUsageSettle = %v, want > 0", got.UnpromptedUsageSettle)
+	}
+}
