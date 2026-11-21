@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 )
@@ -140,7 +141,7 @@ func TestInstallTreeUnpacksTheLockedTreeAndReusesIt(t *testing.T) {
 	}
 }
 
-func TestInstallTreeRefusesATamperedTarballAndWritesNothing(t *testing.T) {
+func TestInstallTreeRefusesATamperedTarballAndPublishesNoTree(t *testing.T) {
 	good := tarball(t, map[string]string{"package/cli.js": "good"})
 	bad := tarball(t, map[string]string{"package/cli.js": "evil"})
 	server := registryWith(t, map[string][]byte{"/srv/-/srv-1.0.0.tgz": bad})
@@ -150,8 +151,14 @@ func TestInstallTreeRefusesATamperedTarballAndWritesNothing(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "pack.lock records") {
 		t.Fatalf("err = %v", err)
 	}
-	if left, _ := os.ReadDir(cache); len(left) != 0 {
-		t.Fatalf("cache not empty after a refused install: %v", left)
+	left, err := os.ReadDir(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range left {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".lock") {
+			t.Fatalf("refused install left content: %v", left)
+		}
 	}
 }
 
@@ -213,5 +220,77 @@ func TestInstallTreeReinstallsATreeEditedInTheCache(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(bin); string(data) != "good" {
 		t.Fatalf("edited cache file kept: %q", data)
+	}
+}
+
+func adapterVerificationFixture(t testing.TB, size int64) (string, string, string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "installed")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	adapter := filepath.Join(root, "adapter.js")
+	file, err := os.Create(adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(size); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := filesDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(root, ".agentpack-tree-complete")
+	if err := os.WriteFile(marker, []byte("test-tree\n"+digest+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stable := time.Now().Add(-time.Minute)
+	for _, path := range []string{adapter, marker} {
+		if err := os.Chtimes(path, stable, stable); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root, adapter, marker
+}
+
+func TestInstalledAdapterVerificationRechecksChangedMetadata(t *testing.T) {
+	t.Setenv("AGENTPACK_FULL_VERIFY", "")
+	root, adapter, marker := adapterVerificationFixture(t, 16)
+	if !installedIntact(root, marker, "test-tree", true) {
+		t.Fatal("valid installation refused")
+	}
+	if _, err := os.Stat(root + ".verified"); err != nil {
+		t.Fatalf("verified tree did not get a stamp: %v", err)
+	}
+	if err := os.WriteFile(adapter, []byte("bad archive data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if installedIntact(root, marker, "test-tree", true) {
+		t.Fatal("changed adapter reused the previous verification")
+	}
+}
+
+func BenchmarkAdapterVerification(b *testing.B) {
+	root, _, marker := adapterVerificationFixture(b, 64<<20)
+	for _, incremental := range []bool{false, true} {
+		name := "full"
+		if incremental {
+			name = "stamped"
+		}
+		b.Run(name, func(b *testing.B) {
+			if !installedIntact(root, marker, "test-tree", incremental) {
+				b.Fatal("fixture verification failed")
+			}
+			b.ResetTimer()
+			for range b.N {
+				if !installedIntact(root, marker, "test-tree", incremental) {
+					b.Fatal("fixture verification failed")
+				}
+			}
+		})
 	}
 }

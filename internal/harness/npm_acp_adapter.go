@@ -50,6 +50,7 @@ func ensureACPAdapterExecutable(ctx context.Context, packageSpec, registry strin
 	if spec, found, err := readACPAdapterSpec(specPath, name, version, registry); err != nil {
 		return "", err
 	} else if found {
+		spec.Incremental = true
 		return mcp.InstallTree(ctx, http.DefaultClient, cacheRoot, spec)
 	}
 	resolved, integrity, err := mcp.ResolveNPM(ctx, http.DefaultClient, registry, name, version)

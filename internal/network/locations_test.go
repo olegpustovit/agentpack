@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/cache"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestCacheLocationsAdvertiseOnlyUnchangedVerifiedTrees(t *testing.T) {
@@ -24,7 +25,7 @@ func TestCacheLocationsAdvertiseOnlyUnchangedVerifiedTrees(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "SKILL.md"), []byte("checked bytes"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	metadata, _, err := cache.TreeMetadata(root)
+	metadata, _, err := paths.TreeMetadata(root)
 	if err != nil {
 		t.Fatal(err)
 	}

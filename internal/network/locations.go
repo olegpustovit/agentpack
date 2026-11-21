@@ -16,6 +16,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/cache"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -91,7 +92,7 @@ func (g *Gateway) advertiseCacheLocations(ctx context.Context) error {
 		if !rootInfo.IsDir() {
 			continue
 		}
-		metadata, _, err := cache.TreeMetadata(root)
+		metadata, _, err := paths.TreeMetadata(root)
 		if err != nil {
 			return err
 		}

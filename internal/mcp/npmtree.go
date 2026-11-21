@@ -26,7 +26,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 // TreeDigestPrefix names the digest of a locked npm tree.
@@ -181,13 +183,14 @@ func cleanBin(target string) (string, error) {
 
 // TreeSpec is what `agentpack mcp-exec` needs to start a locked server.
 type TreeSpec struct {
-	Server     string                  `json:"server"`
-	Package    string                  `json:"package"`
-	Version    string                  `json:"version"`
-	Registry   string                  `json:"registry"`
-	Bin        string                  `json:"bin"`
-	TreeDigest string                  `json:"tree_digest"`
-	Tree       []lockfile.NPMTreeEntry `json:"tree"`
+	Server      string                  `json:"server"`
+	Package     string                  `json:"package"`
+	Version     string                  `json:"version"`
+	Registry    string                  `json:"registry"`
+	Bin         string                  `json:"bin"`
+	TreeDigest  string                  `json:"tree_digest"`
+	Tree        []lockfile.NPMTreeEntry `json:"tree"`
+	Incremental bool                    `json:"-"`
 }
 
 // SpecFor returns the spec of a pinned record whose tree is locked.
@@ -211,7 +214,19 @@ func InstallTree(ctx context.Context, client *http.Client, cacheRoot string, spe
 	root := filepath.Join(cacheRoot, key)
 	executable := filepath.Join(root, filepath.FromSlash("node_modules/"+spec.Package), filepath.FromSlash(spec.Bin))
 	marker := filepath.Join(root, ".agentpack-tree-complete")
-	if installedIntact(root, marker, spec.TreeDigest) {
+	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
+		return "", err
+	}
+	lock := flock.New(root + ".lock")
+	locked, err := lock.TryLockContext(ctx, 25*time.Millisecond)
+	if err != nil {
+		return "", err
+	}
+	if !locked {
+		return "", errors.New("could not lock the npm tree")
+	}
+	defer lock.Close()
+	if installedIntact(root, marker, spec.TreeDigest, spec.Incremental) {
 		return executable, nil
 	}
 	if client == nil {
@@ -219,12 +234,7 @@ func InstallTree(ctx context.Context, client *http.Client, cacheRoot string, spe
 	}
 	staging, err := os.MkdirTemp(cacheRoot, ".install-"+key[:12]+"-")
 	if err != nil {
-		if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
-			return "", err
-		}
-		if staging, err = os.MkdirTemp(cacheRoot, ".install-"+key[:12]+"-"); err != nil {
-			return "", err
-		}
+		return "", err
 	}
 	defer os.RemoveAll(staging)
 	for _, entry := range spec.Tree {
@@ -248,11 +258,10 @@ func InstallTree(ctx context.Context, client *http.Client, cacheRoot string, spe
 	if err := os.Chmod(staging, 0o755); err != nil {
 		return "", err
 	}
-	_ = os.RemoveAll(root)
+	if err := os.RemoveAll(root); err != nil {
+		return "", err
+	}
 	if err := os.Rename(staging, root); err != nil {
-		if installedIntact(root, marker, spec.TreeDigest) {
-			return executable, nil // another launch finished the same tree first
-		}
 		return "", err
 	}
 	return executable, nil
@@ -261,7 +270,7 @@ func InstallTree(ctx context.Context, client *http.Client, cacheRoot string, spe
 // installedIntact reports whether root holds a finished install of the tree
 // whose files are unchanged since it was unpacked. A tree edited in the cache
 // is installed again from the verified tarballs.
-func installedIntact(root, marker, treeDigest string) bool {
+func installedIntact(root, marker, treeDigest string, incremental bool) bool {
 	recorded, err := os.ReadFile(marker)
 	if err != nil {
 		return false
@@ -270,8 +279,43 @@ func installedIntact(root, marker, treeDigest string) bool {
 	if len(lines) != 2 || lines[0] != treeDigest {
 		return false
 	}
+	incremental = incremental && os.Getenv("AGENTPACK_FULL_VERIFY") != "1"
+	stamp := root + ".verified"
+	var metadata string
+	var newest time.Time
+	start := time.Now()
+	if incremental {
+		metadata, newest, err = paths.TreeMetadata(root)
+		if err == nil {
+			if saved, err := os.ReadFile(stamp); err == nil && bytes.Equal(saved, []byte(lines[1]+"\n"+metadata)) {
+				return true
+			}
+		}
+	}
 	files, err := filesDigest(root)
-	return err == nil && files == lines[1]
+	if err != nil || files != lines[1] {
+		return false
+	}
+	if incremental && metadata != "" && newest.Before(start.Add(-paths.RacyTreeMetadataWindow)) {
+		if after, _, err := paths.TreeMetadata(root); err == nil && after == metadata {
+			writeTreeProof(stamp, files+"\n"+metadata)
+		}
+	}
+	return true
+}
+
+func writeTreeProof(path, proof string) {
+	file, err := os.CreateTemp(filepath.Dir(path), ".verify-*")
+	if err != nil {
+		return
+	}
+	defer os.Remove(file.Name())
+	_, err = file.WriteString(proof)
+	if closeErr := file.Close(); err == nil && closeErr == nil {
+		// The per-tree install lock also serializes replacement on Windows.
+		_ = os.Remove(path)
+		_ = os.Rename(file.Name(), path)
+	}
 }
 
 // filesDigest is a digest of every file under root (path, mode bit for

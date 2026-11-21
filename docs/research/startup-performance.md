@@ -121,3 +121,22 @@ The installed gateway used 11–16% of a core while nothing happened. A CPU prof
 ## MCP connection index in the launch digest (2026-11-19)
 
 Shared MCP logins add one read of `$AGENTPACK_HOME/mcp-credentials.json` (a few hundred bytes, written by the gateway) to the launch digest, so connecting or removing a login restages the next launch. Staging reads the same file once per rebuild. Measured on an x86_64 WSL2 host (20 threads), not the ARM64 reference host, medians of five runs of 10 iterations: `BenchmarkMaterializationHome` 0.33 ms, `BenchmarkCodexSetup/cold` 6.8 ms, `warm` 0.13 ms. All are inside the budgets. The gateway's credential loop runs every 30 s with one indexed query and rewrites the file only when its bytes change.
+
+## ACP adapter verification stamp
+
+The adapter stores a verification stamp beside the installed npm tree after checking its full digest and confirming that its metadata stayed stable. If an entry changes or `AGENTPACK_FULL_VERIFY=1`, the next launch hashes the bytes.
+
+On gigacomp (Linux amd64, Intel i9-12900K), five runs at 150 ms per benchmark gave these medians.
+
+| Benchmark | Before | After |
+| --- | ---: | ---: |
+| Materialization home | 0.307 ms | 0.333 ms |
+| Codex setup, cold | 10.139 ms | 9.719 ms |
+| Codex setup, warm | 0.125 ms | 0.137 ms |
+
+A synthetic 64 MiB installed adapter took 40.203 ms for full verification and 0.011 ms with an existing metadata stamp. The adapter benchmark measures verification alone on a one-file fixture. The launch timings above are from the amd64 development host.
+
+```sh
+go test ./internal/sync -run '^$' -bench '^Benchmark(MaterializationHome|CodexSetup)$' -count=5 -benchtime=150ms
+go test ./internal/mcp -run '^$' -bench '^BenchmarkAdapterVerification$' -count=5 -benchtime=150ms
+```

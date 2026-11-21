@@ -5,15 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/olegpustovit/agentpack/internal/cache"
 	"github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestVerbatimFilesAreSharedAcrossHarnessRootsButHooksAreNot(t *testing.T) {
 	claude, cursor := t.TempDir(), t.TempDir()
 	roots := []HarnessRoot{{Target: harness.Claude, Path: claude}, {Target: harness.Cursor, Path: cursor}}
 	source := t.TempDir()
-	digest, _, err := cache.TreeMetadata(source)
+	digest, _, err := paths.TreeMetadata(source)
 	if err != nil {
 		t.Fatal(err)
 	}
