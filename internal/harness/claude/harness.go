@@ -13,7 +13,7 @@ import (
 )
 
 func New() base.Harness {
-	return base.Definition{Target: base.Claude, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, LSP: writeLSP, Guidance: injectGuidance, AfterStage: finalize, Check: verify, Launch: launch, ACPAdapter: claudeACPPackage, LaunchACP: acpLaunch}
+	return base.Definition{Target: base.Claude, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, LSP: writeLSP, Guidance: injectGuidance, AfterStage: finalize, Check: verify, Launch: launch, ACPAdapter: claudeACPPackage, ACPStageAtSession: true, LaunchACP: acpLaunch}
 }
 
 func nativeUserRoots(home string) []string {

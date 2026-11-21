@@ -13,6 +13,7 @@ type ACPLaunch struct {
 	Cmd                  *exec.Cmd
 	AuthenticateMethodID string
 	Rewrite              func([]byte) []byte
+	PrepareSession       func() (func([]byte) []byte, error)
 	AdaptAgent           func([]byte) AgentAdaptResult
 	// ClientPermissionBypass lets Agentpack offer Bypass Permissions and answer ACP approval requests.
 	ClientPermissionBypass bool

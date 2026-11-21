@@ -397,7 +397,7 @@ func TestChatGetsAgentpackToolsOverHTTPOrTheStdioBridge(t *testing.T) {
 	for _, http := range []bool{true, false} {
 		agent := &authReplayAgent{ReplayAgent: acptest.NewReplayAgent(nil), agentCapabilities: sdkacp.AgentCapabilities{McpCapabilities: sdkacp.McpCapabilities{Http: http}}}
 		connection, cleanup := authReplayConnection(agent)
-		if _, err := initializeACPSession(context.Background(), connection, t.TempDir(), "", "", "", tools); err != nil {
+		if _, err := initializeACPSession(context.Background(), connection, t.TempDir(), "", "", "", tools, nil); err != nil {
 			t.Fatal(err)
 		}
 		cleanup()

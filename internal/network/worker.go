@@ -28,6 +28,7 @@ import (
 type WorkerLaunch struct {
 	Session       SessionInfo `json:"session"`
 	Transport     string      `json:"transport,omitempty"`
+	StageInWorker bool        `json:"stage_in_worker,omitempty"`
 	ForkSessionID string      `json:"fork_session_id,omitempty"`
 	Program       string      `json:"program"`
 	Arguments     []string    `json:"arguments"`

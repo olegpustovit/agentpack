@@ -230,6 +230,7 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 	if definitionRoot == "" {
 		definitionRoot = info.Directory
 	}
+	stageInWorker := false
 	if info.Transport == "acp" {
 		stage := func(ctx context.Context) error {
 			_, _, err := runner.Service.SyncForLaunchOptions(ctx, definitionRoot, packSync.SyncOptions{
@@ -241,12 +242,16 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 		if err != nil {
 			return "", err
 		}
-		if _, err := os.Stat(executable); err == nil && os.Getenv("AGENTPACK_FULL_VERIFY") != "1" {
-			if err := prepareRemoteACP(ctx, stage, agent.PrepareACP); err != nil {
+		stageInWorker = agent.ACPInitializeBeforeStage() && os.Getenv("AGENTPACK_TEST_ACP") == ""
+		if !stageInWorker {
+			if _, statErr := os.Stat(executable); statErr == nil && os.Getenv("AGENTPACK_FULL_VERIFY") != "1" {
+				err = prepareRemoteACP(ctx, stage, agent.PrepareACP)
+			} else {
+				err = stage(ctx)
+			}
+			if err != nil {
 				return "", err
 			}
-		} else if err := stage(ctx); err != nil {
-			return "", err
 		}
 	}
 	arguments := []string{"--workspace", info.Directory}
@@ -257,7 +262,7 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 		arguments = append(arguments, "--mode", info.Mode)
 	}
 	arguments = append(arguments, info.Harness)
-	return network.StartWorker(ctx, home, executable, network.WorkerLaunch{Transport: info.Transport, ForkSessionID: forkSessionID, Program: executable, Arguments: arguments, Directory: info.Directory, Environment: append(os.Environ(), "AGENTPACK_SESSION_WORKER=1"), Rows: 24, Columns: 80, Session: info})
+	return network.StartWorker(ctx, home, executable, network.WorkerLaunch{Transport: info.Transport, StageInWorker: stageInWorker, ForkSessionID: forkSessionID, Program: executable, Arguments: arguments, Directory: info.Directory, Environment: append(os.Environ(), "AGENTPACK_SESSION_WORKER=1"), Rows: 24, Columns: 80, Session: info})
 }
 
 // The adapter cache and project stage are independent. The worker sees the published generation.

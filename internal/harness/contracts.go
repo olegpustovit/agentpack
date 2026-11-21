@@ -204,30 +204,32 @@ type Harness interface {
 	Verify(StageContext) error
 	LaunchCommand(LaunchContext) (*exec.Cmd, error)
 	PrepareACP(context.Context) error
+	ACPInitializeBeforeStage() bool
 	ACP(LaunchContext) (ACPLaunch, error)
 	AfterLaunch(LaunchContext) error
 }
 
 type Definition struct {
-	Target           Target
-	UserRoots        func(home string) []string
-	Root             func(StageContext) (string, error)
-	Reset            func(StageContext) ([]string, error)
-	BeforeReset      func(StageContext) error
-	Begin            func(StageContext) (RebuildTransaction, error)
-	Setup            func(StageContext) error
-	MCP              func(mcp.Entries, StageContext) error
-	ProjectMCP       func(mcp.Entries, StageContext) (MCPProjection, error)
-	ProjectLSP       func(map[string]json.RawMessage, StageContext) (LSPProjection, error)
-	LSP              func(map[string]json.RawMessage, StageContext) error
-	Guidance         func(string, StageContext) error
-	AfterStage       func(mcp.Entries, StageContext) error
-	WorkspaceOverlay func(StageContext) error
-	Check            func(StageContext) error
-	Launch           func(LaunchContext) (*exec.Cmd, error)
-	ACPAdapter       string
-	LaunchACP        func(LaunchContext) (ACPLaunch, error)
-	LaunchFinished   func(LaunchContext) error
+	Target            Target
+	UserRoots         func(home string) []string
+	Root              func(StageContext) (string, error)
+	Reset             func(StageContext) ([]string, error)
+	BeforeReset       func(StageContext) error
+	Begin             func(StageContext) (RebuildTransaction, error)
+	Setup             func(StageContext) error
+	MCP               func(mcp.Entries, StageContext) error
+	ProjectMCP        func(mcp.Entries, StageContext) (MCPProjection, error)
+	ProjectLSP        func(map[string]json.RawMessage, StageContext) (LSPProjection, error)
+	LSP               func(map[string]json.RawMessage, StageContext) error
+	Guidance          func(string, StageContext) error
+	AfterStage        func(mcp.Entries, StageContext) error
+	WorkspaceOverlay  func(StageContext) error
+	Check             func(StageContext) error
+	Launch            func(LaunchContext) (*exec.Cmd, error)
+	ACPAdapter        string
+	ACPStageAtSession bool
+	LaunchACP         func(LaunchContext) (ACPLaunch, error)
+	LaunchFinished    func(LaunchContext) error
 }
 
 func (definition Definition) ID() Target { return definition.Target }
@@ -359,6 +361,10 @@ func (definition Definition) PrepareACP(ctx context.Context) error {
 	}
 	_, err := EnsureACPAdapterExecutable(ctx, definition.ACPAdapter)
 	return err
+}
+
+func (definition Definition) ACPInitializeBeforeStage() bool {
+	return definition.ACPStageAtSession
 }
 
 func (definition Definition) ACP(ctx LaunchContext) (ACPLaunch, error) {

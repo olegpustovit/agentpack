@@ -25,21 +25,27 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 		return base.ACPLaunch{}, err
 	}
 	command.Env = append(os.Environ(), "CLAUDE_CODE_EXECUTABLE="+claudeBinary)
+	return base.ACPLaunch{Cmd: command, PrepareSession: func() (func([]byte) []byte, error) {
+		return prepareSessionPlugins(ctx)
+	}}, nil
+}
+
+func prepareSessionPlugins(ctx base.LaunchContext) (func([]byte) []byte, error) {
 	plugins, err := stagedPluginDirs(ctx)
 	if err != nil {
-		return base.ACPLaunch{}, err
+		return nil, err
 	}
 	pluginRoot, err := paths.StagingPluginsDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
-		return base.ACPLaunch{}, err
+		return nil, err
 	}
 	settingsPath := filepath.Join(pluginRoot, "agentpack-bundle", "agentpack-settings.json")
 	settingsInfo, err := os.Lstat(settingsPath)
 	if err == nil && !settingsInfo.Mode().IsRegular() {
-		return base.ACPLaunch{}, fmt.Errorf("staged Claude settings are not a regular file: %s", settingsPath)
+		return nil, fmt.Errorf("staged Claude settings are not a regular file: %s", settingsPath)
 	}
 	if err != nil && !os.IsNotExist(err) {
-		return base.ACPLaunch{}, err
+		return nil, err
 	}
 	if os.IsNotExist(err) {
 		settingsPath = ""
@@ -48,7 +54,7 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	if len(plugins) > 0 || settingsPath != "" {
 		rewrite = rewriteSessionPlugins(plugins, settingsPath)
 	}
-	return base.ACPLaunch{Cmd: command, Rewrite: rewrite}, nil
+	return rewrite, nil
 }
 func claudeCodeExecutable() (string, error) {
 	if strings.TrimSpace(os.Getenv("CLAUDE_CODE_EXECUTABLE")) != "" {

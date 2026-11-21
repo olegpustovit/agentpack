@@ -87,13 +87,34 @@ func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir s
 	if err != nil {
 		return nil, nil, err
 	}
+	var stageDone <-chan error
+	if launch.StageInWorker {
+		if !harness.ACPInitializeBeforeStage() {
+			return nil, nil, errors.New("ACP adapter requires staging before startup")
+		}
+		stageCtx, cancelStage := context.WithCancel(WithPeerCache(ctx, ""))
+		staged := make(chan error, 1)
+		stageDone = staged
+		go func() {
+			defer close(staged)
+			service := packSync.NewService()
+			_, _, err := service.SyncForLaunchOptions(stageCtx, launchCtx.ProjectRoot, packSync.SyncOptions{
+				Mode: launchCtx.Mode.Name(), Target: &target, WorkspaceRoot: launchCtx.WorkspaceRoot,
+			})
+			staged <- err
+		}()
+		defer func() {
+			cancelStage()
+			<-staged
+		}()
+	}
 	done = startStep(ctx, "acp_adapter")
 	acpLaunch, err := harness.ACP(launchCtx)
 	done(err)
 	if err != nil {
 		return nil, nil, err
 	}
-	return startACPAgentProcess(ctx, launch, launchCtx, harness, acpLaunch, sessionDir, conv)
+	return startACPAgentProcess(ctx, launch, launchCtx, harness, acpLaunch, sessionDir, conv, stageDone)
 }
 
 func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir string, entries []acp.LogEntry, conv *ConversationSession) (*ConversationSession, func(), error) {
@@ -181,7 +202,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 		_ = a2cR.Close()
 		finishACPConversation(ctx, conv, client, clientConn)
 	}
-	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, "", launch.tools)
+	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, "", launch.tools, nil)
 	log.SetReplaying(false)
 	if err != nil {
 		cleanup()
@@ -202,7 +223,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 	return conv, cleanup, nil
 }
 
-func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx base.LaunchContext, harness base.Harness, acpLaunch base.ACPLaunch, sessionDir string, conv *ConversationSession) (*ConversationSession, func(), error) {
+func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx base.LaunchContext, harness base.Harness, acpLaunch base.ACPLaunch, sessionDir string, conv *ConversationSession, stageDone <-chan error) (*ConversationSession, func(), error) {
 	log := conv.log
 	cmd := acpLaunch.Cmd
 	if cmd == nil {
@@ -394,8 +415,30 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		close(agentDone)
 	})
 
+	beforeSession := func(initCtx context.Context) error {
+		if stageDone != nil {
+			select {
+			case err := <-stageDone:
+				if err != nil {
+					return fmt.Errorf("stage ACP session: %w", err)
+				}
+			case <-initCtx.Done():
+				return initCtx.Err()
+			}
+		}
+		if acpLaunch.PrepareSession != nil {
+			rewrite, err := acpLaunch.PrepareSession()
+			if err != nil {
+				return err
+			}
+			rewriter.mu.Lock()
+			acpLaunch.Rewrite = rewrite
+			rewriter.mu.Unlock()
+		}
+		return nil
+	}
 	done := startStep(ctx, "acp_handshake")
-	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, acpLaunch.AuthenticateMethodID, launch.tools)
+	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, acpLaunch.AuthenticateMethodID, launch.tools, beforeSession)
 	done(err)
 	log.SetReplaying(false)
 	if err != nil {
@@ -492,7 +535,7 @@ func initializeACPClient(ctx context.Context, conn *sdkacp.ClientSideConnection,
 	return initialize, nil
 }
 
-func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection, workspace, loadID, forkSessionID, authenticateMethodID string, tools chatTools) (acpSessionSetup, error) {
+func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection, workspace, loadID, forkSessionID, authenticateMethodID string, tools chatTools, beforeSession func(context.Context) error) (acpSessionSetup, error) {
 	initCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if loadID != "" && forkSessionID != "" {
@@ -501,6 +544,11 @@ func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection
 	initialize, err := initializeACPClient(initCtx, conn, authenticateMethodID)
 	if err != nil {
 		return acpSessionSetup{}, err
+	}
+	if beforeSession != nil {
+		if err := beforeSession(initCtx); err != nil {
+			return acpSessionSetup{}, err
+		}
 	}
 	setup := acpSessionSetup{AgentCapabilities: agentCapabilitiesView(initialize.AgentCapabilities)}
 	if initialize.AgentInfo != nil {
