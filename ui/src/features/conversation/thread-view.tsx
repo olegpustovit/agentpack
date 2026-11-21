@@ -881,11 +881,15 @@ export function ThreadView({
   const retry = latestUserPrompt(items) && onRetry ? onRetry : undefined
   const lastAgent = items.findLast((item) => item.kind === "agent_message_chunk")
   const compacted = items.some((item) => item.kind === "compaction")
-  const signIn = items.findLast((item) => {
+  const signInIndex = items.findLastIndex((item) => {
     if (item.kind !== "divider") return false
     const notice = item.data as NoticePayload
     return notice.code === "auth_required" || (notice.title === "The agent could not run this prompt" && notice.description?.includes("Authentication required"))
   })
+  // Agent output after the notice proves the sign-in worked, so the card retires.
+  const signIn = signInIndex >= 0 && !items.slice(signInIndex + 1).some((item) => item.kind === "agent_message_chunk" || item.kind === "tool")
+    ? items[signInIndex]
+    : undefined
   const fresh = (item: ThreadItem) => animateAfter !== undefined && item.seq !== undefined && item.seq > animateAfter
   const permission = (item: ThreadItem) => (
     <fieldset disabled={readOnly} className="min-w-0">

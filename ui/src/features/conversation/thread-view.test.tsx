@@ -135,6 +135,17 @@ describe("conversation message actions", () => {
     expect(container.textContent).toContain("Allow Claude to run this command?")
   })
 
+  it("retires the sign-in card once the agent answers after it", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json([])))
+    const notice: ThreadItem = { kind: "divider", data: { title: "Failed to authenticate", code: "auth_required", harness: "claude", methods: [{ id: "claude", label: "Claude account" }] } }
+    const view = (list: ThreadItem[]) => createElement(QueryClientProvider, { client: new QueryClient() }, createElement(ThreadView, { items: list, machine: "local", sessionId: "s", onSignedIn: () => {} }))
+    act(() => root.render(view([items[0]!, notice])))
+    expect(container.querySelector('[data-slot="signin-card"]')).not.toBeNull()
+    act(() => root.render(view([items[0]!, notice, ...items])))
+    expect(container.querySelector('[data-slot="signin-card"]')).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
   it("offers a URL request's link with Done and Decline, and answers it", async () => {
     const posted: unknown[] = []
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
