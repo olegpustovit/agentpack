@@ -93,3 +93,23 @@ cd ui
 bun run build
 bun run e2e --project=chromium --project=webkit -g 'long conversation starts|offline cache writes|failed permission answer|archive hides'
 ```
+
+A separate switch benchmark opens a second 120-turn chat after the app and the
+first chat have loaded. It measures from the link click to the first animation
+frame where the final reply is inside the scroll viewport. Five isolated
+browser contexts ran for each engine and revision on the Linux x86_64
+development host. Chromium uses 4× CDP CPU throttling. WebKit runs at native
+speed.
+
+| Engine | Before (`f6e7f4b`) | After (`f6ee619`) | Mounted conversation paragraphs |
+| --- | ---: | ---: | ---: |
+| Chromium | 410 ms | 189 ms | 360 → 34 |
+| WebKit | 147 ms | 76 ms | 360 → 34 |
+
+Build both revisions with `bun run build` in their respective UI directories.
+Start a Vite preview for each build on a separate localhost port, then run the
+benchmark from the current UI directory.
+
+```sh
+bun run scripts/benchmark-conversation.ts http://127.0.0.1:4230 http://127.0.0.1:4231
+```
