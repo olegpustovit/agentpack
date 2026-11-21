@@ -67,9 +67,10 @@ func (g *Gateway) localDraftState(ctx context.Context, draft registry.Draft) (re
 		return state, err
 	}
 	state.FolderIdentity = identity
-	if !sameFolder(draft.FolderIdentity, identity) {
+	if !SameFolder(draft.FolderIdentity, identity) {
 		return state, nil
 	}
+	identity = draft.FolderIdentity // the registry compares the recorded form exactly
 	if g.options.Library.DraftState == nil {
 		return state, errors.New("draft review is unavailable on this node")
 	}

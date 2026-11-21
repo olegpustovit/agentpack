@@ -248,7 +248,7 @@ func rememberACPConversationOwner(ctx context.Context, store *state.Store, sessi
 	if err != nil {
 		return err
 	}
-	if session.FolderID != "" && session.FolderID != folderID {
+	if session.FolderID != "" && !SameFolder(session.FolderID, folderID) {
 		return errors.New("ACP workspace changed before owner record was saved")
 	}
 	key, canonical, err := acpOwnerKey(folderID, session.Harness, session.AgentSessionID)

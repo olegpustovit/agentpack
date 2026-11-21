@@ -1,6 +1,7 @@
 package network
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http/httptest"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func TestRecentForgetsOnlyMatchingLaunchWithoutDeletingFolder(t *testing.T) {
@@ -123,7 +125,7 @@ func TestKnownDirectorySurvivesDeviceRenumbering(t *testing.T) {
 	if !gateway.knownDirectory(directory) {
 		t.Fatal("folder recorded with an older device number rejected")
 	}
-	if sameFolder("1000012:"+identity, "") || sameFolder("1:2:3", "2:3") {
+	if SameFolder("1000012:"+identity, "") || SameFolder("1:2:3", "2:3") {
 		t.Fatal("sameFolder matched a missing or partial identity")
 	}
 }
@@ -195,5 +197,50 @@ func TestRecentAPIReportsCurrentAvailabilityAndLastUse(t *testing.T) {
 	refreshed := read()
 	if !refreshed.Available || !refreshed.LastUsed.After(first.LastUsed) {
 		t.Fatal(refreshed)
+	}
+}
+
+// Rows recorded as "dev:inode" move to the inode with their owner binding and usage.
+func TestNormalizeFolderIDsKeepsOwnershipAndUsage(t *testing.T) {
+	store := testSessionStore(t, t.TempDir())
+	ctx := t.Context()
+	owner := Actor{Kind: "user", User: "owner@example.com", Node: "mac"}
+	body, _ := json.Marshal(owner)
+	err := state.Transaction(ctx, store.DB, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions(id,node_id,folder_id,directory,harness,transport,agent_session_id,started_by,owner_email,ended_at)
+			VALUES ('chat',`+state.LocalNodeSQL+`,'1000012:abc','/w','codex','acp','native',?,?,1)`, string(body), owner.User); err != nil {
+			return err
+		}
+		key, canonical, err := acpOwnerKey("1000012:abc", "codex", "native")
+		if err != nil {
+			return err
+		}
+		if err := insertOwnerBinding(ctx, tx, key, acpConversationOwnerRecord{FolderID: "1000012:abc", Harness: canonical, Owner: owner}); err != nil {
+			return err
+		}
+		for _, folder := range []string{"1000012:abc", "100000f:abc", "abc"} {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO usage_hourly(hour,node_id,harness,folder_id,model,turns) VALUES (0,`+state.LocalNodeSQL+`,'codex',?,'m',1)`, folder); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := normalizeFolderIDs(ctx, store); err != nil {
+		t.Fatal(err)
+	}
+	var folder string
+	if err := store.Reader.QueryRow("SELECT folder_id FROM sessions WHERE id='chat'").Scan(&folder); err != nil || folder != "abc" {
+		t.Fatalf("folder_id = %q, %v", folder, err)
+	}
+	got, found, err := readACPConversationOwner(ctx, store, "abc", "codex", "native")
+	if err != nil || !found || got.User != owner.User {
+		t.Fatalf("owner after normalize: %+v %t %v", got, found, err)
+	}
+	var rows, turns int
+	if err := store.Reader.QueryRow("SELECT count(*),sum(turns) FROM usage_hourly").Scan(&rows, &turns); err != nil || rows != 1 || turns != 3 {
+		t.Fatalf("usage rows=%d turns=%d %v", rows, turns, err)
 	}
 }

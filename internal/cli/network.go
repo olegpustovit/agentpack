@@ -203,7 +203,7 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 			if err != nil {
 				return "", err
 			}
-			if entry.FolderID == "" || identity != entry.FolderID {
+			if !network.SameFolder(entry.FolderID, identity) {
 				return "", errors.New("folder has changed; launch an agent locally before starting it remotely")
 			}
 			known = true
@@ -220,7 +220,7 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 				break
 			}
 			if entry.Directory == main && entry.FolderID != "" {
-				if identity, err := network.FolderIdentity(main); err == nil && identity == entry.FolderID {
+				if identity, err := network.FolderIdentity(main); err == nil && network.SameFolder(entry.FolderID, identity) {
 					known = true
 					info.DefinitionRoot = cmp.Or(entry.DefinitionRoot, main)
 				}

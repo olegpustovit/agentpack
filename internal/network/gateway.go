@@ -160,6 +160,9 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if err := gateway.loadPublic(context.Background()); err != nil {
 		return err
 	}
+	if err := normalizeFolderIDs(ctx, store); err != nil {
+		return fmt.Errorf("normalize folder identities: %w", err)
+	}
 	gateway.reapStoppedChats(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
 	gateway.endLeftoverStarts(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
 	gateway.mcp, err = NewGatewayMCP(gateway)
@@ -1038,14 +1041,14 @@ func (g *Gateway) knownDirectory(directory string) bool {
 	for _, entry := range recent {
 		if filepath.Clean(entry.Directory) == filepath.Clean(directory) {
 			identity, err := FolderIdentity(directory)
-			return err == nil && sameFolder(entry.FolderID, identity)
+			return err == nil && SameFolder(entry.FolderID, identity)
 		}
 	}
 	return false
 }
 
-// sameFolder also accepts identities recorded before Unix dropped the device ("dev:inode").
-func sameFolder(stored, current string) bool {
+// SameFolder also accepts identities recorded before Unix dropped the device ("dev:inode").
+func SameFolder(stored, current string) bool {
 	return current != "" && (stored == current || strings.HasSuffix(stored, ":"+current) && !strings.Contains(current, ":"))
 }
 

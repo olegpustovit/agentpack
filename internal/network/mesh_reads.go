@@ -137,7 +137,7 @@ func (g *Gateway) meshRecent(ctx context.Context, node string) ([]RecentFolder, 
 			switch {
 			case err != nil:
 				folder.UnavailableReason = "Folder is missing or inaccessible"
-			case info.FolderID == "" || identity != info.FolderID:
+			case !SameFolder(info.FolderID, identity):
 				folder.UnavailableReason = "Folder changed since its last local launch"
 			default:
 				folder.Available = true

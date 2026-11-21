@@ -38,7 +38,7 @@ func (g *Gateway) startShell(w http.ResponseWriter, r *http.Request, actor Actor
 		switch input.Place {
 		case "", "chat":
 			info.Directory, info.WorktreeOf = parent.Directory, parent.WorktreeOf
-			if identity, err := FolderIdentity(info.Directory); err != nil || !sameFolder(parent.FolderID, identity) {
+			if identity, err := FolderIdentity(info.Directory); err != nil || !SameFolder(parent.FolderID, identity) {
 				writeSessionStart(w, info, errors.New("the chat folder has changed"))
 				return
 			}
