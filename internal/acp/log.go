@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"bytes"
 	"cmp"
 	"crypto/sha256"
 	"encoding/json"
@@ -68,7 +69,7 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 	log.seq++
 	entry := LogEntry{Seq: log.seq, TS: ts, Kind: kind}
 	entry.Payload = append(json.RawMessage(nil), payload...)
-	log.compactToolInput(&entry)
+	log.compactToolPayload(&entry)
 	size := entrySize(entry)
 	if size < 0 || size > log.limit {
 		log.truncated = true
@@ -112,7 +113,7 @@ type toolInputStamp struct {
 	seq    int64
 }
 
-func (log *EventLog) compactToolInput(entry *LogEntry) {
+func (log *EventLog) compactToolPayload(entry *LogEntry) {
 	if entry.Kind != "tool_call" && entry.Kind != "tool_call_update" {
 		return
 	}
@@ -120,9 +121,41 @@ func (log *EventLog) compactToolInput(entry *LogEntry) {
 	if json.Unmarshal(entry.Payload, &fields) != nil {
 		return
 	}
+	diffChanged := omitRepeatedDiffText(fields)
+	inputChanged := log.omitRepeatedToolInput(entry, fields)
+	if diffChanged || inputChanged {
+		if body, err := json.Marshal(fields); err == nil {
+			entry.Payload = body
+		}
+	}
+}
+
+func omitRepeatedDiffText(fields map[string]json.RawMessage) bool {
+	text, blocks := toolDiffInput(fields)
+	if len(text) <= len(`"newTextFromInput":true`)-len(`"newText":`) {
+		return false
+	}
+	changed := false
+	for _, block := range blocks {
+		if string(block["type"]) == `"diff"` && bytes.Equal(block["newText"], text) {
+			delete(block, "newText")
+			block["newTextFromInput"] = json.RawMessage(`true`)
+			changed = true
+		}
+	}
+	if changed {
+		if content, err := json.Marshal(blocks); err == nil {
+			fields["content"] = content
+			return true
+		}
+	}
+	return false
+}
+
+func (log *EventLog) omitRepeatedToolInput(entry *LogEntry, fields map[string]json.RawMessage) bool {
 	id := fields["toolCallId"]
 	if len(id) <= 2 || id[0] != '"' || len(id)+len(fields[SubagentKey]) > 256 {
-		return
+		return false
 	}
 	key := toolInputKey{string(id), string(fields[SubagentKey])}
 	raw := fields["rawInput"]
@@ -130,33 +163,32 @@ func (log *EventLog) compactToolInput(entry *LogEntry) {
 		if entry.Kind == "tool_call" {
 			delete(log.toolInputs, key)
 		}
-		return
+		return false
 	}
 	digest := sha256.Sum256(raw)
 	if entry.Kind == "tool_call_update" {
 		previous, ok := log.toolInputs[key]
 		if !ok {
-			return
+			return false
 		}
 		if previous.digest != digest {
 			delete(log.toolInputs, key)
-			return
+			return false
 		}
 		if _, retained := slices.BinarySearchFunc(log.entries, previous.seq, func(row LogEntry, seq int64) int {
 			return cmp.Compare(row.Seq, seq)
 		}); retained {
 			delete(fields, "rawInput")
-			if body, err := json.Marshal(fields); err == nil {
-				entry.Payload = body
-			}
+			return true
 		}
-		return
+		return false
 	}
 	// shortcut: reset the small index at 128 tools. Use eviction order if many calls overlap.
 	if log.toolInputs == nil || len(log.toolInputs) == 128 {
 		log.toolInputs = make(map[toolInputKey]toolInputStamp)
 	}
 	log.toolInputs[key] = toolInputStamp{digest, entry.Seq}
+	return false
 }
 
 // Changed returns a channel that closes on the next append, restore or truncation.

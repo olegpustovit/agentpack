@@ -324,3 +324,18 @@ func TestEventLogOmitsRepeatedToolInputWhileItsSourceIsRetained(t *testing.T) {
 		t.Fatalf("update lost its input after dropping the source: %s", entry.Payload)
 	}
 }
+
+func TestEventLogStoresMatchingDiffTextOnce(t *testing.T) {
+	log := NewEventLog(0)
+	log.Append("tool_call", 1, []byte(`{"toolCallId":"write","rawInput":{"content":"new file content used by the tool"}}`))
+	update := log.Append("tool_call_update", 2, []byte(`{"toolCallId":"write","rawInput":{"content":"new file content used by the tool"},"content":[{"type":"diff","path":"first","newText":"new file content used by the tool"},{"type":"diff","path":"second","newText":"different"}]}`))
+	body := string(update.Payload)
+	if update.Seq != 2 || strings.Contains(body, `"new file content used by the tool"`) || !strings.Contains(body, `"newTextFromInput":true`) ||
+		!strings.Contains(body, `"newText":"different"`) {
+		t.Fatalf("tool update = %+v", update)
+	}
+	reduced := string(ReduceLog(log.Snapshot()).Items[0].Data)
+	if !strings.Contains(reduced, `"newText":"new file content used by the tool"`) || !strings.Contains(reduced, `"newText":"different"`) {
+		t.Fatalf("reduced tool = %s", reduced)
+	}
+}

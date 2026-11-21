@@ -495,19 +495,13 @@ func expandToolDiffs(payload json.RawMessage) json.RawMessage {
 	if json.Unmarshal(payload, &fields) != nil {
 		return payload
 	}
-	var input struct {
-		Content json.RawMessage `json:"content"`
-	}
-	if json.Unmarshal(fields["rawInput"], &input) != nil || len(input.Content) == 0 || input.Content[0] != '"' {
-		return payload
-	}
-	var blocks []map[string]json.RawMessage
-	if json.Unmarshal(fields["content"], &blocks) != nil {
+	text, blocks := toolDiffInput(fields)
+	if len(text) == 0 || len(blocks) == 0 {
 		return payload
 	}
 	for _, block := range blocks {
 		if string(block["type"]) == `"diff"` && string(block["newTextFromInput"]) == "true" {
-			block["newText"] = input.Content
+			block["newText"] = text
 			delete(block, "newTextFromInput")
 		}
 	}
@@ -521,6 +515,22 @@ func expandToolDiffs(payload json.RawMessage) json.RawMessage {
 		return payload
 	}
 	return body
+}
+
+// Tool diff text can share the exact file content already in the tool input.
+func toolDiffInput(fields map[string]json.RawMessage) (json.RawMessage, []map[string]json.RawMessage) {
+	var input struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if len(fields["content"]) == 0 || json.Unmarshal(fields["rawInput"], &input) != nil ||
+		len(input.Content) == 0 || input.Content[0] != '"' {
+		return nil, nil
+	}
+	var blocks []map[string]json.RawMessage
+	if json.Unmarshal(fields["content"], &blocks) != nil {
+		return nil, nil
+	}
+	return input.Content, blocks
 }
 
 func toolKey(payload json.RawMessage) toolInputKey {
