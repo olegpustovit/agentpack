@@ -55,6 +55,24 @@ func resizeTerminal(terminal *terminal, rows, columns uint16) error {
 	return errors.Join(err, ioctlErr)
 }
 
+func (terminal *terminal) shellCommand(shellPID int) string {
+	connection, err := terminal.SyscallConn()
+	if err != nil {
+		return ""
+	}
+	var state string
+	_ = connection.Control(func(fd uintptr) {
+		group, err := unix.IoctlGetInt(int(fd), unix.TIOCGPGRP)
+		if err == nil && group > 0 {
+			state = "idle"
+			if group != shellPID {
+				state = "running"
+			}
+		}
+	})
+	return state
+}
+
 func terminalEOF(err error) bool { return errors.Is(err, syscall.EIO) }
 
 func (*terminal) wait(command *exec.Cmd) error { return command.Wait() }
@@ -66,10 +84,13 @@ func (terminal *terminal) finish(readDone <-chan struct{}) {
 	_ = terminal.Close()
 }
 
-func (*terminal) terminate(process *os.Process, force bool) error {
+func (*terminal) terminate(process *os.Process, force, shell bool) error {
 	signal := syscall.SIGTERM
 	if force {
 		signal = syscall.SIGKILL
+	} else if shell {
+		// Interactive shells can ignore SIGTERM and remain on the PTY.
+		signal = syscall.SIGHUP
 	}
 	err := syscall.Kill(-process.Pid, signal)
 	if errors.Is(err, syscall.ESRCH) {

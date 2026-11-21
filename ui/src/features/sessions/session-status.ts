@@ -48,7 +48,7 @@ export function sessionStatusWord(session: ListedSession, stopping: boolean): st
   return "Stopped"
 }
 
-// ⌘J: the session after the open one that waits on you, in list order, wrapping around.
+// ⌘⇧J: the session after the open one that waits on you, in list order, wrapping around.
 export function nextNeedsYou(sessions: ListedSession[], openKey: string | undefined): ListedSession | undefined {
   const waiting = sessions.filter((session) => sessionGlyphState(session) === "needsYou")
   const at = waiting.findIndex((session) => rowKey(session) === openKey)

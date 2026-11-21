@@ -14,6 +14,7 @@ export type TailnetNode = { id: string; name: string; online: boolean; main?: bo
 export type Actor = { kind: string; user?: string; node?: string; agent?: string }
 
 export type TerminalState = {
+  shell_command?: "idle" | "running"
   interactive: boolean
   running: boolean
   restarting: boolean

@@ -18,6 +18,7 @@ import { api, routeMissing } from "@/lib/api"
 import { basename, harnessName } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
+import { requestTerminal } from "@/features/terminal/shortcuts"
 import { viewLink, views } from "./views"
 
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
@@ -67,7 +68,9 @@ export function rankEntries(entries: PaletteEntry[], rawQuery: string): PaletteG
 
 const shortcuts: [string, string][] = [
   ["Command palette", isMac ? "⌘K" : "Ctrl+K (Ctrl+Shift+K in a terminal)"],
-  ["Next session that needs you", `${mod}J`],
+  ["Toggle terminal", `${mod}J / Ctrl+\``],
+  ["New shell", "Ctrl+Shift+`"],
+  ["Next session that needs you", isMac ? "⌘⇧J" : "Ctrl+Shift+J"],
   ["Sessions, Library, Machines, Usage", `${mod}1–4`],
   ["Toggle the sidebar", `${mod}\\`],
   ["Filter the list", `${mod}F`],
@@ -126,6 +129,10 @@ export default function CommandPalette({
     const live = !session.offline && session.state.running
     const chat = session.transport === "acp"
     const list: PaletteEntry[] = []
+    if (chat && !session.archived_at) {
+      list.push({ id: "terminal", group: "This session", label: "Toggle terminal", shortcut: `${mod}J`, run: () => requestTerminal("toggle") })
+      if (!session.offline) list.push({ id: "terminal-new", group: "This session", label: "New shell", shortcut: "Ctrl+Shift+`", run: () => requestTerminal("new") })
+    }
     if (sessionRules(session).stop) {
       list.push({ id: "stop", group: "This session", label: `Stop ${agent}`, icon: <Square aria-hidden />, run: () => void commands.stop(session) })
     }

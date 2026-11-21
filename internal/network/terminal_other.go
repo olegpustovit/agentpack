@@ -14,5 +14,7 @@ func resizeTerminal(*terminal, uint16, uint16) error             { return ErrUns
 func terminalEOF(error) bool                                     { return false }
 func (*terminal) wait(command *exec.Cmd) error                   { return command.Wait() }
 func (*terminal) finish(<-chan struct{})                         {}
-func (*terminal) terminate(process *os.Process, _ bool) error    { return process.Kill() }
+func (*terminal) terminate(process *os.Process, _, _ bool) error { return process.Kill() }
 func ConfigureDetached(*exec.Cmd)                                {}
+
+func (*terminal) shellCommand(int) string { return "" }

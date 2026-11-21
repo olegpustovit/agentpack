@@ -99,9 +99,18 @@ their recorded holder. Registry replication carries records, not cache file tree
 An imported revision that needs credentials must be configured locally before restore.
 
 The browser app can be installed as a PWA. Its API responses are never cached.
-Fit and zoom scale the host terminal grid; browser resizing does not resize the
-remote PTY. Terminal colors use the labeled fallback palette. Reconnect replays
+Fit and zoom scale an agent's host terminal grid. A chat shell fits its grid
+to the panel when the browser controls that PTY. Terminal colors use the labeled fallback palette. Reconnect replays
 retained terminal bytes, which may be truncated; it is not a server screen snapshot.
+
+In a chat, **⌘J** (**Ctrl+J** on Windows and Linux) or **Ctrl+Backquote**
+toggles the terminal panel. The first shell opens in the chat's folder or
+worktree on its machine. **Ctrl+Shift+Backquote** opens another shell. Hiding
+the panel keeps its shells running. **Open as session** moves the selected shell
+to the session list. On a machine page, the shortcut opens a shell in that
+machine's home folder. Elsewhere it returns to the last chat terminal.
+Use **⌘⇧J** (**Ctrl+Shift+J** on Windows and Linux) to jump
+to the next session that needs you.
 
 ## Connect an MCP client
 

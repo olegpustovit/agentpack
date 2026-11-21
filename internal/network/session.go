@@ -28,14 +28,15 @@ var (
 
 // TerminalState contains no command arguments, environment, or credentials.
 type TerminalState struct {
-	Interactive bool   `json:"interactive"`
-	Running     bool   `json:"running"`
-	Restarting  bool   `json:"restarting"`
-	SharedInput bool   `json:"shared_input,omitempty"`
-	Responder   uint64 `json:"responder,omitempty"`
-	Rows        uint16 `json:"rows"`
-	Columns     uint16 `json:"columns"`
-	ExitCode    int    `json:"exit_code"`
+	Interactive  bool   `json:"interactive"`
+	Running      bool   `json:"running"`
+	Restarting   bool   `json:"restarting"`
+	ShellCommand string `json:"shell_command,omitempty"`
+	SharedInput  bool   `json:"shared_input,omitempty"`
+	Responder    uint64 `json:"responder,omitempty"`
+	Rows         uint16 `json:"rows"`
+	Columns      uint16 `json:"columns"`
+	ExitCode     int    `json:"exit_code"`
 }
 
 // Replay is a byte stream, not a terminal screen snapshot. Offset > 0 means
@@ -82,6 +83,7 @@ type Session struct {
 	waitErr     error
 	stopOnce    sync.Once
 	stopErr     error
+	shell       bool
 }
 
 func StartSession(command *exec.Cmd, rows, columns uint16) (*Session, error) {
@@ -112,7 +114,11 @@ func validSize(rows, columns uint16) bool {
 func (session *Session) State() TerminalState {
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	return session.state
+	state := session.state
+	if session.shell && state.Running {
+		state.ShellCommand = session.terminal.shellCommand(session.command.Process.Pid)
+	}
+	return state
 }
 
 // MarkRestarting lets attachments distinguish a supervised restart from an exit.
@@ -208,7 +214,7 @@ func (session *Session) Resize(attachment *Attachment, rows, columns uint16) err
 	if err := session.attached(attachment); err != nil {
 		return err
 	}
-	if !attachment.local {
+	if !attachment.local && !(session.shell && session.state.Responder == attachment.ID) {
 		return ErrLocalResize
 	}
 	if err := resizeTerminal(session.terminal, rows, columns); err != nil {
@@ -329,7 +335,7 @@ func (session *Session) Stop(ctx context.Context) error {
 	default:
 	}
 	session.stopOnce.Do(func() {
-		session.stopErr = session.terminal.terminate(session.command.Process, false)
+		session.stopErr = session.terminal.terminate(session.command.Process, false, session.shell)
 		if errors.Is(session.stopErr, os.ErrProcessDone) {
 			session.stopErr = nil
 		}
@@ -341,7 +347,7 @@ func (session *Session) Stop(ctx context.Context) error {
 	case <-session.done:
 		return nil
 	case <-ctx.Done():
-		if err := session.terminal.terminate(session.command.Process, true); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		if err := session.terminal.terminate(session.command.Process, true, session.shell); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return err
 		}
 		return ctx.Err()

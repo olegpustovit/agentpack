@@ -31,6 +31,7 @@ type chatStartRequest struct {
 	AgentSessionID string `json:"agent_session_id,omitempty"`
 	Resume         string `json:"resume,omitempty"`
 	ParentID       string `json:"parent_id,omitempty"`
+	Place          string `json:"place,omitempty"`
 	FirstMessage   string `json:"first_message,omitempty"`
 	Tools          *bool  `json:"tools,omitempty"`
 	// Worktree is "new" or an existing worktree of Directory; Carry brings uncommitted changes.

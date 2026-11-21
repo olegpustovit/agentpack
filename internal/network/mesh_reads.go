@@ -35,7 +35,7 @@ func (g *Gateway) meshSessions(ctx context.Context, node string, recentOnly bool
 	if err != nil {
 		return nil, err
 	}
-	where := "hidden=0"
+	where := "hidden=0 AND (transport<>'shell' OR parent_id='')"
 	var args []any
 	if node != "" {
 		where += " AND node_id=?"
@@ -117,7 +117,7 @@ func (g *Gateway) meshRecent(ctx context.Context, node string) ([]RecentFolder, 
 	}
 	entries, err := querySessions(ctx, g.auth.store.Reader, `SELECT `+sessionColumns+` FROM (
  SELECT *,row_number() OVER (PARTITION BY node_id,directory,harness,mode ORDER BY last_used DESC,id DESC) AS rank
- FROM sessions WHERE hidden=0 AND directory<>''`+filter+`) WHERE rank=1 ORDER BY last_used DESC,id DESC LIMIT 100`, args...)
+ FROM sessions WHERE hidden=0 AND transport<>'shell' AND directory<>''`+filter+`) WHERE rank=1 ORDER BY last_used DESC,id DESC LIMIT 100`, args...)
 	if err != nil {
 		return nil, err
 	}

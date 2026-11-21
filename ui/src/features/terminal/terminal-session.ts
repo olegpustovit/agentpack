@@ -21,6 +21,8 @@ export type TerminalSnapshot = {
   fit: boolean
   mouseOwned: boolean
   sharedInput: boolean
+  shellCommand?: TerminalState["shell_command"]
+  ended: boolean
 }
 
 type ControlMessage = {
@@ -32,6 +34,7 @@ type ControlMessage = {
 }
 
 const encoder = new TextEncoder()
+const PANEL_FONT = 12
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
 const CHUNK_BYTES = 32 * 1024
 const MAX_BUFFERED_BYTES = 1024 * 1024
@@ -124,6 +127,8 @@ export class TerminalSession {
   readonly #appearance = matchMedia("(prefers-color-scheme: dark)")
   #listed = true
   #stage: HTMLElement | null = null
+  #panel = false
+  #panelGrid = ""
   #term: Terminal | null = null
   #socket: WebSocket | null = null
   #observer: ResizeObserver | null = null
@@ -169,15 +174,14 @@ export class TerminalSession {
   }
 
   // First attach opens the terminal and the socket. Later attaches only move the element back in.
-  attach(stage: HTMLElement) {
+  attach(stage: HTMLElement, panel = false) {
     this.#stage = stage
+    this.#panel = panel
+    this.#panelGrid = ""
     stage.append(this.#element)
     if (this.#term) this.#term.refresh(0, this.#term.rows - 1)
     else this.#openFresh()
-    this.#observer = new ResizeObserver(() => {
-      cancelAnimationFrame(this.#frame)
-      this.#frame = requestAnimationFrame(() => this.#refit())
-    })
+    this.#observer = new ResizeObserver(() => this.#queueFit())
     this.#observer.observe(stage)
     this.#appearance.addEventListener("change", this.#onAppearance)
     this.#onAppearance()
@@ -189,7 +193,8 @@ export class TerminalSession {
   }
 
   // Keeps the connection and the terminal state; only the on-screen element leaves.
-  detach() {
+  detach(stage?: HTMLElement) {
+    if (stage && stage !== this.#stage) return
     this.#unexpose()
     this.#observer?.disconnect()
     this.#observer = null
@@ -258,6 +263,8 @@ export class TerminalSession {
       fit: this.#fit,
       mouseOwned: term ? term.modes.mouseTrackingMode !== "none" : false,
       sharedInput: this.#state?.shared_input === true,
+      shellCommand: this.#state?.shell_command,
+      ended: this.#state?.running === false && !this.#state.restarting,
     }
   }
 
@@ -279,14 +286,39 @@ export class TerminalSession {
     this.#publish()
   }
 
+  #queueFit() {
+    cancelAnimationFrame(this.#frame)
+    this.#frame = requestAnimationFrame(() => this.#refit())
+  }
+
   #refit() {
     const term = this.#term
     const stage = this.#stage
-    if (!term || !stage || !this.#fit) return
+    if (!term || !stage) return
+    const screen = () => this.#element.querySelector<HTMLElement>(".xterm-screen")
     const before = term.options.fontSize
-    const floor = window.innerWidth <= PHONE_WIDTH ? PHONE_FLOOR : MIN_FONT
-    fitFont(term, stage, () => this.#element.querySelector<HTMLElement>(".xterm-screen"), floor)
-    if (term.options.fontSize !== before) this.#publish()
+    if (this.#panel) {
+      if (before !== PANEL_FONT) {
+        term.options.fontSize = PANEL_FONT
+        this.#queueFit()
+        this.#publish()
+        return
+      }
+      // The responding shell viewer can change its grid. Other viewers keep that grid.
+      if (!this.#canRespond() || !this.#controls()) return
+      const box = screen()?.getBoundingClientRect()
+      if (!box?.width || !box.height || !stage.clientWidth || !stage.clientHeight) return
+      const columns = Math.min(1000, Math.max(2, Math.floor(stage.clientWidth * term.cols / box.width)))
+      const rows = Math.min(1000, Math.max(2, Math.floor(stage.clientHeight * term.rows / box.height)))
+      const size = `${rows}x${columns}`
+      if (size === this.#panelGrid || rows === term.rows && columns === term.cols) return
+      this.#panelGrid = size
+      this.#socket?.send(JSON.stringify({ action: "resize", rows, columns }))
+    } else if (this.#fit) {
+      const floor = window.innerWidth <= PHONE_WIDTH ? PHONE_FLOOR : MIN_FONT
+      fitFont(term, stage, screen, floor)
+      if (term.options.fontSize !== before) this.#publish()
+    }
   }
 
   // Tests read the attached terminal through this hook; it follows the session on screen.
@@ -324,7 +356,7 @@ export class TerminalSession {
       rows: 24,
       cursorBlink: true,
       fontFamily: MONO,
-      fontSize: stored ?? BASE_FONT,
+      fontSize: this.#panel ? PANEL_FONT : stored ?? BASE_FONT,
       scrollback: 5000,
       allowProposedApi: true,
       // Off unless asked for: in this mode xterm leaves typed text in its input element until Enter, and any
@@ -409,6 +441,7 @@ export class TerminalSession {
   }
 
   #updateState(value?: TerminalState) {
+    const responderChanged = value && value.responder !== this.#state?.responder
     if (value) this.#state = value
     const current = this.#state
     const term = this.#term
@@ -417,6 +450,10 @@ export class TerminalSession {
       this.#refit()
     }
     if (term) term.options.disableStdin = !this.#controls()
+    if (this.#panel && responderChanged) {
+      this.#panelGrid = ""
+      this.#queueFit()
+    }
     if (current?.running && current.shared_input !== true && this.#socket?.readyState === WebSocket.OPEN) this.#banner = "Start a new session to enable shared input."
     this.#publish()
   }
@@ -432,6 +469,7 @@ export class TerminalSession {
     const generation = ++this.#generation
     const since = this.#position
     this.#attachment = 0
+    this.#panelGrid = ""
     this.#replayComplete = false
     this.#firstFrameMarked = false
     this.#busy = true
@@ -458,6 +496,7 @@ export class TerminalSession {
       clearTimeout(replayDeadline)
       this.#busy = false
       this.#updateState()
+      if (this.#panel) this.#queueFit()
       terminalMark("replay_complete")
     }
 

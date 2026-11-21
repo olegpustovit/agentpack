@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -112,7 +113,8 @@ func (runner Runner) runNetworkService(ctx context.Context, args []string) (int,
 			return 0, nil
 		}
 		// launchd and systemd start services with a minimal PATH, which hides the agents the gateway launches.
-		if path := loginShellPath(ctx, os.Getenv("SHELL")); path != "" {
+		shell, _ := loginShell(ctx)
+		if path := loginShellPath(ctx, shell); path != "" {
 			os.Setenv("PATH", path+string(os.PathListSeparator)+os.Getenv("PATH"))
 		}
 		return runner.runGateway(ctx, []string{"serve", "--listen", "127.0.0.1:0"})
@@ -285,10 +287,39 @@ func encodedPowerShell(value string) string {
 	return base64.StdEncoding.EncodeToString(data)
 }
 
+func loginShell(ctx context.Context) (string, []string) {
+	if runtime.GOOS == "windows" {
+		return cmp.Or(os.Getenv("ComSpec"), "cmd.exe"), nil
+	}
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		// User services can start without SHELL, so ask the operating system for the account default.
+		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		switch runtime.GOOS {
+		case "linux":
+			if passwd, err := exec.CommandContext(ctx, "getent", "passwd", strconv.Itoa(os.Getuid())).Output(); err == nil {
+				fields := strings.SplitN(strings.TrimSpace(string(passwd)), ":", 7)
+				if len(fields) == 7 {
+					shell = fields[6]
+				}
+			}
+		case "darwin":
+			if current, err := osuser.Current(); err == nil {
+				if output, err := exec.CommandContext(ctx, "/usr/bin/dscl", ".", "-read", "/Users/"+current.Username, "UserShell").Output(); err == nil {
+					_, value, _ := strings.Cut(string(output), "UserShell:")
+					shell = strings.TrimSpace(value)
+				}
+			}
+		}
+	}
+	return cmp.Or(shell, "/bin/sh"), []string{"-l"}
+}
+
 // loginShellPath asks the user's login shell for its PATH. The marker skips anything a profile
 // prints. An empty result means the caller keeps the PATH it has.
 func loginShellPath(ctx context.Context, shell string) string {
-	if shell == "" {
+	if shell == "" || runtime.GOOS == "windows" {
 		return ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)

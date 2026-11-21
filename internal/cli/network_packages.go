@@ -42,7 +42,7 @@ func snapshotRunningEnvironments(ctx context.Context, definitionRoot string) ([]
 	}
 	var snapshots []runningEnvironment
 	for _, session := range sessions {
-		if !session.State.Interactive || !session.State.Running || session.State.Restarting {
+		if session.Transport == "shell" || !session.State.Interactive || !session.State.Running || session.State.Restarting {
 			continue
 		}
 		definition := session.DefinitionRoot

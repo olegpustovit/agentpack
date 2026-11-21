@@ -189,7 +189,11 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		}
 		command.Dir, command.Env = launch.Directory, append(append([]string(nil), environment...), "AGENTPACK_SESSION=1", "AGENTPACK_SESSION_ID="+filepath.Base(directory))
 		command.Env = append(command.Env, "AGENTPACK_TRACE="+obs.ParseTraceParent(obs.TraceParent(ctx)).ID)
-		return StartSession(command, rows, columns)
+		session, err := StartSession(command, rows, columns)
+		if session != nil {
+			session.shell = launch.Transport == "shell"
+		}
+		return session, err
 	}
 	var session *Session
 	var conversation *ConversationSession

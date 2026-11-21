@@ -177,6 +177,14 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 }
 
 func (runner Runner) startRemoteSession(ctx context.Context, home, executable string, info network.SessionInfo, forkSessionID string) (string, error) {
+	if info.Transport == "shell" {
+		program, arguments := loginShell(ctx)
+		return network.StartWorker(ctx, home, executable, network.WorkerLaunch{
+			Transport: info.Transport, Program: program, Arguments: arguments,
+			Directory: info.Directory, Environment: append(os.Environ(), "TERM=xterm-256color", "SHELL="+program),
+			Rows: 24, Columns: 80, Session: info,
+		})
+	}
 	target, ok := launcherTarget(info.Harness)
 	if !ok {
 		return "", errors.New("unknown harness")

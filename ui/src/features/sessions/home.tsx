@@ -39,7 +39,7 @@ export function SessionsHome() {
       <div className="mx-auto flex max-w-[46rem] flex-col gap-(--s6) px-(--s6) py-(--s6)">
         <TaskBar />
         {needsYou.length > 0 && (
-          <Section title={`Needs you · ${needsYou.length}`} hint={`${isMac ? "⌘J" : "Ctrl+J"} jumps to the next one`}>
+          <Section title={`Needs you · ${needsYou.length}`} hint={`${isMac ? "⌘⇧J" : "Ctrl+Shift+J"} jumps to the next one`}>
             {needsYou.map((session) => <WaitingItem key={rowKey(session)} session={session} now={now} />)}
           </Section>
         )}

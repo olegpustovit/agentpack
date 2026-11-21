@@ -1,17 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react"
-import { ArrowLeft, ArrowUp, AtSign, Check, ChevronDown, CornerDownLeft, PanelRight, Plus, Slash, Square } from "lucide-react"
+import { ArrowLeft, ArrowUp, AtSign, Check, ChevronDown, CornerDownLeft, Ellipsis, PanelRight, Plus, Slash, Square, SquareTerminal } from "lucide-react"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
 import { Banner, Spinner } from "@/components/kit/feedback"
 import { PopupSelect } from "@/components/kit/forms"
 import { Button } from "@/components/ui/button"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
+import { useIsPhone } from "@/features/shell/use-is-phone"
+import { chatShellsQuery } from "@/features/terminal/chat-shells"
+import { rememberChatTerminal, takeChatTerminalCommand, terminalCommandEvent, type TerminalCommand, type TerminalRequest } from "@/features/terminal/shortcuts"
 import { StatusSlot } from "@/features/status/status-bar"
 import { pendingChatClaim, useStartSession } from "@/features/sessions/start"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { agentIds } from "@/features/sessions/rules"
-import { useConversationEvents } from "@/features/events/use-events"
+import { useConversationEvents, useEventsConnected } from "@/features/events/use-events"
 import { useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName, relativeTime } from "@/lib/format"
@@ -38,6 +41,8 @@ import { ComposerHintsMenu } from "./composer-hints-menu"
 import { listDiffChanges } from "./diff-summary"
 import { loadAttachments, revokePreview, saveAttachments, uploadConversationBlob, type PendingAttachment } from "./upload-blob"
 import { imageFilesFromClipboard, imageFilesFromList, promptRequest, retryPromptInput } from "./composer-attach"
+
+const TerminalPanel = lazy(() => import("@/features/terminal/terminal-panel"))
 
 type UploadedAttachment = PendingAttachment & { name: string }
 type SendInput = {
@@ -299,17 +304,6 @@ export default function ConversationPane({
     id.startsWith("helper:")
       ? void navigate({ to: "/sessions/$machine/$sessionId", params: { machine, sessionId: id.slice("helper:".length) } })
       : void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, sub: id }) })
-  useEffect(() => {
-    if (!subagentId) return
-    // Esc returns to the parent, unless a field or dialog is using it.
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return
-      if ((event.target as HTMLElement | null)?.closest("input, textarea, [role=dialog], [role=menu]")) return
-      void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, sub: undefined }) })
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [subagentId, navigate])
   useLayoutEffect(() => {
     const element = threadScrollRef.current
     if (!element || tailEntries.length === 0 || element.querySelector("[data-thread-virtual]")) return
@@ -447,6 +441,22 @@ export default function ConversationPane({
     failed: (error, _input, retry) =>
       hud.error(conversationErrorMessage(machine, "stop the conversation", error), conversationNeedsUpdate(error) ? undefined : retry),
   })
+  const working = parent.working
+  const stopping = cancelTurn.isPending
+  const stopTurn = cancelTurn.mutate
+  useEffect(() => {
+    // Esc anywhere in the pane: leave a subagent, else stop the turn; fields and dialogs keep their own Esc.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return
+      if ((event.target as HTMLElement | null)?.closest("input, textarea, [role=dialog], [role=menu]")) return
+      if (subagentId) void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, sub: undefined }) })
+      else if (working && !stopping && !readOnly) stopTurn()
+      else return
+      event.preventDefault()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [subagentId, navigate, working, stopping, readOnly, stopTurn])
   const stopSubagent = useIntent({
     request: (id: string, idempotencyKey) =>
       id.startsWith("helper:")
@@ -713,6 +723,57 @@ export default function ConversationPane({
   }
   const agentName = harnessName(info?.harness ?? "agent")
   const machineName = machines.find((candidate) => candidate.id === machine)?.name ?? machine
+  const phone = useIsPhone()
+  const eventsConnected = useEventsConnected()
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  const [terminalLoaded, setTerminalLoaded] = useState(false)
+  const [newShellRequest, setNewShellRequest] = useState(0)
+  const chatAllowsTerminal = info?.transport === "acp" && !info.archived_at && !subagentId
+  const shells = useQuery({
+    ...chatShellsQuery(machine, sessionId),
+    enabled: chatAllowsTerminal && !readOnly,
+    refetchInterval: eventsConnected ? false : 15_000,
+  })
+  const terminalAvailable = chatAllowsTerminal && !(shells.error instanceof ApiError && [403, 409].includes(shells.error.status))
+  useEffect(() => {
+    if (!terminalAvailable) return
+    const run = (command: TerminalCommand | "open") => {
+      if (command === "new" && readOnly) return
+      if (command === "toggle" && terminalOpen) {
+        setTerminalOpen(false)
+        requestAnimationFrame(() => composerInputRef.current?.focus())
+        return
+      }
+      rememberChatTerminal({ machine, sessionId })
+      setTerminalLoaded(true)
+      setTerminalOpen(true)
+      if (command === "new") setNewShellRequest((count) => count + 1)
+    }
+    const queued = takeChatTerminalCommand(machine, sessionId)
+    if (queued) run(queued)
+    const onCommand = (event: Event) => {
+      event.preventDefault()
+      const { command, repeat } = (event as CustomEvent<TerminalRequest>).detail
+      if (!repeat) run(command)
+    }
+    window.addEventListener(terminalCommandEvent, onCommand)
+    return () => window.removeEventListener(terminalCommandEvent, onCommand)
+  }, [machine, sessionId, terminalAvailable, terminalOpen, readOnly])
+
+  function hideTerminal() {
+    setTerminalOpen(false)
+    requestAnimationFrame(() => composerInputRef.current?.focus())
+  }
+
+  function toggleTerminal() {
+    if (terminalOpen) hideTerminal()
+    else {
+      rememberChatTerminal({ machine, sessionId })
+      setTerminalLoaded(true)
+      setTerminalOpen(true)
+    }
+  }
+
   const contextPercent =
     parent.context_limit && parent.context_tokens !== undefined
       ? Math.min(100, Math.round((parent.context_tokens / parent.context_limit) * 100))
@@ -739,6 +800,16 @@ export default function ConversationPane({
             <ArrowLeft aria-hidden /> Back
           </Button>
         )}
+        {terminalAvailable && (phone ? (
+          <Menu>
+            <MenuTrigger render={<Button type="button" variant="ghost" size="icon" aria-label="Chat actions"><Ellipsis aria-hidden /></Button>} />
+            <MenuContent align="end"><MenuItem icon={<SquareTerminal />} onClick={toggleTerminal}>Terminal</MenuItem></MenuContent>
+          </Menu>
+        ) : (
+          <Button type="button" variant="ghost" size="icon" aria-label="Terminal" title="Terminal (⌘J)" aria-pressed={terminalOpen} onClick={toggleTerminal} className="aria-pressed:text-(--accent)">
+            <SquareTerminal aria-hidden />
+          </Button>
+        ))}
         <Button
           type="button"
           variant="ghost"
@@ -756,6 +827,7 @@ export default function ConversationPane({
       {archiveUnavailable && <Banner>{archiveUnavailable}</Banner>}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <div
           ref={threadScrollRef}
           onScroll={(event) => {
@@ -1215,6 +1287,15 @@ export default function ConversationPane({
             </div>
           </div>
       </div>}
+          </div>
+          {terminalAvailable && (terminalLoaded || !!shells.data?.length) && (
+            <Suspense>
+              <TerminalPanel
+                chat={info} machine={machine} machineName={machineName} phone={phone} offline={readOnly}
+                open={terminalOpen} onToggle={toggleTerminal} onHide={hideTerminal} newShellRequest={newShellRequest} shells={shells}
+              />
+            </Suspense>
+          )}
         </div>
         <ConversationInspector
           thread={parent}

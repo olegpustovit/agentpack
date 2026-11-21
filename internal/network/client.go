@@ -69,7 +69,7 @@ type SessionInfo struct {
 	StartedBy         *Actor             `json:"started_by,omitempty"`
 	Goal              *Goal              `json:"goal,omitempty"`
 	Subagents         []SubagentSummary  `json:"subagents,omitempty"`
-	// ParentID is the chat whose agent started this helper session.
+	// ParentID is the chat that owns this shell or whose agent started this helper session.
 	ParentID string `json:"parent_id,omitempty"`
 	// Tools lets the chat's agent call the agentpack MCP server.
 	Tools bool `json:"tools,omitempty"`

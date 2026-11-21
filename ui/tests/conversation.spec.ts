@@ -3,6 +3,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { expect, test, type Page } from "@playwright/test"
 import { conversationImage, identity, session } from "./helpers"
+import { stubWorker } from "./terminal-stub"
 
 const fixturePath = join(dirname(fileURLToPath(import.meta.url)), "../../testdata/acp/full.jsonl")
 const fixtureBody = readFileSync(fixturePath, "utf8")
@@ -53,6 +54,7 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/sessions/*/conversation**", (route) =>
     route.fulfill({ body: fixtureBody, contentType: "application/x-ndjson" }),
   )
+  await page.route("**/api/sessions/*/shells", (route) => route.fulfill({ json: [] }))
   await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
   await page.route("**/api/sessions/*/blobs/**", (route) =>
     route.fulfill({ body: conversationImage, contentType: "image/png" }),
@@ -694,8 +696,16 @@ test("the replicated session row shows a turn before its log arrives", async ({ 
     json: [{ ...session, id: "chat-one", transport: "acp", conversation_state: "working" }],
   }))
   await page.route("**/api/sessions/chat-one/conversation", () => undefined)
+  let cancels = 0
+  await page.route("**/api/sessions/chat-one/conversation/cancel", (route) => {
+    cancels += 1
+    return route.fulfill({ json: {} })
+  })
   await page.goto("/sessions/local/chat-one")
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible()
+  // Esc stops the turn even when the composer isn't focused.
+  await page.locator("body").press("Escape")
+  await expect.poll(() => cancels).toBe(1)
 })
 
 test("a stopped chat shows why it stopped, not an update banner", async ({ page }) => {
@@ -1072,4 +1082,31 @@ test("an empty composer recalls sent messages newest first, including earlier pa
   await composer.fill("New draft")
   await composer.press("ArrowUp")
   await expect(composer).toHaveValue("New draft")
+})
+
+test("⌘J opens the chat terminal and hides it without disconnecting", async ({ page }) => {
+  const shell = { ...session, id: "shell-one", transport: "shell", harness: "shell", parent_id: "chat-one" }
+  await page.route("**/api/sessions", (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    expect(route.request().postDataJSON()).toEqual({ transport: "shell", parent_id: "chat-one", place: "chat" })
+    return route.fulfill({ json: shell })
+  })
+  const { conns } = await stubWorker(page)
+  await page.goto("/sessions/local/chat-one")
+  const composer = page.locator("#conversation-message")
+  await composer.focus()
+  await page.keyboard.press("ControlOrMeta+j")
+  const terminal = page.locator(".xterm-helper-textarea")
+  await expect(terminal).toBeFocused()
+  await expect(page.getByRole("region", { name: "Terminal" }).locator('[aria-busy="false"]')).toBeAttached()
+  await page.keyboard.press("p")
+  await expect.poll(() => conns[0]?.sent).toContain("p")
+
+  await page.keyboard.press("ControlOrMeta+j")
+  await expect(composer).toBeFocused()
+  await expect(page.getByRole("region", { name: "Terminal" })).toBeHidden()
+  expect(conns[0]?.closed).toBe(false)
+  await page.keyboard.press("ControlOrMeta+j")
+  await expect(terminal).toBeFocused()
+  expect(conns).toHaveLength(1)
 })

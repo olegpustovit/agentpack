@@ -170,3 +170,19 @@ three ARM64 measurements remained within budget. These figures measure
 staging and generation selection. A separate smoke check confirmed that
 Claude ACP 0.100.0 returns an initialize response in a temporary workspace
 with no staged project configuration.
+
+## Gateway chat shell worker
+
+Compared the checkout with `e44312d` on Linux amd64 (Intel i9-12900K) using
+the 32 MiB history fixture and five runs of ten iterations. Values are median
+milliseconds per operation.
+
+| Benchmark | Before | After |
+| --- | ---: | ---: |
+| Materialization home | 0.388 | 0.439 |
+| Codex setup, cold | 7.763 | 7.514 |
+| Codex setup, warm | 0.141 | 0.136 |
+
+```sh
+go test ./internal/sync -run '^$' -bench '^(BenchmarkMaterializationHome|BenchmarkCodexSetup)$' -benchtime=10x -count=5
+```

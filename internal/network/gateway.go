@@ -365,6 +365,8 @@ func (g *Gateway) Handler() http.Handler {
 		writeJSON(w, value)
 	})
 	mux.HandleFunc("GET /api/sessions/{id}", g.serveSessionRow)
+	mux.HandleFunc("GET /api/sessions/{id}/shells", g.serveChatShells)
+	mux.HandleFunc("POST /api/sessions/{id}/detach-shell", g.detachShell)
 	mux.HandleFunc("GET /api/recent", func(w http.ResponseWriter, r *http.Request) {
 		value, err := g.meshRecent(r.Context(), r.URL.Query().Get("node"))
 		if err != nil {
@@ -392,6 +394,10 @@ func (g *Gateway) Handler() http.Handler {
 		actor, ok := actorFrom(r.Context())
 		if !ok {
 			actor = browserActor(g.auth.email(r))
+		}
+		if input.Transport == "shell" {
+			g.startShell(w, r, actor, input)
+			return
 		}
 		if input.ID != "" {
 			info, err := g.claimChatStart(r.Context(), actor, input)
@@ -780,7 +786,7 @@ func (g *Gateway) Handler() http.Handler {
 				actor = browserActor(g.auth.email(r))
 			}
 			for _, session := range sessions {
-				if session.Transport == "acp" && !actor.canWriteSession(session) {
+				if session.Transport == "shell" || session.Transport == "acp" && !actor.canWriteSession(session) {
 					skipped++
 					continue
 				}
@@ -958,7 +964,7 @@ func authorizeACPWrite(w http.ResponseWriter, r *http.Request, session SessionIn
 		http.Error(w, "archived", http.StatusConflict)
 		return false
 	}
-	if session.Transport != "acp" {
+	if session.Transport != "acp" && session.Transport != "shell" {
 		return true
 	}
 	actor, ok := actorFrom(r.Context())
@@ -968,7 +974,7 @@ func authorizeACPWrite(w http.ResponseWriter, r *http.Request, session SessionIn
 	if actor.canWriteSession(session) {
 		return true
 	}
-	http.Error(w, "read-only actor cannot modify this ACP session", http.StatusForbidden)
+	http.Error(w, "read-only actor cannot modify this session", http.StatusForbidden)
 	return false
 }
 
@@ -1107,6 +1113,9 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 	record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "session unavailable", 404)
+		return
+	}
+	if record.Session.Transport == "shell" && !authorizeACPWrite(w, r, record.Session) {
 		return
 	}
 	since, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)

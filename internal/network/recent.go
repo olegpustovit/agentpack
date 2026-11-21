@@ -21,7 +21,7 @@ func Recent(home string) ([]SessionInfo, error) {
 func recentIn(ctx context.Context, db *sql.DB) ([]SessionInfo, error) {
 	entries, err := querySessions(ctx, db, `SELECT `+sessionColumns+` FROM (
         SELECT *,row_number() OVER (PARTITION BY directory,harness,mode ORDER BY last_used DESC,id DESC) AS rank
-        FROM sessions WHERE node_id=`+state.LocalNodeSQL+` AND hidden=0 AND directory<>''
+        FROM sessions WHERE node_id=`+state.LocalNodeSQL+` AND hidden=0 AND transport<>'shell' AND directory<>''
     ) WHERE rank=1 ORDER BY last_used DESC,id DESC LIMIT 100`)
 	for i := range entries {
 		entries[i].ID = ""

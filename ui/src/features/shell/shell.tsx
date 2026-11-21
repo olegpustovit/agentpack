@@ -10,6 +10,10 @@ import { StatusBar, StatusProvider } from "@/features/status/status-bar"
 import { AppWindow, Toolbar, ToolbarButton } from "@/components/kit/window"
 import { buttonVariants } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { api } from "@/lib/api"
+import type { SessionInfo } from "@/lib/api-types"
+import { hud } from "@/lib/hud"
+import { queueLastChatTerminal, requestTerminal, terminalShortcut } from "@/features/terminal/shortcuts"
 import { useAttention } from "./attention"
 import { useIsPhone } from "./use-is-phone"
 import { useSidebar } from "./sidebar"
@@ -64,11 +68,13 @@ const CommandPalette = lazy(() => import("./command-palette"))
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
 
 // ⌘K opens the palette; elsewhere Ctrl+K, or Ctrl+Shift+K in a terminal, where Ctrl+K is the shell's kill-line.
-// ? outside a text field lists shortcuts. ⌘J opens the next session that needs you.
+// ? outside a text field lists shortcuts. ⌘⇧J opens the next session that needs you.
 function ShellCommands() {
   const navigate = useNavigate()
   const { sessions } = useListedSessions()
   const params = useParams({ strict: false })
+  const { view } = useRoutePosition()
+  const machine = view === "machines" ? params.machine : undefined
   const openKey = params.machine && params.sessionId ? `${params.machine}:${params.sessionId}` : undefined
   // The palette's starting query while open; null while closed.
   const [palette, setPalette] = useState<string | null>(null)
@@ -82,10 +88,28 @@ function ShellCommands() {
         setPalette((current) => (current === null ? "" : null))
         return
       }
-      if (key === "j" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && (event.metaKey || !inTerminal)) {
+      const command = terminalShortcut(event, isMac)
+      if (command) {
+        if (command === "next") {
+          if (!event.repeat) {
+            const next = nextNeedsYou(sessions, openKey)
+            if (next) void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: next.machine, sessionId: next.id } })
+          }
+        } else if (!requestTerminal(command, event.repeat)) {
+          if (event.repeat) return
+          if (machine) {
+            void api<SessionInfo>("/api/sessions", { machine, body: { transport: "shell", place: "home" } }).then(
+              (shell) => navigate({ to: "/sessions/$machine/$sessionId", params: { machine, sessionId: shell.id } }),
+              (error: Error) => hud.error(`Couldn't open the machine's shell. ${error.message}`),
+            )
+          } else {
+            const chat = queueLastChatTerminal(command)
+            if (!chat) return
+            void navigate({ to: "/sessions/$machine/$sessionId", params: chat })
+          }
+        }
         event.preventDefault()
-        const next = nextNeedsYou(sessions, openKey)
-        if (next) void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: next.machine, sessionId: next.id } })
+        event.stopPropagation()
         return
       }
       if (event.key === "?" && !event.metaKey && !event.ctrlKey && !event.altKey && !inTerminal && !target?.closest?.("input, textarea, select, [contenteditable='true']")) {
@@ -93,9 +117,9 @@ function ShellCommands() {
         setPalette("?")
       }
     }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [navigate, sessions, openKey])
+    window.addEventListener("keydown", onKeyDown, true)
+    return () => window.removeEventListener("keydown", onKeyDown, true)
+  }, [navigate, sessions, openKey, machine])
   if (palette === null) return null
   return (
     <Suspense fallback={null}>

@@ -1,4 +1,5 @@
 const harnessNames: Record<string, string> = {
+  shell: "Shell",
   agent: "Cursor CLI",
   cursor: "Cursor CLI",
   codex: "Codex",

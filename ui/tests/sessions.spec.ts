@@ -345,7 +345,7 @@ test("Esc clears the marked rows", async ({ page }) => {
   await expect(page.locator("[data-marked]")).toHaveCount(0)
 })
 
-test("Sessions home answers a waiting chat's permission, then ⌘J and ⌘K jump", async ({ page }) => {
+test("Sessions home answers a waiting chat's permission, then ⌘⇧J and ⌘K jump", async ({ page }) => {
   const waiting = { ...sessions[0], id: "c1", name: "refactor staging", transport: "acp", conversation_state: "needs_you" }
   reply = [waiting, sessions[1]]
   const request = '{"seq":1,"ts":1,"kind":"permission_request","payload":{"requestId":"p1","tool":"Bash","summary":"go test ./...","options":[{"id":"allow","label":"Allow once"},{"id":"deny","label":"Deny"}]}}\n'
@@ -361,7 +361,7 @@ test("Sessions home answers a waiting chat's permission, then ⌘J and ⌘K jump
   await waitingSection.getByRole("button", { name: /Allow once/ }).click()
   await expect.poll(() => answers).toEqual([{ request_id: "p1", option_id: "allow" }])
 
-  await page.keyboard.press("ControlOrMeta+j")
+  await page.keyboard.press("ControlOrMeta+Shift+j")
   await expect(page).toHaveURL(/\/sessions\/local\/c1$/)
   await page.keyboard.press("ControlOrMeta+k")
   await page.getByRole("combobox", { name: "Search sessions and commands" }).fill("oracle")

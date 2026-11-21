@@ -35,6 +35,10 @@ export class TerminalPool<T extends PoolEntry = TerminalSession> {
     for (const entry of entries) entry.dispose()
   }
 
+  peek(machine: string, sessionId: string) {
+    return this.#entries.get(`${machine}\0${sessionId}`)
+  }
+
   focus(machine: string, sessionId: string) {
     this.#entries.get(`${machine}\0${sessionId}`)?.focus()
   }

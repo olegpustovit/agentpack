@@ -203,13 +203,13 @@ func (terminal *terminal) finish(readDone <-chan struct{}) {
 	_ = terminal.output.Close()
 }
 
-func (terminal *terminal) terminate(process *os.Process, force bool) error {
+func (terminal *terminal) terminate(process *os.Process, force, shell bool) error {
 	terminal.mu.Lock()
 	defer terminal.mu.Unlock()
 	if terminal.job == 0 {
 		return os.ErrProcessDone
 	}
-	if !force {
+	if !force && !shell {
 		executable, err := os.Executable()
 		if err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -246,3 +246,6 @@ func SignalConsole(pid uint32) error {
 func ConfigureDetached(command *exec.Cmd) {
 	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP, HideWindow: true}
 }
+
+// ConPTY does not expose a foreground process group. Confirm before closing.
+func (*terminal) shellCommand(int) string { return "" }
