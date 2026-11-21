@@ -551,32 +551,35 @@ test("the composer continues a chat with another agent", async ({ page }) => {
   await expect.poll(() => body).toEqual({ harness: "codex" })
 })
 
-test("a chat New session starts takes the folder's last model once", async ({ page }) => {
-  const posted: Record<string, unknown>[] = []
-  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: "", contentType: "application/x-ndjson" }))
-  await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({
+test("a starting chat shows the last agent choices before its worker is ready", async ({ page }) => {
+  await page.route("**/api/sessions", (route) => route.fulfill({
+    json: [{ ...session, id: "chat-one", transport: "acp", conversation_state: "starting", state: { ...session.state, running: false } }],
+  }))
+  await page.route("**/api/sessions/chat-one/conversation**", (route) =>
+    route.fulfill({ body: "", contentType: "application/x-ndjson" }),
+  )
+  await page.route("**/api/agent-snapshot?*", (route) => route.fulfill({
     json: {
-      configOptions: [{
-        type: "select", id: "model", name: "Model", category: "model", currentValue: "sonnet",
-        options: [{ value: "sonnet", name: "Sonnet" }, { value: "opus", name: "Opus" }],
-      }],
+      config: {
+        configOptions: [{
+          type: "select", id: "model", name: "Model", category: "model", currentValue: "sonnet",
+          options: [{ value: "sonnet", name: "Sonnet" }, { value: "opus", name: "Opus" }],
+        }],
+      },
+      commands: { availableCommands: [{ name: "review" }] },
     },
   }))
-  await page.route("**/api/sessions/*/conversation/config", (route) => {
-    posted.push(route.request().postDataJSON() as Record<string, unknown>)
+  let posted: unknown
+  await page.route("**/api/sessions/chat-one/conversation/config", (route) => {
+    posted = route.request().postDataJSON()
     return route.fulfill({ json: { accepted: true } })
   })
-  await page.addInitScript(({ directory }) => {
-    if (sessionStorage.getItem("seeded")) return
-    sessionStorage.setItem("seeded", "1")
-    localStorage.setItem(`agentpack.agentChoices.claude.${directory}`, JSON.stringify({ model: "opus" }))
-    sessionStorage.setItem("agentpack.applyChoices.chat-one", "1")
-  }, { directory: session.directory })
   await page.goto("/sessions/local/chat-one")
-  await expect.poll(() => posted).toEqual([{ key: "model", value: "opus" }])
-  await page.reload()
-  await expect(page.getByRole("textbox", { name: "Message" })).toBeVisible()
-  expect(posted).toHaveLength(1)
+  await expect(page.getByText("Provisional", { exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "Model", exact: true }).click()
+  await page.getByRole("menuitemradio", { name: "Opus" }).click()
+  await expect.poll(() => posted).toEqual({ key: "model", value: "opus" })
+  await expect(page.getByRole("button", { name: "Model", exact: true })).toHaveText("Opus")
 })
 
 test("a sent message shows before the gateway answers, and a failure puts it back in the composer", async ({ page }) => {

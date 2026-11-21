@@ -10,7 +10,6 @@ import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { StatusSlot } from "@/features/status/status-bar"
 import { pendingChatClaim } from "@/features/sessions/start"
 import { sessionsQuery } from "@/features/sessions/queries"
-import { loadAgentChoices, markNewChat, rememberAgentChoice, takeNewChat } from "@/features/sessions/choices"
 import { agentIds } from "@/features/sessions/rules"
 import { useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
@@ -22,7 +21,7 @@ import { newIntentID } from "@/lib/intent"
 import { hud } from "@/lib/hud"
 import { api, ApiError, LOCAL } from "@/lib/api"
 import { ompSettingsQuery, quickRoles } from "@/features/settings/omp-model"
-import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, mergeConversationPages, olderConversationPage, type ConversationPage } from "./queries"
+import { agentSnapshotQuery, archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, mergeConversationPages, olderConversationPage, type ConversationPage } from "./queries"
 import { configRole, dangerousMode, parseConfigOptions } from "./config-options"
 import type { LogEntry, ThreadItem } from "./model"
 import { helperSubagents, reduceThread } from "./reducer"
@@ -32,7 +31,7 @@ import { QueueChips } from "./queue-chips"
 import { subagentRunning } from "./subagent-card"
 import { ConversationInspector } from "./conversation-inspector"
 import { GitInspectorSections, GitToolbarActions, branchLine, useSessionGit } from "./session-git"
-import { advertises, agentCommands, applyHint, cachedCommands, commandSpans, filterAtHints, filterSlashHints, moveHint, rememberCommands, slashQuery, type ComposerHint } from "./composer-hints"
+import { advertises, agentCommands, applyHint, commandSpans, filterAtHints, filterSlashHints, moveHint, slashQuery, type ComposerHint } from "./composer-hints"
 import { ComposerHintsMenu } from "./composer-hints-menu"
 import { listDiffChanges } from "./diff-summary"
 import { loadAttachments, revokePreview, saveAttachments, uploadConversationBlob, type PendingAttachment } from "./upload-blob"
@@ -173,7 +172,9 @@ export default function ConversationPane({
   })
   const needsUpdate = conversationNeedsUpdate(conversationError, live ? configError : undefined)
   const archiveUnavailable = archiveUnavailableMessage(conversationError)
-  const configOptions = parseConfigOptions(configRaw)
+  const snapshot = useQuery(agentSnapshotQuery(machine, info)).data
+  const configOptions = parseConfigOptions(configRaw ?? snapshot?.config)
+  const provisionalConfig = starting && configOptions.length > 0
   const selectOptions = configOptions.filter((option) => option.type === "select")
   const permissionsOption = selectOptions.find((option) => configRole(option) === "permissions")
   const modelOption = selectOptions.find((option) => configRole(option) === "model")
@@ -337,16 +338,21 @@ export default function ConversationPane({
   if (goalSheet && !goalEditorLoaded) setGoalEditorLoaded(true)
   const goalActions = useGoalActions(machine, sessionId)
   const setConfig = useMutation({
-    mutationFn: ({ key, value }: { key: string; value: string | boolean }) =>
-      api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/config`, {
+    mutationFn: async ({ key, value }: { key: string; value: string | boolean }) => {
+      const claimed = await pendingChatClaim(sessionId)
+      return api(`/api/sessions/${encodeURIComponent(claimed?.id ?? sessionId)}/conversation/config`, {
         machine,
         method: "POST",
         body: { key, value },
-      }),
-    onSuccess: (_, { key }) =>
-      queryClient.invalidateQueries({ queryKey: ["conversation-config", machine, sessionId] }).then(() =>
-        setConfigValues((values) => withoutKey(values, key)),
-      ),
+      })
+    },
+    onSuccess: (_, { key }) => {
+      if (!starting) {
+        return queryClient.invalidateQueries({ queryKey: ["conversation-config", machine, sessionId] }).then(() =>
+          setConfigValues((values) => withoutKey(values, key)),
+        )
+      }
+    },
     onError: (error, { key, value }) => {
       setConfigValues((values) => withoutKey(values, key))
       hud.error(
@@ -355,25 +361,14 @@ export default function ConversationPane({
       )
     },
   })
-  function setConfigValue(key: string, value: string | boolean, remember = true) {
+  function setConfigValue(key: string, value: string | boolean) {
     setConfigValues((current) => ({ ...current, [key]: value }))
     setConfig.mutate({ key, value })
-    const option = configOptions.find((candidate) => candidate.id === key)
-    // Model and effort carry over to the next chat started in this folder with this agent.
-    if (remember && info && option && (configRole(option) === "model" || configRole(option) === "effort")) rememberAgentChoice(info.directory, info.harness, key, value)
   }
-  // A chat New session just started takes the folder's remembered model and effort, once.
   useEffect(() => {
-    if (!info || readOnly || configOptions.length === 0 || !takeNewChat(sessionId)) return
-    const remembered = loadAgentChoices(info.directory, info.harness)
-    for (const option of configOptions) {
-      const value = remembered[option.id]
-      const role = configRole(option)
-      if (value === undefined || value === option.value || (role !== "model" && role !== "effort")) continue
-      if (option.type === "select" && !option.items.some((item) => item.value === value)) continue
-      setConfigValue(option.id, value, false)
-    }
-  })
+    if (live && !setConfig.isPending && configRaw !== undefined) setConfigValues((values) => Object.keys(values).length ? {} : values)
+  }, [configRaw, live, setConfig.isPending])
+
   const fork = useMutation({
     mutationFn: () => {
       if (!info?.agent_session_id || !info.agent_capabilities?.sessionCapabilities?.fork) {
@@ -470,7 +465,6 @@ export default function ConversationPane({
   const switchAgent = useMutation({
     mutationFn: (harness: string) => api(`/api/sessions/${encodeURIComponent(sessionId)}/harness`, { machine, method: "POST", body: { harness } }),
     onSuccess: () => {
-      markNewChat(sessionId)
       return queryClient.invalidateQueries({ queryKey: sessionsQuery(machine, false).queryKey })
     },
     onError: (error, harness) =>
@@ -556,12 +550,8 @@ export default function ConversationPane({
     if (!canCompact || readOnly) return
     submitPrompt({ text: focus ? `/compact ${focus}` : "/compact", attachments: [], clearComposer: false })
   }
-  const advertised = agentCommands(entries)
-  const commands = advertised ?? cachedCommands(info?.harness ?? "")
+  const commands = agentCommands(entries) ?? snapshot?.commands?.availableCommands ?? []
   const canCompact = advertises(commands, "compact")
-  useEffect(() => {
-    if (advertised && info?.harness) rememberCommands(info.harness, advertised)
-  }, [advertised, info?.harness])
   const diffPaths = listDiffChanges(thread.items).map((change) => change.path)
   const caretAt = caret?.draft === draft ? caret.at : draft.length
   const beforeCaret = draft.slice(0, caretAt)
@@ -906,6 +896,7 @@ export default function ConversationPane({
                     </MenuContent>
                   </Menu>
                 )}
+                {provisionalConfig && <span className="text-(length:--fs-xs) text-(--fg3)">Provisional</span>}
                 {permissionsOption && (
                   <PopupSelect
                     label="Permissions"
@@ -926,7 +917,7 @@ export default function ConversationPane({
                           variant="ghost"
                           aria-label={effortOption ? "Model and effort" : modelOption?.name ?? "Options"}
                           title="Choose model and effort"
-                          disabled={setConfig.isPending || thread.needs_you || needsUpdate}
+                          disabled={setConfig.isPending || (!starting && thread.needs_you) || needsUpdate}
                           className="max-w-48 gap-(--s2)"
                         >
                           <span className="min-w-0 truncate">
@@ -951,7 +942,7 @@ export default function ConversationPane({
                             <MenuItem
                               key={role.id}
                               icon={<span aria-hidden className="size-[15px]" />}
-                              disabled={setConfig.isPending || thread.needs_you || needsUpdate}
+                              disabled={setConfig.isPending || (!starting && thread.needs_you) || needsUpdate}
                               onClick={() => {
                                 setConfigValue(modelOption.id, role.selector)
                                 if (role.level && effortOption?.items.some((item) => item.value === role.level)) setConfigValue(effortOption.id, role.level)
@@ -975,7 +966,7 @@ export default function ConversationPane({
                                 role="menuitemradio"
                                 aria-checked={selected}
                                 icon={selected ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
-                                disabled={setConfig.isPending || thread.needs_you || needsUpdate}
+                                disabled={setConfig.isPending || (!starting && thread.needs_you) || needsUpdate}
                                 onClick={() => setConfigValue(modelOption.id, item.value)}
                               >
                                 {item.label}
@@ -996,7 +987,7 @@ export default function ConversationPane({
                                 role="menuitemradio"
                                 aria-checked={selected}
                                 icon={selected ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
-                                disabled={setConfig.isPending || thread.needs_you || needsUpdate}
+                                disabled={setConfig.isPending || (!starting && thread.needs_you) || needsUpdate}
                                 onClick={() => setConfigValue(effortOption.id, item.value)}
                               >
                                 {item.label}
@@ -1015,7 +1006,7 @@ export default function ConversationPane({
                                 role="menuitemcheckbox"
                                 aria-checked={current === true}
                                 icon={current === true ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
-                                disabled={setConfig.isPending || thread.needs_you || needsUpdate}
+                                disabled={setConfig.isPending || (!starting && thread.needs_you) || needsUpdate}
                                 onClick={() => setConfigValue(option.id, current !== true)}
                               >
                                 {option.name}
@@ -1029,7 +1020,7 @@ export default function ConversationPane({
                                     role="menuitemradio"
                                     aria-checked={current === item.value}
                                     icon={current === item.value ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
-                                    disabled={setConfig.isPending || thread.needs_you || needsUpdate}
+                                    disabled={setConfig.isPending || (!starting && thread.needs_you) || needsUpdate}
                                     onClick={() => setConfigValue(option.id, item.value)}
                                   >
                                     {item.label}

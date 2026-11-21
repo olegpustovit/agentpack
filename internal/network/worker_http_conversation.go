@@ -152,24 +152,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 		}
 		writeJSON(w, map[string]bool{"accepted": true})
 	})
-	mux.HandleFunc("POST /conversation/config", func(w http.ResponseWriter, r *http.Request) {
-		var input struct {
-			Key   string          `json:"key"`
-			Value json.RawMessage `json:"value"`
-		}
-		if !readJSON(w, r, &input) {
-			return
-		}
-		if input.Key == "" || len(input.Value) == 0 {
-			http.Error(w, "key and value are required", http.StatusBadRequest)
-			return
-		}
-		if err := worker.conversationSession().SetConfigOption(r.Context(), input.Key, input.Value); err != nil {
-			http.Error(w, "could not set config", http.StatusConflict)
-			return
-		}
-		writeJSON(w, map[string]bool{"accepted": true})
-	})
+	mux.HandleFunc("POST /conversation/config", worker.receiveConfig)
 	mux.HandleFunc("GET /conversation/config-options", func(w http.ResponseWriter, r *http.Request) {
 		conv := worker.conversationSession()
 		if conv == nil {
@@ -220,6 +203,43 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 		}
 		writeJSON(w, map[string]string{"sha": sha})
 	})
+}
+
+func (worker *WorkerHTTP) receiveConfig(w http.ResponseWriter, r *http.Request) {
+	var input configSelection
+	if !readJSON(w, r, &input) {
+		return
+	}
+	if !input.valid() {
+		http.Error(w, "valid key and value are required", http.StatusBadRequest)
+		return
+	}
+	conv := worker.conversationSession()
+	if conv == nil {
+		http.Error(w, "conversation unavailable", http.StatusNotFound)
+		return
+	}
+	conv.configMu.Lock()
+	defer conv.configMu.Unlock()
+	conv.mu.Lock()
+	starting := conv.starting
+	conv.mu.Unlock()
+	if !starting {
+		if err := conv.SetConfigOption(r.Context(), input.Key, input.Value); err != nil {
+			http.Error(w, "could not set config", http.StatusConflict)
+			return
+		}
+	}
+	if worker.stateStore != nil {
+		if err := saveWantedConfig(r.Context(), worker.stateStore.DB, filepath.Base(worker.sessionDir), input, starting); err != nil {
+			configWriteError(w, r, err)
+			return
+		}
+	}
+	if !starting {
+		conv.logConfiguration()
+	}
+	writeJSON(w, map[string]bool{"accepted": true})
 }
 
 func (worker *WorkerHTTP) receivePrompt(w http.ResponseWriter, r *http.Request) {

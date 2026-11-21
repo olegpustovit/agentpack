@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest"
-import { afterEach } from "vitest"
-import { agentCommands, applyHint, cachedCommands, commandSpans, filterAtHints, filterSlashHints, moveHint, rememberCommands } from "./composer-hints"
+import { agentCommands, applyHint, commandSpans, filterAtHints, filterSlashHints, moveHint } from "./composer-hints"
 
 describe("composer hints", () => {
-  afterEach(() => localStorage.clear())
   it("lists the agent's own commands with the gateway's", () => {
     const commands = agentCommands([
       { kind: "available_commands_update", payload: { availableCommands: [{ name: "old" }] } },
@@ -29,12 +27,9 @@ describe("composer hints", () => {
     expect(spans.map((span) => span.text).join("")).toBe("/goal ship\nrun /review and /goal x /usr/bin")
   })
 
-  it("lists gateway commands before the first update and caches each agent's list", () => {
+  it("lists gateway commands before the first update", () => {
     expect(agentCommands([])).toBeUndefined()
     expect(filterSlashHints("/go").map((item) => item.value)).toEqual(["/goal"])
-    rememberCommands("claude", [{ name: "review" }])
-    expect(cachedCommands("claude")).toEqual([{ name: "review" }])
-    expect(cachedCommands("codex")).toEqual([])
   })
 
   it("filters @ file hints", () => {

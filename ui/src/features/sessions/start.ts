@@ -4,7 +4,7 @@ import { api, LOCAL } from "@/lib/api"
 import { newIntentID } from "@/lib/intent"
 import { hud } from "@/lib/hud"
 import type { SessionInfo } from "@/lib/api-types"
-import { markNewChat, saveStartChoices } from "./choices"
+import { saveStartChoices } from "./choices"
 import { sessionsQuery } from "./queries"
 import { reusesOperationId, startSessionBody, type SessionView } from "./rules"
 
@@ -63,7 +63,6 @@ export function useStartSession() {
         state: { interactive: false, running: false, restarting: false, rows: 0, columns: 0, exit_code: -1 },
         provisionalStart: "claim",
       }
-      if (!input.agentSessionId) markNewChat(input.id)
       queryClient.setQueryData<SessionInfo[]>(key, (current) => [info, ...(current ?? []).filter((row) => row.id !== info.id)])
       open(input.machine, input.id)
     },
@@ -71,7 +70,6 @@ export function useStartSession() {
       saveStartChoices(input.directory, { harness: input.harness, mode: input.mode, view: input.view, ...(input.worktree !== undefined && { workspace: input.worktree ? "new" : "folder" }) })
       if (input.id) {
         if (input.id !== info.id) {
-          if (!input.agentSessionId) markNewChat(info.id)
           if (onRoute(input.id)) open(input.machine, info.id)
         }
         queryClient.setQueryData<SessionInfo[]>(key, (current) => {

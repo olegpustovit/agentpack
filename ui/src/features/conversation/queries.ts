@@ -1,4 +1,7 @@
-import { ApiError, LOCAL, responseError, routeMissing } from "@/lib/api"
+import { queryOptions } from "@tanstack/react-query"
+import { api, ApiError, LOCAL, responseError, routeMissing } from "@/lib/api"
+import type { SessionInfo } from "@/lib/api-types"
+import type { AgentCommand } from "./composer-hints"
 import type { LogEntry } from "./model"
 
 class ArchiveUnavailableError extends ApiError {
@@ -75,4 +78,19 @@ export function conversationErrorMessage(machine: string, action: string, error:
   }
   const detail = error instanceof Error ? error.message : String(error)
   return `Couldn't ${action}: ${detail}`
+}
+
+export function agentSnapshotQuery(machine: string, info?: Pick<SessionInfo, "directory" | "definition_root" | "harness" | "mode">) {
+  const definition = info?.definition_root || info?.directory || ""
+  const harness = info?.harness ?? ""
+  const mode = info?.mode || "default"
+  return queryOptions({
+    queryKey: ["agent-snapshot", machine, harness, definition, mode] as const,
+    queryFn: () => api<{ config: unknown; commands?: { availableCommands?: AgentCommand[] } } | null>("/api/agent-snapshot", {
+      query: { owner: machine, harness, definition_root: definition, mode },
+    }),
+    enabled: Boolean(harness && definition),
+    staleTime: 60_000,
+    retry: false,
+  })
 }

@@ -24,12 +24,13 @@ const STATE_FAMILIES: Record<string, string[][]> = {
   blob_locations: [],
   mcp_credentials: [["mcp-credentials"]],
   mcp_credential_approvals: [["mcp-credentials"]],
+  agent_snapshots: [["agent-snapshot"]],
   omp_settings: [["omp-settings"]],
   // Web Push state feeds no query: this device reads its subscription from the browser.
   push_keys: [],
   push_subscriptions: [],
 }
-const ALL_STATE_FAMILIES = [["identity"], ["topology"], ["m", LOCAL, "sessions"], ["m", LOCAL, "limits"], ["m", LOCAL, "usage"], ["nodes"], ["diagnostics"], ["replication"], ["mcp-credentials"], ["omp-settings"]]
+const ALL_STATE_FAMILIES = [["identity"], ["topology"], ["m", LOCAL, "sessions"], ["m", LOCAL, "limits"], ["m", LOCAL, "usage"], ["nodes"], ["diagnostics"], ["replication"], ["mcp-credentials"], ["omp-settings"], ["agent-snapshot"]]
 
 // Unknown tables, or an older gateway that sends none, refetch every family.
 export function stateFamilies(tables: string[] | undefined): string[][] {

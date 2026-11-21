@@ -194,6 +194,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 		setup.AgentCapabilities.PromptCapabilities.Image
 	connMu.Unlock()
 	launch.Session.AgentSessionID = setup.AgentSessionID
+	conv.agentVersion = setup.AgentVersion
 	conv.agentSessionID = setup.AgentSessionID
 	conv.SetConfigOptions(setup.ConfigOptions)
 	conv.SetModes(setup.Modes)
@@ -410,6 +411,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	launch.Session.AgentSessionID = setup.AgentSessionID
 	conv.stderr = stderr
 	conv.agentExitCode = exitCode
+	conv.agentVersion = setup.AgentVersion
 	conv.agentSessionID = setup.AgentSessionID
 	conv.SetConfigOptions(setup.ConfigOptions)
 	conv.SetModes(setup.Modes)
@@ -435,6 +437,7 @@ func startStep(ctx context.Context, name string) func(error) {
 }
 
 type acpSessionSetup struct {
+	AgentVersion      string
 	AgentSessionID    string
 	ConfigOptions     json.RawMessage
 	Modes             json.RawMessage
@@ -500,6 +503,9 @@ func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection
 		return acpSessionSetup{}, err
 	}
 	setup := acpSessionSetup{AgentCapabilities: agentCapabilitiesView(initialize.AgentCapabilities)}
+	if initialize.AgentInfo != nil {
+		setup.AgentVersion = initialize.AgentInfo.Version
+	}
 	servers := tools.servers(initialize.AgentCapabilities.McpCapabilities)
 	if forkSessionID != "" {
 		if initialize.AgentCapabilities.SessionCapabilities.Fork == nil {

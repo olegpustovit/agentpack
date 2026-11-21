@@ -586,6 +586,7 @@ func (g *Gateway) Handler() http.Handler {
 			writeJSON(w, publicSession(info))
 		}
 	})
+	mux.HandleFunc("GET /api/agent-snapshot", g.serveAgentSnapshot)
 	mux.HandleFunc("GET /api/agent-sessions", g.serveAgentSessions)
 	mux.HandleFunc("GET /api/sessions/{id}/terminal", g.terminal)
 	mux.HandleFunc("GET /api/sessions/{id}/output", g.terminalData)
@@ -642,17 +643,7 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		proxyWorkerConversation(w, r, record, "/elicitation")
 	})
-	mux.HandleFunc("POST /api/sessions/{id}/conversation/config", func(w http.ResponseWriter, r *http.Request) {
-		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusNotFound)
-			return
-		}
-		if !authorizeACPWrite(w, r, record.Session) {
-			return
-		}
-		proxyWorkerConversation(w, r, record, "/config")
-	})
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/config", g.serveWantedConfig)
 	mux.HandleFunc("GET /api/sessions/{id}/conversation/config-options", func(w http.ResponseWriter, r *http.Request) {
 		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {

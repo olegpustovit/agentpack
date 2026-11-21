@@ -14,28 +14,8 @@ export type AgentCommand = { name?: string; description?: string; input?: { hint
 
 // The newest available_commands_update in the log is the agent's current list.
 export function agentCommands(entries: { kind: string; payload: unknown }[]): AgentCommand[] | undefined {
-  const update = entries.findLast((entry) => entry.kind === "available_commands_update")
+  const update = entries.findLast((entry) => entry.kind === "available_commands_update" && !(entry.payload as { _subagent?: string })?._subagent)
   return (update?.payload as { availableCommands?: AgentCommand[] } | undefined)?.availableCommands
-}
-
-const commandsKey = (harness: string) => `agentpack.commands.${harness}`
-
-// The last list each agent advertised, so the menu works before a chat's first update arrives.
-export function cachedCommands(harness: string): AgentCommand[] {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(commandsKey(harness)) ?? "[]")
-    return Array.isArray(value) ? (value as AgentCommand[]) : []
-  } catch {
-    return []
-  }
-}
-
-export function rememberCommands(harness: string, commands: AgentCommand[]) {
-  try {
-    localStorage.setItem(commandsKey(harness), JSON.stringify(commands.slice(0, 200)))
-  } catch {
-    // The menu then waits for the agent's own update.
-  }
 }
 
 export function advertises(commands: AgentCommand[], name: string): boolean {

@@ -284,7 +284,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 					return
 				}
 				switch r.Method + " " + r.URL.Path {
-				case "GET /conversation", "POST /conversation/prompt", "POST /conversation/prompt/images":
+				case "GET /conversation", "POST /conversation/prompt", "POST /conversation/prompt/images", "POST /conversation/config":
 					bootstrap.ServeHTTP(w, r)
 				default:
 					http.Error(w, "agent is starting", http.StatusServiceUnavailable)
@@ -393,6 +393,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		current.restoreGoal(launch.Session.Goal)
 		current.mu.Lock()
 		current.titleChange = persistTitle
+		current.snapshotChanged = func() { persistAgentSnapshot(ctx, store.DB, record.Session, current) }
 		current.goalChange = func(goal *Goal) {
 			persistSessionJSON(context.Background(), store.DB, record.ID, "goal", goal, goal == nil)
 		}
@@ -408,11 +409,23 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		}
 		current.mu.Unlock()
 		current.applyRememberedPermissions(ctx, store, permissionSettingKey)
+		wanted, err := savedConfig(ctx, store, record.Session)
+		if err != nil {
+			_, event := obs.Start(ctx, "worker", "load_saved_config")
+			event.Set("session_id", record.ID)
+			event.Fail(err)
+			event.End()
+		} else {
+			current.applyWantedConfig(ctx, wanted)
+		}
+		current.logConfiguration()
 	}
 	if conversation != nil {
+		conversation.configMu.Lock()
 		wireConversation(conversation)
 		conversation.SetStateChange(liveState, persistConversationState(conversation))
 		conversation.ResumeTurns()
+		conversation.configMu.Unlock()
 	}
 	handler, err = WorkerHandler(ctx, session, conversation, record.Secret, directory)
 	if err != nil {

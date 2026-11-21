@@ -28,6 +28,9 @@ type ConversationSession struct {
 	initialized       chan struct{}
 	configOptions     json.RawMessage
 	modes             json.RawMessage
+	agentCommands     json.RawMessage
+	agentVersion      string
+	snapshotChanged   func()
 	agentCapabilities *AgentCapabilities
 	agentSessionID    string
 	stateChange       func(string)
@@ -46,6 +49,7 @@ type ConversationSession struct {
 
 	// Queue and goal state (conversation_queue.go, conversation_goal.go). queueMu orders queue
 	// changes with their log entries; it is taken before mu and never inside a log callback.
+	configMu               sync.Mutex
 	queueMu                sync.Mutex
 	queue                  []queuedPrompt
 	seenPrompts            map[string]struct{}
@@ -93,6 +97,7 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 	entries := log.SetOnAppend(session.applyLogEntry)
 	for _, entry := range entries {
 		session.observeEntry(entry)
+		session.applyConfigUpdate(entry)
 		session.replayEntry(entry)
 		if entry.Kind == "agent_exit" {
 			session.agentExited = true
@@ -143,7 +148,14 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	session.goalDirty, session.goalPauseDue = false, false
 	subagents, subagentsChanged := session.applySubagent(entry)
 	subagentsChange := session.subagentsChange
+	snapshotChanged := session.snapshotChanged
 	session.mu.Unlock()
+	if snapshotChanged != nil && entrySubagent(entry.Payload) == "" {
+		switch entry.Kind {
+		case "agent_configuration", "config_option_update", "current_mode_update", "available_commands_update":
+			snapshotChanged()
+		}
+	}
 	if settleDelay > 0 {
 		session.scheduleUnpromptedSettle(settleDelay, settleGen, "end_turn", settleAfter)
 	}
@@ -190,6 +202,8 @@ func (session *ConversationSession) applyConfigUpdate(entry acp.LogEntry) {
 		return
 	}
 	switch entry.Kind {
+	case "available_commands_update":
+		session.agentCommands = entry.Payload
 	case "config_option_update":
 		var update struct {
 			ConfigOptions json.RawMessage `json:"configOptions"`
@@ -633,6 +647,10 @@ func (session *ConversationSession) SetAgentCapabilities(capabilities *AgentCapa
 func (session *ConversationSession) ConfigJSON() json.RawMessage {
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	return session.configJSONLocked()
+}
+
+func (session *ConversationSession) configJSONLocked() json.RawMessage {
 	options := session.configOptions
 	if session.clientMode != "" {
 		options = session.configWithClientBypass()

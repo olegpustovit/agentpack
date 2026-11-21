@@ -7,7 +7,7 @@ const MAX_AGE = 24 * 60 * 60 * 1000
 const SAVE_DELAY = 10_000
 const CHAT_BYTES = 256 << 10
 const CHATS_KEPT = 3
-const shellQueries = new Set(["config", "status", "identity", "nodes", "drafts"])
+const shellQueries = new Set(["config", "status", "identity", "nodes", "drafts", "agent-snapshot"])
 const machineLists = new Set(["sessions", "projects"])
 
 export const cacheBuildID = document.querySelector<HTMLScriptElement>('script[type="module"][src]')?.src.match(/index-(.+)\.js$/)?.[1]

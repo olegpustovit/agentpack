@@ -6,8 +6,8 @@ import { GitFork, GitPullRequest, Plus, Search, Settings, Square, Minimize2 } fr
 import { Kbd } from "@/components/kit/feedback"
 import { menuRow, menuSurface } from "@/components/kit/overlays"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
-import type { ConversationPage } from "@/features/conversation/queries"
-import { advertises, agentCommands, cachedCommands } from "@/features/conversation/composer-hints"
+import { agentSnapshotQuery, type ConversationPage } from "@/features/conversation/queries"
+import { advertises, agentCommands } from "@/features/conversation/composer-hints"
 import { useSessionCommands } from "@/features/sessions/actions"
 import { rowKey, sessionLabel, type ListedSession } from "@/features/sessions/group"
 import { isWorktreePath } from "@/features/sessions/git"
@@ -165,7 +165,8 @@ export default function CommandPalette({
     }
     // The same test the open chat applies: the agent advertised /compact, in this chat or last time.
     const page = queryClient.getQueryData<ConversationPage>(["conversation", session.machine, session.id])
-    if (live && chat && advertises(agentCommands(page?.entries ?? []) ?? cachedCommands(session.harness), "compact")) {
+    const snapshot = queryClient.getQueryData(agentSnapshotQuery(session.machine, session).queryKey)
+    if (live && chat && advertises(agentCommands(page?.entries ?? []) ?? snapshot?.commands?.availableCommands ?? [], "compact")) {
       list.push({
         id: "compact",
         group: "This session",
