@@ -31,11 +31,11 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 }
 
 func prepareSessionPlugins(ctx base.LaunchContext) (func([]byte) []byte, error) {
-	plugins, err := stagedPluginDirs(ctx)
+	pluginRoot, err := paths.StagingPluginsDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return nil, err
 	}
-	pluginRoot, err := paths.StagingPluginsDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	plugins, err := stagedPluginDirs(pluginRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -63,11 +63,7 @@ func claudeCodeExecutable() (string, error) {
 	return base.ResolveBinary(base.Claude.Binary())
 }
 
-func stagedPluginDirs(ctx base.LaunchContext) ([]string, error) {
-	plugins, err := paths.StagingPluginsDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
-	if err != nil {
-		return nil, err
-	}
+func stagedPluginDirs(plugins string) ([]string, error) {
 	entries, err := os.ReadDir(plugins)
 	if err != nil {
 		if os.IsNotExist(err) {
