@@ -330,9 +330,7 @@ func (g *Gateway) readSessionGit(ctx context.Context, info SessionInfo) sessionG
 		result.Base = status.Upstream
 	}
 	if status.Head != "" {
-		if stat, err := gitLine(ctx, info.Directory, "diff", "--shortstat", since); err == nil {
-			result.Added, result.Deleted = shortstat(stat)
-		}
+		result.Added, result.Deleted = sessionDiffstat(ctx, info.Directory, since, status)
 	}
 	if _, err := exec.LookPath("gh"); err == nil {
 		result.GH = true
@@ -341,6 +339,70 @@ func (g *Gateway) readSessionGit(ctx context.Context, info SessionInfo) sessionG
 		}
 	}
 	return result
+}
+
+type diffstatKey struct {
+	directory, base, head string
+	indexTime             time.Time
+	indexSize             int64
+}
+
+type cachedDiffstat struct {
+	index          os.FileInfo
+	added, deleted int
+}
+
+var sessionDiffstats struct {
+	sync.Mutex
+	values map[diffstatKey]cachedDiffstat
+}
+
+func sessionDiffstat(ctx context.Context, dir, since string, status worktreeStatus) (int, int) {
+	args := []string{"diff", "--shortstat", since}
+	key := diffstatKey{directory: dir, base: since, head: status.Head}
+	cacheable := !status.unstaged
+	var index os.FileInfo
+	var indexPath string
+	if cacheable && status.Dirty != 0 {
+		indexPath, _ = gitLine(ctx, dir, "rev-parse", "--path-format=absolute", "--git-path", "index")
+		index, _ = os.Stat(indexPath)
+		cacheable = index != nil && index.Mode().IsRegular()
+		if cacheable {
+			key.indexTime, key.indexSize = index.ModTime(), index.Size()
+			args = []string{"diff", "--cached", "--shortstat", since}
+		}
+	} else if cacheable {
+		if since == "HEAD" {
+			return 0, 0
+		}
+		args = []string{"diff", "--shortstat", since, status.Head}
+	}
+	if cacheable {
+		sessionDiffstats.Lock()
+		cached, ok := sessionDiffstats.values[key]
+		sessionDiffstats.Unlock()
+		if ok && (index == nil || cached.index != nil && os.SameFile(index, cached.index)) {
+			return cached.added, cached.deleted
+		}
+	}
+	stat, err := gitLine(ctx, dir, args...)
+	if err != nil {
+		return 0, 0
+	}
+	added, deleted := shortstat(stat)
+	if index != nil && cacheable {
+		current, err := os.Stat(indexPath)
+		cacheable = err == nil && os.SameFile(index, current) && current.ModTime() == key.indexTime && current.Size() == key.indexSize
+	}
+	if cacheable {
+		sessionDiffstats.Lock()
+		if len(sessionDiffstats.values) >= 128 || sessionDiffstats.values == nil {
+			sessionDiffstats.values = make(map[diffstatKey]cachedDiffstat)
+		}
+		sessionDiffstats.values[key] = cachedDiffstat{index, added, deleted}
+		sessionDiffstats.Unlock()
+	}
+	return added, deleted
 }
 
 type commitGraph struct {

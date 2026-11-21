@@ -379,6 +379,7 @@ type worktreeStatus struct {
 	Behind    int    `json:"behind"`
 	Dirty     int    `json:"dirty"`
 	Untracked int    `json:"untracked"`
+	unstaged  bool
 }
 
 // readStatus parses git status --porcelain=v2 --branch. Ahead and behind are against the upstream.
@@ -411,6 +412,7 @@ func readStatus(ctx context.Context, dir string) (worktreeStatus, error) {
 			status.Untracked++
 		case line != "" && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "! "):
 			status.Dirty++
+			status.unstaged = status.unstaged || len(line) < 4 || line[3] != '.' || line[0] == 'u'
 		}
 	}
 	if status.Head == "(initial)" {

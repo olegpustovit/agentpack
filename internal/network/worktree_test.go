@@ -400,3 +400,30 @@ func TestClientChatClaimPreparesWorktreeOnce(t *testing.T) {
 		t.Fatalf("expected main and one worktree, got %+v (%v)", records, err)
 	}
 }
+
+func TestSessionDiffstatRefreshesIndexAndUnstagedEdits(t *testing.T) {
+	dir := gitRepo(t)
+	path := filepath.Join(dir, "README.md")
+	check := func(want int) {
+		t.Helper()
+		status, err := readStatus(t.Context(), dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		added, deleted := sessionDiffstat(t.Context(), dir, "HEAD", status)
+		if added != want || deleted != 0 {
+			t.Fatalf("lines changed = +%d -%d, want +%d", added, deleted, want)
+		}
+	}
+	check(0)
+	write(t, path, "hello\nsecond\n")
+	git(t, dir, "add", "README.md")
+	check(1)
+	check(1)
+	write(t, path, "hello\nsecond\nthird\n")
+	check(2)
+	git(t, dir, "add", "README.md")
+	check(2)
+	write(t, path, "hello\nsecond\nthird\nfourth\n")
+	check(3)
+}
