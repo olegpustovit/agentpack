@@ -384,6 +384,7 @@ func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ch, unsubscribe := g.subscribe()
+	conversation := g.followConversation(r)
 	defer unsubscribe()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
@@ -418,6 +419,20 @@ func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
 			continue
 		case <-ping.C:
 			message.AppendComment("ping")
+		case frame, open := <-conversation:
+			if !open {
+				conversation = nil
+				continue
+			}
+			message.Type = sse.Type(frame.event)
+			if frame.seq > 0 {
+				message.ID = sse.ID(r.URL.Query().Get("session") + ":" + strconv.FormatInt(frame.seq, 10))
+			}
+			if len(frame.body) == 0 {
+				message.AppendData("{}")
+			} else {
+				message.AppendData(string(frame.body))
+			}
 		case msg, open := <-ch:
 			if !open {
 				return

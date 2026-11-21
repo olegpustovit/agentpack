@@ -788,3 +788,34 @@ test("the offline cache writes changed queries and skips a streaming chat", asyn
   expect(status(entries)).toBeDefined()
   expect(status(await readCache())).toEqual(status(entries))
 })
+
+test("a live conversation uses the shared events connection", async ({ page }) => {
+  const cursors: string[] = []
+  let perChatStreams = 0
+  await page.route("**/api/config", (route) => route.fulfill({ json: { conversation_events: true, ui_build_id: "multiplexed" } }))
+  await page.route("**/api/sessions/chat-one/conversation**", (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname.endsWith("/config-options")) return route.fulfill({ json: [] })
+    if (url.searchParams.has("stream")) {
+      perChatStreams++
+      return route.abort()
+    }
+    return route.fulfill({
+      body: '{"seq":5,"ts":1,"kind":"agent_message_chunk","payload":{"text":{"text":"Local snapshot"}}}\n',
+      contentType: "application/x-ndjson",
+    })
+  })
+  await page.route("**/api/events?*", (route) => {
+    const url = new URL(route.request().url())
+    if (url.searchParams.get("session") !== "chat-one") return route.fallback()
+    cursors.push(url.searchParams.get("since") ?? "")
+    return route.fulfill({
+      body: 'event: conversation\nid: chat-one:6\ndata: {"seq":6,"ts":2,"kind":"agent_message_chunk","payload":{"text":{"text":" and live tail"}}}\n\n',
+      contentType: "text/event-stream",
+    })
+  })
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByText("Local snapshot and live tail")).toBeVisible()
+  expect(cursors[0]).toBe("5")
+  expect(perChatStreams).toBe(0)
+})

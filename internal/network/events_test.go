@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/olegpustovit/agentpack/internal/acp"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +15,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/tmaxmax/go-sse"
 )
 
 func eventsGateway(topics []eventTopic, nodes func(context.Context) ([]TailnetNode, error), target func(context.Context, string) (*url.URL, error)) *Gateway {
@@ -308,4 +310,56 @@ func TestStreamingProgressOnASessionRowIsNotASessionsChange(t *testing.T) {
 	if tables := g.changedTables(t.Context(), strconv.FormatInt(before, 10), strconv.FormatInt(after, 10)); !reflect.DeepEqual(tables, []string{"conversation_events"}) {
 		t.Fatalf("a streamed chunk reported %v", tables)
 	}
+}
+
+func TestEventsCarriesConversationFromItsOwnResumeCursor(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	g.events.topics = []eventTopic{}
+	g.events.nodes = func(context.Context) ([]TailnetNode, error) { return nil, nil }
+	const id = "session-multiplexed"
+	if err := upsertSession(t.Context(), g.auth.store.DB, SessionInfo{ID: id, Transport: "acp", ConversationState: "starting"}); err != nil {
+		t.Fatal(err)
+	}
+	entries := []acp.LogEntry{
+		{Seq: 1, Kind: "queued_prompt", Payload: json.RawMessage(`{}`)},
+		{Seq: 2, Kind: "queued_prompt", Payload: json.RawMessage(`{}`)},
+	}
+	if err := persistConversationChanges(t.Context(), g.auth.store.DB, id, acp.LogChanges{Entries: entries, LastSeq: 2}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(g.serveEvents))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/api/events?owner=local&session="+id+"&since=0", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+g.local.Secret)
+	request.Header.Set("Last-Event-ID", id+":1")
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	g.emitEvent(eventMessage{Topic: "sessions"})
+	var receivedConversation, receivedState bool
+	for event, err := range sse.Read(response.Body, nil) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == "conversation" {
+			if event.LastEventID != id+":2" || !strings.Contains(event.Data, `"seq":2`) {
+				t.Fatalf("conversation did not resume at sequence 2: %+v", event)
+			}
+			receivedConversation = true
+		}
+		if event.Type == "" && strings.Contains(event.Data, `"topic":"sessions"`) {
+			receivedState = true
+		}
+		if receivedConversation && receivedState {
+			return
+		}
+	}
+	t.Fatal("one stream did not carry both event types")
 }

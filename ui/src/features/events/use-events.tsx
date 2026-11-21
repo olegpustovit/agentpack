@@ -1,6 +1,8 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
-import { useQueryClient, type QueryClient } from "@tanstack/react-query"
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react"
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { LOCAL } from "@/lib/api"
+import { configQuery } from "@/lib/config"
+import type { ConversationPage } from "@/features/conversation/queries"
 
 type EventMessage = { topic: string; node?: string; tables?: string[] }
 
@@ -70,32 +72,97 @@ function dispatch(queryClient: QueryClient, msg: EventMessage) {
   invalidate(queryClient, ["m", msg.node || LOCAL, msg.topic])
 }
 
-// Mounted once in _app. The stream closes while the tab is hidden and reopens when it is visible.
+type ConversationSubscription = {
+  machine: string
+  sessionId: string
+  onEntry: (data: string) => void
+  onTruncated: () => void
+  onConnection: (connected: boolean) => void
+  onFallback: () => void
+}
+
+const ConversationEventsContext = createContext<((subscription: ConversationSubscription) => () => void) | undefined>(undefined)
+
+export function useConversationEvents() {
+  return useContext(ConversationEventsContext)
+}
+
+// Mounted once in _app. A chat subscription changes the channels on this same browser stream.
 export function EventsProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
+  const multiplexed = useQuery(configQuery).data?.conversation_events === true
   const [connected, setConnected] = useState(false)
+  const [conversation, setConversation] = useState<ConversationSubscription>()
+  const catchUp = useRef(false)
+  const subscribe = useCallback((subscription: ConversationSubscription) => {
+    setConversation(subscription)
+    return () => setConversation((current) => current === subscription ? undefined : current)
+  }, [])
   useEffect(() => {
     let source: EventSource | null = null
-    const open = () => {
-      if (source) return
-      source = new EventSource("/api/events")
-      source.onopen = () => setConnected(true)
-      source.onerror = () => setConnected(false)
-      source.onmessage = (event: MessageEvent<string>) =>
-        dispatch(queryClient, JSON.parse(event.data) as EventMessage)
+    let retry: ReturnType<typeof setTimeout> | undefined
+    const chat = multiplexed ? conversation : undefined
+    const connection = (open: boolean) => {
+      setConnected(open)
+      chat?.onConnection(open)
     }
     const close = () => {
+      clearTimeout(retry)
       source?.close()
       source = null
-      setConnected(false)
+      connection(false)
     }
-    const onVisibility = () => (document.hidden ? close() : open())
+    const open = () => {
+      if (source) return
+      let path = "/api/events"
+      if (chat) {
+        const key = ["conversation", chat.machine, chat.sessionId]
+        const since = queryClient.getQueryData<ConversationPage>(key)?.entries.at(-1)?.seq ?? 0
+        const query = new URLSearchParams({ session: chat.sessionId, owner: chat.machine, since: String(since) })
+        path += `?${query}`
+      }
+      source = new EventSource(path)
+      source.onopen = () => {
+        connection(true)
+        if (catchUp.current) {
+          catchUp.current = false
+          for (const key of stateFamilies(undefined)) invalidate(queryClient, key)
+        }
+      }
+      source.onerror = () => {
+        connection(false)
+        catchUp.current = true
+        if (chat) {
+          close()
+          if (!document.hidden) retry = setTimeout(open, 1000)
+        }
+      }
+      source.onmessage = (event: MessageEvent<string>) =>
+        dispatch(queryClient, JSON.parse(event.data) as EventMessage)
+      if (chat) {
+        source.addEventListener("conversation", (event: MessageEvent<string>) => chat.onEntry(event.data))
+        source.addEventListener("conversation_truncated", chat.onTruncated)
+        source.addEventListener("conversation_fallback", chat.onFallback)
+      }
+    }
+    const onVisibility = () => {
+      if (document.hidden) {
+        catchUp.current = true
+        close()
+      } else {
+        open()
+      }
+    }
     onVisibility()
     document.addEventListener("visibilitychange", onVisibility)
     return () => {
       document.removeEventListener("visibilitychange", onVisibility)
       close()
     }
-  }, [queryClient])
-  return <EventsContext value={connected}>{children}</EventsContext>
+  }, [conversation, multiplexed, queryClient])
+  return (
+    <EventsContext value={connected}>
+      <ConversationEventsContext value={multiplexed ? subscribe : undefined}>{children}</ConversationEventsContext>
+    </EventsContext>
+  )
 }

@@ -234,7 +234,7 @@ func (g *Gateway) Handler() http.Handler {
 		buildID = uiBuildID(files)
 	}
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]string{"ui_build_id": buildID})
+		writeJSON(w, map[string]any{"ui_build_id": buildID, "conversation_events": true})
 	})
 	g.registerSettings(mux)
 	g.registerPush(mux)

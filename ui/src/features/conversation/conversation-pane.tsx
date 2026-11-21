@@ -11,6 +11,7 @@ import { StatusSlot } from "@/features/status/status-bar"
 import { pendingChatClaim } from "@/features/sessions/start"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { agentIds } from "@/features/sessions/rules"
+import { useConversationEvents } from "@/features/events/use-events"
 import { useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName, relativeTime } from "@/lib/format"
@@ -185,9 +186,48 @@ export default function ConversationPane({
   const extraOptions = configOptions.filter((option) => configRole(option) === "other")
   const tailLoaded = tail !== undefined
   const streamReady = live || (starting && info?.provisionalStart !== "claim")
+  const subscribe = useConversationEvents()
+  const [legacyStream, setLegacyStream] = useState(false)
   useEffect(() => {
     if (!streamReady || needsUpdate || !tailLoaded) return
     const key = ["conversation", machine, sessionId]
+    const onEntry = (data: string) => {
+      let entry: LogEntry
+      try {
+        entry = JSON.parse(data) as LogEntry
+      } catch {
+        return
+      }
+      queryClient.setQueryData<ConversationPage>(key, (current) => {
+        const rows = current?.entries ?? []
+        if (entry.seq <= (rows.at(-1)?.seq ?? 0)) return current
+        return { entries: [...rows, entry], truncated: current?.truncated ?? false }
+      })
+    }
+    const onTruncated = () => {
+      queryClient.setQueryData<ConversationPage>(key, (current) => current && !current.truncated ? { ...current, truncated: true } : current)
+    }
+    if (subscribe && !legacyStream) {
+      let untrack: (() => void) | undefined
+      const unsubscribe = subscribe({
+        machine, sessionId, onEntry, onTruncated,
+        onConnection: (connected) => {
+          if (connected) {
+            if (!untrack) untrack = trackStreamingQuery(key)
+          } else {
+            untrack?.()
+            untrack = undefined
+          }
+          setStreamConnected(connected)
+        },
+        onFallback: () => setLegacyStream(true),
+      })
+      return () => {
+        unsubscribe()
+        untrack?.()
+        untrack = undefined
+      }
+    }
     let source: EventSource | undefined
     let untrack: (() => void) | undefined
     const close = () => {
@@ -211,23 +251,8 @@ export default function ConversationPane({
       untrack = trackStreamingQuery(key)
       source.onopen = () => setStreamConnected(true)
       source.onerror = () => setStreamConnected(false)
-      source.onmessage = (event) => {
-        if (!event.data) return
-        let entry: LogEntry
-        try {
-          entry = JSON.parse(event.data) as LogEntry
-        } catch {
-          return
-        }
-        queryClient.setQueryData<ConversationPage>(key, (current) => {
-          const rows = current?.entries ?? []
-          if (entry.seq <= (rows.at(-1)?.seq ?? 0)) return current
-          return { entries: [...rows, entry], truncated: current?.truncated ?? false }
-        })
-      }
-      source.addEventListener("truncated", () => {
-        queryClient.setQueryData<ConversationPage>(key, (current) => current && { ...current, truncated: true })
-      })
+      source.onmessage = (event) => onEntry(event.data)
+      source.addEventListener("truncated", onTruncated)
     }
     document.addEventListener("visibilitychange", syncVisibility)
     syncVisibility()
@@ -235,7 +260,7 @@ export default function ConversationPane({
       document.removeEventListener("visibilitychange", syncVisibility)
       close()
     }
-  }, [streamReady, machine, needsUpdate, queryClient, sessionId, tailLoaded])
+  }, [legacyStream, machine, needsUpdate, queryClient, sessionId, streamReady, subscribe, tailLoaded])
 
   const parent = reduceThread(historyKey, entries)
   const subagent = subagentId ? parent.subagents?.[subagentId] : undefined
