@@ -18,7 +18,7 @@ import { harnessName, relativeTime } from "@/lib/format"
 import { clock, goalElapsedMs, liveGoal } from "@/lib/goal"
 import { useNow } from "@/lib/use-now"
 import { cacheBuildID, restoreChatQuery, trackStreamingQuery } from "@/lib/persist"
-import { newIntentID, useIntent } from "@/lib/intent"
+import { useIntent } from "@/lib/intent"
 import { hud } from "@/lib/hud"
 import { api, ApiError, LOCAL } from "@/lib/api"
 import { configQuery } from "@/lib/config"
@@ -453,9 +453,9 @@ export default function ConversationPane({
     if (pending.length !== pendingSends.length) setPendingSends(pending)
   }, [entries, pendingSends, reportTimings])
   const discardSend = (id: string) => setPendingSends((pending) => pending.filter((item) => item.id !== id))
-  const send = useMutation({
+  const send = useIntent({
     scope: { id: sessionId },
-    mutationFn: async (input: PromptIntent) => {
+    request: async (input: SendInput, id) => {
       const claimed = await pendingChatClaim(sessionId)
       const target = claimed?.id ?? sessionId
       const request = promptRequest(
@@ -467,32 +467,34 @@ export default function ConversationPane({
       return api<{ queued?: string }>(`/api/sessions/${encodeURIComponent(target)}/conversation/${request.path}`, {
         machine,
         method: "POST",
-        idempotencyKey: input.id,
+        idempotencyKey: id,
         body: input.steer ? { ...request.body, steer: true } : request.body,
       })
     },
     // The composer clears as the message is sent; a failure puts it back.
-    onMutate: (input) => {
+    apply: (input, id) => {
       const startedAt = performance.now()
-      setPendingSends((pending) => [...pending.filter((item) => item.id !== input.id), { ...input, startedAt }])
-      if (!input.clearComposer) return
-      setDraft("")
-      setAttachments(() => [])
+      setPendingSends((pending) => [...pending.filter((item) => item.id !== id), { ...input, id, startedAt }])
+      if (input.clearComposer) {
+        setDraft("")
+        setAttachments(() => [])
+      }
+      return () => {
+        discardSend(id)
+        if (input.clearComposer) setDraft((current) => current || input.text)
+      }
     },
-    onSuccess: (result, input) => {
-      if (result?.queued !== input.id) discardSend(input.id)
+    accepted: (result, _input, id) => {
+      if (result?.queued !== id) discardSend(id)
     },
-    onError: (error, input) => {
-      discardSend(input.id)
-      if (input.clearComposer) setDraft((current) => current || input.text)
+    failed: (error, input, retry) => {
       hud.error(
         conversationErrorMessage(machine, input.steer ? "steer the agent" : input.attachments.length > 1 ? "send multiple images" : "send a message", error),
-        conversationNeedsUpdate(error) ? undefined : () => send.mutate(input),
+        conversationNeedsUpdate(error) ? undefined : retry,
       )
     },
   })
-  const submitPrompt = (input: SendInput, options?: Parameters<typeof send.mutate>[1]) =>
-    send.mutate({ ...input, id: newIntentID() }, options)
+  const submitPrompt = send.mutate
   const resume = useIntent({
     request: (text: string, idempotencyKey) => api<SessionInfo & { queued?: string }>(
       `/api/sessions/${encodeURIComponent(sessionId)}/resume`,
@@ -1170,7 +1172,7 @@ export default function ConversationPane({
           compact={canCompact ? compact : undefined}
           compactReason={canCompact ? undefined : `${agentName} doesn't offer compaction.`}
           onOpenSubagent={openSubagent}
-          onSendComments={(text, sent) => submitPrompt({ text, attachments: [], clearComposer: false }, { onSuccess: sent })}
+          onSendComments={(text, sent) => submitPrompt({ text, attachments: [], clearComposer: false }, undefined, { onSuccess: sent })}
           sendingComments={send.isPending}
           git={<GitInspectorSections machine={machine} sessionId={sessionId} git={git} readOnly={readOnly || needsUpdate} onAskRebase={askAgent} />}
         />

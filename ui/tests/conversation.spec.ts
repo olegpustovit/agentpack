@@ -650,6 +650,7 @@ test("a starting chat shows the last agent choices before its worker is ready", 
 })
 
 test("a sent message shows before the gateway answers, and a failure puts it back in the composer", async ({ page }) => {
+  const ids: Array<string | undefined> = []
   let release: (() => void) | undefined
   const idle = [
     { seq: 1, ts: 1000, kind: "prompt", payload: { text: { text: "Go" } } },
@@ -658,6 +659,7 @@ test("a sent message shows before the gateway answers, and a failure puts it bac
   await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: idle, contentType: "application/x-ndjson" }))
   await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
   await page.route("**/api/sessions/*/conversation/prompt", (route) => new Promise<void>((resolve) => {
+    ids.push(route.request().headers()["idempotency-key"])
     release = () => resolve(route.fulfill({ status: 500, body: "agent unavailable" }))
   }))
   await page.goto("/sessions/local/chat-one")
@@ -671,6 +673,14 @@ test("a sent message shows before the gateway answers, and a failure puts it bac
   release!()
   await expect(message).toHaveValue("ship the fix")
   await expect(thread.getByText("ship the fix")).toHaveCount(0)
+  await page.getByRole("button", { name: "Retry", exact: true }).click()
+  await expect(message).toHaveValue("")
+  await expect(thread.getByText("ship the fix")).toBeVisible()
+  await expect.poll(() => ids.length).toBe(2)
+  expect(ids[0]).toMatch(/^[a-f0-9]{32}$/)
+  expect(ids[1]).toBe(ids[0])
+  release!()
+  await expect(message).toHaveValue("ship the fix")
 })
 
 test("the replicated session row shows a turn before its log arrives", async ({ page }) => {

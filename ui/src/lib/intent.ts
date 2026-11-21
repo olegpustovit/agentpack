@@ -14,14 +14,17 @@ export function useIntent<Input, Result>({
   accepted,
   failed,
   retryID,
+  scope,
 }: {
   request: (input: Input, id: string) => Promise<Result>
   apply?: (input: Input, id: string) => void | (() => void)
   accepted?: (result: Result, input: Input, id: string) => void | Promise<unknown>
+  scope?: { id: string }
   retryID?: (error: Error, id: string) => string
   failed: (error: Error, input: Input, retry: () => void) => void
 }) {
   const mutation = useMutation({
+    scope,
     mutationFn: ({ input, id }: Intent<Input>) => request(input, id),
     onMutate: ({ input, id }) => apply?.(input, id),
     onSuccess: (result, { input, id }) => accepted?.(result, input, id),
@@ -34,7 +37,8 @@ export function useIntent<Input, Result>({
   return {
     ...mutation,
     input: mutation.variables?.input,
-    mutate: (input: Input, id = newIntentID()) => mutation.mutate({ input, id }),
+    mutate: (input: Input, id = newIntentID(), options?: Parameters<typeof mutation.mutate>[1]) =>
+      mutation.mutate({ input, id }, options),
     mutateAsync: (input: Input) => mutation.mutateAsync({ input, id: newIntentID() }),
   }
 }
