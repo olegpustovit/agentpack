@@ -92,6 +92,7 @@ export type ToolDiffBlock = {
   path?: string
   oldText?: string
   newText?: string
+  newTextFromInput?: boolean
   content?: { type?: string; text?: string }
 }
 

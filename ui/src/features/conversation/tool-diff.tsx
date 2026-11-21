@@ -187,7 +187,7 @@ function diffBlock(oldText: string, newText: string, language?: string, review?:
 
 // With `review` this is the inspector's copy, which is not a scroll target, so it carries no anchor id.
 export function ToolDiffBody({ content, toolId, review }: { content: ToolDiffBlock[] | undefined; toolId?: string; review?: DiffReview }) {
-  const diffs = (content ?? []).filter((block) => block.type === "diff" && (block.oldText || block.newText))
+  const diffs = (content ?? []).filter((block) => block.type === "diff" && !block.newTextFromInput && (block.oldText || block.newText))
   if (diffs.length === 0) return null
   return (
     <div className="mt-(--s2) flex flex-col gap-(--s3)">

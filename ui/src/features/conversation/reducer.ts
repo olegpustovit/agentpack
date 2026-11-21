@@ -31,6 +31,17 @@ function toolID(payload: unknown): string {
   return body.toolCallId ?? ""
 }
 
+function expandToolDiffs(tool: ToolPayload): ToolPayload {
+  const text = (tool.rawInput as { content?: unknown } | undefined)?.content
+  if (typeof text !== "string" || !Array.isArray(tool.content) || !tool.content.some((block) => block?.newTextFromInput)) return tool
+  return {
+    ...tool,
+    content: tool.content.map((block) => block.type === "diff" && block.newTextFromInput
+      ? { ...block, newTextFromInput: undefined, newText: text }
+      : block),
+  }
+}
+
 function mergeTextChunks(a: unknown, b: unknown): unknown {
   const left = a as UserMessagePayload
   const right = b as UserMessagePayload
@@ -178,7 +189,7 @@ class ThreadReducer {
         break
       case "tool_call": {
         const id = toolID(entry.payload)
-        state.items.push({ kind: "tool", data: entry.payload })
+        state.items.push({ kind: "tool", data: expandToolDiffs(entry.payload as ToolPayload) })
         if (id) tools[id] = state.items.length - 1
         if (!state.needs_you) state.working = true
         break
@@ -189,9 +200,11 @@ class ThreadReducer {
         if (idx !== undefined) {
           const prev = state.items[idx]!
           // ACP updates are partial: a status or output update keeps the title and kind from earlier.
-          state.items[idx] = { ...prev, data: { ...(prev.data as object), ...(entry.payload as object) }, endTs: entry.ts }
+          const update = entry.payload as ToolPayload
+          const merged = { ...(prev.data as ToolPayload), ...update }
+          state.items[idx] = { ...prev, data: update.content ? expandToolDiffs(merged) : merged, endTs: entry.ts }
         } else {
-          state.items.push({ kind: "tool", data: entry.payload })
+          state.items.push({ kind: "tool", data: expandToolDiffs(entry.payload as ToolPayload) })
         }
         break
       }

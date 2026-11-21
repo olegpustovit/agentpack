@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import type { LogEntry } from "./model"
 import type { SessionInfo } from "@/lib/api-types"
 import type { ThreadItem } from "./model"
+import { listDiffChanges } from "./diff-summary"
 import { helperSubagents, reduceLog, reduceThread } from "./reducer"
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "testdata", "acp", "full.jsonl")
@@ -50,6 +51,18 @@ describe("reduceLog", () => {
         (item.data as { content?: { type?: string }[] }).content?.some((block) => block.type === "diff"),
     )
     expect(editTool).toBeTruthy()
+  })
+
+  it("restores compact tool diffs from the call input and hides unresolved changes", () => {
+    const call: LogEntry = {
+      seq: 1, ts: 1, kind: "tool_call", payload: { toolCallId: "write", rawInput: { content: "new" } },
+    }
+    const update: LogEntry = {
+      seq: 2, ts: 2, kind: "tool_call_update",
+      payload: { toolCallId: "write", content: [{ type: "diff", path: "file", oldText: "old", newTextFromInput: true }] },
+    }
+    expect(listDiffChanges(reduceLog([call, update]).items)).toMatchObject([{ path: "file", block: { newText: "new" } }])
+    expect(listDiffChanges(reduceLog([update]).items)).toEqual([])
   })
 
   it("normalizes raw ACP usage from the shared fixture without rewriting it", () => {

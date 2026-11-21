@@ -296,3 +296,31 @@ func TestCoalescedHeadStaysBounded(t *testing.T) {
 		t.Fatalf("head entry grew to %d bytes", head)
 	}
 }
+
+func TestEventLogOmitsRepeatedToolInputWhileItsSourceIsRetained(t *testing.T) {
+	log := NewEventLog(1024)
+	call := json.RawMessage(`{"toolCallId":"tool","rawInput":{"content":"first"}}`)
+	update := json.RawMessage(`{"toolCallId":"tool","rawInput":{"content":"first"},"status":"completed"}`)
+	log.Append("tool_call", 1, call)
+	entry := log.Append("tool_call_update", 2, update)
+	if entry.Seq != 2 || strings.Contains(string(entry.Payload), "rawInput") {
+		t.Fatalf("compacted update = %+v", entry)
+	}
+	thread := ReduceLog(log.Snapshot())
+	if got := string(thread.Items[0].Data); !strings.Contains(got, `"content":"first"`) || !strings.Contains(got, `"status":"completed"`) {
+		t.Fatalf("reduced update = %s", got)
+	}
+	changed := json.RawMessage(`{"toolCallId":"tool","rawInput":{"content":"changed"}}`)
+	log.Append("tool_call_update", 3, changed)
+	entry = log.Append("tool_call_update", 4, update)
+	if !strings.Contains(string(entry.Payload), "rawInput") {
+		t.Fatalf("update lost its input after a different input: %s", entry.Payload)
+	}
+	log.Append("tool_call", 5, call)
+	log.Append("agent_message_chunk", 6, chunk(strings.Repeat("x", 850)))
+	log.Append("agent_message_chunk", 7, chunk(strings.Repeat("x", 700)))
+	entry = log.Append("tool_call_update", 8, update)
+	if !strings.Contains(string(entry.Payload), "rawInput") {
+		t.Fatalf("update lost its input after dropping the source: %s", entry.Payload)
+	}
+}

@@ -23,7 +23,7 @@ type revertFile struct {
 // Turn numbering is shared with ui/src/features/conversation/diff-summary.ts:
 // reduce the log with acp.ReduceLog, then a turn starts at every reduced item of
 // kind "prompt" or "user_message_chunk" (1-based); a tool item belongs to the latest turn.
-func revertPlan(log []acp.LogEntry, turn int, workspace string) ([]revertFile, int) {
+func revertPlan(log []acp.LogEntry, turn int) ([]revertFile, int, error) {
 	var files []revertFile
 	index := map[string]int{}
 	n := 0
@@ -39,7 +39,7 @@ func revertPlan(log []acp.LogEntry, turn int, workspace string) ([]revertFile, i
 				Type    string  `json:"type"`
 				Path    string  `json:"path"`
 				OldText *string `json:"oldText"`
-				NewText string  `json:"newText"`
+				NewText *string `json:"newText"`
 			} `json:"content"`
 		}
 		if json.Unmarshal(item.Data, &tool) != nil {
@@ -49,15 +49,18 @@ func revertPlan(log []acp.LogEntry, turn int, workspace string) ([]revertFile, i
 			if block.Type != "diff" || block.Path == "" {
 				continue
 			}
+			if block.NewText == nil {
+				return nil, n, errors.New("the change is missing its new text")
+			}
 			if i, ok := index[block.Path]; ok {
-				files[i].final = block.NewText
+				files[i].final = *block.NewText
 				continue
 			}
 			index[block.Path] = len(files)
-			files = append(files, revertFile{path: block.Path, original: block.OldText, final: block.NewText})
+			files = append(files, revertFile{path: block.Path, original: block.OldText, final: *block.NewText})
 		}
 	}
-	return files, n
+	return files, n, nil
 }
 
 // RevertTurn undoes the file edits of one turn, or changes nothing and says why.
@@ -75,7 +78,10 @@ func (session *ConversationSession) RevertTurn(turn int) (int, int, error) {
 	if session.ConversationState() != "idle" {
 		return 0, http.StatusConflict, errors.New("a turn is running")
 	}
-	files, n := revertPlan(session.log.Snapshot(), turn, session.workspace)
+	files, n, err := revertPlan(session.log.Snapshot(), turn)
+	if err != nil {
+		return 0, http.StatusConflict, err
+	}
 	if turn < 1 || turn > n {
 		return 0, http.StatusBadRequest, errors.New("unknown turn")
 	}

@@ -30,7 +30,7 @@ type ThreadReducer struct {
 	// renders the thread, so it skips message text, tools and plans and its memory stays bounded.
 	StateOnly   bool
 	state       ThreadState
-	tools       map[string]int
+	tools       map[toolInputKey]int
 	compactions map[string]int
 	afterPrompt bool
 	inTurn      bool
@@ -39,7 +39,7 @@ type ThreadReducer struct {
 func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 	state := &reducer.state
 	if reducer.tools == nil {
-		reducer.tools = map[string]int{}
+		reducer.tools = map[toolInputKey]int{}
 	}
 	tools := reducer.tools
 	// Some agents (Antigravity) echo the prompt back as a user chunk; the prompt item already shows it.
@@ -59,10 +59,10 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 			state.Working = true
 		}
 	case "tool_call":
-		id := toolID(entry.Payload)
+		id := toolKey(entry.Payload)
 		if !reducer.StateOnly {
-			state.Items = append(state.Items, ThreadItem{Kind: "tool", Data: entry.Payload})
-			if id != "" {
+			state.Items = append(state.Items, ThreadItem{Kind: "tool", Data: expandToolDiffs(entry.Payload)})
+			if id.call != "" {
 				tools[id] = len(state.Items) - 1
 			}
 		}
@@ -73,11 +73,11 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 		if reducer.StateOnly {
 			break
 		}
-		id := toolID(entry.Payload)
+		id := toolKey(entry.Payload)
 		if idx, ok := tools[id]; ok {
 			state.Items[idx].Data = mergeToolUpdate(state.Items[idx].Data, entry.Payload)
 		} else {
-			state.Items = append(state.Items, ThreadItem{Kind: "tool", Data: entry.Payload})
+			state.Items = append(state.Items, ThreadItem{Kind: "tool", Data: expandToolDiffs(entry.Payload)})
 		}
 	case "plan":
 		if !reducer.StateOnly {
@@ -481,15 +481,55 @@ func mergeToolUpdate(previous, update json.RawMessage) json.RawMessage {
 	if err != nil {
 		return previous
 	}
+	if bytes.Contains(update, []byte(`"newTextFromInput"`)) {
+		return expandToolDiffs(body)
+	}
 	return body
 }
 
-func toolID(payload json.RawMessage) string {
+func expandToolDiffs(payload json.RawMessage) json.RawMessage {
+	if !bytes.Contains(payload, []byte(`"newTextFromInput"`)) {
+		return payload
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(payload, &fields) != nil {
+		return payload
+	}
+	var input struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(fields["rawInput"], &input) != nil || len(input.Content) == 0 || input.Content[0] != '"' {
+		return payload
+	}
+	var blocks []map[string]json.RawMessage
+	if json.Unmarshal(fields["content"], &blocks) != nil {
+		return payload
+	}
+	for _, block := range blocks {
+		if string(block["type"]) == `"diff"` && string(block["newTextFromInput"]) == "true" {
+			block["newText"] = input.Content
+			delete(block, "newTextFromInput")
+		}
+	}
+	content, err := json.Marshal(blocks)
+	if err != nil {
+		return payload
+	}
+	fields["content"] = content
+	body, err := json.Marshal(fields)
+	if err != nil {
+		return payload
+	}
+	return body
+}
+
+func toolKey(payload json.RawMessage) toolInputKey {
 	var body struct {
 		ToolCallID string `json:"toolCallId"`
+		Subagent   string `json:"_subagent"`
 	}
 	_ = json.Unmarshal(payload, &body)
-	return body.ToolCallID
+	return toolInputKey{call: body.ToolCallID, child: body.Subagent}
 }
 
 func turnFailed(payload json.RawMessage) bool {

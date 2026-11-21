@@ -28,8 +28,8 @@ export function listDiffChanges(items: ThreadItem[]): DiffChange[] {
     if (item.kind !== "tool") continue
     const tool = item.data as ToolPayload
     for (const block of tool.content ?? []) {
-      if ((block as ToolDiffBlock).type !== "diff") continue
-      const diff = block as ToolDiffBlock
+      if (block.type !== "diff" || block.newTextFromInput) continue
+      const diff = block
       const path = diff.path?.trim() || "change"
       let counts = diffLineCounts.get(diff)
       if (!counts) {

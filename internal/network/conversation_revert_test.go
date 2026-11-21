@@ -86,3 +86,32 @@ func TestRevertTurnRefusesOutsidePath(t *testing.T) {
 		t.Fatal("outside file was modified")
 	}
 }
+
+func TestRevertTurnRestoresCompactToolDiffsOnlyWithTheirSource(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	update := []byte(`{"toolCallId":"tool","content":[{"type":"diff","path":"a.txt","oldText":"old","newTextFromInput":true}]}`)
+	for _, includeSource := range []bool{true, false} {
+		log := acp.NewEventLog(0)
+		log.Append("prompt", 1, []byte(`{"type":"text","text":"go"}`))
+		wantStatus := http.StatusConflict
+		content, want := "", ""
+		if includeSource {
+			log.Append("tool_call", 2, []byte(`{"toolCallId":"tool","rawInput":{"content":"new"}}`))
+			wantStatus, content, want = http.StatusOK, "new", "old"
+		}
+		log.Append("tool_call_update", 3, update)
+		log.Append("turn_end", 4, []byte(`{}`))
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		conv := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
+		conv.workspace = dir
+		if response := postRevert(&WorkerHTTP{conversation: conv}); response.Code != wantStatus {
+			t.Fatalf("source available=%v, status=%d: %s", includeSource, response.Code, response.Body.String())
+		}
+		if got, err := os.ReadFile(path); err != nil || string(got) != want {
+			t.Fatalf("source available=%v, restored file=%q err=%v", includeSource, got, err)
+		}
+	}
+}

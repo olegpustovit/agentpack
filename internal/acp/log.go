@@ -2,6 +2,7 @@ package acp
 
 import (
 	"cmp"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -24,6 +25,7 @@ type EventLog struct {
 	replaying   bool
 	closed      bool
 	entries     []LogEntry
+	toolInputs  map[toolInputKey]toolInputStamp
 	subagents   map[string]bool // announced child session -> cancellable
 	changed     chan struct{}   // closed and replaced whenever readers have something new
 }
@@ -66,6 +68,7 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 	log.seq++
 	entry := LogEntry{Seq: log.seq, TS: ts, Kind: kind}
 	entry.Payload = append(json.RawMessage(nil), payload...)
+	log.compactToolInput(&entry)
 	size := entrySize(entry)
 	if size < 0 || size > log.limit {
 		log.truncated = true
@@ -100,6 +103,60 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 		onAppend(entry)
 	}
 	return entry
+}
+
+type toolInputKey struct{ call, child string }
+
+type toolInputStamp struct {
+	digest [32]byte
+	seq    int64
+}
+
+func (log *EventLog) compactToolInput(entry *LogEntry) {
+	if entry.Kind != "tool_call" && entry.Kind != "tool_call_update" {
+		return
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(entry.Payload, &fields) != nil {
+		return
+	}
+	id := fields["toolCallId"]
+	if len(id) <= 2 || id[0] != '"' || len(id)+len(fields[SubagentKey]) > 256 {
+		return
+	}
+	key := toolInputKey{string(id), string(fields[SubagentKey])}
+	raw := fields["rawInput"]
+	if len(raw) == 0 {
+		if entry.Kind == "tool_call" {
+			delete(log.toolInputs, key)
+		}
+		return
+	}
+	digest := sha256.Sum256(raw)
+	if entry.Kind == "tool_call_update" {
+		previous, ok := log.toolInputs[key]
+		if !ok {
+			return
+		}
+		if previous.digest != digest {
+			delete(log.toolInputs, key)
+			return
+		}
+		if _, retained := slices.BinarySearchFunc(log.entries, previous.seq, func(row LogEntry, seq int64) int {
+			return cmp.Compare(row.Seq, seq)
+		}); retained {
+			delete(fields, "rawInput")
+			if body, err := json.Marshal(fields); err == nil {
+				entry.Payload = body
+			}
+		}
+		return
+	}
+	// shortcut: reset the small index at 128 tools. Use eviction order if many calls overlap.
+	if log.toolInputs == nil || len(log.toolInputs) == 128 {
+		log.toolInputs = make(map[toolInputKey]toolInputStamp)
+	}
+	log.toolInputs[key] = toolInputStamp{digest, entry.Seq}
 }
 
 // Changed returns a channel that closes on the next append, restore or truncation.
