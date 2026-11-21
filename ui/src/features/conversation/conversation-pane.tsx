@@ -403,20 +403,20 @@ export default function ConversationPane({
   }, [configRaw, live, parent.agentMode])
 
   const fork = useMutation({
-    mutationFn: () => {
+    mutationFn: (id: string) => {
       if (!info?.agent_session_id || !info.agent_capabilities?.sessionCapabilities?.fork) {
         throw new Error("Agent does not support conversation forks")
       }
-      return api<SessionInfo>(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, { machine, method: "POST" })
+      return api<SessionInfo>(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, { machine, method: "POST", body: { id } })
     },
     onSuccess: (next) => {
       void queryClient.invalidateQueries({ queryKey: sessionsQuery(machine, false).queryKey })
       void navigate({ to: "/sessions/$machine/$sessionId", params: { machine, sessionId: next.id } })
     },
-    onError: (error) =>
+    onError: (error, id) =>
       hud.error(
         conversationErrorMessage(machine, "fork a conversation", error),
-        conversationNeedsUpdate(error) ? undefined : () => fork.mutate(),
+        conversationNeedsUpdate(error) ? undefined : () => fork.mutate(id),
       ),
   })
   const cancelTurn = useMutation({
@@ -597,7 +597,7 @@ export default function ConversationPane({
   function pickHint(hint: ComposerHint) {
     setHintIndex(0)
     if (hint.value === "/fork") {
-      if (canFork && !fork.isPending) fork.mutate()
+      if (canFork && !fork.isPending) fork.mutate(`session-${newIntentID()}`)
       setDraft("")
       return
     }
@@ -733,7 +733,7 @@ export default function ConversationPane({
                   agent={subagent?.title || agentName}
                   working={live && (subagent ? subagentRunning(subagent) && !thread.needs_you : thread.working && !thread.needs_you)}
                   onQuote={readOnly || subagent ? undefined : quoteReply}
-                  onFork={!subagent && canFork && !fork.isPending ? () => fork.mutate() : undefined}
+                  onFork={!subagent && canFork && !fork.isPending ? () => fork.mutate(`session-${newIntentID()}`) : undefined}
                   onRetry={!subagent && canRetry ? retryLastPrompt : undefined}
                   subagents={subagent ? thread.subagents : { ...thread.subagents, ...helperSubagents(thread.items, helpers) }}
                   lastTurn={thread.last_turn}

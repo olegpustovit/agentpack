@@ -437,11 +437,21 @@ func (g *Gateway) Handler() http.Handler {
 			actor = browserActor(g.auth.email(r))
 		}
 		var input struct {
+			ID       string `json:"id"`
 			ParentID string `json:"parent_id"`
 		}
-		// The body is optional: only agentpack tools name the chat a fork helps.
+		// Legacy clients omit the request ID. Agentpack tools can also name the chat a fork helps.
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if input.ID != "" {
+			info, err := g.claimChatStart(r.Context(), actor, chatStartRequest{
+				ID: input.ID, Directory: record.Session.Directory, Harness: record.Session.Harness,
+				Mode: record.Session.Mode, Transport: "acp", ParentID: input.ParentID, Tools: &record.Session.Tools,
+				forkSessionID: record.Session.AgentSessionID, definitionRoot: record.Session.DefinitionRoot,
+			})
+			writeSessionStart(w, info, err)
 			return
 		}
 		info, err := g.startSession(r.Context(), actor, SessionInfo{

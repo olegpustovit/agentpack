@@ -437,9 +437,13 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 		started, receivedForkID = info, forkSessionID
 		return "session-forked", nil
 	})
-	request := func(actor Actor) *httptest.ResponseRecorder {
+	request := func(actor Actor, requestID ...string) *httptest.ResponseRecorder {
 		t.Helper()
-		r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/sessions/"+sourceSession.ID+"/fork", nil)
+		body := ""
+		if len(requestID) != 0 {
+			body = string(mustRawJSON(map[string]string{"id": requestID[0]}))
+		}
+		r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/sessions/"+sourceSession.ID+"/fork", strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
 		r = r.WithContext(withActor(r.Context(), actor))
 		w := httptest.NewRecorder()
@@ -490,6 +494,15 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 	gotOwner, found, err = readACPConversationOwner(t.Context(), testSessionStore(t, home), folderID, "claude", "source-session")
 	if err != nil || !found || gotOwner != owner {
 		t.Fatalf("source native session owner changed: owner=%+v found=%t err=%v", gotOwner, found, err)
+	}
+
+	const id = "session-0123456789abcdef0123456789abcdef"
+	first, retry := request(renamedOwner, id), request(renamedOwner, id)
+	if first.Code != http.StatusOK || retry.Code != http.StatusOK || starts != 2 || started.ID != id {
+		t.Fatalf("fork retry: first=%d retry=%d starts=%d", first.Code, retry.Code, starts)
+	}
+	if response := request(otherPeer, id); response.Code != http.StatusForbidden || starts != 2 {
+		t.Fatalf("non-owner fork replay: status=%d starts=%d", response.Code, starts)
 	}
 }
 

@@ -36,6 +36,9 @@ type chatStartRequest struct {
 	Worktree     string `json:"worktree,omitempty"`
 	WorktreeName string `json:"worktree_name,omitempty"`
 	Carry        bool   `json:"carry,omitempty"`
+
+	forkSessionID  string
+	definitionRoot string
 }
 
 var errChatStartClaim = errors.New("session ID already claimed")
@@ -51,12 +54,13 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatSta
 	fingerprint := sha256.Sum256(mustRawJSON(struct {
 		Actor Actor
 		Input chatStartRequest
-	}{actor, input}))
+		Fork  string `json:",omitempty"`
+	}{actor, input, input.forkSessionID}))
 	if info, err := readChatStartClaim(ctx, g.auth.store.Reader, input.ID, fingerprint[:]); !errors.Is(err, sql.ErrNoRows) {
 		return info, err
 	}
 	info := SessionInfo{
-		ID: input.ID, Directory: filepath.Clean(input.Directory), Harness: input.Harness,
+		ID: input.ID, Directory: filepath.Clean(input.Directory), DefinitionRoot: input.definitionRoot, Harness: input.Harness,
 		Mode: input.Mode, Transport: input.Transport, AgentSessionID: cmpOr(input.AgentSessionID, input.Resume),
 		ParentID: input.ParentID, Tools: input.Tools == nil || *input.Tools, StartedBy: &actor,
 		ConversationState: "starting", Reachable: true,
@@ -64,7 +68,11 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatSta
 	if input.Worktree != "" && info.AgentSessionID != "" {
 		return SessionInfo{}, errors.New("a resumed conversation keeps its own folder")
 	}
-	if err := authorizeACPResume(ctx, g.auth.store, actor, info); err != nil {
+	source := info
+	if input.forkSessionID != "" {
+		source.AgentSessionID = input.forkSessionID
+	}
+	if err := authorizeACPResume(ctx, g.auth.store, actor, source); err != nil {
 		return SessionInfo{}, err
 	}
 	if !g.knownDirectory(info.Directory) {
@@ -116,7 +124,7 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatSta
 		}
 		return existing, err
 	}
-	g.startInBackground(ctx, info, "", &input)
+	g.startInBackground(ctx, info, input.forkSessionID, &input)
 	return info, nil
 }
 

@@ -18,6 +18,7 @@ import { api, routeMissing } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { basename, harnessName } from "@/lib/format"
 import { hud } from "@/lib/hud"
+import { newIntentID } from "@/lib/intent"
 import { cn } from "@/lib/utils"
 import { viewLink, views } from "./views"
 
@@ -136,7 +137,7 @@ export default function CommandPalette({
         label: "Fork conversation",
         icon: <GitFork aria-hidden />,
         run: () =>
-          void api<SessionInfo>(`/api/sessions/${encodeURIComponent(session.id)}/fork`, { machine: session.machine, method: "POST" }).then(
+          void api<SessionInfo>(`/api/sessions/${encodeURIComponent(session.id)}/fork`, { machine: session.machine, method: "POST", body: { id: `session-${newIntentID()}` } }).then(
             (next) => {
               void queryClient.invalidateQueries({ queryKey: sessionsQuery(session.machine, false).queryKey })
               void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: session.machine, sessionId: next.id } })
