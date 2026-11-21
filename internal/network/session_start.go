@@ -79,7 +79,7 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatSta
 	if !g.knownDirectory(info.Directory) {
 		main, _, err := worktreeMain(ctx, g.options.Home, info.Directory)
 		if input.Worktree != "" || err != nil || !g.knownDirectory(main) {
-			return SessionInfo{}, errors.New("choose a recent folder from this node")
+			return SessionInfo{}, errUnknownFolder
 		}
 		info.WorktreeOf = main
 	}
@@ -235,6 +235,7 @@ func (g *Gateway) stopSession(ctx context.Context, id, requestID string) error {
 var (
 	errResumeConflict = errors.New("This chat is already running or starting.")
 	errNotResumable   = errors.New("This chat cannot be resumed.")
+	errUnknownFolder  = errors.New("choose a recent folder from this node")
 )
 
 // resumeSession brings a stopped chat back under its own ID: the worker reloads the agent's
@@ -273,7 +274,7 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (
 		return SessionInfo{}, errResumeConflict
 	}
 	if !g.knownDirectory(info.Directory) && !g.knownWorktree(ctx, info.Directory) {
-		return SessionInfo{}, errors.New("choose a recent folder from this node")
+		return SessionInfo{}, errUnknownFolder
 	}
 	// The claim is atomic, so two resumes cannot start two workers for one chat.
 	now := time.Now().UTC()

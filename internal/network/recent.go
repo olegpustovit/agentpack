@@ -53,7 +53,7 @@ func recentFolders(recent []SessionInfo) []RecentFolder {
 		switch {
 		case err != nil:
 			folder.UnavailableReason = "Folder is missing or inaccessible"
-		case entry.FolderID == "" || identity != entry.FolderID:
+		case !sameFolder(entry.FolderID, identity):
 			folder.UnavailableReason = "Folder changed since its last local launch"
 		default:
 			folder.Available = true

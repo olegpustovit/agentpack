@@ -101,6 +101,33 @@ func TestKnownDirectoryRejectsReplacementUntilLocalLaunch(t *testing.T) {
 	}
 }
 
+// A recorded "dev:inode" stays valid after a reboot renumbers the device (macOS does).
+func TestKnownDirectorySurvivesDeviceRenumbering(t *testing.T) {
+	home := t.TempDir()
+	directory := t.TempDir()
+	if err := remember(home, SessionInfo{Directory: directory, Harness: "codex"}); err != nil {
+		t.Fatal(err)
+	}
+	auth, err := testGatewayAuth(t, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := FolderIdentity(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.store.DB.Exec("UPDATE sessions SET folder_id=?", "1000012:"+identity); err != nil {
+		t.Fatal(err)
+	}
+	gateway := Gateway{auth: auth, options: GatewayOptions{Home: home}}
+	if !gateway.knownDirectory(directory) {
+		t.Fatal("folder recorded with an older device number rejected")
+	}
+	if sameFolder("1000012:"+identity, "") || sameFolder("1:2:3", "2:3") {
+		t.Fatal("sameFolder matched a missing or partial identity")
+	}
+}
+
 func TestRecentAPIReportsCurrentAvailabilityAndLastUse(t *testing.T) {
 	home := t.TempDir()
 	auth, err := testGatewayAuth(t, home)

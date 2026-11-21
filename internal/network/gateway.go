@@ -613,9 +613,12 @@ func (g *Gateway) Handler() http.Handler {
 			http.Error(w, "session not found", http.StatusNotFound)
 		case errors.Is(err, errResumeConflict):
 			http.Error(w, errResumeConflict.Error(), http.StatusConflict)
-		case errors.Is(err, errNotResumable):
-			http.Error(w, errNotResumable.Error(), http.StatusBadRequest)
+		case errors.Is(err, errNotResumable), errors.Is(err, errUnknownFolder):
+			http.Error(w, err.Error(), http.StatusBadRequest)
 		case err != nil:
+			if event := obs.From(r.Context()); event != nil {
+				event.Fail(err)
+			}
 			http.Error(w, "Couldn't resume the chat.", http.StatusInternalServerError)
 		default:
 			if input.Text == "" {
@@ -1029,10 +1032,15 @@ func (g *Gateway) knownDirectory(directory string) bool {
 	for _, entry := range recent {
 		if filepath.Clean(entry.Directory) == filepath.Clean(directory) {
 			identity, err := FolderIdentity(directory)
-			return err == nil && entry.FolderID != "" && entry.FolderID == identity
+			return err == nil && sameFolder(entry.FolderID, identity)
 		}
 	}
 	return false
+}
+
+// sameFolder also accepts identities recorded before Unix dropped the device ("dev:inode").
+func sameFolder(stored, current string) bool {
+	return current != "" && (stored == current || strings.HasSuffix(stored, ":"+current) && !strings.Contains(current, ":"))
 }
 
 func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {

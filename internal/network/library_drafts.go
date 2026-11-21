@@ -67,7 +67,7 @@ func (g *Gateway) localDraftState(ctx context.Context, draft registry.Draft) (re
 		return state, err
 	}
 	state.FolderIdentity = identity
-	if identity != draft.FolderIdentity {
+	if !sameFolder(draft.FolderIdentity, identity) {
 		return state, nil
 	}
 	if g.options.Library.DraftState == nil {
