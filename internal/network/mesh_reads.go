@@ -44,7 +44,7 @@ func (g *Gateway) meshSessions(ctx context.Context, node string) ([]SessionInfo,
 	if err != nil {
 		return nil, err
 	}
-	localEntries := slices.DeleteFunc(slices.Clone(entries), func(info SessionInfo) bool { return info.NodeID != local })
+	localEntries := slices.DeleteFunc(slices.Clone(entries), func(info SessionInfo) bool { return info.NodeID != local || !info.EndedAt.IsZero() })
 	states := workerStates(ctx, g.options.Home, localEntries)
 	for i := range entries {
 		info := &entries[i]

@@ -115,11 +115,25 @@ function chatTail(data: unknown): unknown {
 
 export function persistQueries(client: QueryClient, build: string): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined
+  let idle: number | undefined
   let observedGeneration = generation
   const dirty = new Set<string>()
-  const save = () => {
+  const cancelSave = () => {
     clearTimeout(timer)
     timer = undefined
+    if (idle !== undefined) window.cancelIdleCallback(idle)
+    idle = undefined
+  }
+  const scheduleSave = () => {
+    if (timer !== undefined || idle !== undefined) return
+    timer = setTimeout(() => {
+      timer = undefined
+      if (window.requestIdleCallback) idle = window.requestIdleCallback(save, { timeout: 1_000 })
+      else save()
+    }, SAVE_DELAY)
+  }
+  const save = () => {
+    cancelSave()
     if (observedGeneration !== generation) {
       dirty.clear()
       observedGeneration = generation
@@ -148,7 +162,7 @@ export function persistQueries(client: QueryClient, build: string): () => void {
         },
       })
     }
-    if (dirty.size) timer = setTimeout(save, SAVE_DELAY)
+    if (dirty.size) scheduleSave()
     if (!batch.length) return
     const started = generation
     void withStore("readwrite", (store) => {
@@ -172,7 +186,7 @@ export function persistQueries(client: QueryClient, build: string): () => void {
     const [scope, , list] = event.query.queryKey
     if (scope !== "conversation" && !shellQueries.has(String(scope)) && !(scope === "m" && machineLists.has(String(list)))) return
     dirty.add(event.query.queryHash)
-    timer ??= setTimeout(save, SAVE_DELAY)
+    scheduleSave()
   })
   const onHidden = () => {
     if (document.visibilityState === "hidden") queueMicrotask(save)
@@ -181,7 +195,7 @@ export function persistQueries(client: QueryClient, build: string): () => void {
   window.addEventListener("pagehide", save)
   return () => {
     unsubscribe()
-    clearTimeout(timer)
+    cancelSave()
     document.removeEventListener("visibilitychange", onHidden)
     window.removeEventListener("pagehide", save)
   }
