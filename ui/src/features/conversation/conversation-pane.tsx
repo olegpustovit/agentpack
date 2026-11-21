@@ -147,6 +147,7 @@ export default function ConversationPane({
   const [streamConnected, setStreamConnected] = useState(false)
   const { data: tail, error: conversationError } = useQuery({
     ...conversationEventsQuery(machine, sessionId),
+    enabled: info?.provisionalStart !== "claim",
     staleTime: streamConnected ? Infinity : undefined,
     structuralSharing: (previous, next) => mergeConversationPages(previous as ConversationPage | undefined, next as ConversationPage),
     retry: false,

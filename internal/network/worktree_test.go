@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -371,5 +372,31 @@ func TestCompareURL(t *testing.T) {
 		if got := compareURL(remote, "main", "ap/x"); got != want {
 			t.Errorf("compareURL(%q) = %q", remote, got)
 		}
+	}
+}
+
+func TestClientChatClaimPreparesWorktreeOnce(t *testing.T) {
+	g, main, call := worktreeGateway(t)
+	input := chatStartRequest{
+		ID: "session-cc548a740d2c495991c792576427836d", Directory: main,
+		Harness: "claude", Mode: "default", Transport: "acp", Worktree: "new", WorktreeName: "claimed",
+	}
+	body := string(mustRawJSON(input))
+	start := call(http.MethodPost, "/api/sessions", body)
+	var provisional SessionInfo
+	if err := json.Unmarshal(start.Body.Bytes(), &provisional); start.Code != http.StatusOK || err != nil ||
+		provisional.ID != input.ID || provisional.Directory != main || provisional.ConversationState != "starting" {
+		t.Fatalf("new worktree claim = %d %s", start.Code, start.Body.String())
+	}
+	g.starting.Wait()
+	replay := call(http.MethodPost, "/api/sessions", body)
+	var prepared SessionInfo
+	if err := json.Unmarshal(replay.Body.Bytes(), &prepared); replay.Code != http.StatusOK || err != nil ||
+		prepared.ID != provisional.ID || prepared.Directory == main || prepared.WorktreeOf != main {
+		t.Fatalf("worktree claim retry = %d %s", replay.Code, replay.Body.String())
+	}
+	records, err := listWorktrees(t.Context(), main)
+	if err != nil || len(records) != 2 {
+		t.Fatalf("expected main and one worktree, got %+v (%v)", records, err)
 	}
 }

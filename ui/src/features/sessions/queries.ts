@@ -26,7 +26,12 @@ function parseProjects(raw: unknown): ProjectRow[] {
 export const sessionsQuery = (_machine: string, live: boolean) =>
   queryOptions({
     queryKey: ["m", LOCAL, "sessions"],
-    queryFn: () => api<SessionInfo[]>("/api/sessions"),
+    queryFn: async ({ client, queryKey }): Promise<SessionInfo[]> => {
+      const rows = (await api<SessionInfo[] | null>("/api/sessions")) ?? []
+      const current = client.getQueryData<SessionInfo[]>(queryKey)
+      const ids = new Set(rows.map((row) => row.id))
+      return [...(current ?? []).filter((row) => row.provisionalStart && !ids.has(row.id)), ...rows]
+    },
     staleTime: 15 * 1000,
     // Events cover changes; polling covers only a dropped stream.
     refetchInterval: live ? false : 15 * 1000,

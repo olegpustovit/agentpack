@@ -1,3 +1,4 @@
+import type { SessionInfo } from "./api-types"
 import { hashKey, hydrate, type DehydratedState, type QueryClient, type QueryKey } from "@tanstack/react-query"
 
 const DB = "agentpack-cache"
@@ -131,7 +132,9 @@ export function persistQueries(client: QueryClient, build: string): () => void {
       const query = cache.get(hash)
       if (query?.state.status !== "success") continue
       const chat = Number(query.queryKey[0] === "conversation")
-      const data = chat ? chatTail(query.state.data) : query.state.data
+      const data = chat ? chatTail(query.state.data) : query.queryKey[2] === "sessions"
+        ? (query.state.data as SessionInfo[]).filter((row) => !row.provisionalStart)
+        : query.state.data
       if (data === undefined) continue
       batch.push({
         build,

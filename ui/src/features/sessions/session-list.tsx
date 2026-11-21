@@ -15,7 +15,6 @@ import { terminalPool } from "@/features/terminal/pool"
 import { rememberSession } from "@/features/shell/views"
 import { LOCAL } from "@/lib/api"
 import { basename, harnessName, plural } from "@/lib/format"
-import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { useSessionCommands } from "./actions"
 import { groupSessions, matchesSession, nestHelpers, rowKey, sessionLabel, type GroupMode, type ListedSession, type SessionSubhead } from "./group"
@@ -444,7 +443,6 @@ function NewInFolder({ head }: { head: SessionSubhead }) {
     mutate: (agent: { harness: string; mode: string }) =>
       mutation.mutate(
         { machine: head.machine, directory: head.directory, ...agent, view: "chat", ...(worktree && { worktree: "new" }) },
-        { onError: (error) => hud.error(`Could not start ${harnessName(agent.harness)}: ${error instanceof Error ? error.message : String(error)}`, () => start.mutate(agent)) },
       ),
   }
   const label = head.offline ? `${machineName} is offline` : `New ${harnessName(usual.harness)} chat in ${folder} on ${machineName}`

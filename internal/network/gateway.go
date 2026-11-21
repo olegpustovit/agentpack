@@ -381,21 +381,17 @@ func (g *Gateway) Handler() http.Handler {
 		respond(w, map[string]bool{"forgotten": true}, ForgetRecent(g.options.Home, SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode}))
 	})
 	mux.HandleFunc("POST /api/sessions", func(w http.ResponseWriter, r *http.Request) {
-		var input struct {
-			Directory      string `json:"directory"`
-			Harness        string `json:"harness"`
-			Mode           string `json:"mode"`
-			Transport      string `json:"transport,omitempty"`
-			AgentSessionID string `json:"agent_session_id,omitempty"`
-			Resume         string `json:"resume,omitempty"`
-			ParentID       string `json:"parent_id,omitempty"`
-			Tools          *bool  `json:"tools,omitempty"`
-			// Worktree is "new" or an existing worktree of Directory; Carry brings uncommitted changes.
-			Worktree     string `json:"worktree,omitempty"`
-			WorktreeName string `json:"worktree_name,omitempty"`
-			Carry        bool   `json:"carry,omitempty"`
-		}
+		var input chatStartRequest
 		if !readJSON(w, r, &input) {
+			return
+		}
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			actor = browserActor(g.auth.email(r))
+		}
+		if input.ID != "" {
+			info, err := g.claimChatStart(r.Context(), actor, input)
+			writeSessionStart(w, info, err)
 			return
 		}
 		if input.Resume != "" && input.AgentSessionID == "" {
@@ -414,10 +410,6 @@ func (g *Gateway) Handler() http.Handler {
 				return
 			}
 			input.Directory, definitionRoot = directory, g.definitionRootFor(r.Context(), main)
-		}
-		actor, ok := actorFrom(r.Context())
-		if !ok {
-			actor = browserActor(g.auth.email(r))
 		}
 		info, err := g.startSession(r.Context(), actor, SessionInfo{
 			Directory: input.Directory, DefinitionRoot: definitionRoot, Harness: input.Harness, Mode: input.Mode,
@@ -936,6 +928,10 @@ func respond(w http.ResponseWriter, value any, err error) {
 	writeJSON(w, value)
 }
 func writeSessionStart(w http.ResponseWriter, info SessionInfo, err error) {
+	if errors.Is(err, errChatStartClaim) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if errors.Is(err, errSessionArchived) {
 		http.Error(w, "archived", http.StatusConflict)
 		return

@@ -162,7 +162,9 @@ export const Route = createFileRoute("/_app/sessions/$machine/$sessionId")({
       return
     }
     void loadPane.conversation().catch(() => undefined)
-    void context.queryClient.prefetchQuery(conversationEventsQuery(params.machine, params.sessionId)).catch(() => undefined)
+    if (info.provisionalStart !== "claim") {
+      void context.queryClient.prefetchQuery(conversationEventsQuery(params.machine, params.sessionId)).catch(() => undefined)
+    }
   },
   component: SessionRoute,
 })

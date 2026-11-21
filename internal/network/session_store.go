@@ -45,13 +45,15 @@ func sessionValues(info SessionInfo) ([]any, error) {
 		string(owner), info.Title, info.WorktreeOf, email, info.ParentID, info.Tools}, nil
 }
 
+const insertSessionSQL = `INSERT INTO sessions (` + sessionWriteColumns + `,node_id,owner_email,parent_id,tools)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,` + state.LocalNodeSQL + `,?,?,?)`
+
 func upsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
 	args, err := sessionValues(info)
 	if err != nil {
 		return err
 	}
-	result, err := db.ExecContext(ctx, `INSERT INTO sessions (`+sessionWriteColumns+`,node_id,owner_email,parent_id,tools)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,`+state.LocalNodeSQL+`,?,?,?) ON CONFLICT(id) DO UPDATE SET
+	result, err := db.ExecContext(ctx, insertSessionSQL+` ON CONFLICT(id) DO UPDATE SET
 		last_used=excluded.last_used,folder_id=excluded.folder_id,directory=excluded.directory,
 		definition_root=excluded.definition_root,harness=excluded.harness,mode=excluded.mode,
 		transport=excluded.transport,agent_session_id=excluded.agent_session_id,

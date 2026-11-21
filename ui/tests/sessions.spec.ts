@@ -146,37 +146,43 @@ test("New session shows what the chosen mode loads", async ({ page }) => {
   await expect(loaded.getByRole("listitem").filter({ hasText: "heavy" })).toContainText("off in design")
 })
 
-test("+ starts a chat at once with the folder's last agent and holds a message until it is up", async ({ page }) => {
+test("+ opens the composer while the chat claim is still in flight", async ({ page }) => {
   await page.clock.install()
-  const starting = { ...sessions[1], id: "s3", transport: "acp", conversation_state: "starting", state: terminal(false) }
-  let posted: unknown
-  await page.route(/\/api\/sessions(\?.*)?$/, (route) => {
+  let posted: { id: string } | undefined
+  let release!: () => void
+  const heldResponse = new Promise<void>((resolve) => { release = resolve })
+  const starting = { ...sessions[1], transport: "acp", conversation_state: "starting", state: terminal(false) }
+  await page.route(/\/api\/sessions(\?.*)?$/, async (route) => {
     if (route.request().method() !== "POST") return route.fallback()
     posted = route.request().postDataJSON()
-    reply = [...sessions, starting]
-    return route.fulfill({ json: starting })
+    await heldResponse
+    const info = { ...starting, id: posted!.id }
+    reply = [...sessions, info]
+    return route.fulfill({ json: info })
   })
   const prompts: unknown[] = []
-  await page.route("**/api/sessions/s3/conversation/prompt", (route) => {
+  await page.route("**/api/sessions/*/conversation/prompt", (route) => {
     prompts.push(route.request().postDataJSON())
     return route.fulfill({ json: {} })
   })
   await page.goto("/sessions")
-  // The folder's last agent is Codex in mode "plan"; the sheet is not involved.
   await page.getByRole("button", { name: "New Codex chat in oracle on host-a" }).click()
-  await expect(page).toHaveURL(/\/sessions\/[^/]+\/s3/)
-  expect(posted).toMatchObject({ directory: "/home/oleg/oracle", harness: "codex", mode: "plan", transport: "acp" })
+  await expect.poll(() => posted).toMatchObject({
+    id: expect.stringMatching(/^session-[0-9a-f]{32}$/),
+    directory: "/home/oleg/oracle", harness: "codex", mode: "plan", transport: "acp",
+  })
+  await expect(page).toHaveURL(new RegExp(`/sessions/[^/]+/${posted!.id}$`))
   await expect(page.getByRole("dialog")).toBeHidden()
   const composer = page.getByRole("textbox", { name: "Message" })
   await expect(composer).toHaveAttribute("placeholder", "Starting Codex…")
   await composer.fill("check the budgets")
   await composer.press("Enter")
   await expect(page.getByText("Sends when Codex is ready")).toBeVisible()
-  // The message stays in the composer (and its saved draft) until it goes out.
-  await expect(composer).toHaveValue("check the budgets")
   expect(prompts).toHaveLength(0)
-  reply = [...sessions, { ...starting, conversation_state: "idle", state: terminal(true) }]
-  // Without live events the list polls every 15 s.
+  const claimed = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/sessions" && response.request().method() === "POST")
+  release()
+  await claimed
+  reply = [...sessions, { ...starting, id: posted!.id, conversation_state: "idle", state: terminal(true) }]
   await page.clock.runFor(16_000)
   await expect.poll(() => prompts).toEqual([{ text: "check the budgets" }])
   await expect(page.getByText("Sends when Codex is ready")).toBeHidden()
@@ -236,13 +242,19 @@ test("a reload paints the last-known list before the gateway answers", async ({ 
   await page.goto("/sessions")
   const rows = page.getByRole("navigation", { name: "Sessions" }).locator("[data-source-row]")
   await expect(rows).toHaveCount(2)
-  // The cache is written a second after the last change.
-  await page.clock.runFor(1_100)
-  await page.waitForFunction(() => new Promise((resolve) => {
-    const open = indexedDB.open("agentpack-cache")
-    open.onsuccess = () => {
-      const request = open.result.transaction("queries").objectStore("queries").get("client")
-      request.onsuccess = () => resolve(request.result !== undefined)
+  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")))
+  await page.waitForFunction(() => new Promise((resolve, reject) => {
+    const opening = indexedDB.open("agentpack-cache", 2)
+    opening.onerror = () => reject(opening.error)
+    opening.onsuccess = () => {
+      const db = opening.result
+      const transaction = db.transaction("entries")
+      const request = transaction.objectStore("entries").get('["m","local","sessions"]')
+      transaction.oncomplete = () => {
+        db.close()
+        resolve(request.result !== undefined)
+      }
+      transaction.onerror = () => reject(transaction.error)
     }
   }))
   await page.route(/\/api\/sessions(\?.*)?$/, () => undefined)

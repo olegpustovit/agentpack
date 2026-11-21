@@ -1,7 +1,11 @@
 package network
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +18,110 @@ import (
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
+
+type chatStartRequest struct {
+	ID             string `json:"id,omitempty"`
+	Directory      string `json:"directory"`
+	Harness        string `json:"harness"`
+	Mode           string `json:"mode"`
+	Transport      string `json:"transport,omitempty"`
+	AgentSessionID string `json:"agent_session_id,omitempty"`
+	Resume         string `json:"resume,omitempty"`
+	ParentID       string `json:"parent_id,omitempty"`
+	Tools          *bool  `json:"tools,omitempty"`
+	// Worktree is "new" or an existing worktree of Directory; Carry brings uncommitted changes.
+	Worktree     string `json:"worktree,omitempty"`
+	WorktreeName string `json:"worktree_name,omitempty"`
+	Carry        bool   `json:"carry,omitempty"`
+}
+
+var errChatStartClaim = errors.New("session ID already claimed")
+
+func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatStartRequest) (SessionInfo, error) {
+	token := strings.TrimPrefix(input.ID, "session-")
+	if input.Transport != "acp" || !validSessionID(input.ID) || len(token) != 32 || token != strings.ToLower(token) {
+		return SessionInfo{}, errors.New("invalid chat ID")
+	}
+	if _, err := hex.DecodeString(token); err != nil {
+		return SessionInfo{}, errors.New("invalid chat ID")
+	}
+	fingerprint := sha256.Sum256(mustRawJSON(struct {
+		Actor Actor
+		Input chatStartRequest
+	}{actor, input}))
+	if info, err := readChatStartClaim(ctx, g.auth.store.Reader, input.ID, fingerprint[:]); !errors.Is(err, sql.ErrNoRows) {
+		return info, err
+	}
+	info := SessionInfo{
+		ID: input.ID, Directory: filepath.Clean(input.Directory), Harness: input.Harness,
+		Mode: input.Mode, Transport: input.Transport, AgentSessionID: cmpOr(input.AgentSessionID, input.Resume),
+		ParentID: input.ParentID, Tools: input.Tools == nil || *input.Tools, StartedBy: &actor,
+		ConversationState: "starting", Reachable: true,
+	}
+	if input.Worktree != "" && info.AgentSessionID != "" {
+		return SessionInfo{}, errors.New("a resumed conversation keeps its own folder")
+	}
+	if err := authorizeACPResume(ctx, g.auth.store, actor, info); err != nil {
+		return SessionInfo{}, err
+	}
+	if !g.knownDirectory(info.Directory) {
+		main, _, err := worktreeMain(ctx, g.options.Home, info.Directory)
+		if input.Worktree != "" || err != nil || !g.knownDirectory(main) {
+			return SessionInfo{}, errors.New("choose a recent folder from this node")
+		}
+		info.WorktreeOf = main
+	}
+	var err error
+	if info.FolderID, err = FolderIdentity(info.Directory); err != nil {
+		return SessionInfo{}, err
+	}
+	if info.NodeID, err = g.auth.store.NodeID(ctx); err != nil {
+		return SessionInfo{}, err
+	}
+	info.StartedAt = time.Now().UTC()
+	info.LastUsed = info.StartedAt
+	args, err := sessionValues(info)
+	if err != nil {
+		return SessionInfo{}, err
+	}
+	inserted := false
+	err = state.Transaction(ctx, g.auth.store.DB, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, insertSessionSQL+" ON CONFLICT(id) DO NOTHING", args...)
+		if err != nil {
+			return err
+		}
+		count, err := result.RowsAffected()
+		if err != nil || count == 0 {
+			return err
+		}
+		inserted = true
+		_, err = tx.ExecContext(ctx, "INSERT INTO session_start_requests VALUES (?,?)", info.ID, fingerprint[:])
+		return err
+	})
+	if err != nil {
+		return SessionInfo{}, err
+	}
+	if !inserted {
+		existing, err := readChatStartClaim(ctx, g.auth.store.Reader, input.ID, fingerprint[:])
+		if errors.Is(err, sql.ErrNoRows) {
+			err = errChatStartClaim
+		}
+		return existing, err
+	}
+	g.startInBackground(ctx, info, "", "", &input)
+	return info, nil
+}
+
+func readChatStartClaim(ctx context.Context, db *sql.DB, id string, fingerprint []byte) (SessionInfo, error) {
+	var existing []byte
+	if err := db.QueryRowContext(ctx, "SELECT fingerprint FROM session_start_requests WHERE session_id=?", id).Scan(&existing); err != nil {
+		return SessionInfo{}, err
+	}
+	if !bytes.Equal(existing, fingerprint) {
+		return SessionInfo{}, errChatStartClaim
+	}
+	return storedSession(ctx, db, id)
+}
 
 // launchSession starts a terminal session synchronously. A chat answers at once: its row is written
 // as "starting" with a gateway-chosen ID, and pack sync plus the agent launch carry on in the
@@ -37,18 +145,37 @@ func (g *Gateway) launchSession(ctx context.Context, info SessionInfo, forkSessi
 	if err := upsertSession(ctx, g.auth.store.DB, info); err != nil {
 		return SessionInfo{}, err
 	}
-	g.startInBackground(ctx, info, forkSessionID, "")
+	g.startInBackground(ctx, info, forkSessionID, "", nil)
 	return info, nil
 }
 
 // startInBackground launches the worker for a "starting" chat row, then sends prompt if there is one;
 // a failure ends the row with the reason.
-func (g *Gateway) startInBackground(ctx context.Context, info SessionInfo, forkSessionID, prompt string) {
+func (g *Gateway) startInBackground(ctx context.Context, info SessionInfo, forkSessionID, prompt string, request *chatStartRequest) {
 	background := context.WithoutCancel(ctx)
 	g.starting.Add(1)
 	obs.Go("gateway.start_session", func() {
 		defer g.starting.Done()
-		if _, err := g.options.Start(background, info, forkSessionID); err != nil {
+		var err error
+		if request != nil && request.Worktree != "" {
+			main := info.Directory
+			info.Directory, err = g.newSessionWorktree(background, main, request.Worktree, request.WorktreeName, request.Carry)
+			if err == nil {
+				info.FolderID, err = FolderIdentity(info.Directory)
+			}
+			if err == nil {
+				info.WorktreeOf, _, err = worktreeMain(background, g.options.Home, info.Directory)
+			}
+			if err == nil {
+				info.DefinitionRoot = g.definitionRootFor(background, main)
+				_, err = g.auth.store.DB.ExecContext(background, "UPDATE sessions SET directory=?,folder_id=?,worktree_of=?,definition_root=? WHERE id=? AND node_id="+state.LocalNodeSQL,
+					info.Directory, info.FolderID, info.WorktreeOf, info.DefinitionRoot, info.ID)
+			}
+		}
+		if err == nil {
+			_, err = g.options.Start(background, info, forkSessionID)
+		}
+		if err != nil {
 			_, event := obs.Start(background, "gateway", "start_session")
 			event.Set("session_id", info.ID)
 			event.Set("harness", info.Harness)
@@ -115,7 +242,7 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt string) (SessionIn
 	info.EndedAt = time.Time{}
 	info.Reachable = true
 	info.LastUsed = time.Now().UTC()
-	g.startInBackground(ctx, info, "", prompt)
+	g.startInBackground(ctx, info, "", prompt, nil)
 	return info, nil
 }
 

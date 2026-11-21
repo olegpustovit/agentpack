@@ -693,3 +693,48 @@ func TestTailnetWhoisIsCachedButFailuresAreNot(t *testing.T) {
 		t.Fatalf("Tailscale asked %d times, want one failure and one cached success", got)
 	}
 }
+
+func TestClientChatIDIsAnInsertOnlyClaim(t *testing.T) {
+	home := t.TempDir()
+	dir := seedFolder(t, home)
+	starts := make(chan SessionInfo, 2)
+	g, origin := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+		starts <- info
+		return info.ID, nil
+	})
+	const id = "session-b7148a740d2c495991c792576427836d"
+	body := chatStartRequest{ID: id, Directory: dir, Harness: "claude", Mode: "default", Transport: "acp"}
+	call := func(input chatStartRequest, user string, want int) {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/sessions", bytes.NewReader(mustRawJSON(input)))
+		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
+		r = r.WithContext(withActor(r.Context(), browserActor(user)))
+		w := httptest.NewRecorder()
+		g.Handler().ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("start status = %d, want %d: %s", w.Code, want, w.Body.String())
+		}
+		if want == http.StatusOK {
+			var info SessionInfo
+			if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil || info.ID != input.ID || info.ConversationState != "starting" {
+				t.Fatalf("invalid claimed session: %+v (%v)", info, err)
+			}
+		}
+	}
+	call(body, testBrowserEmail, http.StatusOK)
+	call(body, testBrowserEmail, http.StatusOK)
+	call(body, "different@example.com", http.StatusConflict)
+	changed := body
+	changed.Harness = "codex"
+	call(changed, testBrowserEmail, http.StatusConflict)
+	unclaimed := body
+	unclaimed.ID = "session-f7148a740d2c495991c792576427836d"
+	if err := upsertSession(t.Context(), g.auth.store.DB, SessionInfo{ID: unclaimed.ID, Transport: "acp"}); err != nil {
+		t.Fatal(err)
+	}
+	call(unclaimed, testBrowserEmail, http.StatusConflict)
+	g.starting.Wait()
+	if len(starts) != 1 || (<-starts).ID != id {
+		t.Fatal("repeated or conflicting claim started a second worker")
+	}
+}

@@ -34,6 +34,7 @@ export type AgentCapabilities = {
 }
 
 export type SessionInfo = {
+  provisionalStart?: "claim" | "replica"
   node_id?: string
   reachable?: boolean
   last_sync?: string
