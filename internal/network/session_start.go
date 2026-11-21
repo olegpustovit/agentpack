@@ -370,7 +370,7 @@ func recordStop(ctx context.Context, store *state.Store, id string, notice map[s
 // still claim a turn, a question or subagents: such a worker never recorded its exit. The caller
 // holds chatLifecycle, so a resume cannot claim a row this is writing.
 func (g *Gateway) reapStoppedChats(ctx context.Context) {
-	g.importLegacySessions(ctx)
+	g.reapWorkerEndpoints(ctx)
 	rows, err := querySessions(ctx, g.auth.store.Reader, "SELECT "+sessionColumns+` FROM sessions WHERE transport='acp' AND ended_at>0 AND archived_at=0 AND node_id=`+state.LocalNodeSQL+`
  AND (conversation_state<>'idle' OR subagents<>'' OR json_extract(state,'$.running'))`)
 	var resume []string

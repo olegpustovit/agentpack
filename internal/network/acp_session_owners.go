@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -35,16 +34,6 @@ func acpOwnerKey(folderID, harness, sessionID string) (key, canonical string, er
 	canonical = string(target)
 	digest := sha256.Sum256([]byte(folderID + "\x00" + canonical + "\x00" + sessionID))
 	return hex.EncodeToString(digest[:]), canonical, nil
-}
-
-// The old filename is also the opaque lookup key for legacy records without a native ID.
-func acpConversationOwnerPath(home, folderID, harness, sessionID string) (directory, path, canonicalHarness string, err error) {
-	key, canonical, err := acpOwnerKey(folderID, harness, sessionID)
-	if err != nil || home == "" {
-		return "", "", "", errors.Join(err, errors.New("ACP owner key is incomplete"))
-	}
-	directory = filepath.Join(home, "network", "acp-session-owners")
-	return directory, filepath.Join(directory, key+".json"), canonical, nil
 }
 
 func ownerBindingID(ctx context.Context, tx *sql.Tx, key string) (string, error) {

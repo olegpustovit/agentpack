@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -132,10 +131,6 @@ func (g *Gateway) workerRecord(ctx context.Context, id string) (WorkerRecord, er
 		return record, err
 	}
 	info, err := storedSession(ctx, g.auth.store.Reader, id)
-	if errors.Is(err, errSessionNotFound) && !reflect.ValueOf(record.Session).IsZero() {
-		// Running legacy workers retain their metadata until the stopped-session import.
-		return record, nil
-	}
 	if err == nil {
 		local, localErr := g.auth.store.NodeID(ctx)
 		if localErr != nil {
