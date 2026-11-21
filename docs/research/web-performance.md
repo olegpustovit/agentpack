@@ -123,3 +123,14 @@ The direct loopback UI also reports these two durations to
 `/api/debug/timings`. A local CLI can read the latest values with the same
 bearer used by `/api/debug/pprof/`. The values live in gateway memory and reset
 when it restarts.
+
+The stream smoke test warms the browser with one reply, then delivers 100
+updates on the shared event stream over ten simulated client seconds.
+Chromium recorded zero Long Tasks in three repeated runs with 4× CPU
+throttling. The bundled WebKit does not expose Long Tasks. Its three runs
+verify that the final streamed update renders.
+
+```sh
+cd ui
+bun run e2e conversation.spec.ts --project=timing --project=webkit --no-deps --workers=1 --repeat-each=3 -g 'chat stream stays responsive'
+```

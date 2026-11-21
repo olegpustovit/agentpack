@@ -919,3 +919,58 @@ test("a long conversation starts at the latest turn and renders only nearby rows
   await page.getByLabel("Conversation", { exact: true }).evaluate((element) => { element.scrollTop = 0 })
   await expect(page.getByText("Question 0", { exact: true })).toBeInViewport()
 })
+
+test("chat stream stays responsive over ten simulated seconds @timing", async ({ page, browserName }) => {
+  if (browserName === "chromium") {
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 })
+  }
+  await page.route("**/api/config", (route) => route.fulfill({ json: { ui_build_id: "timing", conversation_events: true, conversation_config_log: true } }))
+  await page.addInitScript(() => {
+    class Feed extends EventTarget {
+      onopen: (() => void) | null = null
+      constructor(url: URL | string) {
+        super()
+        if (String(url).includes("session=chat-one")) Reflect.set(window, "benchChatFeed", this)
+        queueMicrotask(() => this.onopen?.())
+      }
+      close() {}
+    }
+    Reflect.set(window, "EventSource", Feed)
+  })
+  await page.route("**/api/sessions/chat-one/conversation", (route) => route.fulfill({
+    body: [
+      { seq: 1, ts: 1, kind: "prompt", payload: { text: { text: "Start streaming" } } },
+      { seq: 2, ts: 2, kind: "agent_message_chunk", payload: { text: { text: "First reply" } } },
+    ].map((entry) => JSON.stringify(entry)).join("\n"),
+    contentType: "application/x-ndjson",
+  }))
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByText("First reply", { exact: true })).toBeVisible()
+  await page.waitForFunction(() => Boolean(Reflect.get(window, "benchChatFeed")))
+  await page.clock.install()
+  await page.evaluate(() => {
+    const tasks: number[] = []
+    const observer = PerformanceObserver.supportedEntryTypes.includes("longtask")
+      ? new PerformanceObserver((entries) => tasks.push(...entries.getEntries().map((entry) => entry.duration)))
+      : undefined
+    observer?.observe({ entryTypes: ["longtask"] })
+    Reflect.set(window, "benchChatTasks", () => [
+      ...tasks, ...(observer?.takeRecords().map((entry) => entry.duration) ?? []),
+    ])
+    const feed = Reflect.get(window, "benchChatFeed")
+    let seq = 2
+    const timer = setInterval(() => {
+      ++seq
+      const text = seq === 102 ? "end-of-stream" : "chunk "
+      feed.dispatchEvent(new MessageEvent("conversation", {
+        data: JSON.stringify({ seq, ts: Date.now(), kind: "agent_message_chunk", payload: { text: { type: "text", text } } }),
+      }))
+      if (seq === 102) clearInterval(timer)
+    }, 100)
+  })
+  for (let second = 0; second < 10; second++) await page.clock.runFor(1000)
+  await expect(page.getByText(/end-of-stream/)).toBeVisible()
+  const longTasks = await page.evaluate(() => Reflect.get(window, "benchChatTasks")())
+  if (browserName === "chromium") expect(longTasks).toEqual([])
+})

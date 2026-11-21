@@ -27,13 +27,13 @@ export default defineConfig({
     // Every behaviour runs once. The other two engines cover only what can differ on them.
     { name: "chromium", testIgnore: process.env.CAPTURE ? [] : [captures], grepInvert: /@timing/, use: { ...devices["Desktop Chrome"] } },
     // Real-time budgets measure the app, so they run alone after the rest instead of competing with every worker.
-    { name: "timing", grep: /@timing/, dependencies: ["chromium", "phone", "webkit"], use: { ...devices["Desktop Chrome"] } },
+    { name: "timing", workers: 1, grep: /@timing/, dependencies: ["chromium", "phone", "webkit"], use: { ...devices["Desktop Chrome"] } },
     {
       name: "phone",
       testMatch: ["shell.spec.ts"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
     },
-    { name: "webkit", testMatch: ["terminal.spec.ts", "visual.spec.ts", "conversation.spec.ts", "sessions.spec.ts"], grep: /kit styling|drag|click with app mouse|wheel|long conversation starts|offline cache writes|a failed permission answer|archive hides|fork opens|stopped chat resumes/, use: { ...devices["Desktop Safari"] } },
+    { name: "webkit", testMatch: ["terminal.spec.ts", "visual.spec.ts", "conversation.spec.ts", "sessions.spec.ts"], grep: /kit styling|drag|click with app mouse|wheel|long conversation starts|offline cache writes|a failed permission answer|archive hides|fork opens|stopped chat resumes|chat stream stays responsive/, use: { ...devices["Desktop Safari"] } },
   ],
   webServer: {
     command: `vite preview --host 127.0.0.1 --port ${port} --strictPort`,
