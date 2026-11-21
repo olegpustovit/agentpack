@@ -1,12 +1,23 @@
 #!/bin/sh
 # Build agentpack for every platform on this machine and install it on machines over SSH; no GitHub.
 #   scripts/local-release.sh [HOST...]
+#   scripts/local-release.sh --install-only ARTIFACT_DIR [HOST...]
 # Linux and Windows link here with zig. macOS needs Apple's SDK, so it builds on the Mac named by
 # AGENTPACK_MAC_BUILDER (default olegs-mac-mini) with a Go toolchain kept in ~/.cache/agentpack-build.
 # Each HOST gets the binary for its `uname`, has its gateway stopped, ap (and a real agentpack file)
 # replaced, and the gateway started again; Windows hosts are reached through PowerShell over OpenSSH.
 set -eu
 cd "$(dirname "$0")/.."
+ssh() { command ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 "$@"; }
+scp() { command scp -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 "$@"; }
+
+if [ "${1:-}" = --install-host ]; then
+    out=$2
+    host=$3
+elif [ "${1:-}" = --install-only ]; then
+    out=$2
+    shift 2
+else
 version=$(sh scripts/build-version.sh)
 out=dist/local
 mac=${AGENTPACK_MAC_BUILDER:-olegs-mac-mini}
@@ -53,10 +64,28 @@ scp -q "$mac:.cache/agentpack-build/ap-darwin-arm64" "$out/ap-darwin-arm64"
 rm "$out/source.tgz"
 (cd "$out" && sha256sum ap-* > checksums.txt)
 echo "Built $version in $out"
+fi
 
-for host in "$@"; do
-    # Windows OpenSSH has no uname; its default shell is cmd or PowerShell.
-    case $(ssh "$host" uname -sm 2>/dev/null || echo Windows) in
+if [ "${1:-}" != --install-host ]; then
+    result=0
+    for host in "$@"; do
+        if ! "$0" --install-host "$out" "$host"; then
+            echo "$host: installation failed" >&2
+            result=1
+        fi
+    done
+    exit "$result"
+fi
+
+# Windows OpenSSH has no uname; its default shell is cmd or PowerShell.
+platform=$(ssh "$host" uname -sm 2>/dev/null) || {
+    if [ "$?" -eq 255 ]; then
+        echo "$host: SSH unavailable" >&2
+        exit 1
+    fi
+    platform=Windows
+}
+case $platform in
         "Linux x86_64") binary=ap-linux-amd64 ;;
         "Linux aarch64") binary=ap-linux-arm64 ;;
         "Darwin arm64") binary=ap-darwin-arm64 ;;
@@ -81,11 +110,11 @@ Remove-Item $new
 EOF
 )
             ssh "$host" "powershell -NoProfile -NonInteractive -EncodedCommand $(printf '%s' "$script" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)"
-            continue ;;
-        *) echo "$host: no binary for this platform" >&2; continue ;;
-    esac
-    scp -q "$out/$binary" "$host:/tmp/ap-new"
-    ssh "$host" /bin/sh -s <<'EOF'
+            exit 0 ;;
+        *) echo "$host: no binary for this platform" >&2; exit 1 ;;
+esac
+scp -q "$out/$binary" "$host:/tmp/ap-new"
+ssh "$host" /bin/sh -s <<'EOF'
 set -eu
 bin=$HOME/.local/bin
 "$bin/ap" gateway stop >/dev/null 2>&1 || true
@@ -98,4 +127,3 @@ rm -f /tmp/ap-new
 "$bin/ap" gateway start >/dev/null
 printf '%s: %s\n' "$(hostname)" "$("$bin/ap" --version)"
 EOF
-done
