@@ -54,7 +54,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			http.Error(w, "conversation unavailable", http.StatusNotFound)
 			return
 		}
-		if strings.Contains(r.Header.Get("Accept"), "text/event-stream") || r.URL.Query().Get("stream") == "1" {
+		if isConversationStream(r) {
 			worker.serveConversationSSE(w, r, conv)
 			return
 		}
@@ -333,7 +333,7 @@ func (worker *WorkerHTTP) serveConversationSSE(w http.ResponseWriter, r *http.Re
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
-	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	since := conversationPage(r).since
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	if conv.log.Truncated() {
@@ -344,19 +344,15 @@ func (worker *WorkerHTTP) serveConversationSSE(w http.ResponseWriter, r *http.Re
 	truncatedSent := false
 	coalesce := time.NewTimer(conversationStreamCoalesce)
 	defer coalesce.Stop()
+	heartbeat := time.NewTicker(conversationHeartbeatInterval)
+	defer heartbeat.Stop()
 	for {
 		// Take the wake channel before reading so an append between the two is never missed.
 		changed := conv.log.Changed()
 		entries, truncated := conv.Attach(since)
 		for _, entry := range entries {
 			since = entry.Seq
-			data, err := json.Marshal(entry)
-			if err != nil {
-				continue
-			}
-			var message sse.Message
-			message.AppendData(string(data))
-			if _, err := message.WriteTo(w); err != nil {
+			if err := writeConversationSSE(w, entry); err != nil {
 				return
 			}
 		}
@@ -369,6 +365,14 @@ func (worker *WorkerHTTP) serveConversationSSE(w http.ResponseWriter, r *http.Re
 		select {
 		case <-r.Context().Done():
 			return
+		case <-heartbeat.C:
+			var ping sse.Message
+			ping.AppendComment("ping")
+			if _, err := ping.WriteTo(w); err != nil {
+				return
+			}
+			flusher.Flush()
+			continue
 		case <-changed:
 		}
 		// Batch a token burst into one write without adding visible latency.
@@ -380,6 +384,8 @@ func (worker *WorkerHTTP) serveConversationSSE(w http.ResponseWriter, r *http.Re
 		}
 	}
 }
+
+var conversationHeartbeatInterval = 25 * time.Second
 
 const conversationStreamCoalesce = 16 * time.Millisecond
 
@@ -394,6 +400,13 @@ func writeTruncatedSSE(w io.Writer, truncated bool, sent *bool) error {
 	}
 	*sent = true
 	return nil
+}
+
+var conversationWorkerTransport = &http.Transport{
+	MaxIdleConns:          32,
+	MaxIdleConnsPerHost:   2,
+	IdleConnTimeout:       30 * time.Second,
+	ResponseHeaderTimeout: 30 * time.Second,
 }
 
 // A false result leaves the response untouched so a history read can fall back to SQL.
@@ -429,15 +442,15 @@ func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record Work
 			request.Header.Set("Content-Type", contentType)
 		}
 	}
-	stream := r.Method == http.MethodGet && (r.URL.Query().Get("stream") == "1" || strings.Contains(r.Header.Get("Accept"), "text/event-stream"))
+	stream := r.Method == http.MethodGet && isConversationStream(r)
 	if stream {
 		request.Header.Set("Accept", "text/event-stream")
+		request.Header.Set("Last-Event-ID", r.Header.Get("Last-Event-ID"))
 	}
-	client := http.Client{Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := http.Client{Transport: conversationWorkerTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	if !stream {
 		client.Timeout = 30 * time.Second
 	}
-	defer client.CloseIdleConnections()
 	response, err := client.Do(request)
 	if err != nil {
 		if r.Method == http.MethodGet && suffix == "" {

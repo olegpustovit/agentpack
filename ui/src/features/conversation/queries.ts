@@ -48,11 +48,22 @@ export function joinHistory(older: LogEntry[], tail: LogEntry[]): LogEntry[] {
   return older.length === 0 ? tail : [...older.filter((entry) => entry.seq < first), ...tail]
 }
 
-export function conversationEventsQuery(machine: string, sessionId: string, _live = false) {
+export function mergeConversationPages(current: ConversationPage | undefined, next: ConversationPage): ConversationPage {
+  if (!current?.entries.length) return next
+  if (next.entries.length >= current.entries.length && next.entries[0] === current.entries[0] && next.entries[current.entries.length - 1] === current.entries.at(-1)) return next
+  const entries = new Map(current.entries.map((entry) => [entry.seq, entry]))
+  for (const entry of next.entries) entries.set(entry.seq, entry)
+  return {
+    entries: Array.from(entries.values()).sort((left, right) => left.seq - right.seq),
+    truncated: current.truncated || next.truncated,
+  }
+}
+
+export function conversationEventsQuery(machine: string, sessionId: string) {
   return {
     queryKey: ["conversation", machine, sessionId] as const,
     queryFn: (): Promise<ConversationPage> => conversationLog(machine, sessionId),
-    refetchInterval: false as false | number,
+    refetchOnWindowFocus: false,
   }
 }
 export function conversationNeedsUpdate(...errors: unknown[]): boolean {

@@ -213,6 +213,11 @@ func TestConversationStoreTailIsBoundedByUTF8Bytes(t *testing.T) {
 	if err != nil || len(entries) != 7 || entries[0].Seq != 2 || lastSeq != 8 || !truncated {
 		t.Fatalf("byte-bounded tail: entries=%d seq=%d truncated=%t err=%v", len(entries), lastSeq, truncated, err)
 	}
+	request := httptest.NewRequest(http.MethodGet, "/conversation", nil)
+	page, _, more, err := storedConversationRange(t.Context(), store.Reader, id, conversationPage(request))
+	if err != nil || len(page) != 1 || page[0].Seq != 8 || !more {
+		t.Fatalf("first page lost the cursor for a large event: entries=%d more=%t err=%v", len(page), more, err)
+	}
 	log := acp.NewEventLog(maxConversationSnapshotBytes)
 	if err := log.Restore(entries, lastSeq, truncated); err != nil {
 		t.Fatalf("stored tail cannot fit in memory: %v", err)

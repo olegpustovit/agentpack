@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ApiError, LOCAL } from "@/lib/api"
-import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, olderConversationPage } from "./queries"
+import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, mergeConversationPages, olderConversationPage } from "./queries"
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -38,6 +38,14 @@ describe("earlier history", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(`${JSON.stringify(entry(9))}\n`)))
     const error = await olderConversationPage("peer-1", "s1", 5).catch((error: unknown) => error)
     expect(conversationNeedsUpdate(error)).toBe(true)
+  })
+  it("keeps entries streamed while a snapshot was in flight", () => {
+    const current = { entries: [entry(3), entry(4), entry(5)], truncated: false }
+    const fetched = { entries: [entry(2), entry(3), entry(4)], truncated: true }
+    expect(mergeConversationPages(current, fetched)).toEqual({
+      entries: [entry(2), entry(3), entry(4), entry(5)],
+      truncated: true,
+    })
   })
   it("keeps older pages below the tail and drops overlap", () => {
     expect(joinHistory([entry(1), entry(2), entry(3)], [entry(3), entry(4)]).map((item) => item.seq)).toEqual([1, 2, 3, 4])

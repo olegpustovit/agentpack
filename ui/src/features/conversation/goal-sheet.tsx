@@ -12,11 +12,10 @@ export type GoalAction = "pause" | "resume" | "clear"
 
 const goalPath = (sessionId: string): `/api/${string}` => `/api/sessions/${encodeURIComponent(sessionId)}/conversation/goal`
 
-// Set, edit, pause, resume and clear. Each refreshes the thread, which records the change.
+// Set, edit, pause, resume and clear. The conversation stream records each change.
 export function useGoalActions(machine: string, sessionId: string) {
   const queryClient = useQueryClient()
   const refresh = () => {
-    void queryClient.invalidateQueries({ queryKey: ["conversation", machine, sessionId] })
     void queryClient.invalidateQueries({ queryKey: ["m"] })
   }
   const set = useMutation({

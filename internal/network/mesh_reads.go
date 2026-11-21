@@ -134,9 +134,13 @@ func (g *Gateway) routeMeshRequest(w http.ResponseWriter, r *http.Request) (bool
 		http.Error(w, "archived", http.StatusConflict)
 		return true, nil
 	}
-	if !info.ArchivedAt.IsZero() && r.Method == http.MethodGet && len(parts) == 4 && parts[3] == "conversation" {
-		r.SetPathValue("id", parts[2])
-		g.serveConversation(w, r)
+	history := r.Method == http.MethodGet && len(parts) == 4 && parts[3] == "conversation"
+	if history && (!info.ArchivedAt.IsZero() || !isConversationStream(r)) {
+		if node != "" && node != info.NodeID {
+			http.Error(w, "session belongs to another node", http.StatusBadRequest)
+			return true, nil
+		}
+		g.serveStoredSessionConversation(w, r, info)
 		return true, nil
 	}
 	if r.Method == http.MethodGet && len(parts) == 5 && parts[3] == "blobs" {
@@ -150,6 +154,10 @@ func (g *Gateway) routeMeshRequest(w http.ResponseWriter, r *http.Request) (bool
 		return false, err
 	}
 	if info.NodeID == local {
+		if history {
+			g.serveStoredSessionConversation(w, r, info)
+			return true, nil
+		}
 		return false, nil
 	}
 	if node != "" && node != info.NodeID {
@@ -164,10 +172,8 @@ func (g *Gateway) routeMeshRequest(w http.ResponseWriter, r *http.Request) (bool
 	}
 	r.SetPathValue("id", parts[2])
 	online, _ := g.nodeContact(info.NodeID, local)
-	history := r.Method == http.MethodGet && len(parts) == 4 && parts[3] == "conversation"
 	if history && !online {
-		r.SetPathValue("id", parts[2])
-		g.serveConversation(w, r)
+		g.serveStoredSessionConversation(w, r, info)
 		return true, nil
 	}
 	if !online {

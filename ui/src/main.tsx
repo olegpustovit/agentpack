@@ -8,12 +8,11 @@ import { terminalPool } from "./features/terminal/pool"
 import { queryClient, router } from "./router"
 import { breadcrumb, flushTelemetry, installTelemetry, reportError } from "./lib/telemetry"
 import { configQuery } from "./lib/config"
-import { forgetQueries, persistQueries, restoreQueries } from "./lib/persist"
+import { cacheBuildID, forgetQueries, persistQueries, restoreQueries } from "./lib/persist"
 
-const entryBuildID = document.querySelector<HTMLScriptElement>('script[type="module"][src]')?.src.match(/index-(.+)\.js$/)?.[1]
 installTelemetry(() => ({
   route: router.state.matches.at(-1)?.fullPath ?? "", search: router.state.location.search,
-  ui_build_id: entryBuildID || queryClient.getQueryData(configQuery.queryKey)?.ui_build_id || "dev",
+  ui_build_id: cacheBuildID || queryClient.getQueryData(configQuery.queryKey)?.ui_build_id || "dev",
 }))
 router.subscribe("onResolved", () => breadcrumb({ kind: "navigate", name: router.state.matches.at(-1)?.fullPath ?? "" }))
 
@@ -50,7 +49,7 @@ if ("serviceWorker" in navigator) {
     .catch(() => undefined)
 }
 
-const build = entryBuildID || "dev"
+const build = cacheBuildID || "dev"
 void restoreQueries(queryClient, build).finally(() => {
   persistQueries(queryClient, build)
   createRoot(document.getElementById("root")!).render(

@@ -297,19 +297,34 @@ test("/terminal reopens a stopped chat as a terminal session", async ({ page }) 
   expect(posted).toMatchObject({ transport: "terminal", directory: session.directory })
 })
 
-test("permission answer refetches conversation log", async ({ page }) => {
-  let fetches = 0
-  await page.route("**/api/sessions/*/conversation**", (route) => {
-    if (route.request().url().includes("/permission")) return route.fallback()
-    fetches += 1
-    return route.fulfill({ body: fixtureBody, contentType: "application/x-ndjson" })
+test("a streamed permission result resolves the card without another snapshot", async ({ page }) => {
+  let snapshots = 0
+  let resolveAnswer!: () => void
+  const answered = new Promise<void>((resolve) => { resolveAnswer = resolve })
+  await page.route("**/api/sessions/chat-one/conversation**", async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname.endsWith("/config-options")) return route.fulfill({ json: [] })
+    if (!url.searchParams.has("stream")) {
+      snapshots++
+      return route.fulfill({ body: fixtureBody, contentType: "application/x-ndjson" })
+    }
+    await answered
+    return route.fulfill({
+      body: 'id: 99\ndata: {"seq":99,"ts":1099,"kind":"permission_result","payload":{"requestId":"p1","optionId":"allow"}}\n\n',
+      contentType: "text/event-stream",
+    })
   })
-  await page.route("**/api/sessions/*/conversation/permission", (route) => route.fulfill({ json: { accepted: true } }))
+  await page.route("**/api/sessions/*/conversation/permission", async (route) => {
+    await route.fulfill({ json: { accepted: true } })
+    resolveAnswer()
+  })
   await page.goto("/sessions/local/chat-one")
-  await expect.poll(() => fetches).toBeGreaterThan(0)
-  const before = fetches
-  await page.getByRole("button", { name: "Allow once" }).click()
-  await expect.poll(() => fetches).toBeGreaterThan(before)
+  const allow = page.getByRole("button", { name: "Allow once" })
+  await expect(allow).toBeVisible()
+  const before = snapshots
+  await allow.click()
+  await expect(page.getByText(/Answered: Allow once/)).toBeVisible()
+  expect(snapshots).toBe(before)
 })
 
 test("escape closes message context menu without posting permission", async ({ page }) => {
@@ -686,4 +701,83 @@ test("an Oh My Pi chat switches to a role's model and thinking from the model me
   await expect(page.getByRole("menuitem", { name: /Thinking/ })).toHaveCount(0)
   await page.getByRole("menuitem", { name: /^Fast/ }).click()
   await expect.poll(() => posted).toEqual([{ key: "model", value: "anthropic/haiku" }, { key: "thinking", value: "low" }])
+})
+
+test("a hidden chat reconnects from the last sequence it received", async ({ page }) => {
+  const cursors: string[] = []
+  const entry = (seq: number, text: string) => JSON.stringify({
+    seq,
+    ts: seq,
+    kind: "agent_message_chunk",
+    payload: { text: { type: "text", text } },
+  })
+  await page.addInitScript(() => {
+    let visibility = "visible"
+    Object.defineProperty(document, "visibilityState", { get: () => visibility })
+    document.addEventListener("test-hide", () => {
+      visibility = "hidden"
+      document.dispatchEvent(new Event("visibilitychange"))
+    })
+    document.addEventListener("test-show", () => {
+      visibility = "visible"
+      document.dispatchEvent(new Event("visibilitychange"))
+    })
+  })
+  await page.route("**/api/sessions/chat-one/conversation**", (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname.endsWith("/config-options")) return route.fulfill({ json: [] })
+    if (!url.searchParams.has("stream")) return route.fulfill({
+      body: entry(1, "Initial message") + "\n",
+      contentType: "application/x-ndjson",
+    })
+    cursors.push(url.searchParams.get("since") ?? "")
+    if (cursors.length > 1) return route.abort()
+    return route.fulfill({
+      body: `id: 2\ndata: ${entry(2, "Streamed message")}\n\n`,
+      contentType: "text/event-stream",
+    })
+  })
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByText(/Streamed message/)).toBeVisible()
+  await page.evaluate(() => {
+    document.dispatchEvent(new Event("test-hide"))
+    document.dispatchEvent(new Event("test-show"))
+  })
+  await expect.poll(() => cursors).toEqual(["1", "2"])
+})
+
+test("the offline cache writes changed queries and skips a streaming chat", async ({ page }) => {
+  await page.route("**/api/sessions/chat-one/conversation**", (route) => {
+    const url = new URL(route.request().url())
+    if (!url.searchParams.has("stream")) return route.fallback()
+    return route.fulfill({ body: ": ping\n\n", contentType: "text/event-stream" })
+  })
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByText("I'll update the reattach path")).toBeVisible()
+  const readCache = () => page.evaluate(() => new Promise<Array<{ key: unknown[]; at: number }>>((resolve, reject) => {
+    const opening = indexedDB.open("agentpack-cache", 2)
+    opening.onerror = () => reject(opening.error)
+    opening.onsuccess = () => {
+      const db = opening.result
+      const tx = db.transaction("entries")
+      const request = tx.objectStore("entries").getAll()
+      tx.oncomplete = () => {
+        db.close()
+        resolve(request.result.map((row) => ({ key: row.query.queryKey, at: row.query.dehydratedAt })))
+      }
+      tx.onerror = () => reject(tx.error)
+    }
+  }))
+  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")))
+  await expect.poll(async () => (await readCache()).some(({ key }) => key.includes("sessions"))).toBe(true)
+  expect((await readCache()).filter(({ key }) => key[0] === "conversation")).toEqual([])
+  const entries = await readCache()
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { value: "hidden" })
+    document.dispatchEvent(new Event("visibilitychange"))
+  })
+  await expect.poll(async () => (await readCache()).filter(({ key }) => key[0] === "conversation").length).toBe(1)
+  const status = (rows: typeof entries) => rows.find(({ key }) => key[0] === "status")
+  expect(status(entries)).toBeDefined()
+  expect(status(await readCache())).toEqual(status(entries))
 })

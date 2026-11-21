@@ -280,11 +280,13 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 		}
 	}
 
-	if got := request(http.MethodGet, "/conversation", "", &readOnly).Code; got != http.StatusNoContent {
+	if got := request(http.MethodGet, "/conversation", "", &readOnly).Code; got != http.StatusOK {
 		t.Fatalf("conversation read from another node: status %d", got)
 	}
-	if got := <-requests; got != "/conversation" {
-		t.Fatalf("read worker path = %q", got)
+	select {
+	case got := <-requests:
+		t.Fatalf("snapshot reached worker at %q", got)
+	default:
 	}
 
 	localCLI := Actor{Kind: "cli", User: owner.User, Node: owner.Node}

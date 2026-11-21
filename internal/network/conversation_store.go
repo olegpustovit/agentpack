@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -163,13 +165,20 @@ const maxConversationSnapshotBytes = 4 << 20
 const conversationPageBytes = 1 << 20
 
 // conversationRange selects seq in (since, before); before 0 means the newest tail.
-type conversationRange struct{ since, before int64 }
+type conversationRange struct {
+	since, before int64
+	snapshot      bool
+}
 
 // conversationPage reads ?before= from a request: 0 when absent or invalid.
 func conversationPage(r *http.Request) conversationRange {
 	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	if isConversationStream(r) {
+		lastID, _ := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)
+		since = min(max(since, lastID), math.MaxInt64-1)
+	}
 	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
-	return conversationRange{since: max(since, 0), before: max(before, 0)}
+	return conversationRange{since: max(since, 0), before: max(before, 0), snapshot: !isConversationStream(r)}
 }
 
 // readConversationEntries returns the newest entries in the range that fit the byte budget, oldest first.
@@ -206,6 +215,9 @@ func readConversationEntries(ctx context.Context, tx *sql.Tx, id string, span co
 		return nil, false, errors.New("invalid stored conversation sequence")
 	}
 	budget := maxConversationSnapshotBytes
+	if span.snapshot && span.since == 0 {
+		budget = 256 << 10
+	}
 	if span.before > 0 {
 		budget, truncated = conversationPageBytes, false
 	}
@@ -215,7 +227,7 @@ func readConversationEntries(ctx context.Context, tx *sql.Tx, id string, span co
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT seq,length(CAST(body AS BLOB)),
 		CASE WHEN length(CAST(body AS BLOB))<=? THEN body ELSE '' END
-		FROM conversation_events WHERE session_id=? AND seq>? AND seq<? ORDER BY seq DESC`, budget, id, span.since, upper)
+		FROM conversation_events WHERE session_id=? AND seq>? AND seq<? ORDER BY seq DESC`, maxConversationSnapshotBytes, id, span.since, upper)
 	if err != nil {
 		return nil, false, err
 	}
@@ -229,7 +241,8 @@ func readConversationEntries(ctx context.Context, tx *sql.Tx, id string, span co
 		if err := rows.Scan(&seq, &size, &body); err != nil {
 			return nil, false, err
 		}
-		if size+1 > budget-total {
+		// Keep a single large event readable so its sequence remains a usable paging cursor.
+		if size+1 > budget-total && !(span.snapshot && len(entries) == 0 && size+1 <= maxConversationSnapshotBytes) {
 			truncated = true
 			break
 		}
@@ -288,20 +301,40 @@ func newConversationLog(ctx context.Context, store *state.Store, id string, fail
 func (g *Gateway) serveConversation(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	info, err := storedSession(r.Context(), g.auth.store.Reader, id)
-	if err == nil && !info.ArchivedAt.IsZero() {
-		g.serveArchivedConversation(w, r, info, g.tailnetTarget)
+	if err == nil {
+		g.serveStoredSessionConversation(w, r, info)
 		return
 	}
-	// A running worker holds only a bounded tail; older pages always come from the store.
-	if conversationPage(r).before == 0 {
-		if record, err := g.workerRecord(r.Context(), id); err == nil && proxyWorkerConversation(w, r, record, "") {
+	if errors.Is(err, errSessionNotFound) && conversationPage(r).before == 0 {
+		if record, recordErr := g.workerRecord(r.Context(), id); recordErr == nil && proxyWorkerConversation(w, r, record, "") {
 			return
 		}
 	}
+	g.writeStoredConversation(w, r, id, err)
+}
+
+func (g *Gateway) serveStoredSessionConversation(w http.ResponseWriter, r *http.Request, info SessionInfo) {
+	if !info.ArchivedAt.IsZero() {
+		g.serveArchivedConversation(w, r, info, g.tailnetTarget)
+		return
+	}
+	if info.Transport != "acp" {
+		http.Error(w, "conversation unavailable", http.StatusNotFound)
+		return
+	}
+	if isConversationStream(r) && conversationPage(r).before == 0 {
+		if record, err := g.workerRecord(r.Context(), info.ID); err == nil && proxyWorkerConversation(w, r, record, "") {
+			return
+		}
+	}
+	g.writeStoredConversation(w, r, info.ID, nil)
+}
+
+func (g *Gateway) writeStoredConversation(w http.ResponseWriter, r *http.Request, id string, err error) {
 	if r.Context().Err() != nil {
 		return
 	}
-	if errors.Is(err, errSessionNotFound) || err == nil && info.Transport != "acp" {
+	if errors.Is(err, errSessionNotFound) {
 		http.Error(w, "conversation unavailable", http.StatusNotFound)
 		return
 	}
@@ -327,18 +360,11 @@ func writeConversationEntries(w http.ResponseWriter, r *http.Request, entries []
 	if truncated {
 		w.Header().Set("X-Agentpack-Truncated", "true")
 	}
-	stream := r.URL.Query().Get("stream") == "1" || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
-	if stream {
+	if isConversationStream(r) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-store")
 		for _, entry := range entries {
-			data, err := json.Marshal(entry)
-			if err != nil {
-				return
-			}
-			var message sse.Message
-			message.AppendData(string(data))
-			if _, err := message.WriteTo(w); err != nil {
+			if err := writeConversationSSE(w, entry); err != nil {
 				return
 			}
 		}
@@ -353,4 +379,19 @@ func writeConversationEntries(w http.ResponseWriter, r *http.Request, entries []
 			return
 		}
 	}
+}
+
+func isConversationStream(r *http.Request) bool {
+	return r.URL.Query().Get("stream") == "1" || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
+}
+
+func writeConversationSSE(w io.Writer, entry acp.LogEntry) error {
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	message := sse.Message{ID: sse.ID(strconv.FormatInt(entry.Seq, 10))}
+	message.AppendData(string(data))
+	_, err = message.WriteTo(w)
+	return err
 }

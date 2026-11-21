@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
@@ -69,7 +70,7 @@ func TestConversationGatewayProxyStreamsUntilCancelled(t *testing.T) {
 
 func TestConversationGatewayProxyForwardsSSEAccept(t *testing.T) {
 	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Accept") != "text/event-stream" {
+		if r.Header.Get("Accept") != "text/event-stream" || r.Header.Get("Last-Event-ID") != "8" {
 			http.Error(w, "missing SSE negotiation", http.StatusBadRequest)
 			return
 		}
@@ -83,6 +84,7 @@ func TestConversationGatewayProxyForwardsSSEAccept(t *testing.T) {
 	defer worker.Close()
 	r := httptest.NewRequest(http.MethodGet, "/api/sessions/session-peer/conversation", nil)
 	r.Header.Set("Accept", "text/event-stream")
+	r.Header.Set("Last-Event-ID", "8")
 	r = r.WithContext(obs.WithTrace(r.Context(), "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"))
 	w := httptest.NewRecorder()
 	proxyWorkerConversation(w, r, WorkerRecord{Address: strings.TrimPrefix(worker.URL, "http://")}, "")
@@ -90,6 +92,47 @@ func TestConversationGatewayProxyForwardsSSEAccept(t *testing.T) {
 		t.Fatalf("SSE negotiation changed: %d %s", w.Code, w.Body.String())
 	}
 }
+func TestConversationStreamResumesAndKeepsConnectionAlive(t *testing.T) {
+	old := conversationHeartbeatInterval
+	conversationHeartbeatInterval = time.Millisecond
+	t.Cleanup(func() { conversationHeartbeatInterval = old })
+	log := acp.NewEventLog(0)
+	log.Append("prompt", 1, json.RawMessage(`{}`))
+	log.Append("turn_end", 2, json.RawMessage(`{}`))
+	worker := &WorkerHTTP{}
+	conv := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	r := httptest.NewRequest(http.MethodGet, "/conversation?stream=1&since=0", nil).WithContext(ctx)
+	r.Header.Set("Last-Event-ID", "1")
+	w := &conversationStreamWriter{header: make(http.Header), writes: make(chan string, 8)}
+	done := make(chan struct{})
+	go func() {
+		worker.serveConversationSSE(w, r, conv)
+		close(done)
+	}()
+	var output string
+	for !strings.Contains(output, "ping") {
+		select {
+		case data := <-w.writes:
+			output += data
+		case <-ctx.Done():
+			t.Fatal("conversation stream did not send a heartbeat")
+		}
+	}
+	cancel()
+	for {
+		select {
+		case <-w.writes:
+		case <-done:
+			if !strings.Contains(output, "id: 2") || strings.Contains(output, "id: 1") {
+				t.Fatalf("replay did not resume after ID 1: %q", output)
+			}
+			return
+		}
+	}
+}
+
 func TestConversationTruncationEventIsOneShot(t *testing.T) {
 	var output bytes.Buffer
 	sent := false

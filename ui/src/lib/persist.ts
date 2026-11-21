@@ -1,31 +1,58 @@
-import { dehydrate, hydrate, type DehydratedState, type Query, type QueryClient } from "@tanstack/react-query"
+import { hashKey, hydrate, type DehydratedState, type QueryClient, type QueryKey } from "@tanstack/react-query"
 
-// The query cache survives reloads in IndexedDB, so a reload paints the last-known lists and chats at once
-// and refetches behind them. Only successful reads are kept, for one UI build, for a day.
 const DB = "agentpack-cache"
-const STORE = "queries"
-const KEY = "client"
+const STORE = "entries"
 const MAX_AGE = 24 * 60 * 60 * 1000
-const SAVE_DELAY = 1000
-// Conversations are the largest entries; the most recently loaded ones are what a reload reopens.
-const CHATS_KEPT = 8
-// IndexedDB is usually a few milliseconds; a slower one must not hold the first paint.
-const RESTORE_WAIT = 150
+const SAVE_DELAY = 10_000
+const CHAT_BYTES = 256 << 10
+const CHATS_KEPT = 3
 
-type Saved = { build: string; at: number; state: DehydratedState }
+export const cacheBuildID = document.querySelector<HTMLScriptElement>('script[type="module"][src]')?.src.match(/index-(.+)\.js$/)?.[1]
 
-function withStore<T>(mode: IDBTransactionMode, act: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+type Saved = {
+  build: string
+  at: number
+  chat: number
+  query: DehydratedState["queries"][number]
+}
+
+const streaming = new Map<string, number>()
+let generation = 0
+
+export function trackStreamingQuery(key: QueryKey): () => void {
+  const hash = hashKey(key)
+  streaming.set(hash, (streaming.get(hash) ?? 0) + 1)
+  return () => {
+    const count = streaming.get(hash) ?? 0
+    if (count <= 1) streaming.delete(hash)
+    else streaming.set(hash, count - 1)
+  }
+}
+
+function withStore<T>(mode: IDBTransactionMode, act: (store: IDBObjectStore) => IDBRequest<T> | undefined): Promise<T | undefined> {
   return new Promise((resolve, reject) => {
-    const opening = indexedDB.open(DB, 1)
-    opening.onupgradeneeded = () => opening.result.createObjectStore(STORE)
+    const opening = indexedDB.open(DB, 2)
+    opening.onupgradeneeded = () => {
+      const db = opening.result
+      if (db.objectStoreNames.contains("queries")) db.deleteObjectStore("queries")
+      db.createObjectStore(STORE).createIndex("recent", ["chat", "at"])
+    }
     opening.onerror = () => reject(opening.error)
     opening.onsuccess = () => {
       const db = opening.result
       const tx = db.transaction(STORE, mode)
-      const request = act(tx.objectStore(STORE))
+      let request: IDBRequest<T> | undefined
+      try {
+        request = act(tx.objectStore(STORE))
+      } catch (error) {
+        tx.abort()
+        db.close()
+        reject(error)
+        return
+      }
       tx.oncomplete = () => {
         db.close()
-        resolve(request.result)
+        resolve(request?.result)
       }
       tx.onerror = tx.onabort = () => {
         db.close()
@@ -35,50 +62,125 @@ function withStore<T>(mode: IDBTransactionMode, act: (store: IDBObjectStore) => 
   })
 }
 
-export async function restoreQueries(client: QueryClient, build: string): Promise<void> {
-  try {
-    const saved = await Promise.race([
-      withStore<Saved | undefined>("readonly", (store) => store.get(KEY)),
-      new Promise<undefined>((resolve) => setTimeout(resolve, RESTORE_WAIT)),
-    ])
-    if (saved && saved.build === build && Date.now() - saved.at < MAX_AGE) {
-      hydrate(client, saved.state)
-      // Shown at once, but anything may have changed while the page was closed: mounting refetches it behind.
-      // The sign-in status stays fresh so the shell's guard never waits; a 401 anywhere still signs out.
-      void client.invalidateQueries({ refetchType: "none", predicate: (query) => query.queryKey[0] !== "status" })
-    }
-  } catch {
-    // Storage can be blocked or unavailable; the app then loads from the network as before.
-  }
-}
-
-function keep(chats: Set<Query>) {
-  return (query: Query) => query.state.status === "success" && (query.queryKey[0] !== "conversation" || chats.has(query))
-}
-
-// Saves at most once a second while queries change. Returns the unsubscribe.
-export function persistQueries(client: QueryClient, build: string): () => void {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const save = () => {
-    timer = undefined
-    const chats = new Set(
-      client.getQueryCache().findAll({ queryKey: ["conversation"] })
-        .sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt)
-        .slice(0, CHATS_KEPT),
-    )
-    const saved: Saved = { build, at: Date.now(), state: dehydrate(client, { shouldDehydrateQuery: keep(chats) }) }
-    void withStore("readwrite", (store) => store.put(saved, KEY)).catch(() => undefined)
-  }
-  return client.getQueryCache().subscribe(() => {
-    timer ??= setTimeout(save, SAVE_DELAY)
+function restore(client: QueryClient, build: string, saved: Saved[], started: number) {
+  if (started !== generation) return
+  hydrate(client, {
+    mutations: [],
+    queries: saved.filter((entry) => entry.build === build && Date.now() - entry.at < MAX_AGE).map((entry) => ({
+      ...entry.query,
+      state: { ...entry.query.state, isInvalidated: entry.query.queryKey[0] !== "status" },
+    })),
   })
 }
 
-// Called on sign-out and on any 401, so the next person on this browser never sees the last one's data.
-export function forgetQueries(): void {
+export async function restoreQueries(client: QueryClient, build: string): Promise<void> {
+  const started = generation
   try {
-    void withStore("readwrite", (store) => store.delete(KEY)).catch(() => undefined)
+    const saved = await Promise.race([
+      withStore<Saved[]>("readonly", (store) => store.index("recent").getAll(IDBKeyRange.bound([0, 0], [0, Infinity]))),
+      new Promise<undefined>((resolve) => setTimeout(resolve, 150)),
+    ])
+    if (saved) restore(client, build, saved, started)
   } catch {
-    // Nothing was stored.
+    // IndexedDB may be blocked.
   }
+}
+
+export async function restoreChatQuery(client: QueryClient, build: string, key: QueryKey): Promise<void> {
+  const started = generation
+  try {
+    const saved = await withStore<Saved>("readonly", (store) => store.get(hashKey(key)))
+    if (saved) restore(client, build, [saved], started)
+  } catch {
+    // IndexedDB may be blocked.
+  }
+}
+
+function chatTail(data: unknown): unknown {
+  const page = data as { entries: unknown[]; truncated: boolean }
+  const encoder = new TextEncoder()
+  let size = 0
+  let first = page.entries.length
+  while (first > 0) {
+    size += encoder.encode(JSON.stringify(page.entries[first - 1])).length + 1
+    if (size > CHAT_BYTES) break
+    first--
+  }
+  if (first === page.entries.length) return undefined
+  return { entries: page.entries.slice(first), truncated: first > 0 || page.truncated }
+}
+
+export function persistQueries(client: QueryClient, build: string): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let observedGeneration = generation
+  const dirty = new Set<string>()
+  const save = () => {
+    clearTimeout(timer)
+    timer = undefined
+    if (observedGeneration !== generation) {
+      dirty.clear()
+      observedGeneration = generation
+    }
+    const cache = client.getQueryCache()
+    const batch: Saved[] = []
+    for (const hash of dirty) {
+      if (streaming.has(hash)) continue
+      dirty.delete(hash)
+      const query = cache.get(hash)
+      if (query?.state.status !== "success") continue
+      const chat = Number(query.queryKey[0] === "conversation")
+      const data = chat ? chatTail(query.state.data) : query.state.data
+      if (data === undefined) continue
+      batch.push({
+        build,
+        at: query.state.dataUpdatedAt,
+        chat,
+        query: {
+          queryHash: hash,
+          queryKey: query.queryKey,
+          dehydratedAt: Date.now(),
+          state: { ...query.state, data, fetchStatus: "idle", error: null, fetchFailureReason: null },
+        },
+      })
+    }
+    if (dirty.size) timer = setTimeout(save, SAVE_DELAY)
+    if (!batch.length) return
+    const started = generation
+    void withStore("readwrite", (store) => {
+      if (started !== generation) return
+      for (const entry of batch) store.put(entry, entry.query.queryHash)
+      const cursor = store.index("recent").openKeyCursor(IDBKeyRange.bound([1, 0], [1, Infinity]), "prev")
+      let kept = 0
+      cursor.onsuccess = () => {
+        if (!cursor.result) return
+        if (++kept > CHATS_KEPT) store.delete(cursor.result.primaryKey)
+        cursor.result.continue()
+      }
+    }).catch(() => undefined)
+  }
+  const unsubscribe = client.getQueryCache().subscribe((event) => {
+    if (event.type !== "updated" || event.action.type !== "success") return
+    if (observedGeneration !== generation) {
+      dirty.clear()
+      observedGeneration = generation
+    }
+    dirty.add(event.query.queryHash)
+    timer ??= setTimeout(save, SAVE_DELAY)
+  })
+  const onHidden = () => {
+    if (document.visibilityState === "hidden") queueMicrotask(save)
+  }
+  document.addEventListener("visibilitychange", onHidden)
+  window.addEventListener("pagehide", save)
+  return () => {
+    unsubscribe()
+    clearTimeout(timer)
+    document.removeEventListener("visibilitychange", onHidden)
+    window.removeEventListener("pagehide", save)
+  }
+}
+
+export function forgetQueries(): void {
+  generation++
+  void withStore("readwrite", (store) => store.clear()).catch(() => undefined)
 }

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation } from "@tanstack/react-query"
 import { BookOpen, Check, ChevronRight, Copy, ExternalLink, Flag, Folder, GitFork, Globe, Pencil, Lock, Quote, RotateCcw, Search, Sparkles, SquareTerminal, Wrench } from "lucide-react"
 import { RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -285,7 +285,6 @@ function ToolGroup({ tools }: { tools: ThreadItem[] }) {
 export function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem; machine: string; sessionId: string }) {
   const ask = item.data as ElicitationPayload & { optionIds?: string[]; allowMultiple?: boolean }
   const [selected, setSelected] = useState<string[]>([])
-  const queryClient = useQueryClient()
   const answer = useMutation({
     mutationFn: (value: string) =>
       api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/elicitation`, {
@@ -293,9 +292,6 @@ export function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem
         method: "POST",
         body: { elicitation_id: ask.elicitationId, value },
       }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["conversation", machine, sessionId] })
-    },
   })
   const result = ask.result
   // Older workers logged the URL as the prompt.
@@ -481,7 +477,6 @@ export function PermissionCard({
   agent?: string
 }) {
   const perm = item.data as PermissionPayload
-  const queryClient = useQueryClient()
   const answer = useMutation({
     mutationFn: (optionId: string) =>
       api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/permission`, {
@@ -489,9 +484,6 @@ export function PermissionCard({
         method: "POST",
         body: { request_id: perm.requestId, option_id: optionId },
       }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["conversation", machine, sessionId] })
-    },
   })
   const open = !readOnly && !perm.resolved && !perm.inactive
   const options = perm.options ?? []

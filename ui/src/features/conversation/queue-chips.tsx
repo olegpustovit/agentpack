@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation } from "@tanstack/react-query"
 import { CornerDownRight, Pencil, Send, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api"
@@ -9,10 +9,8 @@ import { conversationErrorMessage, conversationNeedsUpdate } from "./queries"
 
 // Queued messages live in the worker, so every viewer sees and can change the same queue.
 export function QueueChips({ queue, machine, sessionId, readOnly }: { queue: QueuedPrompt[]; machine: string; sessionId: string; readOnly?: boolean }) {
-  const queryClient = useQueryClient()
   const [editing, setEditing] = useState<{ id: string; text: string }>()
   const path = (id: string): `/api/${string}` => `/api/sessions/${encodeURIComponent(sessionId)}/conversation/queue/${encodeURIComponent(id)}`
-  const done = () => void queryClient.invalidateQueries({ queryKey: ["conversation", machine, sessionId] })
   const change = useMutation({
     mutationFn: ({ id, action, text }: { id: string; action: "steer" | "edit" | "remove"; text?: string }) =>
       action === "steer"
@@ -22,7 +20,6 @@ export function QueueChips({ queue, machine, sessionId, readOnly }: { queue: Que
           : api(path(id), { machine, method: "DELETE" }),
     onSuccess: (_, input) => {
       if (input.action === "edit") setEditing(undefined)
-      done()
     },
     onError: (error, input) =>
       hud.error(

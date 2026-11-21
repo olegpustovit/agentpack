@@ -16,10 +16,11 @@ import type { SessionInfo } from "@/lib/api-types"
 import { harnessName, relativeTime } from "@/lib/format"
 import { clock, goalElapsedMs, liveGoal } from "@/lib/goal"
 import { useNow } from "@/lib/use-now"
+import { cacheBuildID, restoreChatQuery, trackStreamingQuery } from "@/lib/persist"
 import { hud } from "@/lib/hud"
 import { api, ApiError, LOCAL } from "@/lib/api"
 import { ompSettingsQuery, quickRoles } from "@/features/settings/omp-model"
-import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, olderConversationPage, type ConversationPage } from "./queries"
+import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, mergeConversationPages, olderConversationPage, type ConversationPage } from "./queries"
 import { configRole, dangerousMode, parseConfigOptions } from "./config-options"
 import type { LogEntry, ThreadItem } from "./model"
 import { helperSubagents, reduceThread } from "./reducer"
@@ -143,7 +144,17 @@ export default function ConversationPane({
   const resumable = !readOnly && !starting && !live && Boolean(info?.ended_at)
   // A first message from New session waits in the composer, held like one typed while starting.
   const [held, setHeld] = useState(() => firstMessage(sessionId) !== "")
-  const { data: tail, error: conversationError } = useQuery({ ...conversationEventsQuery(machine, sessionId, live), retry: false })
+  const [streamConnected, setStreamConnected] = useState(false)
+  const { data: tail, error: conversationError } = useQuery({
+    ...conversationEventsQuery(machine, sessionId),
+    staleTime: streamConnected ? Infinity : undefined,
+    structuralSharing: (previous, next) => mergeConversationPages(previous as ConversationPage | undefined, next as ConversationPage),
+    retry: false,
+  })
+  useEffect(() => {
+    const key = conversationEventsQuery(machine, sessionId).queryKey
+    if (!queryClient.getQueryData(key)) void restoreChatQuery(queryClient, cacheBuildID || "dev", key)
+  }, [machine, queryClient, sessionId])
   // Earlier pages, loaded as the thread scrolls up. Keyed, so another session never shows them.
   const historyKey = `${machine}\0${sessionId}`
   const [history, setHistory] = useState<{ key: string; entries: LogEntry[]; more: boolean; loading: boolean; error?: unknown }>()
@@ -175,27 +186,53 @@ export default function ConversationPane({
   useEffect(() => {
     if (!live || needsUpdate || !tailLoaded) return
     const key = ["conversation", machine, sessionId]
-    const url = new URL(`/api/sessions/${encodeURIComponent(sessionId)}/conversation`, location.origin)
-    url.searchParams.set("stream", "1")
-    // Resume after the loaded tail; a reconnect replays from here and the seq check below drops repeats.
-    url.searchParams.set("since", String(queryClient.getQueryData<ConversationPage>(key)?.entries.at(-1)?.seq ?? 0))
-    if (machine && machine !== LOCAL) url.searchParams.set("node", machine)
-    const source = new EventSource(url)
-    source.onmessage = (event) => {
-      if (!event.data) return
-      let entry: LogEntry
-      try {
-        entry = JSON.parse(event.data) as LogEntry
-      } catch {
+    let source: EventSource | undefined
+    let untrack: (() => void) | undefined
+    const close = () => {
+      source?.close()
+      source = undefined
+      untrack?.()
+      untrack = undefined
+      setStreamConnected(false)
+    }
+    const syncVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        close()
         return
       }
-      queryClient.setQueryData<ConversationPage>(key, (current) => {
-        const rows = current?.entries ?? []
-        if (entry.seq <= (rows.at(-1)?.seq ?? 0)) return current
-        return { entries: [...rows, entry], truncated: current?.truncated ?? false }
+      if (source) return
+      const url = new URL(`/api/sessions/${encodeURIComponent(sessionId)}/conversation`, location.origin)
+      url.searchParams.set("stream", "1")
+      url.searchParams.set("since", String(queryClient.getQueryData<ConversationPage>(key)?.entries.at(-1)?.seq ?? 0))
+      if (machine && machine !== LOCAL) url.searchParams.set("node", machine)
+      source = new EventSource(url)
+      untrack = trackStreamingQuery(key)
+      source.onopen = () => setStreamConnected(true)
+      source.onerror = () => setStreamConnected(false)
+      source.onmessage = (event) => {
+        if (!event.data) return
+        let entry: LogEntry
+        try {
+          entry = JSON.parse(event.data) as LogEntry
+        } catch {
+          return
+        }
+        queryClient.setQueryData<ConversationPage>(key, (current) => {
+          const rows = current?.entries ?? []
+          if (entry.seq <= (rows.at(-1)?.seq ?? 0)) return current
+          return { entries: [...rows, entry], truncated: current?.truncated ?? false }
+        })
+      }
+      source.addEventListener("truncated", () => {
+        queryClient.setQueryData<ConversationPage>(key, (current) => current && { ...current, truncated: true })
       })
     }
-    return () => source.close()
+    document.addEventListener("visibilitychange", syncVisibility)
+    syncVisibility()
+    return () => {
+      document.removeEventListener("visibilitychange", syncVisibility)
+      close()
+    }
   }, [live, machine, needsUpdate, queryClient, sessionId, tailLoaded])
 
   const parent = reduceThread(historyKey, entries)
@@ -220,7 +257,7 @@ export default function ConversationPane({
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [subagentId, navigate])
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = threadScrollRef.current
     if (!element || tailEntries.length === 0) return
     if (stickToBottomRef.current) element.scrollTop = element.scrollHeight
@@ -356,9 +393,6 @@ export default function ConversationPane({
   const cancelTurn = useMutation({
     mutationFn: () =>
       api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/cancel`, { machine, method: "POST" }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["conversation", machine, sessionId] })
-    },
     onError: (error) =>
       hud.error(
         conversationErrorMessage(machine, "stop the conversation", error),
@@ -392,9 +426,6 @@ export default function ConversationPane({
       if (!input.clearComposer) return
       setDraft("")
       setAttachments(() => [])
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["conversation", machine, sessionId] })
     },
     onError: (error, input) => {
       if (input.clearComposer) setDraft((current) => current || input.text)
@@ -431,7 +462,6 @@ export default function ConversationPane({
   const steerQueued = useMutation({
     mutationFn: (queueId: string) =>
       api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/queue/${encodeURIComponent(queueId)}/steer`, { machine, method: "POST" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["conversation", machine, sessionId] }),
     onError: (error, queueId) =>
       hud.error(
         conversationErrorMessage(machine, "steer with the queued message", error),
@@ -688,7 +718,7 @@ export default function ConversationPane({
         </div>
       {!readOnly && subagent && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-(--s4) pb-(--s5)">
-          <div className="pointer-events-auto mx-auto flex w-full max-w-180 items-center gap-(--s3) rounded-(--r-sheet) bg-(--glass) px-(--s4) py-(--s2) text-(length:--fs-sm) shadow-(--shadow-composer) backdrop-blur-xl">
+          <div className="pointer-events-auto mx-auto flex w-full max-w-180 items-center gap-(--s3) rounded-(--r-sheet) bg-(--window) px-(--s4) py-(--s2) text-(length:--fs-sm) shadow-(--shadow-composer)">
             <span className="min-w-0 flex-1 truncate text-(--fg2)">{`${agentName} owns this conversation. Approvals and Stop work here.`}</span>
             {subagentRunning(subagent) && subagent.cancellable && !subagent.id.startsWith("tool:") && (
               <Button type="button" size="sm" disabled={stopSubagent.isPending} onClick={() => stopSubagent.mutate(subagent.id)}>
