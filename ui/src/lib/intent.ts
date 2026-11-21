@@ -33,5 +33,6 @@ export function useIntent<Input, Result>({
     ...mutation,
     input: mutation.variables?.input,
     mutate: (input: Input) => mutation.mutate({ input, id: newIntentID() }),
+    mutateAsync: (input: Input) => mutation.mutateAsync({ input, id: newIntentID() }),
   }
 }

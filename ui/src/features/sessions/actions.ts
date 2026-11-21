@@ -1,7 +1,7 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { api, routeMissing } from "@/lib/api"
-import { newIntentID } from "@/lib/intent"
+import { newIntentID, useIntent } from "@/lib/intent"
 import { hud } from "@/lib/hud"
 import { rowKey, sessionLabel, type ListedSession } from "./group"
 import { sessionsQuery } from "./queries"
@@ -19,26 +19,52 @@ function errorText(error: unknown): string {
 // Stop and restart for session rows. A restart keeps one operation id per session until the
 // gateway accepts it or rejects it, so a retry cannot start a second restart.
 export function useSessionCommands() {
-  return sessionCommands(useQueryClient(), useState(() => new Map<string, string>())[0])
+  const queryClient = useQueryClient()
+  const operations = useState(() => new Map<string, string>())[0]
+  const { restart, refresh } = sessionCommands(queryClient, operations)
+
+  const stop = useIntent({
+    request: (session: ListedSession, id) => api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST", idempotencyKey: id }),
+    accepted: refresh,
+    failed: (error, session, retry) => hud.error(`Couldn't stop ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, retry),
+  })
+  const resume = useIntent({
+    request: (session: ListedSession, id) => api(`/api/sessions/${encodeURIComponent(session.id)}/resume`, { machine: session.machine, method: "POST", idempotencyKey: id, body: { text: "" } }),
+    accepted: refresh,
+    failed: (error, session, retry) => hud.error(`Couldn't resume ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, retry),
+  })
+  const archive = useIntent({
+    request: async (session: ListedSession, id) => {
+      const path: `/api/${string}` = `/api/sessions/${encodeURIComponent(session.id)}`
+      const options = { machine: session.machine, idempotencyKey: id }
+      // The row may be stale. The archive endpoint checks that the agent is stopped.
+      if (session.state.running) await api(`${path}/stop`, { ...options, method: "POST" }).catch(() => undefined)
+      return api(path, { ...options, method: "PATCH", body: { hidden: true } })
+    },
+    accepted: refresh,
+    failed: (error, session, retry) => hud.error(`Couldn't archive ${sessionLabel(session)}: ${errorText(error)}`, retry),
+  })
+  const tools = useIntent({
+    request: ({ session, enabled }: { session: ListedSession; enabled: boolean }) => api(`/api/sessions/${encodeURIComponent(session.id)}/tools`, { machine: session.machine, method: "POST", body: { enabled } }),
+    accepted: refresh,
+    failed: (error, { enabled }, retry) => hud.error(`Couldn't turn agentpack tools ${enabled ? "on" : "off"}: ${toolsError(error)}`, retry),
+  })
+
+  return {
+    stop: (session: ListedSession) => stop.mutateAsync(session).then(() => true, () => false),
+    restart,
+    resume: resume.mutate,
+    archive: (session: ListedSession) => archive.mutateAsync(session).then(() => true, () => false),
+    setTools: async (session: ListedSession, enabled: boolean) => {
+      await tools.mutateAsync({ session, enabled }).catch(() => undefined)
+    },
+  }
 }
 
 // Outside the hook: the retry callbacks reference their own function, which React Compiler cannot memoize.
 function sessionCommands(queryClient: QueryClient, operations: Map<string, string>) {
-
   async function refresh() {
     await queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
-  }
-
-  // Success shows in the row itself; only failures report.
-  async function stop(session: ListedSession, id = newIntentID()): Promise<boolean> {
-    try {
-      await api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST", idempotencyKey: id })
-      await refresh()
-      return true
-    } catch (error) {
-      hud.error(`Couldn't stop ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, () => void stop(session, id))
-      return false
-    }
   }
 
   async function restart(session: ListedSession): Promise<void> {
@@ -59,39 +85,5 @@ function sessionCommands(queryClient: QueryClient, operations: Map<string, strin
     }
   }
 
-  // A stopped chat starts its agent again; the row's state shows it coming up.
-  async function resume(session: ListedSession): Promise<void> {
-    try {
-      await api(`/api/sessions/${encodeURIComponent(session.id)}/resume`, { machine: session.machine, method: "POST", body: { text: "" } })
-      await refresh()
-    } catch (error) {
-      hud.error(`Couldn't resume ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, () => void resume(session))
-    }
-  }
-
-  // Archive takes the session out of every list; a running agent is stopped first.
-  async function archive(session: ListedSession, id = newIntentID()): Promise<boolean> {
-    try {
-      // The row can be stale (just stopped): a failed stop is fine, the archive request refuses a live agent itself.
-      if (session.state.running) await api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST", idempotencyKey: id }).catch(() => undefined)
-      await api(`/api/sessions/${encodeURIComponent(session.id)}`, { machine: session.machine, method: "PATCH", idempotencyKey: id, body: { hidden: true } })
-      await refresh()
-      return true
-    } catch (error) {
-      hud.error(`Couldn't archive ${sessionLabel(session)}: ${errorText(error)}`, () => void archive(session, id))
-      return false
-    }
-  }
-
-  // agentpack tools for a chat's agent; while off, the gateway refuses its next call.
-  async function setTools(session: ListedSession, enabled: boolean): Promise<void> {
-    try {
-      await api(`/api/sessions/${encodeURIComponent(session.id)}/tools`, { machine: session.machine, method: "POST", body: { enabled } })
-      await refresh()
-    } catch (error) {
-      hud.error(`Couldn't turn agentpack tools ${enabled ? "on" : "off"}: ${toolsError(error)}`, () => void setTools(session, enabled))
-    }
-  }
-
-  return { stop, restart, resume, archive, setTools }
+  return { restart, refresh }
 }

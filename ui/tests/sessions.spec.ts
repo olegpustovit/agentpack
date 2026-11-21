@@ -288,10 +288,12 @@ test("⌘/Ctrl- and Shift-click mark rows; the menu then acts on all of them", a
 })
 
 test("archive hides the row immediately and restores it if the request fails", async ({ page }) => {
+  const intentIDs: Array<string | undefined> = []
   let release!: () => void
   const response = new Promise<void>((resolve) => { release = resolve })
   await page.route("**/api/sessions/*", async (route) => {
     if (route.request().method() !== "PATCH") return route.fallback()
+    intentIDs.push(route.request().headers()["idempotency-key"])
     await response
     await route.fulfill({ status: 409, body: "Still running" })
   })
@@ -303,6 +305,10 @@ test("archive hides the row immediately and restores it if the request fails", a
   await expect(rows).toHaveCount(1)
   release()
   await expect(rows).toHaveCount(2)
+  await page.getByRole("button", { name: "Retry", exact: true }).click()
+  await expect.poll(() => intentIDs.length).toBe(2)
+  expect(intentIDs[0]).toMatch(/^[a-f0-9]{32}$/)
+  expect(intentIDs[1]).toBe(intentIDs[0])
 })
 
 test("a chat's row menu switches agentpack tools, and its helpers list under it", async ({ page }) => {
