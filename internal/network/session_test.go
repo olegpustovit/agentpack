@@ -24,6 +24,23 @@ func TestTerminalChild(t *testing.T) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		os.Exit(91)
 	}
+	if os.Getenv("AGENTPACK_TEST_TERMINAL_DA") == "1" {
+		restore, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			os.Exit(93)
+		}
+		fmt.Print("\x1b[c")
+		reply := make([]byte, 0, 16)
+		for buffer := make([]byte, 1); !strings.HasSuffix(string(reply), "c"); {
+			if _, err := os.Stdin.Read(buffer); err != nil {
+				os.Exit(94)
+			}
+			reply = append(reply, buffer[0])
+		}
+		_ = term.Restore(int(os.Stdin.Fd()), restore)
+		fmt.Printf("DA %q\n", reply)
+		os.Exit(0)
+	}
 	fmt.Print("\x1b[2JREADY\n")
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
@@ -324,5 +341,27 @@ func TestAttachReplayResumesWithinWindow(t *testing.T) {
 		if replay.Offset != test.offset || string(replay.Data) != test.data {
 			t.Fatalf("since %d: got offset %d data %q, want offset %d data %q", test.since, replay.Offset, replay.Data, test.offset, test.data)
 		}
+	}
+}
+
+// Nobody is attached when a shell first probes the terminal, so the worker answers for it.
+func TestSessionAnswersDeviceAttributesWithoutViewer(t *testing.T) {
+	command := exec.Command(os.Args[0], "-test.run=^TestTerminalChild$")
+	command.Env = append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1", "AGENTPACK_TEST_TERMINAL_DA=1")
+	session, err := StartSession(command, 24, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if code, err := session.Wait(wait); err != nil || code != 0 {
+		t.Fatalf("child exit %d: %v", code, err)
+	}
+	_, replay, err := session.Attach(false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `DA "\x1b[?1;2c"`; !strings.Contains(string(replay.Data), want) {
+		t.Fatalf("replay %q lacks %s", replay.Data, want)
 	}
 }

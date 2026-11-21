@@ -254,7 +254,8 @@ func (session *Session) updateResponderLocked() {
 	session.state.Responder = responder
 }
 
-func (session *Session) publish(data []byte) {
+// publish reports whether a viewer is attached to answer terminal queries.
+func (session *Session) publish(data []byte) bool {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	session.replay = append(session.replay, data...)
@@ -276,6 +277,7 @@ func (session *Session) publish(data []byte) {
 		default:
 		}
 	}
+	return session.state.Responder != 0
 }
 
 func (session *Session) readOutput() {
@@ -284,7 +286,12 @@ func (session *Session) readOutput() {
 	for {
 		n, err := session.terminal.Read(buffer)
 		if n > 0 {
-			session.publish(bytes.Clone(buffer[:n]))
+			data := bytes.Clone(buffer[:n])
+			// Shells probe the terminal before any viewer attaches (fish waits 10 s), and a viewer never
+			// answers replayed queries, so the worker answers Primary Device Attributes as xterm.js does.
+			if !session.publish(data) && (bytes.Contains(data, []byte("\x1b[c")) || bytes.Contains(data, []byte("\x1b[0c"))) {
+				_, _ = session.terminal.Write([]byte("\x1b[?1;2c"))
+			}
 		}
 		if err != nil {
 			if !terminalEOF(err) && !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) && !errors.Is(err, os.ErrDeadlineExceeded) {
