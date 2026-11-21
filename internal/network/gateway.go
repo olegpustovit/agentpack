@@ -285,10 +285,16 @@ func (g *Gateway) Handler() http.Handler {
 			http.Error(w, "gateway updates are unavailable", http.StatusNotImplemented)
 			return
 		}
-		// Installs this machine's view of the latest release, never a version the caller names.
-		version, _, err := fetchLatestRelease(r.Context())
+		version, status, err := g.updateTarget(r.Context())
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			if status == http.StatusInternalServerError {
+				meshReadError(w, r, err)
+				return
+			}
+			if event := obs.From(r.Context()); event != nil {
+				event.Fail(err)
+			}
+			http.Error(w, err.Error(), status)
 			return
 		}
 		g.updateMu.Lock()

@@ -138,6 +138,9 @@ export type ElicitationPayload = {
   choices?: string[]
   /** A form: each field is a question with options, or free text. Answered with a JSON object keyed by field. */
   fields?: ElicitationField[]
+  /** A URL request (an MCP app sign-in): the person opens it, then answers "done" or "decline". */
+  url?: string
+  agentElicitationId?: string
   resolved?: boolean
   inactive?: boolean
   result?: { value?: string }

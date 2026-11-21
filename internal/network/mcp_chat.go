@@ -455,6 +455,7 @@ func transcriptItem(entry acp.LogEntry) (mcpTranscriptItem, bool) {
 		OptionID      string `json:"optionId"`
 		ElicitationID string `json:"elicitationId"`
 		Prompt        string `json:"prompt"`
+		URL           string `json:"url"`
 		Value         string `json:"value"`
 		Cancelled     bool   `json:"cancelled"`
 		StopReason    string `json:"stopReason"`
@@ -495,7 +496,12 @@ func transcriptItem(entry acp.LogEntry) (mcpTranscriptItem, bool) {
 		item.Kind, item.ID, item.Text = "permission_result", body.RequestID, answer(body.OptionID)
 	case "elicitation":
 		item.Kind, item.ID, item.Text = "question", body.ElicitationID, body.Prompt
-		for _, choice := range body.Choices {
+		choices := body.Choices
+		if body.URL != "" {
+			// A URL request: the person opens it, then answers done or decline.
+			item.Text, choices = strings.TrimSpace(strings.TrimSuffix(body.Prompt, body.URL)+" "+body.URL), []string{"done", "decline"}
+		}
+		for _, choice := range choices {
 			item.Options = append(item.Options, mcpOption{ID: choice, Label: choice})
 		}
 	case "elicitation_result":

@@ -78,6 +78,7 @@ changelog:
       - '^chore:'
 
 release:
+  prerelease: auto
   github:
     owner: olegpustovit
     name: agentpack

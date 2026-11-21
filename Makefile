@@ -9,9 +9,9 @@ RELEASE_BRANCH ?= dev
 export CGO_ENABLED := 1
 CRSQLITE_GOOS := $(shell $(GO) env GOOS)
 CRSQLITE_GOARCH := $(shell $(GO) env GOARCH)
-VERSION := $(shell sed -n 's/^var Version = "\([^"]*\)"/\1/p' internal/cli/run.go)
+VERSION := $(shell sh scripts/build-version.sh)
 
-.PHONY: help all build release install uninstall minor patch ship-minor ship-patch _ship check-clean fmt fmt-check lint test race ci hooks release-check ui-install ui-lint ui-typecheck ui-test ui-build ui-stage ui-e2e artifact dev-deploy
+.PHONY: help all build release install uninstall minor patch ship-minor ship-patch ship-dev _ship check-clean fmt fmt-check lint test race ci hooks release-check ui-install ui-lint ui-typecheck ui-test ui-build ui-stage ui-e2e artifact dev-deploy
 
 .PHONY: crsqlite crsqlite-build
 
@@ -44,6 +44,7 @@ help:
 	@echo "  minor / patch   bump the embedded semantic version"
 	@echo "  ship-minor      bump minor, commit, tag, push $(RELEASE_BRANCH) + tag"
 	@echo "  ship-patch      bump patch, commit, tag, push $(RELEASE_BRANCH) + tag"
+	@echo "  ship-dev        tag and push the current clean development build"
 	@echo "Env: RELEASE_BRANCH=$(RELEASE_BRANCH) INSTALL_DIR=$(INSTALL_DIR) GO=$(GO) GORELEASER=$(GORELEASER)"
 
 all: release
@@ -160,6 +161,14 @@ ship-minor: check-clean
 ship-patch: check-clean
 	@$(MAKE) _bump PART=patch
 	@$(MAKE) _ship
+
+ship-dev: check-clean
+	@set -e; \
+	version='$(VERSION)'; tag=v$${version%%+*}; \
+	case "$$tag" in *-dev.*) ;; *) echo "HEAD is already a stable release"; exit 1;; esac; \
+	$(GO) test ./...; \
+	git tag -a "$$tag" -m "$$tag"; \
+	git push origin "refs/tags/$$tag"
 
 _ship:
 	@set -e; \

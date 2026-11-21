@@ -6,7 +6,7 @@ import { Spinner } from "@/components/kit/feedback"
 import { FieldError } from "@/components/kit/forms"
 import { api, routeMissing } from "@/lib/api"
 import { harnessName } from "@/lib/format"
-import { copyText } from "@/lib/hud"
+import { useCopied } from "@/lib/hud"
 import { useMachines } from "@/features/machines/queries"
 import { agentPath, agentsQuery, readStep, type AgentMethod, type LoginStep } from "./queries"
 
@@ -130,10 +130,7 @@ export function SignIn({
               <span>Enter this code there</span>
               <span className="flex items-center gap-(--s3)">
                 <span data-slot="login-code" className="text-[22px] font-semibold tracking-[.12em] tabular-nums select-all">{current.code}</span>
-                <Button type="button" size="sm" variant="ghost" onClick={() => copyText(current.code!)}>
-                  <Copy aria-hidden />
-                  Copy code
-                </Button>
+                <CopyCodeButton code={current.code} />
               </span>
             </div>
           </li>
@@ -176,6 +173,16 @@ export function SignIn({
 }
 
 // A chat whose agent isn't signed in: the start failure becomes this card, and signing in starts the chat.
+function CopyCodeButton({ code }: { code: string }) {
+  const [copied, copy] = useCopied()
+  return (
+    <Button type="button" size="sm" variant="ghost" onClick={() => copy(code)}>
+      {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+      {copied ? "Copied" : "Copy code"}
+    </Button>
+  )
+}
+
 export function SignInCard({ machine, harness, methods, reason, onSignedIn }: { machine: string; harness: string; methods?: AgentMethod[]; reason?: string; onSignedIn: () => void }) {
   const machineName = useMachines().find((item) => item.id === machine)?.name ?? machine
   // Older gateways didn't put the methods in the notice; ask the machine then.

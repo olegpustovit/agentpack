@@ -218,9 +218,10 @@ func (session *ConversationSession) applyConfigUpdate(entry acp.LogEntry) {
 	}
 }
 
-// bypassModes are agent mode IDs that mean "never ask". Claude Code's bypassPermissions still
-// requests permission for some commands; the user's choice of mode answers those.
-var bypassModes = map[string]bool{"bypassPermissions": true}
+// bypassModes are agent mode IDs that mean "never ask". Claude Code's bypassPermissions and
+// Codex's agent-full-access still request permission for some calls (Codex: app MCP tools);
+// the user's choice of mode answers those.
+var bypassModes = map[string]bool{"bypassPermissions": true, "agent-full-access": true}
 
 // BypassingPermissions reports whether the agent's current mode is one where the user is never asked.
 func (session *ConversationSession) BypassingPermissions() bool {

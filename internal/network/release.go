@@ -6,10 +6,11 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Masterminds/semver/v3"
 )
 
 // releaseURL is the GitHub latest-release endpoint; tests point it at a fake.
@@ -24,9 +25,6 @@ var latestRelease struct {
 }
 
 const releaseCacheTTL = 15 * time.Minute
-
-// The tag reaches an installer URL and the installer's environment, so it must be exactly a version.
-var releaseTag = regexp.MustCompile(`^v` + versionPattern.String() + `$`)
 
 func fetchLatestRelease(ctx context.Context) (version, url string, err error) {
 	latestRelease.Lock()
@@ -55,8 +53,11 @@ func fetchLatestRelease(ctx context.Context) (version, url string, err error) {
 		HTMLURL string `json:"html_url"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&release); err != nil ||
-		!releaseTag.MatchString(release.TagName) ||
+		!strings.HasPrefix(release.TagName, "v") ||
 		release.HTMLURL != "https://github.com/olegpustovit/agentpack/releases/tag/"+release.TagName {
+		return "", "", errors.New("GitHub returned invalid release metadata")
+	}
+	if _, err := semver.StrictNewVersion(strings.TrimPrefix(release.TagName, "v")); err != nil {
 		return "", "", errors.New("GitHub returned invalid release metadata")
 	}
 	latestRelease.version, latestRelease.url, latestRelease.at = strings.TrimPrefix(release.TagName, "v"), release.HTMLURL, time.Now()
@@ -70,4 +71,47 @@ func latestAgentpackVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"version": version, "url": url})
+}
+
+// updateTarget uses only the local release lookup and replicated inventory.
+// Build metadata identifies the running tree but is not part of a release tag.
+func (g *Gateway) updateTarget(ctx context.Context) (string, int, error) {
+	current, err := semver.StrictNewVersion(strings.TrimPrefix(g.options.Version, "v"))
+	if err != nil {
+		return "", http.StatusConflict, errors.New("cannot update a gateway without a valid running version")
+	}
+	rows, err := g.auth.store.Reader.QueryContext(ctx, "SELECT DISTINCT app_version FROM mesh_nodes WHERE app_version<>''")
+	if err != nil {
+		return "", http.StatusInternalServerError, err
+	}
+	defer rows.Close()
+	newest := current
+	for rows.Next() {
+		var version string
+		if err := rows.Scan(&version); err != nil {
+			return "", http.StatusInternalServerError, err
+		}
+		if candidate, err := semver.StrictNewVersion(strings.TrimPrefix(version, "v")); err == nil && candidate.GreaterThan(newest) {
+			newest = candidate
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", http.StatusInternalServerError, err
+	}
+	rows.Close()
+	latest, _, releaseErr := fetchLatestRelease(ctx)
+	if candidate, err := semver.StrictNewVersion(latest); err == nil && candidate.GreaterThan(newest) {
+		newest = candidate
+	}
+	if newest == current {
+		if releaseErr != nil {
+			return "", http.StatusBadGateway, releaseErr
+		}
+		return "", http.StatusConflict, errors.New("already up to date")
+	}
+	target, err := newest.SetMetadata("")
+	if err != nil {
+		return "", http.StatusInternalServerError, err
+	}
+	return target.String(), http.StatusOK, nil
 }

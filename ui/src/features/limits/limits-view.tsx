@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { getRouteApi, Link } from "@tanstack/react-router"
-import { Copy, RefreshCw } from "lucide-react"
+import { Check, Copy, RefreshCw } from "lucide-react"
 import { Meter, Section } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
@@ -13,7 +13,7 @@ import { usageQuery } from "@/features/usage/queries"
 import { api, LOCAL } from "@/lib/api"
 import type { LimitWindow } from "@/lib/api-types"
 import { harnessName, plural, relativeTime } from "@/lib/format"
-import { hud } from "@/lib/hud"
+import { hud, useCopied } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { limitsQuery } from "./queries"
 import { loginCommands, needsLogin, observedAt, paceText, providerGroups, remainingPercent, resetText, runsOutAt, tightestWindow, windowsOf, type LimitReport, type ProviderGroup } from "./model"
@@ -256,21 +256,17 @@ export function LimitsSummary({ agent }: { agent?: string }) {
 
 // Shows the command the user runs on that machine; click copies it.
 function CopyCommand({ command }: { command: string }) {
+  const [copied, copy] = useCopied()
+  const Icon = copied ? Check : Copy
   return (
     <button
       type="button"
-      aria-label={`Copy ${command}`}
-      onClick={() => {
-        // navigator.clipboard is undefined on plain-HTTP gateway origins.
-        (navigator.clipboard?.writeText(command) ?? Promise.reject()).then(
-          () => hud.success("Copied"),
-          () => hud.error("Couldn't copy. Select the command and copy it manually."),
-        )
-      }}
+      aria-label={copied ? "Copied" : `Copy ${command}`}
+      onClick={() => copy(command, "Couldn't copy. Select the command and copy it manually.")}
       className="flex min-w-0 items-center justify-between gap-(--s3) rounded-(--r-row) bg-(--track) px-(--s3) py-(--s1) text-left text-(--fg)"
     >
       <code className="min-w-0 truncate font-(family-name:--mono) text-(length:--fs-sm)">{command}</code>
-      <Copy aria-hidden className="size-(--fs) shrink-0 text-(--fg2)" />
+      <Icon aria-hidden className="size-(--fs) shrink-0 text-(--fg2)" />
     </button>
   )
 }

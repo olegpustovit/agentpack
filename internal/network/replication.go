@@ -12,6 +12,7 @@ type replicaPeerKey struct{}
 const replicationPrefix = "/api/library/replication/"
 
 type replicaContact struct {
+	Reachable   bool      `json:"reachable"`
 	At          time.Time `json:"at"`
 	LastSuccess time.Time `json:"last_sync,omitzero"`
 	Error       string    `json:"error,omitempty"`

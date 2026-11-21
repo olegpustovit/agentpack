@@ -9,7 +9,8 @@ import { LOCAL } from "@/lib/api"
 import { plural } from "@/lib/format"
 import { useAgentpackVersions, useDiscovering, useMachineQueries, useReplicatedQueries, useMachines, type Machine, type MachineQuery } from "./queries"
 
-export function MachineRow({ machine, sessions, needsUpdate }: { machine: Machine; sessions?: number; needsUpdate?: boolean }) {
+export function MachineRow({ machine, sessions, needsUpdate: peerNeedsUpdate }: { machine: Machine; sessions?: number; needsUpdate?: boolean }) {
+  const needsUpdate = peerNeedsUpdate || machine.needsUpdate
   const matchRoute = useMatchRoute()
   const selected = matchRoute({ to: "/machines/$machine", params: { machine: machine.id } })
   return (
@@ -17,11 +18,11 @@ export function MachineRow({ machine, sessions, needsUpdate }: { machine: Machin
       render={<Link to="/machines/$machine" params={{ machine: machine.id }} />}
       selected={Boolean(selected)}
     >
-      <StatusGlyph state={!machine.online ? "offline" : needsUpdate ? "needsUpdate" : "running"} />
+      <StatusGlyph state={needsUpdate ? "needsUpdate" : !machine.online ? "offline" : "running"} />
       <span className="min-w-0 flex-1 truncate">{machine.name}</span>
       {machine.main && <Badge variant="secondary">Main</Badge>}
       <span className="shrink-0 text-(length:--fs-sm) text-(--fg3) sel:text-(--accent-fg)">
-        {!machine.online ? "Offline" : needsUpdate ? "Needs update" : machine.id === LOCAL ? "gateway" : sessions}
+        {needsUpdate ? "Needs update" : !machine.online ? "Offline" : machine.id === LOCAL ? "gateway" : sessions}
       </span>
     </SourceRow>
   )

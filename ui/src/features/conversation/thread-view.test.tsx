@@ -134,4 +134,21 @@ describe("conversation message actions", () => {
     expect(container.querySelectorAll('[role="group"][data-slot="permission-card"]')).toHaveLength(2)
     expect(container.textContent).toContain("Allow Claude to run this command?")
   })
+
+  it("offers a URL request's link with Done and Decline, and answers it", async () => {
+    const posted: unknown[] = []
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
+      posted.push(JSON.parse(init.body as string))
+      return Response.json({ accepted: true })
+    }))
+    const item: ThreadItem = { kind: "elicitation", data: { elicitationId: "e1", agentElicitationId: "codex_apps_auth_1", prompt: "Connect Artifacts", url: "https://chatgpt.com/apps/artifacts/x" } }
+    act(() => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(ThreadView, { items: [item], machine: "local", sessionId: "s" }))))
+    const link = container.querySelector<HTMLAnchorElement>('[data-slot="elicitation-card"] a')!
+    expect(link.href).toBe("https://chatgpt.com/apps/artifacts/x")
+    expect(link.textContent).toBe("Open chatgpt.com")
+    const decline = [...container.querySelectorAll("button")].find((button) => button.textContent === "Decline")!
+    await act(async () => decline.click())
+    expect(posted).toEqual([{ elicitation_id: "e1", value: "decline" }])
+    vi.unstubAllGlobals()
+  })
 })

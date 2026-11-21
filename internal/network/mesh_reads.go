@@ -12,7 +12,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
-// Liveness follows successful sync contacts, never replicated wall-clock heartbeat rows.
+// Liveness follows recent HTTP responses from the peer.
 func (g *Gateway) nodeContact(node, local string) (bool, time.Time) {
 	if node == local {
 		return true, time.Time{}
@@ -23,10 +23,10 @@ func (g *Gateway) nodeContact(node, local string) (bool, time.Time) {
 	}
 	contact := value.(replicaContact)
 	lastSync := contact.LastSuccess
-	if lastSync.IsZero() && contact.Error == "" {
+	if lastSync.IsZero() && contact.Reachable && contact.Error == "" {
 		lastSync = contact.At
 	}
-	return contact.Error == "" && time.Since(contact.At) < 90*time.Second, lastSync
+	return contact.Reachable && time.Since(contact.At) < 90*time.Second, lastSync
 }
 
 func (g *Gateway) meshSessions(ctx context.Context, node string) ([]SessionInfo, error) {

@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
+  ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
@@ -169,6 +170,11 @@ export function RowContextMenuItem({
       {shortcut && <Kbd className="ml-(--s6) font-(family-name:--font)">{shortcut}</Kbd>}
     </ContextMenuItem>
   );
+}
+
+// A toggle row; the check sits at the trailing edge and the menu stays open when it flips.
+export function RowContextMenuCheckboxItem({ className, ...props }: ComponentProps<typeof ContextMenuCheckboxItem>) {
+  return <ContextMenuCheckboxItem className={cn(menuRow, "pr-8", className)} {...props} />;
 }
 
 // Row ⋯ affordance: visible on hover or selection (parent row sets group/row).

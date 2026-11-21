@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { ApiError, api, routeMissing } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { plural } from "@/lib/format"
-import { hud } from "@/lib/hud"
+import { hud, useCopied } from "@/lib/hud"
 import { sessionGitQuery, type SessionGit } from "@/features/sessions/git"
 
 const gitPath = (sessionId: string, action: string): `/api/${string}` => `/api/sessions/${encodeURIComponent(sessionId)}/git/${action}`
@@ -158,6 +158,7 @@ export function GitInspectorSections({
 }) {
   const actions = useGitActions(machine, sessionId)
   const [merging, setMerging] = useState(false)
+  const [pathCopied, copyPath] = useCopied()
   if (!git || (!git.available && !git.removed)) return null
   const conflict = actions.merge.error instanceof ApiError && actions.merge.error.status === 409 && /conflict/i.test(actions.merge.error.message)
   return (
@@ -178,8 +179,8 @@ export function GitInspectorSections({
               </p>
               <div className="mt-(--s3) flex flex-wrap gap-(--s2)">
                 {git.path && (
-                  <Button type="button" size="sm" onClick={() => void navigator.clipboard?.writeText(git.path ?? "").then(() => hud.success("Path copied"))}>
-                    Copy path
+                  <Button type="button" size="sm" onClick={() => copyPath(git.path ?? "")}>
+                    {pathCopied ? "Copied" : "Copy path"}
                   </Button>
                 )}
                 <Button type="button" size="sm" disabled={readOnly || git.ahead === 0 || actions.merge.isPending} title="Merge with --no-ff into the main folder's branch" onClick={() => setMerging(true)}>

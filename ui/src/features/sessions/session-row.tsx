@@ -6,7 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { SubagentSummary } from "@/lib/api-types"
 import { clock, goalElapsedMs, goalStateWords, liveGoal } from "@/lib/goal"
 import { useNow } from "@/lib/use-now"
-import { hud } from "@/lib/hud"
+import { copyText } from "@/lib/hud"
 import { Menu, MenuContent, MenuItem, MenuTrigger, RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger, RowMoreButton } from "@/components/kit/overlays"
 import { ContextMenuSeparator } from "@/components/ui/context-menu"
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
@@ -74,11 +74,7 @@ function menuEntries(session: ListedSession, selected: boolean, actions: RowActi
 }
 
 function copySessionId(text: string) {
-  // navigator.clipboard is undefined on plain-HTTP gateway origins.
-  ;(navigator.clipboard?.writeText(text) ?? Promise.reject()).then(
-    () => hud.success(text.includes("\n") ? "Copied session IDs" : "Copied session ID"),
-    () => hud.error(`Couldn't copy. ${text.replaceAll("\n", ", ")}`),
-  )
+  void copyText(text, `Couldn't copy. ${text.replaceAll("\n", ", ")}`)
 }
 
 // Context menus and the ⋯ menu share one entry list; only their item components differ.

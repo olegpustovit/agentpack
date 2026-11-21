@@ -114,11 +114,11 @@ func TestMeshLivenessExpiresAndLocalFoldersKeepFilesystemChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g.replicaStatus.Store("peer", replicaContact{At: time.Now().Add(-time.Minute)})
+	g.replicaStatus.Store("peer", replicaContact{Reachable: true, At: time.Now().Add(-time.Minute)})
 	if online, _ := g.nodeContact("peer", local); !online {
 		t.Fatal("successful recent sync not reachable")
 	}
-	g.replicaStatus.Store("peer", replicaContact{At: time.Now().Add(-2 * time.Minute)})
+	g.replicaStatus.Store("peer", replicaContact{Reachable: true, At: time.Now().Add(-2 * time.Minute)})
 	if online, _ := g.nodeContact("peer", local); online {
 		t.Fatal("stale sync stayed reachable")
 	}
@@ -152,7 +152,7 @@ func TestMeshNodeInventoryKeepsOfflineMachinesAfterRestart(t *testing.T) {
 	if err != nil || len(nodes) != 1 || nodes[0].Online || nodes[0].Name != "Sleeping computer" {
 		t.Fatalf("offline inventory: %+v %v", nodes, err)
 	}
-	g.replicaStatus.Store("asleep", replicaContact{At: time.Now()})
+	g.replicaStatus.Store("asleep", replicaContact{Reachable: true, At: time.Now()})
 	nodes, err = g.meshNodes(t.Context(), nil)
 	if err != nil || len(nodes) != 1 || !nodes[0].Online {
 		t.Fatalf("reachable inventory: %+v %v", nodes, err)

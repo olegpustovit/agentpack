@@ -48,6 +48,7 @@ type TailnetNode struct {
 	NeedsUpdate bool   `json:"needs_update,omitempty"`
 	// Version is what a peer's /peer answer reports; empty from a peer that predates it.
 	Version string `json:"version,omitempty"`
+	Schema  int    `json:"schema_version,omitempty"`
 }
 type tailnetPeer struct {
 	ID           string
@@ -470,20 +471,35 @@ func (g *Gateway) meshNodes(ctx context.Context, discovered []TailnetNode) ([]Ta
 	for _, node := range discovered {
 		nodes[node.ID] = node
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, "SELECT node_id,name,app_version FROM mesh_nodes WHERE node_id<>?", local)
+	rows, err := g.auth.store.Reader.QueryContext(ctx, "SELECT node_id,name,app_version,schema_version FROM mesh_nodes WHERE node_id<>?", local)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var node TailnetNode
-		if err := rows.Scan(&node.ID, &node.Name, &node.Version); err != nil {
+		if err := rows.Scan(&node.ID, &node.Name, &node.Version, &node.Schema); err != nil {
 			return nil, err
 		}
 		if node.Name == "" {
 			node.Name = node.ID
 		}
-		node.Online, _ = g.nodeContact(node.ID, local)
+		if live, ok := nodes[node.ID]; ok {
+			node.Name = live.Name
+			node.Online = live.Online
+			if live.Version != "" {
+				node.Version = live.Version
+			}
+			if live.Schema != 0 {
+				node.Schema = live.Schema
+			}
+		}
+		if value, ok := g.replicaStatus.Load(node.ID); ok {
+			contact := value.(replicaContact)
+			if contact.Schema != 0 {
+				node.Schema = contact.Schema
+			}
+		}
 		nodes[node.ID] = node
 	}
 	if err := rows.Err(); err != nil {
@@ -503,9 +519,7 @@ func (g *Gateway) meshNodes(ctx context.Context, discovered []TailnetNode) ([]Ta
 			if !ok {
 				node = TailnetNode{ID: peer.Node, Name: peer.Node}
 			}
-			if peer.Mesh || !ok {
-				node.Online, _ = g.nodeContact(peer.Node, local)
-			}
+
 			node.NeedsUpdate = !peer.Mesh
 			if value, ok := g.replicaStatus.Load(peer.Node); ok {
 				node.NeedsUpdate = node.NeedsUpdate || value.(replicaContact).NeedsUpdate
@@ -528,6 +542,8 @@ func (g *Gateway) meshNodes(ctx context.Context, discovered []TailnetNode) ([]Ta
 	}
 	result := make([]TailnetNode, 0, len(nodes))
 	for _, node := range nodes {
+		reachable, _ := g.nodeContact(node.ID, local)
+		node.Online = node.Online || reachable
 		node.Main = node.ID == roles.MainNode
 		result = append(result, node)
 	}
@@ -849,7 +865,7 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 				http.Error(w, "method not allowed", 405)
 				return
 			}
-			writeJSON(w, TailnetNode{ID: self.ID, Name: self.HostName, Online: true, Version: g.options.Version})
+			writeJSON(w, TailnetNode{ID: self.ID, Name: self.HostName, Online: true, Version: g.options.Version, Schema: state.SchemaVersion()})
 			return
 		}
 		actor := Actor{Kind: "peer", User: identity.UserProfile.LoginName, Node: identity.Node.ComputedName, StableNodeID: identity.Node.StableID}

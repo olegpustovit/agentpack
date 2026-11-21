@@ -401,3 +401,33 @@ func TestBypassModeAnswersPermissionWithoutAskingOrLogging(t *testing.T) {
 		t.Fatal("outside bypass mode the user answers")
 	}
 }
+
+// Codex asks to connect a ChatGPT app with a URL elicitation; the card shows the message and
+// link, and the person's Done or Decline becomes the agent's accept or decline.
+func TestURLElicitationShowsTheLinkAndAnswersAcceptOrDecline(t *testing.T) {
+	for _, test := range []struct{ answer, want string }{{"done", "accept"}, {"decline", "decline"}} {
+		client := NewHarnessClient("", nil, nil, nil)
+		var shown map[string]string
+		client.Log.SetOnAppend(func(entry LogEntry) {
+			if entry.Kind != "elicitation" || json.Unmarshal(entry.Payload, &shown) != nil {
+				return
+			}
+			if !client.Broker.Answer(shown["elicitationId"], test.answer) {
+				t.Errorf("could not answer %s", shown["elicitationId"])
+			}
+		})
+		response, err := client.UnstableCreateElicitation(context.Background(), sdkacp.UnstableCreateElicitationRequest{Url: &sdkacp.UnstableCreateElicitationUrl{
+			ElicitationId: "codex_apps_auth_1", Message: "Connect Artifacts", Mode: "url", Url: "https://chatgpt.com/apps/artifacts/x",
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if shown["prompt"] != "Connect Artifacts" || shown["url"] != "https://chatgpt.com/apps/artifacts/x" || shown["agentElicitationId"] != "codex_apps_auth_1" {
+			t.Fatalf("shown = %v", shown)
+		}
+		raw, _ := json.Marshal(response)
+		if string(raw) != `{"action":"`+test.want+`"}` {
+			t.Fatalf("%s answered %s", test.answer, raw)
+		}
+	}
+}

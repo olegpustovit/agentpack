@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react"
+import { useEffect, useState, useSyncExternalStore } from "react"
 
 type Toast = typeof import("sonner").toast
 
@@ -48,9 +48,25 @@ export const hud = {
   },
 }
 
-export function copyText(text: string) {
-  ;(navigator.clipboard?.writeText(text) ?? Promise.reject()).then(
-    () => hud.success("Copied"),
-    () => hud.error("Couldn't copy. Select the text and copy it manually."),
+// Copying is silent, as on the desktop: the control that copied says so for a moment (useCopied), and
+// only a failure is reported. navigator.clipboard is undefined on plain-HTTP gateway origins.
+export function copyText(text: string, failure = "Couldn't copy. Select the text and copy it manually."): Promise<boolean> {
+  return (navigator.clipboard?.writeText(text) ?? Promise.reject()).then(
+    () => true,
+    () => {
+      hud.error(failure)
+      return false
+    },
   )
+}
+
+// `copied` is true for 1.5 s after a successful copy, so a button can show a check in place of its icon.
+export function useCopied(): [boolean, (text: string, failure?: string) => void] {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
+  return [copied, (text, failure) => void copyText(text, failure).then(setCopied)]
 }

@@ -522,4 +522,8 @@ func TestBypassingPermissionsFollowsTheAgentMode(t *testing.T) {
 	if session.BypassingPermissions() {
 		t.Fatal("switching away from bypass must ask again")
 	}
+	log.Append("current_mode_update", 3, json.RawMessage(`{"currentModeId":"agent-full-access"}`))
+	if !session.BypassingPermissions() {
+		t.Fatal("Codex full access must bypass")
+	}
 }

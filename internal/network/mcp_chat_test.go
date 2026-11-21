@@ -215,6 +215,10 @@ func TestTranscriptItemsAreTyped(t *testing.T) {
 	if options := items[3].Options; options[0].Decision != sdkacp.PermissionOptionKindAllowOnce || options[1].Decision != "" {
 		t.Fatalf("decisions: %+v", options)
 	}
+	url, ok := transcriptItem(acp.LogEntry{Kind: "elicitation", Payload: json.RawMessage(`{"elicitationId":"e2","prompt":"Connect Artifacts","url":"https://chatgpt.com/apps/x"}`)})
+	if !ok || url.Text != "Connect Artifacts https://chatgpt.com/apps/x" || len(url.Options) != 2 || url.Options[1].ID != "decline" {
+		t.Fatalf("URL question: %+v", url)
+	}
 }
 
 // chatFixture registers a running chat with an agentpack tools credential, as RunWorker does.

@@ -64,7 +64,7 @@ The script does not launch agents. It reports missing `testdata/acp/<harness>.js
 
 The agent button in the composer continues a chat with another agent (`POST /api/sessions/{id}/harness`). The old agent stops; the chat keeps its ID and transcript, and the new agent starts a fresh session whose first prompt carries that transcript (messages and tool titles, no thoughts or subagent output). With agentpack tools on, only the newest 32 KiB is inlined and the prompt names the `read_conversation` tool and session ID for the rest, which stays in `state.db`; without tools the newest 96 KiB is inlined. Enter on an empty composer sends the first queued message now.
 
-The permission mode last chosen for an agent is stored network-wide in `mesh_settings` (`permission_mode.<harness>`) and applied to every chat of that agent when it starts or resumes. Antigravity's ACP server offers no permission modes, so agentpack offers Ask and Bypass Permissions for it and answers its permission requests itself in Bypass.
+The permission mode last chosen for an agent is stored network-wide in `mesh_settings` (`permission_mode.<harness>`) and applied to every chat of that agent when it starts or resumes. Antigravity's ACP server offers no permission modes, so agentpack offers Ask and Bypass Permissions for it and answers its permission requests itself in Bypass. Claude's Bypass Permissions and Codex's Full access still send some permission requests (Codex asks before ChatGPT app tools); agentpack allows those itself. A sign-in an MCP server or ChatGPT app asks for (a URL request) is never answered automatically: the chat shows an **Open** link with **Done** and **Decline**, and the agent continues once you answer.
 
 ## Opening the web UI
 

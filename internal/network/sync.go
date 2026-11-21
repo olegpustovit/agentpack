@@ -23,13 +23,14 @@ import (
 const syncPageLimit = 4 << 20
 
 type stateChangePage struct {
-	Schema   int            `json:"schema"`
-	SiteID   []byte         `json:"site_id"`
-	Next     int64          `json:"next"`
-	Changes  []state.Change `json:"changes"`
-	Transfer *stateTransfer `json:"transfer,omitempty"`
-	Data     []byte         `json:"data,omitempty"`
-	Offset   int64          `json:"offset,omitempty"`
+	reachable bool
+	Schema    int            `json:"schema"`
+	SiteID    []byte         `json:"site_id"`
+	Next      int64          `json:"next"`
+	Changes   []state.Change `json:"changes"`
+	Transfer  *stateTransfer `json:"transfer,omitempty"`
+	Data      []byte         `json:"data,omitempty"`
+	Offset    int64          `json:"offset,omitempty"`
 }
 
 // peerOnly requires the identity attached by peerHandler, never a caller's header.
@@ -181,11 +182,12 @@ func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, s
 		return page, errors.New("state peer is unreachable")
 	}
 	defer response.Body.Close()
+	page.reachable = true
 	if response.StatusCode == http.StatusConflict {
 		_ = json.NewDecoder(io.LimitReader(response.Body, 1024)).Decode(&page)
 		return page, errSyncNeedsUpdate
 	}
-	if response.StatusCode == http.StatusNotFound {
+	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusForbidden {
 		return page, errSyncNeedsUpdate
 	}
 	if response.StatusCode != http.StatusOK {
@@ -419,7 +421,7 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 		if ctx.Err() != nil {
 			return
 		}
-		contact := replicaContact{At: time.Now().UTC(), Schema: page.Schema, Version: page.Next}
+		contact := replicaContact{Reachable: page.reachable, At: time.Now().UTC(), Schema: page.Schema, Version: page.Next}
 		if prior, ok := g.replicaStatus.Load(peer); ok {
 			contact.LastSuccess = prior.(replicaContact).LastSuccess
 		}
@@ -471,6 +473,6 @@ func (g *Gateway) publishMeshNode(ctx context.Context) error {
 	_, err = g.auth.store.DB.ExecContext(ctx, `INSERT INTO mesh_nodes(node_id,name,site_id,schema_version,app_version,updated_at)
  VALUES (`+state.LocalNodeSQL+`,?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET
  name=excluded.name,site_id=excluded.site_id,schema_version=excluded.schema_version,app_version=excluded.app_version,updated_at=excluded.updated_at
- WHERE name IS NOT excluded.name OR site_id IS NOT excluded.site_id OR schema_version IS NOT excluded.schema_version OR app_version IS NOT excluded.app_version`, localHostname(), site, state.SchemaVersion(), g.options.Version, time.Now().UnixMilli())
+ WHERE name IS NOT excluded.name OR site_id IS NOT excluded.site_id OR schema_version IS NOT excluded.schema_version OR app_version IS NOT excluded.app_version`, g.selfIdentity(ctx).displayName(), site, state.SchemaVersion(), g.options.Version, time.Now().UnixMilli())
 	return err
 }

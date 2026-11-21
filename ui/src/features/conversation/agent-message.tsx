@@ -1,5 +1,5 @@
 import type { MouseEvent } from "react"
-import { hud } from "@/lib/hud"
+import { copyText } from "@/lib/hud"
 import { renderAgentBlocks } from "./agent-markdown"
 import { stripAgentText } from "./agent-text"
 
@@ -11,10 +11,11 @@ function copyCode(event: MouseEvent<HTMLDivElement>) {
   const button = (event.target as HTMLElement).closest("[data-copy-code]")
   const code = button?.closest(".code-block")?.querySelector("code")?.textContent
   if (!button || code === undefined || code === null) return
-  ;(navigator.clipboard?.writeText(code) ?? Promise.reject()).then(
-    () => hud.success("Copied"),
-    () => hud.error("Couldn't copy. Select the code and copy it manually."),
-  )
+  void copyText(code, "Couldn't copy. Select the code and copy it manually.").then((copied) => {
+    if (!copied) return
+    button.textContent = "Copied"
+    setTimeout(() => (button.textContent = "Copy"), 1500)
+  })
 }
 
 export function AgentMessageBody({ text, streaming = false }: { text: string; streaming?: boolean }) {

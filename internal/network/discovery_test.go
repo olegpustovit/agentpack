@@ -2,7 +2,11 @@ package network
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -416,6 +420,31 @@ func TestPeerPatternsCoverSessionRoutes(t *testing.T) {
 	for _, path := range []string{"/api/sessions//resume", "/api/sessions/../resume", `/api/sessions/a\b/stop`, "/api/sessions/x/stop/", "/api//sessions"} {
 		if peerRoute("POST", path) || peerRoute("GET", path) {
 			t.Errorf("unclean path %q passes", path)
+		}
+	}
+}
+
+func TestSyncHTTPResponseKeepsPeerReachable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+	}))
+	defer server.Close()
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &Gateway{}
+	for _, reachable := range []bool{true, false} {
+		if !reachable {
+			server.Close()
+		}
+		page, err := fetchStatePage(t.Context(), server.Client(), target, -1, nil)
+		if err == nil || page.reachable != reachable || errors.Is(err, errSyncNeedsUpdate) != reachable {
+			t.Fatalf("reachability = %v, error = %v, want reachable = %v", page.reachable, err, reachable)
+		}
+		g.replicaStatus.Store("peer", replicaContact{At: time.Now(), Reachable: page.reachable, NeedsUpdate: errors.Is(err, errSyncNeedsUpdate), Error: err.Error()})
+		if online, last := g.nodeContact("peer", "local"); online != reachable || !last.IsZero() {
+			t.Fatalf("online = %v, last sync = %v", online, last)
 		}
 	}
 }

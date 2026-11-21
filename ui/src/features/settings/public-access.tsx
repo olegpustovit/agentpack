@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch"
 import { errorText } from "@/features/library/mutations"
 import { apiLines } from "@/lib/api"
 import type { PublicAccess, Settings } from "@/lib/api-types"
-import { hud } from "@/lib/hud"
+import { hud, useCopied } from "@/lib/hud"
 import { Row } from "./panes"
 import { settingsQuery } from "./queries"
 
@@ -132,20 +132,13 @@ export function PublicAccessRows({ access }: { access: PublicAccess }) {
 }
 
 function McpAddress({ address }: { address: string }) {
+  const [copied, copy] = useCopied()
   return (
     <Row label="MCP address">
       <code className="rounded-(--r-ctl) bg-(--code) px-(--s2) font-(family-name:--mono) text-(length:--fs-sm)">{address}</code>
-      <Button
-        onClick={() =>
-          // navigator.clipboard is undefined on plain-HTTP gateway origins.
-          (navigator.clipboard?.writeText(address) ?? Promise.reject()).then(
-            () => hud.success("Copied"),
-            () => hud.error("Couldn't copy. Select the address and copy it manually."),
-          )
-        }
-      >
-        <Copy aria-hidden />
-        Copy
+      <Button onClick={() => copy(address, "Couldn't copy. Select the address and copy it manually.")}>
+        {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+        {copied ? "Copied" : "Copy"}
       </Button>
       <p className="m-0 max-w-[60ch] basis-full text-(length:--fs-xs) text-(--fg2)">
         Paste it into Claude.ai, ChatGPT, Claude Code or codemode. They sign in through this gateway; nothing else to

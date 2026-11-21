@@ -29,7 +29,7 @@ export const machineUpdateQuery = (machine: string) =>
 
 export function compareAgentpackVersions(left: string, right: string): number {
   const parse = (value: string) => {
-    const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value)
+    const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(value)
     return match && { parts: match.slice(1, 4).map(Number), pre: match[4] }
   }
   const a = parse(left)
@@ -41,7 +41,20 @@ export function compareAgentpackVersions(left: string, right: string): number {
     if (leftPart !== rightPart) return leftPart - rightPart
   }
   if (a.pre === b.pre) return 0
-  return a.pre ? -1 : 1
+  if (!a.pre || !b.pre) return a.pre ? -1 : 1
+  const leftIDs = a.pre.split(".")
+  const rightIDs = b.pre.split(".")
+  for (const [i, x] of leftIDs.entries()) {
+    const y = rightIDs[i]
+    if (y === undefined) return 1
+    if (x === y) continue
+    const numericX = /^\d+$/.test(x)
+    const numericY = /^\d+$/.test(y)
+    if (numericX && numericY) return x.length - y.length || (x < y ? -1 : 1)
+    if (numericX !== numericY) return numericX ? -1 : 1
+    return x < y ? -1 : 1
+  }
+  return -1
 }
 
 export type MachineAgent = { harness: string; installed: boolean; version?: string }

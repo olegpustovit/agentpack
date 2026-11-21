@@ -7,7 +7,7 @@ import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { Button } from "@/components/ui/button"
 import type { CatalogItem, MCPServerInput } from "@/lib/api-types"
-import { hud } from "@/lib/hud"
+import { copyText } from "@/lib/hud"
 import { plural } from "@/lib/format"
 import { InstallMCPSheet } from "./add-package-sheet"
 import { catalogQuery } from "./queries"
@@ -134,9 +134,5 @@ export function DiscoverView() {
 }
 
 function copy(command: string) {
-  // navigator.clipboard is undefined on plain-HTTP gateway origins.
-  ;(navigator.clipboard?.writeText(command) ?? Promise.reject()).then(
-    () => hud.success("Copied. Run it in the project folder."),
-    () => hud.error(`Couldn't copy. Run: ${command}`),
-  )
+  void copyText(command, `Couldn't copy. Run: ${command}`)
 }

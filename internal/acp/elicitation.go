@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"time"
 
 	sdkacp "github.com/coder/acp-go-sdk"
 )
@@ -17,23 +16,19 @@ func (c *HarnessClient) UnstableCreateElicitation(ctx context.Context, params sd
 		if agentID == "" {
 			return sdkacp.UnstableCreateElicitationResponse{}, fmt.Errorf("elicitation ID is required")
 		}
-		id := c.nextRequestID("elicitation")
-		if err := c.Broker.Begin(id); err != nil {
-			return sdkacp.UnstableCreateElicitationResponse{}, err
+		prompt := params.Url.Message
+		if prompt == "" {
+			prompt = params.Url.Url
 		}
-		defer c.Broker.End(id)
-		c.Log.Append("elicitation", time.Now().UnixMilli(), mustJSON(map[string]any{
-			"elicitationId":      id,
-			"agentElicitationId": agentID,
-			"prompt":             params.Url.Url,
-		}))
-		value, err := c.waitAnswer(ctx, "elicitation", "elicitationId", id)
-		if err != nil {
+		// The person opens the URL themselves; their answer only says whether they did.
+		value, err := c.waitElicitation(ctx, map[string]any{"agentElicitationId": agentID, "prompt": prompt, "url": params.Url.Url})
+		switch {
+		case err != nil:
 			return sdkacp.NewUnstableCreateElicitationResponseCancel(), nil
+		case value == "decline":
+			return sdkacp.NewUnstableCreateElicitationResponseDecline(), nil
 		}
-		return sdkacp.UnstableCreateElicitationResponse{
-			Accept: &sdkacp.UnstableCreateElicitationAccept{Action: "accept", Content: map[string]any{"value": value}},
-		}, nil
+		return sdkacp.UnstableCreateElicitationResponse{Accept: &sdkacp.UnstableCreateElicitationAccept{Action: "accept"}}, nil
 	}
 	if params.Form == nil {
 		return sdkacp.UnstableCreateElicitationResponse{}, fmt.Errorf("unsupported elicitation request")

@@ -4,7 +4,8 @@ import { Link, useNavigate, useParams, useRouter, useSearch } from "@tanstack/re
 import { Folder, Laptop, Plus, RefreshCw, Server } from "lucide-react"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
-import { ConfirmAlert, ConfirmAlertContent, RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
+import { ConfirmAlert, ConfirmAlertContent, RowContextMenu, RowContextMenuCheckboxItem, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
+import { ContextMenuSeparator } from "@/components/ui/context-menu"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useEventsConnected } from "@/features/events/use-events"
 import { nodesQuery } from "@/features/machines/queries"
@@ -431,17 +432,18 @@ function SessionConfirm({ confirm, onConfirm }: { confirm: Confirm; onConfirm: (
 }
 
 // "+" starts a chat in this subhead's folder at once with its last agent; ⌥-click or right-click picks
-// another. Revealed on hover; always shown on touch. ⌘N still opens the full New session sheet.
+// another, optionally in a new worktree (off each time the menu opens). Revealed on hover; always shown on touch. ⌘N still opens the full New session sheet.
 function NewInFolder({ head }: { head: SessionSubhead }) {
   const folder = basename(head.directory) || head.directory
   const machineName = head.sessions[0]?.machineName ?? head.machine
   const usual = defaultAgent(loadStartChoices(head.directory), head.sessions)
   const mutation = useStartSession()
+  const [worktree, setWorktree] = useState(false)
   const start = {
     isPending: mutation.isPending,
     mutate: (agent: { harness: string; mode: string }) =>
       mutation.mutate(
-        { machine: head.machine, directory: head.directory, ...agent, view: "chat" },
+        { machine: head.machine, directory: head.directory, ...agent, view: "chat", ...(worktree && { worktree: "new" }) },
         { onError: (error) => hud.error(`Could not start ${harnessName(agent.harness)}: ${error instanceof Error ? error.message : String(error)}`, () => start.mutate(agent)) },
       ),
   }
@@ -466,7 +468,7 @@ function NewInFolder({ head }: { head: SessionSubhead }) {
     if (!start.isPending) start.mutate(usual)
   }
   return (
-    <RowContextMenu>
+    <RowContextMenu onOpenChange={(open) => { if (!open) setWorktree(false) }}>
       <RowContextMenuTrigger render={<button type="button" aria-label={label} title={label} className={className} onClick={onClick} />}>
         <Plus aria-hidden />
       </RowContextMenuTrigger>
@@ -476,6 +478,8 @@ function NewInFolder({ head }: { head: SessionSubhead }) {
             {`New ${harnessName(id)} chat`}
           </RowContextMenuItem>
         ))}
+        <ContextMenuSeparator />
+        <RowContextMenuCheckboxItem checked={worktree} onCheckedChange={setWorktree}>Run in worktree</RowContextMenuCheckboxItem>
       </RowContextMenuContent>
     </RowContextMenu>
   )

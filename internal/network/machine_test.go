@@ -73,6 +73,20 @@ func TestLatestReleaseIsCachedAndValidated(t *testing.T) {
 		t.Fatalf("GitHub was asked %d times, want 1", calls)
 	}
 
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	for _, current := range []string{"0.9.3", "0.10.0"} {
+		g.options.Version = current
+		if version, status, err := g.updateTarget(t.Context()); version != "" || status != http.StatusConflict || err == nil {
+			t.Fatalf("running %s: target %q status %d error %v", current, version, status, err)
+		}
+	}
+	if _, err := g.auth.store.DB.Exec("INSERT INTO mesh_nodes(node_id,name,app_version) VALUES ('peer','Peer','0.10.1-dev.10+abc')"); err != nil {
+		t.Fatal(err)
+	}
+	if version, status, err := g.updateTarget(t.Context()); version != "0.10.1-dev.10" || status != http.StatusOK || err != nil {
+		t.Fatalf("mesh target %q status %d error %v", version, status, err)
+	}
+
 	reset()
 	tag = "v1.2.3; rm -rf /"
 	if _, _, err := fetchLatestRelease(context.Background()); err == nil {

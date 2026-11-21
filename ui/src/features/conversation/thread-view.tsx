@@ -1,12 +1,12 @@
 import { useState, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { BookOpen, ChevronRight, Copy, Flag, Folder, GitFork, Globe, Pencil, Lock, Quote, RotateCcw, Search, Sparkles, SquareTerminal, Wrench } from "lucide-react"
+import { BookOpen, Check, ChevronRight, Copy, ExternalLink, Flag, Folder, GitFork, Globe, Pencil, Lock, Quote, RotateCcw, Search, Sparkles, SquareTerminal, Wrench } from "lucide-react"
 import { RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/kit/feedback"
 import { api, LOCAL } from "@/lib/api"
-import { copyText } from "@/lib/hud"
+import { copyText, useCopied } from "@/lib/hud"
 import { SignInCard } from "@/features/agents/sign-in"
 import { cn } from "@/lib/utils"
 import type { GoalState } from "@/lib/api-types"
@@ -298,11 +298,24 @@ export function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem
     },
   })
   const result = ask.result
+  // Older workers logged the URL as the prompt.
+  const link = ask.agentElicitationId ? ask.url ?? ask.prompt : undefined
   return (
     <div data-slot="elicitation-card" className="rounded-(--r-sheet) border-[0.5px] border-(--warn) bg-(--window) px-(--s5) pt-(--s5) pb-(--s4) shadow-(--shadow-card)">
       <p className="text-(length:--fs) font-semibold text-(--fg)">{ask.prompt ?? "Input needed"}</p>
       {ask.resolved ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">Answered: {answerSummary(ask, result?.value)}</p> : ask.inactive ? <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">No longer active</p> : ask.fields?.length ? (
         <ElicitationForm fields={ask.fields} disabled={!ask.elicitationId || answer.isPending} onSubmit={(value) => answer.mutate(value)} />
+      ) : link !== undefined ? (
+        <div className="mt-(--s3) flex flex-wrap items-center gap-(--s2)">
+          {/^https?:\/\//i.test(link) && (
+            <a href={link} target="_blank" rel="noreferrer noopener" className={buttonVariants({ size: "sm", variant: "primary" })}>
+              <ExternalLink aria-hidden />
+              Open {new URL(link).host}
+            </a>
+          )}
+          <Button type="button" size="sm" disabled={!ask.elicitationId || answer.isPending} onClick={() => answer.mutate("done")}>Done</Button>
+          <Button type="button" size="sm" disabled={!ask.elicitationId || answer.isPending} onClick={() => answer.mutate("decline")}>Decline</Button>
+        </div>
       ) : (
         <div className="mt-(--s3) flex flex-wrap gap-(--s2)">
           {(ask.choices ?? []).map((choice, index) => {
@@ -415,6 +428,7 @@ function ElicitationForm({ fields, disabled, onSubmit }: { fields: ElicitationFi
 
 function answerSummary(ask: ElicitationPayload, value?: string): string {
   if (!value) return "—"
+  if (ask.agentElicitationId) return value === "decline" ? "Declined" : "Done"
   if (!ask.fields?.length) return value
   try {
     const answers = JSON.parse(value) as Record<string, unknown>
@@ -545,7 +559,7 @@ function MessageContextMenu({
     <RowContextMenu>
       <RowContextMenuTrigger className="min-w-0 select-text">{children}</RowContextMenuTrigger>
       <RowContextMenuContent>
-        <RowContextMenuItem icon={<Copy aria-hidden />} onClick={() => copyText(text)}>
+        <RowContextMenuItem icon={<Copy aria-hidden />} onClick={() => void copyText(text)}>
           Copy
         </RowContextMenuItem>
         {onQuote && (
@@ -586,6 +600,7 @@ function AgentBlock({
   onRetry?: () => void
 }) {
   const actions = text && !streaming
+  const [copied, copy] = useCopied()
   return (
     <div data-slot="agent-message" className="group relative">
       <MessageContextMenu text={text} onQuote={onQuote} onFork={onFork} onRetry={onRetry}>
@@ -597,8 +612,8 @@ function AgentBlock({
           data-slot="answer-actions"
           className={`mt-(--s1) flex flex-wrap items-center gap-(--s1) transition-opacity ${last ? "" : "min-[760px]:opacity-0 min-[760px]:group-hover:opacity-100 min-[760px]:group-focus-within:opacity-100"}`}
         >
-          <Button type="button" size="icon" variant="ghost" className="size-(--ctl-h-sm)" aria-label="Copy message" title="Copy" onClick={() => copyText(text)}>
-            <Copy aria-hidden />
+          <Button type="button" size="icon" variant="ghost" className="size-(--ctl-h-sm)" aria-label={copied ? "Copied" : "Copy message"} title={copied ? "Copied" : "Copy"} onClick={() => copy(text)}>
+            {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
           </Button>
           {onRetry && (
             <Button type="button" size="icon" variant="ghost" className="size-(--ctl-h-sm)" aria-label="Retry last message" title="Retry" onClick={onRetry}>

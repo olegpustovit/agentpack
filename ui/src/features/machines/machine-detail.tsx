@@ -73,7 +73,7 @@ function MachineView({ machine }: { machine: Machine }) {
   const latest = known.latest
   const version = info.data?.version ?? known.version
   const outdated = !!version && !!latest && compareAgentpackVersions(version, latest) < 0
-  const needsUpdate = machine.id !== LOCAL && [projects.error, info.error].some(routeMissing)
+  const needsUpdate = machine.needsUpdate || (machine.id !== LOCAL && [projects.error, info.error].some(routeMissing))
   const updating = updatingFrom !== undefined || updateStatus.data?.state === "running"
 
   const update = useMutation({
@@ -121,7 +121,7 @@ function MachineView({ machine }: { machine: Machine }) {
   const subtitle = [status, route, running ? `${plural(running, "session")} running` : undefined].filter(Boolean).join(" · ")
   const cached = projects.data !== undefined
 
-  const updateButton = machine.online && (outdated || needsUpdate || updating) && (
+  const updateButton = (outdated || needsUpdate || updating) && (
     <Button size="sm" disabled={updating || update.isPending} onClick={() => update.mutate()}>
       {updating || update.isPending ? "Updating…" : latest ? `Update to ${latest}` : "Update"}
     </Button>

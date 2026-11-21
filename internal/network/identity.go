@@ -90,7 +90,14 @@ func localHostname() string {
 	return name
 }
 
-type tailnetSelf struct{ ID, User string }
+type tailnetSelf struct{ ID, User, Name string }
+
+func (self tailnetSelf) displayName() string {
+	if self.Name != "" {
+		return self.Name
+	}
+	return localHostname()
+}
 
 // selfIdentity returns this node's Tailscale identity, or zero values while Tailscale is down.
 // shortcut: one cached lookup per gateway, not per request, so a Tailscale change is visible within identityCacheTTL.
@@ -103,6 +110,7 @@ func (g *Gateway) selfIdentity(ctx context.Context) tailnetSelf {
 	var self tailnetSelf
 	if status, err := tailnetSnapshot(ctx); err == nil {
 		self.ID = status.Self.ID
+		self.Name = status.Self.HostName
 		self.User = status.User[strconv.FormatInt(status.Self.UserID, 10)].LoginName
 	}
 	if ctx.Err() == nil {
@@ -136,7 +144,7 @@ func (g *Gateway) identity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, identityResponse{
-		Node:          identityNode{Main: roles.MainNode != "" && roles.MainNode == self.ID, ID: self.ID, Name: localHostname(), OS: runtime.GOOS, Version: g.options.Version},
+		Node:          identityNode{Main: roles.MainNode != "" && roles.MainNode == self.ID, ID: self.ID, Name: self.displayName(), OS: runtime.GOOS, Version: g.options.Version},
 		Auth:          g.auth.email(r),
 		TailscaleUser: self.User,
 	})

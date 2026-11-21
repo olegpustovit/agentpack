@@ -1,7 +1,7 @@
 import type { ComponentProps, CSSProperties, PointerEvent, ReactNode } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { shortHash } from "@/lib/format";
-import { hud } from "@/lib/hud";
+import { copyText } from "@/lib/hud";
 import { cn } from "@/lib/utils";
 
 // Inspector is capped at 1180 px. Two columns from the viewport breakpoint 1260 px.
@@ -179,13 +179,7 @@ export function Hash({ value, className }: { value: string; className?: string }
     <Tooltip>
       <TooltipTrigger
         render={<button type="button" className={cn("rounded-(--r-row) text-left", className)} />}
-        onClick={() => {
-          // navigator.clipboard is undefined on plain-HTTP gateway origins.
-          (navigator.clipboard?.writeText(value) ?? Promise.reject()).then(
-            () => hud.success("Copied"),
-            () => hud.error("Couldn't copy. Select the value and copy it manually."),
-          );
-        }}
+        onClick={() => void copyText(value, "Couldn't copy. Select the value and copy it manually.")}
       >
         <code className="font-(family-name:--mono) text-(length:--fs-sm)">{shortHash(value)}</code>
       </TooltipTrigger>
