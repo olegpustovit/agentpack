@@ -167,7 +167,10 @@ func (g *Gateway) launchSession(ctx context.Context, info SessionInfo, forkSessi
 }
 
 // startInBackground prepares the worker for a starting chat. A failure ends the row with the reason.
-const chatStartTimeout = 2 * time.Minute
+// A cold start may need the npm tree's five-minute download budget before the ACP handshake.
+const chatStartTimeout = 7 * time.Minute
+
+const interruptedStartGrace = 2 * time.Minute
 
 func (g *Gateway) startInBackground(ctx context.Context, info SessionInfo, forkSessionID string, request *chatStartRequest) {
 	background := context.WithoutCancel(ctx)
@@ -383,7 +386,7 @@ func (g *Gateway) reapStoppedChats(ctx context.Context) {
 	g.reapWorkerEndpoints(ctx)
 	rows, err := querySessions(ctx, g.auth.store.Reader, "SELECT "+sessionColumns+` FROM sessions WHERE transport='acp' AND archived_at=0 AND node_id=`+state.LocalNodeSQL+`
  AND ((ended_at>0 AND (conversation_state<>'idle' OR subagents<>'' OR json_extract(state,'$.running')))
- OR (ended_at=0 AND conversation_state='starting' AND last_used<?))`, sessionTimestamp(time.Now().Add(-chatStartTimeout)))
+ OR (ended_at=0 AND conversation_state='starting' AND last_used<?))`, sessionTimestamp(time.Now().Add(-interruptedStartGrace)))
 	var resume []string
 	for _, info := range rows {
 		if info.EndedAt.IsZero() {
