@@ -110,7 +110,7 @@ test("New session claims a Cursor CLI chat together with its first message", asy
   await page.getByRole("button", { name: "Start session" }).click()
   const body = (await posted).postDataJSON()
   expect(body).toMatchObject({ directory: "/home/oleg/agentpack", harness: "agent", first_message: "tidy the overlay" })
-  await expect(page.getByText("tidy the overlay", { exact: true })).toBeVisible()
+  await expect(page.getByRole("list", { name: "Queued messages" })).toContainText("tidy the overlay")
 })
 
 test("New session shows what the chosen mode loads", async ({ page }) => {
