@@ -219,6 +219,9 @@ func TestDeploymentBuildPreservesStateLinkage(t *testing.T) {
 	if !strings.Contains(strings.Join(commands[1].Args, " "), "-linkmode=external -extldflags=-static") {
 		t.Fatal("deployment binary is not statically linked")
 	}
+	if !strings.Contains(strings.Join(commands[1].Args, " "), "internal/cli.Version="+Version) {
+		t.Fatal("deployment binary does not carry the deploying version")
+	}
 	called := 0
 	err = buildDeploymentBinary(context.Background(), "/tmp/output", func(*exec.Cmd) error { called++; return errors.New("fetch failed") })
 	if err == nil || called != 1 {

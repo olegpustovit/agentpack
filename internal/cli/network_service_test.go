@@ -86,6 +86,9 @@ func TestUserServiceDefinitionsProtectSessionLifetimeAndPaths(t *testing.T) {
 			t.Fatalf("missing %q in %s", fragment, launch)
 		}
 	}
+	if strings.Contains(launch, "ErrorActionPreference") {
+		t.Fatal("a stopped gateway's status error would end the launch before service run")
+	}
 }
 func TestServiceLifecycleCommandsAndInvalidPaths(t *testing.T) {
 	for _, platform := range []string{"linux", "darwin", "windows"} {

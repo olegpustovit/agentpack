@@ -80,7 +80,8 @@ func buildDeploymentBinary(ctx context.Context, binary string, run func(*exec.Cm
 	if err := run(exec.CommandContext(ctx, "bash", "scripts/fetch-crsqlite.sh", "linux", "arm64")); err != nil {
 		return fmt.Errorf("prepare pinned cr-sqlite: %w", err)
 	}
-	build := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags=-linkmode=external -extldflags=-static", "-o", binary, "./cmd/agentpack")
+	// The deployed gateway reports the deploying CLI's version, which make dev-deploy has just built from this checkout.
+	build := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags=-linkmode=external -extldflags=-static -X github.com/olegpustovit/agentpack/internal/cli.Version="+Version, "-o", binary, "./cmd/agentpack")
 	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH=arm64", "CGO_ENABLED=1", "CC=zig cc -target aarch64-linux-musl", "CGO_LDFLAGS=-lunwind")
 	return run(build)
 }

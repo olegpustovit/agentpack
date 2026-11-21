@@ -4,7 +4,7 @@
 # Linux and Windows link here with zig. macOS needs Apple's SDK, so it builds on the Mac named by
 # AGENTPACK_MAC_BUILDER (default olegs-mac-mini) with a Go toolchain kept in ~/.cache/agentpack-build.
 # Each HOST gets the binary for its `uname`, has its gateway stopped, ap (and a real agentpack file)
-# replaced, and the gateway started again. Windows hosts are not handled: copy dist/local/ap-windows-amd64.exe.
+# replaced, and the gateway started again; Windows hosts are reached through PowerShell over OpenSSH.
 set -eu
 cd "$(dirname "$0")/.."
 version=$(sh scripts/build-version.sh)
@@ -55,10 +55,33 @@ rm "$out/source.tgz"
 echo "Built $version in $out"
 
 for host in "$@"; do
-    case $(ssh "$host" uname -sm) in
+    # Windows OpenSSH has no uname; its default shell is cmd or PowerShell.
+    case $(ssh "$host" uname -sm 2>/dev/null || echo Windows) in
         "Linux x86_64") binary=ap-linux-amd64 ;;
         "Linux aarch64") binary=ap-linux-arm64 ;;
         "Darwin arm64") binary=ap-darwin-arm64 ;;
+        Windows|MINGW*|MSYS*|CYGWIN*)
+            scp -q "$out/ap-windows-amd64.exe" "$host:.local/bin/ap.exe.new"
+            # A running exe cannot be overwritten but can be renamed; the old copies are left beside it.
+            script=$(cat <<'EOF'
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$bin = Join-Path $env:USERPROFILE '.local\bin'
+$new = Join-Path $bin 'ap.exe.new'
+& (Join-Path $bin 'ap.exe') gateway stop *> $null
+$stamp = [guid]::NewGuid().ToString('N')
+foreach ($name in 'ap.exe','agentpack.exe') {
+  $path = Join-Path $bin $name
+  if (Test-Path $path) { Rename-Item $path "$name.$stamp.old" } elseif ($name -eq 'agentpack.exe') { continue }
+  Copy-Item $new $path
+}
+Remove-Item $new
+& (Join-Path $bin 'ap.exe') gateway start *> $null
+"$env:COMPUTERNAME`: $(& (Join-Path $bin 'ap.exe') --version)"
+EOF
+)
+            ssh "$host" "powershell -NoProfile -NonInteractive -EncodedCommand $(printf '%s' "$script" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)"
+            continue ;;
         *) echo "$host: no binary for this platform" >&2; continue ;;
     esac
     scp -q "$out/$binary" "$host:/tmp/ap-new"
