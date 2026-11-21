@@ -282,3 +282,29 @@ func TestGatewayStartsWithUnreadableLegacySessionData(t *testing.T) {
 		t.Fatal("unreadable legacy session was removed", err)
 	}
 }
+
+func TestDeadCurrentEndpointPreservesSessionHistory(t *testing.T) {
+	home := t.TempDir()
+	store := testSessionStore(t, home)
+	info := SessionInfo{ID: "session-current", Name: "Current chat", Transport: "acp", ConversationState: "working"}
+	if err := upsertSession(t.Context(), store.DB, info); err != nil {
+		t.Fatal(err)
+	}
+	dir := writeLegacySession(t, home, info.ID, 0, SessionInfo{})
+	transcript := filepath.Join(dir, "conversation.ndjson")
+	if err := os.WriteFile(transcript, []byte("unrelated support file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	g := &Gateway{store: store, options: GatewayOptions{Home: home}}
+	g.importLegacySessions(t.Context())
+	got, err := storedSession(t.Context(), store.Reader, info.ID)
+	if err != nil || got.EndedAt.IsZero() || got.Name != info.Name || got.ConversationState != "working" {
+		t.Fatalf("reaped current session: %+v, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "worker.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dead endpoint remains: %v", err)
+	}
+	if _, err := os.Stat(transcript); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -150,6 +151,13 @@ func (g *Gateway) importLegacySessions(ctx context.Context) {
 			}
 			continue
 		}
+		if reflect.ValueOf(record.Session).IsZero() {
+			err := g.settleDeadWorker(ctx, file, record.ID)
+			if err != nil {
+				g.reportSessionImport(ctx, path, err)
+			}
+			continue
+		}
 		stopped = append(stopped, stoppedWorker{file, record})
 	}
 	g.importLegacyOwners(ctx, liveOwners)
@@ -164,6 +172,18 @@ func (g *Gateway) importLegacySessions(ctx context.Context) {
 	if err := g.importLegacyRecent(ctx); err != nil && !errors.Is(err, os.ErrNotExist) {
 		g.reportSessionImport(ctx, filepath.Join(g.options.Home, "network", "recent.json"), err)
 	}
+}
+
+// Current endpoints have no session metadata. The existing row owns their history and state.
+func (g *Gateway) settleDeadWorker(ctx context.Context, file *legacySessionFile, id string) error {
+	if err := file.unchanged(); err != nil {
+		return err
+	}
+	_, err := g.store.DB.ExecContext(ctx, "UPDATE sessions SET ended_at=? WHERE id=? AND ended_at=0 AND node_id="+state.LocalNodeSQL, time.Now().UnixNano(), id)
+	if err == nil {
+		g.removeImportedFiles(ctx, file)
+	}
+	return err
 }
 
 func (g *Gateway) importLegacyOwners(ctx context.Context, live map[string]bool) {
