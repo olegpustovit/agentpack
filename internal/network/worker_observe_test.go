@@ -236,3 +236,35 @@ func TestWorkerTurnUsesRequestTraceAndProcessRecording(t *testing.T) {
 		t.Fatalf("request turn event %+v", event)
 	}
 }
+
+func TestACPProcessInitializesWhileStageIsPending(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	directory := t.TempDir()
+	stage := make(chan error, 1)
+	command := exec.Command(os.Args[0], "-test.run=^TestACPAdapterExitRecordsCodeAndStderr$")
+	launch := WorkerLaunch{
+		Session:     SessionInfo{Harness: "fixture"},
+		Environment: append(os.Environ(), "AGENTPACK_TEST_DIAGNOSTIC_ADAPTER=1"),
+	}
+	adapter := base.ACPLaunch{
+		Cmd: command,
+		AdaptAgent: func(line []byte) base.AgentAdaptResult {
+			var response struct {
+				Result json.RawMessage `json:"result"`
+			}
+			if json.Unmarshal(line, &response) == nil && bytes.Contains(response.Result, []byte(`"protocolVersion"`)) {
+				close(stage)
+			}
+			return base.AgentAdaptResult{}
+		},
+	}
+	session, cleanup, err := startACPAgentProcess(ctx, launch, base.LaunchContext{WorkspaceRoot: directory}, base.Definition{}, adapter, directory, NewConversationSession(acp.NewEventLog(0), nil), stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if session.agentSessionID == "" {
+		t.Fatal("session was not created after staging completed")
+	}
+}
