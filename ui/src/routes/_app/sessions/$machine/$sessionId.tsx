@@ -28,17 +28,30 @@ const loadPane = {
 }
 
 // Returns true when the chunk failed to load (a deploy replaced it, or the network dropped).
-function usePane(kind: keyof typeof loadPane | undefined): boolean {
-  const [, loaded] = useState(0)
+function usePane<T>(load: () => Promise<T>, cached: T | undefined, enabled: boolean) {
+  const [pane, setPane] = useState<T | undefined>(() => cached)
   const [failed, setFailed] = useState(false)
   useEffect(() => {
-    if (!kind || panes[kind]) return
-    // A module fetch can stall without failing (a gateway restarting behind the CDN); offer Reload rather than spin forever.
+    if (!enabled || pane) return
+    let active = true
+    // If a deploy replaced the chunk, let the user reload rather than wait indefinitely.
     const stalled = setTimeout(() => setFailed(true), 15_000)
-    loadPane[kind]().then(() => { clearTimeout(stalled); setFailed(false); loaded((count) => count + 1) }, () => setFailed(true))
-    return () => clearTimeout(stalled)
-  }, [kind])
-  return failed
+    const finish = () => clearTimeout(stalled)
+    load().then((loaded) => {
+      finish()
+      if (!active) return
+      setPane(() => loaded)
+      setFailed(false)
+    }, () => {
+      finish()
+      if (active) setFailed(true)
+    })
+    return () => {
+      active = false
+      finish()
+    }
+  }, [enabled, load, pane])
+  return { pane, failed }
 }
 
 function PaneLoading({ label, failed }: { label: string; failed?: boolean }) {
@@ -70,12 +83,15 @@ function SessionRoute() {
   const listedInfo = data?.find((session) => session.id === sessionId)
   const detail = useQuery({
     queryKey: ["m", LOCAL, "session-row", machine, sessionId],
-    queryFn: () => api<SessionInfo>(`/api/sessions/${encodeURIComponent(sessionId)}`, { machine }),
+    queryFn: async () => {
+      const row = await api<SessionInfo>(`/api/sessions/${encodeURIComponent(sessionId)}`, { machine })
+      return row?.id === sessionId && row.state ? row : null
+    },
     enabled: data !== undefined && !listedInfo,
     staleTime: 15_000,
     retry: false,
   })
-  const info = listedInfo ?? detail.data
+  const info = listedInfo ?? detail.data ?? undefined
   const loading = !info && (!data || detail.isPending)
   const stale = info?.reachable === false || host?.online === false
   const message = unavailableMessage(info, stale)
@@ -115,15 +131,14 @@ function SessionRoute() {
       return [{ machine, sessionId }, ...current.filter((chat) => chat.machine !== machine || chat.sessionId !== sessionId)].slice(0, 3)
     })
   }, [acp, machine, message, sessionId])
-  const paneFailed = usePane(info?.transport === "acp" ? "conversation" : info || !loading ? "terminal" : undefined)
+  const { pane: ConversationPane, failed: conversationFailed } = usePane(loadPane.conversation, panes.conversation, acp)
+  const { pane: TerminalPane, failed: terminalFailed } = usePane(loadPane.terminal, panes.terminal, !acp && !loading)
   if (message) return <UnavailableTerminal message={message} />
   // The pane depends on the transport, so wait for the list rather than guess Terminal
   // (which would load xterm and attach a socket to a chat session).
   if (loading && !stale) return <PaneLoading label="Loading session…" />
   const title = listed && sessionLabel(listed)
   const subtitle = listed && sessionDetail(listed).split(" · ").slice(listed.name ? 0 : 1).join(" · ")
-  const ConversationPane = panes.conversation
-  const TerminalPane = panes.terminal
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1">
@@ -164,7 +179,7 @@ function SessionRoute() {
             listed={!data || !!info}
           />
         ) : (
-          <PaneLoading label={acp ? "Loading conversation…" : "Loading terminal…"} failed={paneFailed} />
+          <PaneLoading label={acp ? "Loading conversation…" : "Loading terminal…"} failed={acp ? conversationFailed : terminalFailed} />
         )}
       </div>
     </div>
