@@ -302,7 +302,8 @@ func (g *Gateway) serveConversation(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	info, err := storedSession(r.Context(), g.auth.store.Reader, id)
 	if err == nil {
-		g.serveStoredSessionConversation(w, r, info)
+		local, _ := g.auth.store.NodeID(r.Context())
+		g.serveStoredSessionConversation(w, r, info, local != "" && info.NodeID == local)
 		return
 	}
 	if errors.Is(err, errSessionNotFound) && conversationPage(r).before == 0 {
@@ -313,7 +314,7 @@ func (g *Gateway) serveConversation(w http.ResponseWriter, r *http.Request) {
 	g.writeStoredConversation(w, r, id, err)
 }
 
-func (g *Gateway) serveStoredSessionConversation(w http.ResponseWriter, r *http.Request, info SessionInfo) {
+func (g *Gateway) serveStoredSessionConversation(w http.ResponseWriter, r *http.Request, info SessionInfo, localOwner bool) {
 	if !info.ArchivedAt.IsZero() {
 		g.serveArchivedConversation(w, r, info, g.tailnetTarget)
 		return
@@ -322,8 +323,8 @@ func (g *Gateway) serveStoredSessionConversation(w http.ResponseWriter, r *http.
 		http.Error(w, "conversation unavailable", http.StatusNotFound)
 		return
 	}
-	if isConversationStream(r) && conversationPage(r).before == 0 {
-		if record, err := g.workerRecord(r.Context(), info.ID); err == nil && proxyWorkerConversation(w, r, record, "") {
+	if localOwner && info.EndedAt.IsZero() && isConversationStream(r) && conversationPage(r).before == 0 {
+		if record, err := workerRecord(g.options.Home, info.ID); err == nil && proxyWorkerConversation(w, r, record, "") {
 			return
 		}
 	}

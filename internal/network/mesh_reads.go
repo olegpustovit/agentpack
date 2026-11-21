@@ -140,7 +140,7 @@ func (g *Gateway) routeMeshRequest(w http.ResponseWriter, r *http.Request) (bool
 			http.Error(w, "session belongs to another node", http.StatusBadRequest)
 			return true, nil
 		}
-		g.serveStoredSessionConversation(w, r, info)
+		g.serveStoredSessionConversation(w, r, info, false)
 		return true, nil
 	}
 	if r.Method == http.MethodGet && len(parts) == 5 && parts[3] == "blobs" {
@@ -155,7 +155,7 @@ func (g *Gateway) routeMeshRequest(w http.ResponseWriter, r *http.Request) (bool
 	}
 	if info.NodeID == local {
 		if history {
-			g.serveStoredSessionConversation(w, r, info)
+			g.serveStoredSessionConversation(w, r, info, true)
 			return true, nil
 		}
 		return false, nil
@@ -173,7 +173,7 @@ func (g *Gateway) routeMeshRequest(w http.ResponseWriter, r *http.Request) (bool
 	r.SetPathValue("id", parts[2])
 	online, _ := g.nodeContact(info.NodeID, local)
 	if history && !online {
-		g.serveStoredSessionConversation(w, r, info)
+		g.serveStoredSessionConversation(w, r, info, false)
 		return true, nil
 	}
 	if !online {
