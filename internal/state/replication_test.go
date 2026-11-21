@@ -23,6 +23,8 @@ func TestReplicatedTablesTrackChangesAndLocalTablesStayLocal(t *testing.T) {
 		"push_keys":          "INSERT INTO push_keys(public_key,private_key,created_at) VALUES ('public','private',1)",
 		"push_subscriptions": "INSERT INTO push_subscriptions(endpoint,email,p256dh,auth,public_key,created_node) VALUES ('https://push.example/1','member@example.com','key','secret','public','node')",
 		"omp_settings":       `INSERT INTO omp_settings(key,value) VALUES ('edit.mode','"patch"')`,
+		// Agent sign-ins replicate on purpose, secrets included: one sign-in serves every node.
+		"agent_credentials": `INSERT INTO agent_credentials(key,value) VALUES ('agy/token','{}')`,
 	} {
 		if _, err := store.DB.Exec(statement); err != nil {
 			t.Fatalf("%s: %v", table, err)

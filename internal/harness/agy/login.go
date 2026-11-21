@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
@@ -52,4 +53,14 @@ func Login(string) (base.LoginFlow, error) {
 		Verify:  func(ctx context.Context) bool { return Account(ctx).SignedIn },
 		Cleanup: func() { _ = os.RemoveAll(dir) },
 	}, nil
+}
+
+// CredentialFile is agy's sign-in. On macOS agy prefers the keychain but reads this file when the
+// keychain holds none, so a sign-in copied from another machine works there too.
+func CredentialFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token")
 }

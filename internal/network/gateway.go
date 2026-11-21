@@ -91,6 +91,7 @@ type Gateway struct {
 	mcpBroker      mcpBroker
 	push           pushWatch
 	omp            ompSettings
+	credentialsMu  sync.Mutex // one agent credential sync at a time
 }
 
 // browserPingInterval keeps idle terminal connections alive through proxies. Tests shorten it.
@@ -167,7 +168,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	for _, task := range []struct {
 		name string
 		run  func(context.Context)
-	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}, {"gateway.push", func(ctx context.Context) { gateway.runPush(ctx, pushInterval) }}, {"gateway.omp_settings", func(ctx context.Context) { gateway.runOMPSettings(ctx, 30*time.Second) }}} {
+	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}, {"gateway.push", func(ctx context.Context) { gateway.runPush(ctx, pushInterval) }}, {"gateway.omp_settings", func(ctx context.Context) { gateway.runOMPSettings(ctx, 30*time.Second) }}, {"gateway.agent_credentials", func(ctx context.Context) { gateway.runAgentCredentials(ctx, 30*time.Second) }}} {
 		background.Add(1)
 		obs.Go(task.name, func() { defer background.Done(); task.run(ctx) })
 	}

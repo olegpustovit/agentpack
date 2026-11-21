@@ -94,3 +94,12 @@ func Login(string) (base.LoginFlow, error) {
 		Cleanup: func() { _ = os.RemoveAll(home) },
 	}, nil
 }
+
+// CredentialFile is the shared Grok sign-in every project home loads before a launch.
+func CredentialFile() string {
+	shared, err := paths.SharedGrokCredentialsDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(shared, "auth.json")
+}

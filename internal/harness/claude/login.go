@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
@@ -61,4 +62,14 @@ func Login(method string) (base.LoginFlow, error) {
 	command := exec.Command(exe, "auth", "login", flag)
 	command.Env = append(os.Environ(), "BROWSER=true")
 	return base.LoginFlow{Command: command, Input: "code"}, nil
+}
+
+// CredentialFile is Claude Code's sign-in file. On macOS Claude prefers the keychain and reads this
+// file when the keychain holds none, so a sign-in copied from another machine works there too.
+func CredentialFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude", ".credentials.json")
 }

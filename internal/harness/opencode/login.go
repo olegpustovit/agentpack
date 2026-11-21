@@ -52,7 +52,7 @@ func Account(ctx context.Context) base.Account {
 			providers = append(providers, integration.ID)
 		}
 	default:
-		data, err := os.ReadFile(v1AuthPath())
+		data, err := os.ReadFile(CredentialFile())
 		var stored map[string]json.RawMessage
 		if err == nil && json.Unmarshal(data, &stored) == nil {
 			for id := range stored {
@@ -65,7 +65,8 @@ func Account(ctx context.Context) base.Account {
 	return account
 }
 
-func v1AuthPath() string {
+// CredentialFile is OpenCode's provider sign-ins, shared with other machines by the gateway.
+func CredentialFile() string {
 	data := os.Getenv("XDG_DATA_HOME")
 	if data == "" {
 		home, _ := os.UserHomeDir()

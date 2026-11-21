@@ -26,16 +26,19 @@ type agentLogin struct {
 	account func(context.Context) harness.Account
 	login   func(method string) (harness.LoginFlow, error)
 	logout  func(context.Context) error // nil when the agent has no way to sign out without a terminal
+	// credential is the file holding the agent's sign-in, shared with every node; nil when its
+	// sign-in is not a file another machine can use (Cursor's keychain, OMP's database).
+	credential func() string
 }
 
 var agentLogins = []agentLogin{
-	{"claude", claude.LoginMethods, claude.Account, claude.Login, claude.Logout},
-	{"codex", codex.LoginMethods, codex.Account, codex.Login, codex.Logout},
-	{"omp", omp.LoginMethods, omp.Account, omp.Login, nil},
-	{"agy", agy.LoginMethods, agy.Account, agy.Login, nil},
-	{"cursor", cursor.LoginMethods, cursor.Account, cursor.Login, cursor.Logout},
-	{"grok", grok.LoginMethods, grok.Account, grok.Login, grok.Logout},
-	{"opencode", opencode.LoginMethods, opencode.Account, opencode.Login, nil},
+	{"claude", claude.LoginMethods, claude.Account, claude.Login, claude.Logout, claude.CredentialFile},
+	{"codex", codex.LoginMethods, codex.Account, codex.Login, codex.Logout, codex.CredentialFile},
+	{"omp", omp.LoginMethods, omp.Account, omp.Login, nil, nil},
+	{"agy", agy.LoginMethods, agy.Account, agy.Login, nil, agy.CredentialFile},
+	{"cursor", cursor.LoginMethods, cursor.Account, cursor.Login, cursor.Logout, nil},
+	{"grok", grok.LoginMethods, grok.Account, grok.Login, grok.Logout, grok.CredentialFile},
+	{"opencode", opencode.LoginMethods, opencode.Account, opencode.Login, nil, opencode.CredentialFile},
 }
 
 // loginMethods are an agent's ways to sign in, known without asking its CLI.
@@ -186,6 +189,9 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 			}
 			done.End()
 			g.agents.forget()
+			if step.State == "done" {
+				g.syncAgentCredentials(context.Background()) // share the new sign-in now, not at the next tick
+			}
 		})
 		step, err := attempt.waitLink(r.Context())
 		respond(w, step, err)
@@ -204,6 +210,9 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 			event.Set("harness", name)
 		}
 		err := agentLogins[index].logout(r.Context())
+		if err == nil {
+			err = g.stopSharingAgentCredential(r.Context(), agentLogins[index])
+		}
 		g.agents.forget()
 		respond(w, map[string]bool{"signed_out": err == nil}, err)
 	})

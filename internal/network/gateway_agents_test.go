@@ -28,7 +28,7 @@ func TestAgentRoutesSignInForTheOwnerOnly(t *testing.T) {
 	}, func(context.Context) error {
 		loggedOut = true
 		return nil
-	}}}
+	}, nil}}
 	g, origin := identityGateway(t, home, nil)
 	testBrowserSession(t, g.auth, testBrowserEmail, "owner")
 	testBrowserSession(t, g.auth, "member@example.com", "member")

@@ -48,3 +48,8 @@ made with, and its creating node for meshes without a Main.
 
 omp_settings replicates network-wide Oh My Pi settings, one sparse JSON row per changed key.
 Each gateway renders the rows into its own `omp/settings.yml` overlay.
+
+agent_credentials replicates agent sign-in files, secrets included, so signing an
+agent in on one node signs it in on all of them. The newest file wins; a sign-out
+from the web UI leaves a newer empty row that stops sharing without deleting other
+nodes' files.
