@@ -418,9 +418,8 @@ export default function ConversationPane({
   // The chat carries on with another agent, which gets the transcript with the next message.
   const switchAgent = useMutation({
     mutationFn: (harness: string) => api(`/api/sessions/${encodeURIComponent(sessionId)}/harness`, { machine, method: "POST", body: { harness } }),
-    onSuccess: (_, harness) => {
+    onSuccess: () => {
       markNewChat(sessionId)
-      hud.success(`Continuing with ${harnessName(harness)}`)
       return queryClient.invalidateQueries({ queryKey: sessionsQuery(machine, false).queryKey })
     },
     onError: (error, harness) =>

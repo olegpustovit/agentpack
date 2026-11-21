@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -331,8 +332,13 @@ func AttachTerminal(ctx context.Context, home, id string, since uint64) (*websoc
 	return connection, err
 }
 
+// StopWorker stops a session's worker. One whose endpoint file is gone has already exited, so
+// stopping it again succeeds.
 func StopWorker(ctx context.Context, home, id string) error {
-	return controlWorker(ctx, home, id, "stop", "")
+	if err := controlWorker(ctx, home, id, "stop", ""); !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func RestartWorker(ctx context.Context, home, id, operationID string) error {

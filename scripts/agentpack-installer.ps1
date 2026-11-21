@@ -79,7 +79,7 @@ try {
     }
 
     if ($env:AGENTPACK_RESTART_SERVICE -eq '1') {
-        & $Destination service start
+        & $Destination gateway start
         if ($LASTEXITCODE -ne 0) { throw 'Could not restart the Agentpack gateway service' }
     }
 

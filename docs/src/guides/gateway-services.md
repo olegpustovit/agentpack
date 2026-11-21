@@ -1,41 +1,47 @@
 # Gateway user services
 
-Normal agent launches start a local node automatically. To have the gateway available
-as a user service after login, run these commands from Bash, Zsh, or PowerShell:
+Run `ap` in an interactive terminal to start the gateway and open its browser UI.
+Use these commands to control the gateway from a terminal or script:
 
 ```text
-agentpack service start
-agentpack service status
-agentpack service stop
-agentpack service uninstall
+ap gateway start
+ap gateway status
+ap gateway stop
 ```
 
-Start creates or refreshes the service definition from the current executable path and
-`AGENTPACK_HOME`, then restarts the gateway. No separate install command is needed.
-No command changes your shell profile or PATH, or requires a root account. The service runs as your current OS user.
-At startup it reads `PATH` from your login shell, so it finds the same agents your terminal does.
+Both start commands install or refresh the login service for the current OS
+user. The service uses the current executable and `AGENTPACK_HOME`. When a
+service manager is unavailable, the gateway runs in a detached process and
+starts again the next time you run `ap` after reboot.
 
-- Linux uses `systemctl --user` and an `agentpack-gateway.service` unit under
-  `$XDG_CONFIG_HOME/systemd/user` (default `~/.config/systemd/user`). It starts at user
-  login; this command does not enable system-wide lingering. `KillMode=process` keeps
-  separately owned session workers alive when stopping the gateway.
-- macOS uses a LaunchAgent at `~/Library/LaunchAgents/space.microapps.agentpack.gateway.plist`.
-  It starts at login and preserves independent workers with `AbandonProcessGroup`.
-- Windows uses a Scheduled Task named `Agentpack Gateway-<your SID>`, with interactive
-  login and limited privileges. PowerShell starts the gateway through WMI outside the
-  scheduled task's job, so task lifetime does not kill sessions. The task checks at login
-  and every minute while you are logged in. It stores no password. `service status`
-  shows both task state and actual gateway availability; the bootstrap task normally
-  returns to Ready while the gateway keeps running.
+- Linux uses `systemctl --user` and writes the unit under
+  `$XDG_CONFIG_HOME/systemd/user` (default `~/.config/systemd/user`).
+  Agentpack tries to enable lingering so the gateway starts at boot and
+  survives logout. If it fails, it prints the `loginctl enable-linger` command.
+- macOS uses a LaunchAgent at
+  `~/Library/LaunchAgents/space.microapps.agentpack.gateway.plist`.
+- Windows uses an interactive Scheduled Task named `Agentpack Gateway-<your SID>`.
+  The task checks at login and every minute while you are logged in.
 
-Stopping disables automatic node startup until an explicit `service start` or
-`gateway start`. Existing agent sessions continue. `gateway stop-agents` is the separate
-command to end them. Uninstall removes only the service definition; packages, recent
-folders, root-account credentials, and session workers remain.
+`ap gateway stop` disables login startup and leaves existing sessions running.
+Use `ap gateway stop-agents` to end those sessions. Linux service logs are in the
+user journal. macOS and Windows service logs are in
+`$AGENTPACK_HOME/network/gateway-service.log`.
 
-Service definitions invoke `agentpack service run`, an internal entry point that checks
-the persistent stop marker before serving. Linux service logs are in the user journal;
-macOS and Windows logs are in `$AGENTPACK_HOME/network/gateway-service.log`.
+## Update the mesh
+
+The machine list can show **Needs update** while a machine is reachable.
+Topology shows the last known version and indicates where the state schema
+differs from the local gateway. Use **Update** on a machine or **Update all**
+in Topology to bring older machines up to the newest version in the mesh.
+The gateway selects the newer of that mesh version and the latest stable
+GitHub release. It refuses updates to an equal or older version.
+
+Use `make ship-patch` for a stable patch or `make ship-dev` to publish a
+development build with pinned installers and checksums. A development build
+can participate in mesh updates as soon as its release assets are published.
+For a machine whose gateway predates remote updates, run the release's pinned
+installer on that machine once, then run `ap gateway start`.
 
 ## Personal Tailscale sharing
 

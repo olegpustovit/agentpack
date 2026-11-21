@@ -37,6 +37,13 @@ describe("sessionRules", () => {
     expect(rules.stop).toBe(true)
   })
 
+  it("a stopped chat can resume; a running one or a terminal cannot", () => {
+    const ended_at = "2026-11-21T10:00:00Z"
+    expect(sessionRules(session({ transport: "acp", interactive: false, running: false, ended_at })).resume).toBe(true)
+    expect(sessionRules(session({ transport: "acp", interactive: false, running: true })).resume).toBe(false)
+    expect(sessionRules(session({ running: false, ended_at })).resume).toBe(false)
+  })
+
   it("stop needs a running session", () => {
     expect(sessionRules(session({ running: false })).stop).toBe(false)
   })

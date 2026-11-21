@@ -132,9 +132,8 @@ function RenameForm({ packId, packName, holders, onDone }: { packId: string; pac
 
   const rename = useMutation({
     mutationFn: (next: string) => Promise.all(holders.map((machine) => renameAgentpack(machine, packId, next))),
-    onSuccess: async (_result, next) => {
+    onSuccess: async () => {
       for (const machine of holders) await queryClient.invalidateQueries({ queryKey: ["m", machine, "library"] })
-      hud.success(`Renamed to ${next}`)
       onDone()
     },
   })

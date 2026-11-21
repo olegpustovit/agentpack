@@ -4,7 +4,7 @@ import { ApiError, LOCAL, api, routeMissing } from "@/lib/api"
 import type { Identity, TailnetNode, Topology } from "@/lib/api-types"
 import { useEventsConnected } from "@/features/events/use-events"
 
-export type Machine = { id: string; name: string; online: boolean; main?: boolean; needsUpdate?: boolean }
+export type Machine = { id: string; name: string; online: boolean; main?: boolean; needsUpdate?: boolean; version?: string; schema?: number }
 
 export const identityQuery = queryOptions({
   queryKey: ["identity"],
@@ -27,9 +27,11 @@ export const machineUpdateQuery = (machine: string) =>
     refetchInterval: (query) => query.state.data?.state === "running" ? 2000 : false,
   })
 
+const agentpackVersionPattern = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+
 export function compareAgentpackVersions(left: string, right: string): number {
   const parse = (value: string) => {
-    const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(value)
+    const match = agentpackVersionPattern.exec(value)
     return match && { parts: match.slice(1, 4).map(Number), pre: match[4] }
   }
   const a = parse(left)
@@ -99,13 +101,22 @@ export const machineInfoQuery = (machine: string) =>
     retry: (count, error) => !(error instanceof ApiError && error.status === 404) && count < 2,
   })
 
-// The running version comes from identity for this machine and from topology for peers, so the
-// list and the detail page agree, and this machine is flagged too.
+export function newestAgentpackVersion(versions: (string | undefined)[]): string | undefined {
+  return versions.reduce<string | undefined>((newest, version) =>
+    version && agentpackVersionPattern.test(version) &&
+    (!newest || compareAgentpackVersions(version, newest) > 0) ? version : newest, undefined)
+}
+
+export function machinesToUpdate(machines: Machine[]): Machine[] {
+  const newest = newestAgentpackVersion(machines.map((machine) => machine.version))
+  return newest ? machines.filter((machine) => machine.version && compareAgentpackVersions(machine.version, newest) < 0) : []
+}
 export function useAgentpackVersions(): (machine: string) => { version?: string; latest?: string; outdated: boolean } {
   const live = useEventsConnected()
   const local = useQuery(identityQuery).data?.node.version
-  const peers = useQuery(topologyQuery(live)).data?.peers
-  const latest = useQuery(latestAgentpackVersionQuery).data?.version
+  const peers = useQuery(nodesQuery(live)).data
+  const release = useQuery(latestAgentpackVersionQuery).data?.version
+  const latest = newestAgentpackVersion([release, local, ...(peers ?? []).map((peer) => peer.version)])
   return (machine) => {
     const version = machine === LOCAL ? local : peers?.find((peer) => peer.id === machine)?.version
     return { version, latest, outdated: !!version && !!latest && compareAgentpackVersions(version, latest) < 0 }
@@ -176,10 +187,10 @@ export function useMachines(): Machine[] {
   const identity = useQuery(identityQuery).data
   const nodes = useQuery(nodesQuery(live)).data
   const found: Machine[] = []
-  if (identity) found.push({ id: LOCAL, name: identity.node.name, online: true, main: identity.node.main })
+  if (identity) found.push({ id: LOCAL, name: identity.node.name, online: true, main: identity.node.main, version: identity.node.version, schema: identity.node.schema_version })
   for (const node of nodes ?? []) {
     if (identity && node.id === identity.node.id) continue
-    found.push({ id: node.id, name: node.name, online: node.online, main: node.main, needsUpdate: node.needs_update })
+    found.push({ id: node.id, name: node.name, online: node.online, main: node.main, needsUpdate: node.needs_update, version: node.version, schema: node.schema_version })
   }
   // Idempotent, so recording during render is safe.
   for (const machine of found) seen.set(machine.id, machine)

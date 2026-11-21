@@ -183,11 +183,27 @@ test("+ starts a chat at once with the folder's last agent and holds a message u
   await expect(composer).toHaveValue("")
 })
 
-test("⌥-click on + lists the agents", async ({ page }) => {
+test("⌥-click on + lists the agents and can start one in a new worktree", async ({ page }) => {
+  let posted: unknown
+  await page.route(/\/api\/sessions(\?.*)?$/, (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    posted = route.request().postDataJSON()
+    return route.fulfill({ status: 500, body: "stop here" })
+  })
   await page.goto("/sessions")
-  await page.getByRole("button", { name: "New Codex chat in oracle on host-a" }).click({ modifiers: ["Alt"] })
+  const plus = page.getByRole("button", { name: "New Codex chat in oracle on host-a" })
+  await plus.click({ modifiers: ["Alt"] })
   await expect(page.getByRole("menuitem", { name: "New Claude chat" })).toBeVisible()
   await expect(page).not.toHaveURL(/\/sessions\/[^/]+\/s/)
+  const worktree = page.getByRole("menuitemcheckbox", { name: "Run in worktree" })
+  await expect(worktree).not.toBeChecked()
+  await worktree.click()
+  await expect(worktree).toBeChecked()
+  await page.getByRole("menuitem", { name: "New Claude chat" }).click()
+  await expect.poll(() => posted).toMatchObject({ harness: "claude", worktree: "new" })
+  // Off again the next time the menu opens.
+  await plus.click({ modifiers: ["Alt"] })
+  await expect(page.getByRole("menuitemcheckbox", { name: "Run in worktree" })).not.toBeChecked()
 })
 
 test("closing New session drops the folder it was opened for", async ({ page }) => {

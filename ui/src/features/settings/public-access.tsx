@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch"
 import { errorText } from "@/features/library/mutations"
 import { apiLines } from "@/lib/api"
 import type { PublicAccess, Settings } from "@/lib/api-types"
-import { hud, useCopied } from "@/lib/hud"
+import { useCopied } from "@/lib/hud"
 import { Row } from "./panes"
 import { settingsQuery } from "./queries"
 
@@ -59,9 +59,8 @@ export function PublicAccessRows({ access }: { access: PublicAccess }) {
       if (failure) throw new Error(failure)
       return status
     },
-    onSuccess: (status, enabled) => {
+    onSuccess: (status) => {
       if (status) queryClient.setQueryData<Settings>(settingsQuery.queryKey, (old) => old && { ...old, public: status })
-      if (status?.enabled === enabled) hud.success(enabled ? "Public access on" : "Public access off")
     },
   })
   const checking = change.isPending && change.variables

@@ -19,15 +19,17 @@ const Toaster = (props: ToasterProps) => (
   />
 )
 
-// The Hud surface: centered above the status bar, 4 s, with a close ✕. Loaded with the first toast.
+// The Hud surface: top right under the toolbar, like a desktop notification, so it never covers the
+// composer. 4 s, with a close ✕. Loaded with the first toast.
 export default function HudToaster() {
   // Runs after Sonner's own subscription (a child's effects run first), so queued toasts are seen.
   useEffect(() => hudListening(toast), [])
   return (
     <Toaster
-      position="bottom-center"
+      position="top-right"
       duration={4000}
-      offset="calc(var(--status-h) + var(--s4))"
+      offset={{ top: "calc(var(--bar-h) + var(--s3))", right: "var(--s4)" }}
+      mobileOffset={{ top: "calc(var(--bar-h) + var(--s3))" }}
       closeButton
       icons={{ close: <X className="size-(--fs)" aria-hidden /> }}
     />

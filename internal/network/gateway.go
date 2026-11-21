@@ -1282,6 +1282,11 @@ func EnsureNode(ctx context.Context, home, executable string) error {
 		return err
 	}
 	go command.Wait()
+	return WaitForGateway(ctx, home)
+}
+
+// WaitForGateway waits for the selected background launcher to publish a healthy endpoint.
+func WaitForGateway(ctx context.Context, home string) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	timer := time.NewTimer(10 * time.Second)
@@ -1291,9 +1296,9 @@ func EnsureNode(ctx context.Context, home, executable string) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-timer.C:
-			return fmt.Errorf("gateway startup timed out; inspect %s", log.Name())
+			return errors.New("gateway startup timed out")
 		case <-ticker.C:
-			if _, err = NodeRequest(ctx, home, "GET", "/healthz"); err == nil {
+			if _, err := NodeRequest(ctx, home, "GET", "/healthz"); err == nil {
 				return nil
 			}
 		}

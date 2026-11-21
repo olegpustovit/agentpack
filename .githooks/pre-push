@@ -4,6 +4,18 @@
 #
 # Installed via `make hooks`. Bypass once with `git push --no-verify`.
 
+tag_pushed=false
+while read -r local_ref local_oid remote_ref remote_oid; do
+    case "$local_ref:$remote_ref" in
+        refs/tags/v*:refs/tags/v*) tag_pushed=true ;;
+    esac
+done
+if ! "$tag_pushed" &&
+    base=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null) &&
+    ! git diff --quiet "$base" HEAD -- internal/state/migrations/; then
+    echo "pre-push: state migrations changed since $base; ship a release before deploying to the mesh." >&2
+fi
+
 echo "pre-push: make ci"
 if ! make ci; then
     echo "pre-push: Go CI gate failed — fix the errors above." >&2

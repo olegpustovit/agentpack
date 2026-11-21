@@ -12,6 +12,8 @@ All downloaded trees, the metadata index, and your **`local/`** mirror live unde
 
 ### Release requirements
 
+A state migration or a wire-format change can break mesh compatibility. Publish it as a stable release or a development release with `make ship-dev` before deploying it to another machine. The pre-push hook warns about migrations pushed without a new product tag. Use `make ship-patch` for hotfixes.
+
 Product GitHub releases (tags `v*`) must begin with copyable, version-pinned install commands for every supported operating-system family: the shell installer for macOS/Linux and the PowerShell installer for Windows. Keep these commands in GoReleaser's `release.header`; do not publish a changelog-only release. The URLs must use `{{ .Tag }}` so each release installs itself rather than whatever `latest` points to. Both installer scripts and `checksums.txt` must be attached to the same release, and release validation must fail if any command or asset declaration is removed.
 
 Static build-input releases tagged `crsqlite-<commit>` are the sole exception: these are prereleases, never latest, contain the five static library archives and `checksums.txt`, and have no product installers. `third_party/crsqlite.lock` pins the source/toolchain/SQLite versions and archive checksums. Builds use cgo and `make crsqlite` downloads and verifies the host library; only `make crsqlite-build` needs Rust and Zig. macOS release linking uses a native Apple SDK. Normal library fetches never fall back to a source build.
@@ -292,7 +294,7 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 - The query cache persists to IndexedDB per UI build (`src/lib/persist.ts`); sign-out and any 401 must call `forgetQueries()`. `public/sw.js` caches only the shell and hashed assets, never `/api/`.
 - Live data is pushed: with `/api/events` connected, queries do not poll. A `state` event names the replicated tables it changed (`tables`) and the UI refetches only their readers.
 - Linkable overlays open from a search param (`new`, `install`, `restore`, `add`). Confirmations are local state.
-- **Alert model:** one surface per situation. Action finished: `Hud`, 4 s. Action failed with nothing open: `Hud` with `Retry`, until dismissed. Ongoing pane or terminal state: `Banner`. Irreversible action: `ConfirmAlert`. Form or server rejection: inline under the field. Do not use `notice()`, `*-status` lines or `window.confirm`.
+- **Alert model:** one surface per situation. Action finished with its result on screen: nothing more. Action finished out of sight: `Hud` (top right), 4 s. Copy: the button shows `Copied` (`useCopied`), never a Hud. Action failed with nothing open: `Hud` with `Retry`, until dismissed. Ongoing pane or terminal state: `Banner`. Irreversible action: `ConfirmAlert`. Form or server rejection: inline under the field. Do not use `notice()`, `*-status` lines or `window.confirm`.
 - **Size budgets** (`ui/scripts/check-size.ts`, run by every `bun run build`): main JS 170 KB gzip, initial CSS 30 KB, every lazy JS chunk 100 KB (the terminal included). Never raise a budget. The root route imports only `Button`, `Input`, `Tooltip` and `DropdownMenu`; dialogs, selects, the command palette and context menus load inside routes or through `React.lazy`.
 - **Checks:** in `ui/`, `bun run lint && bun run test && bun run build && bun run e2e`. `make artifact` also runs `scripts/ui-smoke.sh` against the built gateway. `bun run capture` writes design-review screenshots; it is not part of the suite.
 

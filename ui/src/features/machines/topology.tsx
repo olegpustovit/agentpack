@@ -1,16 +1,18 @@
+import { Button } from "@/components/ui/button"
+import { hud } from "@/lib/hud"
 import { Badge } from "@/components/ui/badge"
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Inspector, Section } from "@/components/kit/data"
 import { Banner, RowSkeleton } from "@/components/kit/feedback"
 import { useEventsConnected } from "@/features/events/use-events"
 import { replicationQuery } from "@/features/library/queries"
-import { ToolbarTitle } from "@/features/shell/toolbar-slot"
+import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { sessionsQuery } from "@/features/sessions/queries"
-import { LOCAL } from "@/lib/api"
+import { api, LOCAL } from "@/lib/api"
 import { plural } from "@/lib/format"
-import { topologyQuery, useMachines, useReplicatedQueries } from "./queries"
+import { machinesToUpdate, topologyQuery, useMachines, useReplicatedQueries } from "./queries"
 import {
   DIAGRAM_W,
   GATEWAY_W,
@@ -50,6 +52,22 @@ export function TopologyView() {
   const machines = useMachines()
   const sessions = useReplicatedQueries(sessionsQuery)
   const data = topology.data
+  const targets = machinesToUpdate(machines)
+  const updateAll = useMutation({
+    mutationFn: async () => {
+      const update = async (machine: (typeof machines)[number]) => {
+        try {
+          const result = await api<{ version: string }>("/api/node/update", { machine: machine.id, method: "POST" })
+          hud.success(`Updating ${machine.name} to ${result.version}`)
+        } catch (error) {
+          hud.error(`Couldn't update ${machine.name}: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+      await Promise.all(targets.filter((machine) => machine.id !== LOCAL).map(update))
+      const gateway = targets.find((machine) => machine.id === LOCAL)
+      if (gateway) await update(gateway)
+    },
+  })
   // Replication enrolment is known locally, so the edge marks it without another peer probe.
   const replication = useQuery(replicationQuery)
   const enrolled = new Set((replication.data?.peers ?? []).map((peer) => peer.node))
@@ -69,18 +87,26 @@ export function TopologyView() {
   const offline = peers.length - reachable
   const gatewaySessions = count(LOCAL)
 
+  const inventory = new Map(machines.map((machine) => [machine.id, machine]))
+  const self = inventory.get(LOCAL)
+  const versionLabel = (id: string, fallback?: string) => {
+    const machine = inventory.get(id)
+    const version = machine?.version || fallback
+    return machine?.schema && self?.schema && machine.schema !== self.schema
+      ? `${version || "—"} · schema ${machine.schema}`
+      : version
+  }
   const rows = [
-    { id: LOCAL, main: data.self.main, name: data.self.name, os: data.self.os, state: "Gateway", path: "—", version: "", sessions: gatewaySessions, reason: "This machine" },
+    { id: LOCAL, main: data.self.main, name: data.self.name, os: data.self.os, state: "Gateway", path: "—", version: versionLabel(LOCAL), sessions: gatewaySessions, reason: "This machine" },
     ...peers.map((peer) => ({
       id: peer.id,
       main: peer.main,
       name: peer.name,
       os: peer.os,
-      state: stateWord(peer.state),
+      state: inventory.get(peer.id)?.needsUpdate ? "Needs update" : stateWord(peer.state),
       // Tailscale often reports no path; the column header explains the dash once.
       path: peer.state === "reachable" && (peer.connection === "direct" || peer.connection === "relay") ? edgeOf(peer).label : "—",
-      // A reachable peer that reports no version predates the field, so it needs an update.
-      version: peer.state === "reachable" ? peer.version || "Needs update" : "",
+      version: versionLabel(peer.id, peer.version),
       sessions: count(peer.id, peer.sessions),
       reason: reasonOf(peer),
     })),
@@ -96,6 +122,13 @@ export function TopologyView() {
           </Banner>
         )}
         <ToolbarTitle title="Topology" subtitle={`${reachable} reachable · ${offline} offline`} />
+        <ToolbarSlot>
+          {(targets.length > 0 || updateAll.isPending) && (
+            <Button size="sm" disabled={updateAll.isPending} onClick={() => updateAll.mutate()}>
+              {updateAll.isPending ? "Updating…" : `Update all (${targets.length})`}
+            </Button>
+          )}
+        </ToolbarSlot>
         <h1 className="sr-only">Topology</h1>
         {/* The diagram repeats the grid below, so assistive tech skips it, and phones show only the grid. */}
         <div className="col-span-full max-[760px]:hidden">

@@ -3,12 +3,12 @@
 export type Status = { joining?: boolean; claimed: boolean; legacy: boolean; authenticated: boolean; email: string }
 
 export type Identity = {
-  node: { id: string; name: string; os: string; version: string; main?: boolean }
+  node: { id: string; name: string; os: string; version: string; schema_version?: number; main?: boolean }
   auth: string
   tailscale_user: string
 }
 
-export type TailnetNode = { id: string; name: string; online: boolean; main?: boolean; needs_update?: boolean }
+export type TailnetNode = { id: string; name: string; online: boolean; main?: boolean; needs_update?: boolean; version?: string; schema_version?: number }
 
 // agent: the harness of the chat that acted for the user through agentpack tools.
 export type Actor = { kind: string; user?: string; node?: string; agent?: string }

@@ -152,7 +152,6 @@ test("public access turns on the detected address after its checks stream in", a
   await expect(page.getByText(`On · ${origin}`)).toBeVisible()
   await expect(page.getByRole("switch", { name: "Public access" })).toBeChecked()
   await expect(page.getByText(`${origin}/mcp`)).toBeVisible()
-  await expect(page.getByText("Public access on")).toBeVisible()
 })
 
 test("replication rows show enrollment, enroll only online peers and sync one", async ({ page }) => {

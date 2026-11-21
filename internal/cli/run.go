@@ -123,7 +123,10 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 		return runner.runGateway(ctx, invocation.Args)
 	}
 	if invocation.Command == "service" {
-		return runner.runNetworkService(ctx, invocation.Args)
+		if len(invocation.Args) == 1 && invocation.Args[0] == "run" {
+			return runner.runNetworkService(ctx, invocation.Args)
+		}
+		return 2, errors.New("expected service run")
 	}
 	if invocation.Command == "deploy" {
 		return runner.runDeploy(ctx, invocation.Args)

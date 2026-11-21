@@ -266,7 +266,7 @@ agentpack extra sync-claude --dry-run   # show what would change
 
 ## Gateway accounts
 
-`agentpack gateway start|stop|status|serve` controls the gateway. Before it is
+`agentpack gateway start|stop|status|serve` controls the gateway. Start installs or refreshes the login service, and stop disables it. Before it is
 claimed, start/status print `UNCLAIMED: open <url> now`; claim the owner account in
 the browser with an email and password. A legacy gateway also requires its current
 password, which claiming preserves.

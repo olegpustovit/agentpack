@@ -47,9 +47,28 @@ func TestServiceInstallStopAndUninstallWithNativeCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"--user daemon-reload", "--user enable agentpack-gateway.service", "--user stop agentpack-gateway.service", "--user restart agentpack-gateway.service", "--user disable --now agentpack-gateway.service"} {
+	for _, expected := range []string{"--user daemon-reload", "--user enable agentpack-gateway.service", "--user restart agentpack-gateway.service", "--user disable --now agentpack-gateway.service"} {
 		if !strings.Contains(string(data), expected) {
 			t.Fatalf("missing %s", expected)
 		}
+	}
+}
+
+func TestGatewayServiceFallbackWhenUserManagerIsUnavailable(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("PATH", directory)
+	if err := os.WriteFile(filepath.Join(directory, "systemctl"), []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(directory, "data")
+	var output bytes.Buffer
+	runner := Runner{Stdout: &output, Stderr: &output}
+	// A missing executable shows that the detached launcher was selected without actually spawning.
+	executable := filepath.Join(directory, "missing-agentpack")
+	if err := runner.startGateway(t.Context(), home, executable); !os.IsNotExist(err) {
+		t.Fatalf("expected detached launch of %s, got %v", executable, err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("fallback advertised a login service: %s", output.String())
 	}
 }

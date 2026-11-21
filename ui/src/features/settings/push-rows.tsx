@@ -36,10 +36,7 @@ export function PushRows() {
       await unsubscribePush()
       return null
     },
-    onSuccess: (next) => {
-      setSubscription(next)
-      hud.success(next ? "Push on for this device" : "Push off for this device")
-    },
+    onSuccess: setSubscription,
   })
   const test = useMutation({
     mutationFn: (target: PushSubscription) => testPush(target),

@@ -21,10 +21,7 @@ export function WorktreesSection({ machine, online }: { machine: string; online:
   const refresh = () => void queryClient.invalidateQueries({ queryKey: worktreesQuery(machine).queryKey })
   const remove = useMutation({
     mutationFn: ({ row, discard }: { row: WorktreeRow; discard: boolean }) => api("/api/worktrees/remove", { machine, method: "POST", body: { path: row.path, discard } }),
-    onSuccess: () => {
-      hud.success("Worktree removed")
-      refresh()
-    },
+    onSuccess: refresh,
     onError: (error) => hud.error(`Couldn't remove the worktree: ${error.message}`),
   })
   const push = useMutation({

@@ -48,7 +48,6 @@ test("diagnostics lists issues, opens a sample and resolves with a fix version",
     await page.screenshot({ path: test.info().outputPath("mobile.png") })
   }
   await page.getByRole("button", { name: "Resolve issue", exact: true }).click()
-  await expect(page.getByText("Issue resolved.", { exact: true })).toBeVisible()
   await expect(page.getByRole("button", { name: "Reopen", exact: true })).toBeVisible()
   expect(mutations).toEqual([{ version: "v0.14.2", note: "Handle an empty session during restart" }])
   await page.getByRole("button", { name: "Back to issues" }).click()

@@ -78,12 +78,11 @@ function IssueDetail({ fingerprint, back }: { fingerprint: string; back: () => v
   const [validation, setValidation] = useState("")
   const update = useMutation({
     mutationFn: ({ action, ...body }: IssueChange) => api<DiagnosticIssue>(`/api/logs/issues/${encodeURIComponent(fingerprint)}/${action}`, { machine: LOCAL, body }),
-    onSuccess: (issue, { action }) => {
+    onSuccess: (issue) => {
       queryClient.setQueryData(issueQuery(fingerprint).queryKey, issue)
       void queryClient.invalidateQueries({ queryKey: ["diagnostics", "issues"] })
       setResolving(false)
       setValidation("")
-      hud.success({ resolve: "Issue resolved.", reopen: "Issue reopened.", ignore: "Issue ignored." }[action])
     },
     onError: (error, input) => {
       if (input.action !== "resolve") hud.error(`Couldn't ${input.action} the issue: ${error.message}`, () => update.mutate(input))

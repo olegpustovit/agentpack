@@ -53,26 +53,21 @@ func TestRootHelpRemainsAvailableInsideAgentSession(t *testing.T) {
 	}
 }
 
-func TestBareCommandPointsAtStartWhenGatewayIsDown(t *testing.T) {
-	t.Setenv("AGENTPACK_HOME", t.TempDir())
-	t.Setenv("AGENTPACK_PUBLIC_URL", "")
-	var output strings.Builder
-	runner := Runner{Stdin: strings.NewReader(""), Stdout: &output, Stderr: io.Discard}
-	err := runner.openGateway(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "ap gateway start") || output.Len() != 0 {
-		t.Fatalf("err=%v output=%q", err, output.String())
-	}
-}
-
-func TestServiceStartIsTheOnlyInstallEntryPoint(t *testing.T) {
+func TestOnlyGatewayExposesServiceControls(t *testing.T) {
 	runner := Runner{Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard}
 	root := runner.rootCommand(nil, new(int))
-	service, _, err := root.Find([]string{"service", "start"})
-	if err != nil || service.Name() != "start" {
-		t.Fatalf("service start command missing: command=%v err=%v", service, err)
+	for _, action := range []string{"start", "stop", "status"} {
+		command, _, err := root.Find([]string{"gateway", action})
+		if err != nil || command.Name() != action || command.Hidden {
+			t.Fatalf("gateway %s missing: %v", action, err)
+		}
+		command, _, err = root.Find([]string{"service", action})
+		if err == nil && command.Name() == action {
+			t.Fatalf("service %s is still exposed", action)
+		}
 	}
-	service, _, err = root.Find([]string{"service", "install"})
-	if err == nil && service.Name() == "install" {
-		t.Fatal("separate service install command should not be exposed")
+	command, _, err := root.Find([]string{"service", "run"})
+	if err != nil || command.Name() != "run" || !command.Hidden {
+		t.Fatalf("hidden service run missing: %v", err)
 	}
 }

@@ -187,3 +187,9 @@ func TestWorkerEndpointRequiresCanonicalSessionMetadata(t *testing.T) {
 		t.Fatalf("gateway did not use canonical metadata: %+v %v", record.Session, err)
 	}
 }
+
+func TestStoppingAStoppedWorkerSucceeds(t *testing.T) {
+	if err := StopWorker(t.Context(), t.TempDir(), "session-test"); err != nil {
+		t.Fatalf("a worker without an endpoint is already stopped: %v", err)
+	}
+}

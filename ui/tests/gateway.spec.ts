@@ -473,7 +473,6 @@ test("restarting keeps the same operation ID after ambiguous failures", async ({
   await expect(page.getByText("Couldn't restart Terminal · Claude on Gateway machine: Worker response unavailable")).toBeVisible()
   await restart()
   await expect.poll(() => ids.length).toBe(3)
-  await expect(page.getByText("Agent restart requested", { exact: true })).toBeVisible()
   expect(ids[1]).toBe(ids[0])
   expect(ids[2]).toBe(ids[0])
   await restart()
@@ -743,5 +742,4 @@ test("⌘⌫ archives the focused session at once, stopping it first", async ({ 
   await gwRow(page, "local:local-two").focus()
   await page.keyboard.press("ControlOrMeta+Backspace")
   await expect.poll(() => bodies).toEqual([{ hidden: true }])
-  await expect(page.getByText("Session archived")).toBeVisible()
 })

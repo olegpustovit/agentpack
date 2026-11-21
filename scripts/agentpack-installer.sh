@@ -154,7 +154,7 @@ if [ -f "$agentpack_binary" ] && [ ! -L "$agentpack_binary" ]; then
 fi
 
 if [ "${AGENTPACK_RESTART_SERVICE:-0}" = "1" ]; then
-    "$install_dir/$binary_name" service start
+    "$install_dir/$binary_name" gateway start
 fi
 
 say "Installed agentpack ${APP_VERSION} to $install_dir/$binary_name"

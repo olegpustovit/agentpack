@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 // Actor is who started or called an operation. It comes from the transport:
@@ -125,6 +126,7 @@ type identityNode struct {
 	Name    string `json:"name"`
 	OS      string `json:"os"`
 	Version string `json:"version"`
+	Schema  int    `json:"schema_version"`
 }
 
 type identityResponse struct {
@@ -144,7 +146,7 @@ func (g *Gateway) identity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, identityResponse{
-		Node:          identityNode{Main: roles.MainNode != "" && roles.MainNode == self.ID, ID: self.ID, Name: self.displayName(), OS: runtime.GOOS, Version: g.options.Version},
+		Node:          identityNode{Main: roles.MainNode != "" && roles.MainNode == self.ID, ID: self.ID, Name: self.displayName(), OS: runtime.GOOS, Version: g.options.Version, Schema: state.SchemaVersion()},
 		Auth:          g.auth.email(r),
 		TailscaleUser: self.User,
 	})

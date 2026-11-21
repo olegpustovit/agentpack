@@ -169,8 +169,8 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	signal.Hidden = true
 	root.AddCommand(worker, signal)
 	gateway := &cobra.Command{Use: "gateway", Short: "Manage shared agent terminals and browser access"}
-	service := &cobra.Command{Use: "service", Short: "Manage optional user service persistence"}
-	for _, action := range []string{"start", "stop", "status", "uninstall", "run"} {
+	service := &cobra.Command{Use: "service", Hidden: true}
+	for _, action := range []string{"run"} {
 		command := leaf(action, "User service "+action)
 		command.Hidden = action == "run"
 		service.AddCommand(command)
@@ -180,6 +180,9 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 		sharing.AddCommand(leaf(action, "Tailnet sharing "+action))
 	}
 	gateway.AddCommand(sharing)
+	restart := leaf("restart-after-update", "Restart the gateway after installing an update")
+	restart.Hidden = true
+	gateway.AddCommand(restart)
 	for _, action := range []string{"start", "stop", "status", "stop-agents", "serve", "passwd EMAIL", "whoami EMAIL", "join NODE", "reset-owner"} {
 		command := leaf(action, "Gateway "+action)
 		if action == "serve" {

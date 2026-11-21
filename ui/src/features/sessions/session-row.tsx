@@ -20,6 +20,7 @@ import { sessionRules } from "./rules"
 export type RowActions = {
   rename: () => void
   restart: () => void
+  resume: () => void
   stop: () => void
   archive: () => void
   reconnect: () => void
@@ -51,7 +52,9 @@ function menuEntries(session: ListedSession, selected: boolean, actions: RowActi
   const rules = sessionRules(session)
   return [
     { label: "Rename…", icon: Pencil, shortcut: "F2", disabled: !rules.rename, run: actions.rename },
-    { label: "Restart…", icon: RotateCw, disabled: !rules.restart, run: actions.restart },
+    rules.resume
+      ? { label: "Resume", icon: RotateCw, disabled: false, run: actions.resume }
+      : { label: "Restart…", icon: RotateCw, disabled: !rules.restart, run: actions.restart },
     { label: "Archive", icon: Archive, shortcut: archiveShortcut, disabled: !rules.archive, run: actions.archive },
     { label: "Stop agent…", icon: Square, disabled: !rules.stop, run: actions.stop },
     // A chat has no terminal to reconnect or close.

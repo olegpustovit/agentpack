@@ -133,10 +133,17 @@ func (runner Runner) openGateway(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if err := runner.startGateway(ctx, home, executable); err != nil {
+		return err
+	}
 	address := strings.TrimSpace(os.Getenv("AGENTPACK_PUBLIC_URL"))
 	if address == "" {
 		if address, err = network.GatewayURL(home); err != nil {
-			return errors.New("the gateway is not running; start it with: ap gateway start")
+			return err
 		}
 	}
 	fmt.Fprintln(runner.Stdout, address)

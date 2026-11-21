@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"syscall"
 
@@ -118,20 +120,38 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 		}
 		serveErr := network.ServeGateway(ctx, options)
 		return 0, errors.Join(serveErr, options.Library.Store.Close())
-	case "start":
-		if err := network.SetGatewayEnabled(home, true); err != nil {
-			return 1, err
+	case "restart-after-update":
+		// The public deployment owns its fixed listener and service environment.
+		if runtime.GOOS == "linux" && os.Getenv("AGENTPACK_PUBLIC_URL") != "" {
+			if userHome, err := os.UserHomeDir(); err == nil && executable == filepath.Join(userHome, ".local", "lib", "agentpack", "agentpack") {
+				if err := exec.CommandContext(ctx, "systemctl", "--user", "restart", gatewayServiceName).Run(); err != nil {
+					return 1, fmt.Errorf("restart deployed gateway: %w", err)
+				}
+				return 0, network.WaitForGateway(ctx, home)
+			}
 		}
-		if err := network.EnsureNode(ctx, home, executable); err != nil {
+		if !gatewayServiceAvailable(ctx, runtime.GOOS) {
+			if err := network.StopGateway(ctx, home); err != nil {
+				return 1, err
+			}
+		}
+		return 0, runner.startGateway(ctx, home, executable)
+	case "start":
+		if err := runner.startGateway(ctx, home, executable); err != nil {
 			return 1, err
 		}
 		return 0, runner.printGatewayClaim(ctx, home)
 	case "stop":
+		if gatewayServiceAvailable(ctx, runtime.GOOS) {
+			return runner.runNetworkService(ctx, []string{"stop"})
+		}
 		if err := network.SetGatewayEnabled(home, false); err != nil {
 			return 1, err
 		}
-		if err := network.StopGateway(ctx, home); err != nil {
-			return 1, err
+		if _, err := network.NodeRequest(ctx, home, "GET", "/healthz"); err == nil {
+			if err := network.StopGateway(ctx, home); err != nil {
+				return 1, err
+			}
 		}
 		fmt.Fprintln(runner.Stdout, `{"stopping":true}`)
 		return 0, nil

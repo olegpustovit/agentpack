@@ -211,18 +211,14 @@ export function SessionList() {
     const keys = targets.map(rowKey)
     // An agent that ignores the signal can hold this request for up to 90 s.
     setStopping((current) => new Set([...current, ...keys]))
-    void Promise.all(targets.map((row) => commands.stop(row, targets.length === 1))).then((done) => {
-      const stopped = done.filter(Boolean).length
-      if (targets.length > 1 && stopped > 0) hud.success(`Stopped ${plural(stopped, "agent")}`)
-    }).finally(() =>
+    void Promise.all(targets.map((row) => commands.stop(row))).finally(() =>
       setStopping((current) => new Set([...current].filter((key) => !keys.includes(key)))),
     )
   }
 
   function archiveRows(targets: ListedSession[]) {
-    void Promise.all(targets.map((row) => commands.archive(row, targets.length === 1).then((done) => done && rowKey(row)))).then((done) => {
+    void Promise.all(targets.map((row) => commands.archive(row).then((done) => done && rowKey(row)))).then((done) => {
       const archived = done.filter((key): key is string => Boolean(key))
-      if (targets.length > 1 && archived.length > 0) hud.success(`Archived ${plural(archived.length, "session")}`)
       if (routeKey && archived.includes(routeKey)) void navigate({ to: "/sessions", search: true })
     })
   }
@@ -231,6 +227,10 @@ export function SessionList() {
     return {
       rename: () => setSheet({ kind: "rename", row }),
       restart: () => setConfirm({ kind: "restart", rows: [row] }),
+      resume: () => {
+        void commands.resume(row)
+        if (!selected) openRow(row)
+      },
       stop: () => setConfirm({ kind: "stop", rows: [row] }),
       archive: () => archiveRows([row]),
       // A pooled session on the open row must dial again; navigating to the row it already shows does nothing.

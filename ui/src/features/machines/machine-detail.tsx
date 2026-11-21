@@ -107,9 +107,8 @@ function MachineView({ machine }: { machine: Machine }) {
 
   const forget = useMutation({
     mutationFn: (project: ProjectRow) => api<unknown>("/api/recent", { machine: machine.id, method: "DELETE", body: { directory: project.directory } }),
-    onSuccess: (_result, project) => {
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: projectsQuery(machine.id).queryKey })
-      hud.success(`Forgot ${projectLabel(project)}`)
     },
     onError: (error, project) => hud.error(`Couldn't forget ${projectLabel(project)}: ${error.message}`),
   })
@@ -313,8 +312,7 @@ function AgentsGrid({ machine, agents, limits }: { machine: Machine; agents: Mac
   const [signingOut, setSigningOut] = useState<string>()
   const signOut = useMutation({
     mutationFn: (harness: string) => api(`/api/agents/${encodeURIComponent(harness)}/logout`, { machine: machine.id, method: "POST" }),
-    onSuccess: (_, harness) => {
-      hud.success(`Signed ${harnessName(harness)} out on ${machine.name}`)
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: agentsQuery(machine.id).queryKey })
     },
     onError: (error, harness) => hud.error(`Couldn't sign ${harnessName(harness)} out on ${machine.name}: ${routeMissing(error) ? "needs an update" : error.message}`, routeMissing(error) ? undefined : () => signOut.mutate(harness)),

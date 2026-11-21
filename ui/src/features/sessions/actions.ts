@@ -28,11 +28,10 @@ function sessionCommands(queryClient: QueryClient, operations: Map<string, strin
     await queryClient.invalidateQueries({ queryKey: sessionsQuery(session.machine, false).queryKey })
   }
 
-  // `announce` is off for multi-row actions, which show one Hud for the batch. Failures always report.
-  async function stop(session: ListedSession, announce = true): Promise<boolean> {
+  // Success shows in the row itself; only failures report.
+  async function stop(session: ListedSession): Promise<boolean> {
     try {
       await api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST" })
-      if (announce) hud.success("Agent stopped")
       await refresh(session)
       return true
     } catch (error) {
@@ -53,7 +52,6 @@ function sessionCommands(queryClient: QueryClient, operations: Map<string, strin
         body: { operation_id: operationId },
       })
       operations.delete(key)
-      hud.success("Agent restart requested")
       await refresh(session)
     } catch (error) {
       if (!reusesOperationId(error)) operations.delete(key)
@@ -61,13 +59,22 @@ function sessionCommands(queryClient: QueryClient, operations: Map<string, strin
     }
   }
 
+  // A stopped chat starts its agent again; the row's state shows it coming up.
+  async function resume(session: ListedSession): Promise<void> {
+    try {
+      await api(`/api/sessions/${encodeURIComponent(session.id)}/resume`, { machine: session.machine, method: "POST", body: { text: "" } })
+      await refresh(session)
+    } catch (error) {
+      hud.error(`Couldn't resume ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, () => void resume(session))
+    }
+  }
+
   // Archive takes the session out of every list; a running agent is stopped first.
-  async function archive(session: ListedSession, announce = true): Promise<boolean> {
+  async function archive(session: ListedSession): Promise<boolean> {
     try {
       // The row can be stale (just stopped): a failed stop is fine, the archive request refuses a live agent itself.
       if (session.state.running) await api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST" }).catch(() => undefined)
       await api(`/api/sessions/${encodeURIComponent(session.id)}`, { machine: session.machine, method: "PATCH", body: { hidden: true } })
-      if (announce) hud.success("Session archived")
       await refresh(session)
       return true
     } catch (error) {
@@ -80,12 +87,11 @@ function sessionCommands(queryClient: QueryClient, operations: Map<string, strin
   async function setTools(session: ListedSession, enabled: boolean): Promise<void> {
     try {
       await api(`/api/sessions/${encodeURIComponent(session.id)}/tools`, { machine: session.machine, method: "POST", body: { enabled } })
-      hud.success(enabled ? "agentpack tools on" : "agentpack tools off")
       await refresh(session)
     } catch (error) {
       hud.error(`Couldn't turn agentpack tools ${enabled ? "on" : "off"}: ${toolsError(error)}`, () => void setTools(session, enabled))
     }
   }
 
-  return { stop, restart, archive, setTools }
+  return { stop, restart, resume, archive, setTools }
 }

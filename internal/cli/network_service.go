@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	osuser "os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -29,6 +30,51 @@ type networkServicePlan struct {
 	content  string
 	commands [][]string
 	remove   bool
+}
+
+func gatewayServiceAvailable(ctx context.Context, goos string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	switch goos {
+	case "linux":
+		return exec.CommandContext(ctx, "systemctl", "--user", "show-environment").Run() == nil
+	case "darwin":
+		return exec.CommandContext(ctx, "launchctl", "print", "gui/"+strconv.Itoa(os.Getuid())).Run() == nil
+	case "windows":
+		return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "if ((Get-Service Schedule).Status -ne 'Running') { exit 1 }").Run() == nil
+	default:
+		return false
+	}
+}
+
+func (runner Runner) startGateway(ctx context.Context, home, executable string) error {
+	if !gatewayServiceAvailable(ctx, runtime.GOOS) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := network.SetGatewayEnabled(home, true); err != nil {
+			return err
+		}
+		return network.EnsureNode(ctx, home, executable)
+	}
+	if _, err := runner.runNetworkService(ctx, []string{"start"}); err != nil {
+		return err
+	}
+	if err := network.WaitForGateway(ctx, home); err != nil {
+		return err
+	}
+	if runtime.GOOS == "linux" {
+		if username, err := osuser.Current(); err == nil {
+			linger, cancel := context.WithTimeout(ctx, 3*time.Second)
+			err := exec.CommandContext(linger, "loginctl", "enable-linger", username.Username).Run()
+			cancel()
+			if err != nil {
+				fmt.Fprintf(runner.Stderr, "To start the gateway at boot and keep it running after logout, run loginctl enable-linger %s\n", username.Username)
+			}
+		}
+	}
+	fmt.Fprintln(runner.Stdout, "Gateway starts at login (ap gateway stop to turn off)")
+	return nil
 }
 
 func (runner Runner) runNetworkService(ctx context.Context, args []string) (int, error) {
@@ -88,12 +134,17 @@ func (runner Runner) runNetworkService(ctx context.Context, args []string) (int,
 			return 1, err
 		}
 	}
-	if runtime.GOOS == "darwin" && (action == "start" || action == "uninstall") {
+	if runtime.GOOS == "darwin" && (action == "start" || action == "stop" || action == "uninstall") {
 		target := "gui/" + strconv.Itoa(os.Getuid()) + "/" + gatewayLaunchLabel
 		if exec.CommandContext(ctx, "launchctl", "print", target).Run() == nil {
 			if err := exec.CommandContext(ctx, "launchctl", "bootout", target).Run(); err != nil {
 				return 1, err
 			}
+		}
+	}
+	if action == "stop" && runtime.GOOS == "linux" {
+		if _, err := os.Stat(plan.path); errors.Is(err, os.ErrNotExist) {
+			return 0, nil
 		}
 	}
 	if plan.content != "" {
@@ -128,7 +179,7 @@ func (runner Runner) runNetworkService(ctx context.Context, args []string) (int,
 		}
 		fmt.Fprintln(runner.Stdout, string(data))
 	}
-	if action != "status" {
+	if action != "status" && action != "start" {
 		fmt.Fprintln(runner.Stdout, "Gateway service "+action+" complete. Existing CLI sessions keep running.")
 	}
 	return 0, nil
@@ -155,7 +206,7 @@ func makeNetworkServicePlan(goos, action, executable, home, configHome, userHome
 			plan.content = "[Unit]\nDescription=Agentpack gateway\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=" + systemdWord(strings.ReplaceAll(executable, "$", "$$")) + " service run\nEnvironment=" + systemdWord("AGENTPACK_HOME="+home) + "\nRestart=on-failure\nRestartSec=3\nKillMode=process\nTimeoutStopSec=10\n\n[Install]\nWantedBy=default.target\n"
 			plan.commands = [][]string{{"systemctl", "--user", "daemon-reload"}, {"systemctl", "--user", "enable", gatewayServiceName}, {"systemctl", "--user", "restart", gatewayServiceName}}
 		case "stop":
-			plan.commands = [][]string{{"systemctl", "--user", "stop", gatewayServiceName}}
+			plan.commands = [][]string{{"systemctl", "--user", "disable", "--now", gatewayServiceName}}
 		case "status":
 			plan.commands = [][]string{{"systemctl", "--user", "status", "--no-pager", gatewayServiceName}}
 		case "uninstall":
@@ -185,7 +236,7 @@ func makeNetworkServicePlan(goos, action, executable, home, configHome, userHome
 			bootstrap := "$ErrorActionPreference = 'Stop'\n$command = '\"' + (Get-Command powershell.exe).Source + '\" -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand " + encodedPowerShell(launch) + "'\n$environment = [string[]](Get-ChildItem Env: | ForEach-Object { $_.Name + '=' + $_.Value })\n$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ EnvironmentVariables = $environment; CreateFlags = [uint32]1024 }\n$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $command; ProcessStartupInformation = $startup }\nif ($result.ReturnValue -ne 0) { throw 'Could not start gateway process' }\n"
 			script += "$action = New-ScheduledTaskAction -Execute (Get-Command powershell.exe).Source -Argument " + powerShellLiteral("-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand "+encodedPowerShell(bootstrap)) + "\n$logon = New-ScheduledTaskTrigger -AtLogOn -User $user.Name\n$retry = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)\n$principal = New-ScheduledTaskPrincipal -UserId $user.Name -LogonType Interactive -RunLevel Limited\n$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 1)\nRegister-ScheduledTask -TaskName $name -Action $action -Trigger @($logon,$retry) -Principal $principal -Settings $settings -Force | Out-Null\nStart-ScheduledTask -TaskName $name\n"
 		case "stop":
-			script += "Disable-ScheduledTask -TaskName $name | Out-Null\n"
+			script += "if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) { Disable-ScheduledTask -TaskName $name | Out-Null }\n"
 		case "status":
 			script += "Get-ScheduledTask -TaskName $name | Format-List TaskName,State\nGet-ScheduledTaskInfo -TaskName $name | Format-List LastRunTime,LastTaskResult,NextRunTime\n"
 		case "uninstall":

@@ -78,12 +78,12 @@ Components live in `ui/src/components/kit/`.
 | `Menu`, `RowContextMenu` | `DropdownMenu`, `ContextMenu` | macOS 26 NSMenu: `--menu` material, 12 px corners, 5 px padding, 24 px rows with a 6 px pill, separators inset 16 px, shortcut white on the pill. A `danger` row is red and highlights `--menu-danger` |
 | `PopupSelect` | `Select` | Replaces every native `<select>`. Menu surface, checkmark in the left state column. `danger` items get their own group; while one is chosen the trigger is red with a shield |
 | `Banner` | plain | Inside a pane, top of its scroller. Icon, one sentence, optional action. Tones: info, warn, danger |
-| `Hud` | `sonner` | Above the status bar, centered, `--hud` fill, 4 s |
+| `Hud` | `sonner` | Top right under the toolbar, `--hud` fill, 4 s; never over the composer |
 | `StatusDot` | plain | See state vocabulary. Always with a word or `aria-label` plus tooltip |
 | `Inspector`, `InspectorHead`, `KeyValue`, `Section` | plain | Max width 1180 px, two columns at ≥ 1260 px |
 | `DataGrid` | `<table>` | Sticky 22 px header, 26 px rows, fixed layout, one flexible column |
 | `Meter` | `<meter>` | 6 px, accent fill. Warn at ≤ 20% left, danger at ≤ 5%. No meter when unknown |
-| `Hash` | `<code>` | First 7 characters, full value in tooltip, click copies, Hud says `Copied` |
+| `Hash` | `<code>` | First 7 characters, full value in tooltip, click copies silently |
 | `Empty`, `RowSkeleton`, `Spinner` | plain | Empty says what appears and how. Spinner respects reduced motion |
 | `Kbd` | plain | 11 px, muted |
 
@@ -108,7 +108,9 @@ Each situation has one surface. This replaces `notice()`, `terminalNotice()`, `*
 
 | Situation | Surface | Example copy |
 |---|---|---|
-| An action finished | `Hud`, 4 s | `Agent stopped` |
+| An action finished and its result is on screen | Nothing: the row, switch or list shows it | Row reads `Stopped` |
+| An action finished somewhere you can't see | `Hud`, 4 s | `Updating mac-mini to 0.14.2` |
+| Copied | The control that copied shows a check or `Copied` for 1.5 s (`useCopied`); no Hud | `Copy` → `Copied` |
 | An action failed and nothing is open | `Hud`, stays until dismissed, with `Retry` | `Couldn't stop claude on oracle-vm: worker failed` |
 | Ongoing state of a pane | `Banner` | `mac-studio is offline. Showing its last known sessions` |
 | Ongoing state of the terminal | `Banner` in the terminal column | `Connection lost. Reconnecting…` |

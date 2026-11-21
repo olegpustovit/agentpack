@@ -20,6 +20,8 @@ export function sessionRules(session: ListedSession) {
   return {
     rename: !session.archived_at,
     restart: !offline && !nonInteractive,
+    // A stopped chat starts its agent again on the same conversation.
+    resume: !offline && session.transport === "acp" && !session.state.running && Boolean(session.ended_at),
     stop: !offline && session.state.running,
     reconnect: !offline && !nonInteractive,
     install: !offline,

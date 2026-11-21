@@ -12,6 +12,9 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
 // updateGateway installs version with the release installer and restarts the gateway service.
@@ -48,7 +51,7 @@ func (runner Runner) updateGateway(ctx context.Context, version string) error {
 	}
 	command.Stdin = strings.NewReader(string(installer))
 	command.Stdout, command.Stderr = runner.Stdout, runner.Stderr
-	command.Env = append(os.Environ(), "AGENTPACK_VERSION="+version, "AGENTPACK_INSTALL_DIR="+installDir)
+	command.Env = append(os.Environ(), "AGENTPACK_VERSION="+version, "AGENTPACK_INSTALL_DIR="+installDir, "AGENTPACK_RESTART_SERVICE=0")
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("install Agentpack %s: %w", version, err)
 	}
@@ -61,13 +64,20 @@ func (runner Runner) updateGateway(ctx context.Context, version string) error {
 			return err
 		}
 	}
-	code, err := runner.runNetworkService(ctx, []string{"start"})
-	if err != nil {
-		return fmt.Errorf("restart gateway after update: %w", err)
+	// Another process must wait for the old gateway to exit before restarting it.
+	restart := exec.Command(executable, "gateway", "restart-after-update")
+	network.ConfigureDetached(restart)
+	restart.Stdout, restart.Stderr = runner.Stdout, runner.Stderr
+	if err := restart.Start(); err != nil {
+		return fmt.Errorf("schedule gateway restart after update: %w", err)
 	}
-	if code != 0 {
-		return fmt.Errorf("restart gateway after update exited with status %d", code)
-	}
+	obs.Go("gateway.update.restart", func() {
+		if err := restart.Wait(); err != nil {
+			_, event := obs.Start(obs.WithRecording(context.Background(), ctx), "gateway", "restart after update")
+			event.Fail(err)
+			event.End()
+		}
+	})
 	return nil
 }
 
