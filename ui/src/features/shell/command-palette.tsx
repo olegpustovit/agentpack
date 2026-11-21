@@ -11,14 +11,12 @@ import { advertises, agentCommands } from "@/features/conversation/composer-hint
 import { useSessionCommands } from "@/features/sessions/actions"
 import { rowKey, sessionLabel, type ListedSession } from "@/features/sessions/group"
 import { isWorktreePath } from "@/features/sessions/git"
-import { sessionsQuery } from "@/features/sessions/queries"
+import { useStartSession } from "@/features/sessions/start"
 import { sessionRules } from "@/features/sessions/rules"
 import { sessionGlyphState } from "@/features/sessions/session-status"
 import { api, routeMissing } from "@/lib/api"
-import type { SessionInfo } from "@/lib/api-types"
 import { basename, harnessName } from "@/lib/format"
 import { hud } from "@/lib/hud"
-import { newIntentID } from "@/lib/intent"
 import { cn } from "@/lib/utils"
 import { viewLink, views } from "./views"
 
@@ -94,6 +92,7 @@ export default function CommandPalette({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const commands = useSessionCommands()
+  const startSession = useStartSession()
   const [query, setQuery] = useState(initialQuery)
   const open = sessions.find((session) => rowKey(session) === openKey)
 
@@ -136,14 +135,10 @@ export default function CommandPalette({
         group: "This session",
         label: "Fork conversation",
         icon: <GitFork aria-hidden />,
-        run: () =>
-          void api<SessionInfo>(`/api/sessions/${encodeURIComponent(session.id)}/fork`, { machine: session.machine, method: "POST", body: { id: `session-${newIntentID()}` } }).then(
-            (next) => {
-              void queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
-              void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: session.machine, sessionId: next.id } })
-            },
-            (error: unknown) => hud.error(`Couldn't fork ${sessionLabel(session)}: ${error instanceof Error ? error.message : String(error)}`),
-          ),
+        run: () => startSession.mutate({
+          machine: session.machine, directory: session.directory, harness: session.harness,
+          mode: session.mode, view: "chat", forkFrom: session.id,
+        }),
       })
     }
     // Offered for a session in its own worktree, as the toolbar does; the gateway pushes then opens the PR.

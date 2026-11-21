@@ -208,18 +208,18 @@ var (
 
 // resumeSession brings a stopped chat back under its own ID: the worker reloads the agent's
 // conversation, continues the same transcript and gets prompt (if any) once it runs.
-func (g *Gateway) resumeSession(ctx context.Context, id, prompt string) (SessionInfo, error) {
+func (g *Gateway) resumeSession(ctx context.Context, id, prompt, queueID string) (SessionInfo, error) {
 	g.chatLifecycle.Lock()
 	defer g.chatLifecycle.Unlock()
 	// A worker that died without ending its row is settled first, so the claim below sees it stopped.
 	// The person's own message resumes this chat, so the reaper doesn't resume it too.
 	g.autoResume(id)
 	g.reapStoppedChats(ctx)
-	return g.claimResume(ctx, id, prompt)
+	return g.claimResume(ctx, id, prompt, queueID)
 }
 
 // claimResume restarts a stopped chat; the caller holds chatLifecycle.
-func (g *Gateway) claimResume(ctx context.Context, id, prompt string) (SessionInfo, error) {
+func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (SessionInfo, error) {
 	info, err := storedSession(ctx, g.auth.store.Reader, id)
 	if err != nil {
 		return SessionInfo{}, err
@@ -231,6 +231,12 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt string) (SessionIn
 	// A chat whose agent never started (it wasn't signed in, say) has no agent session; it starts fresh.
 	if info.NodeID != local || info.Transport != "acp" || !info.ArchivedAt.IsZero() {
 		return SessionInfo{}, errNotResumable
+	}
+	if queueID != "" && prompt != "" {
+		seen, err := storedPromptID(ctx, g.auth.store, id, queueID)
+		if err != nil || seen {
+			return info, err
+		}
 	}
 	if !g.knownDirectory(info.Directory) && !g.knownWorktree(ctx, info.Directory) {
 		return SessionInfo{}, errors.New("choose a recent folder from this node")
@@ -245,7 +251,9 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt string) (SessionIn
 			return errors.Join(errResumeConflict, err)
 		}
 		if prompt != "" {
-			queueID := rand.Text()
+			if queueID == "" {
+				queueID = rand.Text()
+			}
 			return appendStartingPrompt(ctx, tx, id, queuedPrompt{ID: queueID, Input: acp.PromptInput{Text: prompt, QueueID: queueID}})
 		}
 		return nil
@@ -294,7 +302,7 @@ func (g *Gateway) switchHarness(ctx context.Context, id, harness string) (Sessio
 	if switched, err := result.RowsAffected(); err != nil || switched != 1 {
 		return SessionInfo{}, errors.Join(errResumeConflict, err)
 	}
-	return g.resumeSession(ctx, id, "")
+	return g.resumeSession(ctx, id, "", "")
 }
 
 // failStart leaves the error in the chat's transcript and ends the row. The notice also keeps the
@@ -361,7 +369,7 @@ func (g *Gateway) reapStoppedChats(ctx context.Context) {
 		err = errors.Join(err, marshalErr)
 	}
 	for _, id := range resume {
-		if _, resumeErr := g.claimResume(ctx, id, autoResumePrompt); resumeErr != nil && !errors.Is(resumeErr, errResumeConflict) {
+		if _, resumeErr := g.claimResume(ctx, id, autoResumePrompt, ""); resumeErr != nil && !errors.Is(resumeErr, errResumeConflict) {
 			err = errors.Join(err, resumeErr)
 		}
 	}

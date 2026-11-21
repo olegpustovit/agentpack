@@ -11,7 +11,7 @@ import { reusesOperationId, startSessionBody, type SessionView } from "./rules"
 // `prompt` is the new chat's first queued message.
 // `worktree` is "new", an existing worktree of directory, or "" for the folder itself (remembered as the
 // choice); a new worktree's branch is named from the prompt.
-export type StartInput = { machine: string; directory: string; harness: string; mode: string; view: SessionView; agentSessionId?: string; prompt?: string; worktree?: string; carry?: boolean }
+export type StartInput = { machine: string; directory: string; harness: string; mode: string; view: SessionView; agentSessionId?: string; prompt?: string; worktree?: string; carry?: boolean; forkFrom?: string }
 
 const chatClaims = new Map<string, Promise<SessionInfo>>()
 
@@ -29,10 +29,11 @@ export function useStartSession() {
   const onRoute = (id: string) => router.state.location.pathname.endsWith(`/${id}`)
   const start = useMutation({
     mutationFn: (input: StartInput & { id?: string }) => {
-      const claim = api<SessionInfo>("/api/sessions", {
+      const path: `/api/${string}` = input.forkFrom ? `/api/sessions/${encodeURIComponent(input.forkFrom)}/fork` : "/api/sessions"
+      const claim = api<SessionInfo>(path, {
         machine: input.machine,
         method: "POST",
-        body: {
+        body: input.forkFrom ? { id: input.id } : {
           ...startSessionBody({ ...input, worktreeName: input.prompt?.trim() }),
           ...(input.id && { id: input.id, first_message: input.prompt?.trim() || undefined }),
         },
@@ -67,7 +68,7 @@ export function useStartSession() {
       open(input.machine, input.id)
     },
     onSuccess: (info, input) => {
-      saveStartChoices(input.directory, { harness: input.harness, mode: input.mode, view: input.view, ...(input.worktree !== undefined && { workspace: input.worktree ? "new" : "folder" }) })
+      if (!input.forkFrom) saveStartChoices(input.directory, { harness: input.harness, mode: input.mode, view: input.view, ...(input.worktree !== undefined && { workspace: input.worktree ? "new" : "folder" }) })
       if (input.id) {
         if (input.id !== info.id) {
           if (onRoute(input.id)) open(input.machine, info.id)
@@ -88,8 +89,12 @@ export function useStartSession() {
     onError: (error, input) => {
       if (!input.id) return
       queryClient.setQueryData<SessionInfo[]>(key, (current) => current?.filter((row) => row.id !== input.id || !row.provisionalStart))
-      if (onRoute(input.id)) void navigate({ to: "/sessions" })
-      hud.error(`Couldn't start chat: ${error.message}`, reusesOperationId(error) ? () => start.mutate(input) : undefined)
+      if (onRoute(input.id)) {
+        if (input.forkFrom) open(input.machine, input.forkFrom)
+        else void navigate({ to: "/sessions" })
+      }
+      const action = input.forkFrom ? "fork conversation" : "start chat"
+      hud.error(`Couldn't ${action}: ${error.message}`, reusesOperationId(error) ? () => start.mutate(input) : undefined)
     },
   })
   return {

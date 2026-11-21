@@ -301,6 +301,30 @@ test("/terminal reopens a stopped chat as a terminal session", async ({ page }) 
   expect(posted).toMatchObject({ transport: "terminal", directory: session.directory })
 })
 
+test("a fork opens the claimed chat while its request is pending", async ({ page }) => {
+  let release!: () => void
+  const response = new Promise<void>((resolve) => { release = resolve })
+  const source = {
+    ...session, id: "chat-one", transport: "acp", agent_session_id: "native-chat",
+    agent_capabilities: { sessionCapabilities: { fork: {} } },
+  }
+  await page.route("**/api/sessions", (route) => route.fulfill({ json: [source] }))
+  let id = ""
+  await page.route("**/api/sessions/chat-one/fork", async (route) => {
+    id = route.request().postDataJSON().id
+    await response
+    await route.fulfill({ status: 409, body: "Cannot fork" })
+  })
+  await page.goto("/sessions/local/chat-one")
+  await page.getByRole("textbox", { name: "Message" }).fill("/fork")
+  await page.keyboard.press("Enter")
+  await expect(page).toHaveURL(/\/sessions\/local\/session-[0-9a-f]{32}$/)
+  await expect.poll(() => id).toMatch(/^session-[0-9a-f]{32}$/)
+  await expect(page).toHaveURL(new RegExp(`${id}$`))
+  release()
+  await expect(page).toHaveURL(/\/sessions\/local\/chat-one$/)
+})
+
 test("a streamed permission result resolves the card without another snapshot", async ({ page }) => {
   let snapshots = 0
   let resolveAnswer!: () => void
@@ -683,9 +707,12 @@ test("a chat whose agent isn't signed in signs it in and then starts", async ({ 
 test("a message to a stopped chat resumes that chat", async ({ page }) => {
   const stopped = { ...session, id: "chat-one", transport: "acp", agent_session_id: "agent-1", ended_at: session.started_at, state: { ...session.state, running: false } }
   let resumed: unknown
+  let release!: () => void
+  const response = new Promise<void>((resolve) => { release = resolve })
   await page.route("**/api/sessions", (route) => route.fulfill({ json: [resumed ? { ...stopped, ended_at: undefined, conversation_state: "starting" } : stopped] }))
   await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: "", contentType: "application/x-ndjson" }))
-  await page.route("**/api/sessions/chat-one/resume", (route) => {
+  await page.route("**/api/sessions/chat-one/resume", async (route) => {
+    await response
     resumed = route.request().postDataJSON()
     return route.fulfill({ json: { ...stopped, ended_at: undefined, conversation_state: "starting" } })
   })
@@ -694,7 +721,9 @@ test("a message to a stopped chat resumes that chat", async ({ page }) => {
   await composer.fill("continue")
   await page.keyboard.press("Enter")
   await expect(composer).toHaveValue("")
-  expect(resumed).toEqual({ text: "continue" })
+  await expect(page.getByText("continue", { exact: true })).toBeVisible()
+  release()
+  await expect.poll(() => resumed).toEqual({ text: "continue" })
   await expect(page).toHaveURL(/\/sessions\/local\/chat-one/)
   await expect(page.getByPlaceholder(/Starting/)).toBeVisible()
 })

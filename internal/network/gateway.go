@@ -582,7 +582,12 @@ func (g *Gateway) Handler() http.Handler {
 		if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
 			return
 		}
-		info, err := g.resumeSession(r.Context(), r.PathValue("id"), input.Text)
+		queueID := r.Header.Get("Idempotency-Key")
+		if queueID != "" && !validOperationID(queueID) {
+			http.Error(w, "invalid prompt ID", http.StatusBadRequest)
+			return
+		}
+		info, err := g.resumeSession(r.Context(), r.PathValue("id"), input.Text, queueID)
 		switch {
 		case errors.Is(err, errSessionNotFound):
 			http.Error(w, "session not found", http.StatusNotFound)
@@ -593,7 +598,13 @@ func (g *Gateway) Handler() http.Handler {
 		case err != nil:
 			http.Error(w, "Couldn't resume the chat.", http.StatusInternalServerError)
 		default:
-			writeJSON(w, publicSession(info))
+			if input.Text == "" {
+				queueID = ""
+			}
+			writeJSON(w, struct {
+				SessionInfo
+				Queued string `json:"queued,omitempty"`
+			}{publicSession(info), queueID})
 		}
 	})
 	mux.HandleFunc("GET /api/agent-snapshot", g.serveAgentSnapshot)

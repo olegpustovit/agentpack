@@ -8,7 +8,7 @@ import { PopupSelect } from "@/components/kit/forms"
 import { Button } from "@/components/ui/button"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { StatusSlot } from "@/features/status/status-bar"
-import { pendingChatClaim } from "@/features/sessions/start"
+import { pendingChatClaim, useStartSession } from "@/features/sessions/start"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { agentIds } from "@/features/sessions/rules"
 import { useConversationEvents } from "@/features/events/use-events"
@@ -402,23 +402,11 @@ export default function ConversationPane({
     if (live && configRaw !== undefined) setConfigValues((values) => Object.keys(values).length ? {} : values)
   }, [configRaw, live, parent.agentMode])
 
-  const fork = useMutation({
-    mutationFn: (id: string) => {
-      if (!info?.agent_session_id || !info.agent_capabilities?.sessionCapabilities?.fork) {
-        throw new Error("Agent does not support conversation forks")
-      }
-      return api<SessionInfo>(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, { machine, method: "POST", body: { id } })
-    },
-    onSuccess: (next) => {
-      void queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
-      void navigate({ to: "/sessions/$machine/$sessionId", params: { machine, sessionId: next.id } })
-    },
-    onError: (error, id) =>
-      hud.error(
-        conversationErrorMessage(machine, "fork a conversation", error),
-        conversationNeedsUpdate(error) ? undefined : () => fork.mutate(id),
-      ),
-  })
+  const fork = useStartSession()
+  const forkChat = () => {
+    if (!info || !canFork || fork.isPending) return
+    fork.mutate({ machine, directory: info.directory, harness: info.harness, mode: info.mode, view: "chat", forkFrom: sessionId })
+  }
   const cancelTurn = useMutation({
     mutationFn: () =>
       api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/cancel`, { machine, method: "POST" }),
@@ -484,16 +472,32 @@ export default function ConversationPane({
   const submitPrompt = (input: SendInput, options?: Parameters<typeof send.mutate>[1]) =>
     send.mutate({ ...input, id: newIntentID() }, options)
   const resume = useMutation({
-    mutationFn: (text: string) => api(`/api/sessions/${encodeURIComponent(sessionId)}/resume`, { machine, method: "POST", body: { text } }),
-    onMutate: (text) => { if (text) setDraft("") },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey }),
-    onError: (error, text) => {
-      setDraft((current) => current || text)
+    mutationFn: (input: PromptIntent) => api<SessionInfo & { queued?: string }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/resume`,
+      { machine, method: "POST", idempotencyKey: input.id, body: { text: input.text } },
+    ),
+    onMutate: (input) => {
+      if (!input.text) return
+      setPendingSends((pending) => [...pending.filter((item) => item.id !== input.id), input])
+      setDraft("")
+    },
+    onSuccess: (result, input) => {
+      if (result?.queued !== input.id) discardSend(input.id)
+      void queryClient.invalidateQueries({ queryKey: conversationEventsQuery(machine, sessionId).queryKey })
+      return queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
+    },
+    onError: (error, input) => {
+      discardSend(input.id)
+      setDraft((current) => current || input.text)
       // An older peer can't start a chat whose agent never started.
       const old = error instanceof ApiError && error.status === 400 && error.message === "This chat cannot be resumed."
-      hud.error(old ? `${machine === LOCAL ? "Gateway" : "Peer"} needs an update to restart this chat.` : conversationErrorMessage(machine, "resume the chat", error))
+      hud.error(
+        old ? `${machine === LOCAL ? "Gateway" : "Peer"} needs an update to restart this chat.` : conversationErrorMessage(machine, "resume the chat", error),
+        old || conversationNeedsUpdate(error) ? undefined : () => resume.mutate(input),
+      )
     },
   })
+  const submitResume = (text: string) => resume.mutate({ id: newIntentID(), text, attachments: [], steer: false, clearComposer: true })
   // The chat carries on with another agent, which gets the transcript with the next message.
   const switchAgent = useMutation({
     mutationFn: (harness: string) => api(`/api/sessions/${encodeURIComponent(sessionId)}/harness`, { machine, method: "POST", body: { harness } }),
@@ -566,7 +570,7 @@ export default function ConversationPane({
       return
     }
     if (resumable) {
-      resume.mutate(text)
+      submitResume(text)
       return
     }
       // Writing instead of answering an open question interrupts it, as in the Claude CLI.
@@ -574,7 +578,7 @@ export default function ConversationPane({
   }
   // A merge conflict goes back to the agent, which resolves it in its own worktree.
   function askAgent(text: string) {
-    if (resumable) resume.mutate(text)
+    if (resumable) submitResume(text)
     else submitPrompt({ text, attachments: [], clearComposer: false })
   }
   const git = useSessionGit(machine, sessionId, info).data
@@ -597,7 +601,7 @@ export default function ConversationPane({
   function pickHint(hint: ComposerHint) {
     setHintIndex(0)
     if (hint.value === "/fork") {
-      if (canFork && !fork.isPending) fork.mutate(`session-${newIntentID()}`)
+      forkChat()
       setDraft("")
       return
     }
@@ -733,7 +737,7 @@ export default function ConversationPane({
                   agent={subagent?.title || agentName}
                   working={live && (subagent ? subagentRunning(subagent) && !thread.needs_you : thread.working && !thread.needs_you)}
                   onQuote={readOnly || subagent ? undefined : quoteReply}
-                  onFork={!subagent && canFork && !fork.isPending ? () => fork.mutate(`session-${newIntentID()}`) : undefined}
+                  onFork={!subagent && canFork && !fork.isPending ? forkChat : undefined}
                   onRetry={!subagent && canRetry ? retryLastPrompt : undefined}
                   subagents={subagent ? thread.subagents : { ...thread.subagents, ...helperSubagents(thread.items, helpers) }}
                   lastTurn={thread.last_turn}
@@ -741,7 +745,7 @@ export default function ConversationPane({
                   animateAfter={animateAfter}
                   onOpenSubagent={openSubagent}
                   onStopSubagent={readOnly ? undefined : (id) => stopSubagent.mutate(id)}
-                  onSignedIn={!subagent && resumable ? () => resume.mutate(draft.trim()) : undefined}
+                  onSignedIn={!subagent && resumable ? () => submitResume(draft.trim()) : undefined}
                 />
               )}
               </>

@@ -184,7 +184,7 @@ func TestResumeRestartsAStoppedChatUnderItsOwnID(t *testing.T) {
 		return info.ID, nil
 	})
 	stuckChat(t, g, seedFolder(t, home), "session-dead")
-	info, err := g.resumeSession(context.Background(), "session-dead", "")
+	info, err := g.resumeSession(context.Background(), "session-dead", "", "")
 	if err != nil || info.ID != "session-dead" || info.ConversationState != "starting" || !info.Reachable {
 		t.Fatalf("resume: %+v, %v", info, err)
 	}
@@ -192,7 +192,7 @@ func TestResumeRestartsAStoppedChatUnderItsOwnID(t *testing.T) {
 	if got := <-launched; got.ID != "session-dead" || got.AgentSessionID != "agent-1" || got.ConversationState != "starting" {
 		t.Fatalf("worker launch %+v", got)
 	}
-	if _, err := g.resumeSession(context.Background(), "session-dead", ""); !errors.Is(err, errResumeConflict) {
+	if _, err := g.resumeSession(context.Background(), "session-dead", "", ""); !errors.Is(err, errResumeConflict) {
 		t.Fatalf("second resume: %v", err)
 	}
 }
@@ -254,8 +254,11 @@ func TestSignInFailureMarksTheNoticeAndTheChatStartsLater(t *testing.T) {
 	if err := g.auth.store.Reader.QueryRow("SELECT group_concat(body) FROM conversation_events WHERE session_id=?", info.ID).Scan(&body); err != nil || !strings.Contains(body, `"code":"auth_required"`) || !strings.Contains(body, `"harness":"agy"`) || !strings.Contains(body, `"id":"google"`) {
 		t.Fatalf("transcript %q, %v", body, err)
 	}
-	if _, err := g.resumeSession(context.Background(), info.ID, "hello"); err != nil {
+	if _, err := g.resumeSession(context.Background(), info.ID, "hello", "resume-prompt-0001"); err != nil {
 		t.Fatalf("resume after sign-in: %v", err)
+	}
+	if _, err := g.resumeSession(context.Background(), info.ID, "hello", "resume-prompt-0001"); err != nil {
+		t.Fatalf("retry resume after sign-in: %v", err)
 	}
 	g.starting.Wait()
 	if got := <-launched; got.ID != info.ID || got.AgentSessionID != "" {
