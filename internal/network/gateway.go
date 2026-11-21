@@ -160,7 +160,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if err := gateway.loadPublic(context.Background()); err != nil {
 		return err
 	}
-	if err := normalizeFolderIDs(ctx, store); err != nil {
+	if err := normalizeFolderIDs(context.Background(), store); err != nil {
 		return fmt.Errorf("normalize folder identities: %w", err)
 	}
 	gateway.reapStoppedChats(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
