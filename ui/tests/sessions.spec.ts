@@ -151,6 +151,11 @@ test("+ opens the composer while the chat claim is still in flight", async ({ pa
     reply = [...sessions, info]
     return route.fulfill({ json: info })
   })
+  await page.route("**/api/agent-snapshot?*", (route) => route.fulfill({
+    json: { config: { configOptions: [
+      { type: "select", id: "model", name: "Model", category: "model", currentValue: "codex", options: [{ value: "codex", name: "Codex" }] },
+    ] } },
+  }))
   const prompts: Array<{ body: unknown; id?: string }> = []
   await page.route("**/api/sessions/*/conversation/prompt", (route) => {
     const id = route.request().headers()["idempotency-key"]
@@ -167,6 +172,7 @@ test("+ opens the composer while the chat claim is still in flight", async ({ pa
   await expect(page.getByRole("dialog")).toBeHidden()
   const composer = page.getByRole("textbox", { name: "Message" })
   await expect(composer).toHaveAttribute("placeholder", "Starting Codex…")
+  await expect(page.getByRole("button", { name: "Model", exact: true })).toHaveText("Codex")
   await composer.fill("check the budgets")
   await composer.press("Enter")
   await expect(page.getByText("check the budgets", { exact: true })).toBeVisible()
