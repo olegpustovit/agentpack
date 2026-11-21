@@ -658,6 +658,15 @@ test("a sent message shows before the gateway answers, and a failure puts it bac
   await expect(thread.getByText("ship the fix")).toHaveCount(0)
 })
 
+test("the replicated session row shows a turn before its log arrives", async ({ page }) => {
+  await page.route("**/api/sessions", (route) => route.fulfill({
+    json: [{ ...session, id: "chat-one", transport: "acp", conversation_state: "working" }],
+  }))
+  await page.route("**/api/sessions/chat-one/conversation", () => undefined)
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible()
+})
+
 test("a stopped chat shows why it stopped, not an update banner", async ({ page }) => {
   await page.route("**/api/sessions", (route) => {
     if (route.request().method() !== "GET") return route.fallback()

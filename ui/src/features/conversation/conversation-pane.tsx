@@ -165,7 +165,13 @@ export default function ConversationPane({
   const hasOlder = (older ? older.more : Boolean(tail?.truncated)) && (entries[0]?.seq ?? 1) > 1
   // Scroll height and offset before older entries were prepended, so the reader stays on the same line.
   const scrollAnchorRef = useRef<{ height: number; top: number } | null>(null)
-  const parent = reduceThread(historyKey, entries)
+  const transcript = reduceThread(historyKey, entries)
+  const activity = info?.conversation_state
+  const parent = activity ? {
+    ...transcript,
+    working: activity === "working",
+    needs_you: activity === "needs_you",
+  } : transcript
   const logConfig = useQuery(configQuery).data?.conversation_config_log === true
   const { data: legacyConfig, error: configError } = useQuery({
     queryKey: ["conversation-config", machine, sessionId],
