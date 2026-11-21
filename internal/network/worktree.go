@@ -254,8 +254,10 @@ func copyIncluded(source, destination string) error {
 			if err != nil {
 				return err
 			}
-			resolved := filepath.Join(filepath.Dir(rel), link)
-			if filepath.IsAbs(link) || resolved == ".." || strings.HasPrefix(resolved, ".."+string(filepath.Separator)) {
+			// A rooted link ("/etc/x" has no volume on Windows, so it is not IsAbs there) or one that
+			// climbs out of the included folder is not copied.
+			rooted := link == "" || filepath.IsAbs(link) || filepath.VolumeName(link) != "" || os.IsPathSeparator(link[0])
+			if rooted || !filepath.IsLocal(filepath.Join(filepath.Dir(rel), link)) {
 				return nil
 			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
@@ -353,6 +355,12 @@ func worktreeMain(ctx context.Context, home, dir string) (main, root string, err
 	rel, err := filepath.Rel(root, real)
 	if err != nil || strings.HasPrefix(rel, "..") || !isWorktreeOf(ctx, top, root) {
 		return "", "", errNotWorktree
+	}
+	// git reports root with links resolved (and forward slashes on Windows); hand it back in dir's
+	// spelling, so it stays comparable with paths built from home.
+	root = filepath.Clean(dir)
+	for up := rel; up != "."; up = filepath.Dir(up) {
+		root = filepath.Dir(root)
 	}
 	return filepath.Join(top, rel), root, nil
 }
