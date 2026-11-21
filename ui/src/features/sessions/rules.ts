@@ -15,10 +15,11 @@ export function defaultAgent(remembered: StartChoices, launches: { harness: stri
 
 // Row action availability. Non-interactive sessions have no browser terminal.
 export function sessionRules(session: ListedSession) {
-  const offline = session.offline || Boolean(session.archived_at)
+  const pending = session.provisionalStart === "claim"
+  const offline = session.offline || Boolean(session.archived_at) || pending
   const nonInteractive = session.state.interactive === false
   return {
-    rename: !session.archived_at,
+    rename: !session.archived_at && !pending,
     restart: !offline && !nonInteractive,
     // A stopped chat starts its agent again on the same conversation.
     resume: !offline && session.transport === "acp" && !session.state.running && Boolean(session.ended_at),

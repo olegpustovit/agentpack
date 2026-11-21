@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { createFileRoute, useNavigate } from "@tanstack/react-router"
+import { useQuery } from "@tanstack/react-query"
+import { createFileRoute } from "@tanstack/react-router"
 import { Activity, useEffect, useState } from "react"
 import { search } from "@/lib/search"
 import { conversationEventsQuery } from "@/features/conversation/queries"
@@ -7,13 +7,12 @@ import { useEventsConnected } from "@/features/events/use-events"
 import { useMachines } from "@/features/machines/queries"
 import { sessionDetail, sessionLabel } from "@/features/sessions/group"
 import { sessionsQuery } from "@/features/sessions/queries"
-import { startSessionBody, type SessionView } from "@/features/sessions/rules"
+import { useStartSession } from "@/features/sessions/start"
 import { viewSwitchNeedsResume } from "@/features/sessions/view-switch"
 import { rememberSession } from "@/features/shell/views"
 import { unavailableMessage, UnavailableTerminal } from "@/features/terminal/unavailable"
 import { api, LOCAL } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
-import { hud } from "@/lib/hud"
 import { Spinner } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
 
@@ -54,7 +53,7 @@ function usePane<T>(load: () => Promise<T>, cached: T | undefined, enabled: bool
   return { pane, failed }
 }
 
-function PaneLoading({ label, failed }: { label: string; failed?: boolean }) {
+function PaneLoading({ label, failed, immediate }: { label: string; failed?: boolean; immediate?: boolean }) {
   return (
     <div className="grid h-full place-items-center p-(--s6)">
       {failed ? (
@@ -64,7 +63,7 @@ function PaneLoading({ label, failed }: { label: string; failed?: boolean }) {
         </div>
       ) : (
         // Fades in late so a fast load never flashes it.
-        <p className="flex items-center gap-(--s3) text-(length:--fs-sm) text-(--fg3) opacity-0 [animation:pane-loading_.2s_.3s_forwards]">
+        <p className={`flex items-center gap-(--s3) text-(length:--fs-sm) text-(--fg3) ${immediate ? "" : "opacity-0 [animation:pane-loading_.2s_.3s_forwards]"}`}>
           <Spinner /> {label}
         </p>
       )}
@@ -74,8 +73,7 @@ function PaneLoading({ label, failed }: { label: string; failed?: boolean }) {
 
 function SessionRoute() {
   const { machine, sessionId } = Route.useParams()
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
+  const start = useStartSession()
   const live = useEventsConnected()
   const machines = useMachines()
   const host = machines.find((item) => item.id === machine)
@@ -101,27 +99,6 @@ function SessionRoute() {
     rememberSession(ended ? undefined : { machine, sessionId, search: { q, group } })
   }, [ended, machine, sessionId, q, group])
   const listed = info && host ? { ...info, machine, machineName: host.name, offline: stale } : undefined
-  const switchView = useMutation({
-    mutationFn: (view: SessionView) => {
-      if (!info) throw new Error("session unavailable")
-      return api<SessionInfo>("/api/sessions", {
-        machine,
-        method: "POST",
-        body: startSessionBody({
-          directory: info.directory,
-          harness: info.harness,
-          mode: info.mode,
-          view,
-          agentSessionId: info.agent_session_id,
-        }),
-      })
-    },
-    onSuccess: (next) => {
-      void queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
-      void navigate({ to: "/sessions/$machine/$sessionId", params: { machine, sessionId: next.id } })
-    },
-    onError: (error) => hud.error(`Couldn't start session: ${(error as Error).message}`),
-  })
   const [warmChats, setWarmChats] = useState<Array<{ machine: string; sessionId: string }>>([])
   const acp = info?.transport === "acp"
   useEffect(() => {
@@ -132,6 +109,7 @@ function SessionRoute() {
     })
   }, [acp, machine, message, sessionId])
   const { pane: ConversationPane, failed: conversationFailed } = usePane(loadPane.conversation, panes.conversation, acp)
+  const startingTerminal = !acp && info?.provisionalStart === "claim"
   const { pane: TerminalPane, failed: terminalFailed } = usePane(loadPane.terminal, panes.terminal, !acp && !loading)
   if (message) return <UnavailableTerminal message={message} />
   // The pane depends on the transport, so wait for the list rather than guess Terminal
@@ -161,14 +139,17 @@ function SessionRoute() {
                 title={visible ? title || undefined : undefined}
                 subtitle={visible ? subtitle || undefined : undefined}
                 onSwitchTerminal={visible ? () => {
-                  if (stale || info?.archived_at || viewSwitchNeedsResume(chatInfo)) return
-                  switchView.mutate("terminal")
+                  if (stale || start.isPending || chatInfo.archived_at || viewSwitchNeedsResume(chatInfo)) return
+                  start.mutate({
+                    machine, directory: chatInfo.directory, harness: chatInfo.harness, mode: chatInfo.mode,
+                    view: "terminal", agentSessionId: chatInfo.agent_session_id, switchFrom: chatInfo.id,
+                  })
                 } : undefined}
               />
             </Activity>
           )
         })}
-        {acp && ConversationPane ? null : !acp && TerminalPane ? (
+        {startingTerminal ? <PaneLoading label="Opening terminal…" immediate /> : acp && ConversationPane ? null : !acp && TerminalPane ? (
           <TerminalPane
             key={`${machine}/${sessionId}`}
             machine={machine}

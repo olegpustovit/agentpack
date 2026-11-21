@@ -281,9 +281,12 @@ test("history keeps diff and terminal output collapsed until opened", async ({ p
 
 test("/terminal reopens a stopped chat as a terminal session", async ({ page }) => {
   let posted: unknown
-  await page.route("**/api/sessions", (route) => {
+  let release!: () => void
+  const response = new Promise<void>((resolve) => { release = resolve })
+  await page.route("**/api/sessions", async (route) => {
     if (route.request().method() === "POST") {
       posted = route.request().postDataJSON()
+      await response
       return route.fulfill({ json: { ...session, id: "term-one", transport: "terminal", state: { ...session.state, running: true } } })
     }
     if (route.request().method() !== "GET") return route.fallback()
@@ -297,6 +300,9 @@ test("/terminal reopens a stopped chat as a terminal session", async ({ page }) 
   await expect(page.getByRole("group", { name: "Session view" })).toHaveCount(0)
   await page.getByRole("textbox", { name: "Message" }).fill("/terminal")
   await page.keyboard.press("Enter")
+  await expect(page).toHaveURL(/\/sessions\/local\/session-[a-f0-9]{32}$/)
+  await expect(page.getByText("Opening terminal…")).toBeVisible()
+  release()
   await expect(page).toHaveURL(/term-one/)
   expect(posted).toMatchObject({ transport: "terminal", directory: session.directory })
 })
