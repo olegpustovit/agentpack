@@ -664,7 +664,7 @@ func attentionLine(session mcpAttention) string {
 }
 
 func (m *GatewayMCP) watched(ctx context.Context, ids []string) ([]mcpSession, error) {
-	sessions, err := m.gateway.meshSessions(ctx, "")
+	sessions, err := m.gateway.meshSessions(ctx, "", false)
 	if err != nil {
 		return nil, err
 	}
@@ -744,7 +744,7 @@ func (m *GatewayMCP) answerOnce(ctx context.Context, node, session, kind, result
 
 func (m *GatewayMCP) chatTools(server *mcp.Server) {
 	addTool(server, "get_attention", "Sessions that need you, as one short paragraph to read aloud plus the items with their pending permission requests and questions.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, mcpAttentionResult, error) {
-		sessions, err := m.gateway.meshSessions(ctx, "")
+		sessions, err := m.gateway.meshSessions(ctx, "", false)
 		if err != nil {
 			return nil, mcpAttentionResult{}, err
 		}

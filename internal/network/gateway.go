@@ -349,18 +349,14 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/local/sessions/{id}/presence", g.servePresence)
 
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
-		value, err := g.meshSessions(r.Context(), r.URL.Query().Get("node"))
+		value, err := g.meshSessions(r.Context(), r.URL.Query().Get("node"), true)
 		if err != nil {
 			meshReadError(w, r, err)
 			return
 		}
-		if err == nil {
-			for i := range value {
-				value[i] = publicSession(value[i])
-			}
-		}
-		respond(w, value, err)
+		writeJSON(w, value)
 	})
+	mux.HandleFunc("GET /api/sessions/{id}", g.serveSessionRow)
 	mux.HandleFunc("GET /api/recent", func(w http.ResponseWriter, r *http.Request) {
 		value, err := g.meshRecent(r.Context(), r.URL.Query().Get("node"))
 		if err != nil {

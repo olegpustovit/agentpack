@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"path/filepath"
@@ -29,16 +30,24 @@ func (g *Gateway) nodeContact(node, local string) (bool, time.Time) {
 	return contact.Reachable && time.Since(contact.At) < 90*time.Second, lastSync
 }
 
-func (g *Gateway) meshSessions(ctx context.Context, node string) ([]SessionInfo, error) {
+func (g *Gateway) meshSessions(ctx context.Context, node string, recentOnly bool) ([]SessionInfo, error) {
 	local, err := g.auth.store.NodeID(ctx)
 	if err != nil {
 		return nil, err
 	}
-	query := "SELECT " + sessionColumns + " FROM sessions WHERE hidden=0 AND (ended_at=0 OR transport='acp')"
+	where := "hidden=0"
 	var args []any
 	if node != "" {
-		query += " AND node_id=?"
+		where += " AND node_id=?"
 		args = append(args, node)
+	}
+	query := "SELECT " + sessionColumns + " FROM sessions WHERE " + where + " AND (ended_at=0 OR transport='acp')"
+	if recentOnly {
+		query += " AND (ended_at=0 OR id IN (SELECT id FROM sessions WHERE " + where +
+			" AND ended_at>0 AND transport='acp' ORDER BY last_used DESC,id DESC LIMIT 100))"
+		if node != "" {
+			args = append(args, node)
+		}
 	}
 	entries, err := querySessions(ctx, g.auth.store.Reader, query+" ORDER BY last_used DESC,id DESC", args...)
 	if err != nil {
@@ -65,6 +74,34 @@ func (g *Gateway) meshSessions(ctx context.Context, node string) ([]SessionInfo,
 		*info = publicSession(*info)
 	}
 	return entries, nil
+}
+
+// An older chat can fall out of the recent list while its bookmark still works.
+func (g *Gateway) serveSessionRow(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	info, err := scanSession(g.auth.store.Reader.QueryRowContext(ctx, "SELECT "+sessionColumns+" FROM sessions WHERE id=? AND hidden=0", r.PathValue("id")))
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		meshReadError(w, r, err)
+		return
+	}
+	if node := r.URL.Query().Get("node"); node != "" && node != info.NodeID {
+		http.Error(w, "session belongs to another node", http.StatusBadRequest)
+		return
+	}
+	local, err := g.auth.store.NodeID(ctx)
+	if err != nil {
+		meshReadError(w, r, err)
+		return
+	}
+	info.Reachable, info.LastSync = g.nodeContact(info.NodeID, local)
+	if !info.EndedAt.IsZero() {
+		info.State.Running, info.State.Restarting = false, false
+	}
+	writeJSON(w, publicSession(info))
 }
 
 func (g *Gateway) meshRecent(ctx context.Context, node string) ([]RecentFolder, error) {
@@ -122,7 +159,7 @@ func (g *Gateway) routeMeshRequest(w http.ResponseWriter, r *http.Request) (bool
 		return false, nil // List handlers select replicated rows; legacy peers retain live proxying.
 	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) < 3 || parts[0] != "api" || parts[1] != "sessions" {
+	if len(parts) < 3 || parts[0] != "api" || parts[1] != "sessions" || r.Method == http.MethodGet && len(parts) == 3 {
 		return false, nil
 	}
 	info, err := storedSession(r.Context(), g.auth.store.Reader, parts[2])
@@ -187,7 +224,7 @@ func (g *Gateway) routeMeshRequest(w http.ResponseWriter, r *http.Request) (bool
 }
 
 func (g *Gateway) meshAgentSessions(ctx context.Context, node, directory, harness string) ([]AgentSession, error) {
-	entries, err := g.meshSessions(ctx, node)
+	entries, err := g.meshSessions(ctx, node, false)
 	if err != nil {
 		return nil, err
 	}

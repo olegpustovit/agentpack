@@ -2,6 +2,7 @@ package network
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -156,5 +157,46 @@ func TestMeshNodeInventoryKeepsOfflineMachinesAfterRestart(t *testing.T) {
 	nodes, err = g.meshNodes(t.Context(), nil)
 	if err != nil || len(nodes) != 1 || !nodes[0].Online {
 		t.Fatalf("reachable inventory: %+v %v", nodes, err)
+	}
+}
+
+func TestMeshRecentSessionListKeepsOlderBookmarks(t *testing.T) {
+	g, origin := identityGateway(t, t.TempDir(), nil)
+	store := g.auth.store.DB
+	now := time.Now()
+	for i := range 101 {
+		info := SessionInfo{ID: fmt.Sprintf("session-old-%03d", i), Transport: "acp", LastUsed: now.Add(time.Duration(i) * time.Second)}
+		if err := upsertSession(t.Context(), store, info); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.Exec("UPDATE sessions SET ended_at=last_used"); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertSession(t.Context(), store, SessionInfo{ID: "session-live", Transport: "acp"}); err != nil {
+		t.Fatal(err)
+	}
+	request := func(path string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, origin.String()+path, nil)
+		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
+		w := httptest.NewRecorder()
+		g.Handler().ServeHTTP(w, r)
+		return w
+	}
+	list := request("/api/sessions")
+	var rows []SessionInfo
+	if err := json.Unmarshal(list.Body.Bytes(), &rows); err != nil || len(rows) != 101 || rows[len(rows)-1].ID != "session-live" {
+		t.Fatalf("recent list status=%d rows=%d err=%v", list.Code, len(rows), err)
+	}
+	for _, row := range rows {
+		if row.ID == "session-old-000" {
+			t.Fatal("oldest stopped chat remained in the recent list")
+		}
+	}
+	old := request("/api/sessions/session-old-000")
+	var row SessionInfo
+	if err := json.Unmarshal(old.Body.Bytes(), &row); old.Code != http.StatusOK || err != nil || row.ID != "session-old-000" {
+		t.Fatalf("old bookmark status=%d id=%q err=%v", old.Code, row.ID, err)
 	}
 }

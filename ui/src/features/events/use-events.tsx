@@ -9,7 +9,7 @@ type EventMessage = { topic: string; node?: string; tables?: string[] }
 // What each replicated table feeds. A state change refetches only these; chat tables feed the chat stream alone.
 const STATE_FAMILIES: Record<string, string[][]> = {
   // Usage counters arrive through usage_hourly, written in the same transaction as each turn.
-  sessions: [["m", LOCAL, "sessions"]],
+  sessions: [["m", LOCAL, "sessions"], ["m", LOCAL, "session-row"]],
   limits: [["m", LOCAL, "limits"]],
   usage_hourly: [["m", LOCAL, "usage"]],
   limit_samples: [["m", LOCAL, "usage"]],
@@ -32,7 +32,7 @@ const STATE_FAMILIES: Record<string, string[][]> = {
   push_keys: [],
   push_subscriptions: [],
 }
-const ALL_STATE_FAMILIES = [["identity"], ["topology"], ["m", LOCAL, "sessions"], ["m", LOCAL, "limits"], ["m", LOCAL, "usage"], ["nodes"], ["diagnostics"], ["replication"], ["mcp-credentials"], ["omp-settings"], ["agent-snapshot"]]
+const ALL_STATE_FAMILIES = [["identity"], ["topology"], ["m", LOCAL, "sessions"], ["m", LOCAL, "session-row"], ["m", LOCAL, "limits"], ["m", LOCAL, "usage"], ["nodes"], ["diagnostics"], ["replication"], ["mcp-credentials"], ["omp-settings"], ["agent-snapshot"]]
 
 // Unknown tables, or an older gateway that sends none, refetch every family.
 export function stateFamilies(tables: string[] | undefined): string[][] {

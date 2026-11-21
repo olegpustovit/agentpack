@@ -138,12 +138,12 @@ describe("event stream", () => {
 describe("stateFamilies", () => {
   it("refetches nothing for chat writes, only the readers of known tables, and everything otherwise", () => {
     expect(stateFamilies(["conversation_events"])).toEqual([])
-    expect(stateFamilies(["sessions", "conversation_events"])).toEqual([["m", LOCAL, "sessions"]])
+    expect(stateFamilies(["sessions", "conversation_events"])).toEqual([["m", LOCAL, "sessions"], ["m", LOCAL, "session-row"]])
     expect(stateFamilies(["mesh_nodes", "mesh_settings"])).toHaveLength(3)
     expect(stateFamilies(["mcp_credentials", "mcp_credential_approvals"])).toEqual([["mcp-credentials"]])
     expect(stateFamilies(["agent_snapshots"])).toEqual([["agent-snapshot"]])
     expect(stateFamilies(["omp_settings"])).toEqual([["omp-settings"]])
-    expect(stateFamilies(undefined)).toHaveLength(11)
-    expect(stateFamilies(["a_future_table"])).toHaveLength(11)
+    expect(stateFamilies(undefined)).toHaveLength(12)
+    expect(stateFamilies(["a_future_table"])).toHaveLength(12)
   })
 })

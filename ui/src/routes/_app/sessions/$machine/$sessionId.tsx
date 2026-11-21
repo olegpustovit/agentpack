@@ -11,7 +11,7 @@ import { startSessionBody, type SessionView } from "@/features/sessions/rules"
 import { viewSwitchNeedsResume } from "@/features/sessions/view-switch"
 import { rememberSession } from "@/features/shell/views"
 import { unavailableMessage, UnavailableTerminal } from "@/features/terminal/unavailable"
-import { api } from "@/lib/api"
+import { api, LOCAL } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { hud } from "@/lib/hud"
 import { Spinner } from "@/components/kit/feedback"
@@ -67,12 +67,20 @@ function SessionRoute() {
   const machines = useMachines()
   const host = machines.find((item) => item.id === machine)
   const { data } = useQuery(sessionsQuery(live))
-  const info = data?.find((session) => session.id === sessionId)
+  const listedInfo = data?.find((session) => session.id === sessionId)
+  const detail = useQuery({
+    queryKey: ["m", LOCAL, "session-row", machine, sessionId],
+    queryFn: () => api<SessionInfo>(`/api/sessions/${encodeURIComponent(sessionId)}`, { machine }),
+    enabled: data !== undefined && !listedInfo,
+    staleTime: 15_000,
+    retry: false,
+  })
+  const info = listedInfo ?? detail.data
+  const loading = !info && (!data || detail.isPending)
   const stale = info?.reachable === false || host?.online === false
   const message = unavailableMessage(info, stale)
   const { q, group, sub } = Route.useSearch()
-  // A loaded list without this session means it ended, so the Sessions view must not return to it.
-  const ended = !!data && !info
+  const ended = !!data && !loading && !info
   useEffect(() => {
     rememberSession(ended ? undefined : { machine, sessionId, search: { q, group } })
   }, [ended, machine, sessionId, q, group])
@@ -107,11 +115,11 @@ function SessionRoute() {
       return [{ machine, sessionId }, ...current.filter((chat) => chat.machine !== machine || chat.sessionId !== sessionId)].slice(0, 3)
     })
   }, [acp, machine, message, sessionId])
-  const paneFailed = usePane(info?.transport === "acp" ? "conversation" : info || data ? "terminal" : undefined)
+  const paneFailed = usePane(info?.transport === "acp" ? "conversation" : info || !loading ? "terminal" : undefined)
   if (message) return <UnavailableTerminal message={message} />
   // The pane depends on the transport, so wait for the list rather than guess Terminal
   // (which would load xterm and attach a socket to a chat session).
-  if (!data && !stale) return <PaneLoading label="Loading session…" />
+  if (loading && !stale) return <PaneLoading label="Loading session…" />
   const title = listed && sessionLabel(listed)
   const subtitle = listed && sessionDetail(listed).split(" · ").slice(listed.name ? 0 : 1).join(" · ")
   const ConversationPane = panes.conversation

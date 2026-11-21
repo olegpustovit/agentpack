@@ -301,6 +301,15 @@ test("/terminal reopens a stopped chat as a terminal session", async ({ page }) 
   expect(posted).toMatchObject({ transport: "terminal", directory: session.directory })
 })
 
+test("a bookmarked older chat opens outside the recent list", async ({ page }) => {
+  await page.route("**/api/sessions", (route) => route.fulfill({ json: [] }))
+  await page.route("**/api/sessions/chat-one", (route) => route.fulfill({
+    json: { ...session, id: "chat-one", transport: "acp", ended_at: session.started_at, state: { ...session.state, running: false } },
+  }))
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByText("Done. The gateway will resume from the saved offset.")).toBeInViewport()
+})
+
 test("a fork opens the claimed chat while its request is pending", async ({ page }) => {
   let release!: () => void
   const response = new Promise<void>((resolve) => { release = resolve })
