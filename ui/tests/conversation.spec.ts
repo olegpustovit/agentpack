@@ -324,19 +324,25 @@ test("a fork opens the claimed chat while its request is pending", async ({ page
     agent_capabilities: { sessionCapabilities: { fork: {} } },
   }
   await page.route("**/api/sessions", (route) => route.fulfill({ json: [source] }))
-  let id = ""
+  const ids: string[] = []
   await page.route("**/api/sessions/chat-one/fork", async (route) => {
-    id = route.request().postDataJSON().id
+    ids.push(route.request().postDataJSON().id)
     await response
+    if (ids.length === 1) return route.fulfill({ status: 502, body: "Fork outcome unavailable" })
     await route.fulfill({ status: 409, body: "Cannot fork" })
   })
   await page.goto("/sessions/local/chat-one")
   await page.getByRole("textbox", { name: "Message" }).fill("/fork")
   await page.keyboard.press("Enter")
   await expect(page).toHaveURL(/\/sessions\/local\/session-[0-9a-f]{32}$/)
-  await expect.poll(() => id).toMatch(/^session-[0-9a-f]{32}$/)
-  await expect(page).toHaveURL(new RegExp(`${id}$`))
+  await expect.poll(() => ids[0]).toMatch(/^session-[0-9a-f]{32}$/)
+  await expect(page).toHaveURL(new RegExp(`${ids[0]}$`))
   release()
+  await expect(page).toHaveURL(/\/sessions\/local\/chat-one$/)
+  await page.getByRole("button", { name: "Retry", exact: true }).click()
+  await expect.poll(() => ids.length).toBe(2)
+  expect(ids[1]).toBe(ids[0])
+  await expect(page.getByText("Couldn't fork conversation: Cannot fork")).toBeVisible()
   await expect(page).toHaveURL(/\/sessions\/local\/chat-one$/)
 })
 
