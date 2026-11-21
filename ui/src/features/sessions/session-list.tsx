@@ -67,6 +67,7 @@ export function SessionList() {
   const [sheet, setSheet] = useState<SheetState | null>(null)
   const [confirm, setConfirm] = useState<Confirm | null>(null)
   const [stopping, setStopping] = useState<ReadonlySet<string>>(new Set())
+  const [archiving, setArchiving] = useState<ReadonlySet<string>>(new Set())
   const [cursor, setCursor] = useState<Cursor | null>(null)
   const [seen, setSeen] = useState(loadSeen)
   const pending = useRef<number | undefined>(undefined)
@@ -79,7 +80,7 @@ export function SessionList() {
   const selectedKey = cursor?.from === routeKey ? cursor?.key : routeKey
 
   const query = search.q ?? ""
-  const shown = sessions.filter((session) => matchesSession(session, query))
+  const shown = sessions.filter((session) => !archiving.has(rowKey(session)) && matchesSession(session, query))
   // Pinned above the machine and project groups, and listed only there.
   const needsYou = shown.filter((session) => sessionGlyphState(session) === "needsYou")
   const pinned = new Set(needsYou)
@@ -216,10 +217,18 @@ export function SessionList() {
   }
 
   function archiveRows(targets: ListedSession[]) {
-    void Promise.all(targets.map((row) => commands.archive(row).then((done) => done && rowKey(row)))).then((done) => {
-      const archived = done.filter((key): key is string => Boolean(key))
-      if (routeKey && archived.includes(routeKey)) void navigate({ to: "/sessions", search: true })
-    })
+    const keys = new Set(targets.map(rowKey))
+    setArchiving((current) => new Set([...current, ...keys]))
+    if (routeKey && keys.has(routeKey)) {
+      const index = rows.findIndex((row) => rowKey(row) === routeKey)
+      const next = rows.slice(index + 1).find((row) => !keys.has(rowKey(row)))
+        ?? rows.slice(0, index).findLast((row) => !keys.has(rowKey(row)))
+      if (next) openRow(next, true)
+      else void navigate({ to: "/sessions", search: true, replace: true })
+    }
+    void Promise.all(targets.map((row) => commands.archive(row))).finally(() =>
+      setArchiving((current) => new Set([...current].filter((key) => !keys.has(key)))),
+    )
   }
 
   function actionsFor(row: ListedSession, selected: boolean): RowActions {

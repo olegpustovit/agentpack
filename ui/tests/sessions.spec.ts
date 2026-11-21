@@ -281,6 +281,24 @@ test("⌘/Ctrl- and Shift-click mark rows; the menu then acts on all of them", a
   await expect(page.locator("[data-marked]")).toHaveCount(0)
 })
 
+test("archive hides the row immediately and restores it if the request fails", async ({ page }) => {
+  let release!: () => void
+  const response = new Promise<void>((resolve) => { release = resolve })
+  await page.route("**/api/sessions/*", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback()
+    await response
+    await route.fulfill({ status: 409, body: "Still running" })
+  })
+  await page.goto("/sessions")
+  const rows = page.getByRole("navigation", { name: "Sessions" }).locator("[data-source-row]")
+  await expect(rows).toHaveCount(2)
+  await rows.last().click({ button: "right" })
+  await page.getByRole("menuitem", { name: /^Archive/ }).click()
+  await expect(rows).toHaveCount(1)
+  release()
+  await expect(rows).toHaveCount(2)
+})
+
 test("a chat's row menu switches agentpack tools, and its helpers list under it", async ({ page }) => {
   const chat = { ...sessions[0], id: "c1", name: "lead", transport: "acp", conversation_state: "idle", tools: true }
   const helper = { ...chat, id: "c2", name: "helper", parent_id: "c1", started_by: { kind: "browser", user: "oleg@", agent: "claude" } }
