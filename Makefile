@@ -11,7 +11,7 @@ CRSQLITE_GOOS := $(shell $(GO) env GOOS)
 CRSQLITE_GOARCH := $(shell $(GO) env GOARCH)
 VERSION := $(shell sh scripts/build-version.sh)
 
-.PHONY: help all build release install uninstall minor patch ship-minor ship-patch ship-dev _ship check-clean fmt fmt-check lint test race ci hooks release-check ui-install ui-lint ui-typecheck ui-test ui-build ui-stage ui-e2e artifact dev-deploy
+.PHONY: help all build release install uninstall minor patch ship-minor ship-patch ship-dev _ship check-clean fmt fmt-check lint test race ci hooks release-check ui-install ui-lint ui-typecheck ui-test ui-build ui-stage ui-e2e artifact dev-deploy local-release
 
 .PHONY: crsqlite crsqlite-build
 
@@ -26,6 +26,7 @@ help:
 	@echo "  install         release, then copy binary to INSTALL_DIR ($(INSTALL_DIR))"
 	@echo "  uninstall       remove binary from INSTALL_DIR"
 	@echo "  dev-deploy      ui-stage + install and restart the gateway here, deploy the checkout to oracle-vm and install its CLI there"
+	@echo "  local-release   build every platform locally (macOS on a Mac over SSH) and install on HOSTS=\"host ...\""
 	@echo ""
 	@echo "Quality gates (local; CI only builds releases):"
 	@echo "  fmt             format all Go files"
@@ -130,6 +131,9 @@ dev-deploy: ui-stage install
 	"$(INSTALL_DIR)/$(BINARY)" gateway start
 	"$(INSTALL_DIR)/$(BINARY)" deploy
 	ssh -o BatchMode=yes oracle-vm "sh -c 'set -e; cd ~/.local/bin; for t in ap agentpack; do [ \$$t = agentpack ] && [ ! -f agentpack ] && continue; cp ~/.local/lib/agentpack/agentpack .\$$t.new; mv -f .\$$t.new \$$t; done; ./ap --version'"
+
+local-release:
+	./scripts/local-release.sh $(HOSTS)
 
 uninstall:
 	rm -f "$(INSTALL_DIR)/$(BINARY)"
