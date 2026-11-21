@@ -2,15 +2,18 @@ package codex
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf16"
 
 	"filippo.io/age"
@@ -446,4 +449,63 @@ func updateConfig(path string, mutate func(map[string]any)) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+// Codex's own OAuth client; tests point tokenURL at a fake.
+var tokenURL = "https://auth.openai.com/oauth/token"
+
+const oauthClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
+
+// Codex renews a ChatGPT sign-in eight days after its last refresh. Renewing a day earlier lets one
+// machine renew for all of them, so no two machines ever spend the same rotating refresh token.
+const refreshAfter = 7 * 24 * time.Hour
+
+// RefreshCredential renews the ChatGPT sign-in in an auth.json when it is due, and returns nil when
+// it is not (or the file holds an API key).
+func RefreshCredential(ctx context.Context, data []byte) ([]byte, error) {
+	var auth struct {
+		LastRefresh time.Time `json:"last_refresh"`
+		Tokens      struct {
+			RefreshToken string `json:"refresh_token"`
+		} `json:"tokens"`
+	}
+	if err := json.Unmarshal(data, &auth); err != nil {
+		return nil, err
+	}
+	if auth.Tokens.RefreshToken == "" || time.Since(auth.LastRefresh) < refreshAfter {
+		return nil, nil
+	}
+	return RefreshAuth(ctx, data)
+}
+
+// RefreshAuth renews the ChatGPT tokens in an auth.json and returns the updated file.
+func RefreshAuth(ctx context.Context, data []byte) ([]byte, error) {
+	var file map[string]any
+	if err := json.Unmarshal(data, &file); err != nil {
+		return nil, err
+	}
+	tokens, _ := file["tokens"].(map[string]any)
+	refresh, _ := tokens["refresh_token"].(string)
+	if refresh == "" {
+		return nil, errors.New("auth.json holds no ChatGPT refresh token")
+	}
+	var reply struct {
+		IDToken      string `json:"id_token"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := base.RefreshToken(ctx, tokenURL, map[string]string{"refresh_token": refresh, "client_id": oauthClientID, "scope": "openid profile email"}, &reply); err != nil {
+		return nil, err
+	}
+	if reply.AccessToken == "" {
+		return nil, errors.New("token refresh answered without a token")
+	}
+	tokens["access_token"] = reply.AccessToken
+	for key, value := range map[string]string{"id_token": reply.IDToken, "refresh_token": reply.RefreshToken} {
+		if value != "" {
+			tokens[key] = value
+		}
+	}
+	file["last_refresh"] = time.Now().UTC().Format(time.RFC3339Nano)
+	return json.MarshalIndent(file, "", "  ")
 }

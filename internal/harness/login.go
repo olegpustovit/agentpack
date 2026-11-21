@@ -1,8 +1,12 @@
 package harness
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -64,4 +68,30 @@ func RunLogout(ctx context.Context, exe string, args ...string) error {
 		return err
 	}
 	return nil
+}
+
+// RefreshToken sends an OAuth refresh_token grant as JSON and decodes the answer into reply. Errors
+// name the status only: a token endpoint's body may echo credentials.
+func RefreshToken(ctx context.Context, endpoint string, grant map[string]string, reply any) error {
+	grant["grant_type"] = "refresh_token"
+	body, err := json.Marshal(grant)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode/100 != 2 {
+		return fmt.Errorf("token refresh answered %s", response.Status)
+	}
+	return json.NewDecoder(response.Body).Decode(reply)
 }

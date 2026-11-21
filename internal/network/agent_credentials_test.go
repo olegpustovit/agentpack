@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -14,7 +15,14 @@ func TestAgentCredentialsShareTheNewestSignIn(t *testing.T) {
 	path := filepath.Join(home, "agy", "token")
 	saved := agentLogins
 	t.Cleanup(func() { agentLogins = saved })
-	agentLogins = []agentLogin{{harness: "agy", credential: func() string { return path }}}
+	renewals := 0
+	agentLogins = []agentLogin{{harness: "agy", credential: func() string { return path }, refresh: func(_ context.Context, data []byte) ([]byte, error) {
+		if !strings.HasPrefix(string(data), `{"renew"`) {
+			return nil, nil // not due
+		}
+		renewals++
+		return []byte(`{"renewed":1}`), nil
+	}}}
 	g, _ := identityGateway(t, home, nil)
 	ctx := context.Background()
 	write := func(data string, modified time.Time) {
@@ -68,6 +76,31 @@ func TestAgentCredentialsShareTheNewestSignIn(t *testing.T) {
 	g.syncAgentCredentials(ctx)
 	if got := shared(); string(got.Data) != `{"c":3}` {
 		t.Fatalf("newer local sign-in not published: %+v", got)
+	}
+
+	// Only the machine that published a sign-in renews it, so a rotating token is spent once.
+	if err := g.publishAgentCredential(ctx, "agy/token", sharedAgentCredential{Data: []byte(`{"renew":1}`), Modified: base.Add(3 * time.Minute).UnixMilli(), Node: "peer"}); err != nil {
+		t.Fatal(err)
+	}
+	g.syncAgentCredentials(ctx) // installs the peer's
+	g.syncAgentCredentials(ctx) // and leaves its renewal to the peer
+	if renewals != 0 || read() != `{"renew":1}` {
+		t.Fatalf("renewed a peer's sign-in: %d %q", renewals, read())
+	}
+	write(`{"renew":2}`, base.Add(4*time.Minute))
+	g.syncAgentCredentials(ctx) // publishes its own
+	g.syncAgentCredentials(ctx) // and renews it
+	if got := shared(); renewals != 1 || read() != `{"renewed":1}` || string(got.Data) != `{"renewed":1}` {
+		t.Fatalf("own sign-in not renewed: %d %q %+v", renewals, read(), got)
+	}
+
+	// A row without a publisher is adopted by a machine holding the same file.
+	if err := g.publishAgentCredential(ctx, "agy/token", sharedAgentCredential{Data: []byte(`{"renewed":1}`), Modified: shared().Modified}); err != nil {
+		t.Fatal(err)
+	}
+	g.syncAgentCredentials(ctx)
+	if got := shared(); got.Node == "" || string(got.Data) != `{"renewed":1}` {
+		t.Fatalf("unowned sign-in not adopted: %+v", got)
 	}
 
 	// A file the agent is still writing is left alone.

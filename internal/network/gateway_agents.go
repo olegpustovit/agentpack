@@ -29,16 +29,19 @@ type agentLogin struct {
 	// credential is the file holding the agent's sign-in, shared with every node; nil when its
 	// sign-in is not a file another machine can use (Cursor's keychain, OMP's database).
 	credential func() string
+	// refresh renews a rotating sign-in ahead of the agent, returning nil when it is not due; only
+	// the machine that published the shared sign-in calls it.
+	refresh func(context.Context, []byte) ([]byte, error)
 }
 
 var agentLogins = []agentLogin{
-	{"claude", claude.LoginMethods, claude.Account, claude.Login, claude.Logout, claude.CredentialFile},
-	{"codex", codex.LoginMethods, codex.Account, codex.Login, codex.Logout, codex.CredentialFile},
-	{"omp", omp.LoginMethods, omp.Account, omp.Login, nil, nil},
-	{"agy", agy.LoginMethods, agy.Account, agy.Login, nil, agy.CredentialFile},
-	{"cursor", cursor.LoginMethods, cursor.Account, cursor.Login, cursor.Logout, nil},
-	{"grok", grok.LoginMethods, grok.Account, grok.Login, grok.Logout, grok.CredentialFile},
-	{"opencode", opencode.LoginMethods, opencode.Account, opencode.Login, nil, opencode.CredentialFile},
+	{"claude", claude.LoginMethods, claude.Account, claude.Login, claude.Logout, claude.CredentialFile, claude.RefreshCredential},
+	{"codex", codex.LoginMethods, codex.Account, codex.Login, codex.Logout, codex.CredentialFile, codex.RefreshCredential},
+	{"omp", omp.LoginMethods, omp.Account, omp.Login, nil, nil, nil},
+	{"agy", agy.LoginMethods, agy.Account, agy.Login, nil, agy.CredentialFile, nil},
+	{"cursor", cursor.LoginMethods, cursor.Account, cursor.Login, cursor.Logout, nil, nil},
+	{"grok", grok.LoginMethods, grok.Account, grok.Login, grok.Logout, grok.CredentialFile, nil},
+	{"opencode", opencode.LoginMethods, opencode.Account, opencode.Login, nil, opencode.CredentialFile, nil},
 }
 
 // loginMethods are an agent's ways to sign in, known without asking its CLI.

@@ -20,7 +20,8 @@ const agentCredentialLimit = 1 << 20
 // it stops sharing that sign-in without deleting other machines' files.
 type sharedAgentCredential struct {
 	Data     []byte `json:"data,omitempty"`
-	Modified int64  `json:"modified"` // the file's modification time, Unix ms, where it was published
+	Modified int64  `json:"modified"`       // the file's modification time, Unix ms, where it was published
+	Node     string `json:"node,omitempty"` // the publisher, which alone renews a rotating sign-in
 }
 
 // runAgentCredentials shares agent sign-ins across the mesh: an agent signed in on any machine is
@@ -41,6 +42,13 @@ func (g *Gateway) runAgentCredentials(ctx context.Context, interval time.Duratio
 func (g *Gateway) syncAgentCredentials(ctx context.Context) {
 	g.credentialsMu.Lock()
 	defer g.credentialsMu.Unlock()
+	node, err := g.auth.store.NodeID(ctx)
+	if err != nil {
+		_, event := obs.Start(ctx, "gateway", "agent_credentials")
+		event.Fail(err)
+		event.End()
+		return
+	}
 	for _, agent := range agentLogins {
 		if agent.credential == nil {
 			continue
@@ -49,7 +57,7 @@ func (g *Gateway) syncAgentCredentials(ctx context.Context) {
 		if path == "" {
 			continue
 		}
-		installed, err := g.syncAgentCredential(ctx, agent.harness+"/"+filepath.Base(path), path)
+		installed, err := g.syncAgentCredential(ctx, agent, path, node)
 		if err != nil && ctx.Err() == nil {
 			_, event := obs.Start(ctx, "gateway", "agent_credentials")
 			event.Set("harness", agent.harness)
@@ -62,9 +70,11 @@ func (g *Gateway) syncAgentCredentials(ctx context.Context) {
 	}
 }
 
-// syncAgentCredential publishes the local file when it is newer than the shared one, and installs
-// the shared one when that is newer. It reports whether it replaced the local file.
-func (g *Gateway) syncAgentCredential(ctx context.Context, key, path string) (bool, error) {
+// syncAgentCredential publishes the local file when it is newer than the shared one, installs the
+// shared one when that is newer, and renews the shared one ahead of the agent when this machine
+// published it. It reports whether it replaced the local file.
+func (g *Gateway) syncAgentCredential(ctx context.Context, agent agentLogin, path, node string) (bool, error) {
+	key := agent.harness + "/" + filepath.Base(path)
 	shared, err := g.sharedAgentCredential(ctx, key)
 	if err != nil {
 		return false, err
@@ -75,9 +85,23 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, key, path string) (bo
 	}
 	switch {
 	case local != nil && modified > shared.Modified && !bytes.Equal(local, shared.Data):
-		return false, g.publishAgentCredential(ctx, key, sharedAgentCredential{Data: local, Modified: modified})
+		return false, g.publishAgentCredential(ctx, key, sharedAgentCredential{Data: local, Modified: modified, Node: node})
 	case shared.Data != nil && shared.Modified > modified && !bytes.Equal(local, shared.Data):
 		return true, installAgentCredential(path, shared)
+	case shared.Node == "" && local != nil && bytes.Equal(local, shared.Data):
+		// A row published before rows named their publisher: a holder adopts it, hours before
+		// any renewal is due, so the replicated choice settles on one machine first.
+		shared.Node = node
+		return false, g.publishAgentCredential(ctx, key, shared)
+	case agent.refresh != nil && shared.Node == node && local != nil && bytes.Equal(local, shared.Data):
+		renewed, err := agent.refresh(ctx, local)
+		if renewed == nil || err != nil {
+			return false, err
+		}
+		// The old refresh token is spent: keep the new one locally even if publishing fails, and
+		// in the table even if the file write fails; the next round reconciles either.
+		credential := sharedAgentCredential{Data: renewed, Modified: time.Now().UnixMilli(), Node: node}
+		return true, errors.Join(g.publishAgentCredential(ctx, key, credential), installAgentCredential(path, credential))
 	}
 	return false, nil
 }

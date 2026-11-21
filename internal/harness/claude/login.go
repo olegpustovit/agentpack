@@ -3,9 +3,11 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
@@ -72,4 +74,56 @@ func CredentialFile() string {
 		return ""
 	}
 	return filepath.Join(home, ".claude", ".credentials.json")
+}
+
+// Claude Code's own OAuth client (from its bundle); tests point tokenURL at a fake.
+var tokenURL = "https://platform.claude.com/v1/oauth/token"
+
+const oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+
+// Claude Code renews five minutes before expiry. Renewing an hour ahead lets one machine renew for
+// all of them, so no two machines ever spend the same rotating refresh token.
+const refreshAhead = time.Hour
+
+// RefreshCredential renews the sign-in in CredentialFile's contents when it is due, and returns
+// nil when it is not (or the file holds no Claude account sign-in).
+func RefreshCredential(ctx context.Context, data []byte) ([]byte, error) {
+	var file map[string]any
+	if err := json.Unmarshal(data, &file); err != nil {
+		return nil, err
+	}
+	oauth, _ := file["claudeAiOauth"].(map[string]any)
+	refresh, _ := oauth["refreshToken"].(string)
+	expires, _ := oauth["expiresAt"].(float64)
+	if refresh == "" || time.Until(time.UnixMilli(int64(expires))) > refreshAhead {
+		return nil, nil
+	}
+	var scopes []string
+	if list, ok := oauth["scopes"].([]any); ok {
+		for _, scope := range list {
+			if text, ok := scope.(string); ok {
+				scopes = append(scopes, text)
+			}
+		}
+	}
+	var reply struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
+		Scope        string `json:"scope"`
+	}
+	if err := base.RefreshToken(ctx, tokenURL, map[string]string{"refresh_token": refresh, "client_id": oauthClientID, "scope": strings.Join(scopes, " ")}, &reply); err != nil {
+		return nil, err
+	}
+	if reply.AccessToken == "" || reply.ExpiresIn <= 0 {
+		return nil, errors.New("token refresh answered without a token")
+	}
+	oauth["accessToken"], oauth["expiresAt"] = reply.AccessToken, time.Now().Add(time.Duration(reply.ExpiresIn)*time.Second).UnixMilli()
+	if reply.RefreshToken != "" {
+		oauth["refreshToken"] = reply.RefreshToken
+	}
+	if reply.Scope != "" {
+		oauth["scopes"] = strings.Fields(reply.Scope)
+	}
+	return json.Marshal(file)
 }

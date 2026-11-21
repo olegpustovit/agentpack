@@ -1,26 +1,23 @@
 package proxy
 
 import (
-	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/olegpustovit/agentpack/internal/harness/codex"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/zalando/go-keyring"
 )
 
 const codexEndpoint = "https://chatgpt.com/backend-api/codex/responses"
 const openAIEndpoint = "https://api.openai.com/v1/responses"
-const refreshEndpoint = "https://auth.openai.com/oauth/token"
-const codexClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
 type AuthSnapshot struct{ AccessToken, AccountID, EndpointURL string }
 type AuthManager interface {
@@ -39,9 +36,8 @@ type authState struct {
 	Source                                        authSource
 }
 type UpstreamAuth struct {
-	mu     sync.Mutex
-	state  authState
-	client *http.Client
+	mu    sync.Mutex
+	state authState
 }
 
 func LoadUpstreamAuth() (*UpstreamAuth, error) {
@@ -52,7 +48,7 @@ func LoadUpstreamAuth() (*UpstreamAuth, error) {
 	if override := strings.TrimSpace(os.Getenv("AGENTPACK_PROXY_UPSTREAM_URL")); override != "" {
 		state.URL = override
 	}
-	return &UpstreamAuth{state: state, client: http.DefaultClient}, nil
+	return &UpstreamAuth{state: state}, nil
 }
 func (auth *UpstreamAuth) Snapshot() (AuthSnapshot, error) {
 	auth.mu.Lock()
@@ -70,36 +66,23 @@ func (auth *UpstreamAuth) DefaultTransport() Transport {
 func (auth *UpstreamAuth) RefreshAfterUnauthorized() (bool, error) {
 	auth.mu.Lock()
 	defer auth.mu.Unlock()
-	if auth.state.Source != chatGPTSource || auth.state.RefreshToken == "" {
+	if auth.state.Source != chatGPTSource || auth.state.RefreshToken == "" || auth.state.AuthFile == "" {
 		return false, nil
 	}
-	body, _ := json.Marshal(map[string]any{"client_id": codexClientID, "grant_type": "refresh_token", "refresh_token": auth.state.RefreshToken})
-	request, err := http.NewRequest(http.MethodPost, refreshEndpoint, bytes.NewReader(body))
+	data, err := os.ReadFile(auth.state.AuthFile)
 	if err != nil {
 		return false, err
 	}
-	request.Header.Set("content-type", "application/json")
-	response, err := auth.client.Do(request)
-	if err != nil {
+	if data, err = codex.RefreshAuth(context.Background(), data); err != nil {
 		return false, fmt.Errorf("refresh Codex OAuth token: %w", err)
 	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return false, nil
-	}
 	var value map[string]any
-	if json.NewDecoder(response.Body).Decode(&value) != nil {
-		return false, nil
+	if err := json.Unmarshal(data, &value); err != nil {
+		return false, err
 	}
-	access := stringValue(value["access_token"])
-	if access == "" {
-		return false, nil
-	}
-	auth.state.Token = access
-	if refresh := stringValue(value["refresh_token"]); refresh != "" {
-		auth.state.RefreshToken = refresh
-	}
-	return true, persistRefreshed(auth.state, stringValue(value["id_token"]), access)
+	tokens := object(value["tokens"])
+	auth.state.Token, auth.state.RefreshToken = stringValue(tokens["access_token"]), stringValue(tokens["refresh_token"])
+	return true, writeAtomicJSON(auth.state.AuthFile, value)
 }
 
 func loadAuthState() (authState, error) {
@@ -164,28 +147,6 @@ func codexKeyringAccount(home string) string {
 	}
 	sum := sha256.Sum256([]byte(canonical))
 	return "cli|" + hex.EncodeToString(sum[:])[:16]
-}
-func persistRefreshed(state authState, idToken, access string) error {
-	if state.AuthFile == "" {
-		return nil
-	}
-	data, _ := os.ReadFile(state.AuthFile)
-	value := map[string]any{}
-	_ = json.Unmarshal(data, &value)
-	tokens := object(value["tokens"])
-	tokens["access_token"] = access
-	if state.RefreshToken != "" {
-		tokens["refresh_token"] = state.RefreshToken
-	}
-	if state.AccountID != "" {
-		tokens["account_id"] = state.AccountID
-	}
-	if idToken != "" {
-		tokens["id_token"] = map[string]any{"raw_jwt": idToken}
-	}
-	value["tokens"] = tokens
-	value["last_refresh"] = time.Now().UTC().Format(time.RFC3339)
-	return writeAtomicJSON(state.AuthFile, value)
 }
 func writeAtomicJSON(path string, value any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

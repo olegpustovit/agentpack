@@ -14,7 +14,6 @@ import (
 	"time"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
-	keyring "github.com/zalando/go-keyring"
 )
 
 // shortcut: Cursor’s bundled usage RPC is not public; update the fixtures if its schema changes.
@@ -48,6 +47,9 @@ func ReadLimits(ctx context.Context) base.LimitSnapshot {
 	if token == "" {
 		snapshot.State = base.LimitStateUnsupported
 		snapshot.Error = "No Cursor CLI login on this machine. Sign in with cursor-agent login."
+		if runtime.GOOS == "darwin" {
+			snapshot.Error = "Cursor keeps its macOS login in the keychain, which agentpack does not read."
+		}
 		return snapshot
 	}
 	client := &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -95,12 +97,10 @@ func usageToken() (string, error) {
 	if os.Getenv("AGENT_CLI_CREDENTIAL_STORE") == "memory" {
 		return "", nil
 	}
+	// Another program reading Cursor's keychain item makes macOS ask for the login password, again
+	// after every agentpack update, so a keychain login has no limits here.
 	if runtime.GOOS == "darwin" && os.Getenv("AGENT_CLI_CREDENTIAL_STORE") != "file" {
-		token, err := keyring.Get("cursor-access-token", "cursor-user")
-		if err != nil && !errors.Is(err, keyring.ErrNotFound) {
-			return "", errors.New("Cursor login keychain is unavailable")
-		}
-		return token, nil
+		return "", nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
