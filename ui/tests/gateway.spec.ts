@@ -729,7 +729,7 @@ test("New Session explains the Node requirement for ACP chat", async ({ page }) 
   await expect(page.getByRole("button", { name: "Start session" })).toBeDisabled()
 })
 
-test("archive stops a running session, then hides it from the list", async ({ page }) => {
+test("⌘⌫ archives the focused session at once, stopping it first", async ({ page }) => {
   const requests = await mockAPI(page)
   const bodies: unknown[] = []
   await page.route("**/api/sessions/local-two", (route) => {
@@ -740,10 +740,8 @@ test("archive stops a running session, then hides it from the list", async ({ pa
   // The row was stale and the agent had already stopped: archiving still goes through.
   await page.route("**/api/sessions/local-two/stop", (route) => route.fulfill({ status: 400, body: "session is not running" }))
   await page.goto("/")
-  await gwRow(page, "local:local-two").click({ button: "right" })
-  await page.getByRole("menuitem", { name: "Archive…" }).click()
-  await expect(page.getByRole("alertdialog")).toContainText("The agent is stopped first.")
-  await page.getByRole("alertdialog").getByRole("button", { name: "Archive" }).click()
+  await gwRow(page, "local:local-two").focus()
+  await page.keyboard.press("ControlOrMeta+Backspace")
   await expect.poll(() => bodies).toEqual([{ hidden: true }])
   await expect(page.getByText("Session archived")).toBeVisible()
 })

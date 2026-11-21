@@ -7,7 +7,7 @@ import (
 	base "github.com/olegpustovit/agentpack/internal/harness"
 )
 
-const codexACPPackage = "@agentclientprotocol/codex-acp@2.5.0"
+const codexACPPackage = "@agentclientprotocol/codex-acp@2.8.0"
 
 func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	binary, err := base.EnsureACPAdapterExecutable(context.Background(), codexACPPackage)

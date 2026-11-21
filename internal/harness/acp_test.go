@@ -111,7 +111,7 @@ func preloadACPAdapters(t *testing.T) {
 	})
 	for _, packageSpec := range []string{
 		"@agentclientprotocol/claude-agent-acp@0.100.0",
-		"@agentclientprotocol/codex-acp@2.5.0",
+		"@agentclientprotocol/codex-acp@2.8.0",
 	} {
 		if _, err := base.EnsureACPAdapterExecutable(context.Background(), packageSpec); err != nil {
 			t.Fatal(err)

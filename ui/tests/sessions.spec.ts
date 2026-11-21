@@ -253,8 +253,9 @@ test("⌘/Ctrl- and Shift-click mark rows; the menu then acts on all of them", a
   await rows.last().click({ button: "right" })
   // Only s1 is running, so the stop counts one; both can be archived.
   await expect(page.getByRole("menuitem", { name: "Stop agent…" })).toBeEnabled()
-  await page.getByRole("menuitem", { name: "Archive 2 sessions…" }).click()
-  await page.getByRole("alertdialog").getByRole("button", { name: "Archive 2" }).click()
+  // Archive asks nothing: it is the Trash of the session list.
+  await page.getByRole("menuitem", { name: /^Archive 2 sessions/ }).click()
+  await expect(page.getByRole("alertdialog")).toHaveCount(0)
   await expect.poll(() => archived.sort()).toEqual(["s1", "s2"])
   await expect(page.locator("[data-marked]")).toHaveCount(0)
 })

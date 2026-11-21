@@ -222,6 +222,7 @@ The gateway serves its own MCP server at `/mcp` (see [Deploy the public gateway]
 | `respond_permission`, `answer_question` | Answer a request. Repeating an applied answer is a no-op. |
 | `cancel`, `fork_session` | Cancel a turn or one subagent; fork a chat (the agent's own fork of the whole conversation). |
 | `get_usage`, `get_limits` | Usage for an RFC 3339 range (default: the last seven days) and reported plan limits. Read-only. |
+| `run_helper` | For a chat's agent: starts a helper chat in its folder and mode, sends the task and returns the helper's answer (up to 50 s; then `done` is false and the agent follows with `wait`). Agents told to prefer it over a built-in subagent tool the chat cannot show, such as Antigravity's `invoke_subagent`; the parent chat shows the helper as a card. |
 | `start_session` | Starts a chat (or, with `terminal`, a terminal session) and returns at once; an optional `prompt` is sent when the chat is ready. |
 
 ### agentpack tools inside a chat

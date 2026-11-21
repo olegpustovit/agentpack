@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { afterEach } from "vitest"
-import { agentCommands, applyHint, cachedCommands, filterAtHints, filterSlashHints, moveHint, rememberCommands } from "./composer-hints"
+import { agentCommands, applyHint, cachedCommands, commandSpans, filterAtHints, filterSlashHints, moveHint, rememberCommands } from "./composer-hints"
 
 describe("composer hints", () => {
   afterEach(() => localStorage.clear())
@@ -14,11 +14,19 @@ describe("composer hints", () => {
     expect(filterSlashHints("/compact now", commands)).toEqual([])
   })
 
-  it("matches a slash command at the start of any line and replaces only that line", () => {
+  it("matches the agent's commands mid-sentence and the gateway's only at a line start", () => {
     const commands = [{ name: "review", input: { hint: "path" } }]
     expect(filterSlashHints("context first\n/rev", commands)[0]).toMatchObject({ value: "/review", hint: "path", source: "agent" })
-    expect(filterSlashHints("not /rev", commands)).toEqual([])
+    expect(filterSlashHints("please /", commands).map((item) => item.value)).toEqual(["/review"])
+    expect(filterSlashHints("a/rev", commands)).toEqual([])
     expect(applyHint("context first\n/rev", { value: "/review", description: "" })).toBe("context first\n/review ")
+    expect(applyHint("please /re", { value: "/review", description: "" })).toBe("please /review ")
+  })
+
+  it("marks the commands a draft would run", () => {
+    const spans = commandSpans("/goal ship\nrun /review and /goal x /usr/bin", [{ name: "review" }])
+    expect(spans.filter((span) => span.command).map((span) => span.text)).toEqual(["/goal", "/review"])
+    expect(spans.map((span) => span.text).join("")).toBe("/goal ship\nrun /review and /goal x /usr/bin")
   })
 
   it("lists gateway commands before the first update and caches each agent's list", () => {

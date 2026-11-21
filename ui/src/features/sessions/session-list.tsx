@@ -32,7 +32,7 @@ import { RowSheet, type SheetState } from "./session-sheets"
 // holding a key opens one terminal. `from` is the route the cursor was set under; a route change
 // drops it without an effect.
 type Cursor = { key: string; from: string | undefined }
-type Confirm = { kind: "stop" | "restart" | "archive"; rows: ListedSession[] }
+type Confirm = { kind: "stop" | "restart"; rows: ListedSession[] }
 
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
 
@@ -130,6 +130,15 @@ export function SessionList() {
       if (row && sessionRules(row).rename) setSheet({ kind: "rename", row })
       return
     }
+    // ⌘⌫ archives the marked rows, or the focused one, as Finder moves to Trash. No confirmation.
+    if ((event.key === "Backspace" || event.key === "Delete") && (isMac ? event.metaKey : event.ctrlKey)) {
+      const targets = (marked.size > 0 ? markedRows : rows[current] ? [rows[current]] : []).filter((row) => sessionRules(row).archive)
+      if (targets.length === 0) return
+      event.preventDefault()
+      setMarked(new Set())
+      archiveRows(targets)
+      return
+    }
     if (event.key === "Escape" && marked.size > 0) {
       event.preventDefault()
       setMarked(new Set())
@@ -193,7 +202,7 @@ export function SessionList() {
     stopCount: stoppable.length,
     archiveCount: archivable.length,
     stop: () => setConfirm({ kind: "stop", rows: stoppable }),
-    archive: () => setConfirm({ kind: "archive", rows: archivable }),
+    archive: () => { setMarked(new Set()); archiveRows(archivable) },
     ids: markedRows.map((row) => row.id),
   } : undefined
 
@@ -222,7 +231,7 @@ export function SessionList() {
       rename: () => setSheet({ kind: "rename", row }),
       restart: () => setConfirm({ kind: "restart", rows: [row] }),
       stop: () => setConfirm({ kind: "stop", rows: [row] }),
-      archive: () => setConfirm({ kind: "archive", rows: [row] }),
+      archive: () => archiveRows([row]),
       // A pooled session on the open row must dial again; navigating to the row it already shows does nothing.
       reconnect: () => {
         terminalPool.reconnect(row.machine, row.id)
@@ -382,8 +391,7 @@ export function SessionList() {
             const { kind, rows: targets } = confirm
             setConfirm(null)
             setMarked(new Set())
-            if (kind === "archive") archiveRows(targets)
-            else if (kind === "stop") stopRows(targets)
+            if (kind === "stop") stopRows(targets)
             else for (const row of targets) void commands.restart(row)
           }}
         />}
@@ -395,19 +403,15 @@ export function SessionList() {
 
 function SessionConfirm({ confirm, onConfirm }: { confirm: Confirm; onConfirm: () => void }) {
   const { kind, rows } = confirm
-  const verb = { stop: "Stop", restart: "Restart", archive: "Archive" }[kind]
+  const verb = { stop: "Stop", restart: "Restart" }[kind]
   const row = rows[0]
   if (rows.length > 1 || !row) {
     const machines = new Set(rows.map((each) => each.machineName)).size
     return (
       <ConfirmAlertContent
-        title={kind === "archive" ? `Archive ${plural(rows.length, "session")}?` : `${verb} ${plural(rows.length, "agent")}?`}
-        description={
-          kind === "archive"
-            ? `They leave the session list on every machine.${rows.some((each) => each.state.running) ? " Running agents are stopped first." : ""}`
-            : `On ${plural(machines, "machine")}. The sessions stay in the list so you can resume them; use Archive to remove them.`
-        }
-        destructiveLabel={kind === "archive" ? `Archive ${rows.length}` : `${verb} ${rows.length} agents`}
+        title={`${verb} ${plural(rows.length, "agent")}?`}
+        description={`On ${plural(machines, "machine")}. The sessions stay in the list so you can resume them; use Archive to remove them.`}
+        destructiveLabel={`${verb} ${rows.length} agents`}
         onConfirm={onConfirm}
       />
     )
@@ -418,11 +422,9 @@ function SessionConfirm({ confirm, onConfirm }: { confirm: Confirm; onConfirm: (
       description={
         kind === "stop"
           ? `On ${row.machineName}. The session stays in the list so you can resume it; use Archive to remove it.`
-          : kind === "archive"
-            ? `It leaves the session list on every machine.${row.state.running ? " The agent is stopped first." : ""}`
-            : `On ${row.machineName}. Its current conversation may end unless the agent supports resume.`
+          : `On ${row.machineName}. Its current conversation may end unless the agent supports resume.`
       }
-      destructiveLabel={{ stop: "Stop agent", restart: "Restart agent", archive: "Archive" }[kind]}
+      destructiveLabel={{ stop: "Stop agent", restart: "Restart agent" }[kind]}
       onConfirm={onConfirm}
     />
   )

@@ -3,7 +3,9 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import type { LogEntry } from "./model"
-import { reduceLog, reduceThread } from "./reducer"
+import type { SessionInfo } from "@/lib/api-types"
+import type { ThreadItem } from "./model"
+import { helperSubagents, reduceLog, reduceThread } from "./reducer"
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "testdata", "acp", "full.jsonl")
 
@@ -336,5 +338,27 @@ describe("reduceThread", () => {
     // A refetch hands over new objects; the result is rebuilt, not appended twice.
     const refetched = all.map((entry) => ({ ...entry }))
     expect(reduceThread("fixture", refetched)).toEqual(reduceLog(all))
+  })
+})
+
+describe("helperSubagents", () => {
+  const tool = (seq: number, id: string, rawOutput: unknown): ThreadItem => ({ kind: "tool", seq, ts: seq, data: { toolCallId: id, rawOutput } }) as ThreadItem
+  const helper = { id: "session-H1", harness: "claude", name: "Find the bug", conversation_state: "working", state: { running: true } } as SessionInfo
+
+  it("cards the helper on the tool call that started it, not on later reads", () => {
+    const cards = helperSubagents([tool(1, "start", { session: { id: "session-H1" } }), tool(2, "wait", { sessions: [{ id: "session-H1" }] })], [helper])
+    expect(Object.keys(cards)).toEqual(["helper:session-H1"])
+    expect(cards["helper:session-H1"]).toMatchObject({ toolCallId: "start", title: "Find the bug", state: "working", cancellable: true })
+  })
+
+  it("links by start time when the agent sends no tool result", () => {
+    const started = { ...helper, started_at: new Date(5000).toISOString() } as SessionInfo
+    const items = [{ kind: "tool", seq: 1, ts: 1000, data: { toolCallId: "grep", title: "grep" } }, { kind: "tool", seq: 2, ts: 4000, data: { toolCallId: "run", title: "Run mcp_agentpack_run_helper" } }] as ThreadItem[]
+    expect(helperSubagents(items, [started])["helper:session-H1"]?.toolCallId).toBe("run")
+  })
+
+  it("shows a finished helper as done", () => {
+    const done = { ...helper, conversation_state: "idle" } as SessionInfo
+    expect(helperSubagents([tool(1, "start", "session-H1")], [done])["helper:session-H1"]).toMatchObject({ state: "idle", cancellable: false })
   })
 })

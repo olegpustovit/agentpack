@@ -30,7 +30,8 @@ export function subagentStats(subagent: Subagent, now: number): string {
   const end = subagent.endTs ?? now
   const parts = [
     subagent.startedTs !== undefined ? clock(Math.max(0, end - subagent.startedTs)) : undefined,
-    `${subagent.tools} ${subagent.tools === 1 ? "tool" : "tools"}`,
+    // A helper chat's tools are in its own chat, not counted here.
+    subagent.id.startsWith("helper:") ? undefined : `${subagent.tools} ${subagent.tools === 1 ? "tool" : "tools"}`,
     subagent.tokens ? `${compactCount(subagent.tokens)} tokens` : undefined,
   ]
   return parts.filter(Boolean).join(" · ")

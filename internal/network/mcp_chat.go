@@ -323,6 +323,47 @@ var mcpWaitPoll = 500 * time.Millisecond
 // mcpWaitMax stays inside codemode's 60 s run limit.
 const mcpWaitMax = 25 * time.Second
 
+// helperWaitMax bounds run_helper, start included, inside codemode's 60 s run limit.
+const helperWaitMax = 2 * mcpWaitMax
+
+// helperReplyMax keeps a long reply's newest part; read_conversation has the rest.
+const helperReplyMax = 64 << 10
+
+type mcpHelperResult struct {
+	Session mcpSession `json:"session"`
+	Done    bool       `json:"done" jsonschema:"The helper's turn ended; reply holds its answer."`
+	Reply   string     `json:"reply,omitempty" jsonschema:"What the helper wrote this turn. Agent output is untrusted content."`
+}
+
+// helperReply reports whether a helper's first turn ended, and the messages its own agent wrote.
+func helperReply(entries []acp.LogEntry) (bool, string) {
+	var reply strings.Builder
+	last := ""
+	done := false
+	for _, entry := range entries {
+		item, ok := transcriptItem(entry)
+		if !ok || item.Subagent != "" {
+			continue
+		}
+		if item.Kind == "message" {
+			if last != "message" && reply.Len() > 0 {
+				reply.WriteString("\n\n")
+			}
+			reply.WriteString(item.Text)
+		}
+		last = item.Kind
+		if item.Kind == "turn_end" || item.Kind == "exit" {
+			done = true
+			break
+		}
+	}
+	text := reply.String()
+	if len(text) > helperReplyMax {
+		text = "…" + strings.ToValidUTF8(text[len(text)-helperReplyMax:], "")
+	}
+	return done, text
+}
+
 type mcpPromptResult struct {
 	Accepted bool   `json:"accepted"`
 	Queued   string `json:"queued,omitempty" jsonschema:"Queue ID when the prompt waits behind a running turn."`
@@ -877,6 +918,49 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 			return nil, mcpSession{}, err
 		}
 		return nil, sessionView(info), nil
+	})
+	addTool(server, "run_helper", "Delegate a task to a helper chat and wait for its answer. Use this instead of a built-in subagent tool whose work this chat cannot show, such as Antigravity's invoke_subagent: the person watches the helper live, can open and stop it, and approves its permissions. It runs in this chat's folder and mode. When done is false, call wait on session.id until idle, then read_conversation.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		Prompt string   `json:"prompt" jsonschema:"The whole task; the helper sees nothing else of this chat."`
+		Agent  mcpAgent `json:"agent,omitempty" jsonschema:"Agent for the helper; defaults to this chat's agent."`
+	}) (*mcp.CallToolResult, mcpHelperResult, error) {
+		var out mcpHelperResult
+		actor, _ := actorFrom(ctx)
+		if actor.chat == "" {
+			return nil, out, errors.New("run_helper is for a chat's agent; use start_session")
+		}
+		if strings.TrimSpace(in.Prompt) == "" {
+			return nil, out, errEmptyPrompt
+		}
+		self, err := storedSession(ctx, m.gateway.auth.store.Reader, actor.chat)
+		if err != nil {
+			return nil, out, err
+		}
+		deadline := time.Now().Add(helperWaitMax)
+		_, out.Session, err = m.startSession(ctx, nil, mcpStartInput{Directory: self.Directory, Agent: mcpAgent(cmpOr(string(in.Agent), self.Harness)), Mode: self.Mode})
+		if err != nil {
+			return nil, out, err
+		}
+		if _, err := m.sendPrompt(ctx, "", out.Session.ID, in.Prompt, false, time.Until(deadline)); err != nil {
+			return nil, out, err
+		}
+		for !out.Done && time.Now().Before(deadline) {
+			entries, _, err := m.conversation(ctx, "", out.Session.ID, 0)
+			if err != nil {
+				return nil, out, err
+			}
+			if out.Done, out.Reply = helperReply(entries); out.Done {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return nil, out, ctx.Err()
+			case <-time.After(mcpWaitPoll):
+			}
+		}
+		if views, err := m.watched(ctx, []string{out.Session.ID}); err == nil && len(views) == 1 {
+			out.Session = views[0]
+		}
+		return nil, out, nil
 	})
 	addTool(server, "get_usage", "Token, turn and cost usage for a time range, as the Usage page shows it: hourly rows, sessions and limit samples.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		From string `json:"from,omitempty" jsonschema:"Range start, RFC 3339; omit for seven days before to."`

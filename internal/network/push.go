@@ -31,6 +31,9 @@ const (
 	pushMaxEndpoint  = 2048
 	pushMaxKey       = 256
 	pushSendDeadline = 10 * time.Second
+	// pushContact is the VAPID "sub" claim. Apple refuses anything but an https: or mailto: URL with
+	// HTTP 403 BadJwtToken, so it is never the gateway's loopback origin.
+	pushContact = "https://github.com/olegpustovit/agentpack"
 )
 
 // pushWatch is owned by the runPush goroutine; tests call pushPass directly.
@@ -240,19 +243,20 @@ func (g *Gateway) sendPush(ctx context.Context, sub pushSubscriber, message push
 		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	response, err := webpush.SendNotificationWithContext(ctx, payload, &webpush.Subscription{Endpoint: sub.endpoint, Keys: webpush.Keys{P256dh: sub.p256dh, Auth: sub.auth}},
-		&webpush.Options{HTTPClient: client, Subscriber: g.origin.Scheme + "://" + g.origin.Host, VAPIDPublicKey: sub.public, VAPIDPrivateKey: sub.private, TTL: pushTTL, Urgency: webpush.UrgencyHigh, Topic: pushTopic(message.Tag)})
+		&webpush.Options{HTTPClient: client, Subscriber: pushContact, VAPIDPublicKey: sub.public, VAPIDPrivateKey: sub.private, TTL: pushTTL, Urgency: webpush.UrgencyHigh, Topic: pushTopic(message.Tag)})
 	if err != nil {
 		return errors.New("push service unreachable")
 	}
 	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4<<10))
+	// Push services explain a refusal in a short body ({"reason":"BadJwtToken"}); it holds no secret.
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
 	switch {
 	case response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone:
 		// The browser dropped the subscription; forget it.
 		_, err := g.auth.store.DB.ExecContext(ctx, "DELETE FROM push_subscriptions WHERE endpoint=?", sub.endpoint)
 		return err
 	case response.StatusCode >= 300:
-		return fmt.Errorf("push service returned HTTP %d", response.StatusCode)
+		return fmt.Errorf("push service returned HTTP %d: %.200s", response.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
 }

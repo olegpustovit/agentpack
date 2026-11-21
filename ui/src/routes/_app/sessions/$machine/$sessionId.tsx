@@ -117,6 +117,7 @@ function SessionRoute() {
             sessionId={sessionId}
             info={info}
             subagent={sub}
+            helpers={data?.filter((session) => session.parent_id === sessionId)}
             readOnly={stale}
             title={title || undefined}
             subtitle={subtitle || undefined}

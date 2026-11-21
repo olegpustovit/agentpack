@@ -36,11 +36,12 @@ export type GroupActions = { stopCount: number; archiveCount: number; stop: () =
 type Entry = { label: string; icon: LucideIcon; shortcut?: string; disabled: boolean; checked?: boolean; run: () => void } | "separator"
 
 const Unchecked = createLucideIcon("unchecked", [])
+const archiveShortcut = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform) ? "⌘⌫" : "Ctrl+Del"
 
 function groupEntries(group: GroupActions): Entry[] {
   return [
     { label: group.stopCount > 1 ? `Stop ${group.stopCount} agents…` : "Stop agent…", icon: Square, disabled: group.stopCount === 0, run: group.stop },
-    { label: group.archiveCount > 1 ? `Archive ${group.archiveCount} sessions…` : "Archive…", icon: Archive, disabled: group.archiveCount === 0, run: group.archive },
+    { label: group.archiveCount > 1 ? `Archive ${group.archiveCount} sessions` : "Archive", icon: Archive, shortcut: archiveShortcut, disabled: group.archiveCount === 0, run: group.archive },
     "separator",
     { label: `Copy ${group.ids.length} session IDs`, icon: Copy, disabled: false, run: () => copySessionId(group.ids.join("\n")) },
   ]
@@ -51,7 +52,7 @@ function menuEntries(session: ListedSession, selected: boolean, actions: RowActi
   return [
     { label: "Rename…", icon: Pencil, shortcut: "F2", disabled: !rules.rename, run: actions.rename },
     { label: "Restart…", icon: RotateCw, disabled: !rules.restart, run: actions.restart },
-    { label: "Archive…", icon: Archive, disabled: !rules.archive, run: actions.archive },
+    { label: "Archive", icon: Archive, shortcut: archiveShortcut, disabled: !rules.archive, run: actions.archive },
     { label: "Stop agent…", icon: Square, disabled: !rules.stop, run: actions.stop },
     // A chat has no terminal to reconnect or close.
     ...(session.transport === "acp" ? [] : [
