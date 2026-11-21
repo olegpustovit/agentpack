@@ -118,3 +118,8 @@ The browser Performance timeline also retains the latest
 `agentpack:chat-first-frame` and `agentpack:prompt-confirmed` measurements.
 The first ends when the chat is ready for its next paint. The second ends when
 the request ID appears in the conversation log. Both contain only timings.
+
+The direct loopback UI also reports these two durations to
+`/api/debug/timings`. A local CLI can read the latest values with the same
+bearer used by `/api/debug/pprof/`. The values live in gateway memory and reset
+when it restarts.

@@ -75,6 +75,7 @@ type Gateway struct {
 	public         publicAccess
 	stop           context.CancelFunc
 	done           <-chan struct{}
+	chatTimings    sync.Map // latest browser duration per measurement
 	replicaStatus  sync.Map
 	statePulls     sync.Map // peer → coalesced pull notification
 	syncTransferMu sync.Mutex
@@ -234,7 +235,11 @@ func (g *Gateway) Handler() http.Handler {
 		buildID = uiBuildID(files)
 	}
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"ui_build_id": buildID, "conversation_events": true, "conversation_config_log": true})
+		config := map[string]any{"ui_build_id": buildID, "conversation_events": true, "conversation_config_log": true}
+		if g.localBrowserTiming(r) {
+			config["debug_chat_timings"] = true
+		}
+		writeJSON(w, config)
 	})
 	g.registerSettings(mux)
 	g.registerPush(mux)
@@ -249,6 +254,8 @@ func (g *Gateway) Handler() http.Handler {
 	g.registerWorktrees(mux)
 	g.registerOMP(mux)
 	mux.HandleFunc("POST /api/telemetry", g.telemetry)
+	mux.HandleFunc("GET /api/debug/timings", g.readChatTimings)
+	mux.HandleFunc("POST /api/debug/timings", g.writeChatTiming)
 	// Profiles reveal memory contents, so only this machine's CLI may read them; peers and browsers never can.
 	mux.HandleFunc("GET /api/debug/pprof/{name...}", func(w http.ResponseWriter, r *http.Request) {
 		if !g.localRequest(r) {

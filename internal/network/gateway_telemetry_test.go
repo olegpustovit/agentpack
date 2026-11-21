@@ -190,3 +190,44 @@ func TestTelemetryBrowserFixture(t *testing.T) {
 		t.Error("browser fixture timed out")
 	}
 }
+
+func TestChatTimingsAreLocalAndContentFree(t *testing.T) {
+	g, origin := identityGateway(t, t.TempDir(), nil)
+	testBrowserSession(t, g.auth, testBrowserEmail, "browser")
+	handler := g.Handler()
+	request := func(method, body string, browser, forwarded bool) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, origin.String()+"/api/debug/timings", strings.NewReader(body))
+		r.RemoteAddr = "127.0.0.1:32100"
+		if browser {
+			r.Header.Set("Origin", origin.String())
+			r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: "browser"})
+		} else {
+			r.Header.Set("Authorization", "Bearer "+g.local.Secret)
+		}
+		if forwarded {
+			r.Header.Set("X-Forwarded-For", "192.0.2.1")
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	body := `{"name":"chat-first-frame","duration_ms":84.25}`
+	if w := request(http.MethodPost, body, true, true); w.Code == http.StatusNoContent {
+		t.Fatal("accepted a forwarded timing")
+	}
+	if w := request(http.MethodGet, "", true, false); w.Code == http.StatusOK {
+		t.Fatal("browser could read CLI timing diagnostics")
+	}
+	if w := request(http.MethodPost, `{"name":"prompt text","duration_ms":23}`, true, false); w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid measurement status=%d: %s", w.Code, w.Body)
+	}
+	if w := request(http.MethodPost, body, true, false); w.Code != http.StatusNoContent {
+		t.Fatalf("local timing status=%d: %s", w.Code, w.Body)
+	}
+	result := request(http.MethodGet, "", false, false)
+	var samples map[string]float64
+	if err := json.Unmarshal(result.Body.Bytes(), &samples); result.Code != http.StatusOK || err != nil || len(samples) != 1 || samples["chat-first-frame"] != 84.25 {
+		t.Fatalf("timings read status=%d: %s (%v)", result.Code, result.Body, err)
+	}
+}

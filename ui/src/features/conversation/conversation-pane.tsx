@@ -172,7 +172,9 @@ export default function ConversationPane({
     working: activity === "working",
     needs_you: activity === "needs_you",
   } : transcript
-  const logConfig = useQuery(configQuery).data?.conversation_config_log === true
+  const config = useQuery(configQuery).data
+  const logConfig = config?.conversation_config_log === true
+  const reportTimings = config?.debug_chat_timings === true
   const { data: legacyConfig, error: configError } = useQuery({
     queryKey: ["conversation-config", machine, sessionId],
     // Only a running agent has options; a stopped chat has no worker, and its 404 is not a version gap.
@@ -205,11 +207,10 @@ export default function ConversationPane({
     if (!opened) return
     const frame = requestAnimationFrame(() => {
       performance.clearMarks("agentpack:chat-switch")
-      performance.clearMeasures("agentpack:chat-first-frame")
-      performance.measure("agentpack:chat-first-frame", { start: opened.startTime })
+      chatTiming("chat-first-frame", opened.startTime, reportTimings)
     })
     return () => cancelAnimationFrame(frame)
-  }, [historyKey, starting, tailLoaded])
+  }, [historyKey, reportTimings, starting, tailLoaded])
   const streamReady = live || (starting && info?.provisionalStart !== "claim")
   const subscribe = useConversationEvents()
   const [legacyStream, setLegacyStream] = useState(false)
@@ -445,13 +446,12 @@ export default function ConversationPane({
     const pending = pendingSends.filter((item) => {
       if (!received.has(item.id)) return true
       if (item.startedAt !== undefined) {
-        performance.clearMeasures("agentpack:prompt-confirmed")
-        performance.measure("agentpack:prompt-confirmed", { start: item.startedAt })
+        chatTiming("prompt-confirmed", item.startedAt, reportTimings)
       }
       return false
     })
     if (pending.length !== pendingSends.length) setPendingSends(pending)
-  }, [entries, pendingSends])
+  }, [entries, pendingSends, reportTimings])
   const discardSend = (id: string) => setPendingSends((pending) => pending.filter((item) => item.id !== id))
   const send = useMutation({
     scope: { id: sessionId },
@@ -1188,6 +1188,15 @@ function withoutKey<T>(values: Record<string, T>, key: string): Record<string, T
   const rest = { ...values }
   delete rest[key]
   return rest
+}
+
+function chatTiming(name: "chat-first-frame" | "prompt-confirmed", start: number, report: boolean) {
+  const key = `agentpack:${name}`
+  performance.clearMeasures(key)
+  const { duration } = performance.measure(key, { start })
+  if (report) {
+    void api("/api/debug/timings", { method: "POST", body: { name, duration_ms: duration } }).catch(() => undefined)
+  }
 }
 
 function confirmedPrompts(entries: LogEntry[]): Set<string> {

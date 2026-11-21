@@ -134,3 +134,43 @@ func (g *Gateway) telemetry(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (g *Gateway) localBrowserTiming(r *http.Request) bool {
+	return g.origin != nil && strings.EqualFold(r.Host, g.origin.Host) && loopbackPeer(r) &&
+		r.Header.Get("Forwarded") == "" && r.Header.Get("X-Forwarded-For") == "" &&
+		r.Header.Get("X-Forwarded-Host") == "" && r.Header.Get("X-Forwarded-Proto") == ""
+}
+
+func (g *Gateway) writeChatTiming(w http.ResponseWriter, r *http.Request) {
+	if !g.localBrowserTiming(r) || g.auth.email(r) == "" {
+		http.Error(w, "local browser session required", http.StatusForbidden)
+		return
+	}
+	var input struct {
+		Name       string  `json:"name"`
+		DurationMS float64 `json:"duration_ms"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 256)
+	if !readJSON(w, r, &input) {
+		return
+	}
+	if input.Name != "chat-first-frame" && input.Name != "prompt-confirmed" || input.DurationMS < 0 || input.DurationMS > 120_000 {
+		http.Error(w, "invalid chat timing", http.StatusBadRequest)
+		return
+	}
+	g.chatTimings.Store(input.Name, input.DurationMS)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (g *Gateway) readChatTimings(w http.ResponseWriter, r *http.Request) {
+	if !g.localBrowserTiming(r) || !g.localRequest(r) {
+		http.Error(w, "local access only", http.StatusForbidden)
+		return
+	}
+	samples := make(map[string]float64, 2)
+	g.chatTimings.Range(func(name, duration any) bool {
+		samples[name.(string)] = duration.(float64)
+		return true
+	})
+	writeJSON(w, samples)
+}
