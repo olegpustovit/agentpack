@@ -35,6 +35,7 @@ func New() base.Harness {
 		Guidance:       injectGuidance,
 		Check:          verify,
 		Launch:         launch,
+		ACPAdapter:     codexACPPackage,
 		LaunchACP:      acpLaunch,
 		LaunchFinished: afterLaunch,
 	}

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mcp"
@@ -23,6 +24,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/staging"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 )
 
@@ -175,7 +177,8 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 }
 
 func (runner Runner) startRemoteSession(ctx context.Context, home, executable string, info network.SessionInfo, forkSessionID string) (string, error) {
-	if _, ok := launcherTarget(info.Harness); !ok {
+	target, ok := launcherTarget(info.Harness)
+	if !ok {
 		return "", errors.New("unknown harness")
 	}
 	if !filepath.IsAbs(info.Directory) {
@@ -228,17 +231,21 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 		definitionRoot = info.Directory
 	}
 	if info.Transport == "acp" {
-		target, ok := launcherTarget(info.Harness)
-		if !ok {
-			return "", errors.New("unknown harness")
+		stage := func(ctx context.Context) error {
+			_, _, err := runner.Service.SyncForLaunchOptions(ctx, definitionRoot, packSync.SyncOptions{
+				Mode: cmp.Or(info.Mode, mode.DefaultName), Target: &target, WorkspaceRoot: info.Directory,
+			})
+			return err
 		}
-		modeName := info.Mode
-		if modeName == "" {
-			modeName = mode.DefaultName
+		agent, err := registry.ByTarget(target)
+		if err != nil {
+			return "", err
 		}
-		if _, _, err := runner.Service.SyncForLaunchOptions(ctx, definitionRoot, packSync.SyncOptions{
-			Mode: modeName, Target: &target, WorkspaceRoot: info.Directory,
-		}); err != nil {
+		if _, err := os.Stat(executable); err == nil && os.Getenv("AGENTPACK_FULL_VERIFY") != "1" {
+			if err := prepareRemoteACP(ctx, stage, agent.PrepareACP); err != nil {
+				return "", err
+			}
+		} else if err := stage(ctx); err != nil {
 			return "", err
 		}
 	}
@@ -251,6 +258,14 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 	}
 	arguments = append(arguments, info.Harness)
 	return network.StartWorker(ctx, home, executable, network.WorkerLaunch{Transport: info.Transport, ForkSessionID: forkSessionID, Program: executable, Arguments: arguments, Directory: info.Directory, Environment: append(os.Environ(), "AGENTPACK_SESSION_WORKER=1"), Rows: 24, Columns: 80, Session: info})
+}
+
+// The adapter cache and project stage are independent. The worker sees the published generation.
+func prepareRemoteACP(ctx context.Context, stage, adapter func(context.Context) error) error {
+	group, ctx := errgroup.WithContext(ctx)
+	group.Go(func() error { return stage(ctx) })
+	group.Go(func() error { return adapter(ctx) })
+	return group.Wait()
 }
 
 func (runner Runner) launchManaged(ctx context.Context, packContext paths.Context, invocation Invocation, arguments []string) (int, error) {

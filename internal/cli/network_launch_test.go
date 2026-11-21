@@ -153,3 +153,39 @@ func TestRemoteChatStagesFolderWithoutDefinitionRoot(t *testing.T) {
 		t.Fatalf("Codex home %s was not staged: %v", codexHome, err)
 	}
 }
+
+func TestRemoteACPPreparationOverlapsAndJoinsBeforeLaunch(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	task := func(name string) func(context.Context) error {
+		return func(ctx context.Context) error {
+			started <- name
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	done := make(chan error, 1)
+	go func() { done <- prepareRemoteACP(ctx, task("stage"), task("adapter")) }()
+	seen := map[string]bool{}
+	for range 2 {
+		select {
+		case name := <-started:
+			seen[name] = true
+		case <-ctx.Done():
+			t.Fatalf("both preparations did not run together: %v", seen)
+		}
+	}
+	if !seen["stage"] || !seen["adapter"] {
+		t.Fatalf("preparations started: %v", seen)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
