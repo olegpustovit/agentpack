@@ -67,16 +67,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			return
 		}
 		entries, truncated := conv.Attach(since)
-		if truncated {
-			w.Header().Set("X-Agentpack-Truncated", "true")
-		}
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		encoder := json.NewEncoder(w)
-		for _, entry := range entries {
-			if err := encoder.Encode(entry); err != nil {
-				return
-			}
-		}
+		writeConversationEntries(w, r, entries, truncated)
 	})
 	mux.HandleFunc("POST /conversation/prompt", worker.receivePrompt)
 	mux.HandleFunc("POST /conversation/prompt/images", worker.receivePrompt)
