@@ -25,7 +25,7 @@ import { configQuery } from "@/lib/config"
 import { ompSettingsQuery, quickRoles } from "@/features/settings/omp-model"
 import { agentSnapshotQuery, archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, mergeConversationPages, olderConversationPage, type ConversationPage } from "./queries"
 import { configRole, dangerousMode, parseConfigOptions } from "./config-options"
-import type { LogEntry, ThreadItem } from "./model"
+import type { LogEntry, ThreadItem, UserMessagePayload } from "./model"
 import { helperSubagents, reduceThread } from "./reducer"
 import { latestUserPrompt, quoteMessage, ThreadView, userImageSrc } from "./thread-view"
 import { GoalPill, parseGoalCommand, useGoalActions } from "./goal-sheet"
@@ -113,6 +113,7 @@ export default function ConversationPane({
   const navigate = useNavigate()
   const machines = useMachines()
   const [draft, setDraft] = useState(() => loadDraft(draftKey(machine, sessionId)))
+  const recalledPrompt = useRef<{ seq: number; text: string } | null>(null)
   const [hintIndex, setHintIndex] = useState(0)
   const [hintsClosed, setHintsClosed] = useState(false)
   // The caret, valid only for the draft it was read from; a draft set by code puts it at the end.
@@ -324,24 +325,35 @@ export default function ConversationPane({
   }, [older?.entries])
 
   // Scrolling never retries a failed page; the Retry button does.
-  async function loadOlder(retry = false) {
+  async function loadOlder(retry = false, complete?: (loaded: LogEntry[]) => boolean) {
     const first = entries[0]
     if (!first || !hasOlder || older?.loading || (older?.error && !retry)) return
-    const kept = older?.entries ?? []
+    let kept = older?.entries ?? []
+    let before = first.seq
     setHistory({ key: historyKey, entries: kept, more: true, loading: true })
     try {
-      const page = await olderConversationPage(machine, sessionId, first.seq)
+      let more: boolean
+      let loaded: LogEntry[]
+      do {
+        const page = await olderConversationPage(machine, sessionId, before)
+        kept = [...page.entries, ...kept]
+        loaded = joinHistory(kept, tailEntries)
+        const next = page.entries[0]?.seq
+        more = page.truncated && next !== undefined && next > 1 && next < before
+        before = next ?? before
+      } while (more && complete && !complete(loaded))
       const element = threadScrollRef.current
       if (element) scrollAnchorRef.current = { height: element.scrollHeight, top: element.scrollTop }
-      setHistory({ key: historyKey, entries: [...page.entries, ...kept], more: page.truncated, loading: false })
+      setHistory({ key: historyKey, entries: kept, more, loading: false })
+      return loaded
     } catch (error) {
-      setHistory({ key: historyKey, entries: kept, more: true, loading: false, error })
+      setHistory({ key: historyKey, entries: older?.entries ?? [], more: true, loading: false, error })
     }
   }
   useEffect(() => {
     try {
       const key = draftKey(machine, sessionId)
-      if (draft) sessionStorage.setItem(key, draft)
+      if (draft && recalledPrompt.current?.text !== draft) sessionStorage.setItem(key, draft)
       else sessionStorage.removeItem(key)
     } catch {
       // Storage can be blocked; the draft then lives only in memory.
@@ -583,6 +595,7 @@ export default function ConversationPane({
       return
     }
     if (!canSend) return
+    recalledPrompt.current = null
     const text = draft.trim()
     const goalCommand = attachments.length === 0 ? parseGoalCommand(text) : undefined
     if (goalCommand) {
@@ -624,6 +637,30 @@ export default function ConversationPane({
   const composerHints = hintsClosed ? [] : slashHints.length > 0 ? slashHints : atHints
   const activeHint = Math.min(hintIndex, Math.max(composerHints.length - 1, 0))
   const hintTitle = slashHints.length > 0 ? "Commands" : "Files in this thread"
+  async function recallPrompt(direction: -1 | 1, input: HTMLTextAreaElement) {
+    const current = recalledPrompt.current
+    const boundary = current?.text === draft ? current.seq : Infinity
+    function findPrompt(items: ThreadItem[]) {
+      const start = direction < 0 ? items.length - 1 : 0
+      for (let i = start; i >= 0 && i < items.length; i += direction) {
+        const item = items[i]!
+        if (item.kind !== "user_message_chunk" || item.seq === undefined || (item.seq - boundary) * direction <= 0) continue
+        const text = (item.data as UserMessagePayload).text?.text
+        if (text?.trim()) return { seq: item.seq, text }
+      }
+    }
+    let next = findPrompt(transcript.items)
+    if (!next && direction < 0 && hasOlder) {
+      const loaded = await loadOlder(true, (rows) => Boolean(findPrompt(reduceThread(historyKey, rows).items)))
+      if (!loaded || composerInputRef.current !== input || input.value !== draft || recalledPrompt.current !== current) return
+      next = findPrompt(reduceThread(historyKey, loaded).items)
+    }
+    if (!next && direction < 0) return
+    recalledPrompt.current = next ?? null
+    setHintsClosed(Boolean(next))
+    setCaret(undefined)
+    setDraft(next?.text ?? "")
+  }
   function pickHint(hint: ComposerHint) {
     setHintIndex(0)
     if (hint.value === "/fork") {
@@ -853,6 +890,7 @@ export default function ConversationPane({
                   onScroll={(event) => { if (backdropRef.current) backdropRef.current.scrollTop = event.currentTarget.scrollTop }}
                   onSelect={(event) => setCaret({ draft: event.currentTarget.value, at: event.currentTarget.selectionStart })}
                   onChange={(event) => {
+                    recalledPrompt.current = null
                     setDraft(event.currentTarget.value)
                     setCaret({ draft: event.currentTarget.value, at: event.currentTarget.selectionStart })
                     setHintIndex(0)
@@ -884,6 +922,13 @@ export default function ConversationPane({
                         setHintsClosed(true)
                         return
                       }
+                    }
+                    if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey &&
+                      ((event.key === "ArrowUp" && !draft) ||
+                        ((event.key === "ArrowUp" || event.key === "ArrowDown") && recalledPrompt.current?.text === draft))) {
+                      event.preventDefault()
+                      void recallPrompt(event.key === "ArrowUp" ? -1 : 1, event.currentTarget)
+                      return
                     }
                     if (event.key === "Escape" && parent.working && !cancelTurn.isPending) {
                       event.preventDefault()

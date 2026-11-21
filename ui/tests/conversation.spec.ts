@@ -1042,3 +1042,34 @@ test("chat stream stays responsive over ten simulated seconds @timing", async ({
   const longTasks = await page.evaluate(() => Reflect.get(window, "benchChatTasks")())
   if (browserName === "chromium") expect(longTasks).toEqual([])
 })
+
+test("an empty composer recalls sent messages newest first, including earlier pages", async ({ page }) => {
+  await page.route("**/api/sessions/*/conversation**", (route) => {
+    const before = new URL(route.request().url()).searchParams.has("before")
+    const seq = before ? 1 : 2
+    const entry = { seq, ts: seq, kind: "prompt", payload: { text: { text: before ? "Older prompt" : "/compact latest prompt" } } }
+    return route.fulfill({
+      body: JSON.stringify(entry) + "\n",
+      contentType: "application/x-ndjson",
+      headers: before ? {} : { "X-Agentpack-Truncated": "true" },
+    })
+  })
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByText("/compact latest prompt")).toBeVisible()
+  const composer = page.getByRole("textbox", { name: "Message" })
+  await composer.press("ArrowUp")
+  await expect(composer).toHaveValue("/compact latest prompt")
+  await composer.press("ArrowUp")
+  await expect(composer).toHaveValue("Older prompt")
+  await composer.press("ArrowDown")
+  await expect(composer).toHaveValue("/compact latest prompt")
+  await composer.press("ArrowDown")
+  await expect(composer).toHaveValue("")
+  await page.reload()
+  await expect(page.getByText("/compact latest prompt")).toBeVisible()
+  await composer.press("ArrowUp")
+  await expect(composer).toHaveValue("/compact latest prompt")
+  await composer.fill("New draft")
+  await composer.press("ArrowUp")
+  await expect(composer).toHaveValue("New draft")
+})
