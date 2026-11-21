@@ -140,3 +140,24 @@ A synthetic 64 MiB installed adapter took 40.203 ms for full verification and 0.
 go test ./internal/sync -run '^$' -bench '^Benchmark(MaterializationHome|CodexSetup)$' -count=5 -benchtime=150ms
 go test ./internal/mcp -run '^$' -bench '^BenchmarkAdapterVerification$' -count=5 -benchtime=150ms
 ```
+
+The same launch checks also passed on the Linux ARM64 reference host
+(`oracle-vm`). Each column is the median of five runs at 150 ms per benchmark.
+
+| Benchmark | Before (`f6e7f4b`) | After (`7bac9db`) | Budget |
+| --- | ---: | ---: | ---: |
+| Materialization home | 0.668 ms | 0.649 ms | 1 ms |
+| Codex setup, cold | 16.263 ms | 16.255 ms | 20 ms |
+| Codex setup, warm | 0.310 ms | 0.289 ms | 1 ms |
+
+On a Linux ARM64 toolchain, run the launch command above natively. To build
+the same benchmark binary on Linux amd64, use the pinned cross toolchain.
+
+```sh
+./scripts/fetch-crsqlite.sh linux arm64
+CGO_ENABLED=1 CGO_LDFLAGS=-lunwind GOOS=linux GOARCH=arm64 \
+  CC="$PWD/scripts/cc-crsqlite.sh linux arm64" go test -c -trimpath \
+  -ldflags '-linkmode=external -extldflags=-static' -o /tmp/agentpack-launch-bench ./internal/sync
+# On the reference host
+/tmp/agentpack-launch-bench -test.run '^$' -test.bench '^Benchmark(MaterializationHome|CodexSetup)$' -test.count 5 -test.benchtime 150ms
+```

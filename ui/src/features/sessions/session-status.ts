@@ -37,7 +37,7 @@ export function useSteadyGlyph(state: GlyphState, chat: boolean): GlyphState {
 }
 
 export function sessionStatusWord(session: ListedSession, stopping: boolean): string | undefined {
-  if (session.archived_at) return "Archived"
+  if (session.archived_at) return "Cold storage"
   if (session.offline) return "Offline"
   if (stopping) return "Stopping…"
   if (isStarting(session)) return undefined

@@ -48,7 +48,7 @@ type SendInput = {
   resourceLink?: { sha: string; name: string }
   clearComposer: boolean
 }
-type PromptIntent = SendInput & { id: string }
+type PromptIntent = SendInput & { id: string; startedAt?: number }
 
 const GoalSheet = lazy(() => import("./goal-editor").then((module) => ({ default: module.GoalSheet })))
 const draftKey = (machine: string, sessionId: string) => `agentpack:draft:${machine}/${sessionId}`
@@ -199,6 +199,17 @@ export default function ConversationPane({
   const effortOption = selectOptions.find((option) => configRole(option) === "effort")
   const extraOptions = configOptions.filter((option) => configRole(option) === "other")
   const tailLoaded = tail !== undefined
+  useLayoutEffect(() => {
+    if (!tailLoaded && !starting) return
+    const opened = performance.getEntriesByName("agentpack:chat-switch", "mark").at(-1)
+    if (!opened) return
+    const frame = requestAnimationFrame(() => {
+      performance.clearMarks("agentpack:chat-switch")
+      performance.clearMeasures("agentpack:chat-first-frame")
+      performance.measure("agentpack:chat-first-frame", { start: opened.startTime })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [historyKey, starting, tailLoaded])
   const streamReady = live || (starting && info?.provisionalStart !== "claim")
   const subscribe = useConversationEvents()
   const [legacyStream, setLegacyStream] = useState(false)
@@ -431,7 +442,14 @@ export default function ConversationPane({
   useEffect(() => {
     if (!pendingSends.length) return
     const received = confirmedPrompts(entries)
-    const pending = pendingSends.filter((item) => !received.has(item.id))
+    const pending = pendingSends.filter((item) => {
+      if (!received.has(item.id)) return true
+      if (item.startedAt !== undefined) {
+        performance.clearMeasures("agentpack:prompt-confirmed")
+        performance.measure("agentpack:prompt-confirmed", { start: item.startedAt })
+      }
+      return false
+    })
     if (pending.length !== pendingSends.length) setPendingSends(pending)
   }, [entries, pendingSends])
   const discardSend = (id: string) => setPendingSends((pending) => pending.filter((item) => item.id !== id))
@@ -455,7 +473,8 @@ export default function ConversationPane({
     },
     // The composer clears as the message is sent; a failure puts it back.
     onMutate: (input) => {
-      setPendingSends((pending) => [...pending.filter((item) => item.id !== input.id), input])
+      const startedAt = performance.now()
+      setPendingSends((pending) => [...pending.filter((item) => item.id !== input.id), { ...input, startedAt }])
       if (!input.clearComposer) return
       setDraft("")
       setAttachments(() => [])
@@ -481,7 +500,8 @@ export default function ConversationPane({
     ),
     apply: (text, id) => {
       if (!text) return
-      setPendingSends((pending) => [...pending.filter((item) => item.id !== id), { id, text, attachments: [], clearComposer: true }])
+      const startedAt = performance.now()
+      setPendingSends((pending) => [...pending.filter((item) => item.id !== id), { id, text, attachments: [], clearComposer: true, startedAt }])
       setDraft("")
       return () => {
         discardSend(id)
@@ -683,7 +703,7 @@ export default function ConversationPane({
           <PanelRight aria-hidden />
         </Button>
       </ToolbarSlot>
-      {readOnly && <Banner>{info?.archived_at ? "Archived, read-only" : `Offline, read-only${info?.last_sync ? ` · Last sync ${relativeTime(new Date(info.last_sync), Date.now())}` : ""}`}</Banner>}
+      {readOnly && <Banner>{info?.archived_at ? "Cold storage · read-only" : `Offline, read-only${info?.last_sync ? ` · Last sync ${relativeTime(new Date(info.last_sync), Date.now())}` : ""}`}</Banner>}
       {archiveUnavailable && <Banner>{archiveUnavailable}</Banner>}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">

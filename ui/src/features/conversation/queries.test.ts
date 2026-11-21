@@ -10,7 +10,7 @@ describe("conversation peer compatibility", () => {
       status: 503, headers: { "X-Agentpack-Archive-Main": "Sleeping computer" },
     })))
     const error = await conversationEventsQuery(LOCAL, "session-old").queryFn().catch((error: unknown) => error)
-    expect(archiveUnavailableMessage(error)).toBe("Archived on Sleeping computer, unavailable right now")
+    expect(archiveUnavailableMessage(error)).toBe("Cold storage on Sleeping computer is unavailable right now")
     expect(conversationNeedsUpdate(error)).toBe(false)
     expect(archiveUnavailableMessage(new ApiError("worker offline", 503))).toBeUndefined()
   })

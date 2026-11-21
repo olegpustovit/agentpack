@@ -14,6 +14,11 @@ installTelemetry(() => ({
   route: router.state.matches.at(-1)?.fullPath ?? "", search: router.state.location.search,
   ui_build_id: cacheBuildID || queryClient.getQueryData(configQuery.queryKey)?.ui_build_id || "dev",
 }))
+router.subscribe("onBeforeNavigate", ({ fromLocation, toLocation }) => {
+  if (fromLocation?.pathname === toLocation.pathname) return
+  performance.clearMarks("agentpack:chat-switch")
+  if (/^\/sessions\/[^/]+\/[^/]+$/.test(toLocation.pathname)) performance.mark("agentpack:chat-switch")
+})
 router.subscribe("onResolved", () => breadcrumb({ kind: "navigate", name: router.state.matches.at(-1)?.fullPath ?? "" }))
 
 // A deploy removes the previous build's chunks, so an open tab fails its next lazy import:

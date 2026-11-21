@@ -113,3 +113,8 @@ benchmark from the current UI directory.
 ```sh
 bun run scripts/benchmark-conversation.ts http://127.0.0.1:4230 http://127.0.0.1:4231
 ```
+
+The browser Performance timeline also retains the latest
+`agentpack:chat-first-frame` and `agentpack:prompt-confirmed` measurements.
+The first ends when the chat is ready for its next paint. The second ends when
+the request ID appears in the conversation log. Both contain only timings.
