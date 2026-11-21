@@ -30,13 +30,13 @@ function sessionCommands(queryClient: QueryClient, operations: Map<string, strin
   }
 
   // Success shows in the row itself; only failures report.
-  async function stop(session: ListedSession): Promise<boolean> {
+  async function stop(session: ListedSession, id = newIntentID()): Promise<boolean> {
     try {
-      await api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST" })
+      await api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST", idempotencyKey: id })
       await refresh()
       return true
     } catch (error) {
-      hud.error(`Couldn't stop ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, () => void stop(session))
+      hud.error(`Couldn't stop ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, () => void stop(session, id))
       return false
     }
   }
@@ -70,15 +70,15 @@ function sessionCommands(queryClient: QueryClient, operations: Map<string, strin
   }
 
   // Archive takes the session out of every list; a running agent is stopped first.
-  async function archive(session: ListedSession): Promise<boolean> {
+  async function archive(session: ListedSession, id = newIntentID()): Promise<boolean> {
     try {
       // The row can be stale (just stopped): a failed stop is fine, the archive request refuses a live agent itself.
-      if (session.state.running) await api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST" }).catch(() => undefined)
-      await api(`/api/sessions/${encodeURIComponent(session.id)}`, { machine: session.machine, method: "PATCH", body: { hidden: true } })
+      if (session.state.running) await api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST", idempotencyKey: id }).catch(() => undefined)
+      await api(`/api/sessions/${encodeURIComponent(session.id)}`, { machine: session.machine, method: "PATCH", idempotencyKey: id, body: { hidden: true } })
       await refresh()
       return true
     } catch (error) {
-      hud.error(`Couldn't archive ${sessionLabel(session)}: ${errorText(error)}`, () => void archive(session))
+      hud.error(`Couldn't archive ${sessionLabel(session)}: ${errorText(error)}`, () => void archive(session, id))
       return false
     }
   }

@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -80,20 +81,38 @@ var errSessionRunning = errors.New("session is running")
 
 // HideSession archives a stopped session from the user's view: it leaves every list on the mesh, and its
 // history stays in place until the hourly mover takes it to the archive like any other idle chat.
-func HideSession(ctx context.Context, home, id string) error {
+func HideSession(ctx context.Context, home, id string) (bool, error) {
 	store, err := state.Open(home)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer store.Close()
-	info, err := storedSession(ctx, store.Reader, id)
+	var hidden, starting bool
+	err = store.Reader.QueryRowContext(ctx, `SELECT hidden, conversation_state='starting' AND ended_at=0 FROM sessions WHERE id=?`, id).Scan(&hidden, &starting)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, errSessionNotFound
+	}
+	if err != nil || hidden {
+		return false, err
+	}
+	// A starting chat can have no endpoint yet. Check again in the write in case it just resumed.
+	if _, err := workerRecord(home, id); err == nil || starting {
+		return false, errSessionRunning
+	}
+	result, err := store.DB.ExecContext(ctx, `UPDATE sessions SET hidden=1 WHERE id=? AND hidden=0
+		AND NOT (conversation_state='starting' AND ended_at=0)`, id)
 	if err != nil {
-		return err
+		return false, err
 	}
-	// A starting chat has no worker record yet, but its agent is on the way up.
-	if _, err := workerRecord(home, id); err == nil || info.ConversationState == "starting" && info.EndedAt.IsZero() {
-		return errSessionRunning
+	count, err := result.RowsAffected()
+	if err != nil || count != 0 {
+		return count != 0, err
 	}
-	_, err = store.DB.ExecContext(ctx, "UPDATE sessions SET hidden=1 WHERE id=? AND hidden=0", id)
-	return err
+	if err := store.Reader.QueryRowContext(ctx, "SELECT hidden FROM sessions WHERE id=?", id).Scan(&hidden); err != nil {
+		return false, err
+	}
+	if !hidden {
+		return false, errSessionRunning
+	}
+	return false, nil
 }

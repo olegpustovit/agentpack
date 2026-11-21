@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -199,6 +200,27 @@ func (g *Gateway) startInBackground(ctx context.Context, info SessionInfo, forkS
 			g.failStart(background, info, err)
 		}
 	})
+}
+
+func (g *Gateway) stopSession(ctx context.Context, id, requestID string) error {
+	if requestID == "" {
+		return StopWorker(ctx, g.options.Home, id)
+	}
+	record, err := workerRecord(g.options.Home, id)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	fingerprint := sha256.Sum256([]byte(record.Secret))
+	var claimed []byte
+	if err := g.auth.store.DB.QueryRowContext(ctx, `INSERT INTO session_stop_requests(session_id,request_id,worker_fingerprint)
+		VALUES (?,?,?) ON CONFLICT(session_id,request_id) DO UPDATE SET request_id=excluded.request_id RETURNING worker_fingerprint`,
+		id, requestID, fingerprint[:]).Scan(&claimed); err != nil {
+		return err
+	}
+	if record.Secret == "" || !bytes.Equal(claimed, fingerprint[:]) {
+		return nil
+	}
+	return controlWorkerRecord(ctx, record, "stop", requestID)
 }
 
 var (

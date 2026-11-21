@@ -498,7 +498,12 @@ func (g *Gateway) Handler() http.Handler {
 		if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
 			return
 		}
-		respond(w, map[string]bool{"stopped": true}, StopWorker(r.Context(), g.options.Home, r.PathValue("id")))
+		requestID := r.Header.Get("Idempotency-Key")
+		if requestID != "" && !validOperationID(requestID) {
+			http.Error(w, "invalid stop request ID", http.StatusBadRequest)
+			return
+		}
+		respond(w, map[string]bool{"stopped": true}, g.stopSession(r.Context(), r.PathValue("id"), requestID))
 	})
 	mux.HandleFunc("PATCH /api/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
@@ -513,8 +518,8 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		if input.Hidden != nil && *input.Hidden {
 			archived, _ := storedSession(r.Context(), g.auth.store.Reader, r.PathValue("id"))
-			err := HideSession(r.Context(), g.options.Home, r.PathValue("id"))
-			if err == nil {
+			changed, err := HideSession(r.Context(), g.options.Home, r.PathValue("id"))
+			if changed && err == nil {
 				g.removeArchivedWorktree(r.Context(), archived)
 			}
 			switch {

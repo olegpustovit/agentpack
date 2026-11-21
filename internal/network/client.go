@@ -355,6 +355,10 @@ func controlWorker(ctx context.Context, home, id, action, operationID string) er
 	if err != nil {
 		return err
 	}
+	return controlWorkerRecord(ctx, record, action, operationID)
+}
+
+func controlWorkerRecord(ctx context.Context, record WorkerRecord, action, operationID string) error {
 	response, err := workerRequest(ctx, record, "POST", "/"+action, operationID)
 	if err != nil {
 		return err

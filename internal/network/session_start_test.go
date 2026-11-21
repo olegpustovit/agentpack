@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -326,5 +327,44 @@ func TestStartingChatPersistsThreePromptsBeforeTheWorkerExists(t *testing.T) {
 	}
 	if prompts != 3 {
 		t.Fatalf("agent received %d prompts", prompts)
+	}
+}
+
+func TestStopRetryDoesNotStopReplacementWorker(t *testing.T) {
+	home := t.TempDir()
+	g, _ := identityGateway(t, home, nil)
+	var stops atomic.Int32
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/stop" {
+			t.Errorf("unexpected worker request %s %s", r.Method, r.URL.Path)
+		}
+		stops.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer worker.Close()
+	const id = "session-stop"
+	const requestID = "stop-intent-0001"
+	directory := filepath.Join(home, "network", "sessions", id)
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	record := WorkerRecord{ID: id, Address: strings.TrimPrefix(worker.URL, "http://")}
+	writeWorker := func(secret string) {
+		t.Helper()
+		record.Secret = strings.Repeat(secret, 64)
+		if err := publishWorkerEndpoint(directory, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeWorker("a")
+	if err := g.stopSession(t.Context(), id, requestID); err != nil {
+		t.Fatal(err)
+	}
+	writeWorker("b")
+	if err := g.stopSession(t.Context(), id, requestID); err != nil || stops.Load() != 1 {
+		t.Fatalf("stop retry sent to replacement: stops=%d err=%v", stops.Load(), err)
+	}
+	if err := g.stopSession(t.Context(), id, "stop-intent-0002"); err != nil || stops.Load() != 2 {
+		t.Fatalf("new request did not stop replacement: stops=%d err=%v", stops.Load(), err)
 	}
 }
