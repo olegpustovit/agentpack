@@ -256,11 +256,7 @@ export function ConversationInspector({
                           setSelected(change.path)
                           setEditing(undefined)
                           const target = document.getElementById(change.anchor)
-                          if (target) {
-                            target.scrollIntoView({ behavior: "smooth", block: "center" })
-                          } else {
-                            hud.error("Couldn't find that diff in the thread.")
-                          }
+                          target?.scrollIntoView({ behavior: "smooth", block: "center" })
                         }}
                       >
                         <FileCode2 aria-hidden className="size-(--s4) shrink-0 text-(--fg3)" />

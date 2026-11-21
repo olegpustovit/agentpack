@@ -183,20 +183,19 @@ function useOpen(initial: boolean) {
   return { open, onToggle: (event: { currentTarget: HTMLDetailsElement }) => setOpen(event.currentTarget.open) }
 }
 
-function ToolRow({ item }: { item: ThreadItem }) {
+function ToolRow({ item, fresh }: { item: ThreadItem; fresh?: boolean }) {
   const tool = item.data as ToolPayload
   const shell = tool.kind === "execute" || tool.kind === "terminal"
   const command = shell ? (tool.command ?? (tool.rawInput as { command?: string } | undefined)?.command) : undefined
   const title = command ?? tool.title ?? tool.kind ?? "Tool"
   const status = tool.status ?? "pending"
   const Icon = toolIcon(tool.kind)
-  const diff = <ToolDiffBody content={tool.content} toolId={tool.toolCallId} />
   const hasDiff = (tool.content ?? []).some((block) => block.type === "diff" && (block.oldText || block.newText))
   const output = toolOutput(tool)
   const terminalBody = shell ? output || (tool.kind === "terminal" ? command ?? "" : "") : ""
-  const input = shortInput(tool.rawInput)
   const took = item.ts !== undefined && item.endTs !== undefined && item.endTs - item.ts >= 1000 ? formatDuration(item.endTs - item.ts) : ""
-  const { open, onToggle } = useOpen(hasDiff || Boolean(terminalBody))
+  const { open, onToggle } = useOpen(Boolean(fresh && (hasDiff || terminalBody)))
+  const input = open && !hasDiff && !terminalBody ? shortInput(tool.rawInput) : ""
   return (
     <details
       open={open}
@@ -213,7 +212,7 @@ function ToolRow({ item }: { item: ThreadItem }) {
         <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
       </summary>
       {!open ? null : hasDiff ? (
-        diff
+        <ToolDiffBody content={tool.content} toolId={tool.toolCallId} />
       ) : terminalBody ? (
         <ToolOutput slot="tool-terminal" text={terminalBody} command={command} />
       ) : (
@@ -254,7 +253,7 @@ function plural(n: number, word: string) {
   return `${n} ${word}${n === 1 ? "" : "s"}`
 }
 
-function ToolGroup({ tools }: { tools: ThreadItem[] }) {
+function ToolGroup({ tools, fresh }: { tools: ThreadItem[]; fresh: (item: ThreadItem) => boolean }) {
   const failed = tools.filter((item) => (item.data as ToolPayload).status === "failed").length
   const files = new Set(listDiffChanges(tools).map((change) => change.path)).size
   // ts is only known for streamed items; omit the time rather than guess.
@@ -275,7 +274,7 @@ function ToolGroup({ tools }: { tools: ThreadItem[] }) {
       </summary>
       {open && (
         <div className="flex flex-col border-l-[0.5px] border-(--sep) pl-(--s4)">
-          {tools.map((item, index) => <ToolRow key={item.seq ?? index} item={item} />)}
+          {tools.map((item, index) => <ToolRow key={item.seq ?? index} item={item} fresh={fresh(item)} />)}
         </div>
       )}
     </details>
@@ -661,6 +660,7 @@ function ThreadItemView({
   next,
   last,
   streaming,
+  fresh,
   meta,
 }: {
   item: ThreadItem
@@ -676,6 +676,7 @@ function ThreadItemView({
   next?: number
   last?: boolean
   streaming?: boolean
+  fresh?: boolean
   meta?: string
 }) {
   switch (item.kind) {
@@ -686,7 +687,7 @@ function ThreadItemView({
     case "agent_thought_chunk":
       return <ThoughtBlock text={chunkText(item.data)} ms={item.ts !== undefined && next !== undefined ? next - item.ts : undefined} />
     case "tool":
-      return <ToolRow item={item} />
+      return <ToolRow item={item} fresh={fresh} />
     case "permission":
       return <fieldset disabled={readOnly} className="min-w-0"><PermissionCard item={item} machine={machine} sessionId={sessionId} readOnly={readOnly} agent={agent} /></fieldset>
     case "elicitation":
@@ -879,7 +880,7 @@ export function ThreadView({
         if (Array.isArray(entry)) {
           return (
             <div key={entry[0]!.seq ?? index} className={cn("thread-item", fresh(entry.at(-1)!) && "tool-enter")}>
-              <ToolGroup tools={entry} />
+              <ToolGroup tools={entry} fresh={fresh} />
             </div>
           )
         }
@@ -923,6 +924,7 @@ export function ThreadView({
               next={nextTs.get(entry)}
               last={isLastAgent && !working}
               streaming={isLastAgent && working}
+              fresh={fresh(entry)}
               meta={isLastAgent && !working ? turnMeta(lastTurn, entry.ts) : undefined}
             />
           </div>

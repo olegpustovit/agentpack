@@ -6,6 +6,8 @@ const MAX_AGE = 24 * 60 * 60 * 1000
 const SAVE_DELAY = 10_000
 const CHAT_BYTES = 256 << 10
 const CHATS_KEPT = 3
+const shellQueries = new Set(["config", "status", "identity", "nodes", "drafts"])
+const machineLists = new Set(["sessions", "projects"])
 
 export const cacheBuildID = document.querySelector<HTMLScriptElement>('script[type="module"][src]')?.src.match(/index-(.+)\.js$/)?.[1]
 
@@ -164,6 +166,8 @@ export function persistQueries(client: QueryClient, build: string): () => void {
       dirty.clear()
       observedGeneration = generation
     }
+    const [scope, , list] = event.query.queryKey
+    if (scope !== "conversation" && !shellQueries.has(String(scope)) && !(scope === "m" && machineLists.has(String(list)))) return
     dirty.add(event.query.queryHash)
     timer ??= setTimeout(save, SAVE_DELAY)
   })

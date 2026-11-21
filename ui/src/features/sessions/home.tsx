@@ -103,7 +103,7 @@ function HomeRow({ session, now, unread, children }: { session: ListedSession; n
 // Lines changed since the session's branch left its base, read on the machine running it. A peer
 // without the route (404) or a folder outside a repository shows nothing.
 function DiffStat({ session }: { session: ListedSession }) {
-  const { data } = useQuery({ ...sessionGitQuery(session.machine, session.id, `${session.conversation_state ?? ""}:${session.ended_at ?? ""}`), enabled: !session.offline })
+  const { data } = useQuery({ ...sessionGitQuery(session.machine, session.id), enabled: !session.offline })
   if (!data?.available || data.added + data.deleted === 0) return null
   return (
     <span className="shrink-0 text-(length:--fs-xs) tabular-nums" aria-label={`${data.added} lines added, ${data.deleted} removed`}>

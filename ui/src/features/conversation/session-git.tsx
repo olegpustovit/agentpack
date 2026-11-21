@@ -18,10 +18,9 @@ function failure(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
 }
 
-// The session's branch, how far it is from its base, and its pull request. Refetched when a turn ends.
+// The session's branch, how far it is from its base, and its pull request.
 export function useSessionGit(machine: string, sessionId: string, info?: SessionInfo) {
-  const turn = `${info?.conversation_state ?? ""}:${info?.ended_at ?? ""}`
-  return useQuery({ ...sessionGitQuery(machine, sessionId, turn), enabled: Boolean(info?.directory) })
+  return useQuery({ ...sessionGitQuery(machine, sessionId), enabled: Boolean(info?.directory) })
 }
 
 // "ap/replay-offset · 2 ahead of main", for the toolbar subtitle.

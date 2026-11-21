@@ -64,10 +64,9 @@ export function parseSessionGit(raw: unknown): SessionGit {
 
 const noRetryOn404 = (count: number, error: Error) => !(error instanceof ApiError && error.status === 404) && count < 2
 
-// turn is part of the key so a finished turn refetches; the gateway reuses gh answers for 30 s.
-export const sessionGitQuery = (machine: string, sessionId: string, turn: string) =>
+export const sessionGitQuery = (machine: string, sessionId: string) =>
   queryOptions({
-    queryKey: ["m", machine, "session-git", sessionId, turn],
+    queryKey: ["m", machine, "session-git", sessionId],
     queryFn: async () => parseSessionGit(await api<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}/git`, { machine })),
     staleTime: 30 * 1000,
     retry: noRetryOn404,

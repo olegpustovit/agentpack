@@ -263,15 +263,19 @@ test("resolved permission and elicitation cards show their result without answer
   await expect(elicitation.getByRole("button")).toHaveCount(0)
 })
 
-test("exploration starts collapsed and leaves diff and terminal output open", async ({ page }) => {
+test("history keeps diff and terminal output collapsed until opened", async ({ page }) => {
   await page.goto("/sessions/local/chat-one")
   const group = page.locator('[data-slot="tool-group"]')
   await expect(group).not.toHaveAttribute("open")
   await group.locator(":scope > summary").click()
   await expect(group).toContainText("Worked")
   await expect(group.locator("[data-tool-row]")).toHaveCount(6)
-  await expect(page.locator('[data-slot="tool-diff-block"]')).toHaveAttribute("open", "")
-  await expect(page.locator('[data-slot="tool-terminal-block"]')).toHaveAttribute("open", "")
+  const diff = page.locator('[data-slot="tool-diff-block"]')
+  const terminal = page.locator('[data-slot="tool-terminal-block"]')
+  await expect(diff).not.toHaveAttribute("open")
+  await expect(terminal).not.toHaveAttribute("open")
+  await expect(page.locator('[data-slot="tool-terminal"]')).toHaveCount(0)
+  await terminal.locator(":scope > summary").click()
   await expect(page.locator('[data-slot="tool-terminal"]')).toContainText("ok")
 })
 
