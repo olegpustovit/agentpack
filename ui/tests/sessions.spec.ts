@@ -291,10 +291,12 @@ test("archive hides the row immediately and restores it if the request fails", a
   const intentIDs: Array<string | undefined> = []
   let release!: () => void
   const response = new Promise<void>((resolve) => { release = resolve })
+  let releaseRetry!: () => void
+  const retryResponse = new Promise<void>((resolve) => { releaseRetry = resolve })
   await page.route("**/api/sessions/*", async (route) => {
     if (route.request().method() !== "PATCH") return route.fallback()
     intentIDs.push(route.request().headers()["idempotency-key"])
-    await response
+    await (intentIDs.length === 1 ? response : retryResponse)
     await route.fulfill({ status: 409, body: "Still running" })
   })
   await page.goto("/sessions")
@@ -309,6 +311,9 @@ test("archive hides the row immediately and restores it if the request fails", a
   await expect.poll(() => intentIDs.length).toBe(2)
   expect(intentIDs[0]).toMatch(/^[a-f0-9]{32}$/)
   expect(intentIDs[1]).toBe(intentIDs[0])
+  await expect(rows).toHaveCount(1)
+  releaseRetry()
+  await expect(rows).toHaveCount(2)
 })
 
 test("a chat's row menu switches agentpack tools, and its helpers list under it", async ({ page }) => {

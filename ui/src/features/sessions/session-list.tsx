@@ -63,11 +63,19 @@ export function SessionList() {
   // Search-only changes keep the current path (a session may be open), so they are built as hrefs.
   // Read when a handler runs, so the list does not re-render on every URL change.
   const router = useRouter()
-  const commands = useSessionCommands()
   const [sheet, setSheet] = useState<SheetState | null>(null)
   const [confirm, setConfirm] = useState<Confirm | null>(null)
   const [stopping, setStopping] = useState<ReadonlySet<string>>(new Set())
   const [archiving, setArchiving] = useState<ReadonlySet<string>>(new Set())
+  const commands = useSessionCommands((session, pending) => {
+    const key = rowKey(session)
+    setArchiving((current) => {
+      const next = new Set(current)
+      if (pending) next.add(key)
+      else next.delete(key)
+      return next
+    })
+  })
   const [cursor, setCursor] = useState<Cursor | null>(null)
   const [seen, setSeen] = useState(loadSeen)
   const pending = useRef<number | undefined>(undefined)
@@ -218,7 +226,6 @@ export function SessionList() {
 
   function archiveRows(targets: ListedSession[]) {
     const keys = new Set(targets.map(rowKey))
-    setArchiving((current) => new Set([...current, ...keys]))
     if (routeKey && keys.has(routeKey)) {
       const index = rows.findIndex((row) => rowKey(row) === routeKey)
       const next = rows.slice(index + 1).find((row) => !keys.has(rowKey(row)))
@@ -226,9 +233,7 @@ export function SessionList() {
       if (next) openRow(next, true)
       else void navigate({ to: "/sessions", search: true, replace: true })
     }
-    void Promise.all(targets.map((row) => commands.archive(row))).finally(() =>
-      setArchiving((current) => new Set([...current].filter((key) => !keys.has(key)))),
-    )
+    for (const row of targets) commands.archive(row)
   }
 
   function actionsFor(row: ListedSession, selected: boolean): RowActions {

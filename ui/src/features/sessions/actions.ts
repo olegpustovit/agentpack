@@ -1,4 +1,4 @@
-import { useQueryClient, type QueryClient } from "@tanstack/react-query"
+import { useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { api, routeMissing } from "@/lib/api"
 import { newIntentID, useIntent } from "@/lib/intent"
@@ -16,17 +16,36 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "the request did not complete"
 }
 
-// Stop and restart for session rows. A restart keeps one operation id per session until the
-// gateway accepts it or rejects it, so a retry cannot start a second restart.
-export function useSessionCommands() {
+export function useSessionCommands(onArchivePending?: (session: ListedSession, pending: boolean) => void) {
   const queryClient = useQueryClient()
   const operations = useState(() => new Map<string, string>())[0]
-  const { restart, refresh } = sessionCommands(queryClient, operations)
+  const refresh = () => queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
 
   const stop = useIntent({
     request: (session: ListedSession, id) => api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST", idempotencyKey: id }),
     accepted: refresh,
     failed: (error, session, retry) => hud.error(`Couldn't stop ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, retry),
+  })
+  const restart = useIntent({
+    request: async (session: ListedSession, id) => {
+      const key = rowKey(session)
+      if (!operations.has(key)) operations.set(key, id)
+      try {
+        const result = await api(`/api/sessions/${encodeURIComponent(session.id)}/restart`, {
+          machine: session.machine,
+          method: "POST",
+          body: { operation_id: id },
+        })
+        if (operations.get(key) === id) operations.delete(key)
+        return result
+      } catch (error) {
+        if (!reusesOperationId(error) && operations.get(key) === id) operations.delete(key)
+        throw error
+      }
+    },
+    accepted: refresh,
+    retryID: (error, id) => reusesOperationId(error) ? id : newIntentID(),
+    failed: (error, session, retry) => hud.error(`Couldn't restart ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, retry),
   })
   const resume = useIntent({
     request: (session: ListedSession, id) => api(`/api/sessions/${encodeURIComponent(session.id)}/resume`, { machine: session.machine, method: "POST", idempotencyKey: id, body: { text: "" } }),
@@ -41,7 +60,11 @@ export function useSessionCommands() {
       if (session.state.running) await api(`${path}/stop`, { ...options, method: "POST" }).catch(() => undefined)
       return api(path, { ...options, method: "PATCH", body: { hidden: true } })
     },
-    accepted: refresh,
+    apply: (session) => {
+      onArchivePending?.(session, true)
+      return () => onArchivePending?.(session, false)
+    },
+    accepted: (_result, session) => refresh().finally(() => onArchivePending?.(session, false)),
     failed: (error, session, retry) => hud.error(`Couldn't archive ${sessionLabel(session)}: ${errorText(error)}`, retry),
   })
   const tools = useIntent({
@@ -52,38 +75,17 @@ export function useSessionCommands() {
 
   return {
     stop: (session: ListedSession) => stop.mutateAsync(session).then(() => true, () => false),
-    restart,
+    restart: (session: ListedSession) => {
+      // A second click after an ambiguous response must keep the pending operation ID.
+      const key = rowKey(session)
+      const id = operations.get(key) ?? newIntentID()
+      operations.set(key, id)
+      restart.mutate(session, id)
+    },
     resume: resume.mutate,
-    archive: (session: ListedSession) => archive.mutateAsync(session).then(() => true, () => false),
+    archive: archive.mutate,
     setTools: async (session: ListedSession, enabled: boolean) => {
       await tools.mutateAsync({ session, enabled }).catch(() => undefined)
     },
   }
-}
-
-// Outside the hook: the retry callbacks reference their own function, which React Compiler cannot memoize.
-function sessionCommands(queryClient: QueryClient, operations: Map<string, string>) {
-  async function refresh() {
-    await queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
-  }
-
-  async function restart(session: ListedSession): Promise<void> {
-    const key = rowKey(session)
-    const operationId = operations.get(key) ?? newIntentID()
-    operations.set(key, operationId)
-    try {
-      await api(`/api/sessions/${encodeURIComponent(session.id)}/restart`, {
-        machine: session.machine,
-        method: "POST",
-        body: { operation_id: operationId },
-      })
-      operations.delete(key)
-      await refresh()
-    } catch (error) {
-      if (!reusesOperationId(error)) operations.delete(key)
-      hud.error(`Couldn't restart ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, () => void restart(session))
-    }
-  }
-
-  return { restart, refresh }
 }
