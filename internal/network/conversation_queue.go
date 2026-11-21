@@ -130,9 +130,10 @@ func (g *Gateway) servePrompt(w http.ResponseWriter, r *http.Request) {
 func appendStartingPrompt(ctx context.Context, tx *sql.Tx, id string, item queuedPrompt) error {
 	now := time.Now()
 	entry := acp.LogEntry{TS: now.UnixMilli(), Kind: "queued_prompt", Payload: queuedPromptPayload(item)}
-	err := tx.QueryRowContext(ctx, `UPDATE sessions SET last_seq=last_seq+1,last_event_at=?
+	err := tx.QueryRowContext(ctx, `UPDATE sessions SET last_seq=last_seq+1,last_event_at=?,
+		title=CASE WHEN title='' THEN ? ELSE title END
 		WHERE id=? AND conversation_state='starting' AND ended_at=0 AND archived_at=0 AND node_id=`+state.LocalNodeSQL+` RETURNING last_seq`,
-		now.UnixNano(), id).Scan(&entry.Seq)
+		now.UnixNano(), titleFromPrompt(item.Input.Text), id).Scan(&entry.Seq)
 	if err != nil {
 		return err
 	}

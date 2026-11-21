@@ -25,14 +25,19 @@ func patchWorkerConversationState(ctx context.Context, db *sql.DB, id, conversat
 	return nil
 }
 
+func titleFromPrompt(prompt string) string {
+	title := strings.Join(strings.Fields(prompt), " ")
+	if runes := []rune(title); len(runes) > 80 {
+		return string(runes[:79]) + "…"
+	}
+	return title
+}
+
 // setTitle names a chat after its first prompt. Titles are product data like names; they never go to diagnostics.
 func (worker *WorkerHTTP) setTitle(ctx context.Context, prompt string) {
-	title := strings.Join(strings.Fields(prompt), " ")
+	title := titleFromPrompt(prompt)
 	if title == "" || worker.stateStore == nil {
 		return
-	}
-	if runes := []rune(title); len(runes) > 80 {
-		title = string(runes[:79]) + "…"
 	}
 	if _, err := worker.stateStore.DB.ExecContext(ctx, "UPDATE sessions SET title=? WHERE id=? AND title='' AND archived_at=0 AND node_id="+state.LocalNodeSQL, title, filepath.Base(worker.sessionDir)); err != nil {
 		_, event := obs.Start(ctx, "worker", "set_title")

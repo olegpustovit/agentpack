@@ -295,6 +295,10 @@ func TestStartingChatPersistsThreePromptsBeforeTheWorkerExists(t *testing.T) {
 	submit("two", "request-000000002")
 	submit("three", "request-000000003")
 	submit("two", "request-000000002")
+	var title string
+	if err := g.auth.store.Reader.QueryRowContext(t.Context(), "SELECT title FROM sessions WHERE id=?", input.ID).Scan(&title); err != nil || title != "one" {
+		t.Fatalf("title = %q, err = %v", title, err)
+	}
 	entries, seq, _, err := storedConversationTail(t.Context(), g.auth.store.Reader, input.ID, 0)
 	if err != nil || seq != 3 || len(entries) != 3 {
 		t.Fatalf("persisted queue = %+v seq=%d err=%v", entries, seq, err)
