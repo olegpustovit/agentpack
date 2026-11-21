@@ -358,7 +358,10 @@ test("a streamed permission result resolves the card without another snapshot", 
 test("a failed permission answer restores the choices", async ({ page }) => {
   let release!: () => void
   const response = new Promise<void>((resolve) => { release = resolve })
+  const ids: string[] = []
   await page.route("**/api/sessions/*/conversation/permission", async (route) => {
+    ids.push(route.request().headers()["idempotency-key"] ?? "")
+    if (ids.length > 1) return route.fulfill({ json: { accepted: true } })
     await response
     await route.fulfill({ status: 409, body: "Answer rejected" })
   })
@@ -369,6 +372,9 @@ test("a failed permission answer restores the choices", async ({ page }) => {
   await expect(allow).toHaveCount(0)
   release()
   await expect(allow).toBeEnabled()
+  await page.getByRole("button", { name: "Retry", exact: true }).click()
+  await expect(page.getByText(/Answered: Allow once/)).toBeVisible()
+  expect(ids).toEqual([expect.stringMatching(/^[a-f0-9]{32}$/), ids[0]])
 })
 
 test("escape closes message context menu without posting permission", async ({ page }) => {
@@ -562,13 +568,19 @@ test("Enter queues while the agent works and ⌘Enter steers", async ({ page }) 
   await expect.poll(() => posts.length).toBe(2)
   expect(posts[1]).toMatchObject({ text: "steer me", steer: true })
   let steered = ""
-  await page.route("**/api/sessions/*/conversation/queue/*/steer", (route) => {
+  let release!: () => void
+  const response = new Promise<void>((resolve) => { release = resolve })
+  await page.route("**/api/sessions/*/conversation/queue/*/steer", async (route) => {
     steered = route.request().url()
-    return route.fulfill({ json: { accepted: true } })
+    await response
+    return route.fulfill({ status: 409, body: "Cannot steer" })
   })
   await message.fill("")
   await message.press("Enter")
+  await expect(page.getByText("Steering next:", { exact: true })).toBeVisible()
   await expect.poll(() => steered).toContain("/queue/q1/steer")
+  release()
+  await expect(page.getByRole("button", { name: "Steer now" })).toBeEnabled()
   expect(posts).toHaveLength(2)
 })
 

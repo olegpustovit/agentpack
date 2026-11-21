@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react"
-import { useMutation } from "@tanstack/react-query"
+import { useIntent } from "@/lib/intent"
 import { elementScroll, observeElementOffset, observeElementRect, Virtualizer, type VirtualItem } from "@tanstack/virtual-core"
 import { BookOpen, Check, ChevronRight, Copy, ExternalLink, Flag, Folder, GitFork, Globe, Pencil, Lock, Quote, RotateCcw, Search, Sparkles, SquareTerminal, Wrench } from "lucide-react"
 import { RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
@@ -7,7 +7,7 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/kit/feedback"
 import { api, LOCAL } from "@/lib/api"
-import { copyText, useCopied } from "@/lib/hud"
+import { copyText, hud, useCopied } from "@/lib/hud"
 import { SignInCard } from "@/features/agents/sign-in"
 import { cn } from "@/lib/utils"
 import type { GoalState } from "@/lib/api-types"
@@ -19,7 +19,7 @@ import { AgentMessageBody } from "./agent-message"
 import { ToolDiffBody } from "./tool-diff"
 import { ToolOutput } from "./tool-output"
 import { QuickLook } from "./quick-look"
-import { conversationErrorMessage } from "./queries"
+import { conversationErrorMessage, conversationNeedsUpdate } from "./queries"
 import { listDiffChanges } from "./diff-summary"
 
 function chunkText(data: unknown): string {
@@ -285,15 +285,18 @@ function ToolGroup({ tools, fresh }: { tools: ThreadItem[]; fresh: (item: Thread
 export function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem; machine: string; sessionId: string }) {
   const ask = item.data as ElicitationPayload & { optionIds?: string[]; allowMultiple?: boolean }
   const [selected, setSelected] = useState<string[]>([])
-  const answer = useMutation({
-    mutationFn: (value: string) =>
+  const answer = useIntent({
+    request: (value: string, idempotencyKey) =>
       api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/elicitation`, {
         machine,
         method: "POST",
+        idempotencyKey,
         body: { elicitation_id: ask.elicitationId, value },
       }),
+    failed: (error, _value, retry) =>
+      hud.error(conversationErrorMessage(machine, "answer a question", error), conversationNeedsUpdate(error) ? undefined : retry),
   })
-  const submitted = answer.isPending || answer.isSuccess ? answer.variables : undefined
+  const submitted = answer.isPending || answer.isSuccess ? answer.input : undefined
   const result = ask.result
   // Older workers logged the URL as the prompt.
   const link = ask.agentElicitationId ? ask.url ?? ask.prompt : undefined
@@ -351,7 +354,6 @@ export function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem
           )}
         </div>
       )}
-      {answer.error && <p className="mt-(--s2) text-(length:--fs-sm) text-(--danger)">{conversationErrorMessage(machine, "answer a question", answer.error)}</p>}
     </div>
   )
 }
@@ -482,17 +484,20 @@ export function PermissionCard({
   agent?: string
 }) {
   const perm = item.data as PermissionPayload
-  const answer = useMutation({
-    mutationFn: (optionId: string) =>
+  const answer = useIntent({
+    request: (optionId: string, idempotencyKey) =>
       api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/permission`, {
         machine,
         method: "POST",
+        idempotencyKey,
         body: { request_id: perm.requestId, option_id: optionId },
       }),
+    failed: (error, _value, retry) =>
+      hud.error(conversationErrorMessage(machine, "answer a permission request", error), conversationNeedsUpdate(error) ? undefined : retry),
   })
   const open = !readOnly && !perm.resolved && !perm.inactive
   const options = perm.options ?? []
-  const submitted = answer.isPending || answer.isSuccess ? answer.variables : undefined
+  const submitted = answer.isPending || answer.isSuccess ? answer.input : undefined
   if (perm.resolved || perm.inactive || submitted !== undefined) {
     const id = perm.resolved ? perm.result?.optionId : submitted
     const chosen = options.find((option) => option.id === id)
@@ -538,7 +543,6 @@ export function PermissionCard({
           </Button>
         ))}
       </div>
-      {answer.error && <p className="mt-(--s2) text-(length:--fs-sm) text-(--danger)">{conversationErrorMessage(machine, "answer a permission request", answer.error)}</p>}
     </div>
   )
 }

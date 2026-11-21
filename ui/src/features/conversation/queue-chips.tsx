@@ -8,22 +8,22 @@ import type { QueuedPrompt } from "./model"
 import { conversationErrorMessage, conversationNeedsUpdate } from "./queries"
 
 // Queued messages live in the worker, so every viewer sees and can change the same queue.
-export function QueueChips({ queue, machine, sessionId, readOnly }: { queue: QueuedPrompt[]; machine: string; sessionId: string; readOnly?: boolean }) {
+export function QueueChips({ queue, machine, sessionId, readOnly, steering, onSteer }: {
+  queue: QueuedPrompt[]; machine: string; sessionId: string; readOnly?: boolean; steering?: string; onSteer: (id: string) => void
+}) {
   const [editing, setEditing] = useState<{ id: string; text: string }>()
   const path = (id: string): `/api/${string}` => `/api/sessions/${encodeURIComponent(sessionId)}/conversation/queue/${encodeURIComponent(id)}`
   const change = useMutation({
-    mutationFn: ({ id, action, text }: { id: string; action: "steer" | "edit" | "remove"; text?: string }) =>
-      action === "steer"
-        ? api(`${path(id)}/steer` as `/api/${string}`, { machine, method: "POST" })
-        : action === "edit"
-          ? api(path(id), { machine, method: "PATCH", body: { text } })
-          : api(path(id), { machine, method: "DELETE" }),
+    mutationFn: ({ id, action, text }: { id: string; action: "edit" | "remove"; text?: string }) =>
+      action === "edit"
+        ? api(path(id), { machine, method: "PATCH", body: { text } })
+        : api(path(id), { machine, method: "DELETE" }),
     onSuccess: (_, input) => {
       if (input.action === "edit") setEditing(undefined)
     },
     onError: (error, input) =>
       hud.error(
-        conversationErrorMessage(machine, input.action === "steer" ? "steer with this message" : `${input.action} a queued message`, error),
+        conversationErrorMessage(machine, `${input.action} a queued message`, error),
         conversationNeedsUpdate(error) ? undefined : () => change.mutate(input),
       ),
   })
@@ -33,9 +33,10 @@ export function QueueChips({ queue, machine, sessionId, readOnly }: { queue: Que
       {queue.map((item) => {
         const text = item.text?.text ?? ""
         const images = item.images?.length ?? (item.image || item.resource_link ? 1 : 0)
+        const isSteering = item.steer || steering === item.queueId
         const isEditing = editing?.id === item.queueId
         return (
-          <li key={item.queueId} className="flex items-center gap-(--s2) rounded-(--r-sheet) bg-(--glass) px-(--s3) py-(--s2) text-(length:--fs-sm) shadow-(--shadow-composer) backdrop-blur-xl">
+          <li key={item.queueId} className="flex items-center gap-(--s2) rounded-(--r-sheet) bg-(--window) px-(--s3) py-(--s2) text-(length:--fs-sm) shadow-(--shadow-composer)">
             <CornerDownRight aria-hidden className="size-(--s4) shrink-0 text-(--fg3)" />
             {isEditing ? (
               <form
@@ -62,15 +63,15 @@ export function QueueChips({ queue, machine, sessionId, readOnly }: { queue: Que
               </form>
             ) : (
               <span className="min-w-0 flex-1 truncate" title={text}>
-                <span className="text-(--fg3)">{item.steer ? "Steering next: " : "Queued: "}</span>
+                <span className="text-(--fg3)">{isSteering ? "Steering next: " : "Queued: "}</span>
                 {text || (images ? `${images} ${images === 1 ? "image" : "images"}` : "")}
                 {text && images > 0 && <span className="text-(--fg3)"> · {images} {images === 1 ? "image" : "images"}</span>}
               </span>
             )}
             {!readOnly && !isEditing && (
               <>
-                {!item.steer && (
-                  <Button type="button" size="sm" variant="ghost" title="Interrupt the agent and send this now" disabled={change.isPending} onClick={() => change.mutate({ id: item.queueId, action: "steer" })}>
+                {!isSteering && (
+                  <Button type="button" size="sm" variant="ghost" title="Interrupt the agent and send this now" disabled={change.isPending || steering !== undefined} onClick={() => onSteer(item.queueId)}>
                     <Send aria-hidden /> Steer now
                   </Button>
                 )}

@@ -18,7 +18,7 @@ import { harnessName, relativeTime } from "@/lib/format"
 import { clock, goalElapsedMs, liveGoal } from "@/lib/goal"
 import { useNow } from "@/lib/use-now"
 import { cacheBuildID, restoreChatQuery, trackStreamingQuery } from "@/lib/persist"
-import { newIntentID } from "@/lib/intent"
+import { newIntentID, useIntent } from "@/lib/intent"
 import { hud } from "@/lib/hud"
 import { api, ApiError, LOCAL } from "@/lib/api"
 import { configQuery } from "@/lib/config"
@@ -407,22 +407,19 @@ export default function ConversationPane({
     if (!info || !canFork || fork.isPending) return
     fork.mutate({ machine, directory: info.directory, harness: info.harness, mode: info.mode, view: "chat", forkFrom: sessionId })
   }
-  const cancelTurn = useMutation({
-    mutationFn: () =>
-      api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/cancel`, { machine, method: "POST" }),
-    onError: (error) =>
-      hud.error(
-        conversationErrorMessage(machine, "stop the conversation", error),
-        conversationNeedsUpdate(error) ? undefined : () => cancelTurn.mutate(),
-      ),
+  const cancelTurn = useIntent({
+    request: (_input: void, idempotencyKey) =>
+      api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/cancel`, { machine, method: "POST", idempotencyKey }),
+    failed: (error, _input, retry) =>
+      hud.error(conversationErrorMessage(machine, "stop the conversation", error), conversationNeedsUpdate(error) ? undefined : retry),
   })
-  const stopSubagent = useMutation({
-    mutationFn: (id: string) =>
+  const stopSubagent = useIntent({
+    request: (id: string, idempotencyKey) =>
       id.startsWith("helper:")
-        ? api(`/api/sessions/${encodeURIComponent(id.slice("helper:".length))}/conversation/cancel`, { machine, method: "POST" })
-        : api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/cancel`, { machine, method: "POST", body: { subagent: id } }),
-    onError: (error, id) =>
-      hud.error(conversationErrorMessage(machine, "stop the subagent", error), conversationNeedsUpdate(error) ? undefined : () => stopSubagent.mutate(id)),
+        ? api(`/api/sessions/${encodeURIComponent(id.slice("helper:".length))}/conversation/cancel`, { machine, method: "POST", idempotencyKey })
+        : api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/cancel`, { machine, method: "POST", idempotencyKey, body: { subagent: id } }),
+    failed: (error, _id, retry) =>
+      hud.error(conversationErrorMessage(machine, "stop the subagent", error), conversationNeedsUpdate(error) ? undefined : retry),
   })
   const [pendingSends, setPendingSends] = useState<PromptIntent[]>([])
   useEffect(() => {
@@ -471,53 +468,48 @@ export default function ConversationPane({
   })
   const submitPrompt = (input: SendInput, options?: Parameters<typeof send.mutate>[1]) =>
     send.mutate({ ...input, id: newIntentID() }, options)
-  const resume = useMutation({
-    mutationFn: (input: PromptIntent) => api<SessionInfo & { queued?: string }>(
+  const resume = useIntent({
+    request: (text: string, idempotencyKey) => api<SessionInfo & { queued?: string }>(
       `/api/sessions/${encodeURIComponent(sessionId)}/resume`,
-      { machine, method: "POST", idempotencyKey: input.id, body: { text: input.text } },
+      { machine, method: "POST", idempotencyKey, body: { text } },
     ),
-    onMutate: (input) => {
-      if (!input.text) return
-      setPendingSends((pending) => [...pending.filter((item) => item.id !== input.id), input])
+    apply: (text, id) => {
+      if (!text) return
+      setPendingSends((pending) => [...pending.filter((item) => item.id !== id), { id, text, attachments: [], clearComposer: true }])
       setDraft("")
+      return () => {
+        discardSend(id)
+        setDraft((current) => current || text)
+      }
     },
-    onSuccess: (result, input) => {
-      if (result?.queued !== input.id) discardSend(input.id)
+    accepted: (result, _text, id) => {
+      if (result?.queued !== id) discardSend(id)
       void queryClient.invalidateQueries({ queryKey: conversationEventsQuery(machine, sessionId).queryKey })
       return queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
     },
-    onError: (error, input) => {
-      discardSend(input.id)
-      setDraft((current) => current || input.text)
+    failed: (error, _text, retry) => {
       // An older peer can't start a chat whose agent never started.
       const old = error instanceof ApiError && error.status === 400 && error.message === "This chat cannot be resumed."
       hud.error(
         old ? `${machine === LOCAL ? "Gateway" : "Peer"} needs an update to restart this chat.` : conversationErrorMessage(machine, "resume the chat", error),
-        old || conversationNeedsUpdate(error) ? undefined : () => resume.mutate(input),
+        old || conversationNeedsUpdate(error) ? undefined : retry,
       )
     },
   })
-  const submitResume = (text: string) => resume.mutate({ id: newIntentID(), text, attachments: [], steer: false, clearComposer: true })
   // The chat carries on with another agent, which gets the transcript with the next message.
-  const switchAgent = useMutation({
-    mutationFn: (harness: string) => api(`/api/sessions/${encodeURIComponent(sessionId)}/harness`, { machine, method: "POST", body: { harness } }),
-    onSuccess: () => {
-      return queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
-    },
-    onError: (error, harness) =>
-      hud.error(
-        conversationErrorMessage(machine, `switch to ${harnessName(harness)}`, error),
-        conversationNeedsUpdate(error) ? undefined : () => switchAgent.mutate(harness),
-      ),
+  const switchAgent = useIntent({
+    request: (harness: string, idempotencyKey) =>
+      api(`/api/sessions/${encodeURIComponent(sessionId)}/harness`, { machine, method: "POST", idempotencyKey, body: { harness } }),
+    accepted: () => queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey }),
+    failed: (error, harness, retry) =>
+      hud.error(conversationErrorMessage(machine, `switch to ${harnessName(harness)}`, error), conversationNeedsUpdate(error) ? undefined : retry),
   })
-  const steerQueued = useMutation({
-    mutationFn: (queueId: string) =>
-      api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/queue/${encodeURIComponent(queueId)}/steer`, { machine, method: "POST" }),
-    onError: (error, queueId) =>
-      hud.error(
-        conversationErrorMessage(machine, "steer with the queued message", error),
-        conversationNeedsUpdate(error) ? undefined : () => steerQueued.mutate(queueId),
-      ),
+  const steerQueued = useIntent({
+    request: (queueId: string, idempotencyKey) =>
+      api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/queue/${encodeURIComponent(queueId)}/steer`, { machine, method: "POST", idempotencyKey }),
+    failed: (error, _queueId, retry) => hud.error(
+      conversationErrorMessage(machine, "steer with the queued message", error), conversationNeedsUpdate(error) ? undefined : retry,
+    ),
   })
   const upload = useMutation({
     mutationFn: (file: File) => uploadConversationBlob(machine, sessionId, file),
@@ -570,7 +562,7 @@ export default function ConversationPane({
       return
     }
     if (resumable) {
-      submitResume(text)
+      resume.mutate(text)
       return
     }
       // Writing instead of answering an open question interrupts it, as in the Claude CLI.
@@ -578,7 +570,7 @@ export default function ConversationPane({
   }
   // A merge conflict goes back to the agent, which resolves it in its own worktree.
   function askAgent(text: string) {
-    if (resumable) submitResume(text)
+    if (resumable) resume.mutate(text)
     else submitPrompt({ text, attachments: [], clearComposer: false })
   }
   const git = useSessionGit(machine, sessionId, info).data
@@ -745,7 +737,7 @@ export default function ConversationPane({
                   animateAfter={animateAfter}
                   onOpenSubagent={openSubagent}
                   onStopSubagent={readOnly ? undefined : (id) => stopSubagent.mutate(id)}
-                  onSignedIn={!subagent && resumable ? () => submitResume(draft.trim()) : undefined}
+                  onSignedIn={!subagent && resumable ? () => resume.mutate(draft.trim()) : undefined}
                 />
               )}
               </>
@@ -777,7 +769,14 @@ export default function ConversationPane({
         }}
       >
           <div ref={composerRef} className="pointer-events-auto mx-auto flex w-full max-w-180 flex-col gap-(--s3)">
-            <QueueChips queue={parent.queue ?? []} machine={machine} sessionId={sessionId} readOnly={readOnly || needsUpdate} />
+            <QueueChips
+              queue={parent.queue ?? []}
+              machine={machine}
+              sessionId={sessionId}
+              readOnly={readOnly || needsUpdate}
+              steering={steerQueued.isPending ? steerQueued.input : undefined}
+              onSteer={steerQueued.mutate}
+            />
             <GoalPill
               goal={goal}
               plan={plan}
@@ -912,7 +911,7 @@ export default function ConversationPane({
                     <MenuTrigger
                       render={
                         <Button type="button" size="sm" variant="ghost" title="Continue this chat with another agent" disabled={switchAgent.isPending || starting || needsUpdate} className="gap-(--s2)">
-                          {agentName}
+                          {switchAgent.isPending && switchAgent.input ? `Switching to ${harnessName(switchAgent.input)}…` : agentName}
                           <ChevronDown aria-hidden />
                         </Button>
                       }
