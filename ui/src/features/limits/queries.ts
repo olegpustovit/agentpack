@@ -4,7 +4,7 @@ import type { LimitsResponse } from "@/lib/api-types"
 
 const POLL_MS = 60 * 1000
 
-export const limitsQuery = (_machine: string, live: boolean) => {
+export const limitsQuery = (live: boolean) => {
   return queryOptions({
     queryKey: ["m", LOCAL, "limits"],
     queryFn: async () => {

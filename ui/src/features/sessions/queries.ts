@@ -23,7 +23,7 @@ function parseProjects(raw: unknown): ProjectRow[] {
   })
 }
 
-export const sessionsQuery = (_machine: string, live: boolean) =>
+export const sessionsQuery = (live: boolean) =>
   queryOptions({
     queryKey: ["m", LOCAL, "sessions"],
     queryFn: async ({ client, queryKey }): Promise<SessionInfo[]> => {

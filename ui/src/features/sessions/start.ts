@@ -24,7 +24,7 @@ export function useStartSession() {
   const navigate = useNavigate()
   const router = useRouter()
   const queryClient = useQueryClient()
-  const key = sessionsQuery(LOCAL, false).queryKey
+  const key = sessionsQuery(false).queryKey
   const open = (machine: string, sessionId: string) => void navigate({ to: "/sessions/$machine/$sessionId", params: { machine, sessionId } })
   const onRoute = (id: string) => router.state.location.pathname.endsWith(`/${id}`)
   const start = useMutation({

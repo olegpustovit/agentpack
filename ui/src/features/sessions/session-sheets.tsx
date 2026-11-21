@@ -37,7 +37,7 @@ function RenameForm({ row, onDone }: { row: ListedSession; onDone: () => void })
   const queryClient = useQueryClient()
   const [name, setName] = useState(row.name ?? "")
   const [blank, setBlank] = useState(false)
-  const listKey = sessionsQuery(row.machine, false).queryKey
+  const listKey = sessionsQuery(false).queryKey
   const setListedName = (name: string | undefined) =>
     queryClient.setQueryData<SessionInfo[]>(listKey, (items) => items?.map((item) => (item.id === row.id ? { ...item, name } : item)))
   const rename = useMutation({

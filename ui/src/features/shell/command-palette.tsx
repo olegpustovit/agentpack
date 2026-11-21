@@ -139,7 +139,7 @@ export default function CommandPalette({
         run: () =>
           void api<SessionInfo>(`/api/sessions/${encodeURIComponent(session.id)}/fork`, { machine: session.machine, method: "POST", body: { id: `session-${newIntentID()}` } }).then(
             (next) => {
-              void queryClient.invalidateQueries({ queryKey: sessionsQuery(session.machine, false).queryKey })
+              void queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
               void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: session.machine, sessionId: next.id } })
             },
             (error: unknown) => hud.error(`Couldn't fork ${sessionLabel(session)}: ${error instanceof Error ? error.message : String(error)}`),

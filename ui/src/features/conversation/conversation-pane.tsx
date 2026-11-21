@@ -410,7 +410,7 @@ export default function ConversationPane({
       return api<SessionInfo>(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, { machine, method: "POST", body: { id } })
     },
     onSuccess: (next) => {
-      void queryClient.invalidateQueries({ queryKey: sessionsQuery(machine, false).queryKey })
+      void queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
       void navigate({ to: "/sessions/$machine/$sessionId", params: { machine, sessionId: next.id } })
     },
     onError: (error, id) =>
@@ -486,7 +486,7 @@ export default function ConversationPane({
   const resume = useMutation({
     mutationFn: (text: string) => api(`/api/sessions/${encodeURIComponent(sessionId)}/resume`, { machine, method: "POST", body: { text } }),
     onMutate: (text) => { if (text) setDraft("") },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: sessionsQuery(machine, false).queryKey }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey }),
     onError: (error, text) => {
       setDraft((current) => current || text)
       // An older peer can't start a chat whose agent never started.
@@ -498,7 +498,7 @@ export default function ConversationPane({
   const switchAgent = useMutation({
     mutationFn: (harness: string) => api(`/api/sessions/${encodeURIComponent(sessionId)}/harness`, { machine, method: "POST", body: { harness } }),
     onSuccess: () => {
-      return queryClient.invalidateQueries({ queryKey: sessionsQuery(machine, false).queryKey })
+      return queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
     },
     onError: (error, harness) =>
       hud.error(

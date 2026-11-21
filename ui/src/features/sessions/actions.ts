@@ -25,15 +25,15 @@ export function useSessionCommands() {
 // Outside the hook: the retry callbacks reference their own function, which React Compiler cannot memoize.
 function sessionCommands(queryClient: QueryClient, operations: Map<string, string>) {
 
-  async function refresh(session: ListedSession) {
-    await queryClient.invalidateQueries({ queryKey: sessionsQuery(session.machine, false).queryKey })
+  async function refresh() {
+    await queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
   }
 
   // Success shows in the row itself; only failures report.
   async function stop(session: ListedSession): Promise<boolean> {
     try {
       await api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST" })
-      await refresh(session)
+      await refresh()
       return true
     } catch (error) {
       hud.error(`Couldn't stop ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, () => void stop(session))
@@ -52,7 +52,7 @@ function sessionCommands(queryClient: QueryClient, operations: Map<string, strin
         body: { operation_id: operationId },
       })
       operations.delete(key)
-      await refresh(session)
+      await refresh()
     } catch (error) {
       if (!reusesOperationId(error)) operations.delete(key)
       hud.error(`Couldn't restart ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, () => void restart(session))
@@ -63,7 +63,7 @@ function sessionCommands(queryClient: QueryClient, operations: Map<string, strin
   async function resume(session: ListedSession): Promise<void> {
     try {
       await api(`/api/sessions/${encodeURIComponent(session.id)}/resume`, { machine: session.machine, method: "POST", body: { text: "" } })
-      await refresh(session)
+      await refresh()
     } catch (error) {
       hud.error(`Couldn't resume ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, () => void resume(session))
     }
@@ -75,7 +75,7 @@ function sessionCommands(queryClient: QueryClient, operations: Map<string, strin
       // The row can be stale (just stopped): a failed stop is fine, the archive request refuses a live agent itself.
       if (session.state.running) await api(`/api/sessions/${encodeURIComponent(session.id)}/stop`, { machine: session.machine, method: "POST" }).catch(() => undefined)
       await api(`/api/sessions/${encodeURIComponent(session.id)}`, { machine: session.machine, method: "PATCH", body: { hidden: true } })
-      await refresh(session)
+      await refresh()
       return true
     } catch (error) {
       hud.error(`Couldn't archive ${sessionLabel(session)}: ${errorText(error)}`, () => void archive(session))
@@ -87,7 +87,7 @@ function sessionCommands(queryClient: QueryClient, operations: Map<string, strin
   async function setTools(session: ListedSession, enabled: boolean): Promise<void> {
     try {
       await api(`/api/sessions/${encodeURIComponent(session.id)}/tools`, { machine: session.machine, method: "POST", body: { enabled } })
-      await refresh(session)
+      await refresh()
     } catch (error) {
       hud.error(`Couldn't turn agentpack tools ${enabled ? "on" : "off"}: ${toolsError(error)}`, () => void setTools(session, enabled))
     }

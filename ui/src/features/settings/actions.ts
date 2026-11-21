@@ -6,7 +6,7 @@ import { errorText } from "@/features/library/mutations"
 import { nodesQuery } from "@/features/machines/queries"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { terminalPool } from "@/features/terminal/pool"
-import { ApiError, api, LOCAL } from "@/lib/api"
+import { ApiError, api } from "@/lib/api"
 import type { Settings } from "@/lib/api-types"
 import { hud } from "@/lib/hud"
 import { settingsQuery } from "./queries"
@@ -67,7 +67,7 @@ export function useGatewayActions() {
           ? `Stopped local agents; ${skipped} ACP session${skipped === 1 ? "" : "s"} owned by another device remain${skipped === 1 ? "s" : ""} running.`
           : "Agents on the gateway machine have been stopped.",
       )
-      void queryClient.invalidateQueries({ queryKey: sessionsQuery(LOCAL, false).queryKey })
+      void queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
     },
     onError: (error) =>
       hud.error(`Couldn't stop the agents on the gateway machine: ${errorText(error)}`, () => stopAgents.mutate()),

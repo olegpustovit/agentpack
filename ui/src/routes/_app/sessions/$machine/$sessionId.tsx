@@ -66,7 +66,7 @@ function SessionRoute() {
   const live = useEventsConnected()
   const machines = useMachines()
   const host = machines.find((item) => item.id === machine)
-  const { data } = useQuery(sessionsQuery(machine, live))
+  const { data } = useQuery(sessionsQuery(live))
   const info = data?.find((session) => session.id === sessionId)
   const stale = info?.reachable === false || host?.online === false
   const message = unavailableMessage(info, stale)
@@ -93,7 +93,7 @@ function SessionRoute() {
       })
     },
     onSuccess: (next) => {
-      void queryClient.invalidateQueries({ queryKey: sessionsQuery(machine, false).queryKey })
+      void queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
       void navigate({ to: "/sessions/$machine/$sessionId", params: { machine, sessionId: next.id } })
     },
     onError: (error) => hud.error(`Couldn't start session: ${(error as Error).message}`),
@@ -174,7 +174,7 @@ export const Route = createFileRoute("/_app/sessions/$machine/$sessionId")({
   // Runs on hover too (intent preload): the pane's code and the chat log start loading before the click.
   // Nothing is awaited, so navigation never waits on it.
   loader: ({ context, params }) => {
-    const info = context.queryClient.getQueryData<SessionInfo[]>(sessionsQuery(params.machine, false).queryKey)?.find((item) => item.id === params.sessionId)
+    const info = context.queryClient.getQueryData<SessionInfo[]>(sessionsQuery(false).queryKey)?.find((item) => item.id === params.sessionId)
     if (!info) return
     if (info.transport !== "acp") {
       void loadPane.terminal().catch(() => undefined)

@@ -45,7 +45,7 @@ export function useLimitsNudge(machines: Machine[]) {
       if (now - (nudged.get(id) ?? -Infinity) < NUDGE_MS) continue
       nudged.set(id, now)
       api("/api/limits/refresh", { machine: id, method: "POST" }).then(
-        () => queryClient.invalidateQueries({ queryKey: limitsQuery(id, false).queryKey }),
+        () => queryClient.invalidateQueries({ queryKey: limitsQuery(false).queryKey }),
         () => undefined,
       )
     }
@@ -285,7 +285,7 @@ function useMinuteTick(): number {
 async function refreshOne(queryClient: QueryClient, machine: Machine): Promise<void> {
   try {
     await api("/api/limits/refresh", { machine: machine.id, method: "POST" })
-    await queryClient.invalidateQueries({ queryKey: limitsQuery(machine.id, false).queryKey })
+    await queryClient.invalidateQueries({ queryKey: limitsQuery(false).queryKey })
   } catch (error) {
     hud.error(`Couldn't refresh limits on ${machine.name}: ${(error as Error).message}`, () => void refreshOne(queryClient, machine))
   }

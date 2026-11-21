@@ -77,3 +77,19 @@ go tool pprof -top -cum ap cpu.pb.gz
 - Collapsing diffs in older turns: the thread's contract (`conversation.spec.ts`) keeps diffs and terminal output open on load; `content-visibility` already skips their layout and paint off screen.
 - Rows carried inside events: the browser list is the mesh-wide `/api/sessions` view with each worker's live terminal state merged in, which the gateway event does not have. With per-table events, a list refetch happens only when a list column changed, and is one gzipped request. The IndexedDB sync feed (layer C) was conditional on A and B missing budget; the remaining miss is bundle size, which layer C would not fix.
 - The 120 KB initial JS target: what remains is `react-dom` (~45 KB), TanStack Router (~25 KB), TanStack Query (~13 KB), `cn` class merging (~13 KB) and base-ui's button. `cn build` compiled tables were tried and came out larger (14.7 KB). Moving `cn` behind the root route would only hide it from the metric: the shell needs it for the same paint.
+
+## Conversation checks after the 2026-11-21 changes
+
+The Chromium and WebKit runs use a local production build and mocked gateway
+responses. Across both engines, a 120-turn fixture opens on the latest reply
+with fewer than 50 thread rows mounted. Scrolling to the top reveals the first
+turn. A separate check holds the permission and archive responses and verifies
+that the controls update before the gateway answers, then roll back on rejection.
+The IndexedDB check verifies that the cache writes changed queries and excludes
+the live chat.
+
+```sh
+cd ui
+bun run build
+bun run e2e --project=chromium --project=webkit -g 'long conversation starts|offline cache writes|failed permission answer|archive hides'
+```

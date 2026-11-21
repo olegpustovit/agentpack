@@ -254,12 +254,12 @@ export function useMachineQueries<T>(
 
 // One local read includes replicated rows, even when the originating machine is asleep.
 export function useReplicatedQueries<T extends { node_id?: string; reachable?: boolean }>(
-  factory: (machine: string, live: boolean) => UseQueryOptions<T[], Error, T[], string[]>,
+  factory: (live: boolean) => UseQueryOptions<T[], Error, T[], string[]>,
 ): MachineQueries<T[]> {
   const live = useEventsConnected()
   const machines = useMachines()
   const identity = useQuery(identityQuery).data
-  const result = useQuery(factory(LOCAL, live))
+  const result = useQuery(factory(live))
   const byMachine: Record<string, MachineQuery<T[]>> = {}
   const errors: Record<string, Error> = {}
   const groups = partitionReplicatedRows(result.data ?? [], identity?.node.id)
