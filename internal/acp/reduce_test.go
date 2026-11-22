@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -355,5 +356,80 @@ func TestThreadReducerAutonomousCycleEnds(t *testing.T) {
 	reducer.Apply(LogEntry{Kind: "turn_end", Payload: json.RawMessage(`{}`)})
 	if !reducer.Apply(thread("active")).Working || reducer.Apply(thread("idle")).Working {
 		t.Fatal("Codex's thread status should bound its unprompted goal work")
+	}
+}
+
+// Recorded chats with the AIR asyncTasks capability. Claude (claude-agent-acp 0.100): a background
+// Bash, a Monitor and a ScheduleWakeup, the turn's end, self-started turns as the tasks finish, and
+// a final ScheduleWakeup {stop:true}. Codex (codex-acp 2.8): one background terminal.
+func TestThreadReducerWaitingFromRecordedLogs(t *testing.T) {
+	for file, want := range map[string]string{"background-claude.jsonl": "shell,monitor,wake", "background-codex.jsonl": "shell"} {
+		t.Run(file, func(t *testing.T) { checkRecordedWaiting(t, file, want) })
+	}
+}
+
+func checkRecordedWaiting(t *testing.T, file, wantAfterTurn string) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "acp", file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := func(state ThreadState) string {
+		var out []string
+		for _, w := range state.Waiting {
+			out = append(out, w.Kind)
+		}
+		return strings.Join(out, ",")
+	}
+	var reducer ThreadReducer
+	var afterTurn, final ThreadState
+	sawSelfTurn := false
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var entry LogEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatal(err)
+		}
+		final = reducer.Apply(entry)
+		switch {
+		case entry.Kind == "turn_end":
+			afterTurn = final
+			afterTurn.Waiting = slices.Clone(final.Waiting)
+		case entry.Kind == "async_task_spawned" && strings.Contains(line, `"taskType":"turn"`):
+			sawSelfTurn = sawSelfTurn || final.Working
+		}
+	}
+	if afterTurn.Working || kinds(afterTurn) != wantAfterTurn {
+		t.Fatalf("after the turn: working=%v waiting=%q", afterTurn.Working, kinds(afterTurn))
+	}
+	// Only Claude starts turns of its own in these recordings.
+	if !sawSelfTurn && strings.Contains(string(raw), `"taskType":"turn"`) {
+		t.Fatal("a self-started turn did not mark the chat working")
+	}
+	if final.Working || len(final.Waiting) != 0 {
+		t.Fatalf("at the end: working=%v waiting=%q", final.Working, kinds(final))
+	}
+}
+
+func TestThreadReducerWaitsForAskedChatReply(t *testing.T) {
+	var reducer ThreadReducer
+	apply := func(kind, payload string) ThreadState {
+		return reducer.Apply(LogEntry{TS: 1000, Kind: kind, Payload: json.RawMessage(payload)})
+	}
+	apply("tool_call", `{"toolCallId":"a1","title":"ask","_meta":{"claudeCode":{"toolName":"mcp__agentpack__ask"}}}`)
+	state := apply("tool_call_update", `{"toolCallId":"a1","rawInput":{"session_id":"session-b","text":"secret request"}}`)
+	if len(state.Waiting) != 1 || state.Waiting[0].Kind != "reply" || state.Waiting[0].Peer != "session-b" || state.Waiting[0].Until != 1000+replyLimit {
+		t.Fatalf("ask: %+v", state.Waiting)
+	}
+	if body, _ := json.Marshal(state.Waiting); strings.Contains(string(body), "secret") {
+		t.Fatal("waiting stored tool input", string(body))
+	}
+	if state = apply("prompt", `{"text":{"text":"x"},"from":{"session":"session-c","kind":"reply"}}`); len(state.Waiting) != 1 {
+		t.Fatal("a reply from another chat closed the wait")
+	}
+	if state = apply("prompt", `{"text":{"text":"x"},"from":{"session":"session-b","kind":"reply","task":"t1"}}`); len(state.Waiting) != 0 {
+		t.Fatalf("reply did not close the wait: %+v", state.Waiting)
+	}
+	apply("async_task_spawned", `{"asyncTaskId":"b1","taskType":"shell"}`)
+	if state = apply("agent_exit", `{}`); len(state.Waiting) != 0 {
+		t.Fatal("agent exit kept background work", state.Waiting)
 	}
 }

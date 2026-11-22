@@ -2,7 +2,7 @@ import { act, createElement } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { ListedSession } from "./group"
-import { HOLD_MS, isUnread, nextNeedsYou, sessionGlyphState, sessionStatusWord, useSteadyGlyph, type GlyphState } from "./session-status"
+import { HOLD_MS, isUnread, nextNeedsYou, openWaits, sessionGlyphState, sessionStatusWord, useSteadyGlyph, waitingDetail, waitingWord, type GlyphState } from "./session-status"
 
 const base: ListedSession = {
   id: "s1",
@@ -33,6 +33,28 @@ describe("session status", () => {
     expect(sessionGlyphState(session)).toBe("starting")
     expect(sessionStatusWord(session, false)).toBeUndefined()
     expect(sessionGlyphState({ ...session, ended_at: "2026-01-01T00:00:00Z" })).toBe("stopped")
+  })
+
+  it("shows an idle chat with open background work as waiting, until its items expire", () => {
+    const now = Date.parse("2026-01-01T00:00:00Z")
+    vi.setSystemTime(now)
+    const session = { ...base, transport: "acp", conversation_state: "idle", waiting: [{ kind: "shell" as const }, { kind: "monitor" as const }] }
+    expect(sessionGlyphState(session)).toBe("waiting")
+    expect(waitingWord(openWaits(session, now), now)).toBe("2 running")
+    const wake = { ...session, waiting: [{ kind: "wake" as const, until: now + 6 * 60_000 }] }
+    expect(waitingWord(openWaits(wake, now), now)).toBe("Wakes in 4 m")
+    const asked = { ...session, waiting: [{ kind: "reply" as const, peer: "s2", until: now + 60_000 }] }
+    expect(waitingWord(openWaits(asked, now), now)).toBe("Awaits reply")
+    expect(waitingDetail(openWaits(asked, now), (id) => (id === "s2" ? "migrate archive" : undefined), now)).toBe("a reply from migrate archive")
+    expect(sessionGlyphState({ ...asked, waiting: [{ kind: "reply" as const, until: now - 1 }] })).toBe("idle")
+    vi.useRealTimers()
+  })
+
+  it("shows a terminal without reported state as open, never working or unread", () => {
+    const terminal = { ...base, last_used: "2026-01-01T00:00:10Z" }
+    expect(sessionGlyphState(terminal)).toBe("idle")
+    expect(isUnread(terminal, undefined)).toBe(false)
+    expect(sessionGlyphState({ ...terminal, conversation_state: "working" })).toBe("running")
   })
 
   it("prefers needs you over idle", () => {

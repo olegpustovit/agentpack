@@ -292,6 +292,8 @@ test.describe("conversation pane", () => {
           { ...session, id: "local-two", name: "Another", transport: "acp", conversation_state: "needs_you" },
           // Activity after this browser's first-visit baseline: finished and unread.
           { ...session, id: "local-three", name: "Finished", transport: "acp", conversation_state: "idle", last_event_at: "2099-01-01T00:00:00Z" },
+          // Its turn ended with background work open: waiting, neither working nor finished.
+          { ...session, id: "local-four", name: "Nightly e2e", transport: "acp", conversation_state: "idle", waiting: [{ kind: "shell" }, { kind: "monitor" }] },
         ],
       })
     })
@@ -319,6 +321,13 @@ test.describe("conversation pane", () => {
     expect(await style(needs, "background-color")).toBe(await token("var(--warn)"))
     // The name gets the row: no agent or status words beside it except the one trailing slot.
     await expect(page.locator('[data-row-key="local:local-two"]')).toContainText("Needs you")
+    const waiting = page.locator('[data-row-key="local:local-four"] [data-slot="agent-dot"]')
+    await expect(waiting).toHaveAttribute("data-state", "waiting")
+    expect(await style(waiting, "animation-name")).toBe("none")
+    expect(await style(waiting, "border-top-color")).toBe(await token("var(--accent)"))
+    await expect(page.locator('[data-row-key="local:local-four"]')).toContainText("2 running")
+    await expect(page.getByRole("region", { name: "Waiting" })).toContainText("Nightly e2e")
+    await expect(page.getByRole("region", { name: "Waiting" })).toContainText("2 background tasks")
   })
 
   test("composer slash menu and needs-you row label", async ({ page }) => {

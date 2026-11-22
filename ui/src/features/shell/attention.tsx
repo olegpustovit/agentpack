@@ -51,8 +51,9 @@ export function attentionAlerts(before: Watched, after: Watched): Alert[] {
     const where = [harnessName(session.harness), basename(session.directory), session.machineName].filter(Boolean).join(" · ")
     const target = { machine: session.machine, id: session.id }
     if (state === "needsYou" && was !== "needsYou") alerts.push({ kind: "needs", tag: `session:${session.id}`, title: `${sessionLabel(session)} needs you`, body: where, session: target })
-    // A chat whose turn ended; terminals never read idle.
-    if (state === "idle" && was === "running") alerts.push({ kind: "finished", tag: `session:${session.id}`, title: `${sessionLabel(session)} finished`, body: where, session: target })
+    // A turn ended with nothing left in the background (waiting comes first while work runs). A
+    // terminal reads running only while its hooks report a turn, so it finishes the same way.
+    if (state === "idle" && (was === "running" || was === "waiting")) alerts.push({ kind: "finished", tag: `session:${session.id}`, title: `${sessionLabel(session)} finished`, body: where, session: target })
   }
   for (const [provider, left] of after.limits) {
     const was = before.limits.get(provider)

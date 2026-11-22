@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -404,6 +405,9 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		}
 		current.subagentsChange = func(subagents []SubagentSummary) {
 			persistSessionJSON(context.Background(), store.DB, record.ID, "subagents", subagents, len(subagents) == 0)
+		}
+		current.waitingChange = func(waiting []acp.WaitItem) {
+			persistSessionJSON(context.Background(), store.DB, record.ID, "waiting", waiting, len(waiting) == 0)
 		}
 		current.permissionChange = func(mode string) {
 			if _, err := store.DB.ExecContext(context.Background(), "INSERT INTO mesh_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", permissionSettingKey, mode); err != nil {

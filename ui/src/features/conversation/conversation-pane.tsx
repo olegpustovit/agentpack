@@ -12,7 +12,9 @@ import { chatShellsQuery } from "@/features/terminal/chat-shells"
 import { rememberChatTerminal, takeChatTerminalCommand, terminalCommandEvent, type TerminalCommand, type TerminalRequest } from "@/features/terminal/shortcuts"
 import { StatusSlot } from "@/features/status/status-bar"
 import { pendingChatClaim, useStartSession } from "@/features/sessions/start"
+import { sessionLabel } from "@/features/sessions/group"
 import { sessionsQuery } from "@/features/sessions/queries"
+import { openWaits, waitingDetail } from "@/features/sessions/session-status"
 import { agentIds } from "@/features/sessions/rules"
 import { useConversationEvents, useEventsConnected } from "@/features/events/use-events"
 import { identityQuery, useMachines } from "@/features/machines/queries"
@@ -173,6 +175,14 @@ export default function ConversationPane({
   const scrollAnchorRef = useRef<{ height: number; top: number } | null>(null)
   const transcript = reduceThread(historyKey, entries)
   const activity = info?.conversation_state
+  // Idle with background work open: the agent will wake by itself (internal/acp WaitItem).
+  const waitNow = useNow(true, 60_000)
+  const waits = activity === "idle" && info && !readOnly && !subagentId ? openWaits(info, waitNow) : []
+  const knownChats = useQuery({ ...sessionsQuery(false), enabled: waits.some((item) => item.kind === "reply") }).data
+  const chatName = (id: string) => {
+    const chat = knownChats?.find((row) => row.id === id) ?? helpers.find((row) => row.id === id)
+    return chat && sessionLabel({ ...chat, machine, machineName: "", offline: false })
+  }
   const parent = activity ? {
     ...transcript,
     working: activity === "working",
@@ -947,6 +957,14 @@ export default function ConversationPane({
               onEdit={() => setGoalSheet({ objective: goal?.objective ?? "" })}
               onAction={(action) => goalActions.act.mutate(action)}
             />
+            {waits.length > 0 && (
+              <div data-slot="waiting-strip" role="status" className="flex min-w-0 items-center gap-(--s3) rounded-(--r-ctl) bg-(--accent-soft) px-(--s3) py-(--s2) text-(length:--fs-sm) text-(--fg2)">
+                <span aria-hidden data-slot="agent-dot" data-state="waiting" className="agent-dot static! shrink-0" />
+                <span className="min-w-0 truncate">
+                  <strong className="font-semibold text-(--fg)">Waiting</strong> for {waitingDetail(waits, chatName, waitNow)} · {agentName} wakes by itself
+                </span>
+              </div>
+            )}
             {parent.items.some(isOpenRequest) && (
               <div data-slot="pinned-requests" className="flex max-h-[50vh] flex-col gap-(--s3) overflow-auto">
                 {parent.items.filter(isOpenRequest).map((item) => item.kind === "permission"

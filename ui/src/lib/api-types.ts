@@ -65,6 +65,8 @@ export type SessionInfo = {
   // Older peers omit both.
   goal?: GoalState
   subagents?: SubagentSummary[]
+  // Background work an idle chat will wake for (internal/acp WaitItem); older peers omit it.
+  waiting?: WaitItem[]
   // The chat whose agent started this helper, and whether this chat's agent may use agentpack tools.
   parent_id?: string
   tools?: boolean
@@ -86,6 +88,9 @@ export type GoalState = {
   limits?: GoalLimits
   updated_at?: number
 }
+
+// One piece of open background work. `until` (unix ms) bounds it; `peer` is the chat an ask waits on.
+export type WaitItem = { kind: "shell" | "monitor" | "agent" | "task" | "wake" | "reply"; until?: number; peer?: string }
 
 // Running subagents of a chat, for the sidebar's child rows.
 export type SubagentSummary = { id: string; title?: string; state: string; started_at?: number }

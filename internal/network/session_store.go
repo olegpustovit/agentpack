@@ -14,9 +14,9 @@ import (
 const sessionWriteColumns = `id,last_used,folder_id,name,directory,definition_root,harness,mode,
 	transport,agent_session_id,agent_capabilities,conversation_state,state,started_at,started_by,title,worktree_of`
 
-// goal and subagents are written only by the worker (worker_record_patch.go), so upserts never clobber them.
+// goal, subagents and waiting are written only by the worker (worker_record_patch.go), so upserts never clobber them.
 // worktree_of, parent_id and tools are set on insert only: tools is the gateway's switch (POST /tools).
-const sessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at,goal,subagents,last_event_at,parent_id,tools"
+const sessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at,goal,subagents,waiting,last_event_at,parent_id,tools"
 
 func sessionValues(info SessionInfo) ([]any, error) {
 	if info.ID == "" {
@@ -74,18 +74,18 @@ func upsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
 func scanSession(row interface{ Scan(...any) error }) (SessionInfo, error) {
 	var info SessionInfo
 	var lastUsed, startedAt, endedAt, archivedAt, lastEvent int64
-	var capabilities, owner, terminal, goal, subagents string
+	var capabilities, owner, terminal, goal, subagents, waiting string
 	err := row.Scan(&info.ID, &lastUsed, &info.FolderID, &info.Name, &info.Directory,
 		&info.DefinitionRoot, &info.Harness, &info.Mode, &info.Transport, &info.AgentSessionID,
 		&capabilities, &info.ConversationState, &terminal, &startedAt, &owner, &info.Title, &info.WorktreeOf, &info.NodeID, &endedAt, &archivedAt,
-		&goal, &subagents, &lastEvent, &info.ParentID, &info.Tools)
+		&goal, &subagents, &waiting, &lastEvent, &info.ParentID, &info.Tools)
 	if err != nil {
 		return info, err
 	}
 	for _, value := range []struct {
 		body string
 		into any
-	}{{capabilities, &info.AgentCapabilities}, {owner, &info.StartedBy}, {terminal, &info.State}, {goal, &info.Goal}, {subagents, &info.Subagents}} {
+	}{{capabilities, &info.AgentCapabilities}, {owner, &info.StartedBy}, {terminal, &info.State}, {goal, &info.Goal}, {subagents, &info.Subagents}, {waiting, &info.Waiting}} {
 		if value.body != "" {
 			if err := json.Unmarshal([]byte(value.body), value.into); err != nil {
 				return info, fmt.Errorf("decode session %s: %w", info.ID, err)
@@ -151,7 +151,7 @@ func endSession(ctx context.Context, db *sql.DB, id string, terminal TerminalSta
 		return err
 	}
 	// A stopped chat has no turn, answerable request or running subagent left, whatever its last state said.
-	if _, err = db.ExecContext(ctx, "UPDATE sessions SET ended_at=?,state=?,conversation_state=CASE WHEN transport='acp' THEN 'idle' ELSE conversation_state END,subagents='' WHERE id=? AND node_id="+state.LocalNodeSQL+" AND ended_at=0", time.Now().UnixNano(), string(body), id); err != nil {
+	if _, err = db.ExecContext(ctx, "UPDATE sessions SET ended_at=?,state=?,conversation_state=CASE WHEN transport='acp' THEN 'idle' ELSE conversation_state END,subagents='',waiting='' WHERE id=? AND node_id="+state.LocalNodeSQL+" AND ended_at=0", time.Now().UnixNano(), string(body), id); err != nil {
 		return err
 	}
 	// A chat that ended before its first message has nothing to keep in the list, unless it failed to start.

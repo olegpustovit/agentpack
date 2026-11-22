@@ -387,7 +387,7 @@ func recordStop(ctx context.Context, store *state.Store, id string, notice map[s
 func (g *Gateway) reapStoppedChats(ctx context.Context) {
 	g.reapWorkerEndpoints(ctx)
 	rows, err := querySessions(ctx, g.auth.store.Reader, "SELECT "+sessionColumns+` FROM sessions WHERE transport='acp' AND archived_at=0 AND node_id=`+state.LocalNodeSQL+`
- AND ((ended_at>0 AND (conversation_state<>'idle' OR subagents<>'' OR json_extract(state,'$.running')))
+ AND ((ended_at>0 AND (conversation_state<>'idle' OR subagents<>'' OR waiting<>'' OR json_extract(state,'$.running')))
  OR (ended_at=0 AND conversation_state='starting' AND last_used<?))`, sessionTimestamp(time.Now().Add(-interruptedStartGrace)))
 	var resume []string
 	for _, info := range rows {
@@ -412,7 +412,7 @@ func (g *Gateway) reapStoppedChats(ctx context.Context) {
 		info.State.Running, info.State.Restarting = false, false
 		body, marshalErr := json.Marshal(info.State)
 		if marshalErr == nil {
-			_, marshalErr = g.auth.store.DB.ExecContext(ctx, "UPDATE sessions SET state=?,conversation_state='idle',subagents='' WHERE id=? AND ended_at>0 AND node_id="+state.LocalNodeSQL, string(body), info.ID)
+			_, marshalErr = g.auth.store.DB.ExecContext(ctx, "UPDATE sessions SET state=?,conversation_state='idle',subagents='',waiting='' WHERE id=? AND ended_at>0 AND node_id="+state.LocalNodeSQL, string(body), info.ID)
 		}
 		err = errors.Join(err, marshalErr)
 	}

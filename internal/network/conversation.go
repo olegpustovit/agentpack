@@ -81,6 +81,8 @@ type ConversationSession struct {
 	subagents              map[string]*subagentState
 	subagentsSaved         string
 	subagentsChange        func([]SubagentSummary)
+	waitingSaved           string
+	waitingChange          func([]acp.WaitItem)
 	unpromptedUsageSettle  time.Duration // quiet delay after an unprompted usage_update before closing the cycle
 	inPromptTurn           bool
 	lastParentKind         string
@@ -131,7 +133,10 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	if entry.Kind == "agent_exit" {
 		session.agentExited = true
 	}
-	state := conversationState(session.reducer.Apply(entry))
+	thread := session.reducer.Apply(entry)
+	state := conversationState(thread)
+	waiting, waitingChanged := session.noteWaiting(thread.Waiting)
+	waitingChange := session.waitingChange
 	changed := state != session.state
 	if changed {
 		session.followNativeGoal(entry, state)
@@ -164,6 +169,9 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	}
 	if subagentsChanged && subagentsChange != nil {
 		subagentsChange(subagents)
+	}
+	if waitingChanged && waitingChange != nil {
+		waitingChange(waiting)
 	}
 	if goalDirty {
 		// Appending from inside a log callback would deadlock; publish once this entry is done.
@@ -724,4 +732,19 @@ func (session *ConversationSession) AgentCapabilitiesView() *AgentCapabilities {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	return session.agentCapabilities
+}
+
+// noteWaiting copies the reducer's waiting list and reports whether it changed since the last save.
+// The caller holds mu.
+func (session *ConversationSession) noteWaiting(items []acp.WaitItem) ([]acp.WaitItem, bool) {
+	waiting := slices.Clone(items)
+	saved := ""
+	if len(waiting) > 0 {
+		saved = string(mustRawJSON(waiting))
+	}
+	if saved == session.waitingSaved {
+		return waiting, false
+	}
+	session.waitingSaved = saved
+	return waiting, true
 }

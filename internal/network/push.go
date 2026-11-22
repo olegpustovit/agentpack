@@ -15,6 +15,7 @@ import (
 
 	"github.com/SherClockHolmes/webpush-go"
 
+	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/obs"
 )
@@ -294,11 +295,12 @@ func (g *Gateway) runPush(ctx context.Context, interval time.Duration) {
 }
 
 type pushSession struct {
-	id, node, name, directory, agent, state, owner string
-	seq                                            int64
+	id, node, name, directory, agent, state, owner, waiting string
+	seq                                                     int64
 }
 
-// pushPass sends one notification per new transition into needs_you or from working to idle.
+// pushPass sends one notification per new transition into needs_you or into idle from working or
+// waiting. An idle chat with open background work counts as waiting, so it is not "finished" yet.
 // The first pass after subscriptions appear only records a baseline, so a restart never
 // re-announces what is already waiting, and neither does becoming Main.
 func (g *Gateway) pushPass(ctx context.Context) (int, error) {
@@ -328,7 +330,7 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 		g.push.seen = nil
 		return 0, nil
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT id,node_id,name,directory,harness,conversation_state,owner_email,last_seq FROM sessions
+	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT id,node_id,name,directory,harness,conversation_state,owner_email,last_seq,waiting FROM sessions
  WHERE transport='acp' AND ended_at=0 AND archived_at=0 AND hidden=0`)
 	if err != nil {
 		return 0, err
@@ -336,7 +338,7 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 	var sessions []pushSession
 	for rows.Next() {
 		var s pushSession
-		if err := rows.Scan(&s.id, &s.node, &s.name, &s.directory, &s.agent, &s.state, &s.owner, &s.seq); err != nil {
+		if err := rows.Scan(&s.id, &s.node, &s.name, &s.directory, &s.agent, &s.state, &s.owner, &s.seq, &s.waiting); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -353,7 +355,11 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 	}
 	sent := 0
 	var failures []error
+	now := time.Now().UnixMilli()
 	for _, s := range sessions {
+		if s.state == "idle" && waitingOpen(s.waiting, now) {
+			s.state = "waiting"
+		}
 		g.push.seen[s.id] = s.state
 		if baseline {
 			continue
@@ -362,7 +368,7 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 		switch before := previous[s.id]; {
 		case s.state == "needs_you" && before != "needs_you":
 			kind = "needs_you"
-		case s.state == "idle" && before == "working":
+		case s.state == "idle" && (before == "working" || before == "waiting"):
 			kind = "finished"
 		}
 		key := fmt.Sprintf("%s:%d", kind, s.seq)
@@ -477,4 +483,21 @@ func pendingPermission(ctx context.Context, db *sql.DB, session string) (pending
 		return request, err
 	}
 	return request, json.Unmarshal([]byte(payload), &request)
+}
+
+// waitingOpen reports whether a session's waiting column holds an item that has not expired.
+func waitingOpen(raw string, now int64) bool {
+	if raw == "" {
+		return false
+	}
+	var items []acp.WaitItem
+	if json.Unmarshal([]byte(raw), &items) != nil {
+		return false
+	}
+	for _, item := range items {
+		if item.Until == 0 || item.Until > now {
+			return true
+		}
+	}
+	return false
 }
