@@ -347,6 +347,13 @@ export default function ConversationPane({
     setHistory({ key: historyKey, entries: kept, more, loading: false })
     return loaded
   }
+  // A tool-heavy turn can outgrow the first page, which then starts mid-turn: no prompt, and
+  // subagents without the titles recorded when they started. Page back to the turn's prompt.
+  const hasUserMessage = (items: ThreadItem[]) => items.some((item) => item.kind === "user_message_chunk")
+  const turnStartMissing = hasOlder && !hasUserMessage(transcript.items)
+  useEffect(() => {
+    if (turnStartMissing) void loadOlder(false, (rows) => hasUserMessage(reduceThread(historyKey, rows).items))
+  }, [turnStartMissing])
   useEffect(() => {
     const save = draft && recalledPrompt.current?.text !== draft
     try {

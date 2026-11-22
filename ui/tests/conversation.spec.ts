@@ -484,6 +484,19 @@ test("scrolling up loads earlier history and keeps the reader in place", async (
   expect(befores).toEqual(["41"])
 })
 
+test("a first page that starts mid-turn loads back to the turn's prompt", async ({ page }) => {
+  await page.route("**/api/sessions/*/conversation**", (route) => {
+    const before = new URL(route.request().url()).searchParams.get("before")
+    const entry = before
+      ? { seq: 1, ts: 1, kind: "prompt", payload: { text: { text: "Audit the app" } } }
+      : { seq: 2, ts: 2, kind: "agent_message_chunk", payload: { text: { text: "Still working" } } }
+    return route.fulfill({ body: JSON.stringify(entry) + "\n", contentType: "application/x-ndjson", headers: before ? {} : { "X-Agentpack-Truncated": "true" } })
+  })
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByText("Still working")).toBeVisible()
+  await expect(page.getByText("Audit the app")).toBeVisible()
+})
+
 const subagentsBody = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../testdata/acp/subagents.jsonl"), "utf8")
 
 test("attached images survive switching chats and coming back", async ({ page }) => {

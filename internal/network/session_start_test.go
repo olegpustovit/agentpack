@@ -400,15 +400,24 @@ func TestOwnerCanArchiveStoppedImportedRecent(t *testing.T) {
 	if err := endSession(ctx, g.auth.store.DB, id, TerminalState{}); err != nil {
 		t.Fatal(err)
 	}
+	// The same recent replicated from a peer is archived on this gateway's copy of the row.
+	peerID := id + "-peer"
+	if _, err := g.auth.store.DB.ExecContext(ctx, `INSERT INTO sessions(id,harness,transport,started_by,node_id,ended_at)
+		SELECT ?,harness,transport,started_by,'peer-node',ended_at FROM sessions WHERE id=?`, peerID, id); err != nil {
+		t.Fatal(err)
+	}
 	for index, test := range []struct {
+		id   string
 		user string
 		body string
 		want int
 	}{
-		{"member@example.com", `{"hidden":true}`, http.StatusForbidden},
-		{testBrowserEmail, `{"name":"renamed"}`, http.StatusForbidden},
-		{testBrowserEmail, `{"hidden":true}`, http.StatusOK},
+		{id, "member@example.com", `{"hidden":true}`, http.StatusForbidden},
+		{id, testBrowserEmail, `{"name":"renamed"}`, http.StatusForbidden},
+		{id, testBrowserEmail, `{"hidden":true}`, http.StatusOK},
+		{peerID, testBrowserEmail, `{"hidden":true}`, http.StatusOK},
 	} {
+		id := test.id
 		token := test.user + string(rune('0'+index))
 		testBrowserSession(t, g.auth, test.user, token)
 		req := httptest.NewRequest(http.MethodPatch, origin.String()+"/api/sessions/"+id, strings.NewReader(test.body))

@@ -529,9 +529,9 @@ func (g *Gateway) Handler() http.Handler {
 		id := r.PathValue("id")
 		legacyArchive := false
 		if input.Hidden != nil && *input.Hidden && strings.HasPrefix(id, "session-legacy-recent-") {
+			// Any node may archive it: PATCH on a peer's session is applied to the replicated row here.
 			info, err := storedSession(r.Context(), g.auth.store.Reader, id)
-			node, nodeErr := g.auth.store.NodeID(r.Context())
-			legacyArchive = err == nil && nodeErr == nil && info.NodeID == node && info.StartedBy != nil && info.StartedBy.Kind == "peer" && !info.EndedAt.IsZero() && info.ArchivedAt.IsZero()
+			legacyArchive = err == nil && info.StartedBy != nil && info.StartedBy.Kind == "peer" && !info.EndedAt.IsZero() && info.ArchivedAt.IsZero()
 		}
 		if legacyArchive {
 			if !g.ownerOnly(w, r) {
