@@ -117,3 +117,42 @@ func TestReduceRichFixture(t *testing.T) {
 		t.Fatalf("a stored image was rewritten: %s", again)
 	}
 }
+
+// codex-acp forwards an MCP tool's result raw in rawOutput (codex-cli 0.169), images included.
+// They go to the blob store and show as content blocks, unless the adapter already sent one.
+func TestRawMCPResultImagesShowAsContent(t *testing.T) {
+	png := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nraw"))
+	var stored int
+	store := func([]byte) (string, error) { stored++; return strings.Repeat("b", 64), nil }
+	update := json.RawMessage(`{"toolCallId":"exec-1","status":"completed","rawOutput":{"error":null,"result":{"_meta":null,"content":[` +
+		`{"data":"` + png + `","mimeType":"image/png","type":"image"},{"text":"Screenshot captured.","type":"text"}]}}}`)
+	got := string(toolContentPayload(update, store))
+	blob := `"blob":"sha256:` + strings.Repeat("b", 64) + `"`
+	if strings.Contains(got, png) || stored != 1 {
+		t.Fatalf("inline data kept or not stored once (%d): %s", stored, got)
+	}
+	var fields struct {
+		Content   []map[string]json.RawMessage `json:"content"`
+		RawOutput json.RawMessage              `json:"rawOutput"`
+	}
+	if err := json.Unmarshal([]byte(got), &fields); err != nil {
+		t.Fatal(err)
+	}
+	if len(fields.Content) != 1 || !strings.Contains(string(fields.Content[0]["content"]), blob) || string(fields.Content[0]["type"]) != `"content"` {
+		t.Fatalf("image not shown as content: %s", got)
+	}
+	if !strings.Contains(string(fields.RawOutput), blob) || !strings.Contains(string(fields.RawOutput), "Screenshot captured.") {
+		t.Fatalf("rawOutput lost the reference or the text: %s", fields.RawOutput)
+	}
+	// An adapter that already shows the image as content (claude-agent-acp) gets no duplicate.
+	both := json.RawMessage(`{"toolCallId":"t","content":[{"type":"content","content":{"type":"image","blob":"sha256:` + strings.Repeat("c", 64) + `","mimeType":"image/png"}}],` +
+		`"rawOutput":{"content":[{"type":"image","data":"` + png + `","mimeType":"image/png"}]}}`)
+	if got := string(toolContentPayload(both, store)); strings.Count(got, `"type":"content"`) != 1 || strings.Contains(got, png) {
+		t.Fatalf("duplicate or inline image: %s", got)
+	}
+	// No images: the payload is untouched.
+	plain := json.RawMessage(`{"toolCallId":"t","rawOutput":{"result":{"content":[{"type":"text","text":"ok"}]}}}`)
+	if got := toolContentPayload(plain, store); string(got) != string(plain) {
+		t.Fatalf("payload without images changed: %s", got)
+	}
+}

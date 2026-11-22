@@ -105,7 +105,8 @@ func chunkPayload(raw json.RawMessage, store ImageStore) json.RawMessage {
 }
 
 // toolContentPayload rewrites the content blocks of a tool call or update the same way; diffs,
-// terminals and other entries pass through unchanged.
+// terminals and other entries pass through unchanged. Images in a raw MCP result (rawOutput, as
+// codex-acp forwards it) are stored too and shown as content blocks.
 func toolContentPayload(payload json.RawMessage, store ImageStore) json.RawMessage {
 	if !bytes.Contains(payload, []byte(`"content"`)) {
 		return payload
@@ -115,27 +116,74 @@ func toolContentPayload(payload json.RawMessage, store ImageStore) json.RawMessa
 		return payload
 	}
 	var entries []map[string]json.RawMessage
-	if json.Unmarshal(fields["content"], &entries) != nil {
+	if len(fields["content"]) > 0 && json.Unmarshal(fields["content"], &entries) != nil {
 		return payload
 	}
-	changed := false
+	changed, shownImage := false, false
 	for _, entry := range entries {
 		if string(entry["type"]) != `"content"` || len(entry["content"]) == 0 {
 			continue
 		}
 		var block contentBlock
+		if json.Unmarshal(entry["content"], &block) != nil {
+			continue
+		}
+		shownImage = shownImage || block.Type == "image"
 		// Text, links and images already in the blob store stay as they are.
-		if json.Unmarshal(entry["content"], &block) != nil || block.Type == "text" || block.Type == "resource_link" || block.Type == "image" && block.Data == "" {
+		if block.Type == "text" || block.Type == "resource_link" || block.Type == "image" && block.Data == "" {
 			continue
 		}
 		entry["content"] = mustJSON(showBlock(block, store))
 		changed = true
 	}
+	if raw := fields["rawOutput"]; bytes.Contains(raw, []byte(`"image"`)) {
+		var output any
+		if json.Unmarshal(raw, &output) == nil {
+			var images []shownBlock
+			output = storeRawImages(output, store, &images)
+			if len(images) > 0 {
+				fields["rawOutput"] = mustJSON(output)
+				changed = true
+				if !shownImage {
+					for _, image := range images {
+						entries = append(entries, map[string]json.RawMessage{"type": mustJSON("content"), "content": mustJSON(image)})
+					}
+				}
+			}
+		}
+	}
 	if !changed {
 		return payload
 	}
-	fields["content"] = mustJSON(entries)
+	if len(entries) > 0 {
+		fields["content"] = mustJSON(entries)
+	}
 	return mustJSON(fields)
+}
+
+// storeRawImages replaces every MCP image block ({"type":"image","data":...}) in a raw tool result
+// with its blob reference, collecting the images it stored.
+func storeRawImages(value any, store ImageStore, images *[]shownBlock) any {
+	switch node := value.(type) {
+	case map[string]any:
+		if data, ok := node["data"].(string); ok && node["type"] == "image" {
+			mime, _ := node["mimeType"].(string)
+			shown := storedImage(data, mime, store)
+			if shown.Type != "image" {
+				return map[string]any{"type": "text", "text": shown.Text}
+			}
+			*images = append(*images, shown)
+			return map[string]any{"type": "image", "blob": shown.Blob, "mimeType": mime}
+		}
+		for key, child := range node {
+			node[key] = storeRawImages(child, store, images)
+		}
+	case []any:
+		for i, child := range node {
+			node[i] = storeRawImages(child, store, images)
+		}
+	}
+	return value
 }
 
 func baseName(uri string) string {
