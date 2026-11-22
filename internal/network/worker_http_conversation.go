@@ -232,6 +232,7 @@ func (worker *WorkerHTTP) receivePrompt(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	prompt.From = promptFromHeader(r)
 	queued, err := startPrompt(r.Context(), conv, prompt, steer)
 	if err != nil {
 		message := "could not send prompt"
@@ -454,6 +455,9 @@ func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record Work
 	if sendsBody {
 		if key := r.Header.Get("Idempotency-Key"); key != "" {
 			request.Header.Set("Idempotency-Key", key)
+		}
+		if from := promptFromContext(r.Context()); from != nil {
+			request.Header.Set(promptFromHeaderName, string(mustRawJSON(from)))
 		}
 		contentType := "application/json"
 		if suffix == "/blobs" {

@@ -77,6 +77,38 @@ describe("conversation message actions", () => {
     ])
   })
 
+  it("names the chat that sent a message and hides the header its agent reads", () => {
+    act(() => root.render(createElement(ThreadView, {
+      items: [
+        { kind: "user_message_chunk", data: { from: { session: "session-a", name: "Refactor auth", task: "t_1", kind: "ask" }, text: { text: "[agentpack message · task t_1]\nAnswer with reply.\n---\nReview auth.go" } } },
+        { kind: "user_message_chunk", data: { from: { session: "session-b", task: "t_2", kind: "reply", state: "input_required" }, text: { text: "[agentpack question]\n---\nWhich file?" } } },
+      ],
+      machine: "local",
+      sessionId: "session-1",
+    })))
+    expect([...container.querySelectorAll('[data-slot="user-bubble"]')].map((bubble) => bubble.textContent)).toEqual(["Review auth.go", "Which file?"])
+    expect(container.textContent).toContain("Message from Refactor auth")
+    expect(container.textContent).toContain("Question from another chat")
+  })
+
+  it("opens the chat that sent a message, but not an A2A agent", () => {
+    const open = vi.fn()
+    const from = { session: "session-a", node: "node-2", name: "Refactor auth", task: "t_1", kind: "ask" as const }
+    act(() => root.render(createElement(ThreadView, {
+      items: [
+        { kind: "user_message_chunk", data: { from, text: { text: "[h]\n---\nhi" } } },
+        { kind: "user_message_chunk", data: { from: { session: "remote-task", agent: "a2a", name: "Planner", task: "t_2", kind: "reply", state: "completed" }, text: { text: "[h]\n---\nok" } } },
+      ],
+      machine: "local",
+      sessionId: "session-1",
+      onOpenChat: open,
+    })))
+    expect(container.querySelectorAll('button[aria-label^="Open "]')).toHaveLength(1)
+    act(() => container.querySelector<HTMLButtonElement>('button[aria-label="Open Refactor auth"]')!.click())
+    expect(open).toHaveBeenCalledWith(from)
+    expect(container.textContent).toContain("Reply from A2A agent Planner · completed")
+  })
+
   it("groups a turn's tools into one summary, opened by a failure", () => {
     const tool = (seq: number, ts: number, status: string, extra = {}): ThreadItem => ({ kind: "tool", seq, ts, endTs: ts + 1000, data: { title: `t${seq}`, kind: "read", status, ...extra } })
     act(() => root.render(createElement(ThreadView, {

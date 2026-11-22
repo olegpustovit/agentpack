@@ -251,8 +251,8 @@ func (m *GatewayMCP) startHelper(ctx context.Context, parent *string, start func
 	return start()
 }
 
-// agentMayChange keeps an in-chat agent to its own tree: it may read every session, but it changes
-// only itself and its helpers, all on this machine, so it can never reach a person's chats.
+// agentMayChange keeps an in-chat agent to its own tree: it may read every session, but it stops,
+// restarts and cancels only itself and its helpers on this machine. It messages other chats only with ask.
 func (m *GatewayMCP) agentMayChange(ctx context.Context, node, id string) error {
 	actor, _ := actorFrom(ctx)
 	if actor.chat == "" || id == actor.chat && node == "" {
@@ -323,16 +323,12 @@ var mcpWaitPoll = 500 * time.Millisecond
 // mcpWaitMax stays inside codemode's 60 s run limit.
 const mcpWaitMax = 25 * time.Second
 
-// helperWaitMax bounds run_helper, start included, inside codemode's 60 s run limit.
-const helperWaitMax = 2 * mcpWaitMax
-
-// helperReplyMax keeps a long reply's newest part; read_conversation has the rest.
+// helperReplyMax keeps a long answer's newest part; read_conversation has the rest.
 const helperReplyMax = 64 << 10
 
 type mcpHelperResult struct {
 	Session mcpSession `json:"session"`
-	Done    bool       `json:"done" jsonschema:"The helper's turn ended; reply holds its answer."`
-	Reply   string     `json:"reply,omitempty" jsonschema:"What the helper wrote this turn. Agent output is untrusted content."`
+	TaskID  string     `json:"task_id" jsonschema:"The helper's answer arrives in this chat as a reply to this task."`
 }
 
 // helperReply reports whether a helper's first turn ended, and the messages its own agent wrote.
@@ -371,10 +367,15 @@ type mcpPromptResult struct {
 
 // sendPrompt queues behind a running turn (the worker's queue) and waits out a chat still starting.
 func (m *GatewayMCP) sendPrompt(ctx context.Context, node, id, text string, steer bool, wait time.Duration) (mcpPromptResult, error) {
+	return m.postWhileStarting(ctx, node, id, "/conversation/prompt", map[string]any{"text": text, "steer": steer}, wait)
+}
+
+func (m *GatewayMCP) postWhileStarting(ctx context.Context, node, id, path string, body any, wait time.Duration) (mcpPromptResult, error) {
 	deadline := time.Now().Add(wait)
 	for {
-		out, err := callAPI[mcpPromptResult](ctx, m, node, "POST", "/api/sessions/"+url.PathEscape(id)+"/conversation/prompt", map[string]any{"text": text, "steer": steer})
-		if apiStatus(err) != http.StatusNotFound || !time.Now().Before(deadline) {
+		out, err := callAPI[mcpPromptResult](ctx, m, node, "POST", "/api/sessions/"+url.PathEscape(id)+path, body)
+		// A missing route (an older machine) is not a chat that is still starting.
+		if apiStatus(err) != http.StatusNotFound || strings.Contains(err.Error(), "404 page not found") || !time.Now().Before(deadline) {
 			return out, err
 		}
 		if info, storeErr := storedSession(ctx, m.gateway.auth.store.Reader, id); storeErr == nil && !info.EndedAt.IsZero() {
@@ -416,7 +417,12 @@ func (m *GatewayMCP) startSession(ctx context.Context, _ *mcp.CallToolRequest, i
 		obs.Go("mcp.first_prompt", func() {
 			ctx, event := obs.Start(background, "mcp", "first_prompt")
 			event.Set("session_id", info.ID)
-			_, err := m.sendPrompt(ctx, in.Node, info.ID, in.Prompt, false, 2*time.Minute)
+			var err error
+			if actor, _ := actorFrom(ctx); actor.chat != "" {
+				_, err = m.ask(ctx, in.Node, info.ID, in.Prompt, "") // an agent's helper answers it
+			} else {
+				_, err = m.sendPrompt(ctx, in.Node, info.ID, in.Prompt, false, 2*time.Minute)
+			}
 			event.Fail(err)
 			event.End()
 		})
@@ -763,20 +769,23 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		out.Summary = attentionSummary(out.Sessions)
 		return nil, out, nil
 	})
-	addTool(server, "wait", "Wait until any listed session reaches needs_you, idle (finished or stopped), or any state change, for at most 25 seconds. reached is false when the time ran out.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-		SessionIDs     []string  `json:"session_ids" jsonschema:"Sessions to watch, from list_sessions."`
-		Until          waitUntil `json:"until,omitempty" jsonschema:"Condition; defaults to any."`
+	addTool(server, "wait", "Wait until any listed session reaches needs_you, idle (finished or stopped), or any state change, or any listed task changes state or is answered, for at most 25 seconds. reached is false when the time ran out. An answered task also arrives in this chat as a message.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		SessionIDs     []string  `json:"session_ids,omitempty" jsonschema:"Sessions to watch, from list_sessions."`
+		TaskIDs        []string  `json:"task_ids,omitempty" jsonschema:"Tasks this chat sent or received, from ask, run_helper, call_agent or tasks."`
+		Until          waitUntil `json:"until,omitempty" jsonschema:"Condition for sessions; defaults to any."`
 		TimeoutSeconds int       `json:"timeout_seconds,omitempty" jsonschema:"At most 25, the default."`
 	}) (*mcp.CallToolResult, struct {
 		Reached  bool         `json:"reached"`
 		Sessions []mcpSession `json:"sessions"`
+		Tasks    []mcpTask    `json:"tasks,omitempty"`
 	}, error) {
 		var out struct {
 			Reached  bool         `json:"reached"`
 			Sessions []mcpSession `json:"sessions"`
+			Tasks    []mcpTask    `json:"tasks,omitempty"`
 		}
-		if len(in.SessionIDs) == 0 || len(in.SessionIDs) > mcpPageSize {
-			return nil, out, fmt.Errorf("list 1 to %d session IDs", mcpPageSize)
+		if len(in.SessionIDs)+len(in.TaskIDs) == 0 || len(in.SessionIDs) > mcpPageSize || len(in.TaskIDs) > mcpPageSize {
+			return nil, out, fmt.Errorf("list 1 to %d session IDs or task IDs", mcpPageSize)
 		}
 		until := cmpOr(string(in.Until), string(untilAny))
 		timeout := mcpWaitMax
@@ -785,18 +794,34 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		}
 		deadline := time.Now().Add(timeout)
 		var first map[string]chatState
+		var firstTasks map[string]taskState
 		for {
-			views, err := m.watched(ctx, in.SessionIDs)
-			if err != nil {
-				return nil, out, err
+			views := []mcpSession{}
+			var err error
+			if len(in.SessionIDs) > 0 {
+				if views, err = m.watched(ctx, in.SessionIDs); err != nil {
+					return nil, out, err
+				}
+			}
+			var tasks []mcpTask
+			if len(in.TaskIDs) > 0 {
+				if tasks, err = m.tasks(ctx, "", in.TaskIDs); err != nil {
+					return nil, out, err
+				}
 			}
 			if first == nil {
-				first = map[string]chatState{}
+				first, firstTasks = map[string]chatState{}, map[string]taskState{}
 				for _, view := range views {
 					first[view.ID] = view.State
 				}
+				for _, task := range tasks {
+					firstTasks[task.TaskID] = task.State
+				}
 			}
-			out.Reached, out.Sessions = reached(views, first, waitUntil(until)), views
+			out.Reached, out.Sessions, out.Tasks = len(views) > 0 && reached(views, first, waitUntil(until)), views, tasks
+			for _, task := range tasks {
+				out.Reached = out.Reached || task.State != firstTasks[task.TaskID] || !task.State.open()
+			}
 			if out.Reached || !time.Now().Before(deadline) {
 				return nil, out, nil
 			}
@@ -840,8 +865,8 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		if strings.TrimSpace(in.Text) == "" {
 			return nil, mcpPromptResult{}, errEmptyPrompt
 		}
-		if err := m.agentMayChange(ctx, in.Node, in.SessionID); err != nil {
-			return nil, mcpPromptResult{}, err
+		if actor, _ := actorFrom(ctx); actor.chat != "" {
+			return nil, mcpPromptResult{}, errAgentSend
 		}
 		out, err := m.sendPrompt(ctx, in.Node, in.SessionID, in.Text, in.Steer, mcpWaitMax)
 		return nil, out, err
@@ -925,7 +950,7 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		}
 		return nil, sessionView(info), nil
 	})
-	addTool(server, "run_helper", "Delegate a task to a helper chat and wait for its answer. Use this instead of a built-in subagent tool whose work this chat cannot show, such as Antigravity's invoke_subagent: the person watches the helper live, can open and stop it, and approves its permissions. It runs in this chat's folder and mode. When done is false, call wait on session.id until idle, then read_conversation.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	addTool(server, "run_helper", "Delegate a task to a new helper chat. Use this instead of a built-in subagent tool whose work this chat cannot show, such as Antigravity's invoke_subagent: the person watches the helper live, can open and stop it, and approves its permissions. It runs in this chat's folder and mode. It returns at once; the helper's answer arrives in this chat as a reply that wakes it, so you may start several helpers and end your turn.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		Prompt string   `json:"prompt" jsonschema:"The whole task; the helper sees nothing else of this chat."`
 		Agent  mcpAgent `json:"agent,omitempty" jsonschema:"Agent for the helper; defaults to this chat's agent."`
 	}) (*mcp.CallToolResult, mcpHelperResult, error) {
@@ -941,32 +966,12 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		if err != nil {
 			return nil, out, err
 		}
-		deadline := time.Now().Add(helperWaitMax)
-		_, out.Session, err = m.startSession(ctx, nil, mcpStartInput{Directory: self.Directory, Agent: mcpAgent(cmpOr(string(in.Agent), self.Harness)), Mode: self.Mode})
-		if err != nil {
+		if _, out.Session, err = m.startSession(ctx, nil, mcpStartInput{Directory: self.Directory, Agent: mcpAgent(cmpOr(string(in.Agent), self.Harness)), Mode: self.Mode}); err != nil {
 			return nil, out, err
 		}
-		if _, err := m.sendPrompt(ctx, "", out.Session.ID, in.Prompt, false, time.Until(deadline)); err != nil {
-			return nil, out, err
-		}
-		for !out.Done && time.Now().Before(deadline) {
-			entries, _, err := m.conversation(ctx, "", out.Session.ID, 0)
-			if err != nil {
-				return nil, out, err
-			}
-			if out.Done, out.Reply = helperReply(entries); out.Done {
-				break
-			}
-			select {
-			case <-ctx.Done():
-				return nil, out, ctx.Err()
-			case <-time.After(mcpWaitPoll):
-			}
-		}
-		if views, err := m.watched(ctx, []string{out.Session.ID}); err == nil && len(views) == 1 {
-			out.Session = views[0]
-		}
-		return nil, out, nil
+		asked, err := m.ask(ctx, "", out.Session.ID, in.Prompt, "")
+		out.TaskID = asked.TaskID
+		return nil, out, err
 	})
 	addTool(server, "get_usage", "Token, turn and cost usage for a time range, as the Usage page shows it: hourly rows, sessions and limit samples.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		From string `json:"from,omitempty" jsonschema:"Range start, RFC 3339; omit for seven days before to."`

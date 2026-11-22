@@ -62,38 +62,42 @@ type nodeRecord struct {
 }
 
 type Gateway struct {
-	options        GatewayOptions
-	startingChats  sync.Map
-	starting       sync.WaitGroup       // chats launching in the background; tests wait on it
-	chatLifecycle  sync.Mutex           // serializes resume claims with settling dead chats
-	autoResumed    map[string]time.Time // chats the reaper resumed; guarded by chatLifecycle
-	store          *state.Store
-	logs           *obs.Store
-	auth           *gatewayAuth
-	mcp            *GatewayMCP
-	local          nodeRecord
-	origin         *url.URL // loopback origin; public access adds another
-	public         publicAccess
-	stop           context.CancelFunc
-	done           <-chan struct{}
-	chatTimings    sync.Map // latest browser duration per measurement
-	replicaStatus  sync.Map
-	statePulls     sync.Map // peer → coalesced pull notification
-	syncTransferMu sync.Mutex
-	syncTransfers  map[string]*stateTransferFile
-	identityMu     sync.Mutex
-	updateMu       sync.Mutex
-	updating       bool
-	updateError    string
-	identityAt     time.Time
-	identitySelf   tailnetSelf
-	events         eventHub
-	agents         agentAccounts
-	tailnet        tailnetCache
-	mcpBroker      mcpBroker
-	push           pushWatch
-	omp            ompSettings
-	credentialsMu  sync.Mutex // one agent credential sync at a time
+	options         GatewayOptions
+	startingChats   sync.Map
+	starting        sync.WaitGroup       // chats launching in the background; tests wait on it
+	chatLifecycle   sync.Mutex           // serializes resume claims with settling dead chats
+	autoResumed     map[string]time.Time // chats the reaper resumed; guarded by chatLifecycle
+	store           *state.Store
+	logs            *obs.Store
+	auth            *gatewayAuth
+	mcp             *GatewayMCP
+	local           nodeRecord
+	origin          *url.URL // loopback origin; public access adds another
+	public          publicAccess
+	stop            context.CancelFunc
+	done            <-chan struct{}
+	chatTimings     sync.Map // latest browser duration per measurement
+	replicaStatus   sync.Map
+	statePulls      sync.Map // peer → coalesced pull notification
+	syncTransferMu  sync.Mutex
+	syncTransfers   map[string]*stateTransferFile
+	identityMu      sync.Mutex
+	updateMu        sync.Mutex
+	updating        bool
+	updateError     string
+	identityAt      time.Time
+	identitySelf    tailnetSelf
+	events          eventHub
+	agents          agentAccounts
+	tailnet         tailnetCache
+	mcpBroker       mcpBroker
+	push            pushWatch
+	agentTasks      sync.Map             // task IDs whose answer is being delivered
+	agentTaskSeen   map[string]int64     // last_seq each asked chat had at the last pass; owned by runAgentTasks
+	agentTaskRetry  time.Time            // when undelivered answers are tried again; owned by runAgentTasks
+	agentTaskPolled map[string]time.Time // when each called A2A agent's task was last read; owned by runAgentTasks
+	omp             ompSettings
+	credentialsMu   sync.Mutex // one agent credential sync at a time
 }
 
 // browserPingInterval keeps idle terminal connections alive through proxies. Tests shorten it.
@@ -173,7 +177,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	for _, task := range []struct {
 		name string
 		run  func(context.Context)
-	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}, {"gateway.push", func(ctx context.Context) { gateway.runPush(ctx, pushInterval) }}, {"gateway.omp_settings", func(ctx context.Context) { gateway.runOMPSettings(ctx, 30*time.Second) }}, {"gateway.agent_credentials", func(ctx context.Context) { gateway.runAgentCredentials(ctx, 30*time.Second) }}} {
+	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}, {"gateway.push", func(ctx context.Context) { gateway.runPush(ctx, pushInterval) }}, {"gateway.agent_tasks", func(ctx context.Context) { gateway.runAgentTasks(ctx, agentTasksInterval) }}, {"gateway.omp_settings", func(ctx context.Context) { gateway.runOMPSettings(ctx, 30*time.Second) }}, {"gateway.agent_credentials", func(ctx context.Context) { gateway.runAgentCredentials(ctx, 30*time.Second) }}} {
 		background.Add(1)
 		obs.Go(task.name, func() { defer background.Done(); task.run(ctx) })
 	}
@@ -652,6 +656,8 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{id}/conversation", g.serveConversation)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", g.servePrompt)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", g.servePrompt)
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/message", g.serveAgentMessage)
+	mux.HandleFunc("POST /api/sessions/{id}/a2a", g.serveSessionA2A)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/permission", func(w http.ResponseWriter, r *http.Request) {
 		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {

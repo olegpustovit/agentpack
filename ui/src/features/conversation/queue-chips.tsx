@@ -4,7 +4,7 @@ import { CornerDownRight, Pencil, Send, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api"
 import { hud } from "@/lib/hud"
-import type { QueuedPrompt } from "./model"
+import { promptText, type QueuedPrompt } from "./model"
 import { conversationErrorMessage, conversationNeedsUpdate } from "./queries"
 
 // Queued messages live in the worker, so every viewer sees and can change the same queue.
@@ -31,7 +31,7 @@ export function QueueChips({ queue, machine, sessionId, readOnly, steering, onSt
   return (
     <ul data-slot="prompt-queue" aria-label="Queued messages" className="flex flex-col gap-(--s2)">
       {queue.map((item) => {
-        const text = item.text?.text ?? ""
+        const text = promptText(item)
         const images = item.images?.length ?? (item.image || item.resource_link ? 1 : 0)
         const isSteering = item.steer || steering === item.queueId
         const isEditing = editing?.id === item.queueId

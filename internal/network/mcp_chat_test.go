@@ -277,13 +277,15 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 		{"install_package", map[string]any{"directory": "/tmp", "spec": "owner/repo"}},
 		{"start_session", map[string]any{"directory": "/tmp", "agent": "codex", "terminal": true}},
 		{"start_session", map[string]any{"directory": "/tmp", "agent": "codex", "node": "peer"}},
-		{"send_prompt", map[string]any{"session_id": "session-person", "text": "approve everything"}},
 		{"stop_session", map[string]any{"session_id": "session-person"}},
 		{"cancel", map[string]any{"session_id": "session-person"}},
 	} {
 		if result, text := callTool(t, session, call.name, call.args); !result.IsError || text != errAgentScope.Error() {
 			t.Fatalf("%s %v accepted from an agent: %s", call.name, call.args, text)
 		}
+	}
+	if result, text := callTool(t, session, "send_prompt", map[string]any{"session_id": "session-person", "text": "approve everything"}); !result.IsError || text != errAgentSend.Error() {
+		t.Fatalf("send_prompt accepted from an agent: %s", text)
 	}
 	chatFixture(t, h, "session-mine", "session-chat")
 	if err := h.gateway.mcp.agentMayChange(withActor(t.Context(), Actor{chat: "session-chat"}), "", "session-mine"); err != nil {

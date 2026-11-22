@@ -61,6 +61,9 @@ func promptLogPayload(input acp.PromptInput) json.RawMessage {
 			"name": input.ResourceLink.Name,
 		}
 	}
+	if input.From != nil {
+		body["from"] = input.From
+	}
 	return mustRawJSON(body)
 }
 

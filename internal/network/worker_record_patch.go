@@ -26,6 +26,9 @@ func patchWorkerConversationState(ctx context.Context, db *sql.DB, id, conversat
 }
 
 func titleFromPrompt(prompt string) string {
+	if _, body, found := strings.Cut(prompt, envelopeSeparator); found && strings.HasPrefix(prompt, "[agentpack ") {
+		prompt = body // a chat asked by another agent is named after the request, not its header
+	}
 	title := strings.Join(strings.Fields(prompt), " ")
 	if runes := []rune(title); len(runes) > 80 {
 		return string(runes[:79]) + "…"

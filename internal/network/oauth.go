@@ -29,9 +29,10 @@ type GatewayMCP struct {
 	handler  http.Handler
 	mu       sync.Mutex
 	window   clientWindow
-	metadata map[string]cachedClient // Client ID Metadata Documents by URL
-	fetches  clientWindow            // uncached document fetches, which anyone can trigger before sign-in
-	fetcher  *http.Client            // nil: metadataFetcher; tests point it at a local server
+	metadata map[string]cachedClient        // Client ID Metadata Documents by URL
+	fetches  clientWindow                   // uncached document fetches, which anyone can trigger before sign-in
+	fetcher  *http.Client                   // nil: metadataFetcher; tests point it at a local server
+	peer     func(node string) http.Handler // nil: the mesh; tests stand another gateway in for a node
 }
 
 type cachedClient struct {
@@ -42,7 +43,7 @@ type cachedClient struct {
 func (m *GatewayMCP) ServeHTTP(w http.ResponseWriter, r *http.Request) { m.handler.ServeHTTP(w, r) }
 
 func isMCPPath(path string) bool {
-	return path == "/mcp" || strings.HasPrefix(path, "/oauth/") || strings.HasPrefix(path, "/.well-known/oauth-")
+	return path == "/mcp" || strings.HasPrefix(path, "/oauth/") || strings.HasPrefix(path, "/.well-known/oauth-") || strings.HasPrefix(path, "/a2a/")
 }
 
 // baseURL is the origin the request addressed: loopback, or the public origin while it is on.
@@ -67,6 +68,9 @@ func oauthError(w http.ResponseWriter, status int, code string) {
 }
 
 func (m *GatewayMCP) routes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /a2a/{session}", m.serveA2A)
+	mux.HandleFunc("GET /a2a/{session}", m.serveA2A) // an A2A client reads a URL with a path as the card itself
+	mux.HandleFunc("GET /a2a/{session}/.well-known/agent-card.json", m.serveA2A)
 	for _, path := range []string{"/.well-known/oauth-authorization-server", "/.well-known/oauth-authorization-server/mcp"} {
 		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 			b := m.baseURL(r)

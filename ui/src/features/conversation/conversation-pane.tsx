@@ -15,7 +15,7 @@ import { pendingChatClaim, useStartSession } from "@/features/sessions/start"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { agentIds } from "@/features/sessions/rules"
 import { useConversationEvents, useEventsConnected } from "@/features/events/use-events"
-import { useMachines } from "@/features/machines/queries"
+import { identityQuery, useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName, relativeTime } from "@/lib/format"
 import { clock, goalElapsedMs, liveGoal } from "@/lib/goal"
@@ -28,7 +28,7 @@ import { configQuery } from "@/lib/config"
 import { ompSettingsQuery, quickRoles } from "@/features/settings/omp-model"
 import { agentSnapshotQuery, archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, mergeConversationPages, olderConversationPage, type ConversationPage } from "./queries"
 import { configRole, dangerousMode, parseConfigOptions } from "./config-options"
-import type { LogEntry, ThreadItem, UserMessagePayload } from "./model"
+import type { LogEntry, PromptFrom, ThreadItem, UserMessagePayload } from "./model"
 import { helperSubagents, isOpenRequest, reduceThread } from "./reducer"
 import { ElicitationCard, latestUserPrompt, PermissionCard, quoteMessage, ThreadView, userImageSrc } from "./thread-view"
 import { GoalPill, parseGoalCommand, useGoalActions } from "./goal-sheet"
@@ -300,6 +300,10 @@ export default function ConversationPane({
   const [animateAfter, setAnimateAfter] = useState<number>()
   if (animateAfter === undefined && tail) setAnimateAfter(tail.entries.at(-1)?.seq ?? 0)
   const closeSubagent = () => void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, sub: undefined }) })
+  const identity = useQuery(identityQuery).data
+  // A sender on the machine serving this page is "local" in routes.
+  const openChat = (from: PromptFrom) =>
+    void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: !from.node ? machine : from.node === identity?.node.id ? LOCAL : from.node, sessionId: from.session } })
   const openSubagent = (id: string) =>
     id.startsWith("helper:")
       ? void navigate({ to: "/sessions/$machine/$sessionId", params: { machine, sessionId: id.slice("helper:".length) } })
@@ -891,6 +895,7 @@ export default function ConversationPane({
                   turnStarted={thread.turn_started ?? subagent?.startedTs}
                   animateAfter={animateAfter}
                   onOpenSubagent={openSubagent}
+                  onOpenChat={openChat}
                   onStopSubagent={readOnly ? undefined : (id) => stopSubagent.mutate(id)}
                   authHarness={info?.harness}
                   onSignedIn={!subagent && !readOnly && (resumable || live)

@@ -74,6 +74,7 @@ var mcpTypeSchemas = map[reflect.Type]*jsonschema.Schema{
 	reflect.TypeFor[mcpAgent]():                    enumSchema(mcpAgents()),
 	reflect.TypeFor[chatState]():                   enumSchema(chatStates),
 	reflect.TypeFor[waitUntil]():                   enumSchema(waitConditions),
+	reflect.TypeFor[taskState]():                   enumSchema(taskStates),
 	reflect.TypeFor[sdkacp.PermissionOptionKind](): enumSchema(permissionDecisions),
 }
 
@@ -231,6 +232,7 @@ func NewGatewayMCP(gateway *Gateway) (*GatewayMCP, error) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "agentpack", Version: "1"}, nil)
 	m.tools(server)
 	m.chatTools(server)
+	m.taskTools(server)
 	server.AddReceivingMiddleware(m.guardToolCalls)
 	stream := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 	mux := http.NewServeMux()
@@ -452,7 +454,10 @@ func (m *GatewayMCP) do(ctx context.Context, node, method, path string, body any
 		return nil, errors.New("invalid gateway operation")
 	}
 	query := u.Query()
-	if node != "" {
+	handler := m.gateway.Handler()
+	if node != "" && m.peer != nil {
+		handler = m.peer(node)
+	} else if node != "" {
 		query.Set("node", node)
 	}
 	u.RawQuery = query.Encode()
@@ -475,7 +480,7 @@ func (m *GatewayMCP) do(ctx context.Context, node, method, path string, body any
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("traceparent", obs.TraceParent(ctx))
 	response := &mcpResponse{header: make(http.Header)}
-	m.gateway.Handler().ServeHTTP(response, request)
+	handler.ServeHTTP(response, request)
 	if response.tooLarge {
 		return nil, errors.New("gateway response unavailable or too large")
 	}

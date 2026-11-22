@@ -38,4 +38,16 @@ type PromptInput struct {
 	Image        *PromptImage
 	Images       []PromptImage
 	ResourceLink *PromptResourceLink
+	From         *PromptFrom
+}
+
+// PromptFrom names the chat whose agent sent a prompt with ask or reply; nil when a person sent it.
+type PromptFrom struct {
+	Session string `json:"session"`
+	Node    string `json:"node,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Agent   string `json:"agent,omitempty"`
+	Task    string `json:"task"`
+	Kind    string `json:"kind"`            // ask or reply
+	State   string `json:"state,omitempty"` // a reply's task state
 }

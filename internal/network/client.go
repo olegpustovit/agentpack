@@ -117,7 +117,7 @@ func workerRequestTimeout(method, path string) time.Duration {
 	if method == http.MethodPost &&
 		(path == "/stop" || path == "/restart" || path == "/api/sessions" ||
 			strings.HasSuffix(path, "/stop") || strings.HasSuffix(path, "/restart") ||
-			strings.HasSuffix(path, "/conversation/prompt") || strings.HasSuffix(path, "/conversation/blobs")) ||
+			strings.HasSuffix(path, "/conversation/prompt") || strings.HasSuffix(path, "/conversation/message") || strings.HasSuffix(path, "/a2a") || strings.HasSuffix(path, "/conversation/blobs")) ||
 		method == http.MethodGet && strings.Contains(path, "/blobs/") {
 		return 2 * time.Minute
 	}

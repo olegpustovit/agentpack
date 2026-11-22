@@ -66,7 +66,11 @@ export type UserAttachmentPayload = {
   kind?: "image" | "resource_link"
 }
 
+/** The chat whose agent sent a prompt with ask or reply. */
+export type PromptFrom = { session: string; node?: string; name?: string; agent?: string; task: string; kind: "ask" | "reply"; state?: string }
+
 export type UserMessagePayload = {
+  from?: PromptFrom
   text?: { text?: string }
   image?: UserAttachmentPayload
   resource_link?: UserAttachmentPayload
@@ -74,6 +78,19 @@ export type UserMessagePayload = {
 }
 
 export type TextChunkPayload = UserMessagePayload
+
+/** A message from another chat's agent shows its body; the header the agent reads names the sender. */
+export function promptText(payload: UserMessagePayload): string {
+  const text = payload.text?.text ?? ""
+  const body = payload.from ? text.indexOf("\n---\n") : -1
+  return body >= 0 ? text.slice(body + 5) : text
+}
+
+export function promptSender(from: PromptFrom): string {
+  const who = from.agent === "a2a" ? `A2A agent ${from.name || ""}`.trim() : from.name || "another chat"
+  if (from.kind === "ask") return `Message from ${who}`
+  return from.state === "input_required" ? `Question from ${who}` : `Reply from ${who} · ${from.state ?? "completed"}`
+}
 
 export type ToolPayload = {
   toolCallId?: string

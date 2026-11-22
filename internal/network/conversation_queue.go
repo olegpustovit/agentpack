@@ -81,6 +81,7 @@ func (g *Gateway) servePrompt(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	prompt.From = promptFromContext(ctx)
 	directory := filepath.Join(g.options.Home, "network", "sessions", id)
 	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		promptQueueError(w, r, err)
@@ -468,12 +469,13 @@ func promptInputFromLog(payload json.RawMessage) (acp.PromptInput, error) {
 		ResourceLink *struct {
 			Blob, Name string
 		} `json:"resource_link"`
+		From *acp.PromptFrom `json:"from"`
 	}
 	var input acp.PromptInput
 	if err := json.Unmarshal(payload, &body); err != nil {
 		return input, err
 	}
-	input.QueueID = body.QueueID
+	input.QueueID, input.From = body.QueueID, body.From
 	sha := func(blob string) string { return strings.TrimPrefix(blob, "sha256:") }
 	if body.Text != nil {
 		input.Text = body.Text.Text

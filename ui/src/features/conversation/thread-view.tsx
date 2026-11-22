@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils"
 import type { GoalState } from "@/lib/api-types"
 import { clock, goalStateWords } from "@/lib/goal"
 import { useNow } from "@/lib/use-now"
-import type { CompactionPayload, ElicitationField, ElicitationPayload, NoticePayload, PermissionPayload, Subagent, TextChunkPayload, ThreadItem, ThreadState, ToolPayload, UserMessagePayload } from "./model"
+import { promptSender, promptText, type CompactionPayload, type ElicitationField, type ElicitationPayload, type NoticePayload, type PermissionPayload, type PromptFrom, type Subagent, type TextChunkPayload, type ThreadItem, type ThreadState, type ToolPayload, type UserMessagePayload } from "./model"
 import { compactCount, SubagentCard, subagentRunning } from "./subagent-card"
 import { AgentMessageBody } from "./agent-message"
 import { ToolDiffBody } from "./tool-diff"
@@ -41,15 +41,17 @@ function UserMessageBody({
   sessionId,
   onQuote,
   onFork,
+  onOpenChat,
 }: {
   data: unknown
   machine: string
   sessionId: string
   onQuote?: (text: string) => void
   onFork?: () => void
+  onOpenChat?: (from: PromptFrom) => void
 }) {
   const body = data as UserMessagePayload
-  const text = body.text?.text ?? ""
+  const text = promptText(body)
   const attachments = body.images ?? [
     ...(body.image ? [body.image] : []),
     ...(body.resource_link ? [body.resource_link] : []),
@@ -63,7 +65,14 @@ function UserMessageBody({
   return (
     <>
       <div className="flex w-full flex-col items-start gap-(--s2)">
-        <p aria-hidden className="text-(length:--fs-xs) font-medium text-(--fg3)">You</p>
+        <div className="flex items-center gap-(--s2)">
+          <p aria-hidden className="text-(length:--fs-xs) font-medium text-(--fg3)">{body.from ? promptSender(body.from) : "You"}</p>
+          {body.from && body.from.agent !== "a2a" && onOpenChat && (
+            <Button type="button" variant="ghost" size="sm" className="h-auto px-(--s1) py-0 text-(length:--fs-xs)" aria-label={`Open ${body.from.name || "the other chat"}`} onClick={() => onOpenChat(body.from!)}>
+              Open chat
+            </Button>
+          )}
+        </div>
         {previews.length > 0 && (
           <div data-slot="user-attachments" className="flex max-w-full flex-wrap gap-(--s3)">
             {previews.map(({ image, src }, index) => {
@@ -90,7 +99,7 @@ function UserMessageBody({
         )}
         {text ? (
           <MessageContextMenu text={text} onQuote={onQuote} onFork={onFork}>
-            <p data-slot="user-bubble" className="w-full rounded-(--r-sheet) bg-(--track) px-(--s4) py-(--s3) text-(length:--fs) text-(--fg) whitespace-pre-wrap [overflow-wrap:anywhere]">
+            <p data-slot="user-bubble" className={cn("w-full rounded-(--r-sheet) px-(--s4) py-(--s3) text-(length:--fs) text-(--fg) whitespace-pre-wrap [overflow-wrap:anywhere]", body.from ? "border-[0.5px] border-(--sep)" : "bg-(--track)")}>
               {text}
             </p>
           </MessageContextMenu>
@@ -670,6 +679,7 @@ function ThreadItemView({
   onFork,
   onRetry,
   onSignedIn,
+  onOpenChat,
   next,
   last,
   streaming,
@@ -685,6 +695,7 @@ function ThreadItemView({
   onFork?: () => void
   onRetry?: () => void
   onSignedIn?: () => void
+  onOpenChat?: (from: PromptFrom) => void
   /** ts of the item after this one; a thought lasted until then. */
   next?: number
   last?: boolean
@@ -694,7 +705,7 @@ function ThreadItemView({
 }) {
   switch (item.kind) {
     case "user_message_chunk":
-      return <UserMessageBody data={item.data} machine={machine} sessionId={sessionId} onQuote={onQuote} onFork={onFork} />
+      return <UserMessageBody data={item.data} machine={machine} sessionId={sessionId} onQuote={onQuote} onFork={onFork} onOpenChat={onOpenChat} />
     case "agent_message_chunk":
       return <AgentBlock text={chunkText(item.data)} last={last} streaming={streaming} meta={meta} onQuote={onQuote} onFork={onFork} onRetry={onRetry} />
     case "agent_thought_chunk":
@@ -852,6 +863,7 @@ export function ThreadView({
   onOpenSubagent,
   onStopSubagent,
   onSignedIn,
+  onOpenChat,
   authHarness,
   scrollRef,
   pinRequests,
@@ -874,6 +886,8 @@ export function ThreadView({
   onStopSubagent?: (id: string) => void
   /** Starts the chat once its agent is signed in; only the latest sign-in notice offers it. */
   onSignedIn?: () => void
+  /** Opens the chat that sent a message with ask or reply. */
+  onOpenChat?: (from: PromptFrom) => void
   authHarness?: string
   scrollRef?: RefObject<HTMLDivElement | null>
   /** Open requests are answered from the card pinned above the composer, so a busy thread cannot bury them. */
@@ -1036,6 +1050,7 @@ export function ThreadView({
           onFork={onFork}
           onRetry={isLastAgent ? retry : undefined}
           onSignedIn={entry === signIn ? onSignedIn : undefined}
+          onOpenChat={onOpenChat}
           next={nextTs.get(entry)}
           last={isLastAgent && !working}
           streaming={isLastAgent && working}
