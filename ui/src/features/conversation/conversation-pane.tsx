@@ -29,8 +29,8 @@ import { ompSettingsQuery, quickRoles } from "@/features/settings/omp-model"
 import { agentSnapshotQuery, archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, mergeConversationPages, olderConversationPage, type ConversationPage } from "./queries"
 import { configRole, dangerousMode, parseConfigOptions } from "./config-options"
 import type { LogEntry, ThreadItem, UserMessagePayload } from "./model"
-import { helperSubagents, reduceThread } from "./reducer"
-import { latestUserPrompt, quoteMessage, ThreadView, userImageSrc } from "./thread-view"
+import { helperSubagents, isOpenRequest, reduceThread } from "./reducer"
+import { ElicitationCard, latestUserPrompt, PermissionCard, quoteMessage, ThreadView, userImageSrc } from "./thread-view"
 import { GoalPill, parseGoalCommand, useGoalActions } from "./goal-sheet"
 import { QueueChips } from "./queue-chips"
 import { subagentRunning } from "./subagent-card"
@@ -869,6 +869,7 @@ export default function ConversationPane({
               ) : (
                 <ThreadView
                   scrollRef={threadScrollRef}
+                  pinRequests={!readOnly && !subagentId}
                   items={subagent ? thread.items : withSending(thread.items, entries, pendingSends)}
                   machine={machine}
                   sessionId={sessionId}
@@ -934,6 +935,13 @@ export default function ConversationPane({
               onEdit={() => setGoalSheet({ objective: goal?.objective ?? "" })}
               onAction={(action) => goalActions.act.mutate(action)}
             />
+            {parent.items.some(isOpenRequest) && (
+              <div data-slot="pinned-requests" className="flex max-h-[50vh] flex-col gap-(--s3) overflow-auto">
+                {parent.items.filter(isOpenRequest).map((item) => item.kind === "permission"
+                  ? <PermissionCard key={item.seq} item={item} machine={machine} sessionId={sessionId} agent={agentName} />
+                  : <ElicitationCard key={item.seq} item={item} machine={machine} sessionId={sessionId} />)}
+              </div>
+            )}
             <div className="flex flex-col gap-(--s1) rounded-[12px] bg-(--field) px-(--s3) pt-(--s3) pb-(--s2) shadow-(--shadow-composer) transition-shadow focus-within:shadow-[var(--shadow-composer),0_0_0_3px_var(--accent-soft)]">
               <div className="relative flex min-h-(--ctl-h) flex-col gap-(--s2)">
                 {attachments.map((item, index) => (

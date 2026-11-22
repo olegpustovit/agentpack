@@ -18,6 +18,7 @@ import { compactCount, SubagentCard, subagentRunning } from "./subagent-card"
 import { AgentMessageBody } from "./agent-message"
 import { ToolDiffBody } from "./tool-diff"
 import { ToolOutput } from "./tool-output"
+import { isOpenRequest } from "./reducer"
 import { QuickLook } from "./quick-look"
 import { conversationErrorMessage, conversationNeedsUpdate } from "./queries"
 import { listDiffChanges } from "./diff-summary"
@@ -446,10 +447,7 @@ function answerSummary(ask: ElicitationPayload, value?: string): string {
 }
 
 export function findPendingPermission(items: ThreadItem[]): ThreadItem | undefined {
-  return items.findLast((item) => {
-    const permission = item.kind === "permission" ? item.data as PermissionPayload : undefined
-    return Boolean(permission?.requestId && !permission.resolved && !permission.inactive)
-  })
+  return items.findLast((item) => item.kind === "permission" && isOpenRequest(item))
 }
 
 function permissionVerb(tool?: string): string {
@@ -856,6 +854,7 @@ export function ThreadView({
   onSignedIn,
   authHarness,
   scrollRef,
+  pinRequests,
 }: {
   readOnly?: boolean
   agent?: string
@@ -877,6 +876,8 @@ export function ThreadView({
   onSignedIn?: () => void
   authHarness?: string
   scrollRef?: RefObject<HTMLDivElement | null>
+  /** Open requests are answered from the card pinned above the composer, so a busy thread cannot bury them. */
+  pinRequests?: boolean
 }) {
   const retry = latestUserPrompt(items) && onRetry ? onRetry : undefined
   const lastAgent = items.findLast((item) => item.kind === "agent_message_chunk")
@@ -1012,6 +1013,14 @@ export function ThreadView({
     }
     // The compaction block is the one divider for a compaction; the notice would repeat it.
     if (compacted && entry.kind === "divider" && (entry.data as NoticePayload).title === "Context compacted") return null
+    if (pinRequests && isOpenRequest(entry)) {
+      return (
+        <p key={entry.seq ?? index} data-slot="pinned-request-marker" className="thread-item flex min-h-(--row-h) items-center gap-(--s3) text-(length:--fs-sm) text-(--warn-word)">
+          <Lock aria-hidden className="size-3.5 shrink-0" />
+          <span>Waiting for you · answer above the message box</span>
+        </p>
+      )
+    }
     const isLastAgent = entry === lastAgent
     return (
       <div key={entry.seq ?? index} className={cn("thread-item", fresh(entry) && (entry.kind === "tool" ? "tool-enter" : "thread-enter"))}>

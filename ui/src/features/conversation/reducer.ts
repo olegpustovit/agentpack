@@ -70,13 +70,16 @@ function appendChunk(state: ThreadState, entry: LogEntry) {
     items.push({ kind: entry.kind, data: entry.payload })
   }
 }
+/** A permission or question the agent is still waiting on. */
+export function isOpenRequest(item: ThreadItem): boolean {
+  const data = item.data as { requestId?: string; elicitationId?: string; resolved?: boolean; inactive?: boolean } | undefined
+  if (item.kind !== "permission" && item.kind !== "elicitation") return false
+  if (data?.resolved || data?.inactive) return false
+  return item.kind === "permission" ? !!data?.requestId : !!data?.elicitationId
+}
+
 function hasOutstandingRequests(items: ThreadItem[]): boolean {
-  return items.some((item) => {
-    const data = item.data as { requestId?: string; elicitationId?: string; resolved?: boolean; inactive?: boolean } | undefined
-    if (item.kind !== "permission" && item.kind !== "elicitation") return false
-    if (data?.resolved || data?.inactive) return false
-    return item.kind === "permission" ? !!data?.requestId : !!data?.elicitationId
-  })
+  return items.some(isOpenRequest)
 }
 
 function resolveRequest(state: ThreadState, kind: "permission" | "elicitation", idKey: "requestId" | "elicitationId", payload: unknown) {

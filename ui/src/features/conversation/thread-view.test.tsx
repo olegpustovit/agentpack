@@ -133,6 +133,10 @@ describe("conversation message actions", () => {
     act(() => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(ThreadView, { items: list, machine: "local", sessionId: "s", agent: "Claude" }))))
     expect(container.querySelectorAll('[role="group"][data-slot="permission-card"]')).toHaveLength(2)
     expect(container.textContent).toContain("Allow Claude to run this command?")
+    // Pinned above the composer instead, so the thread only marks where they were asked.
+    act(() => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(ThreadView, { items: list, machine: "local", sessionId: "s", pinRequests: true }))))
+    expect(container.querySelectorAll('[role="group"][data-slot="permission-card"]')).toHaveLength(0)
+    expect(container.querySelectorAll('[data-slot="pinned-request-marker"]')).toHaveLength(2)
   })
 
   it("retires the sign-in card once the agent answers after it", () => {
