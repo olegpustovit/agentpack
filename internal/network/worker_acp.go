@@ -181,6 +181,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 	defer log.SetReplaying(false)
 	client := acp.NewHarnessClient(workspace, nil, log, broker)
 	client.AutoApprove = conv.BypassingPermissions
+	client.StoreImage = conv.storeImage
 	agent := acptest.NewReplayAgent(entries)
 	c2aR, c2aW := io.Pipe()
 	a2cR, a2cW := io.Pipe()
@@ -326,6 +327,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	defer log.SetReplaying(false)
 	client := acp.NewHarnessClient(workspace, nil, log, broker)
 	client.AutoApprove = conv.BypassingPermissions
+	client.StoreImage = conv.storeImage
 	rewriter := &rewriteStdin{w: stdinWriter, rewrite: func(line []byte) []byte {
 		line = acp.AddSessionCapabilities(line)
 		if acpLaunch.Rewrite != nil {

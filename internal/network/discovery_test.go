@@ -383,7 +383,8 @@ func TestNameFromTailnetNamesOnlyUnnamedPeers(t *testing.T) {
 // A session route the gateway registers is either reachable through a peer or
 // named here as local-only, so a new route cannot silently fail remotely.
 func TestPeerPatternsCoverSessionRoutes(t *testing.T) {
-	localOnly := map[string]bool{"GET /api/sessions/{id}": true}
+	// show is only called by a chat's own agent, through the gateway of the machine the chat runs on.
+	localOnly := map[string]bool{"GET /api/sessions/{id}": true, "POST /api/sessions/{id}/conversation/show": true}
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)

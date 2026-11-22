@@ -25,6 +25,9 @@ type HarnessClient struct {
 	// Some agents still request permission then (Claude Code for commands outside the project).
 	AutoApprove func() bool
 
+	// StoreImage saves images agents and tools send; nil shows them as a short text instead.
+	StoreImage ImageStore
+
 	requestPrefix   string
 	requestSequence atomic.Uint64
 	updates         *notificationGate
@@ -124,7 +127,7 @@ func (c *HarnessClient) RequestPermission(ctx context.Context, p sdkacp.RequestP
 }
 
 func (c *HarnessClient) SessionUpdate(ctx context.Context, n sdkacp.SessionNotification) error {
-	kind, payload := sessionUpdateLogEntry(n.Update)
+	kind, payload := sessionUpdateLogEntry(n.Update, c.StoreImage)
 	if kind == "" {
 		return nil
 	}
@@ -356,18 +359,18 @@ func (c *HarnessClient) WaitForTerminalExit(ctx context.Context, p sdkacp.WaitFo
 	return c.Terminals.wait(ctx, p.TerminalId)
 }
 
-func sessionUpdateLogEntry(u sdkacp.SessionUpdate) (string, json.RawMessage) {
+func sessionUpdateLogEntry(u sdkacp.SessionUpdate, store ImageStore) (string, json.RawMessage) {
 	switch {
 	case u.AgentMessageChunk != nil:
-		return "agent_message_chunk", marshalChunkPayload(u.AgentMessageChunk.Content)
+		return "agent_message_chunk", marshalChunkPayload(u.AgentMessageChunk.Content, store)
 	case u.AgentThoughtChunk != nil:
-		return "agent_thought_chunk", marshalChunkPayload(u.AgentThoughtChunk.Content)
+		return "agent_thought_chunk", marshalChunkPayload(u.AgentThoughtChunk.Content, store)
 	case u.UserMessageChunk != nil:
-		return "user_message_chunk", marshalChunkPayload(u.UserMessageChunk.Content)
+		return "user_message_chunk", marshalChunkPayload(u.UserMessageChunk.Content, store)
 	case u.ToolCall != nil:
-		return "tool_call", mustJSON(u.ToolCall)
+		return "tool_call", toolContentPayload(mustJSON(u.ToolCall), store)
 	case u.ToolCallUpdate != nil:
-		return "tool_call_update", mustJSON(u.ToolCallUpdate)
+		return "tool_call_update", toolContentPayload(mustJSON(u.ToolCallUpdate), store)
 	case u.Plan != nil:
 		return "plan", mustJSON(u.Plan)
 	case u.PlanUpdate != nil:
@@ -389,11 +392,11 @@ func sessionUpdateLogEntry(u sdkacp.SessionUpdate) (string, json.RawMessage) {
 	}
 }
 
-func marshalChunkPayload(block sdkacp.ContentBlock) json.RawMessage {
+func marshalChunkPayload(block sdkacp.ContentBlock, store ImageStore) json.RawMessage {
 	if block.Text != nil {
 		return mustJSON(map[string]any{"text": map[string]string{"text": block.Text.Text}})
 	}
-	return mustJSON(block)
+	return chunkPayload(mustJSON(block), store)
 }
 
 func mustJSON(v any) json.RawMessage {

@@ -224,6 +224,7 @@ The gateway serves its own MCP server at `/mcp` (see [Deploy the public gateway]
 | `get_usage`, `get_limits` | Usage for an RFC 3339 range (default: the last seven days) and reported plan limits. Read-only. |
 | `run_helper` | For a chat's agent: starts a helper chat in its folder and mode and `ask`s it the task; it returns the helper and `task_id` at once. Agents told to prefer it over a built-in subagent tool the chat cannot show, such as Antigravity's `invoke_subagent`; the parent chat shows the helper as a card. |
 | `ask`, `reply`, `cancel_task`, `tasks` | For a chat's agent: message another chat and get its answer back; see below. |
+| `show` | For a chat's agent: adds a card to its own chat for the person, with a title, Markdown, a table (up to 12 columns and 100 rows) and an image (`image_path` on the chat's machine or inline base64; PNG, JPEG, GIF or WebP). The image goes to the session's blob store; the card does not reach the agent or other chats, and `read_conversation` lists it as a `card`. |
 | `start_session` | Starts a chat (or, with `terminal`, a terminal session) and returns at once; an optional `prompt` is sent when the chat is ready. |
 | `restart_session` | Restarts a running agent, or resumes a stopped chat (its machine restarted or its worker died) with its conversation. |
 

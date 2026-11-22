@@ -13,12 +13,12 @@ import { cn } from "@/lib/utils"
 import type { GoalState } from "@/lib/api-types"
 import { clock, goalStateWords } from "@/lib/goal"
 import { useNow } from "@/lib/use-now"
-import { promptSender, promptText, type CompactionPayload, type ElicitationField, type ElicitationPayload, type NoticePayload, type PermissionPayload, type PromptFrom, type Subagent, type TextChunkPayload, type ThreadItem, type ThreadState, type ToolPayload, type UserMessagePayload } from "./model"
+import { promptSender, promptText, type CompactionPayload, type ElicitationField, type ElicitationPayload, type NoticePayload, type PermissionPayload, type PromptFrom, type Subagent, type TextChunkPayload, type ThreadItem, type ThreadState, type RichBlockPayload, type ToolPayload, type UserAttachmentPayload, type UserMessagePayload } from "./model"
 import { compactCount, SubagentCard, subagentRunning } from "./subagent-card"
 import { AgentMessageBody } from "./agent-message"
 import { ToolDiffBody } from "./tool-diff"
 import { ToolOutput } from "./tool-output"
-import { isOpenRequest } from "./reducer"
+import { chunkAttachments, isOpenRequest } from "./reducer"
 import { QuickLook } from "./quick-look"
 import { conversationErrorMessage, conversationNeedsUpdate } from "./queries"
 import { listDiffChanges } from "./diff-summary"
@@ -52,16 +52,6 @@ function UserMessageBody({
 }) {
   const body = data as UserMessagePayload
   const text = promptText(body)
-  const attachments = body.images ?? [
-    ...(body.image ? [body.image] : []),
-    ...(body.resource_link ? [body.resource_link] : []),
-  ]
-  const previews = attachments.flatMap((image) => {
-    const src = userImageSrc(machine, sessionId, image.blob)
-    return src ? [{ image, src }] : []
-  })
-  const [quickLook, setQuickLook] = useState<number | null>(null)
-  const quickLookImage = quickLook === null ? undefined : previews[quickLook]
   const sender = body.from && (
     <div className="flex items-center gap-(--s2)">
       <p aria-hidden className="text-(length:--fs-xs) font-medium text-(--fg3)">{promptSender(body.from)}</p>
@@ -84,49 +74,89 @@ function UserMessageBody({
     )
   }
   return (
-    <>
-      <div className="flex w-full flex-col items-start gap-(--s2)">
-        {sender || <p aria-hidden className="text-(length:--fs-xs) font-medium text-(--fg3)">You</p>}
-        {previews.length > 0 && (
-          <div data-slot="user-attachments" className="flex max-w-full flex-wrap gap-(--s3)">
-            {previews.map(({ image, src }, index) => {
-              const label = image.name || `image ${index + 1}`
-              return (
-                <button
-                  key={`${image.blob}-${index}`}
-                  type="button"
-                  aria-label={`Preview ${label}`}
-                  className="rounded-(--r-pop) border-[0.5px] border-(--sep) p-0"
-                  onClick={() => setQuickLook(index)}
-                >
-                  <img
-                    src={src}
-                    alt={image.name ?? ""}
-                    width={image.width}
-                    height={image.height}
-                    className="max-h-48 max-w-full rounded-(--r-pop) object-contain"
-                  />
-                </button>
-              )
-            })}
-          </div>
-        )}
-        {text ? (
-          <MessageContextMenu text={text} onQuote={onQuote} onFork={onFork}>
-            <p data-slot="user-bubble" className={cn("w-full rounded-(--r-sheet) px-(--s4) py-(--s3) text-(length:--fs) text-(--fg) whitespace-pre-wrap [overflow-wrap:anywhere]", body.from ? "border-[0.5px] border-(--sep)" : "bg-(--track)")}>
-              {text}
-            </p>
-          </MessageContextMenu>
-        ) : null}
-      </div>
-      {quickLookImage && (
-        <QuickLook
-          src={quickLookImage.src}
-          label={quickLookImage.image.name || "Attached image"}
-          onClose={() => setQuickLook(null)}
-        />
+    <div className="flex w-full flex-col items-start gap-(--s2)">
+      {sender || <p aria-hidden className="text-(length:--fs-xs) font-medium text-(--fg3)">You</p>}
+      <Attachments slot="user-attachments" items={chunkAttachments(body)} machine={machine} sessionId={sessionId} />
+      {text ? (
+        <MessageContextMenu text={text} onQuote={onQuote} onFork={onFork}>
+          <p data-slot="user-bubble" className={cn("w-full rounded-(--r-sheet) px-(--s4) py-(--s3) text-(length:--fs) text-(--fg) whitespace-pre-wrap [overflow-wrap:anywhere]", body.from ? "border-[0.5px] border-(--sep)" : "bg-(--track)")}>
+            {text}
+          </p>
+        </MessageContextMenu>
+      ) : null}
+    </div>
+  )
+}
+
+function safeLink(uri?: string): string | undefined {
+  try {
+    return uri && ["http:", "https:"].includes(new URL(uri).protocol) ? uri : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Images (from the session's blob store, previewed in QuickLook) and links that a person or agent attached. */
+function Attachments({ slot, items, machine, sessionId }: { slot: string; items: UserAttachmentPayload[]; machine: string; sessionId: string }) {
+  const [quickLook, setQuickLook] = useState<number | null>(null)
+  if (items.length === 0) return null
+  const open = quickLook === null ? undefined : items[quickLook]
+  return (
+    <div data-slot={slot} className="flex max-w-full flex-wrap items-start gap-(--s3)">
+      {items.map((item, index) => {
+        const src = userImageSrc(machine, sessionId, item.blob)
+        const label = item.name || `image ${index + 1}`
+        if (src) {
+          return (
+            <button key={`${item.blob}-${index}`} type="button" aria-label={`Preview ${label}`} className="rounded-(--r-pop) border-[0.5px] border-(--sep) p-0" onClick={() => setQuickLook(index)}>
+              <img src={src} alt={item.name ?? ""} width={item.width} height={item.height} className="max-h-48 max-w-full rounded-(--r-pop) object-contain" />
+            </button>
+          )
+        }
+        const href = safeLink(item.uri)
+        const name = item.name || item.uri
+        if (!name) return null
+        const chip = "inline-flex max-w-full items-center gap-(--s2) rounded-(--r-ctl) border-[0.5px] border-(--sep) px-(--s3) py-(--s1) text-(length:--fs-sm) text-(--fg)"
+        return href ? (
+          <a key={`${item.uri}-${index}`} data-slot="attachment-link" href={href} target="_blank" rel="noopener noreferrer" className={cn(chip, "hover:bg-(--hover)")}>
+            <ExternalLink aria-hidden className="size-3.5 shrink-0 text-(--fg2)" />
+            <span className="truncate">{name}</span>
+          </a>
+        ) : (
+          <span key={`${item.uri}-${index}`} data-slot="attachment-link" title={item.uri} className={chip}>
+            <span className="truncate">{name}</span>
+          </span>
+        )
+      })}
+      {open?.blob && <QuickLook src={userImageSrc(machine, sessionId, open.blob)} label={open.name || "Attached image"} onClose={() => setQuickLook(null)} />}
+    </div>
+  )
+}
+
+/** A card an agent showed with the show tool: title, markdown, a table and an image. */
+function RichCard({ data, machine, sessionId }: { data: unknown; machine: string; sessionId: string }) {
+  const card = data as RichBlockPayload
+  const columns = card.table?.columns ?? []
+  return (
+    <div data-slot="rich-card" className="flex w-full max-w-[40rem] flex-col overflow-hidden rounded-(--r-sheet) border-[0.5px] border-(--sep) bg-(--card) shadow-(--shadow-card)">
+      <p className="border-b-[0.5px] border-(--sep-soft) px-(--s4) py-(--s3) text-(length:--fs-sm) font-semibold text-(--fg)">{card.title}</p>
+      {card.markdown && <div className="px-(--s4) py-(--s3)"><AgentMessageBody text={card.markdown} /></div>}
+      {columns.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-(length:--fs-sm)">
+            <thead>
+              <tr>{columns.map((column, index) => <th key={index} scope="col" className="border-b-[0.5px] border-(--sep-soft) px-(--s4) py-(--s2) text-left font-medium text-(--fg2)">{column}</th>)}</tr>
+            </thead>
+            <tbody>
+              {(card.table?.rows ?? []).map((row, rowIndex) => (
+                <tr key={rowIndex}>{columns.map((_, index) => <td key={index} className="border-b-[0.5px] border-(--sep-soft) px-(--s4) py-(--s2) tabular-nums text-(--fg)">{row[index] ?? ""}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
-    </>
+      {card.image && <div className="p-(--s4)"><Attachments slot="rich-card-image" items={[card.image]} machine={machine} sessionId={sessionId} /></div>}
+    </div>
   )
 }
 
@@ -208,7 +238,18 @@ function useOpen(initial: boolean) {
   return { open, onToggle: (event: { currentTarget: HTMLDetailsElement }) => setOpen(event.currentTarget.open) }
 }
 
-function ToolRow({ item, fresh }: { item: ThreadItem; fresh?: boolean }) {
+// Images and links a tool returned, e.g. a browser screenshot from an MCP server.
+function toolAttachments(tool: ToolPayload): UserAttachmentPayload[] {
+  return (tool.content ?? []).flatMap((block): UserAttachmentPayload[] => {
+    const content = block.type === "content" ? block.content : undefined
+    if (content?.type === "image" && content.blob) return [{ blob: content.blob, mime: content.mimeType, name: tool.title }]
+    if (content?.type === "resource_link" && content.uri) return [{ uri: content.uri, name: content.name }]
+    return []
+  })
+}
+
+// Inside a group, the group shows the images instead, so they stay visible while it is closed.
+function ToolRow({ item, fresh, machine, sessionId }: { item: ThreadItem; fresh?: boolean; machine?: string; sessionId?: string }) {
   const tool = item.data as ToolPayload
   const shell = tool.kind === "execute" || tool.kind === "terminal"
   const command = shell ? (tool.command ?? (tool.rawInput as { command?: string } | undefined)?.command) : undefined
@@ -221,7 +262,7 @@ function ToolRow({ item, fresh }: { item: ThreadItem; fresh?: boolean }) {
   const took = item.ts !== undefined && item.endTs !== undefined && item.endTs - item.ts >= 1000 ? formatDuration(item.endTs - item.ts) : ""
   const { open, onToggle } = useOpen(Boolean(fresh && (hasDiff || terminalBody)))
   const input = open && !hasDiff && !terminalBody ? shortInput(tool.rawInput) : ""
-  return (
+  const row = (
     <details
       open={open}
       onToggle={onToggle}
@@ -247,6 +288,12 @@ function ToolRow({ item, fresh }: { item: ThreadItem; fresh?: boolean }) {
         </div>
       )}
     </details>
+  )
+  return sessionId === undefined ? row : (
+    <>
+      {row}
+      <Attachments slot="tool-attachments" items={toolAttachments(tool)} machine={machine ?? LOCAL} sessionId={sessionId} />
+    </>
   )
 }
 
@@ -278,7 +325,7 @@ function plural(n: number, word: string) {
   return `${n} ${word}${n === 1 ? "" : "s"}`
 }
 
-function ToolGroup({ tools, fresh }: { tools: ThreadItem[]; fresh: (item: ThreadItem) => boolean }) {
+function ToolGroup({ tools, fresh, machine, sessionId }: { tools: ThreadItem[]; fresh: (item: ThreadItem) => boolean; machine: string; sessionId: string }) {
   const failed = tools.filter((item) => (item.data as ToolPayload).status === "failed").length
   const files = new Set(listDiffChanges(tools).map((change) => change.path)).size
   // ts is only known for streamed items; omit the time rather than guess.
@@ -291,7 +338,8 @@ function ToolGroup({ tools, fresh }: { tools: ThreadItem[]; fresh: (item: Thread
     ...(files ? [`${plural(files, "file")} changed`] : []),
   ]
   return (
-    <details data-slot="tool-group" open={open} onToggle={onToggle} className="text-(length:--fs-sm)">
+    <>
+      <details data-slot="tool-group" open={open} onToggle={onToggle} className="text-(length:--fs-sm)">
       <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
         <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
         <span className="min-w-0 flex-1 truncate text-(--fg2)">{parts.join(" · ")}</span>
@@ -302,7 +350,9 @@ function ToolGroup({ tools, fresh }: { tools: ThreadItem[]; fresh: (item: Thread
           {tools.map((item, index) => <ToolRow key={item.seq ?? index} item={item} fresh={fresh(item)} />)}
         </div>
       )}
-    </details>
+      </details>
+      <Attachments slot="tool-attachments" items={tools.flatMap((item) => toolAttachments(item.data as ToolPayload))} machine={machine} sessionId={sessionId} />
+    </>
   )
 }
 
@@ -720,12 +770,23 @@ function ThreadItemView({
   switch (item.kind) {
     case "user_message_chunk":
       return <UserMessageBody data={item.data} machine={machine} sessionId={sessionId} onQuote={onQuote} onFork={onFork} onOpenChat={onOpenChat} />
-    case "agent_message_chunk":
-      return <AgentBlock text={chunkText(item.data)} last={last} streaming={streaming} meta={meta} onQuote={onQuote} onFork={onFork} onRetry={onRetry} />
+    case "agent_message_chunk": {
+      const attachments = chunkAttachments(item.data as TextChunkPayload)
+      const text = chunkText(item.data)
+      if (!attachments.length) return <AgentBlock text={text} last={last} streaming={streaming} meta={meta} onQuote={onQuote} onFork={onFork} onRetry={onRetry} />
+      return (
+        <div className="flex flex-col gap-(--s2)">
+          {text && <AgentBlock text={text} last={last} streaming={streaming} meta={meta} onQuote={onQuote} onFork={onFork} onRetry={onRetry} />}
+          <Attachments slot="agent-attachments" items={attachments} machine={machine} sessionId={sessionId} />
+        </div>
+      )
+    }
+    case "rich_block":
+      return <RichCard data={item.data} machine={machine} sessionId={sessionId} />
     case "agent_thought_chunk":
       return <ThoughtBlock text={chunkText(item.data)} ms={item.ts !== undefined && next !== undefined ? next - item.ts : undefined} />
     case "tool":
-      return <ToolRow item={item} fresh={fresh} />
+      return <ToolRow item={item} fresh={fresh} machine={machine} sessionId={sessionId} />
     case "permission":
       return <fieldset disabled={readOnly} className="min-w-0"><PermissionCard item={item} machine={machine} sessionId={sessionId} readOnly={readOnly} agent={agent} /></fieldset>
     case "elicitation":
@@ -1013,7 +1074,7 @@ export function ThreadView({
     if (Array.isArray(entry)) {
       return (
         <div key={entry[0]!.seq ?? index} className={cn("thread-item", fresh(entry.at(-1)!) && "tool-enter")}>
-          <ToolGroup tools={entry} fresh={fresh} />
+          <ToolGroup tools={entry} fresh={fresh} machine={machine} sessionId={sessionId} />
         </div>
       )
     }

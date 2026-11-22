@@ -483,13 +483,17 @@ func entrySize(entry LogEntry) int {
 	return len(line) + 1
 }
 
-// mergeTextChunks joins two text chunks of the same speaker; chunks of different subagents never merge.
+// mergeTextChunks joins two text chunks of the same speaker, keeping every image or link either one
+// carries; chunks of different subagents never merge.
 func mergeTextChunks(a, b json.RawMessage) (json.RawMessage, error) {
 	type chunk struct {
 		Subagent string `json:"_subagent,omitempty"`
 		Text     struct {
 			Text string `json:"text"`
 		} `json:"text"`
+		Image        json.RawMessage   `json:"image,omitempty"`
+		ResourceLink json.RawMessage   `json:"resource_link,omitempty"`
+		Images       []json.RawMessage `json:"images,omitempty"`
 	}
 	var left, right chunk
 	if err := json.Unmarshal(a, &left); err != nil {
@@ -501,6 +505,22 @@ func mergeTextChunks(a, b json.RawMessage) (json.RawMessage, error) {
 	if left.Subagent != right.Subagent {
 		return nil, errors.New("chunks belong to different subagents")
 	}
-	left.Text.Text += right.Text.Text
-	return json.Marshal(left)
+	attachments := func(c chunk) []json.RawMessage {
+		if c.Images != nil {
+			return c.Images
+		}
+		var out []json.RawMessage
+		for _, one := range []json.RawMessage{c.Image, c.ResourceLink} {
+			if len(one) > 0 && string(one) != "null" {
+				out = append(out, one)
+			}
+		}
+		return out
+	}
+	merged := chunk{Subagent: left.Subagent, Images: append(attachments(left), attachments(right)...)}
+	merged.Text.Text = left.Text.Text + right.Text.Text
+	if len(merged.Images) == 0 {
+		merged.Images = nil
+	}
+	return json.Marshal(merged)
 }

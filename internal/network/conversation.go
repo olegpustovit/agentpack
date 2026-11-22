@@ -46,7 +46,8 @@ type ConversationSession struct {
 	stderr            *diagnosticStderr
 	agentExitCode     *atomic.Int32
 	sessionID         string
-	workspace         string // session working directory; set by the worker, bounds revert
+	workspace         string         // session working directory; set by the worker, bounds revert
+	imageStore        acp.ImageStore // the session's blob store, for images agents and tools send
 
 	// Queue and goal state (conversation_queue.go, conversation_goal.go). queueMu orders queue
 	// changes with their log entries; it is taken before mu and never inside a log callback.
@@ -724,4 +725,15 @@ func (session *ConversationSession) AgentCapabilitiesView() *AgentCapabilities {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	return session.agentCapabilities
+}
+
+// storeImage keeps an image an agent or tool sent in the session's blob store.
+func (session *ConversationSession) storeImage(data []byte) (string, error) {
+	session.mu.Lock()
+	store := session.imageStore
+	session.mu.Unlock()
+	if store == nil {
+		return "", errors.New("image storage unavailable")
+	}
+	return store(data)
 }
