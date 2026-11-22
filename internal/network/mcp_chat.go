@@ -771,7 +771,7 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 	})
 	addTool(server, "wait", "Wait until any listed session reaches needs_you, idle (finished or stopped), or any state change, or any listed task changes state or is answered, for at most 25 seconds. reached is false when the time ran out. An answered task also arrives in this chat as a message.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		SessionIDs     []string  `json:"session_ids,omitempty" jsonschema:"Sessions to watch, from list_sessions."`
-		TaskIDs        []string  `json:"task_ids,omitempty" jsonschema:"Tasks this chat sent or received, from ask, run_helper, call_agent or tasks."`
+		TaskIDs        []string  `json:"task_ids,omitempty" jsonschema:"Tasks this chat sent or received, from ask, run_helper or tasks."`
 		Until          waitUntil `json:"until,omitempty" jsonschema:"Condition for sessions; defaults to any."`
 		TimeoutSeconds int       `json:"timeout_seconds,omitempty" jsonschema:"At most 25, the default."`
 	}) (*mcp.CallToolResult, struct {

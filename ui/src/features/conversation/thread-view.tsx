@@ -65,7 +65,7 @@ function UserMessageBody({
   const sender = body.from && (
     <div className="flex items-center gap-(--s2)">
       <p aria-hidden className="text-(length:--fs-xs) font-medium text-(--fg3)">{promptSender(body.from)}</p>
-      {body.from.agent !== "a2a" && onOpenChat && (
+      {onOpenChat && (
         <Button type="button" variant="ghost" size="sm" className="h-auto px-(--s1) py-0 text-(length:--fs-xs)" aria-label={`Open ${body.from.name || "the other chat"}`} onClick={() => onOpenChat(body.from!)}>
           Open chat
         </Button>

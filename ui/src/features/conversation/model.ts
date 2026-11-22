@@ -87,7 +87,7 @@ export function promptText(payload: UserMessagePayload): string {
 }
 
 export function promptSender(from: PromptFrom): string {
-  const who = from.agent === "a2a" ? `A2A agent ${from.name || ""}`.trim() : from.name || "another chat"
+  const who = from.name || "another chat"
   if (from.kind === "ask") return `Message from ${who}`
   return from.state === "input_required" ? `Question from ${who}` : `Reply from ${who} · ${from.state ?? "completed"}`
 }

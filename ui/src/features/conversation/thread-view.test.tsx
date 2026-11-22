@@ -93,22 +93,17 @@ describe("conversation message actions", () => {
     expect(container.textContent).toContain("Question from another chat")
   })
 
-  it("opens the chat that sent a message, but not an A2A agent", () => {
+  it("opens the chat that sent a message", () => {
     const open = vi.fn()
     const from = { session: "session-a", node: "node-2", name: "Refactor auth", task: "t_1", kind: "ask" as const }
     act(() => root.render(createElement(ThreadView, {
-      items: [
-        { kind: "user_message_chunk", data: { from, text: { text: "[h]\n---\nhi" } } },
-        { kind: "user_message_chunk", data: { from: { session: "remote-task", agent: "a2a", name: "Planner", task: "t_2", kind: "reply", state: "completed" }, text: { text: "[h]\n---\nok" } } },
-      ],
+      items: [{ kind: "user_message_chunk", data: { from, text: { text: "[h]\n---\nhi" } } }],
       machine: "local",
       sessionId: "session-1",
       onOpenChat: open,
     })))
-    expect(container.querySelectorAll('button[aria-label^="Open "]')).toHaveLength(1)
     act(() => container.querySelector<HTMLButtonElement>('button[aria-label="Open Refactor auth"]')!.click())
     expect(open).toHaveBeenCalledWith(from)
-    expect(container.textContent).toContain("Reply from A2A agent Planner · completed")
   })
 
   it("groups a turn's tools into one summary, opened by a failure", () => {

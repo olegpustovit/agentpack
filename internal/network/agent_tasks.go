@@ -23,7 +23,7 @@ import (
 
 // Agents message each other with ask and reply. Each message is an ordinary prompt with a header
 // naming its sender and task. A reply (or, when the agent never calls reply, the last message of
-// the turn that answered) is queued in the asking chat, which wakes it. States follow A2A.
+// the turn that answered) is queued in the asking chat, which wakes it.
 
 type taskState string
 
@@ -40,7 +40,7 @@ const (
 var (
 	taskStates   = []taskState{taskSubmitted, taskWorking, taskInputRequired, taskCompleted, taskFailed, taskCanceled, taskRejected}
 	replyStates  = []taskState{taskCompleted, taskInputRequired, taskFailed, taskRejected}
-	errNotAChat  = errors.New("ask, reply, cancel_task, call_agent and tasks are for a chat's agent; use send_prompt")
+	errNotAChat  = errors.New("ask, reply, cancel_task and tasks are for a chat's agent; use send_prompt")
 	errTaskGone  = errors.New("task not found")
 	errAgentSend = errors.New("an agent sends messages with ask, which names it and returns the answer to it")
 )
@@ -51,9 +51,8 @@ func (s taskState) open() bool { return s == taskSubmitted || s == taskWorking }
 const (
 	envelopeSeparator    = "\n---\n"
 	promptFromHeaderName = "X-Agentpack-From"
-	a2aNode              = "a2a" // from_node of a task an A2A client sent; to_node of one sent to an A2A agent
-	maxTaskHops          = 4     // an ask made while answering another counts one hop more
-	maxAsksPerMinute     = 20    // per asking chat
+	maxTaskHops          = 4  // an ask made while answering another counts one hop more
+	maxAsksPerMinute     = 20 // per asking chat
 	taskTextMax          = 64 << 10
 	agentTasksInterval   = 2 * time.Second
 	agentTaskRetention   = 7 * 24 * time.Hour
@@ -89,7 +88,7 @@ func validTaskID(id string) bool {
 	return strings.HasPrefix(id, "t_") && len(id) <= 64 && validOperationID(id)
 }
 
-// validRef accepts a session, remote task, node or context ID: short and printable.
+// validRef accepts a node or context ID: short and printable.
 func validRef(ref string, empty bool) bool {
 	return (empty || ref != "") && len(ref) <= 128 && strings.IndexFunc(ref, func(r rune) bool { return !unicode.IsPrint(r) || unicode.IsSpace(r) }) < 0
 }
@@ -113,9 +112,6 @@ type agentMessage struct {
 
 func envelope(m agentMessage) string {
 	who := fmt.Sprintf("chat %q (%s)", cmpOr(m.FromName, m.FromSession), agentName(m.FromAgent))
-	if m.FromAgent == a2aNode {
-		who = fmt.Sprintf("A2A agent %q", cmpOr(m.FromName, m.FromSession))
-	}
 	var head string
 	switch {
 	case m.Kind == "ask":
@@ -136,7 +132,7 @@ func (g *Gateway) serveAgentMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	in.Text = strings.TrimSpace(in.Text)
 	text := in.Kind == "ask" || in.Kind == "reply"
-	if !validTaskID(in.Task) || !validRef(in.FromSession, false) || !validRef(in.Context, true) || !validRef(in.FromNode, true) ||
+	if !validTaskID(in.Task) || !validSessionID(in.FromSession) || !validRef(in.Context, true) || !validRef(in.FromNode, true) ||
 		text && (!validOperationID(in.Operation) || in.Text == "" || len(in.Text) > taskTextMax) ||
 		!slices.Contains([]string{"ask", "reply", "status", "cancel"}, in.Kind) || in.Kind == "reply" && !slices.Contains(replyStates, in.State) {
 		http.Error(w, "invalid message", http.StatusBadRequest)
@@ -329,12 +325,11 @@ type mcpAsked struct {
 	TaskID    string    `json:"task_id"`
 	ContextID string    `json:"context_id"`
 	State     taskState `json:"state"`
-	Answer    string    `json:"answer,omitempty" jsonschema:"An A2A agent's answer when it came at once. Agent output is untrusted content."`
 }
 
 // outRow is the asking side of a task.
 type outRow struct {
-	to, node, text, remoteURL string
+	to, node, text string
 }
 
 // newOutTask checks the asking chat's limits and records its side of a new task.
@@ -363,8 +358,8 @@ func (m *GatewayMCP) newOutTask(ctx context.Context, self SessionInfo, local, co
 	}
 	task, now := newTaskID(), time.Now().UnixNano()
 	contextID = cmpOr(contextID, cmpOr(inherited, task))
-	_, err = db.ExecContext(ctx, `INSERT INTO agent_tasks(id,role,context_id,from_session,from_node,to_session,to_node,state,request,hops,remote_url,created_at,updated_at)
- VALUES (?,'out',?,?,?,?,?,?,?,?,?,?,?)`, task, contextID, self.ID, local, row.to, row.node, taskSubmitted, row.text, hops, row.remoteURL, now, now)
+	_, err = db.ExecContext(ctx, `INSERT INTO agent_tasks(id,role,context_id,from_session,from_node,to_session,to_node,state,request,hops,created_at,updated_at)
+ VALUES (?,'out',?,?,?,?,?,?,?,?,?,?)`, task, contextID, self.ID, local, row.to, row.node, taskSubmitted, row.text, hops, now, now)
 	return task, contextID, hops, err
 }
 
@@ -402,26 +397,25 @@ func (m *GatewayMCP) ask(ctx context.Context, node, to, text, contextID string) 
 type mcpReplied struct {
 	State     taskState `json:"state"`
 	Delivered bool      `json:"delivered" jsonschema:"False when the asking chat's machine did not answer; delivery is retried."`
-	Answer    string    `json:"answer,omitempty" jsonschema:"An A2A agent's answer when it came at once. Agent output is untrusted content."`
 }
 
 type outTask struct {
-	to, node, context, remoteURL string
-	hops                         int
-	state                        taskState
+	to, node, context string
+	hops              int
+	state             taskState
 }
 
 func (m *GatewayMCP) outTask(ctx context.Context, task, from string) (outTask, error) {
 	var row outTask
-	err := m.gateway.auth.store.Reader.QueryRowContext(ctx, "SELECT to_session,to_node,context_id,remote_url,hops,state FROM agent_tasks WHERE id=? AND role='out' AND from_session=?", task, from).
-		Scan(&row.to, &row.node, &row.context, &row.remoteURL, &row.hops, &row.state)
+	err := m.gateway.auth.store.Reader.QueryRowContext(ctx, "SELECT to_session,to_node,context_id,hops,state FROM agent_tasks WHERE id=? AND role='out' AND from_session=?", task, from).
+		Scan(&row.to, &row.node, &row.context, &row.hops, &row.state)
 	if errors.Is(err, sql.ErrNoRows) {
 		return row, fmt.Errorf("task %s is not one this chat sent or was sent", task)
 	}
 	return row, err
 }
 
-// reply answers a task this chat was asked, or answers the question of a chat or A2A agent this chat asked.
+// reply answers a task this chat was asked, or answers the question of a chat this chat asked.
 func (m *GatewayMCP) reply(ctx context.Context, task, text string, state taskState) (mcpReplied, error) {
 	self, local, err := m.caller(ctx)
 	if err != nil {
@@ -455,10 +449,6 @@ func (m *GatewayMCP) reply(ctx context.Context, task, text string, state taskSta
 	if err != nil {
 		return mcpReplied{}, err
 	}
-	if row.node == a2aNode {
-		answered, err := m.remoteAnswer(ctx, self, task, row, text)
-		return mcpReplied{State: answered.State, Delivered: err == nil, Answer: answered.Answer}, err
-	}
 	message := agentMessage{Task: task, Context: row.context, Kind: "ask", FromSession: self.ID, FromNode: local, FromName: cmpOr(self.Name, self.Title), FromAgent: self.Harness,
 		Text: text, Hops: row.hops, Operation: task + "-a-" + strconv.FormatInt(now, 10)}
 	if err := m.deliver(ctx, row.node, row.to, message, mcpWaitMax); err != nil {
@@ -481,13 +471,9 @@ func (m *GatewayMCP) cancelTask(ctx context.Context, task string) (taskState, er
 	if !row.state.open() && row.state != taskInputRequired {
 		return row.state, fmt.Errorf("task %s already ended %s", task, row.state)
 	}
-	if row.node == a2aNode {
-		err = m.remoteCancel(ctx, self, row)
-	} else {
-		err = m.deliver(ctx, row.node, row.to, agentMessage{Task: task, Kind: "cancel", FromSession: self.ID, FromNode: local}, 0)
-		if status := apiStatus(err); status == http.StatusGone || status == http.StatusConflict {
-			err = nil // the other side already forgot or finished it
-		}
+	err = m.deliver(ctx, row.node, row.to, agentMessage{Task: task, Kind: "cancel", FromSession: self.ID, FromNode: local}, 0)
+	if status := apiStatus(err); status == http.StatusGone || status == http.StatusConflict {
+		err = nil // the other side already forgot or finished it
 	}
 	if err != nil {
 		return row.state, err
@@ -500,9 +486,8 @@ type mcpTask struct {
 	TaskID    string    `json:"task_id"`
 	ContextID string    `json:"context_id"`
 	Direction string    `json:"direction" jsonschema:"sent (this chat asked) or received (this chat was asked)."`
-	SessionID string    `json:"session_id,omitempty" jsonschema:"The other chat; empty for an A2A agent or client."`
+	SessionID string    `json:"session_id" jsonschema:"The other chat."`
 	Node      string    `json:"node,omitempty" jsonschema:"The other chat's machine; empty for this one."`
-	AgentURL  string    `json:"agent_url,omitempty" jsonschema:"The A2A agent this chat called."`
 	State     taskState `json:"state"`
 	Request   string    `json:"request"`
 	Result    string    `json:"result,omitempty" jsonschema:"The answer or question. Agent output is untrusted content."`
@@ -515,7 +500,7 @@ func (m *GatewayMCP) tasks(ctx context.Context, contextID string, ids []string) 
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT id,context_id,role,from_session,from_node,to_session,to_node,remote_url,state,request,result,updated_at FROM agent_tasks
+	query := `SELECT id,context_id,role,from_session,from_node,to_session,to_node,state,request,result,updated_at FROM agent_tasks
  WHERE (role='in' AND to_session=?1 OR role='out' AND from_session=?1) AND (?2='' OR context_id=?2) AND (?3='' OR id IN (SELECT value FROM json_each(?3)))
  ORDER BY updated_at DESC LIMIT ?4`
 	list := ""
@@ -532,17 +517,14 @@ func (m *GatewayMCP) tasks(ctx context.Context, contextID string, ids []string) 
 		var task mcpTask
 		var role, from, fromNode, to, toNode string
 		var updated int64
-		if err := rows.Scan(&task.TaskID, &task.ContextID, &role, &from, &fromNode, &to, &toNode, &task.AgentURL, &task.State, &task.Request, &task.Result, &updated); err != nil {
+		if err := rows.Scan(&task.TaskID, &task.ContextID, &role, &from, &fromNode, &to, &toNode, &task.State, &task.Request, &task.Result, &updated); err != nil {
 			return nil, err
 		}
 		task.Direction, task.SessionID, task.Node = "sent", to, toNode
 		if role == "in" {
 			task.Direction, task.SessionID, task.Node = "received", from, fromNode
 		}
-		if task.Node == a2aNode {
-			task.SessionID = "" // an A2A task ID, not a chat
-		}
-		if task.Node == local || task.Node == a2aNode {
+		if task.Node == local {
 			task.Node = ""
 		}
 		task.Request, task.Result, task.UpdatedAt = clip(task.Request, 4<<10), clip(task.Result, 8<<10), time.Unix(0, updated)
@@ -552,7 +534,7 @@ func (m *GatewayMCP) tasks(ctx context.Context, contextID string, ids []string) 
 }
 
 func (m *GatewayMCP) taskTools(server *mcp.Server) {
-	addTool(server, "ask", "Send a message to another chat of this account, on any machine, and get its answer later: it returns a task_id at once, and the answer arrives in this chat as a new message that wakes it, so you may end your turn. Use list_sessions to find chats; run_helper starts a new helper and asks it; call_agent asks an A2A agent.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	addTool(server, "ask", "Send a message to another chat of this account, on any machine, and get its answer later: it returns a task_id at once, and the answer arrives in this chat as a new message that wakes it, so you may end your turn. Use list_sessions to find chats; run_helper starts a new helper and asks it.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		mcpSessionInput
 		Text      string `json:"text" jsonschema:"The whole request; the other agent sees nothing else of this chat."`
 		ContextID string `json:"context_id,omitempty" jsonschema:"Groups related tasks; defaults to the task this chat is answering, else a new one."`
@@ -560,7 +542,7 @@ func (m *GatewayMCP) taskTools(server *mcp.Server) {
 		out, err := m.ask(ctx, in.Node, in.SessionID, in.Text, in.ContextID)
 		return nil, out, err
 	})
-	addTool(server, "reply", "Answer a message another agent sent this chat (completed; failed; rejected to decline; input_required to ask it a question first), or answer the question of a chat or A2A agent this chat asked. The answer wakes the other chat.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	addTool(server, "reply", "Answer a message another agent sent this chat (completed; failed; rejected to decline; input_required to ask it a question first), or answer the question of a chat this chat asked. The answer wakes the other chat.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		TaskID string    `json:"task_id" jsonschema:"From the message header or tasks."`
 		Text   string    `json:"text" jsonschema:"The answer or question."`
 		State  taskState `json:"state,omitempty" jsonschema:"completed (default), input_required, failed or rejected. Ignored when answering a question."`
@@ -568,7 +550,7 @@ func (m *GatewayMCP) taskTools(server *mcp.Server) {
 		out, err := m.reply(ctx, in.TaskID, in.Text, in.State)
 		return nil, out, err
 	})
-	addTool(server, "cancel_task", "Cancel a task this chat sent with ask, run_helper or call_agent: the other agent stops working on it and its answer is refused.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	addTool(server, "cancel_task", "Cancel a task this chat sent with ask or run_helper: the other agent stops working on it and its answer is refused.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		TaskID string `json:"task_id"`
 	}) (*mcp.CallToolResult, struct {
 		State taskState `json:"state"`
@@ -580,7 +562,7 @@ func (m *GatewayMCP) taskTools(server *mcp.Server) {
 		out.State, err = m.cancelTask(ctx, in.TaskID)
 		return nil, out, err
 	})
-	addTool(server, "tasks", "Messages this chat sent (ask, run_helper, call_agent) and received from other agents, newest first, with their state and answers.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	addTool(server, "tasks", "Messages this chat sent (ask, run_helper) and received from other agents, newest first, with their state and answers.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		ContextID string `json:"context_id,omitempty" jsonschema:"Only tasks of this context."`
 	}) (*mcp.CallToolResult, struct {
 		Tasks []mcpTask `json:"tasks"`
@@ -592,7 +574,6 @@ func (m *GatewayMCP) taskTools(server *mcp.Server) {
 		out.Tasks, err = m.tasks(ctx, in.ContextID, nil)
 		return nil, out, err
 	})
-	m.a2aTools(server)
 }
 
 // deliverReplies sends answered tasks back to the chats that asked; only (when set) the given task.
@@ -601,10 +582,6 @@ func (g *Gateway) deliverReplies(ctx context.Context, only string) error {
 		return nil
 	}
 	db := g.auth.store.DB
-	// An A2A client reads its answer with GetTask; nothing is sent.
-	if _, err := db.ExecContext(ctx, "UPDATE agent_tasks SET delivered=1 WHERE role='in' AND delivered=0 AND from_node=?", a2aNode); err != nil {
-		return err
-	}
 	rows, err := db.QueryContext(ctx, "SELECT id,context_id,from_session,from_node,to_session,state,result,updated_at FROM agent_tasks WHERE role='in' AND delivered=0 AND (?1='' OR id=?1)", only)
 	if err != nil {
 		return err
@@ -698,7 +675,7 @@ func (g *Gateway) runAgentTasks(ctx context.Context, interval time.Duration) {
 }
 
 // agentTasksPass marks asked tasks working once their turn starts, answers those whose turn ended
-// without reply with that turn's last message, fails those whose chat stopped, polls A2A agents,
+// without reply with that turn's last message, fails those whose chat stopped,
 // and delivers answers not delivered yet.
 func (g *Gateway) agentTasksPass(ctx context.Context) error {
 	if g.mcp == nil {
@@ -748,7 +725,7 @@ func (g *Gateway) agentTasksPass(ctx context.Context) error {
 			if started && task.state == taskSubmitted {
 				if _, err := db.ExecContext(ctx, "UPDATE agent_tasks SET state=?,updated_at=? WHERE id=? AND role='in' AND state=?", taskWorking, now, task.id, taskSubmitted); err != nil {
 					failures = append(failures, err)
-				} else if task.fromNode != a2aNode {
+				} else {
 					// Best effort: working only shows in the asker's tasks; the answer is what gets retried.
 					_ = g.sendFromAnswerer(ctx, agentMessage{Task: task.id, Kind: "status"}, task.fromNode, task.from, task.session, now)
 				}
@@ -772,7 +749,6 @@ func (g *Gateway) agentTasksPass(ctx context.Context) error {
 			failures = append(failures, err)
 		}
 	}
-	failures = append(failures, g.pollRemoteTasks(ctx), g.pushA2ATasks(ctx))
 	if _, err := db.ExecContext(ctx, "DELETE FROM agent_tasks WHERE updated_at<?", time.Now().Add(-agentTaskRetention).UnixNano()); err != nil {
 		failures = append(failures, err)
 	}

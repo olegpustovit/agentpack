@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/a2aproject/a2a-go/v2/a2asrv/push"
 	"github.com/gofrs/flock"
 	"github.com/gorilla/websocket"
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -63,44 +62,41 @@ type nodeRecord struct {
 }
 
 type Gateway struct {
-	options         GatewayOptions
-	startingChats   sync.Map
-	starting        sync.WaitGroup       // chats launching in the background; tests wait on it
-	chatLifecycle   sync.Mutex           // serializes resume claims with settling dead chats
-	autoResumed     map[string]time.Time // chats the reaper resumed; guarded by chatLifecycle
-	store           *state.Store
-	logs            *obs.Store
-	auth            *gatewayAuth
-	mcp             *GatewayMCP
-	local           nodeRecord
-	origin          *url.URL // loopback origin; public access adds another
-	public          publicAccess
-	stop            context.CancelFunc
-	done            <-chan struct{}
-	chatTimings     sync.Map // latest browser duration per measurement
-	replicaStatus   sync.Map
-	statePulls      sync.Map // peer → coalesced pull notification
-	syncTransferMu  sync.Mutex
-	syncTransfers   map[string]*stateTransferFile
-	identityMu      sync.Mutex
-	updateMu        sync.Mutex
-	updating        bool
-	updateError     string
-	identityAt      time.Time
-	identitySelf    tailnetSelf
-	events          eventHub
-	agents          agentAccounts
-	tailnet         tailnetCache
-	mcpBroker       mcpBroker
-	push            pushWatch
-	agentTasks      sync.Map             // task IDs whose answer is being delivered
-	agentTaskSeen   map[string]int64     // last_seq each asked chat had at the last pass; owned by runAgentTasks
-	agentTaskRetry  time.Time            // when undelivered answers are tried again; owned by runAgentTasks
-	agentTaskPolled map[string]time.Time // when each called A2A agent's task was last read; owned by runAgentTasks
-	a2aPusher       *push.HTTPPushSender // sends A2A clients' webhooks; owned by runAgentTasks, tests set one that reaches loopback
-	a2aPushRetry    map[string]time.Time // when a failed webhook is tried again; owned by runAgentTasks
-	omp             ompSettings
-	credentialsMu   sync.Mutex // one agent credential sync at a time
+	options        GatewayOptions
+	startingChats  sync.Map
+	starting       sync.WaitGroup       // chats launching in the background; tests wait on it
+	chatLifecycle  sync.Mutex           // serializes resume claims with settling dead chats
+	autoResumed    map[string]time.Time // chats the reaper resumed; guarded by chatLifecycle
+	store          *state.Store
+	logs           *obs.Store
+	auth           *gatewayAuth
+	mcp            *GatewayMCP
+	local          nodeRecord
+	origin         *url.URL // loopback origin; public access adds another
+	public         publicAccess
+	stop           context.CancelFunc
+	done           <-chan struct{}
+	chatTimings    sync.Map // latest browser duration per measurement
+	replicaStatus  sync.Map
+	statePulls     sync.Map // peer → coalesced pull notification
+	syncTransferMu sync.Mutex
+	syncTransfers  map[string]*stateTransferFile
+	identityMu     sync.Mutex
+	updateMu       sync.Mutex
+	updating       bool
+	updateError    string
+	identityAt     time.Time
+	identitySelf   tailnetSelf
+	events         eventHub
+	agents         agentAccounts
+	tailnet        tailnetCache
+	mcpBroker      mcpBroker
+	push           pushWatch
+	agentTasks     sync.Map         // task IDs whose answer is being delivered
+	agentTaskSeen  map[string]int64 // last_seq each asked chat had at the last pass; owned by runAgentTasks
+	agentTaskRetry time.Time        // when undelivered answers are tried again; owned by runAgentTasks
+	omp            ompSettings
+	credentialsMu  sync.Mutex // one agent credential sync at a time
 }
 
 // browserPingInterval keeps idle terminal connections alive through proxies. Tests shorten it.
@@ -660,7 +656,6 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", g.servePrompt)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", g.servePrompt)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/message", g.serveAgentMessage)
-	mux.HandleFunc("POST /api/sessions/{id}/a2a", g.serveSessionA2A)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/permission", func(w http.ResponseWriter, r *http.Request) {
 		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {

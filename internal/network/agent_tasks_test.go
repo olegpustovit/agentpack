@@ -3,7 +3,6 @@ package network
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,13 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/a2aproject/a2a-go/v2/a2a"
-	"github.com/a2aproject/a2a-go/v2/a2aclient"
-	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
-	"github.com/a2aproject/a2a-go/v2/a2asrv/push"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/olegpustovit/agentpack/internal/acp"
-	mcpconfig "github.com/olegpustovit/agentpack/internal/mcp"
 )
 
 type receivedPrompt struct {
@@ -512,113 +506,6 @@ func TestAgentsMessageAcrossMachines(t *testing.T) {
 	}
 }
 
-func TestA2AClientsAndAgents(t *testing.T) {
-	h := newOAuthHarness(t)
-	tokenA, tokenB := chatFixture(t, h, "session-a", ""), chatFixture(t, h, "session-b", "")
-	toA, toB := fakeChatWorker(t, h, "session-a"), fakeChatWorker(t, h, "session-b")
-	if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET name='Reviewer' WHERE id='session-b'"); err != nil {
-		t.Fatal(err)
-	}
-	access := h.exchange(t, h.codeForm(h.code(t)), 200).Access
-	base := h.server.URL + "/a2a/session-b"
-
-	// An A2A client: the card, then a task the chat answers.
-	connect := func(token string) (*a2aclient.Client, *a2a.AgentCard, error) {
-		httpClient := &http.Client{Transport: headerTransport{"Authorization": "Bearer " + token}}
-		card, err := agentcard.NewResolver(httpClient).Resolve(t.Context(), base)
-		if err != nil {
-			return nil, nil, err
-		}
-		client, err := a2aclient.NewFromCard(t.Context(), card, a2aclient.WithJSONRPCTransport(httpClient))
-		return client, card, err
-	}
-	client, card, err := connect(access)
-	if err != nil || card.Name != "Reviewer" || card.SupportedInterfaces[0].URL != base {
-		t.Fatalf("card %+v %v", card, err)
-	}
-	if _, _, err := connect("wrong"); err == nil {
-		t.Fatal("card served without a token")
-	}
-	result, err := client.SendMessage(t.Context(), &a2a.SendMessageRequest{Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("Is auth.go safe?")), Config: &a2a.SendMessageConfig{ReturnImmediately: true}})
-	task, ok := result.(*a2a.Task)
-	if err != nil || !ok || task.Status.State != a2a.TaskStateSubmitted {
-		t.Fatalf("send %+v %v", result, err)
-	}
-	if last := lastPrompt(t, toB); last.from.Agent != a2aNode || last.from.Task != string(task.ID) || !strings.Contains(last.text, "A2A agent") || !strings.HasSuffix(last.text, "Is auth.go safe?") {
-		t.Fatalf("B received %+v", last)
-	}
-	if _, text, failed := structured[mcpReplied](t, h, tokenB, "reply", map[string]any{"task_id": string(task.ID), "text": "Which version?", "state": "input_required"}); failed {
-		t.Fatal(text)
-	}
-	got, err := client.GetTask(t.Context(), &a2a.GetTaskRequest{ID: task.ID})
-	if err != nil || got.Status.State != a2a.TaskStateInputRequired || messageText(got.Status.Message) != "Which version?" {
-		t.Fatalf("get %+v %v", got, err)
-	}
-	answer := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("main"))
-	answer.TaskID = task.ID
-	if _, err := client.SendMessage(t.Context(), &a2a.SendMessageRequest{Message: answer, Config: &a2a.SendMessageConfig{ReturnImmediately: true}}); err != nil {
-		t.Fatal(err)
-	}
-	if last := lastPrompt(t, toB); !strings.HasSuffix(last.text, "main") {
-		t.Fatalf("answer %+v", last)
-	}
-	structured[mcpReplied](t, h, tokenB, "reply", map[string]any{"task_id": string(task.ID), "text": "Safe."})
-	if got, err = client.GetTask(t.Context(), &a2a.GetTaskRequest{ID: task.ID}); err != nil || got.Status.State != a2a.TaskStateCompleted || messageText(got.Status.Message) != "Safe." {
-		t.Fatalf("completed %+v %v", got, err)
-	}
-	list, err := client.ListTasks(t.Context(), &a2a.ListTasksRequest{})
-	if err != nil || len(list.Tasks) != 1 {
-		t.Fatalf("list %+v %v", list, err)
-	}
-	if _, err := client.CancelTask(t.Context(), &a2a.CancelTaskRequest{ID: task.ID}); !errors.Is(err, a2a.ErrTaskNotCancelable) {
-		t.Fatal("cancel a completed task:", err)
-	}
-	if _, err := client.GetTask(t.Context(), &a2a.GetTaskRequest{ID: "t_missing00000000"}); !errors.Is(err, a2a.ErrTaskNotFound) {
-		t.Fatal("missing task:", err)
-	}
-
-	// A chat calls an A2A agent (here the gateway's own endpoint for chat B) with the owner's
-	// connection for its URL, which no chat sees; the answer wakes it.
-	if _, text, failed := structured[mcpAsked](t, h, tokenA, "call_agent", map[string]any{"agent_url": base, "text": "No connection yet"}); !failed {
-		t.Fatal("called an agent that needs a token without one:", text)
-	}
-	credential, err := newStaticMCPCredential(testBrowserEmail, mcpconfig.CredentialHeader, h.server.URL+"/a2a", "", map[string]string{"Authorization": "Bearer " + access})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.gateway.saveMCPCredential(t.Context(), credential); err != nil {
-		t.Fatal(err)
-	}
-	called, text, failed := structured[mcpAsked](t, h, tokenA, "call_agent", map[string]any{"agent_url": base, "text": "Second opinion?"})
-	if failed || called.State != taskSubmitted {
-		t.Fatalf("call_agent: %s %+v", text, called)
-	}
-	remote := string(lastPrompt(t, toB).from.Task)
-	structured[mcpReplied](t, h, tokenB, "reply", map[string]any{"task_id": remote, "text": "Looks fine."})
-	if err := h.gateway.agentTasksPass(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if last := lastPrompt(t, toA); last.from.Agent != a2aNode || last.from.Task != called.TaskID || !strings.Contains(last.text, `A2A agent "Reviewer"`) || !strings.HasSuffix(last.text, "Looks fine.") {
-		t.Fatalf("A woken by %+v", last)
-	}
-	tasks, _, _ := structured[struct{ Tasks []mcpTask }](t, h, tokenA, "tasks", map[string]any{})
-	if len(tasks.Tasks) != 1 || tasks.Tasks[0].AgentURL != base || tasks.Tasks[0].State != taskCompleted || tasks.Tasks[0].SessionID != "" {
-		t.Fatalf("A's tasks %+v", tasks.Tasks)
-	}
-	// Cancelling a call cancels the agent's task.
-	called, _, _ = structured[mcpAsked](t, h, tokenA, "call_agent", map[string]any{"agent_url": base, "text": "Never mind"})
-	remote = string(lastPrompt(t, toB).from.Task)
-	if _, text, failed := structured[struct{ State taskState }](t, h, tokenA, "cancel_task", map[string]any{"task_id": called.TaskID}); failed {
-		t.Fatal(text)
-	}
-	if state, _ := taskRow(t, h, remote, "in"); state != "canceled" {
-		t.Fatal("remote task", state)
-	}
-	if _, text, failed := structured[mcpAsked](t, h, tokenA, "call_agent", map[string]any{"agent_url": "file:///etc/passwd", "text": "hi"}); !failed {
-		t.Fatal("non-http agent URL accepted:", text)
-	}
-}
-
 func TestPromptSenderSurvivesTheQueueAndNamesTheChat(t *testing.T) {
 	from := &acp.PromptFrom{Session: "session-a", Task: "t_0123456789abcdef", Kind: "ask"}
 	input, err := promptInputFromLog(queuedPromptPayload(queuedPrompt{ID: "q", Input: acp.PromptInput{Text: "hi", From: from}}))
@@ -633,126 +520,5 @@ func TestPromptSenderSurvivesTheQueueAndNamesTheChat(t *testing.T) {
 	request := httptest.NewRequest("POST", "/conversation/prompt", strings.NewReader(`{"text":"hi","from":{"session":"x","task":"t"}}`))
 	if prompt, _, ok := readPromptRequest(httptest.NewRecorder(), request); ok && prompt.From != nil {
 		t.Fatalf("sender from the body: %+v", prompt.From)
-	}
-}
-
-func TestA2AStreamingPushAndChatsOnOtherMachines(t *testing.T) {
-	one, two, _, idTwo := meshPair(t)
-	tokenB := chatFixture(t, two, "session-b", "")
-	toB := fakeChatWorker(t, two, "session-b")
-	// Machine one knows the chat from replication: it runs on machine two.
-	owner := browserActor(testBrowserEmail)
-	if err := upsertSession(t.Context(), one.gateway.store.DB, SessionInfo{ID: "session-b", Harness: "claude", Transport: "acp", StartedBy: &owner, ConversationState: "idle", State: TerminalState{Running: true}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := one.gateway.store.DB.Exec("UPDATE sessions SET node_id=? WHERE id='session-b'", idTwo); err != nil {
-		t.Fatal(err)
-	}
-	poll := mcpWaitPoll
-	mcpWaitPoll = time.Millisecond
-	t.Cleanup(func() { mcpWaitPoll = poll })
-	access := one.exchange(t, one.codeForm(one.code(t)), 200).Access
-	httpClient := &http.Client{Transport: headerTransport{"Authorization": "Bearer " + access}}
-	card, err := agentcard.NewResolver(httpClient).Resolve(t.Context(), one.server.URL+"/a2a/session-b")
-	if err != nil || !card.Capabilities.Streaming || !card.Capabilities.PushNotifications {
-		t.Fatalf("card %+v %v", card, err)
-	}
-	client, err := a2aclient.NewFromCard(t.Context(), card, a2aclient.WithJSONRPCTransport(httpClient))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Answers the newest task B was sent, once it arrives.
-	answer := func(text string) {
-		for len(toB()) == 0 || lastPrompt(t, toB).from == nil {
-		}
-		task := lastPrompt(t, toB).from.Task
-		for {
-			if _, _, failed := structured[mcpReplied](t, two, tokenB, "reply", map[string]any{"task_id": task, "text": text}); !failed {
-				return
-			}
-		}
-	}
-
-	// Streaming, through machine one to the chat on machine two: the task, then its answer.
-	before := len(toB())
-	go func() {
-		for len(toB()) == before {
-		}
-		answer("Streamed answer")
-	}()
-	var states []a2a.TaskState
-	for event, err := range client.SendStreamingMessage(t.Context(), &a2a.SendMessageRequest{Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("stream please"))}) {
-		if err != nil {
-			t.Fatal(err)
-		}
-		switch event := event.(type) {
-		case *a2a.Task:
-			states = append(states, event.Status.State)
-		case *a2a.TaskStatusUpdateEvent:
-			states = append(states, event.Status.State)
-			if event.Status.State == a2a.TaskStateCompleted && messageText(event.Status.Message) != "Streamed answer" {
-				t.Fatalf("streamed answer %+v", event.Status.Message)
-			}
-		}
-	}
-	if len(states) < 2 || states[0] != a2a.TaskStateSubmitted || states[len(states)-1] != a2a.TaskStateCompleted {
-		t.Fatalf("streamed states %v", states)
-	}
-
-	// Push: the webhook hears each state change, with the client's token.
-	type pushed struct {
-		token string
-		state a2a.TaskState
-	}
-	var mu sync.Mutex
-	var heard []pushed
-	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Task a2a.Task `json:"task"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		mu.Lock()
-		heard = append(heard, pushed{r.Header.Get("A2A-Notification-Token"), body.Task.Status.State})
-		mu.Unlock()
-	}))
-	defer webhook.Close()
-	two.gateway.a2aPusher = push.NewHTTPPushSender(&push.HTTPSenderConfig{FailOnError: true, AllowPrivateNetworks: true})
-	sent, err := client.SendMessage(t.Context(), &a2a.SendMessageRequest{Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("tell me later")),
-		Config: &a2a.SendMessageConfig{ReturnImmediately: true, PushConfig: &a2a.PushConfig{URL: webhook.URL, Token: "client-secret"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	task := sent.(*a2a.Task)
-	if err := two.gateway.agentTasksPass(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	answer("Pushed answer")
-	if err := two.gateway.agentTasksPass(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	mu.Lock()
-	got := append([]pushed(nil), heard...)
-	mu.Unlock()
-	if len(got) != 2 || got[0] != (pushed{"client-secret", a2a.TaskStateSubmitted}) || got[1] != (pushed{"client-secret", a2a.TaskStateCompleted}) {
-		t.Fatalf("pushed %+v", got)
-	}
-	configs, err := client.ListTaskPushConfigs(t.Context(), &a2a.ListTaskPushConfigRequest{TaskID: task.ID})
-	if err != nil || len(configs) != 1 || configs[0].URL != webhook.URL {
-		t.Fatalf("configs %+v %v", configs, err)
-	}
-	if err := client.DeleteTaskPushConfig(t.Context(), &a2a.DeleteTaskPushConfigRequest{TaskID: task.ID, ID: configs[0].ID}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Subscribing to an answered task returns it and ends.
-	var last *a2a.Task
-	for event, err := range client.SubscribeToTask(t.Context(), &a2a.SubscribeToTaskRequest{ID: task.ID}) {
-		if err != nil {
-			t.Fatal(err)
-		}
-		last, _ = event.(*a2a.Task)
-	}
-	if last == nil || last.Status.State != a2a.TaskStateCompleted || messageText(last.Status.Message) != "Pushed answer" {
-		t.Fatalf("subscribe %+v", last)
 	}
 }

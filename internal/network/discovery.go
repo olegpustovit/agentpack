@@ -626,7 +626,6 @@ var peerPatterns = []string{
 	"POST /api/sessions/{id}/conversation/prompt",
 	"POST /api/sessions/{id}/conversation/prompt/images",
 	"POST /api/sessions/{id}/conversation/message",
-	"POST /api/sessions/{id}/a2a",
 	"POST /api/sessions/{id}/conversation/permission",
 	"POST /api/sessions/{id}/conversation/cancel",
 	"POST /api/sessions/{id}/conversation/elicitation",
