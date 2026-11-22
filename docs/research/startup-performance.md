@@ -186,3 +186,11 @@ milliseconds per operation.
 ```sh
 go test ./internal/sync -run '^$' -bench '^(BenchmarkMaterializationHome|BenchmarkCodexSetup)$' -benchtime=10x -count=5
 ```
+
+### Launch validation without a lockfile
+
+The benchmark command above measured medians of 0.308 → 0.336 ms for home
+materialization, 7.448 → 8.455 ms for cold Codex setup, and 0.139 → 0.134 ms for
+warm setup on Linux amd64 (Intel i9-12900K). These benchmarks end before
+`ValidateLaunchInputs`. A separate smoke launch with `CLAUDE_CODE_PATH=/bin/true`
+exited successfully from an empty folder and left both project files absent.

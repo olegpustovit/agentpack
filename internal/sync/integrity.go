@@ -293,7 +293,9 @@ func (service *Service) ValidateLaunchInputs(definition, workspace string, effec
 		return fmt.Errorf("interrupted staging rebuild requires recovery; retry the launch or run env restore")
 	}
 	lock, err := loadCheckedLock(definition)
-	if err != nil {
+	if os.IsNotExist(rootCause(err)) {
+		lock = lockfile.EmptyForProject(definition)
+	} else if err != nil {
 		return err
 	}
 	current, err := launchDigest(definition, workspace, effective, &target, lock)

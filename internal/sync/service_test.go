@@ -15,6 +15,34 @@ import (
 	"github.com/olegpustovit/agentpack/internal/staging"
 )
 
+func TestPlainFolderLaunchLeavesProjectFilesAbsent(t *testing.T) {
+	project, home := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+
+	service := NewService()
+	effective, _, err := service.SyncForLaunch(t.Context(), project, "", base.Claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := staging.AcquireLaunchShared(project, effective.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Unlock()
+	if err := service.ValidateLaunchInputs(project, project, effective, base.Claude); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{paths.LockPath(project), paths.ManifestPath(project)} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to stay absent, stat returned %v", path, err)
+		}
+	}
+}
+
 func TestServiceAddsPathDependencyAndStagesIt(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
