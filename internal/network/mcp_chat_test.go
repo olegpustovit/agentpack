@@ -310,6 +310,21 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 	if result.IsError || info == nil || info.ParentID != "session-chat" || !info.Tools || info.StartedBy.User != testBrowserEmail || info.StartedBy.Agent != "claude" {
 		t.Fatalf("helper start: %s %+v", text, info)
 	}
+	// A running chat of the person stays out of reach, but once stopped any of its account's agents may revive it.
+	restart := map[string]any{"session_id": "session-person", "operation_id": "revive-session-person"}
+	if result, text := callTool(t, session, "restart_session", restart); !result.IsError || text != errAgentScope.Error() {
+		t.Fatalf("running chat restarted by an agent: %s", text)
+	}
+	owner := browserActor(testBrowserEmail)
+	if err := upsertSession(t.Context(), h.gateway.store.DB, SessionInfo{ID: "session-person", Harness: "codex", Transport: "acp", Directory: directory, AgentSessionID: "agent-1",
+		StartedBy: &owner, EndedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	result, text = callTool(t, session, "restart_session", restart)
+	h.gateway.starting.Wait()
+	if info := started.Load(); result.IsError || !strings.Contains(text, `"restarted":true`) || info.ID != "session-person" {
+		t.Fatalf("stopped chat not revived: %s %+v", text, info)
+	}
 	// Off takes effect on the next call, without reconnecting.
 	response, data := h.request(t, "POST", "/api/sessions/session-chat/tools", `{"enabled":false}`, "application/json", h.cookie, true)
 	if response.StatusCode != 200 {

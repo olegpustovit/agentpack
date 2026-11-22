@@ -253,6 +253,7 @@ func (m *GatewayMCP) startHelper(ctx context.Context, parent *string, start func
 
 // agentMayChange keeps an in-chat agent to its own tree: it may read every session, but it stops,
 // restarts and cancels only itself and its helpers on this machine. It messages other chats only with ask.
+// restart_session's revival of a stopped chat is the one exception.
 func (m *GatewayMCP) agentMayChange(ctx context.Context, node, id string) error {
 	actor, _ := actorFrom(ctx)
 	if actor.chat == "" || id == actor.chat && node == "" {

@@ -124,6 +124,7 @@ for name in ap agentpack; do
     cp /tmp/ap-new "$bin/.$name.new" && chmod 755 "$bin/.$name.new" && mv -f "$bin/.$name.new" "$bin/$name"
 done
 rm -f /tmp/ap-new
-"$bin/ap" gateway start >/dev/null
+# A login shell gives the gateway the PATH its chat agents need (node from a nix or nvm profile).
+"${SHELL:-/bin/sh}" -lc '"$HOME/.local/bin/ap" gateway start' >/dev/null
 printf '%s: %s\n' "$(hostname)" "$("$bin/ap" --version)"
 EOF

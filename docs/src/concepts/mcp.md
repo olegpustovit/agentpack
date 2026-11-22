@@ -225,6 +225,7 @@ The gateway serves its own MCP server at `/mcp` (see [Deploy the public gateway]
 | `run_helper` | For a chat's agent: starts a helper chat in its folder and mode and `ask`s it the task; it returns the helper and `task_id` at once. Agents told to prefer it over a built-in subagent tool the chat cannot show, such as Antigravity's `invoke_subagent`; the parent chat shows the helper as a card. |
 | `ask`, `reply`, `cancel_task`, `tasks` | For a chat's agent: message another chat and get its answer back; see below. |
 | `start_session` | Starts a chat (or, with `terminal`, a terminal session) and returns at once; an optional `prompt` is sent when the chat is ready. |
+| `restart_session` | Restarts a running agent, or resumes a stopped chat (its machine restarted or its worker died) with its conversation. |
 
 ### agentpack tools inside a chat
 
@@ -238,7 +239,7 @@ A chat can use these tools itself. When the worker starts a chat it creates a cr
 
 Messages travel as `POST /api/sessions/{id}/conversation/message` on the machine that runs the chat, through the same owner check and mesh routing as prompts. Each machine keeps its side of a task in its local `agent_tasks` table: `out` rows for chats that asked, `in` rows for chats that were asked. A gateway pass every 2 s marks tasks working, answers tasks whose turn ended, and retries answers a machine could not take, for up to a day. The sender is recorded in the prompt's log entry (`from`); only the gateway sets it. A request asked while answering another counts one hop more and is refused beyond 4 hops, a chat sends at most 20 messages a minute, and rows are deleted after 7 days.
 
-Guardrails: an agent can never answer permission requests or questions. What it starts or forks is a helper of its own chat (`parent_id`, shown nested under the parent and "started by Claude"). Helpers are at most 2 levels below their root chat, and at most 6 run at once per root chat.
+Guardrails: an agent can never answer permission requests or questions. What it starts or forks is a helper of its own chat (`parent_id`, shown nested under the parent and "started by Claude"). Helpers are at most 2 levels below their root chat, and at most 6 run at once per root chat. An agent stops, restarts and cancels only its own chat and its helpers on its machine, with one exception: `restart_session` may resume any stopped chat of the same account on any machine, because resuming sends nothing to that chat's agent.
 
 ## Toggling servers per mode
 
