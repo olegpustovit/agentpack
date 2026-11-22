@@ -42,6 +42,15 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	if err := json.Unmarshal(data, &value); err != nil {
 		return nil, fmt.Errorf("parse staged Claude settings: %w", err)
 	}
+	if ctx.SessionID != "" {
+		// Per launch, never staged: the session ID would otherwise enter the cached bundle.
+		if executable, err := os.Executable(); err == nil {
+			addSessionStateHooks(value, executable, ctx.SessionID)
+			if data, err = json.Marshal(value); err != nil {
+				return nil, err
+			}
+		}
+	}
 	// Inline settings avoid a project-dependent config filename in Claude's credential namespace.
 	command.Args = append(command.Args, "--settings", string(data))
 	plugins, err := paths.StagingPluginsDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
@@ -57,6 +66,30 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	}
 	command.Args = append(command.Args, arguments...)
 	return command, nil
+}
+
+// addSessionStateHooks makes a terminal Claude report its turns to the agentpack worker running it:
+// a prompt or a finished tool means working, a permission prompt means it needs you, Stop means idle.
+// The hook prints nothing, so it never adds to the prompt, and it always exits 0.
+func addSessionStateHooks(settings map[string]any, executable, sessionID string) {
+	hooks, _ := settings["hooks"].(map[string]any)
+	if hooks == nil {
+		hooks = map[string]any{}
+		settings["hooks"] = hooks
+	}
+	report := func(event, matcher, state string) {
+		command := shellQuote(executable) + " hook-exec session-state --target claude --session " + shellQuote(sessionID) + " --state " + state
+		entry := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command, "timeout": 5}}}
+		if matcher != "" {
+			entry["matcher"] = matcher
+		}
+		list, _ := hooks[event].([]any)
+		hooks[event] = append(list, entry)
+	}
+	report("UserPromptSubmit", "", "working")
+	report("PostToolUse", "*", "working")
+	report("Notification", "permission_prompt", "needs_you")
+	report("Stop", "", "idle")
 }
 
 func stagedRoot(ctx base.StageContext) (string, error) {

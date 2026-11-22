@@ -36,6 +36,9 @@ type LaunchContext struct {
 	Yolo           bool
 	StrictExternal bool
 	Command        *exec.Cmd
+	// SessionID is the agentpack terminal session this launch runs in (a worker launch only), so
+	// the agent's hooks can report its turns; empty for a plain terminal.
+	SessionID string
 }
 
 type MCPProjectedFile struct {

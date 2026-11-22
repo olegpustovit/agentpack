@@ -42,7 +42,10 @@ export function runningText(sessions: SessionInfo[]): string | undefined {
   const live = sessions.filter((session) => session.state.running && !session.archived_at && !session.ended_at)
   if (live.length === 0) return undefined
   const waiting = live.filter((session) => session.conversation_state === "needs_you").length
-  return waiting ? `${waiting} needs you` : `${live.length} working`
+  if (waiting) return `${waiting} needs you`
+  // Only a running turn is work; an idle chat or a terminal is just open.
+  const working = live.filter((session) => session.conversation_state === "working").length
+  return working ? `${working} working` : `${live.length} open`
 }
 
 export function MachineDetail({ id }: { id: string }) {
@@ -239,7 +242,7 @@ function MachineView({ machine }: { machine: Machine }) {
                         <DataGridCell>
                           {runningHere ? (
                             <span className="flex items-center gap-(--s2)">
-                              <StatusGlyph state={runningHere.endsWith("needs you") ? "needsYou" : "running"} />
+                              <StatusGlyph state={runningHere.endsWith("needs you") ? "needsYou" : runningHere.endsWith("working") ? "running" : "idle"} />
                               {runningHere}
                             </span>
                           ) : <span className="text-(--fg3)">—</span>}

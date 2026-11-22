@@ -199,7 +199,10 @@ a{color:inherit;text-decoration:none;text-underline-offset:2px}
   .agent-dot[data-state=done]{background:var(--accent)}
   .agent-dot[data-state=needs]{background:var(--warn)}
   .agent-dot[data-state=restarting]{background:var(--fg3)}
+  /* Waiting on background work: a still ring around a centre dot, between working's arc and done's dot. */
+  .agent-dot[data-state=waiting]{width:8px;height:8px;right:-3px;bottom:-3px;border:1.5px solid var(--accent);background:radial-gradient(circle,var(--accent) 0 1.5px,transparent 2px)}
   .group\/list:focus-within [data-selected=true] .agent-dot{--dot-ring:var(--accent);background:var(--accent-fg)}
+  .group\/list:focus-within [data-selected=true] .agent-dot[data-state=waiting]{background:radial-gradient(circle,var(--accent-fg) 0 1.5px,transparent 2px);border-color:var(--accent-fg)}
   .group\/list:focus-within [data-selected=true] .agent-dot[data-state=none]{background:transparent}
   .group\/list:focus-within [data-selected=true] .agent-dot:is([data-state=working],[data-state=starting]){background:transparent;border-color:var(--accent-fg);border-top-color:transparent}
 

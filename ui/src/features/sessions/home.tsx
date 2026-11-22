@@ -17,7 +17,7 @@ import { loadStartChoices } from "./choices"
 import { lastActivity, rowKey, sessionLabel, type ListedSession } from "./group"
 import { projectsQuery, useListedSessions } from "./queries"
 import { agentIds, canStart, defaultAgent, mergeProjects, placeLabel } from "./rules"
-import { isUnread, loadSeen, sessionGlyphState } from "./session-status"
+import { isUnread, loadSeen, openWaits, sessionGlyphState, waitingDetail } from "./session-status"
 import { useStartSession } from "./start"
 import { projectDirectory, sessionGitQuery } from "./git"
 
@@ -31,8 +31,13 @@ export function SessionsHome() {
   const now = useNow(true, 60_000)
   const needsYou = sessions.filter((session) => sessionGlyphState(session) === "needsYou")
   const working = sessions.filter((session) => sessionGlyphState(session) === "running" && session.conversation_state === "working")
+  const waiting = sessions.filter((session) => sessionGlyphState(session) === "waiting")
   const ready = sessions.filter((session) => isUnread(session, seen[rowKey(session)] ?? seen[""]))
-  const quiet = !queries.firstLoadPending && needsYou.length + working.length + ready.length === 0
+  const quiet = !queries.firstLoadPending && needsYou.length + working.length + waiting.length + ready.length === 0
+  const chatName = (id: string) => {
+    const chat = sessions.find((session) => session.id === id)
+    return chat && sessionLabel(chat)
+  }
 
   return (
     <div className="h-full overflow-y-auto">
@@ -47,6 +52,11 @@ export function SessionsHome() {
           <Section title={`Working · ${working.length}`}>
             {/* shortcut: no live activity line (the list has no current-step field); add it when sessions carry one. */}
             {working.map((session) => <HomeRow key={rowKey(session)} session={session} now={now} />)}
+          </Section>
+        )}
+        {waiting.length > 0 && (
+          <Section title={`Waiting · ${waiting.length}`}>
+            {waiting.map((session) => <HomeRow key={rowKey(session)} session={session} now={now} reason={waitingDetail(openWaits(session, now), chatName, now)} />)}
           </Section>
         )}
         {ready.length > 0 && (
@@ -79,7 +89,7 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
   )
 }
 
-function HomeRow({ session, now, unread, children }: { session: ListedSession; now: number; unread?: boolean; children?: ReactNode }) {
+function HomeRow({ session, now, unread, reason, children }: { session: ListedSession; now: number; unread?: boolean; reason?: string; children?: ReactNode }) {
   const when = lastActivity(session)
   return (
     <li className="flex min-h-(--row-h) min-w-0 items-center gap-(--s4) border-b-[0.5px] border-(--sep-soft) py-(--s2)">
@@ -93,7 +103,7 @@ function HomeRow({ session, now, unread, children }: { session: ListedSession; n
         {sessionLabel(session)}
       </Link>
       <span className="shrink-0 text-(length:--fs-sm) text-(--fg2)">
-        {[basename(projectDirectory(session)), session.machineName, when && `active ${shortAge(new Date(when), now)}`].filter(Boolean).join(" · ")}
+        {[basename(projectDirectory(session)), session.machineName, reason || (when && `active ${shortAge(new Date(when), now)}`)].filter(Boolean).join(" · ")}
       </span>
       {children}
     </li>

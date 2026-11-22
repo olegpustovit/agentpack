@@ -287,8 +287,16 @@ describe("reduceLog subagents", () => {
       { seq: 2, ts: 2, kind: "tool_call", payload: { _subagent: "tool:t1", toolCallId: "c1", title: "grep" } },
       { seq: 3, ts: 3, kind: "agent_message_chunk", payload: { _subagent: "tool:t1", text: { text: "child" } } },
     ])
-    expect(state.subagents?.["tool:t1"]).toMatchObject({ toolCallId: "t1", tools: 1 })
+    expect(state.subagents?.["tool:t1"]).toMatchObject({ toolCallId: "t1", tools: 1, state: "running" })
     expect(state.items.map((item) => item.kind)).toEqual(["tool", "subagent"])
+  })
+
+  it("ends a flattened subagent with its parent's turn, which waited for it", () => {
+    const state = reduceLog([
+      { seq: 1, ts: 1, kind: "tool_call", payload: { _subagent: "tool:t1", toolCallId: "c1", title: "sleep 20" } },
+      { seq: 2, ts: 9, kind: "turn_end", payload: { stopReason: "end_turn" } },
+    ])
+    expect(state.subagents?.["tool:t1"]).toMatchObject({ state: "idle", endTs: 9 })
   })
 
   it("does not show a subagent from a settings broadcast alone", () => {

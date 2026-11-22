@@ -214,7 +214,14 @@ func TestPushSubscriptionsAndTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _ = g.pushPass(t.Context())
-	if _, err := db.Exec(`UPDATE sessions SET conversation_state='idle',last_seq=6 WHERE id='session-a'`); err != nil {
+	// The turn ends with a background shell still open: waiting, not finished.
+	if _, err := db.Exec(`UPDATE sessions SET conversation_state='idle',last_seq=6,waiting='[{"kind":"shell"}]' WHERE id='session-a'`); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := g.pushPass(t.Context()); err != nil || count != 0 {
+		t.Fatal("finished while waiting", count, err)
+	}
+	if _, err := db.Exec(`UPDATE sessions SET waiting='' WHERE id='session-a'`); err != nil {
 		t.Fatal(err)
 	}
 	if count, err := g.pushPass(t.Context()); err != nil || count != 1 {

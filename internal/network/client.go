@@ -24,6 +24,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -69,6 +70,8 @@ type SessionInfo struct {
 	StartedBy         *Actor             `json:"started_by,omitempty"`
 	Goal              *Goal              `json:"goal,omitempty"`
 	Subagents         []SubagentSummary  `json:"subagents,omitempty"`
+	// Waiting is the background work an idle chat will wake for; older peers omit it.
+	Waiting []acp.WaitItem `json:"waiting,omitempty"`
 	// ParentID is the chat that owns this shell or whose agent started this helper session.
 	ParentID string `json:"parent_id,omitempty"`
 	// Tools lets the chat's agent call the agentpack MCP server.
@@ -148,6 +151,24 @@ func workerRequest(ctx context.Context, record WorkerRecord, method, path, opera
 	}
 	client := http.Client{Timeout: workerRequestTimeout(method, path), Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	return client.Do(request)
+}
+
+// ReportAgentState sends a terminal agent's turn state (working, idle or needs_you) to the worker
+// running the session, from the agent's own hooks.
+func ReportAgentState(ctx context.Context, home, id, state string) error {
+	record, err := workerRecord(home, id)
+	if err != nil {
+		return err
+	}
+	response, err := workerRequest(ctx, record, http.MethodPost, "/agent-state", "", strings.NewReader(string(mustRawJSON(map[string]string{"state": state}))))
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("worker refused agent state: %s", response.Status)
+	}
+	return nil
 }
 
 // workerTransport keeps loopback read connections to workers alive, so the 2 s session polls do not reconnect each time.

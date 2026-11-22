@@ -14,7 +14,7 @@ import { basename, harnessName, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { lastActivity, rowKey, sessionDetail, sessionLabel, type ListedSession } from "./group"
 import { isWorktreePath } from "./git"
-import { sessionGlyphState, sessionStatusWord, useSteadyGlyph, type GlyphState } from "./session-status"
+import { openWaits, sessionGlyphState, sessionStatusWord, useSteadyGlyph, waitingWord, type GlyphState } from "./session-status"
 import { sessionRules } from "./rules"
 
 export type RowActions = {
@@ -117,6 +117,7 @@ const stateWords: Record<GlyphState, string> = {
   running: "Working",
   needsYou: "Needs you",
   idle: "Idle",
+  waiting: "Waiting",
   stopped: "Stopped",
   restarting: "Restarting",
   offline: "Offline",
@@ -127,7 +128,7 @@ const stateWords: Record<GlyphState, string> = {
 // never restart its pulse.
 export function AgentTile({ harness, state, label, title, className, unread = false }: { harness: string; state: GlyphState | "requires_action"; label: string; title?: string; className?: string; unread?: boolean }) {
   const Icon = agentIcons[harness] ?? Bot
-  const dot = state === "needsYou" || state === "requires_action" ? "needs" : state === "running" ? "working" : state === "restarting" ? "restarting" : state === "starting" ? "starting" : unread ? "done" : "none"
+  const dot = state === "needsYou" || state === "requires_action" ? "needs" : state === "running" ? "working" : state === "waiting" ? "waiting" : state === "restarting" ? "restarting" : state === "starting" ? "starting" : unread ? "done" : "none"
   return (
     <span data-slot="agent-tile" role="img" aria-label={label} title={title} className={cn("relative inline-grid size-[18px] shrink-0 place-items-center rounded-[5px] bg-(--track) text-(--fg2) sel:bg-(--accent-fg)/20 sel:text-(--accent-fg)", className)}>
       <Icon aria-hidden strokeWidth={1.75} className="size-3" />
@@ -174,17 +175,21 @@ export function SessionRow({
   const label = sessionLabel(session)
   const chat = session.transport === "acp"
   const state = useSteadyGlyph(sessionGlyphState(session), chat)
-  const word = state === "running" || state === "idle" ? stopping ? "Stopping…" : undefined : sessionStatusWord(session, stopping)
+  // Ages and wake-up countdowns tick once a minute.
+  const minute = useNow(true, 60_000)
+  const word = stopping && (state === "running" || state === "idle" || state === "waiting") ? "Stopping…"
+    : state === "waiting" ? waitingWord(openWaits(session, minute), minute)
+    : state === "running" || state === "idle" ? undefined : sessionStatusWord(session, stopping)
   const entries = group ? groupEntries(group) : menuEntries(session, selected, actions)
   const since = lastActivity(session)
-  // Ages tick once a minute; a working chat is active now whatever its last refetch said.
-  const minute = useNow(true, 60_000)
+  // A working chat is active now whatever its last refetch said.
   const age = state === "starting" ? undefined : state === "running" && chat ? "now" : since ? shortAge(new Date(since), minute) : undefined
   const goal = liveGoal(session.goal) ? session.goal : undefined
   const now = useNow(goal?.state === "active")
   const goalClock = goal && clock(goalElapsedMs(goal, now))
   const mode = session.mode && session.mode !== "default" ? session.mode : undefined
-  const stateWord = state === "running" && !chat ? "Running" : stateWords[state]
+  // A live terminal whose agent reports no turns: its process runs, with no working dot.
+  const stateWord = !chat && !session.conversation_state && state === "idle" ? "Running" : stateWords[state]
   const detail = [harnessName(session.harness), mode, basename(session.directory), session.machineName, word ?? stateWord, goal && `${goalStateWords[goal.state]} ${goalClock}`].filter(Boolean).join(" · ")
 
   return (

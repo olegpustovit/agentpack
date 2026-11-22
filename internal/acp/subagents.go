@@ -137,7 +137,8 @@ func AppendRawSessionUpdate(log *EventLog, line []byte) bool {
 	switch update.Kind {
 	case "subagent_update":
 		log.noteSubagent(update.SessionID, update.Capabilities)
-	case "notice", "compaction_update", "compaction_summary_chunk", "session_message", "session_message_chunk":
+	case "notice", "compaction_update", "compaction_summary_chunk", "session_message", "session_message_chunk",
+		"async_task_spawned", "async_task_progress", "async_task_state_update":
 	case "tool_call", "tool_call_update":
 		// The SDK rejects the RFD's {"type":"session"} tool call content.
 		if !hasSessionContent(update.Content) {

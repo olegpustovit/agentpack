@@ -48,6 +48,9 @@ func AddSessionCapabilities(line []byte) []byte {
 	capabilities["session"] = json.RawMessage(`{"configOptions":{"boolean":{}},"notices":{},"compaction":{}}`)
 	// Subagent Sessions RFD: children arrive as their own sessions (see subagents.go).
 	capabilities["subagents"] = json.RawMessage(`{}`)
+	// AIR async tasks: Claude and Codex adapters then report background shells, monitors and
+	// self-started turns as async_task_* updates (see reduce.go Waiting).
+	capabilities["_meta"] = json.RawMessage(`{"jetbrains":{"air":{"version":1,"capabilities":["asyncTasks"]}}}`)
 	params["clientCapabilities"], _ = json.Marshal(capabilities)
 	message["params"], _ = json.Marshal(params)
 	out, err := json.Marshal(message)

@@ -22,6 +22,18 @@ type ThreadState struct {
 	ContextTokens int          `json:"context_tokens,omitempty"`
 	ContextLimit  int          `json:"context_limit,omitempty"`
 	CostUSD       float64      `json:"cost_usd,omitempty"`
+	// Waiting lists background work the agent will wake for after its turn ends. It never holds
+	// commands, prompts or tool arguments: only a kind, a deadline and, for a reply, the asked chat.
+	Waiting []WaitItem `json:"waiting,omitempty"`
+}
+
+// WaitItem is one piece of open background work. Until (unix ms) bounds it, so a lost close
+// signal cannot leave a chat waiting forever; 0 means it closes only by protocol or agent exit.
+type WaitItem struct {
+	Kind  string `json:"kind"` // shell, monitor, agent, task, wake or reply
+	Until int64  `json:"until,omitempty"`
+	Peer  string `json:"peer,omitempty"`
+	key   string
 }
 
 // ThreadReducer applies conversation entries and retains only outstanding requests.
@@ -33,7 +45,14 @@ type ThreadReducer struct {
 	compactions map[string]int
 	afterPrompt bool
 	inTurn      bool
+	turnTask    string            // the async task of a turn the agent started itself
+	waitTools   map[string]string // ScheduleWakeup and ask tool calls by ID, named only on their first update
 }
+
+const (
+	wakeGrace  = 2 * 60 * 1000       // a scheduled wake-up may fire this late
+	replyLimit = 24 * 60 * 60 * 1000 // an ask whose answer never comes stops waiting after a day
+)
 
 func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 	state := &reducer.state
@@ -220,6 +239,9 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 		if reducer.keepItems {
 			state.Items = append(state.Items, ThreadItem{Kind: "user_message_chunk", Data: entry.Payload})
 		}
+	}
+	if !child {
+		reducer.applyWaiting(entry)
 	}
 	if !reducer.keepItems {
 		state.Items = slices.DeleteFunc(state.Items, func(item ThreadItem) bool { return !isOutstandingRequest(item) })
@@ -549,4 +571,136 @@ func turnFailed(payload json.RawMessage) bool {
 		StopReason string `json:"stopReason"`
 	}
 	return json.Unmarshal(payload, &end) == nil && (end.StopReason == "error" || end.StopReason == "cancelled")
+}
+
+// applyWaiting opens and closes background-work items. Signals: AIR async_task_* updates (Claude
+// and Codex adapters, asyncTasks capability), a ScheduleWakeup tool call, and an agentpack ask
+// tool call closed by the reply prompt from the asked chat.
+func (reducer *ThreadReducer) applyWaiting(entry LogEntry) {
+	state := &reducer.state
+	switch entry.Kind {
+	case "async_task_spawned":
+		var task struct {
+			ID       string `json:"asyncTaskId"`
+			TaskType string `json:"taskType"`
+		}
+		if json.Unmarshal(entry.Payload, &task) != nil || task.ID == "" {
+			return
+		}
+		if task.TaskType == "turn" {
+			// The agent woke itself (a task finished, a timer fired): it is working, and due wakes are spent.
+			reducer.turnTask = task.ID
+			state.Working = !state.NeedsYou
+			state.Waiting = slices.DeleteFunc(state.Waiting, func(w WaitItem) bool { return w.Kind == "wake" && w.Until-wakeGrace <= entry.TS+60_000 })
+			return
+		}
+		reducer.openWait(WaitItem{Kind: taskKind(task.TaskType), key: "task:" + task.ID})
+	case "async_task_state_update":
+		var task struct {
+			ID    string `json:"asyncTaskId"`
+			State string `json:"state"`
+		}
+		if json.Unmarshal(entry.Payload, &task) != nil || (task.State != "completed" && task.State != "failed" && task.State != "stopped") {
+			return
+		}
+		if task.ID == reducer.turnTask {
+			reducer.turnTask = ""
+			state.Working = false
+			return
+		}
+		reducer.closeWait("task:" + task.ID)
+	case "tool_call", "tool_call_update":
+		var call struct {
+			ID       string `json:"toolCallId"`
+			Title    string `json:"title"`
+			Status   string `json:"status"`
+			RawInput struct {
+				DelaySeconds float64 `json:"delaySeconds"`
+				Stop         bool    `json:"stop"`
+				SessionID    string  `json:"session_id"`
+			} `json:"rawInput"`
+			Meta struct {
+				Claude struct {
+					ToolName string `json:"toolName"`
+				} `json:"claudeCode"`
+			} `json:"_meta"`
+		}
+		if json.Unmarshal(entry.Payload, &call) != nil || call.ID == "" {
+			return
+		}
+		// Claude names the tool only on the first tool_call; its input arrives on a later update.
+		name := call.Meta.Claude.ToolName
+		if name == "" {
+			name = call.Title
+		}
+		if name == "ScheduleWakeup" || isAskTool(name) {
+			if reducer.waitTools == nil {
+				reducer.waitTools = map[string]string{}
+			}
+			reducer.waitTools[call.ID] = name
+		} else if known := reducer.waitTools[call.ID]; known != "" {
+			name = known
+		}
+		key := "tool:" + call.ID
+		switch {
+		case call.Status == "failed":
+			reducer.closeWait(key)
+		case name == "ScheduleWakeup" && call.RawInput.Stop:
+			state.Waiting = slices.DeleteFunc(state.Waiting, func(w WaitItem) bool { return w.Kind == "wake" })
+		case name == "ScheduleWakeup" && call.RawInput.DelaySeconds > 0:
+			// Claude keeps one pending wake-up: a new schedule replaces the earlier one.
+			state.Waiting = slices.DeleteFunc(state.Waiting, func(w WaitItem) bool { return w.Kind == "wake" && w.key != key })
+			reducer.openWait(WaitItem{Kind: "wake", Until: entry.TS + int64(call.RawInput.DelaySeconds*1000) + wakeGrace, key: key})
+		case isAskTool(name) && call.RawInput.SessionID != "":
+			reducer.openWait(WaitItem{Kind: "reply", Until: entry.TS + replyLimit, Peer: call.RawInput.SessionID, key: key})
+		}
+	case "prompt":
+		var prompt struct {
+			From *PromptFrom `json:"from"`
+		}
+		if json.Unmarshal(entry.Payload, &prompt) == nil && prompt.From != nil && prompt.From.Kind == "reply" {
+			for i, w := range state.Waiting {
+				if w.Kind == "reply" && w.Peer == prompt.From.Session {
+					state.Waiting = slices.Delete(state.Waiting, i, i+1)
+					break
+				}
+			}
+		}
+	case "agent_exit":
+		state.Waiting = nil
+		reducer.turnTask = ""
+	}
+}
+
+func (reducer *ThreadReducer) openWait(item WaitItem) {
+	for i, w := range reducer.state.Waiting {
+		if w.key == item.key {
+			reducer.state.Waiting[i] = item
+			return
+		}
+	}
+	reducer.state.Waiting = append(reducer.state.Waiting, item)
+}
+
+func (reducer *ThreadReducer) closeWait(key string) {
+	reducer.state.Waiting = slices.DeleteFunc(reducer.state.Waiting, func(w WaitItem) bool { return w.key == key })
+}
+
+// isAskTool matches the agentpack ask tool as Claude (mcp__agentpack__ask) and title-only adapters name it.
+func isAskTool(name string) bool {
+	name = strings.ToLower(name)
+	return strings.Contains(name, "agentpack") && (strings.HasSuffix(name, "__ask") || strings.HasSuffix(name, ".ask") || strings.HasSuffix(name, "/ask") || strings.HasSuffix(name, ": ask"))
+}
+
+// taskKind names an AIR task type without its description, which can carry a command.
+func taskKind(taskType string) string {
+	switch t := strings.ToLower(taskType); {
+	case strings.Contains(t, "monitor"):
+		return "monitor"
+	case strings.Contains(t, "agent"):
+		return "agent"
+	case strings.Contains(t, "bash"), strings.Contains(t, "shell"), strings.Contains(t, "terminal"), strings.Contains(t, "exec"):
+		return "shell"
+	}
+	return "task"
 }
