@@ -327,42 +327,6 @@ type mcpAsked struct {
 	State     taskState `json:"state"`
 }
 
-// outRow is the asking side of a task.
-type outRow struct {
-	to, node, text string
-}
-
-// newOutTask checks the asking chat's limits and records its side of a new task.
-func (m *GatewayMCP) newOutTask(ctx context.Context, self SessionInfo, local, contextID string, row outRow) (string, string, int, error) {
-	db := m.gateway.auth.store.DB
-	var recent int
-	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM agent_tasks WHERE role='out' AND from_session=? AND created_at>?", self.ID, time.Now().Add(-time.Minute).UnixNano()).Scan(&recent); err != nil {
-		return "", "", 0, err
-	}
-	if recent >= maxAsksPerMinute {
-		return "", "", 0, fmt.Errorf("this chat sent %d messages in the last minute; wait for answers", maxAsksPerMinute)
-	}
-	// An ask made while answering another task continues its context, one hop further.
-	var hops int
-	var inherited string
-	err := db.QueryRowContext(ctx, `SELECT hops+1,context_id FROM agent_tasks WHERE role='in' AND to_session=? AND state IN ('submitted','working','input_required')
- ORDER BY hops DESC LIMIT 1`, self.ID).Scan(&hops, &inherited)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", "", 0, err
-	}
-	if hops > maxTaskHops {
-		return "", "", 0, fmt.Errorf("this request already passed through %d chats; answer it instead of asking further", maxTaskHops)
-	}
-	if !validRef(contextID, true) {
-		return "", "", 0, errors.New("invalid context_id")
-	}
-	task, now := newTaskID(), time.Now().UnixNano()
-	contextID = cmpOr(contextID, cmpOr(inherited, task))
-	_, err = db.ExecContext(ctx, `INSERT INTO agent_tasks(id,role,context_id,from_session,from_node,to_session,to_node,state,request,hops,created_at,updated_at)
- VALUES (?,'out',?,?,?,?,?,?,?,?,?,?)`, task, contextID, self.ID, local, row.to, row.node, taskSubmitted, row.text, hops, now, now)
-	return task, contextID, hops, err
-}
-
 // ask sends text to a chat of the same account on any machine and records the task.
 func (m *GatewayMCP) ask(ctx context.Context, node, to, text, contextID string) (mcpAsked, error) {
 	self, local, err := m.caller(ctx)
@@ -381,14 +345,38 @@ func (m *GatewayMCP) ask(ctx context.Context, node, to, text, contextID string) 
 	if !validSessionID(to) {
 		return mcpAsked{}, errors.New("session_id is a chat from list_sessions")
 	}
-	task, contextID, hops, err := m.newOutTask(ctx, self, local, contextID, outRow{to: to, node: node, text: text})
-	if err != nil {
+	if !validRef(contextID, true) {
+		return mcpAsked{}, errors.New("invalid context_id")
+	}
+	db := m.gateway.auth.store.DB
+	var recent int
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM agent_tasks WHERE role='out' AND from_session=? AND created_at>?", self.ID, time.Now().Add(-time.Minute).UnixNano()).Scan(&recent); err != nil {
+		return mcpAsked{}, err
+	}
+	if recent >= maxAsksPerMinute {
+		return mcpAsked{}, fmt.Errorf("this chat sent %d messages in the last minute; wait for answers", maxAsksPerMinute)
+	}
+	// An ask made while answering another task continues its context, one hop further.
+	var hops int
+	var inherited string
+	err = db.QueryRowContext(ctx, `SELECT hops+1,context_id FROM agent_tasks WHERE role='in' AND to_session=? AND state IN ('submitted','working','input_required')
+ ORDER BY hops DESC LIMIT 1`, self.ID).Scan(&hops, &inherited)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return mcpAsked{}, err
+	}
+	if hops > maxTaskHops {
+		return mcpAsked{}, fmt.Errorf("this request already passed through %d chats; answer it instead of asking further", maxTaskHops)
+	}
+	task, now := newTaskID(), time.Now().UnixNano()
+	contextID = cmpOr(contextID, cmpOr(inherited, task))
+	if _, err := db.ExecContext(ctx, `INSERT INTO agent_tasks(id,role,context_id,from_session,from_node,to_session,to_node,state,request,hops,created_at,updated_at)
+ VALUES (?,'out',?,?,?,?,?,?,?,?,?,?)`, task, contextID, self.ID, local, to, node, taskSubmitted, text, hops, now, now); err != nil {
 		return mcpAsked{}, err
 	}
 	message := agentMessage{Task: task, Context: contextID, Kind: "ask", FromSession: self.ID, FromNode: local, FromName: cmpOr(self.Name, self.Title), FromAgent: self.Harness,
-		Text: text, Hops: hops, Operation: task + "-a-" + strconv.FormatInt(time.Now().UnixNano(), 10)}
+		Text: text, Hops: hops, Operation: task + "-a-" + strconv.FormatInt(now, 10)}
 	if err := m.deliver(ctx, node, to, message, mcpWaitMax); err != nil {
-		_, _ = m.gateway.auth.store.DB.ExecContext(context.WithoutCancel(ctx), "DELETE FROM agent_tasks WHERE id=? AND role='out'", task)
+		_, _ = db.ExecContext(context.WithoutCancel(ctx), "DELETE FROM agent_tasks WHERE id=? AND role='out'", task)
 		return mcpAsked{}, err
 	}
 	return mcpAsked{TaskID: task, ContextID: contextID, State: taskSubmitted}, nil
