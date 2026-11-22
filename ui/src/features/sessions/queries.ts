@@ -1,5 +1,5 @@
 import { queryOptions } from "@tanstack/react-query"
-import { array, object, optional, string } from "@/lib/validate"
+import { array, boolean, object, optional, string } from "@/lib/validate"
 import { api, LOCAL } from "@/lib/api"
 import type { ProjectRow, SessionInfo } from "@/lib/api-types"
 import { useMachines, useReplicatedQueries } from "@/features/machines/queries"
@@ -60,3 +60,36 @@ export function useListedSessions() {
   )
   return { machines, queries, sessions }
 }
+
+export const foundQuery = (machine: string) =>
+  queryOptions({
+    queryKey: ["m", machine, "folders", "found"],
+    queryFn: async () => parseProjects(await api<unknown>("/api/folders/found", { machine })),
+    staleTime: 10 * 60 * 1000,
+    retry: false,
+  })
+
+export const foldersQuery = (machine: string, dir: string) =>
+  queryOptions({
+    queryKey: ["m", machine, "folders", dir],
+    queryFn: async () => {
+      const listing = object(await api<unknown>("/api/folders", { machine, query: { path: dir } }), "folders")
+      return {
+        path: string(listing.path, "folders.path"),
+        parent: string(listing.parent, "folders.parent"),
+        row: listing.row == null ? undefined : parseProjects([listing.row])[0],
+        entries: array(listing.entries, "folders.entries").map((raw) => {
+          const entry = object(raw, "folders entry")
+          return {
+            name: string(entry.name, "folders entry name"),
+            hidden: boolean(entry.hidden, "folders entry hidden"),
+            pack: boolean(entry.pack, "folders entry pack"),
+            git: optional(entry.git, "folders entry git", string),
+          }
+        }),
+        truncated: boolean(listing.truncated, "folders.truncated"),
+      }
+    },
+    staleTime: 10 * 1000,
+    retry: false,
+  })

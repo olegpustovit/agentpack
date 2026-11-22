@@ -99,8 +99,8 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 			if err != nil {
 				return network.ProjectContents{}, err
 			}
-			locked, err := lockfile.Load(packContext.DefinitionRoot)
-			if err != nil {
+			locked, err := lockfile.LoadUnguarded(paths.LockPath(packContext.DefinitionRoot))
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return network.ProjectContents{}, err
 			}
 			// A folder without agentpack.toml still has the implicit default mode.
@@ -196,6 +196,15 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 	if err != nil {
 		return "", err
 	}
+	// The gateway has already authorized starts whose directory identity it supplied.
+	// Verify that identity again before reading definitions or launching the worker.
+	if info.FolderID != "" {
+		identity, err := network.FolderIdentity(info.Directory)
+		if err != nil || !network.SameFolder(info.FolderID, identity) {
+			return "", errors.New("folder has changed before launch")
+		}
+	}
+	browserStart := info.FolderID != "" && info.StartedBy != nil && info.StartedBy.CanStartNewFolder()
 	known := false
 	for _, entry := range recent {
 		if entry.Directory == info.Directory {
@@ -204,10 +213,13 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 				return "", err
 			}
 			if !network.SameFolder(entry.FolderID, identity) {
+				if browserStart {
+					break
+				}
 				return "", errors.New("folder has changed; launch an agent locally before starting it remotely")
 			}
 			known = true
-			info.DefinitionRoot = entry.DefinitionRoot
+			info.DefinitionRoot = cmp.Or(info.DefinitionRoot, entry.DefinitionRoot)
 			break
 		}
 	}
@@ -222,13 +234,13 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 			if entry.Directory == main && entry.FolderID != "" {
 				if identity, err := network.FolderIdentity(main); err == nil && network.SameFolder(entry.FolderID, identity) {
 					known = true
-					info.DefinitionRoot = cmp.Or(entry.DefinitionRoot, main)
+					info.DefinitionRoot = cmp.Or(info.DefinitionRoot, entry.DefinitionRoot, main)
 				}
 				break
 			}
 		}
 	}
-	if !known {
+	if !known && !browserStart {
 		return "", errors.New("folder has not been used before; launch an agent locally before starting it remotely")
 	}
 	// A folder that holds its own agentpack.toml records no separate definition root. The worker

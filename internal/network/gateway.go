@@ -96,6 +96,7 @@ type Gateway struct {
 	agentTaskSeen  map[string]int64 // last_seq each asked chat had at the last pass; owned by runAgentTasks
 	agentTaskRetry time.Time        // when undelivered answers are tried again; owned by runAgentTasks
 	omp            ompSettings
+	found          folderDiscovery
 	credentialsMu  sync.Mutex // one agent credential sync at a time
 }
 
@@ -420,7 +421,7 @@ func (g *Gateway) Handler() http.Handler {
 				return
 			}
 			main := filepath.Clean(input.Directory)
-			directory, err := g.newSessionWorktree(r.Context(), main, input.Worktree, input.WorktreeName, input.Carry)
+			directory, err := g.newSessionWorktree(r.Context(), actor, main, input.Worktree, input.WorktreeName, input.Carry)
 			if err != nil {
 				gitFailure(w, r, http.StatusUnprocessableEntity, err, map[string]any{"field": "worktree"})
 				return
@@ -745,6 +746,8 @@ func (g *Gateway) Handler() http.Handler {
 		value, err := g.projects(r.Context())
 		respond(w, value, err)
 	})
+	mux.HandleFunc("GET /api/folders", g.serveFolders)
+	mux.HandleFunc("GET /api/folders/found", g.serveFoundFolders)
 	mux.HandleFunc("POST /api/packages", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			Directory string `json:"directory"`
@@ -1015,13 +1018,22 @@ func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInf
 	if err := authorizeACPResume(ctx, g.auth.store, actor, source); err != nil {
 		return SessionInfo{}, err
 	}
-	// A new worktree is accepted only when git lists it for a known main folder, which the row records.
+	// A new worktree is accepted only when git lists it for an authorized main folder, which the row records.
 	info.WorktreeOf = ""
-	if main, _, err := worktreeMain(ctx, g.options.Home, info.Directory); err == nil && g.knownDirectory(main) {
+	if main, _, err := worktreeMain(ctx, g.options.Home, info.Directory); err == nil && g.startableDirectory(actor, main) {
 		info.WorktreeOf = main
-	} else if !g.knownDirectory(info.Directory) {
-		return SessionInfo{}, errors.New("choose a recent folder from this node")
+		if info.DefinitionRoot == "" {
+			info.DefinitionRoot = g.definitionRootFor(ctx, main)
+		}
+	} else if !g.startableDirectory(actor, info.Directory) {
+		return SessionInfo{}, errUnknownFolder
 	}
+	info.Directory = filepath.Clean(info.Directory)
+	folderID, err := FolderIdentity(info.Directory)
+	if err != nil {
+		return SessionInfo{}, errUnknownFolder
+	}
+	info.FolderID = folderID
 	local, err := g.auth.store.NodeID(ctx)
 	if err != nil {
 		return SessionInfo{}, err

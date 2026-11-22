@@ -77,12 +77,13 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatSta
 	if err := authorizeACPResume(ctx, g.auth.store, actor, source); err != nil {
 		return SessionInfo{}, err
 	}
-	if !g.knownDirectory(info.Directory) {
-		main, _, err := worktreeMain(ctx, g.options.Home, info.Directory)
-		if input.Worktree != "" || err != nil || !g.knownDirectory(main) {
-			return SessionInfo{}, errUnknownFolder
-		}
+	if main, _, err := worktreeMain(ctx, g.options.Home, info.Directory); input.Worktree == "" && err == nil && g.startableDirectory(actor, main) {
 		info.WorktreeOf = main
+		if info.DefinitionRoot == "" {
+			info.DefinitionRoot = g.definitionRootFor(ctx, main)
+		}
+	} else if !g.startableDirectory(actor, info.Directory) {
+		return SessionInfo{}, errUnknownFolder
 	}
 	var err error
 	if info.FolderID, err = FolderIdentity(info.Directory); err != nil {
@@ -150,12 +151,6 @@ func (g *Gateway) launchSession(ctx context.Context, info SessionInfo, forkSessi
 		info.ID = id
 		return info, err
 	}
-	folderID, err := FolderIdentity(info.Directory)
-	if err != nil {
-		return SessionInfo{}, err
-	}
-	// The row is the folder's newest recent entry from now on, so it must carry the folder's identity.
-	info.FolderID = folderID
 	info.ID = newSessionID()
 	info.ConversationState = "starting"
 	info.StartedAt = time.Now().UTC()
@@ -185,7 +180,7 @@ func (g *Gateway) startInBackground(ctx context.Context, info SessionInfo, forkS
 		var err error
 		if request != nil && request.Worktree != "" {
 			main := info.Directory
-			info.Directory, err = g.newSessionWorktree(startCtx, main, request.Worktree, request.WorktreeName, request.Carry)
+			info.Directory, err = g.newSessionWorktree(startCtx, *info.StartedBy, main, request.Worktree, request.WorktreeName, request.Carry)
 			if err == nil {
 				info.FolderID, err = FolderIdentity(info.Directory)
 			}

@@ -151,7 +151,7 @@ test("the fleet's install rows total at most 12 across machines", async ({ page 
 test("New Session merges each machine's 4 folders into 4 projects", async ({ page }) => {
   await mockFleet(page)
   await page.goto("/sessions?new=1")
-  const machine = page.getByRole("combobox", { name: "Machine" })
+  const machine = page.getByRole("combobox", { name: "Machine", exact: true })
   // Same-named folders merge across machines; each project offers all three machines.
   await expect(page.getByRole("navigation", { name: "Projects" }).getByRole("button")).toHaveCount(4)
   await machine.click()

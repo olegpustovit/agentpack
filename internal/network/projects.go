@@ -78,23 +78,41 @@ type ProjectGit struct {
 	Dirty  int    `json:"dirty"`
 }
 
-// projectGit reads one git status per folder, reused for 30 s across project reads.
-func projectGit(ctx context.Context, directory string) *ProjectGit {
+// projectGit caches a folder’s checkout metadata for 30 seconds.
+func projectGit(ctx context.Context, directory string, full bool) *ProjectGit {
 	projectGitMu.Lock()
 	cached, ok := projectGitCache[directory]
 	projectGitMu.Unlock()
-	if ok && time.Since(cached.at) < 30*time.Second {
+	if ok && time.Since(cached.at) < 30*time.Second && (cached.full || !full) {
 		return cached.git
 	}
 	var git *ProjectGit
-	if status, err := readStatus(ctx, directory); err == nil && status.Head != "" {
-		git = &ProjectGit{Branch: status.Branch, Head: status.Head, Dirty: status.Dirty}
+	if full {
+		if status, err := readStatus(ctx, directory); err == nil && status.Head != "" {
+			git = &ProjectGit{Branch: status.Branch, Head: status.Head, Dirty: status.Dirty}
+		}
+	} else {
+		// Status can execute commands configured by a checkout. Browsing a folder
+		// before it has been used only needs HEAD and the branch.
+		branch, _ := gitLine(ctx, directory, "symbolic-ref", "--quiet", "--short", "HEAD")
+		head, _ := gitLine(ctx, directory, "rev-parse", "--verify", "HEAD")
+		if branch != "" || head != "" {
+			git = &ProjectGit{Branch: branch, Head: head}
+		}
+	}
+	if ctx.Err() != nil {
+		return git
 	}
 	projectGitMu.Lock()
+	if cached := projectGitCache[directory]; !full && cached.full && time.Since(cached.at) < 30*time.Second {
+		projectGitMu.Unlock()
+		return cached.git
+	}
 	projectGitCache[directory] = struct {
-		at  time.Time
-		git *ProjectGit
-	}{time.Now(), git}
+		at   time.Time
+		git  *ProjectGit
+		full bool
+	}{time.Now(), git, full}
 	projectGitMu.Unlock()
 	return git
 }
@@ -102,8 +120,9 @@ func projectGit(ctx context.Context, directory string) *ProjectGit {
 var (
 	projectGitMu    sync.Mutex
 	projectGitCache = map[string]struct {
-		at  time.Time
-		git *ProjectGit
+		at   time.Time
+		git  *ProjectGit
+		full bool
 	}{}
 )
 
@@ -145,7 +164,7 @@ func (g *Gateway) projects(ctx context.Context) ([]ProjectRow, error) {
 			defer wg.Done()
 			slots <- struct{}{}
 			defer func() { <-slots }()
-			row.Git = projectGit(ctx, row.Directory)
+			row.Git = projectGit(ctx, row.Directory, true)
 		}(&rows[i])
 	}
 	wg.Wait()
@@ -177,7 +196,7 @@ func projectRows(ctx context.Context, folders []RecentFolder, contents func(cont
 			})
 		}
 		row := &rows[i]
-		if !slices.ContainsFunc(row.Launches, func(launch ProjectLaunch) bool {
+		if folder.Harness != "" && !slices.ContainsFunc(row.Launches, func(launch ProjectLaunch) bool {
 			return launch.Harness == folder.Harness && launch.Mode == folder.Mode
 		}) {
 			row.Launches = append(row.Launches, ProjectLaunch{Harness: folder.Harness, Mode: folder.Mode, LastUsed: folder.LastUsed})
@@ -187,13 +206,17 @@ func projectRows(ctx context.Context, folders []RecentFolder, contents func(cont
 	slots := make(chan struct{}, projectReadConcurrency)
 	var wg sync.WaitGroup
 	for i := range rows {
-		if !rows[i].Available {
+		if !rows[i].Available || contents == nil {
 			continue
 		}
 		wg.Add(1)
 		go func(row *ProjectRow) {
 			defer wg.Done()
-			slots <- struct{}{}
+			select {
+			case slots <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			defer func() { <-slots }()
 			read, err := contents(ctx, row.Directory)
 			if err != nil {

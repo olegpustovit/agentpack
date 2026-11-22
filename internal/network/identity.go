@@ -19,12 +19,13 @@ import (
 // the local OS user, the gateway's browser account, or a verified tailnet whois.
 // Caller-provided identities have no authority; forwarded accounts require verified mesh membership.
 type Actor struct {
-	nativeUser   string
-	Kind         string `json:"kind"`
-	Account      bool   `json:"account,omitempty"`
-	User         string `json:"user,omitempty"`
-	Node         string `json:"node,omitempty"`
-	StableNodeID string `json:"stable_node_id,omitempty"` // Verified tailnet identity; Node is the display name.
+	nativeUser       string
+	forwardedBrowser bool
+	Kind             string `json:"kind"`
+	Account          bool   `json:"account,omitempty"`
+	User             string `json:"user,omitempty"`
+	Node             string `json:"node,omitempty"`
+	StableNodeID     string `json:"stable_node_id,omitempty"` // Verified tailnet identity; Node is the display name.
 	// Agent is the harness of the chat that acted for this user through agentpack tools.
 	Agent string `json:"agent,omitempty"`
 	chat  string // the calling chat's session ID; never serialized
@@ -58,6 +59,11 @@ func LocalActor(kind string) Actor {
 
 func browserActor(email string) Actor {
 	return Actor{Kind: "browser", User: email, Node: localHostname()}
+}
+
+// CanStartNewFolder requires a browser account verified by this gateway or its enrolled peer.
+func (actor Actor) CanStartNewFolder() bool {
+	return actor.Kind == "browser" || actor.Kind == "peer" && actor.Account && actor.forwardedBrowser
 }
 
 // canWriteSession separates peer ownership from same-host local transports.

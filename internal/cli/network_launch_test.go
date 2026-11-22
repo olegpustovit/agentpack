@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +45,26 @@ func TestRemoteSessionRequiresRememberedFolderAndTerminalHarness(t *testing.T) {
 	_, err = runner.startRemoteSession(context.Background(), home, "must-not-execute", network.SessionInfo{Harness: "codex", Directory: directory}, "")
 	if err == nil || !strings.Contains(err.Error(), "folder has changed") {
 		t.Fatalf("replaced folder accepted: %v", err)
+	}
+}
+
+func TestRemoteTerminalLaunchAcceptsGatewayVerifiedFolder(t *testing.T) {
+	home, directory := t.TempDir(), t.TempDir()
+	identity, err := network.FolderIdentity(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := network.SessionInfo{Harness: "codex", Directory: directory, Transport: "terminal", FolderID: identity, StartedBy: &network.Actor{Kind: "browser"}}
+	store, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Runner{}.startRemoteSession(t.Context(), home, filepath.Join(home, "missing-worker"), info, "")
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected to reach the worker launch, got %v", err)
 	}
 }
 

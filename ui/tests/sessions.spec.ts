@@ -113,6 +113,44 @@ test("New session claims a Cursor CLI chat together with its first message", asy
   await expect(page.getByRole("list", { name: "Queued messages" })).toContainText("tidy the overlay")
 })
 
+test("New session browses and starts in an unlisted folder using the keyboard", async ({ page }) => {
+  await page.route(/\/api\/sessions(\?.*)?$/, (route) =>
+    route.request().method() === "POST" ? route.fulfill({ json: { ...sessions[0], id: "created", directory: "/home/viewer/projects" } }) : route.fallback(),
+  )
+  await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "old", name: "Old gateway", online: true }] }))
+  await page.route((url) => url.pathname.startsWith("/api/folders") && url.searchParams.get("node") === "old",
+    (route) => route.fulfill({ status: 404, body: "404 page not found" }),
+  )
+  await page.goto("/sessions?new=1&machine=old")
+  const field = page.getByPlaceholder("Search projects, or type a path")
+  await field.fill("~/")
+  await expect(page.getByRole("alert")).toHaveText("Update Agentpack on Old gateway to browse its folders")
+  await field.press("Escape")
+  await expect(page.getByRole("navigation", { name: "Projects" })).toBeVisible()
+  const machine = page.getByRole("combobox", { name: "Filter by machine", exact: true })
+  await machine.click()
+  const allMachines = page.getByRole("option", { name: /^All machines/ })
+  await expect(allMachines).toHaveText(/All machines\s*1$/)
+  await allMachines.click()
+  await field.fill("~/pro")
+  await expect(machine.locator('[data-slot="select-value"]')).toHaveText("host-a")
+  await machine.click()
+  await expect(allMachines).toHaveCount(0)
+  const olderPeer = page.getByRole("option", { name: /^Old gateway/ })
+  await expect(olderPeer).toBeDisabled()
+  await expect(olderPeer).toContainText("needs update")
+  await page.getByRole("option", { name: /^host-a/ }).click()
+  await expect(page.getByRole("navigation", { name: "Folders" }).getByRole("button", { name: "projects" })).toBeVisible()
+  await field.press("Tab")
+  await expect(field).toHaveValue("~/projects/")
+  await expect(page.getByRole("button", { name: /Use this folder/ })).toBeVisible()
+  await field.press("Enter")
+  await expect(page.getByRole("heading", { name: "projects", exact: true })).toBeVisible()
+  const posted = page.waitForRequest((request) => request.method() === "POST" && /\/api\/sessions$/.test(request.url()))
+  await field.press("Control+Enter")
+  expect((await posted).postDataJSON()).toMatchObject({ directory: "/home/viewer/projects" })
+})
+
 test("New session shows what the chosen mode loads", async ({ page }) => {
   const project = {
     directory: "/home/oleg/agentpack",

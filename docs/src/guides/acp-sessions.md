@@ -42,6 +42,14 @@ later startup. Unreadable sources stay in place and produce a diagnostic without
 preventing gateway startup; unreadable ownership records keep affected resumes
 read-only until the source can be imported.
 
+## Starting in any folder
+
+In **New session**, choose a machine and type an absolute path or select **Open folder…** to begin at `~/` on that machine. The last part of the path filters folder names as you type. Use ↑ and ↓ to move through matches and Tab or Enter to open one. Backspace after a trailing slash moves up one folder. Select **Use this folder** to review the session settings, then press **Start** or Ctrl+Enter (⌘+Enter on Mac). Escape returns to the project list.
+
+**Found on machines** shows Git repositories and folders with an `agentpack.toml` that are outside the recent list. Each gateway scans up to three levels under its home and the usual development roots within it (`projects`, `src`, `code`, `dev`, `work`, `repos`, `git`, `Developer`, and `go/src`). It skips hidden folders, symlinks and agentpack worktrees, and stops descending inside a Git repository. The Agent filter shows only folders where that agent has run.
+
+Signed-in browser accounts can browse folders the gateway's OS user can read and start sessions in existing folders without a prior launch. A folder joins the machine's recent projects once a session runs there. Folder browsing requires an updated gateway on the selected machine.
+
 ## Conversation API
 
 Worker routes (gateway proxies as `/api/sessions/{id}/conversation/...` with the same auth and `?node=` peer routing as other session APIs):

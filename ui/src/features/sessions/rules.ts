@@ -79,6 +79,11 @@ export function modeEffect(project: Pick<ProjectRow, "modes">, name: string) {
   }
 }
 
+// A folder whose directory is known while its project contents are still being read.
+export function stubRow(directory: string): ProjectRow {
+  return { directory, name: basename(directory), folder_id: "", available: true, unavailable_reason: "", last_used: "", launches: [], packages: [], mcp: [], modes: [], error: "" }
+}
+
 // One folder on one machine. The key matches the sidebar's machine + folder subheads.
 export type ProjectPlace = { key: string; machine: string; machineName: string; online: boolean; row: ProjectRow }
 // Folders merge by name across machines, as the sidebar's Project grouping does.
@@ -124,4 +129,33 @@ export function placeLabel(place: ProjectPlace, places: ProjectPlace[]): string 
 export function placeProblem(place: ProjectPlace): string {
   if (!place.online) return "offline"
   return place.row.available ? "" : place.row.unavailable_reason || "folder missing"
+}
+
+const DAY = 24 * 60 * 60 * 1000
+
+export function projectGroups(projects: MergedProject[], found: MergedProject[], machine: string, agent: string, query: string, now: number) {
+  const needle = query.trim().toLowerCase()
+  const scoped = (rows: MergedProject[], agent: string) => rows.flatMap((item) => {
+    const places = item.places.filter((place) =>
+      (machine === "all" || machine === place.machine) &&
+      (agent === "all" || place.row.launches.some((launch) => launch.harness === agent)) &&
+      [item.name, place.row.directory, place.machineName].some((part) => part.toLowerCase().includes(needle)),
+    )
+    if (!places.length) return []
+    const lastUsed = Math.max(0, ...places.map((place) => Date.parse(place.row.last_used) || 0))
+    return [{ ...item, places, lastUsed }]
+  }).sort((a, b) => b.lastUsed - a.lastUsed || a.name.localeCompare(b.name))
+  const shown = scoped(projects, agent)
+  return [
+    { label: "Today", rows: shown.filter((item) => now - item.lastUsed < DAY) },
+    { label: "This week", rows: shown.filter((item) => now - item.lastUsed >= DAY && now - item.lastUsed < 7 * DAY) },
+    { label: "Older", rows: shown.filter((item) => now - item.lastUsed >= 7 * DAY) },
+    { label: "Found on machines", rows: agent === "all" ? scoped(found, agent) : [] },
+  ]
+}
+
+export function projectLocation(item: MergedProject, machine: string): string {
+  if (machine !== "all") return item.places[0]?.row.directory ?? ""
+  const names = [...new Set(item.places.map((place) => place.machineName))]
+  return [...names.slice(0, 2), ...(names.length > 2 ? [`+${names.length - 2}`] : [])].join(" · ")
 }

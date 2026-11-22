@@ -1,4 +1,4 @@
-import { Fragment, type ComponentProps } from "react";
+import { Fragment, type ComponentProps, type ReactNode } from "react";
 import { ShieldAlert } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { menuRow, menuSurface } from "@/components/kit/overlays";
@@ -43,7 +43,7 @@ export function PopupSelect({
 }: {
   value: string;
   onValueChange: (value: string) => void;
-  items: { value: string; label: string; disabled?: boolean; danger?: boolean }[];
+  items: { value: string; label: string; disabled?: boolean; danger?: boolean; detail?: ReactNode; group?: string }[];
   label: string;
   disabled?: boolean;
 }) {
@@ -62,15 +62,23 @@ export function PopupSelect({
       <SelectContent className={cn(menuSurface, "w-max min-w-(--anchor-width) max-w-[min(90vw,40rem)]")}>
         {items.map((item, index) => (
           <Fragment key={item.value}>
+            {item.group && item.group !== items[index - 1]?.group && (
+              <>
+                {index > 0 && <SelectSeparator />}
+                <div className="px-3 py-1 text-(length:--fs-xs) text-(--fg2)">{item.group}</div>
+              </>
+            )}
             {/* Dangerous choices form their own group, as AppKit separates destructive items. */}
             {item.danger && index > 0 && !items[index - 1]?.danger && <SelectSeparator />}
             <SelectItem
               value={item.value}
+              label={item.label}
               disabled={item.disabled}
               data-danger={item.danger}
               className={cn(menuRow, "min-w-0 pl-6 [&_span]:truncate")}
             >
-              {item.label}
+              <span className="min-w-0 flex-1">{item.label}</span>
+              {item.detail && <span className="ml-auto flex shrink-0 items-center gap-(--s2) text-(length:--fs-xs) text-(--fg2)">{item.detail}</span>}
             </SelectItem>
           </Fragment>
         ))}

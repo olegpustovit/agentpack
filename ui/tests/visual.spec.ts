@@ -555,11 +555,13 @@ test("a long project path stays inside the New session sheet", async ({ page, is
   const long = `/work/${"very-long-folder-name/".repeat(12)}project`
   await page.route("**/api/projects**", (route) => route.fulfill({ json: [projectRow(long, [{ harness: "claude", mode: "" }])] }))
   await page.goto("/sessions?new=1")
-  const sheet = (await page.getByRole("dialog").boundingBox())!
-  const start = (await page.getByRole("button", { name: "Start session" }).boundingBox())!
-  const project = (await page.getByText(long, { exact: true }).last().boundingBox())!
-  expect(start.x + start.width).toBeLessThanOrEqual(sheet.x + sheet.width)
-  expect(project.x + project.width).toBeLessThanOrEqual(sheet.x + sheet.width)
+  // Measure together so the opening animation cannot move the sheet between reads.
+  const overflow = await page.getByRole("dialog").getByText(long, { exact: true }).last().evaluate((project) => {
+    const sheet = project.closest('[role="dialog"]')!
+    const start = sheet.querySelector('button[type="submit"]')!
+    return Math.max(start.getBoundingClientRect().right, project.getBoundingClientRect().right) - sheet.getBoundingClientRect().right
+  })
+  expect(overflow).toBeLessThanOrEqual(0)
   // A CLI launch records an empty mode; the control still names the real one.
   await expect(page.getByRole("group", { name: "Mode" }).getByRole("button", { name: "default" })).toHaveAttribute("aria-pressed", "true")
 })

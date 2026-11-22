@@ -99,7 +99,16 @@ export async function mockAPI(page: Page, { authenticated = true, unclaimed = fa
       const list = fleet ? (machine === "local" ? ["local", ...fleetNodes.map((node) => node.id)].flatMap(fleetSessions) : fleetSessions(machine)) : [session, second]
       data = req.method() === "POST" ? { ...session, ...body, id: "created" } : list
     } else if (url.pathname === "/api/projects") data = fleet ? fleetProjects(machine) : [projectRow("/work/previous", [{ harness: "codex" }])]
-    else if (url.pathname === "/api/packages") data = req.method() === "POST" ? {} : [{ module: "github.com/acme/tools", commit: "abcd1234" }]
+    else if (url.pathname === "/api/folders/found") data = []
+    else if (url.pathname === "/api/folders") {
+      const path = url.searchParams.get("path")
+      const listing = (directory: string, parent: string, entries: unknown[]) => ({
+        path: directory, parent, row: projectRow(directory, [], { last_used: "" }), entries, truncated: false,
+      })
+      if (path === "~/") data = listing("/home/viewer", "/home", [{ name: "projects", hidden: false, pack: false }])
+      else if (path === "~/projects/") data = listing("/home/viewer/projects", "/home/viewer", [])
+      else return route.fulfill({ status: 404, body: "Folder not found." })
+    } else if (url.pathname === "/api/packages") data = req.method() === "POST" ? {} : [{ module: "github.com/acme/tools", commit: "abcd1234" }]
     else if (url.pathname === "/api/settings") data = { running: true, platform: "linux", sharing_enabled: true, allowed_peers: ["tag:server"] }
     else if (url.pathname === "/api/settings/sharing") data = { sharing_enabled: body?.enabled }
     else if (url.pathname === "/api/topology") data = { self: { id: "gateway", name: "Gateway machine", os: "linux", relay: "" }, peers: [] }

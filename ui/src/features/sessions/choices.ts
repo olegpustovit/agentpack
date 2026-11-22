@@ -35,3 +35,18 @@ export function loadStartChoices(directory: string): StartChoices {
 export function saveStartChoices(directory: string, choices: StartChoices) {
   write(startKey(directory), choices)
 }
+
+const filtersKey = "agentpack.projectFilters"
+type ProjectFilters = { machine: string; agent: string }
+
+export function loadProjectFilters(): ProjectFilters {
+  const saved = read<ProjectFilters>(filtersKey)
+  return {
+    machine: typeof saved?.machine === "string" ? saved.machine : "all",
+    agent: typeof saved?.agent === "string" ? saved.agent : "all",
+  }
+}
+
+export function saveProjectFilters(filters: ProjectFilters) {
+  write(filtersKey, filters)
+}

@@ -585,6 +585,8 @@ var peerPatterns = []string{
 	"POST /api/packages",
 	"POST /api/mcp/servers",
 	"GET /api/projects",
+	"GET /api/folders",
+	"GET /api/folders/found",
 	"GET /api/worktrees",
 	"POST /api/worktrees/remove",
 	"POST /api/worktrees/push",
@@ -736,8 +738,12 @@ func (g *Gateway) proxyTailnetTo(w http.ResponseWriter, r *http.Request, id stri
 		}
 		request.Header.Del("Cookie")
 		request.Header.Del("X-Agentpack-User")
+		request.Header.Del("X-Agentpack-Browser")
 		if actor, ok := actorFrom(r.Context()); ok && (actor.Account || actor.Kind == "browser" || actor.Kind == "mcp") {
 			request.Header.Set("X-Agentpack-User", actor.User)
+			if actor.CanStartNewFolder() {
+				request.Header.Set("X-Agentpack-Browser", "1")
+			}
 		}
 		request.Header.Del("Origin")
 		request.Header.Del("Forwarded")
@@ -784,7 +790,7 @@ func slowTailnetRequest(method, path string) bool {
 }
 
 func tailnetRequestTransport(method, path string) *http.Transport {
-	if path == "/api/agent-sessions" {
+	if path == "/api/agent-sessions" || path == "/api/folders/found" {
 		return tailnetProbeTransport
 	}
 	if slowTailnetRequest(method, path) {
@@ -881,9 +887,11 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			return
 		}
 
+		actor.forwardedBrowser = actor.Account && r.Header.Get("X-Agentpack-Browser") == "1"
 		request := r.Clone(withActor(context.WithValue(r.Context(), replicaPeerKey{}, identity.Node.StableID), actor))
 		request.Header = r.Header.Clone()
 		request.Header.Del("X-Agentpack-User")
+		request.Header.Del("X-Agentpack-Browser")
 		request.Header.Del("Cookie")
 		request.Header.Set("Authorization", "Bearer "+g.local.Secret)
 		request.Host = g.origin.Host

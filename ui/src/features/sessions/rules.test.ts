@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { ApiError } from "@/lib/api"
 import { type ListedSession } from "./group"
-import { canStart, mergeProjects, modeChoices, modeEffect, placeLabel, reusesOperationId, sessionRules, startSessionBody } from "./rules"
+import { canStart, mergeProjects, modeChoices, modeEffect, placeLabel, projectGroups, projectLocation, reusesOperationId, sessionRules, startSessionBody } from "./rules"
 
 function session(overrides: Partial<ListedSession> & { interactive?: boolean; running?: boolean } = {}): ListedSession {
   const { interactive = true, running = true, ...rest } = overrides
@@ -102,6 +102,28 @@ describe("new session projects", () => {
   it("merges folders by name across machines, newest project first", () => {
     expect(merged.map((project) => project.name)).toEqual(["agentpack", "site"])
     expect(merged[0]!.places.map((place) => place.machineName)).toEqual(["macbook", "gigacomp", "lab-pi", "gigacomp"])
+  })
+
+  it("filters machine and agent on the same place, groups by local recency, and omits found under an agent filter", () => {
+    const now = Date.parse("2026-01-10T12:00:00Z")
+    const codex = { harness: "codex", mode: "default", last_used: "2026-01-10T10:00:00Z" }
+    const projects = mergeProjects(machines, {
+      local: [
+        { ...row("/work/agentpack", codex.last_used), launches: [codex] },
+        row("/work/site", "2026-01-01T00:00:00Z"),
+      ],
+      mac: [row("/Users/o/agentpack", "2026-01-07T00:00:00Z"), row("/Users/o/kit", "2026-01-08T00:00:00Z")],
+      pi: [row("/srv/agentpack", "2026-01-09T00:00:00Z")],
+    })
+    const found = mergeProjects(machines, { local: [row("/work/fresh", "")] })
+    const names = (groups: ReturnType<typeof projectGroups>) => groups.map(({ rows }) => rows.map((item) => item.name))
+    expect(names(projectGroups(projects, found, "all", "all", "", now))).toEqual([["agentpack"], ["kit"], ["site"], ["fresh"]])
+    expect(names(projectGroups(projects, found, "mac", "all", "", now))).toEqual([[], ["kit", "agentpack"], [], []])
+    expect(names(projectGroups(projects, found, "mac", "codex", "", now))).toEqual([[], [], [], []])
+    expect(names(projectGroups(projects, found, "all", "codex", "", now))).toEqual([["agentpack"], [], [], []])
+    expect(names(projectGroups(projects, found, "all", "all", "fresh", now))).toEqual([[], [], [], ["fresh"]])
+    expect(projectLocation(projects[0]!, "all")).toBe("gigacomp · macbook · +1")
+    expect(projectLocation(projectGroups(projects, found, "mac", "all", "agentpack", now)[1]!.rows[0]!, "mac")).toBe("/Users/o/agentpack")
   })
 
   it("puts places that can start first and explains the rest", () => {

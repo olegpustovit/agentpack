@@ -111,6 +111,8 @@ func TestTailnetTargetsAndRoutesAreBounded(t *testing.T) {
 		{"POST", "/api/sessions/x/conversation/goal"},
 		{"PATCH", "/api/sessions/x/conversation/goal"},
 		{"DELETE", "/api/sessions/x/conversation/goal"},
+		{"GET", "/api/folders"},
+		{"GET", "/api/folders/found"},
 		{"GET", "/api/sessions/x/blobs/" + strings.Repeat("a", 64)},
 	}
 	for _, route := range routes {

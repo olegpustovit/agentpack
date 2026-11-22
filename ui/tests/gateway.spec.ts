@@ -288,7 +288,7 @@ test("390px switches between the session list and terminal panes", async ({ page
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy()
 })
 
-test("new session only offers recent folders and routes start to the chosen machine", async ({ page }) => {
+test("new session lists recent folders and routes start to the chosen machine", async ({ page }) => {
   const requests = await mockAPI(page)
   await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "peer-1", name: "Build server", online: true }] }))
   await page.route((url) => url.pathname === "/api/projects" && url.searchParams.get("node") === "peer-1", (route) =>
@@ -301,7 +301,7 @@ test("new session only offers recent folders and routes start to the chosen mach
   const projects = page.getByRole("navigation", { name: "Projects" }).getByRole("button")
   await expect(projects).toHaveCount(2)
   await projects.filter({ hasText: "previous" }).click()
-  await expect(page.getByRole("combobox", { name: "Machine" })).toContainText("Gateway machine")
+  await expect(page.getByRole("combobox", { name: "Machine", exact: true })).toContainText("Gateway machine")
   await page.getByRole("button", { name: "Start session" }).click()
   await expect(page.getByRole("dialog")).toBeHidden()
   expect(requests).toContainEqual(expect.objectContaining({ method: "POST", path: "/api/sessions", body: expect.objectContaining({ directory: "/work/previous" }) }))
@@ -310,7 +310,7 @@ test("new session only offers recent folders and routes start to the chosen mach
   await page.goto("/sessions")
   await page.getByRole("link", { name: "New session", exact: true }).click()
   await page.getByRole("navigation", { name: "Projects" }).getByRole("button").filter({ hasText: "app" }).click()
-  await expect(page.getByRole("combobox", { name: "Machine" })).toContainText("Build server")
+  await expect(page.getByRole("combobox", { name: "Machine", exact: true })).toContainText("Build server")
   const posted = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).searchParams.get("node") === "peer-1")
   await page.getByRole("button", { name: "Start session" }).click()
   expect((await posted).postDataJSON()).toMatchObject({ directory: "/srv/app" })

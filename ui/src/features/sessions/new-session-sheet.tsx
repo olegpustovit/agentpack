@@ -1,25 +1,25 @@
-import { useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react"
-import { loadStartChoices } from "./choices"
+import { Fragment, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react"
+import { loadProjectFilters, loadStartChoices, saveProjectFilters } from "./choices"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { FieldError, PopupSelect } from "@/components/kit/forms"
+import { StatusGlyph } from "@/components/kit/status-dot"
 import { Kbd } from "@/components/kit/feedback"
-import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
+import { GroupHeader, SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
 import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
 import { useMachineQueries, useMachines, useReplicatedQueries } from "@/features/machines/queries"
 import { agentsQuery } from "@/features/agents/queries"
-import { api, ApiError, routeMissing } from "@/lib/api"
+import { api, ApiError, LOCAL, routeMissing } from "@/lib/api"
 import type { AgentSession, ProjectRow } from "@/lib/api-types"
-import { basename, harnessName, plural, relativeTime, shortAge } from "@/lib/format"
+import { harnessName, plural, relativeTime, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { agentIds, canStart, defaultAgent, mergeProjects, modeChoices, modeEffect, placeKey, placeLabel, placeProblem, type MergedProject, type SessionView } from "./rules"
+import { agentIds, canStart, defaultAgent, mergeProjects, modeChoices, modeEffect, placeKey, placeLabel, projectGroups, projectLocation, stubRow, type MergedProject, type SessionView } from "./rules"
 import { useStartSession } from "./start"
 import { branchSlug, projectDirectory, worktreeFolderInProject, worktreesQuery } from "./git"
-import { projectsQuery, sessionsQuery } from "./queries"
+import { foundQuery, projectsQuery, sessionsQuery } from "./queries"
 
-// Harness ids the gateway starts.
-const DAY = 24 * 60 * 60 * 1000
+import { FolderBrowser, useFolderBrowser } from "./folder-browser"
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
 
 function chatUnavailableReason(error: unknown, machine: string): string | undefined {
@@ -63,9 +63,17 @@ export function NewSessionSheet({
 function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?: string; initialDirectory?: string }) {
   const machines = useMachines()
   const projectQueries = useMachineQueries(projectsQuery)
+  const foundQueries = useMachineQueries(foundQuery)
   const online = machines.filter((machine) => machine.online)
-  // Nulls mean "use the default": the requested folder, else the newest project on its newest machine.
-  const [projectKey, setProjectKey] = useState<string | null>(null)
+  // Default to the requested folder or the newest startable project.
+  const [filters, setFilters] = useState(() => {
+    const saved = loadProjectFilters()
+    return { ...saved, machine: initialMachine ?? saved.machine }
+  })
+  const [picked, setPicked] = useState<{ machine: string; row: ProjectRow; pathQuery?: string } | undefined>(() =>
+    initialMachine && initialDirectory ? { machine: initialMachine, row: stubRow(initialDirectory) } : undefined,
+  )
+  const [selectedProject, setSelectedProject] = useState<string | null>(null)
   const [chosenPlace, setChosenPlace] = useState<string | null>(null)
   const [harness, setHarness] = useState<string | null>(null)
   const [mode, setMode] = useState<string | null>(null)
@@ -76,24 +84,50 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   const [chosenWorkspace, setWorkspace] = useState<string | null>(null)
   const [carry, setCarry] = useState(true)
 
-  // A folder opened from the sidebar is offered even before (or without) the machine listing it.
+  const now = Date.now()
+  const machineFilter = machines.some((machine) => machine.id === filters.machine) ? filters.machine : "all"
+  const agentFilter = agentIds.includes(filters.agent) ? filters.agent : "all"
+  const browserMachine = machines.find((machine) => machine.id === (machineFilter === "all" ? LOCAL : machineFilter))
+  const needsFoldersUpdate = (machine: string) => foundQueries.byMachine[machine]?.needsUpdate === true || projectQueries.byMachine[machine]?.needsUpdate === true
   const rows: Record<string, ProjectRow[] | undefined> = {}
-  for (const machine of machines) rows[machine.id] = projectQueries.byMachine[machine.id]?.data
-  const requested = initialMachine && initialDirectory ? placeKey(initialMachine, initialDirectory) : undefined
-  if (initialMachine && initialDirectory && !(rows[initialMachine] ?? []).some((row) => placeKey(initialMachine, row.directory) === requested)) {
-    rows[initialMachine] = [...(rows[initialMachine] ?? []), stubRow(initialDirectory)]
+  const foundRows: Record<string, ProjectRow[] | undefined> = {}
+  for (const machine of machines) {
+    rows[machine.id] = projectQueries.byMachine[machine.id]?.data
+    if (machine.online && !needsFoldersUpdate(machine.id)) {
+      const used = new Set(rows[machine.id]?.map((row) => placeKey(machine.id, row.directory)))
+      foundRows[machine.id] = foundQueries.byMachine[machine.id]?.data?.filter((row) => !used.has(placeKey(machine.id, row.directory)))
+    }
   }
+  const browser = useFolderBrowser(
+    browserMachine,
+    browserMachine ? needsFoldersUpdate(browserMachine.id) || Boolean(browserMachine.needsUpdate) : false,
+    query,
+    rows[browserMachine?.id ?? LOCAL] ?? [],
+  )
+  const browsing = browser.browsing
   const projects = mergeProjects(machines, rows)
-  const requestedProject = requested ? projects.find((item) => item.places.some((place) => place.key === requested)) : undefined
-  const project = projects.find((item) => item.key === projectKey) ?? requestedProject ?? projects.find((item) => item.places.some(canStart)) ?? projects[0]
+  const found = mergeProjects(machines, foundRows)
+  const groups = projectGroups(projects, found, machineFilter, agentFilter, browsing ? "" : query, now)
+  const shown = groups.flatMap((group) => group.rows)
+  const total = projects.length + found.length
+  const requested = picked && placeKey(picked.machine, picked.row.directory)
+  const pickedRow = picked && (picked.pathQuery
+    ? picked.row
+    : rows[picked.machine]?.find((row) => placeKey(picked.machine, row.directory) === requested) ?? picked.row)
+  const pickedProject = picked && pickedRow ? mergeProjects(machines, { [picked.machine]: [pickedRow] })[0] : undefined
+  const listKey = (item: MergedProject) => `${item.lastUsed ? "recent" : "found"}\0${item.key}`
+  const pathProject = browsing && browser.preview
+    ? mergeProjects(machines, { [browser.machineId]: [browser.preview] })[0]
+    : undefined
+  const project = pathProject ?? pickedProject ?? shown.find((item) => listKey(item) === selectedProject) ?? shown.find((item) => item.places.some(canStart)) ?? shown[0]
   const place =
     project?.places.find((item) => item.key === chosenPlace) ??
-    project?.places.find((item) => item.key === requested) ??
     project?.places.find(canStart) ??
     project?.places[0]
   const row = place?.row
+  const registered = Boolean(place && rows[place.machine]?.some((entry) => entry.available && placeKey(place.machine, entry.directory) === place.key && entry.folder_id === place.row.folder_id))
   const placeQuery = place ? projectQueries.byMachine[place.machine] : undefined
-  const contentsLoading = Boolean(placeQuery?.pending)
+  const contentsLoading = Boolean(placeQuery?.pending && !row?.folder_id)
   const newest = row?.launches[0]
   // What this browser last started here wins over the folder's newest launch.
   const remembered = row ? loadStartChoices(row.directory) : {}
@@ -114,7 +148,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
       })
       return body.sessions ?? []
     },
-    enabled: view === "chat" && startable,
+    enabled: view === "chat" && startable && (registered || Boolean(row?.launches.length)),
     retry: false,
   })
 
@@ -125,7 +159,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   const folder = row?.directory.replace(/[\\/]+$/, "")
   const othersHere = machineSessions.filter((item) => item.state?.running && !item.ended_at && projectDirectory(item).replace(/[\\/]+$/, "") === folder)
   const projectWorktrees = row ? (worktrees.data?.worktrees ?? []).filter((item) => !item.orphaned && item.branch && worktreeFolderInProject(item, row.directory)) : []
-  const canWorktree = Boolean(row?.git) && worktrees.data?.git === true && !resumeId
+  const canWorktree = Boolean(row?.git?.head) && worktrees.data?.git === true && !resumeId
   const showWorkspace = Boolean(row?.git) || worktreesNeedUpdate
   const workspace = !canWorktree ? "folder" : chosenWorkspace ?? remembered.workspace ?? (othersHere.length > 0 ? "new" : "folder")
   const dirty = row?.git?.dirty ?? 0
@@ -136,7 +170,25 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   const worktreeError = start.error instanceof ApiError && start.error.status === 422 ? start.error.message : undefined
 
   function chooseProject(next: MergedProject) {
-    setProjectKey(next.key)
+    setPicked(undefined)
+    setSelectedProject(listKey(next))
+    resetProject()
+  }
+
+  function pickFolder(machine: string, row: ProjectRow) {
+    resetProject()
+    setPicked({ machine, row, pathQuery: query })
+  }
+
+  function changeFilters(next: typeof filters) {
+    setFilters(next)
+    saveProjectFilters(next)
+    resetProject()
+    setPicked(undefined)
+    setSelectedProject(null)
+  }
+
+  function resetProject() {
     setWorkspace(null)
     setChosenPlace(null)
     setHarness(null)
@@ -191,28 +243,40 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   if (online.length === 0) hint = "No machine is online."
   else if (place && !place.online) hint = `${machineName} is offline. Choose another machine for ${project?.name}.`
   else if (row && !row.available) hint = `${row.unavailable_reason || "This folder is missing"} on ${machineName}. Choose another machine.`
-  else if (placeQuery?.needsUpdate) hint = `Update Agentpack on ${machineName} to see its projects.`
-  else if (placeError) hint = `Couldn't load projects from ${machineName}: ${placeError.message}`
-  else if (!projectQueries.firstLoadPending && projects.length === 0) hint = "Run an agent in a folder on a machine first, for example agentpack claude. It then appears here."
+  else if (placeQuery?.needsUpdate && !picked) hint = `Update Agentpack on ${machineName} to see its projects.`
+  else if (placeError && !picked) hint = `Couldn't load projects from ${machineName}: ${placeError.message}`
+  else if (!browsing && !projectQueries.firstLoadPending && total === 0 && !row) hint = "Open a folder to start a session."
   else if (chatUnavailableHint) hint = chatUnavailableHint
   else if (view === "chat" && pastSessions.error && !signInError(pastSessions.error)) hint = `Couldn't load conversations: ${(pastSessions.error as Error).message}`
-  const blocked = !startable || start.isPending || (view === "chat" && Boolean(chatUnavailableHint))
+  const blocked = (browsing && !pathProject) || !startable || start.isPending || (view === "chat" && Boolean(chatUnavailableHint))
   const failedMachines = machines.filter((machine) => machine.online && projectQueries.byMachine[machine.id]?.error)
 
-  const needle = query.trim().toLowerCase()
-  const shown = projects.filter(
-    (item) => !needle || [item.name, ...item.places.flatMap((entry) => [entry.row.directory, entry.machineName])].some((part) => part.toLowerCase().includes(needle)),
-  )
-  const now = Date.now()
-  const recent = shown.filter((item) => now - item.lastUsed < DAY)
-  const older = shown.filter((item) => now - item.lastUsed >= DAY)
+  const machineItems = [...machines].sort((a, b) =>
+    Number(b.id === LOCAL) - Number(a.id === LOCAL) || Number(b.online) - Number(a.online) || a.name.localeCompare(b.name),
+  ).map((machine) => {
+    const old = needsFoldersUpdate(machine.id) || machine.needsUpdate
+    return {
+      value: machine.id,
+      label: machine.name,
+      detail: (
+        <>
+          <StatusGlyph state={!machine.online ? "offline" : old ? "needsUpdate" : "running"} className="size-2" />
+          {!machine.online ? "offline" : old ? "needs update" : rows[machine.id]?.length ?? 0}
+        </>
+      ),
+      group: machine.online ? undefined : "Offline",
+      disabled: browsing && (!machine.online || old),
+    }
+  })
   const projectRow = (item: MergedProject) => {
     const best = item.places.find(canStart)
+    const source = best ?? item.places[0]!
+    const agents = [...new Set(item.places.flatMap((entry) => entry.row.launches.map((launch) => harnessName(launch.harness))))]
     return (
       <SourceRow
         key={item.key}
         type="button"
-        selected={item === project}
+        selected={item === project || Boolean(requested && item.places.some((entry) => entry.key === requested))}
         title={item.places.map((entry) => `${entry.machineName}: ${entry.row.directory}`).join("\n")}
         onClick={() => chooseProject(item)}
         className={cn("h-auto flex-col items-stretch gap-0 py-(--s3) max-[760px]:h-auto", !best && "opacity-50")}
@@ -221,8 +285,10 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
           <span className="min-w-0 flex-1 truncate font-semibold">{item.name}</span>
           {item.lastUsed > 0 && <span className="shrink-0 text-(length:--fs-xs) opacity-70">{shortAge(new Date(item.lastUsed), now)}</span>}
         </span>
-        <span className="truncate text-(length:--fs-xs) opacity-70">{[...new Set(item.places.map((entry) => entry.machineName))].join(" · ")}</span>
-        <span className="truncate text-(length:--fs-xs) opacity-70">{best ? contentsSummary(best.row) : `Can't start: ${placeProblem(item.places[0]!)}`}</span>
+        <span className="truncate text-(length:--fs-xs) opacity-70">{projectLocation(item, machineFilter)}</span>
+        <span className="truncate text-(length:--fs-xs) opacity-70">
+          {[...agents, source.row.error ? "Packages unavailable" : plural(source.row.packages.length, "package")].join(" · ")}
+        </span>
       </SourceRow>
     )
   }
@@ -232,37 +298,60 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
       <header className="flex min-w-0 items-center gap-(--s4) border-b-[0.5px] border-(--sep) px-(--s6) py-(--s5)">
         <div className="min-w-0 flex-1">
           <SheetTitle>New session</SheetTitle>
-          <SheetDescription>Pick a project, then the machine to run it on.</SheetDescription>
+          <SheetDescription>Pick a project or any folder, then the machine to run it on.</SheetDescription>
         </div>
       </header>
 
       <div className="grid min-h-0 grid-cols-[280px_minmax(0,1fr)] max-[760px]:grid-cols-1 max-[760px]:grid-rows-[minmax(0,180px)_minmax(0,1fr)]">
-        <aside className="flex min-h-0 flex-col gap-(--s3) border-r-[0.5px] border-(--sep) bg-(--sidebar) pt-(--s4) max-[760px]:border-r-0 max-[760px]:border-b-[0.5px]">
-          <div className="px-(--s4)">
-            <SearchField aria-label="Search projects" placeholder="Search projects or machines" value={query} onChange={(event) => setQuery(event.target.value)} />
-          </div>
+        <FolderBrowser
+          query={query}
+          setQuery={setQuery}
+          browser={browser}
+          pick={pickFolder}
+          filters={(
+            <div className="flex min-w-0 items-center gap-(--s2) px-(--s4)">
+              <PopupSelect
+                label="Filter by machine"
+                value={browsing ? browserMachine?.id ?? LOCAL : machineFilter}
+                onValueChange={(machine) => changeFilters({ ...filters, machine })}
+                items={browsing ? machineItems : [
+                  { value: "all", label: "All machines", detail: String(projects.length) },
+                  ...machineItems,
+                ]}
+              />
+              {!browsing && <>
+                <PopupSelect label="Filter by agent" value={agentFilter} onValueChange={(agent) => changeFilters({ ...filters, agent })} items={[
+                  { value: "all", label: "All agents" },
+                  ...agentIds.map((value) => ({ value, label: harnessName(value) })),
+                ]} />
+                {(machineFilter !== "all" || agentFilter !== "all" || query.trim()) && (
+                  <span className="shrink-0 text-(length:--fs-xs) text-(--fg2)">{shown.length} of {total}</span>
+                )}
+              </>}
+            </div>
+          )}
+        >
           <SourceList aria-label="Projects" className="flex-1 px-(--s3)">
-            {projectQueries.firstLoadPending && projects.length === 0 ? (
-              <p className="px-(--s3) text-(--fg2)">Loading projects…</p>
-            ) : projects.length === 0 ? (
-              <p className="px-(--s3) text-(--fg2)">No projects yet</p>
-            ) : shown.length === 0 ? (
-              <p className="px-(--s3) text-(--fg2)">No project matches “{query}”.</p>
-            ) : (
-              <>
-                {recent.length > 0 && <GroupHeader>Today</GroupHeader>}
-                {recent.map(projectRow)}
-                {older.length > 0 && <GroupHeader>Earlier</GroupHeader>}
-                {older.map(projectRow)}
-              </>
+            {groups.map((group) => group.rows.length > 0 && (
+              <Fragment key={group.label}>
+                <GroupHeader>{group.label}</GroupHeader>
+                {group.rows.map(projectRow)}
+              </Fragment>
+            ))}
+            {!shown.length && (
+              <p className="px-(--s3) text-(--fg2)">
+                {projectQueries.firstLoadPending || foundQueries.firstLoadPending
+                  ? "Loading projects…"
+                  : query.trim() ? `No project matches “${query}”.` : total ? "No project matches these filters." : "No projects yet"}
+              </p>
             )}
           </SourceList>
           {failedMachines.length > 0 && (
             <p className="border-t-[0.5px] border-(--sep) px-(--s4) py-(--s3) text-(length:--fs-xs) text-(--fg2)">
-              {failedMachines.map((machine) => machine.name).join(", ")}: projects unavailable
+              {failedMachines.map((machine) => `${machine.name}: ${projectQueries.byMachine[machine.id]?.needsUpdate ? "Needs update" : "projects unavailable"}`).join(" · ")}
             </p>
           )}
-        </aside>
+        </FolderBrowser>
 
         <div className="flex min-h-0 flex-col gap-(--s6) overflow-y-auto px-(--s6) py-(--s5)">
           {project && place && row ? (
@@ -375,7 +464,9 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
                 </Choice>
               )}
 
-              {contentsLoading ? (
+              {pathProject && row && !row.folder_id ? (
+                <p className="text-(length:--fs-sm) text-(--fg2)">Open this folder to see what it loads.</p>
+              ) : contentsLoading ? (
                 <p className="text-(--fg2)">Loading what this folder loads on {machineName}…</p>
               ) : (
                 <LoadedContents project={row} mode={modeValue} />
@@ -383,7 +474,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
 
               {view === "chat" && startable && (
                 <Choice label="Conversation">
-                  {pastSessions.isPending ? (
+                  {pastSessions.isLoading ? (
                     <span className="text-(--fg2)">Loading conversations…</span>
                   ) : (
                     <div role="radiogroup" aria-label="Conversation" className="flex max-h-48 flex-col overflow-y-auto">
@@ -436,17 +527,6 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
       </footer>
     </form>
   )
-}
-
-// A folder the machine has not listed yet: startable, nothing known about its contents.
-function stubRow(directory: string): ProjectRow {
-  return { directory, name: basename(directory), folder_id: "", available: true, unavailable_reason: "", last_used: "", launches: [], packages: [], mcp: [], modes: [], error: "" }
-}
-
-function contentsSummary(project: ProjectRow): string {
-  if (project.error) return "Couldn't read pack.lock"
-  if (project.packages.length + project.mcp.length === 0) return "No packages"
-  return `${plural(project.packages.length, "package")} · ${project.mcp.length} MCP`
 }
 
 function Choice({ label, note, children }: { label: string; note?: string; children: ReactNode }) {

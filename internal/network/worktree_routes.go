@@ -43,10 +43,10 @@ func gitFailure(w http.ResponseWriter, r *http.Request, status int, err error, e
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-// newSessionWorktree resolves POST /api/sessions' worktree request for a known main folder:
+// newSessionWorktree resolves POST /api/sessions' worktree request for a startable main folder:
 // "new" creates one, anything else must be an existing worktree git lists for that folder.
-func (g *Gateway) newSessionWorktree(ctx context.Context, main, worktree, name string, carry bool) (string, error) {
-	if !g.knownDirectory(main) {
+func (g *Gateway) newSessionWorktree(ctx context.Context, actor Actor, main, worktree, name string, carry bool) (string, error) {
+	if !g.startableDirectory(actor, main) {
 		return "", errors.New("choose a recent folder from this node")
 	}
 	if !gitAvailable() {
@@ -89,7 +89,10 @@ func (g *Gateway) definitionRootFor(ctx context.Context, main string) string {
 	if err == nil {
 		for _, entry := range recent {
 			if filepath.Clean(entry.Directory) == filepath.Clean(main) && entry.DefinitionRoot != "" {
-				return entry.DefinitionRoot
+				if identity, err := FolderIdentity(main); err == nil && SameFolder(entry.FolderID, identity) {
+					return entry.DefinitionRoot
+				}
+				break
 			}
 		}
 	}

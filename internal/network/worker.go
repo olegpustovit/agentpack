@@ -157,10 +157,14 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		return 1, err
 	}
 	if launch.Session.Directory != "" {
-		launch.Session.FolderID, err = FolderIdentity(launch.Session.Directory)
+		identity, err := FolderIdentity(launch.Session.Directory)
 		if err != nil {
 			return 1, err
 		}
+		if launch.Session.FolderID != "" && !SameFolder(launch.Session.FolderID, identity) {
+			return 1, errors.New("workspace has changed before launch")
+		}
+		launch.Session.FolderID = identity
 	}
 	validate := func() error {
 		identity, err := FolderIdentity(launch.Directory)
