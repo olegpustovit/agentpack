@@ -20,6 +20,14 @@ function loadFixture(): LogEntry[] {
 }
 
 describe("reduceLog", () => {
+  // Shared with TestReduceRichFixture in internal/acp/content_blobs_test.go.
+  it("folds agent images, tool images and shown cards like the Go reducer", () => {
+    const lines = readFileSync(join(dirname(fixture), "rich.jsonl"), "utf8").split("\n").filter(Boolean)
+    const state = reduceLog(lines.map((line) => JSON.parse(line) as LogEntry))
+    expect(state.items.map((item) => item.kind)).toEqual(["agent_message_chunk", "tool", "rich_block"])
+    expect(state.items[0]?.data).toMatchObject({ text: { text: "Here is the failing page:" }, images: [{ blob: expect.stringMatching(/^sha256:5e/) }] })
+    expect(state.items[2]?.data).toMatchObject({ title: "Nightly e2e", table: { columns: ["Project", "Passed", "Failed"] } })
+  })
   it("shows a prompt once even when the agent echoes it", () => {
     const state = reduceLog([
       { seq: 1, ts: 1, kind: "prompt", payload: { text: { text: "hi" } } },

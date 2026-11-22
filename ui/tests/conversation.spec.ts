@@ -61,6 +61,23 @@ test.beforeEach(async ({ page }) => {
   )
 })
 
+test("agent images, tool screenshots and shown cards render from the blob store", async ({ page }) => {
+  const rich = readFileSync(join(dirname(fixturePath), "rich.jsonl"), "utf8")
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: rich, contentType: "application/x-ndjson" }))
+  await page.goto("/sessions/local/chat-one")
+  const card = page.locator('[data-slot="rich-card"]')
+  await expect(card.getByText("Nightly e2e")).toBeVisible()
+  await expect(card.getByRole("columnheader", { name: "Failed" })).toBeVisible()
+  await expect(card.getByRole("cell", { name: "chromium" })).toBeVisible()
+  await expect(page.locator('[data-slot="agent-attachments"] img[src*="/blobs/5e5e"]')).toBeVisible()
+  // The tool group stays closed; its screenshot and link show beneath it.
+  const tool = page.locator('[data-slot="tool-attachments"]')
+  await expect(tool.locator('img[src*="/blobs/5e5e"]')).toBeVisible()
+  await expect(tool.getByRole("link", { name: "report" })).toHaveAttribute("href", "https://example.com/report.html")
+  await card.getByRole("button", { name: /Preview/ }).click()
+  await expect(page.getByRole("dialog")).toBeVisible()
+})
+
 test("conversation thread renders the latest reply, expandable plan, image, and permission card", async ({ page }) => {
   await page.goto("/sessions/local/chat-one")
   await expect(page.getByText("I'll update the reattach path")).toBeVisible()

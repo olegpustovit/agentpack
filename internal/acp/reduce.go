@@ -126,6 +126,10 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 	case "elicitation_result":
 		resolveRequest(state.Items, "elicitation", "elicitationId", entry.Payload)
 		state.NeedsYou = hasOutstandingRequests(state.Items)
+	case "rich_block":
+		if reducer.keepItems {
+			state.Items = append(state.Items, ThreadItem{Kind: "rich_block", Data: entry.Payload})
+		}
 	case "notice":
 		if reducer.keepItems {
 			state.Items = append(state.Items, ThreadItem{Kind: "divider", Data: noticeViewPayload(entry.Payload)})

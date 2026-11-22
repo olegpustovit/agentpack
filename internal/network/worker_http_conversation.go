@@ -144,6 +144,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 		writeJSON(w, map[string]bool{"accepted": true})
 	})
 	mux.HandleFunc("POST /conversation/config", worker.receiveConfig)
+	mux.HandleFunc("POST /conversation/show", worker.receiveShow)
 	mux.HandleFunc("GET /blobs/{sha}", func(w http.ResponseWriter, r *http.Request) {
 		serveSessionBlob(w, r, worker.sessionDir, r.PathValue("sha"))
 	})

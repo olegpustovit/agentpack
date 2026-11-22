@@ -64,6 +64,16 @@ export type UserAttachmentPayload = {
   height?: number
   name?: string
   kind?: "image" | "resource_link"
+  /** A link an agent sent: shown as a chip, opened only when it is http(s). */
+  uri?: string
+}
+
+/** A card an agent showed with the agentpack show tool (internal/network/conversation_show.go). */
+export type RichBlockPayload = {
+  title?: string
+  markdown?: string
+  table?: { columns?: string[]; rows?: string[][] }
+  image?: UserAttachmentPayload
 }
 
 /** The chat whose agent sent a prompt with ask or reply. */
@@ -110,7 +120,8 @@ export type ToolDiffBlock = {
   oldText?: string
   newText?: string
   newTextFromInput?: boolean
-  content?: { type?: string; text?: string }
+  /** Text, an image in the session's blob store, or a link (internal/acp/content_blobs.go). */
+  content?: { type?: string; text?: string; blob?: string; mimeType?: string; uri?: string; name?: string }
 }
 
 export type PermissionPayload = {

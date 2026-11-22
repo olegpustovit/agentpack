@@ -1,0 +1,6 @@
+{"seq":1,"ts":2000,"kind":"agent_message_chunk","payload":{"text":{"text":"Here is the failing page:"}}}
+{"seq":2,"ts":2001,"kind":"agent_message_chunk","payload":{"image":{"blob":"sha256:5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e","mime":"image/png"}}}
+{"seq":3,"ts":2002,"kind":"tool_call","payload":{"toolCallId":"shot","title":"browser_take_screenshot","kind":"other","status":"pending"}}
+{"seq":4,"ts":2003,"kind":"tool_call_update","payload":{"toolCallId":"shot","status":"completed","content":[{"type":"content","content":{"type":"image","blob":"sha256:5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e","mimeType":"image/png"}},{"type":"content","content":{"type":"resource_link","uri":"https://example.com/report.html","name":"report"}},{"type":"content","content":{"type":"text","text":"[image not shown: larger than 20 MiB]"}}]}}
+{"seq":5,"ts":2004,"kind":"rich_block","payload":{"title":"Nightly e2e","markdown":"**214** tests in 6 m 12 s","table":{"columns":["Project","Passed","Failed"],"rows":[["chromium","172","2"],["webkit","31","0"]]},"image":{"blob":"sha256:5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e","mime":"image/png"}}}
+{"seq":6,"ts":2005,"kind":"turn_end","payload":{"stopReason":"end_turn"}}

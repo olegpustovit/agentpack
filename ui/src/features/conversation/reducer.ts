@@ -1,6 +1,6 @@
 import type { GoalState, SessionInfo } from "@/lib/api-types"
 import { harnessName } from "@/lib/format"
-import type { CompactionPayload, LogEntry, QueuedPrompt, Subagent, ThreadItem, ThreadState, ToolPayload, UserMessagePayload } from "./model"
+import type { CompactionPayload, LogEntry, QueuedPrompt, Subagent, ThreadItem, ThreadState, ToolPayload, UserAttachmentPayload, UserMessagePayload } from "./model"
 
 // Entries from a subagent carry its session id (or "tool:<id>" for agents that only tag the parent tool call).
 function subagentOf(payload: unknown): string | undefined {
@@ -42,18 +42,19 @@ function expandToolDiffs(tool: ToolPayload): ToolPayload {
   }
 }
 
+/** A chunk's images and links: an `images` list, or the single `image` and `resource_link` (as internal/acp/log.go merges them). */
+export function chunkAttachments(payload: UserMessagePayload): UserAttachmentPayload[] {
+  return payload.images ?? [...(payload.image ? [payload.image] : []), ...(payload.resource_link ? [payload.resource_link] : [])]
+}
+
 function mergeTextChunks(a: unknown, b: unknown): unknown {
   const left = a as UserMessagePayload
   const right = b as UserMessagePayload
   const merged: UserMessagePayload = {
     text: { text: (left.text?.text ?? "") + (right.text?.text ?? "") },
   }
-  if (right.image) merged.image = right.image
-  else if (left.image) merged.image = left.image
-  if (right.resource_link) merged.resource_link = right.resource_link
-  else if (left.resource_link) merged.resource_link = left.resource_link
-  if (right.images) merged.images = right.images
-  else if (left.images) merged.images = left.images
+  const images = [...chunkAttachments(left), ...chunkAttachments(right)]
+  if (images.length) merged.images = images
   return merged
 }
 
@@ -237,6 +238,9 @@ class ThreadReducer {
         break
       case "notice":
         state.items.push({ kind: "divider", data: entry.payload })
+        break
+      case "rich_block":
+        state.items.push({ kind: "rich_block", data: entry.payload })
         break
       case "compaction_update": {
         const update = entry.payload as {

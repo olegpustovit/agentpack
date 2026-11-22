@@ -398,6 +398,25 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		current.restoreGoal(launch.Session.Goal)
 		current.mu.Lock()
 		current.titleChange = persistTitle
+		current.imageStore = func(data []byte) (string, error) {
+			sha, err := storeSessionBlob(directory, data)
+			switch {
+			case errors.Is(err, errSessionBlobQuota):
+				return "", err
+			case err != nil && sniffBlobMIME(data) == "":
+				return "", errors.New("unsupported image type")
+			case err != nil:
+				return "", errors.New("could not store it")
+			}
+			// The image shows on this machine either way; peers find it once its location is recorded.
+			if err := advertiseBlob(context.Background(), store, record.ID, sha, int64(len(data))); err != nil {
+				_, event := obs.Start(ctx, "worker", "advertise_blob")
+				event.Set("session_id", record.ID)
+				event.Fail(err)
+				event.End()
+			}
+			return sha, nil
+		}
 		current.snapshotChanged = func() { persistAgentSnapshot(ctx, store.DB, record.Session, current) }
 		current.goalChange = func(goal *Goal) {
 			persistSessionJSON(context.Background(), store.DB, record.ID, "goal", goal, goal == nil)

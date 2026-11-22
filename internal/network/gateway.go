@@ -656,6 +656,7 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", g.servePrompt)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", g.servePrompt)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/message", g.serveAgentMessage)
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/show", g.serveShow)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/permission", func(w http.ResponseWriter, r *http.Request) {
 		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
 		if err != nil {
