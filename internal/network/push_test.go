@@ -200,7 +200,7 @@ func TestPushSubscriptionsAndTransitions(t *testing.T) {
 	}
 	message := owner.decrypt(t, bodies[0])
 	raw, _ := json.Marshal(message)
-	if message.Title != "Claude Code needs you" || message.RequestID != "p1" || message.URL != "/sessions/local/session-a" ||
+	if message.Title != "api" || message.Body != "Claude Code\nWants to run a command" || message.Timestamp == 0 || message.RequestID != "p1" || message.URL != "/sessions/local/session-a" ||
 		len(message.Actions) != 2 || message.Actions[0].OptionID != "yes" || message.Actions[1].OptionID != "no" ||
 		strings.Contains(string(raw), "private") {
 		t.Fatalf("message %s", raw)
@@ -221,7 +221,7 @@ func TestPushSubscriptionsAndTransitions(t *testing.T) {
 		t.Fatal("finished", count, err)
 	}
 	bodies, _ = service.take()
-	if message := owner.decrypt(t, bodies[0]); message.Title != "Claude Code finished" || message.Body != "Ready for review in api" {
+	if message := owner.decrypt(t, bodies[0]); message.Title != "api" || message.Body != "Claude Code\nFinished · ready for review" {
 		t.Fatalf("finished %+v", message)
 	}
 
@@ -282,7 +282,8 @@ func TestPushMainSendsForEveryNode(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := db.Exec(`INSERT INTO sessions(id,directory,harness,transport,conversation_state,node_id) VALUES ('s','/w','claude','acp','working',?)`, local); err != nil {
+	if _, err := db.Exec(`INSERT INTO sessions(id,directory,harness,transport,conversation_state,node_id) VALUES ('s','/w','claude','acp','working',?);
+ INSERT INTO mesh_nodes(node_id,name) VALUES (?,'gigacomp')`, local, local); err != nil {
 		t.Fatal(err)
 	}
 	transition := func() int {
@@ -328,10 +329,10 @@ func TestPushMainSendsForEveryNode(t *testing.T) {
 	bodies, requests := service.take()
 	for i, request := range requests {
 		if request.URL.Path == "/laptop" {
-			if message := laptop.decrypt(t, bodies[i]); message.Machine != local || message.URL != "/sessions/"+url.PathEscape(local)+"/s" {
+			if message := laptop.decrypt(t, bodies[i]); message.Machine != local || message.URL != "/sessions/"+url.PathEscape(local)+"/s" || !strings.HasPrefix(message.Body, "Claude Code on gigacomp\n") {
 				t.Fatalf("laptop link %+v", message)
 			}
-		} else if message := here.decrypt(t, bodies[i]); message.Machine != "local" {
+		} else if message := here.decrypt(t, bodies[i]); message.Machine != "local" || !strings.HasPrefix(message.Body, "Claude Code\n") {
 			t.Fatalf("local link %+v", message)
 		}
 	}
@@ -356,5 +357,22 @@ func TestPushMainSendsForEveryNode(t *testing.T) {
 	}
 	if _, requests := service.take(); !strings.Contains(requests[0].Header.Get("Authorization"), "k="+public) {
 		t.Fatal("subscription signed with another key", requests[0].Header.Get("Authorization"))
+	}
+}
+
+func TestPushProjectNamesTheMainFolderOfAWorktree(t *testing.T) {
+	for _, c := range []struct {
+		s    pushSession
+		want string
+	}{
+		{pushSession{directory: "/home/o/agentpack"}, "agentpack"},
+		{pushSession{directory: "/home/o/.local/share/agentpack/worktrees/c6a92db6c6cd7e32/session-952d2a", worktreeOf: "/home/o/projects/agentpack"}, "agentpack"},
+		// Rows from older peers carry only the definition root.
+		{pushSession{directory: "/home/o/.local/share/agentpack/worktrees/c6a92db6c6cd7e32/session-952d2a", definitionRoot: "/home/o/projects/agentpack"}, "agentpack"},
+		{pushSession{directory: "/srv/site", definitionRoot: "/srv/defs"}, "site"},
+	} {
+		if got := pushProject(c.s); got != c.want {
+			t.Errorf("pushProject(%+v) = %q, want %q", c.s, got, c.want)
+		}
 	}
 }

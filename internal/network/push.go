@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -70,6 +71,7 @@ type pushMessage struct {
 	Machine   string       `json:"machine,omitempty"`
 	RequestID string       `json:"request_id,omitempty"`
 	Actions   []pushAction `json:"actions,omitempty"`
+	Timestamp int64        `json:"timestamp,omitempty"`
 }
 
 func (g *Gateway) registerPush(mux *http.ServeMux) {
@@ -294,8 +296,8 @@ func (g *Gateway) runPush(ctx context.Context, interval time.Duration) {
 }
 
 type pushSession struct {
-	id, node, name, directory, agent, state, owner string
-	seq                                            int64
+	id, node, name, directory, worktreeOf, definitionRoot, agent, state, owner string
+	seq                                                                      int64
 }
 
 // pushPass sends one notification per new transition into needs_you or from working to idle.
@@ -328,7 +330,7 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 		g.push.seen = nil
 		return 0, nil
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT id,node_id,name,directory,harness,conversation_state,owner_email,last_seq FROM sessions
+	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT id,node_id,name,directory,worktree_of,definition_root,harness,conversation_state,owner_email,last_seq FROM sessions
  WHERE transport='acp' AND ended_at=0 AND archived_at=0 AND hidden=0`)
 	if err != nil {
 		return 0, err
@@ -336,7 +338,7 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 	var sessions []pushSession
 	for rows.Next() {
 		var s pushSession
-		if err := rows.Scan(&s.id, &s.node, &s.name, &s.directory, &s.agent, &s.state, &s.owner, &s.seq); err != nil {
+		if err := rows.Scan(&s.id, &s.node, &s.name, &s.directory, &s.worktreeOf, &s.definitionRoot, &s.agent, &s.state, &s.owner, &s.seq); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -370,11 +372,6 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 			continue
 		}
 		g.push.sent[s.id] = key
-		message, err := g.pushMessageFor(ctx, s, kind)
-		if err != nil {
-			failures = append(failures, err)
-			continue
-		}
 		subs, err := g.pushSubscribers(ctx, "(s.email=? OR (?='' AND u.role='owner')) AND "+scope, append([]any{s.owner, s.owner}, scopeArgs...)...)
 		if err != nil {
 			failures = append(failures, err)
@@ -385,6 +382,11 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 			machine := s.node
 			if machine == sub.node || machine == "" {
 				machine = "local"
+			}
+			message, err := g.pushMessageFor(ctx, s, kind, machine)
+			if err != nil {
+				failures = append(failures, err)
+				continue
 			}
 			message.Machine = machine
 			message.URL = "/sessions/" + url.PathEscape(machine) + "/" + url.PathEscape(s.id)
@@ -403,26 +405,35 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 	return sent, errors.Join(failures...)
 }
 
-// pushMessageFor leaves Machine and URL to the caller: they depend on the receiving device.
-func (g *Gateway) pushMessageFor(ctx context.Context, s pushSession, kind string) (pushMessage, error) {
-	label := s.name
-	if label == "" {
-		label = harness.DisplayName(harness.Target(s.agent))
+// pushMessageFor leaves Machine and URL to the caller. The title is the project; the body names the
+// agent, the machine when it is not the one the device subscribed through ("local"), the chat's
+// user-given name, and what is needed. The first prompt never appears.
+func (g *Gateway) pushMessageFor(ctx context.Context, s pushSession, kind, machine string) (pushMessage, error) {
+	agent := harness.DisplayName(harness.Target(s.agent))
+	if machine != "local" {
+		var name string
+		err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT name FROM mesh_nodes WHERE node_id=?", s.node).Scan(&name)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return pushMessage{}, err
+		}
+		if name != "" {
+			agent += " on " + name
+		}
 	}
-	folder := filepath.Base(filepath.Clean(s.directory))
-	message := pushMessage{Tag: "session:" + s.id, Session: s.id}
+	if s.name != "" {
+		agent += " · " + s.name
+	}
+	message := pushMessage{Title: pushProject(s), Tag: "session:" + s.id, Session: s.id, Timestamp: time.Now().UnixMilli()}
 	if kind == "finished" {
-		message.Title = label + " finished"
-		message.Body = "Ready for review in " + folder
+		message.Body = agent + "\nFinished · ready for review"
 		return message, nil
 	}
-	message.Title = label + " needs you"
-	message.Body = "Waiting for your answer in " + folder
+	message.Body = agent + "\nHas a question for you"
 	request, err := pendingPermission(ctx, g.auth.store.Reader, s.id)
 	if err != nil || request.RequestID == "" {
 		return message, err
 	}
-	message.Body = "Permission to " + permissionVerb(request.Tool) + " in " + folder
+	message.Body = agent + "\nWants to " + permissionVerb(request.Tool)
 	message.RequestID = request.RequestID
 	// Only options that declare their kind become buttons, so a button never answers "always".
 	for _, option := range request.Options {
@@ -435,6 +446,22 @@ func (g *Gateway) pushMessageFor(ctx context.Context, s pushSession, kind string
 	}
 	return message, nil
 }
+
+// pushProject names the folder a session belongs to, as the session list groups it: a worktree
+// counts under its main folder (projectDirectory in ui/src/features/sessions/git.ts).
+func pushProject(s pushSession) string {
+	directory := s.worktreeOf
+	if directory == "" && s.definitionRoot != "" && worktreePath.MatchString(s.directory) {
+		directory = s.definitionRoot
+	}
+	if directory == "" {
+		directory = s.directory
+	}
+	return filepath.Base(filepath.Clean(directory))
+}
+
+// worktreePath matches the folders agentpack creates for chat worktrees (WORKTREE_PATH in the UI).
+var worktreePath = regexp.MustCompile(`[\\/]worktrees[\\/][0-9a-f]{16}[\\/][^\\/]+(?:[\\/]|$)`)
 
 // permissionVerb names an ACP tool kind without any of the call's arguments.
 func permissionVerb(kind string) string {

@@ -50,6 +50,8 @@ self.addEventListener("push", (event) => {
       tag: data.tag,
       renotify: Boolean(data.tag),
       icon: "/icon-192.png",
+      badge: "/badge-96.png",
+      timestamp: Number(data.timestamp) || Date.now(),
       data,
       actions: actions.map(({ action, title }) => ({ action, title })),
     }),
