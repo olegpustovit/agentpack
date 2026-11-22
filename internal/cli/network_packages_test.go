@@ -47,8 +47,12 @@ func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 			}
 			switch r.URL.Path {
 			case "/state":
-				_ = json.NewEncoder(w).Encode(network.TerminalState{Interactive: id != "session-headless", Running: true})
+				_ = json.NewEncoder(w).Encode(network.TerminalState{Interactive: id != "session-headless" && id != "session-chat", Running: true})
 			case "/restart":
+				if r.URL.Query().Get("when") != "idle" {
+					http.Error(w, "package restarts must wait for idle", 400)
+					return
+				}
 				operationID := r.Header.Get("Idempotency-Key")
 				if operationID == "" {
 					http.Error(w, "missing restart operation ID", 400)
@@ -79,7 +83,7 @@ func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, writeErr := store.DB.Exec("INSERT INTO sessions(id,node_id,directory,definition_root,harness,mode) VALUES (?,"+state.LocalNodeSQL+",?,?,?,?)", id, directory, directory, "claude", selected)
+		_, writeErr := store.DB.Exec("INSERT INTO sessions(id,node_id,directory,definition_root,harness,mode,transport) VALUES (?,"+state.LocalNodeSQL+",?,?,?,?,?)", id, directory, directory, "claude", selected, map[bool]string{true: "acp"}[id == "session-chat"])
 		closeErr := store.Close()
 		if writeErr != nil {
 			t.Fatal(writeErr)
@@ -93,9 +97,10 @@ func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 	emptyRestarts := worker("session-empty", root, "empty")
 	otherRestarts := worker("session-other", t.TempDir(), "")
 	headlessRestarts := worker("session-headless", root, "")
+	chatRestarts := worker("session-chat", root, "")
 	ctx := context.Background()
 	before, err := snapshotRunningEnvironments(ctx, root)
-	if err != nil || len(before) != 2 {
+	if err != nil || len(before) != 3 {
 		t.Fatalf("snapshot: %d %v", len(before), err)
 	}
 	runner := Runner{Stdout: io.Discard, Stderr: io.Discard}
@@ -112,8 +117,8 @@ func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 	if err := runner.restartChangedEnvironments(ctx, before); err != nil {
 		t.Fatal(err)
 	}
-	if defaultRestarts.Load() != 1 || emptyRestarts.Load() != 0 || otherRestarts.Load() != 0 || headlessRestarts.Load() != 0 {
-		t.Fatalf("wrong restarts: default=%d empty=%d other=%d", defaultRestarts.Load(), emptyRestarts.Load(), otherRestarts.Load())
+	if defaultRestarts.Load() != 1 || emptyRestarts.Load() != 0 || otherRestarts.Load() != 0 || headlessRestarts.Load() != 0 || chatRestarts.Load() != 1 {
+		t.Fatalf("wrong restarts: default=%d empty=%d other=%d chat=%d", defaultRestarts.Load(), emptyRestarts.Load(), otherRestarts.Load(), chatRestarts.Load())
 	}
 	if err := runner.restartChangedEnvironments(ctx, before); err != nil || defaultRestarts.Load() != 1 {
 		t.Fatalf("retry repeated package restart: count=%d error=%v", defaultRestarts.Load(), err)

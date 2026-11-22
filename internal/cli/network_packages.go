@@ -24,6 +24,12 @@ type runningEnvironment struct {
 	operationID string
 }
 
+// restartable: chats (ACP) and browser terminals; native-stdio presence has no worker to restart.
+func restartable(session network.SessionInfo) bool {
+	return (session.Transport == "acp" || session.Transport != "shell" && session.State.Interactive) &&
+		session.State.Running && !session.State.Restarting
+}
+
 func snapshotRunningEnvironments(ctx context.Context, definitionRoot string) ([]runningEnvironment, error) {
 	home, err := paths.UserAgentpackHome()
 	if err != nil {
@@ -42,7 +48,7 @@ func snapshotRunningEnvironments(ctx context.Context, definitionRoot string) ([]
 	}
 	var snapshots []runningEnvironment
 	for _, session := range sessions {
-		if session.Transport == "shell" || !session.State.Interactive || !session.State.Running || session.State.Restarting {
+		if !restartable(session) {
 			continue
 		}
 		definition := session.DefinitionRoot
@@ -84,7 +90,7 @@ func (runner Runner) restartChangedEnvironments(ctx context.Context, snapshots [
 	}
 	running := make(map[string]bool, len(live))
 	for _, session := range live {
-		running[session.ID] = session.State.Interactive && session.State.Running && !session.State.Restarting
+		running[session.ID] = restartable(session)
 	}
 	var failures []error
 	var changed []runningEnvironment
@@ -121,11 +127,11 @@ func (runner Runner) restartChangedEnvironments(ctx context.Context, snapshots [
 		return err
 	}
 	for _, before := range changed {
-		if err := network.RestartWorker(ctx, home, before.session.ID, before.operationID); err != nil {
+		if err := network.RestartWorkerWhenIdle(ctx, home, before.session.ID, before.operationID); err != nil {
 			failures = append(failures, fmt.Errorf("package change saved, but session %s could not restart: %w", before.session.ID, err))
 			continue
 		}
-		fmt.Fprintf(runner.Stderr, "agentpack: restarted %s in %s (mode %s) after its environment changed\n", before.session.Harness, before.session.Directory, before.session.Mode)
+		fmt.Fprintf(runner.Stderr, "agentpack: restarting %s in %s (mode %s) after its environment changed\n", before.session.Harness, before.session.Directory, before.session.Mode)
 	}
 	return errors.Join(failures...)
 }

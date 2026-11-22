@@ -38,6 +38,7 @@ type ConversationSession struct {
 	permissionChange  func(string) // someone chose a permission mode; remembered for the agent
 	clientMode        string       // Agentpack permission override; "" when unsupported
 	publishedState    string
+	afterIdle         func() // one-shot, run when the conversation next settles idle
 	lastSeq           int64
 	toolCalls         uint64
 	permissions       uint64
@@ -343,6 +344,13 @@ func (session *ConversationSession) publishState() {
 	defer session.stateWriteMu.Unlock()
 	session.mu.Lock()
 	callback, state := session.stateChange, session.state
+	var afterIdle func()
+	if state == string(stateIdle) {
+		afterIdle, session.afterIdle = session.afterIdle, nil
+	}
+	if afterIdle != nil {
+		defer afterIdle()
+	}
 	if callback == nil || state == session.publishedState {
 		session.mu.Unlock()
 		return
@@ -350,6 +358,18 @@ func (session *ConversationSession) publishState() {
 	session.publishedState = state
 	session.mu.Unlock()
 	callback(state)
+}
+
+// whenIdle registers run for the next idle settle, replacing any earlier one; false means
+// the conversation is idle now and run was not registered.
+func (session *ConversationSession) whenIdle(run func()) bool {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.state == string(stateIdle) {
+		return false
+	}
+	session.afterIdle = run
+	return true
 }
 
 func (session *ConversationSession) Prompt(ctx context.Context, input acp.PromptInput) (result error) {

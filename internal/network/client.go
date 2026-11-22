@@ -348,6 +348,14 @@ func RestartWorker(ctx context.Context, home, id, operationID string) error {
 	return controlWorker(ctx, home, id, "restart", operationID)
 }
 
+// RestartWorkerWhenIdle restarts a chat once its current turn and approvals settle; other sessions restart now.
+func RestartWorkerWhenIdle(ctx context.Context, home, id, operationID string) error {
+	if !validOperationID(operationID) {
+		return errors.New("restart requires a valid operation_id")
+	}
+	return controlWorker(ctx, home, id, "restart?when=idle", operationID)
+}
+
 var errWorkerControlRejected = errors.New("worker operation rejected")
 
 func controlWorker(ctx context.Context, home, id, action, operationID string) error {

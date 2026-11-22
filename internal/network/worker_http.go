@@ -3,6 +3,7 @@ package network
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -312,6 +313,18 @@ func WorkerHandler(ctx context.Context, session *Session, conversation *Conversa
 		operationID := r.Header.Get("Idempotency-Key")
 		if !validOperationID(operationID) {
 			http.Error(w, "restart requires a valid Idempotency-Key", http.StatusBadRequest)
+			return
+		}
+		// A package change must not cut off a turn or a pending approval: restart once the chat is idle.
+		if conversation := worker.conversationSession(); r.URL.Query().Get("when") == "idle" && conversation != nil &&
+			conversation.whenIdle(func() {
+				obs.Go("worker.restart_when_idle", func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+					defer cancel()
+					_ = worker.Restart(ctx, rand.Text()) // Restart records its own failure
+				})
+			}) {
+			writeJSON(w, map[string]bool{"deferred": true})
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 90*time.Second)

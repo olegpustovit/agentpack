@@ -333,3 +333,34 @@ func TestConversationSnapshotIsNamedBySequence(t *testing.T) {
 		t.Fatalf("appended log answered %d with etag %q", changed.Code, changed.Header().Get("ETag"))
 	}
 }
+
+func TestPackageRestartWaitsForIdleChat(t *testing.T) {
+	log := acp.NewEventLog(0)
+	log.Append("prompt", 1, json.RawMessage(`{}`))
+	conversation := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
+	worker, err := WorkerHandler(context.Background(), nil, conversation, strings.Repeat("s", 64), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := make(chan struct{}, 2)
+	worker.restartACP = func(context.Context) error {
+		restarted <- struct{}{}
+		return nil
+	}
+	restart := func(id string) int {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/restart?when=idle", nil)
+		request.Header.Set("Idempotency-Key", id)
+		request.Header.Set("Authorization", "Bearer "+strings.Repeat("s", 64))
+		worker.ServeHTTP(response, request)
+		return response.Code
+	}
+	if code := restart("restart-operation-0001"); code != http.StatusOK || len(restarted) != 0 {
+		t.Fatalf("busy chat: status %d, restarted %d", code, len(restarted))
+	}
+	log.Append("turn_end", 2, json.RawMessage(`{}`))
+	<-restarted // the deferred restart runs once the turn ends
+	if code := restart("restart-operation-0002"); code != http.StatusOK || len(restarted) != 1 {
+		t.Fatalf("idle chat: status %d, restarted %d", code, len(restarted))
+	}
+}

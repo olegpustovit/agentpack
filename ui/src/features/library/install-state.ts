@@ -84,7 +84,7 @@ export function canApplyDraft(review: DraftReview): boolean {
 }
 
 export function affectedAgents(sessions: SessionInfo[], directory: string): number {
-  return sessions.filter((session) => session.directory === directory && session.state.running && session.state.interactive).length
+  return sessions.filter((session) => session.directory === directory && session.state.running && (session.state.interactive || session.transport === "acp")).length
 }
 
 export function restartCopy(count: number): string {

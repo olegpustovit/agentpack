@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { ProjectRow } from "@/lib/api-types"
 import { affectedAgents, canApplyDraft, destinationState, expectedPins, installLabel, restartCopy, restorePlan, runLimited, type Destination, type InstallItem } from "./install-state"
+import type { SessionInfo } from "@/lib/api-types"
 import type { DraftReview } from "./mutations"
 
 const item: InstallItem = { module: "github.com/acme/alpha", commit: "abcd1234ef56", name: "alpha", cache_key: "key-1" }
@@ -137,6 +138,11 @@ describe("copy", () => {
     expect(restartCopy(0)).toBe("")
     expect(restartCopy(2)).toBe("Restarts 2 agents")
     expect(affectedAgents([], "/srv/app")).toBe(0)
+  })
+
+  it("counts running chats and terminals but not native-stdio sessions", () => {
+    const session = (transport: string, interactive: boolean) => ({ directory: "/srv/app", transport, state: { running: true, interactive } }) as SessionInfo
+    expect(affectedAgents([session("acp", false), session("", true), session("", false)], "/srv/app")).toBe(2)
   })
 
   it("reads Install when nothing is chosen, then names what the primary does", () => {
