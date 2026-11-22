@@ -303,15 +303,6 @@ class ThreadReducer {
         }
         break
       }
-      case "subagent_progress": {
-        const progress = entry.payload as { sessionId?: string; toolCallId?: string; usage?: { totalTokens?: number }; lastToolName?: string }
-        const id = progress.sessionId ?? (progress.toolCallId ? `tool:${progress.toolCallId}` : undefined)
-        if (!id) break
-        const found = this.child(id, entry)
-        if (typeof progress.usage?.totalTokens === "number") found.tokens = progress.usage.totalTokens
-        if (progress.lastToolName) found.lastTool = progress.lastToolName
-        break
-      }
       case "session_message":
       case "session_message_chunk": {
         // Parent stream: the task handed to a child (places its card) or the child's reply.
@@ -363,6 +354,9 @@ class ThreadReducer {
       }
       case "turn_end": {
         state.working = false
+        // A flattened subagent (Claude's tool:<id>) gets no end update of its own; the parent's turn
+        // waits for it, so the turn's end is its end.
+        if (!nested) for (const child of meta.values()) if (child.id.startsWith("tool:") && child.state === "running") Object.assign(child, { state: "idle", endTs: entry.ts })
         const turn = this.turn
         if (turn) {
           const tokens = state.context_tokens !== undefined && turn.tokens !== undefined ? state.context_tokens - turn.tokens : undefined
@@ -414,8 +408,8 @@ class ThreadReducer {
           ...info,
           thread,
           tools: tools.length,
-          tokens: info.tokens ?? thread.context_tokens,
-          lastTool: last?.title ?? info.lastTool,
+          tokens: thread.context_tokens,
+          lastTool: last?.title,
         }
         // A child waiting on you makes the whole chat wait on you.
         if (thread.needs_you) state.needs_you = true

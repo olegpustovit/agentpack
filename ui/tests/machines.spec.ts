@@ -99,7 +99,7 @@ test("machine detail shows its agents, system, projects and updates an outdated 
   const rows = matrix(page).locator("tbody tr")
   await expect(rows).toHaveCount(2)
   await expect(rows.nth(0)).toContainText("oracle")
-  await expect(rows.nth(0)).toContainText("1 working")
+  await expect(rows.nth(0)).toContainText("1 open")
   await expect(rows.nth(1)).toContainText("api")
 
   await page.getByRole("button", { name: "Update to 0.9.2" }).click()

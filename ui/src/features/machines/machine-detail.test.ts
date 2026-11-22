@@ -9,7 +9,8 @@ describe("runningText", () => {
   it("leads with sessions that need you and ignores stopped or archived ones", () => {
     expect(runningText([])).toBeUndefined()
     expect(runningText([session({ state: { running: false } as SessionInfo["state"] }), session({ archived_at: "x" })])).toBeUndefined()
-    expect(runningText([session({ conversation_state: "working" }), session({})])).toBe("2 working")
+    expect(runningText([session({ conversation_state: "working" }), session({})])).toBe("1 working")
+    expect(runningText([session({ conversation_state: "idle" }), session({})])).toBe("2 open")
     expect(runningText([session({ conversation_state: "needs_you" }), session({})])).toBe("1 needs you")
   })
 })
