@@ -12,6 +12,7 @@ const testBrowserEmail = "owner@example.com"
 
 func testUnclaimedAuth(t *testing.T, home string) (*gatewayAuth, error) {
 	t.Helper()
+	seedTestState(t, home)
 	store, err := state.Open(home)
 	if err != nil {
 		return nil, err

@@ -43,6 +43,7 @@ func seedFolder(t *testing.T, home string) string {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
+	seedTestState(t, home)
 	if err := remember(home, SessionInfo{Directory: dir, Harness: "claude", Mode: "default"}); err != nil {
 		t.Fatal(err)
 	}

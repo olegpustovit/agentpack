@@ -15,7 +15,9 @@ import (
 
 func replicaStore(t *testing.T) *registry.Store {
 	t.Helper()
-	store, err := registry.New(t.TempDir())
+	home := t.TempDir()
+	seedTestState(t, home)
+	store, err := registry.New(home)
 	if err != nil {
 		t.Fatal(err)
 	}

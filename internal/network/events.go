@@ -60,10 +60,11 @@ type eventHub struct {
 	watchers int
 	cancel   context.CancelFunc
 
-	topics []eventTopic
-	nodes  func(context.Context) ([]TailnetNode, error)
-	target func(context.Context, string) (*url.URL, error)
-	client *http.Client
+	topics    []eventTopic
+	nodes     func(context.Context) ([]TailnetNode, error)
+	target    func(context.Context, string) (*url.URL, error)
+	client    *http.Client
+	checkAuth <-chan time.Time
 }
 
 // subscribe returns a stream of events and the function that ends it. The channel is closed
@@ -392,8 +393,12 @@ func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 	ping := time.NewTicker(eventPingInterval)
 	defer ping.Stop()
-	auth := time.NewTicker(time.Second)
-	defer auth.Stop()
+	checkAuth := g.events.checkAuth
+	if checkAuth == nil {
+		auth := time.NewTicker(time.Second)
+		defer auth.Stop()
+		checkAuth = auth.C
+	}
 	for {
 		var message sse.Message
 		select {
@@ -401,7 +406,7 @@ func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-g.done:
 			return
-		case <-auth.C:
+		case <-checkAuth:
 			peer, _ := r.Context().Value(replicaPeerKey{}).(string)
 			allowed := private
 			if peer != "" {

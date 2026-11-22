@@ -356,6 +356,8 @@ func TestStateEventWakesPeerPullWithoutBrowser(t *testing.T) {
 
 func TestStateEventStreamKeepsPeerAuthenticationAndRevokesRemoval(t *testing.T) {
 	g := eventsGateway(nil, nil, nil)
+	authTick := make(chan time.Time)
+	g.events.checkAuth = authTick
 	g.options.Library.Store = replicaStore(t)
 	if err := g.options.Library.Store.EnrollPeer("peer"); err != nil {
 		t.Fatal(err)
@@ -402,7 +404,9 @@ func TestStateEventStreamKeepsPeerAuthenticationAndRevokesRemoval(t *testing.T) 
 	select {
 	case <-closed:
 		t.Fatal("peer stream was checked as a browser session")
-	case <-time.After(1200 * time.Millisecond):
+	case authTick <- time.Now():
+	case <-time.After(3 * time.Second):
+		t.Fatal("peer stream did not receive its authentication check")
 	}
 	g.emitEvent(eventMessage{Topic: "state"})
 	select {
@@ -417,6 +421,12 @@ func TestStateEventStreamKeepsPeerAuthenticationAndRevokesRemoval(t *testing.T) 
 	}
 	if err := g.options.Library.Store.RemovePeer("peer"); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case authTick <- time.Now():
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("peer stream did not receive its revocation check")
 	}
 	select {
 	case <-closed:

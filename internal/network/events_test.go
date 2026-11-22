@@ -209,6 +209,8 @@ func TestEventsStreamClosesOnLogout(t *testing.T) {
 
 	g := eventsGateway(nil, nil, nil)
 	g.auth = auth
+	authTick := make(chan time.Time, 1)
+	g.events.checkAuth = authTick
 	server := httptest.NewServer(http.HandlerFunc(g.serveEvents))
 	defer server.Close()
 	request, _ := http.NewRequest(http.MethodGet, server.URL+"/api/events", nil)
@@ -222,6 +224,7 @@ func TestEventsStreamClosesOnLogout(t *testing.T) {
 	logout := httptest.NewRequest("POST", "https://agentpack.example/api/logout", nil)
 	logout.AddCookie(cookie)
 	auth.logout(httptest.NewRecorder(), logout)
+	authTick <- time.Now()
 
 	done := make(chan struct{})
 	go func() {

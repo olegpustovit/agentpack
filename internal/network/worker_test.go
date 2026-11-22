@@ -3,6 +3,7 @@
 package network
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -51,7 +52,10 @@ func TestWorkerCleanupChild(t *testing.T) {
 	signal.Notify(stopped, syscall.SIGTERM)
 	fmt.Println("READY FOR CLEANUP")
 	<-stopped
-	time.Sleep(2100 * time.Millisecond)
+	fmt.Println("STARTING CLEANUP")
+	if release, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil || strings.TrimSpace(release) != "finish" {
+		os.Exit(8)
+	}
 	fmt.Println("CREDENTIAL CLEANUP COMPLETE")
 	os.Exit(0)
 }
@@ -91,6 +95,12 @@ func TestRunWorkerCancellationDrainsCleanup(t *testing.T) {
 		return kind == websocket.BinaryMessage && strings.Contains(string(data), "READY FOR CLEANUP")
 	})
 	cancel()
+	readWorker(t, connection, func(kind int, data []byte) bool {
+		return kind == websocket.BinaryMessage && strings.Contains(string(data), "STARTING CLEANUP")
+	})
+	if err := connection.WriteMessage(websocket.BinaryMessage, []byte("finish\n")); err != nil {
+		t.Fatal(err)
+	}
 	var output strings.Builder
 	readWorker(t, connection, func(kind int, data []byte) bool {
 		if kind == websocket.BinaryMessage {

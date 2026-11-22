@@ -38,6 +38,7 @@ func remember(home string, info SessionInfo) error {
 
 func testSessionStore(t *testing.T, home string) *state.Store {
 	t.Helper()
+	seedTestState(t, home)
 	store, err := state.Open(home)
 	if err != nil {
 		t.Fatal(err)
