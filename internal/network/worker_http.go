@@ -344,6 +344,25 @@ func WorkerHandler(ctx context.Context, session *Session, conversation *Conversa
 		}
 		writeJSON(w, map[string]bool{"stopped": true})
 	})
+	// A terminal agent's hooks report its turns here (ReportAgentState); chats have their own state.
+	mux.HandleFunc("POST /agent-state", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			State string `json:"state"`
+		}
+		if session == nil || worker.stateStore == nil || json.NewDecoder(http.MaxBytesReader(w, r.Body, 256)).Decode(&body) != nil ||
+			(body.State != string(stateWorking) && body.State != string(stateIdle) && body.State != string(stateNeedsYou)) {
+			http.Error(w, "invalid agent state", http.StatusBadRequest)
+			return
+		}
+		if err := patchWorkerConversationState(r.Context(), worker.stateStore.DB, filepath.Base(worker.sessionDir), body.State); err != nil && !errors.Is(err, errSessionArchived) {
+			_, event := obs.Start(r.Context(), "worker", "agent_state")
+			event.Fail(err)
+			event.End()
+			http.Error(w, "could not record agent state", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /state", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if conversation := worker.conversationSession(); conversation != nil {

@@ -6,9 +6,13 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/hooks"
+	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func (runner Runner) runHook(ctx context.Context, arguments []string) (int, error) {
@@ -77,6 +81,33 @@ func (runner Runner) runHook(ctx context.Context, arguments []string) (int, erro
 			return 2, fmt.Errorf("unknown hook event %q", eventText)
 		}
 		return 0, writeJSON(runner.Stdout, guidanceOutput(target, event, string(body)))
+	}
+	if kind == "session-state" {
+		id, args, found, err := takeFlag(args, "--session")
+		if err != nil || !found {
+			return 2, flagError(err, "--session")
+		}
+		state, args, found, err := takeFlag(args, "--state")
+		if err != nil || !found {
+			return 2, flagError(err, "--state")
+		}
+		if err := noArgs(args); err != nil {
+			return 2, err
+		}
+		// Reporting is best effort: a hook that fails must never stop the agent's turn.
+		home, err := paths.UserAgentpackHome()
+		if err == nil {
+			reportCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			err = network.ReportAgentState(reportCtx, home, id, state)
+			cancel()
+		}
+		if err != nil {
+			_, event := obs.Start(ctx, "hook", "session_state")
+			event.Set("session_id", id)
+			event.Fail(err)
+			event.End()
+		}
+		return 0, nil
 	}
 	specPath, args, found, err := takeFlag(args, "--spec")
 	if err != nil || !found {

@@ -570,6 +570,9 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 		Yolo:           invocation.Global.Yolo,
 		StrictExternal: invocation.Global.StrictExternal,
 	}
+	if os.Getenv("AGENTPACK_SESSION_WORKER") == "1" {
+		launch.SessionID = os.Getenv("AGENTPACK_SESSION_ID")
+	}
 	command, err := harness.LaunchCommand(launch)
 	if err != nil {
 		return 1, err
