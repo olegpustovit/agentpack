@@ -9,7 +9,7 @@ Some harnesses speak the [Agent Client Protocol](https://agentclientprotocol.com
 | Field | Meaning |
 |---|---|
 | `transport` | `terminal` (default) or `acp` |
-| `conversation_state` | `starting` until a new chat's agent is up, then `working`, `needs_you`, or `idle` while the worker is running. A terminal Claude session reports the same three states through hooks agentpack adds at launch (`ap hook-exec session-state`); other terminals leave it empty |
+| `conversation_state` | `starting` until a new chat's agent is up, then `working`, `needs_you`, or `idle` while the worker is running. A terminal Claude session reports the same three states through hooks agentpack adds at launch (`ap hook-exec session-state`). A terminal Codex session reports `working` and `idle` from the turn states its own interface prints (OSC 7501), and `idle` again through a `notify` agentpack adds at launch, which still runs a `notify` program you configured. Other terminals leave it empty |
 | `waiting` | Background work an `idle` chat will wake for: `{kind, until?, peer?}` with kind `shell`, `monitor`, `agent`, `task`, `wake` (a `ScheduleWakeup`) or `reply` (an `ask` to the chat `peer`). Agentpack advertises the AIR `asyncTasks` capability, so the Claude and Codex adapters report background shells, monitors and self-started turns. It never holds commands or arguments, and `until` bounds every timed item. The UI shows such a chat as Waiting, and push sends "finished" only once the list empties |
 | `last_event_at` | Time of the chat's latest conversation entry; the session list's ages and unread markers use it |
 | `agent_session_id` | Agent-native session id for resume |

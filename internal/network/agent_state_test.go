@@ -54,4 +54,23 @@ func TestTerminalAgentStateReachesSessionRow(t *testing.T) {
 	if err := ReportAgentState(t.Context(), home, id, "starting"); err == nil || state() != "idle" {
 		t.Fatalf("an unknown state was accepted: err=%v state=%q", err, state())
 	}
+
+	// Codex announces its turns in its own output (OSC 7501), even split across reads.
+	session.scanAgentState([]byte("output\x1b]7501;state=wor"))
+	session.scanAgentState([]byte("king:app=codex\x07more"))
+	if state() != "working" {
+		t.Fatalf("OSC working report: %q", state())
+	}
+	session.scanAgentState([]byte("\x1b]7501;state=clear:app=codex\x1b\\ \x1b]7501;state=done:app=codex\x1b\\"))
+	if state() != "idle" {
+		t.Fatalf("OSC idle report: %q", state())
+	}
+	// A repeated report never rewrites the row.
+	if _, err := auth.store.DB.Exec("UPDATE sessions SET conversation_state='needs_you' WHERE id=?", id); err != nil {
+		t.Fatal(err)
+	}
+	session.scanAgentState([]byte("\x1b]7501;state=idle:app=codex\x07"))
+	if state() != "needs_you" {
+		t.Fatalf("a repeated report rewrote the state: %q", state())
+	}
 }

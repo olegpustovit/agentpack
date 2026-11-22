@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -35,19 +36,21 @@ type WorkerHTTP struct {
 	conversation *ConversationSession
 	sessionDir   string
 	stateStore   *state.Store
-	start        func(uint16, uint16) (*Session, error)
-	restartACP   func(context.Context) error
-	stopACP      func(context.Context) error
-	validate     func() error
-	lifecycle    sync.Mutex
-	done         chan struct{}
-	finished     bool
-	stopping     bool
-	diagnostics  context.Context
-	err          error
-	attached     chan struct{}
-	restarts     map[string]error
-	restartIDs   []string
+	// agentState is the last turn state a terminal agent reported (hooks, notify or its own output).
+	agentState  atomic.Value
+	start       func(uint16, uint16) (*Session, error)
+	restartACP  func(context.Context) error
+	stopACP     func(context.Context) error
+	validate    func() error
+	lifecycle   sync.Mutex
+	done        chan struct{}
+	finished    bool
+	stopping    bool
+	diagnostics context.Context
+	err         error
+	attached    chan struct{}
+	restarts    map[string]error
+	restartIDs  []string
 }
 
 type restartOperation struct {
@@ -200,6 +203,7 @@ func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (resu
 		var replacement *Session
 		replacement, err = worker.start(state.Rows, state.Columns)
 		if err == nil {
+			replacement.OnAgentState(worker.recordAgentState)
 			worker.mu.Lock()
 			worker.session = replacement
 			worker.attached = make(chan struct{})
@@ -300,6 +304,9 @@ func WorkerHandler(ctx context.Context, session *Session, conversation *Conversa
 	}
 	worker := &WorkerHTTP{diagnostics: ctx, session: session, conversation: conversation, sessionDir: sessionDir, connections: make(map[*websocket.Conn]struct{}), drained: make(chan struct{}), done: make(chan struct{}), attached: make(chan struct{})}
 	if session != nil {
+		session.OnAgentState(worker.recordAgentState)
+	}
+	if session != nil {
 		obs.Go("worker.watch", func() { worker.watch(session) })
 	}
 	mux := http.NewServeMux()
@@ -354,6 +361,7 @@ func WorkerHandler(ctx context.Context, session *Session, conversation *Conversa
 			http.Error(w, "invalid agent state", http.StatusBadRequest)
 			return
 		}
+		worker.agentState.Store(body.State)
 		if err := patchWorkerConversationState(r.Context(), worker.stateStore.DB, filepath.Base(worker.sessionDir), body.State); err != nil && !errors.Is(err, errSessionArchived) {
 			_, event := obs.Start(r.Context(), "worker", "agent_state")
 			event.Fail(err)
@@ -568,5 +576,20 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 		case <-closed:
 			return
 		}
+	}
+}
+
+// recordAgentState writes a turn state a terminal agent announced in its own output. Repeats never
+// touch the database.
+func (worker *WorkerHTTP) recordAgentState(state string) {
+	if worker.stateStore == nil || worker.agentState.Swap(state) == state {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := patchWorkerConversationState(ctx, worker.stateStore.DB, filepath.Base(worker.sessionDir), state); err != nil && !errors.Is(err, errSessionArchived) {
+		_, event := obs.Start(obs.WithRecording(ctx, worker.diagnostics), "worker", "agent_state")
+		event.Fail(err)
+		event.End()
 	}
 }

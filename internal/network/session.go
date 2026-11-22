@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -84,6 +85,10 @@ type Session struct {
 	stopOnce    sync.Once
 	stopErr     error
 	shell       bool
+	// agentState receives the turn states the agent announces in its own output (OSC 7501);
+	// oscTail carries a report split across reads. Only readOutput touches oscTail.
+	agentState func(string)
+	oscTail    []byte
 }
 
 func StartSession(command *exec.Cmd, rows, columns uint16) (*Session, error) {
@@ -292,6 +297,7 @@ func (session *Session) readOutput() {
 			if !session.publish(data) && (bytes.Contains(data, []byte("\x1b[c")) || bytes.Contains(data, []byte("\x1b[0c"))) {
 				_, _ = session.terminal.Write([]byte("\x1b[?1;2c"))
 			}
+			session.scanAgentState(data)
 		}
 		if err != nil {
 			if !terminalEOF(err) && !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) && !errors.Is(err, os.ErrDeadlineExceeded) {
@@ -358,5 +364,52 @@ func (session *Session) Stop(ctx context.Context) error {
 			return err
 		}
 		return ctx.Err()
+	}
+}
+
+// OnAgentState makes the session report the turn states its agent announces in its own output.
+func (session *Session) OnAgentState(report func(string)) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	session.agentState = report
+}
+
+// agentStateReport is how Codex's terminal UI announces its turns (0.169): ESC ] 7501 ; state=<state>[:app=codex]
+// BEL, with working while a turn runs, done when it finishes, idle at the prompt and clear on exit.
+var agentStateReport = []byte("\x1b]7501;state=")
+
+func (session *Session) scanAgentState(data []byte) {
+	session.mu.Lock()
+	report := session.agentState
+	session.mu.Unlock()
+	if report == nil {
+		return
+	}
+	text := append(session.oscTail, data...)
+	session.oscTail = nil
+	for {
+		start := bytes.Index(text, agentStateReport)
+		if start < 0 {
+			// Keep just enough to find a report whose introducer is split across reads.
+			keep := min(len(text), len(agentStateReport)-1)
+			session.oscTail = bytes.Clone(text[len(text)-keep:])
+			return
+		}
+		rest := text[start+len(agentStateReport):]
+		end := bytes.IndexAny(rest, "\x07\x1b")
+		if end < 0 {
+			if len(rest) < 64 {
+				session.oscTail = bytes.Clone(text[start:])
+			}
+			return
+		}
+		value, _, _ := strings.Cut(string(rest[:end]), ":")
+		switch value {
+		case "working":
+			report(string(stateWorking))
+		case "idle", "done":
+			report(string(stateIdle))
+		}
+		text = rest[end:]
 	}
 }

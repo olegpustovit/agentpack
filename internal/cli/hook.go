@@ -2,10 +2,12 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"time"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
@@ -91,21 +93,49 @@ func (runner Runner) runHook(ctx context.Context, arguments []string) (int, erro
 		if err != nil || !found {
 			return 2, flagError(err, "--state")
 		}
+		// Codex's notify appends its JSON payload as the last argument; a notify the user configured
+		// follows --then and receives that payload too.
+		var then []string
+		if len(args) > 0 && args[0] == "--then" {
+			then, args = args[1:], nil
+		}
+		payload := ""
+		if len(then) > 0 {
+			payload = then[len(then)-1]
+		} else if target == base.Codex && len(args) == 1 {
+			payload, args = args[0], nil
+		}
 		if err := noArgs(args); err != nil {
 			return 2, err
 		}
-		// Reporting is best effort: a hook that fails must never stop the agent's turn.
-		home, err := paths.UserAgentpackHome()
-		if err == nil {
-			reportCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			err = network.ReportAgentState(reportCtx, home, id, state)
-			cancel()
+		var notification struct {
+			Type string `json:"type"`
 		}
-		if err != nil {
-			_, event := obs.Start(ctx, "hook", "session_state")
-			event.Set("session_id", id)
-			event.Fail(err)
-			event.End()
+		if payload == "" || json.Unmarshal([]byte(payload), &notification) != nil || notification.Type == "agent-turn-complete" {
+			// Reporting is best effort: a hook that fails must never stop the agent's turn.
+			home, err := paths.UserAgentpackHome()
+			if err == nil {
+				reportCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+				err = network.ReportAgentState(reportCtx, home, id, state)
+				cancel()
+			}
+			if err != nil {
+				_, event := obs.Start(ctx, "hook", "session_state")
+				event.Set("session_id", id)
+				event.Fail(err)
+				event.End()
+			}
+		}
+		if len(then) > 0 {
+			command := exec.Command(then[0], then[1:]...)
+			if err := command.Start(); err != nil {
+				_, event := obs.Start(ctx, "hook", "session_state_notify")
+				event.Set("session_id", id)
+				event.Fail(err)
+				event.End()
+			} else {
+				_ = command.Process.Release()
+			}
 		}
 		return 0, nil
 	}

@@ -3,6 +3,7 @@ package codex
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -18,6 +19,7 @@ import (
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/pelletier/go-toml/v2"
 )
 
 var pendingLoginHomes sync.Map
@@ -84,6 +86,16 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 		}
 		pendingLoginHomes.Store(loginHome, home)
 		home = loginHome
+	}
+	if ctx.SessionID != "" && !isCodexLogin(arguments) {
+		// Per launch, never staged: the session ID would otherwise enter the shared generation.
+		if executable, err := os.Executable(); err == nil {
+			notify, err := sessionNotify(home, executable, ctx.SessionID)
+			if err != nil {
+				return nil, err
+			}
+			arguments = append([]string{"-c", notify}, arguments...)
+		}
 	}
 	command := exec.Command(binary, arguments...)
 	command.Env = append(os.Environ(), "CODEX_HOME="+home)
@@ -502,4 +514,39 @@ func keepAttribution() bool {
 	default:
 		return false
 	}
+}
+
+// sessionNotify is a -c override that makes a terminal Codex report each finished turn to the
+// agentpack worker running it. Codex runs one notify program, so a notify the user configured is
+// chained after the report and still receives Codex's payload.
+func sessionNotify(home, executable, sessionID string) (string, error) {
+	command := []string{executable, "hook-exec", "session-state", "--target", "codex", "--session", sessionID, "--state", "idle"}
+	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	var config map[string]any
+	if len(data) > 0 {
+		if err := toml.Unmarshal(data, &config); err != nil {
+			return "", fmt.Errorf("parse staged Codex config: %w", err)
+		}
+	}
+	// A notify Codex itself would reject is left alone rather than chained.
+	if list, ok := config["notify"].([]any); ok && len(list) > 0 {
+		user := make([]string, 0, len(list))
+		for _, item := range list {
+			if text, ok := item.(string); ok {
+				user = append(user, text)
+			}
+		}
+		if len(user) == len(list) {
+			command = append(append(command, "--then"), user...)
+		}
+	}
+	// A JSON string array is also a TOML inline array.
+	encoded, err := json.Marshal(command)
+	if err != nil {
+		return "", err
+	}
+	return "notify=" + string(encoded), nil
 }
