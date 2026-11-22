@@ -86,7 +86,9 @@ describe("conversation message actions", () => {
       machine: "local",
       sessionId: "session-1",
     })))
-    expect([...container.querySelectorAll('[data-slot="user-bubble"]')].map((bubble) => bubble.textContent)).toEqual(["Review auth.go", "Which file?"])
+    expect([...container.querySelectorAll('[data-slot="user-bubble"]')].map((bubble) => bubble.textContent)).toEqual(["Review auth.go"])
+    // A reply or question is a card with the answer rendered as agent markdown.
+    expect(container.querySelector('[data-slot="reply-card"]')?.textContent).toContain("Which file?")
     expect(container.textContent).toContain("Message from Refactor auth")
     expect(container.textContent).toContain("Question from another chat")
   })

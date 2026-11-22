@@ -262,7 +262,10 @@ func (g *Gateway) stopTaskWork(ctx context.Context, session, task string, since 
 	}
 	method, path := http.MethodPost, "/api/sessions/"+url.PathEscape(session)+"/conversation/cancel"
 	if prompt == 0 {
-		// shortcut: a prompt queued while its chat was still starting stays; that agent then finds the task canceled and reply refuses it
+		// Still queued: in the starting chat's log, or in its worker.
+		if removed, err := g.removeStartingPrompt(ctx, session, operation); removed || err != nil {
+			return err
+		}
 		method, path = http.MethodDelete, "/api/sessions/"+url.PathEscape(session)+"/conversation/queue/"+url.PathEscape(operation)
 	} else {
 		// Only the turn this task started is cancelled: a later prompt means that turn already ended.
@@ -331,7 +334,7 @@ type mcpAsked struct {
 
 // outRow is the asking side of a task.
 type outRow struct {
-	to, node, text, remoteURL, remoteAuth string
+	to, node, text, remoteURL string
 }
 
 // newOutTask checks the asking chat's limits and records its side of a new task.
@@ -360,8 +363,8 @@ func (m *GatewayMCP) newOutTask(ctx context.Context, self SessionInfo, local, co
 	}
 	task, now := newTaskID(), time.Now().UnixNano()
 	contextID = cmpOr(contextID, cmpOr(inherited, task))
-	_, err = db.ExecContext(ctx, `INSERT INTO agent_tasks(id,role,context_id,from_session,from_node,to_session,to_node,state,request,hops,remote_url,remote_auth,created_at,updated_at)
- VALUES (?,'out',?,?,?,?,?,?,?,?,?,?,?,?)`, task, contextID, self.ID, local, row.to, row.node, taskSubmitted, row.text, hops, row.remoteURL, row.remoteAuth, now, now)
+	_, err = db.ExecContext(ctx, `INSERT INTO agent_tasks(id,role,context_id,from_session,from_node,to_session,to_node,state,request,hops,remote_url,created_at,updated_at)
+ VALUES (?,'out',?,?,?,?,?,?,?,?,?,?,?)`, task, contextID, self.ID, local, row.to, row.node, taskSubmitted, row.text, hops, row.remoteURL, now, now)
 	return task, contextID, hops, err
 }
 
@@ -403,15 +406,15 @@ type mcpReplied struct {
 }
 
 type outTask struct {
-	to, node, context, remoteURL, remoteAuth string
-	hops                                     int
-	state                                    taskState
+	to, node, context, remoteURL string
+	hops                         int
+	state                        taskState
 }
 
 func (m *GatewayMCP) outTask(ctx context.Context, task, from string) (outTask, error) {
 	var row outTask
-	err := m.gateway.auth.store.Reader.QueryRowContext(ctx, "SELECT to_session,to_node,context_id,remote_url,remote_auth,hops,state FROM agent_tasks WHERE id=? AND role='out' AND from_session=?", task, from).
-		Scan(&row.to, &row.node, &row.context, &row.remoteURL, &row.remoteAuth, &row.hops, &row.state)
+	err := m.gateway.auth.store.Reader.QueryRowContext(ctx, "SELECT to_session,to_node,context_id,remote_url,hops,state FROM agent_tasks WHERE id=? AND role='out' AND from_session=?", task, from).
+		Scan(&row.to, &row.node, &row.context, &row.remoteURL, &row.hops, &row.state)
 	if errors.Is(err, sql.ErrNoRows) {
 		return row, fmt.Errorf("task %s is not one this chat sent or was sent", task)
 	}
@@ -453,7 +456,7 @@ func (m *GatewayMCP) reply(ctx context.Context, task, text string, state taskSta
 		return mcpReplied{}, err
 	}
 	if row.node == a2aNode {
-		answered, err := m.remoteAnswer(ctx, task, row, text)
+		answered, err := m.remoteAnswer(ctx, self, task, row, text)
 		return mcpReplied{State: answered.State, Delivered: err == nil, Answer: answered.Answer}, err
 	}
 	message := agentMessage{Task: task, Context: row.context, Kind: "ask", FromSession: self.ID, FromNode: local, FromName: cmpOr(self.Name, self.Title), FromAgent: self.Harness,
@@ -479,7 +482,7 @@ func (m *GatewayMCP) cancelTask(ctx context.Context, task string) (taskState, er
 		return row.state, fmt.Errorf("task %s already ended %s", task, row.state)
 	}
 	if row.node == a2aNode {
-		err = m.remoteCancel(ctx, row)
+		err = m.remoteCancel(ctx, self, row)
 	} else {
 		err = m.deliver(ctx, row.node, row.to, agentMessage{Task: task, Kind: "cancel", FromSession: self.ID, FromNode: local}, 0)
 		if status := apiStatus(err); status == http.StatusGone || status == http.StatusConflict {

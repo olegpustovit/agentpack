@@ -134,6 +134,7 @@ test.describe("kit styling", () => {
       { seq: 3, ts: 3, kind: "agent_message_chunk", payload: { text: { text: "Plain agent reply\n\nSecond paragraph\n\n- first point\n- second point" } } },
       { seq: 4, ts: 4, kind: "plan", payload: { entries: [{ priority: "high", status: "in_progress", content: "Publish the branch" }] } },
       { seq: 5, ts: 5, kind: "permission_request", payload: { requestId: "p1", tool: "Bash", summary: "Run tests", options: [{ id: "allow", label: "Allow once" }, { id: "deny", label: "Deny" }] } },
+      { seq: 6, ts: 6, kind: "prompt", payload: { from: { session: "local-two", name: "Reviewer", task: "t_1", kind: "reply", state: "completed" }, text: { text: "[agentpack reply]\n---\nLooks **fine**." } } },
     ].map((entry) => `${JSON.stringify(entry)}\n`).join("")
     await page.route("**/api/sessions", (route) => {
       if (route.request().method() !== "GET") return route.fallback()
@@ -160,6 +161,14 @@ test.describe("kit styling", () => {
     const agentBox = await page.locator('[data-slot="agent-message"]').first().boundingBox()
     expect(box?.width ?? 0).toBeGreaterThan(560)
     expect(Math.abs((box?.x ?? 0) - (agentBox?.x ?? -100))).toBeLessThan(2)
+
+    // Another agent's answer is an outlined card, not a filled bubble, with its markdown rendered.
+    const reply = page.locator('[data-slot="reply-card"]')
+    await expect(reply).toContainText("Reply from Reviewer · completed")
+    await expect(reply.locator("strong")).toHaveText("fine")
+    await expect(reply.getByRole("button", { name: "Open Reviewer" })).toBeVisible()
+    expect(await style(reply, "background-color")).toBe(transparent)
+    expect(await style(reply, "border-top-color")).toBe(await token("border-top", "0.5px solid var(--sep)", "border-top-color"))
 
     // Tool rows are unboxed and use tool-specific icons.
     const row = page.locator("[data-tool-row]")

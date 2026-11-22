@@ -142,6 +142,39 @@ func appendStartingPrompt(ctx context.Context, tx *sql.Tx, id string, item queue
 	return err
 }
 
+// removeStartingPrompt drops a prompt queued while its chat was still starting, as the worker
+// would ("removed"), so the worker it starts never sends it. False when there was nothing to drop
+// here: the worker took over, or the chat is not starting.
+func (g *Gateway) removeStartingPrompt(ctx context.Context, id, queueID string) (bool, error) {
+	directory := filepath.Join(g.options.Home, "network", "sessions", id)
+	if err := paths.EnsurePrivateDirectory(directory); err != nil {
+		return false, err
+	}
+	lock, err := lockPromptHandoff(ctx, directory)
+	if err != nil {
+		return false, err
+	}
+	defer lock.Close()
+	if _, err := g.workerRecord(ctx, id); err == nil {
+		return false, nil
+	}
+	err = state.Transaction(ctx, g.auth.store.DB, func(tx *sql.Tx) error {
+		now := time.Now()
+		entry := acp.LogEntry{TS: now.UnixMilli(), Kind: "dequeued_prompt", Payload: mustRawJSON(map[string]string{"queueId": queueID, "reason": "removed"})}
+		err := tx.QueryRowContext(ctx, `UPDATE sessions SET last_seq=last_seq+1,last_event_at=?
+			WHERE id=? AND conversation_state='starting' AND ended_at=0 AND archived_at=0 AND node_id=`+state.LocalNodeSQL+` RETURNING last_seq`, now.UnixNano(), id).Scan(&entry.Seq)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "INSERT INTO conversation_events(session_id,seq,body) VALUES (?,?,?)", id, entry.Seq, string(mustRawJSON(entry)))
+		return err
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func promptQueueError(w http.ResponseWriter, r *http.Request, err error) {
 	if event := obs.From(r.Context()); event != nil {
 		event.Fail(err)

@@ -19,6 +19,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	mcpconfig "github.com/olegpustovit/agentpack/internal/mcp"
 )
 
 // A2A: every chat is an A2A agent at <gateway>/a2a/<session> for clients holding a gateway OAuth
@@ -305,24 +306,54 @@ func (c *a2aChat) GetExtendedAgentCard(context.Context, *a2a.GetExtendedAgentCar
 	return nil, a2a.ErrExtendedCardNotConfigured
 }
 
-// bearerTransport adds an A2A agent's token to every request to it.
-type bearerTransport struct{ token string }
+// headerTransport adds an A2A agent's connection headers to every request to it.
+type headerTransport map[string]string
 
-func (t bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if t.token != "" {
+func (headers headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if len(headers) > 0 {
 		r = r.Clone(r.Context())
-		r.Header.Set("Authorization", "Bearer "+t.token)
+		for name, value := range headers {
+			r.Header.Set(name, value)
+		}
 	}
 	return http.DefaultTransport.RoundTrip(r)
 }
 
-// a2aClient resolves an agent's card at base and connects to it.
-func a2aClient(ctx context.Context, base, token string) (*a2aclient.Client, *a2a.AgentCard, error) {
+// agentHeaders are the headers of the owner's MCP connection (`mcp login URL --header NAME`, or an
+// OAuth login) whose URL is the agent's URL or a parent of it, so a token never passes through a chat.
+func (g *Gateway) agentHeaders(ctx context.Context, owner *Actor, base string) (map[string]string, error) {
+	canonical, err := mcpconfig.CanonicalURL(base)
+	if err != nil || owner == nil {
+		return nil, nil
+	}
+	credentials, err := g.listMCPCredentials(ctx, owner.User)
+	if err != nil {
+		return nil, err
+	}
+	var best mcpCredential
+	for _, credential := range credentials {
+		if credential.Match != "" && (canonical == credential.Match || strings.HasPrefix(canonical, credential.Match+"/")) && len(credential.Match) > len(best.Match) {
+			best = credential
+		}
+	}
+	if best.ID == "" {
+		return nil, nil
+	}
+	secret, err := g.freshMCPSecret(ctx, best.ID, 0)
+	return secret.Headers, err
+}
+
+// a2aClient resolves the agent's card at base with the chat owner's connection for it, and connects to it.
+func (g *Gateway) a2aClient(ctx context.Context, chat SessionInfo, base string) (*a2aclient.Client, *a2a.AgentCard, error) {
 	parsed, err := url.Parse(base)
 	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" {
 		return nil, nil, errors.New("agent_url is the agent's http(s) base URL")
 	}
-	httpClient := &http.Client{Timeout: a2aCallTimeout, Transport: bearerTransport{token}}
+	headers, err := g.agentHeaders(ctx, chat.StartedBy, base)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read the connection for %s: %w", base, err)
+	}
+	httpClient := &http.Client{Timeout: a2aCallTimeout, Transport: headerTransport(headers)}
 	card, err := agentcard.NewResolver(httpClient).Resolve(ctx, base)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read the agent card: %w", err)
@@ -342,7 +373,7 @@ func taskAnswer(task *a2a.Task) string {
 }
 
 // callAgent sends text to an A2A agent; an answer that is not ready wakes this chat later.
-func (m *GatewayMCP) callAgent(ctx context.Context, base, text, contextID, token string) (mcpAsked, error) {
+func (m *GatewayMCP) callAgent(ctx context.Context, base, text, contextID string) (mcpAsked, error) {
 	self, local, err := m.caller(ctx)
 	if err != nil {
 		return mcpAsked{}, err
@@ -350,11 +381,11 @@ func (m *GatewayMCP) callAgent(ctx context.Context, base, text, contextID, token
 	if text, err = taskText(text); err != nil {
 		return mcpAsked{}, err
 	}
-	client, _, err := a2aClient(ctx, base, token)
+	client, _, err := m.gateway.a2aClient(ctx, self, base)
 	if err != nil {
 		return mcpAsked{}, err
 	}
-	task, contextID, _, err := m.newOutTask(ctx, self, local, contextID, outRow{node: a2aNode, text: text, remoteURL: base, remoteAuth: token})
+	task, contextID, _, err := m.newOutTask(ctx, self, local, contextID, outRow{node: a2aNode, text: text, remoteURL: base})
 	if err != nil {
 		return mcpAsked{}, err
 	}
@@ -397,19 +428,19 @@ func (m *GatewayMCP) sendToAgent(ctx context.Context, client *a2aclient.Client, 
 }
 
 // remoteAnswer answers an A2A agent's question; sendToAgent records the task's new state.
-func (m *GatewayMCP) remoteAnswer(ctx context.Context, task string, row outTask, text string) (mcpAsked, error) {
-	client, _, err := a2aClient(ctx, row.remoteURL, row.remoteAuth)
+func (m *GatewayMCP) remoteAnswer(ctx context.Context, self SessionInfo, task string, row outTask, text string) (mcpAsked, error) {
+	client, _, err := m.gateway.a2aClient(ctx, self, row.remoteURL)
 	if err != nil {
 		return mcpAsked{}, err
 	}
 	return m.sendToAgent(ctx, client, task, row.context, row.to, text)
 }
 
-func (m *GatewayMCP) remoteCancel(ctx context.Context, row outTask) error {
+func (m *GatewayMCP) remoteCancel(ctx context.Context, self SessionInfo, row outTask) error {
 	if row.to == "" {
 		return nil // never reached the agent
 	}
-	client, _, err := a2aClient(ctx, row.remoteURL, row.remoteAuth)
+	client, _, err := m.gateway.a2aClient(ctx, self, row.remoteURL)
 	if err != nil {
 		return err
 	}
@@ -422,19 +453,19 @@ func (m *GatewayMCP) remoteCancel(ctx context.Context, row outTask) error {
 
 // pollRemoteTasks reads the A2A agents' open tasks and wakes the calling chat with each answer.
 func (g *Gateway) pollRemoteTasks(ctx context.Context) error {
-	rows, err := g.auth.store.DB.QueryContext(ctx, "SELECT id,from_session,to_session,remote_url,remote_auth,state,updated_at FROM agent_tasks WHERE role='out' AND to_node=? AND to_session<>'' AND state IN ('submitted','working')", a2aNode)
+	rows, err := g.auth.store.DB.QueryContext(ctx, "SELECT id,from_session,to_session,remote_url,state,updated_at FROM agent_tasks WHERE role='out' AND to_node=? AND to_session<>'' AND state IN ('submitted','working')", a2aNode)
 	if err != nil {
 		return err
 	}
 	type open struct {
-		id, chat, remote, base, token string
-		state                         taskState
-		updated                       int64
+		id, chat, remote, base string
+		state                  taskState
+		updated                int64
 	}
 	var tasks []open
 	for rows.Next() {
 		var task open
-		if err := rows.Scan(&task.id, &task.chat, &task.remote, &task.base, &task.token, &task.state, &task.updated); err != nil {
+		if err := rows.Scan(&task.id, &task.chat, &task.remote, &task.base, &task.state, &task.updated); err != nil {
 			rows.Close()
 			return err
 		}
@@ -452,7 +483,7 @@ func (g *Gateway) pollRemoteTasks(ctx context.Context) error {
 			continue
 		}
 		g.agentTaskPolled[task.id] = time.Now()
-		failures = append(failures, g.pollRemoteTask(ctx, task.id, task.chat, task.remote, task.base, task.token, task.state, task.updated))
+		failures = append(failures, g.pollRemoteTask(ctx, task.id, task.chat, task.remote, task.base, task.state, task.updated))
 	}
 	for id, at := range g.agentTaskPolled {
 		if time.Since(at) > 2*a2aPollInterval {
@@ -462,10 +493,15 @@ func (g *Gateway) pollRemoteTasks(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
-func (g *Gateway) pollRemoteTask(ctx context.Context, id, chat, remote, base, token string, state taskState, updated int64) error {
+func (g *Gateway) pollRemoteTask(ctx context.Context, id, chat, remote, base string, state taskState, updated int64) error {
 	ctx, cancel := context.WithTimeout(ctx, a2aCallTimeout)
 	defer cancel()
-	client, card, err := a2aClient(ctx, base, token)
+	info, err := storedSession(ctx, g.auth.store.Reader, chat)
+	var client *a2aclient.Client
+	var card *a2a.AgentCard
+	if err == nil {
+		client, card, err = g.a2aClient(ctx, info, base)
+	}
 	var task *a2a.Task
 	if err == nil {
 		task, err = client.GetTask(ctx, &a2a.GetTaskRequest{ID: a2a.TaskID(remote)})
@@ -490,8 +526,7 @@ func (g *Gateway) pollRemoteTask(ctx context.Context, id, chat, remote, base, to
 		return err
 	}
 	// The answer reaches the chat like a chat's reply: through the message route, which records it and wakes the chat.
-	info, err := storedSession(ctx, g.auth.store.Reader, chat)
-	if err != nil || info.StartedBy == nil {
+	if info.StartedBy == nil {
 		_, err = db.ExecContext(ctx, "UPDATE agent_tasks SET state=?,result=?,updated_at=? WHERE id=? AND role='out'", next, answer, time.Now().UnixNano(), id)
 		return err
 	}
@@ -506,13 +541,12 @@ func (g *Gateway) pollRemoteTask(ctx context.Context, id, chat, remote, base, to
 }
 
 func (m *GatewayMCP) a2aTools(server *mcp.Server) {
-	addTool(server, "call_agent", "Send a message to an A2A agent, given its base URL (whose /.well-known/agent-card.json is read) or its agent card URL. An answer that comes at once is returned; otherwise it arrives in this chat later as a message that wakes it. Use reply to answer its questions and cancel_task to stop it.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	addTool(server, "call_agent", "Send a message to an A2A agent, given its base URL (whose /.well-known/agent-card.json is read) or its agent card URL. An answer that comes at once is returned; otherwise it arrives in this chat later as a message that wakes it. Use reply to answer its questions and cancel_task to stop it. An agent that needs a token uses the person's connection for its URL: they add it once with `ap mcp login <agent url> --header Authorization`; never ask for a token in the chat.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		AgentURL  string `json:"agent_url" jsonschema:"The agent's http(s) base URL, or its agent card URL."`
 		Text      string `json:"text" jsonschema:"The whole request."`
 		ContextID string `json:"context_id,omitempty" jsonschema:"An earlier task's context_id to continue that conversation."`
-		Token     string `json:"token,omitempty" jsonschema:"Bearer token the agent requires; kept on this machine with the task."`
 	}) (*mcp.CallToolResult, mcpAsked, error) {
-		out, err := m.callAgent(ctx, in.AgentURL, in.Text, in.ContextID, in.Token)
+		out, err := m.callAgent(ctx, in.AgentURL, in.Text, in.ContextID)
 		return nil, out, err
 	})
 }

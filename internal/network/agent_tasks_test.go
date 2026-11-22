@@ -14,8 +14,11 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
+	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/olegpustovit/agentpack/internal/acp"
+	mcpconfig "github.com/olegpustovit/agentpack/internal/mcp"
 )
 
 type receivedPrompt struct {
@@ -296,6 +299,43 @@ func TestCancelTaskStopsTheWorkAndRefusesTheAnswer(t *testing.T) {
 	}
 }
 
+func TestCancelRemovesAPromptQueuedWhileTheChatStarts(t *testing.T) {
+	h := newOAuthHarness(t)
+	tokenA := chatFixture(t, h, "session-a", "")
+	fakeChatWorker(t, h, "session-a")
+	owner := browserActor(testBrowserEmail)
+	if err := upsertSession(t.Context(), h.gateway.store.DB, SessionInfo{ID: "session-new", Harness: "claude", Transport: "acp", StartedBy: &owner, ConversationState: "starting", State: TerminalState{Running: true}}); err != nil {
+		t.Fatal(err)
+	}
+	asked, text, failed := structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-new", "text": "hi"})
+	if failed {
+		t.Fatal(text)
+	}
+	if _, text, failed := structured[struct{ State taskState }](t, h, tokenA, "cancel_task", map[string]any{"task_id": asked.TaskID}); failed {
+		t.Fatal(text)
+	}
+	// The worker that starts replays the log: the prompt was queued, then removed, so it is never sent.
+	session := &ConversationSession{seenPrompts: map[string]struct{}{}}
+	rows, err := h.gateway.store.DB.Query("SELECT body FROM conversation_events WHERE session_id='session-new' ORDER BY seq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	kinds := []string{}
+	for rows.Next() {
+		var body string
+		var entry acp.LogEntry
+		if err := rows.Scan(&body); err != nil || json.Unmarshal([]byte(body), &entry) != nil {
+			t.Fatal(err)
+		}
+		kinds = append(kinds, entry.Kind)
+		session.replayEntry(entry)
+	}
+	if strings.Join(kinds, ",") != "queued_prompt,dequeued_prompt" || len(session.queue) != 0 {
+		t.Fatalf("log %v queue %+v", kinds, session.queue)
+	}
+}
+
 func TestAskLimitsAndContexts(t *testing.T) {
 	h := newOAuthHarness(t)
 	tokenA, tokenB := chatFixture(t, h, "session-a", ""), chatFixture(t, h, "session-b", "")
@@ -482,11 +522,20 @@ func TestA2AClientsAndAgents(t *testing.T) {
 	base := h.server.URL + "/a2a/session-b"
 
 	// An A2A client: the card, then a task the chat answers.
-	client, card, err := a2aClient(t.Context(), base, access)
+	connect := func(token string) (*a2aclient.Client, *a2a.AgentCard, error) {
+		httpClient := &http.Client{Transport: headerTransport{"Authorization": "Bearer " + token}}
+		card, err := agentcard.NewResolver(httpClient).Resolve(t.Context(), base)
+		if err != nil {
+			return nil, nil, err
+		}
+		client, err := a2aclient.NewFromCard(t.Context(), card, a2aclient.WithJSONRPCTransport(httpClient))
+		return client, card, err
+	}
+	client, card, err := connect(access)
 	if err != nil || card.Name != "Reviewer" || card.SupportedInterfaces[0].URL != base {
 		t.Fatalf("card %+v %v", card, err)
 	}
-	if _, _, err := a2aClient(t.Context(), base, "wrong"); err == nil {
+	if _, _, err := connect("wrong"); err == nil {
 		t.Fatal("card served without a token")
 	}
 	result, err := client.SendMessage(t.Context(), &a2a.SendMessageRequest{Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("Is auth.go safe?")), Config: &a2a.SendMessageConfig{ReturnImmediately: true}})
@@ -527,8 +576,19 @@ func TestA2AClientsAndAgents(t *testing.T) {
 		t.Fatal("missing task:", err)
 	}
 
-	// A chat calls an A2A agent (here the gateway's own endpoint for chat B); the answer wakes it.
-	called, text, failed := structured[mcpAsked](t, h, tokenA, "call_agent", map[string]any{"agent_url": base, "text": "Second opinion?", "token": access})
+	// A chat calls an A2A agent (here the gateway's own endpoint for chat B) with the owner's
+	// connection for its URL, which no chat sees; the answer wakes it.
+	if _, text, failed := structured[mcpAsked](t, h, tokenA, "call_agent", map[string]any{"agent_url": base, "text": "No connection yet"}); !failed {
+		t.Fatal("called an agent that needs a token without one:", text)
+	}
+	credential, err := newStaticMCPCredential(testBrowserEmail, mcpconfig.CredentialHeader, h.server.URL+"/a2a", "", map[string]string{"Authorization": "Bearer " + access})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.gateway.saveMCPCredential(t.Context(), credential); err != nil {
+		t.Fatal(err)
+	}
+	called, text, failed := structured[mcpAsked](t, h, tokenA, "call_agent", map[string]any{"agent_url": base, "text": "Second opinion?"})
 	if failed || called.State != taskSubmitted {
 		t.Fatalf("call_agent: %s %+v", text, called)
 	}
@@ -545,7 +605,7 @@ func TestA2AClientsAndAgents(t *testing.T) {
 		t.Fatalf("A's tasks %+v", tasks.Tasks)
 	}
 	// Cancelling a call cancels the agent's task.
-	called, _, _ = structured[mcpAsked](t, h, tokenA, "call_agent", map[string]any{"agent_url": base, "text": "Never mind", "token": access})
+	called, _, _ = structured[mcpAsked](t, h, tokenA, "call_agent", map[string]any{"agent_url": base, "text": "Never mind"})
 	remote = string(lastPrompt(t, toB).from.Task)
 	if _, text, failed := structured[struct{ State taskState }](t, h, tokenA, "cancel_task", map[string]any{"task_id": called.TaskID}); failed {
 		t.Fatal(text)

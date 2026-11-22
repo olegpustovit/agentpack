@@ -62,17 +62,31 @@ function UserMessageBody({
   })
   const [quickLook, setQuickLook] = useState<number | null>(null)
   const quickLookImage = quickLook === null ? undefined : previews[quickLook]
+  const sender = body.from && (
+    <div className="flex items-center gap-(--s2)">
+      <p aria-hidden className="text-(length:--fs-xs) font-medium text-(--fg3)">{promptSender(body.from)}</p>
+      {body.from.agent !== "a2a" && onOpenChat && (
+        <Button type="button" variant="ghost" size="sm" className="h-auto px-(--s1) py-0 text-(length:--fs-xs)" aria-label={`Open ${body.from.name || "the other chat"}`} onClick={() => onOpenChat(body.from!)}>
+          Open chat
+        </Button>
+      )}
+    </div>
+  )
+  // Another agent's answer or question reads as agent output: a card with its markdown rendered.
+  if (body.from?.kind === "reply") {
+    return (
+      <div data-slot="reply-card" className="flex w-full flex-col gap-(--s2) rounded-(--r-sheet) border-[0.5px] border-(--sep) px-(--s4) py-(--s3)">
+        {sender}
+        <MessageContextMenu text={text} onQuote={onQuote} onFork={onFork}>
+          <div className="min-w-0"><AgentMessageBody text={text} /></div>
+        </MessageContextMenu>
+      </div>
+    )
+  }
   return (
     <>
       <div className="flex w-full flex-col items-start gap-(--s2)">
-        <div className="flex items-center gap-(--s2)">
-          <p aria-hidden className="text-(length:--fs-xs) font-medium text-(--fg3)">{body.from ? promptSender(body.from) : "You"}</p>
-          {body.from && body.from.agent !== "a2a" && onOpenChat && (
-            <Button type="button" variant="ghost" size="sm" className="h-auto px-(--s1) py-0 text-(length:--fs-xs)" aria-label={`Open ${body.from.name || "the other chat"}`} onClick={() => onOpenChat(body.from!)}>
-              Open chat
-            </Button>
-          )}
-        </div>
+        {sender || <p aria-hidden className="text-(length:--fs-xs) font-medium text-(--fg3)">You</p>}
         {previews.length > 0 && (
           <div data-slot="user-attachments" className="flex max-w-full flex-wrap gap-(--s3)">
             {previews.map(({ image, src }, index) => {
