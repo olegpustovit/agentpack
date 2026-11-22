@@ -125,6 +125,22 @@ test.describe("kit styling", () => {
     expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--terminal-bg").trim())).toMatch(/^#f{3,6}$/)
   })
 
+  test("waiting strip is opaque, so the thread never shows through it", async ({ page }) => {
+    await desktop(page)
+    await page.route("**/api/sessions", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({ json: [{ ...session, transport: "acp", conversation_state: "idle", waiting: [{ kind: "shell" }, { kind: "monitor" }] }] })
+    })
+    await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: composerFixture, contentType: "application/x-ndjson" }))
+    await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+    await page.goto("/sessions/local/local-one")
+    const strip = page.locator('[data-slot="waiting-strip"]')
+    await expect(strip).toContainText("2 background tasks")
+    // Opaque base colour (no alpha channel); the accent tint is layered on top as an image.
+    expect(await style(strip, "background-color")).not.toMatch(/rgba|transparent|\/\s*0?\.\d/)
+    expect(await style(strip, "background-image")).toContain("linear-gradient")
+  })
+
   test("conversation kit styling: bubble, tool row, agent text, permission card, composer glass", async ({ page }) => {
     await desktop(page)
     const text = `Ship it ${"long message ".repeat(60)}`

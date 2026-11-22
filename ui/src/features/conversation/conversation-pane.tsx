@@ -958,7 +958,7 @@ export default function ConversationPane({
               onAction={(action) => goalActions.act.mutate(action)}
             />
             {waits.length > 0 && (
-              <div data-slot="waiting-strip" role="status" className="flex min-w-0 items-center gap-(--s3) rounded-(--r-ctl) bg-(--accent-soft) px-(--s3) py-(--s2) text-(length:--fs-sm) text-(--fg2)">
+              <div data-slot="waiting-strip" role="status" className="flex min-w-0 items-center gap-(--s3) rounded-(--r-ctl) bg-(--card) bg-[linear-gradient(var(--accent-soft),var(--accent-soft))] px-(--s3) py-(--s2) text-(length:--fs-sm) text-(--fg2)">
                 <span aria-hidden data-slot="agent-dot" data-state="waiting" className="agent-dot static! shrink-0" />
                 <span className="min-w-0 truncate">
                   <strong className="font-semibold text-(--fg)">Waiting</strong> for {waitingDetail(waits, chatName, waitNow)} · {agentName} wakes by itself
