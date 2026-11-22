@@ -3,9 +3,9 @@ package network
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"iter"
 	"net/http"
 	"net/url"
@@ -18,6 +18,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"github.com/a2aproject/a2a-go/v2/a2asrv/push"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	mcpconfig "github.com/olegpustovit/agentpack/internal/mcp"
 )
@@ -69,25 +70,26 @@ func (m *GatewayMCP) serveA2A(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, a2aCard(m.baseURL(r)+"/a2a/"+url.PathEscape(id), info))
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
-	if err != nil {
-		http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
-		return
-	}
 	_, node, err := m.localNode(ctx, info.NodeID)
 	if err != nil {
 		http.Error(w, "agent unavailable", http.StatusInternalServerError)
 		return
 	}
-	// Headers do not cross the mesh; the SDK also takes the protocol version as a query parameter.
+	// The call runs on the chat's machine, through the gateway's own routes and mesh proxy, as the
+	// token's account; streaming responses pass straight through. Headers do not cross the mesh, so
+	// the protocol version travels as the query parameter the SDK also reads.
+	forward := verified.Clone(ctx)
 	query := url.Values{a2a.SvcParamVersion: {r.Header.Get(a2a.SvcParamVersion)}}
-	response, err := m.do(ctx, node, http.MethodPost, "/api/sessions/"+url.PathEscape(id)+"/a2a?"+query.Encode(), body)
-	if err != nil {
-		http.Error(w, err.Error(), cmpOrStatus(apiStatus(err), http.StatusBadGateway))
-		return
+	handler := m.gateway.Handler()
+	if node != "" && m.peer != nil {
+		handler = m.peer(node)
+	} else if node != "" {
+		query.Set("node", node)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(response.body.Bytes())
+	forward.URL.Path, forward.URL.RawQuery = "/api/sessions/"+url.PathEscape(id)+"/a2a", query.Encode()
+	forward.Header = http.Header{"Authorization": {"Bearer " + m.gateway.local.Secret}, "Content-Type": {"application/json"}, "Accept": r.Header.Values("Accept")}
+	forward.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	handler.ServeHTTP(w, forward)
 }
 
 func cmpOrStatus(status, fallback int) int {
@@ -104,6 +106,7 @@ func a2aCard(endpoint string, info SessionInfo) *a2a.AgentCard {
 		Name: name, Description: description, Version: "1",
 		SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(endpoint, a2a.TransportProtocolJSONRPC)},
 		DefaultInputModes:   []string{"text/plain"}, DefaultOutputModes: []string{"text/plain"},
+		Capabilities:         a2a.AgentCapabilities{Streaming: true, PushNotifications: true},
 		Skills:               []a2a.AgentSkill{{ID: "chat", Name: name, Description: description, Tags: []string{"coding", info.Harness}}},
 		SecuritySchemes:      a2a.NamedSecuritySchemes{"agentpack": a2a.HTTPAuthSecurityScheme{Scheme: "Bearer", Description: "An agentpack gateway OAuth access token (scope agentpack)."}},
 		SecurityRequirements: a2a.SecurityRequirementsOptions{{"agentpack": a2a.SecuritySchemeScopes{"agentpack"}}},
@@ -175,42 +178,57 @@ func messageText(message *a2a.Message) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func (c *a2aChat) SendMessage(ctx context.Context, req *a2a.SendMessageRequest) (a2a.SendMessageResult, error) {
+// submit asks the chat a client's message: a new task, or the answer to a task's question.
+func (c *a2aChat) submit(ctx context.Context, req *a2a.SendMessageRequest) (string, error) {
 	if req == nil || req.Message == nil {
-		return nil, a2a.ErrInvalidParams
+		return "", a2a.ErrInvalidParams
 	}
 	text, err := taskText(messageText(req.Message))
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", a2a.ErrInvalidParams, err)
+		return "", fmt.Errorf("%w: %v", a2a.ErrInvalidParams, err)
 	}
 	task, contextID := string(req.Message.TaskID), req.Message.ContextID
 	if task != "" {
-		// Answering the question a task's agent asked.
 		row, err := c.row(ctx, task)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 		if row.state != taskInputRequired {
-			return nil, fmt.Errorf("%w: task %s is not waiting for input", a2a.ErrInvalidParams, task)
+			return "", fmt.Errorf("%w: task %s is not waiting for input", a2a.ErrInvalidParams, task)
 		}
 		contextID = row.context
 	} else {
 		var recent int
 		if err := c.m.gateway.auth.store.Reader.QueryRowContext(ctx, "SELECT count(*) FROM agent_tasks WHERE role='in' AND to_session=? AND from_node=? AND created_at>?", c.session, a2aNode, time.Now().Add(-time.Minute).UnixNano()).Scan(&recent); err != nil {
-			return nil, err
+			return "", err
 		}
 		if recent >= maxAsksPerMinute {
-			return nil, fmt.Errorf("%w: %d messages in the last minute; wait for answers", a2a.ErrUnsupportedOperation, maxAsksPerMinute)
+			return "", fmt.Errorf("%w: %d messages in the last minute; wait for answers", a2a.ErrUnsupportedOperation, maxAsksPerMinute)
 		}
 		task = newTaskID()
 		if !validRef(contextID, true) {
-			return nil, fmt.Errorf("%w: invalid contextId", a2a.ErrInvalidParams)
+			return "", fmt.Errorf("%w: invalid contextId", a2a.ErrInvalidParams)
 		}
 	}
 	actor, _ := actorFrom(ctx)
 	message := agentMessage{Task: task, Context: cmpOr(contextID, task), Kind: "ask", FromSession: a2aNode, FromNode: a2aNode, FromName: cmpOr(actor.User, "A2A client"), FromAgent: a2aNode,
 		Text: text, Operation: task + "-a-" + strconv.FormatInt(time.Now().UnixNano(), 10)}
 	if err := c.m.deliver(ctx, "", c.session, message, mcpWaitMax); err != nil {
+		return "", err
+	}
+	if req.Config != nil && req.Config.PushConfig != nil {
+		config := *req.Config.PushConfig
+		config.TaskID = a2a.TaskID(task)
+		if _, err := c.CreateTaskPushConfig(ctx, &config); err != nil {
+			return task, err
+		}
+	}
+	return task, nil
+}
+
+func (c *a2aChat) SendMessage(ctx context.Context, req *a2a.SendMessageRequest) (a2a.SendMessageResult, error) {
+	task, err := c.submit(ctx, req)
+	if err != nil {
 		return nil, err
 	}
 	row, err := c.row(ctx, task)
@@ -227,6 +245,53 @@ func (c *a2aChat) SendMessage(ctx context.Context, req *a2a.SendMessageRequest) 
 		return nil, err
 	}
 	return row.task(), nil
+}
+
+// follow streams a task: the task itself, then a status update on each change, until it is
+// answered (final, or waiting for input) or the client leaves.
+func (c *a2aChat) follow(ctx context.Context, task string, yield func(a2a.Event, error) bool) {
+	row, err := c.row(ctx, task)
+	if err != nil {
+		yield(nil, err)
+		return
+	}
+	if !yield(row.task(), nil) {
+		return
+	}
+	for row.state.open() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(mcpWaitPoll):
+		}
+		next, err := c.row(ctx, task)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		if next.state != row.state {
+			full := next.task()
+			if !yield(&a2a.TaskStatusUpdateEvent{TaskID: full.ID, ContextID: full.ContextID, Status: full.Status}, nil) {
+				return
+			}
+		}
+		row = next
+	}
+}
+
+func (c *a2aChat) SendStreamingMessage(ctx context.Context, req *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error] {
+	return func(yield func(a2a.Event, error) bool) {
+		task, err := c.submit(ctx, req)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		c.follow(ctx, task, yield)
+	}
+}
+
+func (c *a2aChat) SubscribeToTask(ctx context.Context, req *a2a.SubscribeToTaskRequest) iter.Seq2[a2a.Event, error] {
+	return func(yield func(a2a.Event, error) bool) { c.follow(ctx, string(req.ID), yield) }
 }
 
 func (c *a2aChat) GetTask(ctx context.Context, req *a2a.GetTaskRequest) (*a2a.Task, error) {
@@ -276,30 +341,142 @@ func (c *a2aChat) CancelTask(ctx context.Context, req *a2a.CancelTaskRequest) (*
 	return c.GetTask(ctx, &a2a.GetTaskRequest{ID: req.ID})
 }
 
-func (c *a2aChat) SubscribeToTask(context.Context, *a2a.SubscribeToTaskRequest) iter.Seq2[a2a.Event, error] {
-	return unsupportedEvents
+// maxPushConfigs bounds the webhooks one task notifies.
+const maxPushConfigs = 10
+
+func (c *a2aChat) CreateTaskPushConfig(ctx context.Context, config *a2a.PushConfig) (*a2a.PushConfig, error) {
+	if _, err := c.row(ctx, string(config.TaskID)); err != nil {
+		return nil, err
+	}
+	parsed, err := url.Parse(config.URL)
+	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" {
+		return nil, fmt.Errorf("%w: url is the http(s) webhook", a2a.ErrInvalidParams)
+	}
+	saved := *config
+	saved.ID = cmpOr(saved.ID, randomToken()[:16])
+	if !validRef(saved.ID, false) {
+		return nil, fmt.Errorf("%w: invalid id", a2a.ErrInvalidParams)
+	}
+	db := c.m.gateway.auth.store.DB
+	var count int
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM a2a_push_configs WHERE task_id=? AND id<>?", saved.TaskID, saved.ID).Scan(&count); err != nil {
+		return nil, err
+	}
+	if count >= maxPushConfigs {
+		return nil, fmt.Errorf("%w: a task notifies at most %d webhooks", a2a.ErrInvalidParams, maxPushConfigs)
+	}
+	_, err = db.ExecContext(ctx, `INSERT INTO a2a_push_configs(task_id,id,config,created_at) VALUES (?,?,?,?)
+ ON CONFLICT(task_id,id) DO UPDATE SET config=excluded.config,pushed=''`, saved.TaskID, saved.ID, string(mustRawJSON(saved)), time.Now().UnixNano())
+	return &saved, err
 }
 
-func (c *a2aChat) SendStreamingMessage(context.Context, *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error] {
-	return unsupportedEvents
+func (c *a2aChat) pushConfigs(ctx context.Context, task a2a.TaskID, id string) ([]*a2a.PushConfig, error) {
+	if _, err := c.row(ctx, string(task)); err != nil {
+		return nil, err
+	}
+	rows, err := c.m.gateway.auth.store.Reader.QueryContext(ctx, "SELECT config FROM a2a_push_configs WHERE task_id=? AND (?='' OR id=?) ORDER BY created_at", task, id, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	configs := []*a2a.PushConfig{}
+	for rows.Next() {
+		var body string
+		config := &a2a.PushConfig{}
+		if err := rows.Scan(&body); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(body), config); err != nil {
+			return nil, err
+		}
+		configs = append(configs, config)
+	}
+	return configs, rows.Err()
 }
 
-func unsupportedEvents(yield func(a2a.Event, error) bool) { yield(nil, a2a.ErrUnsupportedOperation) }
-
-func (c *a2aChat) GetTaskPushConfig(context.Context, *a2a.GetTaskPushConfigRequest) (*a2a.PushConfig, error) {
-	return nil, a2a.ErrPushNotificationNotSupported
+func (c *a2aChat) GetTaskPushConfig(ctx context.Context, req *a2a.GetTaskPushConfigRequest) (*a2a.PushConfig, error) {
+	configs, err := c.pushConfigs(ctx, req.TaskID, req.ID)
+	if err == nil && len(configs) == 0 {
+		err = fmt.Errorf("%w: no push config %q", a2a.ErrInvalidParams, req.ID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return configs[0], nil
 }
 
-func (c *a2aChat) ListTaskPushConfigs(context.Context, *a2a.ListTaskPushConfigRequest) (*a2a.ListTaskPushConfigResponse, error) {
-	return nil, a2a.ErrPushNotificationNotSupported
+func (c *a2aChat) ListTaskPushConfigs(ctx context.Context, req *a2a.ListTaskPushConfigRequest) (*a2a.ListTaskPushConfigResponse, error) {
+	configs, err := c.pushConfigs(ctx, req.TaskID, "")
+	if err != nil {
+		return nil, err
+	}
+	return &a2a.ListTaskPushConfigResponse{Configs: configs}, nil
 }
 
-func (c *a2aChat) CreateTaskPushConfig(context.Context, *a2a.PushConfig) (*a2a.PushConfig, error) {
-	return nil, a2a.ErrPushNotificationNotSupported
+func (c *a2aChat) DeleteTaskPushConfig(ctx context.Context, req *a2a.DeleteTaskPushConfigRequest) error {
+	if _, err := c.row(ctx, string(req.TaskID)); err != nil {
+		return err
+	}
+	_, err := c.m.gateway.auth.store.DB.ExecContext(ctx, "DELETE FROM a2a_push_configs WHERE task_id=? AND id=?", req.TaskID, req.ID)
+	return err
 }
 
-func (c *a2aChat) DeleteTaskPushConfig(context.Context, *a2a.DeleteTaskPushConfigRequest) error {
-	return a2a.ErrPushNotificationNotSupported
+// pushA2ATasks tells each A2A client webhook about its task's state changes.
+func (g *Gateway) pushA2ATasks(ctx context.Context) error {
+	db := g.auth.store.DB
+	if _, err := db.ExecContext(ctx, "DELETE FROM a2a_push_configs WHERE task_id NOT IN (SELECT id FROM agent_tasks WHERE role='in')"); err != nil {
+		return err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT p.id,p.config,t.id,t.context_id,t.request,t.result,t.state,t.updated_at FROM a2a_push_configs p
+ JOIN agent_tasks t ON t.id=p.task_id AND t.role='in' AND t.from_node=? WHERE p.pushed<>t.state`, a2aNode)
+	if err != nil {
+		return err
+	}
+	type pending struct {
+		id     string
+		config a2a.PushConfig
+		row    a2aRow
+	}
+	var items []pending
+	for rows.Next() {
+		var item pending
+		var body string
+		if err := rows.Scan(&item.id, &body, &item.row.id, &item.row.context, &item.row.request, &item.row.result, &item.row.state, &item.row.updated); err != nil {
+			rows.Close()
+			return err
+		}
+		if json.Unmarshal([]byte(body), &item.config) == nil {
+			items = append(items, item)
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	if g.a2aPusher == nil {
+		g.a2aPusher = push.NewHTTPPushSender(&push.HTTPSenderConfig{Timeout: agentTaskDeliveryTimeout, FailOnError: true})
+	}
+	var failures []error
+	for _, item := range items {
+		key := item.row.id + "/" + item.id
+		if time.Now().Before(g.a2aPushRetry[key]) {
+			continue
+		}
+		err := g.a2aPusher.SendPush(ctx, &item.config, item.row.task())
+		// An unreachable webhook is retried twice a minute for a day, then given up.
+		if err != nil && time.Since(time.Unix(0, item.row.updated)) < agentTaskDeliveryWindow {
+			if g.a2aPushRetry == nil {
+				g.a2aPushRetry = map[string]time.Time{}
+			}
+			g.a2aPushRetry[key] = time.Now().Add(agentTaskRetryDelay)
+			failures = append(failures, fmt.Errorf("A2A push for task %s: %w", item.row.id, err))
+			continue
+		}
+		delete(g.a2aPushRetry, key)
+		if _, err := db.ExecContext(ctx, "UPDATE a2a_push_configs SET pushed=? WHERE task_id=? AND id=?", item.row.state, item.row.id, item.id); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func (c *a2aChat) GetExtendedAgentCard(context.Context, *a2a.GetExtendedAgentCardRequest) (*a2a.AgentCard, error) {

@@ -772,7 +772,7 @@ func (g *Gateway) agentTasksPass(ctx context.Context) error {
 			failures = append(failures, err)
 		}
 	}
-	failures = append(failures, g.pollRemoteTasks(ctx))
+	failures = append(failures, g.pollRemoteTasks(ctx), g.pushA2ATasks(ctx))
 	if _, err := db.ExecContext(ctx, "DELETE FROM agent_tasks WHERE updated_at<?", time.Now().Add(-agentTaskRetention).UnixNano()); err != nil {
 		failures = append(failures, err)
 	}

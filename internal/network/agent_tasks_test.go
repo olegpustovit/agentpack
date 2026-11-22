@@ -16,6 +16,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
+	"github.com/a2aproject/a2a-go/v2/a2asrv/push"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/olegpustovit/agentpack/internal/acp"
 	mcpconfig "github.com/olegpustovit/agentpack/internal/mcp"
@@ -632,5 +633,126 @@ func TestPromptSenderSurvivesTheQueueAndNamesTheChat(t *testing.T) {
 	request := httptest.NewRequest("POST", "/conversation/prompt", strings.NewReader(`{"text":"hi","from":{"session":"x","task":"t"}}`))
 	if prompt, _, ok := readPromptRequest(httptest.NewRecorder(), request); ok && prompt.From != nil {
 		t.Fatalf("sender from the body: %+v", prompt.From)
+	}
+}
+
+func TestA2AStreamingPushAndChatsOnOtherMachines(t *testing.T) {
+	one, two, _, idTwo := meshPair(t)
+	tokenB := chatFixture(t, two, "session-b", "")
+	toB := fakeChatWorker(t, two, "session-b")
+	// Machine one knows the chat from replication: it runs on machine two.
+	owner := browserActor(testBrowserEmail)
+	if err := upsertSession(t.Context(), one.gateway.store.DB, SessionInfo{ID: "session-b", Harness: "claude", Transport: "acp", StartedBy: &owner, ConversationState: "idle", State: TerminalState{Running: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := one.gateway.store.DB.Exec("UPDATE sessions SET node_id=? WHERE id='session-b'", idTwo); err != nil {
+		t.Fatal(err)
+	}
+	poll := mcpWaitPoll
+	mcpWaitPoll = time.Millisecond
+	t.Cleanup(func() { mcpWaitPoll = poll })
+	access := one.exchange(t, one.codeForm(one.code(t)), 200).Access
+	httpClient := &http.Client{Transport: headerTransport{"Authorization": "Bearer " + access}}
+	card, err := agentcard.NewResolver(httpClient).Resolve(t.Context(), one.server.URL+"/a2a/session-b")
+	if err != nil || !card.Capabilities.Streaming || !card.Capabilities.PushNotifications {
+		t.Fatalf("card %+v %v", card, err)
+	}
+	client, err := a2aclient.NewFromCard(t.Context(), card, a2aclient.WithJSONRPCTransport(httpClient))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Answers the newest task B was sent, once it arrives.
+	answer := func(text string) {
+		for len(toB()) == 0 || lastPrompt(t, toB).from == nil {
+		}
+		task := lastPrompt(t, toB).from.Task
+		for {
+			if _, _, failed := structured[mcpReplied](t, two, tokenB, "reply", map[string]any{"task_id": task, "text": text}); !failed {
+				return
+			}
+		}
+	}
+
+	// Streaming, through machine one to the chat on machine two: the task, then its answer.
+	before := len(toB())
+	go func() {
+		for len(toB()) == before {
+		}
+		answer("Streamed answer")
+	}()
+	var states []a2a.TaskState
+	for event, err := range client.SendStreamingMessage(t.Context(), &a2a.SendMessageRequest{Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("stream please"))}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch event := event.(type) {
+		case *a2a.Task:
+			states = append(states, event.Status.State)
+		case *a2a.TaskStatusUpdateEvent:
+			states = append(states, event.Status.State)
+			if event.Status.State == a2a.TaskStateCompleted && messageText(event.Status.Message) != "Streamed answer" {
+				t.Fatalf("streamed answer %+v", event.Status.Message)
+			}
+		}
+	}
+	if len(states) < 2 || states[0] != a2a.TaskStateSubmitted || states[len(states)-1] != a2a.TaskStateCompleted {
+		t.Fatalf("streamed states %v", states)
+	}
+
+	// Push: the webhook hears each state change, with the client's token.
+	type pushed struct {
+		token string
+		state a2a.TaskState
+	}
+	var mu sync.Mutex
+	var heard []pushed
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Task a2a.Task `json:"task"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		heard = append(heard, pushed{r.Header.Get("A2A-Notification-Token"), body.Task.Status.State})
+		mu.Unlock()
+	}))
+	defer webhook.Close()
+	two.gateway.a2aPusher = push.NewHTTPPushSender(&push.HTTPSenderConfig{FailOnError: true, AllowPrivateNetworks: true})
+	sent, err := client.SendMessage(t.Context(), &a2a.SendMessageRequest{Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("tell me later")),
+		Config: &a2a.SendMessageConfig{ReturnImmediately: true, PushConfig: &a2a.PushConfig{URL: webhook.URL, Token: "client-secret"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := sent.(*a2a.Task)
+	if err := two.gateway.agentTasksPass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	answer("Pushed answer")
+	if err := two.gateway.agentTasksPass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	got := append([]pushed(nil), heard...)
+	mu.Unlock()
+	if len(got) != 2 || got[0] != (pushed{"client-secret", a2a.TaskStateSubmitted}) || got[1] != (pushed{"client-secret", a2a.TaskStateCompleted}) {
+		t.Fatalf("pushed %+v", got)
+	}
+	configs, err := client.ListTaskPushConfigs(t.Context(), &a2a.ListTaskPushConfigRequest{TaskID: task.ID})
+	if err != nil || len(configs) != 1 || configs[0].URL != webhook.URL {
+		t.Fatalf("configs %+v %v", configs, err)
+	}
+	if err := client.DeleteTaskPushConfig(t.Context(), &a2a.DeleteTaskPushConfigRequest{TaskID: task.ID, ID: configs[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Subscribing to an answered task returns it and ends.
+	var last *a2a.Task
+	for event, err := range client.SubscribeToTask(t.Context(), &a2a.SubscribeToTaskRequest{ID: task.ID}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		last, _ = event.(*a2a.Task)
+	}
+	if last == nil || last.Status.State != a2a.TaskStateCompleted || messageText(last.Status.Message) != "Pushed answer" {
+		t.Fatalf("subscribe %+v", last)
 	}
 }

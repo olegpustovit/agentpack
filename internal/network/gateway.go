@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2asrv/push"
 	"github.com/gofrs/flock"
 	"github.com/gorilla/websocket"
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -96,6 +97,8 @@ type Gateway struct {
 	agentTaskSeen   map[string]int64     // last_seq each asked chat had at the last pass; owned by runAgentTasks
 	agentTaskRetry  time.Time            // when undelivered answers are tried again; owned by runAgentTasks
 	agentTaskPolled map[string]time.Time // when each called A2A agent's task was last read; owned by runAgentTasks
+	a2aPusher       *push.HTTPPushSender // sends A2A clients' webhooks; owned by runAgentTasks, tests set one that reaches loopback
+	a2aPushRetry    map[string]time.Time // when a failed webhook is tried again; owned by runAgentTasks
 	omp             ompSettings
 	credentialsMu   sync.Mutex // one agent credential sync at a time
 }
