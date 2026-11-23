@@ -117,7 +117,11 @@ func (runner Runner) runNetworkService(ctx context.Context, args []string) (int,
 		if path := loginShellPath(ctx, shell); path != "" {
 			os.Setenv("PATH", path+string(os.PathListSeparator)+os.Getenv("PATH"))
 		}
-		return runner.runGateway(ctx, []string{"serve", "--listen", "127.0.0.1:0"})
+		executable, err := os.Executable()
+		if err != nil {
+			return 1, err
+		}
+		return runner.serveGateway(ctx, home, executable, "127.0.0.1:0")
 	}
 	executable, err := os.Executable()
 	if err != nil {

@@ -59,7 +59,7 @@ func TestLibraryCatalogCombinesSourcesAndCaches(t *testing.T) {
 		"hookify":    "github.com/anthropics/claude-plugins-official/plugins/hookify",
 		"sub":        "github.com/Org/skills/plugins/sub@abc123",
 		"whole":      "github.com/org/whole",
-		"playwright": "agentpack mcp add playwright --command npx --args -y @playwright/mcp",
+		"playwright": "agentpack mcp add playwright --command npx -- -y @playwright/mcp",
 		"remote":     "agentpack mcp add remote --url 'https://example.com/mcp?a=1&b=2' --type http",
 	}
 	if len(specs) != len(want) {

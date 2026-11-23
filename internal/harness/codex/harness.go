@@ -533,7 +533,7 @@ func sessionNotify(home, executable, sessionID string) (string, error) {
 			}
 		}
 		if len(user) == len(list) {
-			command = append(append(command, "--then"), user...)
+			command = append(append(command, "--"), user...)
 		}
 	}
 	// A JSON string array is also a TOML inline array.

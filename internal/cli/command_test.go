@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
 
@@ -69,5 +70,31 @@ func TestOnlyGatewayExposesServiceControls(t *testing.T) {
 	command, _, err := root.Find([]string{"service", "run"})
 	if err != nil || command.Name() != "run" || !command.Hidden {
 		t.Fatalf("hidden service run missing: %v", err)
+	}
+}
+
+func TestOnlyLaunchersKeepTheirArgumentsUnparsed(t *testing.T) {
+	launchers := map[string]bool{"claude": true, "opencode": true, "codex": true, "omp": true, "grok": true, "agy": true, "agent": true}
+	var walk func(*cobra.Command)
+	walk = func(command *cobra.Command) {
+		for _, child := range command.Commands() {
+			walk(child)
+		}
+		if command.HasSubCommands() || !command.Runnable() {
+			return
+		}
+		if command.DisableFlagParsing != (command.Parent() == command.Root() && launchers[command.Name()]) {
+			t.Errorf("%q DisableFlagParsing = %t", command.CommandPath(), command.DisableFlagParsing)
+		}
+	}
+	walk(NewRunner().rootCommand(nil, new(int)))
+}
+
+func TestUnknownFlagIsAUsageError(t *testing.T) {
+	var stderr strings.Builder
+	runner := Runner{Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: &stderr}
+	code, err := runner.Execute(context.Background(), []string{"sync", "--bogus"})
+	if code != 2 || err == nil || !strings.Contains(err.Error(), "unknown flag: --bogus") {
+		t.Fatalf("code=%d err=%v", code, err)
 	}
 }

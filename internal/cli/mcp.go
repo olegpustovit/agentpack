@@ -13,7 +13,8 @@ import (
 	"github.com/olegpustovit/agentpack/internal/staging"
 )
 
-func (runner Runner) runMCP(ctx context.Context, root string, arguments []string, quiet bool) error {
+func (runner Runner) runMCP(ctx context.Context, root string, invocation Invocation) error {
+	arguments, quiet := invocation.Args, invocation.Global.Quiet
 	if len(arguments) == 0 {
 		return fmt.Errorf("mcp requires add, remove, or list")
 	}
@@ -23,13 +24,11 @@ func (runner Runner) runMCP(ctx context.Context, root string, arguments []string
 		if len(args) == 0 {
 			return fmt.Errorf("mcp add requires a name")
 		}
-		name := args[0]
-		args = args[1:]
-		server, allowUnpinned, err := parseMCPAdd(args)
+		server, err := parseMCPAdd(invocation)
 		if err != nil {
 			return err
 		}
-		return runner.addMCPServer(ctx, root, name, server, allowUnpinned, quiet)
+		return runner.addMCPServer(ctx, root, args[0], server, boolFlag(invocation, "allow-unpinned"), quiet)
 	case "remove":
 		if len(args) != 1 {
 			return fmt.Errorf("mcp remove requires one name")
@@ -111,85 +110,63 @@ func mcpServerFrom(input network.MCPServerInput) (mcp.Server, error) {
 	return mcp.Server{Command: &input.Command, Args: input.Args}, nil
 }
 
-// parseMCPAdd reads the flags of `mcp add NAME`: a local server (--command,
-// --args, --env) or a remote one (--url, --type, --header), never both.
-func parseMCPAdd(args []string) (server mcp.Server, allowUnpinned bool, err error) {
-	command, args, hasCommand, err := takeFlag(args, "--command")
-	if err != nil {
-		return server, false, err
+// parseMCPAdd reads `mcp add NAME`: a local server (--command, --env, and
+// its arguments after --) or a remote one (--url, --type, --header), never both.
+func parseMCPAdd(invocation Invocation) (mcp.Server, error) {
+	flags := invocation.Flags
+	command, url, serverType := stringFlag(invocation, "command"), stringFlag(invocation, "url"), stringFlag(invocation, "type")
+	hasCommand, hasURL := flags.Changed("command"), flags.Changed("url")
+	// Args is ["add", NAME, ...]; anything past the name must follow --.
+	if dash := flags.ArgsLenAtDash(); dash == -1 && len(invocation.Args) > 2 || dash > 1 {
+		return mcp.Server{}, fmt.Errorf("unexpected argument %q; pass server arguments after --", invocation.Args[2])
 	}
-	url, args, hasURL, err := takeFlag(args, "--url")
-	if err != nil {
-		return server, false, err
-	}
-	serverType, args, hasType, err := takeFlag(args, "--type")
-	if err != nil {
-		return server, false, err
-	}
-	args, allowUnpinned = takeBool(args, "--allow-unpinned")
+	serverArgs := invocation.Args[2:]
 	switch {
 	case hasCommand == hasURL:
-		return server, false, fmt.Errorf("mcp add requires exactly one of --command or --url")
+		return mcp.Server{}, fmt.Errorf("mcp add requires exactly one of --command or --url")
 	case hasURL && url == "":
-		return server, false, fmt.Errorf("--url requires a non-empty value")
+		return mcp.Server{}, fmt.Errorf("--url requires a non-empty value")
 	case hasCommand && command == "":
-		return server, false, fmt.Errorf("--command requires a non-empty value")
-	case hasCommand && hasType:
-		return server, false, fmt.Errorf("--type applies to --url servers only")
+		return mcp.Server{}, fmt.Errorf("--command requires a non-empty value")
+	case hasCommand && flags.Changed("type"):
+		return mcp.Server{}, fmt.Errorf("--type applies to --url servers only")
 	}
-	serverArgs, environment, headers, err := parseMCPLists(args)
+	environment, err := keyValues(stringsFlag(invocation, "env"), true)
 	if err != nil {
-		return server, false, err
+		return mcp.Server{}, err
+	}
+	headers, err := keyValues(stringsFlag(invocation, "header"), false)
+	if err != nil {
+		return mcp.Server{}, err
 	}
 	if hasURL {
 		if len(serverArgs) != 0 || len(environment) != 0 {
-			return server, false, fmt.Errorf("--args and --env apply to --command servers only")
+			return mcp.Server{}, fmt.Errorf("server arguments and --env apply to --command servers only")
 		}
-		if !hasType {
-			serverType = "http"
-		}
-		return mcp.Server{Type: &serverType, URL: &url, Headers: headers}, allowUnpinned, nil
+		serverType = cmp.Or(serverType, "http")
+		return mcp.Server{Type: &serverType, URL: &url, Headers: headers}, nil
 	}
 	if len(headers) != 0 {
-		return server, false, fmt.Errorf("--header applies to --url servers only")
+		return mcp.Server{}, fmt.Errorf("--header applies to --url servers only")
 	}
-	return mcp.Server{Command: &command, Args: serverArgs, Env: environment}, allowUnpinned, nil
+	return mcp.Server{Command: &command, Args: serverArgs, Env: environment}, nil
 }
 
-func parseMCPLists(arguments []string) ([]string, map[string]string, map[string]string, error) {
-	var commandArgs []string
-	environment := make(map[string]string)
-	headers := make(map[string]string)
-	section := ""
-	for index := 0; index < len(arguments); index++ {
-		switch arguments[index] {
-		case "--args":
-			section = "args"
-		case "--env":
-			section = "env"
-		case "--header":
-			section = "header"
-		default:
-			if section == "args" {
-				commandArgs = append(commandArgs, arguments[index])
-				continue
-			}
-			if section == "env" || section == "header" {
-				key, value, found := strings.Cut(arguments[index], "=")
-				if !found || key == "" {
-					return nil, nil, nil, fmt.Errorf("expected KEY=VALUE, got %q", arguments[index])
-				}
-				if section == "env" {
-					environment[key] = value
-				} else {
-					headers[key] = value
-				}
-				continue
-			}
-			return nil, nil, nil, fmt.Errorf("unexpected argument %q", arguments[index])
+// keyValues reads KEY=VALUE flag values. A bare --env value names the
+// agentpack environment instead, so skipBare leaves it out.
+func keyValues(values []string, skipBare bool) (map[string]string, error) {
+	pairs := map[string]string{}
+	for _, value := range values {
+		key, val, found := strings.Cut(value, "=")
+		if !found && skipBare {
+			continue
 		}
+		if !found || key == "" {
+			return nil, fmt.Errorf("expected KEY=VALUE, got %q", value)
+		}
+		pairs[key] = val
 	}
-	return commandArgs, environment, headers, nil
+	return pairs, nil
 }
 
 // mcpPinLabel describes what pack.lock records for a server as it is defined

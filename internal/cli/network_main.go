@@ -12,7 +12,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
-func (runner Runner) runGatewayMain(ctx context.Context, home string, args []string) (int, error) {
+func (runner Runner) runGatewayMain(ctx context.Context, home string, args []string, empty bool) (int, error) {
 	if len(args) > 0 && args[0] != "set" && args[0] != "archive-ready" {
 		return 2, errors.New("expected gateway main, main set, or main archive-ready [--empty]")
 	}
@@ -20,7 +20,6 @@ func (runner Runner) runGatewayMain(ctx context.Context, home string, args []str
 	if len(args) > 0 {
 		action, args = args[0], args[1:]
 	}
-	args, empty := takeBool(args, "--empty")
 	if len(args) != 0 || empty && action != "archive-ready" {
 		return 2, errors.New("unexpected gateway main arguments")
 	}

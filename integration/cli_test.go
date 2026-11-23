@@ -406,7 +406,7 @@ func TestCompiledCLIPinsNPXServerAndRecordsUnpinnedOnlyWhenAllowed(t *testing.T)
 	if result := runCLI(t, project, "init"); result.err != nil {
 		t.Fatalf("init: stderr=%q err=%v", result.stderr, result.err)
 	}
-	add := []string{"mcp", "add", "playwright", "--command", "npx", "--args", "-y", "@playwright/mcp@latest"}
+	add := []string{"mcp", "add", "playwright", "--command", "npx", "--", "-y", "@playwright/mcp@latest"}
 	result := runCLIWithEnv(t, project, add, "NPM_CONFIG_REGISTRY="+registry.URL)
 	if result.err != nil {
 		t.Fatalf("mcp add: stdout=%q stderr=%q err=%v", result.stdout, result.stderr, result.err)

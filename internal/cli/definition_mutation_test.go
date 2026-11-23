@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,5 +122,17 @@ func TestGatewayInstallWaitsForCLIMutationAndCancels(t *testing.T) {
 	err = runner.installNetworkPackage(ctx, root, "must-not-resolve", true)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("gateway did not wait for CLI transaction: %v", err)
+	}
+}
+
+func TestReadOnlySyncAndEjectRemoveTakeNoDefinitionLock(t *testing.T) {
+	for argv, want := range map[string]bool{"sync": true, "sync --dry-run": false, "sync --verify-only": false, "eject": true, "eject --remove": false, "mode list": false, "mode create x": true} {
+		invocation, err := parseLeaf(strings.Fields(argv))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := definitionMutation(invocation); got != want {
+			t.Errorf("%s: definitionMutation = %t, want %t", argv, got, want)
+		}
 	}
 }

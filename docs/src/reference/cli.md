@@ -19,6 +19,8 @@
 | `-h`, `--help` | Print help |
 | `-V`, `--version` | Print the agentpack version |
 
+Global options may appear before or after a command. After a launcher (`claude`, `codex`, `opencode`, `agent`, `grok`, `agy`, `omp`), `--yolo` and `--debug` belong to the harness; put them before the launcher name to mean agentpack's. Everything after `--` always goes to the harness unchanged.
+
 When `--env`, `--definition-root`, or an `env use`/`env bind` binding is set, lock/manifest operations use the definition root while `.agents` and overlays use the workspace. See [Portable Environments](../concepts/environments.md).
 
 Help and errors use the terminal's native foreground and transparent background, with no semantic colors or theme detection. Contextual help is available at every level, for example `agentpack mcp add --help`.
@@ -210,8 +212,8 @@ agentpack eject --remove
 Manage `[mcp.servers]` in the manifest. `add`/`remove` update the server records in `pack.lock`; agents pick the change up on their next launch, or run `agentpack sync`.
 
 ```sh
-agentpack mcp add retrieval --command uvx --args mcp-retrieval --env API_KEY=sk-...
-agentpack mcp add playwright --command npx --args @playwright/mcp@latest --allow-unpinned
+agentpack mcp add retrieval --command uvx --env API_KEY=sk-... -- mcp-retrieval
+agentpack mcp add playwright --command npx --allow-unpinned -- @playwright/mcp@latest
 agentpack mcp add research-foundry --url https://researcher.microapps.space/mcp
 agentpack mcp add internal --url https://mcp.example.com/mcp --type sse --header "Authorization=Bearer ${TOKEN}"
 agentpack mcp remove retrieval
@@ -227,7 +229,7 @@ agentpack mcp connections
 agentpack mcp logout linear
 ```
 
-`add` takes either `--command COMMAND [--args ARGS...] [--env KEY=VALUE...]` for a local server or `--url URL [--type TYPE] [--header KEY=VALUE...]` for a remote one (`--type` defaults to `http`); giving both, or neither, is an error. Headers may hold credentials and are never written to `pack.lock`.
+`add` takes either `--command COMMAND [--env KEY=VALUE]... [-- ARGS...]` for a local server or `--url URL [--type TYPE] [--header KEY=VALUE...]` for a remote one (`--type` defaults to `http`); giving both, or neither, is an error. Headers may hold credentials and are never written to `pack.lock`.
 
 `add` resolves an npm server to an exact version and fails if the registry is unreachable; `--allow-unpinned` records it as unpinned instead. See [MCP Servers](../concepts/mcp.md#what-packlock-records).
 

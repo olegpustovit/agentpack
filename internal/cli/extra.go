@@ -7,21 +7,14 @@ import (
 )
 
 // runExtra dispatches agentpack's optional, non-core "extra" commands.
-func (runner Runner) runExtra(root string, arguments []string, quiet bool) error {
-	if len(arguments) == 0 {
+func (runner Runner) runExtra(root string, invocation Invocation) error {
+	if first(invocation.Args) != "sync-claude" {
 		return fmt.Errorf("extra requires an action")
 	}
-	action, args := arguments[0], arguments[1:]
-	switch action {
-	case "sync-claude":
-		args, dryRun := takeBool(args, "--dry-run")
-		if err := noArgs(args); err != nil {
-			return err
-		}
-		return runner.runExtraSyncClaude(root, dryRun, quiet)
-	default:
-		return fmt.Errorf("unknown extra action %q", action)
+	if err := noArgs(invocation.Args[1:]); err != nil {
+		return err
 	}
+	return runner.runExtraSyncClaude(root, boolFlag(invocation, "dry-run"), invocation.Global.Quiet)
 }
 
 // runExtraSyncClaude reconciles a project's .claude/skills and .agents/skills

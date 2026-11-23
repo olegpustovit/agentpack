@@ -17,17 +17,25 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
-func (runner Runner) runHook(ctx context.Context, arguments []string) (int, error) {
-	if len(arguments) == 0 {
+func (runner Runner) runHook(ctx context.Context, invocation Invocation) (int, error) {
+	if len(invocation.Args) == 0 {
 		return 2, fmt.Errorf("hook-exec requires a kind")
 	}
-	kind, args := arguments[0], arguments[1:]
-	targetText, args, found, err := takeFlag(args, "--target")
+	// Arguments after -- are a user notify command, which Codex follows with its payload.
+	args, then := invocation.Args, []string(nil)
+	if dash := invocation.Flags.ArgsLenAtDash(); dash >= 0 {
+		args, then = args[:dash], args[dash:]
+	}
+	kind, args := args[0], args[1:]
+	required := func(name string) (string, error) {
+		if !invocation.Flags.Changed(name) {
+			return "", fmt.Errorf("hook-exec requires --%s", name)
+		}
+		return stringFlag(invocation, name), nil
+	}
+	targetText, err := required("target")
 	if err != nil {
 		return 2, err
-	}
-	if !found {
-		return 2, fmt.Errorf("hook-exec requires --target")
 	}
 	target, err := base.ParseTarget(targetText)
 	if err != nil {
@@ -38,13 +46,13 @@ func (runner Runner) runHook(ctx context.Context, arguments []string) (int, erro
 		return 1, err
 	}
 	if kind == "dispatch" {
-		eventText, args, found, err := takeFlag(args, "--event")
-		if err != nil || !found {
-			return 2, flagError(err, "--event")
+		eventText, err := required("event")
+		if err != nil {
+			return 2, err
 		}
-		directory, args, found, err := takeFlag(args, "--specs-dir")
-		if err != nil || !found {
-			return 2, flagError(err, "--specs-dir")
+		directory, err := required("specs-dir")
+		if err != nil {
+			return 2, err
 		}
 		if err := noArgs(args); err != nil {
 			return 2, err
@@ -63,13 +71,13 @@ func (runner Runner) runHook(ctx context.Context, arguments []string) (int, erro
 		return outcome.ExitCode, nil
 	}
 	if kind == "inject-guidance" {
-		eventText, args, found, err := takeFlag(args, "--event")
-		if err != nil || !found {
-			return 2, flagError(err, "--event")
+		eventText, err := required("event")
+		if err != nil {
+			return 2, err
 		}
-		file, args, found, err := takeFlag(args, "--file")
-		if err != nil || !found {
-			return 2, flagError(err, "--file")
+		file, err := required("file")
+		if err != nil {
+			return 2, err
 		}
 		if err := noArgs(args); err != nil {
 			return 2, err
@@ -85,20 +93,16 @@ func (runner Runner) runHook(ctx context.Context, arguments []string) (int, erro
 		return 0, writeJSON(runner.Stdout, guidanceOutput(target, event, string(body)))
 	}
 	if kind == "session-state" {
-		id, args, found, err := takeFlag(args, "--session")
-		if err != nil || !found {
-			return 2, flagError(err, "--session")
+		id, err := required("session")
+		if err != nil {
+			return 2, err
 		}
-		state, args, found, err := takeFlag(args, "--state")
-		if err != nil || !found {
-			return 2, flagError(err, "--state")
+		state, err := required("state")
+		if err != nil {
+			return 2, err
 		}
 		// Codex's notify appends its JSON payload as the last argument; a notify the user configured
-		// follows --then and receives that payload too.
-		var then []string
-		if len(args) > 0 && args[0] == "--then" {
-			then, args = args[1:], nil
-		}
+		// follows -- and receives that payload too.
 		payload := ""
 		if len(then) > 0 {
 			payload = then[len(then)-1]
@@ -139,9 +143,9 @@ func (runner Runner) runHook(ctx context.Context, arguments []string) (int, erro
 		}
 		return 0, nil
 	}
-	specPath, args, found, err := takeFlag(args, "--spec")
-	if err != nil || !found {
-		return 2, flagError(err, "--spec")
+	specPath, err := required("spec")
+	if err != nil {
+		return 2, err
 	}
 	if err := noArgs(args); err != nil {
 		return 2, err
@@ -176,12 +180,6 @@ func (runner Runner) runHook(ctx context.Context, arguments []string) (int, erro
 	return 0, writeJSON(runner.Stdout, hooks.HookOutput(target, spec.Event, result))
 }
 
-func flagError(err error, name string) error {
-	if err != nil {
-		return err
-	}
-	return fmt.Errorf("hook-exec requires %s", name)
-}
 func guidanceOutput(target base.Target, event hooks.Event, body string) any {
 	switch target {
 	case base.Claude:

@@ -14,7 +14,7 @@ import (
 // runEject syncs, then writes the staged content into the project for the
 // named agents (all it supports by default), or takes the last eject out.
 func (runner Runner) runEject(ctx context.Context, root, workspace string, invocation Invocation) error {
-	args, remove := takeBool(invocation.Args, "--remove")
+	args, remove := invocation.Args, boolFlag(invocation, "remove")
 	quiet := invocation.Global.Quiet
 	if remove {
 		if len(args) != 0 {

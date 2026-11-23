@@ -324,7 +324,7 @@ func mcpAddCommand(input MCPServerInput) string {
 	if input.URL != "" {
 		words = append(words, "--url", input.URL, "--type", input.Type)
 	} else {
-		words = append(append(words, "--command", input.Command, "--args"), input.Args...)
+		words = append(append(words, "--command", input.Command, "--"), input.Args...)
 	}
 	for index, word := range words {
 		words[index] = shellWord(word)

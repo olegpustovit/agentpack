@@ -41,16 +41,24 @@ func TestParseEnvSelector(t *testing.T) {
 	}
 }
 
-func TestParseLeavesMCPEnvAssignments(t *testing.T) {
-	got, err := Parse([]string{"mcp", "add", "docs", "--command", "npx", "--env", "TOKEN=value"})
+func TestMCPAddEnvAssignmentsAndEnvironmentSelector(t *testing.T) {
+	invocation, err := parseLeaf([]string{"mcp", "add", "docs", "--command", "npx", "--env", "TOKEN=value", "--env", "team"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Global.Env != "" {
-		t.Fatalf("mcp --env KEY=VALUE must not become global env selector: %#v", got.Global)
+	server, err := parseMCPAdd(invocation)
+	if err != nil || !reflect.DeepEqual(server.Env, map[string]string{"TOKEN": "value"}) {
+		t.Fatalf("env = %#v err=%v", server.Env, err)
 	}
-	if !reflect.DeepEqual(got.Args, []string{"add", "docs", "--command", "npx", "--env", "TOKEN=value"}) {
-		t.Fatalf("args = %#v", got.Args)
+}
+
+func TestParseLeavesHarnessDebugAndYolo(t *testing.T) {
+	got, err := Parse([]string{"--debug", "claude", "--debug", "x", "--yolo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Global.Debug || got.Global.Yolo || !reflect.DeepEqual(got.Args, []string{"--debug", "x", "--yolo"}) {
+		t.Fatalf("unexpected invocation: %#v", got)
 	}
 }
 
@@ -62,17 +70,7 @@ func TestParseCursorAgentAliasAndMissingValue(t *testing.T) {
 	if got.Command != "agent" || !reflect.DeepEqual(got.Args, []string{"--print", "hi"}) {
 		t.Fatalf("unexpected invocation: %#v", got)
 	}
-	if _, err := Parse([]string{"sync", "--mode"}); err == nil {
+	if _, err := Parse([]string{"claude", "--mode"}); err == nil {
 		t.Fatal("expected missing global value error")
-	}
-}
-
-func TestParseMCPListsPreservesCommandArgumentOrder(t *testing.T) {
-	arguments, environment, _, err := parseMCPLists([]string{"--args", "-y", "server", "--env", "TOKEN=abc", "EMPTY="})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(arguments, []string{"-y", "server"}) || environment["TOKEN"] != "abc" || environment["EMPTY"] != "" {
-		t.Fatalf("args=%#v env=%#v", arguments, environment)
 	}
 }
