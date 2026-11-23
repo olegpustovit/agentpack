@@ -45,13 +45,14 @@ type GatewayOptions struct {
 	Packages                 func(context.Context, string) (network.ProjectContents, error)
 	Install                  func(context.Context, string, string, bool) error
 	InstallMCP               func(context.Context, string, registry.MCPServerInput, bool) error
-	// ProjectMCPLogin saves the login a project uses for a remote MCP server; "" restores the first.
-	ProjectMCPLogin func(ctx context.Context, directory, url, credential string) error
 	Update                   func(ctx context.Context, version string) error
 	Library                  LibraryOptions
 	Assets                   http.Handler
 	Version                  string
 	UIBuildID                string
+
+	// ProjectMCPLogin saves the login a project uses for a remote MCP server; "" restores the first.
+	ProjectMCPLogin func(ctx context.Context, directory, url, credential string) error
 }
 
 type Gateway struct {
