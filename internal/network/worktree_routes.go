@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
@@ -46,7 +47,7 @@ func gitFailure(w http.ResponseWriter, r *http.Request, status int, err error, e
 
 // newSessionWorktree resolves POST /api/sessions' worktree request for a startable main folder:
 // "new" creates one, anything else must be an existing worktree git lists for that folder.
-func (g *Gateway) newSessionWorktree(ctx context.Context, actor Actor, main, worktree, name string, carry bool) (string, error) {
+func (g *Gateway) newSessionWorktree(ctx context.Context, actor session.Actor, main, worktree, name string, carry bool) (string, error) {
 	if !g.startableDirectory(ctx, actor, main) {
 		return "", errors.New("choose a recent folder from this node")
 	}
@@ -120,8 +121,8 @@ type worktreeRow struct {
 	Error    string   `json:"error,omitempty"`
 }
 
-func (g *Gateway) worktreeSessions(ctx context.Context) ([]SessionInfo, error) {
-	return querySessions(ctx, g.store.Reader, "SELECT "+sessionColumns+" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND hidden=0 AND directory<>''")
+func (g *Gateway) worktreeSessions(ctx context.Context) ([]session.SessionInfo, error) {
+	return session.QuerySessions(ctx, g.store.Reader, "SELECT "+session.SessionColumns+" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND hidden=0 AND directory<>''")
 }
 
 func within(root, dir string) bool {
@@ -165,7 +166,7 @@ func (g *Gateway) serveWorktrees(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"git": true, "worktrees": rows})
 }
 
-func (g *Gateway) worktreeRow(ctx context.Context, path string, sessions []SessionInfo) worktreeRow {
+func (g *Gateway) worktreeRow(ctx context.Context, path string, sessions []session.SessionInfo) worktreeRow {
 	row := worktreeRow{Path: path, Sessions: []string{}, Size: dirSize(path)}
 	for _, session := range sessions {
 		if within(path, session.Directory) {
@@ -321,8 +322,8 @@ type sessionGit struct {
 }
 
 // localSession reads a session this machine runs; a peer's session is reached with ?node=.
-func (g *Gateway) localSession(w http.ResponseWriter, r *http.Request) (SessionInfo, bool) {
-	info, err := storedSession(r.Context(), g.store.Reader, r.PathValue("id"))
+func (g *Gateway) localSession(w http.ResponseWriter, r *http.Request) (session.SessionInfo, bool) {
+	info, err := session.StoredSession(r.Context(), g.store.Reader, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return info, false
@@ -335,7 +336,7 @@ func (g *Gateway) localSession(w http.ResponseWriter, r *http.Request) (SessionI
 	return info, true
 }
 
-func (g *Gateway) readSessionGit(ctx context.Context, info SessionInfo) sessionGit {
+func (g *Gateway) readSessionGit(ctx context.Context, info session.SessionInfo) sessionGit {
 	result := sessionGit{}
 	if !gitAvailable() {
 		return result
@@ -627,7 +628,7 @@ func viewPullRequest(ctx context.Context, dir, branch string) *pullRequest {
 
 // worktreeSession is the shared guard for commit, PR and merge: the caller may write to the
 // session and it runs in a worktree. In a shared folder, other agents' edits would be swept in.
-func (g *Gateway) worktreeSession(w http.ResponseWriter, r *http.Request) (info SessionInfo, main, root string, ok bool) {
+func (g *Gateway) worktreeSession(w http.ResponseWriter, r *http.Request) (info session.SessionInfo, main, root string, ok bool) {
 	info, ok = g.localSession(w, r)
 	if !ok || !authorizeACPWrite(w, r, info) {
 		return info, "", "", false
@@ -762,7 +763,7 @@ func (g *Gateway) serveSessionMerge(w http.ResponseWriter, r *http.Request) {
 // removeArchivedWorktree runs after a session is archived: its worktree goes when no other
 // session uses it, it has no changes and its commits are on the main folder's branch or in a
 // merged pull request.
-func (g *Gateway) removeArchivedWorktree(ctx context.Context, info SessionInfo) {
+func (g *Gateway) removeArchivedWorktree(ctx context.Context, info session.SessionInfo) {
 	if !insideWorktrees(g.options.Home, info.Directory) {
 		return
 	}

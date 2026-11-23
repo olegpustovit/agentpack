@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // TestLiveACPProbe runs one real ACP turn against an installed agent and
@@ -21,7 +22,7 @@ func TestLiveACPProbe(t *testing.T) {
 		t.Skip("set AGENTPACK_ACP_PROBE, AGENTPACK_ACP_PROBE_PROJECT and AGENTPACK_ACP_PROBE_OUT")
 	}
 	dir := t.TempDir()
-	session, stop, err := startACPConversation(context.Background(), WorkerLaunch{Directory: project, Session: SessionInfo{Harness: harness, Directory: project, DefinitionRoot: project, Transport: "acp"}}, dir, NewConversationSession(acp.NewEventLog(0), nil))
+	session, stop, err := startACPConversation(context.Background(), WorkerLaunch{Directory: project, Session: session.SessionInfo{Harness: harness, Directory: project, DefinitionRoot: project, Transport: "acp"}}, dir, NewConversationSession(acp.NewEventLog(0), nil))
 	if err != nil {
 		t.Fatal(err)
 	}

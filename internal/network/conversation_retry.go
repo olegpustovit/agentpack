@@ -26,41 +26,41 @@ const networkRetryPrompt = "The connection to your model service dropped and you
 
 // retryAfterNetworkDrop schedules another turn when this one failed because the agent could not
 // reach its service. A turn the person sends meanwhile, a cancel or a closed chat drops the retry.
-func (session *ConversationSession) retryAfterNetworkDrop(err error) {
-	session.mu.Lock()
-	session.turnsEnded++
-	reply := strings.TrimSpace(string(session.turnText))
+func (cs *ConversationSession) retryAfterNetworkDrop(err error) {
+	cs.mu.Lock()
+	cs.turnsEnded++
+	reply := strings.TrimSpace(string(cs.turnText))
 	last := reply[strings.LastIndexByte(reply, '\n')+1:]
 	dropped := len(last) < 400 && networkFailureLine.MatchString(last) || err != nil && networkFailure.MatchString(err.Error())
-	if !dropped || session.userCancelled || session.closedErr() != nil {
-		session.networkRetries = 0
-		session.mu.Unlock()
+	if !dropped || cs.userCancelled || cs.closedErr() != nil {
+		cs.networkRetries = 0
+		cs.mu.Unlock()
 		return
 	}
-	attempt, turns := session.networkRetries, session.turnsEnded
+	attempt, turns := cs.networkRetries, cs.turnsEnded
 	if attempt >= len(networkRetryDelays) {
-		session.mu.Unlock()
-		session.logNotice("The agent's service is still unreachable", "Send a message to try again.")
+		cs.mu.Unlock()
+		cs.logNotice("The agent's service is still unreachable", "Send a message to try again.")
 		return
 	}
-	session.networkRetries++
-	after := session.after
-	session.mu.Unlock()
+	cs.networkRetries++
+	after := cs.after
+	cs.mu.Unlock()
 	if after == nil {
 		after = func(delay time.Duration, run func()) { time.AfterFunc(delay, run) }
 	}
 	delay := networkRetryDelays[attempt]
-	session.logNotice("Lost the connection to the agent's service", fmt.Sprintf("Retrying in %s (%d of %d).", delay, attempt+1, len(networkRetryDelays)))
+	cs.logNotice("Lost the connection to the agent's service", fmt.Sprintf("Retrying in %s (%d of %d).", delay, attempt+1, len(networkRetryDelays)))
 	after(delay, func() {
-		session.mu.Lock()
-		stale := session.turnsEnded != turns || session.running || session.closedErr() != nil
-		session.mu.Unlock()
+		cs.mu.Lock()
+		stale := cs.turnsEnded != turns || cs.running || cs.closedErr() != nil
+		cs.mu.Unlock()
 		if !stale {
-			_, _, _ = session.Submit(context.Background(), acp.PromptInput{Text: networkRetryPrompt}, false)
+			_, _, _ = cs.Submit(context.Background(), acp.PromptInput{Text: networkRetryPrompt}, false)
 		}
 	})
 }
 
-func (session *ConversationSession) logNotice(title, description string) {
-	session.log.Append("notice", session.clock().UnixMilli(), mustRawJSON(map[string]string{"sessionUpdate": "notice", "severity": "warning", "title": title, "description": description}))
+func (cs *ConversationSession) logNotice(title, description string) {
+	cs.log.Append("notice", cs.clock().UnixMilli(), mustRawJSON(map[string]string{"sessionUpdate": "notice", "severity": "warning", "title": title, "description": description}))
 }

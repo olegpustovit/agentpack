@@ -7,21 +7,22 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
-func testRememberACPConversationOwner(t *testing.T, home string, session SessionInfo, fallback string) error {
+func testRememberACPConversationOwner(t *testing.T, home string, info session.SessionInfo, fallback string) error {
 	t.Helper()
 	store := testSessionStore(t, home)
-	if session.ID == "" {
-		session.ID = "session-" + rand.Text()
+	if info.ID == "" {
+		info.ID = "session-" + rand.Text()
 	}
-	pending := session
+	pending := info
 	pending.AgentSessionID = ""
-	if err := upsertSession(t.Context(), store.DB, pending); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, pending); err != nil {
 		return err
 	}
-	return rememberACPConversationOwner(t.Context(), store, session, fallback)
+	return rememberACPConversationOwner(t.Context(), store, info, fallback)
 }
 
 func TestNativeOwnerClaimIsAtomicAndCreatesNoFiles(t *testing.T) {
@@ -31,12 +32,12 @@ func TestNativeOwnerClaimIsAtomicAndCreatesNoFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessions := []SessionInfo{
-		{ID: "session-first", Directory: directory, FolderID: folderID, Harness: "agent", Transport: "acp", StartedBy: &Actor{Kind: "browser", User: "first@example.com", Node: "host"}},
-		{ID: "session-second", Directory: directory, FolderID: folderID, Harness: "cursor", Transport: "acp", StartedBy: &Actor{Kind: "browser", User: "second@example.com", Node: "host"}},
+	sessions := []session.SessionInfo{
+		{ID: "session-first", Directory: directory, FolderID: folderID, Harness: "agent", Transport: "acp", StartedBy: &session.Actor{Kind: "browser", User: "first@example.com", Node: "host"}},
+		{ID: "session-second", Directory: directory, FolderID: folderID, Harness: "cursor", Transport: "acp", StartedBy: &session.Actor{Kind: "browser", User: "second@example.com", Node: "host"}},
 	}
-	for i, session := range sessions {
-		if err := upsertSession(t.Context(), stores[i].DB, session); err != nil {
+	for i, info := range sessions {
+		if err := session.UpsertSession(t.Context(), stores[i].DB, info); err != nil {
 			t.Fatal(err)
 		}
 	}

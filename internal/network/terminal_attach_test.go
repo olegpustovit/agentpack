@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/websocket"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func TestTryReattachResumesFromLastSeenOffset(t *testing.T) {
@@ -20,7 +21,7 @@ func TestTryReattachResumesFromLastSeenOffset(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/state" {
-			_ = json.NewEncoder(w).Encode(TerminalState{Running: true, Interactive: true})
+			_ = json.NewEncoder(w).Encode(session.TerminalState{Running: true, Interactive: true})
 			return
 		}
 		if r.URL.Path != "/attach" {
@@ -33,9 +34,9 @@ func TestTryReattachResumesFromLastSeenOffset(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		_ = conn.WriteJSON(terminalNotice{Type: "attached", State: TerminalState{Running: true}, Offset: 103})
+		_ = conn.WriteJSON(terminalNotice{Type: "attached", State: session.TerminalState{Running: true}, Offset: 103})
 		_ = conn.WriteMessage(websocket.BinaryMessage, []byte("def"))
-		_ = conn.WriteJSON(terminalNotice{Type: "replay_complete", State: TerminalState{Running: true}, Offset: 106})
+		_ = conn.WriteJSON(terminalNotice{Type: "replay_complete", State: session.TerminalState{Running: true}, Offset: 106})
 	}))
 	defer server.Close()
 

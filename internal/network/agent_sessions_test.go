@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func TestListAgentSessionsFixture(t *testing.T) {
@@ -31,7 +32,7 @@ func TestAgentSessionsGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
-	if err := remember(home, SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
+	if err := remember(home, session.SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
 		t.Fatal(err)
 	}
 	auth, err := testGatewayAuth(t, home)
@@ -102,8 +103,8 @@ func TestACPConversationOwnerPersistsStableIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := Actor{Kind: "peer", User: "alice@example.com", Node: "old-name", StableNodeID: "stable-peer"}
-	session := SessionInfo{
+	owner := session.Actor{Kind: "peer", User: "alice@example.com", Node: "old-name", StableNodeID: "stable-peer"}
+	session := session.SessionInfo{
 		Directory: directory, FolderID: folderID, Harness: "agent", Mode: "default",
 		Transport: "acp", AgentSessionID: "agent-session-1", StartedBy: &owner,
 	}

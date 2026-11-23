@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -17,9 +18,9 @@ var (
 )
 
 type acpConversationOwnerRecord struct {
-	FolderID string `json:"folder_id"`
-	Harness  string `json:"harness"`
-	Owner    Actor  `json:"owner"`
+	FolderID string        `json:"folder_id"`
+	Harness  string        `json:"harness"`
+	Owner    session.Actor `json:"owner"`
 }
 
 func acpOwnerKey(folderID, harness, sessionID string) (key, canonical string, err error) {
@@ -35,8 +36,8 @@ func acpOwnerKey(folderID, harness, sessionID string) (key, canonical string, er
 	return hex.EncodeToString(digest[:]), canonical, nil
 }
 
-func decodeACPAccountOwner(body, email string) (Actor, error) {
-	var owner Actor
+func decodeACPAccountOwner(body, email string) (session.Actor, error) {
+	var owner session.Actor
 	if err := json.Unmarshal([]byte(body), &owner); err != nil {
 		return owner, errors.Join(errACPResumeOwnerStorage, err)
 	}
@@ -44,7 +45,7 @@ func decodeACPAccountOwner(body, email string) (Actor, error) {
 		return owner, errACPResumeOwnerStorage
 	}
 	if email != "" {
-		normalized, err := normalizeEmail(owner.User)
+		normalized, err := session.NormalizeEmail(owner.User)
 		if err != nil || normalized != email {
 			return owner, errACPResumeOwnerStorage
 		}
@@ -52,55 +53,55 @@ func decodeACPAccountOwner(body, email string) (Actor, error) {
 	return owner, nil
 }
 
-func loadACPConversationOwner(ctx context.Context, tx *sql.Tx, folderID, harness, sessionID string) (Actor, bool, error) {
+func loadACPConversationOwner(ctx context.Context, tx *sql.Tx, folderID, harness, sessionID string) (session.Actor, bool, error) {
 	key, canonical, err := acpOwnerKey(folderID, harness, sessionID)
 	if err != nil {
-		return Actor{}, false, err
+		return session.Actor{}, false, err
 	}
 	var body, email, storedFolder, storedHarness string
-	var owner Actor
+	var owner session.Actor
 	found := false
 	err = tx.QueryRowContext(ctx, "SELECT started_by,owner_email,folder_id,harness FROM acp_session_owners WHERE key=? AND node_id="+state.LocalNodeSQL, key).Scan(&body, &email, &storedFolder, &storedHarness)
 	if err == nil {
 		if storedFolder != folderID || storedHarness != canonical {
-			return Actor{}, false, errACPResumeOwnerStorage
+			return session.Actor{}, false, errACPResumeOwnerStorage
 		}
 		owner, err = decodeACPAccountOwner(body, email)
 		if err != nil {
-			return Actor{}, false, err
+			return session.Actor{}, false, err
 		}
 		found = true
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		return Actor{}, false, err
+		return session.Actor{}, false, err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT harness,started_by,owner_email,archived_at FROM sessions
         WHERE node_id=`+state.LocalNodeSQL+` AND folder_id=? AND agent_session_id=? AND transport='acp' ORDER BY started_at,id`, folderID, sessionID)
 	if err != nil {
-		return Actor{}, false, err
+		return session.Actor{}, false, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var name, body, email string
 		var archivedAt int64
 		if err := rows.Scan(&name, &body, &email, &archivedAt); err != nil {
-			return Actor{}, false, err
+			return session.Actor{}, false, err
 		}
 		target, err := harnessTarget(name)
 		if err != nil || string(target) != canonical {
 			continue
 		}
 		if archivedAt != 0 {
-			return Actor{}, false, errSessionArchived
+			return session.Actor{}, false, session.ErrSessionArchived
 		}
 		if body == "" || body == "null" {
 			continue
 		}
 		candidate, err := decodeACPAccountOwner(body, email)
 		if err != nil {
-			return Actor{}, false, err
+			return session.Actor{}, false, err
 		}
-		if found && !candidate.canWriteSession(SessionInfo{StartedBy: &owner}) {
-			return Actor{}, false, errACPResumeOwnerStorage
+		if found && !candidate.CanWriteSession(session.SessionInfo{StartedBy: &owner}) {
+			return session.Actor{}, false, errACPResumeOwnerStorage
 		}
 		if !found {
 			owner, found = candidate, true
@@ -109,10 +110,10 @@ func loadACPConversationOwner(ctx context.Context, tx *sql.Tx, folderID, harness
 	return owner, found, rows.Err()
 }
 
-func readACPConversationOwner(ctx context.Context, store *state.Store, folderID, harness, sessionID string) (Actor, bool, error) {
+func readACPConversationOwner(ctx context.Context, store *state.Store, folderID, harness, sessionID string) (session.Actor, bool, error) {
 	tx, err := store.Reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return Actor{}, false, errors.Join(errACPResumeOwnerStorage, err)
+		return session.Actor{}, false, errors.Join(errACPResumeOwnerStorage, err)
 	}
 	defer tx.Rollback()
 	owner, found, err := loadACPConversationOwner(ctx, tx, folderID, harness, sessionID)
@@ -125,15 +126,15 @@ func readACPConversationOwner(ctx context.Context, store *state.Store, folderID,
 	return owner, found, err
 }
 
-func authorizeACPResume(ctx context.Context, store *state.Store, actor Actor, session SessionInfo) error {
-	if session.AgentSessionID == "" {
+func authorizeACPResume(ctx context.Context, store *state.Store, actor session.Actor, info session.SessionInfo) error {
+	if info.AgentSessionID == "" {
 		return nil
 	}
-	target, err := harnessTarget(session.Harness)
+	target, err := harnessTarget(info.Harness)
 	if err != nil {
 		return err
 	}
-	rows, err := store.Reader.QueryContext(ctx, "SELECT harness FROM sessions WHERE agent_session_id=? AND archived_at>0", session.AgentSessionID)
+	rows, err := store.Reader.QueryContext(ctx, "SELECT harness FROM sessions WHERE agent_session_id=? AND archived_at>0", info.AgentSessionID)
 	if err != nil {
 		return err
 	}
@@ -146,18 +147,18 @@ func authorizeACPResume(ctx context.Context, store *state.Store, actor Actor, se
 		canonical, err := harnessTarget(name)
 		if err == nil && canonical == target {
 			rows.Close()
-			return errSessionArchived
+			return session.ErrSessionArchived
 		}
 	}
 	err = errors.Join(rows.Err(), rows.Close())
-	if err != nil || session.Transport != "acp" {
+	if err != nil || info.Transport != "acp" {
 		return err
 	}
-	folderID, err := FolderIdentity(session.Directory)
+	folderID, err := FolderIdentity(info.Directory)
 	if err != nil {
 		return err
 	}
-	owner, found, err := readACPConversationOwner(ctx, store, folderID, session.Harness, session.AgentSessionID)
+	owner, found, err := readACPConversationOwner(ctx, store, folderID, info.Harness, info.AgentSessionID)
 	if err != nil {
 		return err
 	}
@@ -167,7 +168,7 @@ func authorizeACPResume(ctx context.Context, store *state.Store, actor Actor, se
 		}
 		return nil
 	}
-	if !actor.canWriteSession(SessionInfo{StartedBy: &owner}) {
+	if !actor.CanWriteSession(session.SessionInfo{StartedBy: &owner}) {
 		return errACPResumeDenied
 	}
 	return nil
@@ -179,7 +180,7 @@ func insertOwnerBinding(ctx context.Context, tx *sql.Tx, key string, record acpC
 	if err != nil {
 		return err
 	}
-	email, _ := normalizeEmail(record.Owner.User)
+	email, _ := session.NormalizeEmail(record.Owner.User)
 	if _, err := decodeACPAccountOwner(string(body), email); err != nil {
 		return err
 	}
@@ -195,17 +196,17 @@ func insertOwnerBinding(ctx context.Context, tx *sql.Tx, key string, record acpC
 	if err != nil {
 		return err
 	}
-	if !record.Owner.canWriteSession(SessionInfo{StartedBy: &owner}) {
+	if !record.Owner.CanWriteSession(session.SessionInfo{StartedBy: &owner}) {
 		return errACPResumeDenied
 	}
 	return nil
 }
 
-func rememberACPConversationOwner(ctx context.Context, store *state.Store, session SessionInfo, fallbackDirectory string) error {
-	if session.Transport != "acp" || session.AgentSessionID == "" || session.StartedBy == nil {
+func rememberACPConversationOwner(ctx context.Context, store *state.Store, info session.SessionInfo, fallbackDirectory string) error {
+	if info.Transport != "acp" || info.AgentSessionID == "" || info.StartedBy == nil {
 		return nil
 	}
-	directory := session.Directory
+	directory := info.Directory
 	if directory == "" {
 		directory = fallbackDirectory
 	}
@@ -213,39 +214,39 @@ func rememberACPConversationOwner(ctx context.Context, store *state.Store, sessi
 	if err != nil {
 		return err
 	}
-	if session.FolderID != "" && !SameFolder(session.FolderID, folderID) {
+	if info.FolderID != "" && !SameFolder(info.FolderID, folderID) {
 		return errors.New("ACP workspace changed before owner record was saved")
 	}
-	key, canonical, err := acpOwnerKey(folderID, session.Harness, session.AgentSessionID)
+	key, canonical, err := acpOwnerKey(folderID, info.Harness, info.AgentSessionID)
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(session.StartedBy)
+	body, err := json.Marshal(info.StartedBy)
 	if err != nil {
 		return err
 	}
-	email, _ := normalizeEmail(session.StartedBy.User)
+	email, _ := session.NormalizeEmail(info.StartedBy.User)
 	return state.Transaction(ctx, store.DB, func(tx *sql.Tx) error {
-		owner, found, err := loadACPConversationOwner(ctx, tx, folderID, session.Harness, session.AgentSessionID)
+		owner, found, err := loadACPConversationOwner(ctx, tx, folderID, info.Harness, info.AgentSessionID)
 		if err != nil {
 			return err
 		}
-		if found && !session.StartedBy.canWriteSession(SessionInfo{StartedBy: &owner}) {
+		if found && !info.StartedBy.CanWriteSession(session.SessionInfo{StartedBy: &owner}) {
 			return errACPResumeDenied
 		}
 		if !found {
-			owner = *session.StartedBy
+			owner = *info.StartedBy
 		}
 		if err := insertOwnerBinding(ctx, tx, key, acpConversationOwnerRecord{FolderID: folderID, Harness: canonical, Owner: owner}); err != nil {
 			return err
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE sessions SET agent_session_id=?,folder_id=?,started_by=?,owner_email=? WHERE id=? AND node_id=`+state.LocalNodeSQL, session.AgentSessionID, folderID, string(body), email, session.ID)
+		result, err := tx.ExecContext(ctx, `UPDATE sessions SET agent_session_id=?,folder_id=?,started_by=?,owner_email=? WHERE id=? AND node_id=`+state.LocalNodeSQL, info.AgentSessionID, folderID, string(body), email, info.ID)
 		if err != nil {
 			return err
 		}
 		count, err := result.RowsAffected()
 		if err == nil && count != 1 {
-			return errSessionNotFound
+			return session.ErrSessionNotFound
 		}
 		return err
 	})

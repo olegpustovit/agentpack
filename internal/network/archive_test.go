@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func TestArchivedSessionsRefuseEveryWriteAndNativeResume(t *testing.T) {
@@ -19,18 +20,18 @@ func TestArchivedSessionsRefuseEveryWriteAndNativeResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := browserActor(testBrowserEmail)
-	session := SessionInfo{ID: "session-archived", Directory: directory, FolderID: folder, Harness: "cursor", Transport: "acp", AgentSessionID: "native-archived", StartedBy: &owner}
-	if err := upsertSession(t.Context(), g.store.DB, session); err != nil {
+	owner := session.BrowserActor(testBrowserEmail)
+	info := session.SessionInfo{ID: "session-archived", Directory: directory, FolderID: folder, Harness: "cursor", Transport: "acp", AgentSessionID: "native-archived", StartedBy: &owner}
+	if err := session.UpsertSession(t.Context(), g.store.DB, info); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := g.store.DB.Exec("UPDATE sessions SET archived_at=1 WHERE id=?", session.ID); err != nil {
+	if _, err := g.store.DB.Exec("UPDATE sessions SET archived_at=1 WHERE id=?", info.ID); err != nil {
 		t.Fatal(err)
 	}
 	handler := g.Handler()
 	for _, path := range []string{"/conversation/prompt", "/conversation/prompt/images", "/conversation/permission", "/conversation/cancel", "/conversation/elicitation", "/conversation/config", "/conversation/blobs", "/restart", "/fork", "/stop", "/input"} {
 		t.Run(path, func(t *testing.T) {
-			r := httptest.NewRequest("POST", origin.String()+"/api/sessions/"+session.ID+path, strings.NewReader(`{}`))
+			r := httptest.NewRequest("POST", origin.String()+"/api/sessions/"+info.ID+path, strings.NewReader(`{}`))
 			r.Header.Set("Authorization", "Bearer "+g.local.Secret)
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, r)
@@ -41,7 +42,7 @@ func TestArchivedSessionsRefuseEveryWriteAndNativeResume(t *testing.T) {
 	}
 	for _, resumeDirectory := range []string{directory, t.TempDir(), directory + "/missing"} {
 		for _, transport := range []string{"acp", "terminal"} {
-			body, _ := json.Marshal(map[string]string{"directory": resumeDirectory, "harness": "agent", "agent_session_id": session.AgentSessionID, "transport": transport})
+			body, _ := json.Marshal(map[string]string{"directory": resumeDirectory, "harness": "agent", "agent_session_id": info.AgentSessionID, "transport": transport})
 			r := httptest.NewRequest("POST", origin.String()+"/api/sessions", strings.NewReader(string(body)))
 			r.Header.Set("Authorization", "Bearer "+g.local.Secret)
 			w := httptest.NewRecorder()
@@ -51,15 +52,15 @@ func TestArchivedSessionsRefuseEveryWriteAndNativeResume(t *testing.T) {
 			}
 		}
 	}
-	if err := upsertSession(t.Context(), g.store.DB, session); !errors.Is(err, errSessionArchived) {
+	if err := session.UpsertSession(t.Context(), g.store.DB, info); !errors.Is(err, session.ErrSessionArchived) {
 		t.Fatalf("worker revived archived metadata: %v", err)
 	}
 	entry := acp.LogEntry{Seq: 1, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"late event"}}`)}
-	if err := persistConversationChangesSince(t.Context(), g.store.DB, session.ID, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{entry}}, 0, false); err == nil {
+	if err := persistConversationChangesSince(t.Context(), g.store.DB, info.ID, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{entry}}, 0, false); err == nil {
 		t.Fatal("worker added events to archived session")
 	}
 	ids, err := archivedNativeIDs(t.Context(), g.store, folder, "agent")
-	if err != nil || !ids[session.AgentSessionID] {
+	if err != nil || !ids[info.AgentSessionID] {
 		t.Fatalf("harness alias bypassed archive state: %v %v", ids, err)
 	}
 }

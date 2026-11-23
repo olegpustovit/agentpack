@@ -7,9 +7,9 @@ import (
 )
 
 // CancelSubagent stops one announced subagent session; the parent turn keeps running.
-func (session *ConversationSession) CancelSubagent(ctx context.Context, id string) error {
-	session.mu.Lock()
-	broker, log := session.broker, session.log
-	session.mu.Unlock()
+func (cs *ConversationSession) CancelSubagent(ctx context.Context, id string) error {
+	cs.mu.Lock()
+	broker, log := cs.broker, cs.log
+	cs.mu.Unlock()
 	return acp.CancelSubagent(ctx, log, broker, id)
 }

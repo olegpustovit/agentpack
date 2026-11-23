@@ -14,6 +14,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -28,7 +29,7 @@ func TestRemoteSessionRequiresRememberedFolderAndTerminalHarness(t *testing.T) {
 		{"unknown folder", "codex", directory, "not been used before"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := runner.startRemoteSession(context.Background(), home, "must-not-execute", network.SessionInfo{Harness: test.harness, Directory: test.directory}, "")
+			_, err := runner.startRemoteSession(context.Background(), home, "must-not-execute", session.SessionInfo{Harness: test.harness, Directory: test.directory}, "")
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("got %v, want %s", err, test.want)
 			}
@@ -42,7 +43,7 @@ func TestRemoteSessionRequiresRememberedFolderAndTerminalHarness(t *testing.T) {
 	if _, err := store.DB.Exec("INSERT INTO sessions(id,node_id,directory,harness,folder_id) VALUES ('session-replaced',(SELECT node_id FROM local_node WHERE id=1),?,'codex','replaced-folder')", directory); err != nil {
 		t.Fatal(err)
 	}
-	_, err = runner.startRemoteSession(context.Background(), home, "must-not-execute", network.SessionInfo{Harness: "codex", Directory: directory}, "")
+	_, err = runner.startRemoteSession(context.Background(), home, "must-not-execute", session.SessionInfo{Harness: "codex", Directory: directory}, "")
 	if err == nil || !strings.Contains(err.Error(), "folder has changed") {
 		t.Fatalf("replaced folder accepted: %v", err)
 	}
@@ -54,7 +55,7 @@ func TestRemoteTerminalLaunchAcceptsGatewayVerifiedFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := network.SessionInfo{Harness: "codex", Directory: directory, Transport: "terminal", FolderID: identity, StartedBy: &network.Actor{Kind: "browser"}}
+	info := session.SessionInfo{Harness: "codex", Directory: directory, Transport: "terminal", FolderID: identity, StartedBy: &session.Actor{Kind: "browser"}}
 	store, err := state.Open(home)
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +81,7 @@ func TestNativePresenceEndsWithLaunchProcess(t *testing.T) {
 	command := exec.Command(os.Args[0], "-test.run=^TestNativePresenceCLIChild$")
 	command.Env = append(os.Environ(), "AGENTPACK_TEST_NATIVE_EXIT=1")
 	runner := Runner{Launch: func(process *os.Process) (func(), error) {
-		return network.RegisterPresence(home, "test", network.SessionInfo{Directory: directory, Harness: "codex"}, process)
+		return network.RegisterPresence(home, "test", session.SessionInfo{Directory: directory, Harness: "codex"}, process)
 	}}
 	code, err := runner.runProcess(command)
 	if code != 23 || err != nil {
@@ -165,7 +166,7 @@ func TestRemoteChatStagesFolderWithoutDefinitionRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The worker cannot start from a missing executable; the sync before it is what is tested.
-	_, _ = Runner{}.startRemoteSession(context.Background(), home, filepath.Join(t.TempDir(), "missing"), network.SessionInfo{Harness: "codex", Directory: directory, Transport: "acp"}, "")
+	_, _ = Runner{}.startRemoteSession(context.Background(), home, filepath.Join(t.TempDir(), "missing"), session.SessionInfo{Harness: "codex", Directory: directory, Transport: "acp"}, "")
 	codexHome, err := codex.CurrentHome(directory, "default")
 	if err != nil {
 		t.Fatal(err)

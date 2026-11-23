@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/tmaxmax/go-sse"
 )
 
@@ -61,11 +62,11 @@ func topicCount(messages []eventMessage, topic string) int {
 }
 
 func TestDigestOfSessionsIncludesConversationState(t *testing.T) {
-	idle, err := digestOf([]SessionInfo{{ID: "s1", ConversationState: "idle", State: TerminalState{Running: true}}}, nil)
+	idle, err := digestOf([]session.SessionInfo{{ID: "s1", ConversationState: "idle", State: session.TerminalState{Running: true}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	needs, err := digestOf([]SessionInfo{{ID: "s1", ConversationState: "needs_you", State: TerminalState{Running: true}}}, nil)
+	needs, err := digestOf([]session.SessionInfo{{ID: "s1", ConversationState: "needs_you", State: session.TerminalState{Running: true}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +279,7 @@ func TestStateEventsNameTheTablesThatChanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := upsertSession(t.Context(), auth.store.DB, SessionInfo{ID: "session-tables"}); err != nil {
+	if err := session.UpsertSession(t.Context(), auth.store.DB, session.SessionInfo{ID: "session-tables"}); err != nil {
 		t.Fatal(err)
 	}
 	after, err := auth.store.DBVersion(t.Context())
@@ -300,7 +301,7 @@ func TestStreamingProgressOnASessionRowIsNotASessionsChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := &Gateway{store: auth.store, auth: auth}
-	if err := upsertSession(t.Context(), auth.store.DB, SessionInfo{ID: "session-stream"}); err != nil {
+	if err := session.UpsertSession(t.Context(), auth.store.DB, session.SessionInfo{ID: "session-stream"}); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := auth.store.DBVersion(t.Context())
@@ -318,7 +319,7 @@ func TestEventsCarriesConversationFromItsOwnResumeCursor(t *testing.T) {
 	g.events.topics = []eventTopic{}
 	g.events.nodes = func(context.Context) ([]TailnetNode, error) { return nil, nil }
 	const id = "session-multiplexed"
-	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: id, Transport: "acp", ConversationState: "starting"}); err != nil {
+	if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: id, Transport: "acp", ConversationState: "starting"}); err != nil {
 		t.Fatal(err)
 	}
 	entries := []acp.LogEntry{
@@ -393,7 +394,7 @@ func TestSessionTableChangesEmitSessionsWithoutWorkerPoll(t *testing.T) {
 	if got := next(); got.Topic != "state" {
 		t.Fatalf("initial event = %+v", got)
 	}
-	if err := upsertSession(ctx, auth.store.DB, SessionInfo{ID: "session-changed"}); err != nil {
+	if err := session.UpsertSession(ctx, auth.store.DB, session.SessionInfo{ID: "session-changed"}); err != nil {
 		t.Fatal(err)
 	}
 	ticks <- time.Now()

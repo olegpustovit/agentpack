@@ -13,6 +13,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // WithPeerCache adds an optional download source; it opens nothing on a cached launch.
@@ -60,7 +61,7 @@ func (g *Gateway) serveCacheFrom(w http.ResponseWriter, r *http.Request, targetF
 		return
 	}
 	peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-	actor, ok := actorFrom(r.Context())
+	actor, ok := session.ActorFrom(r.Context())
 	if peer != "" {
 		if !g.peer(peer).Mesh {
 			http.Error(w, "cache transfer requires mesh enrollment", http.StatusForbidden)

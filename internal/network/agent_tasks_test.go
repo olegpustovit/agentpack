@@ -14,6 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 type receivedPrompt struct {
@@ -211,7 +212,7 @@ func TestAgentsAskReplyAndWakeTheSender(t *testing.T) {
 	chatFixture(t, h, "session-c", "")
 	fakeChatWorker(t, h, "session-c")
 	asked, _, _ = structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-c", "text": "Anything"})
-	if err := endSession(t.Context(), h.gateway.store.DB, "session-c", TerminalState{}); err != nil {
+	if err := session.EndSession(t.Context(), h.gateway.store.DB, "session-c", session.TerminalState{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.gateway.agentTasksPass(t.Context()); err != nil {
@@ -223,7 +224,7 @@ func TestAgentsAskReplyAndWakeTheSender(t *testing.T) {
 
 	// An asking chat that stopped is not woken, but its tasks still get the answer.
 	asked, _, _ = structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Last one"})
-	if err := endSession(t.Context(), h.gateway.store.DB, "session-a", TerminalState{}); err != nil {
+	if err := session.EndSession(t.Context(), h.gateway.store.DB, "session-a", session.TerminalState{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(h.gateway.options.Home, "network", "sessions", "session-a", "worker.json")); err != nil {
@@ -298,8 +299,8 @@ func TestCancelRemovesAPromptQueuedWhileTheChatStarts(t *testing.T) {
 	h := newOAuthHarness(t)
 	tokenA := chatFixture(t, h, "session-a", "")
 	fakeChatWorker(t, h, "session-a")
-	owner := browserActor(testBrowserEmail)
-	if err := upsertSession(t.Context(), h.gateway.store.DB, SessionInfo{ID: "session-new", Harness: "claude", Transport: "acp", StartedBy: &owner, ConversationState: "starting", State: TerminalState{Running: true}}); err != nil {
+	owner := session.BrowserActor(testBrowserEmail)
+	if err := session.UpsertSession(t.Context(), h.gateway.store.DB, session.SessionInfo{ID: "session-new", Harness: "claude", Transport: "acp", StartedBy: &owner, ConversationState: "starting", State: session.TerminalState{Running: true}}); err != nil {
 		t.Fatal(err)
 	}
 	asked, text, failed := structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-new", "text": "hi"})
@@ -342,8 +343,8 @@ func TestAskLimitsAndContexts(t *testing.T) {
 		t.Fatal("asked itself:", text)
 	}
 	// A chat of another account cannot be asked.
-	other := browserActor("other@example.com")
-	if err := upsertSession(t.Context(), h.gateway.store.DB, SessionInfo{ID: "session-other", Harness: "claude", Transport: "acp", StartedBy: &other, ConversationState: "idle", State: TerminalState{Running: true}}); err != nil {
+	other := session.BrowserActor("other@example.com")
+	if err := session.UpsertSession(t.Context(), h.gateway.store.DB, session.SessionInfo{ID: "session-other", Harness: "claude", Transport: "acp", StartedBy: &other, ConversationState: "idle", State: session.TerminalState{Running: true}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, text, failed := structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-other", "text": "hi"}); !failed {
@@ -432,8 +433,8 @@ func meshPair(t *testing.T) (*oauthHarness, *oauthHarness, string, string) {
 					http.Error(w, "node is unavailable or not allowed", http.StatusBadGateway)
 					return
 				}
-				actor, _ := actorFrom(r.Context())
-				r = r.WithContext(withActor(r.Context(), Actor{Kind: "peer", Account: true, User: actor.User, StableNodeID: fromID}))
+				actor, _ := session.ActorFrom(r.Context())
+				r = r.WithContext(session.WithActor(r.Context(), session.Actor{Kind: "peer", Account: true, User: actor.User, StableNodeID: fromID}))
 				r.Header.Set("Authorization", "Bearer "+to.gateway.local.Secret)
 				to.gateway.Handler().ServeHTTP(w, r)
 			})
@@ -487,7 +488,7 @@ func TestAgentsMessageAcrossMachines(t *testing.T) {
 	}
 	// A stopped asking chat on the other machine still gets its answer in tasks.
 	asked, _, _ = structured[mcpAsked](t, one, tokenA, "ask", map[string]any{"session_id": "session-b", "node": idTwo, "text": "Last"})
-	if err := endSession(t.Context(), one.gateway.store.DB, "session-a", TerminalState{}); err != nil {
+	if err := session.EndSession(t.Context(), one.gateway.store.DB, "session-a", session.TerminalState{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(one.gateway.options.Home, "network", "sessions", "session-a", "worker.json")); err != nil {

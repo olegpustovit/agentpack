@@ -5,13 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/mail"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/registry"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -59,18 +58,6 @@ func ResetOwner(ctx context.Context, store *state.Store, home string) error {
 // A missing account still pays for one default-cost comparison.
 const dummyPasswordHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
 
-func normalizeEmail(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if len(value) == 0 || len(value) > 254 {
-		return "", errors.New("email must contain 1 to 254 bytes")
-	}
-	address, err := mail.ParseAddress(value)
-	if err != nil || address.Name != "" || len(address.Address) > 254 {
-		return "", errors.New("enter an email address without a display name")
-	}
-	return strings.ToLower(address.Address), nil
-}
-
 func validPassword(password string) error {
 	if len(password) < 12 || len(password) > 72 {
 		return errors.New("password must contain 12 to 72 bytes")
@@ -91,7 +78,7 @@ func passwordHash(password string) ([]byte, error) {
 
 // claimOwner uses an already-computed hash so a legacy claim can preserve it.
 func claimOwner(ctx context.Context, store *state.Store, email string, hash []byte) (bool, error) {
-	email, err := normalizeEmail(email)
+	email, err := session.NormalizeEmail(email)
 	if err != nil {
 		return false, err
 	}
@@ -108,7 +95,7 @@ SELECT ?,?,'owner',?,coalesce((SELECT cast(value AS INTEGER) FROM mesh_settings 
 }
 
 func AddUser(ctx context.Context, store *state.Store, email, password string) error {
-	email, err := normalizeEmail(email)
+	email, err := session.NormalizeEmail(email)
 	if err != nil {
 		return err
 	}
@@ -129,7 +116,7 @@ SELECT ?,?,'member',?,coalesce((SELECT cast(value AS INTEGER) FROM mesh_settings
 }
 
 func SetPassword(ctx context.Context, store *state.Store, email, password string) error {
-	email, err := normalizeEmail(email)
+	email, err := session.NormalizeEmail(email)
 	if err != nil {
 		return err
 	}
@@ -147,7 +134,7 @@ func SetPassword(ctx context.Context, store *state.Store, email, password string
 }
 
 func DisableUser(ctx context.Context, store *state.Store, email string) error {
-	email, err := normalizeEmail(email)
+	email, err := session.NormalizeEmail(email)
 	if err != nil {
 		return err
 	}
@@ -198,7 +185,7 @@ func ListUsers(ctx context.Context, store *state.Store) ([]User, error) {
 func verifyLogin(ctx context.Context, store *state.Store, email, password string) (User, error) {
 	var user User
 	hash := dummyPasswordHash
-	mailbox, invalidEmail := normalizeEmail(email)
+	mailbox, invalidEmail := session.NormalizeEmail(email)
 	var lookup error
 	if invalidEmail == nil {
 		lookup = store.Reader.QueryRowContext(ctx, "SELECT email,password_hash,role,disabled,sessions_valid_after,created_at FROM users WHERE email=?", mailbox).Scan(&user.Email, &hash, &user.Role, &user.Disabled, &user.SessionsValidAfter, &user.CreatedAt)
@@ -254,7 +241,7 @@ func PrepareMeshJoin(ctx context.Context, store *state.Store, peer string) error
 }
 
 func BindLocalAccount(ctx context.Context, store *state.Store, email string) error {
-	email, err := normalizeEmail(email)
+	email, err := session.NormalizeEmail(email)
 	if err != nil {
 		return err
 	}

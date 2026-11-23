@@ -2,6 +2,7 @@ package network
 
 import (
 	"errors"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"io"
 	"net/http"
 	"strconv"
@@ -9,11 +10,11 @@ import (
 )
 
 type TerminalOutput struct {
-	Offset     uint64        `json:"offset"`
-	NextOffset uint64        `json:"next_offset"`
-	Output     string        `json:"output"`
-	Truncated  bool          `json:"truncated"`
-	State      TerminalState `json:"state"`
+	Offset     uint64                `json:"offset"`
+	NextOffset uint64                `json:"next_offset"`
+	Output     string                `json:"output"`
+	Truncated  bool                  `json:"truncated"`
+	State      session.TerminalState `json:"state"`
 }
 
 func (worker *WorkerHTTP) registerMCP(mux *http.ServeMux) {

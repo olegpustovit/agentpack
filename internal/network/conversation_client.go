@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // ConversationLog reads the worker conversation NDJSON log for a local session.
@@ -26,7 +27,7 @@ func ConversationLog(ctx context.Context, home, sessionID string, since int64) (
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, errSessionUnavailable
+		return nil, session.ErrSessionUnavailable
 	}
 	return readConversationNDJSON(response.Body)
 }
@@ -55,7 +56,7 @@ func ConversationAnswerPermission(ctx context.Context, home, sessionID, requestI
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return errSessionUnavailable
+		return session.ErrSessionUnavailable
 	}
 	return nil
 }
@@ -84,7 +85,7 @@ func ConversationPrompt(ctx context.Context, home, sessionID, text string) error
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return errSessionUnavailable
+		return session.ErrSessionUnavailable
 	}
 	return nil
 }
@@ -126,7 +127,7 @@ func ConversationPromptImages(ctx context.Context, home, sessionID, text string,
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return errSessionUnavailable
+		return session.ErrSessionUnavailable
 	}
 	return nil
 }
@@ -155,7 +156,7 @@ func ConversationAnswerElicitation(ctx context.Context, home, sessionID, elicita
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return errSessionUnavailable
+		return session.ErrSessionUnavailable
 	}
 	return nil
 }

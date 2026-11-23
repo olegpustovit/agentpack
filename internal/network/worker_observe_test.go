@@ -20,6 +20,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/acp/acptest"
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 type diagnosticExitAgent struct{ *acptest.ReplayAgent }
@@ -45,7 +46,7 @@ func TestACPAdapterExitRecordsCodeAndStderr(t *testing.T) {
 			defer cancel()
 			directory := t.TempDir()
 			command := exec.Command(os.Args[0], "-test.run=^TestACPAdapterExitRecordsCodeAndStderr$")
-			launch := WorkerLaunch{Session: SessionInfo{Harness: "fixture"}, Environment: append(os.Environ(), "AGENTPACK_TEST_DIAGNOSTIC_ADAPTER=1")}
+			launch := WorkerLaunch{Session: session.SessionInfo{Harness: "fixture"}, Environment: append(os.Environ(), "AGENTPACK_TEST_DIAGNOSTIC_ADAPTER=1")}
 			session, cleanup, err := startACPAgentProcess(ctx, launch, base.LaunchContext{WorkspaceRoot: directory}, "", base.ACPLaunch{Cmd: command}, directory, NewConversationSession(acp.NewEventLog(0), nil), nil)
 			if err != nil {
 				t.Fatal(err)
@@ -244,7 +245,7 @@ func TestACPProcessInitializesWhileStageIsPending(t *testing.T) {
 	stage := make(chan error, 1)
 	command := exec.Command(os.Args[0], "-test.run=^TestACPAdapterExitRecordsCodeAndStderr$")
 	launch := WorkerLaunch{
-		Session:     SessionInfo{Harness: "fixture"},
+		Session:     session.SessionInfo{Harness: "fixture"},
 		Environment: append(os.Environ(), "AGENTPACK_TEST_DIAGNOSTIC_ADAPTER=1"),
 	}
 	adapter := base.ACPLaunch{

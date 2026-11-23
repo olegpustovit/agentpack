@@ -15,11 +15,12 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // RegisterPresence advertises a native-stdio launch without changing its pipes.
 // Its process is owned by the caller; the node only receives public metadata.
-func RegisterPresence(home, version string, info SessionInfo, process *os.Process) (func(), error) {
+func RegisterPresence(home, version string, info session.SessionInfo, process *os.Process) (func(), error) {
 	root := filepath.Join(home, "network", "sessions")
 	if err := paths.EnsurePrivateDirectory(root); err != nil {
 		return nil, err
@@ -46,7 +47,9 @@ func RegisterPresence(home, version string, info SessionInfo, process *os.Proces
 		return nil, err
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /state", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, TerminalState{Running: true, ExitCode: -1}) })
+	mux.HandleFunc("GET /state", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, session.TerminalState{Running: true, ExitCode: -1})
+	})
 	mux.HandleFunc("POST /stop", func(w http.ResponseWriter, r *http.Request) {
 		if err := process.Kill(); err != nil {
 			http.Error(w, "could not stop process", 409)
@@ -103,12 +106,12 @@ func (g *Gateway) servePresence(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	_, event := obs.Start(r.Context(), "session", "presence")
 	event.Set("session_id", id)
-	if actor, ok := actorFrom(r.Context()); ok {
+	if actor, ok := session.ActorFrom(r.Context()); ok {
 		event.Set("user", actor.User)
 	}
 	defer event.End()
 	if r.Method == http.MethodDelete {
-		if err := endSession(r.Context(), g.store.DB, id, TerminalState{ExitCode: -1}); err != nil {
+		if err := session.EndSession(r.Context(), g.store.DB, id, session.TerminalState{ExitCode: -1}); err != nil {
 			event.Fail(err)
 			http.Error(w, "could not persist session end", http.StatusInternalServerError)
 			return
@@ -122,7 +125,7 @@ func (g *Gateway) servePresence(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session unavailable", http.StatusNotFound)
 		return
 	}
-	var info SessionInfo
+	var info session.SessionInfo
 	if !readJSON(w, r, &info) {
 		return
 	}
@@ -136,14 +139,14 @@ func (g *Gateway) servePresence(w http.ResponseWriter, r *http.Request) {
 	if info.StartedAt.IsZero() {
 		info.StartedAt = info.LastUsed
 	}
-	actor, ok := actorFrom(r.Context())
+	actor, ok := session.ActorFrom(r.Context())
 	if !ok {
 		http.Error(w, "local actor unavailable", http.StatusForbidden)
 		return
 	}
 	info.StartedBy = &actor
-	info.State = TerminalState{Running: true, ExitCode: -1}
-	if err := upsertSession(r.Context(), g.store.DB, info); err != nil {
+	info.State = session.TerminalState{Running: true, ExitCode: -1}
+	if err := session.UpsertSession(r.Context(), g.store.DB, info); err != nil {
 		event.Fail(err)
 		http.Error(w, "could not register session", http.StatusInternalServerError)
 		return

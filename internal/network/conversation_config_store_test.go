@@ -7,13 +7,14 @@ import (
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func TestWantedModelAppliesBeforeQueuedPrompt(t *testing.T) {
 	ctx := t.Context()
 	store := testSessionStore(t, t.TempDir())
-	info := SessionInfo{ID: "session-saved-model", Harness: "claude", Directory: "/project", Transport: "acp", ConversationState: "starting"}
-	if err := upsertSession(ctx, store.DB, info); err != nil {
+	info := session.SessionInfo{ID: "session-saved-model", Harness: "claude", Directory: "/project", Transport: "acp", ConversationState: "starting"}
+	if err := session.UpsertSession(ctx, store.DB, info); err != nil {
 		t.Fatal(err)
 	}
 	if err := saveWantedConfig(ctx, store.DB, info.ID, configSelection{Key: "model", Value: json.RawMessage(`"opus"`)}, true); err != nil {

@@ -27,6 +27,7 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/gorilla/websocket"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
@@ -38,7 +39,7 @@ const localStateNode = "local"
 
 type GatewayOptions struct {
 	Home, Address, PublicURL string
-	Start                    func(context.Context, SessionInfo, string) (string, error)
+	Start                    func(context.Context, session.SessionInfo, string) (string, error)
 	Packages                 func(context.Context, string) (ProjectContents, error)
 	Install                  func(context.Context, string, string, bool) error
 	InstallMCP               func(context.Context, string, MCPServerInput, bool) error
@@ -534,7 +535,7 @@ func (g *Gateway) routes() routeMux {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		if err := ForgetRecent(r.Context(), g.store, SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode}); err != nil {
+		if err := ForgetRecent(r.Context(), g.store, session.SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode}); err != nil {
 			fail(w, r, err)
 			return
 		}
@@ -545,9 +546,9 @@ func (g *Gateway) routes() routeMux {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		actor, ok := actorFrom(r.Context())
+		actor, ok := session.ActorFrom(r.Context())
 		if !ok {
-			actor = browserActor(g.auth.email(r))
+			actor = session.BrowserActor(g.auth.email(r))
 		}
 		if input.Transport == "shell" {
 			g.startShell(w, r, actor, input)
@@ -575,7 +576,7 @@ func (g *Gateway) routes() routeMux {
 			}
 			input.Directory, definitionRoot = directory, g.definitionRootFor(r.Context(), main)
 		}
-		info, err := g.startSession(r.Context(), actor, SessionInfo{
+		info, err := g.startSession(r.Context(), actor, session.SessionInfo{
 			Directory: input.Directory, DefinitionRoot: definitionRoot, Harness: input.Harness, Mode: input.Mode,
 			Transport: input.Transport, AgentSessionID: input.AgentSessionID,
 			// agentpack tools are on for new chats unless the request turns them off.
@@ -596,9 +597,9 @@ func (g *Gateway) routes() routeMux {
 		if !authorizeACPWrite(w, r, record.Session) {
 			return
 		}
-		actor, ok := actorFrom(r.Context())
+		actor, ok := session.ActorFrom(r.Context())
 		if !ok {
-			actor = browserActor(g.auth.email(r))
+			actor = session.BrowserActor(g.auth.email(r))
 		}
 		var input struct {
 			ID       string `json:"id"`
@@ -618,7 +619,7 @@ func (g *Gateway) routes() routeMux {
 			writeSessionStart(w, r, info, err)
 			return
 		}
-		info, err := g.startSession(r.Context(), actor, SessionInfo{
+		info, err := g.startSession(r.Context(), actor, session.SessionInfo{
 			Directory:      record.Session.Directory,
 			DefinitionRoot: record.Session.DefinitionRoot,
 			Harness:        record.Session.Harness,
@@ -645,7 +646,7 @@ func (g *Gateway) routes() routeMux {
 		}
 		info, err := g.switchHarness(r.Context(), r.PathValue("id"), input.Harness)
 		switch {
-		case errors.Is(err, errSessionNotFound):
+		case errors.Is(err, session.ErrSessionNotFound):
 			http.Error(w, "session not found", http.StatusNotFound)
 		case errors.Is(err, errResumeConflict):
 			http.Error(w, errResumeConflict.Error(), http.StatusConflict)
@@ -691,7 +692,7 @@ func (g *Gateway) routes() routeMux {
 				g.removeArchivedWorktree(r.Context(), archived)
 			}
 			switch {
-			case errors.Is(err, errSessionNotFound):
+			case errors.Is(err, session.ErrSessionNotFound):
 				http.Error(w, "session not found", http.StatusNotFound)
 			case errors.Is(err, errSessionRunning):
 				http.Error(w, "Stop the session before archiving it.", http.StatusConflict)
@@ -713,9 +714,9 @@ func (g *Gateway) routes() routeMux {
 		}
 		info, err := RenameSession(r.Context(), g.store, g.options.Home, r.PathValue("id"), name)
 		switch {
-		case errors.Is(err, errSessionNotFound):
+		case errors.Is(err, session.ErrSessionNotFound):
 			http.Error(w, "session not found", http.StatusNotFound)
-		case errors.Is(err, errSessionUnavailable):
+		case errors.Is(err, session.ErrSessionUnavailable):
 			http.Error(w, "session unavailable", http.StatusBadGateway)
 		case err != nil:
 			http.Error(w, "could not save session name", http.StatusInternalServerError)
@@ -762,7 +763,7 @@ func (g *Gateway) routes() routeMux {
 		}
 		info, err := g.resumeSession(r.Context(), r.PathValue("id"), input.Text, queueID)
 		switch {
-		case errors.Is(err, errSessionNotFound):
+		case errors.Is(err, session.ErrSessionNotFound):
 			http.Error(w, "session not found", http.StatusNotFound)
 		case errors.Is(err, errResumeConflict):
 			http.Error(w, errResumeConflict.Error(), http.StatusConflict)
@@ -778,7 +779,7 @@ func (g *Gateway) routes() routeMux {
 				queueID = ""
 			}
 			writeJSON(w, struct {
-				SessionInfo
+				session.SessionInfo
 				Queued string `json:"queued,omitempty"`
 			}{publicSession(info), queueID})
 		}
@@ -875,12 +876,12 @@ func (g *Gateway) routes() routeMux {
 		sessions, err := sessionsIn(r.Context(), g.store.Reader, g.options.Home)
 		skipped := 0
 		if err == nil {
-			actor, ok := actorFrom(r.Context())
+			actor, ok := session.ActorFrom(r.Context())
 			if !ok {
-				actor = browserActor(g.auth.email(r))
+				actor = session.BrowserActor(g.auth.email(r))
 			}
 			for _, session := range sessions {
-				if session.Transport == "shell" || session.Transport == "acp" && !actor.canWriteSession(session) {
+				if session.Transport == "shell" || session.Transport == "acp" && !actor.CanWriteSession(session) {
 					skipped++
 					continue
 				}
@@ -929,7 +930,7 @@ func (g *Gateway) serveRoute(row route, handler http.Handler) http.Handler {
 			http.Error(w, "local access only", http.StatusForbidden)
 			return
 		}
-		if _, known := actorFrom(r.Context()); !known {
+		if _, known := session.ActorFrom(r.Context()); !known {
 			if local {
 				actor, err := g.localActor(r.Context())
 				if errors.Is(err, errLocalAccountUnavailable) {
@@ -940,9 +941,9 @@ func (g *Gateway) serveRoute(row route, handler http.Handler) http.Handler {
 					authFailure(w, r, "local account unavailable", err)
 					return
 				}
-				r = r.WithContext(withActor(r.Context(), actor))
+				r = r.WithContext(session.WithActor(r.Context(), actor))
 			} else if email != "" {
-				r = r.WithContext(withActor(r.Context(), browserActor(email)))
+				r = r.WithContext(session.WithActor(r.Context(), session.BrowserActor(email)))
 			}
 		}
 		if row.session {
@@ -983,7 +984,7 @@ func (g *Gateway) forwardToWorker(suffix string) http.HandlerFunc {
 	}
 }
 
-func publicSession(info SessionInfo) SessionInfo {
+func publicSession(info session.SessionInfo) session.SessionInfo {
 	if info.StartedBy == nil || info.StartedBy.Kind != "peer" || info.StartedBy.StableNodeID == "" {
 		return info
 	}
@@ -1003,12 +1004,12 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	http.Error(w, "gateway operation failed", http.StatusInternalServerError)
 }
-func writeSessionStart(w http.ResponseWriter, r *http.Request, info SessionInfo, err error) {
+func writeSessionStart(w http.ResponseWriter, r *http.Request, info session.SessionInfo, err error) {
 	if errors.Is(err, errChatStartClaim) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if errors.Is(err, errSessionArchived) {
+	if errors.Is(err, session.ErrSessionArchived) {
 		http.Error(w, "archived", http.StatusConflict)
 		return
 	}
@@ -1030,19 +1031,19 @@ func writeSessionStart(w http.ResponseWriter, r *http.Request, info SessionInfo,
 	}
 	writeJSON(w, publicSession(info))
 }
-func authorizeACPWrite(w http.ResponseWriter, r *http.Request, session SessionInfo) bool {
-	if !session.ArchivedAt.IsZero() {
+func authorizeACPWrite(w http.ResponseWriter, r *http.Request, info session.SessionInfo) bool {
+	if !info.ArchivedAt.IsZero() {
 		http.Error(w, "archived", http.StatusConflict)
 		return false
 	}
-	if session.Transport != "acp" && session.Transport != "shell" {
+	if info.Transport != "acp" && info.Transport != "shell" {
 		return true
 	}
-	actor, ok := actorFrom(r.Context())
+	actor, ok := session.ActorFrom(r.Context())
 	if !ok {
-		actor = browserActor("")
+		actor = session.BrowserActor("")
 	}
-	if actor.canWriteSession(session) {
+	if actor.CanWriteSession(info) {
 		return true
 	}
 	http.Error(w, "read-only actor cannot modify this session", http.StatusForbidden)
@@ -1053,7 +1054,7 @@ func (g *Gateway) authorizeACPWriteByID(w http.ResponseWriter, r *http.Request, 
 	info, ok := sessionRow(r.Context(), id)
 	if !ok {
 		var err error
-		if info, err = storedSession(r.Context(), g.store.Reader, id); errors.Is(err, errSessionNotFound) {
+		if info, err = session.StoredSession(r.Context(), g.store.Reader, id); errors.Is(err, session.ErrSessionNotFound) {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return false
 		} else if err != nil {
@@ -1065,16 +1066,16 @@ func (g *Gateway) authorizeACPWriteByID(w http.ResponseWriter, r *http.Request, 
 }
 
 // startSession records the actor that started the session, then starts its worker.
-func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInfo, forkSessionID string) (SessionInfo, error) {
+func (g *Gateway) startSession(ctx context.Context, actor session.Actor, info session.SessionInfo, forkSessionID string) (session.SessionInfo, error) {
 	source := info
 	if forkSessionID != "" {
 		if info.Transport != "acp" || info.AgentSessionID != "" {
-			return SessionInfo{}, errors.New("fork requires an ACP session without resume")
+			return session.SessionInfo{}, errors.New("fork requires an ACP session without resume")
 		}
 		source.AgentSessionID = forkSessionID
 	}
 	if err := authorizeACPResume(ctx, g.store, actor, source); err != nil {
-		return SessionInfo{}, err
+		return session.SessionInfo{}, err
 	}
 	// A new worktree is accepted only when git lists it for an authorized main folder, which the row records.
 	info.WorktreeOf = ""
@@ -1084,17 +1085,17 @@ func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInf
 			info.DefinitionRoot = g.definitionRootFor(ctx, main)
 		}
 	} else if !g.startableDirectory(ctx, actor, info.Directory) {
-		return SessionInfo{}, errUnknownFolder
+		return session.SessionInfo{}, errUnknownFolder
 	}
 	info.Directory = filepath.Clean(info.Directory)
 	folderID, err := FolderIdentity(info.Directory)
 	if err != nil {
-		return SessionInfo{}, errUnknownFolder
+		return session.SessionInfo{}, errUnknownFolder
 	}
 	info.FolderID = folderID
 	local, err := g.nodeID(ctx)
 	if err != nil {
-		return SessionInfo{}, err
+		return session.SessionInfo{}, err
 	}
 	info.NodeID = local
 	info.Reachable = true
@@ -1262,7 +1263,7 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 		if peer == "" {
 			return private || g.auth.authenticated(r)
 		}
-		actor, _ := actorFrom(r.Context())
+		actor, _ := session.ActorFrom(r.Context())
 		if !actor.Account {
 			return false
 		}
@@ -1422,4 +1423,26 @@ func WaitForGateway(ctx context.Context, home string) error {
 			}
 		}
 	}
+}
+
+func (g *Gateway) workerRecord(ctx context.Context, id string) (WorkerRecord, error) {
+	record, err := workerRecord(g.options.Home, id)
+	if err != nil {
+		return record, err
+	}
+	info, cached := sessionRow(ctx, id)
+	if !cached {
+		info, err = session.StoredSession(ctx, g.store.Reader, id)
+	}
+	if err == nil {
+		local, localErr := g.nodeID(ctx)
+		if localErr != nil {
+			return record, localErr
+		}
+		if info.NodeID != local {
+			return record, session.ErrSessionUnavailable
+		}
+	}
+	record.Session = info
+	return record, err
 }

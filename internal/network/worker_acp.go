@@ -25,6 +25,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -333,7 +334,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	if acpLaunch.Steers {
 		conv.steer = prompter.steer
 		if conv.agentCapabilities == nil {
-			conv.agentCapabilities = &AgentCapabilities{}
+			conv.agentCapabilities = &session.AgentCapabilities{}
 		}
 		conv.agentCapabilities.Steering = true
 	}
@@ -415,16 +416,16 @@ type acpSessionSetup struct {
 	AgentSessionID    string
 	ConfigOptions     json.RawMessage
 	Modes             json.RawMessage
-	AgentCapabilities *AgentCapabilities
+	AgentCapabilities *session.AgentCapabilities
 }
 
-func agentCapabilitiesView(capabilities sdkacp.AgentCapabilities) *AgentCapabilities {
-	view := &AgentCapabilities{LoadSession: capabilities.LoadSession}
+func agentCapabilitiesView(capabilities sdkacp.AgentCapabilities) *session.AgentCapabilities {
+	view := &session.AgentCapabilities{LoadSession: capabilities.LoadSession}
 	if capabilities.PromptCapabilities.Image {
-		view.PromptCapabilities = &AgentPromptCapabilities{Image: true}
+		view.PromptCapabilities = &session.AgentPromptCapabilities{Image: true}
 	}
 	if capabilities.SessionCapabilities.Resume != nil || capabilities.SessionCapabilities.Fork != nil {
-		session := &AgentSessionCapabilities{}
+		session := &session.AgentSessionCapabilities{}
 		if capabilities.SessionCapabilities.Resume != nil {
 			session.Resume = &struct{}{}
 		}
@@ -736,7 +737,7 @@ func finishACPConversation(ctx context.Context, conversation *ConversationSessio
 }
 
 func closeACPEventLog(log *acp.EventLog) {
-	if err := log.Close(); err != nil && err != errSessionArchived {
+	if err := log.Close(); err != nil && err != session.ErrSessionArchived {
 		fmt.Fprintln(os.Stderr, "warning: ACP conversation log could not be persisted")
 	}
 }

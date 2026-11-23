@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 const folderReadTimeout = 2 * time.Second
@@ -187,7 +188,7 @@ func folderMarker(dir, name string) bool {
 
 func browsableFolder(dir string) (RecentFolder, error) {
 	identity, err := FolderIdentity(dir)
-	return RecentFolder{SessionInfo: SessionInfo{Directory: dir, FolderID: identity}, Available: err == nil}, err
+	return RecentFolder{SessionInfo: session.SessionInfo{Directory: dir, FolderID: identity}, Available: err == nil}, err
 }
 
 func (g *Gateway) browsableRows(ctx context.Context, folders []RecentFolder) []ProjectRow {
@@ -306,7 +307,7 @@ func discoverFolders(ctx context.Context, home, dataHome string) []RecentFolder 
 	return found
 }
 
-func (g *Gateway) startableDirectory(ctx context.Context, actor Actor, dir string) bool {
+func (g *Gateway) startableDirectory(ctx context.Context, actor session.Actor, dir string) bool {
 	if g.knownDirectory(ctx, dir) {
 		return true
 	}

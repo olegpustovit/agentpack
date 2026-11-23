@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/mcp"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // fakeMCPAuthServer is an MCP server behind an OAuth server that rotates refresh tokens and rejects reuse.
@@ -283,7 +284,7 @@ func TestMCPCredentialSecretStaysLocal(t *testing.T) {
 	// A peer acting for the same account may not read the secret.
 	request := httptest.NewRequest(http.MethodGet, g.origin.String()+"/api/mcp/credentials/"+created.ID+"/secret", nil)
 	request.Header.Set("Authorization", "Bearer "+g.local.Secret)
-	request = request.WithContext(withActor(context.WithValue(request.Context(), replicaPeerKey{}, "peer"), Actor{Kind: "peer", User: testBrowserEmail, Account: true, StableNodeID: "peer"}))
+	request = request.WithContext(session.WithActor(context.WithValue(request.Context(), replicaPeerKey{}, "peer"), session.Actor{Kind: "peer", User: testBrowserEmail, Account: true, StableNodeID: "peer"}))
 	response := httptest.NewRecorder()
 	g.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusForbidden || strings.Contains(response.Body.String(), "ghp_secret") {
@@ -334,8 +335,8 @@ func TestMCPCredentialPeerRefreshesThroughRefresher(t *testing.T) {
 	}
 	// Main's tailnet listener: what peerHandler attaches to a verified mesh request.
 	mainMesh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		actor := Actor{Kind: "peer", User: r.Header.Get("X-Agentpack-User"), Account: true, StableNodeID: "peer-node"}
-		r = r.Clone(withActor(context.WithValue(r.Context(), replicaPeerKey{}, "peer-node"), actor))
+		actor := session.Actor{Kind: "peer", User: r.Header.Get("X-Agentpack-User"), Account: true, StableNodeID: "peer-node"}
+		r = r.Clone(session.WithActor(context.WithValue(r.Context(), replicaPeerKey{}, "peer-node"), actor))
 		r.Header.Set("Authorization", "Bearer "+main.local.Secret)
 		r.Host = main.origin.Host
 		main.Handler().ServeHTTP(w, r)

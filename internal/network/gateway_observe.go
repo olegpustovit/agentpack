@@ -12,6 +12,7 @@ import (
 
 	"github.com/felixge/httpsnoop"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 type httpObservation struct {
@@ -78,7 +79,7 @@ func observeHTTP(mux *http.ServeMux, next http.Handler, sink obs.Sink, metadata 
 		ctx, event := obs.Start(ctx, "http", pattern)
 		r = r.WithContext(ctx)
 		w.Header().Set("X-Agentpack-Trace", event.TraceID)
-		if actor, ok := actorFrom(ctx); ok {
+		if actor, ok := session.ActorFrom(ctx); ok {
 			event.Set("user", actor.User)
 		}
 		event.Set("node", r.URL.Query().Get("node"))

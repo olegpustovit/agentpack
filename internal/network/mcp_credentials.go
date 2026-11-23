@@ -25,6 +25,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -480,8 +481,8 @@ func (g *Gateway) remoteMCPRefresh(ctx context.Context, node string, credential 
 }
 
 // credentialAccount is the account an actor's credentials belong to.
-func credentialAccount(r *http.Request) (Actor, string, bool) {
-	actor, ok := actorFrom(r.Context())
+func credentialAccount(r *http.Request) (session.Actor, string, bool) {
+	actor, ok := session.ActorFrom(r.Context())
 	if !ok || actor.User == "" {
 		return actor, "", false
 	}
@@ -494,7 +495,7 @@ func credentialAccount(r *http.Request) (Actor, string, bool) {
 	return actor, "", false
 }
 
-func (g *Gateway) ownedMCPCredential(w http.ResponseWriter, r *http.Request) (mcpCredential, Actor, bool) {
+func (g *Gateway) ownedMCPCredential(w http.ResponseWriter, r *http.Request) (mcpCredential, session.Actor, bool) {
 	actor, account, ok := credentialAccount(r)
 	if !ok {
 		http.Error(w, "an enabled account is required for MCP credentials", http.StatusForbidden)
@@ -765,7 +766,7 @@ func (g *Gateway) writeMCPIndex(ctx context.Context) error {
 	actor, err := g.localActor(ctx)
 	if err != nil {
 		if errors.Is(err, errLocalAccountUnavailable) {
-			actor = Actor{}
+			actor = session.Actor{}
 		} else {
 			return err
 		}

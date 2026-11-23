@@ -1,4 +1,4 @@
-package network
+package session
 
 import (
 	"context"
@@ -17,9 +17,9 @@ const sessionWriteColumns = `id,last_used,folder_id,name,directory,definition_ro
 
 // goal, subagents, waiting and an ACP chat's conversation_state are written by its log's sink (storeConversationFold), so upserts never clobber them.
 // worktree_of, parent_id and tools are set on insert only: tools is the gateway's switch (POST /tools).
-const sessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at,goal,subagents,waiting,last_event_at,parent_id,tools"
+const SessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at,goal,subagents,waiting,last_event_at,parent_id,tools"
 
-func sessionValues(info SessionInfo) ([]any, error) {
+func SessionValues(info SessionInfo) ([]any, error) {
 	if info.ID == "" {
 		return nil, errors.New("session ID is required")
 	}
@@ -37,23 +37,23 @@ func sessionValues(info SessionInfo) ([]any, error) {
 	}
 	var email string
 	if info.StartedBy != nil {
-		email, _ = normalizeEmail(info.StartedBy.User)
+		email, _ = NormalizeEmail(info.StartedBy.User)
 	}
-	return []any{info.ID, sessionTimestamp(info.LastUsed), info.FolderID, info.Name, info.Directory,
+	return []any{info.ID, SessionTimestamp(info.LastUsed), info.FolderID, info.Name, info.Directory,
 		info.DefinitionRoot, info.Harness, info.Mode, info.Transport, info.AgentSessionID,
-		string(capabilities), info.ConversationState, string(terminal), sessionTimestamp(info.StartedAt),
+		string(capabilities), info.ConversationState, string(terminal), SessionTimestamp(info.StartedAt),
 		string(owner), info.Title, info.WorktreeOf, email, info.ParentID, info.Tools}, nil
 }
 
-const insertSessionSQL = `INSERT INTO sessions (` + sessionWriteColumns + `,node_id,owner_email,parent_id,tools)
+const InsertSessionSQL = `INSERT INTO sessions (` + sessionWriteColumns + `,node_id,owner_email,parent_id,tools)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,` + state.LocalNodeSQL + `,?,?,?)`
 
-func upsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
-	args, err := sessionValues(info)
+func UpsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
+	args, err := SessionValues(info)
 	if err != nil {
 		return err
 	}
-	result, err := db.ExecContext(ctx, insertSessionSQL+` ON CONFLICT(id) DO UPDATE SET
+	result, err := db.ExecContext(ctx, InsertSessionSQL+` ON CONFLICT(id) DO UPDATE SET
 		last_used=excluded.last_used,folder_id=excluded.folder_id,directory=excluded.directory,
 		definition_root=excluded.definition_root,harness=excluded.harness,mode=excluded.mode,
 		transport=excluded.transport,agent_session_id=excluded.agent_session_id,
@@ -67,13 +67,13 @@ func upsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
 			return countErr
 		}
 		if count == 0 {
-			return errSessionArchived
+			return ErrSessionArchived
 		}
 	}
 	return err
 }
 
-func scanSession(row interface{ Scan(...any) error }) (SessionInfo, error) {
+func ScanSession(row interface{ Scan(...any) error }) (SessionInfo, error) {
 	var info SessionInfo
 	var lastUsed, startedAt, endedAt, archivedAt, lastEvent int64
 	var capabilities, owner, terminal, goal, subagents, waiting string
@@ -112,48 +112,26 @@ func scanSession(row interface{ Scan(...any) error }) (SessionInfo, error) {
 	return info, nil
 }
 
-func sessionTimestamp(value time.Time) int64 {
+func SessionTimestamp(value time.Time) int64 {
 	if value.IsZero() {
 		return 0
 	}
 	return value.UnixNano()
 }
 
-// sessionRowReads counts storedSession calls so tests can pin the reads per session request.
-var sessionRowReads atomic.Int64
+// SessionRowReads counts storedSession calls so tests can pin the reads per session request.
+var SessionRowReads atomic.Int64
 
-func storedSession(ctx context.Context, db *sql.DB, id string) (SessionInfo, error) {
-	sessionRowReads.Add(1)
-	info, err := scanSession(db.QueryRowContext(ctx, "SELECT "+sessionColumns+" FROM sessions WHERE id=?", id))
+func StoredSession(ctx context.Context, db *sql.DB, id string) (SessionInfo, error) {
+	SessionRowReads.Add(1)
+	info, err := ScanSession(db.QueryRowContext(ctx, "SELECT "+SessionColumns+" FROM sessions WHERE id=?", id))
 	if errors.Is(err, sql.ErrNoRows) {
-		return info, errSessionNotFound
+		return info, ErrSessionNotFound
 	}
 	return info, err
 }
 
-func (g *Gateway) workerRecord(ctx context.Context, id string) (WorkerRecord, error) {
-	record, err := workerRecord(g.options.Home, id)
-	if err != nil {
-		return record, err
-	}
-	info, cached := sessionRow(ctx, id)
-	if !cached {
-		info, err = storedSession(ctx, g.store.Reader, id)
-	}
-	if err == nil {
-		local, localErr := g.nodeID(ctx)
-		if localErr != nil {
-			return record, localErr
-		}
-		if info.NodeID != local {
-			return record, errSessionUnavailable
-		}
-	}
-	record.Session = info
-	return record, err
-}
-
-func endSession(ctx context.Context, db *sql.DB, id string, terminal TerminalState) error {
+func EndSession(ctx context.Context, db *sql.DB, id string, terminal TerminalState) error {
 	terminal.Running, terminal.Restarting = false, false
 	body, err := json.Marshal(terminal)
 	if err != nil {
@@ -169,7 +147,7 @@ func endSession(ctx context.Context, db *sql.DB, id string, terminal TerminalSta
 	return err
 }
 
-func querySessions(ctx context.Context, db *sql.DB, query string, args ...any) ([]SessionInfo, error) {
+func QuerySessions(ctx context.Context, db *sql.DB, query string, args ...any) ([]SessionInfo, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -177,7 +155,7 @@ func querySessions(ctx context.Context, db *sql.DB, query string, args ...any) (
 	defer rows.Close()
 	entries := []SessionInfo{}
 	for rows.Next() {
-		info, err := scanSession(rows)
+		info, err := ScanSession(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -185,3 +163,9 @@ func querySessions(ctx context.Context, db *sql.DB, query string, args ...any) (
 	}
 	return entries, rows.Err()
 }
+
+var (
+	ErrSessionArchived    = errors.New("archived")
+	ErrSessionNotFound    = errors.New("session not found")
+	ErrSessionUnavailable = errors.New("session unavailable")
+)

@@ -18,6 +18,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // Closed sets are named types so schemaFor publishes them as enums and codemode clients get Literal types.
@@ -160,7 +161,7 @@ type mcpSession struct {
 	LastUsed  time.Time `json:"last_used,omitzero"`
 }
 
-func sessionView(info SessionInfo) mcpSession {
+func sessionView(info session.SessionInfo) mcpSession {
 	name := info.Name
 	if name == "" {
 		name = info.Title
@@ -169,7 +170,7 @@ func sessionView(info SessionInfo) mcpSession {
 		Chat: info.Transport == "acp", State: viewState(info), ParentID: info.ParentID, Tools: info.Tools, Reachable: info.Reachable, LastUsed: info.LastUsed}
 }
 
-func viewState(info SessionInfo) chatState {
+func viewState(info session.SessionInfo) chatState {
 	switch state := chatState(info.ConversationState); {
 	case state == stateStarting:
 		return stateStarting
@@ -322,7 +323,7 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 		mcpNodeInput
 		mcpPageInput
 	}) (*mcp.CallToolResult, mcpSessions, error) {
-		sessions, err := callAPI[[]SessionInfo](ctx, m, in.Node, "GET", "/api/sessions", nil)
+		sessions, err := callAPI[[]session.SessionInfo](ctx, m, in.Node, "GET", "/api/sessions", nil)
 		if err != nil {
 			return nil, mcpSessions{}, err
 		}
@@ -368,7 +369,7 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 		}
 		// A stopped chat has no worker to restart; resuming it sends nothing to its agent, so any chat's
 		// agent may revive its account's stopped chats. The resume route checks the account.
-		if info, err := storedSession(ctx, m.gateway.store.Reader, in.SessionID); err == nil && info.Transport == "acp" && viewState(info) == stateStopped {
+		if info, err := session.StoredSession(ctx, m.gateway.store.Reader, in.SessionID); err == nil && info.Transport == "acp" && viewState(info) == stateStopped {
 			_, err := m.do(ctx, in.Node, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/resume", map[string]string{"text": ""})
 			return nil, restarted{err == nil}, err
 		}

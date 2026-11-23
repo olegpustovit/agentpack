@@ -18,6 +18,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -47,7 +48,7 @@ func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 			}
 			switch r.URL.Path {
 			case "/state":
-				_ = json.NewEncoder(w).Encode(network.TerminalState{Interactive: id != "session-headless" && id != "session-chat", Running: true})
+				_ = json.NewEncoder(w).Encode(session.TerminalState{Interactive: id != "session-headless" && id != "session-chat", Running: true})
 			case "/restart":
 				if r.URL.Query().Get("when") != "idle" {
 					http.Error(w, "package restarts must wait for idle", 400)
@@ -67,7 +68,7 @@ func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 			}
 		}))
 		t.Cleanup(server.Close)
-		record := network.WorkerRecord{ID: id, Secret: secret, Address: strings.TrimPrefix(server.URL, "http://"), Session: network.SessionInfo{Directory: directory, DefinitionRoot: directory, Harness: "claude", Mode: selected}}
+		record := network.WorkerRecord{ID: id, Secret: secret, Address: strings.TrimPrefix(server.URL, "http://"), Session: session.SessionInfo{Directory: directory, DefinitionRoot: directory, Harness: "claude", Mode: selected}}
 		data, err := json.Marshal(record)
 		if err != nil {
 			t.Fatal(err)

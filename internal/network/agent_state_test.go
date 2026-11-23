@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"encoding/json"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -22,10 +23,10 @@ func TestTerminalAgentStateReachesSessionRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := upsertSession(t.Context(), auth.store.DB, SessionInfo{ID: id}); err != nil {
+	if err := session.UpsertSession(t.Context(), auth.store.DB, session.SessionInfo{ID: id}); err != nil {
 		t.Fatal(err)
 	}
-	session := &Session{state: TerminalState{Running: true, Interactive: true}, done: make(chan struct{}), attachments: make(map[uint64]*Attachment)}
+	session := &Session{state: session.TerminalState{Running: true, Interactive: true}, done: make(chan struct{}), attachments: make(map[uint64]*Attachment)}
 	t.Cleanup(func() { close(session.done) })
 	secret := strings.Repeat("s", 64)
 	worker, err := WorkerHandler(context.Background(), session, nil, secret, dir)

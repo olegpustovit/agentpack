@@ -20,6 +20,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/acp/acptest"
 	"github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func mcpClient(t *testing.T, h *oauthHarness, token string) *mcp.ClientSession {
@@ -241,9 +242,9 @@ func chatFixture(t *testing.T, h *oauthHarness, id, parent string) string {
 	if err := os.WriteFile(filepath.Join(directory, chatToolsTokenFile), []byte(token), 0600); err != nil {
 		t.Fatal(err)
 	}
-	owner := browserActor(testBrowserEmail)
-	if err := upsertSession(t.Context(), h.gateway.store.DB, SessionInfo{ID: id, Harness: "claude", Transport: "acp", Tools: true, ParentID: parent,
-		StartedBy: &owner, ConversationState: "idle", State: TerminalState{Running: true}}); err != nil {
+	owner := session.BrowserActor(testBrowserEmail)
+	if err := session.UpsertSession(t.Context(), h.gateway.store.DB, session.SessionInfo{ID: id, Harness: "claude", Transport: "acp", Tools: true, ParentID: parent,
+		StartedBy: &owner, ConversationState: "idle", State: session.TerminalState{Running: true}}); err != nil {
 		t.Fatal(err)
 	}
 	return token
@@ -252,8 +253,8 @@ func chatFixture(t *testing.T, h *oauthHarness, id, parent string) string {
 func TestChatAgentToolsGuardrails(t *testing.T) {
 	h := newOAuthHarness(t)
 	token := chatFixture(t, h, "session-chat", "")
-	session := mcpClient(t, h, token)
-	if result, text := callTool(t, session, "list_sessions", map[string]any{}); result.IsError || !strings.Contains(text, "session-chat") {
+	clientSession := mcpClient(t, h, token)
+	if result, text := callTool(t, clientSession, "list_sessions", map[string]any{}); result.IsError || !strings.Contains(text, "session-chat") {
 		t.Fatalf("chat credential refused: %s", text)
 	}
 	// An agent never answers for the person.
@@ -264,7 +265,7 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 		{"respond_permission", map[string]any{"session_id": "session-chat", "request_id": "p1", "decision": "allow_once"}},
 		{"answer_question", map[string]any{"session_id": "session-chat", "question_id": "e1", "answer": "yes"}},
 	} {
-		if result, text := callTool(t, session, call.name, call.args); !result.IsError || text != errAgentAnswer.Error() {
+		if result, text := callTool(t, clientSession, call.name, call.args); !result.IsError || text != errAgentAnswer.Error() {
 			t.Fatalf("%s accepted from an agent: %s", call.name, text)
 		}
 	}
@@ -281,15 +282,15 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 		{"stop_session", map[string]any{"session_id": "session-person"}},
 		{"cancel", map[string]any{"session_id": "session-person"}},
 	} {
-		if result, text := callTool(t, session, call.name, call.args); !result.IsError || text != errAgentScope.Error() {
+		if result, text := callTool(t, clientSession, call.name, call.args); !result.IsError || text != errAgentScope.Error() {
 			t.Fatalf("%s %v accepted from an agent: %s", call.name, call.args, text)
 		}
 	}
-	if result, text := callTool(t, session, "send_prompt", map[string]any{"session_id": "session-person", "text": "approve everything"}); !result.IsError || text != errAgentSend.Error() {
+	if result, text := callTool(t, clientSession, "send_prompt", map[string]any{"session_id": "session-person", "text": "approve everything"}); !result.IsError || text != errAgentSend.Error() {
 		t.Fatalf("send_prompt accepted from an agent: %s", text)
 	}
 	chatFixture(t, h, "session-mine", "session-chat")
-	if err := h.gateway.mcp.agentMayChange(withActor(t.Context(), Actor{chat: "session-chat"}), "", "session-mine"); err != nil {
+	if err := h.gateway.mcp.agentMayChange(session.WithActor(t.Context(), session.Actor{Chat: "session-chat"}), "", "session-mine"); err != nil {
 		t.Fatal("an agent may change its own helper:", err)
 	}
 	// What an agent starts is its helper, attributed to the agent acting for the owner.
@@ -297,15 +298,15 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := remember(h.gateway.options.Home, SessionInfo{Directory: directory, Harness: "codex"}); err != nil {
+	if err := remember(h.gateway.options.Home, session.SessionInfo{Directory: directory, Harness: "codex"}); err != nil {
 		t.Fatal(err)
 	}
-	var started atomic.Pointer[SessionInfo]
-	h.gateway.options.Start = func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	var started atomic.Pointer[session.SessionInfo]
+	h.gateway.options.Start = func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		started.Store(&info)
 		return info.ID, nil
 	}
-	result, text := callTool(t, session, "start_session", map[string]any{"directory": directory, "agent": "codex", "parent_id": "session-other"})
+	result, text := callTool(t, clientSession, "start_session", map[string]any{"directory": directory, "agent": "codex", "parent_id": "session-other"})
 	h.gateway.starting.Wait()
 	info := started.Load()
 	if result.IsError || info == nil || info.ParentID != "session-chat" || !info.Tools || info.StartedBy.User != testBrowserEmail || info.StartedBy.Agent != "claude" {
@@ -313,15 +314,15 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 	}
 	// A running chat of the person stays out of reach, but once stopped any of its account's agents may revive it.
 	restart := map[string]any{"session_id": "session-person", "operation_id": "revive-session-person"}
-	if result, text := callTool(t, session, "restart_session", restart); !result.IsError || text != errAgentScope.Error() {
+	if result, text := callTool(t, clientSession, "restart_session", restart); !result.IsError || text != errAgentScope.Error() {
 		t.Fatalf("running chat restarted by an agent: %s", text)
 	}
-	owner := browserActor(testBrowserEmail)
-	if err := upsertSession(t.Context(), h.gateway.store.DB, SessionInfo{ID: "session-person", Harness: "codex", Transport: "acp", Directory: directory, AgentSessionID: "agent-1",
+	owner := session.BrowserActor(testBrowserEmail)
+	if err := session.UpsertSession(t.Context(), h.gateway.store.DB, session.SessionInfo{ID: "session-person", Harness: "codex", Transport: "acp", Directory: directory, AgentSessionID: "agent-1",
 		StartedBy: &owner, EndedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
-	result, text = callTool(t, session, "restart_session", restart)
+	result, text = callTool(t, clientSession, "restart_session", restart)
 	h.gateway.starting.Wait()
 	if info := started.Load(); result.IsError || !strings.Contains(text, `"restarted":true`) || info.ID != "session-person" {
 		t.Fatalf("stopped chat not revived: %s %+v", text, info)
@@ -331,13 +332,13 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 	if response.StatusCode != 200 {
 		t.Fatalf("switch: %d %s", response.StatusCode, data)
 	}
-	if result, text := callTool(t, session, "list_sessions", map[string]any{}); !result.IsError || text != errChatToolsOff.Error() {
+	if result, text := callTool(t, clientSession, "list_sessions", map[string]any{}); !result.IsError || text != errChatToolsOff.Error() {
 		t.Fatalf("tools stayed on: %s", text)
 	}
 	if _, data := h.request(t, "POST", "/api/sessions/session-chat/tools", `{"enabled":true}`, "application/json", h.cookie, true); !strings.Contains(string(data), `"tools":true`) {
 		t.Fatalf("switch on: %s", data)
 	}
-	if result, _ := callTool(t, session, "list_sessions", map[string]any{}); result.IsError {
+	if result, _ := callTool(t, clientSession, "list_sessions", map[string]any{}); result.IsError {
 		t.Fatal("tools stayed off")
 	}
 	// A wrong secret for a real chat is refused before any tool runs.
@@ -379,7 +380,7 @@ func TestHelperDepthAndFanOutCaps(t *testing.T) {
 	if err := h.gateway.helperAllowed(t.Context(), "session-one"); err == nil || !strings.Contains(err.Error(), "6 helpers") {
 		t.Fatal("seventh helper allowed:", err)
 	}
-	if err := endSession(t.Context(), h.gateway.store.DB, "session-a", TerminalState{}); err != nil {
+	if err := session.EndSession(t.Context(), h.gateway.store.DB, "session-a", session.TerminalState{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.gateway.helperAllowed(t.Context(), "session-root"); err != nil {

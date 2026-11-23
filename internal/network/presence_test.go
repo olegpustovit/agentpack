@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func TestPresenceChild(t *testing.T) {
@@ -33,7 +34,7 @@ func TestNativePresencePreservesPipesAndOwnsStop(t *testing.T) {
 	defer command.Process.Kill()
 	home := t.TempDir()
 	testPresenceGateway(t, home)
-	cleanup, err := RegisterPresence(home, "test", SessionInfo{Directory: t.TempDir(), Harness: "codex"}, command.Process)
+	cleanup, err := RegisterPresence(home, "test", session.SessionInfo{Directory: t.TempDir(), Harness: "codex"}, command.Process)
 	if err != nil {
 		command.Process.Kill()
 		command.Wait()
@@ -111,7 +112,7 @@ func TestPresenceDoesNotOpenStateDatabase(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "network", "node.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	cleanup, err := RegisterPresence(home, "test", SessionInfo{Directory: t.TempDir(), Harness: "codex"}, nil)
+	cleanup, err := RegisterPresence(home, "test", session.SessionInfo{Directory: t.TempDir(), Harness: "codex"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +132,7 @@ func TestPresenceDoesNotOpenStateDatabase(t *testing.T) {
 		t.Fatalf("successful presence wrote diagnostics: %v", err)
 	}
 	failEnd.Store(true)
-	cleanup, err = RegisterPresence(home, "test", SessionInfo{Directory: t.TempDir(), Harness: "codex"}, nil)
+	cleanup, err = RegisterPresence(home, "test", session.SessionInfo{Directory: t.TempDir(), Harness: "codex"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

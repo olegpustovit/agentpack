@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func foldScript() []acp.LogEntry {
@@ -17,7 +18,7 @@ func foldScript() []acp.LogEntry {
 		raw("prompt", map[string]any{"text": map[string]string{"text": "ship it"}}),
 		raw("agent_message_chunk", map[string]any{"text": map[string]string{"text": "on "}}),
 		raw("agent_message_chunk", map[string]any{"text": map[string]string{"text": "it"}}),
-		raw("goal_update", Goal{Objective: "ship", State: "active", Engine: "gateway"}),
+		raw("goal_update", session.Goal{Objective: "ship", State: "active", Engine: "gateway"}),
 		raw("session_info_update", map[string]any{"sessionUpdate": "session_info_update", "title": "Shipping"}),
 		raw("subagent_update", map[string]any{"sessionId": "child", "title": "Helper", "state": map[string]string{"state": "running"}}),
 		raw("tool_call", map[string]any{"toolCallId": "w", "title": "ScheduleWakeup", "rawInput": map[string]any{"delaySeconds": 60}}),
@@ -26,7 +27,7 @@ func foldScript() []acp.LogEntry {
 		raw("turn_end", map[string]string{"stopReason": "end_turn"}),
 		raw("permission_request", map[string]any{"requestId": "r2", "toolCall": map[string]string{"toolCallId": "t2"}}),
 		raw("subagent_update", map[string]any{"sessionId": "child", "state": map[string]string{"state": "idle"}}),
-		raw("goal_update", Goal{Objective: "ship", State: "cleared", Engine: "gateway"}),
+		raw("goal_update", session.Goal{Objective: "ship", State: "cleared", Engine: "gateway"}),
 		raw("agent_exit", map[string]int{"code": 0}),
 	}
 }
@@ -40,7 +41,7 @@ type derivedRow struct {
 func TestSessionRowIsTheFoldOfStoredEventsAtEveryCommit(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-fold"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	log, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
@@ -83,7 +84,7 @@ func TestSessionRowIsTheFoldOfStoredEventsAtEveryCommit(t *testing.T) {
 func TestConversationFoldRestoresFromCheckpoint(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-restore"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	log, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
@@ -133,7 +134,7 @@ func TestConversationFoldRestoresFromCheckpoint(t *testing.T) {
 func TestStartingRowHoldsUntilRepublished(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-instant"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp", ConversationState: "starting"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp", ConversationState: "starting"}); err != nil {
 		t.Fatal(err)
 	}
 	var starting atomic.Bool
@@ -145,7 +146,7 @@ func TestStartingRowHoldsUntilRepublished(t *testing.T) {
 	defer log.Close()
 	NewConversationSession(log, nil)
 	state := func() string {
-		info, err := storedSession(t.Context(), store.Reader, id)
+		info, err := session.StoredSession(t.Context(), store.Reader, id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -155,7 +156,7 @@ func TestStartingRowHoldsUntilRepublished(t *testing.T) {
 	if got := state(); got != "starting" {
 		t.Fatalf("held state = %q", got)
 	}
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp", ConversationState: "idle"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp", ConversationState: "idle"}); err != nil {
 		t.Fatal(err)
 	}
 	starting.Store(false)

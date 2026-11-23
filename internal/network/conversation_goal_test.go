@@ -8,9 +8,10 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
-func startGatewayGoal(t *testing.T, limits *GoalLimits) (*ConversationSession, *fakeAgent) {
+func startGatewayGoal(t *testing.T, limits *session.GoalLimits) (*ConversationSession, *fakeAgent) {
 	t.Helper()
 	session, agent := newFakeAgentSession(t)
 	if err := session.SetGoal(t.Context(), "ship it", "tests pass", limits); err != nil {
@@ -23,7 +24,7 @@ func startGatewayGoal(t *testing.T, limits *GoalLimits) (*ConversationSession, *
 }
 
 // runGoalTurns answers each continuation with turn until the goal leaves the active state.
-func runGoalTurns(t *testing.T, agent *fakeAgent, turn fakeTurn) *Goal {
+func runGoalTurns(t *testing.T, agent *fakeAgent, turn fakeTurn) *session.Goal {
 	t.Helper()
 	for range 10 {
 		prompt := agent.nextPrompt(t)
@@ -31,7 +32,7 @@ func runGoalTurns(t *testing.T, agent *fakeAgent, turn fakeTurn) *Goal {
 			t.Fatalf("continuation = %q", prompt.Text)
 		}
 		agent.turns <- turn
-		goal := agent.goalUntil(t, func(*Goal) bool { return true })
+		goal := agent.goalUntil(t, func(*session.Goal) bool { return true })
 		if goal.State != "active" {
 			return goal
 		}
@@ -52,7 +53,7 @@ func TestGatewayGoalStopRules(t *testing.T) {
 	slow.advance = 61 * time.Second
 	for _, test := range []struct {
 		name   string
-		limits *GoalLimits
+		limits *session.GoalLimits
 		turn   fakeTurn
 		state  string
 		reason string
@@ -61,10 +62,10 @@ func TestGatewayGoalStopRules(t *testing.T) {
 		{name: "met", turn: reply("All green.\n**GOAL: met** suite passes", true), state: "met", reason: "suite passes", turns: 1},
 		{name: "blocked three times", turn: reply("GOAL: blocked need an API key", true), state: "blocked", reason: "need an API key", turns: 3},
 		{name: "no progress", turn: reply("thinking\nGOAL: continue", false), state: "blocked", reason: "no progress", turns: 3},
-		{name: "turn limit", limits: &GoalLimits{Turns: 2}, turn: reply("GOAL: continue", true), state: "limited", reason: "turn limit reached", turns: 2},
-		{name: "time limit", limits: &GoalLimits{Minutes: 1}, turn: slow, state: "limited", reason: "time limit reached", turns: 1},
-		{name: "token limit", limits: &GoalLimits{Tokens: 100}, turn: withUsage(reply("GOAL: continue", true), usage(150, 0)), state: "limited", reason: "token limit reached", turns: 1},
-		{name: "cost limit", limits: &GoalLimits{CostUSD: 1}, turn: withUsage(reply("GOAL: continue", true), usage(10, 2)), state: "limited", reason: "cost limit reached", turns: 1},
+		{name: "turn limit", limits: &session.GoalLimits{Turns: 2}, turn: reply("GOAL: continue", true), state: "limited", reason: "turn limit reached", turns: 2},
+		{name: "time limit", limits: &session.GoalLimits{Minutes: 1}, turn: slow, state: "limited", reason: "time limit reached", turns: 1},
+		{name: "token limit", limits: &session.GoalLimits{Tokens: 100}, turn: withUsage(reply("GOAL: continue", true), usage(150, 0)), state: "limited", reason: "token limit reached", turns: 1},
+		{name: "cost limit", limits: &session.GoalLimits{CostUSD: 1}, turn: withUsage(reply("GOAL: continue", true), usage(10, 2)), state: "limited", reason: "cost limit reached", turns: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, agent := startGatewayGoal(t, test.limits)
@@ -118,10 +119,10 @@ func TestGoalPauseResumeKeepsActiveTime(t *testing.T) {
 }
 
 func TestNativeGoalUsesAgentCommandAndSnapshots(t *testing.T) {
-	session, agent := newFakeAgentSession(t, entry("available_commands_update", map[string]any{
+	conv, agent := newFakeAgentSession(t, entry("available_commands_update", map[string]any{
 		"sessionUpdate": "available_commands_update", "availableCommands": []map[string]string{{"name": "goal", "description": "goal"}},
 	}))
-	if err := session.SetGoal(t.Context(), "ship it", "tests pass", nil); err != nil {
+	if err := conv.SetGoal(t.Context(), "ship it", "tests pass", nil); err != nil {
 		t.Fatal(err)
 	}
 	if goal := agent.goalUntil(t, goalIn("active")); goal.Engine != "native" {
@@ -139,18 +140,18 @@ func TestNativeGoalUsesAgentCommandAndSnapshots(t *testing.T) {
 		t.Fatalf("goal = %+v", goal)
 	}
 	agent.log.Append("session_info_update", 2, snapshot(nil).Payload)
-	agent.goalUntil(t, func(goal *Goal) bool { return goal == nil })
+	agent.goalUntil(t, func(goal *session.Goal) bool { return goal == nil })
 }
 
 // Claude's background Agent tasks arrive as AIR's subagent_spawned / subagent_state_update; the
 // session tree lists them while they run and the most recent once they finish.
 func TestSubagentSummaryTracksBackgroundAgents(t *testing.T) {
-	session, _ := newFakeAgentSession(t)
+	conv, _ := newFakeAgentSession(t)
 	// The fold is applied as each update is appended, so its summary is current after every call.
-	summary := func() []SubagentSummary { return session.fold.subagentSummaries() }
+	summary := func() []session.SubagentSummary { return conv.fold.subagentSummaries() }
 	air := func(update string) {
 		line := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"parent","update":` + update + `}}`
-		if !acp.AppendRawSessionUpdate(session.log, []byte(line)) {
+		if !acp.AppendRawSessionUpdate(conv.log, []byte(line)) {
 			t.Fatalf("not consumed: %s", update)
 		}
 	}
@@ -171,10 +172,10 @@ func TestSubagentSummaryTracksBackgroundAgents(t *testing.T) {
 	}
 	spawn("h")
 	list := summary()
-	if len(list) != finishedSubagentsShown+1 || list[len(list)-1].ID != "h" || slices.ContainsFunc(list, func(s SubagentSummary) bool { return s.ID == "a" }) {
+	if len(list) != finishedSubagentsShown+1 || list[len(list)-1].ID != "h" || slices.ContainsFunc(list, func(s session.SubagentSummary) bool { return s.ID == "a" }) {
 		t.Fatalf("tree = %+v; want the running one and the %d most recent finished", list, finishedSubagentsShown)
 	}
-	session.log.Append("agent_exit", 6, []byte(`{}`))
+	conv.log.Append("agent_exit", 6, []byte(`{}`))
 	if list := summary(); list != nil {
 		t.Fatalf("exit kept %+v", list)
 	}
@@ -241,16 +242,16 @@ func TestStopDuringUnpromptedNativeGoalPauses(t *testing.T) {
 // A long chat's goal update can lie before the replayed tail; the saved row restores it, so the
 // person can still clear it.
 func TestGoalBeyondTheReplayedTailIsRestoredAndClears(t *testing.T) {
-	session, agent := newFakeAgentSession(t)
-	session.restoreGoal(&Goal{Objective: "ship it", State: "active", Engine: "native"})
-	if session.goal == nil || session.goal.Objective != "ship it" {
-		t.Fatalf("goal = %+v", session.goal)
+	conv, agent := newFakeAgentSession(t)
+	conv.restoreGoal(&session.Goal{Objective: "ship it", State: "active", Engine: "native"})
+	if conv.goal == nil || conv.goal.Objective != "ship it" {
+		t.Fatalf("goal = %+v", conv.goal)
 	}
-	session.restoreGoal(&Goal{Objective: "older", State: "active"}) // the transcript's own goal wins
-	if session.goal.Objective != "ship it" {
-		t.Fatalf("goal replaced: %+v", session.goal)
+	conv.restoreGoal(&session.Goal{Objective: "older", State: "active"}) // the transcript's own goal wins
+	if conv.goal.Objective != "ship it" {
+		t.Fatalf("goal replaced: %+v", conv.goal)
 	}
-	if err := session.ClearGoal(context.Background()); err != nil {
+	if err := conv.ClearGoal(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if input := agent.nextPrompt(t); input.Text != "/goal clear" {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/mattn/go-sqlite3"
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -232,7 +233,7 @@ func TestArchivedConversationReadsThroughMainAndHandlesUnavailableArchive(t *tes
 	defer server.Close()
 	target, _ := url.Parse(server.URL)
 	targetFor := func(context.Context, string) (*url.URL, error) { return target, nil }
-	info, err := storedSession(t.Context(), peer.auth.store.Reader, "session-archived-read")
+	info, err := session.StoredSession(t.Context(), peer.auth.store.Reader, "session-archived-read")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // Sign-in routes are the owner's, read each agent's account, and drive one login per agent.
@@ -90,25 +91,25 @@ func TestRequireOwnerActors(t *testing.T) {
 	g := &Gateway{store: auth.store, auth: auth}
 	for _, tc := range []struct {
 		name  string
-		actor Actor
+		actor session.Actor
 		want  bool
 	}{
-		{"browser owner", Actor{Kind: "browser", User: "owner@example.com"}, true},
-		{"browser member", Actor{Kind: "browser", User: "member@example.com"}, false},
-		{"local owner", Actor{Kind: "local", Account: true, User: "owner@example.com"}, true},
-		{"local member", Actor{Kind: "local", Account: true, User: "member@example.com"}, false},
-		{"bare peer", Actor{Kind: "peer", User: "owner@example.com"}, false},
-		{"forwarded owner", Actor{Kind: "peer", Account: true, User: "owner@example.com"}, true},
-		{"forwarded member", Actor{Kind: "peer", Account: true, User: "member@example.com"}, false},
-		{"MCP owner", Actor{Kind: "mcp", User: "owner@example.com"}, true},
-		{"MCP member", Actor{Kind: "mcp", User: "member@example.com"}, false},
-		{"unbound local with accounts", Actor{Kind: "local", User: "native"}, false},
-		{"unknown", Actor{Kind: "unknown", User: "owner@example.com"}, false},
+		{"browser owner", session.Actor{Kind: "browser", User: "owner@example.com"}, true},
+		{"browser member", session.Actor{Kind: "browser", User: "member@example.com"}, false},
+		{"local owner", session.Actor{Kind: "local", Account: true, User: "owner@example.com"}, true},
+		{"local member", session.Actor{Kind: "local", Account: true, User: "member@example.com"}, false},
+		{"bare peer", session.Actor{Kind: "peer", User: "owner@example.com"}, false},
+		{"forwarded owner", session.Actor{Kind: "peer", Account: true, User: "owner@example.com"}, true},
+		{"forwarded member", session.Actor{Kind: "peer", Account: true, User: "member@example.com"}, false},
+		{"MCP owner", session.Actor{Kind: "mcp", User: "owner@example.com"}, true},
+		{"MCP member", session.Actor{Kind: "mcp", User: "member@example.com"}, false},
+		{"unbound local with accounts", session.Actor{Kind: "local", User: "native"}, false},
+		{"unknown", session.Actor{Kind: "unknown", User: "owner@example.com"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "/", nil)
 			w := httptest.NewRecorder()
-			if got := g.requireOwner(w, r.WithContext(withActor(r.Context(), tc.actor))); got != tc.want {
+			if got := g.requireOwner(w, r.WithContext(session.WithActor(r.Context(), tc.actor))); got != tc.want {
 				t.Fatalf("owner access = %v, want %v", got, tc.want)
 			}
 		})

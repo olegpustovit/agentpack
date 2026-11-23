@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"path/filepath"
 
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
-func Recent(home string) ([]SessionInfo, error) {
+func Recent(home string) ([]session.SessionInfo, error) {
 	store, err := state.Open(home)
 	if err != nil {
 		return nil, err
@@ -18,25 +19,25 @@ func Recent(home string) ([]SessionInfo, error) {
 }
 
 // RecentIn reads recent launches from an open store; the gateway passes its own.
-func RecentIn(ctx context.Context, db *sql.DB) ([]SessionInfo, error) {
-	entries, err := querySessions(ctx, db, `SELECT `+sessionColumns+` FROM (
+func RecentIn(ctx context.Context, db *sql.DB) ([]session.SessionInfo, error) {
+	entries, err := session.QuerySessions(ctx, db, `SELECT `+session.SessionColumns+` FROM (
         SELECT *,row_number() OVER (PARTITION BY directory,harness,mode ORDER BY last_used DESC,id DESC) AS rank
         FROM sessions WHERE node_id=`+state.LocalNodeSQL+` AND hidden=0 AND transport<>'shell' AND directory<>''
     ) WHERE rank=1 ORDER BY last_used DESC,id DESC LIMIT 100`)
 	for i := range entries {
 		entries[i].ID = ""
-		entries[i].State = TerminalState{}
+		entries[i].State = session.TerminalState{}
 	}
 	return entries, err
 }
 
 type RecentFolder struct {
-	SessionInfo
+	session.SessionInfo
 	Available         bool   `json:"available"`
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
 }
 
-func recentFolders(recent []SessionInfo) []RecentFolder {
+func recentFolders(recent []session.SessionInfo) []RecentFolder {
 	folders := make([]RecentFolder, 0, len(recent))
 	for _, entry := range recent {
 		folder := RecentFolder{SessionInfo: entry}
@@ -54,7 +55,7 @@ func recentFolders(recent []SessionInfo) []RecentFolder {
 	return folders
 }
 
-func ForgetRecent(ctx context.Context, store *state.Store, info SessionInfo) error {
+func ForgetRecent(ctx context.Context, store *state.Store, info session.SessionInfo) error {
 	_, err := store.DB.ExecContext(ctx, `UPDATE sessions SET hidden=1 WHERE node_id=`+state.LocalNodeSQL+` AND directory=?
         AND (?='' OR harness=?) AND (?='' OR mode=?)`,
 		filepath.Clean(info.Directory), info.Harness, info.Harness, info.Mode, info.Mode)

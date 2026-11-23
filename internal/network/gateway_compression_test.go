@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 type countedConn struct {
@@ -37,10 +38,10 @@ func TestGatewayCompressesReplayAndKeepsBrowserConnectionAlive(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, "network", "sessions", id), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	session := &Session{state: TerminalState{Running: true, Interactive: true}, replay: bytes.Repeat([]byte("terminal replay line\r\n\x1b[32mready\x1b[0m\r\n"), 1<<15), done: make(chan struct{}), attachments: make(map[uint64]*Attachment)}
-	t.Cleanup(func() { close(session.done) })
+	pty := &Session{state: session.TerminalState{Running: true, Interactive: true}, replay: bytes.Repeat([]byte("terminal replay line\r\n\x1b[32mready\x1b[0m\r\n"), 1<<15), done: make(chan struct{}), attachments: make(map[uint64]*Attachment)}
+	t.Cleanup(func() { close(pty.done) })
 	secret := strings.Repeat("s", 64)
-	worker, err := WorkerHandler(context.Background(), session, nil, secret, "")
+	worker, err := WorkerHandler(context.Background(), pty, nil, secret, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestGatewayCompressesReplayAndKeepsBrowserConnectionAlive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := upsertSession(t.Context(), auth.store.DB, SessionInfo{ID: id}); err != nil {
+	if err := session.UpsertSession(t.Context(), auth.store.DB, session.SessionInfo{ID: id}); err != nil {
 		t.Fatal(err)
 	}
 	gateway := &Gateway{store: auth.store, auth: auth, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home}}
@@ -104,11 +105,11 @@ func TestGatewayCompressesReplayAndKeepsBrowserConnectionAlive(t *testing.T) {
 		}
 		replay = append(replay, data...)
 	}
-	if !bytes.Equal(replay, session.replay) {
-		t.Fatalf("replay changed: bytes=%d expected=%d", len(replay), len(session.replay))
+	if !bytes.Equal(replay, pty.replay) {
+		t.Fatalf("replay changed: bytes=%d expected=%d", len(replay), len(pty.replay))
 	}
-	if got := counted.read.Load(); got >= int64(len(session.replay))/10 {
-		t.Fatalf("replay was not compressed: wire bytes=%d replay bytes=%d", got, len(session.replay))
+	if got := counted.read.Load(); got >= int64(len(pty.replay))/10 {
+		t.Fatalf("replay was not compressed: wire bytes=%d replay bytes=%d", got, len(pty.replay))
 	}
 	// Worker pings terminate at the gateway; the browser needs its own heartbeat.
 	if err := connection.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
@@ -121,7 +122,7 @@ func TestGatewayCompressesReplayAndKeepsBrowserConnectionAlive(t *testing.T) {
 			return err
 		}
 		if !published {
-			session.publish([]byte("after browser heartbeat"))
+			pty.publish([]byte("after browser heartbeat"))
 			published = true
 		}
 		return nil

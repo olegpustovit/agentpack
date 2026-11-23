@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"encoding/json"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -155,9 +156,9 @@ func worktreeGateway(t *testing.T) (*Gateway, string, func(method, path, body st
 	t.Helper()
 	main := gitRepo(t)
 	home := t.TempDir()
-	g, origin := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) { return info.ID, nil })
+	g, origin := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) { return info.ID, nil })
 	g.options.Packages = func(context.Context, string) (ProjectContents, error) { return ProjectContents{}, nil }
-	if err := remember(home, SessionInfo{Directory: main, Harness: "claude", Mode: "default"}); err != nil {
+	if err := remember(home, session.SessionInfo{Directory: main, Harness: "claude", Mode: "default"}); err != nil {
 		t.Fatal(err)
 	}
 	handler := g.Handler()
@@ -170,14 +171,14 @@ func worktreeGateway(t *testing.T) (*Gateway, string, func(method, path, body st
 	}
 }
 
-func startWorktreeChat(t *testing.T, g *Gateway, call func(method, path, body string) *httptest.ResponseRecorder, main, worktree string) SessionInfo {
+func startWorktreeChat(t *testing.T, g *Gateway, call func(method, path, body string) *httptest.ResponseRecorder, main, worktree string) session.SessionInfo {
 	t.Helper()
 	body, _ := json.Marshal(map[string]any{"directory": main, "harness": "claude", "mode": "default", "transport": "acp", "worktree": worktree, "worktree_name": "replay offset"})
 	w := call("POST", "/api/sessions", string(body))
 	if w.Code != 200 {
 		t.Fatalf("start: %d %s", w.Code, w.Body)
 	}
-	var info SessionInfo
+	var info session.SessionInfo
 	if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +195,7 @@ func TestNewWorktreeSessionSharesTheProjectAndArchiveRemovesIt(t *testing.T) {
 	if !insideWorktrees(g.options.Home, info.Directory) || info.DefinitionRoot != main {
 		t.Fatalf("session %+v", info)
 	}
-	if stored, err := storedSession(t.Context(), g.store.Reader, info.ID); err != nil || stored.WorktreeOf != main {
+	if stored, err := session.StoredSession(t.Context(), g.store.Reader, info.ID); err != nil || stored.WorktreeOf != main {
 		t.Fatalf("worktree_of %q %v", stored.WorktreeOf, err)
 	}
 	// A second chat continues in the same worktree; an arbitrary folder is refused.
@@ -351,7 +352,7 @@ func TestSessionMergeConflictAbortsAndAnswers409(t *testing.T) {
 		t.Fatalf("merge left the main folder %q", status)
 	}
 	// A shared folder session cannot commit: other agents' edits would be swept in.
-	plain, err := g.startSession(t.Context(), LocalActor("local"), SessionInfo{Directory: main, Harness: "claude", Mode: "default", Transport: "acp"}, "")
+	plain, err := g.startSession(t.Context(), session.LocalActor("local"), session.SessionInfo{Directory: main, Harness: "claude", Mode: "default", Transport: "acp"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,14 +384,14 @@ func TestClientChatClaimPreparesWorktreeOnce(t *testing.T) {
 	}
 	body := string(mustRawJSON(input))
 	start := call(http.MethodPost, "/api/sessions", body)
-	var provisional SessionInfo
+	var provisional session.SessionInfo
 	if err := json.Unmarshal(start.Body.Bytes(), &provisional); start.Code != http.StatusOK || err != nil ||
 		provisional.ID != input.ID || provisional.Directory != main || provisional.ConversationState != "starting" {
 		t.Fatalf("new worktree claim = %d %s", start.Code, start.Body.String())
 	}
 	g.starting.Wait()
 	replay := call(http.MethodPost, "/api/sessions", body)
-	var prepared SessionInfo
+	var prepared session.SessionInfo
 	if err := json.Unmarshal(replay.Body.Bytes(), &prepared); replay.Code != http.StatusOK || err != nil ||
 		prepared.ID != provisional.ID || prepared.Directory == main || prepared.WorktreeOf != main {
 		t.Fatalf("worktree claim retry = %d %s", replay.Code, replay.Body.String())

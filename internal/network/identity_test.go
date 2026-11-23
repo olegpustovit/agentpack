@@ -20,13 +20,14 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 
 	"tailscale.com/client/local"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
-func identityGateway(t *testing.T, home string, start func(context.Context, SessionInfo, string) (string, error)) (*Gateway, *url.URL) {
+func identityGateway(t *testing.T, home string, start func(context.Context, session.SessionInfo, string) (string, error)) (*Gateway, *url.URL) {
 	t.Helper()
 	auth, err := testGatewayAuth(t, home)
 	if err != nil {
@@ -44,7 +45,7 @@ func seedFolder(t *testing.T, home string) string {
 	}
 	dir := t.TempDir()
 	seedTestState(t, home)
-	if err := remember(home, SessionInfo{Directory: dir, Harness: "claude", Mode: "default"}); err != nil {
+	if err := remember(home, session.SessionInfo{Directory: dir, Harness: "claude", Mode: "default"}); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -77,8 +78,8 @@ func TestIdentityWithoutTailscaleReportsSignedInEmail(t *testing.T) {
 func TestBrowserActorIgnoresForgedActorHeader(t *testing.T) {
 	home := t.TempDir()
 	dir := seedFolder(t, home)
-	var started SessionInfo
-	g, origin := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	var started session.SessionInfo
+	g, origin := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		started = info
 		return "session-test", nil
 	})
@@ -99,12 +100,12 @@ func TestBrowserActorIgnoresForgedActorHeader(t *testing.T) {
 func TestStartSessionRecordsMCPActor(t *testing.T) {
 	home := t.TempDir()
 	dir := seedFolder(t, home)
-	var started SessionInfo
-	g, _ := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	var started session.SessionInfo
+	g, _ := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		started = info
 		return "session-test", nil
 	})
-	info, err := g.startSession(context.Background(), LocalActor("mcp"), SessionInfo{Directory: dir, Harness: "claude", Mode: "default"}, "")
+	info, err := g.startSession(context.Background(), session.LocalActor("mcp"), session.SessionInfo{Directory: dir, Harness: "claude", Mode: "default"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,26 +117,26 @@ func TestStartSessionRecordsMCPActor(t *testing.T) {
 func TestContextActorBecomesStartedBy(t *testing.T) {
 	home := t.TempDir()
 	dir := seedFolder(t, home)
-	var started SessionInfo
-	g, origin := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	var started session.SessionInfo
+	g, origin := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		started = info
 		return "session-test", nil
 	})
 	r := httptest.NewRequest("POST", origin.String()+"/api/sessions", bytes.NewBufferString(`{"directory":`+strconv.Quote(dir)+`,"harness":"claude","mode":"default"}`))
 	r.Header.Set("Authorization", "Bearer "+g.local.Secret)
-	r = r.WithContext(withActor(r.Context(), Actor{Kind: "peer", User: "alice@example.com", Node: "laptop", StableNodeID: "stable-laptop"}))
+	r = r.WithContext(session.WithActor(r.Context(), session.Actor{Kind: "peer", User: "alice@example.com", Node: "laptop", StableNodeID: "stable-laptop"}))
 	w := httptest.NewRecorder()
 	g.Handler().ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	if started.StartedBy == nil || *started.StartedBy != (Actor{Kind: "peer", User: "alice@example.com", Node: "laptop", StableNodeID: "stable-laptop"}) {
+	if started.StartedBy == nil || *started.StartedBy != (session.Actor{Kind: "peer", User: "alice@example.com", Node: "laptop", StableNodeID: "stable-laptop"}) {
 		t.Fatalf("context actor: %+v", started.StartedBy)
 	}
 	if started.StartedBy.StableNodeID == "" {
 		t.Fatal("private worker launch lost the stable peer identity")
 	}
-	var public SessionInfo
+	var public session.SessionInfo
 	if err := json.Unmarshal(w.Body.Bytes(), &public); err != nil {
 		t.Fatal(err)
 	}
@@ -147,36 +148,36 @@ func TestContextActorBecomesStartedBy(t *testing.T) {
 	}
 }
 func TestPeerSessionOwnerRequiresStableNodeIdentity(t *testing.T) {
-	owner := Actor{Kind: "peer", User: "alice@example.com", Node: "old-name", StableNodeID: "stable-owner"}
-	session := SessionInfo{StartedBy: &owner}
-	if !(Actor{Kind: "peer", User: owner.User, Node: "new-name", StableNodeID: owner.StableNodeID}).canWriteSession(session) {
+	owner := session.Actor{Kind: "peer", User: "alice@example.com", Node: "old-name", StableNodeID: "stable-owner"}
+	info := session.SessionInfo{StartedBy: &owner}
+	if !(session.Actor{Kind: "peer", User: owner.User, Node: "new-name", StableNodeID: owner.StableNodeID}).CanWriteSession(info) {
 		t.Fatal("same stable peer identity lost write access after a name change")
 	}
-	for _, actor := range []Actor{
+	for _, actor := range []session.Actor{
 		{Kind: "peer", User: owner.User, Node: owner.Node, StableNodeID: "stable-other"},
 		{Kind: "peer", User: owner.User, Node: owner.Node},
 		{Kind: "peer", User: "mallory@example.com", Node: owner.Node, StableNodeID: owner.StableNodeID},
 	} {
-		if actor.canWriteSession(session) {
+		if actor.CanWriteSession(info) {
 			t.Fatalf("non-owner peer gained write access: %+v", actor)
 		}
 	}
-	legacyOwner := Actor{Kind: "peer", User: owner.User, Node: owner.Node}
-	if (Actor{Kind: "peer", User: owner.User, Node: owner.Node, StableNodeID: "stable-other"}).canWriteSession(SessionInfo{StartedBy: &legacyOwner}) {
+	legacyOwner := session.Actor{Kind: "peer", User: owner.User, Node: owner.Node}
+	if (session.Actor{Kind: "peer", User: owner.User, Node: owner.Node, StableNodeID: "stable-other"}).CanWriteSession(session.SessionInfo{StartedBy: &legacyOwner}) {
 		t.Fatal("a reused peer name matched an owner without a stable ID")
 	}
-	localOwner := LocalActor("cli")
-	localBrowser := browserActor(testBrowserEmail)
-	if localBrowser.canWriteSession(SessionInfo{StartedBy: &localOwner}) ||
-		localOwner.canWriteSession(SessionInfo{StartedBy: &localBrowser}) {
+	localOwner := session.LocalActor("cli")
+	localBrowser := session.BrowserActor(testBrowserEmail)
+	if localBrowser.CanWriteSession(session.SessionInfo{StartedBy: &localOwner}) ||
+		localOwner.CanWriteSession(session.SessionInfo{StartedBy: &localBrowser}) {
 		t.Fatal("host alone granted access across account identities")
 	}
-	localPeer := Actor{Kind: "peer", User: localOwner.User, Node: localOwner.Node, StableNodeID: "stable-peer"}
-	if localPeer.canWriteSession(SessionInfo{StartedBy: &localOwner}) {
+	localPeer := session.Actor{Kind: "peer", User: localOwner.User, Node: localOwner.Node, StableNodeID: "stable-peer"}
+	if localPeer.CanWriteSession(session.SessionInfo{StartedBy: &localOwner}) {
 		t.Fatal("peer identity crossed into a local owner session")
 	}
-	peerOwner := Actor{Kind: "peer", User: localOwner.User, Node: localOwner.Node, StableNodeID: "stable-peer"}
-	if localBrowser.canWriteSession(SessionInfo{StartedBy: &peerOwner}) {
+	peerOwner := session.Actor{Kind: "peer", User: localOwner.User, Node: localOwner.Node, StableNodeID: "stable-peer"}
+	if localBrowser.CanWriteSession(session.SessionInfo{StartedBy: &peerOwner}) {
 		t.Fatal("local identity crossed into a peer owner session")
 	}
 }
@@ -201,12 +202,12 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 	defer upstream.Close()
 
 	sessionID := "session-answer"
-	owner := browserActor(testBrowserEmail)
+	owner := session.BrowserActor(testBrowserEmail)
 	record := WorkerRecord{
 		ID: sessionID, Address: strings.TrimPrefix(upstream.URL, "http://"), Secret: strings.Repeat("s", 64),
-		Session: SessionInfo{ID: sessionID, Transport: "acp", StartedBy: &owner},
+		Session: session.SessionInfo{ID: sessionID, Transport: "acp", StartedBy: &owner},
 	}
-	if err := upsertSession(t.Context(), g.store.DB, record.Session); err != nil {
+	if err := session.UpsertSession(t.Context(), g.store.DB, record.Session); err != nil {
 		t.Fatal(err)
 	}
 	directory := filepath.Join(home, "network", "sessions", sessionID)
@@ -221,12 +222,12 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := func(method, path, body string, actor *Actor) *httptest.ResponseRecorder {
+	request := func(method, path, body string, actor *session.Actor) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest(method, origin.String()+"/api/sessions/"+sessionID+path, strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
 		if actor != nil {
-			r = r.WithContext(withActor(r.Context(), *actor))
+			r = r.WithContext(session.WithActor(r.Context(), *actor))
 		}
 		w := httptest.NewRecorder()
 		g.Handler().ServeHTTP(w, r)
@@ -254,7 +255,7 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 		}
 	}
 
-	readOnly := Actor{Kind: "peer", User: owner.User, Node: "another-node"}
+	readOnly := session.Actor{Kind: "peer", User: owner.User, Node: "another-node"}
 	mutations := []struct {
 		method, path, body string
 	}{
@@ -290,7 +291,7 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 	default:
 	}
 
-	localCLI := Actor{Kind: "cli", User: owner.User, Node: owner.Node}
+	localCLI := session.Actor{Kind: "cli", User: owner.User, Node: owner.Node}
 	for _, path := range []string{"prompt", "permission", "cancel", "elicitation", "config", "blobs"} {
 		if got := request(http.MethodPost, "/conversation/"+path, `{}`, &localCLI).Code; got != http.StatusNoContent {
 			t.Fatalf("owner write %s: status %d", path, got)
@@ -320,7 +321,7 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 	if err := os.RemoveAll(directory); err != nil {
 		t.Fatal(err)
 	}
-	if err := endSession(t.Context(), g.store.DB, sessionID, TerminalState{}); err != nil {
+	if err := session.EndSession(t.Context(), g.store.DB, sessionID, session.TerminalState{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := request(http.MethodPatch, "", `{"name":"Nope"}`, &readOnly).Code; got != http.StatusForbidden {
@@ -337,19 +338,19 @@ func TestPeerACPResumeRequiresRecordedOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := Actor{Kind: "peer", User: "alice@example.com", Node: "old-name", StableNodeID: "stable-owner"}
-	if err := testRememberACPConversationOwner(t, home, SessionInfo{
+	owner := session.Actor{Kind: "peer", User: "alice@example.com", Node: "old-name", StableNodeID: "stable-owner"}
+	if err := testRememberACPConversationOwner(t, home, session.SessionInfo{
 		Directory: directory, FolderID: folderID, Harness: "claude", Mode: "default",
 		Transport: "acp", AgentSessionID: "prior-1", StartedBy: &owner,
 	}, ""); err != nil {
 		t.Fatal(err)
 	}
-	var started []SessionInfo
-	g, origin := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	var started []session.SessionInfo
+	g, origin := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		started = append(started, info)
 		return "session-new", nil
 	})
-	resume := func(agentSessionID string, actor Actor) *httptest.ResponseRecorder {
+	resume := func(agentSessionID string, actor session.Actor) *httptest.ResponseRecorder {
 		t.Helper()
 		body, err := json.Marshal(map[string]string{
 			"directory": directory, "harness": "claude", "mode": "default",
@@ -360,18 +361,18 @@ func TestPeerACPResumeRequiresRecordedOwner(t *testing.T) {
 		}
 		r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/sessions", bytes.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
-		r = r.WithContext(withActor(r.Context(), actor))
+		r = r.WithContext(session.WithActor(r.Context(), actor))
 		w := httptest.NewRecorder()
 		g.Handler().ServeHTTP(w, r)
 		g.starting.Wait()
 		return w
 	}
 
-	otherPeer := Actor{Kind: "peer", User: owner.User, Node: owner.Node, StableNodeID: "stable-other"}
+	otherPeer := session.Actor{Kind: "peer", User: owner.User, Node: owner.Node, StableNodeID: "stable-other"}
 	if got := resume("prior-1", otherPeer).Code; got != http.StatusForbidden || len(started) != 0 {
 		t.Fatalf("non-owner resume status=%d starts=%d", got, len(started))
 	}
-	renamedOwner := Actor{Kind: "peer", User: owner.User, Node: "new-name", StableNodeID: owner.StableNodeID}
+	renamedOwner := session.Actor{Kind: "peer", User: owner.User, Node: "new-name", StableNodeID: owner.StableNodeID}
 	if got := resume("prior-1", renamedOwner).Code; got != http.StatusOK || len(started) != 1 {
 		t.Fatalf("owner resume status=%d starts=%d", got, len(started))
 	}
@@ -389,7 +390,7 @@ func TestPeerACPResumeRequiresRecordedOwner(t *testing.T) {
 	if got := resume("unowned", otherPeer).Code; got != http.StatusForbidden || len(started) != 1 {
 		t.Fatalf("unowned peer resume status=%d starts=%d", got, len(started))
 	}
-	if got := resume("external-history", browserActor(testBrowserEmail)).Code; got != http.StatusOK || len(started) != 2 {
+	if got := resume("external-history", session.BrowserActor(testBrowserEmail)).Code; got != http.StatusOK || len(started) != 2 {
 		t.Fatalf("local unowned resume status=%d starts=%d", got, len(started))
 	}
 }
@@ -401,8 +402,8 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := Actor{Kind: "peer", User: "alice@example.com", Node: "old-name", StableNodeID: "stable-owner"}
-	sourceSession := SessionInfo{
+	owner := session.Actor{Kind: "peer", User: "alice@example.com", Node: "old-name", StableNodeID: "stable-owner"}
+	sourceSession := session.SessionInfo{
 		ID: "session-source", Directory: directory, FolderID: folderID, Harness: "claude",
 		Mode: "default", Transport: "acp", AgentSessionID: "source-session", StartedBy: &owner,
 	}
@@ -414,13 +415,13 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := testSessionStore(t, home)
-	saveSourceRecord := func(session SessionInfo) {
+	saveSourceRecord := func(info session.SessionInfo) {
 		t.Helper()
-		if err := upsertSession(t.Context(), store.DB, session); err != nil {
+		if err := session.UpsertSession(t.Context(), store.DB, info); err != nil {
 			t.Fatal(err)
 		}
 		data, err := json.Marshal(WorkerRecord{
-			Session: session, ID: sourceSession.ID, Address: "127.0.0.1:7420", Secret: strings.Repeat("s", 64),
+			Session: info, ID: sourceSession.ID, Address: "127.0.0.1:7420", Secret: strings.Repeat("s", 64),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -430,15 +431,15 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 		}
 	}
 	saveSourceRecord(sourceSession)
-	var started SessionInfo
+	var started session.SessionInfo
 	var receivedForkID string
 	starts := 0
-	g, origin := identityGateway(t, home, func(_ context.Context, info SessionInfo, forkSessionID string) (string, error) {
+	g, origin := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, forkSessionID string) (string, error) {
 		starts++
 		started, receivedForkID = info, forkSessionID
 		return "session-forked", nil
 	})
-	request := func(actor Actor, requestID ...string) *httptest.ResponseRecorder {
+	request := func(actor session.Actor, requestID ...string) *httptest.ResponseRecorder {
 		t.Helper()
 		body := ""
 		if len(requestID) != 0 {
@@ -446,13 +447,13 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 		}
 		r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/sessions/"+sourceSession.ID+"/fork", strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
-		r = r.WithContext(withActor(r.Context(), actor))
+		r = r.WithContext(session.WithActor(r.Context(), actor))
 		w := httptest.NewRecorder()
 		g.Handler().ServeHTTP(w, r)
 		g.starting.Wait()
 		return w
 	}
-	renamedOwner := Actor{Kind: "peer", User: owner.User, Node: "new-name", StableNodeID: owner.StableNodeID}
+	renamedOwner := session.Actor{Kind: "peer", User: owner.User, Node: "new-name", StableNodeID: owner.StableNodeID}
 	for _, test := range []struct {
 		name      string
 		transport string
@@ -469,7 +470,7 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 		}
 	}
 	saveSourceRecord(sourceSession)
-	otherPeer := Actor{Kind: "peer", User: owner.User, Node: owner.Node, StableNodeID: "stable-other"}
+	otherPeer := session.Actor{Kind: "peer", User: owner.User, Node: owner.Node, StableNodeID: "stable-other"}
 	if got := request(otherPeer).Code; got != http.StatusForbidden || starts != 0 {
 		t.Fatalf("non-owner fork status=%d starts=%d", got, starts)
 	}
@@ -539,14 +540,14 @@ func TestStartWorkerStampsStartedAtOnlyWhenZero(t *testing.T) {
 		}
 		return got
 	}
-	if got := captured(t, WorkerLaunch{Session: SessionInfo{ID: "a"}}); got.Session.StartedAt.IsZero() || time.Since(got.Session.StartedAt) > time.Minute {
+	if got := captured(t, WorkerLaunch{Session: session.SessionInfo{ID: "a"}}); got.Session.StartedAt.IsZero() || time.Since(got.Session.StartedAt) > time.Minute {
 		t.Fatalf("zero StartedAt not stamped: %v", got.Session.StartedAt)
 	}
 	fixed := time.Date(2024, 5, 6, 7, 8, 9, 0, time.UTC)
-	if got := captured(t, WorkerLaunch{Session: SessionInfo{ID: "b", StartedAt: fixed}}); !got.Session.StartedAt.Equal(fixed) {
+	if got := captured(t, WorkerLaunch{Session: session.SessionInfo{ID: "b", StartedAt: fixed}}); !got.Session.StartedAt.Equal(fixed) {
 		t.Fatalf("preset StartedAt overwritten: %v", got.Session.StartedAt)
 	}
-	fork := captured(t, WorkerLaunch{Session: SessionInfo{ID: "c"}, ForkSessionID: "source-session"})
+	fork := captured(t, WorkerLaunch{Session: session.SessionInfo{ID: "c"}, ForkSessionID: "source-session"})
 	if fork.ForkSessionID != "source-session" || fork.Session.AgentSessionID != "" {
 		t.Fatalf("fork source was not kept private in worker launch: %+v", fork)
 	}
@@ -558,13 +559,13 @@ func TestRunWorkerPersistsCLIStartedBy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	actor := LocalActor("cli")
+	actor := session.LocalActor("cli")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ready := make(chan string, 1)
 	done := make(chan error, 1)
 	go func() {
-		_, err := RunWorker(ctx, home, "test", WorkerLaunch{Session: SessionInfo{StartedBy: &actor, StartedAt: time.Now()}, Program: executable, Directory: home, Arguments: []string{"-test.run=^TestTerminalChild$"}, Environment: append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1"), Rows: 24, Columns: 80}, func(id string) error { ready <- id; return nil })
+		_, err := RunWorker(ctx, home, "test", WorkerLaunch{Session: session.SessionInfo{StartedBy: &actor, StartedAt: time.Now()}, Program: executable, Directory: home, Arguments: []string{"-test.run=^TestTerminalChild$"}, Environment: append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1"), Rows: 24, Columns: 80}, func(id string) error { ready <- id; return nil })
 		done <- err
 	}()
 	var id string
@@ -576,7 +577,7 @@ func TestRunWorkerPersistsCLIStartedBy(t *testing.T) {
 		t.Fatal("worker startup timeout")
 	}
 	store := testSessionStore(t, home)
-	info, err := storedSession(t.Context(), store.Reader, id)
+	info, err := session.StoredSession(t.Context(), store.Reader, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +592,7 @@ func TestForwardedAccountRequiresExplicitMeshAndOwnsOnlyItsChats(t *testing.T) {
 	g, _ := identityGateway(t, t.TempDir(), nil)
 	library := replicaStore(t)
 	g.options.Library.Store = library
-	peer := Actor{Kind: "peer", User: "tailscale@example.com", StableNodeID: "remote"}
+	peer := session.Actor{Kind: "peer", User: "tailscale@example.com", StableNodeID: "remote"}
 	if err := library.EnrollOwnMachine("remote"); err != nil {
 		t.Fatal(err)
 	}
@@ -606,23 +607,23 @@ func TestForwardedAccountRequiresExplicitMeshAndOwnsOnlyItsChats(t *testing.T) {
 	if err != nil || !actor.Account || actor.User != testBrowserEmail {
 		t.Fatalf("mesh account refused: %+v %v", actor, err)
 	}
-	own := browserActor(testBrowserEmail)
-	if !actor.canWriteSession(SessionInfo{StartedBy: &own}) {
+	own := session.BrowserActor(testBrowserEmail)
+	if !actor.CanWriteSession(session.SessionInfo{StartedBy: &own}) {
 		t.Fatal("same account could not continue its chat through another node")
 	}
-	other := browserActor("other@example.com")
-	if actor.canWriteSession(SessionInfo{StartedBy: &other}) {
+	other := session.BrowserActor("other@example.com")
+	if actor.CanWriteSession(session.SessionInfo{StartedBy: &other}) {
 		t.Fatal("peer account wrote someone else's chat")
 	}
 	body, err := json.Marshal(actor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var saved Actor
+	var saved session.Actor
 	if err := json.Unmarshal(body, &saved); err != nil {
 		t.Fatal(err)
 	}
-	if !own.canWriteSession(SessionInfo{StartedBy: &saved}) {
+	if !own.CanWriteSession(session.SessionInfo{StartedBy: &saved}) {
 		t.Fatal("account ownership did not survive session persistence")
 	}
 	if _, err := g.forwardedAccount(t.Context(), peer, "missing@example.com"); err == nil {
@@ -648,7 +649,7 @@ func TestProxyUsesAuthenticatedAccountInsteadOfCallerHeader(t *testing.T) {
 		r := httptest.NewRequest("POST", "http://localhost/api/sessions/session-example/stop", nil)
 		r.Header.Set("X-Agentpack-User", "forged@example.com")
 		if account {
-			r = r.WithContext(withActor(r.Context(), browserActor(testBrowserEmail)))
+			r = r.WithContext(session.WithActor(r.Context(), session.BrowserActor(testBrowserEmail)))
 		}
 		g.proxyTailnetTo(httptest.NewRecorder(), r, "remote", target)
 		email := <-got
@@ -711,8 +712,8 @@ func TestTailnetWhoisIsCachedButFailuresAreNot(t *testing.T) {
 func TestClientChatIDIsAnInsertOnlyClaim(t *testing.T) {
 	home := t.TempDir()
 	dir := seedFolder(t, home)
-	starts := make(chan SessionInfo, 2)
-	g, origin := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	starts := make(chan session.SessionInfo, 2)
+	g, origin := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		starts <- info
 		return info.ID, nil
 	})
@@ -722,14 +723,14 @@ func TestClientChatIDIsAnInsertOnlyClaim(t *testing.T) {
 		t.Helper()
 		r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/sessions", bytes.NewReader(mustRawJSON(input)))
 		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
-		r = r.WithContext(withActor(r.Context(), browserActor(user)))
+		r = r.WithContext(session.WithActor(r.Context(), session.BrowserActor(user)))
 		w := httptest.NewRecorder()
 		g.Handler().ServeHTTP(w, r)
 		if w.Code != want {
 			t.Fatalf("start status = %d, want %d: %s", w.Code, want, w.Body.String())
 		}
 		if want == http.StatusOK {
-			var info SessionInfo
+			var info session.SessionInfo
 			if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil || info.ID != input.ID || info.ConversationState != "starting" {
 				t.Fatalf("invalid claimed session: %+v (%v)", info, err)
 			}
@@ -743,7 +744,7 @@ func TestClientChatIDIsAnInsertOnlyClaim(t *testing.T) {
 	call(changed, testBrowserEmail, http.StatusConflict)
 	unclaimed := body
 	unclaimed.ID = "session-f7148a740d2c495991c792576427836d"
-	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: unclaimed.ID, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: unclaimed.ID, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	call(unclaimed, testBrowserEmail, http.StatusConflict)

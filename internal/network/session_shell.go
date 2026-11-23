@@ -6,20 +6,21 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
-func (g *Gateway) startShell(w http.ResponseWriter, r *http.Request, actor Actor, input chatStartRequest) {
+func (g *Gateway) startShell(w http.ResponseWriter, r *http.Request, actor session.Actor, input chatStartRequest) {
 	ctx := r.Context()
 	node, err := g.store.NodeID(ctx)
 	if err != nil {
-		writeSessionStart(w, r, SessionInfo{}, err)
+		writeSessionStart(w, r, session.SessionInfo{}, err)
 		return
 	}
-	info := SessionInfo{NodeID: node, Reachable: true, Transport: "shell", Harness: "shell", ParentID: input.ParentID, StartedBy: &actor}
+	info := session.SessionInfo{NodeID: node, Reachable: true, Transport: "shell", Harness: "shell", ParentID: input.ParentID, StartedBy: &actor}
 	if input.ParentID != "" {
-		parent, err := storedSession(ctx, g.store.Reader, input.ParentID)
-		if errors.Is(err, errSessionNotFound) {
+		parent, err := session.StoredSession(ctx, g.store.Reader, input.ParentID)
+		if errors.Is(err, session.ErrSessionNotFound) {
 			http.Error(w, "chat not found", http.StatusNotFound)
 			return
 		}
@@ -73,8 +74,8 @@ func (g *Gateway) startShell(w http.ResponseWriter, r *http.Request, actor Actor
 
 func (g *Gateway) serveChatShells(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	parent, err := storedSession(ctx, g.store.Reader, r.PathValue("id"))
-	if errors.Is(err, errSessionNotFound) {
+	parent, err := session.StoredSession(ctx, g.store.Reader, r.PathValue("id"))
+	if errors.Is(err, session.ErrSessionNotFound) {
 		http.Error(w, "chat not found", http.StatusNotFound)
 		return
 	}
@@ -89,7 +90,7 @@ func (g *Gateway) serveChatShells(w http.ResponseWriter, r *http.Request) {
 	if !authorizeACPWrite(w, r, parent) {
 		return
 	}
-	rows, err := querySessions(ctx, g.store.Reader, "SELECT "+sessionColumns+
+	rows, err := session.QuerySessions(ctx, g.store.Reader, "SELECT "+session.SessionColumns+
 		" FROM sessions WHERE transport='shell' AND parent_id=? AND node_id=? AND hidden=0 AND ended_at=0 ORDER BY started_at,id", parent.ID, parent.NodeID)
 	if err != nil {
 		meshReadError(w, r, err)

@@ -65,20 +65,20 @@ func revertPlan(log []acp.LogEntry, turn int) ([]revertFile, int, error) {
 
 // RevertTurn undoes the file edits of one turn, or changes nothing and says why.
 // The status is the HTTP code for a refusal.
-func (session *ConversationSession) RevertTurn(turn int) (int, int, error) {
-	if session.workspace == "" {
+func (cs *ConversationSession) RevertTurn(turn int) (int, int, error) {
+	if cs.workspace == "" {
 		return 0, http.StatusConflict, errors.New("session has no working directory")
 	}
-	session.writes.RLock()
-	defer session.writes.RUnlock()
-	if !session.promptMu.TryLock() { // blocks a new prompt while files change
+	cs.writes.RLock()
+	defer cs.writes.RUnlock()
+	if !cs.promptMu.TryLock() { // blocks a new prompt while files change
 		return 0, http.StatusConflict, errors.New("a turn is running")
 	}
-	defer session.promptMu.Unlock()
-	if session.ConversationState() != "idle" {
+	defer cs.promptMu.Unlock()
+	if cs.ConversationState() != "idle" {
 		return 0, http.StatusConflict, errors.New("a turn is running")
 	}
-	files, n, err := revertPlan(session.log.Snapshot(), turn)
+	files, n, err := revertPlan(cs.log.Snapshot(), turn)
 	if err != nil {
 		return 0, http.StatusConflict, err
 	}
@@ -90,7 +90,7 @@ func (session *ConversationSession) RevertTurn(turn int) (int, int, error) {
 	}
 	for i := range files {
 		f := &files[i]
-		resolved, err := acp.ResolveWorkspacePath(session.workspace, nil, f.path)
+		resolved, err := acp.ResolveWorkspacePath(cs.workspace, nil, f.path)
 		if errors.Is(err, fs.ErrNotExist) {
 			return 0, http.StatusConflict, fmt.Errorf("%s changed since this turn", f.path)
 		}

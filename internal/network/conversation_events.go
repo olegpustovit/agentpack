@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/tmaxmax/go-sse"
 )
 
@@ -53,7 +54,7 @@ func (g *Gateway) followConversation(r *http.Request) <-chan conversationStreamF
 				send(conversationStreamFrame{event: "conversation_fallback"})
 				return
 			}
-			if err != nil && ctx.Err() == nil && !errors.Is(err, errSessionUnavailable) {
+			if err != nil && ctx.Err() == nil && !errors.Is(err, session.ErrSessionUnavailable) {
 				_, event := obs.Start(ctx, "gateway", "relay_conversation")
 				event.Set("session_id", id)
 				event.Fail(err)
@@ -70,11 +71,11 @@ func (g *Gateway) followConversation(r *http.Request) <-chan conversationStreamF
 }
 
 func (g *Gateway) readConversationStream(ctx context.Context, id, node string, since int64, send func(conversationStreamFrame) bool) (int64, error) {
-	info, err := storedSession(ctx, g.store.Reader, id)
+	info, err := session.StoredSession(ctx, g.store.Reader, id)
 	if err == nil && (info.Transport != "acp" || !info.ArchivedAt.IsZero()) {
 		return since, errConversationStreamUnsupported
 	}
-	if err != nil && !errors.Is(err, errSessionNotFound) {
+	if err != nil && !errors.Is(err, session.ErrSessionNotFound) {
 		return since, err
 	}
 	local, err := g.store.NodeID(ctx)
@@ -97,7 +98,7 @@ func (g *Gateway) readConversationStream(ctx context.Context, id, node string, s
 			// A starting session can already contain prompts accepted directly by the gateway.
 			entries, _, truncated, err := storedConversationTail(ctx, g.store.Reader, id, since)
 			if err != nil {
-				return since, errSessionUnavailable
+				return since, session.ErrSessionUnavailable
 			}
 			if truncated && !send(conversationStreamFrame{event: "conversation_truncated"}) {
 				return since, ctx.Err()
@@ -115,7 +116,7 @@ func (g *Gateway) readConversationStream(ctx context.Context, id, node string, s
 	} else {
 		upstream, err = g.tailnetTarget(ctx, node)
 		if err != nil {
-			return since, errSessionUnavailable
+			return since, session.ErrSessionUnavailable
 		}
 		path = "/api/sessions/" + id + "/conversation"
 		transport = tailnetRequestTransport(http.MethodGet, path)
@@ -129,7 +130,7 @@ func (g *Gateway) readConversationStream(ctx context.Context, id, node string, s
 	request.Header.Set("Accept", "text/event-stream")
 	if authorization != "" {
 		request.Header.Set("Authorization", authorization)
-	} else if actor, ok := actorFrom(ctx); ok && (actor.Account || actor.Kind == "browser" || actor.Kind == "mcp") {
+	} else if actor, ok := session.ActorFrom(ctx); ok && (actor.Account || actor.Kind == "browser" || actor.Kind == "mcp") {
 		request.Header.Set("X-Agentpack-User", actor.User)
 	}
 	if trace := obs.TraceParent(ctx); trace != "" {

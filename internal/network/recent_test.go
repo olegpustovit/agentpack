@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -20,10 +21,10 @@ func TestRecentForgetsOnlyMatchingLaunchWithoutDeletingFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
-	first := SessionInfo{Directory: directory, Harness: "codex", Mode: "default"}
+	first := session.SessionInfo{Directory: directory, Harness: "codex", Mode: "default"}
 	second := first
 	second.Mode = "review"
-	for _, entry := range []SessionInfo{first, second, first} {
+	for _, entry := range []session.SessionInfo{first, second, first} {
 		if err := remember(home, entry); err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +73,7 @@ func TestKnownDirectoryRejectsReplacementUntilLocalLaunch(t *testing.T) {
 	if err := os.Mkdir(directory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	info := SessionInfo{Directory: directory, Harness: "codex"}
+	info := session.SessionInfo{Directory: directory, Harness: "codex"}
 	if err := remember(home, info); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,7 @@ func TestRecentAPIReportsCurrentAvailabilityAndLastUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := time.Now().UTC()
-	info := SessionInfo{Directory: directory, Harness: "codex", Mode: "default"}
+	info := session.SessionInfo{Directory: directory, Harness: "codex", Mode: "default"}
 	if err := remember(home, info); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +175,7 @@ func TestRecentAPIReportsCurrentAvailabilityAndLastUse(t *testing.T) {
 
 func TestKnownDirectoryBeyondRecentList(t *testing.T) {
 	home, directory := t.TempDir(), t.TempDir()
-	if err := remember(home, SessionInfo{Directory: directory, Harness: "codex"}); err != nil {
+	if err := remember(home, session.SessionInfo{Directory: directory, Harness: "codex"}); err != nil {
 		t.Fatal(err)
 	}
 	auth, err := testGatewayAuth(t, home)

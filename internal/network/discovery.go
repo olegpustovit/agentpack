@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 
 	"golang.org/x/sync/errgroup"
@@ -594,7 +595,7 @@ func (g *Gateway) proxyTailnetTo(w http.ResponseWriter, r *http.Request, id stri
 		request.Header.Del("Cookie")
 		request.Header.Del("X-Agentpack-User")
 		request.Header.Del("X-Agentpack-Browser")
-		if actor, ok := actorFrom(r.Context()); ok && (actor.Account || actor.Kind == "browser" || actor.Kind == "mcp") {
+		if actor, ok := session.ActorFrom(r.Context()); ok && (actor.Account || actor.Kind == "browser" || actor.Kind == "mcp") {
 			request.Header.Set("X-Agentpack-User", actor.User)
 			if actor.CanStartNewFolder() {
 				request.Header.Set("X-Agentpack-Browser", "1")
@@ -733,7 +734,7 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			http.Error(w, "peer is not enrolled", http.StatusForbidden)
 			return
 		}
-		actor := Actor{Kind: "peer", User: identity.UserProfile.LoginName, Node: identity.Node.ComputedName, StableNodeID: identity.Node.StableID}
+		actor := session.Actor{Kind: "peer", User: identity.UserProfile.LoginName, Node: identity.Node.ComputedName, StableNodeID: identity.Node.StableID}
 		actor, err = g.forwardedAccount(r.Context(), actor, r.Header.Get("X-Agentpack-User"))
 		if err != nil {
 			if event := obs.From(r.Context()); event != nil {
@@ -748,8 +749,8 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			http.Error(w, "forwarded account required", http.StatusForbidden)
 			return
 		}
-		actor.forwardedBrowser = actor.Account && r.Header.Get("X-Agentpack-Browser") == "1"
-		request := r.Clone(withCaller(withActor(context.WithValue(r.Context(), replicaPeerKey{}, identity.Node.StableID), actor), callerPeer))
+		actor.ForwardedBrowser = actor.Account && r.Header.Get("X-Agentpack-Browser") == "1"
+		request := r.Clone(withCaller(session.WithActor(context.WithValue(r.Context(), replicaPeerKey{}, identity.Node.StableID), actor), callerPeer))
 		request.Header = r.Header.Clone()
 		request.Header.Del("X-Agentpack-User")
 		request.Header.Del("X-Agentpack-Browser")

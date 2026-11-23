@@ -13,6 +13,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/tmaxmax/go-sse"
 )
 
@@ -178,7 +179,7 @@ func TestACPAgentExitStopsStateButKeepsConversationAndRestart(t *testing.T) {
 	stateRequest := httptest.NewRequest(http.MethodGet, "/state", nil)
 	stateRequest.Header.Set("Authorization", "Bearer "+strings.Repeat("s", 64))
 	worker.ServeHTTP(state, stateRequest)
-	var got TerminalState
+	var got session.TerminalState
 	if err := json.Unmarshal(state.Body.Bytes(), &got); err != nil || got.Running {
 		t.Fatalf("state after agent exit = %s, err=%v", state.Body.String(), err)
 	}

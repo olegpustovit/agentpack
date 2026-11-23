@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -416,7 +417,7 @@ func (m *GatewayMCP) authenticate(r *http.Request) *http.Request {
 		}
 		return nil
 	}
-	return r.WithContext(withActor(r.Context(), Actor{Kind: "mcp", User: email, Node: localHostname()}))
+	return r.WithContext(session.WithActor(r.Context(), session.Actor{Kind: "mcp", User: email, Node: session.LocalHostname()}))
 }
 
 // normalizeClient checks registered or published client metadata and makes it a public client:

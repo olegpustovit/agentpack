@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -245,12 +246,12 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: h.server.URL + "/mcp", HTTPClient: &http.Client{Transport: mcpBearerTransport{tokens.Access}}}, &mcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"})
+	clientSession, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: h.server.URL + "/mcp", HTTPClient: &http.Client{Transport: mcpBearerTransport{tokens.Access}}}, &mcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
-	listed, err := session.ListTools(ctx, nil)
+	defer clientSession.Close()
+	listed, err := clientSession.ListTools(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,12 +264,12 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 	if !slices.Equal(names, want) {
 		t.Fatal("tool inventory", names)
 	}
-	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_sessions", Arguments: map[string]any{}})
+	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "list_sessions", Arguments: map[string]any{}})
 	if err != nil || result.IsError {
 		t.Fatalf("list sessions: %v %+v", err, result)
 	}
 	var started atomic.Int32
-	h.gateway.options.Start = func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	h.gateway.options.Start = func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		if info.StartedBy == nil || info.StartedBy.Kind != "mcp" || info.StartedBy.User != testBrowserEmail {
 			t.Errorf("MCP identity lost: %+v", info.StartedBy)
 		}
@@ -276,17 +277,17 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 		return "session-test", nil
 	}
 	directory := filepath.Join(h.gateway.options.Home, "project")
-	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "start_session", Arguments: map[string]any{"directory": directory, "agent": "codex", "terminal": true}})
+	result, err = clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "start_session", Arguments: map[string]any{"directory": directory, "agent": "codex", "terminal": true}})
 	if err != nil || !result.IsError || started.Load() != 0 {
 		t.Fatalf("unknown folder accepted: %v %+v", err, result)
 	}
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := remember(h.gateway.options.Home, SessionInfo{Directory: directory, Harness: "codex"}); err != nil {
+	if err := remember(h.gateway.options.Home, session.SessionInfo{Directory: directory, Harness: "codex"}); err != nil {
 		t.Fatal(err)
 	}
-	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "start_session", Arguments: map[string]any{"directory": directory, "agent": "codex", "terminal": true}})
+	result, err = clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "start_session", Arguments: map[string]any{"directory": directory, "agent": "codex", "terminal": true}})
 	if err != nil || result.IsError || started.Load() != 1 {
 		t.Fatalf("known folder failed: %v %+v", err, result)
 	}
@@ -312,15 +313,15 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workerDirectory, "worker.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := upsertSession(t.Context(), h.gateway.store.DB, SessionInfo{ID: record.ID}); err != nil {
+	if err := session.UpsertSession(t.Context(), h.gateway.store.DB, session.SessionInfo{ID: record.ID}); err != nil {
 		t.Fatal(err)
 	}
-	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "restart_session", Arguments: map[string]any{"session_id": record.ID}})
+	result, err = clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "restart_session", Arguments: map[string]any{"session_id": record.ID}})
 	if err == nil && !result.IsError {
 		t.Fatal("restart accepted a missing operation ID")
 	}
 	for range 2 {
-		result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "restart_session", Arguments: map[string]any{"session_id": record.ID, "operation_id": "restart-operation-123"}})
+		result, err = clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "restart_session", Arguments: map[string]any{"session_id": record.ID, "operation_id": "restart-operation-123"}})
 		if err != nil || result.IsError {
 			t.Fatalf("restart with operation ID: %v %+v", err, result)
 		}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -31,7 +32,7 @@ type ConversationSession struct {
 	agentCommands     json.RawMessage
 	agentVersion      string
 	snapshotChanged   func()
-	agentCapabilities *AgentCapabilities
+	agentCapabilities *session.AgentCapabilities
 	agentSessionID    string
 	permissionChange  func(string) // someone chose a permission mode; remembered for the agent
 	clientMode        string       // Agentpack permission override; "" when unsupported
@@ -66,8 +67,8 @@ type ConversationSession struct {
 	after                  func(time.Duration, func()) // schedules network retries; tests replace it
 	networkRetries         int                         // retries since the last turn that reached the agent's service
 	turnsEnded             int                         // a retry is dropped when another turn ended meanwhile
-	goal                   *Goal
-	goalCleared            *Goal // the last goal, kept to log its "cleared" state
+	goal                   *session.Goal
+	goalCleared            *session.Goal // the last goal, kept to log its "cleared" state
 	goalPublished          string
 	goalDirty              bool // the agent reported a native goal snapshot
 	goalSettled            bool // the native goal was marked met because the agent went idle
@@ -114,8 +115,8 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 	return session
 }
 
-func (session *ConversationSession) Attach(since int64) (entries []acp.LogEntry, truncated, gap bool) {
-	return session.log.ReadSince(since)
+func (cs *ConversationSession) Attach(since int64) (entries []acp.LogEntry, truncated, gap bool) {
+	return cs.log.ReadSince(since)
 }
 
 func conversationState(thread acp.ThreadState) string {
@@ -129,20 +130,20 @@ func conversationState(thread acp.ThreadState) string {
 	}
 }
 
-func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
-	<-session.initialized
-	session.mu.Lock()
-	parent := session.observeEntry(entry)
+func (cs *ConversationSession) applyLogEntry(entry acp.LogEntry) {
+	<-cs.initialized
+	cs.mu.Lock()
+	parent := cs.observeEntry(entry)
 	if entry.Kind == "agent_exit" {
-		session.agentExited = true
+		cs.agentExited = true
 	}
 	// The log applied this entry to the fold before notifying, and holds later appends until this returns.
-	state := conversationState(session.fold.Thread.State())
-	changed := state != session.state
+	state := conversationState(cs.fold.Thread.State())
+	changed := state != cs.state
 	if changed {
-		session.followNativeGoal(entry, state)
+		cs.followNativeGoal(entry, state)
 	}
-	session.state = state
+	cs.state = state
 	var settleDelay time.Duration
 	var settleGen uint64
 	var settleAfter func(time.Duration, func())
@@ -150,18 +151,18 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	// long turn (a native /goal, a Stop-hook continuation) that is when the next prompt goes in.
 	cycleEnd := false
 	if entry.Kind == "usage_update" && parent {
-		settleDelay, settleGen, settleAfter = session.unpromptedSettlePlan()
-		cycleEnd = session.queuesPrompts && session.delivering > 0 && bytes.Contains(entry.Payload, []byte(`"cost"`))
+		settleDelay, settleGen, settleAfter = cs.unpromptedSettlePlan()
+		cycleEnd = cs.queuesPrompts && cs.delivering > 0 && bytes.Contains(entry.Payload, []byte(`"cost"`))
 	}
-	goalDirty, pause := session.goalDirty, session.goalPauseDue
-	session.goalDirty, session.goalPauseDue = false, false
-	snapshotChanged := session.snapshotChanged
+	goalDirty, pause := cs.goalDirty, cs.goalPauseDue
+	cs.goalDirty, cs.goalPauseDue = false, false
+	snapshotChanged := cs.snapshotChanged
 	var afterIdle func()
 	// Not while the queue or a goal is about to start the next turn: a restart would cut it off.
-	if changed && state == string(stateIdle) && len(session.queue) == 0 && !session.goalWantsTurn() {
-		afterIdle, session.afterIdle = session.afterIdle, nil
+	if changed && state == string(stateIdle) && len(cs.queue) == 0 && !cs.goalWantsTurn() {
+		afterIdle, cs.afterIdle = cs.afterIdle, nil
 	}
-	session.mu.Unlock()
+	cs.mu.Unlock()
 	if snapshotChanged != nil && parent {
 		switch entry.Kind {
 		case "agent_configuration", "config_option_update", "current_mode_update", "available_commands_update":
@@ -169,26 +170,26 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 		}
 	}
 	if settleDelay > 0 {
-		session.scheduleUnpromptedSettle(settleDelay, settleGen, "end_turn", settleAfter)
+		cs.scheduleUnpromptedSettle(settleDelay, settleGen, "end_turn", settleAfter)
 	}
 	if goalDirty {
 		// Appending from inside a log callback would deadlock; publish once this entry is done.
-		obs.Go("acp.goal_publish", session.publishGoal)
+		obs.Go("acp.goal_publish", cs.publishGoal)
 	}
 	if pause {
-		obs.Go("acp.goal_pause", func() { _, _, _ = session.Submit(context.Background(), acp.PromptInput{Text: "/goal pause"}, false) })
+		obs.Go("acp.goal_pause", func() { _, _, _ = cs.Submit(context.Background(), acp.PromptInput{Text: "/goal pause"}, false) })
 	}
 	if changed {
 		// The sink stores the new state with the events behind it before anything acts on it;
 		// a failed write stays pending in the log, which retries it.
-		_ = session.log.Flush()
+		_ = cs.log.Flush()
 		if afterIdle != nil {
 			afterIdle()
 		}
-		session.maybeDrain()
+		cs.maybeDrain()
 	}
 	if cycleEnd {
-		obs.Go("acp.deliver", func() { session.deliverDuringTurn(true) })
+		obs.Go("acp.deliver", func() { cs.deliverDuringTurn(true) })
 	}
 }
 
@@ -210,16 +211,16 @@ func agentTitle(entry acp.LogEntry) string {
 }
 
 // applyConfigUpdate keeps the cached options in step with the agent. The caller holds mu.
-func (session *ConversationSession) applyConfigUpdate(entry acp.LogEntry) {
+func (cs *ConversationSession) applyConfigUpdate(entry acp.LogEntry) {
 	switch entry.Kind {
 	case "available_commands_update":
-		session.agentCommands = entry.Payload
+		cs.agentCommands = entry.Payload
 	case "config_option_update":
 		var update struct {
 			ConfigOptions json.RawMessage `json:"configOptions"`
 		}
 		if json.Unmarshal(entry.Payload, &update) == nil && len(update.ConfigOptions) > 0 {
-			session.configOptions = update.ConfigOptions
+			cs.configOptions = update.ConfigOptions
 		}
 	case "current_mode_update":
 		var update struct {
@@ -229,18 +230,18 @@ func (session *ConversationSession) applyConfigUpdate(entry acp.LogEntry) {
 			return
 		}
 		var modes map[string]any
-		if json.Unmarshal(session.modes, &modes) == nil && modes != nil {
+		if json.Unmarshal(cs.modes, &modes) == nil && modes != nil {
 			modes["currentModeId"] = update.CurrentModeID
-			session.modes, _ = json.Marshal(modes)
+			cs.modes, _ = json.Marshal(modes)
 		}
 		var options []map[string]any
-		if json.Unmarshal(session.configOptions, &options) == nil {
+		if json.Unmarshal(cs.configOptions, &options) == nil {
 			for _, option := range options {
 				if option["category"] == "mode" {
 					option["currentValue"] = update.CurrentModeID
 				}
 			}
-			session.configOptions, _ = json.Marshal(options)
+			cs.configOptions, _ = json.Marshal(options)
 		}
 	}
 }
@@ -251,23 +252,23 @@ func (session *ConversationSession) applyConfigUpdate(entry acp.LogEntry) {
 var bypassModes = map[string]bool{"bypassPermissions": true, "agent-full-access": true}
 
 // BypassingPermissions reports whether the agent's current mode is one where the user is never asked.
-func (session *ConversationSession) BypassingPermissions() bool {
-	_, value := session.permissionMode()
+func (cs *ConversationSession) BypassingPermissions() bool {
+	_, value := cs.permissionMode()
 	return bypassModes[value]
 }
 
 // applyRememberedPermissions puts a starting agent in the permission mode last chosen for it.
 // An agent that does not offer that mode keeps its own.
-func (session *ConversationSession) applyRememberedPermissions(ctx context.Context, store *state.Store, settingKey string) {
+func (cs *ConversationSession) applyRememberedPermissions(ctx context.Context, store *state.Store, settingKey string) {
 	mode, err := store.Mesh().Setting(ctx, settingKey)
 	if err != nil || mode == "" {
 		return
 	}
-	key, current := session.permissionMode()
+	key, current := cs.permissionMode()
 	if key == "" || current == mode {
 		return
 	}
-	if err := session.setConfigOption(ctx, key, mode, mustRawJSON(mode)); err != nil {
+	if err := cs.setConfigOption(ctx, key, mode, mustRawJSON(mode)); err != nil {
 		_, event := obs.Start(ctx, "worker", "apply_permissions")
 		event.Set("mode", mode)
 		event.Fail(err)
@@ -278,42 +279,42 @@ func (session *ConversationSession) applyRememberedPermissions(ctx context.Conte
 // clientModes are the permission modes agentpack offers for an agent without its own.
 var clientModes = []map[string]string{{"value": "default", "name": "Ask"}, {"value": "bypassPermissions", "name": "Bypass Permissions"}}
 
-func (session *ConversationSession) setClientMode(value any) error {
+func (cs *ConversationSession) setClientMode(value any) error {
 	mode, _ := value.(string)
 	if !slices.ContainsFunc(clientModes, func(item map[string]string) bool { return item["value"] == mode }) {
 		return errors.New("unknown permission mode")
 	}
-	session.mu.Lock()
-	session.clientMode = mode
-	session.mu.Unlock()
+	cs.mu.Lock()
+	cs.clientMode = mode
+	cs.mu.Unlock()
 	return nil
 }
 
 // permissionMode is the ID of the agent's permission option ("mode" for agents that only list
 // modes) and its current value; both are empty when the agent has none.
-func (session *ConversationSession) permissionMode() (key, value string) {
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	key, value = session.agentPermissionMode()
-	if session.clientMode != "" {
+func (cs *ConversationSession) permissionMode() (key, value string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	key, value = cs.agentPermissionMode()
+	if cs.clientMode != "" {
 		if key == "" {
-			return "mode", session.clientMode
+			return "mode", cs.clientMode
 		}
-		if bypassModes[session.clientMode] {
-			return key, session.clientMode
+		if bypassModes[cs.clientMode] {
+			return key, cs.clientMode
 		}
 	}
 	return key, value
 }
 
 // agentPermissionMode reads the native mode with session.mu held.
-func (session *ConversationSession) agentPermissionMode() (key, value string) {
+func (cs *ConversationSession) agentPermissionMode() (key, value string) {
 	var options []struct {
 		ID           string          `json:"id"`
 		Category     string          `json:"category"`
 		CurrentValue json.RawMessage `json:"currentValue"`
 	}
-	if json.Unmarshal(session.configOptions, &options) == nil {
+	if json.Unmarshal(cs.configOptions, &options) == nil {
 		for _, option := range options {
 			if option.Category == "mode" && json.Unmarshal(option.CurrentValue, &value) == nil {
 				return option.ID, value
@@ -323,104 +324,104 @@ func (session *ConversationSession) agentPermissionMode() (key, value string) {
 	var modes struct {
 		CurrentModeID string `json:"currentModeId"`
 	}
-	if json.Unmarshal(session.modes, &modes) == nil && modes.CurrentModeID != "" {
+	if json.Unmarshal(cs.modes, &modes) == nil && modes.CurrentModeID != "" {
 		return "mode", modes.CurrentModeID
 	}
 	return "", ""
 }
 
-func (session *ConversationSession) ConversationState() string {
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	return session.state
+func (cs *ConversationSession) ConversationState() string {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return cs.state
 }
 
-func (session *ConversationSession) AgentExited() bool {
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	return session.agentExited
+func (cs *ConversationSession) AgentExited() bool {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return cs.agentExited
 }
 
 // whenIdle registers run for the next idle settle, replacing any earlier one; false means
 // the conversation is idle now and run was not registered.
-func (session *ConversationSession) whenIdle(run func()) bool {
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	if session.state == string(stateIdle) {
+func (cs *ConversationSession) whenIdle(run func()) bool {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.state == string(stateIdle) {
 		return false
 	}
-	session.afterIdle = run
+	cs.afterIdle = run
 	return true
 }
 
-func (session *ConversationSession) Prompt(ctx context.Context, input acp.PromptInput) (result error) {
-	session.writes.RLock()
-	defer session.writes.RUnlock()
-	if !session.promptMu.TryLock() {
+func (cs *ConversationSession) Prompt(ctx context.Context, input acp.PromptInput) (result error) {
+	cs.writes.RLock()
+	defer cs.writes.RUnlock()
+	if !cs.promptMu.TryLock() {
 		return errors.New("ACP session already has an active prompt")
 	}
-	defer session.promptMu.Unlock()
+	defer cs.promptMu.Unlock()
 	_, event := obs.Start(ctx, "acp.turn", "prompt")
-	session.mu.Lock()
-	broker, exited := session.broker, session.agentExited
-	event.Set("session_id", session.sessionID)
-	first, tools, permissions := session.lastSeq+1, session.toolCalls, session.permissions
-	session.stopReason = ""
-	session.mu.Unlock()
+	cs.mu.Lock()
+	broker, exited := cs.broker, cs.agentExited
+	event.Set("session_id", cs.sessionID)
+	first, tools, permissions := cs.lastSeq+1, cs.toolCalls, cs.permissions
+	cs.stopReason = ""
+	cs.mu.Unlock()
 	defer func() {
-		session.mu.Lock()
-		if session.lastSeq < first {
-			first = session.lastSeq
+		cs.mu.Lock()
+		if cs.lastSeq < first {
+			first = cs.lastSeq
 		}
-		if session.stopReason == "" && result != nil {
-			session.stopReason = "error"
+		if cs.stopReason == "" && result != nil {
+			cs.stopReason = "error"
 			if errors.Is(result, context.Canceled) {
-				session.stopReason = "cancelled"
+				cs.stopReason = "cancelled"
 			}
 		}
 		event.Set("first_seq", first)
-		event.Set("last_seq", session.lastSeq)
-		event.Set("tool_calls", session.toolCalls-tools)
-		event.Set("permission_requests", session.permissions-permissions)
-		event.Set("stop_reason", session.stopReason)
-		session.mu.Unlock()
+		event.Set("last_seq", cs.lastSeq)
+		event.Set("tool_calls", cs.toolCalls-tools)
+		event.Set("permission_requests", cs.permissions-permissions)
+		event.Set("stop_reason", cs.stopReason)
+		cs.mu.Unlock()
 		event.Fail(result)
 		event.End()
 	}()
 	if exited {
 		return errors.New("ACP adapter has exited")
 	}
-	session.mu.Lock()
-	session.delivering++
-	session.mu.Unlock()
-	return session.deliver(ctx, broker, input)
+	cs.mu.Lock()
+	cs.delivering++
+	cs.mu.Unlock()
+	return cs.deliver(ctx, broker, input)
 }
 
 // deliver sends input to the agent, counted by the caller in delivering until the agent answers.
-func (session *ConversationSession) deliver(ctx context.Context, broker *acp.Broker, input acp.PromptInput) error {
+func (cs *ConversationSession) deliver(ctx context.Context, broker *acp.Broker, input acp.PromptInput) error {
 	err := broker.Prompt(ctx, input)
-	session.mu.Lock()
-	session.delivering--
-	if session.delivering == 0 && session.delivered != nil {
-		close(session.delivered)
-		session.delivered = nil
+	cs.mu.Lock()
+	cs.delivering--
+	if cs.delivering == 0 && cs.delivered != nil {
+		close(cs.delivered)
+		cs.delivered = nil
 	}
-	session.mu.Unlock()
+	cs.mu.Unlock()
 	return err
 }
 
 // awaitDelivered waits until the agent answered every prompt sent to it.
-func (session *ConversationSession) awaitDelivered() {
-	session.mu.Lock()
-	if session.delivering == 0 {
-		session.mu.Unlock()
+func (cs *ConversationSession) awaitDelivered() {
+	cs.mu.Lock()
+	if cs.delivering == 0 {
+		cs.mu.Unlock()
 		return
 	}
-	if session.delivered == nil {
-		session.delivered = make(chan struct{})
+	if cs.delivered == nil {
+		cs.delivered = make(chan struct{})
 	}
-	done := session.delivered
-	session.mu.Unlock()
+	done := cs.delivered
+	cs.mu.Unlock()
 	<-done
 }
 
@@ -428,39 +429,39 @@ func (session *ConversationSession) awaitDelivered() {
 // whether the entry is the chat's own. A subagent's entries (its options, usage, replies and turn
 // ends) never drive the chat's goal, usage, retry or stop reason.
 // The caller holds mu, or is initializing the session before publication.
-func (session *ConversationSession) observeEntry(entry acp.LogEntry) bool {
-	session.lastSeq = entry.Seq
+func (cs *ConversationSession) observeEntry(entry acp.LogEntry) bool {
+	cs.lastSeq = entry.Seq
 	switch entry.Kind {
 	case "tool_call":
-		session.toolCalls++
+		cs.toolCalls++
 	case "permission_request":
-		session.permissions++
+		cs.permissions++
 	}
 	if entrySubagent(entry.Payload) != "" {
 		return false
 	}
-	session.observeGoalEntry(entry)
-	session.applyConfigUpdate(entry)
+	cs.observeGoalEntry(entry)
+	cs.applyConfigUpdate(entry)
 	switch entry.Kind {
 	case "prompt":
-		session.inPromptTurn = true
-		session.lastParentKind = "prompt"
-		session.unpromptedUsagePending = false
-		session.advanceSettle()
+		cs.inPromptTurn = true
+		cs.lastParentKind = "prompt"
+		cs.unpromptedUsagePending = false
+		cs.advanceSettle()
 	case "turn_end", "agent_exit":
-		session.inPromptTurn = false
-		session.lastParentKind = entry.Kind
-		session.unpromptedUsagePending = false
-		session.advanceSettle()
+		cs.inPromptTurn = false
+		cs.lastParentKind = entry.Kind
+		cs.unpromptedUsagePending = false
+		cs.advanceSettle()
 	case "agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update",
 		"permission_request", "permission_result", "elicitation", "elicitation_result":
-		session.lastParentKind = entry.Kind
-		session.unpromptedUsagePending = false
-		session.advanceSettle()
+		cs.lastParentKind = entry.Kind
+		cs.unpromptedUsagePending = false
+		cs.advanceSettle()
 	case "usage_update":
-		session.advanceSettle()
-		session.unpromptedUsagePending = !session.inPromptTurn &&
-			(session.lastParentKind == "agent_message_chunk" || session.lastParentKind == "agent_thought_chunk")
+		cs.advanceSettle()
+		cs.unpromptedUsagePending = !cs.inPromptTurn &&
+			(cs.lastParentKind == "agent_message_chunk" || cs.lastParentKind == "agent_thought_chunk")
 	}
 	if entry.Kind == "turn_end" {
 		var end struct {
@@ -471,7 +472,7 @@ func (session *ConversationSession) observeEntry(entry acp.LogEntry) bool {
 			for _, reason := range []string{end.StopReason, end.Status} {
 				switch reason {
 				case "end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled", "completed", "error", "failed":
-					session.stopReason = reason
+					cs.stopReason = reason
 					return true
 				}
 			}
@@ -481,89 +482,89 @@ func (session *ConversationSession) observeEntry(entry acp.LogEntry) bool {
 }
 
 // Cancel is the user's Stop: it ends the running turn and pauses an active goal.
-func (session *ConversationSession) Cancel(ctx context.Context) error {
-	session.mu.Lock()
-	broker := session.broker
-	if session.running || session.goal != nil && session.goal.Engine == "native" && session.goal.State == "active" {
-		session.userCancelled = true
+func (cs *ConversationSession) Cancel(ctx context.Context) error {
+	cs.mu.Lock()
+	broker := cs.broker
+	if cs.running || cs.goal != nil && cs.goal.Engine == "native" && cs.goal.State == "active" {
+		cs.userCancelled = true
 	}
 	var settleDelay time.Duration
 	var settleGen uint64
 	var settleAfter func(time.Duration, func())
-	if session.unpromptedUsageSettle > 0 && !session.running && !session.inPromptTurn &&
-		session.state == string(stateWorking) && session.closedErr() == nil {
-		session.advanceSettle()
-		settleDelay, settleGen, settleAfter = session.unpromptedUsageSettle, session.settleGen, session.after
+	if cs.unpromptedUsageSettle > 0 && !cs.running && !cs.inPromptTurn &&
+		cs.state == string(stateWorking) && cs.closedErr() == nil {
+		cs.advanceSettle()
+		settleDelay, settleGen, settleAfter = cs.unpromptedUsageSettle, cs.settleGen, cs.after
 	}
-	session.mu.Unlock()
+	cs.mu.Unlock()
 	err := broker.Cancel(ctx)
 	if err == nil && settleDelay > 0 {
-		session.scheduleUnpromptedSettle(settleDelay, settleGen, "cancelled", settleAfter)
+		cs.scheduleUnpromptedSettle(settleDelay, settleGen, "cancelled", settleAfter)
 	}
 	return err
 }
 
 // SetUnpromptedUsageSettle enables closing an unprompted cycle with a synthetic turn_end once
 // a parent usage_update stays quiet for delay (longer after thought-only steps).
-func (session *ConversationSession) SetUnpromptedUsageSettle(delay time.Duration) {
-	session.mu.Lock()
-	session.unpromptedUsageSettle = delay
-	settleDelay, settleGen, settleAfter := session.unpromptedSettlePlan()
-	session.mu.Unlock()
+func (cs *ConversationSession) SetUnpromptedUsageSettle(delay time.Duration) {
+	cs.mu.Lock()
+	cs.unpromptedUsageSettle = delay
+	settleDelay, settleGen, settleAfter := cs.unpromptedSettlePlan()
+	cs.mu.Unlock()
 	if settleDelay > 0 {
-		session.scheduleUnpromptedSettle(settleDelay, settleGen, "end_turn", settleAfter)
+		cs.scheduleUnpromptedSettle(settleDelay, settleGen, "end_turn", settleAfter)
 	}
 }
 
 // unpromptedSettlePlan returns the delay and generation to watch when an unprompted cycle
 // reached a quiet usage_update. The caller holds mu.
-func (session *ConversationSession) unpromptedSettlePlan() (time.Duration, uint64, func(time.Duration, func())) {
-	if session.unpromptedUsageSettle <= 0 || !session.unpromptedUsagePending ||
-		session.running || session.inPromptTurn || session.state != string(stateWorking) || session.closedErr() != nil {
+func (cs *ConversationSession) unpromptedSettlePlan() (time.Duration, uint64, func(time.Duration, func())) {
+	if cs.unpromptedUsageSettle <= 0 || !cs.unpromptedUsagePending ||
+		cs.running || cs.inPromptTurn || cs.state != string(stateWorking) || cs.closedErr() != nil {
 		return 0, 0, nil
 	}
-	delay := session.unpromptedUsageSettle
-	if session.lastParentKind != "agent_message_chunk" {
+	delay := cs.unpromptedUsageSettle
+	if cs.lastParentKind != "agent_message_chunk" {
 		delay = max(15*time.Second, delay*8)
 	}
-	return delay, session.settleGen, session.after
+	return delay, cs.settleGen, cs.after
 }
 
 // advanceSettle invalidates any pending unprompted settle timer. The caller holds mu.
-func (session *ConversationSession) advanceSettle() {
-	session.settleGen++
-	if session.settleTimer != nil {
-		session.settleTimer.Stop()
-		session.settleTimer = nil
+func (cs *ConversationSession) advanceSettle() {
+	cs.settleGen++
+	if cs.settleTimer != nil {
+		cs.settleTimer.Stop()
+		cs.settleTimer = nil
 	}
 }
 
-func (session *ConversationSession) scheduleUnpromptedSettle(delay time.Duration, gen uint64, stopReason string, after func(time.Duration, func())) {
+func (cs *ConversationSession) scheduleUnpromptedSettle(delay time.Duration, gen uint64, stopReason string, after func(time.Duration, func())) {
 	run := func() {
-		session.writes.RLock()
-		defer session.writes.RUnlock()
-		session.mu.Lock()
-		if session.settleGen != gen || session.running || session.inPromptTurn ||
-			session.state != string(stateWorking) || session.closedErr() != nil {
-			session.mu.Unlock()
+		cs.writes.RLock()
+		defer cs.writes.RUnlock()
+		cs.mu.Lock()
+		if cs.settleGen != gen || cs.running || cs.inPromptTurn ||
+			cs.state != string(stateWorking) || cs.closedErr() != nil {
+			cs.mu.Unlock()
 			return
 		}
-		session.advanceSettle()
-		session.unpromptedUsagePending = false
-		log, now := session.log, session.clock().UnixMilli()
-		session.mu.Unlock()
+		cs.advanceSettle()
+		cs.unpromptedUsagePending = false
+		log, now := cs.log, cs.clock().UnixMilli()
+		cs.mu.Unlock()
 		log.Append("turn_end", now, mustRawJSON(map[string]string{"stopReason": stopReason}))
 	}
 	if after != nil {
 		after(delay, run)
 		return
 	}
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	if session.settleGen != gen || session.closedErr() != nil {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.settleGen != gen || cs.closedErr() != nil {
 		return
 	}
-	session.settleTimer = time.AfterFunc(delay, run)
+	cs.settleTimer = time.AfterFunc(delay, run)
 }
 
 func entrySubagent(payload json.RawMessage) string {
@@ -576,14 +577,14 @@ func entrySubagent(payload json.RawMessage) string {
 	return ""
 }
 
-func (session *ConversationSession) AnswerPermission(ctx context.Context, requestID, optionID string) error {
-	session.writes.RLock()
-	defer session.writes.RUnlock()
-	session.mu.Lock()
-	broker := session.broker
-	log := session.log
-	exited := session.agentExited
-	session.mu.Unlock()
+func (cs *ConversationSession) AnswerPermission(ctx context.Context, requestID, optionID string) error {
+	cs.writes.RLock()
+	defer cs.writes.RUnlock()
+	cs.mu.Lock()
+	broker := cs.broker
+	log := cs.log
+	exited := cs.agentExited
+	cs.mu.Unlock()
 	if exited {
 		return ErrSessionEnded
 	}
@@ -595,14 +596,14 @@ func (session *ConversationSession) AnswerPermission(ctx context.Context, reques
 	return nil
 }
 
-func (session *ConversationSession) AnswerElicitation(ctx context.Context, elicitationID, value string) error {
-	session.writes.RLock()
-	defer session.writes.RUnlock()
-	session.mu.Lock()
-	broker := session.broker
-	log := session.log
-	exited := session.agentExited
-	session.mu.Unlock()
+func (cs *ConversationSession) AnswerElicitation(ctx context.Context, elicitationID, value string) error {
+	cs.writes.RLock()
+	defer cs.writes.RUnlock()
+	cs.mu.Lock()
+	broker := cs.broker
+	log := cs.log
+	exited := cs.agentExited
+	cs.mu.Unlock()
 	if exited {
 		return ErrSessionEnded
 	}
@@ -619,7 +620,7 @@ func (session *ConversationSession) AnswerElicitation(ctx context.Context, elici
 	return nil
 }
 
-func (session *ConversationSession) SetConfigOption(ctx context.Context, key string, value json.RawMessage) error {
+func (cs *ConversationSession) SetConfigOption(ctx context.Context, key string, value json.RawMessage) error {
 	var configValue any
 	if err := json.Unmarshal(value, &configValue); err != nil {
 		return errors.New("invalid config value")
@@ -629,83 +630,83 @@ func (session *ConversationSession) SetConfigOption(ctx context.Context, key str
 	default:
 		return errors.New("config value must be a string or boolean")
 	}
-	session.mu.Lock()
-	remember := session.permissionChange
-	session.mu.Unlock()
-	if err := session.setConfigOption(ctx, key, configValue, value); err != nil {
+	cs.mu.Lock()
+	remember := cs.permissionChange
+	cs.mu.Unlock()
+	if err := cs.setConfigOption(ctx, key, configValue, value); err != nil {
 		return err
 	}
 	if mode, ok := configValue.(string); ok && remember != nil {
-		if permissions, _ := session.permissionMode(); key == permissions {
+		if permissions, _ := cs.permissionMode(); key == permissions {
 			remember(mode)
 		}
 	}
 	return nil
 }
 
-func (session *ConversationSession) setConfigOption(ctx context.Context, key string, value any, raw json.RawMessage) error {
-	session.mu.Lock()
-	clientMode, broker := session.clientMode, session.broker
+func (cs *ConversationSession) setConfigOption(ctx context.Context, key string, value any, raw json.RawMessage) error {
+	cs.mu.Lock()
+	clientMode, broker := cs.clientMode, cs.broker
 	var nativeKey string
 	if clientMode != "" {
-		nativeKey, _ = session.agentPermissionMode()
+		nativeKey, _ = cs.agentPermissionMode()
 	}
-	session.mu.Unlock()
+	cs.mu.Unlock()
 	if clientMode != "" && ((nativeKey == "" && key == "mode") || (key == nativeKey && value == "bypassPermissions")) {
-		return session.setClientMode(value)
+		return cs.setClientMode(value)
 	}
 	if err := broker.SetConfig(ctx, key, string(raw)); err != nil {
 		return err
 	}
 	if clientMode != "" && key == nativeKey {
-		return session.setClientMode("default")
+		return cs.setClientMode("default")
 	}
 	return nil
 }
 
-func (session *ConversationSession) SetConfigOptions(raw json.RawMessage) {
-	session.mu.Lock()
-	session.configOptions = raw
-	session.mu.Unlock()
+func (cs *ConversationSession) SetConfigOptions(raw json.RawMessage) {
+	cs.mu.Lock()
+	cs.configOptions = raw
+	cs.mu.Unlock()
 }
 
-func (session *ConversationSession) SetModes(raw json.RawMessage) {
-	session.mu.Lock()
-	session.modes = raw
-	session.mu.Unlock()
+func (cs *ConversationSession) SetModes(raw json.RawMessage) {
+	cs.mu.Lock()
+	cs.modes = raw
+	cs.mu.Unlock()
 }
 
-func (session *ConversationSession) SetAgentCapabilities(capabilities *AgentCapabilities) {
-	session.mu.Lock()
-	session.agentCapabilities = capabilities
-	session.mu.Unlock()
+func (cs *ConversationSession) SetAgentCapabilities(capabilities *session.AgentCapabilities) {
+	cs.mu.Lock()
+	cs.agentCapabilities = capabilities
+	cs.mu.Unlock()
 }
 
-func (session *ConversationSession) ConfigJSON() json.RawMessage {
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	return session.configJSONLocked()
+func (cs *ConversationSession) ConfigJSON() json.RawMessage {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return cs.configJSONLocked()
 }
 
-func (session *ConversationSession) configJSONLocked() json.RawMessage {
-	options := session.configOptions
-	if session.clientMode != "" {
-		options = session.configWithClientBypass()
+func (cs *ConversationSession) configJSONLocked() json.RawMessage {
+	options := cs.configOptions
+	if cs.clientMode != "" {
+		options = cs.configWithClientBypass()
 	}
 	raw, _ := json.Marshal(struct {
 		ConfigOptions json.RawMessage `json:"configOptions,omitempty"`
 		Modes         json.RawMessage `json:"modes,omitempty"`
 	}{
 		ConfigOptions: options,
-		Modes:         session.modes,
+		Modes:         cs.modes,
 	})
 	return raw
 }
 
 // configWithClientBypass augments the permission picker with session.mu held.
-func (session *ConversationSession) configWithClientBypass() json.RawMessage {
+func (cs *ConversationSession) configWithClientBypass() json.RawMessage {
 	var options []map[string]any
-	_ = json.Unmarshal(session.configOptions, &options)
+	_ = json.Unmarshal(cs.configOptions, &options)
 	bypass := clientModes[1]
 	for _, option := range options {
 		if option["category"] != "mode" || option["type"] != "select" {
@@ -713,8 +714,8 @@ func (session *ConversationSession) configWithClientBypass() json.RawMessage {
 		}
 		choices, _ := option["options"].([]any)
 		option["options"] = append(choices, bypass)
-		if bypassModes[session.clientMode] {
-			option["currentValue"] = session.clientMode
+		if bypassModes[cs.clientMode] {
+			option["currentValue"] = cs.clientMode
 		}
 		return mustRawJSON(options)
 	}
@@ -723,9 +724,9 @@ func (session *ConversationSession) configWithClientBypass() json.RawMessage {
 		Current string           `json:"currentModeId"`
 		Choices []map[string]any `json:"availableModes"`
 	}
-	current := session.clientMode
+	current := cs.clientMode
 	var choices any = clientModes
-	if json.Unmarshal(session.modes, &modes) == nil && modes.Current != "" {
+	if json.Unmarshal(cs.modes, &modes) == nil && modes.Current != "" {
 		choices = append(modes.Choices, map[string]any{"value": bypass["value"], "name": bypass["name"]})
 		if !bypassModes[current] {
 			current = modes.Current
@@ -738,17 +739,17 @@ func (session *ConversationSession) configWithClientBypass() json.RawMessage {
 	return mustRawJSON(options)
 }
 
-func (session *ConversationSession) AgentCapabilitiesView() *AgentCapabilities {
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	return session.agentCapabilities
+func (cs *ConversationSession) AgentCapabilitiesView() *session.AgentCapabilities {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return cs.agentCapabilities
 }
 
 // storeImage keeps an image an agent or tool sent in the session's blob store.
-func (session *ConversationSession) storeImage(data []byte) (string, error) {
-	session.mu.Lock()
-	store := session.imageStore
-	session.mu.Unlock()
+func (cs *ConversationSession) storeImage(data []byte) (string, error) {
+	cs.mu.Lock()
+	store := cs.imageStore
+	cs.mu.Unlock()
 	if store == nil {
 		return "", errors.New("image storage unavailable")
 	}

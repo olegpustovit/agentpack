@@ -10,12 +10,13 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func TestUsageReplayedEventCountsOnce(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-usage"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp", Harness: "claude", FolderID: "folder-1"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp", Harness: "claude", FolderID: "folder-1"}); err != nil {
 		t.Fatal(err)
 	}
 	const hour = 1_800_000_000_000 // ms, on an hour boundary
@@ -53,7 +54,7 @@ func TestUsageReplayedEventCountsOnce(t *testing.T) {
 func TestUsageCostResetCountsTheNewTotal(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-cost"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp", Harness: "omp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp", Harness: "omp"}); err != nil {
 		t.Fatal(err)
 	}
 	cost := func(amount string) json.RawMessage {
@@ -81,7 +82,7 @@ func TestUsageCostResetCountsTheNewTotal(t *testing.T) {
 func TestUsageWithoutReportedCostStaysUnknown(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-codex"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp", Harness: "codex"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp", Harness: "codex"}); err != nil {
 		t.Fatal(err)
 	}
 	changes := acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, TS: 1, Kind: "turn_end", Payload: json.RawMessage(`{"usage":{"outputTokens":5}}`)}}}
@@ -97,7 +98,7 @@ func TestUsageWithoutReportedCostStaysUnknown(t *testing.T) {
 func TestFinishedTurnsRefreshTheirAgentsLimitsOncePerGate(t *testing.T) {
 	g, _ := identityGateway(t, t.TempDir(), nil)
 	store := g.store
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: "chat", Transport: "acp", Harness: "claude"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: "chat", Transport: "acp", Harness: "claude"}); err != nil {
 		t.Fatal(err)
 	}
 	// Real time: last_event_at is stamped with the clock, and the report selects sessions by it.
@@ -164,7 +165,7 @@ func TestUsageRejectsUnboundedRanges(t *testing.T) {
 func TestUsageCostAfterWorkerRestartCountsTheNewProcessInFull(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-restart"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp", Harness: "claude"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp", Harness: "claude"}); err != nil {
 		t.Fatal(err)
 	}
 	cost := func(seq int64, amount string) acp.LogChanges {
@@ -241,7 +242,7 @@ func TestLimitSamplesKeepTheHoursLastReadingForAWeekPerMachine(t *testing.T) {
 func TestUsageCountsWorktreesUnderTheirProject(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	main := "/src/app"
-	for _, info := range []SessionInfo{
+	for _, info := range []session.SessionInfo{
 		{ID: "session-main", Directory: main, FolderID: "f-main"},
 		{ID: "session-new", Directory: "/home/u/.local/share/agentpack/worktrees/0123456789abcdef/fix", FolderID: "f-new", DefinitionRoot: "/src", WorktreeOf: main},
 		{ID: "session-old", Directory: "/home/u/.local/share/agentpack/worktrees/0123456789abcdef/old/sub", FolderID: "f-old", DefinitionRoot: main},
@@ -249,7 +250,7 @@ func TestUsageCountsWorktreesUnderTheirProject(t *testing.T) {
 		{ID: "session-other", Directory: "/src/other", FolderID: "f-other", DefinitionRoot: main},
 	} {
 		info.Harness, info.Transport = "claude", "acp"
-		if err := upsertSession(t.Context(), store.DB, info); err != nil {
+		if err := session.UpsertSession(t.Context(), store.DB, info); err != nil {
 			t.Fatal(err)
 		}
 	}

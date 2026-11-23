@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func TestChatShellUsesWorktreeAndStaysOutOfSessionList(t *testing.T) {
@@ -33,7 +34,7 @@ func TestChatShellUsesWorktreeAndStaysOutOfSessionList(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	g, origin := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	g, origin := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		ready := make(chan string, 1)
 		go func() {
 			_, err := RunWorker(ctx, home, "test", WorkerLaunch{
@@ -51,8 +52,8 @@ func TestChatShellUsesWorktreeAndStaysOutOfSessionList(t *testing.T) {
 			return "", ctx.Err()
 		}
 	})
-	parent := SessionInfo{ID: "session-parent", Transport: "acp", Harness: "codex", Directory: worktree, WorktreeOf: main, FolderID: folderID, StartedBy: new(browserActor(testBrowserEmail))}
-	if err := upsertSession(ctx, g.store.DB, parent); err != nil {
+	parent := session.SessionInfo{ID: "session-parent", Transport: "acp", Harness: "codex", Directory: worktree, WorktreeOf: main, FolderID: folderID, StartedBy: new(session.BrowserActor(testBrowserEmail))}
+	if err := session.UpsertSession(ctx, g.store.DB, parent); err != nil {
 		t.Fatal(err)
 	}
 	testBrowserSession(t, g.auth, testBrowserEmail, "shell-owner")
@@ -70,7 +71,7 @@ func TestChatShellUsesWorktreeAndStaysOutOfSessionList(t *testing.T) {
 		return w
 	}
 	created := request("POST", "/api/sessions", `{"transport":"shell","parent_id":"session-parent","directory":"/ignored"}`)
-	var shell SessionInfo
+	var shell session.SessionInfo
 	if err := json.Unmarshal(created.Body.Bytes(), &shell); err != nil || shell.Directory != worktree || shell.WorktreeOf != main || shell.ParentID != parent.ID {
 		t.Fatalf("shell: %+v, %v", shell, err)
 	}

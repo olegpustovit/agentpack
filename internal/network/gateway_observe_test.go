@@ -16,6 +16,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -47,7 +48,7 @@ func TestHTTPObservationRecordsRouteAndTrustedActorWithoutBodies(t *testing.T) {
 	request.Header.Set("traceparent", testTraceParent)
 	request.Header.Set("Cookie", "agentpack_session=private-cookie")
 	request.Header.Set("Authorization", "Bearer private-authorization")
-	request = request.WithContext(withActor(request.Context(), Actor{User: "alice@example.com", Kind: "peer"}))
+	request = request.WithContext(session.WithActor(request.Context(), session.Actor{User: "alice@example.com", Kind: "peer"}))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	event := observedEvent(t, queue)

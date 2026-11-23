@@ -18,6 +18,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/registry"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -114,7 +115,7 @@ func TestGatewayLibraryBootstrapsRecentProjectsAndCachedPackages(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	writeRecent := func(entries ...network.SessionInfo) {
+	writeRecent := func(entries ...session.SessionInfo) {
 		t.Helper()
 		if _, err := store.DB.Exec("DELETE FROM sessions"); err != nil {
 			t.Fatal(err)
@@ -127,13 +128,13 @@ func TestGatewayLibraryBootstrapsRecentProjectsAndCachedPackages(t *testing.T) {
 		}
 	}
 
-	recent := func(root, workspace string) network.SessionInfo {
+	recent := func(root, workspace string) session.SessionInfo {
 		t.Helper()
 		identity, err := network.FolderIdentity(workspace)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return network.SessionInfo{Directory: workspace, DefinitionRoot: root, FolderID: identity, Harness: "claude", Mode: "default"}
+		return session.SessionInfo{Directory: workspace, DefinitionRoot: root, FolderID: identity, Harness: "claude", Mode: "default"}
 	}
 	first := recent(firstRoot, firstWorkspace)
 	manualWorkspace := t.TempDir()

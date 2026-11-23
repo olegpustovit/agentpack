@@ -24,63 +24,11 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
-
-type AgentCapabilities struct {
-	LoadSession         bool                      `json:"loadSession,omitempty"`
-	PromptCapabilities  *AgentPromptCapabilities  `json:"promptCapabilities,omitempty"`
-	SessionCapabilities *AgentSessionCapabilities `json:"sessionCapabilities,omitempty"`
-	// Steering: a steer joins the running turn instead of interrupting it (harness.ACPLaunch.Steers).
-	Steering bool `json:"steering,omitempty"`
-}
-
-type AgentPromptCapabilities struct {
-	Image bool `json:"image,omitempty"`
-}
-
-type AgentSessionCapabilities struct {
-	Resume *struct{} `json:"resume,omitempty"`
-	Fork   *struct{} `json:"fork,omitempty"`
-}
-
-type SessionInfo struct {
-	NodeID            string             `json:"node_id,omitempty"`
-	Reachable         bool               `json:"reachable"`
-	LastSync          time.Time          `json:"last_sync,omitzero"`
-	EndedAt           time.Time          `json:"ended_at,omitzero"`
-	ArchivedAt        time.Time          `json:"archived_at,omitzero"`
-	LastUsed          time.Time          `json:"last_used,omitzero"`
-	LastEventAt       time.Time          `json:"last_event_at,omitzero"`
-	FolderID          string             `json:"folder_id,omitempty"`
-	ID                string             `json:"id"`
-	Name              string             `json:"name,omitempty"`
-	Title             string             `json:"title,omitempty"`
-	Directory         string             `json:"directory"`
-	DefinitionRoot    string             `json:"definition_root,omitempty"`
-	Harness           string             `json:"harness"`
-	Mode              string             `json:"mode"`
-	Transport         string             `json:"transport,omitempty"`
-	AgentSessionID    string             `json:"agent_session_id,omitempty"`
-	AgentCapabilities *AgentCapabilities `json:"agent_capabilities,omitempty"`
-	ConversationState string             `json:"conversation_state,omitempty"`
-	State             TerminalState      `json:"state"`
-	StartedAt         time.Time          `json:"started_at,omitzero"`
-	StartedBy         *Actor             `json:"started_by,omitempty"`
-	Goal              *Goal              `json:"goal,omitempty"`
-	Subagents         []SubagentSummary  `json:"subagents,omitempty"`
-	// Waiting is the background work an idle chat will wake for; older peers omit it.
-	Waiting []acp.WaitItem `json:"waiting,omitempty"`
-	// ParentID is the chat that owns this shell or whose agent started this helper session.
-	ParentID string `json:"parent_id,omitempty"`
-	// Tools lets the chat's agent call the agentpack MCP server.
-	Tools bool `json:"tools,omitempty"`
-	// WorktreeOf is the main folder of the agentpack worktree Directory is in. Older peers omit it.
-	WorktreeOf string `json:"worktree_of,omitempty"`
-}
 
 func workerRecord(home, id string) (WorkerRecord, error) {
 	var record WorkerRecord
@@ -155,10 +103,10 @@ func ReportAgentState(ctx context.Context, home, id, state string) error {
 var workerTransport = &http.Transport{Proxy: nil, MaxIdleConnsPerHost: 2, IdleConnTimeout: 30 * time.Second}
 
 // workerStates asks every listed local worker for its live terminal state at once; a worker that does not answer is left out.
-func workerStates(ctx context.Context, home string, sessions []SessionInfo) map[string]TerminalState {
+func workerStates(ctx context.Context, home string, sessions []session.SessionInfo) map[string]session.TerminalState {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	states := map[string]TerminalState{}
+	states := map[string]session.TerminalState{}
 	for _, info := range sessions {
 		record, err := workerRecord(home, info.ID)
 		if err != nil {
@@ -176,7 +124,7 @@ func workerStates(ctx context.Context, home string, sessions []SessionInfo) map[
 	return states
 }
 
-func Sessions(ctx context.Context, home string) ([]SessionInfo, error) {
+func Sessions(ctx context.Context, home string) ([]session.SessionInfo, error) {
 	store, err := state.Open(home)
 	if err != nil {
 		return nil, err
@@ -186,13 +134,13 @@ func Sessions(ctx context.Context, home string) ([]SessionInfo, error) {
 }
 
 // sessionsIn lists this node's live sessions from an open store; the gateway passes its own.
-func sessionsIn(ctx context.Context, db *sql.DB, home string) ([]SessionInfo, error) {
-	sessions, err := querySessions(ctx, db, "SELECT "+sessionColumns+" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND ended_at=0 ORDER BY id")
+func sessionsIn(ctx context.Context, db *sql.DB, home string) ([]session.SessionInfo, error) {
+	sessions, err := session.QuerySessions(ctx, db, "SELECT "+session.SessionColumns+" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND ended_at=0 ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
 	states := workerStates(ctx, home, sessions)
-	result := []SessionInfo{}
+	result := []session.SessionInfo{}
 	for _, info := range sessions {
 		if terminal, ok := states[info.ID]; ok {
 			info.State = terminal

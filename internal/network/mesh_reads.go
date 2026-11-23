@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // Liveness follows recent HTTP responses from the peer.
@@ -29,7 +30,7 @@ func (g *Gateway) nodeContact(node, local string) (bool, time.Time) {
 	return contact.Reachable && time.Since(contact.At) < 90*time.Second, lastSync
 }
 
-func (g *Gateway) meshSessions(ctx context.Context, node string, recentOnly bool) ([]SessionInfo, error) {
+func (g *Gateway) meshSessions(ctx context.Context, node string, recentOnly bool) ([]session.SessionInfo, error) {
 	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return nil, err
@@ -40,7 +41,7 @@ func (g *Gateway) meshSessions(ctx context.Context, node string, recentOnly bool
 		where += " AND node_id=?"
 		args = append(args, node)
 	}
-	query := "SELECT " + sessionColumns + " FROM sessions WHERE " + where + " AND (ended_at=0 OR transport='acp')"
+	query := "SELECT " + session.SessionColumns + " FROM sessions WHERE " + where + " AND (ended_at=0 OR transport='acp')"
 	if recentOnly {
 		query += " AND (ended_at=0 OR id IN (SELECT id FROM sessions WHERE " + where +
 			" AND ended_at>0 AND transport='acp' ORDER BY last_used DESC,id DESC LIMIT 100))"
@@ -48,11 +49,11 @@ func (g *Gateway) meshSessions(ctx context.Context, node string, recentOnly bool
 			args = append(args, node)
 		}
 	}
-	entries, err := querySessions(ctx, g.store.Reader, query+" ORDER BY last_used DESC,id DESC", args...)
+	entries, err := session.QuerySessions(ctx, g.store.Reader, query+" ORDER BY last_used DESC,id DESC", args...)
 	if err != nil {
 		return nil, err
 	}
-	localEntries := slices.DeleteFunc(slices.Clone(entries), func(info SessionInfo) bool {
+	localEntries := slices.DeleteFunc(slices.Clone(entries), func(info session.SessionInfo) bool {
 		return info.NodeID != local || info.Transport == "acp" || !info.EndedAt.IsZero()
 	})
 	states := workerStates(ctx, g.options.Home, localEntries)
@@ -78,7 +79,7 @@ func (g *Gateway) meshSessions(ctx context.Context, node string, recentOnly bool
 // An older chat can fall out of the recent list while its bookmark still works.
 func (g *Gateway) serveSessionRow(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	info, err := scanSession(g.store.Reader.QueryRowContext(ctx, "SELECT "+sessionColumns+" FROM sessions WHERE id=? AND hidden=0", r.PathValue("id")))
+	info, err := session.ScanSession(g.store.Reader.QueryRowContext(ctx, "SELECT "+session.SessionColumns+" FROM sessions WHERE id=? AND hidden=0", r.PathValue("id")))
 	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
@@ -114,7 +115,7 @@ func (g *Gateway) meshRecent(ctx context.Context, node string) ([]RecentFolder, 
 		filter = " AND node_id=?"
 		args = append(args, node)
 	}
-	entries, err := querySessions(ctx, g.store.Reader, `SELECT `+sessionColumns+` FROM (
+	entries, err := session.QuerySessions(ctx, g.store.Reader, `SELECT `+session.SessionColumns+` FROM (
  SELECT *,row_number() OVER (PARTITION BY node_id,directory,harness,mode ORDER BY last_used DESC,id DESC) AS rank
  FROM sessions WHERE hidden=0 AND transport<>'shell' AND directory<>''`+filter+`) WHERE rank=1 ORDER BY last_used DESC,id DESC LIMIT 100`, args...)
 	if err != nil {
@@ -123,7 +124,7 @@ func (g *Gateway) meshRecent(ctx context.Context, node string) ([]RecentFolder, 
 	folders := make([]RecentFolder, 0, len(entries))
 	for _, info := range entries {
 		info.ID = ""
-		info.State = TerminalState{}
+		info.State = session.TerminalState{}
 		info.Reachable, info.LastSync = g.nodeContact(info.NodeID, local)
 		folder := RecentFolder{SessionInfo: publicSession(info)}
 		if info.NodeID != local {
@@ -155,8 +156,8 @@ func meshListRoute(path string) bool {
 // routes mutations and live streams to the owning node; replicated reads stay on this gateway.
 func (g *Gateway) routeMeshRequest(w http.ResponseWriter, r *http.Request) (*http.Request, bool, error) {
 	node := r.URL.Query().Get("node")
-	info, err := storedSession(r.Context(), g.store.Reader, r.PathValue("id"))
-	if errors.Is(err, errSessionNotFound) {
+	info, err := session.StoredSession(r.Context(), g.store.Reader, r.PathValue("id"))
+	if errors.Is(err, session.ErrSessionNotFound) {
 		return r, false, nil
 	}
 	if err != nil {

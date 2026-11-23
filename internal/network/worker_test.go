@@ -23,6 +23,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func TestWorkerExitChild(t *testing.T) {
@@ -242,7 +243,7 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 		t.Fatal("worker record survived exit")
 	}
 	store := testSessionStore(t, home)
-	stored, err := storedSession(context.Background(), store.Reader, id)
+	stored, err := session.StoredSession(context.Background(), store.Reader, id)
 	var ended int64
 	if err != nil || stored.Name != "Long-running review" || stored.State.Running || stored.State.ExitCode != 7 || store.Reader.QueryRow("SELECT ended_at FROM sessions WHERE id=?", id).Scan(&ended) != nil || ended == 0 {
 		t.Fatalf("worker exit lost durable metadata: %+v ended=%d err=%v", stored, ended, err)
@@ -334,7 +335,7 @@ func runFastExitWorker(t *testing.T, restart bool) {
 	// under full-suite load without shortening its final-output window.
 	wait, stopWaiting := context.WithTimeout(ctx, 30*time.Second)
 	defer stopWaiting()
-	var state TerminalState
+	var state session.TerminalState
 	for {
 		response, err := workerRequest(wait, record, http.MethodGet, "/state", "")
 		if err == nil {
@@ -434,7 +435,7 @@ func TestWorkerRejectsReplacedWorkspaceWithoutStoppingAgent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ready, done := make(chan string, 1), make(chan error, 1)
 	go func() {
-		_, err := RunWorker(ctx, home, "test", WorkerLaunch{Program: executable, Arguments: []string{"-test.run=^TestTerminalChild$"}, Directory: directory, Environment: append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1"), Rows: 24, Columns: 80, Session: SessionInfo{Directory: directory, Harness: "codex"}}, func(id string) error { ready <- id; return nil })
+		_, err := RunWorker(ctx, home, "test", WorkerLaunch{Program: executable, Arguments: []string{"-test.run=^TestTerminalChild$"}, Directory: directory, Environment: append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1"), Rows: 24, Columns: 80, Session: session.SessionInfo{Directory: directory, Harness: "codex"}}, func(id string) error { ready <- id; return nil })
 		done <- err
 	}()
 	t.Cleanup(func() {
@@ -454,7 +455,7 @@ func TestWorkerRejectsReplacedWorkspaceWithoutStoppingAgent(t *testing.T) {
 		t.Fatal("worker did not start")
 	}
 	store := testSessionStore(t, home)
-	info, err := storedSession(t.Context(), store.Reader, id)
+	info, err := session.StoredSession(t.Context(), store.Reader, id)
 	if err != nil || info.FolderID == "" {
 		t.Fatalf("missing worker identity: %v", err)
 	}

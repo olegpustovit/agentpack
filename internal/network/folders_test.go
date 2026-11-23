@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -142,7 +143,7 @@ func TestFoundFoldersUseBoundedDiscoveryAndLiveRecents(t *testing.T) {
 	if want := []string{repo, pack}; err != nil || !slices.Equal(directories(rows), want) {
 		t.Fatalf("found %v (%v), want %v", directories(rows), err, want)
 	}
-	if err := remember(g.options.Home, SessionInfo{Directory: repo, Harness: "claude", Mode: "default"}); err != nil {
+	if err := remember(g.options.Home, session.SessionInfo{Directory: repo, Harness: "claude", Mode: "default"}); err != nil {
 		t.Fatal(err)
 	}
 	mark("agentpack.toml", "projects", "created-after-scan")
@@ -155,19 +156,19 @@ func TestFoundFoldersUseBoundedDiscoveryAndLiveRecents(t *testing.T) {
 func TestBrowserStartsInNewFolder(t *testing.T) {
 	home := t.TempDir()
 	var g *Gateway
-	g, origin := identityGateway(t, home, func(ctx context.Context, info SessionInfo, _ string) (string, error) {
+	g, origin := identityGateway(t, home, func(ctx context.Context, info session.SessionInfo, _ string) (string, error) {
 		if info.Transport == "acp" {
 			return info.ID, nil
 		}
 		// The terminal worker registers its session before answering the gateway.
 		info.ID = "session-terminal"
 		info.LastUsed = time.Now().UTC()
-		return info.ID, upsertSession(ctx, g.store.DB, info)
+		return info.ID, session.UpsertSession(ctx, g.store.DB, info)
 	})
 	t.Cleanup(g.starting.Wait)
 	testBrowserSession(t, g.auth, "viewer@example.com", "browse-start")
 	handler := g.Handler()
-	call := func(method, path string, input chatStartRequest, actor *Actor) *httptest.ResponseRecorder {
+	call := func(method, path string, input chatStartRequest, actor *session.Actor) *httptest.ResponseRecorder {
 		t.Helper()
 		body, err := json.Marshal(input)
 		if err != nil {
@@ -177,7 +178,7 @@ func TestBrowserStartsInNewFolder(t *testing.T) {
 		r.Header.Set("Origin", origin.String())
 		r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: "browse-start"})
 		if actor != nil {
-			r = r.WithContext(withActor(r.Context(), *actor))
+			r = r.WithContext(session.WithActor(r.Context(), *actor))
 		}
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, r)
@@ -189,10 +190,10 @@ func TestBrowserStartsInNewFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	chat, terminal := t.TempDir(), t.TempDir()
-	mcp := &Actor{Kind: "mcp", User: "viewer@example.com"}
+	mcp := &session.Actor{Kind: "mcp", User: "viewer@example.com"}
 	for i, tc := range []struct {
 		dir, transport string
-		actor          *Actor
+		actor          *session.Actor
 		status         int
 	}{
 		{unlisted, "acp", mcp, 400},

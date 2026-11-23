@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"encoding/json"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,12 +34,12 @@ func TestClearGoalReconcilesAWorkerThatLostIt(t *testing.T) {
 	}))
 	defer worker.Close()
 	g, _ := identityGateway(t, home, nil)
-	owner := &Actor{Kind: "browser", Account: true, User: "owner@example.com"}
+	owner := &session.Actor{Kind: "browser", Account: true, User: "owner@example.com"}
 	id := "session-goal"
-	if err := upsertSession(context.Background(), g.store.DB, SessionInfo{ID: id, Directory: seedFolder(t, home), Harness: "claude", Transport: "acp", StartedBy: owner}); err != nil {
+	if err := session.UpsertSession(context.Background(), g.store.DB, session.SessionInfo{ID: id, Directory: seedFolder(t, home), Harness: "claude", Transport: "acp", StartedBy: owner}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := g.store.DB.Exec("UPDATE sessions SET goal=? WHERE id=?", string(mustRawJSON(&Goal{Objective: "ship", State: "active", Engine: "native"})), id); err != nil {
+	if _, err := g.store.DB.Exec("UPDATE sessions SET goal=? WHERE id=?", string(mustRawJSON(&session.Goal{Objective: "ship", State: "active", Engine: "native"})), id); err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(home, "network", "sessions", id)
@@ -51,13 +52,13 @@ func TestClearGoalReconcilesAWorkerThatLostIt(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodDelete, "/api/sessions/"+id+"/conversation/goal", nil)
 	request.SetPathValue("id", id)
-	request = request.WithContext(withActor(request.Context(), *owner))
+	request = request.WithContext(session.WithActor(request.Context(), *owner))
 	response := httptest.NewRecorder()
 	g.clearGoal(response, request)
 	if response.Code != http.StatusOK || prompted != "/goal clear" {
 		t.Fatalf("response %d %q, prompted %q", response.Code, response.Body.String(), prompted)
 	}
-	stored, err := storedSession(context.Background(), g.store.Reader, id)
+	stored, err := session.StoredSession(context.Background(), g.store.Reader, id)
 	if err != nil || stored.Goal != nil {
 		t.Fatalf("goal kept: %+v, %v", stored.Goal, err)
 	}

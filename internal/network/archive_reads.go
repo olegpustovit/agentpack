@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -20,7 +21,7 @@ func archiveUnavailable(w http.ResponseWriter, r *http.Request, err error) {
 	http.Error(w, "archive unavailable", http.StatusServiceUnavailable)
 }
 
-func (g *Gateway) serveArchivedConversation(w http.ResponseWriter, r *http.Request, info SessionInfo, targetFor func(context.Context, string) (*url.URL, error)) {
+func (g *Gateway) serveArchivedConversation(w http.ResponseWriter, r *http.Request, info session.SessionInfo, targetFor func(context.Context, string) (*url.URL, error)) {
 	roles, err := g.store.Main(r.Context())
 	if err != nil {
 		archiveUnavailable(w, r, err)

@@ -20,13 +20,14 @@ import (
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/acp/acptest"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func TestConversationStoreFixtureRoundTripAndProgress(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-fixture"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := loadEventLogFixtureEntries(filepath.Join("..", "..", "testdata", "acp", "full.jsonl"))
@@ -60,7 +61,7 @@ func TestConversationStoreFixtureRoundTripAndProgress(t *testing.T) {
 func TestConversationStoreMergeAndResumeDoNotReuseSequence(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-merged"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	log := acp.NewEventLog(256)
@@ -99,7 +100,7 @@ func TestConversationStoreMergeAndResumeDoNotReuseSequence(t *testing.T) {
 func TestConversationStoreFailureKeepsWorkerAndRedactsDiagnostics(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-failed"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancelCause(t.Context())
@@ -128,7 +129,7 @@ func TestStoppedConversationMatchesLiveHistoryAndSince(t *testing.T) {
 	home := t.TempDir()
 	g, origin := identityGateway(t, home, nil)
 	id := "session-history"
-	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	log, err := newConversationLog(t.Context(), g.store, id, func(err error) { t.Error(err) }, nil)
@@ -196,7 +197,7 @@ func TestStoppedConversationMatchesLiveHistoryAndSince(t *testing.T) {
 func TestConversationStoreTailIsBoundedByUTF8Bytes(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-bounded"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	payload, err := json.Marshal(map[string]string{"text": strings.Repeat("é", 1<<18)})
@@ -228,7 +229,7 @@ func TestConversationStoreTailIsBoundedByUTF8Bytes(t *testing.T) {
 func TestConversationStoreRejectedBatchRollsBackRowsAndProgress(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-atomic"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	first := acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "prompt", Payload: json.RawMessage(`{}`)}}}
@@ -251,7 +252,7 @@ func TestConversationStoreTwoWritersAndSessionReader(t *testing.T) {
 	second := testSessionStore(t, home)
 	stores := []*state.Store{first, second}
 	for i, id := range []string{"session-first", "session-second"} {
-		if err := upsertSession(t.Context(), stores[i].DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+		if err := session.UpsertSession(t.Context(), stores[i].DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -314,7 +315,7 @@ func (agent *historyLoadAgent) LoadSession(ctx context.Context, request sdkacp.L
 func TestConversationStoreNativeLoadDoesNotDuplicateHistory(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-load"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	log, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
@@ -365,13 +366,13 @@ func TestConversationStoreNativeLoadDoesNotDuplicateHistory(t *testing.T) {
 func TestConversationStoreRestartAcceptsPromptAfterOldExit(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-restart"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp", State: TerminalState{Running: true, ExitCode: -1}}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp", State: session.TerminalState{Running: true, ExitCode: -1}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := persistConversationChangesSince(t.Context(), store.DB, id, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "agent_exit", Payload: json.RawMessage(`{}`)}}}, 0, false); err != nil {
 		t.Fatal(err)
 	}
-	if info, err := storedSession(t.Context(), store.Reader, id); err != nil || info.State.Running {
+	if info, err := session.StoredSession(t.Context(), store.Reader, id); err != nil || info.State.Running {
 		t.Fatalf("stored state after exit = %+v, err = %v", info.State, err)
 	}
 	log, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
@@ -379,7 +380,7 @@ func TestConversationStoreRestartAcceptsPromptAfterOldExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
-	conversation, cleanup, err := startACPReplayAgent(t.Context(), WorkerLaunch{Directory: directory, Session: SessionInfo{Directory: directory}}, directory, nil, NewConversationSession(log, nil))
+	conversation, cleanup, err := startACPReplayAgent(t.Context(), WorkerLaunch{Directory: directory, Session: session.SessionInfo{Directory: directory}}, directory, nil, NewConversationSession(log, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +401,7 @@ func TestConversationStoreRestartAcceptsPromptAfterOldExit(t *testing.T) {
 func TestConversationStoreStopKeepsFinalTurnEvents(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-stop-turn"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	log, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
@@ -412,7 +413,7 @@ func TestConversationStoreStopKeepsFinalTurnEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
-	conversation, cleanup, err := startACPReplayAgent(t.Context(), WorkerLaunch{Directory: directory, Session: SessionInfo{Directory: directory}}, directory, fixture, NewConversationSession(log, nil))
+	conversation, cleanup, err := startACPReplayAgent(t.Context(), WorkerLaunch{Directory: directory, Session: session.SessionInfo{Directory: directory}}, directory, fixture, NewConversationSession(log, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +447,7 @@ func TestConversationPagesReachTheFirstEventWithoutTheWorker(t *testing.T) {
 	home := t.TempDir()
 	g, origin := identityGateway(t, home, nil)
 	id := "session-long"
-	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	payload, err := json.Marshal(map[string]string{"text": strings.Repeat("x", 200<<10)})
@@ -542,7 +543,7 @@ func TestBypassingPermissionsFollowsTheAgentMode(t *testing.T) {
 func TestConversationReaderBackfillsEvictedEntries(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-gap"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	log := acp.NewEventLog(512)

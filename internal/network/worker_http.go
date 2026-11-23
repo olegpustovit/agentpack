@@ -19,6 +19,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -295,22 +296,22 @@ func (worker *WorkerHTTP) Shutdown(ctx context.Context) error {
 
 // WorkerHandler is private IPC. The gateway authenticates its own callers,
 // then attaches using this worker's secret. Never expose the secret to browsers.
-func WorkerHandler(ctx context.Context, session *Session, conversation *ConversationSession, secret, sessionDir string) (*WorkerHTTP, error) {
-	if (session == nil) == (conversation == nil) {
+func WorkerHandler(ctx context.Context, pty *Session, conversation *ConversationSession, secret, sessionDir string) (*WorkerHTTP, error) {
+	if (pty == nil) == (conversation == nil) {
 		return nil, errors.New("worker requires exactly one of session or conversation")
 	}
 	if len(secret) < 32 {
 		return nil, errors.New("worker requires a secret of at least 32 bytes")
 	}
-	worker := &WorkerHTTP{diagnostics: ctx, session: session, conversation: conversation, sessionDir: sessionDir, connections: make(map[*websocket.Conn]struct{}), drained: make(chan struct{}), done: make(chan struct{}), attached: make(chan struct{})}
-	if session != nil {
-		session.OnAgentState(worker.recordAgentState)
+	worker := &WorkerHTTP{diagnostics: ctx, session: pty, conversation: conversation, sessionDir: sessionDir, connections: make(map[*websocket.Conn]struct{}), drained: make(chan struct{}), done: make(chan struct{}), attached: make(chan struct{})}
+	if pty != nil {
+		pty.OnAgentState(worker.recordAgentState)
 	}
-	if session != nil {
-		obs.Go("worker.watch", func() { worker.watch(session) })
+	if pty != nil {
+		obs.Go("worker.watch", func() { worker.watch(pty) })
 	}
 	mux := http.NewServeMux()
-	if session != nil {
+	if pty != nil {
 		worker.registerMCP(mux)
 	}
 	if conversation != nil {
@@ -356,13 +357,13 @@ func WorkerHandler(ctx context.Context, session *Session, conversation *Conversa
 		var body struct {
 			State string `json:"state"`
 		}
-		if session == nil || worker.stateStore == nil || json.NewDecoder(http.MaxBytesReader(w, r.Body, 256)).Decode(&body) != nil ||
+		if pty == nil || worker.stateStore == nil || json.NewDecoder(http.MaxBytesReader(w, r.Body, 256)).Decode(&body) != nil ||
 			(body.State != string(stateWorking) && body.State != string(stateIdle) && body.State != string(stateNeedsYou)) {
 			http.Error(w, "invalid agent state", http.StatusBadRequest)
 			return
 		}
 		worker.agentState.Store(body.State)
-		if err := patchWorkerConversationState(r.Context(), worker.stateStore.DB, filepath.Base(worker.sessionDir), body.State); err != nil && !errors.Is(err, errSessionArchived) {
+		if err := patchWorkerConversationState(r.Context(), worker.stateStore.DB, filepath.Base(worker.sessionDir), body.State); err != nil && !errors.Is(err, session.ErrSessionArchived) {
 			_, event := obs.Start(r.Context(), "worker", "agent_state")
 			event.Fail(err)
 			event.End()
@@ -374,7 +375,7 @@ func WorkerHandler(ctx context.Context, session *Session, conversation *Conversa
 	mux.HandleFunc("GET /state", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if conversation := worker.conversationSession(); conversation != nil {
-			_ = json.NewEncoder(w).Encode(TerminalState{Running: !conversation.AgentExited(), ExitCode: -1})
+			_ = json.NewEncoder(w).Encode(session.TerminalState{Running: !conversation.AgentExited(), ExitCode: -1})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(worker.current().State())
@@ -411,11 +412,11 @@ type terminalControl struct {
 }
 
 type terminalNotice struct {
-	Type       string        `json:"type"`
-	Attachment uint64        `json:"attachment,omitempty"`
-	State      TerminalState `json:"state"`
-	Offset     uint64        `json:"offset,omitempty"`
-	Error      string        `json:"error,omitempty"`
+	Type       string                `json:"type"`
+	Attachment uint64                `json:"attachment,omitempty"`
+	State      session.TerminalState `json:"state"`
+	Offset     uint64                `json:"offset,omitempty"`
+	Error      string                `json:"error,omitempty"`
 }
 
 func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *http.Request) {
@@ -587,7 +588,7 @@ func (worker *WorkerHTTP) recordAgentState(state string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := patchWorkerConversationState(ctx, worker.stateStore.DB, filepath.Base(worker.sessionDir), state); err != nil && !errors.Is(err, errSessionArchived) {
+	if err := patchWorkerConversationState(ctx, worker.stateStore.DB, filepath.Base(worker.sessionDir), state); err != nil && !errors.Is(err, session.ErrSessionArchived) {
 		_, event := obs.Start(obs.WithRecording(ctx, worker.diagnostics), "worker", "agent_state")
 		event.Fail(err)
 		event.End()

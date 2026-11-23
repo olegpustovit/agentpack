@@ -1,6 +1,7 @@
 package network
 
 import (
+	"github.com/olegpustovit/agentpack/internal/session"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,7 +15,7 @@ func TestConversationRelayForwardsDerivedFrames(t *testing.T) {
 	home := t.TempDir()
 	g, _ := identityGateway(t, home, nil)
 	id := "session-relay"
-	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

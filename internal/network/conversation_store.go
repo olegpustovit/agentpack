@@ -17,6 +17,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 	"github.com/tmaxmax/go-sse"
 )
@@ -41,9 +42,9 @@ func persistConversationChangesSince(ctx context.Context, db *sql.DB, id string,
 				return err
 			}
 			if archived {
-				return errSessionArchived
+				return session.ErrSessionArchived
 			}
-			return errSessionNotFound
+			return session.ErrSessionNotFound
 		}
 		for _, seq := range changes.Removed {
 			if seq <= 0 || seq > changes.LastSeq {
@@ -243,7 +244,7 @@ func storedConversationRange(ctx context.Context, db *sql.DB, id string, span co
 	var truncated bool
 	err = tx.QueryRowContext(ctx, "SELECT last_seq,conversation_truncated FROM sessions WHERE id=?", id).Scan(&lastSeq, &truncated)
 	if errors.Is(err, sql.ErrNoRows) {
-		err = errSessionNotFound
+		err = session.ErrSessionNotFound
 	}
 	if err != nil {
 		return nil, 0, false, err
@@ -341,7 +342,7 @@ func newConversationLog(ctx context.Context, store *state.Store, id string, fail
 		defer cancel()
 		err := persistConversationChangesSince(writeCtx, store.DB, id, changes, lastSeq, starting != nil && starting.Load())
 		switch {
-		case err == errSessionArchived:
+		case err == session.ErrSessionArchived:
 			fail(err)
 		case err != nil && !failing.Swap(true):
 			_, event := obs.Start(ctx, "worker", "persist_conversation")
@@ -358,13 +359,13 @@ func newConversationLog(ctx context.Context, store *state.Store, id string, fail
 
 func (g *Gateway) serveConversation(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	info, err := storedSession(r.Context(), g.store.Reader, id)
+	info, err := session.StoredSession(r.Context(), g.store.Reader, id)
 	if err == nil {
 		local, _ := g.store.NodeID(r.Context())
 		g.serveStoredSessionConversation(w, r, info, local != "" && info.NodeID == local)
 		return
 	}
-	if errors.Is(err, errSessionNotFound) && conversationPage(r).before == 0 {
+	if errors.Is(err, session.ErrSessionNotFound) && conversationPage(r).before == 0 {
 		if record, recordErr := g.workerRecord(r.Context(), id); recordErr == nil && proxyWorkerConversation(w, r, record, "") {
 			return
 		}
@@ -372,7 +373,7 @@ func (g *Gateway) serveConversation(w http.ResponseWriter, r *http.Request) {
 	g.writeStoredConversation(w, r, id, err)
 }
 
-func (g *Gateway) serveStoredSessionConversation(w http.ResponseWriter, r *http.Request, info SessionInfo, localOwner bool) {
+func (g *Gateway) serveStoredSessionConversation(w http.ResponseWriter, r *http.Request, info session.SessionInfo, localOwner bool) {
 	if !info.ArchivedAt.IsZero() {
 		g.serveArchivedConversation(w, r, info, g.tailnetTarget)
 		return
@@ -393,7 +394,7 @@ func (g *Gateway) writeStoredConversation(w http.ResponseWriter, r *http.Request
 	if r.Context().Err() != nil {
 		return
 	}
-	if errors.Is(err, errSessionNotFound) {
+	if errors.Is(err, session.ErrSessionNotFound) {
 		http.Error(w, "conversation unavailable", http.StatusNotFound)
 		return
 	}

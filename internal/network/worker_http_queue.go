@@ -2,6 +2,7 @@ package network
 
 import (
 	"errors"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"net/http"
 	"strings"
 )
@@ -25,9 +26,9 @@ func (worker *WorkerHTTP) registerQueueAndGoal(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /conversation/goal", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
-			Objective string      `json:"objective"`
-			Checks    string      `json:"checks"`
-			Limits    *GoalLimits `json:"limits"`
+			Objective string              `json:"objective"`
+			Checks    string              `json:"checks"`
+			Limits    *session.GoalLimits `json:"limits"`
 		}
 		if !readJSON(w, r, &input) {
 			return
@@ -69,7 +70,7 @@ func writeQueueResult(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, errEmptyPrompt):
 		http.Error(w, err.Error(), http.StatusBadRequest)
-	case errors.Is(err, errSessionArchived):
+	case errors.Is(err, session.ErrSessionArchived):
 		http.Error(w, "archived", http.StatusConflict)
 	default:
 		http.Error(w, "session unavailable", http.StatusConflict)

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 type issueResolution struct {
@@ -43,7 +44,7 @@ func (g *Gateway) registerDiagnostics(mux routeRegistrar) {
 				return
 			}
 			status := map[string]string{"resolve": "resolved", "reopen": "open", "ignore": "ignored"}[action]
-			actor, _ := actorFrom(r.Context())
+			actor, _ := session.ActorFrom(r.Context())
 			issue, err := obs.ChangeIssue(r.Context(), g.store, g.options.Home, r.PathValue("fingerprint"), status, input.Version, input.Note, actor.User)
 			writeDiagnostics(w, r, issue, err)
 		})

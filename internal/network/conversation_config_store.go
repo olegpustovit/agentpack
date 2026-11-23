@@ -14,13 +14,14 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 type agentSnapshot struct {
-	Config       json.RawMessage    `json:"config"`
-	Commands     json.RawMessage    `json:"commands,omitempty"`
-	Capabilities *AgentCapabilities `json:"capabilities,omitempty"`
+	Config       json.RawMessage            `json:"config"`
+	Commands     json.RawMessage            `json:"commands,omitempty"`
+	Capabilities *session.AgentCapabilities `json:"capabilities,omitempty"`
 }
 
 func (g *Gateway) serveAgentSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +51,7 @@ func (g *Gateway) serveAgentSnapshot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, json.RawMessage(body))
 }
 
-func persistAgentSnapshot(ctx context.Context, db *sql.DB, info SessionInfo, conv *ConversationSession) {
+func persistAgentSnapshot(ctx context.Context, db *sql.DB, info session.SessionInfo, conv *ConversationSession) {
 	conv.mu.Lock()
 	snapshot := agentSnapshot{Config: conv.configJSONLocked(), Commands: conv.agentCommands, Capabilities: conv.agentCapabilities}
 	version := conv.agentVersion
@@ -96,7 +97,7 @@ func (g *Gateway) serveWantedConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	info, err := storedSession(ctx, g.store.Reader, id)
+	info, err := session.StoredSession(ctx, g.store.Reader, id)
 	if err != nil || !validSessionID(id) || info.Transport != "acp" || info.ConversationState != "starting" || !info.EndedAt.IsZero() {
 		http.Error(w, "session unavailable", http.StatusNotFound)
 		return
@@ -139,7 +140,7 @@ func (g *Gateway) serveWantedConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func configWriteError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, errSessionUnavailable) {
+	if errors.Is(err, session.ErrSessionUnavailable) {
 		http.Error(w, "session unavailable", http.StatusConflict)
 		return
 	}
@@ -162,12 +163,12 @@ func saveWantedConfig(ctx context.Context, db *sql.DB, id string, choice configS
 	}
 	count, err := result.RowsAffected()
 	if err == nil && count == 0 {
-		return errSessionUnavailable
+		return session.ErrSessionUnavailable
 	}
 	return err
 }
 
-func savedConfig(ctx context.Context, store *state.Store, info SessionInfo) (map[string]json.RawMessage, error) {
+func savedConfig(ctx context.Context, store *state.Store, info session.SessionInfo) (map[string]json.RawMessage, error) {
 	var body string
 	if err := store.Reader.QueryRowContext(ctx, "SELECT wanted_config FROM sessions WHERE id=?", info.ID).Scan(&body); err != nil {
 		return nil, err
@@ -206,7 +207,7 @@ func hasConfigChoice(choices []agentConfigChoice, value string) bool {
 	})
 }
 
-func (session *ConversationSession) wantedChoice(key string, value json.RawMessage) (allowed, unchanged bool) {
+func (cs *ConversationSession) wantedChoice(key string, value json.RawMessage) (allowed, unchanged bool) {
 	var config struct {
 		ConfigOptions []struct {
 			ID      string              `json:"id"`
@@ -219,7 +220,7 @@ func (session *ConversationSession) wantedChoice(key string, value json.RawMessa
 			Options []agentConfigChoice `json:"availableModes"`
 		} `json:"modes"`
 	}
-	if json.Unmarshal(session.ConfigJSON(), &config) != nil {
+	if json.Unmarshal(cs.ConfigJSON(), &config) != nil {
 		return false, false
 	}
 	var choice string
@@ -242,7 +243,7 @@ func (session *ConversationSession) wantedChoice(key string, value json.RawMessa
 	return false, false
 }
 
-func (session *ConversationSession) applyWantedConfig(ctx context.Context, wanted map[string]json.RawMessage) {
+func (cs *ConversationSession) applyWantedConfig(ctx context.Context, wanted map[string]json.RawMessage) {
 	keys := make([]string, 0, len(wanted))
 	for key := range wanted {
 		keys = append(keys, key)
@@ -254,25 +255,25 @@ func (session *ConversationSession) applyWantedConfig(ctx context.Context, wante
 	}
 	for _, key := range keys {
 		value := wanted[key]
-		if allowed, unchanged := session.wantedChoice(key, value); allowed {
+		if allowed, unchanged := cs.wantedChoice(key, value); allowed {
 			if unchanged {
 				continue
 			}
-			if err := session.SetConfigOption(ctx, key, value); err == nil {
+			if err := cs.SetConfigOption(ctx, key, value); err == nil {
 				continue
 			} else {
 				_, event := obs.Start(ctx, "worker", "apply_saved_config")
-				event.Set("session_id", session.sessionID)
+				event.Set("session_id", cs.sessionID)
 				event.Fail(err)
 				event.End()
 			}
 		}
-		session.log.Append("notice", time.Now().UnixMilli(), mustRawJSON(map[string]string{
+		cs.log.Append("notice", time.Now().UnixMilli(), mustRawJSON(map[string]string{
 			"sessionUpdate": "notice", "severity": "info", "title": "A saved agent option could not be applied", "description": key,
 		}))
 	}
 }
 
-func (session *ConversationSession) logConfiguration() {
-	session.log.Append("agent_configuration", time.Now().UnixMilli(), session.ConfigJSON())
+func (cs *ConversationSession) logConfiguration() {
+	cs.log.Append("agent_configuration", time.Now().UnixMilli(), cs.ConfigJSON())
 }

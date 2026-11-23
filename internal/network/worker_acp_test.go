@@ -22,6 +22,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/acp/acptest"
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 type closeableBuffer struct {
@@ -179,7 +180,7 @@ func TestWorkerLaunchContextUsesSafeDefaultPermissions(t *testing.T) {
 	dir := t.TempDir()
 	ctx, err := workerLaunchContext(WorkerLaunch{
 		Directory: dir,
-		Session:   SessionInfo{Directory: dir, Harness: "agy"},
+		Session:   session.SessionInfo{Directory: dir, Harness: "agy"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +195,7 @@ func TestStartACPRequiresHarness(t *testing.T) {
 	_, _, err := startACPConversation(context.Background(), WorkerLaunch{
 		Transport: "acp",
 		Directory: dir,
-		Session:   SessionInfo{Directory: dir},
+		Session:   session.SessionInfo{Directory: dir},
 	}, dir, NewConversationSession(acp.NewEventLog(0), nil))
 	if err == nil || !strings.Contains(err.Error(), "harness") {
 		t.Fatalf("expected harness error, got %v", err)
@@ -234,7 +235,7 @@ func TestStartACPReplayAgent(t *testing.T) {
 	session, cleanup, err := startACPConversation(context.Background(), WorkerLaunch{
 		Transport: "acp",
 		Directory: dir,
-		Session:   SessionInfo{Directory: dir, Harness: "claude"},
+		Session:   session.SessionInfo{Directory: dir, Harness: "claude"},
 	}, dir, NewConversationSession(acp.NewEventLog(0), nil))
 	if err != nil {
 		t.Fatal(err)
@@ -263,8 +264,8 @@ func TestStartACPReplayAgent(t *testing.T) {
 func TestACPNeedsYouPersistsWithoutConversationReader(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	ctx := context.Background()
-	info := SessionInfo{ID: "session-test", Transport: "acp", ConversationState: "idle"}
-	if err := upsertSession(ctx, store.DB, info); err != nil {
+	info := session.SessionInfo{ID: "session-test", Transport: "acp", ConversationState: "idle"}
+	if err := session.UpsertSession(ctx, store.DB, info); err != nil {
 		t.Fatal(err)
 	}
 	log, err := newConversationLog(ctx, store, info.ID, func(err error) { t.Error(err) }, nil)
@@ -274,7 +275,7 @@ func TestACPNeedsYouPersistsWithoutConversationReader(t *testing.T) {
 	defer log.Close()
 	NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
 	log.Append("permission_request", 1, json.RawMessage(`{"requestId":"p1"}`))
-	got, err := storedSession(ctx, store.Reader, info.ID)
+	got, err := session.StoredSession(ctx, store.Reader, info.ID)
 	if err != nil || got.ConversationState != "needs_you" {
 		t.Fatalf("state without a reader=%q err=%v", got.ConversationState, err)
 	}
@@ -359,7 +360,7 @@ func TestSessionInfoAgentCapabilitiesRoundTripUsesAllowlist(t *testing.T) {
 			List:   &sdkacp.SessionListCapabilities{},
 		},
 	})
-	data, err := json.Marshal(SessionInfo{AgentCapabilities: capabilities})
+	data, err := json.Marshal(session.SessionInfo{AgentCapabilities: capabilities})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +368,7 @@ func TestSessionInfoAgentCapabilitiesRoundTripUsesAllowlist(t *testing.T) {
 		strings.Contains(string(data), "private") || strings.Contains(string(data), "audio") || strings.Contains(string(data), `"list"`) {
 		t.Fatalf("capability view contains unapproved fields: %s", data)
 	}
-	var got SessionInfo
+	var got session.SessionInfo
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +379,7 @@ func TestSessionInfoAgentCapabilitiesRoundTripUsesAllowlist(t *testing.T) {
 		got.AgentCapabilities.SessionCapabilities.Fork == nil {
 		t.Fatalf("round-tripped capabilities = %+v", got.AgentCapabilities)
 	}
-	var old SessionInfo
+	var old session.SessionInfo
 	if err := json.Unmarshal([]byte(`{"id":"session-old"}`), &old); err != nil {
 		t.Fatal(err)
 	}
@@ -633,7 +634,7 @@ func TestRunWorkerACPRestartAndStop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	code, err := RunWorker(context.Background(), home, "test", WorkerLaunch{
-		Session:   SessionInfo{ID: "test-session", Directory: directory, Harness: "claude", Mode: "default"},
+		Session:   session.SessionInfo{ID: "test-session", Directory: directory, Harness: "claude", Mode: "default"},
 		Program:   program,
 		Directory: directory,
 		Transport: "acp",

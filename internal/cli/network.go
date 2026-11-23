@@ -22,6 +22,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/staging"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 	"golang.org/x/sync/errgroup"
@@ -143,7 +144,7 @@ func (runner Runner) runGateway(ctx context.Context, invocation Invocation) (int
 	}
 }
 
-func (runner Runner) startRemoteSession(ctx context.Context, home, executable string, info network.SessionInfo, forkSessionID string) (string, error) {
+func (runner Runner) startRemoteSession(ctx context.Context, home, executable string, info session.SessionInfo, forkSessionID string) (string, error) {
 	if info.Transport == "shell" {
 		program, arguments := loginShell(ctx)
 		return network.StartWorker(ctx, home, executable, network.WorkerLaunch{
@@ -282,7 +283,7 @@ func (runner Runner) launchManaged(ctx context.Context, packContext paths.Contex
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		runner.Launch = func(process *os.Process) (func(), error) {
-			cleanup, err := network.RegisterPresence(home, Version, network.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode}, process)
+			cleanup, err := network.RegisterPresence(home, Version, session.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode}, process)
 			if err != nil {
 				fmt.Fprintf(runner.Stderr, "warning: could not register native-stdio session: %v\n", err)
 				return nil, nil
@@ -299,8 +300,8 @@ func (runner Runner) launchManaged(ctx context.Context, packContext paths.Contex
 	if err != nil {
 		return 1, err
 	}
-	cliActor := network.LocalActor("cli")
-	info := network.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode, StartedBy: &cliActor}
+	cliActor := session.LocalActor("cli")
+	info := session.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode, StartedBy: &cliActor}
 	// tmux pane closure sends SIGHUP; let the local attachment stop its worker.
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGHUP, syscall.SIGTERM)
 	defer stop()
@@ -333,7 +334,7 @@ func (runner Runner) serveGateway(ctx context.Context, home, executable, address
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	options := network.GatewayOptions{Home: home, Address: address, PublicURL: os.Getenv("AGENTPACK_PUBLIC_URL"), Assets: network.WebAssets(), Version: Version}
-	options.Start = func(ctx context.Context, info network.SessionInfo, forkSessionID string) (string, error) {
+	options.Start = func(ctx context.Context, info session.SessionInfo, forkSessionID string) (string, error) {
 		return runner.startRemoteSession(ctx, home, executable, info, forkSessionID)
 	}
 	options.Update = runner.updateGateway

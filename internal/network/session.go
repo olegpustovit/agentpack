@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"io"
 	"os"
 	"os/exec"
@@ -26,19 +27,6 @@ var (
 	ErrSlowObserver        = errors.New("terminal observer fell behind; reconnect to recover available history")
 	ErrUnsupportedTerminal = errors.New("terminal sharing is not supported on this platform")
 )
-
-// TerminalState contains no command arguments, environment, or credentials.
-type TerminalState struct {
-	Interactive  bool   `json:"interactive"`
-	Running      bool   `json:"running"`
-	Restarting   bool   `json:"restarting"`
-	ShellCommand string `json:"shell_command,omitempty"`
-	SharedInput  bool   `json:"shared_input,omitempty"`
-	Responder    uint64 `json:"responder,omitempty"`
-	Rows         uint16 `json:"rows"`
-	Columns      uint16 `json:"columns"`
-	ExitCode     int    `json:"exit_code"`
-}
 
 // Replay is a byte stream, not a terminal screen snapshot. Offset > 0 means
 // earlier bytes were discarded, including potentially required ANSI state.
@@ -76,7 +64,7 @@ type Session struct {
 	writeMu     sync.Mutex
 	command     *exec.Cmd
 	terminal    *terminal
-	state       TerminalState
+	state       session.TerminalState
 	attachments map[uint64]*Attachment
 	nextID      uint64
 	replay      []byte
@@ -107,7 +95,7 @@ func StartSession(command *exec.Cmd, rows, columns uint16) (*Session, error) {
 	}
 	session := &Session{
 		command: command, terminal: terminal,
-		state:       TerminalState{Interactive: true, Running: true, SharedInput: true, Rows: rows, Columns: columns, ExitCode: -1},
+		state:       session.TerminalState{Interactive: true, Running: true, SharedInput: true, Rows: rows, Columns: columns, ExitCode: -1},
 		attachments: make(map[uint64]*Attachment), done: make(chan struct{}), readDone: make(chan struct{}),
 	}
 	go session.readOutput()
@@ -119,7 +107,7 @@ func validSize(rows, columns uint16) bool {
 	return rows > 0 && columns > 0 && rows <= 1000 && columns <= 1000
 }
 
-func (session *Session) State() TerminalState {
+func (session *Session) State() session.TerminalState {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	state := session.state

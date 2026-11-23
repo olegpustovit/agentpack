@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func TestMeshReadsSurviveOwnerShutdownAndRefuseWrites(t *testing.T) {
@@ -22,9 +23,9 @@ func TestMeshReadsSurviveOwnerShutdownAndRefuseWrites(t *testing.T) {
 	if err := target.options.Library.Store.EnrollPeer("remote"); err != nil {
 		t.Fatal(err)
 	}
-	owner := browserActor(testBrowserEmail)
-	info := SessionInfo{ID: "session-remote", Name: "Saved chat", Directory: "/remote/project", Harness: "codex", Transport: "acp", AgentSessionID: "native-remote", StartedBy: &owner, LastUsed: time.Now()}
-	if err := upsertSession(t.Context(), source.auth.store.DB, info); err != nil {
+	owner := session.BrowserActor(testBrowserEmail)
+	info := session.SessionInfo{ID: "session-remote", Name: "Saved chat", Directory: "/remote/project", Harness: "codex", Transport: "acp", AgentSessionID: "native-remote", StartedBy: &owner, LastUsed: time.Now()}
+	if err := session.UpsertSession(t.Context(), source.auth.store.DB, info); err != nil {
 		t.Fatal(err)
 	}
 	entry := acp.LogEntry{Seq: 1, Kind: "message", Payload: json.RawMessage(`{"text":"persisted history"}`)}
@@ -49,7 +50,7 @@ func TestMeshReadsSurviveOwnerShutdownAndRefuseWrites(t *testing.T) {
 		r := httptest.NewRequest(method, origin.String()+path, strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+target.local.Secret)
 		// This test acts as the owning browser account, rather than the OS account.
-		r = r.WithContext(withActor(r.Context(), owner))
+		r = r.WithContext(session.WithActor(r.Context(), owner))
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, r)
 		return w
@@ -59,7 +60,7 @@ func TestMeshReadsSurviveOwnerShutdownAndRefuseWrites(t *testing.T) {
 		if w.Code != 200 {
 			t.Fatalf("sessions: %d %s", w.Code, w.Body.String())
 		}
-		var entries []SessionInfo
+		var entries []session.SessionInfo
 		if err := json.Unmarshal(w.Body.Bytes(), &entries); err != nil {
 			t.Fatal(err)
 		}
@@ -132,7 +133,7 @@ func TestMeshLivenessExpiresAndLocalFoldersKeepFilesystemChecks(t *testing.T) {
 	if _, got := g.nodeContact("peer", local); !got.Equal(last) {
 		t.Fatal("failed contact replaced last successful sync time")
 	}
-	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: "session-missing", Directory: "/missing/project"}); err != nil {
+	if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: "session-missing", Directory: "/missing/project"}); err != nil {
 		t.Fatal(err)
 	}
 	folders, err := g.meshRecent(t.Context(), "")
@@ -165,15 +166,15 @@ func TestMeshRecentSessionListKeepsOlderBookmarks(t *testing.T) {
 	store := g.store.DB
 	now := time.Now()
 	for i := range 101 {
-		info := SessionInfo{ID: fmt.Sprintf("session-old-%03d", i), Transport: "acp", LastUsed: now.Add(time.Duration(i) * time.Second)}
-		if err := upsertSession(t.Context(), store, info); err != nil {
+		info := session.SessionInfo{ID: fmt.Sprintf("session-old-%03d", i), Transport: "acp", LastUsed: now.Add(time.Duration(i) * time.Second)}
+		if err := session.UpsertSession(t.Context(), store, info); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := store.Exec("UPDATE sessions SET ended_at=last_used"); err != nil {
 		t.Fatal(err)
 	}
-	if err := upsertSession(t.Context(), store, SessionInfo{ID: "session-live", Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store, session.SessionInfo{ID: "session-live", Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	request := func(path string) *httptest.ResponseRecorder {
@@ -185,7 +186,7 @@ func TestMeshRecentSessionListKeepsOlderBookmarks(t *testing.T) {
 		return w
 	}
 	list := request("/api/sessions")
-	var rows []SessionInfo
+	var rows []session.SessionInfo
 	if err := json.Unmarshal(list.Body.Bytes(), &rows); err != nil || len(rows) != 101 || rows[len(rows)-1].ID != "session-live" {
 		t.Fatalf("recent list status=%d rows=%d err=%v", list.Code, len(rows), err)
 	}
@@ -195,7 +196,7 @@ func TestMeshRecentSessionListKeepsOlderBookmarks(t *testing.T) {
 		}
 	}
 	old := request("/api/sessions/session-old-000")
-	var row SessionInfo
+	var row session.SessionInfo
 	if err := json.Unmarshal(old.Body.Bytes(), &row); old.Code != http.StatusOK || err != nil || row.ID != "session-old-000" {
 		t.Fatalf("old bookmark status=%d id=%q err=%v", old.Code, row.ID, err)
 	}

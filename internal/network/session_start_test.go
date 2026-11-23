@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -23,21 +24,21 @@ func TestChatStartAnswersBeforeTheAgentIsUp(t *testing.T) {
 	home := t.TempDir()
 	dir := seedFolder(t, home)
 	release := make(chan struct{})
-	launched := make(chan SessionInfo, 1)
-	g, _ := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	launched := make(chan session.SessionInfo, 1)
+	g, _ := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		launched <- info
 		<-release
 		return info.ID, nil
 	})
 	defer close(release)
-	info, err := g.startSession(context.Background(), LocalActor("local"), SessionInfo{Directory: dir, Harness: "claude", Mode: "default", Transport: "acp"}, "")
+	info, err := g.startSession(context.Background(), session.LocalActor("local"), session.SessionInfo{Directory: dir, Harness: "claude", Mode: "default", Transport: "acp"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(info.ID, "session-") || info.ConversationState != "starting" {
 		t.Fatalf("start returned %+v", info)
 	}
-	stored, err := storedSession(context.Background(), g.store.Reader, info.ID)
+	stored, err := session.StoredSession(context.Background(), g.store.Reader, info.ID)
 	if err != nil || stored.ConversationState != "starting" {
 		t.Fatalf("starting row: %+v, %v", stored, err)
 	}
@@ -50,7 +51,7 @@ func TestChatStartAnswersBeforeTheAgentIsUp(t *testing.T) {
 		t.Fatal("the launch did not run in the background")
 	}
 	// The starting row is now the folder's newest recent entry; it must not lock the folder.
-	if _, err := g.startSession(context.Background(), LocalActor("local"), SessionInfo{Directory: dir, Harness: "claude", Mode: "default", Transport: "acp"}, ""); err != nil {
+	if _, err := g.startSession(context.Background(), session.LocalActor("local"), session.SessionInfo{Directory: dir, Harness: "claude", Mode: "default", Transport: "acp"}, ""); err != nil {
 		t.Fatalf("second start while the first is starting: %v", err)
 	}
 	<-launched
@@ -60,19 +61,19 @@ func TestFailedChatStartKeepsTheErrorAndTheRow(t *testing.T) {
 	home := t.TempDir()
 	dir := seedFolder(t, home)
 	var g *Gateway
-	g, _ = identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	g, _ = identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		// The worker failed after registering: it ended (and hid) its prompt-less row first.
-		if err := endSession(context.Background(), g.store.DB, info.ID, TerminalState{ExitCode: 1}); err != nil {
+		if err := session.EndSession(context.Background(), g.store.DB, info.ID, session.TerminalState{ExitCode: 1}); err != nil {
 			t.Error(err)
 		}
 		return "", errors.New("pack sync failed")
 	})
-	info, err := g.startSession(context.Background(), LocalActor("local"), SessionInfo{Directory: dir, Harness: "claude", Mode: "default", Transport: "acp"}, "")
+	info, err := g.startSession(context.Background(), session.LocalActor("local"), session.SessionInfo{Directory: dir, Harness: "claude", Mode: "default", Transport: "acp"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	g.starting.Wait()
-	stored, err := storedSession(context.Background(), g.store.Reader, info.ID)
+	stored, err := session.StoredSession(context.Background(), g.store.Reader, info.ID)
 	if err != nil || stored.EndedAt.IsZero() || stored.ConversationState != "idle" {
 		t.Fatalf("failed start not ended: %+v", stored)
 	}
@@ -90,11 +91,11 @@ func TestGatewayStartEndsLeftoverStartingRows(t *testing.T) {
 	home := t.TempDir()
 	dir := seedFolder(t, home)
 	g, _ := identityGateway(t, home, nil)
-	if err := upsertSession(context.Background(), g.store.DB, SessionInfo{ID: "session-leftover", Directory: dir, Harness: "claude", Transport: "acp", ConversationState: "starting"}); err != nil {
+	if err := session.UpsertSession(context.Background(), g.store.DB, session.SessionInfo{ID: "session-leftover", Directory: dir, Harness: "claude", Transport: "acp", ConversationState: "starting"}); err != nil {
 		t.Fatal(err)
 	}
 	g.endLeftoverStarts(context.Background())
-	stored, err := storedSession(context.Background(), g.store.Reader, "session-leftover")
+	stored, err := session.StoredSession(context.Background(), g.store.Reader, "session-leftover")
 	if err != nil || stored.EndedAt.IsZero() || stored.ConversationState != "idle" {
 		t.Fatalf("leftover start: %+v, %v", stored, err)
 	}
@@ -104,13 +105,13 @@ func TestEndingAChatSettlesAStaleState(t *testing.T) {
 	home := t.TempDir()
 	dir := seedFolder(t, home)
 	g, _ := identityGateway(t, home, nil)
-	if err := upsertSession(context.Background(), g.store.DB, SessionInfo{ID: "session-busy", Directory: dir, Harness: "claude", Transport: "acp", ConversationState: "needs_you"}); err != nil {
+	if err := session.UpsertSession(context.Background(), g.store.DB, session.SessionInfo{ID: "session-busy", Directory: dir, Harness: "claude", Transport: "acp", ConversationState: "needs_you"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := endSession(context.Background(), g.store.DB, "session-busy", TerminalState{}); err != nil {
+	if err := session.EndSession(context.Background(), g.store.DB, "session-busy", session.TerminalState{}); err != nil {
 		t.Fatal(err)
 	}
-	stored, err := storedSession(context.Background(), g.store.Reader, "session-busy")
+	stored, err := session.StoredSession(context.Background(), g.store.Reader, "session-busy")
 	if err != nil || stored.ConversationState != "idle" {
 		t.Fatalf("ended chat: %+v, %v", stored, err)
 	}
@@ -136,8 +137,8 @@ func TestWorkerThatExitsEarlyReportsItsOwnError(t *testing.T) {
 func stuckChat(t *testing.T, g *Gateway, dir, id string) {
 	t.Helper()
 	ctx := context.Background()
-	info := SessionInfo{ID: id, Directory: dir, Harness: "claude", Mode: "default", Transport: "acp", AgentSessionID: "agent-1", ConversationState: "working", State: TerminalState{Running: true, ExitCode: -1}}
-	if err := upsertSession(ctx, g.store.DB, info); err != nil {
+	info := session.SessionInfo{ID: id, Directory: dir, Harness: "claude", Mode: "default", Transport: "acp", AgentSessionID: "agent-1", ConversationState: "working", State: session.TerminalState{Running: true, ExitCode: -1}}
+	if err := session.UpsertSession(ctx, g.store.DB, info); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := g.store.DB.Exec(`UPDATE sessions SET ended_at=1,subagents='[{"id":"a"}]' WHERE id=?`, id); err != nil {
@@ -164,9 +165,9 @@ func appendStoredEvent(t *testing.T, g *Gateway, id, kind string, payload json.R
 
 func TestReaperSettlesAChatWhoseWorkerDiedAndResumesItOnce(t *testing.T) {
 	home := t.TempDir()
-	launched := make(chan SessionInfo, 2)
+	launched := make(chan session.SessionInfo, 2)
 	var g *Gateway
-	g, _ = identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	g, _ = identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		launched <- info
 		// The resumed agent takes its prompt and dies, like a machine that drops off again.
 		appendStoredEvent(t, g, info.ID, "prompt", mustRawJSON(map[string]any{"text": map[string]string{"text": autoResumePrompt}}))
@@ -187,7 +188,7 @@ func TestReaperSettlesAChatWhoseWorkerDiedAndResumesItOnce(t *testing.T) {
 		t.Fatalf("resumed twice: %+v", got)
 	default:
 	}
-	stored, err := storedSession(context.Background(), g.store.Reader, "session-dead")
+	stored, err := session.StoredSession(context.Background(), g.store.Reader, "session-dead")
 	if err != nil || stored.ConversationState != "idle" || stored.State.Running || len(stored.Subagents) != 0 {
 		t.Fatalf("settled row: %+v, %v", stored, err)
 	}
@@ -210,8 +211,8 @@ func TestReaperSettlesAChatWhoseWorkerDiedAndResumesItOnce(t *testing.T) {
 
 func TestResumeRestartsAStoppedChatUnderItsOwnID(t *testing.T) {
 	home := t.TempDir()
-	launched := make(chan SessionInfo, 2)
-	g, _ := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	launched := make(chan session.SessionInfo, 2)
+	g, _ := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		launched <- info
 		return info.ID, nil
 	})
@@ -231,8 +232,8 @@ func TestResumeRestartsAStoppedChatUnderItsOwnID(t *testing.T) {
 
 func TestSwitchHarnessContinuesTheChatWithAFreshAgent(t *testing.T) {
 	home := t.TempDir()
-	launched := make(chan SessionInfo, 1)
-	g, _ := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	launched := make(chan session.SessionInfo, 1)
+	g, _ := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		launched <- info
 		return info.ID, nil
 	})
@@ -269,15 +270,15 @@ func TestSignInFailureMarksTheNoticeAndTheChatStartsLater(t *testing.T) {
 	home := t.TempDir()
 	dir := seedFolder(t, home)
 	launches := 0
-	launched := make(chan SessionInfo, 1)
-	g, _ := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	launched := make(chan session.SessionInfo, 1)
+	g, _ := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		if launches++; launches == 1 {
 			return "", errors.New("Antigravity" + notSignedIn + "gigacomp.")
 		}
 		launched <- info
 		return info.ID, nil
 	})
-	info, err := g.startSession(context.Background(), LocalActor("local"), SessionInfo{Directory: dir, Harness: "agy", Mode: "default", Transport: "acp"}, "")
+	info, err := g.startSession(context.Background(), session.LocalActor("local"), session.SessionInfo{Directory: dir, Harness: "agy", Mode: "default", Transport: "acp"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,12 +303,12 @@ func TestStartingChatPersistsThreePromptsBeforeTheWorkerExists(t *testing.T) {
 	home := t.TempDir()
 	dir := seedFolder(t, home)
 	release := make(chan struct{})
-	g, origin := identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
+	g, origin := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		<-release
 		return info.ID, nil
 	})
 	defer close(release)
-	actor := browserActor(testBrowserEmail)
+	actor := session.BrowserActor(testBrowserEmail)
 	input := chatStartRequest{ID: "session-d7148a740d2c495991c792576427836d", Directory: dir,
 		Harness: "claude", Mode: "default", Transport: "acp", FirstMessage: "one"}
 	if _, err := g.claimChatStart(t.Context(), actor, input); err != nil {
@@ -317,7 +318,7 @@ func TestStartingChatPersistsThreePromptsBeforeTheWorkerExists(t *testing.T) {
 		r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/sessions/"+input.ID+"/conversation/prompt", strings.NewReader(string(mustRawJSON(map[string]string{"text": text}))))
 		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
 		r.Header.Set("Idempotency-Key", key)
-		r = r.WithContext(withActor(r.Context(), actor))
+		r = r.WithContext(session.WithActor(r.Context(), actor))
 		w := httptest.NewRecorder()
 		g.Handler().ServeHTTP(w, r)
 		var result struct {
@@ -405,17 +406,17 @@ func TestReaperSettlesInterruptedChatStart(t *testing.T) {
 	ctx := t.Context()
 	old := time.Now().Add(-3 * time.Minute)
 	for _, id := range []string{"session-orphan", "session-in-flight"} {
-		if err := upsertSession(ctx, g.store.DB, SessionInfo{ID: id, Harness: "codex", Transport: "acp", ConversationState: "starting", StartedAt: old, LastUsed: old}); err != nil {
+		if err := session.UpsertSession(ctx, g.store.DB, session.SessionInfo{ID: id, Harness: "codex", Transport: "acp", ConversationState: "starting", StartedAt: old, LastUsed: old}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	g.startingChats.Store("session-in-flight", struct{}{})
 	g.reapStoppedChats(ctx)
-	orphan, err := storedSession(ctx, g.store.Reader, "session-orphan")
+	orphan, err := session.StoredSession(ctx, g.store.Reader, "session-orphan")
 	if err != nil || orphan.EndedAt.IsZero() {
 		t.Fatalf("interrupted start stayed active: %v", err)
 	}
-	active, err := storedSession(ctx, g.store.Reader, "session-in-flight")
+	active, err := session.StoredSession(ctx, g.store.Reader, "session-in-flight")
 	if err != nil || !active.EndedAt.IsZero() {
 		t.Fatalf("reaper settled an active start: %v", err)
 	}

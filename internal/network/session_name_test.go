@@ -3,6 +3,7 @@ package network
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,11 +24,11 @@ func TestSessionNameRoutePersistsWithoutChangingWorkerIdentity(t *testing.T) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		writeJSON(w, TerminalState{Running: true, Rows: 24, Columns: 80})
+		writeJSON(w, session.TerminalState{Running: true, Rows: 24, Columns: 80})
 	}))
 	defer worker.Close()
 	record := WorkerRecord{
-		Session: SessionInfo{Directory: t.TempDir(), Harness: "claude", Mode: "default"},
+		Session: session.SessionInfo{Directory: t.TempDir(), Harness: "claude", Mode: "default"},
 		ID:      id, Address: strings.TrimPrefix(worker.URL, "http://"), Secret: strings.Repeat("s", 64),
 	}
 	data, err := json.Marshal(record)
@@ -43,7 +44,7 @@ func TestSessionNameRoutePersistsWithoutChangingWorkerIdentity(t *testing.T) {
 	}
 	info := record.Session
 	info.ID = id
-	if err := upsertSession(t.Context(), auth.store.DB, info); err != nil {
+	if err := session.UpsertSession(t.Context(), auth.store.DB, info); err != nil {
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
@@ -73,7 +74,7 @@ func TestSessionNameRoutePersistsWithoutChangingWorkerIdentity(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("rename failed: %d %s", response.Code, response.Body.String())
 	}
-	var renamed SessionInfo
+	var renamed session.SessionInfo
 	if err := json.Unmarshal(response.Body.Bytes(), &renamed); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +83,7 @@ func TestSessionNameRoutePersistsWithoutChangingWorkerIdentity(t *testing.T) {
 	}
 	// A new gateway instance sees the label from disk while the worker identity stays intact.
 	response = request(makeGateway(), http.MethodGet, "/api/sessions", "")
-	var sessions []SessionInfo
+	var sessions []session.SessionInfo
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &sessions) != nil || len(sessions) != 1 || sessions[0].Name != renamed.Name {
 		t.Fatalf("persisted session name: %d %s", response.Code, response.Body.String())
 	}

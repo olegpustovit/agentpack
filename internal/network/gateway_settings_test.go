@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/registry"
+	"github.com/olegpustovit/agentpack/internal/session"
 
 	"github.com/olegpustovit/agentpack/internal/state"
 )
@@ -100,10 +101,10 @@ func TestStopAgentsSkipsACPWorkersOwnedElsewhere(t *testing.T) {
 	origin, _ := url.Parse("http://127.0.0.1:7420")
 	const workerSecret = "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
 	stopped := map[string]bool{}
-	worker := func(id string, session SessionInfo) {
+	worker := func(id string, info session.SessionInfo) {
 		t.Helper()
-		session.ID = id
-		if err := upsertSession(t.Context(), auth.store.DB, session); err != nil {
+		info.ID = id
+		if err := session.UpsertSession(t.Context(), auth.store.DB, info); err != nil {
 			t.Fatal(err)
 		}
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -113,7 +114,7 @@ func TestStopAgentsSkipsACPWorkersOwnedElsewhere(t *testing.T) {
 			}
 			switch r.URL.Path {
 			case "/state":
-				_ = json.NewEncoder(w).Encode(TerminalState{Running: true, Interactive: true})
+				_ = json.NewEncoder(w).Encode(session.TerminalState{Running: true, Interactive: true})
 			case "/stop":
 				stopped[id] = true
 			default:
@@ -122,10 +123,10 @@ func TestStopAgentsSkipsACPWorkersOwnedElsewhere(t *testing.T) {
 		}))
 		t.Cleanup(server.Close)
 		record := WorkerRecord{
-			Session: session, ID: id, Address: strings.TrimPrefix(server.URL, "http://"),
+			Session: info, ID: id, Address: strings.TrimPrefix(server.URL, "http://"),
 			Secret: workerSecret,
 		}
-		record.Session = SessionInfo{}
+		record.Session = session.SessionInfo{}
 		data, err := json.Marshal(record)
 		if err != nil {
 			t.Fatal(err)
@@ -138,11 +139,11 @@ func TestStopAgentsSkipsACPWorkersOwnedElsewhere(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	owner := browserActor(testBrowserEmail)
-	foreign := Actor{Kind: "peer", User: "alice@example.com", Node: "remote", StableNodeID: "stable-foreign"}
-	worker("session-owned-acp", SessionInfo{Transport: "acp", StartedBy: &owner})
-	worker("session-foreign-acp", SessionInfo{Transport: "acp", StartedBy: &foreign})
-	worker("session-foreign-terminal", SessionInfo{Transport: "terminal", StartedBy: &foreign})
+	owner := session.BrowserActor(testBrowserEmail)
+	foreign := session.Actor{Kind: "peer", User: "alice@example.com", Node: "remote", StableNodeID: "stable-foreign"}
+	worker("session-owned-acp", session.SessionInfo{Transport: "acp", StartedBy: &owner})
+	worker("session-foreign-acp", session.SessionInfo{Transport: "acp", StartedBy: &foreign})
+	worker("session-foreign-terminal", session.SessionInfo{Transport: "terminal", StartedBy: &foreign})
 
 	g := &Gateway{
 		store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)},
@@ -150,10 +151,10 @@ func TestStopAgentsSkipsACPWorkersOwnedElsewhere(t *testing.T) {
 	}
 	listRequest := httptest.NewRequest(http.MethodGet, origin.String()+"/api/sessions", nil)
 	listRequest.Header.Set("Authorization", "Bearer "+g.local.Secret)
-	listRequest = listRequest.WithContext(withActor(listRequest.Context(), owner))
+	listRequest = listRequest.WithContext(session.WithActor(listRequest.Context(), owner))
 	listResponse := httptest.NewRecorder()
 	g.Handler().ServeHTTP(listResponse, listRequest)
-	var listed []SessionInfo
+	var listed []session.SessionInfo
 	if err := json.Unmarshal(listResponse.Body.Bytes(), &listed); err != nil {
 		t.Fatalf("decode public session list %q: %v", listResponse.Body.String(), err)
 	}
@@ -181,7 +182,7 @@ func TestStopAgentsSkipsACPWorkersOwnedElsewhere(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodPost, origin.String()+"/api/node/stop-agents", nil)
 	request.Header.Set("Authorization", "Bearer "+g.local.Secret)
-	request = request.WithContext(withActor(request.Context(), owner))
+	request = request.WithContext(session.WithActor(request.Context(), owner))
 	response := httptest.NewRecorder()
 	g.Handler().ServeHTTP(response, request)
 	var result struct {

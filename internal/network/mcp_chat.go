@@ -25,6 +25,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -138,26 +139,26 @@ func chatBearer(r *http.Request) bool {
 
 // chatCaller authenticates a chat's agent. The agent runs on this machine, so the credential is
 // accepted from loopback only and never through a proxy. The agent acts as the chat's owner.
-func (g *Gateway) chatCaller(r *http.Request) (Actor, error) {
+func (g *Gateway) chatCaller(r *http.Request) (session.Actor, error) {
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if ip := net.ParseIP(host); r.URL.Path != "/mcp" || ip == nil || !ip.IsLoopback() || r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("Forwarded") != "" {
-		return Actor{}, errChatCredential
+		return session.Actor{}, errChatCredential
 	}
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	id, _, _ := strings.Cut(token, ".")
 	stored, err := os.ReadFile(chatToolsTokenPath(g.options.Home, id))
 	if !validSessionID(id) || err != nil || len(stored) == 0 || subtle.ConstantTimeCompare(stored, []byte(token)) != 1 {
-		return Actor{}, errChatCredential
+		return session.Actor{}, errChatCredential
 	}
-	info, err := storedSession(r.Context(), g.store.Reader, id)
-	if errors.Is(err, errSessionNotFound) || err == nil && info.StartedBy == nil {
-		return Actor{}, errChatCredential
+	info, err := session.StoredSession(r.Context(), g.store.Reader, id)
+	if errors.Is(err, session.ErrSessionNotFound) || err == nil && info.StartedBy == nil {
+		return session.Actor{}, errChatCredential
 	}
 	if err != nil {
-		return Actor{}, err
+		return session.Actor{}, err
 	}
 	actor := *info.StartedBy
-	actor.Agent, actor.chat = info.Harness, id
+	actor.Agent, actor.Chat = info.Harness, id
 	return actor, nil
 }
 
@@ -171,7 +172,7 @@ func (g *Gateway) serveChatTools(w http.ResponseWriter, r *http.Request, stream 
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	stream.ServeHTTP(w, r.WithContext(withActor(r.Context(), actor)))
+	stream.ServeHTTP(w, r.WithContext(session.WithActor(r.Context(), actor)))
 }
 
 // chatToolsOn reads the switch on every call, so turning it off takes effect without a reload.
@@ -237,9 +238,9 @@ func (g *Gateway) helperAllowed(ctx context.Context, parent string) error {
 }
 
 // startHelper starts a session; an agent always starts helpers of its own chat, within the limits.
-func (m *GatewayMCP) startHelper(ctx context.Context, parent *string, start func() (SessionInfo, error)) (SessionInfo, error) {
-	if actor, _ := actorFrom(ctx); actor.chat != "" {
-		*parent = actor.chat
+func (m *GatewayMCP) startHelper(ctx context.Context, parent *string, start func() (session.SessionInfo, error)) (session.SessionInfo, error) {
+	if actor, _ := session.ActorFrom(ctx); actor.Chat != "" {
+		*parent = actor.Chat
 	}
 	if *parent == "" {
 		return start()
@@ -247,7 +248,7 @@ func (m *GatewayMCP) startHelper(ctx context.Context, parent *string, start func
 	helperStarts.Lock()
 	defer helperStarts.Unlock()
 	if err := m.gateway.helperAllowed(ctx, *parent); err != nil {
-		return SessionInfo{}, err
+		return session.SessionInfo{}, err
 	}
 	return start()
 }
@@ -256,19 +257,19 @@ func (m *GatewayMCP) startHelper(ctx context.Context, parent *string, start func
 // restarts and cancels only itself and its helpers on this machine. It messages other chats only with ask.
 // restart_session's revival of a stopped chat is the one exception.
 func (m *GatewayMCP) agentMayChange(ctx context.Context, node, id string) error {
-	actor, _ := actorFrom(ctx)
-	if actor.chat == "" || id == actor.chat && node == "" {
+	actor, _ := session.ActorFrom(ctx)
+	if actor.Chat == "" || id == actor.Chat && node == "" {
 		return nil
 	}
 	if node != "" {
 		return errAgentScope
 	}
 	for depth := 0; depth <= maxHelperDepth && id != ""; depth++ {
-		info, err := storedSession(ctx, m.gateway.store.Reader, id)
+		info, err := session.StoredSession(ctx, m.gateway.store.Reader, id)
 		if err != nil {
 			return errAgentScope
 		}
-		if info.ParentID == actor.chat {
+		if info.ParentID == actor.Chat {
 			return nil
 		}
 		id = info.ParentID
@@ -278,14 +279,14 @@ func (m *GatewayMCP) agentMayChange(ctx context.Context, node, id string) error 
 
 // refuseAgentOnly refuses what no agent may do at all: raw terminal input and package installs.
 func refuseAgentOnly(ctx context.Context) error {
-	if actor, _ := actorFrom(ctx); actor.chat != "" {
+	if actor, _ := session.ActorFrom(ctx); actor.Chat != "" {
 		return errAgentScope
 	}
 	return nil
 }
 
 func refuseAgent(ctx context.Context) error {
-	if actor, _ := actorFrom(ctx); actor.Agent != "" {
+	if actor, _ := session.ActorFrom(ctx); actor.Agent != "" {
 		return errAgentAnswer
 	}
 	return nil
@@ -304,8 +305,8 @@ func (m *GatewayMCP) guardToolCalls(next mcp.MethodHandler) mcp.MethodHandler {
 		if method != "tools/call" {
 			return next(ctx, method, request)
 		}
-		if actor, _ := actorFrom(ctx); actor.chat != "" {
-			if err := m.gateway.chatToolsOn(ctx, actor.chat); err != nil {
+		if actor, _ := session.ActorFrom(ctx); actor.Chat != "" {
+			if err := m.gateway.chatToolsOn(ctx, actor.Chat); err != nil {
 				return toolError(err), nil
 			}
 		}
@@ -380,7 +381,7 @@ func (m *GatewayMCP) postWhileStarting(ctx context.Context, node, id, path strin
 		if apiStatus(err) != http.StatusNotFound || strings.Contains(err.Error(), "404 page not found") || !time.Now().Before(deadline) {
 			return out, err
 		}
-		if info, storeErr := storedSession(ctx, m.gateway.store.Reader, id); storeErr == nil && !info.EndedAt.IsZero() {
+		if info, storeErr := session.StoredSession(ctx, m.gateway.store.Reader, id); storeErr == nil && !info.EndedAt.IsZero() {
 			return out, err
 		}
 		select {
@@ -392,7 +393,7 @@ func (m *GatewayMCP) postWhileStarting(ctx context.Context, node, id, path strin
 }
 
 func (m *GatewayMCP) startSession(ctx context.Context, _ *mcp.CallToolRequest, in mcpStartInput) (*mcp.CallToolResult, mcpSession, error) {
-	if actor, _ := actorFrom(ctx); actor.chat != "" && (in.Terminal || in.Node != "") {
+	if actor, _ := session.ActorFrom(ctx); actor.Chat != "" && (in.Terminal || in.Node != "") {
 		return nil, mcpSession{}, errAgentScope
 	}
 	if in.Terminal && in.Prompt != "" {
@@ -408,8 +409,8 @@ func (m *GatewayMCP) startSession(ctx context.Context, _ *mcp.CallToolRequest, i
 	if in.Terminal {
 		body.Transport = ""
 	}
-	info, err := m.startHelper(ctx, &body.ParentID, func() (SessionInfo, error) {
-		return callAPI[SessionInfo](ctx, m, in.Node, "POST", "/api/sessions", body)
+	info, err := m.startHelper(ctx, &body.ParentID, func() (session.SessionInfo, error) {
+		return callAPI[session.SessionInfo](ctx, m, in.Node, "POST", "/api/sessions", body)
 	})
 	if err != nil {
 		return nil, mcpSession{}, err
@@ -420,7 +421,7 @@ func (m *GatewayMCP) startSession(ctx context.Context, _ *mcp.CallToolRequest, i
 			ctx, event := obs.Start(background, "mcp", "first_prompt")
 			event.Set("session_id", info.ID)
 			var err error
-			if actor, _ := actorFrom(ctx); actor.chat != "" {
+			if actor, _ := session.ActorFrom(ctx); actor.Chat != "" {
 				_, err = m.ask(ctx, in.Node, info.ID, in.Prompt, "") // an agent's helper answers it
 			} else {
 				_, err = m.sendPrompt(ctx, in.Node, info.ID, in.Prompt, false, 2*time.Minute)
@@ -882,7 +883,7 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		if strings.TrimSpace(in.Text) == "" {
 			return nil, mcpPromptResult{}, errEmptyPrompt
 		}
-		if actor, _ := actorFrom(ctx); actor.chat != "" {
+		if actor, _ := session.ActorFrom(ctx); actor.Chat != "" {
 			return nil, mcpPromptResult{}, errAgentSend
 		}
 		out, err := m.sendPrompt(ctx, in.Node, in.SessionID, in.Text, in.Steer, mcpWaitMax)
@@ -951,16 +952,16 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		return nil, out, err
 	})
 	addTool(server, "fork_session", "Fork a chat into a new chat that continues from its conversation so far, using the agent's own session fork.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpSessionInput) (*mcp.CallToolResult, mcpSession, error) {
-		if actor, _ := actorFrom(ctx); actor.chat != "" && in.Node != "" {
+		if actor, _ := session.ActorFrom(ctx); actor.Chat != "" && in.Node != "" {
 			return nil, mcpSession{}, errAgentScope
 		}
 		parent := ""
-		info, err := m.startHelper(ctx, &parent, func() (SessionInfo, error) {
+		info, err := m.startHelper(ctx, &parent, func() (session.SessionInfo, error) {
 			var body any
 			if parent != "" {
 				body = map[string]string{"parent_id": parent}
 			}
-			return callAPI[SessionInfo](ctx, m, in.Node, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/fork", body)
+			return callAPI[session.SessionInfo](ctx, m, in.Node, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/fork", body)
 		})
 		if err != nil {
 			return nil, mcpSession{}, err
@@ -972,14 +973,14 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		Agent  mcpAgent `json:"agent,omitempty" jsonschema:"Agent for the helper; defaults to this chat's agent."`
 	}) (*mcp.CallToolResult, mcpHelperResult, error) {
 		var out mcpHelperResult
-		actor, _ := actorFrom(ctx)
-		if actor.chat == "" {
+		actor, _ := session.ActorFrom(ctx)
+		if actor.Chat == "" {
 			return nil, out, errors.New("run_helper is for a chat's agent; use start_session")
 		}
 		if strings.TrimSpace(in.Prompt) == "" {
 			return nil, out, errEmptyPrompt
 		}
-		self, err := storedSession(ctx, m.gateway.store.Reader, actor.chat)
+		self, err := session.StoredSession(ctx, m.gateway.store.Reader, actor.Chat)
 		if err != nil {
 			return nil, out, err
 		}

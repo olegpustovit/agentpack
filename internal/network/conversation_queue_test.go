@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 type fakeTurn struct {
@@ -77,7 +78,7 @@ func (agent *fakeAgent) nextPrompt(t *testing.T) acp.PromptInput {
 }
 
 // goalUntil returns the first logged goal for which done is true; the row's goal is the last one (conversationFold).
-func (agent *fakeAgent) goalUntil(t *testing.T, done func(*Goal) bool) *Goal {
+func (agent *fakeAgent) goalUntil(t *testing.T, done func(*session.Goal) bool) *session.Goal {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
 	for {
@@ -88,7 +89,7 @@ func (agent *fakeAgent) goalUntil(t *testing.T, done func(*Goal) bool) *Goal {
 			if entry.Kind != "goal_update" {
 				continue
 			}
-			goal := &Goal{}
+			goal := &session.Goal{}
 			if err := json.Unmarshal(entry.Payload, goal); err != nil {
 				t.Fatal(err)
 			}
@@ -108,8 +109,8 @@ func (agent *fakeAgent) goalUntil(t *testing.T, done func(*Goal) bool) *Goal {
 	}
 }
 
-func goalIn(state string) func(*Goal) bool {
-	return func(goal *Goal) bool { return goal != nil && goal.State == state }
+func goalIn(state string) func(*session.Goal) bool {
+	return func(goal *session.Goal) bool { return goal != nil && goal.State == state }
 }
 
 func entry(kind string, payload any) acp.LogEntry {
@@ -277,7 +278,7 @@ func TestClientPromptIDIsAcceptedOnceAcrossReplay(t *testing.T) {
 func TestClientPromptLookupSurvivesADroppedReplayTail(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-stored-intent"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	input := acp.PromptInput{Text: "first message", QueueID: "5a6057ea65564edfb5222d0c394e0b43"}

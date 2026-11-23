@@ -10,6 +10,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -235,7 +236,7 @@ func (g *Gateway) registerAgents(mux routeRegistrar) {
 // forwarding an account. Bare peer identities and unknown actors are denied.
 // The local CLI retains setup and shutdown authority before the first account exists.
 func (g *Gateway) requireOwner(w http.ResponseWriter, r *http.Request) bool {
-	actor, ok := actorFrom(r.Context())
+	actor, ok := session.ActorFrom(r.Context())
 	allowed := false
 	if ok && (actor.Kind == "browser" || actor.Kind == "local" || actor.Kind == "mcp" || actor.Kind == "peer" && actor.Account) {
 		err := g.store.Reader.QueryRowContext(r.Context(), `SELECT EXISTS(

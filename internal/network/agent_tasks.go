@@ -19,6 +19,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // Agents message each other with ask and reply. Each message is an ordinary prompt with a header
@@ -138,7 +139,7 @@ func (g *Gateway) serveAgentMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid message", http.StatusBadRequest)
 		return
 	}
-	info, err := storedSession(ctx, g.store.Reader, id)
+	info, err := session.StoredSession(ctx, g.store.Reader, id)
 	if err != nil || info.Transport != "acp" {
 		http.Error(w, "session unavailable", http.StatusNotFound)
 		return
@@ -164,7 +165,7 @@ func (g *Gateway) serveAgentMessage(w http.ResponseWriter, r *http.Request) {
 var acceptedBody = []byte(`{"accepted":true}`)
 
 // applyAgentMessage updates this node's side of the task and, for ask and reply, queues the prompt.
-func (g *Gateway) applyAgentMessage(r *http.Request, id string, info SessionInfo, in agentMessage) (int, []byte, error) {
+func (g *Gateway) applyAgentMessage(r *http.Request, id string, info session.SessionInfo, in agentMessage) (int, []byte, error) {
 	ctx, db, now := r.Context(), g.store.DB, time.Now().UnixNano()
 	switch in.Kind {
 	case "ask":
@@ -298,14 +299,14 @@ func (m *GatewayMCP) localNode(ctx context.Context, node string) (string, string
 }
 
 // caller is the chat whose agent calls a task tool, and this node's ID.
-func (m *GatewayMCP) caller(ctx context.Context) (SessionInfo, string, error) {
-	actor, _ := actorFrom(ctx)
-	if actor.chat == "" {
-		return SessionInfo{}, "", errNotAChat
+func (m *GatewayMCP) caller(ctx context.Context) (session.SessionInfo, string, error) {
+	actor, _ := session.ActorFrom(ctx)
+	if actor.Chat == "" {
+		return session.SessionInfo{}, "", errNotAChat
 	}
-	self, err := storedSession(ctx, m.gateway.store.Reader, actor.chat)
+	self, err := session.StoredSession(ctx, m.gateway.store.Reader, actor.Chat)
 	if err != nil {
-		return SessionInfo{}, "", err
+		return session.SessionInfo{}, "", err
 	}
 	local, _, err := m.localNode(ctx, "")
 	return self, local, err
@@ -620,8 +621,8 @@ func (g *Gateway) sendFromAnswerer(ctx context.Context, message agentMessage, no
 	if err != nil {
 		return err
 	}
-	answerer, err := storedSession(ctx, g.store.Reader, answering)
-	if errors.Is(err, errSessionNotFound) || err == nil && answerer.StartedBy == nil {
+	answerer, err := session.StoredSession(ctx, g.store.Reader, answering)
+	if errors.Is(err, session.ErrSessionNotFound) || err == nil && answerer.StartedBy == nil {
 		return nil // nobody can act for a removed chat
 	}
 	if err != nil {
@@ -629,12 +630,12 @@ func (g *Gateway) sendFromAnswerer(ctx context.Context, message agentMessage, no
 	}
 	// The answering chat's agent acts for its owner, as it would calling reply itself.
 	actor := *answerer.StartedBy
-	actor.Agent, actor.chat = answerer.Harness, answerer.ID
+	actor.Agent, actor.Chat = answerer.Harness, answerer.ID
 	message.FromSession, message.FromNode, message.FromName, message.FromAgent = answerer.ID, local, cmpOr(answerer.Name, answerer.Title), answerer.Harness
 	if message.Kind == "" {
 		message.Kind, message.Operation = "reply", message.Task+"-r-"+strconv.FormatInt(updated, 10)
 	}
-	err = g.mcp.deliver(withActor(ctx, actor), node, to, message, 0)
+	err = g.mcp.deliver(session.WithActor(ctx, actor), node, to, message, 0)
 	if err == nil || apiStatus(err) == http.StatusGone || time.Since(time.Unix(0, updated)) > agentTaskDeliveryWindow {
 		return nil
 	}

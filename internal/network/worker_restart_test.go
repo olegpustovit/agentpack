@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func TestGatewayRestartOperationIsIdempotent(t *testing.T) {
@@ -75,7 +76,7 @@ func TestGatewayRestartOperationIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := upsertSession(t.Context(), auth.store.DB, SessionInfo{ID: record.ID}); err != nil {
+	if err := session.UpsertSession(t.Context(), auth.store.DB, session.SessionInfo{ID: record.ID}); err != nil {
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")

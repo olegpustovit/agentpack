@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 	"io"
 	"net/http"
@@ -42,7 +43,7 @@ func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
 		r := httptest.NewRequest("GET", origin.String()+path, nil)
 		if peer {
 			r.Header.Set("Authorization", "Bearer "+joining.local.Secret)
-			r = r.WithContext(withActor(context.WithValue(r.Context(), replicaPeerKey{}, "source"), Actor{Kind: "peer", StableNodeID: "source"}))
+			r = r.WithContext(session.WithActor(context.WithValue(r.Context(), replicaPeerKey{}, "source"), session.Actor{Kind: "peer", StableNodeID: "source"}))
 		}
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, r)
@@ -64,7 +65,7 @@ func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
 	events := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Host = origin.Host
 		r.Header.Set("Authorization", "Bearer "+joining.local.Secret)
-		r = r.WithContext(withActor(context.WithValue(r.Context(), replicaPeerKey{}, "source"), Actor{Kind: "peer", StableNodeID: "source"}))
+		r = r.WithContext(session.WithActor(context.WithValue(r.Context(), replicaPeerKey{}, "source"), session.Actor{Kind: "peer", StableNodeID: "source"}))
 		handler.ServeHTTP(w, r)
 	}))
 	defer events.Close()
@@ -91,7 +92,7 @@ func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
 	sourceHandler := source.Handler()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("Authorization", "Bearer "+source.local.Secret)
-		r = r.WithContext(withActor(context.WithValue(r.Context(), replicaPeerKey{}, "joining"), Actor{Kind: "peer", StableNodeID: "joining"}))
+		r = r.WithContext(session.WithActor(context.WithValue(r.Context(), replicaPeerKey{}, "joining"), session.Actor{Kind: "peer", StableNodeID: "joining"}))
 		sourceHandler.ServeHTTP(w, r)
 	}))
 	defer server.Close()
@@ -123,12 +124,12 @@ func TestLocalAccountBindingPreservesOwnershipAndRevocation(t *testing.T) {
 	if err != nil || actor.User != testBrowserEmail || !actor.Account {
 		t.Fatalf("default owner mapping: %+v %v", actor, err)
 	}
-	owner := browserActor(testBrowserEmail)
-	if !actor.canWriteSession(SessionInfo{StartedBy: &owner}) {
+	owner := session.BrowserActor(testBrowserEmail)
+	if !actor.CanWriteSession(session.SessionInfo{StartedBy: &owner}) {
 		t.Fatal("local owner cannot continue its browser chat")
 	}
-	legacy := LocalActor("local")
-	if !actor.canWriteSession(SessionInfo{StartedBy: &legacy}) {
+	legacy := session.LocalActor("local")
+	if !actor.CanWriteSession(session.SessionInfo{StartedBy: &legacy}) {
 		t.Fatal("mapping lost this OS user's native history")
 	}
 	if err := BindLocalAccount(t.Context(), g.store, " MEMBER@example.com "); err != nil {
@@ -138,11 +139,11 @@ func TestLocalAccountBindingPreservesOwnershipAndRevocation(t *testing.T) {
 	if err != nil || actor.User != "member@example.com" {
 		t.Fatalf("bound account: %+v %v", actor, err)
 	}
-	if actor.canWriteSession(SessionInfo{StartedBy: &owner}) {
+	if actor.CanWriteSession(session.SessionInfo{StartedBy: &owner}) {
 		t.Fatal("bound member wrote owner's chat")
 	}
-	member := browserActor("member@example.com")
-	if !actor.canWriteSession(SessionInfo{StartedBy: &member}) {
+	member := session.BrowserActor("member@example.com")
+	if !actor.CanWriteSession(session.SessionInfo{StartedBy: &member}) {
 		t.Fatal("bound member cannot write its own chat")
 	}
 	if err := BindLocalAccount(t.Context(), g.store, "missing@example.com"); err == nil {

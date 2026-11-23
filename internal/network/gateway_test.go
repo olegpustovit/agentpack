@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -120,7 +121,10 @@ func TestGatewayRestrictsRemoteFolders(t *testing.T) {
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
 	called := false
-	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Start: func(context.Context, SessionInfo, string) (string, error) { called = true; return "session-test", nil }}}
+	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Start: func(context.Context, session.SessionInfo, string) (string, error) {
+		called = true
+		return "session-test", nil
+	}}}
 	r := httptest.NewRequest("POST", origin.String()+"/api/sessions", bytes.NewBufferString(`{"directory":"/unregistered","harness":"claude"}`))
 	r.Header.Set("Authorization", "Bearer "+g.local.Secret)
 	w := httptest.NewRecorder()
@@ -136,7 +140,7 @@ func TestGatewayPackageRestartChoice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := remember(home, SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
+	if err := remember(home, session.SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
@@ -176,7 +180,7 @@ func TestGatewayInstallsMCPServerIntoRecentFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := remember(home, SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
+	if err := remember(home, session.SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")

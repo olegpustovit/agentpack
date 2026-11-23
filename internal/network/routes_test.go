@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/registry"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func peerPatterns() []string {
@@ -155,8 +156,8 @@ func TestSessionWriteReadsItsRowOnce(t *testing.T) {
 	home := t.TempDir()
 	g, origin := identityGateway(t, home, nil)
 	const id, secret = "session-once", "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
-	owner := browserActor(testBrowserEmail)
-	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: id, Transport: "acp", StartedBy: &owner}); err != nil {
+	owner := session.BrowserActor(testBrowserEmail)
+	if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: id, Transport: "acp", StartedBy: &owner}); err != nil {
 		t.Fatal(err)
 	}
 	var forwarded atomic.Int32
@@ -180,7 +181,7 @@ func TestSessionWriteReadsItsRowOnce(t *testing.T) {
 	}
 	testBrowserSession(t, g.auth, testBrowserEmail, "once")
 	handler := g.Handler()
-	before := sessionRowReads.Load()
+	before := session.SessionRowReads.Load()
 	r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/sessions/"+id+"/conversation/cancel", strings.NewReader("{}"))
 	r.Header.Set("Origin", origin.String())
 	r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: "once"})
@@ -189,7 +190,7 @@ func TestSessionWriteReadsItsRowOnce(t *testing.T) {
 	if w.Code != http.StatusOK || forwarded.Load() != 1 {
 		t.Fatalf("cancel: %d %s (forwarded %d)", w.Code, w.Body.String(), forwarded.Load())
 	}
-	if reads := sessionRowReads.Load() - before; reads != 1 {
+	if reads := session.SessionRowReads.Load() - before; reads != 1 {
 		t.Fatalf("session row read %d times, want 1", reads)
 	}
 }

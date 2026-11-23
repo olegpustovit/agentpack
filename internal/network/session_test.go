@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/session"
 	"golang.org/x/term"
 )
 
@@ -242,7 +243,7 @@ func TestSessionSerializesConcurrentLocalAndBrowserInput(t *testing.T) {
 }
 
 func TestSlowObserverAndBoundedReplay(t *testing.T) {
-	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment)}
+	session := &Session{state: session.TerminalState{Running: true}, attachments: make(map[uint64]*Attachment)}
 	slow, _, err := session.Attach(false, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -298,7 +299,7 @@ func TestSessionValidatesBeforeSpawn(t *testing.T) {
 }
 
 func TestObserverRetainsTinyOutputBursts(t *testing.T) {
-	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment)}
+	session := &Session{state: session.TerminalState{Running: true}, attachments: make(map[uint64]*Attachment)}
 	for _, local := range []bool{false, true} {
 		attachment, _, err := session.Attach(local, 0)
 		if err != nil {
@@ -323,7 +324,7 @@ func TestObserverRetainsTinyOutputBursts(t *testing.T) {
 }
 
 func TestAttachReplayResumesWithinWindow(t *testing.T) {
-	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment), offset: 100, replay: []byte("abcdefgh")}
+	session := &Session{state: session.TerminalState{Running: true}, attachments: make(map[uint64]*Attachment), offset: 100, replay: []byte("abcdefgh")}
 	for _, test := range []struct {
 		since, offset uint64
 		data          string
@@ -389,7 +390,7 @@ func TestSessionAnswersDeviceAttributesWithoutViewer(t *testing.T) {
 
 // Past the replay window a tiny chunk costs the same as before it: output stays linear.
 func BenchmarkSessionPublishTinyChunks(b *testing.B) {
-	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment)}
+	session := &Session{state: session.TerminalState{Running: true}, attachments: make(map[uint64]*Attachment)}
 	chunk := []byte("x")
 	b.ReportAllocs()
 	for b.Loop() {

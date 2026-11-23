@@ -11,24 +11,19 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
-var (
-	errSessionArchived    = errors.New("archived")
-	errSessionNotFound    = errors.New("session not found")
-	errSessionUnavailable = errors.New("session unavailable")
-)
-
-func sessionState(ctx context.Context, record WorkerRecord) (TerminalState, error) {
+func sessionState(ctx context.Context, record WorkerRecord) (session.TerminalState, error) {
 	response, err := workerRequest(ctx, record, http.MethodGet, "/state", "")
 	if err != nil {
-		return TerminalState{}, errors.Join(errSessionUnavailable, err)
+		return session.TerminalState{}, errors.Join(session.ErrSessionUnavailable, err)
 	}
 	defer response.Body.Close()
-	var state TerminalState
+	var state session.TerminalState
 	if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&state) != nil {
-		return TerminalState{}, errSessionUnavailable
+		return session.TerminalState{}, session.ErrSessionUnavailable
 	}
 	return state, nil
 }
@@ -46,12 +41,12 @@ func normalizeSessionName(name string) (string, error) {
 	return name, nil
 }
 
-func RenameSession(ctx context.Context, store *state.Store, home, id, name string) (SessionInfo, error) {
+func RenameSession(ctx context.Context, store *state.Store, home, id, name string) (session.SessionInfo, error) {
 	name, err := normalizeSessionName(name)
 	if err != nil {
-		return SessionInfo{}, err
+		return session.SessionInfo{}, err
 	}
-	info, err := storedSession(ctx, store.Reader, id)
+	info, err := session.StoredSession(ctx, store.Reader, id)
 	if err != nil {
 		return info, err
 	}
@@ -80,7 +75,7 @@ func HideSession(ctx context.Context, store *state.Store, home, id string) (bool
 	var hidden, starting bool
 	err := store.Reader.QueryRowContext(ctx, `SELECT hidden, conversation_state='starting' AND ended_at=0 FROM sessions WHERE id=?`, id).Scan(&hidden, &starting)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, errSessionNotFound
+		return false, session.ErrSessionNotFound
 	}
 	if err != nil || hidden {
 		return false, err

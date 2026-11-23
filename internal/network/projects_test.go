@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func projectsHome(t *testing.T) string {
@@ -26,7 +27,7 @@ func projectsHome(t *testing.T) string {
 func TestProjectsGroupsLaunchesIntoOneRow(t *testing.T) {
 	home := projectsHome(t)
 	directory := t.TempDir()
-	for _, launch := range []SessionInfo{
+	for _, launch := range []session.SessionInfo{
 		{Directory: directory, Harness: "claude", Mode: "default"},
 		{Directory: directory, Harness: "codex", Mode: "default"},
 		{Directory: directory, Harness: "grok", Mode: "review"},
@@ -64,11 +65,11 @@ func TestProjectsMergesTrailingSlashDuplicates(t *testing.T) {
 	older := time.Now().UTC().Add(-time.Hour)
 	newer := time.Now().UTC()
 	store := testSessionStore(t, home)
-	for i, info := range []SessionInfo{
+	for i, info := range []session.SessionInfo{
 		{ID: "session-old", Directory: directory + string(filepath.Separator), Harness: "claude", Mode: "default", FolderID: identity, LastUsed: older},
 		{ID: "session-new", Directory: directory, Harness: "claude", Mode: "default", FolderID: identity, LastUsed: newer},
 	} {
-		if err := upsertSession(context.Background(), store.DB, info); err != nil {
+		if err := session.UpsertSession(context.Background(), store.DB, info); err != nil {
 			t.Fatal(i, err)
 		}
 	}
@@ -89,7 +90,7 @@ func TestProjectsMergesTrailingSlashDuplicates(t *testing.T) {
 func TestProjectsDoesNotReadUnavailableFolder(t *testing.T) {
 	home := projectsHome(t)
 	directory := t.TempDir()
-	if err := remember(home, SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
+	if err := remember(home, session.SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(directory); err != nil {
@@ -123,7 +124,7 @@ func TestProjectsIsolatesFailingFolder(t *testing.T) {
 	good := t.TempDir()
 	bad := t.TempDir()
 	for _, directory := range []string{good, bad} {
-		if err := remember(home, SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
+		if err := remember(home, session.SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -152,7 +153,7 @@ func TestForgetRecentWithoutHarnessOrModeRemovesWholeFolder(t *testing.T) {
 	home := projectsHome(t)
 	directory := t.TempDir()
 	other := t.TempDir()
-	for _, launch := range []SessionInfo{
+	for _, launch := range []session.SessionInfo{
 		{Directory: directory, Harness: "claude", Mode: "default"},
 		{Directory: directory + string(filepath.Separator), Harness: "codex", Mode: "review"},
 		{Directory: other, Harness: "claude", Mode: "default"},
@@ -161,7 +162,7 @@ func TestForgetRecentWithoutHarnessOrModeRemovesWholeFolder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := ForgetRecent(t.Context(), testSessionStore(t, home), SessionInfo{Directory: directory}); err != nil {
+	if err := ForgetRecent(t.Context(), testSessionStore(t, home), session.SessionInfo{Directory: directory}); err != nil {
 		t.Fatal(err)
 	}
 	remaining, err := Recent(home)

@@ -19,33 +19,34 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 // WorkerLaunch is delivered through a private startup pipe, never HTTP or disk.
 // Launching agentpack itself here keeps staging, auth and cleanup in the CLI.
 type WorkerLaunch struct {
-	Session       SessionInfo `json:"session"`
-	Transport     string      `json:"transport,omitempty"`
-	StageInWorker bool        `json:"stage_in_worker,omitempty"`
-	ForkSessionID string      `json:"fork_session_id,omitempty"`
-	Program       string      `json:"program"`
-	Arguments     []string    `json:"arguments"`
-	Directory     string      `json:"directory"`
-	Environment   []string    `json:"environment"`
-	Rows          uint16      `json:"rows"`
-	Columns       uint16      `json:"columns"`
+	Session       session.SessionInfo `json:"session"`
+	Transport     string              `json:"transport,omitempty"`
+	StageInWorker bool                `json:"stage_in_worker,omitempty"`
+	ForkSessionID string              `json:"fork_session_id,omitempty"`
+	Program       string              `json:"program"`
+	Arguments     []string            `json:"arguments"`
+	Directory     string              `json:"directory"`
+	Environment   []string            `json:"environment"`
+	Rows          uint16              `json:"rows"`
+	Columns       uint16              `json:"columns"`
 	tools         chatTools
 }
 
 // WorkerRecord is private connection material, readable only by the local OS
 // user. Public node listings must use a separate allowlisted session view.
 type WorkerRecord struct {
-	Session SessionInfo `json:"session,omitzero"`
-	ID      string      `json:"id"`
-	PID     int         `json:"pid"`
-	Address string      `json:"address"`
-	Secret  string      `json:"secret"`
+	Session session.SessionInfo `json:"session,omitzero"`
+	ID      string              `json:"id"`
+	PID     int                 `json:"pid"`
+	Address string              `json:"address"`
+	Secret  string              `json:"secret"`
 }
 
 // createSessionDirectory claims id (chosen by the gateway for an instant start) or a fresh one.
@@ -138,7 +139,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		launch.Session.StartedAt = launch.Session.LastUsed
 	}
 	if launch.Session.StartedBy == nil {
-		actor := LocalActor("local")
+		actor := session.LocalActor("local")
 		launch.Session.StartedBy = &actor
 	}
 	started.Set("session_id", filepath.Base(directory))
@@ -175,7 +176,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		}
 		return session, err
 	}
-	var session *Session
+	var pty *Session
 	var conversation *ConversationSession
 	var acpCleanup func()
 	var handler *WorkerHTTP
@@ -185,7 +186,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			terminal = handler.current().State()
 		}
 		terminal.ExitCode = code
-		if err := endSession(context.Background(), store.DB, launch.Session.ID, terminal); err != nil {
+		if err := session.EndSession(context.Background(), store.DB, launch.Session.ID, terminal); err != nil {
 			_, event := obs.Start(ctx, "worker", "persist_end")
 			event.Set("session_id", launch.Session.ID)
 			event.Fail(err)
@@ -199,10 +200,10 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	pending := launch.Session
 	// A new claim on an agent session is recorded only once its owner is verified; a resumed chat's
 	// row already holds it, and keeps it so a failed start can be resumed again.
-	if stored, err := storedSession(ctx, store.Reader, launch.Session.ID); err != nil || stored.AgentSessionID != pending.AgentSessionID {
+	if stored, err := session.StoredSession(ctx, store.Reader, launch.Session.ID); err != nil || stored.AgentSessionID != pending.AgentSessionID {
 		pending.AgentSessionID = ""
 	}
-	if err := upsertSession(ctx, store.DB, pending); err != nil {
+	if err := session.UpsertSession(ctx, store.DB, pending); err != nil {
 		return 1, fmt.Errorf("register session: %w", err)
 	}
 	var server *http.Server
@@ -210,8 +211,8 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		stop, cancel := context.WithTimeout(context.Background(), workerStopGrace)
 		if handler != nil {
 			_ = handler.Stop(stop)
-		} else if session != nil {
-			_ = session.Stop(stop)
+		} else if pty != nil {
+			_ = pty.Stop(stop)
 		}
 		cancel()
 		if server != nil {
@@ -274,13 +275,13 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		launch.Session.AgentSessionID = conversation.agentSessionID
 		launch.Session.AgentCapabilities = conversation.AgentCapabilitiesView()
 		// Other gateways read this replicated row to decide whether the chat is live.
-		launch.Session.State = TerminalState{Running: !conversation.AgentExited(), ExitCode: -1}
+		launch.Session.State = session.TerminalState{Running: !conversation.AgentExited(), ExitCode: -1}
 		if err := rememberACPConversationOwner(ctx, store, launch.Session, launch.Directory); err != nil {
 			return 1, fmt.Errorf("persist ACP session owner: %w", err)
 		}
 	} else {
 		var err error
-		session, err = start(launch.Rows, launch.Columns)
+		pty, err = start(launch.Rows, launch.Columns)
 		if err != nil {
 			return 1, err
 		}
@@ -290,10 +291,10 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		record.Session.Transport = "acp"
 		record.Session.AgentSessionID = launch.Session.AgentSessionID
 	}
-	if session != nil {
-		record.Session.State = session.State()
+	if pty != nil {
+		record.Session.State = pty.State()
 	}
-	if err := upsertSession(ctx, store.DB, record.Session); err != nil {
+	if err := session.UpsertSession(ctx, store.DB, record.Session); err != nil {
 		return 1, fmt.Errorf("register session: %w", err)
 	}
 	if server == nil {
@@ -310,12 +311,12 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		conversation.ResumeTurns()
 		conversation.configMu.Unlock()
 	}
-	handler, err = WorkerHandler(ctx, session, conversation, record.Secret, directory)
+	handler, err = WorkerHandler(ctx, pty, conversation, record.Secret, directory)
 	if err != nil {
 		return 1, err
 	}
 	handler.stateStore = store
-	if session != nil {
+	if pty != nil {
 		handler.start = start
 		handler.validate = validate
 	} else if conversation != nil {
@@ -360,7 +361,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			launch.Session.AgentCapabilities = next.AgentCapabilitiesView()
 			launch.Session.ConversationState = next.ConversationState()
 			launch.Session.State.Running = !next.AgentExited()
-			if err := upsertSession(ctx, store.DB, launch.Session); err != nil {
+			if err := session.UpsertSession(ctx, store.DB, launch.Session); err != nil {
 				if cleanup != nil {
 					cleanup()
 				}
@@ -397,7 +398,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	started.End()
 	select {
 	case <-ctx.Done():
-		if context.Cause(ctx) == errSessionArchived {
+		if context.Cause(ctx) == session.ErrSessionArchived {
 			return 0, nil
 		}
 		return 1, context.Cause(ctx)
@@ -424,7 +425,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 
 func publishWorkerEndpoint(directory string, record WorkerRecord) error {
 	endpoint := record
-	endpoint.Session = SessionInfo{}
+	endpoint.Session = session.SessionInfo{}
 	data, err := json.Marshal(endpoint)
 	if err != nil {
 		return err
@@ -443,7 +444,7 @@ func publishWorkerEndpoint(directory string, record WorkerRecord) error {
 // wireWorkerConversation connects a started conversation to its worker: stored prompt IDs, the
 // goal saved on its row, image storage, the agent snapshot, and the permission mode last chosen
 // for this agent on any chat and machine of the network.
-func wireWorkerConversation(ctx context.Context, store *state.Store, record WorkerRecord, directory string, goal *Goal, lookupPrompt func(context.Context, string) (bool, error), current *ConversationSession) {
+func wireWorkerConversation(ctx context.Context, store *state.Store, record WorkerRecord, directory string, goal *session.Goal, lookupPrompt func(context.Context, string) (bool, error), current *ConversationSession) {
 	permissionSettingKey := "permission_mode." + record.Session.Harness
 	current.queueMu.Lock()
 	current.promptStored = lookupPrompt

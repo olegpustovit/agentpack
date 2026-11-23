@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/cache"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // policy is who may call a route on this gateway. The zero value requires a login.
@@ -338,8 +339,8 @@ func callerOf(ctx context.Context) callerKind {
 type sessionRowKey struct{}
 
 // sessionRow returns the row the route table resolved for this request's session, if any.
-func sessionRow(ctx context.Context, id string) (SessionInfo, bool) {
-	info, ok := ctx.Value(sessionRowKey{}).(SessionInfo)
+func sessionRow(ctx context.Context, id string) (session.SessionInfo, bool) {
+	info, ok := ctx.Value(sessionRowKey{}).(session.SessionInfo)
 	return info, ok && info.ID == id
 }
 

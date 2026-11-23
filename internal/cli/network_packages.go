@@ -13,6 +13,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
@@ -24,7 +25,7 @@ type runningEnvironment struct {
 }
 
 // restartable: chats (ACP) and browser terminals; native-stdio presence has no worker to restart.
-func restartable(session network.SessionInfo) bool {
+func restartable(session session.SessionInfo) bool {
 	return (session.Transport == "acp" || session.Transport != "shell" && session.State.Interactive) &&
 		session.State.Running && !session.State.Restarting
 }

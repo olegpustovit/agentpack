@@ -9,13 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 	"golang.org/x/crypto/bcrypt"
 )
 
 func TestAccountValidation(t *testing.T) {
 	for _, test := range []struct{ input, want string }{{" Ada@Example.COM ", "ada@example.com"}, {"a+b@example.com", "a+b@example.com"}, {"", ""}, {"not-an-email", ""}, {"Ada <ada@example.com>", ""}, {"a@example.com\r\nBcc: b@example.com", ""}, {strings.Repeat("a", 250) + "@example.com", ""}} {
-		got, err := normalizeEmail(test.input)
+		got, err := session.NormalizeEmail(test.input)
 		if (err != nil) != (test.want == "") || got != test.want {
 			t.Fatalf("normalize %q: %q %v", test.input, got, err)
 		}

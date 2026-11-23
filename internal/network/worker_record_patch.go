@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -21,7 +22,7 @@ func patchWorkerConversationState(ctx context.Context, db *sql.DB, id, conversat
 			return err
 		}
 		if archived {
-			return errSessionArchived
+			return session.ErrSessionArchived
 		}
 		return nil
 	})

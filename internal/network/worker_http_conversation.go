@@ -15,6 +15,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/tmaxmax/go-sse"
 )
 
@@ -237,7 +238,7 @@ func (worker *WorkerHTTP) receivePrompt(w http.ResponseWriter, r *http.Request) 
 	queued, err := startPrompt(r.Context(), conv, prompt, steer)
 	if err != nil {
 		message := "could not send prompt"
-		if errors.Is(err, errSessionArchived) {
+		if errors.Is(err, session.ErrSessionArchived) {
 			message = "archived"
 		}
 		http.Error(w, message, http.StatusConflict)

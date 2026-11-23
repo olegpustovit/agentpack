@@ -17,6 +17,7 @@ import (
 	"github.com/tmaxmax/go-sse"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -183,7 +184,7 @@ func TestMeshEnrollmentMutationsRequireOwner(t *testing.T) {
 			path += "/peer"
 		}
 		r := httptest.NewRequest(method, path, strings.NewReader(`{"peer":"peer"}`))
-		r = r.WithContext(withCaller(withActor(r.Context(), browserActor("member@example.com")), callerCLI))
+		r = r.WithContext(withCaller(session.WithActor(r.Context(), session.BrowserActor("member@example.com")), callerCLI))
 		w := httptest.NewRecorder()
 		mux.mux.ServeHTTP(w, r)
 		if w.Code != 403 {
@@ -191,7 +192,7 @@ func TestMeshEnrollmentMutationsRequireOwner(t *testing.T) {
 		}
 	}
 	r := httptest.NewRequest("DELETE", replicationPrefix+"peers/peer", nil)
-	r = r.WithContext(withCaller(withActor(r.Context(), browserActor(testBrowserEmail)), callerCLI))
+	r = r.WithContext(withCaller(session.WithActor(r.Context(), session.BrowserActor(testBrowserEmail)), callerCLI))
 	w := httptest.NewRecorder()
 	mux.mux.ServeHTTP(w, r)
 	if w.Code != 200 {

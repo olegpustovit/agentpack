@@ -23,6 +23,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 const workerTestSecret = "01234567890123456789012345678901"
@@ -448,7 +449,7 @@ func TestClosingLocalTerminalStopsWorker(t *testing.T) {
 }
 
 func TestWorkerAttachResumesFromSince(t *testing.T) {
-	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment), offset: 100, replay: []byte("abcdefgh")}
+	session := &Session{state: session.TerminalState{Running: true}, attachments: make(map[uint64]*Attachment), offset: 100, replay: []byte("abcdefgh")}
 	server := testWorkerServer(t, session)
 	headers := http.Header{"Authorization": []string{"Bearer " + workerTestSecret}}
 	for _, test := range []struct {
@@ -545,7 +546,7 @@ func TestConversationReplayFromFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Peers only see the replicated row, so it must say the chat is live.
-	if stored, err := storedSession(context.Background(), testSessionStore(t, home).Reader, id); err != nil || !stored.State.Running {
+	if stored, err := session.StoredSession(context.Background(), testSessionStore(t, home).Reader, id); err != nil || !stored.State.Running {
 		t.Fatalf("replicated ACP session = %+v, %v; want running", stored.State, err)
 	}
 	response, err := workerRequest(context.Background(), record, http.MethodGet, "/conversation?since=0", "")

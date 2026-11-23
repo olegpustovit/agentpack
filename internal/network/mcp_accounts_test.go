@@ -1,6 +1,7 @@
 package network
 
 import (
+	"github.com/olegpustovit/agentpack/internal/session"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,7 +21,7 @@ func TestOAuthCredentialsFollowAccountRevocation(t *testing.T) {
 	if verified == nil {
 		t.Fatal("valid OAuth token rejected")
 	}
-	actor, _ := actorFrom(verified.Context())
+	actor, _ := session.ActorFrom(verified.Context())
 	if actor.User != testBrowserEmail || actor.Kind != "mcp" {
 		t.Fatalf("wrong OAuth actor: %+v", actor)
 	}

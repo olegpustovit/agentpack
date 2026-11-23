@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/registry"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func TestLibraryRoutesPreserveTrustAndPersistRename(t *testing.T) {
@@ -28,7 +29,7 @@ func TestLibraryRoutesPreserveTrustAndPersistRename(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if err := remember(home, SessionInfo{Directory: directory, Harness: "claude"}); err != nil {
+	if err := remember(home, session.SessionInfo{Directory: directory, Harness: "claude"}); err != nil {
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")

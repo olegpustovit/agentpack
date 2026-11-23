@@ -18,6 +18,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -174,7 +175,7 @@ func (a *gatewayAuth) claim(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &input) {
 		return
 	}
-	email, err := normalizeEmail(input.Email)
+	email, err := session.NormalizeEmail(input.Email)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -245,7 +246,7 @@ func (a *gatewayAuth) login(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &input) {
 		return
 	}
-	email, _ := normalizeEmail(input.Email)
+	email, _ := session.NormalizeEmail(input.Email)
 	if !a.allowLogin(w, r, email) {
 		return
 	}

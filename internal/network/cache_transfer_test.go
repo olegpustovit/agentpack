@@ -13,6 +13,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/cache"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func seedPeerCache(t *testing.T, g *Gateway) (string, string) {
@@ -129,7 +130,7 @@ func TestLocalGatewayRelaysApprovedPeerCacheAndMissingGatewayFailsFast(t *testin
 	target, _ := url.Parse(remote.URL)
 	localMux := http.NewServeMux()
 	localMux.HandleFunc("GET /api/cache/{cache_key}", func(w http.ResponseWriter, r *http.Request) {
-		r = r.WithContext(withActor(r.Context(), Actor{Kind: "local"}))
+		r = r.WithContext(session.WithActor(r.Context(), session.Actor{Kind: "local"}))
 		receiver.serveCacheFrom(w, r, func(context.Context, string) (*url.URL, error) { return target, nil })
 	})
 	local := httptest.NewServer(localMux)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"golang.org/x/term"
 )
 
@@ -101,7 +102,7 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 	var attachment uint64
 	var lastOffset uint64 // Resume after bytes already written to the terminal.
 	resumed := false      // set by reconnect until the worker says where its replay starts
-	var state TerminalState
+	var state session.TerminalState
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	write := func(kind int, data []byte) error {
@@ -120,7 +121,7 @@ func RunTerminal(ctx context.Context, home, id string, input *os.File, output io
 		connection.SetReadLimit(replayLimit + 4096)
 		incoming = make(chan terminalMessage, 1)
 		go read(connection, incoming)
-		state = TerminalState{}
+		state = session.TerminalState{}
 		attachment = 0
 		resumed = true
 		return nil
@@ -245,7 +246,7 @@ func tryReattach(ctx context.Context, record WorkerRecord, since uint64) (*webso
 	if err != nil {
 		return nil, err
 	}
-	var state TerminalState
+	var state session.TerminalState
 	err = json.NewDecoder(response.Body).Decode(&state)
 	response.Body.Close()
 	if err != nil {
