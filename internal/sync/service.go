@@ -479,7 +479,7 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 	} else if fresh, freshErr := service.stagingIsCurrent(pipeline, options, recorded && len(drift) == 0); freshErr != nil {
 		return result, freshErr
 	} else if fresh {
-		tidyTempDirectories(projectRoot, false)
+		tidyTempDirectories(projectRoot, false, "")
 	} else {
 		if len(drift) != 0 {
 			shown := append([]string(nil), drift...)
@@ -522,8 +522,7 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 			err = generation.Publish()
 		}
 		if err == nil {
-			paths.ReclaimStagingGenerations(projectRoot, effective.Name(), recordedGenerations(projectRoot, effective.Name()))
-			tidyTempDirectories(projectRoot, options.Target != nil)
+			tidyTempDirectories(projectRoot, options.Target != nil, effective.Name())
 		}
 	}
 	if err != nil {
@@ -725,12 +724,19 @@ func (service Service) stagingIsCurrent(pipeline staging.Pipeline, options SyncO
 	return pipeline.Verify() == nil, nil
 }
 
-// tidyTempDirectories removes what deleted projects left in the temp directory.
-// Its cost is what that directory holds, so a launch never waits for it and
+// tidyTempDirectories removes what deleted projects left in the temp directory
+// and, after a publish of modeName, the generations nothing uses any more.
+// Its cost is what those directories hold, so a launch never waits for it and
 // other commands wait briefly; an early exit leaves the rest for a later run.
-func tidyTempDirectories(projectRoot string, launch bool) {
+func tidyTempDirectories(projectRoot string, launch bool, modeName string) {
 	tidied := make(chan struct{})
-	go func() { removeOrphans(projectRoot); close(tidied) }()
+	go func() {
+		if modeName != "" {
+			paths.ReclaimStagingGenerations(projectRoot, modeName, recordedGenerations(projectRoot, modeName))
+		}
+		removeOrphans(projectRoot)
+		close(tidied)
+	}()
 	if !launch {
 		select {
 		case <-tidied:
