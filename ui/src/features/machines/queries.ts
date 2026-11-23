@@ -3,6 +3,7 @@ import { array, boolean, number, object, optional, string } from "@/lib/validate
 import { ApiError, LOCAL, api, routeMissing } from "@/lib/api"
 import type { Identity, TailnetNode, Topology } from "@/lib/api-types"
 import { useEventsConnected } from "@/features/events/use-events"
+import { onSignOut } from "@/lib/persist"
 
 export type Machine = { id: string; name: string; online: boolean; main?: boolean; needsUpdate?: boolean; version?: string; schema?: number }
 
@@ -181,6 +182,7 @@ export const topologyQuery = (live: boolean) =>
 // Machines seen in this tab. Module state is per tab and resets on reload.
 // shortcut: no persistence across reloads, upgrade if offline machines must survive a reload.
 const seen = new Map<string, Machine>()
+onSignOut(() => seen.clear())
 
 export function useMachines(): Machine[] {
   const live = useEventsConnected()

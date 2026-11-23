@@ -1,6 +1,7 @@
 import DOMPurify from "dompurify"
 import { useSyncExternalStore } from "react"
 import { marked, type Token, type TokensList } from "marked"
+import { onSignOut } from "@/lib/persist"
 
 // highlight.js and remend load beside the chat instead of inside its chunk. Until they arrive,
 // fences render plain and a streaming tail is parsed as typed; finished output re-renders once.
@@ -76,6 +77,7 @@ export function renderAgentBlocks(text: string, streaming = false, _highlighter?
 
 // Finished blocks are re-sent on every streamed chunk; parsing and sanitizing them once keeps a chunk O(new text).
 const renderedBlocks = new Map<string, string>()
+onSignOut(() => renderedBlocks.clear())
 const maxRenderedBlocks = 2000
 
 function remember(raw: string, html: string) {
