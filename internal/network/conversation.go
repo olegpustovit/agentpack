@@ -361,7 +361,8 @@ func (session *ConversationSession) publishState() {
 	session.mu.Lock()
 	callback, state := session.stateChange, session.state
 	var afterIdle func()
-	if state == string(stateIdle) {
+	// Not while the queue or a goal is about to start the next turn: a restart would cut it off.
+	if state == string(stateIdle) && len(session.queue) == 0 && !session.goalWantsTurn() {
 		afterIdle, session.afterIdle = session.afterIdle, nil
 	}
 	if afterIdle != nil {
