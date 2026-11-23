@@ -178,7 +178,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	}
 	var pty *Session
 	var conversation *ConversationSession
-	var acpCleanup func()
+	var agent *acpAgent
 	var handler *WorkerHTTP
 	defer func() {
 		terminal := launch.Session.State
@@ -243,6 +243,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	var starting atomic.Bool
 	starting.Store(launch.Session.ConversationState == "starting")
 	if launch.Transport == "acp" {
+		agent = &acpAgent{store: store, launch: &launch, record: record, directory: directory, cancel: cancelWorker}
 		prepared, err := prepareACPWorker(ctx, store, record, directory, &starting, cancelWorker, lookupPrompt, serve, &readyHTTP)
 		if err != nil {
 			return 1, err
@@ -251,11 +252,11 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		if launch.tools.Close != nil {
 			defer launch.tools.Close()
 		}
-		conversation, acpCleanup, err = startACPConversation(startCtx, launch, directory, prepared)
+		conversation, agent.cleanup, err = startACPConversation(startCtx, launch, directory, prepared)
 		if err != nil {
 			return 1, err
 		}
-		if acpCleanup != nil {
+		if agent.cleanup != nil {
 			defer func() {
 				// Under the lifecycle lock, after any restart in progress: a restart that swapped the
 				// agent is cleaned up here, and none can start a new one afterwards.
@@ -264,10 +265,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 					defer handler.lifecycle.Unlock()
 					handler.stopping = true
 				}
-				if acpCleanup != nil {
-					acpCleanup()
-					acpCleanup = nil
-				}
+				agent.close()
 			}()
 		}
 		// Restart must load the forked ID rather than fork its source again.
@@ -321,61 +319,10 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		handler.validate = validate
 	} else if conversation != nil {
 		handler.validate = validate
-		handler.stopACP = func(ctx context.Context) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if acpCleanup != nil {
-				acpCleanup()
-				acpCleanup = nil
-			}
-			return nil
-		}
-		handler.restartACP = func(ctx context.Context) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if acpCleanup != nil {
-				acpCleanup()
-				acpCleanup = nil
-			}
-			log, err := NewConversationLog(ctx, store, launch.Session.ID, cancelWorker, nil)
-			if err != nil {
-				return err
-			}
-			prepared := NewConversationSession(log, nil)
-			if err := restorePendingQueue(ctx, store.Reader, record.ID, prepared); err != nil {
-				return errors.Join(err, log.Close())
-			}
-			next, cleanup, err := startACPConversation(obs.WithRecording(ctx, handler.Diagnostics), launch, directory, prepared)
-			if err != nil {
-				return err
-			}
-			if err := ctx.Err(); err != nil {
-				if cleanup != nil {
-					cleanup()
-				}
-				return err
-			}
-			launch.Session.AgentSessionID = next.agentSessionID
-			launch.Session.AgentCapabilities = next.AgentCapabilitiesView()
-			launch.Session.ConversationState = next.ConversationState()
-			launch.Session.State.Running = !next.AgentExited()
-			if err := session.UpsertSession(ctx, store.DB, launch.Session); err != nil {
-				if cleanup != nil {
-					cleanup()
-				}
-				return err
-			}
-			conversation = next
-			acpCleanup = cleanup
-			wireConversation(next)
-			handler.mu.Lock()
-			handler.Conversation = next
-			handler.mu.Unlock()
-			next.ResumeTurns()
-			return next.Log.Republish()
-		}
+		agent.handler = handler
+		agent.wire = wireConversation
+		handler.stopACP = agent.stop
+		handler.restartACP = agent.restart
 	}
 	if server == nil {
 		serve(handler)
@@ -386,6 +333,9 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		return 1, fmt.Errorf("announce worker: %w", err)
 	}
 	starting.Store(false)
+	if agent != nil {
+		conversation = agent.current()
+	}
 	if conversation != nil {
 		// Through the log's writer, so the state follows every batch already stored and none overwrites a newer one.
 		if err := conversation.Log.Republish(); err != nil {
@@ -568,3 +518,81 @@ func guardWorkerFolders(launch *WorkerLaunch) (func() error, error) {
 
 // Error spools written before opening state are attributed by the local gateway.
 const LocalStateNode = "local"
+
+// acpAgent owns a worker's running ACP agent process: it stops it, and on restart starts a new one
+// on a fresh conversation log and swaps it into the worker's handler.
+type acpAgent struct {
+	store     *state.Store
+	launch    *WorkerLaunch
+	record    WorkerRecord
+	directory string
+	cancel    context.CancelCauseFunc
+	handler   *WorkerHTTP
+	wire      func(*ConversationSession)
+	cleanup   func()
+}
+
+// close stops the agent process, once.
+func (agent *acpAgent) close() {
+	if agent.cleanup != nil {
+		agent.cleanup()
+		agent.cleanup = nil
+	}
+}
+
+func (agent *acpAgent) current() *ConversationSession {
+	agent.handler.mu.Lock()
+	defer agent.handler.mu.Unlock()
+	return agent.handler.Conversation
+}
+
+func (agent *acpAgent) stop(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	agent.close()
+	return nil
+}
+
+func (agent *acpAgent) restart(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	agent.close()
+	launch, store := agent.launch, agent.store
+	log, err := NewConversationLog(ctx, store, launch.Session.ID, agent.cancel, nil)
+	if err != nil {
+		return err
+	}
+	prepared := NewConversationSession(log, nil)
+	if err := restorePendingQueue(ctx, store.Reader, agent.record.ID, prepared); err != nil {
+		return errors.Join(err, log.Close())
+	}
+	next, cleanup, err := startACPConversation(obs.WithRecording(ctx, agent.handler.Diagnostics), *launch, agent.directory, prepared)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
+		return err
+	}
+	launch.Session.AgentSessionID = next.agentSessionID
+	launch.Session.AgentCapabilities = next.AgentCapabilitiesView()
+	launch.Session.ConversationState = next.ConversationState()
+	launch.Session.State.Running = !next.AgentExited()
+	if err := session.UpsertSession(ctx, store.DB, launch.Session); err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
+		return err
+	}
+	agent.cleanup = cleanup
+	agent.wire(next)
+	agent.handler.mu.Lock()
+	agent.handler.Conversation = next
+	agent.handler.mu.Unlock()
+	next.ResumeTurns()
+	return next.Log.Republish()
+}
