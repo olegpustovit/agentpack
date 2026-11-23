@@ -84,6 +84,8 @@ test("the Sessions view reopens the terminal it left, with its grouping", async 
   await openRoute(page, "/sessions/local/s1?group=machine")
   await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Usage", exact: true }).click()
   await expect(page).toHaveURL(/\/usage/)
+  // The URL changes before the Usage route commits; until the terminal has left, there is nothing to reopen.
+  await expect(page.locator(".xterm")).toHaveCount(0)
   await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Sessions", exact: true }).click()
   await expect(page).toHaveURL(/\/sessions\/local\/s1\?group=machine/)
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused()
