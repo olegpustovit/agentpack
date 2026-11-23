@@ -202,7 +202,7 @@ func TestHomeWorkspaceIgnoresRuntimeState(t *testing.T) {
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
 	digest := func() string {
 		t.Helper()
-		value, err := computeMaterializationDigest(home, home, mode.ImplicitEffective())
+		value, err := computeMaterializationDigest(home, home, mode.ImplicitEffective(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}

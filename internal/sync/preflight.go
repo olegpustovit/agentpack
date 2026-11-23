@@ -323,12 +323,18 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 	if filepath.Clean(definitionRoot) != filepath.Clean(workspace) {
 		materializeRemedy = "run `agentpack env restore` to publish the selected frozen environment before probing"
 	}
-	materialized, materializedFound, materializedErr := readMaterializationDigest(definitionRoot, effective.Name())
+	// A full sync materializes every target, so it also answers for one.
+	recordedFor := options.Target
+	materialized, materializedFound, materializedErr := readMaterializationDigest(definitionRoot, effective.Name(), recordedFor)
+	if materializedErr == nil && !materializedFound && recordedFor != nil {
+		recordedFor = nil
+		materialized, materializedFound, materializedErr = readMaterializationDigest(definitionRoot, effective.Name(), nil)
+	}
 	if materializedErr != nil {
 		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_UNREADABLE", Severity: environment.SeverityError, Message: materializedErr.Error(), Evidence: environment.EvidenceUnknown, Remedy: materializeRemedy})
 	} else if !materializedFound {
 		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_INPUTS_UNKNOWN", Severity: environment.SeverityWarning, Message: "no materialization input identity is recorded", Evidence: environment.EvidenceUnknown, Remedy: materializeRemedy})
-	} else if current, err := computeMaterializationDigest(definitionRoot, workspace, effective); err != nil {
+	} else if current, err := computeMaterializationDigest(definitionRoot, workspace, effective, recordedFor); err != nil {
 		return report, err
 	} else if materialized != current {
 		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_INPUTS_STALE", Severity: environment.SeverityViolation, Message: "staged configuration was built from different definition, mode, workspace, or inherited inputs", Evidence: environment.EvidenceGenerated, Remedy: materializeRemedy})

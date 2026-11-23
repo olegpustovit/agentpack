@@ -61,7 +61,8 @@ func launchDigest(projectRoot, workspace string, effective mode.Effective, targe
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256([]byte(inputs + "\x00cache\x00" + fingerprint))
+	// A new agentpack binary may stage differently, so it invalidates the launch too.
+	sum := sha256.Sum256([]byte(inputs + "\x00cache\x00" + fingerprint + "\x00binary\x00" + executableStamp()))
 	return hex.EncodeToString(sum[:]), nil
 }
 

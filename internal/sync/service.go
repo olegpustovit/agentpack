@@ -514,9 +514,9 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 				workspace = projectRoot
 			}
 			var digest string
-			digest, err = computeMaterializationDigest(projectRoot, workspace, effective)
+			digest, err = computeMaterializationDigest(projectRoot, workspace, effective, options.Target)
 			if err == nil {
-				err = writeMaterializationDigest(projectRoot, effective.Name(), digest)
+				err = writeMaterializationDigest(projectRoot, effective.Name(), options.Target, digest)
 			}
 			if err == nil && options.Target == nil {
 				err = writeSyncedDigest(projectRoot, effective.Name(), digest)
@@ -717,7 +717,7 @@ func (service Service) stagingIsCurrent(pipeline staging.Pipeline, options SyncO
 	if workspace == "" {
 		workspace = pipeline.ProjectRoot
 	}
-	current, err := computeMaterializationDigest(pipeline.ProjectRoot, workspace, pipeline.Mode)
+	current, err := computeMaterializationDigest(pipeline.ProjectRoot, workspace, pipeline.Mode, nil)
 	if err != nil || stored != current+"\x00"+executableStamp() {
 		return false, err
 	}

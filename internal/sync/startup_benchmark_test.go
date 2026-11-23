@@ -90,7 +90,7 @@ func BenchmarkMaterializationHome(b *testing.B) {
 	writeBenchPackages(b, home)
 	b.ResetTimer()
 	for range b.N {
-		if _, err := computeMaterializationDigest(home, home, mode.ImplicitEffective()); err != nil {
+		if _, err := computeMaterializationDigest(home, home, mode.ImplicitEffective(), nil); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -162,7 +162,7 @@ func BenchmarkMaterializationRealHome(b *testing.B) {
 	b.Setenv("AGENTPACK_STAGING_ROOT", b.TempDir())
 	b.ResetTimer()
 	for range b.N {
-		if _, err := computeMaterializationDigest(home, home, mode.ImplicitEffective()); err != nil {
+		if _, err := computeMaterializationDigest(home, home, mode.ImplicitEffective(), nil); err != nil {
 			b.Fatal(err)
 		}
 	}

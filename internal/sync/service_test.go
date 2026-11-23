@@ -11,6 +11,7 @@ import (
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
+	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/staging"
 )
@@ -130,6 +131,24 @@ func TestSyncForLaunchUsesVerifiedFastPath(t *testing.T) {
 	contents, err := os.ReadFile(database)
 	if err != nil || string(contents) != string(marker) || !before.ModTime().Equal(after.ModTime()) || before.Mode() != after.Mode() {
 		t.Fatalf("warm launch setup changed state.db: %v", err)
+	}
+	// A one-harness launch records its own materialization, never all harnesses'.
+	claude := base.Claude
+	if _, found, err := readMaterializationDigest(project, mode.DefaultName, nil); err != nil || found {
+		t.Fatalf("launch wrote the all-harness materialization record: found=%v err=%v", found, err)
+	}
+	if _, found, err := readMaterializationDigest(project, mode.DefaultName, &claude); err != nil || !found {
+		t.Fatalf("launch did not record its own materialization: found=%v err=%v", found, err)
+	}
+	// An upgraded agentpack binary invalidates the launch digest.
+	upgraded := filepath.Join(t.TempDir(), "agentpack")
+	if err := os.WriteFile(upgraded, []byte("new build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	executable = func() (string, error) { return upgraded, nil }
+	t.Cleanup(func() { executable = os.Executable })
+	if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", base.Claude); err != nil || skipped {
+		t.Fatalf("after upgrade skipped=%v err=%v", skipped, err)
 	}
 }
 

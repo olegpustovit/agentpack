@@ -299,22 +299,32 @@ func selectLaunchGeneration(projectRoot, modeName string, target base.Target) er
 	}
 	return paths.SelectStagingGeneration(projectRoot, modeName, state.Root)
 }
-func readMaterializationDigest(projectRoot, modeName string) (string, bool, error) {
-	path, err := paths.ProjectStateFile(projectRoot, "materialized-"+paths.ModePathComponent(modeName)+".json")
+// materializationStatePath is per target: a launch rebuilds one harness and
+// must not claim that every other harness was built from current inputs.
+func materializationStatePath(projectRoot, modeName string, target *base.Target) (string, error) {
+	name := "materialized-" + paths.ModePathComponent(modeName)
+	if target != nil {
+		name += "-" + string(*target)
+	}
+	return paths.ProjectStateFile(projectRoot, name+".json")
+}
+
+func readMaterializationDigest(projectRoot, modeName string, target *base.Target) (string, bool, error) {
+	path, err := materializationStatePath(projectRoot, modeName, target)
 	if err != nil {
 		return "", false, err
 	}
 	return readDigestState(path)
 }
-func writeMaterializationDigest(projectRoot, modeName, digest string) error {
-	path, err := paths.ProjectStateFile(projectRoot, "materialized-"+paths.ModePathComponent(modeName)+".json")
+func writeMaterializationDigest(projectRoot, modeName string, target *base.Target, digest string) error {
+	path, err := materializationStatePath(projectRoot, modeName, target)
 	if err != nil {
 		return err
 	}
 	return writeDigestState(path, digest, "")
 }
-func computeMaterializationDigest(definition, workspace string, effective mode.Effective) (string, error) {
-	inputs, err := ComputeLaunchDigest(definition, workspace, effective, nil)
+func computeMaterializationDigest(definition, workspace string, effective mode.Effective, target *base.Target) (string, error) {
+	inputs, err := ComputeLaunchDigest(definition, workspace, effective, target)
 	if err != nil {
 		return "", err
 	}
@@ -323,8 +333,12 @@ func computeMaterializationDigest(definition, workspace string, effective mode.E
 		return "", err
 	}
 	roots := workspaceConfigInputs(workspace, home)
-	for _, target := range base.AllTargets() {
-		roots = append(roots, inheritedConfigPaths(&target, workspace)...)
+	targets := base.AllTargets()
+	if target != nil {
+		targets = []base.Target{*target}
+	}
+	for _, each := range targets {
+		roots = append(roots, inheritedConfigPaths(&each, workspace)...)
 	}
 	ambient, err := fingerprintInputs(roots)
 	if err != nil {
@@ -398,10 +412,12 @@ func readSyncedDigest(projectRoot, modeName string) (string, string, bool, error
 	return state.Digest, state.Root, true, nil
 }
 
+var executable = os.Executable
+
 // executableStamp changes whenever the agentpack binary does, since a new
 // version may stage differently.
 func executableStamp() string {
-	path, err := os.Executable()
+	path, err := executable()
 	if err != nil {
 		return ""
 	}
