@@ -142,6 +142,7 @@ func TestRoutePoliciesArePinned(t *testing.T) {
 		"POST /api/sessions/{id}/conversation/goal", "PATCH /api/sessions/{id}/conversation/goal", "DELETE /api/sessions/{id}/conversation/goal",
 		"PATCH /api/sessions/{id}/conversation/queue/{queueId}", "DELETE /api/sessions/{id}/conversation/queue/{queueId}",
 		"POST /api/sessions/{id}/conversation/queue/{queueId}/steer", "GET /api/sessions/{id}/blobs/{sha}/held",
+		"PUT /api/projects/mcp-login",
 	}
 	got := peerPatterns()
 	slices.Sort(old)

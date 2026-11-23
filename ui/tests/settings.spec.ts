@@ -346,3 +346,24 @@ test("legacy claiming asks for the current password and keeps it", async ({ page
   await expect(page.getByRole("alert")).toContainText("invalid current password")
   await expect(page).toHaveURL(/\/login$/)
 })
+
+test("connections group logins by server and a second login needs its own name", async ({ page }) => {
+  await mockGateway(page)
+  const linear = "https://mcp.linear.app/mcp"
+  await page.route("**/api/mcp/credentials", (route) => answer(route, { callback_url: "", credentials: [
+    { id: "c1", match: linear, kind: "oauth", label: "Work", status: "connected" },
+    { id: "c2", match: linear, kind: "oauth", label: "Client", status: "connected" },
+  ] }))
+  await page.goto("/settings/connections")
+  const logins = page.locator("section").filter({ hasText: "mcp.linear.app" }).getByRole("listitem")
+  await expect(logins).toHaveCount(2)
+  await expect(logins.first()).toContainText("Default")
+  await expect(logins.nth(1)).not.toContainText("Default")
+  await page.getByRole("button", { name: "Add login…" }).click()
+  await expect(page.getByLabel("Server URL")).toHaveValue(linear)
+  await expect(page.getByLabel("Label")).toBeFocused()
+  await page.getByLabel("Label").fill("Work")
+  await page.getByRole("button", { name: "Sign in…" }).click()
+  await expect(page.getByText("A login named Work exists. Choose another name.")).toBeVisible()
+  expect(calls).toEqual([])
+})

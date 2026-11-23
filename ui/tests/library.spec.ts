@@ -189,13 +189,19 @@ test("remote MCP servers show their shared login and connect in place", async ({
     json: machineOf(route.request().url()) === "local" ? [folder("/w/admin", "admin", [remote("cloudflare", "https://mcp.cloudflare.com/mcp"), remote("linear", "https://mcp.linear.app/mcp")])] : [],
   }))
   await page.route("**/api/mcp/credentials", (route) => route.fulfill({
-    json: { callback_url: "", credentials: [{ id: "c1", match: "https://mcp.linear.app/mcp", kind: "oauth", label: "linear", status: "connected" }] },
+    json: { callback_url: "", credentials: [
+      { id: "c1", match: "https://mcp.linear.app/mcp", kind: "oauth", label: "Work", status: "connected" },
+      { id: "c2", match: "https://mcp.linear.app/mcp", kind: "oauth", label: "Client", status: "connected" },
+    ] },
   }))
   let login: Record<string, unknown> | undefined
   await page.route("**/api/mcp/logins", (route) => {
     login = route.request().postDataJSON() as Record<string, unknown>
     return route.fulfill({ json: { login: "l1", authorize_url: "/library?type=mcp" } })
   })
+  await page.goto("/library/mcp/linear?type=mcp")
+  await expect(page.getByText("Work · default of 2 logins")).toBeVisible()
+  await expect(page.getByRole("link", { name: "Manage logins…" })).toBeVisible()
   await page.goto("/library/mcp/cloudflare?type=mcp")
   const list = page.getByRole("navigation", { name: "Library" })
   await expect(list.getByRole("link", { name: /linear/ })).toContainText("Connected")

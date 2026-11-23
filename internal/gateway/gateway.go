@@ -50,6 +50,9 @@ type GatewayOptions struct {
 	Assets                   http.Handler
 	Version                  string
 	UIBuildID                string
+
+	// ProjectMCPLogin saves the login a project uses for a remote MCP server; "" restores the first.
+	ProjectMCPLogin func(ctx context.Context, directory, url, credential string) error
 }
 
 type Gateway struct {

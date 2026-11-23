@@ -172,7 +172,7 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 		return nil, err
 	}
 	merged = mcpPluginPlan.Entries
-	if merged, err = applyMCPCredentials(merged); err != nil {
+	if merged, err = applyMCPCredentials(pipeline.ProjectRoot, merged); err != nil {
 		return nil, err
 	}
 	var mcpProjections []base.MCPProjection

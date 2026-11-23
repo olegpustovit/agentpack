@@ -180,7 +180,7 @@ func mergePluginMCP(root string, plugin lockfile.Package, effective *mode.Effect
 }
 
 // applyMCPCredentials routes servers with a stored credential through the bridge.
-func applyMCPCredentials(entries mcp.Entries) (mcp.Entries, error) {
+func applyMCPCredentials(projectRoot string, entries mcp.Entries) (mcp.Entries, error) {
 	path, err := paths.MCPCredentialIndexPath()
 	if err != nil {
 		return nil, err
@@ -189,7 +189,15 @@ func applyMCPCredentials(entries mcp.Entries) (mcp.Entries, error) {
 	if err != nil {
 		return nil, err
 	}
-	applied, notes := mcp.ApplyCredentials(entries, index, hooks.Executable())
+	loginsPath, err := paths.ProjectMCPLoginsPath(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	logins, err := mcp.ReadProjectLogins(loginsPath)
+	if err != nil {
+		return nil, err
+	}
+	applied, notes := mcp.ApplyCredentials(entries, index, logins, hooks.Executable())
 	for _, note := range notes {
 		log.Printf("warning: %s", note)
 	}

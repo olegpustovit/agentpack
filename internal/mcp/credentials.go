@@ -7,8 +7,11 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 // Credential kinds stored by the gateway.
@@ -47,6 +50,58 @@ func ReadCredentialIndex(path string) (CredentialIndex, error) {
 		return CredentialIndex{}, fmt.Errorf("MCP credential index %s: %w", path, err)
 	}
 	return index, nil
+}
+
+// ProjectLogins is the login a project picked for each remote server: canonical URL to
+// credential ID. A server without a pick uses the first matching login.
+type ProjectLogins map[string]string
+
+// ReadProjectLogins reads a project's picks; a missing file has none.
+func ReadProjectLogins(path string) (ProjectLogins, error) {
+	logins := ProjectLogins{}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return logins, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(data, &logins); err != nil {
+		return nil, fmt.Errorf("MCP project logins %s: %w", path, err)
+	}
+	return logins, nil
+}
+
+// SaveProjectLogin records that the project uses credential id for the server at rawURL;
+// an empty id drops the pick, and a file left with no picks is removed.
+func SaveProjectLogin(path, rawURL, id string) error {
+	canonical, err := CanonicalURL(rawURL)
+	if err != nil {
+		return err
+	}
+	logins, err := ReadProjectLogins(path)
+	if err != nil {
+		return err
+	}
+	if id == "" {
+		delete(logins, canonical)
+	} else {
+		logins[canonical] = id
+	}
+	if len(logins) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	data, err := json.MarshalIndent(logins, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return paths.WriteAtomic(path, append(data, '\n'), 0o600)
 }
 
 // CanonicalURL is the form credentials match on: lowercase scheme and host,
@@ -102,8 +157,9 @@ func hasHeader(headers map[string]string, name string) bool {
 // reaches staging. A remote server matches by canonical URL unless it already
 // sends its own Authorization header; a server naming `credential` uses that
 // one. A plugin's server matches only after its module was approved for the
-// credential. The returned lines explain servers left unchanged.
-func ApplyCredentials(entries Entries, index CredentialIndex, executable string) (Entries, []string) {
+// credential. Among several logins for one URL, the project's pick in logins
+// wins over the first one. The returned lines explain servers left unchanged.
+func ApplyCredentials(entries Entries, index CredentialIndex, logins ProjectLogins, executable string) (Entries, []string) {
 	if len(entries) == 0 || len(index.Credentials) == 0 && !namesCredential(entries) {
 		return entries, nil
 	}
@@ -133,11 +189,20 @@ func ApplyCredentials(entries Entries, index CredentialIndex, executable string)
 			if err != nil {
 				continue
 			}
+			picked := logins[canonical]
 			for i, candidate := range index.Credentials {
-				if candidate.Kind != CredentialEnv && candidate.Match == canonical {
+				if candidate.Kind == CredentialEnv || candidate.Match != canonical {
+					continue
+				}
+				if ref == nil || candidate.ID == picked {
 					ref = &index.Credentials[i]
+				}
+				if picked == "" || candidate.ID == picked {
 					break
 				}
+			}
+			if picked != "" && ref != nil && ref.ID != picked {
+				notes = append(notes, fmt.Sprintf("MCP server %s: the login picked for this project is gone; using %q", name, ref.Label))
 			}
 		}
 		if ref == nil {

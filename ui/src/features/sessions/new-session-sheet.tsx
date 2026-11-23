@@ -1,6 +1,6 @@
 import { Fragment, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react"
 import { loadProjectFilters, loadStartChoices, saveProjectFilters } from "./choices"
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { FieldError, PopupSelect } from "@/components/kit/forms"
 import { StatusGlyph } from "@/components/kit/status-dot"
@@ -10,12 +10,16 @@ import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from 
 import { Button } from "@/components/ui/button"
 import { useMachineQueries, useMachines, useReplicatedQueries } from "@/features/machines/queries"
 import { agentsQuery } from "@/features/agents/queries"
-import { api, ApiError, LOCAL, routeMissing } from "@/lib/api"
+import { api, ApiError, errorText, LOCAL, routeMissing } from "@/lib/api"
 import type { AgentSession, ProjectRow } from "@/lib/api-types"
 import { harnessName, plural, relativeTime, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { agentIds, canStart, defaultAgent, mergeProjects, modeChoices, modeEffect, placeKey, placeLabel, projectGroups, projectLocation, stubRow, type MergedProject, type SessionView } from "./rules"
 import { useStartSession } from "./start"
+import { useEventsConnected } from "@/features/events/use-events"
+import { LoginGlyph } from "@/features/library/mcp-inspector"
+import { connectionsQuery, loginsFor, signIn, type Connection } from "@/features/settings/connections-model"
+import { hud } from "@/lib/hud"
 import { branchSlug, projectDirectory, worktreeFolderInProject, worktreesQuery } from "./git"
 import { foundQuery, projectsQuery, sessionsQuery } from "./queries"
 
@@ -469,7 +473,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
               ) : contentsLoading ? (
                 <p className="text-(--fg2)">Loading what this folder loads on {machineName}…</p>
               ) : (
-                <LoadedContents project={row} mode={modeValue} />
+                <LoadedContents project={row} mode={modeValue} machine={place?.machine ?? LOCAL} machineName={machineName} />
               )}
 
               {view === "chat" && startable && (
@@ -542,7 +546,9 @@ function Choice({ label, note, children }: { label: string; note?: string; child
 }
 
 // Everything the session loads from pack.lock, with what the chosen mode turns off.
-function LoadedContents({ project, mode }: { project: ProjectRow; mode: string }) {
+function LoadedContents({ project, mode, machine, machineName }: { project: ProjectRow; mode: string; machine: string; machineName: string }) {
+  const credentials = useQuery(connectionsQuery(useEventsConnected())).data?.credentials ?? []
+  const choosable = project.mcp.some((server) => loginsFor(server.url ?? "", credentials).length > 1)
   const effect = modeEffect(project, mode)
   const off = project.packages.filter((pkg) => effect.offPackages.has(pkg.module)).length + project.mcp.filter((server) => effect.offMCP.has(server.name)).length
   const active = project.packages.length + project.mcp.length - off
@@ -583,11 +589,13 @@ function LoadedContents({ project, mode }: { project: ProjectRow; mode: string }
                 status={server.status}
                 tone={server.status === "pinned" ? "ok" : server.status === "unpinned" ? "warn" : undefined}
                 mode={mode}
+                login={loginsFor(server.url ?? "", credentials).length > 0 && <LoginPicker project={project} server={server} logins={loginsFor(server.url ?? "", credentials)} machine={machine} />}
               />
             ))}
           </ContentsGroup>
         </div>
       )}
+      {choosable && <p className="text-(length:--fs-xs) text-(--fg3)">{`Logins you pick are saved for ${project.name} on ${machineName} and used by its new sessions.`}</p>}
     </section>
   )
 }
@@ -604,7 +612,7 @@ function ContentsGroup({ title, count, empty, children }: { title: string; count
   )
 }
 
-function ContentsRow({ name, detail, tag, status, tone, off, mode }: { name: string; detail: string; tag: string; status: string; tone?: "ok" | "warn"; off: boolean; mode: string }) {
+function ContentsRow({ name, detail, tag, status, tone, off, mode, login }: { name: string; detail: string; tag: string; status: string; tone?: "ok" | "warn"; off: boolean; mode: string; login?: ReactNode }) {
   return (
     <li data-off={off || undefined} className="flex min-w-0 items-center gap-(--s4) border-t-[0.5px] border-(--sep-soft) px-(--s5) py-(--s3) first:border-t-0 data-off:opacity-50">
       <div className="min-w-0 flex-1">
@@ -614,11 +622,61 @@ function ContentsRow({ name, detail, tag, status, tone, off, mode }: { name: str
         </div>
         {detail && <div className="truncate font-(family-name:--mono) text-(length:--fs-xs) text-(--fg2)">{detail}</div>}
       </div>
-      <Tag className={cn(!off && tone === "ok" && "text-(--ok-word)", !off && tone === "warn" && "text-(--warn-word)")}>{off ? `off in ${mode}` : status}</Tag>
+      {login && !off ? login : <Tag className={cn(!off && tone === "ok" && "text-(--ok-word)", !off && tone === "warn" && "text-(--warn-word)")}>{off ? `off in ${mode}` : status}</Tag>}
     </li>
   )
 }
 
 function Tag({ className, children }: { className?: string; children: ReactNode }) {
   return <span className={cn("shrink-0 rounded-(--r-row) border-[0.5px] border-(--sep) px-(--s2) text-(length:--fs-xs) whitespace-nowrap text-(--fg2)", className)}>{children}</span>
+}
+
+// The login this project's sessions use for one server: the project's pick, else the first login (the default).
+// A pick is saved on the project's machine at once; it never blocks Start.
+function LoginPicker({ project, server, logins, machine }: { project: ProjectRow; server: ProjectRow["mcp"][number]; logins: Connection[]; machine: string }) {
+  const queryClient = useQueryClient()
+  const save = useMutation<unknown, Error, string>({
+    mutationFn: (credential) => api("/api/projects/mcp-login", { machine, method: "PUT", body: { directory: project.directory, url: server.url, credential } }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: projectsQuery(machine).queryKey }),
+    onError: (error) => {
+      if (!routeMissing(error)) hud.error(`Couldn't save the ${server.name} login for ${project.name}: ${errorText(error)}`)
+    },
+  })
+  // An older peer has no route to save a pick: its sessions keep the default.
+  const outdated = routeMissing(save.error)
+  const value = save.isPending ? save.variables || logins[0]!.id : logins.some((login) => login.id === server.login) ? server.login! : logins[0]!.id
+  const chosen = logins.find((login) => login.id === value)!
+  const expired = chosen.status === "needs_login"
+  const reconnect = (
+    <Button type="button" size="sm" variant="primary" onClick={() => void signIn({ url: chosen.match, label: chosen.label, return_to: location.pathname + location.search })}>Reconnect…</Button>
+  )
+  // One login reads as a status; there is nothing to choose.
+  if (logins.length === 1) {
+    return (
+      <span className="flex shrink-0 items-center gap-(--s3) text-(length:--fs-sm) text-(--fg2)">
+        {expired && reconnect}
+        <LoginGlyph login={expired ? "needs_login" : "connected"} />
+        <span className={cn(expired && "text-(--danger-word)")}>{expired ? `${chosen.label} · Needs sign-in` : chosen.label}</span>
+      </span>
+    )
+  }
+  return (
+    <span className="flex shrink-0 items-center gap-(--s3)">
+      {expired && reconnect}
+      <span className={cn("w-44 [&_[data-slot=select-trigger]]:w-full", expired && "[&_[data-slot=select-trigger]]:text-(--danger-word)")}>
+        <PopupSelect
+          label={`${server.name} login for ${project.name}`}
+          value={value}
+          disabled={save.isPending || outdated}
+          onValueChange={(next) => save.mutate(next === logins[0]!.id ? "" : next)}
+          items={logins.map((login, index) => ({
+            value: login.id,
+            label: login.status === "needs_login" ? `${login.label} · Needs sign-in` : login.label,
+            detail: index === 0 ? "Default" : undefined,
+          }))}
+        />
+      </span>
+      {outdated && <span className="text-(length:--fs-xs) text-(--fg2)">Needs update</span>}
+    </span>
+  )
 }

@@ -535,6 +535,50 @@ func (g *Gateway) accountEnabled(ctx context.Context, email string) bool {
 }
 
 func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
+	// shortcut: the pick is checked against the caller's account, not the account bound to the project's machine; when they differ the resolver falls back to the first login. Check the bound account if mixed-account meshes need it.
+	mux.HandleFunc("PUT /api/projects/mcp-login", func(w http.ResponseWriter, r *http.Request) {
+		_, account, ok := credentialAccount(r)
+		if !ok {
+			http.Error(w, "an enabled account is required for MCP credentials", http.StatusForbidden)
+			return
+		}
+		var input struct {
+			Directory  string `json:"directory"`
+			URL        string `json:"url"`
+			Credential string `json:"credential"`
+		}
+		if !network.ReadJSON(w, r, &input) {
+			return
+		}
+		canonical, err := mcp.CanonicalURL(input.URL)
+		if err != nil || !filepath.IsAbs(input.Directory) {
+			http.Error(w, "an absolute directory and an http(s) URL are required", http.StatusBadRequest)
+			return
+		}
+		if input.Credential != "" {
+			credential, err := g.loadMCPCredential(r.Context(), input.Credential)
+			if errors.Is(err, errMCPCredentialNotFound) || err == nil && (credential.Account != account || credential.Match != canonical || credential.Kind == mcp.CredentialEnv) {
+				http.Error(w, "MCP credential not found", http.StatusNotFound)
+				return
+			}
+			if err != nil {
+				credentialFailure(w, r, err)
+				return
+			}
+		}
+		if g.options.ProjectMCPLogin == nil {
+			http.Error(w, "project logins are unavailable on this machine", http.StatusServiceUnavailable)
+			return
+		}
+		if err := g.options.ProjectMCPLogin(r.Context(), input.Directory, canonical, input.Credential); err != nil {
+			if event := obs.From(r.Context()); event != nil {
+				event.Fail(err)
+			}
+			http.Error(w, "could not save the project login", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /api/mcp/credentials", func(w http.ResponseWriter, r *http.Request) {
 		_, account, ok := credentialAccount(r)
 		if !ok {

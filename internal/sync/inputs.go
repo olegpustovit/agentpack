@@ -40,7 +40,7 @@ type launchState struct {
 type Inputs struct {
 	Lock, Manifest string // sha256 of the file bytes, or __missing__
 	DotAgents      string
-	// Context is the workspace, mode, staging generation, selected target and MCP credential index.
+	// Context is the workspace, mode, staging generation, selected target, MCP credential index and the project's MCP login picks.
 	Context string
 	// PerTarget holds Harness.LaunchInputs for the selected harness, or every harness when none is.
 	PerTarget map[base.Target]string
@@ -64,6 +64,9 @@ func readInputs(projectRoot, workspace string, effective mode.Effective, target 
 	context.Write([]byte("staging_layout_version\x00" + stagingLayoutVersion))
 	if index, err := paths.MCPCredentialIndexPath(); err == nil {
 		base.DigestFile(context, "mcp_credentials", index)
+	}
+	if logins, err := paths.ProjectMCPLoginsPath(projectRoot); err == nil {
+		base.DigestFile(context, "mcp_logins", logins)
 	}
 	name := "__none__"
 	if target != nil {

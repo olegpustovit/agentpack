@@ -353,11 +353,27 @@ func (runner Runner) serveGateway(ctx context.Context, home, executable, address
 		contents := projectContents(locked, project)
 		// The Library matches a remote server to its shared login by URL and starts one from it.
 		if plan, err := staging.CollectMCPPlan(packContext.WorkspaceRoot, locked, project, nil); err == nil {
+			var logins mcp.ProjectLogins
+			if path, err := paths.ProjectMCPLoginsPath(packContext.DefinitionRoot); err == nil {
+				logins, _ = mcp.ReadProjectLogins(path)
+			}
 			for i, server := range contents.MCP {
 				contents.MCP[i].URL = mcp.LoginURL(plan.Entries[server.Name].Server)
+				contents.MCP[i].Login = logins[contents.MCP[i].URL]
 			}
 		}
 		return contents, nil
+	}
+	options.ProjectMCPLogin = func(ctx context.Context, directory, url, credential string) error {
+		packContext, err := resolveInvocationContext(Invocation{Global: Global{WorkspaceRoot: directory}}, true)
+		if err != nil {
+			return err
+		}
+		path, err := paths.ProjectMCPLoginsPath(packContext.DefinitionRoot)
+		if err != nil {
+			return err
+		}
+		return mcp.SaveProjectLogin(path, url, credential)
 	}
 	options.Install = runner.installNetworkPackage
 	options.InstallMCP = runner.installNetworkMCP

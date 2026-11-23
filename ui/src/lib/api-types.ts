@@ -149,6 +149,8 @@ export type ProjectMCP = {
   reason: string
   /** Set for a remote server a shared MCP login can serve; absent from older peers. */
   url?: string
+  /** The login this project picked for url; absent means the first (default) login. */
+  login?: string
 }
 
 // What one mode turns off; a peer that predates modes sends none.

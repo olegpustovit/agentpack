@@ -176,6 +176,39 @@ test("New session shows what the chosen mode loads", async ({ page }) => {
   await expect(loaded.getByRole("listitem").filter({ hasText: "heavy" })).toContainText("off in design")
 })
 
+test("New session saves the project's pick among several logins", async ({ page }) => {
+  const linear = "https://mcp.linear.app/mcp"
+  let login = ""
+  const project = () => ({
+    directory: "/home/oleg/agentpack", name: "agentpack", available: true, last_used: twoHoursAgo,
+    launches: [{ harness: "claude", mode: "default", last_used: twoHoursAgo }], packages: [], error: "",
+    mcp: [{ name: "linear", launcher: "remote", status: "unpinnable", package: "", version: "", source: "manifest", url: linear, ...(login && { login }) }],
+  })
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [project()] }))
+  await page.route("**/api/mcp/credentials", (route) => route.fulfill({ json: { callback_url: "", credentials: [
+    { id: "c1", match: linear, kind: "oauth", label: "Work", status: "connected" },
+    { id: "c2", match: linear, kind: "oauth", label: "Client", status: "connected" },
+  ] } }))
+  let saved: { url: string; body: unknown } | undefined
+  await page.route("**/api/projects/mcp-login*", (route) => {
+    saved = { url: route.request().url(), body: route.request().postDataJSON() }
+    login = "c2"
+    return route.fulfill({ status: 204 })
+  })
+  await page.goto("/sessions?new=1")
+  const loaded = page.getByRole("region", { name: "Loaded in this session" })
+  await expect(loaded).toContainText("Logins you pick are saved for agentpack")
+  const picker = loaded.getByRole("combobox", { name: "linear login for agentpack" })
+  await expect(picker).toContainText("Work")
+  await picker.click()
+  await page.getByRole("option", { name: /Client/ }).click()
+  await expect.poll(() => saved?.body).toEqual({ directory: "/home/oleg/agentpack", url: linear, credential: "c2" })
+  expect(new URL(saved!.url).searchParams.get("node")).toBeNull()
+  await expect(picker).toContainText("Client")
+  await page.reload()
+  await expect(page.getByRole("region", { name: "Loaded in this session" }).getByRole("combobox", { name: "linear login for agentpack" })).toContainText("Client")
+})
+
 test("+ opens the composer while the chat claim is still in flight", async ({ page }) => {
   let posted: { id: string } | undefined
   let release!: () => void
