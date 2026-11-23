@@ -250,6 +250,16 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 			return nil, err
 		}
 	}
+	home, _ := os.UserHomeDir()
+	for _, candidate := range harnesses {
+		root, err := candidate.Root(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := ResolveCollisions(root, string(candidate.Target), candidate.NativeUserRoots(home)); err != nil {
+			return nil, err
+		}
+	}
 	if err := pipeline.verify(ctx); err != nil {
 		return nil, err
 	}
@@ -331,7 +341,7 @@ func (pipeline Pipeline) verify(ctx base.StageContext) error {
 			return err
 		}
 		skillRoots = append(skillRoots, root)
-		names, err := ResolveCollisions(root, string(candidate.Target), candidate.NativeUserRoots(home))
+		names, err := collisions(root, string(candidate.Target), candidate.NativeUserRoots(home), false)
 		if err != nil {
 			return err
 		}
@@ -570,23 +580,7 @@ func writeRebuildJournal(path string, journal rebuildJournal) error {
 	if err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".rebuild-journal-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if _, err := file.Write(data); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), path)
+	return paths.WriteAtomic(path, data, 0o600)
 }
 
 func backupRebuildPaths(values []string, journalPath string) ([]rebuildBackup, error) {

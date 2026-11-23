@@ -215,23 +215,10 @@ func TestCheckLockEntriesRejectsACommitThatDoesNotOwnItsCacheKey(t *testing.T) {
 	if err := CheckLockEntries(lockfile.PackLock{Packages: []lockfile.Package{unhashed, local}}); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func TestRenameEntryAcceptsOnlyTheSameTreeInstalledConcurrently(t *testing.T) {
-	root := t.TempDir()
-	out, same, different := filepath.Join(root, "entry"), filepath.Join(root, "same"), filepath.Join(root, "different")
-	// The slot is already filled, as if another process won the race.
-	writeTestFile(t, filepath.Join(out, "SKILL.md"), "# Demo")
-	writeTestFile(t, filepath.Join(same, "SKILL.md"), "# Demo")
-	writeTestFile(t, filepath.Join(different, "SKILL.md"), "# Different")
-	if err := renameEntry(same, out); err != nil {
-		t.Fatalf("identical concurrent install was rejected: %v", err)
-	}
-	if err := renameEntry(different, out); err == nil || !strings.Contains(err.Error(), "install cache entry") {
-		t.Fatalf("renameEntry(different tree) error = %v", err)
-	}
-	if body, err := os.ReadFile(filepath.Join(out, "SKILL.md")); err != nil || string(body) != "# Demo" {
-		t.Fatalf("occupied slot changed: %q, %v", body, err)
+	// A Rust-era plugin entry carries only its URL; it is not pinned behind the user's back.
+	partial := lockfile.Package{Module: "github.com/acme/plugin", Kind: lockfile.PackagePlugin, URL: "https://github.com/acme/plugin/tree/main"}
+	if err := CheckLockEntries(lockfile.PackLock{Packages: []lockfile.Package{partial}}); err == nil || !strings.Contains(err.Error(), "run `agentpack lock`") {
+		t.Fatalf("CheckLockEntries(partial plugin) = %v", err)
 	}
 }
 

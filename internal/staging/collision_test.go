@@ -48,3 +48,15 @@ func TestResolveCollisionsUsesOnlyTargetNativeRoots(t *testing.T) {
 		})
 	}
 }
+
+func TestVerifyingCollisionsNeverRemovesStagedFiles(t *testing.T) {
+	home, bundle := t.TempDir(), t.TempDir()
+	writeTree(t, filepath.Join(home, ".claude"), map[string]string{"skills/tutor/SKILL.md": "user"})
+	writeTree(t, bundle, map[string]string{"skills/tutor/SKILL.md": "pack"})
+	if _, err := collisions(bundle, "claude", []string{filepath.Join(home, ".claude")}, false); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("collisions(verify) = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bundle, "skills/tutor/SKILL.md")); err != nil {
+		t.Fatalf("verification removed a staged file: %v", err)
+	}
+}

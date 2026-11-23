@@ -75,7 +75,7 @@ func SaveBinding(binding Binding) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return paths.WriteAtomic(path, data, 0o644)
 }
 
 // ClearBinding removes the association for a workspace.

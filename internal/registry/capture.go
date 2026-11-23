@@ -216,7 +216,7 @@ func decodeLock(data []byte) (lockfile.PackLock, error) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return lockfile.PackLock{}, err
 	}
-	return lockfile.LoadUnguarded(path)
+	return lockfile.LoadFromPath(path)
 }
 
 type captureSetting struct {

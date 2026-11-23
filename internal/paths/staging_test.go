@@ -1,6 +1,7 @@
 package paths
 
 import (
+	"github.com/gofrs/flock"
 	"os"
 	"path/filepath"
 	"testing"
@@ -66,6 +67,47 @@ func TestStagingGenerationRefusesEscapingPointer(t *testing.T) {
 	}
 	if _, err := StagingRootForMode(project, "default"); err == nil {
 		t.Fatal("accepted a staging pointer outside the mode")
+	}
+}
+
+func TestReclaimKeepsLeasedRecordedAndUnfinishedGenerations(t *testing.T) {
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	project := t.TempDir()
+	published, err := BeginStagingGeneration(project, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := published.Publish(); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := stagingModePath(project, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := func(name string, built bool) string {
+		root := legacy + "-g-" + name
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if built {
+			if err := os.WriteFile(filepath.Join(root, ".staged.json"), []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return root
+	}
+	dead, held, recorded, unfinished := generation("dead", true), generation("held", true), generation("recorded", true), generation("unfinished", false)
+	// Another process's lease: a separate lock on the same file.
+	lease := flock.New(held + ".lease")
+	if err := lease.RLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Unlock()
+	ReclaimStagingGenerations(project, "default", []string{recorded})
+	for root, want := range map[string]bool{dead: false, held: true, recorded: true, unfinished: true, published.Root: true} {
+		if _, err := os.Stat(root); (err == nil) != want {
+			t.Errorf("%s: kept=%v, want %v", filepath.Base(root), err == nil, want)
+		}
 	}
 }
 

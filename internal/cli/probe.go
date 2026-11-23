@@ -8,7 +8,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/environment"
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
-	"github.com/olegpustovit/agentpack/internal/staging"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
@@ -50,15 +49,6 @@ func (runner Runner) runProbe(ctx context.Context, definitionRoot, workspaceRoot
 		mode = report.Mode
 	}
 
-	lease, err := staging.AcquireLaunchShared(definitionRoot, mode)
-	if err != nil {
-		return 5, err
-	}
-	defer lease.Unlock()
-	report, err = runner.Service.Preflight(definitionRoot, packSync.PreflightOptions{Mode: mode, Target: &target, Policy: policy, WorkspaceRoot: workspaceRoot, StrictExternal: strict})
-	if err != nil {
-		return 5, err
-	}
 	for _, finding := range report.Findings {
 		if finding.Severity == environment.SeverityError || (finding.Severity == environment.SeverityViolation && finding.Code != "CONTRACT_MISMATCH" && finding.Code != "OBSERVATION_UNAVAILABLE") || finding.Code == "STAGING_NOT_RECORDED" || finding.Code == "STAGING_INPUTS_UNKNOWN" {
 			if jsonOut {

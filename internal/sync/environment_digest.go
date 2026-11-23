@@ -32,7 +32,7 @@ func EnvironmentDigest(definitionRoot, workspace, selectedMode string, target ha
 		return "", err
 	}
 	for _, pkg := range lock.Packages {
-		if err := cache.VerifyPackage(pkg); err != nil {
+		if err := cache.VerifyPackageIncremental(pkg); err != nil {
 			return "", err
 		}
 	}

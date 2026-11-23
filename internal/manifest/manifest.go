@@ -308,7 +308,7 @@ func mutateDocument(projectRoot string, mutate func([]byte) ([]byte, error)) err
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, output, 0o644); err != nil {
+	if err := paths.WriteAtomic(path, output, 0o644); err != nil {
 		return fmt.Errorf("write manifest %s: %w", path, err)
 	}
 	return nil

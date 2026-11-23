@@ -151,8 +151,8 @@ Missing packages can be restored from approved peers, with the locked content
 hash checked before installation; any failure falls through to GitHub. A cached
 launch never asks the gateway for package bytes. Missing chat attachments use
 verified peer copies under the existing storage quota. The disposable metadata
-index is plain SQLite at `cache/index.db`; old `cache/db.reddb` indexes are removed
-and rebuilt without changing package trees or project locks.
+index is plain SQLite at `cache/index.db`; it can be deleted and is rebuilt
+without changing package trees or project locks.
 
 The Library imports verified legacy files before removing them. Its effective
 heads are derived from immutable revisions, so concurrent edits keep their merge

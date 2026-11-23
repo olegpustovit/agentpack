@@ -11,8 +11,8 @@ import (
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
+	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
-	"github.com/olegpustovit/agentpack/internal/staging"
 )
 
 func TestPlainFolderLaunchLeavesProjectFilesAbsent(t *testing.T) {
@@ -24,16 +24,7 @@ func TestPlainFolderLaunchLeavesProjectFilesAbsent(t *testing.T) {
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
 
 	service := NewService()
-	effective, _, err := service.SyncForLaunch(t.Context(), project, "", base.Claude)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lease, err := staging.AcquireLaunchShared(project, effective.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lease.Unlock()
-	if err := service.ValidateLaunchInputs(project, project, effective, base.Claude); err != nil {
+	if _, _, err := service.SyncForLaunch(t.Context(), project, "", base.Claude); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{paths.LockPath(project), paths.ManifestPath(project)} {
@@ -64,8 +55,11 @@ func TestServiceAddsPathDependencyAndStagesIt(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	pkg, err := NewService().Add(context.Background(), project, source, false)
+	pkg, err := NewService().Add(context.Background(), project, source)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewService().Sync(context.Background(), project, SyncOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if pkg.Module != "demo" {
@@ -131,6 +125,24 @@ func TestSyncForLaunchUsesVerifiedFastPath(t *testing.T) {
 	if err != nil || string(contents) != string(marker) || !before.ModTime().Equal(after.ModTime()) || before.Mode() != after.Mode() {
 		t.Fatalf("warm launch setup changed state.db: %v", err)
 	}
+	// A one-harness launch records its own materialization, never all harnesses'.
+	claude := base.Claude
+	if _, found, err := readMaterializationDigest(project, mode.DefaultName, nil); err != nil || found {
+		t.Fatalf("launch wrote the all-harness materialization record: found=%v err=%v", found, err)
+	}
+	if _, found, err := readMaterializationDigest(project, mode.DefaultName, &claude); err != nil || !found {
+		t.Fatalf("launch did not record its own materialization: found=%v err=%v", found, err)
+	}
+	// An upgraded agentpack binary invalidates the launch digest.
+	upgraded := filepath.Join(t.TempDir(), "agentpack")
+	if err := os.WriteFile(upgraded, []byte("new build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	executable = func() (string, error) { return upgraded, nil }
+	t.Cleanup(func() { executable = os.Executable })
+	if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", base.Claude); err != nil || skipped {
+		t.Fatalf("after upgrade skipped=%v err=%v", skipped, err)
+	}
 }
 
 // A launch of another agent must not need the staging a running session holds.
@@ -155,15 +167,9 @@ func TestSyncForLaunchOfAnotherAgentWhileOneIsRunning(t *testing.T) {
 		}
 	}
 	service := NewService()
-	effective, _, err := service.SyncForLaunch(context.Background(), project, "", base.Claude)
-	if err != nil {
+	if _, _, err := service.SyncForLaunch(context.Background(), project, "", base.Claude); err != nil {
 		t.Fatal(err)
 	}
-	running, err := staging.AcquireLaunchShared(project, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer running.Unlock()
 	// twice round, so that a launch after Cursor's or Antigravity's overlay is covered too
 	for _, target := range []base.Target{base.Claude, base.Codex, base.OpenCode, base.Grok, base.Cursor, base.Agy,
 		base.Claude, base.Codex, base.Agy, base.Cursor, base.Claude} {
@@ -172,9 +178,6 @@ func TestSyncForLaunchOfAnotherAgentWhileOneIsRunning(t *testing.T) {
 		}
 		if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", target); err != nil || !skipped {
 			t.Fatalf("%s repeat: skipped=%v err=%v", target, skipped, err)
-		}
-		if err := service.ValidateLaunchInputs(project, project, effective, target); err != nil {
-			t.Fatalf("%s: %v", target, err)
 		}
 	}
 }
@@ -189,14 +192,6 @@ func TestChangedInputsRebuildAlongsideRunningSessionWithoutChangingItsFiles(t *t
 		t.Fatal(err)
 	}
 	oldSkill := fixture.stagedPath()
-	running, err := staging.AcquireLaunchShared(fixture.project, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer running.Unlock()
-	if _, err := staging.TryAcquireRebuildExclusive(fixture.project, "default"); err == nil {
-		t.Fatal("fixture did not hold the running session's lock")
-	}
 	fixture.manifest(demoKey, commitTwo)
 	for _, target := range []base.Target{base.Codex, base.Claude, base.Grok, base.OpenCode, base.Cursor, base.Agy} {
 		if _, _, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", target); err != nil {
@@ -254,6 +249,32 @@ func TestServiceRejectsModeSelectorsMissingFromCapabilityCatalog(t *testing.T) {
 	_, err := NewService().Sync(context.Background(), project, SyncOptions{DryRun: true})
 	if err == nil || !strings.Contains(err.Error(), "unknown package selector target") {
 		t.Fatalf("Sync() error = %v", err)
+	}
+}
+
+// Staging reads .agents from the workspace, so mode selectors resolve there too.
+func TestModeSelectorsResolveAgainstTheWorkspace(t *testing.T) {
+	definition, workspace := t.TempDir(), t.TempDir()
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	contents := "name = \"demo\"\nversion = \"0.0.1\"\n\n[dependencies]\n\n[modes.default]\nbase = \"all\"\ndisable = [\".agents:rules/a.mdc\"]\n"
+	if err := os.WriteFile(filepath.Join(definition, "agentpack.toml"), []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(definition, "demo", "0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, ".agents", "rules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".agents", "rules", "a.mdc"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewService().Sync(context.Background(), definition, SyncOptions{DryRun: true, WorkspaceRoot: workspace}); err != nil {
+		t.Fatalf("Sync(workspace) = %v", err)
+	}
+	if _, err := NewService().Sync(context.Background(), definition, SyncOptions{DryRun: true}); err == nil || !strings.Contains(err.Error(), "unknown .agents selector target") {
+		t.Fatalf("Sync(definition) = %v", err)
 	}
 }
 

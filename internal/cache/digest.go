@@ -97,8 +97,14 @@ func (err *LockEntryError) Summary() string {
 // writes the three together, so a commit that no longer matches its cache_key
 // means the lock was edited by hand, and the content hash describes some
 // other commit.
+//
+// A plugin entry with a URL but no pins was written by the Rust-era tool;
+// it is refused rather than pinned again behind the user's back.
 func CheckLockEntries(lock lockfile.PackLock) error {
 	for _, pkg := range lock.Packages {
+		if pkg.Kind == lockfile.PackagePlugin && strings.HasPrefix(pkg.URL, "https://github.com/") && (pkg.CacheKey == "" || pkg.Commit == "" || pkg.Owner == "" || pkg.Repo == "") {
+			return fmt.Errorf("pack.lock entry for %s has no cache_key, commit, owner or repo; nothing was fetched or staged; run `agentpack lock` to pin it", describe(pkg))
+		}
 		if pkg.ContentHash == "" || isLocalPackage(pkg) || strings.HasPrefix(pkg.URL, "agentpack-local:") {
 			continue
 		}
@@ -347,15 +353,7 @@ func recordVerified(pkg lockfile.Package, root string, checkedAt time.Time) {
 	if err != nil || os.MkdirAll(filepath.Dir(path), 0o755) != nil {
 		return
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".stamp-*")
-	if err != nil {
-		return
-	}
-	defer os.Remove(file.Name())
-	_, writeErr := file.Write(data)
-	if file.Close() == nil && writeErr == nil {
-		_ = os.Rename(file.Name(), path)
-	}
+	_ = paths.WriteAtomic(path, data, 0o600)
 }
 
 // VerifyPackage recomputes the cache entry digest and compares it with the
@@ -407,117 +405,4 @@ func StatFingerprint(lock lockfile.PackLock) (string, error) {
 		fmt.Fprintf(hasher, "%s\x00", metadata)
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
-}
-
-// RefetchPackage builds the package again from its pinned source in a
-// temporary directory and installs it over the cache entry only when it
-// differs from what is cached. A fetched tree that contradicts the lock entry's
-// content hash is discarded and leaves the cache untouched.
-func RefetchPackage(pkg lockfile.Package, restoreRemote RemoteRestoreFunc) (digest string, replaced bool, err error) {
-	out, err := EntryDir(pkg.CacheKey)
-	if err != nil {
-		return "", false, err
-	}
-	fill, err := packageSource(pkg, restoreRemote)
-	if err != nil {
-		return "", false, err
-	}
-	if fill == nil {
-		return "", false, fmt.Errorf("cannot re-fetch %s: its source is unavailable here", pkg.Module)
-	}
-	temporary, digest, err := buildVerified(pkg, fill)
-	if err != nil {
-		return "", false, err
-	}
-	defer os.RemoveAll(temporary)
-	if current, currentErr := TreeDigest(out); currentErr == nil && current == digest {
-		return digest, false, nil
-	}
-	if err := installEntry(temporary, out); err != nil {
-		return "", false, err
-	}
-	return digest, true, nil
-}
-
-// packageSource returns the function that writes the package tree into a
-// directory, or nil when the package is local and its source is missing.
-func packageSource(pkg lockfile.Package, restoreRemote RemoteRestoreFunc) (func(string) error, error) {
-	local, err := localSourceDir(pkg.URL)
-	if err != nil {
-		return nil, err
-	}
-	if local != "" {
-		if info, statErr := os.Stat(local); statErr == nil && info.IsDir() {
-			return func(destination string) error { return copyMergeTree(local, destination) }, nil
-		}
-	}
-	if isLocalPackage(pkg) {
-		return nil, nil
-	}
-	if restoreRemote == nil {
-		return nil, fmt.Errorf("cache entry %s is missing and no remote restorer is configured", pkg.CacheKey)
-	}
-	return func(destination string) error { return restoreRemote(pkg, destination) }, nil
-}
-
-// buildVerified fills a temporary sibling of the cache entry, normalizes it,
-// and checks it against the lock before anything can read it as cache content.
-func buildVerified(pkg lockfile.Package, fill func(string) error) (temporary, digest string, err error) {
-	cacheRoot, err := paths.CacheDir()
-	if err != nil {
-		return "", "", err
-	}
-	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
-		return "", "", fmt.Errorf("create cache directory %s: %w", cacheRoot, err)
-	}
-	directory, err := os.MkdirTemp(cacheRoot, ".tmp-fetch-")
-	if err != nil {
-		return "", "", fmt.Errorf("create cache temporary directory: %w", err)
-	}
-	temporary = directory
-	defer func() {
-		if err != nil {
-			_ = os.RemoveAll(directory)
-		}
-	}()
-	if err = fill(temporary); err != nil {
-		return "", "", err
-	}
-	if err = os.Chmod(temporary, 0o755); err != nil {
-		return "", "", err
-	}
-	if err = NormalizePluginLayout(temporary); err != nil {
-		return "", "", err
-	}
-	if digest, err = TreeDigest(temporary); err != nil {
-		return "", "", err
-	}
-	if pkg.ContentHash != "" && !MatchesContentHash(temporary, pkg.ContentHash, digest) {
-		err = &IntegrityError{Package: pkg, Expected: pkg.ContentHash, Actual: digest, Fetched: true}
-		return "", "", err
-	}
-	return temporary, digest, nil
-}
-
-func installEntry(temporary, out string) error {
-	if err := os.RemoveAll(out); err != nil {
-		return fmt.Errorf("remove cache entry %s: %w", out, err)
-	}
-	return renameEntry(temporary, out)
-}
-
-// renameEntry moves a verified tree into its cache slot. If the slot is
-// occupied again, another agentpack process installed the entry between the
-// removal and the rename; that is success when it holds the same tree.
-func renameEntry(temporary, out string) error {
-	err := os.Rename(temporary, out)
-	if err == nil {
-		return nil
-	}
-	ours, oursErr := TreeDigest(temporary)
-	theirs, theirsErr := TreeDigest(out)
-	if oursErr == nil && theirsErr == nil && ours == theirs {
-		return nil
-	}
-	return fmt.Errorf("install cache entry %s: %w", out, err)
 }

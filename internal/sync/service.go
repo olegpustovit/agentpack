@@ -242,7 +242,7 @@ func (service Service) LockWithOptions(ctx context.Context, projectRoot string, 
 
 // Update refreshes every floating dependency when specs is empty. Otherwise it
 // refreshes only the requested direct dependencies, using their manifest pins.
-func (service Service) Update(ctx context.Context, projectRoot string, specs []string, noSync bool) (lockfile.PackLock, error) {
+func (service Service) Update(ctx context.Context, projectRoot string, specs []string) (lockfile.PackLock, error) {
 	if _, err := paths.EnsureUserAgentpackLayout(); err != nil {
 		return lockfile.PackLock{}, err
 	}
@@ -266,22 +266,14 @@ func (service Service) Update(ctx context.Context, projectRoot string, specs []s
 	if refresh {
 		pinMode = mcpRefresh
 	}
-	lock, err := service.resolve(ctx, projectRoot, project, resolveRun{options: resolve.ResolveOptions{RefreshFloating: refresh, RefreshModules: modules, RecordContentHashes: true}, pinMode: pinMode, explicit: true})
-	if err != nil {
-		return lockfile.PackLock{}, err
-	}
-	if !noSync {
-		_, err = service.Sync(ctx, projectRoot, SyncOptions{})
-	}
-	return lock, err
+	return service.resolve(ctx, projectRoot, project, resolveRun{options: resolve.ResolveOptions{RefreshFloating: refresh, RefreshModules: modules, RecordContentHashes: true}, pinMode: pinMode, explicit: true})
 }
 
-// Add records a package in agentpack.toml, locks it and stages it. When any
-// of that fails, agentpack.toml and pack.lock are left exactly as they were:
-// a package that could not be staged is not half-added.
-func (service Service) Add(ctx context.Context, projectRoot, spec string, noSync bool) (lockfile.Package, error) {
+// Add records a package in agentpack.toml and locks it; staging is lazy. When
+// either fails, agentpack.toml and pack.lock are left exactly as they were.
+func (service Service) Add(ctx context.Context, projectRoot, spec string) (lockfile.Package, error) {
 	restore := keepProjectFiles(projectRoot)
-	pkg, err := service.add(ctx, projectRoot, spec, noSync)
+	pkg, err := service.add(ctx, projectRoot, spec)
 	if err != nil {
 		if restoreErr := restore(); restoreErr != nil {
 			return pkg, errors.Join(err, fmt.Errorf("restore agentpack.toml and pack.lock: %w", restoreErr))
@@ -290,7 +282,7 @@ func (service Service) Add(ctx context.Context, projectRoot, spec string, noSync
 	return pkg, err
 }
 
-func (service Service) add(ctx context.Context, projectRoot, spec string, noSync bool) (lockfile.Package, error) {
+func (service Service) add(ctx context.Context, projectRoot, spec string) (lockfile.Package, error) {
 	if _, err := paths.EnsureUserAgentpackLayout(); err != nil {
 		return lockfile.Package{}, err
 	}
@@ -306,16 +298,18 @@ func (service Service) add(ctx context.Context, projectRoot, spec string, noSync
 		if err := manifest.AppendPathDependency(projectRoot, name, filepath.ToSlash(relative)); err != nil {
 			return lockfile.Package{}, err
 		}
-		project, _ := manifest.Load(projectRoot)
+		project, err := manifest.Load(projectRoot)
+		if err != nil {
+			return lockfile.Package{}, err
+		}
 		lock, err := service.resolveAdded(ctx, projectRoot, project, nil)
 		if err != nil {
 			return lockfile.Package{}, err
 		}
+		// The copy is this add's fetch; a path has no shorthand to alias.
 		pkg := findPackage(lock, name)
-		if !noSync {
-			_, err = service.Sync(ctx, projectRoot, SyncOptions{})
-		}
-		return pkg, err
+		record := cache.EntryRecord{Kind: pkg.Kind, SourceURL: pkg.URL, Owner: pkg.Owner, Repo: pkg.Repo, Path: pkg.Path, Commit: pkg.Commit, FetchedAtUnix: time.Now().Unix()}
+		return pkg, cache.UpsertEntry(pkg.CacheKey, record, nil)
 	}
 	resolved, err := NewAddResolver(service.client()).Resolve(ctx, projectRoot, spec)
 	if err != nil {
@@ -328,18 +322,17 @@ func (service Service) add(ctx context.Context, projectRoot, spec string, noSync
 	if err := RecordFetched(resolved.Package, resolved.Shorthand); err != nil {
 		return lockfile.Package{}, err
 	}
-	project, _ := manifest.Load(projectRoot)
+	project, err := manifest.Load(projectRoot)
+	if err != nil {
+		return lockfile.Package{}, err
+	}
 	lock, err := service.resolveAdded(ctx, projectRoot, project, []lockfile.Package{resolved.Package})
 	if err != nil {
 		return lockfile.Package{}, err
 	}
-	pkg := findPackage(lock, key)
-	if !noSync {
-		_, err = service.Sync(ctx, projectRoot, SyncOptions{})
-	}
-	return pkg, err
+	return findPackage(lock, key), nil
 }
-func (service Service) Remove(ctx context.Context, projectRoot, spec string, noSync bool) (string, error) {
+func (service Service) Remove(ctx context.Context, projectRoot, spec string) (string, error) {
 	project, err := manifest.Load(projectRoot)
 	if err != nil {
 		return "", err
@@ -354,13 +347,10 @@ func (service Service) Remove(ctx context.Context, projectRoot, spec string, noS
 	if err := manifest.RemoveDependencyEntry(projectRoot, key); err != nil {
 		return "", err
 	}
-	project, _ = manifest.Load(projectRoot)
-	if _, err := service.resolveAndSave(ctx, projectRoot, project, false, nil); err != nil {
+	if project, err = manifest.Load(projectRoot); err != nil {
 		return "", err
 	}
-	if !noSync {
-		_, err = service.Sync(ctx, projectRoot, SyncOptions{})
-	}
+	_, err = service.resolveAndSave(ctx, projectRoot, project, false, nil)
 	return key, err
 }
 func (service Service) Sync(ctx context.Context, projectRoot string, options SyncOptions) (SyncResult, error) {
@@ -375,6 +365,15 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		options.Progress = service.Step
 	}
 	verify := options.verifier()
+	// Entries installed before this sync are already in the index; only the
+	// ones it fetches (here or while resolving) are recorded.
+	cached := map[string]bool{}
+	if root, err := paths.CacheDir(); err == nil {
+		entries, _ := os.ReadDir(root)
+		for _, entry := range entries {
+			cached[entry.Name()] = true
+		}
+	}
 	if !options.DryRun && !options.Frozen && project != nil && len(project.Dependencies) != 0 {
 		// sync verifies what the lock already pins. It records a content hash
 		// only for content it has to download, and adds no MCP records.
@@ -396,7 +395,11 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 	if err != nil {
 		return SyncResult{}, err
 	}
-	effective, err := resolveMode(projectRoot, project, &lock, options.Mode)
+	workspace := options.WorkspaceRoot
+	if workspace == "" {
+		workspace = projectRoot
+	}
+	effective, err := resolveMode(workspace, project, &lock, options.Mode)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -411,44 +414,17 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 	if options.DryRun {
 		return result, nil
 	}
-	if options.Frozen {
-		for _, pkg := range lock.Packages {
-			if pkg.NeedsBackfill() {
-				return result, fmt.Errorf("frozen restore refuses incomplete lock entry %s; run `agentpack lock`", pkg.Module)
-			}
-		}
-	}
-	dirty := false
-	if !options.Frozen {
-		for index := range lock.Packages {
-			pkg := &lock.Packages[index]
-			if pkg.NeedsBackfill() {
-				resolved, err := cache.FetchGitHubAssetURL(ctx, service.client(), pkg.URL)
-				if err != nil {
-					return result, err
-				}
-				if resolved.Kind != lockfile.PackagePlugin {
-					return result, fmt.Errorf("plugin URL %s resolved to a skill subtree", pkg.URL)
-				}
-				*pkg = resolved
-				dirty = true
-			}
-		}
-		if dirty {
-			if err := lock.Save(projectRoot); err != nil {
-				return result, err
-			}
-		}
-	}
 	for _, pkg := range lock.Packages {
 		if pkg.CacheKey == "" {
 			continue
 		}
 		options.step("verifying " + pkg.Module)
 		restore := cache.GitHubRestore(ctx, service.client())
+		fetched := !cached[pkg.CacheKey]
 		ready, err := cache.EnsureLockCachedVerifying(pkg, restore, verify)
 		var mismatch *cache.IntegrityError
 		if !options.Frozen && options.Repair && errors.As(err, &mismatch) && !mismatch.Fetched {
+			fetched = true
 			if _, _, err = cache.RefetchPackage(pkg, restore); err == nil {
 				service.notify("%s", mismatch.Repaired())
 				ready, err = cache.EnsureLockCached(pkg, restore)
@@ -462,6 +438,9 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 				return result, fmt.Errorf("cache missing and source unavailable for %s", pkg.Module)
 			}
 			result.Warnings = append(result.Warnings, fmt.Sprintf("%s %s: cache missing and source unavailable", pkg.Kind, pkg.CacheKey))
+		}
+		if !fetched || !ready {
+			continue
 		}
 		record := cache.EntryRecord{Kind: pkg.Kind, SourceURL: pkg.URL, Owner: pkg.Owner, Repo: pkg.Repo, Path: pkg.Path, Commit: pkg.Commit, FetchedAtUnix: time.Now().Unix()}
 		if err := cache.UpsertEntry(pkg.CacheKey, record, nil); err != nil {
@@ -495,16 +474,12 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		case len(drift) != 0:
 			err = &staging.DriftError{Changes: drift}
 		default:
-			// Verify may drop staged duplicates of skills the user has since
-			// installed; record the tree again so that is not read as drift.
-			if err = pipeline.Verify(); err == nil {
-				err = pipeline.RecordStaged()
-			}
+			err = pipeline.Verify()
 		}
 	} else if fresh, freshErr := service.stagingIsCurrent(pipeline, options, recorded && len(drift) == 0); freshErr != nil {
 		return result, freshErr
 	} else if fresh {
-		tidyTempDirectories(projectRoot, false)
+		tidyTempDirectories(projectRoot, false, "")
 	} else {
 		if len(drift) != 0 {
 			shown := append([]string(nil), drift...)
@@ -531,20 +506,13 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		}
 		defer generation.Abort()
 		options.step("staging skills, commands and MCP config")
+		// Rebuild verifies what it staged before returning.
 		_, err = pipeline.Rebuild()
 		if err == nil {
-			options.step("checking staged files")
-			err = pipeline.Verify()
-		}
-		if err == nil {
-			workspace := options.WorkspaceRoot
-			if workspace == "" {
-				workspace = projectRoot
-			}
 			var digest string
-			digest, err = computeMaterializationDigest(projectRoot, workspace, effective)
+			digest, err = computeMaterializationDigest(projectRoot, workspace, effective, options.Target)
 			if err == nil {
-				err = writeMaterializationDigest(projectRoot, effective.Name(), digest)
+				err = writeMaterializationDigest(projectRoot, effective.Name(), options.Target, digest)
 			}
 			if err == nil && options.Target == nil {
 				err = writeSyncedDigest(projectRoot, effective.Name(), digest)
@@ -554,7 +522,7 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 			err = generation.Publish()
 		}
 		if err == nil {
-			tidyTempDirectories(projectRoot, options.Target != nil)
+			tidyTempDirectories(projectRoot, options.Target != nil, effective.Name())
 		}
 	}
 	if err != nil {
@@ -590,13 +558,13 @@ func (service Service) SyncForLaunchOptions(ctx context.Context, projectRoot str
 	if err != nil {
 		return mode.Effective{}, false, err
 	}
-	effective, err := resolveMode(projectRoot, project, &lock, options.Mode)
-	if err != nil {
-		return mode.Effective{}, false, err
-	}
 	workspace := options.WorkspaceRoot
 	if workspace == "" {
 		workspace = projectRoot
+	}
+	effective, err := resolveMode(workspace, project, &lock, options.Mode)
+	if err != nil {
+		return mode.Effective{}, false, err
 	}
 	pending, err := (staging.Pipeline{ProjectRoot: projectRoot, WorkspaceRoot: workspace, Mode: effective, Target: &target}).RebuildPending()
 	if err != nil {
@@ -653,7 +621,10 @@ func (service Service) SyncForLaunchOptions(ctx context.Context, projectRoot str
 	}
 	return effective, false, nil
 }
-func resolveMode(projectRoot string, project *manifest.Manifest, lock *lockfile.PackLock, name string) (mode.Effective, error) {
+
+// resolveMode validates the selected mode against what staging will read: the
+// lock, the manifest and the workspace's .agents directory.
+func resolveMode(workspace string, project *manifest.Manifest, lock *lockfile.PackLock, name string) (mode.Effective, error) {
 	if name == "" {
 		name = mode.DefaultName
 	}
@@ -667,7 +638,7 @@ func resolveMode(projectRoot string, project *manifest.Manifest, lock *lockfile.
 	} else if name != mode.DefaultName {
 		return mode.Effective{}, fmt.Errorf("unknown mode: %s", name)
 	}
-	catalog, err := modecatalog.BuildCapabilityCatalog(projectRoot, lock, project)
+	catalog, err := modecatalog.BuildCapabilityCatalog(workspace, lock, project)
 	if err != nil {
 		return mode.Effective{}, fmt.Errorf("build mode capability catalog: %w", err)
 	}
@@ -745,27 +716,27 @@ func (service Service) stagingIsCurrent(pipeline staging.Pipeline, options SyncO
 	if workspace == "" {
 		workspace = pipeline.ProjectRoot
 	}
-	current, err := computeMaterializationDigest(pipeline.ProjectRoot, workspace, pipeline.Mode)
+	current, err := computeMaterializationDigest(pipeline.ProjectRoot, workspace, pipeline.Mode, nil)
 	if err != nil || stored != current+"\x00"+executableStamp() {
 		return false, err
 	}
-	// Verify may drop staged copies of skills the user has since installed;
-	// record the tree again so the next sync does not read that as drift.
-	if pipeline.Verify() != nil {
-		return false, nil
-	}
-	if dropped, _, err := pipeline.StagedDrift(false); err != nil || len(dropped) == 0 {
-		return err == nil, err
-	}
-	return true, pipeline.RecordStaged()
+	// A user install that now hides a staged item makes staging stale.
+	return pipeline.Verify() == nil, nil
 }
 
-// tidyTempDirectories removes what deleted projects left in the temp directory.
-// Its cost is what that directory holds, so a launch never waits for it and
+// tidyTempDirectories removes what deleted projects left in the temp directory
+// and, after a publish of modeName, the generations nothing uses any more.
+// Its cost is what those directories hold, so a launch never waits for it and
 // other commands wait briefly; an early exit leaves the rest for a later run.
-func tidyTempDirectories(projectRoot string, launch bool) {
+func tidyTempDirectories(projectRoot string, launch bool, modeName string) {
 	tidied := make(chan struct{})
-	go func() { removeOrphans(projectRoot); close(tidied) }()
+	go func() {
+		if modeName != "" {
+			paths.ReclaimStagingGenerations(projectRoot, modeName, recordedGenerations(projectRoot, modeName))
+		}
+		removeOrphans(projectRoot)
+		close(tidied)
+	}()
 	if !launch {
 		select {
 		case <-tidied:

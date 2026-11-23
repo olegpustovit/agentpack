@@ -116,7 +116,7 @@ func (b *Bootstrapper) captureRecent() error {
 		if _, err := manifest.Load(definition); err != nil {
 			continue
 		}
-		locked, err := lockfile.LoadUnguarded(paths.LockPath(definition))
+		locked, err := lockfile.LoadFromPath(paths.LockPath(definition))
 		if err != nil || cache.CheckLockEntries(locked) != nil {
 			continue
 		}
@@ -224,7 +224,7 @@ func cachedModule(owner, repo, inRepoPath string) (string, bool) {
 // which of the packages it needs this machine still has to fetch.
 func (s *Store) DraftStateOf(draft Draft, definition string) (DraftState, error) {
 	state := DraftState{Pins: map[string]PackagePin{}}
-	locked, err := lockfile.LoadUnguarded(paths.LockPath(definition))
+	locked, err := lockfile.LoadFromPath(paths.LockPath(definition))
 	if err != nil {
 		return state, err
 	}

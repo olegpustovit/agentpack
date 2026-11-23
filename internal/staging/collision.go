@@ -3,6 +3,7 @@ package staging
 import (
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,7 +12,15 @@ import (
 
 // ResolveCollisions removes duplicates only from this target's staged bundle.
 // The returned native names also allow verification after a prior collision pass.
+// Only Rebuild calls it, before the generation is published.
 func ResolveCollisions(bundle, target string, userRoots []string) (map[string]struct{}, error) {
+	return collisions(bundle, target, userRoots, true)
+}
+
+// collisions lists the pack items of bundle that a user-installed item of the
+// same name hides. With remove it deletes them; without, any one is an error,
+// so a read-only check never changes a published generation.
+func collisions(bundle, target string, userRoots []string, remove bool) (map[string]struct{}, error) {
 	userSkills, err := UserSkillNames(userRoots)
 	if err != nil {
 		return nil, err
@@ -35,6 +44,9 @@ func ResolveCollisions(bundle, target string, userRoots []string) (map[string]st
 			return nil, err
 		}
 		for _, name := range intersection(user, pack) {
+			if !remove {
+				return nil, fmt.Errorf("%s staged bundle still has %s `%s`, which a user-installed one replaces; staging is stale", target, kind.label, name)
+			}
 			root := filepath.Join(bundle, kind.directory)
 			if kind.directory == "skills" {
 				err = removeNamedDirectory(root, name)
@@ -44,7 +56,7 @@ func ResolveCollisions(bundle, target string, userRoots []string) (map[string]st
 			if err != nil {
 				return nil, err
 			}
-			fmt.Fprintf(os.Stderr, "warning: Using user-installed %s `%s`; omitted pack duplicate from %s staged bundle\n", kind.label, name, target)
+			log.Printf("warning: Using user-installed %s `%s`; omitted pack duplicate from %s staged bundle", kind.label, name, target)
 		}
 	}
 	return userSkills, nil

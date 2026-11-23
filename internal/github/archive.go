@@ -36,9 +36,6 @@ func ExtractTarballWithPrefix(archive io.Reader, prefix, destination string) (in
 	if err != nil {
 		return 0, err
 	}
-	if err := os.RemoveAll(destination); err != nil {
-		return 0, fmt.Errorf("reset archive destination %s: %w", destination, err)
-	}
 	if err := os.MkdirAll(destination, 0o755); err != nil {
 		return 0, fmt.Errorf("create archive destination %s: %w", destination, err)
 	}

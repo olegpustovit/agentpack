@@ -2,6 +2,7 @@ package sync
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -197,6 +198,7 @@ func hashDotAgents(root string) ([]byte, error) {
 	// Antigravity's launch puts the staged bundle here (a link, or a copy where
 	// links are refused). It is Agentpack's own output, not an input.
 	overlay := filepath.Join(root, "plugins", paths.StagedAgentpackBundleName)
+	sizes := map[string]int64{}
 	var files []string
 	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -212,6 +214,7 @@ func hashDotAgents(root string) ([]byte, error) {
 			info, err := entry.Info()
 			if err == nil && info.Mode().IsRegular() {
 				files = append(files, path)
+				sizes[path] = info.Size()
 			}
 		}
 		return nil
@@ -230,13 +233,7 @@ func hashDotAgents(root string) ([]byte, error) {
 		}
 		hash.Write([]byte(relative))
 		hash.Write([]byte{0})
-		info, _ := os.Stat(path)
-		size := uint64(info.Size())
-		var encoded [8]byte
-		for index := 0; index < 8; index++ {
-			encoded[index] = byte(size >> (8 * index))
-		}
-		hash.Write(encoded[:])
+		hash.Write(binary.LittleEndian.AppendUint64(nil, uint64(sizes[path])))
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
@@ -302,22 +299,55 @@ func selectLaunchGeneration(projectRoot, modeName string, target base.Target) er
 	}
 	return paths.SelectStagingGeneration(projectRoot, modeName, state.Root)
 }
-func readMaterializationDigest(projectRoot, modeName string) (string, bool, error) {
-	path, err := paths.ProjectStateFile(projectRoot, "materialized-"+paths.ModePathComponent(modeName)+".json")
+
+// materializationStatePath is per target: a launch rebuilds one harness and
+// must not claim that every other harness was built from current inputs.
+func materializationStatePath(projectRoot, modeName string, target *base.Target) (string, error) {
+	name := "materialized-" + paths.ModePathComponent(modeName)
+	if target != nil {
+		name += "-" + string(*target)
+	}
+	return paths.ProjectStateFile(projectRoot, name+".json")
+}
+
+// recordedGenerations lists the staging generations this mode's launch and
+// sync records point at. Each harness returns to its own on the next launch,
+// so reclaiming one would make switching agents rebuild.
+func recordedGenerations(projectRoot, modeName string) []string {
+	pattern, err := paths.ProjectStateFile(projectRoot, "launch-sync-"+paths.ModePathComponent(modeName)+".*.state")
+	if err != nil {
+		return nil
+	}
+	files, _ := filepath.Glob(pattern)
+	if synced, err := syncedStatePath(projectRoot, modeName); err == nil {
+		files = append(files, synced)
+	}
+	var roots []string
+	for _, file := range files {
+		var state launchState
+		if data, err := os.ReadFile(file); err == nil && json.Unmarshal(data, &state) == nil && state.Root != "" {
+			roots = append(roots, state.Root)
+		}
+	}
+	return roots
+}
+
+func readMaterializationDigest(projectRoot, modeName string, target *base.Target) (string, bool, error) {
+	path, err := materializationStatePath(projectRoot, modeName, target)
 	if err != nil {
 		return "", false, err
 	}
 	return readDigestState(path)
 }
-func writeMaterializationDigest(projectRoot, modeName, digest string) error {
-	path, err := paths.ProjectStateFile(projectRoot, "materialized-"+paths.ModePathComponent(modeName)+".json")
+func writeMaterializationDigest(projectRoot, modeName string, target *base.Target, digest string) error {
+	path, err := materializationStatePath(projectRoot, modeName, target)
 	if err != nil {
 		return err
 	}
 	return writeDigestState(path, digest, "")
 }
-func computeMaterializationDigest(definition, workspace string, effective mode.Effective) (string, error) {
-	inputs, err := ComputeLaunchDigest(definition, workspace, effective, nil)
+func computeMaterializationDigest(definition, workspace string, effective mode.Effective, target *base.Target) (string, error) {
+	inputs, err := ComputeLaunchDigest(definition, workspace, effective, target)
 	if err != nil {
 		return "", err
 	}
@@ -326,8 +356,12 @@ func computeMaterializationDigest(definition, workspace string, effective mode.E
 		return "", err
 	}
 	roots := workspaceConfigInputs(workspace, home)
-	for _, target := range base.AllTargets() {
-		roots = append(roots, inheritedConfigPaths(&target, workspace)...)
+	targets := base.AllTargets()
+	if target != nil {
+		targets = []base.Target{*target}
+	}
+	for _, each := range targets {
+		roots = append(roots, inheritedConfigPaths(&each, workspace)...)
 	}
 	ambient, err := fingerprintInputs(roots)
 	if err != nil {
@@ -358,23 +392,7 @@ func writeDigestState(path, digest, root string) error {
 	if err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".sync-state-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if _, err := file.Write(data); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), path)
+	return paths.WriteAtomic(path, data, 0o600)
 }
 
 // A plain sync skips the rebuild when its inputs, the staged tree and the
@@ -417,10 +435,12 @@ func readSyncedDigest(projectRoot, modeName string) (string, string, bool, error
 	return state.Digest, state.Root, true, nil
 }
 
+var executable = os.Executable
+
 // executableStamp changes whenever the agentpack binary does, since a new
 // version may stage differently.
 func executableStamp() string {
-	path, err := os.Executable()
+	path, err := executable()
 	if err != nil {
 		return ""
 	}

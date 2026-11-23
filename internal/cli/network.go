@@ -342,7 +342,7 @@ func (runner Runner) serveGateway(ctx context.Context, home, executable, address
 		if err != nil {
 			return network.ProjectContents{}, err
 		}
-		locked, err := lockfile.LoadUnguarded(paths.LockPath(packContext.DefinitionRoot))
+		locked, err := lockfile.LoadFromPath(paths.LockPath(packContext.DefinitionRoot))
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return network.ProjectContents{}, err
 		}

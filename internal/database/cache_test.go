@@ -20,15 +20,8 @@ func TestOpenCacheDropsLegacyAndUsesPrivatePlainSQLite(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}
-	legacy := filepath.Join(filepath.Dir(path), "db.reddb")
-	if err := os.WriteFile(legacy, []byte("disposable old index"), 0600); err != nil {
-		t.Fatal(err)
-	}
 	if db, err := OpenCache(true); err != nil || db != nil {
 		t.Fatalf("missing read-only index: %v %v", db, err)
-	}
-	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
-		t.Fatalf("legacy index retained: %v", err)
 	}
 	db, err := OpenCache(false)
 	if err != nil {

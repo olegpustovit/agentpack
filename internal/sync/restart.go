@@ -35,12 +35,9 @@ func (service Service) ChangedEnvironments(ctx context.Context, before []Running
 		return nil, err
 	}
 	for _, environment := range changed {
-		effective, _, err := service.SyncForLaunchOptions(ctx, environment.DefinitionRoot, SyncOptions{
+		_, _, err := service.SyncForLaunchOptions(ctx, environment.DefinitionRoot, SyncOptions{
 			Mode: environment.Mode, Target: &environment.Target, WorkspaceRoot: environment.Workspace,
 		})
-		if err == nil {
-			err = service.ValidateLaunchInputs(environment.DefinitionRoot, environment.Workspace, effective, environment.Target)
-		}
 		if err != nil {
 			failures = append(failures, fmt.Errorf("package change saved, but session %s is not ready to restart: %w", environment.SessionID, err))
 		}

@@ -61,7 +61,8 @@ func launchDigest(projectRoot, workspace string, effective mode.Effective, targe
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256([]byte(inputs + "\x00cache\x00" + fingerprint))
+	// A new agentpack binary may stage differently, so it invalidates the launch too.
+	sum := sha256.Sum256([]byte(inputs + "\x00cache\x00" + fingerprint + "\x00binary\x00" + executableStamp()))
 	return hex.EncodeToString(sum[:]), nil
 }
 
@@ -283,36 +284,6 @@ func (service Service) RefreshMCPRecords(ctx context.Context, projectRoot string
 	}
 	if pin {
 		service.reportMCPServers(lock)
-	}
-	return nil
-}
-
-// ValidateLaunchInputs runs under the launch lease so a concurrent rebuild
-// between sync and lease acquisition cannot launch another workspace's staging.
-func (service *Service) ValidateLaunchInputs(definition, workspace string, effective mode.Effective, target base.Target) error {
-	pending, err := (staging.Pipeline{ProjectRoot: definition, WorkspaceRoot: workspace, Mode: effective, Target: &target}).RebuildPending()
-	if err != nil {
-		return err
-	}
-	if pending {
-		return fmt.Errorf("interrupted staging rebuild requires recovery; retry the launch or run env restore")
-	}
-	lock, err := loadCheckedLock(definition)
-	if os.IsNotExist(rootCause(err)) {
-		lock = lockfile.EmptyForProject(definition)
-	} else if err != nil {
-		return err
-	}
-	current, err := launchDigest(definition, workspace, effective, &target, lock)
-	if err != nil {
-		return err
-	}
-	stored, found, err := ReadLaunchDigest(definition, effective.Name(), target)
-	if err != nil {
-		return err
-	}
-	if !found || stored != current {
-		return fmt.Errorf("launch inputs changed before the staging lease was acquired; retry the launch")
 	}
 	return nil
 }

@@ -19,7 +19,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/proxy"
-	"github.com/olegpustovit/agentpack/internal/staging"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
@@ -189,9 +188,7 @@ func (runner Runner) dispatch(ctx context.Context, invocation Invocation) (int, 
 		}
 	case "add", "remove":
 		// Staging is lazy: each launcher stages its own harness when the lock
-		// changed, and running sessions are restarted below, so nothing here
-		// rebuilds every harness.
-		const noSync = true
+		// changed, and running sessions are restarted below.
 		args := invocation.Args
 		plugin, hasPlugin := stringFlag(invocation, "plugin"), invocation.Command == "add" && invocation.Flags.Changed("plugin")
 		if len(args) != 1 {
@@ -208,10 +205,10 @@ func (runner Runner) dispatch(ctx context.Context, invocation Invocation) (int, 
 			var added []lockfile.Package
 			if hasPlugin {
 				var pkg lockfile.Package
-				pkg, err = runner.Service.AddPlugin(ctx, root, args[0], plugin, noSync)
+				pkg, err = runner.Service.AddPlugin(ctx, root, args[0], plugin)
 				added = []lockfile.Package{pkg}
 			} else {
-				added, err = runner.Service.AddAll(ctx, root, args[0], noSync)
+				added, err = runner.Service.AddAll(ctx, root, args[0])
 			}
 			if err == nil && !invocation.Global.Quiet {
 				if len(added) > 1 {
@@ -223,7 +220,7 @@ func (runner Runner) dispatch(ctx context.Context, invocation Invocation) (int, 
 			}
 		} else {
 			var key string
-			key, err = runner.Service.Remove(ctx, root, args[0], noSync)
+			key, err = runner.Service.Remove(ctx, root, args[0])
 			if err == nil && !invocation.Global.Quiet {
 				fmt.Fprintf(runner.Stdout, "Removed %s from %s and refreshed %s.\n", key, paths.ManifestPath(root), paths.LockPath(root))
 			}
@@ -231,7 +228,7 @@ func (runner Runner) dispatch(ctx context.Context, invocation Invocation) (int, 
 	case "update":
 		args := invocation.Args
 		var updated lockfile.PackLock
-		updated, err = runner.Service.Update(ctx, root, args, true)
+		updated, err = runner.Service.Update(ctx, root, args)
 		if err == nil && !invocation.Global.Quiet {
 			if len(args) == 0 {
 				fmt.Fprintf(runner.Stdout, "Updated floating dependencies and refreshed %s (%d package(s)).\n", paths.LockPath(root), len(updated.Packages))
@@ -497,14 +494,6 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 	setStep("starting " + invocation.Command)
 	if invocation.Global.Debug {
 		fmt.Fprintf(runner.Stderr, "agentpack: target=%s mode=%s definition=%s workspace=%s fast-sync=%t\n", target, effective.Name(), packContext.DefinitionRoot, packContext.WorkspaceRoot, skipped)
-	}
-	stagingLock, err := staging.AcquireLaunchShared(packContext.DefinitionRoot, effective.Name())
-	if err != nil {
-		return 1, err
-	}
-	defer stagingLock.Unlock()
-	if err := runner.Service.ValidateLaunchInputs(packContext.DefinitionRoot, packContext.WorkspaceRoot, effective, target); err != nil {
-		return 1, err
 	}
 	if err := recordLaunchEnvironment(packContext, effective.Name(), target, skipped); err != nil {
 		return 1, err

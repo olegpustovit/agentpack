@@ -1,5 +1,35 @@
 # Home-workspace startup performance
 
+## Core repair WP-D (2026-11-23)
+
+The budget benchmarks (`BenchmarkMaterializationHome`, `BenchmarkCodexSetup/cold`
+and `/warm`) keep the 32 MiB history fixture and no packages. Separate,
+unbudgeted variants add four cached, content-hashed plugins of 2,000 files
+each: `BenchmarkMaterializationHomePackages` and `BenchmarkCodexSetup/warm-packages`.
+
+```sh
+go test ./internal/sync -run '^$' -bench 'Benchmark(MaterializationHome|MaterializationHomePackages|CodexSetup)$' -count 5
+```
+
+After merging core/integrate, Linux amd64 (i9-12900K), medians of five runs on a
+host running other workers (load average 22 to 24 on 20 threads):
+
+| Benchmark | Median (ms) | Range (ms) | Budget (ms) |
+| --- | ---: | ---: | ---: |
+| MaterializationHome | 0.721 | 0.338 to 1.258 | <1 |
+| CodexSetup/warm | 0.135 | 0.113 to 0.156 | <1 |
+| CodexSetup/cold | 25.434 | 12.422 to 27.778 | <20 |
+| MaterializationHomePackages | 0.820 | 0.318 to 0.844 | none |
+| CodexSetup/warm-packages | 21.244 | 10.496 to 22.771 | none |
+
+Cold runs swung by 2 times with the host load, so the cold median does not
+verify the budget; it still needs a run on the ARM64 reference host. With the
+package set, the warm launch's remaining cost is `cache.StatFingerprint`, the
+documented metadata walk of every cached file (8,000 here). WP-D removed the
+capability catalog's walk of every cached file (selectors now `Lstat` one path)
+and the unread `DependencyTrees`; on the same host, the fastest package-set
+warm run went from 11.6 ms to 6.7 ms before the merge.
+
 ## Private staging and lock roots (2026-11-23)
 
 Linux amd64, Intel i9-12900K, Go 1.27.3, 32 MiB history fixture. Medians

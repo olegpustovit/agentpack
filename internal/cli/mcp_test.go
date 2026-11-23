@@ -124,3 +124,20 @@ func parseLeaf(argv []string) (Invocation, error) {
 	}
 	return leafInvocation(command, Global{}, command.Flags().Args()), nil
 }
+
+// A server named for `mcp login` is looked up in the project's pack.lock and manifest.
+func TestMCPLoginTargetReadsTheProjectLock(t *testing.T) {
+	project := t.TempDir()
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	manifestText := "name = \"demo\"\nversion = \"0.0.1\"\n\n[dependencies]\n\n[mcp.servers.docs]\nurl = \"https://docs.example/mcp\"\ntype = \"http\"\n"
+	if err := os.WriteFile(filepath.Join(project, "agentpack.toml"), []byte(manifestText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "pack.lock"), []byte("lockfile_version = 2\n\n[meta]\nname = \"demo\"\nversion = \"0.0.1\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server, err := Runner{}.mcpLoginTarget(Invocation{Global: Global{ProjectRoot: project}}, "docs")
+	if err != nil || server.URL == nil || *server.URL != "https://docs.example/mcp" {
+		t.Fatalf("mcpLoginTarget = %+v, %v", server, err)
+	}
+}

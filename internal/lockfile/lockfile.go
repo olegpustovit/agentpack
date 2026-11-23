@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -170,11 +169,6 @@ type NPMTreeEntry struct {
 	CPU       []string `toml:"cpu,omitempty"`
 }
 
-func (pkg Package) NeedsBackfill() bool {
-	return pkg.Kind == PackagePlugin && pkg.URL != "" &&
-		(pkg.CacheKey == "" || pkg.Commit == "" || pkg.Owner == "" || pkg.Repo == "")
-}
-
 type PackLock struct {
 	LockfileVersion uint32      `toml:"lockfile_version"`
 	Meta            Meta        `toml:"meta"`
@@ -206,23 +200,9 @@ func Load(projectRoot string) (PackLock, error) {
 	return LoadFromPath(paths.LockPath(projectRoot))
 }
 
+// LoadFromPath reads a lock. Save replaces it in one rename, so a reader sees
+// a whole file; writers are serialized by the project's mutation lock.
 func LoadFromPath(path string) (PackLock, error) {
-	var result PackLock
-	err := withOperationLock(path, func() error {
-		var err error
-		result, err = loadFromPath(path)
-		return err
-	})
-	return result, err
-}
-
-// LoadUnguarded reads a lock only the caller can reach. It leaves no guard
-// directory behind, which LoadFromPath does for every project path it sees.
-func LoadUnguarded(path string) (PackLock, error) {
-	return loadFromPath(path)
-}
-
-func loadFromPath(path string) (PackLock, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return PackLock{}, fmt.Errorf("read lockfile %s: %w", path, err)
@@ -360,59 +340,10 @@ func (lock PackLock) Save(projectRoot string) error {
 		return fmt.Errorf("encode lockfile: %w", err)
 	}
 	path := paths.LockPath(projectRoot)
-	if err := withOperationLock(path, func() error { return writeAtomic(path, output.Bytes(), 0o644) }); err != nil {
+	if err := paths.WriteAtomic(path, output.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("write lockfile %s: %w", path, err)
 	}
 	return nil
-}
-
-func withOperationLock(path string, operation func() error) (err error) {
-	hash, err := paths.ProjectPathHash(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	directory := filepath.Join(os.TempDir(), "agentpack-"+hash)
-	if err := paths.EnsureOwnedPrivateDirectory(directory); err != nil {
-		return err
-	}
-	// The directory outlives the project unless something can tell whose it
-	// was; the marker lets a later sync remove it once the project is gone.
-	_ = paths.MarkProjectDirectory(directory, filepath.Dir(path))
-	guard := flock.New(filepath.Join(directory, "pack.lock.lock"))
-	if err := guard.Lock(); err != nil {
-		return err
-	}
-	defer func() {
-		if unlockErr := guard.Unlock(); unlockErr != nil {
-			err = errors.Join(err, unlockErr)
-		}
-	}()
-	return operation()
-}
-
-func writeAtomic(path string, data []byte, mode os.FileMode) (err error) {
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".pack.lock-*")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
-	}()
-	if err := temporary.Chmod(mode); err != nil {
-		return err
-	}
-	if _, err := temporary.Write(data); err != nil {
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporaryPath, path)
 }
 
 func Init(projectRoot, name, version string) error {

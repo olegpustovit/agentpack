@@ -149,7 +149,7 @@ func RecordFetched(pkg lockfile.Package, shorthand string) error {
 }
 
 func addFilesystem(directory string) (lockfile.Package, error) {
-	cacheKey, commit, root, err := cache.CopyPackageDirToCache(directory, "path:"+directory)
+	cacheKey, commit, root, _, err := cache.CopyPackageDirToCache(directory, "path:"+directory)
 	if err != nil {
 		return lockfile.Package{}, err
 	}
@@ -159,7 +159,7 @@ func addFilesystem(directory string) (lockfile.Package, error) {
 }
 
 func addLocalMirror(directory, spec, owner, repo, inRepoPath string) (lockfile.Package, error) {
-	cacheKey, commit, root, err := cache.CopyPackageDirToCache(directory, "local:"+spec)
+	cacheKey, commit, root, _, err := cache.CopyPackageDirToCache(directory, "local:"+spec)
 	if err != nil {
 		return lockfile.Package{}, err
 	}
