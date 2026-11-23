@@ -58,7 +58,7 @@ func (c *HarnessClient) permissionRequestID(toolCallID sdkacp.ToolCallId) (strin
 
 // NewClientSideConnection returns an SDK client connection over the given transport.
 func (c *HarnessClient) NewClientSideConnection(peerInput io.Writer, peerOutput io.Reader) *sdkacp.ClientSideConnection {
-	c.updates = newNotificationGate(peerOutput)
+	c.updates = newNotificationGate(peerOutput, c.Log)
 	conn := sdkacp.NewClientSideConnection(gatedClient{Client: c, gate: c.updates}, peerInput, c.updates)
 	c.Broker.setCancelSession(func(ctx context.Context, sessionID string) error {
 		return conn.Cancel(ctx, sdkacp.CancelNotification{SessionId: sdkacp.SessionId(sessionID)})

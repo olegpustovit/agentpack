@@ -2,6 +2,7 @@ package acp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -21,20 +22,31 @@ type notificationGate struct {
 	inflight int
 	r        *bufio.Reader
 	pending  []byte
+	log      *EventLog // takes the lines the SDK cannot decode, in wire order
 }
 
-func newNotificationGate(r io.Reader) *notificationGate {
-	g := &notificationGate{r: bufio.NewReader(r)}
+func newNotificationGate(r io.Reader, log *EventLog) *notificationGate {
+	g := &notificationGate{r: bufio.NewReader(r), log: log}
 	g.cond = sync.NewCond(&g.mu)
 	return g
 }
 
 // Read serves whole JSON-RPC lines; shortcut: one line is held in memory, bounded only by the SDK's own frame limit.
+// It is the single ordered ingestion point: a line logged here waits for the handlers of every
+// update read before it, so the log keeps the agent's wire order.
 func (g *notificationGate) Read(p []byte) (int, error) {
-	if len(g.pending) == 0 {
+	for len(g.pending) == 0 {
 		line, err := g.r.ReadBytes('\n')
 		if len(line) == 0 {
 			return 0, err
+		}
+		if apply := g.rawLine(line); apply != nil {
+			g.drain()
+			apply(g.log)
+			if err != nil {
+				return 0, err
+			}
+			continue
 		}
 		if countsAsHandled(line) {
 			g.mu.Lock()
@@ -49,6 +61,26 @@ func (g *notificationGate) Read(p []byte) (int, error) {
 	n := copy(p, g.pending)
 	g.pending = g.pending[n:]
 	return n, nil
+}
+
+// rawLine is how the log takes a line the SDK must not see, or nil.
+func (g *notificationGate) rawLine(line []byte) func(*EventLog) {
+	if g.log == nil || !bytes.Contains(line, []byte(`"method"`)) {
+		return nil
+	}
+	if apply := agentLogLine(line); apply != nil {
+		return apply
+	}
+	return rawSessionUpdate(line)
+}
+
+// drain waits until every update read so far has been handled.
+func (g *notificationGate) drain() {
+	g.mu.Lock()
+	for g.inflight != 0 {
+		g.cond.Wait()
+	}
+	g.mu.Unlock()
 }
 
 func (g *notificationGate) release() {
@@ -136,6 +168,6 @@ func (c gatedClient) UnstableDisconnectMcp(ctx context.Context, p sdkacp.Unstabl
 // NewClientConnection connects client to an agent with backpressure on notification floods.
 // Pass the outermost client so its overrides are the handlers that release the gate.
 func NewClientConnection(client sdkacp.Client, peerInput io.Writer, peerOutput io.Reader) *sdkacp.ClientSideConnection {
-	gate := newNotificationGate(peerOutput)
+	gate := newNotificationGate(peerOutput, nil)
 	return sdkacp.NewClientSideConnection(gatedClient{Client: client, gate: gate}, peerInput, gate)
 }

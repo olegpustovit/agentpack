@@ -727,18 +727,21 @@ func adaptAgentStdoutWithDrainTimeout(r io.ReadCloser, w io.WriteCloser, adapt f
 			return
 		}
 		if !oversized && len(line) > 0 {
-			forward := line
+			// Everything goes down the one pipe the client reads, which logs it in wire order (P3.6).
+			lines := [][]byte{line}
 			if adapt != nil {
 				result := adapt(line)
-				ts := time.Now().UnixMilli()
+				lines = lines[:0]
 				for _, kind := range result.Log {
-					log.Append(kind.Kind, ts, kind.Payload)
+					lines = append(lines, acp.AgentLogLine(kind.Kind, kind.Payload))
 				}
-				if result.Forward != nil {
-					forward = result.Forward
+				if result.Forward == nil {
+					lines = append(lines, line)
+				} else if len(result.Forward) > 0 {
+					lines = append(lines, result.Forward)
 				}
 			}
-			if len(forward) > 0 && !appendRawSessionUpdate(log, forward) {
+			for _, forward := range lines {
 				if _, err := w.Write(append(forward, '\n')); err != nil {
 					return
 				}
@@ -748,10 +751,6 @@ func adaptAgentStdoutWithDrainTimeout(r io.ReadCloser, w io.WriteCloser, adapt f
 			return
 		}
 	}
-}
-
-func appendRawSessionUpdate(log *acp.EventLog, line []byte) bool {
-	return acp.AppendRawSessionUpdate(log, line)
 }
 
 const maxACPFrameBytes = 4 << 20

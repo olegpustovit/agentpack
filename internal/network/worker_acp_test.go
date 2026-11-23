@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -462,7 +463,7 @@ func TestRawSessionNoticeAndCompactionUpdatesReachEventLog(t *testing.T) {
 	log := acp.NewEventLog(0)
 	for _, update := range updates {
 		line := []byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":` + update.payload + `}}`)
-		appendRawSessionUpdate(log, line)
+		acp.AppendRawSessionUpdate(log, line)
 	}
 	entries := log.Snapshot()
 	if len(entries) != len(updates) {
@@ -876,5 +877,59 @@ func TestSteerJoinsTheTurnWithoutCancel(t *testing.T) {
 	entries := prompter.log.Snapshot()
 	if len(entries) != 1 || entries[0].Kind != "prompt" || !strings.Contains(string(entries[0].Payload), `"queueId":"q1"`) {
 		t.Fatalf("only the injected steer is a prompt entry: %s", logEntryKinds(prompter.log))
+	}
+}
+
+// P3.6: updates the SDK decodes, raw updates it cannot and adapter log entries reach the log in the
+// order the agent wrote them, however far the SDK's handlers lag behind.
+func TestAgentStdoutIsLoggedInWireOrder(t *testing.T) {
+	log := acp.NewEventLog(0)
+	client := acp.NewHarnessClient("", log, nil)
+	clientInput, clientInputWriter := io.Pipe()
+	agentOutput, agentOutputWriter := io.Pipe()
+	defer clientInput.Close()
+	conn := client.NewClientSideConnection(io.Discard, clientInput)
+	adapt := func(line []byte) base.AgentAdaptResult {
+		if bytes.Contains(line, []byte(`"text":"adapted"`)) {
+			return base.AgentAdaptResult{Log: []base.LogKind{{Kind: "tool_call", Payload: json.RawMessage(`{"toolCallId":"grouped"}`)}}}
+		}
+		return base.AgentAdaptResult{}
+	}
+	done := make(chan struct{})
+	go func() {
+		adaptAgentStdout(agentOutput, clientInputWriter, adapt, log)
+		close(done)
+	}()
+	chunk := func(text string) string {
+		return `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"` + text + `"}}}}`
+	}
+	notice := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"notice","severity":"warning","title":"t"}}}`
+	var want []string
+	var input strings.Builder
+	for round := range 20 {
+		for i := range 30 {
+			input.WriteString(chunk(fmt.Sprintf("r%dc%d", round, i)) + "\n")
+			want = append(want, "agent_message_chunk")
+		}
+		input.WriteString(notice + "\n")
+		want = append(want, "notice")
+		input.WriteString(chunk("adapted") + "\n")
+		want = append(want, "tool_call", "agent_message_chunk")
+	}
+	if _, err := agentOutputWriter.Write([]byte(input.String())); err != nil {
+		t.Fatal(err)
+	}
+	_ = agentOutputWriter.Close()
+	<-done
+	<-conn.Done()
+	if err := client.DrainSessionUpdates(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, entry := range log.Snapshot() {
+		got = append(got, entry.Kind)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("logged order differs from the wire (%d entries, want %d):\n%v", len(got), len(want), got)
 	}
 }
