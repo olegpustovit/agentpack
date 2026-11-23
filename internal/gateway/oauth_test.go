@@ -116,6 +116,9 @@ func (h *oauthHarness) consent(t *testing.T) (string, string) {
 	if response.StatusCode != 200 {
 		t.Fatalf("consent: %d %s", response.StatusCode, data)
 	}
+	if policy := response.Header.Get("Referrer-Policy"); policy != "same-origin" {
+		t.Fatalf("consent Referrer-Policy = %q, want same-origin for the form POST", policy)
+	}
 	_, after, ok := strings.Cut(string(data), `name="consent" value="`)
 	if !ok {
 		t.Fatal("consent missing")
@@ -133,6 +136,9 @@ func (h *oauthHarness) code(t *testing.T) string {
 	response, data := h.request(t, "POST", path, url.Values{"consent": {consent}, "decision": {"allow"}}.Encode(), "application/x-www-form-urlencoded", h.cookie, true)
 	if response.StatusCode != 303 {
 		t.Fatalf("authorize: %d %s", response.StatusCode, data)
+	}
+	if policy := response.Header.Get("Referrer-Policy"); policy != "no-referrer" {
+		t.Fatalf("callback redirect Referrer-Policy = %q, want no-referrer", policy)
 	}
 	redirect, err := url.Parse(response.Header.Get("Location"))
 	if err != nil || redirect.Host != "assistant.example" || redirect.Query().Get("state") != "state-value" || redirect.Query().Get("code") == "" {
@@ -181,7 +187,13 @@ func TestOAuthConsentPKCEBindingAndRefreshReplay(t *testing.T) {
 	form := url.Values{"consent": {consent}, "decision": {"allow"}}
 	response, _ = h.request(t, "POST", path, form.Encode(), "application/x-www-form-urlencoded", h.cookie, false)
 	if response.StatusCode != 403 {
-		t.Fatal("cross-site consent accepted")
+		t.Fatal("consent accepted without an Origin header")
+	}
+	for _, origin := range []string{"null", "https://assistant.example"} {
+		w := serve(h.gateway.Handler(), "POST", h.server.URL+path, "127.0.0.1:5000", map[string]string{"Origin": origin, "Cookie": h.cookie.String()})
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"invalid_origin"`) {
+			t.Fatalf("consent Origin %q: %d %s", origin, w.Code, w.Body.String())
+		}
 	}
 	other := &http.Cookie{Name: h.cookie.Name, Value: network.RandomToken()}
 	testBrowserSession(t, h.gateway.auth, testBrowserEmail, other.Value)

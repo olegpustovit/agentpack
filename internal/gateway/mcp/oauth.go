@@ -188,6 +188,8 @@ func (m *Server) authorize(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// Browsers send Origin: null for form posts under no-referrer.
+		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'")
 		name := client.Client.ClientName
 		if clientMetadataURL(query.Get("client_id")) {
