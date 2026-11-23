@@ -167,16 +167,6 @@ func TestSaveSortsPackagesWithoutMutatingCaller(t *testing.T) {
 	}
 }
 
-func TestPackageNeedsBackfill(t *testing.T) {
-	t.Parallel()
-	if !(Package{Kind: PackagePlugin, URL: "https://example.com"}).NeedsBackfill() {
-		t.Fatal("partial plugin should need backfill")
-	}
-	if (Package{Kind: PackageSkill, URL: "https://example.com"}).NeedsBackfill() {
-		t.Fatal("skill should not need plugin backfill")
-	}
-}
-
 func TestVersion2LockLoadsUnverifiedAndStaysVersion2(t *testing.T) {
 	root := t.TempDir()
 	raw := "lockfile_version = 2\n\n[meta]\nname = \"p\"\nversion = \"0.1.0\"\n\n[[packages]]\nmodule = \"github.com/acme/demo\"\nkind = \"skill\"\nurl = \"u\"\nowner = \"acme\"\nrepo = \"demo\"\ncommit = \"c\"\ncache_key = \"k\"\n"

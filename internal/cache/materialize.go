@@ -102,14 +102,6 @@ func MaterializeGitHubTree(ctx context.Context, client *http.Client, source gith
 	return pkg, err
 }
 
-func FetchGitHubAssetURL(ctx context.Context, client *http.Client, rawURL string) (lockfile.Package, error) {
-	source, err := githubsource.ParseURL(rawURL)
-	if err != nil {
-		return lockfile.Package{}, err
-	}
-	return MaterializeGitHubTree(ctx, client, source, rawURL, false)
-}
-
 func GitHubRestore(ctx context.Context, client *http.Client) RemoteRestoreFunc {
 	return func(pkg lockfile.Package, destination string) error {
 		if peer, ok := ctx.Value(peerRestoreKey{}).(func(context.Context, lockfile.Package, string) error); ok && pkg.ContentHash != "" {

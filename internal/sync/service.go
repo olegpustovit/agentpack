@@ -419,35 +419,6 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 	if options.DryRun {
 		return result, nil
 	}
-	if options.Frozen {
-		for _, pkg := range lock.Packages {
-			if pkg.NeedsBackfill() {
-				return result, fmt.Errorf("frozen restore refuses incomplete lock entry %s; run `agentpack lock`", pkg.Module)
-			}
-		}
-	}
-	dirty := false
-	if !options.Frozen {
-		for index := range lock.Packages {
-			pkg := &lock.Packages[index]
-			if pkg.NeedsBackfill() {
-				resolved, err := cache.FetchGitHubAssetURL(ctx, service.client(), pkg.URL)
-				if err != nil {
-					return result, err
-				}
-				if resolved.Kind != lockfile.PackagePlugin {
-					return result, fmt.Errorf("plugin URL %s resolved to a skill subtree", pkg.URL)
-				}
-				*pkg = resolved
-				dirty = true
-			}
-		}
-		if dirty {
-			if err := lock.Save(projectRoot); err != nil {
-				return result, err
-			}
-		}
-	}
 	for _, pkg := range lock.Packages {
 		if pkg.CacheKey == "" {
 			continue
@@ -503,11 +474,7 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		case len(drift) != 0:
 			err = &staging.DriftError{Changes: drift}
 		default:
-			// Verify may drop staged duplicates of skills the user has since
-			// installed; record the tree again so that is not read as drift.
-			if err = pipeline.Verify(); err == nil {
-				err = pipeline.RecordStaged()
-			}
+			err = pipeline.Verify()
 		}
 	} else if fresh, freshErr := service.stagingIsCurrent(pipeline, options, recorded && len(drift) == 0); freshErr != nil {
 		return result, freshErr
@@ -539,11 +506,8 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		}
 		defer generation.Abort()
 		options.step("staging skills, commands and MCP config")
+		// Rebuild verifies what it staged before returning.
 		_, err = pipeline.Rebuild()
-		if err == nil {
-			options.step("checking staged files")
-			err = pipeline.Verify()
-		}
 		if err == nil {
 			workspace := options.WorkspaceRoot
 			if workspace == "" {
@@ -757,15 +721,8 @@ func (service Service) stagingIsCurrent(pipeline staging.Pipeline, options SyncO
 	if err != nil || stored != current+"\x00"+executableStamp() {
 		return false, err
 	}
-	// Verify may drop staged copies of skills the user has since installed;
-	// record the tree again so the next sync does not read that as drift.
-	if pipeline.Verify() != nil {
-		return false, nil
-	}
-	if dropped, _, err := pipeline.StagedDrift(false); err != nil || len(dropped) == 0 {
-		return err == nil, err
-	}
-	return true, pipeline.RecordStaged()
+	// A user install that now hides a staged item makes staging stale.
+	return pipeline.Verify() == nil, nil
 }
 
 // tidyTempDirectories removes what deleted projects left in the temp directory.

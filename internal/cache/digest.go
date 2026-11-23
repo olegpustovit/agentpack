@@ -97,8 +97,14 @@ func (err *LockEntryError) Summary() string {
 // writes the three together, so a commit that no longer matches its cache_key
 // means the lock was edited by hand, and the content hash describes some
 // other commit.
+//
+// A plugin entry with a URL but no pins was written by the Rust-era tool;
+// it is refused rather than pinned again behind the user's back.
 func CheckLockEntries(lock lockfile.PackLock) error {
 	for _, pkg := range lock.Packages {
+		if pkg.Kind == lockfile.PackagePlugin && strings.HasPrefix(pkg.URL, "https://github.com/") && (pkg.CacheKey == "" || pkg.Commit == "" || pkg.Owner == "" || pkg.Repo == "") {
+			return fmt.Errorf("pack.lock entry for %s has no cache_key, commit, owner or repo; nothing was fetched or staged; run `agentpack lock` to pin it", describe(pkg))
+		}
 		if pkg.ContentHash == "" || isLocalPackage(pkg) || strings.HasPrefix(pkg.URL, "agentpack-local:") {
 			continue
 		}

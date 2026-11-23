@@ -215,6 +215,11 @@ func TestCheckLockEntriesRejectsACommitThatDoesNotOwnItsCacheKey(t *testing.T) {
 	if err := CheckLockEntries(lockfile.PackLock{Packages: []lockfile.Package{unhashed, local}}); err != nil {
 		t.Fatal(err)
 	}
+	// A Rust-era plugin entry carries only its URL; it is not pinned behind the user's back.
+	partial := lockfile.Package{Module: "github.com/acme/plugin", Kind: lockfile.PackagePlugin, URL: "https://github.com/acme/plugin/tree/main"}
+	if err := CheckLockEntries(lockfile.PackLock{Packages: []lockfile.Package{partial}}); err == nil || !strings.Contains(err.Error(), "run `agentpack lock`") {
+		t.Fatalf("CheckLockEntries(partial plugin) = %v", err)
+	}
 }
 
 func TestRefetchPackageReplacesOnlyWhatDiffersAndNeverAgainstTheLock(t *testing.T) {

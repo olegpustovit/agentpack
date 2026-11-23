@@ -174,11 +174,6 @@ type NPMTreeEntry struct {
 	CPU       []string `toml:"cpu,omitempty"`
 }
 
-func (pkg Package) NeedsBackfill() bool {
-	return pkg.Kind == PackagePlugin && pkg.URL != "" &&
-		(pkg.CacheKey == "" || pkg.Commit == "" || pkg.Owner == "" || pkg.Repo == "")
-}
-
 type PackLock struct {
 	LockfileVersion uint32      `toml:"lockfile_version"`
 	Meta            Meta        `toml:"meta"`
