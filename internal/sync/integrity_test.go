@@ -229,7 +229,8 @@ func TestLaunchFastPathNeverStagesAnEditItCannotSee(t *testing.T) {
 	if skipped, err := launch(); err != nil || skipped {
 		t.Fatalf("first launch: skipped=%v err=%v", skipped, err)
 	}
-	// Same size, original modification time: invisible to file metadata.
+	// Same size, original modification time: invisible to size and time; on
+	// Unix the status-change time shows it.
 	path := filepath.Join(fixture.cacheEntry(lock), "SKILL.md")
 	info, err := os.Stat(path)
 	if err != nil {
@@ -239,13 +240,14 @@ func TestLaunchFastPathNeverStagesAnEditItCannotSee(t *testing.T) {
 	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
 		t.Fatal(err)
 	}
-	// The fast path skips staging, so the harness still gets the tree built
-	// from the verified cache.
-	if skipped, err := launch(); err != nil || !skipped || fixture.staged() != skillOne {
+	// Either the fast path skips staging, so the harness still gets the tree
+	// built from the verified cache, or the launch sees the change and hashes.
+	var mismatch *cache.IntegrityError
+	skipped, err := launch()
+	if runtime.GOOS == "windows" && (err != nil || !skipped) || runtime.GOOS != "windows" && !errors.As(err, &mismatch) || fixture.staged() != skillOne {
 		t.Fatalf("fast launch: skipped=%v err=%v staged=%q", skipped, err, fixture.staged())
 	}
 	// Anything that would stage from the cache hashes it first.
-	var mismatch *cache.IntegrityError
 	if _, err := fixture.service.Sync(context.Background(), fixture.project, SyncOptions{}); !errors.As(err, &mismatch) {
 		t.Fatalf("sync error = %v", err)
 	}

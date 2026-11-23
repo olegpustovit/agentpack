@@ -12,9 +12,10 @@ import (
 // RacyTreeMetadataWindow keeps a recent edit from becoming a reusable verification stamp.
 const RacyTreeMetadataWindow = 3 * time.Second
 
-// TreeMetadata digests the path, type, permission bits, size and modification
-// time of every file below root, and reports the newest modification time. It
-// reads no contents, so it detects visible changes without proving any bytes.
+// TreeMetadata digests the path, type, permission bits, size, modification
+// time and, on Unix, inode and status-change time of every file below root,
+// and reports the newest modification time. It reads no contents, so it
+// detects visible changes without proving any bytes.
 func TreeMetadata(root string) (string, time.Time, error) {
 	hasher := sha256.New()
 	var newest time.Time
@@ -34,7 +35,8 @@ func TreeMetadata(root string) (string, time.Time, error) {
 		if info.ModTime().After(newest) {
 			newest = info.ModTime()
 		}
-		fmt.Fprintf(hasher, "%s\x00%s\x00%d\x00%d\x00", filepath.ToSlash(relative), info.Mode(), info.Size(), info.ModTime().UnixNano())
+		inode, changed := changeStamp(info)
+		fmt.Fprintf(hasher, "%s\x00%s\x00%d\x00%d\x00%d\x00%d\x00", filepath.ToSlash(relative), info.Mode(), info.Size(), info.ModTime().UnixNano(), inode, changed)
 		return nil
 	})
 	if err != nil {

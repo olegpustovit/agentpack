@@ -304,10 +304,11 @@ func TestStatFingerprintSeesEveryVisibleChangeButReadsNoContent(t *testing.T) {
 		if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
 			t.Fatal(err)
 		}
-		// This is the limit of the metadata check, and why it only ever
+		// Size and time alone cannot see this; on Unix the inode's
+		// status-change time does, as in Git's index. The check still only
 		// decides whether to skip a sync, never whether content is intact.
-		if fingerprint(t, lock) != before {
-			t.Fatal("fingerprint read file contents")
+		if changed := fingerprint(t, lock) != before; changed != (runtime.GOOS != "windows") {
+			t.Fatalf("fingerprint changed = %v on %s", changed, runtime.GOOS)
 		}
 		if err := VerifyLockCacheIntegrity(lock); err == nil {
 			t.Fatal("full verification missed the edit")
@@ -464,18 +465,37 @@ func TestVerifyPackageIncrementalReusesProofOnlyWhileMetadataHolds(t *testing.T)
 	if _, err := os.Stat(stamp); err != nil {
 		t.Fatalf("a full check of a settled entry records a stamp: %v", err)
 	}
-	// Same size and time: only a full check can see this, which is what the
-	// stamp's reuse is observed by, and why explicit sync always hashes.
+	// A stamp for another hash under the same metadata is trusted without
+	// reading the entry, which is what reuse means; a full check reads it.
+	data, err := os.ReadFile(stamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := pkg
+	other.ContentHash = lockfile.ContentHashPrefix + strings.Repeat("0", 64)
+	if err := os.WriteFile(stamp, []byte(strings.Replace(string(data), pkg.ContentHash, other.ContentHash, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPackageIncremental(other); err != nil {
+		t.Fatalf("stamp was not reused: %v", err)
+	}
+	var mismatch *IntegrityError
+	if err := VerifyPackage(other); !errors.As(err, &mismatch) {
+		t.Fatalf("full check trusted the stamp: %v", err)
+	}
+	// Same size and time: on Unix the status-change time still shows the edit.
+	if err := os.WriteFile(stamp, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPackageIncremental(pkg); err != nil {
+		t.Fatal(err)
+	}
 	writeTestFile(t, file, "# Evil")
 	if err := os.Chtimes(file, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyPackageIncremental(pkg); err != nil {
-		t.Fatalf("stamp was not reused: %v", err)
-	}
-	var mismatch *IntegrityError
-	if err := VerifyPackage(pkg); !errors.As(err, &mismatch) {
-		t.Fatalf("full check missed the change: %v", err)
+	if err := VerifyPackageIncremental(pkg); runtime.GOOS != "windows" && !errors.As(err, &mismatch) {
+		t.Fatalf("a same-size rewrite was trusted: %v", err)
 	}
 	// Any visible change falls back to hashing.
 	writeTestFile(t, file, "# Evil content")
