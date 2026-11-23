@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 )
@@ -98,7 +99,7 @@ func (g *Gateway) forwardErrorTraces(ctx context.Context, targetFor func(context
 		}
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("traceparent", obs.TraceParent(ctx))
-		client := &http.Client{Transport: tailnetTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		client := &http.Client{Transport: mesh.Transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		response, err := client.Do(r)
 		if err != nil {
 			return errors.New("main diagnostics unreachable")
@@ -151,7 +152,7 @@ func fetchPeerTracePage(ctx context.Context, target *url.URL, trace, cursor stri
 		return obs.TracePage{}, err
 	}
 	request.Header.Set("traceparent", obs.TraceParent(ctx))
-	client := &http.Client{Transport: tailnetTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{Transport: mesh.Transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(request)
 	if err != nil {
 		return obs.TracePage{}, errors.New("trace peer unreachable")

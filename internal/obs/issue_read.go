@@ -27,6 +27,12 @@ type IssueCount struct {
 	LastTrace   string    `json:"last_trace"`
 }
 
+// IssueResolution names the version that fixed an issue.
+type IssueResolution struct {
+	Version string `json:"version" jsonschema:"Version containing the fix; required."`
+	Note    string `json:"note,omitempty" jsonschema:"Optional explanation of the fix."`
+}
+
 type Issue struct {
 	Fingerprint     string       `json:"fingerprint"`
 	Kind            string       `json:"kind"`

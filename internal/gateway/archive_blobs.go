@@ -18,6 +18,8 @@ import (
 	"strings"
 
 	"github.com/gofrs/flock"
+
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -306,7 +308,7 @@ func (g *Gateway) cleanupArchivedBlobs(ctx context.Context, targetFor func(conte
 // mainHoldsBlob asks Main whether it stores a verified copy, and fetches the bytes to check them
 // itself only from a Main that predates the held route.
 func mainHoldsBlob(ctx context.Context, target *url.URL, id, sha string) error {
-	client := &http.Client{Transport: tailnetTransport, Timeout: network.WorkerRequestTimeout(http.MethodGet, "/blobs/"), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{Transport: mesh.Transport, Timeout: network.WorkerRequestTimeout(http.MethodGet, "/blobs/"), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	get := func(path string) (*http.Response, error) {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.JoinPath(path).String(), nil)
 		if err != nil {

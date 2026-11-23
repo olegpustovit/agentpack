@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/olegpustovit/agentpack/internal/network"
-	"github.com/olegpustovit/agentpack/internal/session"
-	"github.com/olegpustovit/agentpack/internal/state"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +11,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
+	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
@@ -62,7 +64,7 @@ func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
 		t.Fatalf("joining browser could not load its UI configuration: %d", w.Code)
 	}
 	joining.events.topics = []eventTopic{}
-	joining.events.nodes = func(context.Context) ([]TailnetNode, error) { return nil, nil }
+	joining.events.nodes = func(context.Context) ([]mesh.Node, error) { return nil, nil }
 	events := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Host = origin.Host
 		r.Header.Set("Authorization", "Bearer "+joining.local.Secret)
@@ -227,14 +229,17 @@ func TestMeshOwnerResetCannotRevivePeerLoginsForRecreatedEmail(t *testing.T) {
 	if !peer.authenticated(request) {
 		t.Fatal("fixture login was not initially valid")
 	}
-	grant := oauthRecord{Email: testBrowserEmail, SessionEpoch: 0}
+	// An OAuth grant holds while its account is enabled at the epoch it was granted in (epoch 0 here).
+	errOAuthGrant := errors.New("invalid OAuth grant")
 	checkGrant := func() error {
-		tx, err := peer.store.Reader.BeginTx(t.Context(), nil)
-		if err != nil {
+		var valid bool
+		if err := peer.store.Reader.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE email=? AND disabled=0 AND sessions_valid_after=0)", testBrowserEmail).Scan(&valid); err != nil {
 			return err
 		}
-		defer tx.Rollback()
-		return oauthAccountValid(tx, grant)
+		if !valid {
+			return errOAuthGrant
+		}
+		return nil
 	}
 	if err := checkGrant(); err != nil {
 		t.Fatal("fixture OAuth grant was not valid", err)

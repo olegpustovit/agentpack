@@ -1,14 +1,16 @@
 package gateway
 
 import (
-	"github.com/olegpustovit/agentpack/internal/network"
 	"net/http"
 	"runtime"
+
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
+	"github.com/olegpustovit/agentpack/internal/network"
 )
 
 func (g *Gateway) registerSettings(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
-		config, err := ReadSharingConfig(g.store)
+		config, err := mesh.ReadSharingConfig(g.store)
 		if err != nil {
 			fail(w, r, err)
 			return
@@ -23,13 +25,13 @@ func (g *Gateway) registerSettings(mux routeRegistrar) {
 		if !network.ReadJSON(w, r, &input) {
 			return
 		}
-		config, err := ReadSharingConfig(g.store)
+		config, err := mesh.ReadSharingConfig(g.store)
 		if err == nil && input.Enabled {
-			err = CheckTailnet(r.Context())
+			err = mesh.CheckTailnet(r.Context())
 		}
 		if err == nil {
 			config.Enabled = input.Enabled
-			err = WriteSharingConfig(g.store, config)
+			err = mesh.WriteSharingConfig(g.store, config)
 		}
 		if err != nil {
 			fail(w, r, err)

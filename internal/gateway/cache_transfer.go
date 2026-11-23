@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/olegpustovit/agentpack/internal/cache"
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -129,7 +130,7 @@ func (g *Gateway) serveCacheFrom(w http.ResponseWriter, r *http.Request, targetF
 			continue
 		}
 		request.Header.Set("traceparent", obs.TraceParent(r.Context()))
-		client := &http.Client{Transport: tailnetTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		client := &http.Client{Transport: mesh.Transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		response, err := client.Do(request)
 		if err != nil {
 			continue

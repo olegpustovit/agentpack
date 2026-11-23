@@ -1,4 +1,4 @@
-package gateway
+package mesh
 
 import (
 	"cmp"
@@ -6,10 +6,12 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
-// topology is the machine map. It never carries Tailscale IPs or current socket addresses.
-type topology struct {
+// Topology is the machine map. It never carries Tailscale IPs or current socket addresses.
+type Topology struct {
 	Self  topologySelf   `json:"self"`
 	Peers []topologyPeer `json:"peers"`
 }
@@ -35,22 +37,22 @@ type topologyPeer struct {
 	Sessions int `json:"sessions"`
 }
 
-func (g *Gateway) tailnetTopology(ctx context.Context) (topology, error) {
+func ReadTopology(ctx context.Context, store *state.Store) (Topology, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	config, err := ReadSharingConfig(g.store)
+	config, err := ReadSharingConfig(store)
 	if err != nil {
-		return topology{}, err
+		return Topology{}, err
 	}
-	status, err := tailnetSnapshot(ctx)
+	status, err := Snapshot(ctx)
 	if err != nil {
-		return topology{}, err
+		return Topology{}, err
 	}
-	result, err := topologyFrom(ctx, status, config, probeTailnetPeer)
+	result, err := topologyFrom(ctx, status, config, ProbePeer)
 	if err != nil {
 		return result, err
 	}
-	roles, err := g.store.Main(ctx)
+	roles, err := store.Main(ctx)
 	if err != nil {
 		return result, err
 	}
@@ -62,21 +64,21 @@ func (g *Gateway) tailnetTopology(ctx context.Context) (topology, error) {
 }
 
 // topologyFrom classifies every peer. Only online, permitted peers with an address are probed.
-func topologyFrom(ctx context.Context, status tailnetStatus, config SharingConfig, probe probeFunc) (topology, error) {
-	permitted := func(peer *tailnetPeer) bool {
-		return config.Enabled && allowedTailnetPeer(status.Self, peer, config)
+func topologyFrom(ctx context.Context, status Status, config SharingConfig, probe ProbeFunc) (Topology, error) {
+	permitted := func(peer *Peer) bool {
+		return config.Enabled && AllowedPeer(status.Self, peer, config)
 	}
-	var probeable []*tailnetPeer
+	var probeable []*Peer
 	for _, peer := range status.Peer {
-		if peer != nil && peer.Online && permitted(peer) && tailnetAddress(peer) != "" {
+		if peer != nil && peer.Online && permitted(peer) && Address(peer) != "" {
 			probeable = append(probeable, peer)
 		}
 	}
-	probed, err := probeTailnetPeers(ctx, probeable, probe)
+	probed, err := probePeers(ctx, probeable, probe)
 	if err != nil {
-		return topology{}, err
+		return Topology{}, err
 	}
-	result := topology{
+	result := Topology{
 		Self:  topologySelf{ID: status.Self.ID, Name: status.Self.HostName, OS: status.Self.OS, Relay: status.Self.Relay},
 		Peers: []topologyPeer{},
 	}
@@ -106,7 +108,7 @@ func topologyFrom(ctx context.Context, status tailnetStatus, config SharingConfi
 }
 
 // connectionOf names the path type without exposing the address behind it.
-func connectionOf(peer *tailnetPeer) string {
+func connectionOf(peer *Peer) string {
 	if peer.CurAddr != "" {
 		return "direct"
 	}

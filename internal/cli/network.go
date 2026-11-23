@@ -339,14 +339,14 @@ func (runner Runner) serveGateway(ctx context.Context, home, executable, address
 		return runner.startRemoteSession(ctx, home, executable, info, forkSessionID)
 	}
 	options.Update = runner.updateGateway
-	options.Packages = func(ctx context.Context, directory string) (gateway.ProjectContents, error) {
+	options.Packages = func(ctx context.Context, directory string) (network.ProjectContents, error) {
 		packContext, err := resolveInvocationContext(Invocation{Global: Global{WorkspaceRoot: directory}}, true)
 		if err != nil {
-			return gateway.ProjectContents{}, err
+			return network.ProjectContents{}, err
 		}
 		locked, err := lockfile.LoadFromPath(paths.LockPath(packContext.DefinitionRoot))
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return gateway.ProjectContents{}, err
+			return network.ProjectContents{}, err
 		}
 		// A folder without agentpack.toml still has the implicit default mode.
 		project, _ := manifest.Load(packContext.DefinitionRoot)

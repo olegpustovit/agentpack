@@ -27,6 +27,9 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/gorilla/websocket"
+
+	"github.com/olegpustovit/agentpack/internal/gateway/mcp"
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/registry"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -39,7 +42,7 @@ import (
 type GatewayOptions struct {
 	Home, Address, PublicURL string
 	Start                    func(context.Context, session.SessionInfo, string) (string, error)
-	Packages                 func(context.Context, string) (ProjectContents, error)
+	Packages                 func(context.Context, string) (network.ProjectContents, error)
 	Install                  func(context.Context, string, string, bool) error
 	InstallMCP               func(context.Context, string, registry.MCPServerInput, bool) error
 	Update                   func(ctx context.Context, version string) error
@@ -65,7 +68,8 @@ type Gateway struct {
 	store          *state.Store
 	logs           *obs.Store
 	auth           *gatewayAuth
-	mcp            *GatewayMCP
+	mcp            *mcp.Server
+	mcpNodes       func(node string) http.Handler // nil: MCP calls for a node take the mesh; tests stand another gateway in
 	local          network.NodeRecord
 	origin         *url.URL // loopback origin; public access adds another
 	public         publicAccess
@@ -87,12 +91,9 @@ type Gateway struct {
 	identitySelf   tailnetSelf
 	events         eventHub
 	agents         agentAccounts
-	tailnet        tailnetCache
+	tailnet        mesh.Cache
 	mcpBroker      mcpBroker
 	push           pushWatch
-	agentTasks     sync.Map         // task IDs whose answer is being delivered
-	agentTaskSeen  map[string]int64 // last_seq each asked chat had at the last pass; owned by runAgentTasks
-	agentTaskRetry time.Time        // when undelivered answers are tried again; owned by runAgentTasks
 	omp            ompSettings
 	found          folderDiscovery
 	credentialsMu  sync.Mutex // one agent credential sync at a time
@@ -145,7 +146,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 		return err
 	}
 	if strings.HasPrefix(nodeID, "site:") {
-		if snapshot, err := tailnetSnapshot(ctx); err == nil {
+		if snapshot, err := mesh.Snapshot(ctx); err == nil {
 			if err := store.BindNode(ctx, snapshot.Self.ID); err != nil {
 				return err
 			}
@@ -173,7 +174,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	}
 	gateway.reapStoppedChats(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
 	gateway.endLeftoverStarts(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
-	gateway.mcp, err = NewGatewayMCP(gateway)
+	gateway.mcp, err = mcp.New(store, options.Home, origin.String(), gateway)
 	if err != nil {
 		return err
 	}
@@ -182,7 +183,9 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	for _, task := range []struct {
 		name string
 		run  func(context.Context)
-	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.replication_effects", gateway.runReplicationEffects}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}, {"gateway.push", func(ctx context.Context) { gateway.runPush(ctx, pushInterval) }}, {"gateway.agent_tasks", func(ctx context.Context) { gateway.runAgentTasks(ctx, agentTasksInterval) }}, {"gateway.omp_settings", func(ctx context.Context) { gateway.runOMPSettings(ctx, 30*time.Second) }}, {"gateway.agent_credentials", func(ctx context.Context) { gateway.runAgentCredentials(ctx, 30*time.Second) }}} {
+	}{{"gateway.tailnet_sharing", func(ctx context.Context) { gateway.tailnet.Serve(ctx, gateway.store, gateway) }}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.replication_effects", gateway.runReplicationEffects}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}, {"gateway.push", func(ctx context.Context) { gateway.runPush(ctx, pushInterval) }}, {"gateway.agent_tasks", func(ctx context.Context) {
+		gateway.mcp.RunTasks(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")), mcp.TasksInterval)
+	}}, {"gateway.omp_settings", func(ctx context.Context) { gateway.runOMPSettings(ctx, 30*time.Second) }}, {"gateway.agent_credentials", func(ctx context.Context) { gateway.runAgentCredentials(ctx, 30*time.Second) }}} {
 		background.Add(1)
 		obs.Go(task.name, func() { defer background.Done(); task.run(ctx) })
 	}
@@ -248,7 +251,7 @@ func (g *Gateway) runLogSpool(ctx context.Context) {
 }
 
 // localRequest reports a caller holding the private local secret: this machine's CLI, an enrolled
-// peer (through peerHandler) or an in-process MCP call. Browsers never are.
+// peer (through ServePeer) or an in-process MCP call. Browsers never are.
 func (g *Gateway) localRequest(r *http.Request) bool {
 	kind := callerOf(r.Context())
 	return kind == callerCLI || kind == callerPeer || kind == callerMCP
@@ -270,17 +273,17 @@ func (g *Gateway) buildHandler() http.Handler {
 	mux := g.routes()
 	secured := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(WithPeerCache(r.Context(), g.options.Home))
-		if p := r.URL.Path; strings.HasPrefix(p, "/api/") || isMCPPath(p) {
+		if p := r.URL.Path; strings.HasPrefix(p, "/api/") || mcp.IsPath(p) {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		if g.mcp != nil && chatBearer(r) {
-			g.mcp.ServeHTTP(w, r) // a chat's own agentpack tools credential; see mcp_chat.go
+		if g.mcp != nil && mcp.ChatBearer(r) {
+			g.mcp.ServeHTTP(w, r) // a chat's own agentpack tools credential; see mcp/chat.go
 			return
 		}
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
-		// Only the private local secret makes a caller local; peerHandler and MCP dispatch name which kind.
+		// Only the private local secret makes a caller local; ServePeer and MCP dispatch name which kind.
 		kind := callerBrowser
 		if r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1 {
 			if kind = callerOf(r.Context()); kind == callerUnknown || kind == callerBrowser {
@@ -326,13 +329,13 @@ func (g *Gateway) buildHandler() http.Handler {
 			}
 		}
 		if !claimed && !local {
-			allowed := (r.Method == "GET" || r.Method == "HEAD") && (r.URL.Path == "/healthz" || r.URL.Path == "/api/status" || !strings.HasPrefix(r.URL.Path, "/api/") && !isMCPPath(r.URL.Path)) || r.Method == "POST" && r.URL.Path == "/api/claim"
+			allowed := (r.Method == "GET" || r.Method == "HEAD") && (r.URL.Path == "/healthz" || r.URL.Path == "/api/status" || !strings.HasPrefix(r.URL.Path, "/api/") && !mcp.IsPath(r.URL.Path)) || r.Method == "POST" && r.URL.Path == "/api/claim"
 			if !allowed {
 				http.Error(w, "unclaimed", http.StatusForbidden)
 				return
 			}
 		}
-		if g.mcp != nil && isMCPPath(r.URL.Path) {
+		if g.mcp != nil && mcp.IsPath(r.URL.Path) {
 			g.mcp.ServeHTTP(w, r)
 			return
 		}
@@ -483,7 +486,7 @@ func (g *Gateway) routes() routeMux {
 		network.WriteJSON(w, value)
 	})
 	mux.HandleFunc("GET /api/topology", func(w http.ResponseWriter, r *http.Request) {
-		value, err := g.tailnetTopology(r.Context())
+		value, err := mesh.ReadTopology(r.Context(), g.store)
 		if err != nil {
 			fail(w, r, err)
 			return
@@ -494,7 +497,7 @@ func (g *Gateway) routes() routeMux {
 	mux.HandleFunc("DELETE /api/local/sessions/{id}/presence", g.servePresence)
 
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
-		value, err := g.meshSessions(r.Context(), r.URL.Query().Get("node"), true)
+		value, err := g.Sessions(r.Context(), r.URL.Query().Get("node"), true)
 		if err != nil {
 			meshReadError(w, r, err)
 			return
@@ -580,7 +583,7 @@ func (g *Gateway) routes() routeMux {
 			http.Error(w, "only ACP sessions with a native session ID can be forked", http.StatusBadRequest)
 			return
 		}
-		if !authorizeACPWrite(w, r, record.Session) {
+		if !session.AuthorizeWrite(w, r, record.Session) {
 			return
 		}
 		actor, ok := session.ActorFrom(r.Context())
@@ -780,10 +783,10 @@ func (g *Gateway) routes() routeMux {
 		}
 		g.terminalData(w, r)
 	})
-	mux.HandleFunc("GET /api/sessions/{id}/conversation", g.serveConversation)
-	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", g.servePrompt)
-	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", g.servePrompt)
-	mux.HandleFunc("POST /api/sessions/{id}/conversation/message", g.serveAgentMessage)
+	mux.HandleFunc("GET /api/sessions/{id}/conversation", g.ServeConversation)
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", g.ServePrompt)
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", g.ServePrompt)
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/message", g.mcp.ServeAgentMessage)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/show", g.serveShow)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/config", g.serveWantedConfig)
 	mux.HandleFunc("DELETE /api/sessions/{id}/conversation/goal", g.clearGoal)
@@ -946,7 +949,7 @@ func (g *Gateway) serveRoute(row route, handler http.Handler) http.Handler {
 		if node := r.URL.Query().Get("node"); node != "" && strings.HasPrefix(r.URL.Path, "/api/") &&
 			!(r.Method == http.MethodGet && meshListRoute(r.URL.Path) && g.peer(node).Mesh) {
 			w.Header().Del("Cache-Control") // the peer's Cache-Control passes through unchanged
-			g.proxyTailnet(w, r, node)
+			g.tailnet.Proxy(w, r, g.store, g, node)
 			return
 		}
 		if row.policy == owner && !g.requireOwner(w, r) {
@@ -964,7 +967,7 @@ func (g *Gateway) forwardToWorker(suffix string) http.HandlerFunc {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
 		}
-		if !authorizeACPWrite(w, r, record.Session) {
+		if !session.AuthorizeWrite(w, r, record.Session) {
 			return
 		}
 		network.ProxyWorkerConversation(w, r, record, strings.Replace(suffix, "{queueId}", url.PathEscape(r.PathValue("queueId")), 1))
@@ -1018,25 +1021,6 @@ func writeSessionStart(w http.ResponseWriter, r *http.Request, info session.Sess
 	}
 	network.WriteJSON(w, publicSession(info))
 }
-func authorizeACPWrite(w http.ResponseWriter, r *http.Request, info session.SessionInfo) bool {
-	if !info.ArchivedAt.IsZero() {
-		http.Error(w, "archived", http.StatusConflict)
-		return false
-	}
-	if info.Transport != "acp" && info.Transport != "shell" {
-		return true
-	}
-	actor, ok := session.ActorFrom(r.Context())
-	if !ok {
-		actor = session.BrowserActor("")
-	}
-	if actor.CanWriteSession(info) {
-		return true
-	}
-	http.Error(w, "read-only actor cannot modify this session", http.StatusForbidden)
-	return false
-}
-
 func (g *Gateway) authorizeACPWriteByID(w http.ResponseWriter, r *http.Request, id string) bool {
 	info, ok := sessionRow(r.Context(), id)
 	if !ok {
@@ -1049,7 +1033,7 @@ func (g *Gateway) authorizeACPWriteByID(w http.ResponseWriter, r *http.Request, 
 			return false
 		}
 	}
-	return authorizeACPWrite(w, r, info)
+	return session.AuthorizeWrite(w, r, info)
 }
 
 // startSession records the actor that started the session, then starts its worker.
@@ -1172,7 +1156,7 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session unavailable", 404)
 		return
 	}
-	if record.Session.Transport == "shell" && !authorizeACPWrite(w, r, record.Session) {
+	if record.Session.Transport == "shell" && !session.AuthorizeWrite(w, r, record.Session) {
 		return
 	}
 	since, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)

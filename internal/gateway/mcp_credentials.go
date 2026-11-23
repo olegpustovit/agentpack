@@ -22,6 +22,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
@@ -458,7 +459,7 @@ func (g *Gateway) remoteMCPRefresh(ctx context.Context, node string, credential 
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Agentpack-User", credential.Account)
 	request.Header.Set("traceparent", obs.TraceParent(ctx))
-	client := &http.Client{Transport: tailnetMutationTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{Transport: mesh.MutationTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(request)
 	if err != nil {
 		return mcpBridgeSecret{}, errMCPRefresherUnreachable

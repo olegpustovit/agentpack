@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/registry"
@@ -39,7 +40,7 @@ type stateChangePage struct {
 	Reset bool `json:"reset,omitempty"`
 }
 
-// peerOnly requires the identity attached by peerHandler, never a caller's header.
+// peerOnly requires the identity attached by ServePeer, never a caller's header.
 func (g *Gateway) peerOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
@@ -456,7 +457,7 @@ func (g *Gateway) runStateSync(ctx context.Context) {
 
 func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan struct{}, interval time.Duration, targetFor func(context.Context, string) (*url.URL, error)) {
 	delay := time.Second
-	client := &http.Client{Transport: tailnetTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{Transport: mesh.Transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	// A peer failing the same way on every retry is recorded once; each record is a replicated write.
 	lastFailure := ""
 	var site []byte

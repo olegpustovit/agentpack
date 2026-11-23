@@ -334,7 +334,7 @@ func TestMCPCredentialPeerRefreshesThroughRefresher(t *testing.T) {
 	if err := peer.options.Library.Store.EnrollPeer(mainID); err != nil {
 		t.Fatal(err)
 	}
-	// Main's tailnet listener: what peerHandler attaches to a verified mesh request.
+	// Main's tailnet listener: what ServePeer attaches to a verified mesh request.
 	mainMesh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		actor := session.Actor{Kind: "peer", User: r.Header.Get("X-Agentpack-User"), Account: true, StableNodeID: "peer-node"}
 		r = r.Clone(session.WithActor(context.WithValue(r.Context(), replicaPeerKey{}, "peer-node"), actor))

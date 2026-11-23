@@ -1,4 +1,4 @@
-package gateway
+package mcp
 
 import (
 	"context"
@@ -16,7 +16,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -26,37 +25,28 @@ import (
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
-type GatewayMCP struct {
-	gateway  *Gateway
-	handler  http.Handler
-	mu       sync.Mutex
-	window   clientWindow
-	metadata map[string]cachedClient        // Client ID Metadata Documents by URL
-	fetches  clientWindow                   // uncached document fetches, which anyone can trigger before sign-in
-	fetcher  *http.Client                   // nil: metadataFetcher; tests point it at a local server
-	peer     func(node string) http.Handler // nil: the mesh; tests stand another gateway in for a node
-}
-
 type cachedClient struct {
 	client  oauthClient
 	expires time.Time
 }
 
-func (m *GatewayMCP) ServeHTTP(w http.ResponseWriter, r *http.Request) { m.handler.ServeHTTP(w, r) }
+func (m *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { m.handler.ServeHTTP(w, r) }
 
-func isMCPPath(path string) bool {
+// IsPath reports whether the MCP server, its OAuth server or their metadata answer path.
+func IsPath(path string) bool {
 	return path == "/mcp" || strings.HasPrefix(path, "/oauth/") || strings.HasPrefix(path, "/.well-known/oauth-")
 }
 
 // baseURL is the origin the request addressed: loopback, or the public origin while it is on.
-func (m *GatewayMCP) baseURL(r *http.Request) string {
-	if origin := sourceOf(r).origin; origin != "" {
+func (m *Server) baseURL(r *http.Request) string {
+	if origin := m.host.Origin(r); origin != "" {
 		return origin
 	}
-	return m.gateway.origin.Scheme + "://" + m.gateway.origin.Host
+	return m.loopback
 }
 
-func protectedResourceMetadata(base string) map[string]any {
+// ProtectedResourceMetadata is the RFC 9728 document for the MCP endpoint at base.
+func ProtectedResourceMetadata(base string) map[string]any {
 	return map[string]any{"resource": base + "/mcp", "authorization_servers": []string{base}, "scopes_supported": []string{"agentpack"}, "bearer_methods_supported": []string{"header"}, "resource_name": "Agentpack"}
 }
 
@@ -69,7 +59,7 @@ func oauthError(w http.ResponseWriter, status int, code string) {
 	}{code})
 }
 
-func (m *GatewayMCP) routes(mux *http.ServeMux) {
+func (m *Server) routes(mux *http.ServeMux) {
 	for _, path := range []string{"/.well-known/oauth-authorization-server", "/.well-known/oauth-authorization-server/mcp"} {
 		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 			b := m.baseURL(r)
@@ -78,7 +68,7 @@ func (m *GatewayMCP) routes(mux *http.ServeMux) {
 	}
 	for _, path := range []string{"/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"} {
 		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
-			network.WriteJSON(w, protectedResourceMetadata(m.baseURL(r)))
+			network.WriteJSON(w, ProtectedResourceMetadata(m.baseURL(r)))
 		})
 	}
 	mux.HandleFunc("POST /oauth/register", m.register)
@@ -89,15 +79,15 @@ func (m *GatewayMCP) routes(mux *http.ServeMux) {
 }
 
 // limited allows each client address 120 OAuth requests a minute, and all of them together 1200.
-func (m *GatewayMCP) limited(w http.ResponseWriter, r *http.Request) bool {
+func (m *Server) limited(w http.ResponseWriter, r *http.Request) bool {
 	m.mu.Lock()
-	client, local := limiterKey(r)
-	wait := m.window.take(time.Now(), client, 120, limiterCeiling(local, 1200))
+	client, local := m.host.ClientKey(r)
+	wait := m.window.Take(time.Now(), client, 120, network.LimiterCeiling(local, 1200))
 	m.mu.Unlock()
 	if wait == 0 {
 		return false
 	}
-	retryAfter(w, wait)
+	network.RetryAfter(w, wait)
 	oauthError(w, 429, "rate_limited")
 	return true
 }
@@ -107,7 +97,7 @@ func validOAuthRedirect(raw string) bool {
 	return err == nil && len(raw) <= 2048 && u.User == nil && u.Fragment == "" && u.Host != "" && (u.Scheme == "https" || u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"))
 }
 
-func (m *GatewayMCP) register(w http.ResponseWriter, r *http.Request) {
+func (m *Server) register(w http.ResponseWriter, r *http.Request) {
 	if m.limited(w, r) {
 		return
 	}
@@ -123,7 +113,7 @@ func (m *GatewayMCP) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := network.RandomToken()
-	err := state.Transaction(r.Context(), m.gateway.store.DB, func(tx *sql.Tx) error {
+	err := state.Transaction(r.Context(), m.store.DB, func(tx *sql.Tx) error {
 		if err := oauthPrune(tx); err != nil {
 			return err
 		}
@@ -143,7 +133,7 @@ func (m *GatewayMCP) register(w http.ResponseWriter, r *http.Request) {
 
 var oauthConsent = template.Must(template.New("consent").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect to Agentpack</title><main class="auth-shell"><section class="auth-card"><p class="eyebrow">Agentpack connection</p><h1>Connect {{.Name}}</h1><p>This client will be able to read terminal output, type into sessions when control is released, start and stop agents, and install packages on your connected computers.</p><p>Return address: <strong>{{.Redirect}}</strong></p><form method="post" action="{{.Action}}"><input type="hidden" name="consent" value="{{.Token}}"><button class="primary" type="submit" name="decision" value="allow">Allow access</button><button type="submit" name="decision" value="deny">Cancel</button></form></section></main></html>`))
 
-func (m *GatewayMCP) authorize(w http.ResponseWriter, r *http.Request) {
+func (m *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	if m.limited(w, r) {
 		return
 	}
@@ -158,7 +148,7 @@ func (m *GatewayMCP) authorize(w http.ResponseWriter, r *http.Request) {
 		client.Kind = "client"
 		client.Client, err = m.metadataClient(r.Context(), query.Get("client_id"))
 	} else {
-		err = state.Transaction(r.Context(), m.gateway.store.Reader, func(tx *sql.Tx) error { var err error; client, err = oauthGet(tx, query.Get("client_id")); return err })
+		err = state.Transaction(r.Context(), m.store.Reader, func(tx *sql.Tx) error { var err error; client, err = oauthGet(tx, query.Get("client_id")); return err })
 	}
 	if err != nil || client.Kind != "client" || client.Client == nil {
 		oauthError(w, 400, "invalid_client")
@@ -174,16 +164,16 @@ func (m *GatewayMCP) authorize(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, 400, "invalid_request")
 		return
 	}
-	if !m.gateway.auth.authenticated(r) {
+	login, ok := m.host.BrowserLogin(r)
+	if !ok {
 		http.Redirect(w, r, "/login?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
 		return
 	}
-	cookie, _ := r.Cookie(cookieName(r))
-	session := string(oauthKey(cookie.Value))
-	cookieHash := sha256.Sum256([]byte(cookie.Value))
+	session := string(oauthKey(login))
+	cookieHash := sha256.Sum256([]byte(login))
 	if r.Method == http.MethodGet {
 		token := network.RandomToken()
-		err := state.Transaction(r.Context(), m.gateway.store.DB, func(tx *sql.Tx) error {
+		err := state.Transaction(r.Context(), m.store.DB, func(tx *sql.Tx) error {
 			if err := oauthPrune(tx); err != nil {
 				return err
 			}
@@ -222,7 +212,7 @@ func (m *GatewayMCP) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := network.RandomToken()
-	err = state.Transaction(r.Context(), m.gateway.store.DB, func(tx *sql.Tx) error {
+	err = state.Transaction(r.Context(), m.store.DB, func(tx *sql.Tx) error {
 		consent, err := oauthGet(tx, r.PostForm.Get("consent"))
 		if err != nil || consent.Kind != "consent" || consent.Session != session || consent.Query != r.URL.RawQuery || oauthAccountValid(tx, consent) != nil {
 			return errOAuthGrant
@@ -263,7 +253,7 @@ func validVerifier(verifier string) bool {
 	return true
 }
 
-func (m *GatewayMCP) token(w http.ResponseWriter, r *http.Request) {
+func (m *Server) token(w http.ResponseWriter, r *http.Request) {
 	if m.limited(w, r) {
 		return
 	}
@@ -293,7 +283,7 @@ func (m *GatewayMCP) token(w http.ResponseWriter, r *http.Request) {
 	access, refresh := network.RandomToken(), network.RandomToken()
 	replayed := false
 	expires := 3600
-	err := state.Transaction(r.Context(), m.gateway.store.DB, func(tx *sql.Tx) error {
+	err := state.Transaction(r.Context(), m.store.DB, func(tx *sql.Tx) error {
 		// A metadata-document client was checked at authorization; its codes and tokens name it.
 		if !clientMetadataURL(form.Get("client_id")) {
 			client, err := oauthGet(tx, form.Get("client_id"))
@@ -364,7 +354,7 @@ func (m *GatewayMCP) token(w http.ResponseWriter, r *http.Request) {
 	}{access, refresh, "Bearer", expires, "agentpack"})
 }
 
-func (m *GatewayMCP) revoke(w http.ResponseWriter, r *http.Request) {
+func (m *Server) revoke(w http.ResponseWriter, r *http.Request) {
 	if m.limited(w, r) {
 		return
 	}
@@ -373,7 +363,7 @@ func (m *GatewayMCP) revoke(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, 400, "invalid_request")
 		return
 	}
-	err := state.Transaction(r.Context(), m.gateway.store.DB, func(tx *sql.Tx) error {
+	err := state.Transaction(r.Context(), m.store.DB, func(tx *sql.Tx) error {
 		record, err := oauthGet(tx, r.PostForm.Get("token"))
 		if err != nil {
 			return nil
@@ -390,13 +380,14 @@ func (m *GatewayMCP) revoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (m *GatewayMCP) authenticate(r *http.Request) *http.Request {
+// Authenticate returns r carrying the actor of its valid MCP access token, or nil.
+func (m *Server) Authenticate(r *http.Request) *http.Request {
 	value := r.Header.Get("Authorization")
 	if !strings.HasPrefix(value, "Bearer ") {
 		return nil
 	}
 	var email string
-	err := state.Transaction(r.Context(), m.gateway.store.Reader, func(tx *sql.Tx) error {
+	err := state.Transaction(r.Context(), m.store.Reader, func(tx *sql.Tx) error {
 		record, err := oauthGet(tx, strings.TrimPrefix(value, "Bearer "))
 		if err != nil {
 			return err
@@ -510,7 +501,7 @@ var metadataFetcher = &http.Client{
 
 // metadataClient fetches and caches a Client ID Metadata Document. The document must name its
 // own URL as client_id and carry no secret.
-func (m *GatewayMCP) metadataClient(ctx context.Context, id string) (*oauthClient, error) {
+func (m *Server) metadataClient(ctx context.Context, id string) (*oauthClient, error) {
 	u, err := url.Parse(id)
 	if err != nil || len(id) > 2048 || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" || u.Path == "" || u.Path == "/" || slices.ContainsFunc(strings.Split(u.Path, "/"), func(part string) bool { return part == "." || part == ".." }) {
 		return nil, errOAuthGrant
@@ -518,10 +509,10 @@ func (m *GatewayMCP) metadataClient(ctx context.Context, id string) (*oauthClien
 	now := time.Now()
 	m.mu.Lock()
 	cached, ok := m.metadata[id]
-	fetcher := m.fetcher
+	fetcher := m.Fetcher
 	fresh := ok && now.Before(cached.expires)
 	// The authorize page fetches before sign-in, so the gateway must not become anyone's request cannon.
-	busy := !fresh && m.fetches.take(now, u.Hostname(), 10, 60) > 0
+	busy := !fresh && m.fetches.Take(now, u.Hostname(), 10, 60) > 0
 	m.mu.Unlock()
 	if fresh {
 		return &cached.client, nil

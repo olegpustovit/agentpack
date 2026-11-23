@@ -16,18 +16,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tmaxmax/go-sse"
+
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/session"
-	"github.com/tmaxmax/go-sse"
 )
 
-func eventsGateway(topics []eventTopic, nodes func(context.Context) ([]TailnetNode, error), target func(context.Context, string) (*url.URL, error)) *Gateway {
+func eventsGateway(topics []eventTopic, nodes func(context.Context) ([]mesh.Node, error), target func(context.Context, string) (*url.URL, error)) *Gateway {
 	if topics == nil {
 		topics = []eventTopic{}
 	}
 	if nodes == nil {
-		nodes = func(context.Context) ([]TailnetNode, error) { return nil, nil }
+		nodes = func(context.Context) ([]mesh.Node, error) { return nil, nil }
 	}
 	g := &Gateway{local: network.NodeRecord{Secret: strings.Repeat("x", 64)}}
 	g.events.topics = topics
@@ -139,7 +141,7 @@ func TestEventsRelayPeerDirectEventsOnly(t *testing.T) {
 	}))
 	defer peer.Close()
 	target := func(context.Context, string) (*url.URL, error) { return url.Parse(peer.URL) }
-	nodes := func(context.Context) ([]TailnetNode, error) { return []TailnetNode{{ID: "peer1", Name: "peer1"}}, nil }
+	nodes := func(context.Context) ([]mesh.Node, error) { return []mesh.Node{{ID: "peer1", Name: "peer1"}}, nil }
 	g := eventsGateway(nil, nodes, target)
 	ch, unsubscribe := g.subscribe()
 	defer unsubscribe()
@@ -163,7 +165,7 @@ func TestEventsSkipPeerWithoutEndpoint(t *testing.T) {
 	}))
 	defer peer.Close()
 	target := func(context.Context, string) (*url.URL, error) { return url.Parse(peer.URL) }
-	nodes := func(context.Context) ([]TailnetNode, error) { return []TailnetNode{{ID: "old", Name: "old"}}, nil }
+	nodes := func(context.Context) ([]mesh.Node, error) { return []mesh.Node{{ID: "old", Name: "old"}}, nil }
 	g := eventsGateway(nil, nodes, target)
 	ch, unsubscribe := g.subscribe()
 	defer unsubscribe()
@@ -318,7 +320,7 @@ func TestStreamingProgressOnASessionRowIsNotASessionsChange(t *testing.T) {
 func TestEventsCarriesConversationFromItsOwnResumeCursor(t *testing.T) {
 	g, _ := identityGateway(t, t.TempDir(), nil)
 	g.events.topics = []eventTopic{}
-	g.events.nodes = func(context.Context) ([]TailnetNode, error) { return nil, nil }
+	g.events.nodes = func(context.Context) ([]mesh.Node, error) { return nil, nil }
 	const id = "session-multiplexed"
 	if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: id, Transport: "acp", ConversationState: "starting"}); err != nil {
 		t.Fatal(err)

@@ -1,4 +1,4 @@
-package gateway
+package mcp
 
 import (
 	"context"
@@ -15,18 +15,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/network"
 )
 
-func (g *Gateway) serveShow(w http.ResponseWriter, r *http.Request) {
-	record, err := g.workerRecord(r.Context(), r.PathValue("id"))
-	if err != nil {
-		http.Error(w, "session unavailable", http.StatusNotFound)
-		return
-	}
-	if !authorizeACPWrite(w, r, record.Session) {
-		return
-	}
-	network.ProxyWorkerConversation(w, r, record, "/show")
-}
-
 type mcpShowInput struct {
 	Title     string             `json:"title" jsonschema:"Card heading."`
 	Markdown  string             `json:"markdown,omitempty" jsonschema:"Card body as Markdown."`
@@ -38,7 +26,7 @@ type mcpShowInput struct {
 	} `json:"image,omitempty" jsonschema:"Inline image, when there is no file."`
 }
 
-func (m *GatewayMCP) showTool(server *mcp.Server) {
+func (m *Server) showTool(server *mcp.Server) {
 	addTool(server, "show", "Show a card in this chat for the person: a title with Markdown, a table and/or an image (a screenshot, a chart). Use it for results worth seeing at a glance; it does not reach the agent or other chats.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpShowInput) (*mcp.CallToolResult, struct {
 		Shown bool `json:"shown"`
 	}, error) {

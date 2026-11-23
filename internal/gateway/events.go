@@ -19,6 +19,7 @@ import (
 
 	"github.com/tmaxmax/go-sse"
 
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -62,7 +63,7 @@ type eventHub struct {
 	cancel   context.CancelFunc
 
 	topics    []eventTopic
-	nodes     func(context.Context) ([]TailnetNode, error)
+	nodes     func(context.Context) ([]mesh.Node, error)
 	target    func(context.Context, string) (*url.URL, error)
 	client    *http.Client
 	checkAuth <-chan time.Time
@@ -274,7 +275,7 @@ func (g *Gateway) pollNodes(ctx context.Context) {
 	}
 	client := h.client
 	if client == nil {
-		client = &http.Client{Transport: tailnetTransport}
+		client = &http.Client{Transport: mesh.Transport}
 	}
 	ticker := time.NewTicker(eventNodeInterval)
 	defer ticker.Stop()

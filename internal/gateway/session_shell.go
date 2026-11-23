@@ -33,7 +33,7 @@ func (g *Gateway) startShell(w http.ResponseWriter, r *http.Request, actor sessi
 			http.Error(w, "choose a chat on this machine", http.StatusBadRequest)
 			return
 		}
-		if !authorizeACPWrite(w, r, parent) {
+		if !session.AuthorizeWrite(w, r, parent) {
 			return
 		}
 		switch input.Place {
@@ -88,7 +88,7 @@ func (g *Gateway) serveChatShells(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "chat not found", http.StatusNotFound)
 		return
 	}
-	if !authorizeACPWrite(w, r, parent) {
+	if !session.AuthorizeWrite(w, r, parent) {
 		return
 	}
 	rows, err := session.QuerySessions(ctx, g.store.Reader, "SELECT "+session.SessionColumns+

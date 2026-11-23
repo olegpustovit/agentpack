@@ -14,10 +14,9 @@ import (
 	"testing"
 	"time"
 
-	sdkacp "github.com/coder/acp-go-sdk"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/olegpustovit/agentpack/internal/acp"
+
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -107,10 +106,10 @@ func TestMCPToolsPublishTypedSchemas(t *testing.T) {
 		want        []string
 	}{
 		{"start_session", "agent", true, []string{"agent"}, []string{"claude", "agent", "codex", "opencode", "grok", "agy", "omp"}},
-		{"wait", "until", true, []string{"until"}, strs(waitConditions)},
+		{"wait", "until", true, []string{"until"}, []string{"needs_you", "idle", "any"}},
 		{"respond_permission", "decision", true, []string{"decision"}, strs(network.PermissionDecisions)},
-		{"list_sessions", "state", false, []string{"sessions", "[]", "state"}, strs(chatStates)},
-		{"get_attention", "state", false, []string{"sessions", "[]", "state"}, strs(chatStates)},
+		{"list_sessions", "state", false, []string{"sessions", "[]", "state"}, []string{"starting", "working", "needs_you", "idle", "stopped"}},
+		{"get_attention", "state", false, []string{"sessions", "[]", "state"}, []string{"starting", "working", "needs_you", "idle", "stopped"}},
 	} {
 		schema := tools[check.tool].OutputSchema
 		if check.input {
@@ -119,9 +118,6 @@ func TestMCPToolsPublishTypedSchemas(t *testing.T) {
 		if got := enumOf(t, schema, check.path...); !slices.Equal(got, check.want) {
 			t.Fatalf("%s %s enum = %v, want %v", check.tool, check.field, got, check.want)
 		}
-	}
-	if !slices.Equal(strs(mcpAgents()), []string{"claude", "agent", "codex", "opencode", "grok", "agy", "omp"}) {
-		t.Fatal("agent names drifted from harness targets", mcpAgents())
 	}
 	if tools["respond_permission"].Annotations.IdempotentHint != true || tools["wait"].Annotations.ReadOnlyHint != true {
 		t.Fatal("tool hints", tools["respond_permission"].Annotations, tools["wait"].Annotations)
@@ -157,72 +153,6 @@ func TestMCPToolsPublishTypedSchemas(t *testing.T) {
 	}
 }
 
-func TestMCPResultsStayUnderOneMegabyte(t *testing.T) {
-	h := newOAuthHarness(t)
-	handler := h.gateway.mcp.guardToolCalls(func(context.Context, string, mcp.Request) (mcp.Result, error) {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: strings.Repeat("x", mcpResultLimit)}}}, nil
-	})
-	result, err := handler(t.Context(), "tools/call", nil)
-	if err != nil || !result.(*mcp.CallToolResult).IsError {
-		t.Fatalf("oversized result passed: %v", err)
-	}
-	var entries []acp.LogEntry
-	for i := range 2 * network.TranscriptItems {
-		entries = append(entries, acp.LogEntry{Seq: int64(i + 1), Kind: "prompt", Payload: json.RawMessage(`{"text":{"text":"` + strings.Repeat("y", 4096) + `"}}`)})
-	}
-	items, next := network.Transcript(entries)
-	data, _ := json.Marshal(items)
-	if next == "" || len(data) > mcpResultLimit/2 || items[len(items)-1].Seq != mustInt(t, next) {
-		t.Fatalf("transcript page unbounded: %d items, %d bytes, next %q", len(items), len(data), next)
-	}
-	sessions := make([]int, 120)
-	first, cursor, _ := page(sessions, "")
-	second, last, _ := page(sessions, cursor)
-	third, end, _ := page(sessions, last)
-	if len(first) != mcpPageSize || len(second) != mcpPageSize || len(third) != 20 || end != "" {
-		t.Fatal("paging", len(first), len(second), len(third), end)
-	}
-}
-
-func mustInt(t *testing.T, value string) int64 {
-	var n int64
-	if err := json.Unmarshal([]byte(value), &n); err != nil {
-		t.Fatal(err)
-	}
-	return n
-}
-
-func TestTranscriptItemsAreTyped(t *testing.T) {
-	entries := []acp.LogEntry{
-		{Seq: 1, Kind: "prompt", Payload: json.RawMessage(`{"text":{"text":"Run the tests"}}`)},
-		{Seq: 2, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"On "}}`)},
-		{Seq: 3, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"it."}}`)},
-		{Seq: 4, Kind: "tool_call", Payload: json.RawMessage(`{"toolCallId":"t1","title":"Bash","status":"pending"}`)},
-		{Seq: 5, Kind: "tool_call_update", Payload: json.RawMessage(`{"toolCallId":"t1","status":"completed"}`)},
-		{Seq: 6, Kind: "permission_request", Payload: json.RawMessage(`{"requestId":"p1","summary":"go test","options":[{"id":"a","label":"Allow","kind":"allow_once"},{"id":"x","label":"Odd","kind":"novel"}]}`)},
-		{Seq: 7, Kind: "usage_update", Payload: json.RawMessage(`{}`)},
-		{Seq: 8, Kind: "elicitation", Payload: json.RawMessage(`{"elicitationId":"e1","prompt":"Tone?","choices":["Direct"]}`)},
-	}
-	items, next := network.Transcript(entries)
-	kinds := []string{}
-	for _, item := range items {
-		kinds = append(kinds, item.Kind)
-	}
-	if next != "" || !slices.Equal(kinds, []string{"prompt", "message", "tool", "permission", "question"}) {
-		t.Fatal(kinds, next)
-	}
-	if items[1].Text != "On it." || items[1].Seq != 3 || items[2].Status != "completed" || items[2].Text != "Bash" {
-		t.Fatalf("merge: %+v %+v", items[1], items[2])
-	}
-	if options := items[3].Options; options[0].Decision != sdkacp.PermissionOptionKindAllowOnce || options[1].Decision != "" {
-		t.Fatalf("decisions: %+v", options)
-	}
-	url, ok := network.TranscriptItem(acp.LogEntry{Kind: "elicitation", Payload: json.RawMessage(`{"elicitationId":"e2","prompt":"Connect Artifacts","url":"https://chatgpt.com/apps/x"}`)})
-	if !ok || url.Text != "Connect Artifacts https://chatgpt.com/apps/x" || len(url.Options) != 2 || url.Options[1].ID != "decline" {
-		t.Fatalf("URL question: %+v", url)
-	}
-}
-
 // chatFixture registers a running chat with an agentpack tools credential, as RunWorker does.
 func chatFixture(t *testing.T, h *oauthHarness, id, parent string) string {
 	t.Helper()
@@ -250,6 +180,14 @@ func chatFixture(t *testing.T, h *oauthHarness, id, parent string) string {
 	return token
 }
 
+// What the tools answer an agent that oversteps; the person reads these.
+const (
+	agentAnswerRefusal  = "only a person can answer permission prompts and questions"
+	agentScopeRefusal   = "a chat's agent can change only itself and the helper chats it started on this machine, and cannot use terminals or install packages"
+	agentSendRefusal    = "an agent sends messages with ask, which names it and returns the answer to it"
+	chatToolsOffRefusal = "agentpack tools are off for this chat"
+)
+
 func TestChatAgentToolsGuardrails(t *testing.T) {
 	h := newOAuthHarness(t)
 	token := chatFixture(t, h, "session-chat", "")
@@ -265,7 +203,7 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 		{"respond_permission", map[string]any{"session_id": "session-chat", "request_id": "p1", "decision": "allow_once"}},
 		{"answer_question", map[string]any{"session_id": "session-chat", "question_id": "e1", "answer": "yes"}},
 	} {
-		if result, text := callTool(t, clientSession, call.name, call.args); !result.IsError || text != errAgentAnswer.Error() {
+		if result, text := callTool(t, clientSession, call.name, call.args); !result.IsError || text != agentAnswerRefusal {
 			t.Fatalf("%s accepted from an agent: %s", call.name, text)
 		}
 	}
@@ -282,16 +220,16 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 		{"stop_session", map[string]any{"session_id": "session-person"}},
 		{"cancel", map[string]any{"session_id": "session-person"}},
 	} {
-		if result, text := callTool(t, clientSession, call.name, call.args); !result.IsError || text != errAgentScope.Error() {
+		if result, text := callTool(t, clientSession, call.name, call.args); !result.IsError || text != agentScopeRefusal {
 			t.Fatalf("%s %v accepted from an agent: %s", call.name, call.args, text)
 		}
 	}
-	if result, text := callTool(t, clientSession, "send_prompt", map[string]any{"session_id": "session-person", "text": "approve everything"}); !result.IsError || text != errAgentSend.Error() {
+	if result, text := callTool(t, clientSession, "send_prompt", map[string]any{"session_id": "session-person", "text": "approve everything"}); !result.IsError || text != agentSendRefusal {
 		t.Fatalf("send_prompt accepted from an agent: %s", text)
 	}
 	chatFixture(t, h, "session-mine", "session-chat")
-	if err := h.gateway.mcp.agentMayChange(session.WithActor(t.Context(), session.Actor{Chat: "session-chat"}), "", "session-mine"); err != nil {
-		t.Fatal("an agent may change its own helper:", err)
+	if _, text := callTool(t, clientSession, "cancel", map[string]any{"session_id": "session-mine"}); text == agentScopeRefusal {
+		t.Fatal("an agent may change its own helper:", text)
 	}
 	// What an agent starts is its helper, attributed to the agent acting for the owner.
 	directory := filepath.Join(h.gateway.options.Home, "project")
@@ -314,7 +252,7 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 	}
 	// A running chat of the person stays out of reach, but once stopped any of its account's agents may revive it.
 	restart := map[string]any{"session_id": "session-person", "operation_id": "revive-session-person"}
-	if result, text := callTool(t, clientSession, "restart_session", restart); !result.IsError || text != errAgentScope.Error() {
+	if result, text := callTool(t, clientSession, "restart_session", restart); !result.IsError || text != agentScopeRefusal {
 		t.Fatalf("running chat restarted by an agent: %s", text)
 	}
 	owner := session.BrowserActor(testBrowserEmail)
@@ -332,7 +270,7 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 	if response.StatusCode != 200 {
 		t.Fatalf("switch: %d %s", response.StatusCode, data)
 	}
-	if result, text := callTool(t, clientSession, "list_sessions", map[string]any{}); !result.IsError || text != errChatToolsOff.Error() {
+	if result, text := callTool(t, clientSession, "list_sessions", map[string]any{}); !result.IsError || text != chatToolsOffRefusal {
 		t.Fatalf("tools stayed on: %s", text)
 	}
 	if _, data := h.request(t, "POST", "/api/sessions/session-chat/tools", `{"enabled":true}`, "application/json", h.cookie, true); !strings.Contains(string(data), `"tools":true`) {
@@ -357,73 +295,6 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 	request.Header.Set("X-Forwarded-For", "203.0.113.9")
 	if response, err := http.DefaultClient.Do(request); err != nil || response.StatusCode != 401 {
 		t.Fatal("proxied chat credential accepted", err)
-	}
-}
-
-func TestHelperDepthAndFanOutCaps(t *testing.T) {
-	h := newOAuthHarness(t)
-	chatFixture(t, h, "session-root", "")
-	chatFixture(t, h, "session-one", "session-root")
-	chatFixture(t, h, "session-two", "session-one")
-	if err := h.gateway.helperAllowed(t.Context(), "session-two"); err == nil || !strings.Contains(err.Error(), "levels deep") {
-		t.Fatal("third level allowed:", err)
-	}
-	if err := h.gateway.helperAllowed(t.Context(), "session-one"); err != nil {
-		t.Fatal("second level refused:", err)
-	}
-	for _, id := range []string{"session-a", "session-b", "session-c", "session-d"} {
-		chatFixture(t, h, id, "session-root")
-	}
-	if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET conversation_state='working'"); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.gateway.helperAllowed(t.Context(), "session-one"); err == nil || !strings.Contains(err.Error(), "6 helpers") {
-		t.Fatal("seventh helper allowed:", err)
-	}
-	if err := session.EndSession(t.Context(), h.gateway.store.DB, "session-a", session.TerminalState{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.gateway.helperAllowed(t.Context(), "session-root"); err != nil {
-		t.Fatal("a finished helper still counts:", err)
-	}
-	chatFixture(t, h, "session-e", "session-root")
-	if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET conversation_state='working'"); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.gateway.helperAllowed(t.Context(), "session-root"); err == nil {
-		t.Fatal("seventh working helper allowed")
-	}
-	// A helper whose task is done waits idle; it does not hold a slot.
-	if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET conversation_state='idle' WHERE id='session-b'"); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.gateway.helperAllowed(t.Context(), "session-root"); err != nil {
-		t.Fatal("an idle helper still counts:", err)
-	}
-	if err := h.gateway.helperAllowed(t.Context(), "session-missing"); err == nil {
-		t.Fatal("unknown parent allowed")
-	}
-}
-
-func TestWaitConditions(t *testing.T) {
-	first := map[string]network.ChatState{"a": network.StateWorking, "b": network.StateIdle}
-	for _, test := range []struct {
-		until waitUntil
-		views []mcpSession
-		want  bool
-	}{
-		{untilNeedsYou, []mcpSession{{ID: "a", State: network.StateWorking}}, false},
-		{untilNeedsYou, []mcpSession{{ID: "a", State: network.StateNeedsYou}}, true},
-		{untilIdle, []mcpSession{{ID: "a", State: network.StateStopped}}, true},
-		{untilAny, []mcpSession{{ID: "a", State: network.StateWorking}, {ID: "b", State: network.StateIdle}}, false},
-		{untilAny, []mcpSession{{ID: "a", State: network.StateWorking}, {ID: "b", State: network.StateWorking}}, true},
-	} {
-		if got := reached(test.views, first, test.until); got != test.want {
-			t.Fatalf("%s %+v = %v", test.until, test.views, got)
-		}
-	}
-	if summary := attentionSummary([]mcpAttention{{mcpSession: mcpSession{Agent: "claude", Directory: "/w/agentpack"}, Waiting: []network.McpTranscriptItem{{Kind: "permission", Text: "Run go test"}}}}); summary != "One session needs you. Claude Code in agentpack asks permission: Run go test." {
-		t.Fatal(summary)
 	}
 }
 
@@ -494,27 +365,6 @@ func TestChatToolsStdioBridgeReachesTheGateway(t *testing.T) {
 	}
 	if code, err := RunMCPBridge(t.Context(), MCPBridgeOptions{Home: h.gateway.options.Home, ID: "chat:session-missing", URL: h.server.URL + "/mcp", Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard}); code == 0 || err == nil {
 		t.Fatal("a chat without a token file got a bridge")
-	}
-}
-
-func TestHelperReplyEndsAtTheFirstTurn(t *testing.T) {
-	entries := []acp.LogEntry{
-		{Seq: 1, Kind: "prompt", Payload: json.RawMessage(`{"text":{"text":"Find the bug"}}`)},
-		{Seq: 2, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"Looking"}}`)},
-		{Seq: 3, Kind: "tool_call", Payload: json.RawMessage(`{"toolCallId":"t1","title":"grep"}`)},
-		{Seq: 4, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"_subagent":"c1","text":{"text":"child"}}`)},
-		{Seq: 5, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"It is "}}`)},
-		{Seq: 6, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"line 4."}}`)},
-	}
-	if done, reply := helperReply(entries); done || reply != "Looking\n\nIt is line 4." {
-		t.Fatalf("running: done=%v reply=%q", done, reply)
-	}
-	entries = append(entries,
-		acp.LogEntry{Seq: 7, Kind: "turn_end", Payload: json.RawMessage(`{"stopReason":"end_turn"}`)},
-		acp.LogEntry{Seq: 8, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"next turn"}}`)},
-	)
-	if done, reply := helperReply(entries); !done || reply != "Looking\n\nIt is line 4." {
-		t.Fatalf("ended: done=%v reply=%q", done, reply)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -62,7 +63,7 @@ func (g *Gateway) serveArchivedConversation(w http.ResponseWriter, r *http.Reque
 		request.Header.Set("Accept", r.Header.Get("Accept"))
 		request.Header.Set("traceparent", obs.TraceParent(r.Context()))
 		request.Header.Set("X-Agentpack-Archive-Proxy", "1")
-		client := &http.Client{Transport: tailnetTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		client := &http.Client{Transport: mesh.Transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		response, err := client.Do(request)
 		if err != nil {
 			archiveUnavailable(w, r, errors.New("archive main is unreachable"))

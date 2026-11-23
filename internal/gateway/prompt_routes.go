@@ -20,14 +20,14 @@ import (
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
-func (g *Gateway) servePrompt(w http.ResponseWriter, r *http.Request) {
+func (g *Gateway) ServePrompt(w http.ResponseWriter, r *http.Request) {
 	ctx, id := r.Context(), r.PathValue("id")
 	suffix := "/prompt"
 	if strings.HasSuffix(r.URL.Path, "/images") {
 		suffix = "/prompt/images"
 	}
 	if record, err := g.workerRecord(ctx, id); err == nil {
-		if authorizeACPWrite(w, r, record.Session) {
+		if session.AuthorizeWrite(w, r, record.Session) {
 			network.ProxyWorkerConversation(w, r, record, suffix)
 		}
 		return
@@ -37,7 +37,7 @@ func (g *Gateway) servePrompt(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session unavailable", http.StatusNotFound)
 		return
 	}
-	if !authorizeACPWrite(w, r, info) {
+	if !session.AuthorizeWrite(w, r, info) {
 		return
 	}
 	if info.ConversationState != "starting" || !info.EndedAt.IsZero() {
@@ -68,7 +68,7 @@ func (g *Gateway) servePrompt(w http.ResponseWriter, r *http.Request) {
 	if record, err := g.workerRecord(ctx, id); err == nil {
 		_ = lock.Close()
 		r.Body = io.NopCloser(bytes.NewReader(body))
-		if authorizeACPWrite(w, r, record.Session) {
+		if session.AuthorizeWrite(w, r, record.Session) {
 			network.ProxyWorkerConversation(w, r, record, suffix)
 		}
 		return
@@ -115,10 +115,10 @@ func appendStartingPrompt(ctx context.Context, tx *sql.Tx, id string, item netwo
 	return err
 }
 
-// removeStartingPrompt drops a prompt queued while its chat was still starting, as the worker
+// RemoveStartingPrompt drops a prompt queued while its chat was still starting, as the worker
 // would ("removed"), so the worker it starts never sends it. False when there was nothing to drop
 // here: the worker took over, or the chat is not starting.
-func (g *Gateway) removeStartingPrompt(ctx context.Context, id, queueID string) (bool, error) {
+func (g *Gateway) RemoveStartingPrompt(ctx context.Context, id, queueID string) (bool, error) {
 	directory := filepath.Join(g.options.Home, "network", "sessions", id)
 	if err := paths.EnsurePrivateDirectory(directory); err != nil {
 		return false, err

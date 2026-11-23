@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	gatewaymcp "github.com/olegpustovit/agentpack/internal/gateway/mcp"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -24,6 +27,30 @@ type receivedPrompt struct {
 }
 
 // fakeChatWorker points a chat fixture at a worker that records each request it is sent.
+// Task tool results as an MCP client decodes them.
+type (
+	taskAsked struct {
+		TaskID    string `json:"task_id"`
+		ContextID string `json:"context_id"`
+		State     string `json:"state"`
+	}
+	taskReplied struct {
+		State     string `json:"state"`
+		Delivered bool   `json:"delivered"`
+	}
+	taskView struct {
+		TaskID    string    `json:"task_id"`
+		ContextID string    `json:"context_id"`
+		Direction string    `json:"direction"`
+		SessionID string    `json:"session_id"`
+		Node      string    `json:"node"`
+		State     string    `json:"state"`
+		Request   string    `json:"request"`
+		Result    string    `json:"result"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+)
+
 func fakeChatWorker(t *testing.T, h *oauthHarness, id string) func() []receivedPrompt {
 	t.Helper()
 	var mu sync.Mutex
@@ -126,8 +153,8 @@ func TestAgentsAskReplyAndWakeTheSender(t *testing.T) {
 	toA, toB := fakeChatWorker(t, h, "session-a"), fakeChatWorker(t, h, "session-b")
 
 	// A asks B, a separate top-level chat of the same account.
-	asked, text, failed := structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Review auth.go"})
-	if failed || asked.TaskID == "" || asked.State != taskSubmitted || asked.ContextID != asked.TaskID {
+	asked, text, failed := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Review auth.go"})
+	if failed || asked.TaskID == "" || asked.State != "submitted" || asked.ContextID != asked.TaskID {
 		t.Fatalf("ask: %s %+v", text, asked)
 	}
 	prompts := toB()
@@ -140,8 +167,8 @@ func TestAgentsAskReplyAndWakeTheSender(t *testing.T) {
 	}
 
 	// B replies; the answer wakes A with a prompt naming B.
-	replied, text, failed := structured[mcpReplied](t, h, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "Line 4 leaks the token."})
-	if failed || !replied.Delivered || replied.State != taskCompleted {
+	replied, text, failed := structured[taskReplied](t, h, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "Line 4 leaks the token."})
+	if failed || !replied.Delivered || replied.State != "completed" {
 		t.Fatalf("reply: %s %+v", text, replied)
 	}
 	prompts = toA()
@@ -152,23 +179,23 @@ func TestAgentsAskReplyAndWakeTheSender(t *testing.T) {
 	if state, result := taskRow(t, h, asked.TaskID, "out"); state != "completed" || result != "Line 4 leaks the token." {
 		t.Fatal("out row", state, result)
 	}
-	if _, text, failed := structured[mcpReplied](t, h, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "again"}); !failed || !strings.Contains(text, "not waiting") {
+	if _, text, failed := structured[taskReplied](t, h, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "again"}); !failed || !strings.Contains(text, "not waiting") {
 		t.Fatal("second reply accepted:", text)
 	}
-	list, _, _ := structured[struct{ Tasks []mcpTask }](t, h, tokenA, "tasks", map[string]any{})
+	list, _, _ := structured[struct{ Tasks []taskView }](t, h, tokenA, "tasks", map[string]any{})
 	if len(list.Tasks) != 1 || list.Tasks[0].Direction != "sent" || list.Tasks[0].SessionID != "session-b" || list.Tasks[0].Result != "Line 4 leaks the token." {
 		t.Fatalf("A's tasks %+v", list.Tasks)
 	}
 
 	// B asks A a question first; A answers it; the task goes back to B.
-	asked, _, _ = structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Fix the bug"})
-	if _, text, failed := structured[mcpReplied](t, h, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "Which bug?", "state": "input_required"}); failed {
+	asked, _, _ = structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Fix the bug"})
+	if _, text, failed := structured[taskReplied](t, h, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "Which bug?", "state": "input_required"}); failed {
 		t.Fatal(text)
 	}
 	if last := lastPrompt(t, toA); !strings.HasPrefix(last.text, "[agentpack question · task "+asked.TaskID) {
 		t.Fatalf("question %+v", last)
 	}
-	if replied, text, failed := structured[mcpReplied](t, h, tokenA, "reply", map[string]any{"task_id": asked.TaskID, "text": "The token leak"}); failed || replied.State != taskSubmitted {
+	if replied, text, failed := structured[taskReplied](t, h, tokenA, "reply", map[string]any{"task_id": asked.TaskID, "text": "The token leak"}); failed || replied.State != "submitted" {
 		t.Fatal("answering the question:", text)
 	}
 	if last := lastPrompt(t, toB); last.from.Kind != "ask" || last.from.Task != asked.TaskID || !strings.HasSuffix(last.text, "The token leak") {
@@ -180,7 +207,7 @@ func TestAgentsAskReplyAndWakeTheSender(t *testing.T) {
 
 	// B never calls reply: its turn starting marks the task working on both sides, and the turn's last message answers it.
 	appendEvents(t, h, "session-b", taskPrompt(1, asked.TaskID), message(2, "Fixed in "), message(3, "abc123."))
-	if err := h.gateway.agentTasksPass(t.Context()); err != nil {
+	if err := h.gateway.mcp.TaskPass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if in, _ := taskRow(t, h, asked.TaskID, "in"); in != "working" {
@@ -190,7 +217,7 @@ func TestAgentsAskReplyAndWakeTheSender(t *testing.T) {
 		t.Fatal("out row while working:", out)
 	}
 	appendEvents(t, h, "session-b", turnEnd(4))
-	if err := h.gateway.agentTasksPass(t.Context()); err != nil {
+	if err := h.gateway.mcp.TaskPass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if last := lastPrompt(t, toA); last.from.Task != asked.TaskID || !strings.HasSuffix(last.text, "Fixed in abc123.") {
@@ -201,8 +228,8 @@ func TestAgentsAskReplyAndWakeTheSender(t *testing.T) {
 	}
 
 	// B declines.
-	asked, _, _ = structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Delete prod"})
-	if _, text, failed := structured[mcpReplied](t, h, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "No.", "state": "rejected"}); failed {
+	asked, _, _ = structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Delete prod"})
+	if _, text, failed := structured[taskReplied](t, h, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "No.", "state": "rejected"}); failed {
 		t.Fatal(text)
 	}
 	if state, _ := taskRow(t, h, asked.TaskID, "out"); state != "rejected" || lastPrompt(t, toA).from.State != "rejected" {
@@ -212,11 +239,11 @@ func TestAgentsAskReplyAndWakeTheSender(t *testing.T) {
 	// A chat that stops before answering fails the task.
 	chatFixture(t, h, "session-c", "")
 	fakeChatWorker(t, h, "session-c")
-	asked, _, _ = structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-c", "text": "Anything"})
+	asked, _, _ = structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-c", "text": "Anything"})
 	if err := session.EndSession(t.Context(), h.gateway.store.DB, "session-c", session.TerminalState{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.gateway.agentTasksPass(t.Context()); err != nil {
+	if err := h.gateway.mcp.TaskPass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if state, result := taskRow(t, h, asked.TaskID, "out"); state != "failed" || !strings.Contains(result, "stopped") {
@@ -224,7 +251,7 @@ func TestAgentsAskReplyAndWakeTheSender(t *testing.T) {
 	}
 
 	// An asking chat that stopped is not woken, but its tasks still get the answer.
-	asked, _, _ = structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Last one"})
+	asked, _, _ = structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Last one"})
 	if err := session.EndSession(t.Context(), h.gateway.store.DB, "session-a", session.TerminalState{}); err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +259,7 @@ func TestAgentsAskReplyAndWakeTheSender(t *testing.T) {
 		t.Fatal(err) // a stopped chat's worker is gone
 	}
 	woken := len(toA())
-	if replied, text, failed := structured[mcpReplied](t, h, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "Done."}); failed || !replied.Delivered || len(toA()) != woken {
+	if replied, text, failed := structured[taskReplied](t, h, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "Done."}); failed || !replied.Delivered || len(toA()) != woken {
 		t.Fatalf("reply to a stopped chat: %s %+v", text, replied)
 	}
 	if state, result := taskRow(t, h, asked.TaskID, "out"); state != "completed" || result != "Done." {
@@ -263,21 +290,21 @@ func TestCancelTaskStopsTheWorkAndRefusesTheAnswer(t *testing.T) {
 		return calls[len(calls)-1]
 	}
 	// Still queued: the queued prompt is removed.
-	queued, _, _ := structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "one"})
+	queued, _, _ := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "one"})
 	var operation string
 	if err := h.gateway.store.DB.QueryRow("SELECT operation FROM agent_tasks WHERE id=? AND role='in'", queued.TaskID).Scan(&operation); err != nil {
 		t.Fatal(err)
 	}
-	if out, text, failed := structured[struct{ State taskState }](t, h, tokenA, "cancel_task", map[string]any{"task_id": queued.TaskID}); failed || out.State != taskCanceled {
+	if out, text, failed := structured[struct{ State string }](t, h, tokenA, "cancel_task", map[string]any{"task_id": queued.TaskID}); failed || out.State != "canceled" {
 		t.Fatal("cancel:", text)
 	}
 	if got := last(); got != "DELETE /conversation/queue/"+operation {
 		t.Fatal("queued prompt not removed:", got)
 	}
 	// Working: the turn it started is cancelled.
-	working, _, _ := structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "two"})
+	working, _, _ := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "two"})
 	appendEvents(t, h, "session-b", taskPrompt(1, working.TaskID))
-	if _, text, failed := structured[struct{ State taskState }](t, h, tokenA, "cancel_task", map[string]any{"task_id": working.TaskID}); failed {
+	if _, text, failed := structured[struct{ State string }](t, h, tokenA, "cancel_task", map[string]any{"task_id": working.TaskID}); failed {
 		t.Fatal(text)
 	}
 	if got := last(); got != "POST /conversation/cancel" {
@@ -287,11 +314,11 @@ func TestCancelTaskStopsTheWorkAndRefusesTheAnswer(t *testing.T) {
 		if in, _ := taskRow(t, h, task, "in"); in != "canceled" {
 			t.Fatal("in row", in)
 		}
-		if _, text, failed := structured[mcpReplied](t, h, tokenB, "reply", map[string]any{"task_id": task, "text": "late"}); !failed {
+		if _, text, failed := structured[taskReplied](t, h, tokenB, "reply", map[string]any{"task_id": task, "text": "late"}); !failed {
 			t.Fatal("answer to a canceled task accepted:", text)
 		}
 	}
-	if _, text, failed := structured[struct{ State taskState }](t, h, tokenA, "cancel_task", map[string]any{"task_id": working.TaskID}); !failed || !strings.Contains(text, "already ended") {
+	if _, text, failed := structured[struct{ State string }](t, h, tokenA, "cancel_task", map[string]any{"task_id": working.TaskID}); !failed || !strings.Contains(text, "already ended") {
 		t.Fatal("second cancel:", text)
 	}
 }
@@ -304,11 +331,11 @@ func TestCancelRemovesAPromptQueuedWhileTheChatStarts(t *testing.T) {
 	if err := session.UpsertSession(t.Context(), h.gateway.store.DB, session.SessionInfo{ID: "session-new", Harness: "claude", Transport: "acp", StartedBy: &owner, ConversationState: "starting", State: session.TerminalState{Running: true}}); err != nil {
 		t.Fatal(err)
 	}
-	asked, text, failed := structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-new", "text": "hi"})
+	asked, text, failed := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-new", "text": "hi"})
 	if failed {
 		t.Fatal(text)
 	}
-	if _, text, failed := structured[struct{ State taskState }](t, h, tokenA, "cancel_task", map[string]any{"task_id": asked.TaskID}); failed {
+	if _, text, failed := structured[struct{ State string }](t, h, tokenA, "cancel_task", map[string]any{"task_id": asked.TaskID}); failed {
 		t.Fatal(text)
 	}
 	// The worker that starts replays the log: the prompt was queued, then removed, so it is never sent.
@@ -340,7 +367,7 @@ func TestAskLimitsAndContexts(t *testing.T) {
 	fakeChatWorker(t, h, "session-a")
 	fakeChatWorker(t, h, "session-b")
 	fakeChatWorker(t, h, "session-c")
-	if _, text, failed := structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-a", "text": "hi"}); !failed || !strings.Contains(text, "itself") {
+	if _, text, failed := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-a", "text": "hi"}); !failed || !strings.Contains(text, "itself") {
 		t.Fatal("asked itself:", text)
 	}
 	// A chat of another account cannot be asked.
@@ -348,40 +375,41 @@ func TestAskLimitsAndContexts(t *testing.T) {
 	if err := session.UpsertSession(t.Context(), h.gateway.store.DB, session.SessionInfo{ID: "session-other", Harness: "claude", Transport: "acp", StartedBy: &other, ConversationState: "idle", State: session.TerminalState{Running: true}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, text, failed := structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-other", "text": "hi"}); !failed {
+	if _, text, failed := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-other", "text": "hi"}); !failed {
 		t.Fatal("asked another account's chat:", text)
 	}
 	if n := countRows(t, h, "SELECT count(*) FROM agent_tasks"); n != 0 {
 		t.Fatal("a refused ask left rows:", n)
 	}
 	// An ask made while answering one continues its context, one hop further.
-	first, _, _ := structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "hi", "context_id": "ctx-1"})
-	second, _, _ := structured[mcpAsked](t, h, tokenB, "ask", map[string]any{"session_id": "session-c", "text": "sub"})
+	first, _, _ := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "hi", "context_id": "ctx-1"})
+	second, _, _ := structured[taskAsked](t, h, tokenB, "ask", map[string]any{"session_id": "session-c", "text": "sub"})
 	if first.ContextID != "ctx-1" || second.ContextID != "ctx-1" || countRows(t, h, "SELECT hops FROM agent_tasks WHERE id='"+second.TaskID+"' AND role='in'") != 1 {
 		t.Fatalf("context %+v %+v", first, second)
 	}
-	list, _, _ := structured[struct{ Tasks []mcpTask }](t, h, tokenB, "tasks", map[string]any{"context_id": "ctx-1"})
+	list, _, _ := structured[struct{ Tasks []taskView }](t, h, tokenB, "tasks", map[string]any{"context_id": "ctx-1"})
 	if len(list.Tasks) != 2 {
 		t.Fatalf("B's ctx-1 tasks %+v", list.Tasks)
 	}
 	// A request that already passed through maxTaskHops chats is answered, not forwarded.
-	if _, err := h.gateway.store.DB.Exec("UPDATE agent_tasks SET hops=? WHERE id=?", maxTaskHops, first.TaskID); err != nil {
+	if _, err := h.gateway.store.DB.Exec("UPDATE agent_tasks SET hops=? WHERE id=?", 4, first.TaskID); err != nil {
 		t.Fatal(err)
 	}
-	if _, text, failed := structured[mcpAsked](t, h, tokenB, "ask", map[string]any{"session_id": "session-c", "text": "hi"}); !failed || !strings.Contains(text, "passed through") {
+	if _, text, failed := structured[taskAsked](t, h, tokenB, "ask", map[string]any{"session_id": "session-c", "text": "hi"}); !failed || !strings.Contains(text, "passed through") {
 		t.Fatal("hop limit:", text)
 	}
-	for range maxAsksPerMinute - 1 {
-		if _, text, failed := structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-c", "text": "hi"}); failed {
+	for range 20 - 1 { // 20 asks a minute per chat
+		if _, text, failed := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-c", "text": "hi"}); failed {
 			t.Fatal(text)
 		}
 	}
-	if _, text, failed := structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-c", "text": "hi"}); !failed || !strings.Contains(text, "last minute") {
+	if _, text, failed := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-c", "text": "hi"}); !failed || !strings.Contains(text, "last minute") {
 		t.Fatal("rate limit:", text)
 	}
 	// A person's MCP client has no chat to be woken.
-	if _, err := h.gateway.mcp.ask(t.Context(), "", "session-b", "hi", ""); err != errNotAChat {
-		t.Fatal("person asked:", err)
+	person := h.exchange(t, h.codeForm(h.code(t)), 200).Access
+	if _, text, failed := structured[taskAsked](t, h, person, "ask", map[string]any{"session_id": "session-b", "text": "hi"}); !failed || !strings.Contains(text, "are for a chat's agent") {
+		t.Fatal("person asked:", text)
 	}
 }
 
@@ -390,13 +418,13 @@ func TestWaitReturnsWhenATaskIsAnswered(t *testing.T) {
 	tokenA, tokenB := chatFixture(t, h, "session-a", ""), chatFixture(t, h, "session-b", "")
 	fakeChatWorker(t, h, "session-a")
 	fakeChatWorker(t, h, "session-b")
-	poll := mcpWaitPoll
-	mcpWaitPoll = time.Millisecond
-	t.Cleanup(func() { mcpWaitPoll = poll })
-	asked, _, _ := structured[mcpAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "hi"})
+	poll := gatewaymcp.WaitPoll
+	gatewaymcp.WaitPoll = time.Millisecond
+	t.Cleanup(func() { gatewaymcp.WaitPoll = poll })
+	asked, _, _ := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "hi"})
 	type waited struct {
 		Reached bool
-		Tasks   []mcpTask
+		Tasks   []taskView
 	}
 	done := make(chan waited, 1)
 	waiting := mcpClient(t, h, tokenA)
@@ -409,10 +437,10 @@ func TestWaitReturnsWhenATaskIsAnswered(t *testing.T) {
 		}
 		done <- out
 	}()
-	structured[mcpReplied](t, h, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "hello"})
+	structured[taskReplied](t, h, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "hello"})
 	select {
 	case out := <-done:
-		if !out.Reached || len(out.Tasks) != 1 || out.Tasks[0].State != taskCompleted || out.Tasks[0].Result != "hello" {
+		if !out.Reached || len(out.Tasks) != 1 || out.Tasks[0].State != "completed" || out.Tasks[0].Result != "hello" {
 			t.Fatalf("wait %+v", out)
 		}
 	case <-time.After(5 * time.Second):
@@ -428,7 +456,7 @@ func meshPair(t *testing.T) (*oauthHarness, *oauthHarness, string, string) {
 	idOne, _ := one.gateway.store.NodeID(t.Context())
 	idTwo, _ := two.gateway.store.NodeID(t.Context())
 	link := func(from, to *oauthHarness, fromID, toID string) {
-		from.gateway.mcp.peer = func(node string) http.Handler {
+		from.gateway.mcpNodes = func(node string) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if node != toID {
 					http.Error(w, "node is unavailable or not allowed", http.StatusBadGateway)
@@ -450,7 +478,7 @@ func TestAgentsMessageAcrossMachines(t *testing.T) {
 	one, two, idOne, idTwo := meshPair(t)
 	tokenA, tokenB := chatFixture(t, one, "session-a", ""), chatFixture(t, two, "session-b", "")
 	toA, toB := fakeChatWorker(t, one, "session-a"), fakeChatWorker(t, two, "session-b")
-	asked, text, failed := structured[mcpAsked](t, one, tokenA, "ask", map[string]any{"session_id": "session-b", "node": idTwo, "text": "Run the GPU benchmark"})
+	asked, text, failed := structured[taskAsked](t, one, tokenA, "ask", map[string]any{"session_id": "session-b", "node": idTwo, "text": "Run the GPU benchmark"})
 	if failed {
 		t.Fatal("ask across machines:", text)
 	}
@@ -463,64 +491,47 @@ func TestAgentsMessageAcrossMachines(t *testing.T) {
 	}
 	// Working and the answer travel back to the asking machine.
 	appendEvents(t, two, "session-b", taskPrompt(1, asked.TaskID))
-	if err := two.gateway.agentTasksPass(t.Context()); err != nil {
+	if err := two.gateway.mcp.TaskPass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if state, _ := taskRow(t, one, asked.TaskID, "out"); state != "working" {
 		t.Fatal("status across machines:", state)
 	}
-	if replied, text, failed := structured[mcpReplied](t, two, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "42 it/s"}); failed || !replied.Delivered {
+	if replied, text, failed := structured[taskReplied](t, two, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "42 it/s"}); failed || !replied.Delivered {
 		t.Fatal("reply across machines:", text)
 	}
 	if last := lastPrompt(t, toA); last.from.Node != idTwo || !strings.HasSuffix(last.text, "42 it/s") {
 		t.Fatalf("A received %+v", last)
 	}
-	list, _, _ := structured[struct{ Tasks []mcpTask }](t, one, tokenA, "tasks", map[string]any{})
-	if len(list.Tasks) != 1 || list.Tasks[0].Node != idTwo || list.Tasks[0].State != taskCompleted {
+	list, _, _ := structured[struct{ Tasks []taskView }](t, one, tokenA, "tasks", map[string]any{})
+	if len(list.Tasks) != 1 || list.Tasks[0].Node != idTwo || list.Tasks[0].State != "completed" {
 		t.Fatalf("A's tasks %+v", list.Tasks)
 	}
 	// Cancel across machines.
-	asked, _, _ = structured[mcpAsked](t, one, tokenA, "ask", map[string]any{"session_id": "session-b", "node": idTwo, "text": "Another"})
-	if _, text, failed := structured[struct{ State taskState }](t, one, tokenA, "cancel_task", map[string]any{"task_id": asked.TaskID}); failed {
+	asked, _, _ = structured[taskAsked](t, one, tokenA, "ask", map[string]any{"session_id": "session-b", "node": idTwo, "text": "Another"})
+	if _, text, failed := structured[struct{ State string }](t, one, tokenA, "cancel_task", map[string]any{"task_id": asked.TaskID}); failed {
 		t.Fatal(text)
 	}
 	if state, _ := taskRow(t, two, asked.TaskID, "in"); state != "canceled" {
 		t.Fatal("cancel across machines:", state)
 	}
 	// A stopped asking chat on the other machine still gets its answer in tasks.
-	asked, _, _ = structured[mcpAsked](t, one, tokenA, "ask", map[string]any{"session_id": "session-b", "node": idTwo, "text": "Last"})
+	asked, _, _ = structured[taskAsked](t, one, tokenA, "ask", map[string]any{"session_id": "session-b", "node": idTwo, "text": "Last"})
 	if err := session.EndSession(t.Context(), one.gateway.store.DB, "session-a", session.TerminalState{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(one.gateway.options.Home, "network", "sessions", "session-a", "worker.json")); err != nil {
 		t.Fatal(err)
 	}
-	if replied, text, failed := structured[mcpReplied](t, two, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "Done remotely."}); failed || !replied.Delivered {
+	if replied, text, failed := structured[taskReplied](t, two, tokenB, "reply", map[string]any{"task_id": asked.TaskID, "text": "Done remotely."}); failed || !replied.Delivered {
 		t.Fatal(text)
 	}
 	if state, result := taskRow(t, one, asked.TaskID, "out"); state != "completed" || result != "Done remotely." {
 		t.Fatal("stopped asker across machines:", state, result)
 	}
 	// An older machine without the route says so.
-	one.gateway.mcp.peer = func(string) http.Handler { return http.NotFoundHandler() }
-	if _, text, failed := structured[mcpAsked](t, one, tokenA, "ask", map[string]any{"session_id": "session-b", "node": idTwo, "text": "hi"}); !failed || !strings.Contains(text, "update it") {
+	one.gateway.mcpNodes = func(string) http.Handler { return http.NotFoundHandler() }
+	if _, text, failed := structured[taskAsked](t, one, tokenA, "ask", map[string]any{"session_id": "session-b", "node": idTwo, "text": "hi"}); !failed || !strings.Contains(text, "update it") {
 		t.Fatal("old peer:", text)
-	}
-}
-
-func TestPromptSenderSurvivesTheQueueAndNamesTheChat(t *testing.T) {
-	from := &acp.PromptFrom{Session: "session-a", Task: "t_0123456789abcdef", Kind: "ask"}
-	input, err := network.PromptInputFromLog(network.QueuedPromptPayload(network.QueuedPrompt{ID: "q", Input: acp.PromptInput{Text: "hi", From: from}}))
-	if err != nil || input.From == nil || *input.From != *from {
-		t.Fatalf("%+v %v", input.From, err)
-	}
-	message := agentMessage{Task: from.Task, Kind: "ask", FromSession: "session-a", FromAgent: "claude", Text: "Review   auth.go"}
-	if title := network.TitleFromPrompt(envelope(message)); title != "Review auth.go" {
-		t.Fatal(title)
-	}
-	// A person cannot set a sender: the worker reads it only from the gateway's header.
-	request := httptest.NewRequest("POST", "/conversation/prompt", strings.NewReader(`{"text":"hi","from":{"session":"x","task":"t"}}`))
-	if prompt, _, ok := network.ReadPromptRequest(httptest.NewRecorder(), request); ok && prompt.From != nil {
-		t.Fatalf("sender from the body: %+v", prompt.From)
 	}
 }

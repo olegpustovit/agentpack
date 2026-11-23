@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/registry"
 	"github.com/olegpustovit/agentpack/internal/state"
 	"github.com/olegpustovit/agentpack/internal/state/statetest"
@@ -200,11 +201,11 @@ func TestReplicationIdentityCannotBeSuppliedInHeaders(t *testing.T) {
 func TestDiscoveredPeersEnrollAutomatically(t *testing.T) {
 	g, _ := registryGateway(t, "nSelf", "")
 	// An unclaimed gateway pairs with every discovered peer, not only the first one it joins.
-	g.autoEnroll(t.Context(), []TailnetNode{{ID: "nPeer", Name: "gigacomp", Online: true}, {ID: "nOther"}})
+	g.autoEnroll(t.Context(), []mesh.Node{{ID: "nPeer", Name: "gigacomp", Online: true}, {ID: "nOther"}})
 	if !g.peer("nPeer").Mesh || !g.peer("nOther").Mesh {
 		t.Fatal("a discovered peer was not paired")
 	}
-	g.autoEnroll(t.Context(), []TailnetNode{{ID: "nPeer"}})
+	g.autoEnroll(t.Context(), []mesh.Node{{ID: "nPeer"}})
 	peers, err := g.options.Library.Store.ListPeers()
 	if err != nil || len(peers) != 2 {
 		t.Fatalf("peers = %v, %v", peers, err)
@@ -212,7 +213,7 @@ func TestDiscoveredPeersEnrollAutomatically(t *testing.T) {
 	if err := g.options.Library.Store.RemovePeer("nPeer"); err != nil {
 		t.Fatal(err)
 	}
-	g.autoEnroll(t.Context(), []TailnetNode{{ID: "nPeer"}})
+	g.autoEnroll(t.Context(), []mesh.Node{{ID: "nPeer"}})
 	if g.peer("nPeer").Mesh {
 		t.Fatal("a removed peer was paired again")
 	}

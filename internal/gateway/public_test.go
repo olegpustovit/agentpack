@@ -13,9 +13,11 @@ import (
 	"strings"
 	"testing"
 
+	"tailscale.com/ipn"
+
+	"github.com/olegpustovit/agentpack/internal/gateway/mcp"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/state"
-	"tailscale.com/ipn"
 )
 
 const testPublicOrigin = "https://agentpack.example.com"
@@ -206,12 +208,12 @@ func TestPublicAccessVerifiesItselfBeforeEnabling(t *testing.T) {
 		failed  string
 	}{
 		{"another server", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			network.WriteJSON(w, protectedResourceMetadata(testPublicOrigin))
+			network.WriteJSON(w, mcp.ProtectedResourceMetadata(testPublicOrigin))
 		}), "reachable"},
 		// A server that copies the request header back must not pass for this gateway.
 		{"echoes the probe", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Agentpack-Probe", r.Header.Get("X-Agentpack-Probe"))
-			network.WriteJSON(w, protectedResourceMetadata(testPublicOrigin))
+			network.WriteJSON(w, mcp.ProtectedResourceMetadata(testPublicOrigin))
 		}), "reachable"},
 		{"host dropped", forward(false), "mcp"},
 		{"reaches itself", forward(true), ""},

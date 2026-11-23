@@ -2,53 +2,14 @@ package gateway
 
 import (
 	"context"
-	"github.com/olegpustovit/agentpack/internal/network"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/network"
 )
-
-// ProjectContents is one folder's pack.lock as a node reports it.
-type ProjectContents struct {
-	Packages []ProjectPackage `json:"packages"`
-	MCP      []ProjectMCP     `json:"mcp"`
-	Modes    []ProjectMode    `json:"modes"`
-}
-
-// ProjectMode names one mode and what it turns off; selectors themselves stay on the node.
-type ProjectMode struct {
-	Name            string   `json:"name"`
-	OffPackages     []string `json:"off_packages"`
-	PartialPackages []string `json:"partial_packages"`
-	OffMCP          []string `json:"off_mcp"`
-}
-
-type ProjectPackage struct {
-	Module      string `json:"module"`
-	Commit      string `json:"commit"`
-	ContentHash string `json:"content_hash"`
-	CacheKey    string `json:"cache_key"`
-	Kind        string `json:"kind"`
-	Name        string `json:"name"`
-	URL         string `json:"url"`
-	Direct      bool   `json:"direct"`
-}
-
-type ProjectMCP struct {
-	Name      string `json:"name"`
-	Source    string `json:"source"`
-	Launcher  string `json:"launcher"`
-	Status    string `json:"status"`
-	Package   string `json:"package"`
-	Version   string `json:"version"`
-	Integrity string `json:"integrity"`
-	Host      string `json:"host"`
-	Reason    string `json:"reason"`
-	// URL is set for a remote server that a shared MCP login can serve (mcp.LoginURL).
-	URL string `json:"url,omitempty"`
-}
 
 type ProjectLaunch struct {
 	Harness  string    `json:"harness"`
@@ -58,17 +19,17 @@ type ProjectLaunch struct {
 
 // ProjectRow is one folder. Launches are unique per harness and mode, newest first.
 type ProjectRow struct {
-	Directory         string           `json:"directory"`
-	Name              string           `json:"name"`
-	FolderID          string           `json:"folder_id"`
-	Available         bool             `json:"available"`
-	UnavailableReason string           `json:"unavailable_reason"`
-	LastUsed          time.Time        `json:"last_used"`
-	Launches          []ProjectLaunch  `json:"launches"`
-	Packages          []ProjectPackage `json:"packages"`
-	MCP               []ProjectMCP     `json:"mcp"`
-	Modes             []ProjectMode    `json:"modes"`
-	Error             string           `json:"error"`
+	Directory         string                   `json:"directory"`
+	Name              string                   `json:"name"`
+	FolderID          string                   `json:"folder_id"`
+	Available         bool                     `json:"available"`
+	UnavailableReason string                   `json:"unavailable_reason"`
+	LastUsed          time.Time                `json:"last_used"`
+	Launches          []ProjectLaunch          `json:"launches"`
+	Packages          []network.ProjectPackage `json:"packages"`
+	MCP               []network.ProjectMCP     `json:"mcp"`
+	Modes             []network.ProjectMode    `json:"modes"`
+	Error             string                   `json:"error"`
 	// Git is the folder's checkout state; absent when it is not a repository or git is missing.
 	Git *ProjectGit `json:"git,omitempty"`
 }
@@ -161,7 +122,7 @@ func (g *Gateway) projects(ctx context.Context) ([]ProjectRow, error) {
 	return rows, nil
 }
 
-func projectRows(ctx context.Context, folders []network.RecentFolder, contents func(context.Context, string) (ProjectContents, error)) ([]ProjectRow, error) {
+func projectRows(ctx context.Context, folders []network.RecentFolder, contents func(context.Context, string) (network.ProjectContents, error)) ([]ProjectRow, error) {
 	slices.SortStableFunc(folders, func(a, b network.RecentFolder) int { return b.LastUsed.Compare(a.LastUsed) })
 	rows := []ProjectRow{}
 	index := map[string]int{}
@@ -180,9 +141,9 @@ func projectRows(ctx context.Context, folders []network.RecentFolder, contents f
 				UnavailableReason: folder.UnavailableReason,
 				LastUsed:          folder.LastUsed,
 				Launches:          []ProjectLaunch{},
-				Packages:          []ProjectPackage{},
-				MCP:               []ProjectMCP{},
-				Modes:             []ProjectMode{},
+				Packages:          []network.ProjectPackage{},
+				MCP:               []network.ProjectMCP{},
+				Modes:             []network.ProjectMode{},
 			})
 		}
 		row := &rows[i]
@@ -213,9 +174,9 @@ func projectRows(ctx context.Context, folders []network.RecentFolder, contents f
 				row.Error = err.Error()
 				return
 			}
-			row.Packages = append([]ProjectPackage{}, read.Packages...)
-			row.MCP = append([]ProjectMCP{}, read.MCP...)
-			row.Modes = append([]ProjectMode{}, read.Modes...)
+			row.Packages = append([]network.ProjectPackage{}, read.Packages...)
+			row.MCP = append([]network.ProjectMCP{}, read.MCP...)
+			row.Modes = append([]network.ProjectMode{}, read.Modes...)
 		}(&rows[i])
 	}
 	wg.Wait()

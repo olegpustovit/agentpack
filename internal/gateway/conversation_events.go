@@ -12,10 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tmaxmax/go-sse"
+
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
-	"github.com/tmaxmax/go-sse"
 )
 
 type conversationStreamFrame struct {
@@ -166,7 +167,7 @@ func (g *Gateway) readConversationStream(ctx context.Context, id, node string, s
 			return since, false, session.ErrSessionUnavailable
 		}
 		path = "/api/sessions/" + id + "/conversation"
-		transport = tailnetRequestTransport(http.MethodGet, path)
+		transport = g.RequestTransport(http.MethodGet, path)
 	}
 	endpoint := upstream.JoinPath(path)
 	endpoint.RawQuery = query.Encode()

@@ -40,11 +40,11 @@ func TestProjectsGroupsLaunchesIntoOneRow(t *testing.T) {
 	}
 	var mu sync.Mutex
 	calls := 0
-	rows, err := testProjects(home, func(_ context.Context, _ string) (ProjectContents, error) {
+	rows, err := testProjects(home, func(_ context.Context, _ string) (network.ProjectContents, error) {
 		mu.Lock()
 		calls++
 		mu.Unlock()
-		return ProjectContents{Packages: []ProjectPackage{{Module: "github.com/o/r"}}}, nil
+		return network.ProjectContents{Packages: []network.ProjectPackage{{Module: "github.com/o/r"}}}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -75,8 +75,8 @@ func TestProjectsMergesTrailingSlashDuplicates(t *testing.T) {
 			t.Fatal(i, err)
 		}
 	}
-	rows, err := testProjects(home, func(_ context.Context, _ string) (ProjectContents, error) {
-		return ProjectContents{}, nil
+	rows, err := testProjects(home, func(_ context.Context, _ string) (network.ProjectContents, error) {
+		return network.ProjectContents{}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -99,9 +99,9 @@ func TestProjectsDoesNotReadUnavailableFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	var read []string
-	rows, err := testProjects(home, func(_ context.Context, dir string) (ProjectContents, error) {
+	rows, err := testProjects(home, func(_ context.Context, dir string) (network.ProjectContents, error) {
 		read = append(read, dir)
-		return ProjectContents{}, nil
+		return network.ProjectContents{}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -130,11 +130,11 @@ func TestProjectsIsolatesFailingFolder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rows, err := testProjects(home, func(_ context.Context, dir string) (ProjectContents, error) {
+	rows, err := testProjects(home, func(_ context.Context, dir string) (network.ProjectContents, error) {
 		if dir == bad {
-			return ProjectContents{}, errors.New("lock unreadable")
+			return network.ProjectContents{}, errors.New("lock unreadable")
 		}
-		return ProjectContents{Packages: []ProjectPackage{{Module: "github.com/o/r"}}}, nil
+		return network.ProjectContents{Packages: []network.ProjectPackage{{Module: "github.com/o/r"}}}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +177,7 @@ func TestForgetRecentWithoutHarnessOrModeRemovesWholeFolder(t *testing.T) {
 }
 
 // testProjects groups the launches recorded under home the way GET /api/projects does, without git.
-func testProjects(home string, contents func(context.Context, string) (ProjectContents, error)) ([]ProjectRow, error) {
+func testProjects(home string, contents func(context.Context, string) (network.ProjectContents, error)) ([]ProjectRow, error) {
 	recent, err := network.Recent(home)
 	if err != nil {
 		return nil, err

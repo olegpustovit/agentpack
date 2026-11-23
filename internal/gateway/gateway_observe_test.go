@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -229,7 +231,7 @@ func TestPeerProxyPropagatesCorrectedTraceAndStripsPrivateHeaders(t *testing.T) 
 	target, _ := url.Parse(peer.URL)
 	gateway := &Gateway{}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) { gateway.proxyTailnetTo(w, r, "peer", target) })
+	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) { mesh.ProxyTo(w, r, gateway, "peer", target) })
 	queue := obs.NewQueue()
 	request := httptest.NewRequest("GET", "http://localhost/api/sessions?node=peer", nil)
 	request.Header.Set("traceparent", testTraceParent)

@@ -631,7 +631,7 @@ func viewPullRequest(ctx context.Context, dir, branch string) *pullRequest {
 // session and it runs in a worktree. In a shared folder, other agents' edits would be swept in.
 func (g *Gateway) worktreeSession(w http.ResponseWriter, r *http.Request) (info session.SessionInfo, main, root string, ok bool) {
 	info, ok = g.localSession(w, r)
-	if !ok || !authorizeACPWrite(w, r, info) {
+	if !ok || !session.AuthorizeWrite(w, r, info) {
 		return info, "", "", false
 	}
 	main, root, err := worktreeMain(r.Context(), g.options.Home, info.Directory)

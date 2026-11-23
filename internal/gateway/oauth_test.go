@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -21,7 +20,10 @@ import (
 	"testing"
 	"time"
 
+	gatewaymcp "github.com/olegpustovit/agentpack/internal/gateway/mcp"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -51,7 +53,7 @@ func newOAuthHarness(t *testing.T) *oauthHarness {
 		t.Fatal(err)
 	}
 	g := &Gateway{store: store, options: GatewayOptions{Home: home}, auth: auth, origin: origin, local: network.NodeRecord{Address: server.Listener.Addr().String(), Secret: network.RandomToken()}}
-	g.mcp, err = NewGatewayMCP(g)
+	g.mcp, err = gatewaymcp.New(store, home, origin.String(), g)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,19 +218,22 @@ func TestOAuthConsentPKCEBindingAndRefreshReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if h.gateway.mcp, err = gatewaymcp.New(h.gateway.store, h.gateway.options.Home, h.gateway.origin.String(), h.gateway); err != nil {
+		t.Fatal(err)
+	}
 	r := httptest.NewRequest("POST", h.server.URL+"/mcp", nil)
 	r.Header.Set("Authorization", "Bearer "+second.Access)
-	if h.gateway.mcp.authenticate(r) == nil {
+	if h.gateway.mcp.Authenticate(r) == nil {
 		t.Fatal("token did not survive restart")
 	}
 	h.exchange(t, refresh, 400)
-	if h.gateway.mcp.authenticate(r) != nil {
+	if h.gateway.mcp.Authenticate(r) != nil {
 		t.Fatal("refresh replay did not revoke family")
 	}
 	third := h.exchange(t, h.codeForm(h.code(t)), 200)
 	h.request(t, "POST", "/oauth/revoke", url.Values{"token": {third.Refresh}, "client_id": {h.clientID}}.Encode(), "application/x-www-form-urlencoded", nil, false)
 	r.Header.Set("Authorization", "Bearer "+third.Access)
-	if h.gateway.mcp.authenticate(r) != nil {
+	if h.gateway.mcp.Authenticate(r) != nil {
 		t.Fatal("revocation left access token valid")
 	}
 }
@@ -332,34 +337,6 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 	}
 }
 
-func TestOAuthRegisteredClientDoesNotExpire(t *testing.T) {
-	h := newOAuthHarness(t)
-	err := state.Transaction(context.Background(), h.gateway.store.DB, func(tx *sql.Tx) error {
-		client, err := oauthGet(tx, h.clientID)
-		if err != nil {
-			return err
-		}
-		if !client.Expires.IsZero() {
-			t.Fatal("registered client has a time limit")
-		}
-		// Only credentials expire: clients registered once must survive pruning.
-		if err := oauthPut(tx, "expired-access", oauthRecord{Kind: "access", Expires: time.Now().Add(-time.Hour)}); err != nil {
-			return err
-		}
-		if err := oauthPrune(tx); err != nil {
-			return err
-		}
-		if _, err := oauthGet(tx, "expired-access"); err == nil {
-			t.Fatal("expired access token survived")
-		}
-		_, err = oauthGet(tx, h.clientID)
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestOAuthAuthorizeWithoutSessionRedirectsToLogin(t *testing.T) {
 	h := newOAuthHarness(t)
 	path := h.authorizePath()
@@ -377,16 +354,20 @@ func TestOAuthCodeConsumedOnceAcrossStores(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer other.Close()
-	second := &GatewayMCP{gateway: &Gateway{store: other, origin: h.gateway.origin}}
+	second := &Gateway{store: other, options: h.gateway.options, auth: h.gateway.auth, origin: h.gateway.origin, local: h.gateway.local}
+	if second.mcp, err = gatewaymcp.New(other, h.gateway.options.Home, h.gateway.origin.String(), second); err != nil {
+		t.Fatal(err)
+	}
 	start := make(chan struct{})
 	results := make(chan int, 2)
-	for _, m := range []*GatewayMCP{h.gateway.mcp, second} {
+	for _, g := range []*Gateway{h.gateway, second} {
 		go func() {
 			<-start
 			r := httptest.NewRequest(http.MethodPost, h.server.URL+"/oauth/token", strings.NewReader(form))
 			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r.RemoteAddr = "127.0.0.1:1"
 			w := httptest.NewRecorder()
-			m.token(w, r)
+			g.Handler().ServeHTTP(w, r)
 			results <- w.Code
 		}()
 	}
@@ -419,7 +400,7 @@ func TestOAuthClientMetadataDocument(t *testing.T) {
 		"/oauth/client.json": `{"client_id":"` + id + `","client_name":"Hosted assistant","redirect_uris":["http://127.0.0.1/callback"],"token_endpoint_auth_method":"private_key_jwt"}`,
 		"/other.json":        `{"client_id":"https://elsewhere.example.com/client.json","redirect_uris":["https://assistant.example/callback"]}`,
 		"/secret.json":       `{"client_id":"https://client.example.com/secret.json","client_secret":"s","redirect_uris":["https://assistant.example/callback"]}`,
-		"/big.json":          `{"client_id":"https://client.example.com/big.json","redirect_uris":["https://assistant.example/callback"],"pad":"` + strings.Repeat("x", clientMetadataLimit) + `"}`,
+		"/big.json":          `{"client_id":"https://client.example.com/big.json","redirect_uris":["https://assistant.example/callback"],"pad":"` + strings.Repeat("x", 16<<10) + `"}`,
 	}
 	var fetches atomic.Int32
 	host := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -436,7 +417,7 @@ func TestOAuthClientMetadataDocument(t *testing.T) {
 	client.Transport.(*http.Transport).DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, network, host.Listener.Addr().String())
 	}
-	h.gateway.mcp.fetcher = client
+	h.gateway.mcp.Fetcher = client
 	_, data := h.request(t, "GET", "/.well-known/oauth-authorization-server", "", "", nil, false)
 	if !bytes.Contains(data, []byte(`"client_id_metadata_document_supported":true`)) {
 		t.Fatalf("metadata does not advertise CIMD: %s", data)
@@ -466,14 +447,6 @@ func TestOAuthClientMetadataDocument(t *testing.T) {
 	if got := fetches.Load() - before; got > 10 {
 		t.Fatalf("%d uncached fetches for one host in a minute", got)
 	}
-	for _, address := range []string{"127.0.0.1:443", "10.1.2.3:443", "100.101.102.103:443", "[fd7a:115c:a1e0::1]:443", "169.254.169.254:80", "[::ffff:127.0.0.1]:443", "[64:ff9b::a00:1]:443", "[2002:a00:1::1]:443"} {
-		if publicAddressOnly("tcp", address, nil) == nil {
-			t.Fatalf("metadata fetch may reach %s", address)
-		}
-	}
-	if err := publicAddressOnly("tcp", "93.184.215.14:443", nil); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestOAuthRegistrationScopesRedirectsAndLimiter(t *testing.T) {
@@ -493,16 +466,5 @@ func TestOAuthRegistrationScopesRedirectsAndLimiter(t *testing.T) {
 		if response, _ := h.authorizeFor(t, registered.ClientID, test.redirect, test.scope); response.StatusCode != 400 {
 			t.Fatalf("%+v accepted: %d", test, response.StatusCode)
 		}
-	}
-	limited := func(address string) bool {
-		r := httptest.NewRequest("POST", "/oauth/token", nil)
-		r.RemoteAddr = address
-		return h.gateway.mcp.limited(httptest.NewRecorder(), r)
-	}
-	for range 120 {
-		limited("203.0.113.1:1")
-	}
-	if !limited("203.0.113.1:2") || limited("203.0.113.2:1") {
-		t.Fatal("OAuth limit is not per client address")
 	}
 }

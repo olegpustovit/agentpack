@@ -1,4 +1,4 @@
-package gateway
+package mcp
 
 import (
 	"bytes"
@@ -54,7 +54,7 @@ const (
 	maxTaskHops         = 4  // an ask made while answering another counts one hop more
 	maxAsksPerMinute    = 20 // per asking chat
 	taskTextMax         = 64 << 10
-	agentTasksInterval  = 2 * time.Second
+	TasksInterval       = 2 * time.Second
 	agentTaskRetention  = 7 * 24 * time.Hour
 	agentTaskRetryDelay = 30 * time.Second
 	// A delivery attempt is bounded so an unreachable machine cannot hold up the pass, and an answer
@@ -103,7 +103,8 @@ func envelope(m agentMessage) string {
 	return head + network.EnvelopeSeparator + m.Text
 }
 
-func (g *Gateway) serveAgentMessage(w http.ResponseWriter, r *http.Request) {
+// ServeAgentMessage serves POST /api/sessions/{id}/conversation/message on the node that runs {id}.
+func (m *Server) ServeAgentMessage(w http.ResponseWriter, r *http.Request) {
 	ctx, id := r.Context(), r.PathValue("id")
 	var in agentMessage
 	if !network.ReadJSON(w, r, &in) {
@@ -117,15 +118,15 @@ func (g *Gateway) serveAgentMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid message", http.StatusBadRequest)
 		return
 	}
-	info, err := session.StoredSession(ctx, g.store.Reader, id)
+	info, err := session.StoredSession(ctx, m.store.Reader, id)
 	if err != nil || info.Transport != "acp" {
 		http.Error(w, "session unavailable", http.StatusNotFound)
 		return
 	}
-	if !authorizeACPWrite(w, r, info) {
+	if !session.AuthorizeWrite(w, r, info) {
 		return
 	}
-	status, body, err := g.applyAgentMessage(r, id, info, in)
+	status, body, err := m.applyAgentMessage(r, id, info, in)
 	if err != nil {
 		obs.From(ctx).Fail(err)
 		http.Error(w, "task unavailable", http.StatusInternalServerError)
@@ -135,7 +136,7 @@ func (g *Gateway) serveAgentMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, strings.TrimSpace(string(body)), status)
 		return
 	}
-	g.emitEvent(eventMessage{Topic: "agent-tasks"})
+	m.host.Emit("agent-tasks")
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(body)
 }
@@ -143,8 +144,8 @@ func (g *Gateway) serveAgentMessage(w http.ResponseWriter, r *http.Request) {
 var acceptedBody = []byte(`{"accepted":true}`)
 
 // applyAgentMessage updates this node's side of the task and, for ask and reply, queues the prompt.
-func (g *Gateway) applyAgentMessage(r *http.Request, id string, info session.SessionInfo, in agentMessage) (int, []byte, error) {
-	ctx, db, now := r.Context(), g.store.DB, time.Now().UnixNano()
+func (m *Server) applyAgentMessage(r *http.Request, id string, info session.SessionInfo, in agentMessage) (int, []byte, error) {
+	ctx, db, now := r.Context(), m.store.DB, time.Now().UnixNano()
 	switch in.Kind {
 	case "ask":
 		var since int64
@@ -161,7 +162,7 @@ func (g *Gateway) applyAgentMessage(r *http.Request, id string, info session.Ses
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return 0, nil, err
 		}
-		if status, body := g.queueTaskPrompt(r, id, in); status != http.StatusOK {
+		if status, body := m.queueTaskPrompt(r, id, in); status != http.StatusOK {
 			return status, body, nil
 		}
 		_, err = db.ExecContext(ctx, `INSERT INTO agent_tasks(id,role,context_id,from_session,from_node,to_session,state,request,hops,since_seq,operation,delivered,created_at,updated_at)
@@ -180,7 +181,7 @@ func (g *Gateway) applyAgentMessage(r *http.Request, id string, info session.Ses
 		}
 		// A stopped chat is not woken; its tasks still get the answer.
 		if info.EndedAt.IsZero() && info.ArchivedAt.IsZero() {
-			if status, body := g.queueTaskPrompt(r, id, in); status != http.StatusOK {
+			if status, body := m.queueTaskPrompt(r, id, in); status != http.StatusOK {
 				return status, body, nil
 			}
 		}
@@ -206,12 +207,12 @@ func (g *Gateway) applyAgentMessage(r *http.Request, id string, info session.Ses
 		if _, err := db.ExecContext(ctx, "UPDATE agent_tasks SET state=?,delivered=1,updated_at=? WHERE id=? AND role='in'", taskCanceled, now, in.Task); err != nil {
 			return 0, nil, err
 		}
-		return http.StatusOK, acceptedBody, g.stopTaskWork(ctx, id, in.Task, since, operation)
+		return http.StatusOK, acceptedBody, m.stopTaskWork(ctx, id, in.Task, since, operation)
 	}
 }
 
 // queueTaskPrompt queues the message as a prompt through the ordinary prompt route.
-func (g *Gateway) queueTaskPrompt(r *http.Request, id string, in agentMessage) (int, []byte) {
+func (m *Server) queueTaskPrompt(r *http.Request, id string, in agentMessage) (int, []byte) {
 	from := &acp.PromptFrom{Session: in.FromSession, Node: in.FromNode, Name: in.FromName, Agent: in.FromAgent, Task: in.Task, Kind: in.Kind}
 	if in.Kind == "reply" {
 		from.State = string(in.State)
@@ -223,7 +224,7 @@ func (g *Gateway) queueTaskPrompt(r *http.Request, id string, in agentMessage) (
 	body := network.MustRawJSON(map[string]string{"text": envelope(in)})
 	prompt.Body, prompt.ContentLength = io.NopCloser(bytes.NewReader(body)), int64(len(body))
 	queued := &mcpResponse{header: make(http.Header)}
-	g.servePrompt(queued, prompt)
+	m.host.ServePrompt(queued, prompt)
 	if queued.status == 0 {
 		queued.status = http.StatusOK
 	}
@@ -231,27 +232,27 @@ func (g *Gateway) queueTaskPrompt(r *http.Request, id string, in agentMessage) (
 }
 
 // stopTaskWork drops a canceled task's prompt from the queue, or cancels the turn working on it.
-func (g *Gateway) stopTaskWork(ctx context.Context, session, task string, since int64, operation string) error {
-	prompt, end, err := taskTurn(ctx, g.store.DB, task, session, since)
+func (m *Server) stopTaskWork(ctx context.Context, session, task string, since int64, operation string) error {
+	prompt, end, err := taskTurn(ctx, m.store.DB, task, session, since)
 	if err != nil || end != 0 {
 		return err
 	}
 	method, path := http.MethodPost, "/api/sessions/"+url.PathEscape(session)+"/conversation/cancel"
 	if prompt == 0 {
 		// Still queued: in the starting chat's log, or in its worker.
-		if removed, err := g.removeStartingPrompt(ctx, session, operation); removed || err != nil {
+		if removed, err := m.host.RemoveStartingPrompt(ctx, session, operation); removed || err != nil {
 			return err
 		}
 		method, path = http.MethodDelete, "/api/sessions/"+url.PathEscape(session)+"/conversation/queue/"+url.PathEscape(operation)
 	} else {
 		// Only the turn this task started is cancelled: a later prompt means that turn already ended.
 		var later bool
-		if err := g.store.Reader.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM conversation_events WHERE session_id=? AND seq>?
+		if err := m.store.Reader.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM conversation_events WHERE session_id=? AND seq>?
  AND kind='prompt')`, session, prompt).Scan(&later); err != nil || later {
 			return err
 		}
 	}
-	_, err = g.mcp.do(ctx, "", method, path, nil)
+	_, err = m.do(ctx, "", method, path, nil)
 	if status := apiStatus(err); status == http.StatusNotFound || status == http.StatusConflict {
 		return nil // already sent, finished or gone
 	}
@@ -259,7 +260,7 @@ func (g *Gateway) stopTaskWork(ctx context.Context, session, task string, since 
 }
 
 // deliver sends a message to a chat on node, waiting out a chat that is still starting.
-func (m *GatewayMCP) deliver(ctx context.Context, node, id string, message agentMessage, wait time.Duration) error {
+func (m *Server) deliver(ctx context.Context, node, id string, message agentMessage, wait time.Duration) error {
 	_, err := m.postWhileStarting(ctx, node, id, "/conversation/message", message, wait)
 	if apiStatus(err) == http.StatusNotFound && node != "" && strings.Contains(err.Error(), "404 page not found") {
 		return errors.New("that machine's agentpack cannot receive agent messages yet; update it")
@@ -268,8 +269,8 @@ func (m *GatewayMCP) deliver(ctx context.Context, node, id string, message agent
 }
 
 // localNode returns this node's ID and node with this node written as "".
-func (m *GatewayMCP) localNode(ctx context.Context, node string) (string, string, error) {
-	local, err := m.gateway.store.NodeID(ctx)
+func (m *Server) localNode(ctx context.Context, node string) (string, string, error) {
+	local, err := m.store.NodeID(ctx)
 	if node == local {
 		node = ""
 	}
@@ -277,12 +278,12 @@ func (m *GatewayMCP) localNode(ctx context.Context, node string) (string, string
 }
 
 // caller is the chat whose agent calls a task tool, and this node's ID.
-func (m *GatewayMCP) caller(ctx context.Context) (session.SessionInfo, string, error) {
+func (m *Server) caller(ctx context.Context) (session.SessionInfo, string, error) {
 	actor, _ := session.ActorFrom(ctx)
 	if actor.Chat == "" {
 		return session.SessionInfo{}, "", errNotAChat
 	}
-	self, err := session.StoredSession(ctx, m.gateway.store.Reader, actor.Chat)
+	self, err := session.StoredSession(ctx, m.store.Reader, actor.Chat)
 	if err != nil {
 		return session.SessionInfo{}, "", err
 	}
@@ -308,7 +309,7 @@ type mcpAsked struct {
 }
 
 // ask sends text to a chat of the same account on any machine and records the task.
-func (m *GatewayMCP) ask(ctx context.Context, node, to, text, contextID string) (mcpAsked, error) {
+func (m *Server) ask(ctx context.Context, node, to, text, contextID string) (mcpAsked, error) {
 	self, local, err := m.caller(ctx)
 	if err != nil {
 		return mcpAsked{}, err
@@ -328,7 +329,7 @@ func (m *GatewayMCP) ask(ctx context.Context, node, to, text, contextID string) 
 	if !validRef(contextID, true) {
 		return mcpAsked{}, errors.New("invalid context_id")
 	}
-	db := m.gateway.store.DB
+	db := m.store.DB
 	var recent int
 	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM agent_tasks WHERE role='out' AND from_session=? AND created_at>?", self.ID, time.Now().Add(-time.Minute).UnixNano()).Scan(&recent); err != nil {
 		return mcpAsked{}, err
@@ -373,9 +374,9 @@ type outTask struct {
 	state             taskState
 }
 
-func (m *GatewayMCP) outTask(ctx context.Context, task, from string) (outTask, error) {
+func (m *Server) outTask(ctx context.Context, task, from string) (outTask, error) {
 	var row outTask
-	err := m.gateway.store.Reader.QueryRowContext(ctx, "SELECT to_session,to_node,context_id,hops,state FROM agent_tasks WHERE id=? AND role='out' AND from_session=?", task, from).
+	err := m.store.Reader.QueryRowContext(ctx, "SELECT to_session,to_node,context_id,hops,state FROM agent_tasks WHERE id=? AND role='out' AND from_session=?", task, from).
 		Scan(&row.to, &row.node, &row.context, &row.hops, &row.state)
 	if errors.Is(err, sql.ErrNoRows) {
 		return row, fmt.Errorf("task %s is not one this chat sent or was sent", task)
@@ -384,7 +385,7 @@ func (m *GatewayMCP) outTask(ctx context.Context, task, from string) (outTask, e
 }
 
 // reply answers a task this chat was asked, or answers the question of a chat this chat asked.
-func (m *GatewayMCP) reply(ctx context.Context, task, text string, state taskState) (mcpReplied, error) {
+func (m *Server) reply(ctx context.Context, task, text string, state taskState) (mcpReplied, error) {
 	self, local, err := m.caller(ctx)
 	if err != nil {
 		return mcpReplied{}, err
@@ -396,13 +397,13 @@ func (m *GatewayMCP) reply(ctx context.Context, task, text string, state taskSta
 	if !slices.Contains(replyStates, state) {
 		return mcpReplied{}, errors.New("state is completed, input_required, failed or rejected")
 	}
-	db, now := m.gateway.store.DB, time.Now().UnixNano()
+	db, now := m.store.DB, time.Now().UnixNano()
 	result, err := db.ExecContext(ctx, "UPDATE agent_tasks SET state=?,result=?,delivered=0,updated_at=? WHERE id=? AND role='in' AND to_session=? AND state IN ('submitted','working')", state, text, now, task, self.ID)
 	if err != nil {
 		return mcpReplied{}, err
 	}
 	if changed, _ := result.RowsAffected(); changed == 1 {
-		delivered := m.gateway.deliverReplies(ctx, task) == nil
+		delivered := m.deliverReplies(ctx, task) == nil
 		return mcpReplied{State: state, Delivered: delivered}, nil
 	}
 	var asked taskState
@@ -427,7 +428,7 @@ func (m *GatewayMCP) reply(ctx context.Context, task, text string, state taskSta
 }
 
 // cancelTask cancels a task this chat sent: the asked agent stops working on it and cannot answer it.
-func (m *GatewayMCP) cancelTask(ctx context.Context, task string) (taskState, error) {
+func (m *Server) cancelTask(ctx context.Context, task string) (taskState, error) {
 	self, local, err := m.caller(ctx)
 	if err != nil {
 		return "", err
@@ -446,7 +447,7 @@ func (m *GatewayMCP) cancelTask(ctx context.Context, task string) (taskState, er
 	if err != nil {
 		return row.state, err
 	}
-	_, err = m.gateway.store.DB.ExecContext(ctx, "UPDATE agent_tasks SET state=?,updated_at=? WHERE id=? AND role='out'", taskCanceled, time.Now().UnixNano(), task)
+	_, err = m.store.DB.ExecContext(ctx, "UPDATE agent_tasks SET state=?,updated_at=? WHERE id=? AND role='out'", taskCanceled, time.Now().UnixNano(), task)
 	return taskCanceled, err
 }
 
@@ -463,7 +464,7 @@ type mcpTask struct {
 }
 
 // tasks lists the caller's tasks, newest first: all, those of one context, or the listed IDs.
-func (m *GatewayMCP) tasks(ctx context.Context, contextID string, ids []string) ([]mcpTask, error) {
+func (m *Server) tasks(ctx context.Context, contextID string, ids []string) ([]mcpTask, error) {
 	self, local, err := m.caller(ctx)
 	if err != nil {
 		return nil, err
@@ -475,7 +476,7 @@ func (m *GatewayMCP) tasks(ctx context.Context, contextID string, ids []string) 
 	if len(ids) > 0 {
 		list = string(network.MustRawJSON(ids))
 	}
-	rows, err := m.gateway.store.Reader.QueryContext(ctx, query, self.ID, contextID, list, mcpPageSize)
+	rows, err := m.store.Reader.QueryContext(ctx, query, self.ID, contextID, list, mcpPageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -501,7 +502,7 @@ func (m *GatewayMCP) tasks(ctx context.Context, contextID string, ids []string) 
 	return out, rows.Err()
 }
 
-func (m *GatewayMCP) taskTools(server *mcp.Server) {
+func (m *Server) taskTools(server *mcp.Server) {
 	addTool(server, "ask", "Send a message to another chat of this account, on any machine, and get its answer later: it returns a task_id at once, and the answer arrives in this chat as a new message that wakes it, so you may end your turn. Use list_sessions to find chats; run_helper starts a new helper and asks it.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		mcpSessionInput
 		Text      string `json:"text" jsonschema:"The whole request; the other agent sees nothing else of this chat."`
@@ -545,11 +546,8 @@ func (m *GatewayMCP) taskTools(server *mcp.Server) {
 }
 
 // deliverReplies sends answered tasks back to the chats that asked; only (when set) the given task.
-func (g *Gateway) deliverReplies(ctx context.Context, only string) error {
-	if g.mcp == nil {
-		return nil
-	}
-	rows, err := g.store.Reader.QueryContext(ctx, "SELECT id,context_id,from_session,from_node,to_session,state,result,updated_at FROM agent_tasks WHERE role='in' AND delivered=0 AND (?1='' OR id=?1)", only)
+func (m *Server) deliverReplies(ctx context.Context, only string) error {
+	rows, err := m.store.Reader.QueryContext(ctx, "SELECT id,context_id,from_session,from_node,to_session,state,result,updated_at FROM agent_tasks WHERE role='in' AND delivered=0 AND (?1='' OR id=?1)", only)
 	if err != nil {
 		return err
 	}
@@ -573,33 +571,33 @@ func (g *Gateway) deliverReplies(ctx context.Context, only string) error {
 	var failures []error
 	for _, item := range items {
 		// One delivery per task at a time, so the pass and a reply call never queue an answer twice.
-		if _, busy := g.agentTasks.LoadOrStore(item.message.Task, true); busy {
+		if _, busy := m.agentTasks.LoadOrStore(item.message.Task, true); busy {
 			continue
 		}
-		failures = append(failures, g.deliverReply(ctx, item.message, item.node, item.to, item.answerer, item.updated))
-		g.agentTasks.Delete(item.message.Task)
+		failures = append(failures, m.deliverReply(ctx, item.message, item.node, item.to, item.answerer, item.updated))
+		m.agentTasks.Delete(item.message.Task)
 	}
 	return errors.Join(failures...)
 }
 
-func (g *Gateway) deliverReply(ctx context.Context, message agentMessage, node, to, answering string, updated int64) error {
+func (m *Server) deliverReply(ctx context.Context, message agentMessage, node, to, answering string, updated int64) error {
 	ctx, cancel := context.WithTimeout(ctx, agentTaskDeliveryTimeout)
 	defer cancel()
-	if err := g.sendFromAnswerer(ctx, message, node, to, answering, updated); err != nil {
+	if err := m.sendFromAnswerer(ctx, message, node, to, answering, updated); err != nil {
 		return err
 	}
-	_, err := g.store.DB.ExecContext(context.WithoutCancel(ctx), "UPDATE agent_tasks SET delivered=1 WHERE id=? AND role='in' AND updated_at=?", message.Task, updated)
+	_, err := m.store.DB.ExecContext(context.WithoutCancel(ctx), "UPDATE agent_tasks SET delivered=1 WHERE id=? AND role='in' AND updated_at=?", message.Task, updated)
 	return err
 }
 
 // sendFromAnswerer sends a reply (or, with Kind set, a status) as the answering chat. It returns nil
 // once no more attempts are needed: delivered, or undeliverable for good.
-func (g *Gateway) sendFromAnswerer(ctx context.Context, message agentMessage, node, to, answering string, updated int64) error {
-	local, node, err := g.mcp.localNode(ctx, node)
+func (m *Server) sendFromAnswerer(ctx context.Context, message agentMessage, node, to, answering string, updated int64) error {
+	local, node, err := m.localNode(ctx, node)
 	if err != nil {
 		return err
 	}
-	answerer, err := session.StoredSession(ctx, g.store.Reader, answering)
+	answerer, err := session.StoredSession(ctx, m.store.Reader, answering)
 	if errors.Is(err, session.ErrSessionNotFound) || err == nil && answerer.StartedBy == nil {
 		return nil // nobody can act for a removed chat
 	}
@@ -613,22 +611,19 @@ func (g *Gateway) sendFromAnswerer(ctx context.Context, message agentMessage, no
 	if message.Kind == "" {
 		message.Kind, message.Operation = "reply", message.Task+"-r-"+strconv.FormatInt(updated, 10)
 	}
-	err = g.mcp.deliver(session.WithActor(ctx, actor), node, to, message, 0)
+	err = m.deliver(session.WithActor(ctx, actor), node, to, message, 0)
 	if err == nil || apiStatus(err) == http.StatusGone || time.Since(time.Unix(0, updated)) > agentTaskDeliveryWindow {
 		return nil
 	}
 	return fmt.Errorf("task %s: %w", message.Task, err)
 }
 
-func (g *Gateway) runAgentTasks(ctx context.Context, interval time.Duration) {
-	if g.logs != nil {
-		node, _ := g.store.NodeID(ctx)
-		ctx = obs.WithSink(ctx, g.logs, obs.BuildMetadata(g.options.Version, node, "gateway"))
-	}
+// RunTasks makes an agent task pass every interval until ctx ends.
+func (m *Server) RunTasks(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		if err := g.agentTasksPass(ctx); err != nil && ctx.Err() == nil {
+		if err := m.TaskPass(ctx); err != nil && ctx.Err() == nil {
 			_, event := obs.Start(ctx, "gateway.agent_tasks", "pass")
 			event.Fail(err)
 			event.End()
@@ -641,15 +636,12 @@ func (g *Gateway) runAgentTasks(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// agentTasksPass marks asked tasks working once their turn starts, answers those whose turn ended
+// TaskPass marks asked tasks working once their turn starts, answers those whose turn ended
 // without reply with that turn's last message, fails those whose chat stopped,
 // and delivers answers not delivered yet.
-func (g *Gateway) agentTasksPass(ctx context.Context) error {
-	if g.mcp == nil {
-		return nil
-	}
-	db := g.store.DB
-	rows, err := g.store.Reader.QueryContext(ctx, `SELECT t.id,t.to_session,t.from_session,t.from_node,t.state,t.since_seq,coalesce(s.last_seq,-1),coalesce(s.ended_at,1) FROM agent_tasks t
+func (m *Server) TaskPass(ctx context.Context) error {
+	db := m.store.DB
+	rows, err := m.store.Reader.QueryContext(ctx, `SELECT t.id,t.to_session,t.from_session,t.from_node,t.state,t.since_seq,coalesce(s.last_seq,-1),coalesce(s.ended_at,1) FROM agent_tasks t
  LEFT JOIN sessions s ON s.id=t.to_session WHERE t.role='in' AND t.state IN ('submitted','working')`)
 	if err != nil {
 		return err
@@ -676,10 +668,10 @@ func (g *Gateway) agentTasksPass(ctx context.Context) error {
 	var answered []string
 	for _, task := range tasks {
 		seen[task.id] = task.last
-		if previous, ok := g.agentTaskSeen[task.id]; ok && previous == task.last && task.end == 0 {
+		if previous, ok := m.agentTaskSeen[task.id]; ok && previous == task.last && task.end == 0 {
 			continue // nothing new in that chat
 		}
-		started, state, answer, err := turnAnswer(ctx, g.store.Reader, task.id, task.session, task.since)
+		started, state, answer, err := turnAnswer(ctx, m.store.Reader, task.id, task.session, task.since)
 		if err != nil {
 			failures = append(failures, err)
 			continue
@@ -694,7 +686,7 @@ func (g *Gateway) agentTasksPass(ctx context.Context) error {
 					failures = append(failures, err)
 				} else {
 					// Best effort: working only shows in the asker's tasks; the answer is what gets retried.
-					_ = g.sendFromAnswerer(ctx, agentMessage{Task: task.id, Kind: "status"}, task.fromNode, task.from, task.session, now)
+					_ = m.sendFromAnswerer(ctx, agentMessage{Task: task.id, Kind: "status"}, task.fromNode, task.from, task.session, now)
 				}
 			}
 			continue
@@ -705,14 +697,14 @@ func (g *Gateway) agentTasksPass(ctx context.Context) error {
 		}
 		answered = append(answered, task.id)
 	}
-	g.agentTaskSeen = seen
+	m.agentTaskSeen = seen
 	for _, id := range answered {
-		failures = append(failures, g.deliverReplies(ctx, id))
+		failures = append(failures, m.deliverReplies(ctx, id))
 	}
 	// Answers a machine could not take are retried twice a minute, not every pass, while it is away.
-	if now := time.Now(); now.After(g.agentTaskRetry) {
-		if err := g.deliverReplies(ctx, ""); err != nil {
-			g.agentTaskRetry = now.Add(agentTaskRetryDelay)
+	if now := time.Now(); now.After(m.agentTaskRetry) {
+		if err := m.deliverReplies(ctx, ""); err != nil {
+			m.agentTaskRetry = now.Add(agentTaskRetryDelay)
 			failures = append(failures, err)
 		}
 	}

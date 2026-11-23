@@ -9,11 +9,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/session"
 )
 
-type issueResolution struct {
-	Version string `json:"version" jsonschema:"Version containing the fix; required."`
-	Note    string `json:"note,omitempty" jsonschema:"Optional explanation of the fix."`
-}
-
 func (g *Gateway) registerDiagnostics(mux routeRegistrar) {
 	mux.HandleFunc("POST /api/logs/ingest", g.peerOnly(g.ingestTraces))
 	mux.HandleFunc("GET /api/logs/trace/{trace}", g.peerOnly(g.localTrace))
@@ -40,7 +35,7 @@ func (g *Gateway) registerDiagnostics(mux routeRegistrar) {
 	})
 	for _, action := range []string{"resolve", "reopen", "ignore"} {
 		mux.HandleFunc("POST /api/logs/issues/{fingerprint}/"+action, func(w http.ResponseWriter, r *http.Request) {
-			var input issueResolution
+			var input obs.IssueResolution
 			if action == "resolve" && !network.ReadJSON(w, r, &input) {
 				return
 			}

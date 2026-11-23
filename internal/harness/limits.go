@@ -48,3 +48,11 @@ func ProbeLimits(target Target, source string) (LimitSnapshot, string) {
 	}
 	return snapshot, executable
 }
+
+// NodeLimit is a limit snapshot as the mesh reports it for one machine.
+type NodeLimit struct {
+	LimitSnapshot
+	NodeID    string    `json:"node_id"`
+	Reachable bool      `json:"reachable"`
+	LastSync  time.Time `json:"last_sync,omitzero"`
+}
