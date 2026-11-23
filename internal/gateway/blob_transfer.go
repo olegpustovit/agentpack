@@ -16,6 +16,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func sessionBlobDir(home, id string) (string, error) {
@@ -204,4 +205,22 @@ func (g *Gateway) serveBlobHeld(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	network.WriteJSON(w, map[string]bool{"held": held})
+}
+
+func (g *Gateway) uploadConversationBlob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	info, ok := sessionRow(r.Context(), id)
+	if ok && info.Transport == "acp" && info.ConversationState == "starting" && info.EndedAt.IsZero() {
+		if !session.AuthorizeWrite(w, r, info) {
+			return
+		}
+		dir, err := sessionBlobDir(g.options.Home, id)
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		network.UploadSessionBlob(w, r, dir, g.store)
+		return
+	}
+	g.forwardToWorker("/blobs")(w, r)
 }

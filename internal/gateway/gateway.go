@@ -44,6 +44,7 @@ type GatewayOptions struct {
 	Start                    func(context.Context, session.SessionInfo, string) (string, error)
 	Packages                 func(context.Context, string) (network.ProjectContents, error)
 	Install                  func(context.Context, string, string, bool) error
+	SaveProject              func(context.Context, ProjectSettingsInput) error
 	InstallMCP               func(context.Context, string, registry.MCPServerInput, bool) error
 	Update                   func(ctx context.Context, version string) error
 	Library                  LibraryOptions
@@ -789,6 +790,7 @@ func (g *Gateway) routes() routeMux {
 	mux.HandleFunc("GET /api/sessions/{id}/conversation", g.ServeConversation)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", g.ServePrompt)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", g.ServePrompt)
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/blobs", g.uploadConversationBlob)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/message", g.mcp.ServeAgentMessage)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/show", g.serveShow)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/config", g.serveWantedConfig)
@@ -808,6 +810,7 @@ func (g *Gateway) routes() routeMux {
 		}
 		network.WriteJSON(w, contents.Packages)
 	})
+	mux.HandleFunc("PUT /api/projects/settings", g.saveProjectSettings)
 	mux.HandleFunc("GET /api/projects", func(w http.ResponseWriter, r *http.Request) {
 		value, err := g.projects(r.Context())
 		if err != nil {

@@ -413,16 +413,18 @@ test("clicking the selected row preserves its terminal and compact menu aligns i
 
 test("backend strings are text and API failures stay visible", async ({ page }) => {
   await mockAPI(page)
-  await page.route("**/api/sessions", (route) => route.fulfill({ json: [{ ...session, directory: "/work/<img src=x onerror=alert(1)>" }] }))
-  await page.route("**/api/packages", (route) => route.fulfill({ status: 500, json: { error: "Project is not available" } }))
+  const directory = "/work/<img src=x onerror=alert(1)>"
+  await page.route("**/api/sessions", (route) => route.fulfill({ json: [{ ...session, directory }] }))
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow(directory)] }))
+  await page.route("**/api/projects/settings", (route) => route.fulfill({ status: 500, json: { error: "Project is not available" } }))
   await page.goto("/")
   await expect(gwSessions(page)).toContainText("<img src=x onerror=alert(1)>")
   await expect(page.locator("img")).toHaveCount(0)
   await gwMore(page, "local:local-one").click()
-  await page.getByRole("menuitem", { name: "Install package…" }).click()
-  await page.getByLabel("Package", { exact: true }).fill("acme/skill")
-  await page.getByRole("button", { name: "Install", exact: true }).click()
-  await expect(page.getByRole("alert")).toContainText("Project is not available")
+  await page.getByRole("menuitem", { name: "Project settings…" }).click()
+  await page.getByLabel("Package source").fill("acme/skill")
+  await page.getByRole("button", { name: "Save", exact: true }).click()
+  await expect(page.getByRole("alert").filter({ hasText: "Project is not available" })).toBeVisible()
 })
 
 test("replicated peer sessions use one list and terminal links retain the node", async ({ page }) => {

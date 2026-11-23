@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -345,6 +346,60 @@ func TestStartingChatPersistsThreePromptsBeforeTheWorkerExists(t *testing.T) {
 		if entries[i].Kind != "queued_prompt" || err != nil || body.Text != want || body.QueueID == "" {
 			t.Fatalf("persisted prompt %d = %s %s, want %q with a queue ID", i, entries[i].Kind, entries[i].Payload, want)
 		}
+	}
+}
+
+func TestStartingChatAcceptsImagesBeforeWorkerExists(t *testing.T) {
+	home := t.TempDir()
+	dir := seedFolder(t, home)
+	release := make(chan struct{})
+	g, origin := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
+		<-release
+		return info.ID, nil
+	})
+	defer close(release)
+	actor := session.BrowserActor(testBrowserEmail)
+	input := chatStartRequest{ID: "session-d7148a740d2c495991c792576427836d", Directory: dir,
+		Harness: "claude", Mode: "default", Transport: "acp"}
+	if _, err := g.claimChatStart(t.Context(), actor, input); err != nil {
+		t.Fatal(err)
+	}
+	post := func(suffix string, data []byte) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/sessions/"+input.ID+"/conversation/"+suffix, bytes.NewReader(data))
+		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
+		r = r.WithContext(session.WithActor(r.Context(), actor))
+		w := httptest.NewRecorder()
+		g.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", suffix, w.Code, w.Body.String())
+		}
+		return w
+	}
+	png := []byte{0x89, 'P', 'N', 'G', 13, 10, 26, 10}
+	var result struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(post("blobs", png).Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir, err := sessionBlobDir(home, input.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := network.ReadSessionBlob(sessionDir, result.SHA); err != nil || !bytes.Equal(data, png) {
+		t.Fatalf("worker blob store: %x %v", data, err)
+	}
+	post("prompt/images", network.MustRawJSON(map[string]any{
+		"images": []map[string]string{{"sha": result.SHA, "name": "screen.png"}},
+	}))
+	entries, _, _, err := network.StoredConversationTail(t.Context(), g.store.Reader, input.ID, 0)
+	if err != nil || len(entries) != 1 || entries[0].Kind != "queued_prompt" {
+		t.Fatalf("queued image prompt: %+v %v", entries, err)
+	}
+	prompt, err := network.PromptInputFromLog(entries[0].Payload)
+	if err != nil || len(prompt.Images) != 1 || prompt.Images[0].Sha != result.SHA {
+		t.Fatalf("queued image: %+v %v", prompt.Images, err)
 	}
 }
 

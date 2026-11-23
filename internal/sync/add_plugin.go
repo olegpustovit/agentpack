@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -88,34 +89,44 @@ func (service Service) catalogPluginSpec(ctx context.Context, marketplace, plugi
 // keepProjectFiles remembers agentpack.toml and pack.lock as they are and
 // returns a function that puts them back, so that a command that fails leaves
 // the project as it found it.
-func keepProjectFiles(projectRoot string) func() error {
-	type kept struct {
-		path    string
-		data    []byte
-		existed bool
-	}
-	var files []kept
-	for _, path := range []string{paths.ManifestPath(projectRoot), paths.LockPath(projectRoot)} {
-		data, err := os.ReadFile(path)
-		files = append(files, kept{path: path, data: data, existed: err == nil})
-	}
-	return func() error {
-		for _, file := range files {
-			if !file.existed {
-				if err := os.Remove(file.path); err != nil && !os.IsNotExist(err) {
+// KeepProjectFiles snapshots the definition and any extra files before a multi-step edit.
+func KeepProjectFiles(projectRoot string, extra ...string) (func() error, error) {
+	var restore []func() error
+	for _, path := range append([]string{paths.ManifestPath(projectRoot), paths.LockPath(projectRoot)}, extra...) {
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			restore = append(restore, func() error {
+				if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 					return err
 				}
-				continue
-			}
-			if current, err := os.ReadFile(file.path); err == nil && string(current) == string(file.data) {
-				continue
-			}
-			if err := paths.WriteAtomic(file.path, file.data, 0o644); err != nil {
-				return err
-			}
+				return nil
+			})
+			continue
 		}
-		return nil
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("expected a regular file at %s", path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		restore = append(restore, func() error {
+			if current, err := os.ReadFile(path); err == nil && bytes.Equal(current, data) {
+				return nil
+			}
+			return paths.WriteAtomic(path, data, info.Mode().Perm())
+		})
 	}
+	return func() error {
+		var err error
+		for _, write := range restore {
+			err = errors.Join(err, write())
+		}
+		return err
+	}, nil
 }
 
 // AddAll adds spec like Add. When spec is a marketplace catalog that lists
@@ -131,7 +142,10 @@ func (service Service) AddAll(ctx context.Context, projectRoot, spec string) ([]
 		}
 		return []lockfile.Package{pkg}, nil
 	}
-	restore := keepProjectFiles(projectRoot)
+	restore, err := KeepProjectFiles(projectRoot)
+	if err != nil {
+		return nil, err
+	}
 	packages, err := service.addCatalog(ctx, projectRoot, spec, several.Names)
 	if err != nil {
 		if restoreErr := restore(); restoreErr != nil {

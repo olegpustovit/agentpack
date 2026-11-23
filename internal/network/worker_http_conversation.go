@@ -19,8 +19,6 @@ import (
 	"github.com/tmaxmax/go-sse"
 )
 
-const maxBlobUploadReadTime = 30 * time.Second
-
 // promptAcceptWait caps the wait for brokers that never report acceptance (adapters fail or log the prompt sooner).
 var promptAcceptWait = 2 * time.Second
 
@@ -153,40 +151,9 @@ func (worker *WorkerHTTP) RegisterConversation(mux *http.ServeMux) {
 		serveSessionBlob(w, r, worker.SessionDir, r.PathValue("sha"))
 	})
 	mux.HandleFunc("POST /conversation/blobs", func(w http.ResponseWriter, r *http.Request) {
-		if worker.SessionDir == "" {
-			http.Error(w, "blob store unavailable", http.StatusConflict)
-			return
-		}
-		controller := http.NewResponseController(w)
-		if err := controller.SetReadDeadline(time.Now().Add(maxBlobUploadReadTime)); err != nil && !errors.Is(err, http.ErrNotSupported) {
-			http.Error(w, "could not set blob upload deadline", http.StatusInternalServerError)
-			return
-		}
-		defer func() { _ = controller.SetReadDeadline(time.Time{}) }()
 		worker.blobMu.Lock()
 		defer worker.blobMu.Unlock()
-		data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBlobBytes+1))
-		if err != nil {
-			http.Error(w, "invalid blob", http.StatusBadRequest)
-			return
-		}
-		sha, err := StoreSessionBlob(worker.SessionDir, data)
-		if errors.Is(err, ErrSessionBlobQuota) {
-			http.Error(w, err.Error(), http.StatusInsufficientStorage)
-			return
-		}
-		if err != nil {
-			http.Error(w, "could not store blob", http.StatusBadRequest)
-			return
-		}
-		if err := AdvertiseBlob(r.Context(), worker.StateStore, filepath.Base(worker.SessionDir), sha, int64(len(data))); err != nil {
-			if event := obs.From(r.Context()); event != nil {
-				event.Fail(err)
-			}
-			http.Error(w, "could not record blob location", http.StatusInternalServerError)
-			return
-		}
-		WriteJSON(w, map[string]string{"sha": sha})
+		UploadSessionBlob(w, r, worker.SessionDir, worker.StateStore)
 	})
 }
 

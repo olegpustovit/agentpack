@@ -2,11 +2,14 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
+	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -69,18 +72,18 @@ func (runner Runner) changeNetworkProject(ctx context.Context, directory string,
 	if err := change(ctx, packContext.DefinitionRoot); err != nil {
 		return err
 	}
-	if err := captureNetworkEnvironment(packContext.DefinitionRoot, directory, ""); err != nil {
-		return fmt.Errorf("installed, but library capture failed: %w", err)
+	captureErr := captureNetworkEnvironment(packContext.DefinitionRoot, directory, "")
+	if captureErr != nil {
+		captureErr = fmt.Errorf("project settings saved, but Library capture failed: %w", captureErr)
 	}
 	if !restart {
-		return nil
+		return captureErr
 	}
-	return runner.restartStaleSessions(ctx, packContext.DefinitionRoot)
+	return errors.Join(captureErr, runner.restartStaleSessions(ctx, packContext.DefinitionRoot))
 }
 
 // projectContents converts pack.lock into the node's project view. Commands, arguments,
 // environment and headers never leave the node.
-// shortcut: lists only servers recorded in pack.lock, extend when mcp list provenance moves out of cli
 func projectContents(locked lockfile.PackLock, project *manifest.Manifest) network.ProjectContents {
 	contents := network.ProjectContents{Packages: []network.ProjectPackage{}, MCP: []network.ProjectMCP{}, Modes: []network.ProjectMode{}}
 	for _, pkg := range locked.Packages {
@@ -149,4 +152,86 @@ func projectMode(name string, definition mode.Definition, contents network.Proje
 		}
 	}
 	return view
+}
+
+func (runner Runner) saveNetworkProject(ctx context.Context, input gateway.ProjectSettingsInput) error {
+	return runner.changeNetworkProject(ctx, input.Directory, true, func(ctx context.Context, root string) (err error) {
+		loginPath, err := paths.ProjectMCPLoginsPath(root)
+		if err != nil {
+			return err
+		}
+		rollback, err := packSync.KeepProjectFiles(root, loginPath)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				err = errors.Join(err, rollback())
+			}
+		}()
+
+		project, err := manifest.Load(root)
+		if err != nil {
+			return err
+		}
+		for _, module := range input.Remove {
+			if project == nil {
+				continue
+			}
+			if _, exists := project.Dependencies[module]; !exists {
+				continue
+			}
+			if _, err := runner.Service.Remove(ctx, root, module); err != nil {
+				return err
+			}
+		}
+		for _, spec := range input.Add {
+			if _, err := runner.Service.AddAll(ctx, root, spec); err != nil {
+				return err
+			}
+		}
+		for _, name := range input.RemoveMCP {
+			if _, err := manifest.RemoveMCPServer(root, name); err != nil {
+				return err
+			}
+		}
+		for _, entry := range input.Servers {
+			server, err := mcpServerFrom(entry)
+			if err != nil {
+				return err
+			}
+			if server.IsRemote() {
+				if _, err := mcp.CanonicalURL(entry.URL); err != nil {
+					return errors.New("MCP server URL must be http(s) without credentials")
+				}
+			}
+			if project != nil {
+				if current, ok := project.MCP.Servers[entry.Name]; ok {
+					if current.IsRemote() != server.IsRemote() ||
+						current.IsRemote() && *current.URL != entry.URL ||
+						current.Command != nil && *current.Command != entry.Command {
+						if len(current.Headers) > 0 || len(current.Env) > 0 || current.OAuth != nil || current.Credential != "" {
+							return fmt.Errorf("changing the endpoint of a server with private configuration requires editing agentpack.toml")
+						}
+					}
+					server.Headers, server.OAuth, server.Credential = current.Headers, current.OAuth, current.Credential
+					server.Env, server.Cwd, server.Disabled = current.Env, current.Cwd, current.Disabled
+				}
+			}
+			if err := manifest.AddMCPServer(root, entry.Name, server); err != nil {
+				return err
+			}
+		}
+		if len(input.Servers)+len(input.RemoveMCP) > 0 {
+			if err := runner.Service.RefreshMCPRecords(ctx, root, len(input.Servers) > 0, false); err != nil {
+				return err
+			}
+		}
+		for url, id := range input.Logins {
+			if err := mcp.SaveProjectLogin(loginPath, url, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

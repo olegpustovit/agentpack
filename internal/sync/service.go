@@ -285,7 +285,10 @@ func (service Service) Update(ctx context.Context, projectRoot string, specs []s
 // Add records a package in agentpack.toml and locks it; staging is lazy. When
 // either fails, agentpack.toml and pack.lock are left exactly as they were.
 func (service Service) Add(ctx context.Context, projectRoot, spec string) (lockfile.Package, error) {
-	restore := keepProjectFiles(projectRoot)
+	restore, err := KeepProjectFiles(projectRoot)
+	if err != nil {
+		return lockfile.Package{}, err
+	}
 	pkg, err := service.add(ctx, projectRoot, spec)
 	if err != nil {
 		if restoreErr := restore(); restoreErr != nil {

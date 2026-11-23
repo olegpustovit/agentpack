@@ -111,7 +111,7 @@ export function useComposer({ machine, sessionId, info, entries, reportTimings }
       const request = promptRequest(
         input.text,
         input.attachments,
-        info?.agent_capabilities?.promptCapabilities?.image === true,
+        info?.conversation_state === "starting" ? undefined : info?.agent_capabilities?.promptCapabilities?.image === true,
         input.resourceLink,
       )
       return api<{ queued?: string }>(`/api/sessions/${encodeURIComponent(target)}/conversation/${request.path}`, {
@@ -276,17 +276,21 @@ export function Composer({
       conversationErrorMessage(machine, "steer with the queued message", error), conversationNeedsUpdate(error) ? undefined : retry,
     ),
   })
+  const [uploadingFiles, setUploadingFiles] = useState<File[]>([])
   const upload = useMutation({
-    mutationFn: (file: File) => uploadConversationBlob(machine, sessionId, file),
+    mutationFn: async (file: File) => {
+      const claimed = await pendingChatClaim(sessionId)
+      return uploadConversationBlob(machine, claimed?.id ?? sessionId, file)
+    },
+    onSuccess: (value, file) => setAttachments((current) => [...current, { ...value, name: file.name }]),
     onError: (error, file) =>
       hud.error(
         conversationErrorMessage(machine, "attach images", error),
-        conversationNeedsUpdate(error) ? undefined : () => upload.mutate(file),
+        conversationNeedsUpdate(error) ? undefined : () => void attachImages([file]),
       ),
   })
 
-  // Images upload to the running agent, so a starting chat accepts text.
-  const canSend = (draft.trim().length > 0 || attachments.length > 0) && !upload.isPending && !needsUpdate && !((starting || resumable) && attachments.length > 0) && !(resumable && resume.isPending)
+  const canSend = (draft.trim().length > 0 || attachments.length > 0) && uploadingFiles.length === 0 && !needsUpdate && !(resumable && attachments.length > 0) && !(resumable && resume.isPending)
   const nextQueued = parent.queue?.find((item) => !item.steer && !item.delivered)
 
   function submit(steer = false) {
@@ -370,21 +374,15 @@ export function Composer({
   }
   async function attachImages(files: File[]) {
     if (files.length === 0 || needsUpdate) return
-    if (send.isPending) {
-      hud.error("Wait for the message to finish sending before adding images.")
-      return
-    }
-    if (upload.isPending) {
-      hud.error("Wait for the current image upload to finish.")
-      return
-    }
+    if (uploadingFiles.length > 0) return
+    setUploadingFiles(files)
     for (const file of files) {
       try {
-        const value = await upload.mutateAsync(file)
-        setAttachments((current) => [...current, { ...value, name: file.name }])
+        await upload.mutateAsync(file)
       } catch {
-        return
+        // The upload offers a retry for this file. Keep uploading the rest.
       }
+      setUploadingFiles((current) => current.filter((item) => item !== file))
     }
   }
 
@@ -421,6 +419,9 @@ export function Composer({
                   Remove
                 </Button>
               </div>
+            ))}
+            {uploadingFiles.map((file, index) => (
+              <p key={index} role="status" className="truncate px-(--s2) text-(length:--fs-xs) text-(--fg2)">Attaching {file.name}…</p>
             ))}
             <ComposerHintsMenu id="composer-hints-list" activeIndex={activeHint} title={hintTitle} hints={composerHints} onPick={pickHint} query={slashQuery(beforeCaret)?.query ?? ""} agentName={agentName} />
             <div className="relative">
@@ -515,7 +516,7 @@ export function Composer({
               size="icon"
               variant="ghost"
               aria-label="Attach image"
-              disabled={send.isPending || upload.isPending || needsUpdate}
+              disabled={uploadingFiles.length > 0 || needsUpdate}
               onClick={() => fileInputRef.current?.click()}
             >
               <Plus aria-hidden />

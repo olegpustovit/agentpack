@@ -41,7 +41,7 @@ export function AddPackageSheet({
   )
 }
 
-// Save agentpack from the Library toolbar: choose a project first, then the same form a session row opens.
+// Save agentpack from the Library toolbar after choosing a project.
 export function SaveAgentpackSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const machines = useMachines()
   const projects = useMachineQueries(projectsQuery)

@@ -10,11 +10,11 @@ export type RetryPromptInput = {
 export function promptRequest(
   text: string,
   attachments: PromptAttachment[],
-  imageSupported: boolean,
+  imageSupported: boolean | undefined,
   resourceLink?: { sha: string; name: string },
 ) {
   if (resourceLink) return { path: "prompt", body: { text, resource_link: resourceLink } }
-  if (attachments.length > 1) {
+  if (attachments.length > 1 || (attachments.length === 1 && imageSupported === undefined)) {
     return {
       path: "prompt/images",
       body: { text, images: attachments.map(({ sha, name, width, height }) => ({ sha, name: name ?? "", width, height })) },

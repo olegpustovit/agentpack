@@ -25,8 +25,7 @@ export function sessionRules(session: ListedSession) {
     resume: !offline && session.transport === "acp" && !session.state.running && Boolean(session.ended_at),
     stop: !offline && session.state.running,
     reconnect: !offline && !nonInteractive,
-    install: !offline,
-    save: !offline,
+    projectSettings: !session.offline && !pending,
     // A starting chat's agent is on its way up; Stop it once it runs.
     archive: !offline && !(session.conversation_state === "starting" && !session.ended_at),
   }

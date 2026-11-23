@@ -10,8 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
@@ -215,4 +217,39 @@ func AdvertiseBlob(ctx context.Context, store *state.Store, id, sha string, size
 
 func ValidPeerSessionID(id string) bool {
 	return id != "" && id != "." && id != ".." && !strings.ContainsAny(id, "/\\")
+}
+
+func UploadSessionBlob(w http.ResponseWriter, r *http.Request, sessionDir string, store *state.Store) {
+	if sessionDir == "" {
+		http.Error(w, "blob store unavailable", http.StatusConflict)
+		return
+	}
+	controller := http.NewResponseController(w)
+	if err := controller.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		http.Error(w, "could not set blob upload deadline", http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = controller.SetReadDeadline(time.Time{}) }()
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBlobBytes+1))
+	if err != nil {
+		http.Error(w, "invalid blob", http.StatusBadRequest)
+		return
+	}
+	sha, err := StoreSessionBlob(sessionDir, data)
+	if errors.Is(err, ErrSessionBlobQuota) {
+		http.Error(w, err.Error(), http.StatusInsufficientStorage)
+		return
+	}
+	if err != nil {
+		http.Error(w, "could not store blob", http.StatusBadRequest)
+		return
+	}
+	if err := AdvertiseBlob(r.Context(), store, filepath.Base(sessionDir), sha, int64(len(data))); err != nil {
+		if event := obs.From(r.Context()); event != nil {
+			event.Fail(err)
+		}
+		http.Error(w, "could not record blob location", http.StatusInternalServerError)
+		return
+	}
+	WriteJSON(w, map[string]string{"sha": sha})
 }

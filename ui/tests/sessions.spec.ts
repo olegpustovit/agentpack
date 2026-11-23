@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test"
-import { mockAPI } from "./helpers"
+import { conversationImage, mockAPI, projectRow } from "./helpers"
 
 const identity = { node: { id: "n1", name: "host-a", os: "linux", version: "0" }, auth: "password", tailscale_user: "" }
 const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
@@ -209,6 +209,51 @@ test("New session saves the project's pick among several logins", async ({ page 
   await expect(page.getByRole("region", { name: "Loaded in this session" }).getByRole("combobox", { name: "linear login for agentpack" })).toContainText("Client")
 })
 
+test("a session opens project settings and saves packages, MCP and the login together", async ({ page }) => {
+  const directory = sessions[0]!.directory
+  const linear = "https://mcp.linear.app/mcp"
+  const project = projectRow(directory, [], {
+    mcp: [{ name: "linear", launcher: "remote", source: "manifest", url: linear }],
+  })
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [project] }))
+  await page.route("**/api/library/packages", (route) => route.fulfill({ json: [
+    { id: "tools", module: "github.com/acme/tools", name: "Tools", kind: "plugin", commit: "abcd1234" },
+  ] }))
+  await page.route("**/api/mcp/credentials", (route) => route.fulfill({ json: { credentials: [
+    { id: "c1", match: linear, kind: "oauth", label: "Work", status: "connected" },
+    { id: "c2", match: linear, kind: "oauth", label: "Client", status: "connected" },
+  ] } }))
+  const saves: unknown[] = []
+  await page.route("**/api/projects/settings", (route) => {
+    saves.push(route.request().postDataJSON())
+    return route.fulfill({ status: 204 })
+  })
+  await page.goto("/sessions")
+  const row = page.getByRole("navigation", { name: "Sessions" }).getByRole("link", { name: /build/ })
+  await row.click({ button: "right" })
+  await expect(page.getByRole("menuitem", { name: /Save agentpack|Install package/ })).toHaveCount(0)
+  await page.getByRole("menuitem", { name: "Project settings…" }).click()
+  const settings = page.getByRole("dialog", { name: "Project settings" })
+  await expect(settings).toContainText(directory)
+  await settings.getByRole("textbox", { name: "Search Library packages" }).fill("tools")
+  await settings.getByRole("checkbox", { name: "Add Tools" }).check()
+  await settings.getByRole("combobox", { name: "linear login" }).click()
+  await page.getByRole("option", { name: "Client" }).click()
+  await settings.getByRole("button", { name: "Add MCP server…" }).click()
+  await settings.getByLabel("Server name").fill("docs")
+  await settings.getByLabel("Server URL").fill("https://mcp.example.com/docs")
+  expect(saves).toHaveLength(0)
+  await page.setViewportSize({ width: 390, height: 844 })
+  const save = settings.getByRole("button", { name: "Save", exact: true })
+  await expect(save).toBeInViewport()
+  await save.click()
+  await expect(settings).toBeHidden()
+  expect(saves).toEqual([{
+    directory, add: ["github.com/acme/tools@abcd1234"], remove: [], remove_mcp: [],
+    servers: [{ name: "docs", url: "https://mcp.example.com/docs" }], logins: { [linear]: "c2" },
+  }])
+})
+
 test("+ opens the composer while the chat claim is still in flight", async ({ page }) => {
   let posted: { id: string } | undefined
   let release!: () => void
@@ -257,6 +302,38 @@ test("+ opens the composer while the chat claim is still in flight", async ({ pa
     { text: "check the budgets" }, { text: "then confirm the results" },
   ])
   expect(new Set(prompts.map(({ id }) => id)).size).toBe(2)
+})
+
+test("an image can be attached before a chat claim and sent while its agent is starting", async ({ page }) => {
+  let release!: () => void
+  const heldResponse = new Promise<void>((resolve) => { release = resolve })
+  await page.route(/\/api\/sessions(\?.*)?$/, async (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    const { id } = route.request().postDataJSON()
+    await heldResponse
+    const info = { ...sessions[1], id, transport: "acp", conversation_state: "starting", state: terminal(false) }
+    reply = [...sessions, info]
+    return route.fulfill({ json: info })
+  })
+  const sha = "a".repeat(64)
+  await page.route("**/api/sessions/*/conversation/blobs", (route) => route.fulfill({ json: { sha } }))
+  let posted: unknown
+  await page.route("**/api/sessions/*/conversation/prompt/images", (route) => {
+    posted = route.request().postDataJSON()
+    return route.fulfill({ json: { queued: route.request().headers()["idempotency-key"] } })
+  })
+  await page.goto("/sessions")
+  await page.getByRole("button", { name: "New Codex chat in oracle on host-a" }).click()
+  await expect(page.getByRole("button", { name: "Attach image" })).toBeEnabled()
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "screen.png", mimeType: "image/png", buffer: conversationImage,
+  })
+  await expect(page.getByText("Attaching screen.png…")).toBeVisible()
+  release()
+  await expect(page.getByText("Image attached · screen.png")).toBeVisible()
+  await expect(page.getByPlaceholder("Starting Codex…")).toBeVisible()
+  await page.getByRole("button", { name: "Send", exact: true }).click()
+  await expect.poll(() => posted).toMatchObject({ images: [{ sha, name: "screen.png" }] })
 })
 
 test("⌥-click on + lists the agents and can start one in a new worktree", async ({ page }) => {

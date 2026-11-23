@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from "react"
 import { Link } from "@tanstack/react-router"
-import { Archive, Check, createLucideIcon, Copy, GitBranch, Package, Pencil, Plug, RotateCw, Save, Square, X, type LucideIcon } from "lucide-react"
+import { Archive, Check, createLucideIcon, Copy, GitBranch, Pencil, Plug, RotateCw, Settings, Square, X, type LucideIcon } from "lucide-react"
 import { AgentTile } from "@/components/kit/agent-tile"
 import { SourceRow } from "@/components/kit/list"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -26,8 +26,7 @@ export type RowActions = {
   archive: () => void
   reconnect: () => void
   closeTerminal: () => void
-  install: () => void
-  save: () => void
+  projectSettings: () => void
   tools: () => void
 }
 
@@ -69,8 +68,7 @@ function menuEntries(session: ListedSession, selected: boolean, actions: RowActi
       { label: "agentpack Tools", icon: session.tools ? Check : Unchecked, checked: Boolean(session.tools), disabled: session.offline || Boolean(session.archived_at), run: actions.tools },
     ] : []),
     "separator",
-    { label: "Install package…", icon: Package, disabled: !rules.install, run: actions.install },
-    { label: "Save agentpack…", icon: Save, disabled: !rules.save, run: actions.save },
+    { label: "Project settings…", icon: Settings, disabled: !rules.projectSettings, run: actions.projectSettings },
     "separator",
     // For bug reports: the ID finds the session's state and diagnostic traces.
     { label: "Copy session ID", icon: Copy, disabled: false, run: () => copySessionId(session.id) },

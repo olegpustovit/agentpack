@@ -151,6 +151,7 @@ export type ProjectMCP = {
   url?: string
   /** The login this project picked for url; absent means the first (default) login. */
   login?: string
+  transport?: string
 }
 
 // What one mode turns off; a peer that predates modes sends none.

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/registry"
 )
 
 type ProjectLaunch struct {
@@ -188,4 +190,59 @@ func projectRows(ctx context.Context, folders []network.RecentFolder, contents f
 		return strings.Compare(a.Directory, b.Directory)
 	})
 	return rows, nil
+}
+
+type ProjectSettingsInput struct {
+	Directory string                    `json:"directory"`
+	Add       []string                  `json:"add"`
+	Remove    []string                  `json:"remove"`
+	Servers   []registry.MCPServerInput `json:"servers"`
+	RemoveMCP []string                  `json:"remove_mcp"`
+	Logins    map[string]string         `json:"logins"`
+}
+
+func (g *Gateway) saveProjectSettings(w http.ResponseWriter, r *http.Request) {
+	var input ProjectSettingsInput
+	if !network.ReadJSON(w, r, &input) {
+		return
+	}
+	if !g.knownDirectory(r.Context(), input.Directory) {
+		badRequest(w, "choose an available project folder")
+		return
+	}
+	for _, server := range input.Servers {
+		if strings.TrimSpace(server.Name) == "" || (strings.TrimSpace(server.Command) == "") == (strings.TrimSpace(server.URL) == "") {
+			badRequest(w, "each MCP server needs a name and either a command or a URL")
+			return
+		}
+	}
+	if len(input.Logins) > 0 {
+		_, account, ok := credentialAccount(r)
+		if !ok {
+			http.Error(w, "an enabled account is required for MCP credentials", http.StatusForbidden)
+			return
+		}
+		logins := make(map[string]string, len(input.Logins))
+		for rawURL, id := range input.Logins {
+			url, ok := g.validateProjectLogin(w, r, account, rawURL, id)
+			if !ok {
+				return
+			}
+			if old, exists := logins[url]; exists && old != id {
+				badRequest(w, "conflicting logins for the same MCP URL")
+				return
+			}
+			logins[url] = id
+		}
+		input.Logins = logins
+	}
+	if g.options.SaveProject == nil {
+		http.Error(w, "project settings are unavailable on this machine", http.StatusServiceUnavailable)
+		return
+	}
+	if err := g.options.SaveProject(r.Context(), input); err != nil {
+		fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

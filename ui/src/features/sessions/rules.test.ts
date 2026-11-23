@@ -22,12 +22,13 @@ describe("sessionRules", () => {
   it("allows offline rename but refuses live actions", () => {
     const rules = sessionRules(session({ offline: true }))
     expect(rules.rename).toBe(true)
-    expect(rules.stop || rules.restart || rules.reconnect || rules.install || rules.save).toBe(false)
+    expect(rules.stop || rules.restart || rules.reconnect || rules.projectSettings).toBe(false)
   })
 
-  it("archived rows remain read-only even on a reachable machine", () => {
-    const rules=sessionRules(session({archived_at:"2026-11-15T00:00:00Z"}))
-    expect(Object.values(rules).every((allowed)=>!allowed)).toBe(true)
+  it("an archived session can open settings for its reachable project", () => {
+    const { projectSettings, ...actions } = sessionRules(session({ archived_at: "2026-11-15T00:00:00Z" }))
+    expect(projectSettings).toBe(true)
+    expect(Object.values(actions).every((allowed) => !allowed)).toBe(true)
   })
 
   it("non-interactive sessions cannot restart or reconnect", () => {

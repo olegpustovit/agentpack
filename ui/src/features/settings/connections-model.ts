@@ -44,9 +44,15 @@ export const connectionsQuery = (live: boolean) => queryOptions({
 })
 
 // Sign-in leaves for the authorization server and comes back through the gateway to return_to (Settings → Connections by default).
-export async function signIn(input: { url: string; label?: string; client_id?: string; client_secret?: string; return_to?: string }) {
+type SignInInput = { url: string; label?: string; client_id?: string; client_secret?: string; return_to?: string }
+
+export async function startSignIn(input: SignInInput) {
   const started = await api<{ authorize_url: string }>("/api/mcp/logins", { body: input })
-  location.assign(started.authorize_url)
+  return started.authorize_url
+}
+
+export async function signIn(input: SignInInput) {
+  location.assign(await startSignIn(input))
 }
 
 export type ServerLogin = "connected" | "needs_login" | "none"

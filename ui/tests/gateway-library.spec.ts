@@ -61,7 +61,7 @@ test("existing package installation remains available from More", async ({ page 
   expect(requests.some((value) => value.path === "/api/packages" && value.method === "POST" && value.body && typeof value.body === "object" && "spec" in value.body && value.body.spec === "acme/skill" && "directory" in value.body && value.body.directory === "/work/other")).toBeTruthy()
 })
 
-test("save, rename, preview and restore an agentpack from an attached session", async ({ page }) => {
+test("save, rename, preview and restore an agentpack in the Library", async ({ page }) => {
   const requests = await mockAPI(page)
   await mockLibraryBase(page)
   const pack = { id: "pack-1", name: "Project setup", revisions: ["rev-1"], heads: ["rev-1"] }
@@ -91,9 +91,8 @@ test("save, rename, preview and restore an agentpack from an attached session", 
     return route.fulfill({ json: { restored: true } })
   })
 
-  await page.goto("/sessions")
-  await page.getByRole("navigation", { name: "Sessions" }).locator("[data-source-row]").filter({ hasText: "Claude" }).click({ button: "right" })
-  await page.getByRole("menuitem", { name: "Save agentpack…" }).click()
+  await page.goto("/library")
+  await page.getByRole("button", { name: "Save agentpack…" }).click()
   await page.getByLabel("Name", { exact: true }).fill("Project setup")
   await page.getByLabel("Revision note").fill("Initial")
   await page.getByRole("button", { name: "Save", exact: true }).click()

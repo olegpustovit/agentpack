@@ -433,27 +433,27 @@ test.describe("session list behaviour", () => {
     await expect(page.locator(".xterm-helper-textarea")).toBeFocused()
   })
 
-  test("Install package lists known packages with their state", async ({ page }) => {
+  test("Project settings lists Library packages for the selected session folder", async ({ page }) => {
     await desktop(page)
     const pin = { module: "github.com/acme/tools", commit: "a".repeat(40), content_hash: "", cache_key: "k", kind: "skill", name: "tools", url: "", direct: true }
     await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow("/work/my-project", [{ harness: "claude" }], { packages: [pin] }), projectRow("/work/another-project", [{ harness: "claude" }])] }))
     await page.route("**/api/library/packages", (route) => route.fulfill({ json: [{ ...pin, id: "k", owner: "acme", repo: "tools" }] }))
-    const posted: { spec?: string; directory?: string }[] = []
-    await page.route("**/api/packages", (route) => {
+    const posted: { add?: string[]; directory?: string }[] = []
+    await page.route("**/api/projects/settings", (route) => {
       posted.push(route.request().postDataJSON())
-      return route.fulfill({ json: { installed: true } })
+      return route.fulfill({ status: 204 })
     })
     await page.goto("/sessions")
     const row = page.locator('[data-row-key="local:local-two"]')
     await row.hover()
     await page.getByRole("button", { name: "More actions" }).first().click()
-    await page.getByRole("menuitem", { name: "Install package…" }).click()
-    const known = page.getByRole("group", { name: "Known packages" })
-    await expect(known.getByText("tools")).toBeVisible()
+    await page.getByRole("menuitem", { name: "Project settings…" }).click()
+    const known = page.getByRole("group", { name: "Library packages" })
+    await expect(known.getByRole("checkbox", { name: "Add tools" })).toBeVisible()
     await known.getByRole("checkbox").click()
-    await page.getByRole("button", { name: "Install", exact: true }).click()
+    await page.getByRole("button", { name: "Save", exact: true }).click()
     await expect.poll(() => posted.length).toBe(1)
-    expect(posted[0]).toMatchObject({ spec: `github.com/acme/tools@${"a".repeat(40)}`, directory: "/work/another-project" })
+    expect(posted[0]).toMatchObject({ add: [`github.com/acme/tools@${"a".repeat(40)}`], directory: "/work/another-project" })
   })
 })
 

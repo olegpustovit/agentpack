@@ -4,7 +4,7 @@ import { Field, FieldError, FieldGrid, FieldLabel, PopupSelect } from "@/compone
 import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { AddPackageSheet } from "@/features/library/add-package-sheet"
+import { ProjectSettings } from "./project-settings"
 import { agentpacksQuery } from "@/features/library/queries"
 import { api } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
@@ -14,19 +14,16 @@ import type { ListedSession } from "./group"
 import { sessionsQuery } from "./queries"
 
 export type SaveTarget = Pick<ListedSession, "machine" | "machineName" | "directory" | "mode">
-export type SheetState = { kind: "rename" | "install" | "save"; row: ListedSession }
+export type SheetState = { kind: "rename" | "project"; row: ListedSession }
 
-// One Sheet for the three row dialogs. Each body mounts only while open, so its form starts clean.
+// Each dialog body mounts only while open, so its form starts clean.
 export function RowSheet({ sheet, onClose }: { sheet: SheetState | null; onClose: () => void }) {
-  if (sheet?.kind === "install") {
-    return <AddPackageSheet open initialMachine={sheet.row.machine} initialDirectory={sheet.row.directory} onOpenChange={(open) => { if (!open) onClose() }} />
-  }
   return (
     <Sheet open={sheet !== null} onOpenChange={(open) => { if (!open) onClose() }}>
       {sheet && (
-        <SheetContent>
+        <SheetContent className={sheet.kind === "project" ? "w-xl sm:max-w-xl max-h-[calc(100dvh-var(--bar-h))]" : undefined}>
           {sheet.kind === "rename" && <RenameForm row={sheet.row} onDone={onClose} />}
-          {sheet.kind === "save" && <SaveForm row={sheet.row} onDone={onClose} />}
+          {sheet.kind === "project" && <ProjectSettings key={sheet.row.id} row={sheet.row} onDone={onClose} />}
         </SheetContent>
       )}
     </Sheet>

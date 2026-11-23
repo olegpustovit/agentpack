@@ -535,6 +535,26 @@ func (g *Gateway) accountEnabled(ctx context.Context, email string) bool {
 	return g.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE email=? AND disabled=0)", email).Scan(&enabled) == nil && enabled
 }
 
+func (g *Gateway) validateProjectLogin(w http.ResponseWriter, r *http.Request, account, rawURL, id string) (string, bool) {
+	canonical, err := mcp.CanonicalURL(rawURL)
+	if err != nil {
+		http.Error(w, "an http(s) MCP URL is required", http.StatusBadRequest)
+		return "", false
+	}
+	if id != "" {
+		credential, err := g.loadMCPCredential(r.Context(), id)
+		if errors.Is(err, errMCPCredentialNotFound) || err == nil && (credential.Account != account || credential.Match != canonical || credential.Kind == mcp.CredentialEnv) {
+			http.Error(w, "MCP credential not found", http.StatusNotFound)
+			return "", false
+		}
+		if err != nil {
+			credentialFailure(w, r, err)
+			return "", false
+		}
+	}
+	return canonical, true
+}
+
 func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
 	// shortcut: the pick is checked against the caller's account, not the account bound to the project's machine; when they differ the resolver falls back to the first login. Check the bound account if mixed-account meshes need it.
 	mux.HandleFunc("PUT /api/projects/mcp-login", func(w http.ResponseWriter, r *http.Request) {
@@ -551,21 +571,13 @@ func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
 		if !network.ReadJSON(w, r, &input) {
 			return
 		}
-		canonical, err := mcp.CanonicalURL(input.URL)
-		if err != nil || !filepath.IsAbs(input.Directory) {
-			http.Error(w, "an absolute directory and an http(s) URL are required", http.StatusBadRequest)
+		if !filepath.IsAbs(input.Directory) {
+			http.Error(w, "an absolute directory is required", http.StatusBadRequest)
 			return
 		}
-		if input.Credential != "" {
-			credential, err := g.loadMCPCredential(r.Context(), input.Credential)
-			if errors.Is(err, errMCPCredentialNotFound) || err == nil && (credential.Account != account || credential.Match != canonical || credential.Kind == mcp.CredentialEnv) {
-				http.Error(w, "MCP credential not found", http.StatusNotFound)
-				return
-			}
-			if err != nil {
-				credentialFailure(w, r, err)
-				return
-			}
+		canonical, ok := g.validateProjectLogin(w, r, account, input.URL, input.Credential)
+		if !ok {
+			return
 		}
 		if g.options.ProjectMCPLogin == nil {
 			http.Error(w, "project logins are unavailable on this machine", http.StatusServiceUnavailable)

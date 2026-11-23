@@ -39,5 +39,6 @@ type ProjectMCP struct {
 	// URL is set for a remote server that a shared MCP login can serve (mcp.LoginURL).
 	URL string `json:"url,omitempty"`
 	// Login is the credential ID this project picked for URL; empty means the first login.
-	Login string `json:"login,omitempty"`
+	Login     string `json:"login,omitempty"`
+	Transport string `json:"transport,omitempty"`
 }

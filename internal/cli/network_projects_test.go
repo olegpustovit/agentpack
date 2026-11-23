@@ -2,14 +2,20 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
+	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/registry"
 )
 
 func TestProjectContentsOmitsMCPCommandsAndSecrets(t *testing.T) {
@@ -62,5 +68,51 @@ func TestProjectModesReportWhatEachModeTurnsOff(t *testing.T) {
 	}
 	if l := got["lean"]; !slices.Equal(l.OffPackages, []string{"github.com/a/heavy", "github.com/a/mixed"}) || !slices.Equal(l.OffMCP, []string{"playwright"}) {
 		t.Fatalf("lean: %+v", l)
+	}
+}
+
+func TestSaveNetworkProjectCommitsTheBatchOrRestoresTheDefinition(t *testing.T) {
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	root := t.TempDir()
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("---\nname: example\ndescription: Example skill\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	const url = "https://example.com/mcp"
+	input := gateway.ProjectSettingsInput{
+		Directory: root,
+		Add:       []string{source},
+		Servers:   []registry.MCPServerInput{{Name: "example", URL: url}},
+		Logins:    map[string]string{url: "login"},
+	}
+	runner := NewRunner()
+	invalid := input
+	invalid.Servers = append(slices.Clone(input.Servers), registry.MCPServerInput{Name: "invalid"})
+	if err := runner.saveNetworkProject(t.Context(), invalid); err == nil {
+		t.Fatal("invalid MCP server was accepted")
+	}
+	for _, path := range []string{paths.ManifestPath(root), paths.LockPath(root)} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("failed settings save left %s: %v", path, err)
+		}
+	}
+	if err := runner.saveNetworkProject(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	project, err := manifest.Load(root)
+	if err != nil || project == nil || len(project.Dependencies) != 1 || len(project.MCP.Servers) != 1 {
+		t.Fatalf("saved definition: %+v %v", project, err)
+	}
+	locked, err := lockfile.LoadFromPath(paths.LockPath(root))
+	if err != nil || len(locked.Packages) != 1 || len(locked.MCPServers) != 1 {
+		t.Fatalf("saved lock: %+v %v", locked, err)
+	}
+	path, err := paths.ProjectMCPLoginsPath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logins, err := mcp.ReadProjectLogins(path)
+	if err != nil || logins[url] != "login" {
+		t.Fatalf("saved logins: %+v %v", logins, err)
 	}
 }

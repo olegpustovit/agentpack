@@ -258,8 +258,7 @@ export function SessionList() {
           terminalPool.dispose(row.machine, row.id)
         })
       },
-      install: () => setSheet({ kind: "install", row }),
-      save: () => setSheet({ kind: "save", row }),
+      projectSettings: () => setSheet({ kind: "project", row }),
       tools: () => void commands.setTools(row, !row.tools),
     }
   }

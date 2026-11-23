@@ -348,18 +348,36 @@ func (runner Runner) serveGateway(ctx context.Context, home, executable, address
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return network.ProjectContents{}, err
 		}
-		// A folder without agentpack.toml still has the implicit default mode.
-		project, _ := manifest.Load(packContext.DefinitionRoot)
-		contents := projectContents(locked, project)
-		// The Library matches a remote server to its shared login by URL and starts one from it.
-		if plan, err := staging.CollectMCPPlan(packContext.WorkspaceRoot, locked, project, nil); err == nil {
-			var logins mcp.ProjectLogins
+		project, err := manifest.Load(packContext.DefinitionRoot)
+		if err != nil {
+			return network.ProjectContents{}, err
+		}
+		plan, planErr := staging.CollectMCPPlan(packContext.WorkspaceRoot, locked, project, nil)
+		var logins mcp.ProjectLogins
+		if planErr == nil {
 			if path, err := paths.ProjectMCPLoginsPath(packContext.DefinitionRoot); err == nil {
 				logins, _ = mcp.ReadProjectLogins(path)
 			}
-			for i, server := range contents.MCP {
-				contents.MCP[i].URL = mcp.LoginURL(plan.Entries[server.Name].Server)
-				contents.MCP[i].Login = logins[contents.MCP[i].URL]
+			recorded := make(map[string]lockfile.MCPServer, len(locked.MCPServers))
+			for _, server := range locked.MCPServers {
+				recorded[server.Name] = server
+			}
+			locked.MCPServers = nil
+			for _, name := range plan.Entries.Names() {
+				server := mcp.Describe(name, plan.Entries[name])
+				if previous, ok := recorded[name]; ok && server.Definition == previous.Definition {
+					server = previous
+				}
+				locked.MCPServers = append(locked.MCPServers, server)
+			}
+		}
+		contents := projectContents(locked, project)
+		for i := range contents.MCP {
+			server := plan.Entries[contents.MCP[i].Name].Server
+			contents.MCP[i].URL = mcp.LoginURL(server)
+			contents.MCP[i].Login = logins[contents.MCP[i].URL]
+			if server.Type != nil && contents.MCP[i].URL != "" {
+				contents.MCP[i].Transport = *server.Type
 			}
 		}
 		return contents, nil
@@ -373,8 +391,14 @@ func (runner Runner) serveGateway(ctx context.Context, home, executable, address
 		if err != nil {
 			return err
 		}
+		_, release, err := packSync.LockDefinition(ctx, packContext.DefinitionRoot)
+		if err != nil {
+			return err
+		}
+		defer release()
 		return mcp.SaveProjectLogin(path, url, credential)
 	}
+	options.SaveProject = runner.saveNetworkProject
 	options.Install = runner.installNetworkPackage
 	options.InstallMCP = runner.installNetworkMCP
 	var err error

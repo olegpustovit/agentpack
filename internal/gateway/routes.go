@@ -171,6 +171,7 @@ var routeTable = []route{
 	{pattern: "GET /api/packages", peer: peerRead},
 	{pattern: "POST /api/packages", policy: owner, peer: peerWrite},
 	{pattern: "GET /api/projects", peer: peerRead},
+	{pattern: "PUT /api/projects/settings", policy: owner, peer: peerWrite, timeout: timeoutLong},
 	{pattern: "GET /api/folders", peer: peerRead},
 	{pattern: "GET /api/folders/found", peer: peerRead, timeout: timeoutProbe},
 	{pattern: "GET /api/worktrees", peer: peerRead},
@@ -209,7 +210,7 @@ var routeTable = []route{
 	// show is only called by a chat's own agent, through the gateway of the machine the chat runs on.
 	{pattern: "POST /api/sessions/{id}/conversation/show", session: true},
 	{pattern: "POST /api/sessions/{id}/conversation/config", peer: peerWrite, session: true},
-	{pattern: "POST /api/sessions/{id}/conversation/blobs", peer: peerWrite, session: true, timeout: timeoutLong, worker: "/blobs"},
+	{pattern: "POST /api/sessions/{id}/conversation/blobs", peer: peerWrite, session: true, timeout: timeoutLong},
 	{pattern: "POST /api/sessions/{id}/conversation/permission", peer: peerWrite, session: true, worker: "/permission"},
 	{pattern: "POST /api/sessions/{id}/conversation/revert", peer: peerWrite, session: true, worker: "/revert"},
 	{pattern: "POST /api/sessions/{id}/conversation/cancel", peer: peerWrite, session: true, worker: "/cancel"},
