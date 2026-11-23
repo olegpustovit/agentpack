@@ -192,3 +192,17 @@ func TestDownloadTarballCancelledMidBodyLeavesNoFile(t *testing.T) {
 		t.Fatalf("cancelled download left %v", leftovers)
 	}
 }
+
+func TestCappedWriterRefusesAnArchivePastTheCap(t *testing.T) {
+	var out bytes.Buffer
+	writer := &cappedWriter{w: &out, left: 4}
+	if _, err := writer.Write([]byte("abc")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte("de")); err == nil {
+		t.Fatal("wrote past the cap")
+	}
+	if out.String() != "abc" {
+		t.Fatalf("wrote %q", out.String())
+	}
+}

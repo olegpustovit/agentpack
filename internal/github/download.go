@@ -268,7 +268,7 @@ func fetchTarballWithGit(ctx context.Context, owner, repo, sha string) (string, 
 	if err != nil {
 		return "", err
 	}
-	err = errors.Join(archiveCheckout(file, checkout, repo+"-"+sha), file.Close())
+	err = errors.Join(archiveCheckout(&cappedWriter{w: file, left: maxTarballBytes}, checkout, repo+"-"+sha), file.Close())
 	if err != nil {
 		_ = os.Remove(file.Name())
 		return "", err
@@ -329,4 +329,19 @@ func archiveCheckout(output io.Writer, root, prefix string) error {
 		return err
 	}
 	return errors.Join(tarWriter.Close(), gzipWriter.Close())
+}
+
+// cappedWriter fails once more than maxTarballBytes would be written, so the
+// Git-protocol fallback has the same archive cap as a codeload download.
+type cappedWriter struct {
+	w    io.Writer
+	left int64
+}
+
+func (c *cappedWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > c.left {
+		return 0, fmt.Errorf("archive is larger than %d MiB", maxTarballBytes>>20)
+	}
+	c.left -= int64(len(p))
+	return c.w.Write(p)
 }
