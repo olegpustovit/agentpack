@@ -332,6 +332,15 @@ func (log *EventLog) SetFold(fold Fold, seq int64) {
 	log.fold = fold
 }
 
+// ReadFold calls read with the fold while no entry is being applied to it.
+func (log *EventLog) ReadFold(read func(Fold)) {
+	log.mu.RLock()
+	defer log.mu.RUnlock()
+	if log.fold != nil {
+		read(log.fold)
+	}
+}
+
 // Fold is the installed fold, or nil.
 func (log *EventLog) Fold() Fold {
 	log.mu.RLock()

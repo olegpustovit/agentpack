@@ -735,16 +735,28 @@ func TestConversationStreamPushesAppendsWithoutPolling(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	lines := make(chan string, 8)
+	lines, derived := make(chan string, 8), make(chan string, 8)
 	go func() {
 		scanner := bufio.NewScanner(response.Body)
+		event := ""
 		for scanner.Scan() {
-			if text := scanner.Text(); strings.HasPrefix(text, "data:") {
+			switch text := scanner.Text(); {
+			case strings.HasPrefix(text, "event:"):
+				event = strings.TrimSpace(strings.TrimPrefix(text, "event:"))
+			case strings.HasPrefix(text, "data:") && event == "derived":
+				derived <- text
+			case strings.HasPrefix(text, "data:"):
 				lines <- text
+			case text == "":
+				event = ""
 			}
 		}
 		close(lines)
 	}()
+	// The server's fold comes first, so a browser shows the state before any entry arrives.
+	if got := <-derived; !strings.Contains(got, `"working":true`) || !strings.Contains(got, `"through":1`) {
+		t.Fatalf("first derived frame = %s", got)
+	}
 	started := time.Now()
 	log.Append("agent_message_chunk", 2, json.RawMessage(`{"text":"new"}`))
 	select {
@@ -757,6 +769,17 @@ func TestConversationStreamPushesAppendsWithoutPolling(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("append never reached the stream")
+	}
+	log.Append("turn_end", 3, json.RawMessage(`{}`))
+	for got := ""; !strings.Contains(got, `"through":3`); {
+		select {
+		case got = <-derived:
+			if strings.Contains(got, `"through":3`) && !strings.Contains(got, `"conversation_state":"idle"`) {
+				t.Fatalf("derived after turn end = %s", got)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("state change never reached the stream")
+		}
 	}
 }
 

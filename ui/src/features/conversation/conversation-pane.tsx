@@ -35,7 +35,7 @@ import { GoalPill, parseGoalCommand, useGoalActions } from "./goal-sheet"
 import { QueueChips } from "./queue-chips"
 import { subagentRunning } from "./subagent-card"
 import { ConversationInspector } from "./conversation-inspector"
-import { useConversationStream, useHistoryPaging } from "./conversation-log"
+import { useConversationStream, useHistoryPaging, type DerivedState } from "./conversation-log"
 import { ChatConfigControls, useChatConfig } from "./chat-config"
 import { GitInspectorSections, GitToolbarActions, branchLine, useSessionGit } from "./session-git"
 import { advertises, agentCommands, applyHint, commandSpans, filterAtHints, filterSlashHints, moveHint, slashQuery, type ComposerHint } from "./composer-hints"
@@ -152,6 +152,7 @@ export default function ConversationPane({
   // One that never started (its agent wasn't signed in, say) starts fresh the same way.
   const resumable = !readOnly && !starting && !live && Boolean(info?.ended_at)
   const [streamConnected, setStreamConnected] = useState(false)
+  const [derived, setDerived] = useState<DerivedState>()
   const { data: tail, error: conversationError } = useQuery({
     ...conversationEventsQuery(machine, sessionId),
     enabled: info?.provisionalStart !== "claim",
@@ -164,10 +165,11 @@ export default function ConversationPane({
     if (!queryClient.getQueryData(key)) void restoreChatQuery(queryClient, cacheBuildID || "dev", key)
   }, [machine, queryClient, sessionId])
   const { historyKey, older, entries, hasOlder, transcript, loadOlder } = useHistoryPaging(machine, sessionId, tail, threadScrollRef, stickToBottomRef)
-  const activity = info?.conversation_state
+  // The owner's fold is the live state; the row, then this browser's reducer, are the fallbacks for older owners.
+  const activity = derived?.conversation_state ?? info?.conversation_state
   // Idle with background work open: the agent will wake by itself (internal/acp WaitItem).
   const waitNow = useNow(true, 60_000)
-  const waits = activity === "idle" && info && !readOnly && !subagentId ? openWaits(info, waitNow) : []
+  const waits = activity === "idle" && info && !readOnly && !subagentId ? openWaits(derived ?? info, waitNow) : []
   const knownChats = useQuery({ ...sessionsQuery(false), enabled: waits.some((item) => item.kind === "reply") }).data
   const chatName = (id: string) => {
     const chat = knownChats?.find((row) => row.id === id) ?? helpers.find((row) => row.id === id)
@@ -196,7 +198,7 @@ export default function ConversationPane({
     })
     return () => cancelAnimationFrame(frame)
   }, [historyKey, reportTimings, starting, tailLoaded])
-  useConversationStream(machine, sessionId, (live || (starting && info?.provisionalStart !== "claim")) && !needsUpdate && tailLoaded, setStreamConnected)
+  useConversationStream(machine, sessionId, (live || (starting && info?.provisionalStart !== "claim")) && !needsUpdate && tailLoaded, setStreamConnected, setDerived)
 
   const subagent = subagentId ? parent.subagents?.[subagentId] : undefined
   const thread = subagent?.thread ?? parent

@@ -27,7 +27,8 @@ type conversationDerived struct {
 	NeedsYou  bool              `json:"needs_you"`
 	Waiting   []acp.WaitItem    `json:"waiting,omitempty"`
 	Subagents []SubagentSummary `json:"subagents,omitempty"`
-	Seq       int64             `json:"seq"`
+	// Through is the last sequence folded in. Not "seq": an older relay reads a frame's seq as an entry's.
+	Through int64 `json:"through"`
 }
 
 func (fold *conversationFold) Apply(entry acp.LogEntry) {
@@ -53,10 +54,21 @@ func (fold *conversationFold) Apply(entry acp.LogEntry) {
 
 func (fold *conversationFold) Checkpoint() json.RawMessage { return mustRawJSON(fold) }
 
+// liveDerived is the session's state now, from its log's fold.
+func (session *ConversationSession) liveDerived() json.RawMessage {
+	var derived json.RawMessage
+	session.log.ReadFold(func(fold acp.Fold) {
+		if fold, ok := fold.(*conversationFold); ok {
+			derived = mustRawJSON(fold.derived())
+		}
+	})
+	return derived
+}
+
 func (fold *conversationFold) derived() conversationDerived {
 	thread := fold.Thread.State()
 	return conversationDerived{State: conversationState(thread), Working: thread.Working, NeedsYou: thread.NeedsYou,
-		Waiting: thread.Waiting, Subagents: fold.subagentSummaries(), Seq: fold.Seq}
+		Waiting: thread.Waiting, Subagents: fold.subagentSummaries(), Through: fold.Seq}
 }
 
 // sessionJSON is a derived list as the row stores it: empty for none.

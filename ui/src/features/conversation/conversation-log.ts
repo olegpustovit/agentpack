@@ -2,14 +2,35 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react"
 import { reconnectDelay, useConversationEvents } from "@/features/events/use-events"
 import { LOCAL } from "@/lib/api"
+import type { WaitItem } from "@/lib/api-types"
+import { array, boolean, number, object, string } from "@/lib/validate"
 import { trackStreamingQuery } from "@/lib/persist"
 import { joinHistory, olderConversationPage, type ConversationPage } from "./queries"
 import type { LogEntry, ThreadItem } from "./model"
 import { reduceThread } from "./reducer"
 
+/** The chat's state as the owning worker's fold computed it; the browser's own reducer is the fallback for older owners. */
+export type DerivedState = { conversation_state: string; working: boolean; needs_you: boolean; waiting: WaitItem[]; through: number }
+
+export function parseDerived(data: string): DerivedState | undefined {
+  try {
+    const fields = object(JSON.parse(data), "derived")
+    return {
+      conversation_state: string(fields.conversation_state, "derived.conversation_state"),
+      working: boolean(fields.working, "derived.working"),
+      needs_you: boolean(fields.needs_you, "derived.needs_you"),
+      waiting: fields.waiting == null ? [] : (array(fields.waiting, "derived.waiting") as WaitItem[]),
+      through: number(fields.through, "derived.through"),
+    }
+  } catch {
+    return undefined
+  }
+}
+
 // Appends a chat's live entries to its cached tail: through the shared event stream, or its own
-// EventSource on a gateway without one. Reports the connection so the tail query stops refetching.
-export function useConversationStream(machine: string, sessionId: string, enabled: boolean, setStreamConnected: (connected: boolean) => void) {
+// EventSource on a gateway without one. Reports the connection so the tail query stops refetching,
+// and the server's derived state while connected.
+export function useConversationStream(machine: string, sessionId: string, enabled: boolean, setStreamConnected: (connected: boolean) => void, setDerived: (derived: DerivedState | undefined) => void) {
   const queryClient = useQueryClient()
   const subscribe = useConversationEvents()
   const [legacyStream, setLegacyStream] = useState(false)
@@ -34,10 +55,19 @@ export function useConversationStream(machine: string, sessionId: string, enable
     }
     // The stream skipped entries the worker could no longer send: reload the tail instead of showing a hole.
     const onGap = () => void queryClient.refetchQueries({ queryKey: key, exact: true })
+    const onDerived = (data: string) => {
+      const derived = parseDerived(data)
+      if (derived) setDerived(derived)
+    }
+    const connectedTo = (connected: boolean) => {
+      // A frame from a closed stream would outlive the state it described.
+      if (!connected) setDerived(undefined)
+      setStreamConnected(connected)
+    }
     if (subscribe && !legacyStream) {
       let untrack: (() => void) | undefined
       const unsubscribe = subscribe({
-        machine, sessionId, onEntry, onTruncated, onGap,
+        machine, sessionId, onEntry, onTruncated, onGap, onDerived,
         onConnection: (connected) => {
           if (connected) {
             if (!untrack) untrack = trackStreamingQuery(key)
@@ -45,7 +75,7 @@ export function useConversationStream(machine: string, sessionId: string, enable
             untrack?.()
             untrack = undefined
           }
-          setStreamConnected(connected)
+          connectedTo(connected)
         },
         onFallback: () => setLegacyStream(true),
       })
@@ -53,6 +83,7 @@ export function useConversationStream(machine: string, sessionId: string, enable
         unsubscribe()
         untrack?.()
         untrack = undefined
+        setDerived(undefined)
       }
     }
     let source: EventSource | undefined
@@ -65,7 +96,7 @@ export function useConversationStream(machine: string, sessionId: string, enable
       source = undefined
       untrack?.()
       untrack = undefined
-      setStreamConnected(false)
+      connectedTo(false)
     }
     const syncVisibility = () => {
       if (document.visibilityState === "hidden") {
@@ -81,10 +112,10 @@ export function useConversationStream(machine: string, sessionId: string, enable
       untrack = trackStreamingQuery(key)
       source.onopen = () => {
         attempt = 0
-        setStreamConnected(true)
+        connectedTo(true)
       }
       source.onerror = () => {
-        setStreamConnected(false)
+        connectedTo(false)
         if (source?.readyState !== EventSource.CLOSED) return
         close()
         retry = setTimeout(syncVisibility, reconnectDelay(attempt))
@@ -93,6 +124,7 @@ export function useConversationStream(machine: string, sessionId: string, enable
       source.onmessage = (event) => onEntry(event.data)
       source.addEventListener("truncated", onTruncated)
       source.addEventListener("gap", onGap)
+      source.addEventListener("derived", (event: MessageEvent<string>) => onDerived(event.data))
     }
     document.addEventListener("visibilitychange", syncVisibility)
     syncVisibility()
@@ -100,7 +132,7 @@ export function useConversationStream(machine: string, sessionId: string, enable
       document.removeEventListener("visibilitychange", syncVisibility)
       close()
     }
-  }, [enabled, legacyStream, machine, queryClient, sessionId, setStreamConnected, subscribe])
+  }, [enabled, legacyStream, machine, queryClient, sessionId, setDerived, setStreamConnected, subscribe])
 }
 
 // Earlier pages, loaded as the thread scrolls up, joined to the cached tail; the reader stays on the same

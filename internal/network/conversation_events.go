@@ -157,6 +157,12 @@ func (g *Gateway) readConversationStream(ctx context.Context, id, node string, s
 			}
 			continue
 		}
+		if entry.Type == "derived" {
+			if !send(conversationStreamFrame{event: "conversation_derived", body: json.RawMessage(entry.Data)}) {
+				return since, ctx.Err()
+			}
+			continue
+		}
 		var header struct {
 			Seq int64 `json:"seq"`
 		}
