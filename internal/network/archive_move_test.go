@@ -845,3 +845,21 @@ func TestArchiveMarkerAppliesToEndedSessionWithStaleWorkingState(t *testing.T) {
 		t.Fatalf("worker refused the archive marker: %v %v", archived, err)
 	}
 }
+
+// One wake after a changing pull runs the hourly pass early, and repeated wakes coalesce.
+func TestArchivePassWakesAfterAChangingPull(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	g.archiveWake = make(chan struct{}, 1)
+	passes := make(chan struct{}, 8)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		g.runArchive(ctx, time.Hour, func() time.Time { passes <- struct{}{}; return time.Now() })
+	}()
+	defer func() { cancel(); <-done }()
+	<-passes
+	g.wakeArchive()
+	g.wakeArchive() // never blocks a puller
+	<-passes
+}

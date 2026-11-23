@@ -470,20 +470,7 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 		}
 		if err == nil && changed {
 			g.credentialsChanged()
-		}
-		if err == nil {
-			archiveCtx, archiveEvent := obs.Start(pullCtx, "archive.edits", "relayed history")
-			if archiveErr := g.drainArchiveEdits(archiveCtx, targetFor); archiveErr != nil {
-				archiveEvent.Fail(archiveErr)
-				archiveEvent.End()
-			} else if changed {
-				archiveEvent.End()
-			}
-			if cleanupErr := g.cleanupArchivedBlobs(archiveCtx, targetFor); cleanupErr != nil {
-				_, cleanupEvent := obs.Start(archiveCtx, "archive.cleanup", "local attachments")
-				cleanupEvent.Fail(cleanupErr)
-				cleanupEvent.End()
-			}
+			g.wakeArchive()
 		}
 		cancel()
 		if ctx.Err() != nil {

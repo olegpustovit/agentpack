@@ -36,7 +36,17 @@ func (g *Gateway) runArchive(ctx context.Context, interval time.Duration, now fu
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-g.archiveWake:
 		}
+	}
+}
+
+// wakeArchive runs the archive pass early after a pull changed state, so relayed edits drain and
+// archived attachments clean up once, not once per peer worker.
+func (g *Gateway) wakeArchive() {
+	select {
+	case g.archiveWake <- struct{}{}:
+	default:
 	}
 }
 

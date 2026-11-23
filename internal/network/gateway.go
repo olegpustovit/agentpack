@@ -90,6 +90,7 @@ type Gateway struct {
 	replicaStatus  sync.Map
 	statePulls     sync.Map   // peer → coalesced pull notification
 	archiveMu      sync.Mutex // serializes archive copies with edits to archive.db
+	archiveWake    chan struct{}
 	syncTransferMu sync.Mutex
 	syncTransfers  map[string]*stateTransferFile
 	identityMu     sync.Mutex
@@ -181,7 +182,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	defer restoreDiagnostics()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	gateway := &Gateway{options: options, store: store, logs: logs, auth: auth, local: nodeRecord{listener.Addr().String(), randomToken()}, origin: origin, stop: cancel, done: ctx.Done()}
+	gateway := &Gateway{options: options, store: store, logs: logs, auth: auth, local: nodeRecord{listener.Addr().String(), randomToken()}, origin: origin, stop: cancel, done: ctx.Done(), archiveWake: make(chan struct{}, 1)}
 	gateway.nodeIDCache.Store(nodeID)
 	defer func() { result = errors.Join(result, gateway.cleanStateTransfers(time.Time{})) }()
 	if err := gateway.loadPublic(context.Background()); err != nil {
