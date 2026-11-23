@@ -37,7 +37,7 @@ func TestProjectsGroupsLaunchesIntoOneRow(t *testing.T) {
 	}
 	var mu sync.Mutex
 	calls := 0
-	rows, err := Projects(context.Background(), home, func(_ context.Context, _ string) (ProjectContents, error) {
+	rows, err := testProjects(home, func(_ context.Context, _ string) (ProjectContents, error) {
 		mu.Lock()
 		calls++
 		mu.Unlock()
@@ -72,7 +72,7 @@ func TestProjectsMergesTrailingSlashDuplicates(t *testing.T) {
 			t.Fatal(i, err)
 		}
 	}
-	rows, err := Projects(context.Background(), home, func(_ context.Context, _ string) (ProjectContents, error) {
+	rows, err := testProjects(home, func(_ context.Context, _ string) (ProjectContents, error) {
 		return ProjectContents{}, nil
 	})
 	if err != nil {
@@ -96,7 +96,7 @@ func TestProjectsDoesNotReadUnavailableFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	var read []string
-	rows, err := Projects(context.Background(), home, func(_ context.Context, dir string) (ProjectContents, error) {
+	rows, err := testProjects(home, func(_ context.Context, dir string) (ProjectContents, error) {
 		read = append(read, dir)
 		return ProjectContents{}, nil
 	})
@@ -127,7 +127,7 @@ func TestProjectsIsolatesFailingFolder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rows, err := Projects(context.Background(), home, func(_ context.Context, dir string) (ProjectContents, error) {
+	rows, err := testProjects(home, func(_ context.Context, dir string) (ProjectContents, error) {
 		if dir == bad {
 			return ProjectContents{}, errors.New("lock unreadable")
 		}
@@ -171,4 +171,13 @@ func TestForgetRecentWithoutHarnessOrModeRemovesWholeFolder(t *testing.T) {
 	if len(remaining) != 1 || remaining[0].Directory != other {
 		t.Fatalf("want only the other folder to remain, got %+v", remaining)
 	}
+}
+
+// testProjects groups the launches recorded under home the way GET /api/projects does, without git.
+func testProjects(home string, contents func(context.Context, string) (ProjectContents, error)) ([]ProjectRow, error) {
+	recent, err := Recent(home)
+	if err != nil {
+		return nil, err
+	}
+	return projectRows(context.Background(), withoutWorktrees(home, recentFolders(recent)), contents)
 }

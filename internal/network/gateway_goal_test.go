@@ -35,10 +35,10 @@ func TestClearGoalReconcilesAWorkerThatLostIt(t *testing.T) {
 	g, _ := identityGateway(t, home, nil)
 	owner := &Actor{Kind: "browser", Account: true, User: "owner@example.com"}
 	id := "session-goal"
-	if err := upsertSession(context.Background(), g.auth.store.DB, SessionInfo{ID: id, Directory: seedFolder(t, home), Harness: "claude", Transport: "acp", StartedBy: owner}); err != nil {
+	if err := upsertSession(context.Background(), g.store.DB, SessionInfo{ID: id, Directory: seedFolder(t, home), Harness: "claude", Transport: "acp", StartedBy: owner}); err != nil {
 		t.Fatal(err)
 	}
-	persistSessionJSON(context.Background(), g.auth.store.DB, id, "goal", &Goal{Objective: "ship", State: "active", Engine: "native"}, false)
+	persistSessionJSON(context.Background(), g.store.DB, id, "goal", &Goal{Objective: "ship", State: "active", Engine: "native"}, false)
 	dir := filepath.Join(home, "network", "sessions", id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestClearGoalReconcilesAWorkerThatLostIt(t *testing.T) {
 	if response.Code != http.StatusOK || prompted != "/goal clear" {
 		t.Fatalf("response %d %q, prompted %q", response.Code, response.Body.String(), prompted)
 	}
-	stored, err := storedSession(context.Background(), g.auth.store.Reader, id)
+	stored, err := storedSession(context.Background(), g.store.Reader, id)
 	if err != nil || stored.Goal != nil {
 		t.Fatalf("goal kept: %+v, %v", stored.Goal, err)
 	}

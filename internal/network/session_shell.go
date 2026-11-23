@@ -11,14 +11,14 @@ import (
 
 func (g *Gateway) startShell(w http.ResponseWriter, r *http.Request, actor Actor, input chatStartRequest) {
 	ctx := r.Context()
-	node, err := g.auth.store.NodeID(ctx)
+	node, err := g.store.NodeID(ctx)
 	if err != nil {
 		writeSessionStart(w, r, SessionInfo{}, err)
 		return
 	}
 	info := SessionInfo{NodeID: node, Reachable: true, Transport: "shell", Harness: "shell", ParentID: input.ParentID, StartedBy: &actor}
 	if input.ParentID != "" {
-		parent, err := storedSession(ctx, g.auth.store.Reader, input.ParentID)
+		parent, err := storedSession(ctx, g.store.Reader, input.ParentID)
 		if errors.Is(err, errSessionNotFound) {
 			http.Error(w, "chat not found", http.StatusNotFound)
 			return
@@ -73,7 +73,7 @@ func (g *Gateway) startShell(w http.ResponseWriter, r *http.Request, actor Actor
 
 func (g *Gateway) serveChatShells(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	parent, err := storedSession(ctx, g.auth.store.Reader, r.PathValue("id"))
+	parent, err := storedSession(ctx, g.store.Reader, r.PathValue("id"))
 	if errors.Is(err, errSessionNotFound) {
 		http.Error(w, "chat not found", http.StatusNotFound)
 		return
@@ -89,7 +89,7 @@ func (g *Gateway) serveChatShells(w http.ResponseWriter, r *http.Request) {
 	if !authorizeACPWrite(w, r, parent) {
 		return
 	}
-	rows, err := querySessions(ctx, g.auth.store.Reader, "SELECT "+sessionColumns+
+	rows, err := querySessions(ctx, g.store.Reader, "SELECT "+sessionColumns+
 		" FROM sessions WHERE transport='shell' AND parent_id=? AND node_id=? AND hidden=0 AND ended_at=0 ORDER BY started_at,id", parent.ID, parent.NodeID)
 	if err != nil {
 		meshReadError(w, r, err)
@@ -108,7 +108,7 @@ func (g *Gateway) detachShell(w http.ResponseWriter, r *http.Request) {
 	if !g.authorizeACPWriteByID(w, r, id) {
 		return
 	}
-	result, err := g.auth.store.DB.ExecContext(ctx, "UPDATE sessions SET parent_id='' WHERE id=? AND transport='shell' AND ended_at=0 AND node_id="+state.LocalNodeSQL, id)
+	result, err := g.store.DB.ExecContext(ctx, "UPDATE sessions SET parent_id='' WHERE id=? AND transport='shell' AND ended_at=0 AND node_id="+state.LocalNodeSQL, id)
 	if err == nil {
 		var changed int64
 		changed, err = result.RowsAffected()

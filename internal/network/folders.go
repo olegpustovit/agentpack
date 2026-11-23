@@ -137,7 +137,7 @@ func (g *Gateway) listFolders(ctx context.Context, path string) (folderListing, 
 	if err != nil {
 		return out, err
 	}
-	recent, err := RecentIn(ctx, g.auth.store.Reader)
+	recent, err := RecentIn(ctx, g.store.Reader)
 	if err != nil {
 		return out, err
 	}
@@ -214,7 +214,7 @@ func (g *Gateway) foundFolders(ctx context.Context) ([]ProjectRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	recent, err := RecentIn(ctx, g.auth.store.Reader)
+	recent, err := RecentIn(ctx, g.store.Reader)
 	if err != nil {
 		return nil, err
 	}

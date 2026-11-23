@@ -13,20 +13,12 @@ import (
 // etagMaxBody bounds buffering; a larger response streams through without an ETag.
 const etagMaxBody = 8 << 20
 
-// etagPath reports whether an API path gets a content ETag. Streams, status and UI configuration stay uncached.
-func etagPath(p string) bool {
-	if !strings.HasPrefix(p, "/api/") || p == "/api/events" || p == "/api/sync/events" || p == "/api/status" || p == "/api/config" {
-		return false
-	}
-	return !strings.HasPrefix(p, "/api/sessions/") || !(strings.HasSuffix(p, "/terminal") || strings.HasSuffix(p, "/output"))
-}
-
-// conditionalAPI gives GET and HEAD API responses a content ETag so repeat reads can answer 304.
+// conditionalAPI gives GET and HEAD responses of a routeTable row with ETags a content ETag so repeat reads can answer 304.
 func conditionalAPI(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// A stream (the hub's live conversation) must flush as it goes, never buffer.
 		streaming := r.URL.Query().Get("stream") == "1" || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
-		if (r.Method != http.MethodGet && r.Method != http.MethodHead) || streaming || !etagPath(r.URL.Path) {
+		if (r.Method != http.MethodGet && r.Method != http.MethodHead) || streaming {
 			next.ServeHTTP(w, r)
 			return
 		}

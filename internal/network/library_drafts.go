@@ -15,7 +15,7 @@ import (
 
 const draftReviewLimit = 64 << 20
 
-func (g *Gateway) registerLibraryDrafts(mux *http.ServeMux) {
+func (g *Gateway) registerLibraryDrafts(mux routeRegistrar) {
 	store := g.options.Library.Store
 	mux.HandleFunc("GET /api/library/drafts", func(w http.ResponseWriter, r *http.Request) {
 		value, err := store.ListDrafts()

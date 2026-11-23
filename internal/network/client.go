@@ -105,28 +105,6 @@ func parseWorkerRecord(data []byte, id string) (WorkerRecord, error) {
 	return record, nil
 }
 
-func workerRequestTimeout(method, path string) time.Duration {
-	path, _, _ = strings.Cut(path, "?")
-	if method == http.MethodGet && strings.HasPrefix(path, "/api/cache/") {
-		return 2 * time.Minute
-	}
-	if method == http.MethodGet && strings.HasPrefix(path, "/api/logs/traces/") {
-		return 5 * time.Second
-	}
-	if strings.HasPrefix(path, "/api/mcp/") {
-		// Refreshing may ask Main over the mesh, and starting a login discovers the authorization server.
-		return time.Minute
-	}
-	if method == http.MethodPost &&
-		(path == "/stop" || path == "/restart" || path == "/api/sessions" ||
-			strings.HasSuffix(path, "/stop") || strings.HasSuffix(path, "/restart") ||
-			strings.HasSuffix(path, "/conversation/prompt") || strings.HasSuffix(path, "/conversation/message") || strings.HasSuffix(path, "/conversation/blobs")) ||
-		method == http.MethodGet && strings.Contains(path, "/blobs/") {
-		return 2 * time.Minute
-	}
-	return 2 * time.Second
-}
-
 func workerRequest(ctx context.Context, record WorkerRecord, method, path, operationID string, body ...io.Reader) (*http.Response, error) {
 	var reader io.Reader
 	if len(body) > 0 {
@@ -336,19 +314,6 @@ func attachWorker(ctx context.Context, record WorkerRecord, local bool, since ui
 	connection, response, err := dialer.DialContext(ctx, "ws://"+record.Address+"/attach?since="+strconv.FormatUint(since, 10), headers)
 	if response != nil && response.Body != nil {
 		response.Body.Close()
-	}
-	return connection, err
-}
-
-// AttachTerminal opens a local-viewer connection to an existing worker without taking ownership of it.
-func AttachTerminal(ctx context.Context, home, id string, since uint64) (*websocket.Conn, error) {
-	record, err := workerRecord(home, id)
-	if err != nil {
-		return nil, err
-	}
-	connection, err := reattach(ctx, record, since)
-	if err == nil {
-		connection.SetReadLimit(replayLimit + 4096)
 	}
 	return connection, err
 }

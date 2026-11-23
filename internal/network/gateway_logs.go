@@ -12,7 +12,7 @@ type issueResolution struct {
 	Note    string `json:"note,omitempty" jsonschema:"Optional explanation of the fix."`
 }
 
-func (g *Gateway) registerDiagnostics(mux *http.ServeMux) {
+func (g *Gateway) registerDiagnostics(mux routeRegistrar) {
 	mux.HandleFunc("POST /api/logs/ingest", g.peerOnly(g.ingestTraces))
 	mux.HandleFunc("GET /api/logs/trace/{trace}", g.peerOnly(g.localTrace))
 	mux.HandleFunc("GET /api/logs/issues", func(w http.ResponseWriter, r *http.Request) {

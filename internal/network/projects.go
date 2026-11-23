@@ -133,19 +133,8 @@ func withoutWorktrees(home string, folders []RecentFolder) []RecentFolder {
 
 const projectReadConcurrency = 4
 
-// Projects groups recent launches by cleaned directory. Contents are read only for
-// available folders, at most projectReadConcurrency at a time; a failed read sets
-// Error on that row alone.
-func Projects(ctx context.Context, home string, contents func(context.Context, string) (ProjectContents, error)) ([]ProjectRow, error) {
-	folders, err := RecentFolders(home)
-	if err != nil {
-		return nil, err
-	}
-	return projectRows(ctx, withoutWorktrees(home, folders), contents)
-}
-
 func (g *Gateway) projects(ctx context.Context) ([]ProjectRow, error) {
-	recent, err := RecentIn(ctx, g.auth.store.Reader)
+	recent, err := RecentIn(ctx, g.store.Reader)
 	if err != nil {
 		return nil, err
 	}

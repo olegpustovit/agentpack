@@ -208,7 +208,7 @@ func TestEventsStreamClosesOnLogout(t *testing.T) {
 	testBrowserSession(t, auth, testBrowserEmail, cookie.Value)
 
 	g := eventsGateway(nil, nil, nil)
-	g.auth = auth
+	g.store, g.auth = auth.store, auth
 	g.events.checkAuth = make(chan time.Time)
 	server := httptest.NewServer(http.HandlerFunc(g.serveEvents))
 	defer server.Close()
@@ -273,7 +273,7 @@ func TestStateEventsNameTheTablesThatChanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := &Gateway{auth: auth}
+	g := &Gateway{store: auth.store, auth: auth}
 	before, err := auth.store.DBVersion(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -299,7 +299,7 @@ func TestStreamingProgressOnASessionRowIsNotASessionsChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := &Gateway{auth: auth}
+	g := &Gateway{store: auth.store, auth: auth}
 	if err := upsertSession(t.Context(), auth.store.DB, SessionInfo{ID: "session-stream"}); err != nil {
 		t.Fatal(err)
 	}
@@ -318,14 +318,14 @@ func TestEventsCarriesConversationFromItsOwnResumeCursor(t *testing.T) {
 	g.events.topics = []eventTopic{}
 	g.events.nodes = func(context.Context) ([]TailnetNode, error) { return nil, nil }
 	const id = "session-multiplexed"
-	if err := upsertSession(t.Context(), g.auth.store.DB, SessionInfo{ID: id, Transport: "acp", ConversationState: "starting"}); err != nil {
+	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: id, Transport: "acp", ConversationState: "starting"}); err != nil {
 		t.Fatal(err)
 	}
 	entries := []acp.LogEntry{
 		{Seq: 1, Kind: "queued_prompt", Payload: json.RawMessage(`{}`)},
 		{Seq: 2, Kind: "queued_prompt", Payload: json.RawMessage(`{}`)},
 	}
-	if err := persistConversationChanges(t.Context(), g.auth.store.DB, id, acp.LogChanges{Entries: entries, LastSeq: 2}); err != nil {
+	if err := persistConversationChanges(t.Context(), g.store.DB, id, acp.LogChanges{Entries: entries, LastSeq: 2}); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(g.serveEvents))
@@ -371,7 +371,7 @@ func TestSessionTableChangesEmitSessionsWithoutWorkerPoll(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := eventsGateway(nil, nil, nil)
-	g.auth = auth
+	g.store, g.auth = auth.store, auth
 	ticks := make(chan time.Time, 1)
 	topic := g.defaultEventTopics()[0]
 	topic.tick = ticks

@@ -30,7 +30,7 @@ func TestFailedStateTransferRemovesItsTemporaryFile(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	g := &Gateway{auth: auth}
+	g := &Gateway{store: auth.store, auth: auth}
 	if _, err := g.newStateTransfer(ctx, "peer", 1, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled transfer: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestOversizedStateVersionTransfersAtomicallyInBoundedChunks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	g := &Gateway{auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
+	g := &Gateway{store: auth.store, auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
 	t.Cleanup(func() {
 		if err := g.cleanStateTransfers(time.Time{}); err != nil {
 			t.Error(err)
@@ -210,7 +210,7 @@ func TestOversizedArchivedEditReachesMainThroughPeer(t *testing.T) {
 	worker, _ := identityGateway(t, t.TempDir(), nil)
 	relay, _ := identityGateway(t, t.TempDir(), nil)
 	for id, g := range map[string]*Gateway{"main": main, "worker": worker, "relay": relay} {
-		if err := g.auth.store.BindNode(t.Context(), id); err != nil {
+		if err := g.store.BindNode(t.Context(), id); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -111,7 +111,7 @@ func TestMeshReadsSurviveOwnerShutdownAndRefuseWrites(t *testing.T) {
 
 func TestMeshLivenessExpiresAndLocalFoldersKeepFilesystemChecks(t *testing.T) {
 	g, _ := identityGateway(t, t.TempDir(), nil)
-	local, err := g.auth.store.NodeID(t.Context())
+	local, err := g.store.NodeID(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestMeshLivenessExpiresAndLocalFoldersKeepFilesystemChecks(t *testing.T) {
 	if _, got := g.nodeContact("peer", local); !got.Equal(last) {
 		t.Fatal("failed contact replaced last successful sync time")
 	}
-	if err := upsertSession(t.Context(), g.auth.store.DB, SessionInfo{ID: "session-missing", Directory: "/missing/project"}); err != nil {
+	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: "session-missing", Directory: "/missing/project"}); err != nil {
 		t.Fatal(err)
 	}
 	folders, err := g.meshRecent(t.Context(), "")
@@ -146,7 +146,7 @@ func TestMeshLivenessExpiresAndLocalFoldersKeepFilesystemChecks(t *testing.T) {
 
 func TestMeshNodeInventoryKeepsOfflineMachinesAfterRestart(t *testing.T) {
 	g, _ := identityGateway(t, t.TempDir(), nil)
-	if _, err := g.auth.store.DB.Exec("INSERT INTO mesh_nodes(node_id,name,app_version) VALUES ('asleep','Sleeping computer','v1.0.0')"); err != nil {
+	if _, err := g.store.DB.Exec("INSERT INTO mesh_nodes(node_id,name,app_version) VALUES ('asleep','Sleeping computer','v1.0.0')"); err != nil {
 		t.Fatal(err)
 	}
 	nodes, err := g.meshNodes(t.Context(), nil)
@@ -162,7 +162,7 @@ func TestMeshNodeInventoryKeepsOfflineMachinesAfterRestart(t *testing.T) {
 
 func TestMeshRecentSessionListKeepsOlderBookmarks(t *testing.T) {
 	g, origin := identityGateway(t, t.TempDir(), nil)
-	store := g.auth.store.DB
+	store := g.store.DB
 	now := time.Now()
 	for i := range 101 {
 		info := SessionInfo{ID: fmt.Sprintf("session-old-%03d", i), Transport: "acp", LastUsed: now.Add(time.Duration(i) * time.Second)}

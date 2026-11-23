@@ -49,7 +49,7 @@ func TestSessionNameRoutePersistsWithoutChangingWorkerIdentity(t *testing.T) {
 	origin, _ := url.Parse("http://127.0.0.1:7420")
 	secret := strings.Repeat("g", 64)
 	makeGateway := func() *Gateway {
-		return &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: secret}, options: GatewayOptions{Home: home}}
+		return &Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: secret}, options: GatewayOptions{Home: home}}
 	}
 	request := func(gateway *Gateway, method, path, body string) *httptest.ResponseRecorder {
 		t.Helper()

@@ -43,7 +43,7 @@ func (g *Gateway) runAgentCredentials(ctx context.Context, interval time.Duratio
 func (g *Gateway) syncAgentCredentials(ctx context.Context) {
 	g.credentialsMu.Lock()
 	defer g.credentialsMu.Unlock()
-	node, err := g.auth.store.NodeID(ctx)
+	node, err := g.store.NodeID(ctx)
 	if err != nil {
 		_, event := obs.Start(ctx, "gateway", "agent_credentials")
 		event.Fail(err)
@@ -110,7 +110,7 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 func (g *Gateway) sharedAgentCredential(ctx context.Context, key string) (sharedAgentCredential, error) {
 	var value string
 	var shared sharedAgentCredential
-	err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT value FROM agent_credentials WHERE key=?", key).Scan(&value)
+	err := g.store.Reader.QueryRowContext(ctx, "SELECT value FROM agent_credentials WHERE key=?", key).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
 		return shared, nil
 	}
@@ -125,7 +125,7 @@ func (g *Gateway) publishAgentCredential(ctx context.Context, key string, creden
 	if err != nil {
 		return err
 	}
-	_, err = g.auth.store.DB.ExecContext(ctx, "INSERT INTO agent_credentials(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, string(value))
+	_, err = g.store.DB.ExecContext(ctx, "INSERT INTO agent_credentials(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, string(value))
 	return err
 }
 

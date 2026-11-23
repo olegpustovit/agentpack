@@ -5,9 +5,9 @@ import (
 	"runtime"
 )
 
-func (g *Gateway) registerSettings(mux *http.ServeMux) {
+func (g *Gateway) registerSettings(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
-		config, err := ReadSharingConfig(g.store, g.options.Home)
+		config, err := ReadSharingConfig(g.store)
 		if err != nil {
 			fail(w, r, err)
 			return
@@ -16,16 +16,13 @@ func (g *Gateway) registerSettings(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /api/settings/public", g.setPublic)
 	mux.HandleFunc("POST /api/settings/sharing", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		var input struct {
 			Enabled bool `json:"enabled"`
 		}
 		if !readJSON(w, r, &input) {
 			return
 		}
-		config, err := ReadSharingConfig(g.store, g.options.Home)
+		config, err := ReadSharingConfig(g.store)
 		if err == nil && input.Enabled {
 			err = CheckTailnet(r.Context())
 		}

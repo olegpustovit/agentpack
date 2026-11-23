@@ -80,7 +80,7 @@ func traceGateway(t *testing.T, node string) *Gateway {
 	t.Helper()
 	home := t.TempDir()
 	g, _ := identityGateway(t, home, nil)
-	if err := g.auth.store.BindNode(t.Context(), node); err != nil {
+	if err := g.store.BindNode(t.Context(), node); err != nil {
 		t.Fatal(err)
 	}
 	g.options.Library.Store = replicaStore(t)
@@ -106,7 +106,7 @@ func TestErrorTraceForwardingSurvivesOfflineSourceAndRetries(t *testing.T) {
 		if err := g.options.Library.Store.EnrollPeer("main"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := g.auth.store.DB.Exec("INSERT INTO mesh_settings(key,value) VALUES ('main_node','main')"); err != nil {
+		if _, err := g.store.DB.Exec("INSERT INTO mesh_settings(key,value) VALUES ('main_node','main')"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -207,7 +207,7 @@ func TestErrorTraceForwardingSurvivesOfflineSourceAndRetries(t *testing.T) {
 
 func TestPeerDiagnosticRoutesRequireExplicitMeshEnrollment(t *testing.T) {
 	g := traceGateway(t, "main")
-	if _, err := g.auth.store.DB.Exec("INSERT INTO mesh_settings(key,value) VALUES ('main_node','main')"); err != nil {
+	if _, err := g.store.DB.Exec("INSERT INTO mesh_settings(key,value) VALUES ('main_node','main')"); err != nil {
 		t.Fatal(err)
 	}
 	if err := g.options.Library.Store.EnrollOwnMachine("legacy"); err != nil {
@@ -254,7 +254,7 @@ func TestPeerDiagnosticRoutesRequireExplicitMeshEnrollment(t *testing.T) {
 
 func TestPeerDiagnosticIngestValidatesWholeBatch(t *testing.T) {
 	g := traceGateway(t, "main")
-	if _, err := g.auth.store.DB.Exec("INSERT INTO mesh_settings(key,value) VALUES ('main_node','main')"); err != nil {
+	if _, err := g.store.DB.Exec("INSERT INTO mesh_settings(key,value) VALUES ('main_node','main')"); err != nil {
 		t.Fatal(err)
 	}
 	if err := g.options.Library.Store.EnrollPeer("source"); err != nil {
@@ -275,7 +275,7 @@ func TestPeerDiagnosticIngestValidatesWholeBatch(t *testing.T) {
 	if err != nil || len(events) != 0 {
 		t.Fatalf("invalid batch saved events: %+v %v", events, err)
 	}
-	if _, err := g.auth.store.DB.Exec("UPDATE mesh_settings SET value='other' WHERE key='main_node'"); err != nil {
+	if _, err := g.store.DB.Exec("UPDATE mesh_settings SET value='other' WHERE key='main_node'"); err != nil {
 		t.Fatal(err)
 	}
 	r := httptest.NewRequest("POST", "/api/logs/ingest", strings.NewReader(`{"events":[]}`))

@@ -32,7 +32,7 @@ type ompSettings struct {
 	overlay   []byte // nil until the first write
 }
 
-func (g *Gateway) registerOMP(mux *http.ServeMux) {
+func (g *Gateway) registerOMP(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/omp/settings", func(w http.ResponseWriter, r *http.Request) {
 		network, err := g.ompNetwork(r.Context())
 		if err != nil {
@@ -71,9 +71,6 @@ func (g *Gateway) registerOMP(mux *http.ServeMux) {
 		writeJSON(w, map[string]any{"models": c.models})
 	})
 	mux.HandleFunc("PUT /api/omp/settings/{key}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		var input struct {
 			Value json.RawMessage `json:"value"`
 		}
@@ -95,16 +92,13 @@ func (g *Gateway) registerOMP(mux *http.ServeMux) {
 			http.Error(w, "invalid value", http.StatusBadRequest)
 			return
 		}
-		_, err := g.auth.store.DB.ExecContext(r.Context(), "INSERT INTO omp_settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value.String())
+		_, err := g.store.DB.ExecContext(r.Context(), "INSERT INTO omp_settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value.String())
 		g.respondOMPNetwork(w, r, err)
 	})
 	mux.HandleFunc("DELETE /api/omp/settings/{key}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		// Resetting a record resets its entries too.
 		key := r.PathValue("key")
-		_, err := g.auth.store.DB.ExecContext(r.Context(), "DELETE FROM omp_settings WHERE key=? OR substr(key,1,?)=?", key, len(key)+1, key+".")
+		_, err := g.store.DB.ExecContext(r.Context(), "DELETE FROM omp_settings WHERE key=? OR substr(key,1,?)=?", key, len(key)+1, key+".")
 		g.respondOMPNetwork(w, r, err)
 	})
 }
@@ -126,7 +120,7 @@ func (g *Gateway) respondOMPNetwork(w http.ResponseWriter, r *http.Request, err 
 }
 
 func (g *Gateway) ompNetwork(ctx context.Context) (map[string]json.RawMessage, error) {
-	rows, err := g.auth.store.Reader.QueryContext(ctx, "SELECT key,value FROM omp_settings")
+	rows, err := g.store.Reader.QueryContext(ctx, "SELECT key,value FROM omp_settings")
 	if err != nil {
 		return nil, err
 	}

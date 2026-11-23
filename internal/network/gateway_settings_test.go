@@ -43,7 +43,7 @@ func TestGatewaySettingsSharingDoesNotStopAgents(t *testing.T) {
 	if response.Code != 200 || stopped {
 		t.Fatalf("sharing stop: %d stopped=%v", response.Code, stopped)
 	}
-	config, err := ReadSharingConfig(store, home)
+	config, err := ReadSharingConfig(store)
 	if err != nil || config.Enabled || len(config.Allow) != 1 {
 		t.Fatalf("config %+v %v", config, err)
 	}
@@ -68,7 +68,7 @@ func TestPeerHTTPRejectsBrowserAndAdministrativeRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("https://agentpack.example")
-	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home}}
+	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home}}
 	handler := g.peerHandler(&tailnetPeer{ID: "self", UserID: 7}, "100.100.1.2:7421")
 	for _, test := range []struct {
 		host, path, origin string
@@ -145,7 +145,7 @@ func TestStopAgentsSkipsACPWorkersOwnedElsewhere(t *testing.T) {
 	worker("session-foreign-terminal", SessionInfo{Transport: "terminal", StartedBy: &foreign})
 
 	g := &Gateway{
-		auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)},
+		store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)},
 		options: GatewayOptions{Home: home},
 	}
 	listRequest := httptest.NewRequest(http.MethodGet, origin.String()+"/api/sessions", nil)
@@ -259,7 +259,7 @@ func TestRemovedPeerCannotMutate(t *testing.T) {
 	g.tailnet.whois = map[netip.Addr]cachedWhois{netip.MustParseAddr(address): {at: time.Now(), identity: identity}}
 	host := "100.64.0.2:7421"
 	handler := g.peerHandler(&tailnetPeer{ID: "self", UserID: 7}, host)
-	for _, pattern := range peerPatterns {
+	for _, pattern := range peerPatterns() {
 		method, path, _ := strings.Cut(pattern, " ")
 		if method == http.MethodGet {
 			continue

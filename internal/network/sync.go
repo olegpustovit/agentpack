@@ -63,7 +63,7 @@ func (g *Gateway) meshPeer(ctx context.Context, id string) bool {
 	return false
 }
 
-func (g *Gateway) registerStateSync(mux *http.ServeMux) {
+func (g *Gateway) registerStateSync(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/sync/events", g.peerOnly(func(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
 		if !g.meshPeer(r.Context(), peer) {

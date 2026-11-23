@@ -96,7 +96,7 @@ func TestBrowserTelemetryTrustLimitsAndPersistence(t *testing.T) {
 		t.Fatal("valid", code)
 	}
 	events := storedBrowserErrors(t, g)
-	nodeID, err := g.auth.store.NodeID(t.Context())
+	nodeID, err := g.store.NodeID(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

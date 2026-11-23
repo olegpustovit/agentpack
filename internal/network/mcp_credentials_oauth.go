@@ -278,7 +278,7 @@ func (g *Gateway) revokeMCPToken(ctx context.Context, credential mcpCredential) 
 	})
 }
 
-func (g *Gateway) registerMCPOAuth(mux *http.ServeMux) {
+func (g *Gateway) registerMCPOAuth(mux routeRegistrar) {
 	mux.HandleFunc("POST /api/mcp/logins", func(w http.ResponseWriter, r *http.Request) {
 		_, account, ok := credentialAccount(r)
 		if !ok {

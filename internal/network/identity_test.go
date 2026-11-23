@@ -33,7 +33,7 @@ func identityGateway(t *testing.T, home string, start func(context.Context, Sess
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
-	return &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Version: "test", Start: start}}, origin
+	return &Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Version: "test", Start: start}}, origin
 }
 
 // seedFolder registers a fresh directory as a recent folder for the gateway's folder check.
@@ -206,7 +206,7 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 		ID: sessionID, Address: strings.TrimPrefix(upstream.URL, "http://"), Secret: strings.Repeat("s", 64),
 		Session: SessionInfo{ID: sessionID, Transport: "acp", StartedBy: &owner},
 	}
-	if err := upsertSession(t.Context(), g.auth.store.DB, record.Session); err != nil {
+	if err := upsertSession(t.Context(), g.store.DB, record.Session); err != nil {
 		t.Fatal(err)
 	}
 	directory := filepath.Join(home, "network", "sessions", sessionID)
@@ -320,7 +320,7 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 	if err := os.RemoveAll(directory); err != nil {
 		t.Fatal(err)
 	}
-	if err := endSession(t.Context(), g.auth.store.DB, sessionID, TerminalState{}); err != nil {
+	if err := endSession(t.Context(), g.store.DB, sessionID, TerminalState{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := request(http.MethodPatch, "", `{"name":"Nope"}`, &readOnly).Code; got != http.StatusForbidden {
@@ -628,7 +628,7 @@ func TestForwardedAccountRequiresExplicitMeshAndOwnsOnlyItsChats(t *testing.T) {
 	if _, err := g.forwardedAccount(t.Context(), peer, "missing@example.com"); err == nil {
 		t.Fatal("nonexistent account accepted")
 	}
-	if _, err := g.auth.store.DB.Exec("UPDATE users SET disabled=1 WHERE email=?", testBrowserEmail); err != nil {
+	if _, err := g.store.DB.Exec("UPDATE users SET disabled=1 WHERE email=?", testBrowserEmail); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := g.forwardedAccount(t.Context(), peer, testBrowserEmail); err == nil {
@@ -743,7 +743,7 @@ func TestClientChatIDIsAnInsertOnlyClaim(t *testing.T) {
 	call(changed, testBrowserEmail, http.StatusConflict)
 	unclaimed := body
 	unclaimed.ID = "session-f7148a740d2c495991c792576427836d"
-	if err := upsertSession(t.Context(), g.auth.store.DB, SessionInfo{ID: unclaimed.ID, Transport: "acp"}); err != nil {
+	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: unclaimed.ID, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	call(unclaimed, testBrowserEmail, http.StatusConflict)
