@@ -26,6 +26,53 @@ type QueuedPrompt struct {
 	Steer bool
 }
 
+// turnRunner decides what the agent does next: the queue, the goal, network retries, steering
+// and delivery during a turn. It acts on derived state only after the sink stored it (see
+// ConversationSession.applyLogEntry), like an outbox.
+//
+// Lock order: queueMu, then the core's mu. queueMu orders queue changes and goal publishes with
+// their log entries, so it is never taken inside a log callback. Every other field is guarded by
+// the core's mu, because the log callback reads them.
+type turnRunner struct {
+	queueMu       sync.Mutex
+	Queue         []QueuedPrompt
+	SeenPrompts   map[string]struct{}
+	starting      bool
+	running       bool // a turn loop owns the agent
+	queuesPrompts bool // the agent takes a prompt in while its turn runs (harness.ACPLaunch.QueuesPrompts)
+	delivering    int  // prompts the agent has not answered yet
+	// steer joins the running turn (harness.ACPLaunch.Steers); nil when steering must cancel.
+	steer          func(context.Context, acp.PromptInput) (bool, error)
+	delivered      chan struct{}
+	userCancelled  bool // the user stopped the running turn
+	archived       bool
+	now            func() time.Time
+	after          func(time.Duration, func()) // schedules network retries; tests replace it
+	networkRetries int                         // retries since the last turn that reached the agent's service
+	turnsEnded     int                         // a retry is dropped when another turn ended meanwhile
+	goal           *session.Goal
+	goalCleared    *session.Goal // the last goal, kept to log its "cleared" state
+	goalPublished  string
+	goalDirty      bool // the agent reported a native goal snapshot
+	goalSettled    bool // the native goal was marked met because the agent went idle
+	goalPauseDue   bool // the user stopped unprompted native goal work; tell the agent to pause
+	nativeGoal     bool // the agent advertises a /goal command
+	turnText       []byte
+	turnTools      int
+	goalBlocked    int
+	goalIdle       int
+	usageUsed      int64
+	usageCost      float64
+	// An unprompted cycle (a native goal, a Stop-hook continuation) is closed with a synthetic
+	// turn_end once its last usage_update stays quiet for unpromptedUsageSettle.
+	unpromptedUsageSettle  time.Duration
+	inPromptTurn           bool
+	lastParentKind         string
+	unpromptedUsagePending bool
+	settleGen              uint64
+	settleTimer            *time.Timer
+}
+
 var (
 	errNotQueued   = errors.New("prompt is not queued")
 	ErrEmptyPrompt = errors.New("text or image is required")
@@ -105,11 +152,8 @@ func (cs *ConversationSession) Submit(ctx context.Context, input acp.PromptInput
 		if _, seen := cs.SeenPrompts[input.QueueID]; seen {
 			return input.QueueID, nil, nil
 		}
-		if cs.promptStored != nil {
-			stored, err := cs.promptStored(ctx, input.QueueID)
-			if stored || err != nil {
-				return input.QueueID, nil, err
-			}
+		if stored, err := cs.promptStored(ctx, input.QueueID); stored || err != nil {
+			return input.QueueID, nil, err
 		}
 	}
 	cs.mu.Lock()

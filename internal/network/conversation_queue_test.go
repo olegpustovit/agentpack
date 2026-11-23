@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -280,7 +281,8 @@ func TestClientPromptIDIsAcceptedOnceAcrossReplay(t *testing.T) {
 func TestClientPromptLookupSurvivesADroppedReplayTail(t *testing.T) {
 	store := statetest.Open(t, t.TempDir())
 	id := "session-stored-intent"
-	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	info := session.SessionInfo{ID: id, Transport: "acp"}
+	if err := session.UpsertSession(t.Context(), store.DB, info); err != nil {
 		t.Fatal(err)
 	}
 	input := acp.PromptInput{Text: "first message", QueueID: "5a6057ea65564edfb5222d0c394e0b43"}
@@ -290,9 +292,7 @@ func TestClientPromptLookupSurvivesADroppedReplayTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	session, agent := newFakeAgentSession(t)
-	session.promptStored = func(ctx context.Context, key string) (bool, error) {
-		return StoredPromptID(ctx, store, id, key)
-	}
+	session.wireStore(t.Context(), store, info, filepath.Join(t.TempDir(), id))
 	if id, _, err := session.Submit(t.Context(), input, false); err != nil || id != input.QueueID || len(agent.log.Snapshot()) != 0 {
 		t.Fatalf("retry of an old prompt wrote a new event: id=%q err=%v log=%v", id, err, logKinds(agent.log))
 	}

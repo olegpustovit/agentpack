@@ -318,8 +318,8 @@ func (cs *ConversationSession) applyGatewayStopRules(goal *session.Goal, now int
 
 // publishGoal logs the current goal unless it is unchanged since the last publish.
 func (cs *ConversationSession) publishGoal() {
-	cs.goalPublishMu.Lock()
-	defer cs.goalPublishMu.Unlock()
+	cs.queueMu.Lock()
+	defer cs.queueMu.Unlock()
 	cs.mu.Lock()
 	goal := cs.goal
 	if goal == nil {

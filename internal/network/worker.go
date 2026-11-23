@@ -230,9 +230,6 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		return 1, fmt.Errorf("generate worker secret: %w", err)
 	}
 	record := WorkerRecord{Session: launch.Session, ID: filepath.Base(directory), PID: os.Getpid(), Address: listener.Addr().String(), Secret: hex.EncodeToString(secret[:])}
-	lookupPrompt := func(ctx context.Context, id string) (bool, error) {
-		return StoredPromptID(ctx, store, record.ID, id)
-	}
 	var readyHTTP atomic.Pointer[WorkerHTTP]
 	serveDone := make(chan error, 1)
 	serve := func(httpHandler http.Handler) {
@@ -244,7 +241,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	starting.Store(launch.Session.ConversationState == "starting")
 	if launch.Transport == "acp" {
 		agent = &acpAgent{store: store, launch: &launch, record: record, directory: directory, cancel: cancelWorker}
-		prepared, err := prepareACPWorker(ctx, store, record, directory, &starting, cancelWorker, lookupPrompt, serve, &readyHTTP)
+		prepared, err := prepareACPWorker(ctx, store, record, directory, &starting, cancelWorker, serve, &readyHTTP)
 		if err != nil {
 			return 1, err
 		}
@@ -301,7 +298,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		}
 	}
 	wireConversation := func(current *ConversationSession) {
-		wireWorkerConversation(ctx, store, record, directory, launch.Session.Goal, lookupPrompt, current)
+		wireWorkerConversation(ctx, store, record, directory, launch.Session.Goal, current)
 	}
 	if conversation != nil {
 		conversation.configMu.Lock()
@@ -391,45 +388,13 @@ func PublishWorkerEndpoint(directory string, record WorkerRecord) error {
 	return nil
 }
 
-// wireWorkerConversation connects a started conversation to its worker: stored prompt IDs, the
-// goal saved on its row, image storage, the agent snapshot, and the permission mode last chosen
-// for this agent on any chat and machine of the network.
-func wireWorkerConversation(ctx context.Context, store *state.Store, record WorkerRecord, directory string, goal *session.Goal, lookupPrompt func(context.Context, string) (bool, error), current *ConversationSession) {
-	permissionSettingKey := "permission_mode." + record.Session.Harness
-	current.queueMu.Lock()
-	current.promptStored = lookupPrompt
-	current.queueMu.Unlock()
+// wireWorkerConversation connects a started conversation to its worker: its persistence adapter,
+// the goal saved on its row, and the permission mode last chosen for this agent on any chat and
+// machine of the network.
+func wireWorkerConversation(ctx context.Context, store *state.Store, record WorkerRecord, directory string, goal *session.Goal, current *ConversationSession) {
+	current.wireStore(ctx, store, record.Session, directory)
 	current.restoreGoal(goal)
-	current.mu.Lock()
-	current.imageStore = func(data []byte) (string, error) {
-		sha, err := StoreSessionBlob(directory, data)
-		switch {
-		case errors.Is(err, ErrSessionBlobQuota):
-			return "", err
-		case err != nil && SniffBlobMIME(data) == "":
-			return "", errors.New("unsupported image type")
-		case err != nil:
-			return "", errors.New("could not store it")
-		}
-		// The image shows on this machine either way; peers find it once its location is recorded.
-		if err := AdvertiseBlob(context.Background(), store, record.ID, sha, int64(len(data))); err != nil {
-			_, event := obs.Start(ctx, "worker", "advertise_blob")
-			event.Set("session_id", record.ID)
-			event.Fail(err)
-			event.End()
-		}
-		return sha, nil
-	}
-	current.snapshotChanged = func() { persistAgentSnapshot(ctx, store.DB, record.Session, current) }
-	current.permissionChange = func(mode string) {
-		if err := store.Mesh().SetSetting(context.Background(), permissionSettingKey, mode); err != nil {
-			_, event := obs.Start(ctx, "worker", "remember_permissions")
-			event.Fail(err)
-			event.End()
-		}
-	}
-	current.mu.Unlock()
-	current.applyRememberedPermissions(ctx, store, permissionSettingKey)
+	current.applyRememberedPermissions(ctx, store, record.Session.Harness)
 	wanted, err := savedConfig(ctx, store, record.Session)
 	if err != nil {
 		_, event := obs.Start(ctx, "worker", "load_saved_config")
@@ -446,7 +411,7 @@ func wireWorkerConversation(ctx context.Context, store *state.Store, record Work
 // endpoint with the requests a starting chat answers: its conversation, prompts and config.
 // Once ready holds the full handler, it serves everything.
 func prepareACPWorker(ctx context.Context, store *state.Store, record WorkerRecord, directory string, starting *atomic.Bool, fail func(error),
-	lookupPrompt func(context.Context, string) (bool, error), serve func(http.Handler), ready *atomic.Pointer[WorkerHTTP]) (*ConversationSession, error) {
+	serve func(http.Handler), ready *atomic.Pointer[WorkerHTTP]) (*ConversationSession, error) {
 	lock, err := LockPromptHandoff(ctx, directory)
 	if err != nil {
 		return nil, err
@@ -460,7 +425,8 @@ func prepareACPWorker(ctx context.Context, store *state.Store, record WorkerReco
 	if err := restorePendingQueue(ctx, store.Reader, record.ID, prepared); err != nil {
 		return nil, errors.Join(err, log.Close())
 	}
-	prepared.starting, prepared.agentExited, prepared.promptStored = true, false, lookupPrompt
+	prepared.starting, prepared.agentExited = true, false
+	prepared.wireStore(ctx, store, record.Session, directory)
 	bootstrap, err := WorkerHandler(ctx, nil, prepared, record.Secret, directory)
 	if err != nil {
 		return nil, errors.Join(err, log.Close())

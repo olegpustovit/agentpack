@@ -6,8 +6,20 @@ import (
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
+	"github.com/olegpustovit/agentpack/internal/state/statetest"
 )
+
+// rememberedPermissions wires conv to a state store and reads the mode it remembers for Claude.
+func rememberedPermissions(t *testing.T, conv *ConversationSession) func() string {
+	store := statetest.Open(t, t.TempDir())
+	conv.wireStore(t.Context(), store, session.SessionInfo{Harness: "claude"}, t.TempDir())
+	return func() string {
+		mode, _ := store.Mesh().Setting(context.Background(), "permission_mode.claude")
+		return mode
+	}
+}
 
 func TestPermissionModeIsRememberedAndAppliedToTheNextChat(t *testing.T) {
 	store, err := state.Open(t.TempDir())
@@ -23,11 +35,7 @@ func TestPermissionModeIsRememberedAndAppliedToTheNextChat(t *testing.T) {
 	options := []byte(`[{"id":"mode","category":"mode","type":"select","currentValue":"default"},{"id":"model","category":"model","type":"select","currentValue":"opus"}]`)
 	first := NewConversationSession(acp.NewEventLog(0), broker)
 	first.SetConfigOptions(options)
-	first.permissionChange = func(mode string) {
-		if _, err := store.DB.Exec("INSERT INTO mesh_settings(key,value) VALUES('permission_mode.claude',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", mode); err != nil {
-			t.Fatal(err)
-		}
-	}
+	first.wireStore(t.Context(), store, session.SessionInfo{Harness: "claude"}, t.TempDir())
 	ctx := context.Background()
 	if err := first.SetConfigOption(ctx, "model", []byte(`"sonnet"`)); err != nil {
 		t.Fatal(err)
@@ -37,8 +45,8 @@ func TestPermissionModeIsRememberedAndAppliedToTheNextChat(t *testing.T) {
 	}
 	next := NewConversationSession(acp.NewEventLog(0), broker)
 	next.SetConfigOptions(options)
-	next.applyRememberedPermissions(ctx, store, "permission_mode.claude")
-	next.applyRememberedPermissions(ctx, store, "permission_mode.codex") // nothing remembered for codex
+	next.applyRememberedPermissions(ctx, store, "claude")
+	next.applyRememberedPermissions(ctx, store, "codex") // nothing remembered for codex
 	if want := []string{`model="sonnet"`, `mode="bypassPermissions"`, `mode="bypassPermissions"`}; len(sets) != 3 || sets[0] != want[0] || sets[1] != want[1] || sets[2] != want[2] {
 		t.Fatalf("config sets %q", sets)
 	}
@@ -52,13 +60,12 @@ func TestAgentWithoutModesGetsAgentpackPermissions(t *testing.T) {
 	session := NewConversationSession(acp.NewEventLog(0), broker)
 	session.SetConfigOptions([]byte(`[{"id":"model","category":"model","type":"select","currentValue":"gemini"}]`))
 	session.clientMode = "default"
-	var remembered string
-	session.permissionChange = func(mode string) { remembered = mode }
+	remembered := rememberedPermissions(t, session)
 	if err := session.SetConfigOption(context.Background(), "mode", []byte(`"bypassPermissions"`)); err != nil {
 		t.Fatal(err)
 	}
-	if !session.BypassingPermissions() || remembered != "bypassPermissions" {
-		t.Fatalf("bypassing %v, remembered %q", session.BypassingPermissions(), remembered)
+	if !session.BypassingPermissions() || remembered() != "bypassPermissions" {
+		t.Fatalf("bypassing %v, remembered %q", session.BypassingPermissions(), remembered())
 	}
 	if config := string(session.ConfigJSON()); !strings.Contains(config, `"model"`) || !strings.Contains(config, `"currentValue":"bypassPermissions"`) {
 		t.Fatalf("config %s", config)
@@ -95,20 +102,19 @@ func TestAgentpackBypassExtendsNativePermissionModes(t *testing.T) {
 				!strings.Contains(config, `"name":"Plan"`) || !strings.Contains(config, `"name":"Bypass Permissions"`) {
 				t.Fatalf("initial config %s", config)
 			}
-			var remembered string
-			session.permissionChange = func(mode string) { remembered = mode }
+			remembered := rememberedPermissions(t, session)
 			if err := session.SetConfigOption(ctx, key, []byte(`"bypassPermissions"`)); err != nil {
 				t.Fatal(err)
 			}
-			if !session.BypassingPermissions() || remembered != "bypassPermissions" || len(calls) != 0 ||
+			if !session.BypassingPermissions() || remembered() != "bypassPermissions" || len(calls) != 0 ||
 				!strings.Contains(string(session.ConfigJSON()), `"currentValue":"bypassPermissions"`) {
-				t.Fatalf("bypass config %s, requests %q, remembered %q", session.ConfigJSON(), calls, remembered)
+				t.Fatalf("bypass config %s, requests %q, remembered %q", session.ConfigJSON(), calls, remembered())
 			}
 			if err := session.SetConfigOption(ctx, key, []byte(`"plan"`)); err != nil {
 				t.Fatal(err)
 			}
-			if session.BypassingPermissions() || remembered != "plan" || len(calls) != 1 || calls[0] != key+`="plan"` {
-				t.Fatalf("bypassing %v, requests %q, remembered %q", session.BypassingPermissions(), calls, remembered)
+			if session.BypassingPermissions() || remembered() != "plan" || len(calls) != 1 || calls[0] != key+`="plan"` {
+				t.Fatalf("bypassing %v, requests %q, remembered %q", session.BypassingPermissions(), calls, remembered())
 			}
 		})
 	}

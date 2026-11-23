@@ -274,8 +274,9 @@ func TestACPNeedsYouPersistsWithoutConversationReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer log.Close()
-	NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
+	conv := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
 	log.Append("permission_request", 1, json.RawMessage(`{"requestId":"p1"}`))
+	conv.storeSettled()
 	got, err := session.StoredSession(ctx, store.Reader, info.ID)
 	if err != nil || got.ConversationState != "needs_you" {
 		t.Fatalf("state without a reader=%q err=%v", got.ConversationState, err)
@@ -286,7 +287,7 @@ func TestACPNeedsYouPersistsWithoutConversationReader(t *testing.T) {
 // chunks in between are left to the batching writer.
 func TestConversationStateIsStoredOnTransitions(t *testing.T) {
 	log := acp.NewEventLog(0)
-	NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
+	conv := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
 	var mu sync.Mutex
 	var states []string
 	if err := log.EnableSink(func(changes acp.LogChanges) error {
@@ -308,6 +309,7 @@ func TestConversationStateIsStoredOnTransitions(t *testing.T) {
 		return states[len(states)-1]
 	}
 	log.Append("prompt", 1, json.RawMessage(`{}`))
+	conv.storeSettled()
 	if last() != "working" {
 		t.Fatalf("stored states after prompt = %v", states)
 	}
@@ -315,6 +317,7 @@ func TestConversationStateIsStoredOnTransitions(t *testing.T) {
 		log.Append("agent_message_chunk", int64(i+2), json.RawMessage(`{"text":{"text":"x"}}`))
 	}
 	log.Append("turn_end", 2_000, json.RawMessage(`{}`))
+	conv.storeSettled()
 	if last() != "idle" {
 		t.Fatalf("stored states after turn end = %v", states)
 	}
