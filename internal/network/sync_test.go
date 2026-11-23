@@ -29,7 +29,7 @@ func TestStateSyncRequiresEnrollmentAndMatchingSchema(t *testing.T) {
 	if err := library.EnrollPeer("trusted"); err != nil {
 		t.Fatal(err)
 	}
-	g := &Gateway{auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
+	g := &Gateway{store: auth.store, auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
 	mux := http.NewServeMux()
 	g.registerStateSync(mux)
 	schema := strconv.Itoa(state.SchemaVersion())
@@ -73,7 +73,7 @@ func TestStateSyncPagesCommitCompleteVersions(t *testing.T) {
 	if err := library.EnrollPeer("trusted"); err != nil {
 		t.Fatal(err)
 	}
-	g := &Gateway{auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
+	g := &Gateway{store: auth.store, auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
 	mux := http.NewServeMux()
 	g.registerStateSync(mux)
 	const count = 6
@@ -133,7 +133,7 @@ func TestLegacyLibraryPeersCannotReadMeshState(t *testing.T) {
 	if err := library.EnrollOwnMachine("legacy"); err != nil {
 		t.Fatal(err)
 	}
-	g := &Gateway{auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
+	g := &Gateway{store: auth.store, auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
 	mux := http.NewServeMux()
 	g.registerStateSync(mux)
 	request := func() int {
@@ -172,8 +172,9 @@ func TestMeshEnrollmentMutationsRequireOwner(t *testing.T) {
 	if err := library.EnrollPeer("peer"); err != nil {
 		t.Fatal(err)
 	}
-	g := &Gateway{auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
-	mux := http.NewServeMux()
+	g := &Gateway{store: auth.store, auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
+	// The route table enforces the owner policy; the caller kind only gets the request past the login check.
+	mux := routeMux{g, http.NewServeMux()}
 	g.registerRegistryReplication(mux)
 	for _, method := range []string{"POST", "DELETE"} {
 		path := replicationPrefix + "peers"
@@ -181,17 +182,17 @@ func TestMeshEnrollmentMutationsRequireOwner(t *testing.T) {
 			path += "/peer"
 		}
 		r := httptest.NewRequest(method, path, strings.NewReader(`{"peer":"peer"}`))
-		r = r.WithContext(withActor(r.Context(), browserActor("member@example.com")))
+		r = r.WithContext(withCaller(withActor(r.Context(), browserActor("member@example.com")), callerCLI))
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, r)
+		mux.mux.ServeHTTP(w, r)
 		if w.Code != 403 {
 			t.Fatalf("member mutation %s: %d", method, w.Code)
 		}
 	}
 	r := httptest.NewRequest("DELETE", replicationPrefix+"peers/peer", nil)
-	r = r.WithContext(withActor(r.Context(), browserActor(testBrowserEmail)))
+	r = r.WithContext(withCaller(withActor(r.Context(), browserActor(testBrowserEmail)), callerCLI))
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, r)
+	mux.mux.ServeHTTP(w, r)
 	if w.Code != 200 {
 		t.Fatalf("owner removal: %d %s", w.Code, w.Body.String())
 	}
@@ -210,7 +211,7 @@ func syncGateway(t *testing.T, id string) (*Gateway, *httptest.Server, *atomic.I
 	if err := library.EnrollPeer("trusted"); err != nil {
 		t.Fatal(err)
 	}
-	g := &Gateway{auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
+	g := &Gateway{store: auth.store, auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
 	mux := http.NewServeMux()
 	g.registerStateSync(mux)
 	status := new(atomic.Int32)

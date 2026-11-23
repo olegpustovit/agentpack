@@ -79,7 +79,7 @@ func TestGatewayRestartOperationIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
-	gateway := (&Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: secret}, options: GatewayOptions{Home: home}}).Handler()
+	gateway := (&Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: secret}, options: GatewayOptions{Home: home}}).Handler()
 	request := func(operationID string) int {
 		body, _ := json.Marshal(restartOperation{OperationID: operationID})
 		r := httptest.NewRequest("POST", origin.String()+"/api/sessions/"+record.ID+"/restart", bytes.NewReader(body))

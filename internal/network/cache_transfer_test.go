@@ -29,11 +29,11 @@ func seedPeerCache(t *testing.T, g *Gateway) (string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	node, err := g.auth.store.NodeID(t.Context())
+	node, err := g.store.NodeID(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := g.auth.store.DB.Exec("INSERT INTO cache_locations(cache_key,node_id,content_hash,size,verified_at) VALUES (?,?,?,12,1)", key, node, hash); err != nil {
+	if _, err := g.store.DB.Exec("INSERT INTO cache_locations(cache_key,node_id,content_hash,size,verified_at) VALUES (?,?,?,12,1)", key, node, hash); err != nil {
 		t.Fatal(err)
 	}
 	return key, hash

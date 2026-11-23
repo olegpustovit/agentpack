@@ -255,7 +255,9 @@ func TestArchivedConversationReadsThroughMainAndHandlesUnavailableArchive(t *tes
 	}
 	r = httptest.NewRequest("GET", "/api/sessions/"+info.ID+"/conversation?node=main", nil)
 	w = httptest.NewRecorder()
-	handled, err := peer.routeMeshRequest(w, r)
+	r.Pattern = "GET /api/sessions/{id}/conversation"
+	r.SetPathValue("id", info.ID)
+	_, handled, err := peer.routeMeshRequest(w, r)
 	if err != nil || !handled || w.Code != 503 || strings.TrimSpace(w.Body.String()) != "archive unavailable" {
 		t.Fatalf("mesh routing bypassed archive: handled=%v %d %s %v", handled, w.Code, w.Body.String(), err)
 	}

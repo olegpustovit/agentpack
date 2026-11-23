@@ -83,20 +83,6 @@ func (c *limitsCache) current() savedLimits {
 	return c.saved
 }
 
-func (c *limitsCache) get(ctx context.Context) []harness.LimitSnapshot {
-	saved := c.current()
-	if saved.Snapshots == nil {
-		return c.collect(ctx, limitsCacheTTL)
-	}
-	if time.Since(saved.At) >= limitsCacheTTL && c.refreshing.CompareAndSwap(false, true) {
-		go func() {
-			defer c.refreshing.Store(false)
-			c.collect(ctx, limitsCacheTTL)
-		}()
-	}
-	return saved.Snapshots
-}
-
 // collect outlives the request: a viewer leaving the page must not cache cancelled probes as failures.
 func (c *limitsCache) collect(ctx context.Context, maxAge time.Duration) []harness.LimitSnapshot {
 	c.collecting.Lock()
@@ -291,10 +277,10 @@ func saveLimitSnapshot(ctx context.Context, db *sql.DB, at time.Time, snapshot h
 
 func (g *Gateway) runLimitsAfterTurns(ctx context.Context, interval time.Duration) {
 	if g.logs != nil {
-		node, _ := g.auth.store.NodeID(ctx)
+		node, _ := g.store.NodeID(ctx)
 		ctx = obs.WithSink(ctx, g.logs, obs.BuildMetadata(g.options.Version, node, "gateway"))
 	}
-	turns := &turnLimits{store: g.auth.store, read: readLimitsOf, now: time.Now}
+	turns := &turnLimits{store: g.store, read: readLimitsOf, now: time.Now}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -311,10 +297,10 @@ func (g *Gateway) runLimitsAfterTurns(ctx context.Context, interval time.Duratio
 	}
 }
 
-func (g *Gateway) registerLimits(mux *http.ServeMux) {
+func (g *Gateway) registerLimits(mux routeRegistrar) {
 	nodeID, cacheErr := g.nodeID(context.Background())
 	if cacheErr == nil {
-		g.limits, cacheErr = newLimitsCache(g.auth.store, nodeID, collectLimits)
+		g.limits, cacheErr = newLimitsCache(g.store, nodeID, collectLimits)
 	}
 	cache := g.limits
 	if cacheErr != nil && g.store != nil {
@@ -365,7 +351,7 @@ type meshLimit struct {
 }
 
 func (g *Gateway) meshLimits(ctx context.Context, node string) ([]meshLimit, error) {
-	local, err := g.auth.store.NodeID(ctx)
+	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +361,7 @@ func (g *Gateway) meshLimits(ctx context.Context, node string) ([]meshLimit, err
 		query += " WHERE node_id=?"
 		args = append(args, node)
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, query+" ORDER BY node_id,harness", args...)
+	rows, err := g.store.Reader.QueryContext(ctx, query+" ORDER BY node_id,harness", args...)
 	if err != nil {
 		return nil, err
 	}

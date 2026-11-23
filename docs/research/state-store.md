@@ -635,14 +635,10 @@ before CRR conversion; this is outstanding work, not the final mesh identity.
 Migration 0003 adds node_settings. Sharing reads and writes use the gateway's
 existing store rather than reopening SQLite per discovery/auth request. Explicit
 CLI sharing commands own a short-lived store; launch setup remains unchanged.
-The first read imports valid legacy network/sharing.json with an atomic insert
-and removes the file only after a successful write. An existing database value
-wins against a racing import. Allow-entry validation also applies to imports;
-malformed JSON and failed writes preserve the source for recovery. The local
-node key shares the limits P4.1 rekey requirement.
+The legacy network/sharing.json import was removed before release; a missing
+row means sharing on. The local node key shares the limits P4.1 rekey requirement.
 
-Tests cover defaults, enabled/disabled settings, allow validation, import,
-restart persistence, and a forced SQLite write failure retaining the original.
+Tests cover defaults, enabled/disabled settings, allow validation and restart persistence.
 `make ci` passes. Workflow 43610347558 caught a Windows-only fixture error:
 question marks are illegal in Windows directory names. The URI-escaping test now
 uses spaces, Unicode, hash and ampersand on every platform, plus question marks

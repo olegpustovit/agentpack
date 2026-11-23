@@ -35,7 +35,7 @@ func (g *Gateway) fetchBlob(ctx context.Context, id, sha string, targetFor func(
 	}
 	data, err := readSessionBlob(dir, sha)
 	if err == nil {
-		if err := advertiseBlob(ctx, g.auth.store, id, sha, int64(len(data))); err != nil {
+		if err := advertiseBlob(ctx, g.store, id, sha, int64(len(data))); err != nil {
 			return nil, err
 		}
 		return data, nil
@@ -43,12 +43,12 @@ func (g *Gateway) fetchBlob(ctx context.Context, id, sha string, targetFor func(
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	local, err := g.auth.store.NodeID(ctx)
+	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var ownSession string
-	err = g.auth.store.Reader.QueryRowContext(ctx, "SELECT session_id FROM blob_locations WHERE sha=? AND node_id=?", sha, local).Scan(&ownSession)
+	err = g.store.Reader.QueryRowContext(ctx, "SELECT session_id FROM blob_locations WHERE sha=? AND node_id=?", sha, local).Scan(&ownSession)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
@@ -58,14 +58,14 @@ func (g *Gateway) fetchBlob(ctx context.Context, id, sha string, targetFor func(
 				if _, err := storeSessionBlob(dir, data); err != nil {
 					return nil, err
 				}
-				if err := advertiseBlob(ctx, g.auth.store, id, sha, int64(len(data))); err != nil {
+				if err := advertiseBlob(ctx, g.store, id, sha, int64(len(data))); err != nil {
 					return nil, err
 				}
 				return data, nil
 			}
 		}
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT node_id,session_id FROM blob_locations
+	rows, err := g.store.Reader.QueryContext(ctx, `SELECT node_id,session_id FROM blob_locations
  WHERE sha=? AND node_id<>? ORDER BY session_id=? DESC,node_id`, sha, local, id)
 	if err != nil {
 		return nil, err
@@ -129,7 +129,7 @@ func (g *Gateway) fetchBlob(ctx context.Context, id, sha string, targetFor func(
 		if _, err := storeSessionBlob(dir, data); err != nil {
 			return nil, err
 		}
-		if err := advertiseBlob(ctx, g.auth.store, id, sha, int64(len(data))); err != nil {
+		if err := advertiseBlob(ctx, g.store, id, sha, int64(len(data))); err != nil {
 			return nil, err
 		}
 		return data, nil

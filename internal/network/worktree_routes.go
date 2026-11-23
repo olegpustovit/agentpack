@@ -21,7 +21,7 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-func (g *Gateway) registerWorktrees(mux *http.ServeMux) {
+func (g *Gateway) registerWorktrees(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/worktrees", g.serveWorktrees)
 	mux.HandleFunc("POST /api/worktrees/remove", g.serveWorktreeRemove)
 	mux.HandleFunc("POST /api/worktrees/push", g.serveWorktreePush)
@@ -86,7 +86,7 @@ func (g *Gateway) newSessionWorktree(ctx context.Context, actor Actor, main, wor
 // definitionRootFor is what a session in a worktree of main uses for packages and modes: the main
 // folder's own definition root, so staging, logins and MCP sign-ins stay the project's.
 func (g *Gateway) definitionRootFor(ctx context.Context, main string) string {
-	recent, err := recentIn(ctx, g.auth.store.Reader)
+	recent, err := recentIn(ctx, g.store.Reader)
 	if err == nil {
 		for _, entry := range recent {
 			if filepath.Clean(entry.Directory) == filepath.Clean(main) && entry.DefinitionRoot != "" {
@@ -121,7 +121,7 @@ type worktreeRow struct {
 }
 
 func (g *Gateway) worktreeSessions(ctx context.Context) ([]SessionInfo, error) {
-	return querySessions(ctx, g.auth.store.Reader, "SELECT "+sessionColumns+" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND hidden=0 AND directory<>''")
+	return querySessions(ctx, g.store.Reader, "SELECT "+sessionColumns+" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND hidden=0 AND directory<>''")
 }
 
 func within(root, dir string) bool {
@@ -231,9 +231,6 @@ func (g *Gateway) worktreeRoot(path string) (string, bool) {
 }
 
 func (g *Gateway) serveWorktreeRemove(w http.ResponseWriter, r *http.Request) {
-	if !g.requireOwner(w, r) {
-		return
-	}
 	var input struct {
 		Path    string `json:"path"`
 		Discard bool   `json:"discard"`
@@ -265,9 +262,6 @@ func (g *Gateway) serveWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) serveWorktreePush(w http.ResponseWriter, r *http.Request) {
-	if !g.requireOwner(w, r) {
-		return
-	}
 	var input struct {
 		Path string `json:"path"`
 	}
@@ -328,12 +322,12 @@ type sessionGit struct {
 
 // localSession reads a session this machine runs; a peer's session is reached with ?node=.
 func (g *Gateway) localSession(w http.ResponseWriter, r *http.Request) (SessionInfo, bool) {
-	info, err := storedSession(r.Context(), g.auth.store.Reader, r.PathValue("id"))
+	info, err := storedSession(r.Context(), g.store.Reader, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return info, false
 	}
-	local, err := g.auth.store.NodeID(r.Context())
+	local, err := g.store.NodeID(r.Context())
 	if err != nil || info.NodeID != local || info.Directory == "" {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return info, false

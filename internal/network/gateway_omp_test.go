@@ -47,7 +47,7 @@ func TestOMPSettingsRoutesAndOverlay(t *testing.T) {
 		t.Fatalf("overlay after PUT = %q, %v", data, err)
 	}
 	// A row arriving by replication reaches the overlay on the next pass.
-	if _, err := g.auth.store.DB.Exec(`INSERT INTO omp_settings(key,value) VALUES ('edit.fuzzyMatch','false')`); err != nil {
+	if _, err := g.store.DB.Exec(`INSERT INTO omp_settings(key,value) VALUES ('edit.fuzzyMatch','false')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := g.writeOMPOverlay(t.Context()); err != nil {

@@ -34,7 +34,7 @@ type LibraryOptions struct {
 	DraftState func(context.Context, registry.Draft) (registry.DraftState, error)
 }
 
-func (g *Gateway) registerLibrary(mux *http.ServeMux) {
+func (g *Gateway) registerLibrary(mux routeRegistrar) {
 	library := g.options.Library
 	// Discover reads public sources only, so it works without a Library store.
 	mux.HandleFunc("GET /api/library/catalog", libraryCatalog.serve)

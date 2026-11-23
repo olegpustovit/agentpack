@@ -96,7 +96,7 @@ func (g *Gateway) telemetry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "diagnostics unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	nodeID, err := g.auth.store.NodeID(r.Context())
+	nodeID, err := g.store.NodeID(r.Context())
 	if err != nil {
 		http.Error(w, "gateway state unavailable", http.StatusServiceUnavailable)
 		return

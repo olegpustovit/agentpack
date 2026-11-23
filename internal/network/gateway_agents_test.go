@@ -86,7 +86,7 @@ func TestRequireOwnerActors(t *testing.T) {
 	if _, err := auth.store.DB.Exec("INSERT INTO users(email, password_hash, role, created_at) VALUES ('member@example.com','hash','member',2) ON CONFLICT(email) DO NOTHING"); err != nil {
 		t.Fatal(err)
 	}
-	g := &Gateway{auth: auth}
+	g := &Gateway{store: auth.store, auth: auth}
 	for _, tc := range []struct {
 		name  string
 		actor Actor

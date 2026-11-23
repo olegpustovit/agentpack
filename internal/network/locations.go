@@ -22,7 +22,7 @@ import (
 
 func (g *Gateway) runContentLocations(ctx context.Context, interval time.Duration) {
 	if g.logs != nil {
-		node, _ := g.auth.store.NodeID(ctx)
+		node, _ := g.store.NodeID(ctx)
 		ctx = obs.WithSink(ctx, g.logs, obs.BuildMetadata(g.options.Version, node, "gateway"))
 	}
 	ticker := time.NewTicker(interval)
@@ -123,7 +123,7 @@ func (g *Gateway) advertiseCacheLocations(ctx context.Context) error {
 		}
 		locations[key] = location{stamp.ContentHash, size, info.ModTime().UnixNano()}
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, "SELECT cache_key FROM cache_locations WHERE node_id="+state.LocalNodeSQL)
+	rows, err := g.store.Reader.QueryContext(ctx, "SELECT cache_key FROM cache_locations WHERE node_id="+state.LocalNodeSQL)
 	if err != nil {
 		return err
 	}
@@ -147,7 +147,7 @@ func (g *Gateway) advertiseCacheLocations(ctx context.Context) error {
 	}
 	// Bound each replicated version so a large cache inventory still fits a sync page.
 	for batch := range slices.Chunk(keys, 64) {
-		if err := state.Transaction(ctx, g.auth.store.DB, func(tx *sql.Tx) error {
+		if err := state.Transaction(ctx, g.store.DB, func(tx *sql.Tx) error {
 			for _, key := range batch {
 				item, ok := locations[key]
 				if !ok {

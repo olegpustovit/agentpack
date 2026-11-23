@@ -30,7 +30,7 @@ func TestLimitsSurviveRestartAndRefreshBehindTheReader(t *testing.T) {
 	}
 	runs <- "first"
 	close(release)
-	if got := first.get(context.Background()); got[0].Harness != "first" {
+	if got := first.collect(context.Background(), limitsCacheTTL); got[0].Harness != "first" {
 		t.Fatalf("a cold cache must collect: %#v", got)
 	}
 
@@ -46,15 +46,12 @@ func TestLimitsSurviveRestartAndRefreshBehindTheReader(t *testing.T) {
 	restarted.saved.At = time.Now().Add(-2 * limitsCacheTTL)
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	// The probe is blocked on release, so this returning proves the reader did not wait for it.
-	if got := restarted.get(cancelled); got[0].Harness != "first" {
-		t.Fatalf("stale read: %#v", got)
-	}
-	<-started
 	runs <- "second"
 	close(release)
-	restarted.collecting.Lock()
-	restarted.collecting.Unlock()
+	// A cancelled viewer must not cache cancelled probes: collect outlives the request.
+	if got := restarted.collect(cancelled, limitsCacheTTL); got[0].Harness != "second" {
+		t.Fatalf("stale cache was not refreshed: %#v", got)
+	}
 	if got := restarted.current().Snapshots; got[0].Harness != "second" {
 		t.Fatalf("refresh did not replace the cache: %#v", got)
 	}
@@ -73,12 +70,12 @@ func TestLimitsPersistPerNodeAndReplaceOnlyTheirOwnRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.get(context.Background())
+	a.collect(context.Background(), limitsCacheTTL)
 	b, err := newLimitsCache(store, "node-b", probe)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.get(context.Background())
+	b.collect(context.Background(), limitsCacheTTL)
 	if err := a.save(savedLimits{At: time.Now(), Snapshots: []harness.LimitSnapshot{{Harness: "claude"}}}); err != nil {
 		t.Fatal(err)
 	}

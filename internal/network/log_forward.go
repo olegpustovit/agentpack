@@ -28,8 +28,8 @@ func (g *Gateway) ingestTraces(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "diagnostics require explicit mesh enrollment", http.StatusForbidden)
 		return
 	}
-	roles, err := g.auth.store.Main(r.Context())
-	local, nodeErr := g.auth.store.NodeID(r.Context())
+	roles, err := g.store.Main(r.Context())
+	local, nodeErr := g.store.NodeID(r.Context())
 	if err != nil || nodeErr != nil {
 		writeDiagnostics(w, r, nil, errors.Join(err, nodeErr))
 		return
@@ -71,11 +71,11 @@ func (g *Gateway) localTrace(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) forwardErrorTraces(ctx context.Context, targetFor func(context.Context, string) (*url.URL, error)) error {
-	roles, err := g.auth.store.Main(ctx)
+	roles, err := g.store.Main(ctx)
 	if err != nil {
 		return err
 	}
-	local, err := g.auth.store.NodeID(ctx)
+	local, err := g.store.NodeID(ctx)
 	if err != nil || roles.MainNode == "" || roles.MainNode == local || g.logs == nil {
 		return err
 	}
@@ -114,7 +114,7 @@ func (g *Gateway) runLogForwarding(ctx context.Context) {
 	if g.logs == nil {
 		return
 	}
-	node, err := g.auth.store.NodeID(ctx)
+	node, err := g.store.NodeID(ctx)
 	if err != nil {
 		_, event := obs.Start(obs.WithSink(ctx, g.logs, obs.BuildMetadata(g.options.Version, "", "gateway")), "logs.forward", "node identity")
 		event.Fail(err)
@@ -218,11 +218,11 @@ func (g *Gateway) tracePage(ctx context.Context, trace, cursor string, all bool,
 	if err != nil {
 		return tracePage{}, err
 	}
-	roles, err := g.auth.store.Main(ctx)
+	roles, err := g.store.Main(ctx)
 	if err != nil {
 		return tracePage{}, err
 	}
-	local, err := g.auth.store.NodeID(ctx)
+	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return tracePage{}, err
 	}

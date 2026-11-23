@@ -34,7 +34,7 @@ func TestLibraryRoutesPreserveTrustAndPersistRename(t *testing.T) {
 	origin, _ := url.Parse("http://127.0.0.1:7420")
 	called := 0
 	bootstrapped := 0
-	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Library: LibraryOptions{
+	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Library: LibraryOptions{
 		Store:     store,
 		Bootstrap: func() error { bootstrapped++; return nil },
 		Save: func(_ context.Context, input SaveAgentpackInput) (SavedAgentpack, error) {
@@ -157,7 +157,7 @@ func TestLibraryAgentpacksIncludeRevisionsInOneCall(t *testing.T) {
 		revisions[pack.ID] = revision.ID
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
-	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Library: LibraryOptions{Store: store, Bootstrap: func() error { return nil }}}}
+	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Library: LibraryOptions{Store: store, Bootstrap: func() error { return nil }}}}
 	r := httptest.NewRequest("GET", origin.String()+"/api/library/agentpacks?include=revisions", nil)
 	r.Header.Set("Authorization", "Bearer "+g.local.Secret)
 	w := httptest.NewRecorder()

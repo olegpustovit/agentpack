@@ -59,14 +59,14 @@ func (g *Gateway) newStateTransfer(ctx context.Context, peer string, version int
 		}
 	}()
 	hash := sha256.New()
-	if err := g.auth.store.WriteVersion(ctx, version, exclude, io.MultiWriter(file, hash)); err != nil {
+	if err := g.store.WriteVersion(ctx, version, exclude, io.MultiWriter(file, hash)); err != nil {
 		return nil, err
 	}
 	info, err := file.Stat()
 	if err != nil {
 		return nil, err
 	}
-	site, err := g.auth.store.SiteID(ctx)
+	site, err := g.store.SiteID(ctx)
 	if err != nil {
 		return nil, err
 	}

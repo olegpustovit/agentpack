@@ -126,14 +126,11 @@ func (c *agentAccounts) attempt(name, id string) *loginAttempt {
 	return nil
 }
 
-func (g *Gateway) registerAgents(mux *http.ServeMux) {
+func (g *Gateway) registerAgents(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/agents", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"agents": g.agents.read(r.Context(), r.URL.Query().Get("fresh") == "1")})
 	})
 	mux.HandleFunc("POST /api/agents/{harness}/login", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		var input struct {
 			Method string `json:"method"`
 		}
@@ -204,9 +201,6 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 		writeJSON(w, step)
 	})
 	mux.HandleFunc("POST /api/agents/{harness}/logout", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		name := r.PathValue("harness")
 		index := slices.IndexFunc(agentLogins, func(agent agentLogin) bool { return agent.harness == name && agent.logout != nil })
 		if index < 0 {
@@ -228,9 +222,6 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 		writeJSON(w, map[string]bool{"signed_out": true})
 	})
 	mux.HandleFunc("GET /api/agents/{harness}/login/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		if attempt := g.agents.attempt(r.PathValue("harness"), r.PathValue("id")); attempt != nil {
 			writeJSON(w, attempt.current())
 			return
@@ -238,9 +229,6 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 		http.Error(w, "sign-in not found", http.StatusGone)
 	})
 	mux.HandleFunc("POST /api/agents/{harness}/login/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		var input struct {
 			Input string `json:"input"`
 		}
@@ -259,9 +247,6 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 		writeJSON(w, attempt.current())
 	})
 	mux.HandleFunc("DELETE /api/agents/{harness}/login/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		if attempt := g.agents.attempt(r.PathValue("harness"), r.PathValue("id")); attempt != nil {
 			attempt.Cancel()
 		}
@@ -276,7 +261,7 @@ func (g *Gateway) requireOwner(w http.ResponseWriter, r *http.Request) bool {
 	actor, ok := actorFrom(r.Context())
 	allowed := false
 	if ok && (actor.Kind == "browser" || actor.Kind == "local" || actor.Kind == "mcp" || actor.Kind == "peer" && actor.Account) {
-		err := g.auth.store.Reader.QueryRowContext(r.Context(), `SELECT EXISTS(
+		err := g.store.Reader.QueryRowContext(r.Context(), `SELECT EXISTS(
 			SELECT 1 FROM users WHERE email=? AND role='owner' AND disabled=0
 		) OR (? AND NOT EXISTS(SELECT 1 FROM users))`, actor.User, actor.Kind == "local" && !actor.Account).Scan(&allowed)
 		if err != nil {

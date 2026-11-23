@@ -159,9 +159,6 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 			nodeID = snapshot.Self.ID
 		}
 	}
-	if err := os.Remove(filepath.Join(options.Home, "network", "limits.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove legacy limits cache: %w", err)
-	}
 	auth, err := newGatewayAuth(options.Home, store)
 	if err != nil {
 		return err
@@ -180,9 +177,6 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	defer func() { result = errors.Join(result, gateway.cleanStateTransfers(time.Time{})) }()
 	if err := gateway.loadPublic(context.Background()); err != nil {
 		return err
-	}
-	if err := normalizeFolderIDs(context.Background(), store); err != nil {
-		return fmt.Errorf("normalize folder identities: %w", err)
 	}
 	gateway.reapStoppedChats(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
 	gateway.endLeftoverStarts(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
@@ -260,9 +254,11 @@ func (g *Gateway) runLogSpool(ctx context.Context) {
 	}
 }
 
-// localRequest reports a same-machine CLI call: it carries the private local secret and no browser origin.
+// localRequest reports a caller holding the private local secret: this machine's CLI, an enrolled
+// peer (through peerHandler) or an in-process MCP call. Browsers never are.
 func (g *Gateway) localRequest(r *http.Request) bool {
-	return r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1
+	kind := callerOf(r.Context())
+	return kind == callerCLI || kind == callerPeer || kind == callerMCP
 }
 
 func (g *Gateway) Handler() http.Handler {
@@ -278,7 +274,96 @@ func (g *Gateway) buildHandler() http.Handler {
 			http.Error(w, "gateway state unavailable", http.StatusServiceUnavailable)
 		})
 	}
-	mux := http.NewServeMux()
+	mux := g.routes()
+	secured := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(WithPeerCache(r.Context(), g.options.Home))
+		if p := r.URL.Path; strings.HasPrefix(p, "/api/") || isMCPPath(p) {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		if g.mcp != nil && chatBearer(r) {
+			g.mcp.ServeHTTP(w, r) // a chat's own agentpack tools credential; see mcp_chat.go
+			return
+		}
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+		// Only the private local secret makes a caller local; peerHandler and MCP dispatch name which kind.
+		kind := callerBrowser
+		if r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1 {
+			if kind = callerOf(r.Context()); kind == callerUnknown || kind == callerBrowser {
+				kind = callerCLI
+			}
+		}
+		r = r.WithContext(withCaller(r.Context(), kind))
+		local := kind != callerBrowser
+		publicOrigin, _ := g.public.current()
+		source := g.resolveSource(r, publicOrigin)
+		r = withRequestSource(r, source)
+		if g.serveProbe(w, r) {
+			return
+		}
+		if !local && source.origin == "" {
+			if source.proxied && publicOrigin == nil {
+				g.servePublicOff(w, r, source)
+				return
+			}
+			http.Error(w, "unrecognized gateway host", 403)
+			return
+		}
+		claimed, err := g.auth.claimed(r.Context())
+		if err != nil {
+			authFailure(w, r, "account state unavailable", err)
+			return
+		}
+		// An unclaimed gateway is claimed locally (or over SSH), never from the internet, even when
+		// pinned; status and health stay readable for deploy checks.
+		if !local && !claimed && publicOrigin != nil && source.origin == publicOrigin.String() && !(r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/api/status")) {
+			g.servePublicOff(w, r, source)
+			return
+		}
+		if peer, _ := r.Context().Value(replicaPeerKey{}).(string); peer != "" {
+			var hasAccounts bool
+			if err := g.store.Reader.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM users)").Scan(&hasAccounts); err != nil {
+				authFailure(w, r, "account state unavailable", err)
+				return
+			}
+			if !hasAccounts && (!g.meshPeer(r.Context(), peer) || !(r.Method == http.MethodGet && (r.URL.Path == "/api/sync/changes" || r.URL.Path == "/api/sync/events" || r.URL.Path == "/api/events"))) {
+				http.Error(w, "waiting for mesh accounts", http.StatusForbidden)
+				return
+			}
+		}
+		if !claimed && !local {
+			allowed := (r.Method == "GET" || r.Method == "HEAD") && (r.URL.Path == "/healthz" || r.URL.Path == "/api/status" || !strings.HasPrefix(r.URL.Path, "/api/") && !isMCPPath(r.URL.Path)) || r.Method == "POST" && r.URL.Path == "/api/claim"
+			if !allowed {
+				http.Error(w, "unclaimed", http.StatusForbidden)
+				return
+			}
+		}
+		if g.mcp != nil && isMCPPath(r.URL.Path) {
+			g.mcp.ServeHTTP(w, r)
+			return
+		}
+		origin := r.Header.Get("Origin")
+		if origin != "" && origin != source.origin {
+			http.Error(w, "cross-origin access refused", 403)
+			return
+		}
+		if !local && r.Method != "GET" && r.Method != "HEAD" && origin == "" {
+			http.Error(w, "origin required", 403)
+			return
+		}
+		mux.mux.ServeHTTP(w, r)
+	})
+	var sink obs.Sink
+	if g.logs != nil {
+		sink = g.logs
+	}
+	return observeHTTP(mux.mux, secured, sink, obs.BuildMetadata(g.options.Version, nodeID, "gateway"))
+}
+
+// routes binds every handler to its routeTable row.
+func (g *Gateway) routes() routeMux {
+	mux := routeMux{g, http.NewServeMux()}
 	buildID := g.options.UIBuildID
 	if buildID == "" {
 		files, _ := fs.Sub(webDist, "webdist")
@@ -308,10 +393,6 @@ func (g *Gateway) buildHandler() http.Handler {
 	mux.HandleFunc("POST /api/debug/timings", g.writeChatTiming)
 	// Profiles reveal memory contents, so only this machine's CLI may read them; peers and browsers never can.
 	mux.HandleFunc("GET /api/debug/pprof/{name...}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.localRequest(r) {
-			http.Error(w, "local access only", http.StatusForbidden)
-			return
-		}
 		switch name := r.PathValue("name"); name {
 		case "profile":
 			pprof.Profile(w, r)
@@ -338,9 +419,6 @@ func (g *Gateway) buildHandler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/machine", g.machine)
 	mux.HandleFunc("POST /api/node/update", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		if g.options.Update == nil {
 			http.Error(w, "gateway updates are unavailable", http.StatusNotImplemented)
 			return
@@ -597,22 +675,11 @@ func (g *Gateway) buildHandler() http.Handler {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		id := r.PathValue("id")
-		legacyArchive := false
-		if input.Hidden != nil && *input.Hidden && strings.HasPrefix(id, "session-legacy-recent-") {
-			// Any node may archive it: PATCH on a peer's session is applied to the replicated row here.
-			info, err := storedSession(r.Context(), g.auth.store.Reader, id)
-			legacyArchive = err == nil && info.StartedBy != nil && info.StartedBy.Kind == "peer" && !info.EndedAt.IsZero() && info.ArchivedAt.IsZero()
-		}
-		if legacyArchive {
-			if !g.requireOwner(w, r) {
-				return
-			}
-		} else if !g.authorizeACPWriteByID(w, r, id) {
+		if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
 			return
 		}
 		if input.Hidden != nil && *input.Hidden {
-			archived, _ := storedSession(r.Context(), g.auth.store.Reader, r.PathValue("id"))
+			archived, _ := sessionRow(r.Context(), r.PathValue("id"))
 			changed, err := HideSession(r.Context(), g.options.Home, r.PathValue("id"))
 			if changed && err == nil {
 				g.removeArchivedWorktree(r.Context(), archived)
@@ -725,79 +792,7 @@ func (g *Gateway) buildHandler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", g.servePrompt)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/message", g.serveAgentMessage)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/show", g.serveShow)
-	mux.HandleFunc("POST /api/sessions/{id}/conversation/permission", func(w http.ResponseWriter, r *http.Request) {
-		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusNotFound)
-			return
-		}
-		if !authorizeACPWrite(w, r, record.Session) {
-			return
-		}
-		proxyWorkerConversation(w, r, record, "/permission")
-	})
-	mux.HandleFunc("POST /api/sessions/{id}/conversation/revert", func(w http.ResponseWriter, r *http.Request) {
-		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusNotFound)
-			return
-		}
-		if !authorizeACPWrite(w, r, record.Session) {
-			return
-		}
-		proxyWorkerConversation(w, r, record, "/revert")
-	})
-	mux.HandleFunc("POST /api/sessions/{id}/conversation/cancel", func(w http.ResponseWriter, r *http.Request) {
-		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusNotFound)
-			return
-		}
-		if !authorizeACPWrite(w, r, record.Session) {
-			return
-		}
-		proxyWorkerConversation(w, r, record, "/cancel")
-	})
-	mux.HandleFunc("POST /api/sessions/{id}/conversation/elicitation", func(w http.ResponseWriter, r *http.Request) {
-		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusNotFound)
-			return
-		}
-		if !authorizeACPWrite(w, r, record.Session) {
-			return
-		}
-		proxyWorkerConversation(w, r, record, "/elicitation")
-	})
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/config", g.serveWantedConfig)
-	mux.HandleFunc("POST /api/sessions/{id}/conversation/blobs", func(w http.ResponseWriter, r *http.Request) {
-		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
-		if err != nil {
-			http.Error(w, "session unavailable", http.StatusNotFound)
-			return
-		}
-		if !authorizeACPWrite(w, r, record.Session) {
-			return
-		}
-		proxyWorkerConversation(w, r, record, "/blobs")
-	})
-	for _, route := range []string{
-		"PATCH /queue/{queueId}", "DELETE /queue/{queueId}", "POST /queue/{queueId}/steer",
-		"POST /goal", "PATCH /goal",
-	} {
-		method, suffix, _ := strings.Cut(route, " ")
-		mux.HandleFunc(method+" /api/sessions/{id}/conversation"+suffix, func(w http.ResponseWriter, r *http.Request) {
-			record, err := g.workerRecord(r.Context(), r.PathValue("id"))
-			if err != nil {
-				http.Error(w, "session unavailable", http.StatusNotFound)
-				return
-			}
-			if !authorizeACPWrite(w, r, record.Session) {
-				return
-			}
-			proxyWorkerConversation(w, r, record, strings.Replace(suffix, "{queueId}", url.PathEscape(r.PathValue("queueId")), 1))
-		})
-	}
 	mux.HandleFunc("DELETE /api/sessions/{id}/conversation/goal", g.clearGoal)
 	mux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}", g.serveBlob)
 	mux.HandleFunc("GET /api/packages", func(w http.ResponseWriter, r *http.Request) {
@@ -824,9 +819,6 @@ func (g *Gateway) buildHandler() http.Handler {
 	mux.HandleFunc("GET /api/folders", g.serveFolders)
 	mux.HandleFunc("GET /api/folders/found", g.serveFoundFolders)
 	mux.HandleFunc("POST /api/packages", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		var input struct {
 			Directory string `json:"directory"`
 			Spec      string `json:"spec"`
@@ -846,9 +838,6 @@ func (g *Gateway) buildHandler() http.Handler {
 		writeJSON(w, map[string]bool{"installed": true})
 	})
 	mux.HandleFunc("POST /api/mcp/servers", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		var input struct {
 			MCPServerInput
 			Directory string `json:"directory"`
@@ -869,9 +858,6 @@ func (g *Gateway) buildHandler() http.Handler {
 		writeJSON(w, map[string]bool{"installed": true})
 	})
 	mux.HandleFunc("POST /api/node/stop", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		if err := SetGatewayEnabled(g.options.Home, false); err != nil {
 			fail(w, r, err)
 			return
@@ -880,7 +866,7 @@ func (g *Gateway) buildHandler() http.Handler {
 		g.stop()
 	})
 	mux.HandleFunc("POST /api/node/stop-agents", func(w http.ResponseWriter, r *http.Request) {
-		sessions, err := sessionsIn(r.Context(), g.auth.store.Reader, g.options.Home)
+		sessions, err := sessionsIn(r.Context(), g.store.Reader, g.options.Home)
 		skipped := 0
 		if err == nil {
 			actor, ok := actorFrom(r.Context())
@@ -909,83 +895,32 @@ func (g *Gateway) buildHandler() http.Handler {
 	if g.options.Assets != nil {
 		mux.Handle("/", g.options.Assets)
 	}
-	api := conditionalAPI(mux)
-	secured := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r = r.WithContext(WithPeerCache(r.Context(), g.options.Home))
-		if p := r.URL.Path; strings.HasPrefix(p, "/api/") || isMCPPath(p) {
-			w.Header().Set("Cache-Control", "no-store")
+	for _, row := range routeTable {
+		if row.worker != "" {
+			mux.HandleFunc(row.pattern, g.forwardToWorker(row.worker))
 		}
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		if g.mcp != nil && chatBearer(r) {
-			g.mcp.ServeHTTP(w, r) // a chat's own agentpack tools credential; see mcp_chat.go
-			return
-		}
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+	}
+	return mux
+}
+
+// serveRoute applies a routeTable row: login, actor, session routing, ?node= proxying, owner
+// policy and ETags, in that order, around the handler registered for the row.
+func (g *Gateway) serveRoute(row route, handler http.Handler) http.Handler {
+	if row.etag() {
+		handler = conditionalAPI(handler)
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		local := g.localRequest(r)
-		publicOrigin, _ := g.public.current()
-		source := g.resolveSource(r, publicOrigin)
-		r = withRequestSource(r, source)
-		if g.serveProbe(w, r) {
-			return
-		}
-		if !local && source.origin == "" {
-			if source.proxied && publicOrigin == nil {
-				g.servePublicOff(w, r, source)
-				return
-			}
-			http.Error(w, "unrecognized gateway host", 403)
-			return
-		}
-		claimed, err := g.auth.claimed(r.Context())
-		if err != nil {
-			authFailure(w, r, "account state unavailable", err)
-			return
-		}
-		// An unclaimed gateway is claimed locally (or over SSH), never from the internet, even when
-		// pinned; status and health stay readable for deploy checks.
-		if !local && !claimed && publicOrigin != nil && source.origin == publicOrigin.String() && !(r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/api/status")) {
-			g.servePublicOff(w, r, source)
-			return
-		}
-		if peer, _ := r.Context().Value(replicaPeerKey{}).(string); peer != "" {
-			var hasAccounts bool
-			if err := g.auth.store.Reader.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM users)").Scan(&hasAccounts); err != nil {
-				authFailure(w, r, "account state unavailable", err)
-				return
-			}
-			if !hasAccounts && (!g.meshPeer(r.Context(), peer) || !(r.Method == http.MethodGet && (r.URL.Path == "/api/sync/changes" || r.URL.Path == "/api/sync/events" || r.URL.Path == "/api/events"))) {
-				http.Error(w, "waiting for mesh accounts", http.StatusForbidden)
-				return
-			}
-		}
-		if !claimed && !local {
-			allowed := (r.Method == "GET" || r.Method == "HEAD") && (r.URL.Path == "/healthz" || r.URL.Path == "/api/status" || !strings.HasPrefix(r.URL.Path, "/api/") && !isMCPPath(r.URL.Path)) || r.Method == "POST" && r.URL.Path == "/api/claim"
-			if !allowed {
-				http.Error(w, "unclaimed", http.StatusForbidden)
-				return
-			}
-		}
-		if g.mcp != nil && isMCPPath(r.URL.Path) {
-			g.mcp.ServeHTTP(w, r)
-			return
-		}
-		origin := r.Header.Get("Origin")
-		if origin != "" && origin != source.origin {
-			http.Error(w, "cross-origin access refused", 403)
-			return
-		}
-		if !local && r.Method != "GET" && r.Method != "HEAD" && origin == "" {
-			http.Error(w, "origin required", 403)
-			return
-		}
-		public := r.URL.Path == "/healthz" || r.URL.Path == "/api/config" || r.URL.Path == "/api/status" || r.URL.Path == "/api/claim" || r.URL.Path == "/api/login" || !strings.HasPrefix(r.URL.Path, "/api/")
 		email := ""
 		if !local {
 			email = g.auth.email(r)
 		}
-		if !public && !local && email == "" {
+		if row.policy != public && !local && email == "" {
 			http.Error(w, "login required", 401)
+			return
+		}
+		if row.policy == cli && callerOf(r.Context()) != callerCLI {
+			http.Error(w, "local access only", http.StatusForbidden)
 			return
 		}
 		if _, known := actorFrom(r.Context()); !known {
@@ -1004,29 +939,42 @@ func (g *Gateway) buildHandler() http.Handler {
 				r = r.WithContext(withActor(r.Context(), browserActor(email)))
 			}
 		}
-
-		if handled, err := g.routeMeshRequest(w, r); err != nil {
-			meshReadError(w, r, err)
-			return
-		} else if handled {
-			return
+		if row.session {
+			var handled bool
+			var err error
+			if r, handled, err = g.routeMeshRequest(w, r); err != nil {
+				meshReadError(w, r, err)
+				return
+			} else if handled {
+				return
+			}
 		}
-		if r.Method == http.MethodGet && meshListRoute(r.URL.Path) && (r.URL.Query().Get("node") == "" || g.meshPeer(r.Context(), r.URL.Query().Get("node"))) {
-			api.ServeHTTP(w, r)
-			return
-		}
-		if nodeID := r.URL.Query().Get("node"); nodeID != "" && strings.HasPrefix(r.URL.Path, "/api/") {
+		if node := r.URL.Query().Get("node"); node != "" && strings.HasPrefix(r.URL.Path, "/api/") &&
+			!(r.Method == http.MethodGet && meshListRoute(r.URL.Path) && g.meshPeer(r.Context(), node)) {
 			w.Header().Del("Cache-Control") // the peer's Cache-Control passes through unchanged
-			g.proxyTailnet(w, r, nodeID)
+			g.proxyTailnet(w, r, node)
 			return
 		}
-		api.ServeHTTP(w, r)
+		if row.policy == owner && !g.requireOwner(w, r) {
+			return
+		}
+		handler.ServeHTTP(w, r)
 	})
-	var sink obs.Sink
-	if g.logs != nil {
-		sink = g.logs
+}
+
+// forwardToWorker serves a conversation control row by handing the request to the session's worker.
+func (g *Gateway) forwardToWorker(suffix string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
+		if err != nil {
+			http.Error(w, "session unavailable", http.StatusNotFound)
+			return
+		}
+		if !authorizeACPWrite(w, r, record.Session) {
+			return
+		}
+		proxyWorkerConversation(w, r, record, strings.Replace(suffix, "{queueId}", url.PathEscape(r.PathValue("queueId")), 1))
 	}
-	return observeHTTP(mux, secured, sink, obs.BuildMetadata(g.options.Version, nodeID, "gateway"))
 }
 
 func publicSession(info SessionInfo) SessionInfo {
@@ -1096,18 +1044,16 @@ func authorizeACPWrite(w http.ResponseWriter, r *http.Request, session SessionIn
 }
 
 func (g *Gateway) authorizeACPWriteByID(w http.ResponseWriter, r *http.Request, id string) bool {
-	info, err := storedSession(r.Context(), g.auth.store.Reader, id)
-	if errors.Is(err, errSessionNotFound) {
-		record, recordErr := g.workerRecord(r.Context(), id)
-		if recordErr != nil {
+	info, ok := sessionRow(r.Context(), id)
+	if !ok {
+		var err error
+		if info, err = storedSession(r.Context(), g.store.Reader, id); errors.Is(err, errSessionNotFound) {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return false
+		} else if err != nil {
+			http.Error(w, "session metadata unavailable", http.StatusInternalServerError)
+			return false
 		}
-		info, err = record.Session, nil
-	}
-	if err != nil {
-		http.Error(w, "session metadata unavailable", http.StatusInternalServerError)
-		return false
 	}
 	return authorizeACPWrite(w, r, info)
 }
@@ -1121,7 +1067,7 @@ func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInf
 		}
 		source.AgentSessionID = forkSessionID
 	}
-	if err := authorizeACPResume(ctx, g.auth.store, actor, source); err != nil {
+	if err := authorizeACPResume(ctx, g.store, actor, source); err != nil {
 		return SessionInfo{}, err
 	}
 	// A new worktree is accepted only when git lists it for an authorized main folder, which the row records.
@@ -1162,19 +1108,19 @@ func (g *Gateway) knownDirectory(ctx context.Context, directory string) bool {
 		return false
 	}
 	var known bool
-	err = g.auth.store.Reader.QueryRowContext(ctx, `SELECT EXISTS(
+	err = g.store.Reader.QueryRowContext(ctx, `SELECT EXISTS(
 		SELECT 1 FROM (
 			SELECT folder_id FROM sessions WHERE node_id=`+state.LocalNodeSQL+`
 			AND hidden=0 AND transport<>'shell' AND directory=?
 			ORDER BY last_used DESC,id DESC LIMIT 1
-		) WHERE folder_id=? OR (? AND substr(folder_id, -length(?))=?)
-	)`, filepath.Clean(directory), identity, !strings.Contains(identity, ":"), ":"+identity, ":"+identity).Scan(&known)
+		) WHERE folder_id=?
+	)`, filepath.Clean(directory), identity).Scan(&known)
 	return err == nil && known
 }
 
-// SameFolder also accepts identities recorded before Unix dropped the device ("dev:inode").
+// SameFolder reports whether a recorded folder identity is the folder's current one.
 func SameFolder(stored, current string) bool {
-	return current != "" && (stored == current || strings.HasSuffix(stored, ":"+current) && !strings.Contains(current, ":"))
+	return current != "" && stored == current
 }
 
 func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
@@ -1195,7 +1141,7 @@ func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var definitionRoot, modeName string
-	err := g.auth.store.Reader.QueryRowContext(r.Context(), `SELECT definition_root,mode FROM sessions
+	err := g.store.Reader.QueryRowContext(r.Context(), `SELECT definition_root,mode FROM sessions
 		WHERE node_id=`+state.LocalNodeSQL+` AND hidden=0 AND transport<>'shell' AND directory=? AND harness=?
 		ORDER BY last_used DESC,id DESC LIMIT 1`, filepath.Clean(directory), harness).Scan(&definitionRoot, &modeName)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -1217,7 +1163,7 @@ func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
-	archived, err := archivedNativeIDs(r.Context(), g.auth.store, folderID, harness)
+	archived, err := archivedNativeIDs(r.Context(), g.store, folderID, harness)
 	if err != nil {
 		meshReadError(w, r, err)
 		return

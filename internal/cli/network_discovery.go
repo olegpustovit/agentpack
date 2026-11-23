@@ -26,7 +26,7 @@ func (runner Runner) runSharing(ctx context.Context, args []string) (int, error)
 		return 1, err
 	}
 	defer store.Close()
-	config, err := network.ReadSharingConfig(store, home)
+	config, err := network.ReadSharingConfig(store)
 	if err != nil {
 		return 1, err
 	}

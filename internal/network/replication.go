@@ -41,9 +41,9 @@ func (g *Gateway) enrolledPeer(id string) bool {
 // enrollPeer pairs an allowed peer; an unclaimed gateway first closes its claim window to join the mesh's accounts.
 func (g *Gateway) enrollPeer(ctx context.Context, peer string) error {
 	var claimed bool
-	err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users) OR (SELECT join_peer<>'' FROM local_node WHERE id=1)").Scan(&claimed)
+	err := g.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users) OR (SELECT join_peer<>'' FROM local_node WHERE id=1)").Scan(&claimed)
 	if err == nil && !claimed {
-		err = PrepareMeshJoin(ctx, g.auth.store, peer)
+		err = PrepareMeshJoin(ctx, g.store, peer)
 	}
 	if err == nil {
 		err = g.options.Library.Store.EnrollPeer(peer)
@@ -54,7 +54,7 @@ func (g *Gateway) enrollPeer(ctx context.Context, peer string) error {
 	return err
 }
 
-func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
+func (g *Gateway) registerRegistryReplication(mux routeRegistrar) {
 	store := g.options.Library.Store
 	if store == nil {
 		return
@@ -69,16 +69,13 @@ func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
 		}{peers, contacts}, err)
 	})
 	mux.HandleFunc("POST "+replicationPrefix+"peers", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		var input struct {
 			Peer string `json:"peer"`
 		}
 		if !readJSON(w, r, &input) {
 			return
 		}
-		config, err := ReadSharingConfig(g.store, g.options.Home)
+		config, err := ReadSharingConfig(g.store)
 		if err != nil || !config.Enabled {
 			libraryResponse(w, nil, errors.New("tailnet sharing is disabled"))
 			return
@@ -103,9 +100,6 @@ func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
 		libraryResponse(w, map[string]bool{"enrolled": err == nil}, err)
 	})
 	mux.HandleFunc("DELETE "+replicationPrefix+"peers/{peer}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		err := store.RemovePeer(r.PathValue("peer"))
 		if err == nil {
 			g.emitEvent(eventMessage{Topic: "replication"})
@@ -114,9 +108,6 @@ func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
 		libraryResponse(w, map[string]bool{"removed": err == nil}, err)
 	})
 	mux.HandleFunc("POST "+replicationPrefix+"sync", func(w http.ResponseWriter, r *http.Request) {
-		if !g.requireOwner(w, r) {
-			return
-		}
 		var input struct {
 			Peer string `json:"peer"`
 		}

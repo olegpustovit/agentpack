@@ -3,7 +3,6 @@ package network
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -156,16 +155,16 @@ func (g *Gateway) defaultEventTopics() []eventTopic {
 	home := g.options.Home
 	topics := []eventTopic{
 		{name: "state", interval: 2 * time.Second, digest: func(ctx context.Context) (string, error) {
-			version, err := g.auth.store.DBVersion(ctx)
+			version, err := g.store.DBVersion(ctx)
 			return strconv.FormatInt(version, 10), err
 		}, detail: g.changedTables},
 		// The fallback catches terminal-only state that workers do not persist.
 		{name: "sessions", interval: 30 * time.Second, digest: func(ctx context.Context) (string, error) {
-			value, err := sessionsIn(ctx, g.auth.store.Reader, home)
+			value, err := sessionsIn(ctx, g.store.Reader, home)
 			return digestOf(value, err)
 		}},
 		{name: "projects", interval: 10 * time.Second, digest: func(ctx context.Context) (string, error) {
-			recent, err := recentIn(ctx, g.auth.store.Reader)
+			recent, err := recentIn(ctx, g.store.Reader)
 			if err != nil {
 				return "", err
 			}
@@ -201,7 +200,7 @@ func (g *Gateway) changedTables(ctx context.Context, previous, current string) [
 	if err1 != nil || err2 != nil || to <= from {
 		return nil
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT DISTINCT "table",cid FROM crsql_changes WHERE db_version>? AND db_version<=?`, from, to)
+	rows, err := g.store.Reader.QueryContext(ctx, `SELECT DISTINCT "table",cid FROM crsql_changes WHERE db_version>? AND db_version<=?`, from, to)
 	if err != nil {
 		return nil
 	}
@@ -386,7 +385,7 @@ func digestOf(value any, err error) (string, error) {
 
 // serveEvents serves GET /api/events as a server-sent event stream.
 func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
-	private := r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1
+	private := g.localRequest(r)
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)

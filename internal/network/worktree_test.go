@@ -182,7 +182,7 @@ func startWorktreeChat(t *testing.T, g *Gateway, call func(method, path, body st
 		t.Fatal(err)
 	}
 	g.starting.Wait()
-	if _, err := g.auth.store.DB.Exec("UPDATE sessions SET ended_at=1, conversation_state='idle' WHERE id=?", info.ID); err != nil {
+	if _, err := g.store.DB.Exec("UPDATE sessions SET ended_at=1, conversation_state='idle' WHERE id=?", info.ID); err != nil {
 		t.Fatal(err)
 	}
 	return info
@@ -194,7 +194,7 @@ func TestNewWorktreeSessionSharesTheProjectAndArchiveRemovesIt(t *testing.T) {
 	if !insideWorktrees(g.options.Home, info.Directory) || info.DefinitionRoot != main {
 		t.Fatalf("session %+v", info)
 	}
-	if stored, err := storedSession(t.Context(), g.auth.store.Reader, info.ID); err != nil || stored.WorktreeOf != main {
+	if stored, err := storedSession(t.Context(), g.store.Reader, info.ID); err != nil || stored.WorktreeOf != main {
 		t.Fatalf("worktree_of %q %v", stored.WorktreeOf, err)
 	}
 	// A second chat continues in the same worktree; an arbitrary folder is refused.

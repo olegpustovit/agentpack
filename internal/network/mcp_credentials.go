@@ -597,7 +597,7 @@ func (g *Gateway) accountEnabled(ctx context.Context, email string) bool {
 	return g.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE email=? AND disabled=0)", email).Scan(&enabled) == nil && enabled
 }
 
-func (g *Gateway) registerMCPCredentials(mux *http.ServeMux) {
+func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/mcp/credentials", func(w http.ResponseWriter, r *http.Request) {
 		_, account, ok := credentialAccount(r)
 		if !ok {

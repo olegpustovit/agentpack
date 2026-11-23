@@ -32,7 +32,7 @@ func replicaStore(t *testing.T) *registry.Store {
 func registryGateway(t *testing.T, node, caller string) (*Gateway, *httptest.Server) {
 	t.Helper()
 	g, _ := identityGateway(t, t.TempDir(), nil)
-	if err := g.auth.store.BindNode(t.Context(), node); err != nil {
+	if err := g.store.BindNode(t.Context(), node); err != nil {
 		t.Fatal(err)
 	}
 	store, err := registry.New(g.options.Home)
