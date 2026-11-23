@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { groupSessions, matchesSession, nestHelpers, sessionDetail, sessionLabel, type ListedSession } from "./group"
+import { groupSessions, matchesSession, nestHelpers, sessionDetail, sessionLabel, treeSessions, type ListedSession } from "./group"
 
 function session(id: string, machine: string, machineName: string, directory: string, offline = false): ListedSession {
   return {
@@ -145,5 +145,33 @@ describe("nestHelpers", () => {
       expect(heads).toHaveLength(1)
       expect(nestHelpers(heads[0]!.sessions).map((entry) => `${entry.session.id}${entry.nested ? "+" : ""}`)).toEqual(["p", "h+"])
     }
+  })
+})
+
+describe("treeSessions", () => {
+  const lead = { ...session("p", laptop, "laptop", "/work/a"), transport: "acp", conversation_state: "idle" }
+  const helper = (state: string, extra: Partial<ListedSession> = {}) => ({ ...session("h", laptop, "laptop", "/work/a"), transport: "acp", parent_id: "p", conversation_state: state, ...extra })
+  const ids = (rows: ListedSession[]) => rows.map((row) => row.id)
+
+  it("lists a working, asking or starting helper", () => {
+    for (const state of ["working", "needs_you", "starting"]) expect(ids(treeSessions([lead, helper(state)]))).toEqual(["p", "h"])
+  })
+
+  it("drops a stopped or ended helper, so it never shows as a top-level row", () => {
+    const stopped = helper("working", { state: { ...lead.state, running: false } })
+    expect(ids(treeSessions([lead, stopped]))).toEqual(["p"])
+    expect(ids(treeSessions([stopped]))).toEqual([])
+    expect(ids(treeSessions([lead, helper("starting", { ended_at: "2026-01-01T00:00:00Z" })]))).toEqual(["p"])
+  })
+
+  it("keeps an idle helper only while the parent waits on its reply or it has background work", () => {
+    expect(ids(treeSessions([lead, helper("idle")]))).toEqual(["p"])
+    expect(ids(treeSessions([{ ...lead, waiting: [{ kind: "reply", peer: "h" }] }, helper("idle")]))).toEqual(["p", "h"])
+    expect(ids(treeSessions([lead, helper("idle", { waiting: [{ kind: "agent" }] })]))).toEqual(["p", "h"])
+  })
+
+  it("keeps running subagents and drops finished ones", () => {
+    const chat = { ...lead, subagents: [{ id: "a", state: "running" }, { id: "b", state: "idle" }, { id: "c", state: "requires_action" }] }
+    expect(treeSessions([chat])[0]?.subagents?.map((sub) => sub.id)).toEqual(["a", "c"])
   })
 })

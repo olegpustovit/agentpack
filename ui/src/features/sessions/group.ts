@@ -1,6 +1,7 @@
 import type { SessionInfo } from "@/lib/api-types"
 import { basename, harnessName, relativeTime } from "@/lib/format"
 import { projectDirectory } from "./git"
+import { isStarting, openWaits } from "./session-status"
 
 export type GroupMode = "machine" | "project"
 
@@ -141,6 +142,24 @@ export function groupSessions(sessions: ListedSession[], group: GroupMode): Sess
   return sortByLabel(
     [...groups.values()].map(({ heads, ...rest }) => ({ ...rest, subheads: sortByLabel([...heads.values()]) })),
   )
+}
+
+// The tree lists a helper chat only while it is active: starting, working, asking, restarting, or idle
+// with its own background work or a parent still waiting on its reply. The parent's reply wait spans
+// the helper's idle gaps between turns, so the row does not flicker; a finished helper stays reachable
+// from the parent's helper card. Live subagents are those not idle (finished).
+export function treeSessions(sessions: ListedSession[]): ListedSession[] {
+  const byId = new Map(sessions.map((session) => [session.id, session]))
+  return sessions.flatMap((session) => {
+    const subagents = session.subagents?.filter((subagent) => subagent.state !== "idle")
+    const row = subagents?.length === session.subagents?.length ? session : { ...session, subagents }
+    if (!session.parent_id) return [row]
+    const live = !session.archived_at && !session.ended_at && (session.state.running || session.state.restarting)
+    const parent = byId.get(session.parent_id)
+    const awaited = parent ? openWaits(parent).some((item) => item.kind === "reply" && item.peer === session.id) : false
+    const active = isStarting(session) || (live && (session.conversation_state !== "idle" || openWaits(session).length > 0 || awaited))
+    return active ? [row] : []
+  })
 }
 
 // Helper chats follow the chat whose agent started them, when both are in the list.

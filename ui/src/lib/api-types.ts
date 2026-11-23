@@ -95,7 +95,7 @@ export type GoalState = {
 export type WaitItem = { kind: "shell" | "monitor" | "agent" | "task" | "wake" | "reply"; until?: number; peer?: string }
 
 // Running subagents of a chat, for the sidebar's child rows.
-// state "idle" is a finished subagent, listed until newer ones push it out; older peers list only busy ones.
+// state "idle" is a finished subagent (the sidebar hides it); older peers list only busy ones.
 export type SubagentSummary = { id: string; title?: string; state: string; started_at?: number; ended_at?: number }
 
 export type AgentSession = {
