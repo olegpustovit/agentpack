@@ -18,7 +18,7 @@ import (
 )
 
 // An agentpack update must never look like a package change: an environment from another binary reads as absent.
-func TestSessionEnvironmentIgnoresDigestsFromAnotherBinary(t *testing.T) {
+func TestReadEnvironmentIgnoresDigestsFromAnotherBinary(t *testing.T) {
 	home := t.TempDir()
 	id := "session-TEST"
 	if err := os.MkdirAll(filepath.Join(home, "network", "sessions", id), 0700); err != nil {
@@ -29,14 +29,14 @@ func TestSessionEnvironmentIgnoresDigestsFromAnotherBinary(t *testing.T) {
 	if err := writeEnvironment(path, Environment{Digest: digest}); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := SessionEnvironment(home, id); err != nil || got.Digest != digest {
+	if got, err := readEnvironment(path, true); err != nil || got.Digest != digest {
 		t.Fatalf("same binary: got %+v, %v", got, err)
 	}
 	for name, content := range map[string]string{"older agentpack": digest + "\n" + BinaryTag(), "other binary": `{"digest":"` + digest + `","binary":"/old/ap:1:2"}`} {
 		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if got, err := SessionEnvironment(home, id); err != nil || got.Digest != "" {
+		if got, err := readEnvironment(path, true); err != nil || got.Digest != "" {
 			t.Fatalf("%s: got %+v, %v; want absent", name, got, err)
 		}
 	}

@@ -51,16 +51,6 @@ func BinaryTag() string {
 	return fmt.Sprintf("%s:%d:%d", executable, info.Size(), info.ModTime().UnixNano())
 }
 
-// SessionEnvironment reads what session id launched with. One recorded by another binary reads as
-// absent, so an agentpack update never looks like a package change.
-func SessionEnvironment(home, id string) (Environment, error) {
-	path, err := environmentPath(home, id)
-	if err != nil {
-		return Environment{}, err
-	}
-	return readEnvironment(path, true)
-}
-
 func readEnvironment(path string, matchBinary bool) (Environment, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
