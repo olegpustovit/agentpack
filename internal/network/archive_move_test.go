@@ -377,7 +377,7 @@ func TestArchivePreservesFlushBeforeRemoteReceivesMarker(t *testing.T) {
 		{Seq: 1, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"late coalesced text"}}`)},
 		{Seq: 2, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"late final event"}}`)},
 	}}
-	if err := persistConversationChangesSince(t.Context(), worker.auth.store.DB, "session-late-flush", changes, 0); err != nil {
+	if err := persistConversationChangesSince(t.Context(), worker.auth.store.DB, "session-late-flush", changes, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	syncArchiveFixture(t, worker.auth.store, main.auth.store)
@@ -399,7 +399,7 @@ func TestArchivePreservesFlushBeforeRemoteReceivesMarker(t *testing.T) {
 			t.Fatalf("late flush restored archived chat: %v %v", archived, err)
 		}
 	}
-	if err := persistConversationChangesSince(t.Context(), worker.auth.store.DB, "session-late-flush", changes, 0); err == nil {
+	if err := persistConversationChangesSince(t.Context(), worker.auth.store.DB, "session-late-flush", changes, 0, false); err == nil {
 		t.Fatal("worker wrote after receiving archive marker")
 	}
 }
@@ -430,7 +430,7 @@ func TestArchiveLateCoalescingStaleGossipAndMainHandover(t *testing.T) {
 				{Seq: 1, Kind: "agent_message_chunk", Payload: merged},
 				{Seq: last, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"final event"}}`)},
 			},
-		}, 0); err != nil {
+		}, 0, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -515,7 +515,7 @@ func TestArchivePendingHandoverRetainsUnacknowledgedWorkerEdit(t *testing.T) {
 		{Seq: 1, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"late while copying"}}`)},
 		{Seq: 2, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"new final event"}}`)},
 	}}
-	if err := persistConversationChangesSince(t.Context(), worker.auth.store.DB, "session-pending-copy", changes, 0); err != nil {
+	if err := persistConversationChangesSince(t.Context(), worker.auth.store.DB, "session-pending-copy", changes, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	applyOne := func(from, to *state.Store) error {
@@ -620,7 +620,7 @@ func TestArchiveMarkerWaitsForActiveTurnAndCompleteFreshTail(t *testing.T) {
 	if err := apply(); !errors.Is(err, state.ErrArchivePending) {
 		t.Fatalf("pruned an active turn: %v", err)
 	}
-	if err := persistConversationChangesSince(t.Context(), worker.auth.store.DB, "session-fresh-tail", acp.LogChanges{LastSeq: 2, Entries: []acp.LogEntry{{Seq: 2, Kind: "turn_end", Payload: json.RawMessage(`{}`)}}}, 0); err != nil {
+	if err := persistConversationChangesSince(t.Context(), worker.auth.store.DB, "session-fresh-tail", acp.LogChanges{LastSeq: 2, Entries: []acp.LogEntry{{Seq: 2, Kind: "turn_end", Payload: json.RawMessage(`{}`)}}}, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	syncArchiveFixture(t, worker.auth.store, main.auth.store)
@@ -666,7 +666,7 @@ func TestNewMainCapturesItsOwnNewerBodyBeforeOldPruning(t *testing.T) {
 	if err := persistConversationChangesSince(t.Context(), owner.auth.store.DB, "session-new-main-owned", acp.LogChanges{LastSeq: 2, Entries: []acp.LogEntry{
 		{Seq: 1, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"new owner's coalesced text"}}`)},
 		{Seq: 2, Kind: "turn_end", Payload: json.RawMessage(`{}`)},
-	}}, 0); err != nil {
+	}}, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(main.options.Home, "archive.db"))
@@ -720,7 +720,7 @@ func TestArchivedEditsRelayThroughIntermediatePeer(t *testing.T) {
 			{Seq: 1, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"relayed coalesced edit"}}`)},
 			{Seq: 3, Kind: "turn_end", Payload: json.RawMessage(`{}`)},
 		},
-	}, 0); err != nil {
+	}, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	syncArchiveFixture(t, worker.auth.store, relay.auth.store)

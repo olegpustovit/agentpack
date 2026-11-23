@@ -20,6 +20,9 @@ positions. Archive pruning records original clocks before tombstones. Sync write
 archive_edits backups in one transaction before applying a page that could absorb
 a newer body. The received page and cursor commit together. Main deletes each backup only after its archive commits it. These
 independent backups may survive a rejected page and are safe to relay or retry.
+conversation_checkpoints is local: the owning worker's fold of a chat's log, written in the same
+transaction as the events and the sessions row's derived columns (conversation_state, waiting,
+subagents, goal, title). conversation_events.kind is a virtual column derived from body, so it never replicates.
 archive_blobs retains required attachment references; archive_cleanup is local. sync_quarantine is also local and records rejected
 incoming change versions without copying their values.
 

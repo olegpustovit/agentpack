@@ -38,7 +38,9 @@ func TestClearGoalReconcilesAWorkerThatLostIt(t *testing.T) {
 	if err := upsertSession(context.Background(), g.store.DB, SessionInfo{ID: id, Directory: seedFolder(t, home), Harness: "claude", Transport: "acp", StartedBy: owner}); err != nil {
 		t.Fatal(err)
 	}
-	persistSessionJSON(context.Background(), g.store.DB, id, "goal", &Goal{Objective: "ship", State: "active", Engine: "native"}, false)
+	if _, err := g.store.DB.Exec("UPDATE sessions SET goal=? WHERE id=?", string(mustRawJSON(&Goal{Objective: "ship", State: "active", Engine: "native"})), id); err != nil {
+		t.Fatal(err)
+	}
 	dir := filepath.Join(home, "network", "sessions", id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)

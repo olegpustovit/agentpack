@@ -27,7 +27,7 @@ type fakeAgent struct {
 	prompts chan acp.PromptInput
 	turns   chan fakeTurn
 	cancels chan struct{}
-	goals   chan *Goal
+	goalSeq int64 // goalUntil has read goal updates up to here
 	mu      sync.Mutex
 	now     time.Time
 }
@@ -39,7 +39,7 @@ func newFakeAgentSession(t *testing.T, history ...acp.LogEntry) (*ConversationSe
 		log.Append(entry.Kind, entry.TS, entry.Payload)
 	}
 	agent := &fakeAgent{log: log, prompts: make(chan acp.PromptInput, 16), turns: make(chan fakeTurn, 16),
-		cancels: make(chan struct{}, 16), goals: make(chan *Goal, 64), now: time.UnixMilli(1_000_000)}
+		cancels: make(chan struct{}, 16), now: time.UnixMilli(1_000_000)}
 	broker := acp.NewBroker(func(_ context.Context, input acp.PromptInput) error {
 		log.Append("prompt", 1, promptLogPayload(input))
 		agent.prompts <- input
@@ -62,7 +62,6 @@ func newFakeAgentSession(t *testing.T, history ...acp.LogEntry) (*ConversationSe
 		defer agent.mu.Unlock()
 		return agent.now
 	}
-	session.goalChange = func(goal *Goal) { agent.goals <- goal }
 	return session, agent
 }
 
@@ -77,16 +76,31 @@ func (agent *fakeAgent) nextPrompt(t *testing.T) acp.PromptInput {
 	}
 }
 
-// goalUntil returns the first saved goal for which done is true.
+// goalUntil returns the first logged goal for which done is true; the row's goal is the last one (conversationFold).
 func (agent *fakeAgent) goalUntil(t *testing.T, done func(*Goal) bool) *Goal {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
 	for {
-		select {
-		case goal := <-agent.goals:
+		changed := agent.log.Changed()
+		entries, _, _ := agent.log.ReadSince(agent.goalSeq)
+		for _, entry := range entries {
+			agent.goalSeq = entry.Seq
+			if entry.Kind != "goal_update" {
+				continue
+			}
+			goal := &Goal{}
+			if err := json.Unmarshal(entry.Payload, goal); err != nil {
+				t.Fatal(err)
+			}
+			if goal.State == "cleared" {
+				goal = nil
+			}
 			if done(goal) {
 				return goal
 			}
+		}
+		select {
+		case <-changed:
 		case <-deadline:
 			t.Fatal("the goal never reached the expected state")
 			return nil
@@ -269,7 +283,7 @@ func TestClientPromptLookupSurvivesADroppedReplayTail(t *testing.T) {
 	input := acp.PromptInput{Text: "first message", QueueID: "5a6057ea65564edfb5222d0c394e0b43"}
 	logged := entry("prompt", json.RawMessage(promptLogPayload(input)))
 	logged.Seq = 1
-	if err := persistConversationChangesSince(t.Context(), store.DB, id, acp.LogChanges{Entries: []acp.LogEntry{logged}, LastSeq: 1}, 0); err != nil {
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, acp.LogChanges{Entries: []acp.LogEntry{logged}, LastSeq: 1}, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	session, agent := newFakeAgentSession(t)

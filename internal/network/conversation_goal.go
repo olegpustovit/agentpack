@@ -338,7 +338,7 @@ func (session *ConversationSession) applyGatewayStopRules(goal *Goal, now int64)
 	}
 }
 
-// publishGoal logs and saves the current goal unless it is unchanged since the last publish.
+// publishGoal logs the current goal unless it is unchanged since the last publish.
 func (session *ConversationSession) publishGoal() {
 	session.goalPublishMu.Lock()
 	defer session.goalPublishMu.Unlock()
@@ -357,17 +357,9 @@ func (session *ConversationSession) publishGoal() {
 		return
 	}
 	session.goalPublished = string(payload)
-	var saved *Goal
-	if session.goal != nil {
-		copied := *session.goal
-		saved = &copied
-	}
-	persist := session.goalChange
 	session.mu.Unlock()
+	// The sink saves it on the session row with the entry (conversationFold).
 	session.log.Append("goal_update", session.clock().UnixMilli(), payload)
-	if persist != nil {
-		persist(saved)
-	}
 }
 
 // SetGoal replaces the goal and starts working on it.

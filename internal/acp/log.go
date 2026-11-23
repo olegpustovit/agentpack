@@ -19,6 +19,7 @@ type EventLog struct {
 	mu          sync.RWMutex
 	notifyMu    sync.Mutex
 	onAppend    func(LogEntry)
+	fold        Fold
 	persistence *eventLogPersistence
 	limit       int
 	seq         int64
@@ -39,6 +40,15 @@ type LogChanges struct {
 	Removed   []int64
 	LastSeq   int64
 	Truncated bool
+	// Checkpoint is the fold's state after LastSeq, so a sink stores events and what they add up to together.
+	Checkpoint json.RawMessage
+}
+
+// Fold derives state from the log. Apply runs for every retained entry under the log's lock, in
+// sequence order, so each batch carries the fold at exactly its last sequence.
+type Fold interface {
+	Apply(LogEntry)
+	Checkpoint() json.RawMessage
 }
 
 // eventLogPersistence hands batches to the sink. pending is guarded by the log's mu;
@@ -83,6 +93,9 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 	}
 	// A failing store never drops events: they stay in memory and pending until a write succeeds.
 	persistence := log.persistence
+	if log.fold != nil {
+		log.fold.Apply(entry)
+	}
 	log.entries = append(log.entries, entry)
 	log.bytes += size
 	if persistence != nil {
@@ -102,7 +115,7 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 	log.mu.Unlock()
 
 	if pressure {
-		_ = log.flushChanges(persistence)
+		_ = log.flushChanges(persistence, false)
 	}
 	if onAppend != nil {
 		onAppend(entry)
@@ -246,7 +259,7 @@ func (log *EventLog) EnableSink(sink func(LogChanges) error) error {
 	// Entries the log holds now may already be stored rows; one a joined row absorbs is deleted.
 	persistence.flushedSeq = log.seq
 	log.mu.Unlock()
-	err := log.flushChanges(persistence)
+	err := log.flushChanges(persistence, false)
 	log.mu.Lock()
 	if err != nil {
 		return err
@@ -274,7 +287,7 @@ func (log *EventLog) Close() error {
 	}
 	close(persistence.stop)
 	<-persistence.done
-	err := log.flushChanges(persistence)
+	err := log.flushChanges(persistence, false)
 	log.mu.Lock()
 	log.persistence = nil
 	log.mu.Unlock()
@@ -282,17 +295,48 @@ func (log *EventLog) Close() error {
 }
 
 // Flush makes a turn boundary durable before its acknowledgement or idle state is visible.
-func (log *EventLog) Flush() error {
+func (log *EventLog) Flush() error { return log.flush(false) }
+
+// Republish writes the fold's checkpoint even when no event is pending, for a sink whose
+// reading of it changed (a worker that finished starting). A closed log already wrote its last.
+func (log *EventLog) Republish() error { return log.flush(true) }
+
+func (log *EventLog) flush(force bool) error {
 	log.mu.Lock()
 	closed, persistence := log.closed, log.persistence
 	log.mu.Unlock()
+	if closed && force {
+		return nil
+	}
 	if closed {
 		return errors.New("event log closed")
 	}
 	if persistence == nil {
 		return nil
 	}
-	return log.flushChanges(persistence)
+	return log.flushChanges(persistence, force)
+}
+
+// SetFold installs fold and applies to it the retained entries after seq, the sequence its
+// checkpoint was taken at (0 for a new fold). Install it before the sink.
+func (log *EventLog) SetFold(fold Fold, seq int64) {
+	log.notifyMu.Lock()
+	defer log.notifyMu.Unlock()
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	for _, entry := range log.entries {
+		if entry.Seq > seq {
+			fold.Apply(entry)
+		}
+	}
+	log.fold = fold
+}
+
+// Fold is the installed fold, or nil.
+func (log *EventLog) Fold() Fold {
+	log.mu.RLock()
+	defer log.mu.RUnlock()
+	return log.fold
 }
 
 // persistFlushDelay batches a burst of appends into one write transaction.
@@ -321,7 +365,7 @@ func (log *EventLog) persistLoop(persistence *eventLogPersistence) {
 	for {
 		// Taken before flushing, so an append that races the flush still wakes the next wait.
 		changed := log.Changed()
-		if err := log.flushChanges(persistence); err != nil {
+		if err := log.flushChanges(persistence, false); err != nil {
 			if !failing {
 				failing = true
 				log.Append("notice", time.Now().UnixMilli(), json.RawMessage(`{"sessionUpdate":"notice","severity":"warning","title":"Chat history is not being saved","description":"agentpack keeps the conversation in memory and retries."}`))
@@ -363,15 +407,18 @@ func (p *eventLogPersistence) put(entry LogEntry) {
 
 // flushChanges writes what is pending. The caller must not hold log.mu: the batch is taken out
 // under it and written outside it, so appends and readers go on during a slow write.
-func (log *EventLog) flushChanges(p *eventLogPersistence) error {
+func (log *EventLog) flushChanges(p *eventLogPersistence, force bool) error {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
 	log.mu.Lock()
-	if len(p.pending) == 0 && p.flushedSeq == log.seq && p.flushedTruncated == log.truncated {
+	if !force && len(p.pending) == 0 && p.flushedSeq == log.seq && p.flushedTruncated == log.truncated {
 		log.mu.Unlock()
 		return nil
 	}
 	changes := LogChanges{LastSeq: log.seq, Truncated: log.truncated}
+	if log.fold != nil {
+		changes.Checkpoint = log.fold.Checkpoint()
+	}
 	batch := slices.SortedFunc(maps.Values(p.pending), func(a, b LogEntry) int { return cmp.Compare(a.Seq, b.Seq) })
 	pending, flushedSeq, tail := p.pending, p.flushedSeq, p.tail
 	p.pending, p.bytes = map[int64]LogEntry{}, 0

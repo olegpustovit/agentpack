@@ -50,17 +50,3 @@ func (worker *WorkerHTTP) setTitle(ctx context.Context, prompt string) {
 		event.End()
 	}
 }
-
-// persistSessionJSON saves the worker's goal or subagent list on its session row; nil clears it.
-func persistSessionJSON(ctx context.Context, db *sql.DB, id, column string, value any, empty bool) {
-	body := ""
-	if !empty {
-		body = string(mustRawJSON(value))
-	}
-	if _, err := db.ExecContext(ctx, "UPDATE sessions SET "+column+"=? WHERE id=? AND archived_at=0 AND node_id="+state.LocalNodeSQL+" AND "+column+"<>?", body, id, body); err != nil {
-		_, event := obs.Start(ctx, "worker", "persist_"+column)
-		event.Set("session_id", id)
-		event.Fail(err)
-		event.End()
-	}
-}

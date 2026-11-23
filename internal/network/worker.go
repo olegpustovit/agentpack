@@ -14,11 +14,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -263,6 +261,9 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		server = &http.Server{Handler: httpHandler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
 		obs.Go("worker.http", func() { serveDone <- server.Serve(listener) })
 	}
+	// An instant start's row stays "starting" until the worker serves; see Republish after ready.
+	var starting atomic.Bool
+	starting.Store(launch.Session.ConversationState == "starting")
 	if launch.Transport == "acp" {
 		lock, err := lockPromptHandoff(ctx, directory)
 		if err != nil {
@@ -271,7 +272,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		var prepared *ConversationSession
 		err = func() error {
 			defer lock.Close()
-			log, err := newConversationLog(ctx, store, launch.Session.ID, cancelWorker)
+			log, err := newConversationLog(ctx, store, launch.Session.ID, cancelWorker, &starting)
 			if err != nil {
 				return err
 			}
@@ -345,18 +346,9 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		}
 	}
 	record.Session = launch.Session
-	// An instant start stays "starting" in the row until the endpoint serves; see the patch after ready.
-	instant := launch.Session.ConversationState == "starting"
 	if launch.Transport == "acp" {
 		record.Session.Transport = "acp"
 		record.Session.AgentSessionID = launch.Session.AgentSessionID
-		if conversation != nil {
-			record.Session.ConversationState = conversation.ConversationState()
-		}
-	}
-	liveState := record.Session.ConversationState
-	if instant {
-		record.Session.ConversationState = "starting"
 	}
 	if session != nil {
 		record.Session.State = session.State()
@@ -369,39 +361,6 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			return 1, err
 		}
 	}
-	var stateWriteWarning sync.Once
-	persistConversationState := func(current *ConversationSession) func(string) {
-		return func(state string) {
-			var err error
-			if state != "working" {
-				err = current.log.Flush()
-			}
-			if err == nil {
-				err = patchWorkerConversationState(context.Background(), store.DB, record.ID, state)
-			}
-			if err != nil {
-				if err == errSessionArchived {
-					cancelWorker(err)
-					return
-				}
-				stateWriteWarning.Do(func() {
-					_, event := obs.Start(ctx, "worker", "persist_state")
-					event.Set("session_id", record.ID)
-					event.Fail(err)
-					event.End()
-					fmt.Fprintln(os.Stderr, "warning: ACP worker state could not be persisted")
-				})
-			}
-		}
-	}
-	persistTitle := func(title string) {
-		if _, err := store.DB.ExecContext(context.Background(), "UPDATE sessions SET title=? WHERE id=? AND archived_at=0 AND node_id="+state.LocalNodeSQL, title, record.ID); err != nil {
-			_, event := obs.Start(ctx, "worker", "set_title")
-			event.Set("session_id", record.ID)
-			event.Fail(err)
-			event.End()
-		}
-	}
 	// The permission mode last chosen for this agent, on any chat and machine of the network.
 	permissionSettingKey := "permission_mode." + launch.Session.Harness
 	wireConversation := func(current *ConversationSession) {
@@ -410,7 +369,6 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		current.queueMu.Unlock()
 		current.restoreGoal(launch.Session.Goal)
 		current.mu.Lock()
-		current.titleChange = persistTitle
 		current.imageStore = func(data []byte) (string, error) {
 			sha, err := storeSessionBlob(directory, data)
 			switch {
@@ -431,15 +389,6 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			return sha, nil
 		}
 		current.snapshotChanged = func() { persistAgentSnapshot(ctx, store.DB, record.Session, current) }
-		current.goalChange = func(goal *Goal) {
-			persistSessionJSON(context.Background(), store.DB, record.ID, "goal", goal, goal == nil)
-		}
-		current.subagentsChange = func(subagents []SubagentSummary) {
-			persistSessionJSON(context.Background(), store.DB, record.ID, "subagents", subagents, len(subagents) == 0)
-		}
-		current.waitingChange = func(waiting []acp.WaitItem) {
-			persistSessionJSON(context.Background(), store.DB, record.ID, "waiting", waiting, len(waiting) == 0)
-		}
 		current.permissionChange = func(mode string) {
 			if _, err := store.DB.ExecContext(context.Background(), "INSERT INTO mesh_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", permissionSettingKey, mode); err != nil {
 				_, event := obs.Start(ctx, "worker", "remember_permissions")
@@ -463,7 +412,6 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if conversation != nil {
 		conversation.configMu.Lock()
 		wireConversation(conversation)
-		conversation.SetStateChange(liveState, persistConversationState(conversation))
 		conversation.ResumeTurns()
 		conversation.configMu.Unlock()
 	}
@@ -495,7 +443,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 				acpCleanup()
 				acpCleanup = nil
 			}
-			log, err := newConversationLog(ctx, store, launch.Session.ID, cancelWorker)
+			log, err := newConversationLog(ctx, store, launch.Session.ID, cancelWorker, nil)
 			if err != nil {
 				return err
 			}
@@ -529,9 +477,8 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			handler.mu.Lock()
 			handler.conversation = next
 			handler.mu.Unlock()
-			next.SetStateChange(next.ConversationState(), persistConversationState(next))
 			next.ResumeTurns()
-			return nil
+			return next.log.Republish()
 		}
 	}
 	if server == nil {
@@ -542,9 +489,15 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if err := ready(record.ID); err != nil {
 		return 1, fmt.Errorf("announce worker: %w", err)
 	}
-	if instant && conversation != nil {
-		// Through publishState, so a turn that already changed the state is never overwritten by an older read.
-		conversation.SetStateChange("starting", persistConversationState(conversation))
+	starting.Store(false)
+	if conversation != nil {
+		// Through the log's writer, so the state follows every batch already stored and none overwrites a newer one.
+		if err := conversation.log.Republish(); err != nil {
+			_, event := obs.Start(ctx, "worker", "persist_state")
+			event.Set("session_id", record.ID)
+			event.Fail(err)
+			event.End()
+		}
 	}
 	started.End()
 	select {

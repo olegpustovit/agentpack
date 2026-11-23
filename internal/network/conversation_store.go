@@ -22,8 +22,10 @@ import (
 )
 
 // persistConversationChangesSince is for a live log restored at restoredSeq: its agent process is new,
-// so a running cost total logged before then belongs to the previous process.
-func persistConversationChangesSince(ctx context.Context, db *sql.DB, id string, changes acp.LogChanges, restoredSeq int64) error {
+// so a running cost total logged before then belongs to the previous process. The batch, the row's
+// derived columns and the fold's checkpoint commit together, so the row is always the fold of the
+// stored events. holdStarting keeps an instant start's row "starting" until its worker serves.
+func persistConversationChangesSince(ctx context.Context, db *sql.DB, id string, changes acp.LogChanges, restoredSeq int64, holdStarting bool) error {
 	return state.Transaction(ctx, db, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `UPDATE sessions SET last_seq=max(last_seq,?),last_event_at=?,
 			conversation_truncated=max(conversation_truncated,?) WHERE id=? AND archived_at=0 AND node_id=`+state.LocalNodeSQL,
@@ -89,8 +91,52 @@ func persistConversationChangesSince(ctx context.Context, db *sql.DB, id string,
 				}
 			}
 		}
-		return nil
+		return storeConversationFold(ctx, tx, id, changes.Checkpoint, holdStarting)
 	})
+}
+
+// storeConversationFold writes the fold's derived columns and checkpoint; nil means the log has no fold.
+func storeConversationFold(ctx context.Context, tx *sql.Tx, id string, checkpoint json.RawMessage, holdStarting bool) error {
+	if checkpoint == nil {
+		return nil
+	}
+	var fold conversationFold
+	if err := json.Unmarshal(checkpoint, &fold); err != nil {
+		return fmt.Errorf("decode conversation checkpoint: %w", err)
+	}
+	derived := fold.derived()
+	var goal any
+	if fold.GoalKnown {
+		goal = string(fold.Goal)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET
+		conversation_state=CASE WHEN ? AND conversation_state='starting' THEN 'starting' ELSE ? END,
+		waiting=?,subagents=?,goal=coalesce(?,goal),title=CASE WHEN ?='' THEN title ELSE ? END
+		WHERE id=? AND node_id=`+state.LocalNodeSQL,
+		holdStarting, derived.State, sessionJSON(derived.Waiting), sessionJSON(derived.Subagents), goal,
+		fold.Title, fold.Title, id); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO conversation_checkpoints(session_id,seq,body) VALUES (?,?,?)
+		ON CONFLICT(session_id) DO UPDATE SET seq=excluded.seq,body=excluded.body`, id, fold.Seq, string(checkpoint))
+	return err
+}
+
+// storedConversationFold is the session's last checkpoint, or a new fold at seq 0.
+func storedConversationFold(ctx context.Context, db *sql.DB, id string) (*conversationFold, error) {
+	var body string
+	err := db.QueryRowContext(ctx, "SELECT body FROM conversation_checkpoints WHERE session_id=?", id).Scan(&body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &conversationFold{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	fold := &conversationFold{}
+	if json.Unmarshal([]byte(body), fold) != nil {
+		return &conversationFold{}, nil // an unreadable checkpoint is rebuilt from the tail
+	}
+	return fold, nil
 }
 
 // recordUsage adds one new event's usage to its session and to this node's hour. Rows of this node have no
@@ -268,7 +314,9 @@ func readConversationEntries(ctx context.Context, tx *sql.Tx, id string, span co
 	return entries, truncated, nil
 }
 
-func newConversationLog(ctx context.Context, store *state.Store, id string, fail func(error)) (*acp.EventLog, error) {
+// newConversationLog restores a session's log and its fold, and stores what is appended to it.
+// starting, when set, holds an instant start's row "starting" until it is cleared and Republish runs.
+func newConversationLog(ctx context.Context, store *state.Store, id string, fail func(error), starting *atomic.Bool) (*acp.EventLog, error) {
 	entries, lastSeq, truncated, err := storedConversationTail(ctx, store.Reader, id, 0)
 	if err != nil {
 		return nil, err
@@ -277,13 +325,21 @@ func newConversationLog(ctx context.Context, store *state.Store, id string, fail
 	if err := log.Restore(entries, lastSeq, truncated); err != nil {
 		return nil, err
 	}
+	fold, err := storedConversationFold(ctx, store.Reader, id)
+	if err != nil {
+		return nil, err
+	}
+	if fold.Seq > lastSeq || len(entries) > 0 && fold.Seq < entries[0].Seq-1 {
+		fold = &conversationFold{} // not from this log, or older than the tail: fold the tail as before
+	}
+	log.SetFold(fold, fold.Seq)
 	// A failing write is retried by the log, which keeps the events in memory meanwhile; only an
 	// archived chat stops the worker. Each run of failures is recorded once.
 	var failing atomic.Bool
 	err = log.EnableSink(func(changes acp.LogChanges) error {
 		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		err := persistConversationChangesSince(writeCtx, store.DB, id, changes, lastSeq)
+		err := persistConversationChangesSince(writeCtx, store.DB, id, changes, lastSeq, starting != nil && starting.Load())
 		switch {
 		case err == errSessionArchived:
 			fail(err)

@@ -213,6 +213,9 @@ func (g *Gateway) archiveSession(ctx context.Context, archive *sql.DB, id string
 		if _, err := tx.ExecContext(ctx, "DELETE FROM conversation_events WHERE session_id=?", id); err != nil {
 			return err
 		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM conversation_checkpoints WHERE session_id=?", id); err != nil {
+			return err
+		}
 		if archivedAt == 0 {
 			if _, err := tx.ExecContext(ctx, "UPDATE sessions SET archived_at=? WHERE id=?", now.UnixNano(), id); err != nil {
 				return err

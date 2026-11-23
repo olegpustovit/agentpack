@@ -266,34 +266,54 @@ func TestACPNeedsYouPersistsWithoutConversationReader(t *testing.T) {
 	if err := upsertSession(ctx, store.DB, info); err != nil {
 		t.Fatal(err)
 	}
-	log := acp.NewEventLog(0)
-	conversation := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
-	conversation.SetStateChange("idle", func(value string) {
-		if err := patchWorkerConversationState(ctx, store.DB, info.ID, value); err != nil {
-			t.Error(err)
-		}
-	})
+	log, err := newConversationLog(ctx, store, info.ID, func(err error) { t.Error(err) }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
 	log.Append("permission_request", 1, json.RawMessage(`{"requestId":"p1"}`))
 	got, err := storedSession(ctx, store.Reader, info.ID)
 	if err != nil || got.ConversationState != "needs_you" {
 		t.Fatalf("state without a reader=%q err=%v", got.ConversationState, err)
 	}
 }
-func TestConversationStateWritesOnlyOnLabelTransitions(t *testing.T) {
+
+// A state change is stored with the events behind it before anything acts on it; streamed
+// chunks in between are left to the batching writer.
+func TestConversationStateIsStoredOnTransitions(t *testing.T) {
 	log := acp.NewEventLog(0)
-	conversation := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
-	var writes []string
-	conversation.SetStateChange("idle", func(state string) { writes = append(writes, state) })
+	NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
+	var mu sync.Mutex
+	var states []string
+	if err := log.EnableSink(func(changes acp.LogChanges) error {
+		var fold conversationFold
+		if err := json.Unmarshal(changes.Checkpoint, &fold); err != nil {
+			return err
+		}
+		mu.Lock()
+		states = append(states, fold.derived().State)
+		mu.Unlock()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	last := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return states[len(states)-1]
+	}
 	log.Append("prompt", 1, json.RawMessage(`{}`))
+	if last() != "working" {
+		t.Fatalf("stored states after prompt = %v", states)
+	}
 	for i := range 1_000 {
 		log.Append("agent_message_chunk", int64(i+2), json.RawMessage(`{"text":{"text":"x"}}`))
 	}
-	if len(writes) != 1 || writes[0] != "working" {
-		t.Fatalf("state writes across streamed chunks = %v", writes)
-	}
 	log.Append("turn_end", 2_000, json.RawMessage(`{}`))
-	if len(writes) != 2 || writes[1] != "idle" {
-		t.Fatalf("state writes after turn end = %v", writes)
+	if last() != "idle" {
+		t.Fatalf("stored states after turn end = %v", states)
 	}
 }
 func TestConversationStateSeedsFromRetainedEvents(t *testing.T) {
