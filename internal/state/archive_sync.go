@@ -20,6 +20,20 @@ type archiveClock struct {
 
 var ErrArchivePending = errors.New("newer archived history awaits the main gateway; retry after archive handover")
 
+// archiveGuardError names the live session an incoming archive marker would prune.
+type archiveGuardError struct{ session string }
+
+func (e archiveGuardError) Error() string { return ErrArchivePending.Error() }
+func (e archiveGuardError) Unwrap() error { return ErrArchivePending }
+
+// archiveDataError is a peer change whose archived history cannot be preserved; retrying never helps.
+type archiveDataError struct {
+	version int64
+	err     error
+}
+
+func (e archiveDataError) Error() string { return e.err.Error() }
+
 func archivedValueHash(body string) string {
 	sum := sha256.Sum256([]byte(body))
 	return hex.EncodeToString(sum[:])
@@ -92,7 +106,7 @@ func guardArchiveMarkers(ctx context.Context, tx *sql.Tx, changes []Change, valu
 				return err
 			}
 			if pending {
-				return ErrArchivePending
+				return archiveGuardError{id}
 			}
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -423,8 +424,9 @@ type RejectedChange struct {
 }
 
 // ApplyPage commits a peer page and its cursor together, or neither. Malformed changes and ones a
-// validation hook refuses are quarantined in the same commit; archive conflicts and storage
-// failures stay retryable so a later pull can preserve history.
+// validation hook refuses are quarantined in the same commit. A source version the archive guard
+// refuses is deferred whole, with every later version touching its sessions, and replayed by a
+// later page once the guard clears; storage failures stay retryable.
 func (r *Replicator) ApplyPage(ctx context.Context, changes []Change, site []byte, next int64) ([]RejectedChange, error) {
 	s := r.s
 	if len(site) != 16 || next < 0 {
@@ -464,19 +466,227 @@ func (r *Replicator) ApplyPage(ctx context.Context, changes []Change, site []byt
 		valid = append(valid, change)
 		values = append(values, value)
 	}
-	err := s.applyReplication(ctx, valid, values, func(tx *sql.Tx) error {
-		for _, change := range rejected {
-			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO sync_quarantine(peer,version,reason) VALUES (?,?,?)", site, change.Version, change.Reason); err != nil {
-				return err
-			}
-		}
-		return setCursor(ctx, tx, site, next)
-	})
+	blocked, err := r.replayDeferred(ctx)
 	if err != nil {
 		return nil, err
 	}
-	r.signal(valid)
-	return rejected, nil
+	for {
+		apply, applyValues, deferred, err := s.splitDeferred(ctx, valid, values, blocked)
+		if err != nil {
+			return nil, err
+		}
+		err = s.applyReplication(ctx, apply, applyValues, func(tx *sql.Tx) error {
+			for _, change := range rejected {
+				if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO sync_quarantine(peer,version,reason) VALUES (?,?,?)", site, change.Version, change.Reason); err != nil {
+					return err
+				}
+			}
+			for _, version := range deferred {
+				if err := deferVersion(ctx, tx, site, version); err != nil {
+					return err
+				}
+			}
+			return setCursor(ctx, tx, site, next)
+		})
+		var guard archiveGuardError
+		var data archiveDataError
+		switch {
+		case errors.As(err, &guard) && !blocked[guard.session]:
+			blocked[guard.session] = true
+			continue
+		case errors.As(err, &data):
+			rejected = append(rejected, RejectedChange{Version: data.version, Reason: data.Error()})
+			valid, values = withoutVersion(valid, values, data.version)
+			continue
+		case err != nil:
+			return nil, err
+		}
+		r.signal(apply)
+		return rejected, nil
+	}
+}
+
+type deferredVersion struct {
+	version  int64
+	sessions []string
+	changes  []Change
+}
+
+func withoutVersion(changes []Change, values []any, version int64) ([]Change, []any) {
+	keptChanges, keptValues := changes[:0:0], values[:0:0]
+	for i, change := range changes {
+		if change.DBVersion != version {
+			keptChanges = append(keptChanges, change)
+			keptValues = append(keptValues, values[i])
+		}
+	}
+	return keptChanges, keptValues
+}
+
+// changeSession names the chat a change belongs to, or "" for other tables.
+func (s *Store) changeSession(ctx context.Context, change Change) (string, error) {
+	switch change.Table {
+	case "sessions", "conversation_events", "archive_blobs", "archive_event_clocks":
+	default:
+		return "", nil
+	}
+	var cell any
+	if err := s.Reader.QueryRowContext(ctx, "SELECT cell FROM crsql_unpack_columns(?)", change.PK).Scan(&cell); err != nil {
+		return "", err
+	}
+	if pk, ok := cell.([]byte); ok && change.Table == "archive_event_clocks" {
+		if err := s.Reader.QueryRowContext(ctx, "SELECT cell FROM crsql_unpack_columns(?)", pk).Scan(&cell); err != nil {
+			return "", err
+		}
+	}
+	id, _ := cell.(string)
+	return id, nil
+}
+
+// splitDeferred holds back every source version touching a blocked session and blocks the other
+// sessions those versions touch, so each chat's changes keep their order.
+func (s *Store) splitDeferred(ctx context.Context, changes []Change, values []any, blocked map[string]bool) ([]Change, []any, []deferredVersion, error) {
+	if len(blocked) == 0 {
+		return changes, values, nil, nil
+	}
+	var order []int64
+	touched := map[int64]map[string]bool{}
+	for _, change := range changes {
+		if touched[change.DBVersion] == nil {
+			touched[change.DBVersion] = map[string]bool{}
+			order = append(order, change.DBVersion)
+		}
+		id, err := s.changeSession(ctx, change)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if id != "" {
+			touched[change.DBVersion][id] = true
+		}
+	}
+	slices.Sort(order)
+	held := map[int64]bool{}
+	var deferred []deferredVersion
+	for _, version := range order {
+		hold := false
+		for id := range touched[version] {
+			hold = hold || blocked[id]
+		}
+		if !hold {
+			continue
+		}
+		entry := deferredVersion{version: version}
+		for id := range touched[version] {
+			blocked[id] = true
+			entry.sessions = append(entry.sessions, id)
+		}
+		deferred = append(deferred, entry)
+		held[version] = true
+	}
+	if len(deferred) == 0 {
+		return changes, values, nil, nil
+	}
+	apply, applyValues := changes[:0:0], values[:0:0]
+	for i, change := range changes {
+		if !held[change.DBVersion] {
+			apply = append(apply, change)
+			applyValues = append(applyValues, values[i])
+		}
+	}
+	for i := range deferred {
+		for _, change := range changes {
+			if change.DBVersion == deferred[i].version {
+				deferred[i].changes = append(deferred[i].changes, change)
+			}
+		}
+	}
+	return apply, applyValues, deferred, nil
+}
+
+func deferVersion(ctx context.Context, tx *sql.Tx, site []byte, version deferredVersion) error {
+	sessions, err := json.Marshal(version.sessions)
+	if err != nil {
+		return err
+	}
+	changes, err := json.Marshal(version.changes)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO sync_deferred(peer,version,sessions,changes) VALUES (?,?,?,?)", site, version.version, string(sessions), string(changes))
+	return err
+}
+
+// replayDeferred applies held-back versions in arrival order once the archive guard clears, and
+// returns the sessions still blocked.
+func (r *Replicator) replayDeferred(ctx context.Context) (map[string]bool, error) {
+	s := r.s
+	blocked := map[string]bool{}
+	rows, err := s.Reader.QueryContext(ctx, "SELECT id,peer,version,sessions,changes FROM sync_deferred ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
+	type row struct {
+		id, version       int64
+		peer              []byte
+		sessions, changes string
+	}
+	var pending []row
+	for rows.Next() {
+		var entry row
+		if err := rows.Scan(&entry.id, &entry.peer, &entry.version, &entry.sessions, &entry.changes); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		pending = append(pending, entry)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, err
+	}
+	for _, entry := range pending {
+		var sessions []string
+		var changes []Change
+		if err := errors.Join(json.Unmarshal([]byte(entry.sessions), &sessions), json.Unmarshal([]byte(entry.changes), &changes)); err != nil {
+			return nil, err
+		}
+		hold := false
+		for _, id := range sessions {
+			hold = hold || blocked[id]
+		}
+		var values []any
+		if !hold {
+			if values, err = decodeChanges(changes); err != nil {
+				return nil, err
+			}
+			err = s.applyReplication(ctx, changes, values, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, "DELETE FROM sync_deferred WHERE id=?", entry.id)
+				return err
+			})
+			var data archiveDataError
+			if errors.As(err, &data) {
+				err = Transaction(ctx, s.DB, func(tx *sql.Tx) error {
+					if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO sync_quarantine(peer,version,reason) VALUES (?,?,?)", entry.peer, entry.version, data.Error()); err != nil {
+						return err
+					}
+					_, err := tx.ExecContext(ctx, "DELETE FROM sync_deferred WHERE id=?", entry.id)
+					return err
+				})
+				changes = nil
+			}
+			hold = errors.Is(err, ErrArchivePending)
+			if err != nil && !hold {
+				return nil, err
+			}
+			if !hold {
+				r.signal(changes)
+			}
+		}
+		if hold {
+			for _, id := range sessions {
+				blocked[id] = true
+			}
+		}
+	}
+	return blocked, nil
 }
 
 func (s *Store) replicatedColumns(ctx context.Context, table string) (map[string]bool, error) {

@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -431,5 +432,35 @@ func TestRestoredSourceKeepsPeerCursorsValid(t *testing.T) {
 	// Without the watermark the cursor is ahead and the source says so instead of skipping versions.
 	if _, _, err := source.Replicator().Changes(ctx, 1<<40, nil, 4<<20); !errors.Is(err, ErrCursorAhead) {
 		t.Fatalf("ahead cursor: %v", err)
+	}
+}
+
+func TestUnpreservableArchiveEditIsQuarantinedWithoutHoldingTheCursor(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var pk []byte
+	if err := store.Reader.QueryRow("SELECT crsql_pack_columns('session',1)").Scan(&pk); err != nil {
+		t.Fatal(err)
+	}
+	site := bytes.Repeat([]byte{7}, 16)
+	clock, _ := json.Marshal(archiveClock{CL: 1, Version: 1, Site: site})
+	if _, err := store.DB.Exec("INSERT INTO archive_event_clocks(pk,clock) VALUES (?,?)", pk, string(clock)); err != nil {
+		t.Fatal(err)
+	}
+	// The body claims seq 2 for the event keyed seq 1, so it can never be preserved.
+	value, err := sqliteValue(`{"seq":2}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := Change{Table: "conversation_events", Column: "body", PK: pk, Value: value, ColVersion: 2, DBVersion: 1, SiteID: site, CL: 1}
+	rejected, err := store.Replicator().ApplyPage(t.Context(), []Change{bad}, site, 1)
+	if err != nil || len(rejected) != 1 || rejected[0].Version != 1 {
+		t.Fatalf("rejected %v: %v", rejected, err)
+	}
+	if cursor, err := store.Replicator().Cursor(t.Context(), site); err != nil || cursor != 1 {
+		t.Fatalf("cursor %d: %v", cursor, err)
 	}
 }

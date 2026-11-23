@@ -27,7 +27,10 @@ conversation_checkpoints is local: the owning worker's fold of a chat's log, wri
 transaction as the events and the sessions row's derived columns (conversation_state, waiting,
 subagents, goal, title). conversation_events.kind is a virtual column derived from body, so it never replicates.
 archive_blobs retains required attachment references; archive_cleanup is local. sync_quarantine is also local and records rejected
-incoming change versions without copying their values.
+incoming change versions without copying their values. sync_deferred is local: a peer version the
+archive guard refuses (an archive marker for a chat still working here) is stored whole, with every
+later version touching the same chats, while the peer cursor moves on; the next page replays it in
+arrival order once the guard clears.
 
 
 mcp_credentials and mcp_credential_approvals replicate MCP logins, secrets

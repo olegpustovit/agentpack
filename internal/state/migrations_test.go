@@ -396,11 +396,16 @@ func TestOwnerBindingsMigrationMovesPseudoRows(t *testing.T) {
 	}
 	defer db.Close()
 	previous := fstest.MapFS{}
-	names, err := fs.Glob(migrationFiles, "migrations/00[0-4][0-9]_*.sql")
+	// Deployed machines upgrade from 0044, across the 0048 alteration, in one run.
+	names, err := fs.Glob(migrationFiles, "migrations/00[0-3][0-9]_*.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range names {
+	more, err := fs.Glob(migrationFiles, "migrations/004[0-4]_*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range append(names, more...) {
 		body, err := migrationFiles.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
