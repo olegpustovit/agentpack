@@ -306,7 +306,10 @@ func (service Service) add(ctx context.Context, projectRoot, spec string) (lockf
 		if err != nil {
 			return lockfile.Package{}, err
 		}
-		return findPackage(lock, name), nil
+		// The copy is this add's fetch; a path has no shorthand to alias.
+		pkg := findPackage(lock, name)
+		record := cache.EntryRecord{Kind: pkg.Kind, SourceURL: pkg.URL, Owner: pkg.Owner, Repo: pkg.Repo, Path: pkg.Path, Commit: pkg.Commit, FetchedAtUnix: time.Now().Unix()}
+		return pkg, cache.UpsertEntry(pkg.CacheKey, record, nil)
 	}
 	resolved, err := NewAddResolver(service.client()).Resolve(ctx, projectRoot, spec)
 	if err != nil {
