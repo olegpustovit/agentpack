@@ -215,7 +215,9 @@ class ThreadReducer {
           const merged = { ...(prev.data as ToolPayload), ...update }
           state.items[idx] = { ...prev, data: update.content ? expandToolDiffs(merged) : merged, endTs: entry.ts }
         } else {
+          // The call lies before the loaded window: later updates merge into this row instead of adding bare ones.
           state.items.push({ kind: "tool", data: expandToolDiffs(entry.payload as ToolPayload) })
+          if (id) tools[id] = state.items.length - 1
         }
         break
       }

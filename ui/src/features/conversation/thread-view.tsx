@@ -248,12 +248,20 @@ function toolAttachments(tool: ToolPayload): UserAttachmentPayload[] {
   })
 }
 
+// An update whose call lies before the loaded window has no title or kind: name it from what it carries.
+function toolTitle(tool: ToolPayload, none = "Tool"): string {
+  const input = tool.rawInput as { command?: unknown; description?: unknown } | undefined
+  const meta = (tool as { _meta?: { claudeCode?: { toolName?: unknown } } })._meta?.claudeCode?.toolName
+  const text = (value: unknown) => (typeof value === "string" && value.trim() ? value : undefined)
+  return text(tool.title) ?? text(meta) ?? text(input?.command) ?? text(input?.description) ?? tool.kind ?? none
+}
+
 // Inside a group, the group shows the images instead, so they stay visible while it is closed.
 function ToolRow({ item, fresh, machine, sessionId }: { item: ThreadItem; fresh?: boolean; machine?: string; sessionId?: string }) {
   const tool = item.data as ToolPayload
   const shell = tool.kind === "execute" || tool.kind === "terminal"
   const command = shell ? (tool.command ?? (tool.rawInput as { command?: string } | undefined)?.command) : undefined
-  const title = command ?? tool.title ?? tool.kind ?? "Tool"
+  const title = command ?? toolTitle(tool)
   const status = tool.status ?? "pending"
   const Icon = toolIcon(tool.kind)
   const hasDiff = (tool.content ?? []).some((block) => block.type === "diff" && (block.oldText || block.newText))
@@ -627,7 +635,7 @@ export function livePhase(items: ThreadItem[], subagents: Record<string, Subagen
   if (tool) {
     const data = tool.data as ToolPayload
     const command = data.command ?? (data.rawInput as { command?: string } | undefined)?.command
-    return { label: `Running ${command ?? data.title ?? data.kind ?? "a tool"}`, since: tool.ts }
+    return { label: `Running ${command ?? toolTitle(data, "a tool")}`, since: tool.ts }
   }
   if (last?.kind === "agent_message_chunk") return { label: "Writing", since: last.ts }
   return { label: "Working", since: last?.ts }

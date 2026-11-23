@@ -385,6 +385,19 @@ describe("reduceThread", () => {
   })
 })
 
+describe("tool calls outside the loaded window (P1.34)", () => {
+  const call: LogEntry = { seq: 1, ts: 1, kind: "tool_call", payload: { toolCallId: "t1", title: "Read config.go", kind: "read", status: "pending" } }
+  const update = (seq: number, status: string): LogEntry => ({ seq, ts: seq, kind: "tool_call_update", payload: { toolCallId: "t1", status } })
+
+  it("keeps one row per orphan update stream, and titles it once older entries are prepended", () => {
+    const tail = [update(2, "in_progress"), update(3, "completed")]
+    expect(reduceThread("p134", tail).items.filter((item) => item.kind === "tool")).toHaveLength(1)
+    const tools = reduceThread("p134", [call, ...tail]).items.filter((item) => item.kind === "tool")
+    expect(tools).toHaveLength(1)
+    expect(tools[0]!.data).toMatchObject({ title: "Read config.go", kind: "read", status: "completed" })
+  })
+})
+
 describe("helperSubagents", () => {
   const tool = (seq: number, id: string, rawOutput: unknown): ThreadItem => ({ kind: "tool", seq, ts: seq, data: { toolCallId: id, rawOutput } }) as ThreadItem
   const helper = { id: "session-H1", harness: "claude", name: "Find the bug", conversation_state: "working", state: { running: true } } as SessionInfo
