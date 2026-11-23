@@ -32,6 +32,8 @@ function projectLabel(project: ProjectRow): string {
   return project.name || basename(project.directory)
 }
 
+const UPDATE_DEADLINE_MS = 5 * 60 * 1000
+
 export function formatBytes(bytes: number): string {
   const gb = bytes / 1024 ** 3
   return gb >= 10 ? `${Math.round(gb)} GB` : `${gb.toFixed(1)} GB`
@@ -96,8 +98,16 @@ function MachineView({ machine }: { machine: Machine }) {
         void queryClient.invalidateQueries({ queryKey })
       }
     }, 2000)
-    return () => clearInterval(timer)
-  }, [updatingFrom, machine.id, queryClient])
+    // A gateway that never comes back with another version stops the polling.
+    const deadline = setTimeout(() => {
+      setUpdatingFrom(undefined)
+      hud.error(`${machine.name} hasn't reported a new version`)
+    }, UPDATE_DEADLINE_MS)
+    return () => {
+      clearInterval(timer)
+      clearTimeout(deadline)
+    }
+  }, [updatingFrom, machine.id, machine.name, queryClient])
 
   useEffect(() => {
     if (updatingFrom === undefined) return
