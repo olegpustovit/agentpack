@@ -81,7 +81,7 @@ race: crsqlite
 deadcode: crsqlite
 	@findings=$$($(GO) run golang.org/x/tools/cmd/deadcode@v0.53.0 -filter '/internal/(harness(/.*)?|network|gateway(/.*)?|session|cache)$$' ./cmd/...) || exit $$?; \
 	printf '%s\n' "$$findings"; \
-	case "$$findings" in *internal/harness/*|*internal/gateway/*) exit 1;; esac
+	case "$$findings" in *internal/harness/*|*internal/gateway/*|*internal/network/*|*internal/cache/*|*internal/session/*) exit 1;; esac
 
 ci: fmt-check lint test race build deadcode
 
