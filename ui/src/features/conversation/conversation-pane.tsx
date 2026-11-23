@@ -1,7 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react"
-import { ArrowLeft, ArrowUp, AtSign, Check, ChevronDown, CornerDownLeft, Ellipsis, PanelRight, Plus, Slash, Square, SquareTerminal } from "lucide-react"
+import { ArrowLeft, Ellipsis, PanelRight, Square, SquareTerminal } from "lucide-react"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
 import { Banner, Spinner } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
@@ -10,11 +10,10 @@ import { useIsPhone } from "@/features/shell/use-is-phone"
 import { chatShellsQuery } from "@/features/terminal/chat-shells"
 import { rememberChatTerminal, takeChatTerminalCommand, terminalCommandEvent, type TerminalCommand, type TerminalRequest } from "@/features/terminal/shortcuts"
 import { StatusSlot } from "@/features/status/status-bar"
-import { pendingChatClaim, useStartSession } from "@/features/sessions/start"
+import { useStartSession } from "@/features/sessions/start"
 import { sessionLabel } from "@/features/sessions/group"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { openWaits, waitingDetail } from "@/features/sessions/session-status"
-import { agentIds } from "@/features/sessions/rules"
 import { useEventsConnected } from "@/features/events/use-events"
 import { identityQuery, useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
@@ -27,45 +26,23 @@ import { hud } from "@/lib/hud"
 import { api, ApiError, LOCAL } from "@/lib/api"
 import { configQuery } from "@/lib/config"
 import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, mergeConversationPages, type ConversationPage } from "./queries"
-import type { LogEntry, PromptFrom, ThreadItem, UserMessagePayload } from "./model"
-import { helperSubagents, isOpenRequest, reduceThread } from "./reducer"
-import { latestUserPrompt, quoteMessage, ThreadView, userImageSrc } from "./thread-view"
+import type { PromptFrom, ThreadItem } from "./model"
+import { helperSubagents, isOpenRequest } from "./reducer"
+import { latestUserPrompt, quoteMessage, ThreadView } from "./thread-view"
 import { ElicitationCard, PermissionCard } from "./request-cards"
 import { GoalPill, parseGoalCommand, useGoalActions } from "./goal-sheet"
-import { QueueChips } from "./queue-chips"
 import { subagentRunning } from "./subagent-card"
 import { ConversationInspector } from "./conversation-inspector"
 import { useConversationStream, useHistoryPaging } from "./conversation-log"
-import { ChatConfigControls, useChatConfig } from "./chat-config"
+import { useChatConfig } from "./chat-config"
 import { GitInspectorSections, GitToolbarActions, branchLine, useSessionGit } from "./session-git"
-import { advertises, agentCommands, applyHint, commandSpans, filterAtHints, filterSlashHints, moveHint, slashQuery, type ComposerHint } from "./composer-hints"
-import { ComposerHintsMenu } from "./composer-hints-menu"
-import { listDiffChanges } from "./diff-summary"
-import { loadAttachments, revokePreview, saveAttachments, uploadConversationBlob, type PendingAttachment } from "./upload-blob"
-import { imageFilesFromClipboard, imageFilesFromList, promptRequest, retryPromptInput } from "./composer-attach"
+import { advertises, agentCommands } from "./composer-hints"
+import { retryPromptInput } from "./composer-attach"
+import { chatTiming, Composer, useComposer, withSending } from "./composer"
 
 const TerminalPanel = lazy(() => import("@/features/terminal/terminal-panel"))
 
-type UploadedAttachment = PendingAttachment & { name: string }
-type SendInput = {
-  text: string
-  /** Interrupt the running turn and send this next. */
-  steer?: boolean
-  attachments: (Pick<PendingAttachment, "sha" | "mime" | "width" | "height"> & { name?: string })[]
-  resourceLink?: { sha: string; name: string }
-  clearComposer: boolean
-}
-type PromptIntent = SendInput & { id: string; startedAt?: number }
-
 const GoalSheet = lazy(() => import("./goal-editor").then((module) => ({ default: module.GoalSheet })))
-const draftKey = (machine: string, sessionId: string) => `agentpack:draft:${machine}/${sessionId}`
-function loadDraft(key: string) {
-  try {
-    return sessionStorage.getItem(key) ?? ""
-  } catch {
-    return ""
-  }
-}
 type PlanEntry = { id?: string; status?: string; content?: string }
 
 function currentPlan(items: ThreadItem[]): PlanEntry[] {
@@ -74,22 +51,6 @@ function currentPlan(items: ThreadItem[]): PlanEntry[] {
     if (item.kind === "plan") plan = (item.data as { entries?: PlanEntry[] } | undefined)?.entries ?? []
   }
   return plan
-}
-// Context used, as a ring. At 75 % it turns to the warning colour: compact before the agent does it mid-task.
-function ContextRing({ percent }: { percent: number }) {
-  const radius = 8
-  const length = 2 * Math.PI * radius
-  return (
-    <svg viewBox="0 0 20 20" className="size-4 -rotate-90" aria-hidden>
-      <circle cx="10" cy="10" r={radius} fill="none" stroke="var(--track)" strokeWidth="2.5" />
-      <circle
-        cx="10" cy="10" r={radius} fill="none" strokeWidth="2.5" strokeLinecap="round"
-        stroke={percent >= 75 ? "var(--warn)" : "var(--accent)"}
-        strokeDasharray={length} strokeDashoffset={length * (1 - percent / 100)}
-        style={{ transition: "stroke-dashoffset .6s ease-out" }}
-      />
-    </svg>
-  )
 }
 
 // Loaded on demand so the conversation UI stays out of the initial bundle.
@@ -119,29 +80,8 @@ export default function ConversationPane({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const machines = useMachines()
-  const [draft, setDraft] = useState(() => loadDraft(draftKey(machine, sessionId)))
-  const recalledPrompt = useRef<{ seq: number; text: string } | null>(null)
-  const [hintIndex, setHintIndex] = useState(0)
-  const [hintsClosed, setHintsClosed] = useState(false)
-  // The caret, valid only for the draft it was read from; a draft set by code puts it at the end.
-  const [caret, setCaret] = useState<{ draft: string; at: number }>()
-  const backdropRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
-  const [attachments, setAttachmentsState] = useState<UploadedAttachment[]>(() =>
-    loadAttachments(`${draftKey(machine, sessionId)}:attachments`, (sha) => userImageSrc(machine, sessionId, sha)),
-  )
-  // Saved with the draft, so switching chats and coming back keeps them.
-  function setAttachments(update: (current: UploadedAttachment[]) => UploadedAttachment[]) {
-    setAttachmentsState((current) => {
-      const next = update(current)
-      for (const item of current) if (!next.includes(item)) revokePreview(item.previewUrl)
-      saveAttachments(`${draftKey(machine, sessionId)}:attachments`, next)
-      return next
-    })
-  }
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1240)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const composerInputRef = useRef<HTMLTextAreaElement>(null)
   const threadScrollRef = useRef<HTMLDivElement>(null)
   const readOnly = unavailable || info?.reachable === false || Boolean(info?.archived_at)
   // A starting chat accepts text before the worker completes its handshake.
@@ -163,7 +103,8 @@ export default function ConversationPane({
     const key = conversationEventsQuery(machine, sessionId).queryKey
     if (!queryClient.getQueryData(key)) void restoreChatQuery(queryClient, cacheBuildID || "dev", key)
   }, [machine, queryClient, sessionId])
-  const { historyKey, older, entries, hasOlder, transcript, loadOlder } = useHistoryPaging(machine, sessionId, tail, threadScrollRef, stickToBottomRef)
+  const history = useHistoryPaging(machine, sessionId, tail, threadScrollRef, stickToBottomRef)
+  const { historyKey, older, entries, hasOlder, transcript, loadOlder } = history
   const activity = info?.conversation_state
   // Idle with background work open: the agent will wake by itself (internal/acp WaitItem).
   const waitNow = useNow(true, 60_000)
@@ -212,48 +153,6 @@ export default function ConversationPane({
     id.startsWith("helper:")
       ? void navigate({ to: "/sessions/$machine/$sessionId", params: { machine, sessionId: id.slice("helper:".length) } })
       : void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, sub: id }) })
-  useEffect(() => {
-    const save = draft && recalledPrompt.current?.text !== draft
-    try {
-      const key = draftKey(machine, sessionId)
-      if (save) sessionStorage.setItem(key, draft)
-      else sessionStorage.removeItem(key)
-    } catch {
-      // Storage can be blocked; the draft then lives only in memory.
-    }
-  }, [draft, machine, sessionId])
-  // Opening a chat (the pane is keyed by session) puts the caret in the composer, unless focus is
-  // already in another field. Touch screens skip it so the keyboard does not cover the thread.
-  const composerShown = !readOnly && !subagentId
-  useEffect(() => {
-    if (!composerShown || !matchMedia("(pointer: fine)").matches) return
-    const active = document.activeElement
-    if (active && active !== document.body && !active.closest("a, [data-source-row]")) return
-    composerInputRef.current?.focus({ preventScroll: true })
-  }, [composerShown])
-  // The composer floats over the thread; the thread reserves exactly its height, so the last
-  // message sits a short gap above it however many attachments or lines the composer holds.
-  const composerRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const composer = composerRef.current
-    const thread = threadScrollRef.current
-    if (!composer || !thread) return
-    const observer = new ResizeObserver(() => {
-      thread.style.setProperty("--composer-h", `${composer.offsetHeight}px`)
-      if (stickToBottomRef.current) thread.scrollTop = thread.scrollHeight
-    })
-    observer.observe(composer)
-    return () => {
-      observer.disconnect()
-      thread.style.removeProperty("--composer-h")
-    }
-  }, [composerShown])
-  useEffect(() => {
-    const input = composerInputRef.current
-    if (!input) return
-    input.style.height = "auto"
-    input.style.height = `${Math.min(input.scrollHeight, 180)}px`
-  }, [draft])
   const plan = currentPlan(parent.items)
   // The live record is the log; the session row is the fallback for chats whose log is not loaded.
   const goal = parent.goal ?? (liveGoal(info?.goal) ? info?.goal : undefined)
@@ -299,119 +198,14 @@ export default function ConversationPane({
     failed: (error, _id, retry) =>
       hud.error(conversationErrorMessage(machine, "stop the subagent", error), conversationNeedsUpdate(error) ? undefined : retry),
   })
-  const [pendingSends, setPendingSends] = useState<PromptIntent[]>([])
-  useEffect(() => {
-    if (!pendingSends.length) return
-    const received = confirmedPrompts(entries)
-    const pending = pendingSends.filter((item) => {
-      if (!received.has(item.id)) return true
-      if (item.startedAt !== undefined) {
-        chatTiming("prompt-confirmed", item.startedAt, reportTimings)
-      }
-      return false
-    })
-    if (pending.length !== pendingSends.length) setPendingSends(pending)
-  }, [entries, pendingSends, reportTimings])
-  const discardSend = (id: string) => setPendingSends((pending) => pending.filter((item) => item.id !== id))
-  const send = useIntent({
-    scope: { id: sessionId },
-    request: async (input: SendInput, id) => {
-      const claimed = await pendingChatClaim(sessionId)
-      const target = claimed?.id ?? sessionId
-      const request = promptRequest(
-        input.text,
-        input.attachments,
-        info?.agent_capabilities?.promptCapabilities?.image === true,
-        input.resourceLink,
-      )
-      return api<{ queued?: string }>(`/api/sessions/${encodeURIComponent(target)}/conversation/${request.path}`, {
-        machine,
-        method: "POST",
-        idempotencyKey: id,
-        body: input.steer ? { ...request.body, steer: true } : request.body,
-      })
-    },
-    // The composer clears as the message is sent; a failure puts it back.
-    apply: (input, id) => {
-      const startedAt = performance.now()
-      setPendingSends((pending) => [...pending.filter((item) => item.id !== id), { ...input, id, startedAt }])
-      if (input.clearComposer) {
-        setDraft("")
-        setAttachments(() => [])
-      }
-      return () => {
-        discardSend(id)
-        if (input.clearComposer) setDraft((current) => current || input.text)
-      }
-    },
-    accepted: (result, _input, id) => {
-      if (result?.queued !== id) discardSend(id)
-    },
-    failed: (error, input, retry) => {
-      hud.error(
-        conversationErrorMessage(machine, input.steer ? "steer the agent" : input.attachments.length > 1 ? "send multiple images" : "send a message", error),
-        conversationNeedsUpdate(error) ? undefined : retry,
-      )
-    },
-  })
+  const composer = useComposer({ machine, sessionId, info, entries, reportTimings })
+  const { send, resume } = composer
   const submitPrompt = send.mutate
-  const resume = useIntent({
-    request: (text: string, idempotencyKey) => api<SessionInfo & { queued?: string }>(
-      `/api/sessions/${encodeURIComponent(sessionId)}/resume`,
-      { machine, method: "POST", idempotencyKey, body: { text } },
-    ),
-    apply: (text, id) => {
-      if (!text) return
-      const startedAt = performance.now()
-      setPendingSends((pending) => [...pending.filter((item) => item.id !== id), { id, text, attachments: [], clearComposer: true, startedAt }])
-      setDraft("")
-      return () => {
-        discardSend(id)
-        setDraft((current) => current || text)
-      }
-    },
-    accepted: (result, _text, id) => {
-      if (result?.queued !== id) discardSend(id)
-      void queryClient.invalidateQueries({ queryKey: conversationEventsQuery(machine, sessionId).queryKey })
-      return queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
-    },
-    failed: (error, _text, retry) => {
-      // An older peer can't start a chat whose agent never started.
-      const old = error instanceof ApiError && error.status === 400 && error.message === "This chat cannot be resumed."
-      hud.error(
-        old ? `${machine === LOCAL ? "Gateway" : "Peer"} needs an update to restart this chat.` : conversationErrorMessage(machine, "resume the chat", error),
-        old || conversationNeedsUpdate(error) ? undefined : retry,
-      )
-    },
-  })
   const restartAfterSignIn = useIntent({
     request: (_input: void, id) => api(`/api/sessions/${encodeURIComponent(sessionId)}/restart`, {
       machine, body: { operation_id: id },
     }),
     failed: (error, _input, retry) => hud.error(conversationErrorMessage(machine, "restart the agent after sign-in", error), retry),
-  })
-  // The chat carries on with another agent, which gets the transcript with the next message.
-  const switchAgent = useIntent({
-    request: (harness: string, idempotencyKey) =>
-      api(`/api/sessions/${encodeURIComponent(sessionId)}/harness`, { machine, method: "POST", idempotencyKey, body: { harness } }),
-    accepted: () => queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey }),
-    failed: (error, harness, retry) =>
-      hud.error(conversationErrorMessage(machine, `switch to ${harnessName(harness)}`, error), conversationNeedsUpdate(error) ? undefined : retry),
-  })
-  const steerQueued = useIntent({
-    request: (queueId: string, idempotencyKey) =>
-      api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/queue/${encodeURIComponent(queueId)}/steer`, { machine, method: "POST", idempotencyKey }),
-    failed: (error, _queueId, retry) => hud.error(
-      conversationErrorMessage(machine, "steer with the queued message", error), conversationNeedsUpdate(error) ? undefined : retry,
-    ),
-  })
-  const upload = useMutation({
-    mutationFn: (file: File) => uploadConversationBlob(machine, sessionId, file),
-    onError: (error, file) =>
-      hud.error(
-        conversationErrorMessage(machine, "attach images", error),
-        conversationNeedsUpdate(error) ? undefined : () => upload.mutate(file),
-      ),
   })
   const retryInput = (() => {
     const prompt = latestUserPrompt(thread.items)
@@ -431,38 +225,6 @@ export default function ConversationPane({
       })
     }
   }
-  // Images upload to the running agent, so a starting chat accepts text.
-  const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !upload.isPending && !needsUpdate && !((starting || resumable) && attachments.length > 0) && !(resumable && resume.isPending)
-
-  const nextQueued = parent.queue?.find((item) => !item.steer && !item.delivered)
-
-  function submit(steer = false) {
-    // Enter on an empty composer sends the waiting message now.
-    if (nextQueued && !draft.trim() && attachments.length === 0 && !readOnly && !needsUpdate && !steerQueued.isPending) {
-      steerQueued.mutate(nextQueued.queueId)
-      return
-    }
-    if (!canSend) return
-    recalledPrompt.current = null
-    const text = draft.trim()
-    const goalCommand = attachments.length === 0 ? parseGoalCommand(text) : undefined
-    if (goalCommand) {
-      setDraft("")
-      if (goalCommand.kind === "sheet") setGoalSheet({ objective: "" })
-      else if (goalCommand.kind === "action") goalActions.act.mutate(goalCommand.action)
-      else goalActions.set.mutate(
-        { goal: { objective: goalCommand.objective }, edit: false },
-        { onError: (error) => hud.error(conversationErrorMessage(machine, "set the goal", error)) },
-      )
-      return
-    }
-    if (resumable) {
-      resume.mutate(text)
-      return
-    }
-      // Writing instead of answering an open question interrupts it, as in the Claude CLI.
-    submitPrompt({ text, attachments, clearComposer: true, steer: (steer || parent.needs_you) && parent.working })
-  }
   // A merge conflict goes back to the agent, which resolves it in its own worktree.
   function askAgent(text: string) {
     if (resumable) resume.mutate(text)
@@ -476,84 +238,17 @@ export default function ConversationPane({
   }
   const commands = agentCommands(entries) ?? snapshot?.commands?.availableCommands ?? []
   const canCompact = advertises(commands, "compact")
-  const diffPaths = listDiffChanges(thread.items).map((change) => change.path)
-  const caretAt = caret?.draft === draft ? caret.at : draft.length
-  const beforeCaret = draft.slice(0, caretAt)
-  const slashHints = filterSlashHints(beforeCaret, commands).filter((hint) => hint.value !== "/fork" || (canFork && !fork.isPending))
-  const atHints = filterAtHints(beforeCaret, diffPaths)
-  const spans = draft.includes("/") ? commandSpans(draft, commands) : []
-  const composerHints = hintsClosed ? [] : slashHints.length > 0 ? slashHints : atHints
-  const activeHint = Math.min(hintIndex, Math.max(composerHints.length - 1, 0))
-  const hintTitle = slashHints.length > 0 ? "Commands" : "Files in this thread"
-  async function recallPrompt(direction: -1 | 1, input: HTMLTextAreaElement) {
-    const current = recalledPrompt.current
-    const boundary = current?.text === draft ? current.seq : Infinity
-    function findPrompt(items: ThreadItem[]) {
-      const start = direction < 0 ? items.length - 1 : 0
-      for (let i = start; i >= 0 && i < items.length; i += direction) {
-        const item = items[i]!
-        if (item.kind !== "user_message_chunk" || item.seq === undefined || (item.seq - boundary) * direction <= 0) continue
-        const text = (item.data as UserMessagePayload).text?.text
-        if (text?.trim()) return { seq: item.seq, text }
-      }
-    }
-    let next = findPrompt(transcript.items)
-    if (!next && direction < 0 && hasOlder) {
-      const loaded = await loadOlder(true, (rows) => Boolean(findPrompt(reduceThread(historyKey, rows).items)))
-      if (!loaded || composerInputRef.current !== input || input.value !== draft || recalledPrompt.current !== current) return
-      next = findPrompt(reduceThread(historyKey, loaded).items)
-    }
-    if (!next && direction < 0) return
-    recalledPrompt.current = next ?? null
-    setHintsClosed(Boolean(next))
-    setCaret(undefined)
-    setDraft(next?.text ?? "")
-  }
-  function pickHint(hint: ComposerHint) {
-    setHintIndex(0)
-    if (hint.value === "/fork") {
-      forkChat()
-      setDraft("")
-      return
-    }
-    if (hint.value === "/goal" && draft.trim() === "/goal") {
-      setDraft("/goal ")
-      return
-    }
-    if (hint.value === "/terminal") {
-      onSwitchTerminal?.()
-      setDraft("")
-      return
-    }
-    const head = applyHint(beforeCaret, hint)
-    const tail = draft.slice(caretAt)
-    const next = head + (tail.startsWith(" ") ? tail.slice(1) : tail)
-    setDraft(next)
-    setCaret({ draft: next, at: head.length })
-    requestAnimationFrame(() => composerInputRef.current?.setSelectionRange(head.length, head.length))
-  }
   function quoteReply(text: string) {
-    setDraft((current) => `${current}${current ? "\n\n" : ""}${quoteMessage(text)}\n`)
-    composerInputRef.current?.focus()
+    composer.setDraft((current) => `${current}${current ? "\n\n" : ""}${quoteMessage(text)}\n`)
+    composer.inputRef.current?.focus()
   }
-  async function attachImages(files: File[]) {
-    if (readOnly || files.length === 0 || needsUpdate) return
-    if (send.isPending) {
-      hud.error("Wait for the message to finish sending before adding images.")
-      return
-    }
-    if (upload.isPending) {
-      hud.error("Wait for the current image upload to finish.")
-      return
-    }
-    for (const file of files) {
-      try {
-        const value = await upload.mutateAsync(file)
-        setAttachments((current) => [...current, { ...value, name: file.name }])
-      } catch {
-        return
-      }
-    }
+  function goalCommand(command: NonNullable<ReturnType<typeof parseGoalCommand>>) {
+    if (command.kind === "sheet") setGoalSheet({ objective: "" })
+    else if (command.kind === "action") goalActions.act.mutate(command.action)
+    else goalActions.set.mutate(
+      { goal: { objective: command.objective }, edit: false },
+      { onError: (error) => hud.error(conversationErrorMessage(machine, "set the goal", error)) },
+    )
   }
   const agentName = harnessName(info?.harness ?? "agent")
   const machineName = machines.find((candidate) => candidate.id === machine)?.name ?? machine
@@ -575,7 +270,7 @@ export default function ConversationPane({
       if (command === "new" && readOnly) return
       if (command === "toggle" && terminalOpen) {
         setTerminalOpen(false)
-        requestAnimationFrame(() => composerInputRef.current?.focus())
+        requestAnimationFrame(() => composer.inputRef.current?.focus())
         return
       }
       rememberChatTerminal({ machine, sessionId })
@@ -596,7 +291,7 @@ export default function ConversationPane({
 
   function hideTerminal() {
     setTerminalOpen(false)
-    requestAnimationFrame(() => composerInputRef.current?.focus())
+    requestAnimationFrame(() => composer.inputRef.current?.focus())
   }
 
   function toggleTerminal() {
@@ -704,7 +399,7 @@ export default function ConversationPane({
                 <ThreadView
                   scrollRef={threadScrollRef}
                   pinRequests={!readOnly && !subagentId}
-                  items={subagent ? thread.items : withSending(thread.items, entries, pendingSends)}
+                  items={subagent ? thread.items : withSending(thread.items, entries, composer.pendingSends)}
                   machine={machine}
                   sessionId={sessionId}
                   readOnly={readOnly}
@@ -722,7 +417,7 @@ export default function ConversationPane({
                   onStopSubagent={readOnly ? undefined : (id) => stopSubagent.mutate(id)}
                   authHarness={info?.harness}
                   onSignedIn={!subagent && !readOnly && (resumable || live)
-                    ? () => resumable ? resume.mutate(draft.trim()) : restartAfterSignIn.mutate()
+                    ? () => resumable ? resume.mutate(composer.draft.trim()) : restartAfterSignIn.mutate()
                     : undefined}
                 />
               )}
@@ -743,259 +438,38 @@ export default function ConversationPane({
           </div>
         </div>
       )}
-      {!readOnly && !subagentId && <div
-        className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-(--s4) pt-(--s7) pb-(--s5)"
-        style={{ backgroundImage: "linear-gradient(to top, var(--window) 55%, transparent)" }}
-        onDragOver={(event) => {
-          if (event.dataTransfer.types.includes("Files")) event.preventDefault()
-        }}
-        onDrop={(event) => {
-          event.preventDefault()
-          void attachImages(imageFilesFromList(event.dataTransfer.files))
-        }}
-      >
-          <div ref={composerRef} className="pointer-events-auto mx-auto flex w-full max-w-180 flex-col gap-(--s3)">
-            <QueueChips
-              queue={parent.queue ?? []}
-              machine={machine}
-              sessionId={sessionId}
-              readOnly={readOnly || needsUpdate}
-              steering={steerQueued.isPending ? steerQueued.input : undefined}
-              steerJoins={info?.agent_capabilities?.steering === true}
-              onSteer={steerQueued.mutate}
-            />
-            <GoalPill
-              goal={goal}
-              plan={plan}
-              readOnly={readOnly || needsUpdate}
-              onEdit={() => setGoalSheet({ objective: goal?.objective ?? "" })}
-              onAction={(action) => goalActions.act.mutate(action)}
-            />
-            {waits.length > 0 && (
-              <div data-slot="waiting-strip" role="status" className="flex min-w-0 items-center gap-(--s3) rounded-(--r-ctl) bg-(--card) bg-[linear-gradient(var(--accent-soft),var(--accent-soft))] px-(--s3) py-(--s2) text-(length:--fs-sm) text-(--fg2)">
-                <span aria-hidden data-slot="agent-dot" data-state="waiting" className="agent-dot static! shrink-0" />
-                <span className="min-w-0 truncate">
-                  <strong className="font-semibold text-(--fg)">Waiting</strong> for {waitingDetail(waits, chatName, waitNow)} · {agentName} wakes by itself
-                </span>
-              </div>
-            )}
-            {parent.items.some(isOpenRequest) && (
-              <div data-slot="pinned-requests" className="flex max-h-[50vh] flex-col gap-(--s3) overflow-auto">
-                {parent.items.filter(isOpenRequest).map((item) => item.kind === "permission"
-                  ? <PermissionCard key={item.seq} item={item} machine={machine} sessionId={sessionId} agent={agentName} />
-                  : <ElicitationCard key={item.seq} item={item} machine={machine} sessionId={sessionId} />)}
-              </div>
-            )}
-            <div className="flex flex-col gap-(--s1) rounded-[12px] bg-(--field) px-(--s3) pt-(--s3) pb-(--s2) shadow-(--shadow-composer) transition-shadow focus-within:shadow-[var(--shadow-composer),0_0_0_3px_var(--accent-soft)]">
-              <div className="relative flex min-h-(--ctl-h) flex-col gap-(--s2)">
-                {attachments.map((item, index) => (
-                  <div key={`${item.sha}-${index}`} className="flex items-center gap-(--s2) rounded-(--r-ctl) border-[0.5px] border-(--sep) bg-(--window) p-(--s2)">
-                    <img src={item.previewUrl} alt="" className="h-12 w-16 rounded-(--r-row) object-cover" />
-                    <span className="min-w-0 flex-1 truncate text-(length:--fs-xs) text-(--fg2)">Image attached · {item.name}</span>
-                    <Button type="button" size="sm" variant="ghost" aria-label={`Remove ${item.name}`} disabled={send.isPending} onClick={() => setAttachments((current) => current.filter((_, attachmentIndex) => attachmentIndex !== index))}>
-                      Remove
-                    </Button>
-                  </div>
-                ))}
-                <ComposerHintsMenu id="composer-hints-list" activeIndex={activeHint} title={hintTitle} hints={composerHints} onPick={pickHint} query={slashQuery(beforeCaret)?.query ?? ""} agentName={agentName} />
-                <div className="relative">
-                {spans.some((span) => span.command) && (
-                  // Marks commands behind the transparent textarea, which cannot style its own text.
-                  <div ref={backdropRef} aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden px-(--s3) py-(--s2) text-(length:--fs) wrap-break-word whitespace-pre-wrap text-transparent">
-                    {spans.map((span, index) => span.command ? <mark key={index} data-command className="rounded-[3px] bg-(--accent-soft) text-transparent">{span.text}</mark> : span.text)}{" "}
-                  </div>
-                )}
-                <textarea
-                  ref={composerInputRef}
-                  id="conversation-message"
-                  aria-label="Message"
-                  rows={1}
-                  placeholder={needsUpdate ? "Update this peer to open the conversation…" : starting ? `Starting ${agentName}…` : nextQueued ? "Queue another message, or press ↵ to steer with the queued one" : parent.working ? `Queue a message for ${agentName} (⌘↵ ${info?.agent_capabilities?.steering ? "steers" : "interrupts to steer"})` : `Message ${agentName}`}
-                  value={draft}
-                  disabled={needsUpdate}
-                  aria-controls={composerHints.length > 0 ? "composer-hints-list" : undefined}
-                  aria-activedescendant={composerHints.length > 0 ? `composer-hints-list-${activeHint}` : undefined}
-                  onScroll={(event) => { if (backdropRef.current) backdropRef.current.scrollTop = event.currentTarget.scrollTop }}
-                  onSelect={(event) => setCaret({ draft: event.currentTarget.value, at: event.currentTarget.selectionStart })}
-                  onChange={(event) => {
-                    recalledPrompt.current = null
-                    setDraft(event.currentTarget.value)
-                    setCaret({ draft: event.currentTarget.value, at: event.currentTarget.selectionStart })
-                    setHintIndex(0)
-                    setHintsClosed(false)
-                  }}
-                  onPaste={(event) => {
-                    const files = imageFilesFromClipboard(event.clipboardData)
-                    if (files.length > 0) {
-                      event.preventDefault()
-                      void attachImages(files)
-                    }
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.nativeEvent.isComposing || event.keyCode === 229) return
-                    if (composerHints.length > 0) {
-                      const move = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0
-                      if (move) {
-                        event.preventDefault()
-                        setHintIndex(moveHint(activeHint, move, composerHints.length))
-                        return
-                      }
-                      if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
-                        event.preventDefault()
-                        pickHint(composerHints[activeHint]!)
-                        return
-                      }
-                      if (event.key === "Escape") {
-                        event.preventDefault()
-                        setHintsClosed(true)
-                        return
-                      }
-                    }
-                    if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey &&
-                      ((event.key === "ArrowUp" && !draft) ||
-                        ((event.key === "ArrowUp" || event.key === "ArrowDown") && recalledPrompt.current?.text === draft))) {
-                      event.preventDefault()
-                      void recallPrompt(event.key === "ArrowUp" ? -1 : 1, event.currentTarget)
-                      return
-                    }
-                    if (event.key === "Escape" && parent.working && !cancelTurn.isPending) {
-                      event.preventDefault()
-                      cancelTurn.mutate()
-                      return
-                    }
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault()
-                      submit(event.metaKey || event.ctrlKey)
-                    }
-                  }}
-                  className="relative block min-h-(--ctl-h) max-h-45 w-full resize-none border-0 bg-transparent px-(--s3) py-(--s2) text-(length:--fs) text-(--fg) outline-none placeholder:text-(--fg3)"
-                />
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-(--s1)">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/gif,image/webp"
-                  multiple
-                  className="sr-only"
-                  onChange={(event) => {
-                    const files = imageFilesFromList(event.currentTarget.files)
-                    event.currentTarget.value = ""
-                    void attachImages(files)
-                  }}
-                />
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  aria-label="Attach image"
-                  disabled={send.isPending || upload.isPending || needsUpdate}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <Plus aria-hidden />
-                </Button>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  aria-label="Mention a file"
-                  disabled={needsUpdate}
-                  onClick={() => setDraft((current) => `${current}${current && !current.endsWith(" ") ? " " : ""}@`)}
-                >
-                  <AtSign aria-hidden />
-                </Button>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  aria-label="Commands"
-                  disabled={needsUpdate}
-                  onClick={() => setDraft("/")}
-                >
-                  <Slash aria-hidden />
-                </Button>
-                <span className="min-w-0 flex-1" />
-                {!readOnly && info?.transport === "acp" && (
-                  <Menu>
-                    <MenuTrigger
-                      render={
-                        <Button type="button" size="sm" variant="ghost" title="Continue this chat with another agent" disabled={switchAgent.isPending || starting || needsUpdate} className="gap-(--s2)">
-                          {switchAgent.isPending && switchAgent.input ? `Switching to ${harnessName(switchAgent.input)}…` : agentName}
-                          <ChevronDown aria-hidden />
-                        </Button>
-                      }
-                    />
-                    <MenuContent align="end">
-                      <p className="px-[11px] pt-(--s2) pb-(--s1) text-(length:--fs-xs) font-semibold text-(--fg3)">Continue with</p>
-                      {agentIds.map((id) => (
-                        <MenuItem
-                          key={id}
-                          role="menuitemradio"
-                          aria-checked={id === info.harness}
-                          icon={id === info.harness ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
-                          disabled={id === info.harness}
-                          onClick={() => switchAgent.mutate(id)}
-                        >
-                          {harnessName(id)}
-                        </MenuItem>
-                      ))}
-                    </MenuContent>
-                  </Menu>
-                )}
-                <ChatConfigControls config={chatConfig} harness={info?.harness} starting={starting} needsYou={thread.needs_you} needsUpdate={needsUpdate} />
-                {contextPercent !== undefined && (
-                  <button
-                    type="button"
-                    data-slot="context-ring"
-                    aria-label={`Context ${contextPercent}% used${canCompact ? ". Compact" : ""}`}
-                    title={canCompact ? `Context ${contextPercent}% used. Click to compact; ⌥-click to choose what to keep.` : `Context ${contextPercent}% used. ${agentName} doesn't offer compaction.`}
-                    disabled={!canCompact || needsUpdate}
-                    onClick={(event) => {
-                      if (event.altKey) {
-                        setDraft("/compact ")
-                        composerInputRef.current?.focus()
-                      } else compact()
-                    }}
-                    className="grid size-6 shrink-0 place-items-center rounded-full hover:bg-(--hover) disabled:hover:bg-transparent"
-                  >
-                    <ContextRing percent={contextPercent} />
-                  </button>
-                )}
-                {parent.working && (
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    disabled={cancelTurn.isPending}
-                    aria-label={cancelTurn.isPending ? "Stopping…" : "Stop"}
-                    title={cancelTurn.isPending ? "Stopping…" : "Stop (Esc)"}
-                    onClick={() => cancelTurn.mutate()}
-                  >
-                    {cancelTurn.isPending ? <Spinner /> : <Square aria-hidden className="fill-current" />}
-                  </Button>
-                )}
-                {parent.working && canSend && (
-                  <Button type="button" size="sm" variant="ghost" title={info?.agent_capabilities?.steering ? "Send this into the agent's current turn now (⌘↵)" : "Interrupt the agent and send this now (⌘↵)"} onClick={() => submit(true)}>
-                    <CornerDownLeft aria-hidden /> Steer
-                  </Button>
-                )}
-                {(!parent.working || canSend) && (
-                  <button
-                    type="button"
-                    disabled={!canSend}
-                    aria-label={parent.working ? "Queue" : "Send"}
-                    title={parent.working ? "Queue for after this turn (↵)" : "Send (↵)"}
-                    className="ml-(--s2) grid size-6 shrink-0 place-items-center rounded-full bg-(--accent) text-(--accent-fg) disabled:bg-(--track) disabled:text-(--fg3) [&_svg]:size-(--s4)"
-                    onClick={() => submit()}
-                  >
-                    <ArrowUp aria-hidden />
-                  </button>
-                )}
-              </div>
+      {!readOnly && !subagentId && (
+        <Composer
+          composer={composer} machine={machine} sessionId={sessionId} info={info} parent={parent} history={history}
+          chatConfig={chatConfig} commands={commands} contextPercent={contextPercent} compact={canCompact ? compact : undefined}
+          starting={starting} resumable={resumable} needsUpdate={needsUpdate} stopping={cancelTurn.isPending} onStop={() => cancelTurn.mutate()}
+          onFork={canFork && !fork.isPending ? forkChat : undefined} onSwitchTerminal={onSwitchTerminal} onGoalCommand={goalCommand}
+          threadScrollRef={threadScrollRef} stickToBottomRef={stickToBottomRef}
+        >
+          <GoalPill
+            goal={goal}
+            plan={plan}
+            readOnly={readOnly || needsUpdate}
+            onEdit={() => setGoalSheet({ objective: goal?.objective ?? "" })}
+            onAction={(action) => goalActions.act.mutate(action)}
+          />
+          {waits.length > 0 && (
+            <div data-slot="waiting-strip" role="status" className="flex min-w-0 items-center gap-(--s3) rounded-(--r-ctl) bg-(--card) bg-[linear-gradient(var(--accent-soft),var(--accent-soft))] px-(--s3) py-(--s2) text-(length:--fs-sm) text-(--fg2)">
+              <span aria-hidden data-slot="agent-dot" data-state="waiting" className="agent-dot static! shrink-0" />
+              <span className="min-w-0 truncate">
+                <strong className="font-semibold text-(--fg)">Waiting</strong> for {waitingDetail(waits, chatName, waitNow)} · {agentName} wakes by itself
+              </span>
             </div>
-          </div>
-      </div>}
+          )}
+          {parent.items.some(isOpenRequest) && (
+            <div data-slot="pinned-requests" className="flex max-h-[50vh] flex-col gap-(--s3) overflow-auto">
+              {parent.items.filter(isOpenRequest).map((item) => item.kind === "permission"
+                ? <PermissionCard key={item.seq} item={item} machine={machine} sessionId={sessionId} agent={agentName} />
+                : <ElicitationCard key={item.seq} item={item} machine={machine} sessionId={sessionId} />)}
+            </div>
+          )}
+        </Composer>
+      )}
           </div>
           {terminalAvailable && (terminalLoaded || !!shells.data?.length) && (
             <Suspense>
@@ -1032,31 +506,4 @@ export default function ConversationPane({
       </div>
     </div>
   )
-}
-
-function chatTiming(name: "chat-first-frame" | "prompt-confirmed", start: number, report: boolean) {
-  const key = `agentpack:${name}`
-  performance.clearMeasures(key)
-  const { duration } = performance.measure(key, { start })
-  if (report) {
-    void api("/api/debug/timings", { method: "POST", body: { name, duration_ms: duration } }).catch(() => undefined)
-  }
-}
-
-function confirmedPrompts(entries: LogEntry[]): Set<string> {
-  const received = new Set<string>()
-  for (const { kind, payload } of entries) {
-    if (kind !== "prompt" && kind !== "queued_prompt" && kind !== "dequeued_prompt") continue
-    const id = (payload as { queueId?: string }).queueId
-    if (id) received.add(id)
-  }
-  return received
-}
-
-function withSending(items: ThreadItem[], entries: LogEntry[], sending: PromptIntent[]): ThreadItem[] {
-  if (!sending.length) return items
-  const received = confirmedPrompts(entries)
-  return [...items, ...sending.filter((item) => item.text && !received.has(item.id)).map((item): ThreadItem =>
-    ({ kind: "user_message_chunk", data: { text: { text: item.text } } }),
-  )]
 }
