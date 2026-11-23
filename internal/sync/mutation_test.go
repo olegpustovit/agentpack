@@ -44,8 +44,14 @@ func TestSyncAndLaunchReadPackLockOnce(t *testing.T) {
 		run  func() (bool, error)
 	}{
 		{"sync", func() (bool, error) { _, err := service.Sync(t.Context(), project, SyncOptions{}); return false, err }},
-		{"cold launch", func() (bool, error) { _, skipped, err := service.SyncForLaunch(t.Context(), project, "", base.Claude); return !skipped, err }},
-		{"warm launch", func() (bool, error) { _, skipped, err := service.SyncForLaunch(t.Context(), project, "", base.Claude); return skipped, err }},
+		{"cold launch", func() (bool, error) {
+			_, skipped, err := service.SyncForLaunch(t.Context(), project, "", base.Claude)
+			return !skipped, err
+		}},
+		{"warm launch", func() (bool, error) {
+			_, skipped, err := service.SyncForLaunch(t.Context(), project, "", base.Claude)
+			return skipped, err
+		}},
 	} {
 		reads = 0
 		if ok, err := step.run(); err != nil || step.name != "sync" && !ok {
