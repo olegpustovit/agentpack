@@ -73,7 +73,7 @@ func SelectedEnvironment(definitionRoot, workspace, selectedMode string, target 
 	if err != nil {
 		return "", nil, err
 	}
-	return selectedContent(workspace, project, lock, effective, target)
+	return selectedContent(definitionRoot, workspace, project, lock, effective, target)
 }
 
 // LaunchFingerprint is the launch identity of a project's current inputs, as a launch compares it
@@ -109,7 +109,7 @@ func environmentItem(module, name, virtual string) string {
 }
 
 // selectedContent computes Content.Selected and the names of what it selects.
-func selectedContent(workspace string, project *manifest.Manifest, lock lockfile.PackLock, effective mode.Effective, target harness.Target) (string, []string, error) {
+func selectedContent(definitionRoot, workspace string, project *manifest.Manifest, lock lockfile.PackLock, effective mode.Effective, target harness.Target) (string, []string, error) {
 	items := map[string]bool{}
 	hash := sha256.New()
 	encoder := json.NewEncoder(hash)
@@ -215,8 +215,16 @@ func selectedContent(workspace string, project *manifest.Manifest, lock lockfile
 	if err != nil {
 		return "", nil, err
 	}
-	// Staging's own matcher: a connection that reroutes a server through the bridge changes what the agent runs.
-	bridged, _ := mcp.ApplyCredentials(pinned, index, "agentpack")
+	loginsPath, err := paths.ProjectMCPLoginsPath(definitionRoot)
+	if err != nil {
+		return "", nil, err
+	}
+	logins, err := mcp.ReadProjectLogins(loginsPath)
+	if err != nil {
+		return "", nil, err
+	}
+	// Staging's own matcher: a connection or project login pick that reroutes a server through the bridge changes what the agent runs.
+	bridged, _ := mcp.ApplyCredentials(pinned, index, logins, "agentpack")
 	for _, name := range entries.Names() {
 		server := pinned[name].Server
 		if err := encoder.Encode(struct {
