@@ -75,6 +75,7 @@ type Gateway struct {
 	replicaStatus  sync.Map
 	statePulls     sync.Map   // peer → coalesced pull notification
 	archiveMu      sync.Mutex // serializes archive copies with edits to archive.db
+	heldBlobs      sync.Map   // blobHeldKey -> true once the file's bytes matched its SHA
 	archiveWake    chan struct{}
 	syncTransferMu sync.Mutex
 	syncTransfers  map[string]*stateTransferFile
@@ -787,6 +788,7 @@ func (g *Gateway) routes() routeMux {
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/config", g.serveWantedConfig)
 	mux.HandleFunc("DELETE /api/sessions/{id}/conversation/goal", g.clearGoal)
 	mux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}", g.serveBlob)
+	mux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}/held", g.serveBlobHeld)
 	mux.HandleFunc("GET /api/packages", func(w http.ResponseWriter, r *http.Request) {
 		directory := r.URL.Query().Get("directory")
 		if !g.knownDirectory(r.Context(), directory) {

@@ -17,6 +17,12 @@ import (
 )
 
 func TestArchiveKeepsMainAttachmentsAndVerifiesBeforePeerCleanup(t *testing.T) {
+	// An older Main answers the held check with 404, so the peer fetches the bytes and hashes them.
+	t.Run("older Main", func(t *testing.T) { archiveCleanupScenario(t, false) })
+	t.Run("held check", func(t *testing.T) { archiveCleanupScenario(t, true) })
+}
+
+func archiveCleanupScenario(t *testing.T, held bool) {
 	main, _ := identityGateway(t, t.TempDir(), nil)
 	worker, _ := identityGateway(t, t.TempDir(), nil)
 	for node, g := range map[string]*Gateway{"main": main, "worker": worker} {
@@ -73,7 +79,14 @@ func TestArchiveKeepsMainAttachmentsAndVerifiesBeforePeerCleanup(t *testing.T) {
 	syncArchiveFixture(t, main.auth.store, worker.auth.store)
 	mainDir, _ := sessionBlobDir(main.options.Home, id)
 	mainMux := http.NewServeMux()
-	mainMux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}", main.serveBlob)
+	if held {
+		mainMux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}/held", main.serveBlobHeld)
+		mainMux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}", func(w http.ResponseWriter, r *http.Request) {
+			t.Error("attachment check downloaded the blob from Main")
+		})
+	} else {
+		mainMux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}", main.serveBlob)
+	}
 	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mainMux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), replicaPeerKey{}, "worker")))
 	}))

@@ -261,24 +261,8 @@ func (g *Gateway) cleanupArchivedBlobs(ctx context.Context, targetFor func(conte
 			if err != nil {
 				return err
 			}
-			request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.JoinPath("/api/sessions/"+s.id+"/blobs/"+sha).String(), nil)
-			if err != nil {
+			if err := mainHoldsBlob(ctx, target, s.id, sha); err != nil {
 				return err
-			}
-			request.Header.Set("traceparent", obs.TraceParent(ctx))
-			client := &http.Client{Transport: tailnetTransport, Timeout: network.WorkerRequestTimeout(http.MethodGet, "/blobs/"), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-			response, err := client.Do(request)
-			if err != nil {
-				return errors.New("archive Main is unreachable for attachment verification")
-			}
-			data, readErr := io.ReadAll(io.LimitReader(response.Body, network.MaxBlobBytes+1))
-			response.Body.Close()
-			if readErr != nil {
-				return readErr
-			}
-			sum := sha256.Sum256(data)
-			if response.StatusCode != 200 || len(data) > network.MaxBlobBytes || hex.EncodeToString(sum[:]) != sha {
-				return errors.New("archive Main attachment copy could not be verified")
 			}
 		}
 		committed := false
@@ -315,6 +299,55 @@ func (g *Gateway) cleanupArchivedBlobs(ctx context.Context, targetFor func(conte
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// mainHoldsBlob asks Main whether it stores a verified copy, and fetches the bytes to check them
+// itself only from a Main that predates the held route.
+func mainHoldsBlob(ctx context.Context, target *url.URL, id, sha string) error {
+	client := &http.Client{Transport: tailnetTransport, Timeout: network.WorkerRequestTimeout(http.MethodGet, "/blobs/"), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	get := func(path string) (*http.Response, error) {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.JoinPath(path).String(), nil)
+		if err != nil {
+			return nil, err
+		}
+		request.Header.Set("traceparent", obs.TraceParent(ctx))
+		response, err := client.Do(request)
+		if err != nil {
+			return nil, errors.New("archive Main is unreachable for attachment verification")
+		}
+		return response, nil
+	}
+	unverified := errors.New("archive Main attachment copy could not be verified")
+	path := "/api/sessions/" + id + "/blobs/" + sha
+	response, err := get(path + "/held")
+	if err != nil {
+		return err
+	}
+	if response.StatusCode != http.StatusNotFound {
+		defer response.Body.Close()
+		var answer struct {
+			Held bool `json:"held"`
+		}
+		if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 1<<10)).Decode(&answer) != nil || !answer.Held {
+			return unverified
+		}
+		return nil
+	}
+	response.Body.Close()
+	response, err = get(path)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(response.Body, network.MaxBlobBytes+1))
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(data)
+	if response.StatusCode != http.StatusOK || len(data) > network.MaxBlobBytes || hex.EncodeToString(sum[:]) != sha {
+		return unverified
 	}
 	return nil
 }

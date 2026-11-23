@@ -195,6 +195,7 @@ var routeTable = []route{
 	{pattern: "GET /api/sessions/{id}/output", peer: peerRead, session: true, noETag: true},
 	{pattern: "POST /api/sessions/{id}/input", peer: peerWrite, session: true},
 	{pattern: "GET /api/sessions/{id}/blobs/{sha}", peer: peerRead, session: true, timeout: timeoutLong},
+	{pattern: "GET /api/sessions/{id}/blobs/{sha}/held", peer: peerRead, session: true}, // this node's verified copy, never fetched
 	{pattern: "GET /api/sessions/{id}/git", peer: peerRead, session: true},
 	{pattern: "POST /api/sessions/{id}/git/commit", peer: peerWrite, session: true},
 	{pattern: "POST /api/sessions/{id}/git/pr", peer: peerWrite, session: true},
@@ -279,6 +280,9 @@ func peerRoute(method, path string) bool {
 		return err == nil && len(decoded) == 16 && strings.Trim(last, "0") != ""
 	case "GET /api/sessions/{id}/blobs/{sha}":
 		_, err := network.ValidateBlobSHA(last)
+		return err == nil
+	case "GET /api/sessions/{id}/blobs/{sha}/held":
+		_, err := network.ValidateBlobSHA(parts[len(parts)-2])
 		return err == nil
 	}
 	return true

@@ -182,6 +182,9 @@ func (g *Gateway) routeMeshRequest(w http.ResponseWriter, r *http.Request) (*htt
 		g.serveBlob(w, r)
 		return r, true, nil
 	}
+	if r.Pattern == "GET /api/sessions/{id}/blobs/{sha}/held" {
+		return r, false, nil
+	}
 	local, err := g.nodeID(r.Context())
 	if err != nil {
 		return r, false, err

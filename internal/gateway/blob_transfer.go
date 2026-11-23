@@ -156,3 +156,51 @@ func (g *Gateway) serveBlob(w http.ResponseWriter, r *http.Request) {
 	}
 	network.WriteSessionBlob(w, data)
 }
+
+type blobHeldKey struct {
+	path    string
+	size    int64
+	modTime time.Time
+}
+
+// blobHeld reports whether this node stores bytes matching sha for the session. A verified file is
+// remembered while its size and modification time hold, so repeated checks do not rehash it.
+func (g *Gateway) blobHeld(id, sha string) (bool, error) {
+	dir, err := sessionBlobDir(g.options.Home, id)
+	if err != nil {
+		return false, nil
+	}
+	info, err := os.Lstat(filepath.Join(dir, "blobs", sha))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	key := blobHeldKey{filepath.Join(dir, "blobs", sha), info.Size(), info.ModTime()}
+	if _, ok := g.heldBlobs.Load(key); ok {
+		return true, nil
+	}
+	if _, err := network.ReadSessionBlob(dir, sha); errors.Is(err, os.ErrNotExist) || errors.Is(err, network.ErrBlobIntegrity) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	g.heldBlobs.Store(key, true)
+	return true, nil
+}
+
+// serveBlobHeld answers a peer's attachment check without sending the bytes; it never fetches.
+func (g *Gateway) serveBlobHeld(w http.ResponseWriter, r *http.Request) {
+	sha, err := network.ValidateBlobSHA(r.PathValue("sha"))
+	if err != nil {
+		http.Error(w, "blob not found", http.StatusNotFound)
+		return
+	}
+	held, err := g.blobHeld(r.PathValue("id"), sha)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	network.WriteJSON(w, map[string]bool{"held": held})
+}
