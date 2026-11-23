@@ -181,17 +181,18 @@ func RunMCPBridge(ctx context.Context, options MCPBridgeOptions) (int, error) {
 			emit(&jsonrpc.Response{ID: request.ID, Error: &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: cause.Error()}})
 		}
 	}
+	// Only this loop sets connection; a failed connect fails that one call, so a later call connects with a fresh credential.
 	var connection mcp.Connection
-	var connectErr error
-	connected := sync.OnceFunc(func() {
-		connection, connectErr = transport.Connect(ctx)
-		if connectErr != nil {
-			return
+	connect := func() error {
+		conn, err := transport.Connect(ctx)
+		if err != nil {
+			return err
 		}
+		connection = conn
 		go func() {
 			defer cancel()
 			for {
-				message, err := connection.Read(ctx)
+				message, err := conn.Read(ctx)
 				if err != nil {
 					if ctx.Err() == nil {
 						fmt.Fprintf(options.Stderr, "agentpack mcp-bridge: %v\n", err)
@@ -213,7 +214,8 @@ func RunMCPBridge(ctx context.Context, options MCPBridgeOptions) (int, error) {
 				emit(message)
 			}
 		}()
-	})
+		return nil
+	}
 	lines := make(chan []byte)
 	go func() {
 		defer close(lines)
@@ -253,10 +255,11 @@ func RunMCPBridge(ctx context.Context, options MCPBridgeOptions) (int, error) {
 				continue
 			}
 			// The SDK connects lazily on the first write, so the harness's initialize also carries a missing-credential error back.
-			connected()
-			if connectErr != nil {
-				fail(message, connectErr)
-				continue
+			if connection == nil {
+				if err := connect(); err != nil {
+					fail(message, err)
+					continue
+				}
 			}
 			pending.Add(1)
 			go func() {

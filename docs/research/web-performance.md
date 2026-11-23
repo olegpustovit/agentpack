@@ -67,6 +67,20 @@ Same x86_64 development host, a copy of the development `state.db` (562 MB: 510 
 
 Both are within budget, so the 2 s `state` topic stays a poll. Its query, `max(db_version)` over `crsql_db_versions`, reads one row per site; it was not visible in the profile. A 40 s CPU profile with the tab open had 100 ms of samples. The Library topic's 10 s `registry.dbVersion` and `ListPackages` took 40%, and `changedTables` took 30%. `changedTables` ran only because the reproduction's pulls fail while sharing is off, and each recorded failure is a replicated `issue_counts` write. Most of the tab's reads come from the 10 s Library and projects topics and the 30 s sessions digest. Moving them onto the `state` table-change signal is P2.5's next step if the budget tightens.
 
+## Clock tables indexed on `db_version` (2026-11-23)
+
+On the MacBook Air the gateway used 35–45% CPU. A 45 s profile put 75% in `ChangePage` (peer pulls of `/api/sync/changes`, 2,237 in 10 min, 144 ms each, almost all returning an empty page) and 10% in the `state` topic's `changedTables`. Both query `crsql_changes` by `db_version` alone, but cr-sqlite indexes its clock tables on `(site_id, db_version)`, so every query scanned all of `conversation_events__crsql_clock`. `state.Open` now adds a local `<table>_dbv` index on `db_version` to every clock table (`ensureVersionIndexes`); `TestClockTablesHaveVersionIndex` checks the plan, also after a `crsql-alter` migration. The index is not replicated and does not change `ReplicationVersion`.
+
+Same x86_64 development host (i9-12900K), a copy of the development `state.db` (607 MB plus 17 MB WAL, db_version 232,622, 283,561 `conversation_events` clock rows), medians of 15 runs:
+
+| Query | Before | After |
+| --- | ---: | ---: |
+| ChangePage, nothing new, exclude peer | 38.4 ms | 0.81 ms |
+| ChangePage, last 50 versions, exclude self | 39.3 ms | 1.17 ms |
+| `changedTables`, last 50 versions | 40.2 ms | 0.98 ms |
+
+Building every missing index the first time took 285 ms; later opens pay one `sqlite_master` read (0.4 ms). The plan's earlier measurement on the same host (40.7 / 41.2 / 37.9 ms → 1.22 / 1.12 / 1.03 ms) agrees. The Air is about 3.6× slower on this query, so at 3.7 pulls/s its cost projects from about 53% to about 1.5% CPU. Not yet re-measured on the Air.
+
 ## Reproduce
 
 ```sh

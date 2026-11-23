@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -418,5 +419,74 @@ func TestMCPCredentialRevokeAllNeedsReconnect(t *testing.T) {
 	credential, _ := g.loadMCPCredential(context.Background(), id)
 	if result["revoked"] != 1 || credential.State.Status != mcpStatusNeedsLogin || credential.State.Token != nil || credential.State.Generation != 2 {
 		t.Fatalf("revoke-all %v → %+v", result, credential.State)
+	}
+}
+
+// An SSE bridge connects when the first message arrives; one started while its credential needs login
+// must serve calls once the credential is valid again, without a restart.
+func TestMCPBridgeReconnectsAfterLogin(t *testing.T) {
+	server := sdk.NewServer(&sdk.Implementation{Name: "fake", Version: "1"}, nil)
+	sdk.AddTool(server, &sdk.Tool{Name: "ping"}, func(context.Context, *sdk.CallToolRequest, struct{}) (*sdk.CallToolResult, any, error) {
+		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "pong"}}}, nil, nil
+	})
+	sse := sdk.NewSSEHandler(func(*http.Request) *sdk.Server { return server }, nil)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer good" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		sse.ServeHTTP(w, r)
+	}))
+	t.Cleanup(upstream.Close)
+	var valid atomic.Bool
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !valid.Load() {
+			network.WriteJSON(w, mcpBridgeSecret{Label: "Fake", Status: mcpStatusNeedsLogin})
+			return
+		}
+		network.WriteJSON(w, mcpBridgeSecret{Status: mcpStatusConnected, Headers: map[string]string{"Authorization": "Bearer good"}, Generation: 1})
+	}))
+	t.Cleanup(gateway.Close)
+	home := t.TempDir()
+	data, _ := json.Marshal(network.NodeRecord{Address: gateway.Listener.Addr().String(), Secret: strings.Repeat("x", 64)})
+	if err := os.MkdirAll(filepath.Join(home, "network"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "network", "node.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdinReader, stdin := io.Pipe()
+	stdoutReader, stdout := io.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = RunMCPBridge(context.Background(), MCPBridgeOptions{Home: home, ID: "fake", URL: upstream.URL, SSE: true, Stdin: stdinReader, Stdout: stdout, Stderr: io.Discard})
+		stdout.Close()
+	}()
+	defer func() { stdin.Close(); <-done }()
+	lines := bufio.NewScanner(stdoutReader)
+	call := func(id int, method, params string) map[string]any {
+		t.Helper()
+		fmt.Fprintf(stdin, `{"jsonrpc":"2.0","id":%d,"method":%q,"params":%s}`+"\n", id, method, params)
+		if !lines.Scan() {
+			t.Fatal("bridge closed its output")
+		}
+		var message map[string]any
+		if err := json.Unmarshal(lines.Bytes(), &message); err != nil {
+			t.Fatal(err)
+		}
+		return message
+	}
+	initialize := `{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}`
+	if message := call(1, "initialize", initialize); !strings.Contains(fmt.Sprint(message["error"]), "needs login") {
+		t.Fatalf("initialize before login: %v", message)
+	}
+	valid.Store(true)
+	if message := call(2, "initialize", initialize); message["error"] != nil {
+		t.Fatalf("initialize after login: %v", message)
+	}
+	fmt.Fprintln(stdin, `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	if message := call(3, "tools/call", `{"name":"ping","arguments":{}}`); !strings.Contains(fmt.Sprint(message["result"]), "pong") {
+		t.Fatalf("tool call after login: %v", message)
 	}
 }

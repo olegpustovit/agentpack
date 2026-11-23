@@ -38,7 +38,7 @@ func migrate(ctx context.Context, db *sql.DB, source fs.FS) error {
 	// A current database needs no write lock: per-migration checks each take one and stall a streaming worker.
 	var current int
 	if conn.QueryRowContext(ctx, "SELECT CASE WHEN count(*)=1 THEN max(version) END FROM schema_meta").Scan(&current) == nil && current == len(files) {
-		return nil
+		return ensureVersionIndexes(ctx, conn)
 	}
 	contents := make([]string, len(files))
 	for i, name := range files {
@@ -48,7 +48,42 @@ func migrate(ctx context.Context, db *sql.DB, source fs.FS) error {
 		}
 		contents[i] = string(data)
 	}
-	return migratePending(ctx, conn, files, contents)
+	if err := migratePending(ctx, conn, files, contents); err != nil {
+		return err
+	}
+	return ensureVersionIndexes(ctx, conn)
+}
+
+// ensureVersionIndexes indexes every clock table on db_version. cr-sqlite indexes them on
+// (site_id, db_version), but sync reads by db_version alone, so each peer pull scanned every clock
+// row (281k rows, 144 ms on an M-series Air). It runs after migrations rather than as one, so it also
+// covers clock tables created by later migrations, and the index is local: the mesh wire version does
+// not change.
+func ensureVersionIndexes(ctx context.Context, conn *sql.Conn) error {
+	rows, err := conn.QueryContext(ctx, `SELECT t.name FROM sqlite_master t WHERE t.type='table'
+		AND t.name LIKE '%\_\_crsql\_clock' ESCAPE '\'
+		AND NOT EXISTS (SELECT 1 FROM sqlite_master i WHERE i.type='index' AND i.name=t.name||'_dbv')`)
+	if err != nil {
+		return err
+	}
+	var missing []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		missing = append(missing, name)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for _, table := range missing {
+		if _, err := conn.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS "`+table+`_dbv" ON "`+table+`"(db_version)`); err != nil {
+			return fmt.Errorf("index %s: %w", table, err)
+		}
+	}
+	return nil
 }
 
 // migratePending applies every missing migration in one transaction: one sync instead of one per

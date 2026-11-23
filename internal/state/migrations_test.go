@@ -433,3 +433,47 @@ func TestOwnerBindingsMigrationMovesPseudoRows(t *testing.T) {
 		t.Fatalf("sessions left = %d, %v", count, err)
 	}
 }
+
+// Sync reads clock tables by db_version alone; cr-sqlite's own index leads with site_id.
+func TestClockTablesHaveVersionIndex(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	plan := func() string {
+		t.Helper()
+		rows, err := store.Reader.Query("EXPLAIN QUERY PLAN SELECT * FROM conversation_events__crsql_clock WHERE db_version>?", 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var plan strings.Builder
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				t.Fatal(err)
+			}
+			plan.WriteString(detail + "\n")
+		}
+		return plan.String()
+	}
+	if got := plan(); !strings.Contains(got, "conversation_events__crsql_clock_dbv") {
+		t.Fatalf("plan does not use the version index:\n%s", got)
+	}
+	// A later crsql-alter migration on an existing database keeps the index.
+	fixture := fstest.MapFS{}
+	files, _ := fs.Glob(migrationFiles, "migrations/*.sql")
+	for _, name := range files {
+		data, _ := fs.ReadFile(migrationFiles, name)
+		fixture[name] = &fstest.MapFile{Data: data}
+	}
+	fixture[fmt.Sprintf("migrations/%04d_alter.sql", len(files)+1)] = &fstest.MapFile{Data: []byte("-- crsql-alter: conversation_events\nALTER TABLE conversation_events ADD COLUMN extra TEXT;\n")}
+	if err := migrate(t.Context(), store.DB, fixture); err != nil {
+		t.Fatal(err)
+	}
+	if got := plan(); !strings.Contains(got, "conversation_events__crsql_clock_dbv") {
+		t.Fatalf("plan after crsql-alter does not use the version index:\n%s", got)
+	}
+}
