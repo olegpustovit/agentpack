@@ -3,7 +3,6 @@ package network
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -43,16 +42,11 @@ func (g *Gateway) fetchBlob(ctx context.Context, id, sha string, targetFor func(
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	local, err := g.store.NodeID(ctx)
+	ownSession, err := g.store.Archive().LocalBlobSession(ctx, sha)
 	if err != nil {
 		return nil, err
 	}
-	var ownSession string
-	err = g.store.Reader.QueryRowContext(ctx, "SELECT session_id FROM blob_locations WHERE sha=? AND node_id=?", sha, local).Scan(&ownSession)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	if err == nil && ownSession != id {
+	if ownSession != "" && ownSession != id {
 		if ownDir, err := sessionBlobDir(g.options.Home, ownSession); err == nil {
 			if data, err := readSessionBlob(ownDir, sha); err == nil {
 				if _, err := storeSessionBlob(dir, data); err != nil {
@@ -65,38 +59,24 @@ func (g *Gateway) fetchBlob(ctx context.Context, id, sha string, targetFor func(
 			}
 		}
 	}
-	rows, err := g.store.Reader.QueryContext(ctx, `SELECT node_id,session_id FROM blob_locations
- WHERE sha=? AND node_id<>? ORDER BY session_id=? DESC,node_id`, sha, local, id)
+	locations, err := g.store.Archive().BlobHolders(ctx, sha, id)
 	if err != nil {
-		return nil, err
-	}
-	type location struct{ node, session string }
-	var locations []location
-	for rows.Next() {
-		var item location
-		if err := rows.Scan(&item.node, &item.session); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		locations = append(locations, item)
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, err
 	}
 	lastErr := error(os.ErrNotExist)
 	for _, item := range locations {
-		if !g.peer(item.node).Mesh {
+		if !g.peer(item.Node).Mesh {
 			continue
 		}
-		if _, err := sessionBlobDir(g.options.Home, item.session); err != nil {
+		if _, err := sessionBlobDir(g.options.Home, item.Session); err != nil {
 			continue
 		}
-		target, err := targetFor(ctx, item.node)
+		target, err := targetFor(ctx, item.Node)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.JoinPath("/api/sessions/"+item.session+"/blobs/"+sha).String(), nil)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.JoinPath("/api/sessions/"+item.Session+"/blobs/"+sha).String(), nil)
 		if err != nil {
 			lastErr = err
 			continue

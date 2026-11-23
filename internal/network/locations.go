@@ -2,14 +2,12 @@ package network
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -42,11 +40,7 @@ func (g *Gateway) runContentLocations(ctx context.Context, interval time.Duratio
 }
 
 func (g *Gateway) advertiseCacheLocations(ctx context.Context) error {
-	type location struct {
-		hash           string
-		size, verified int64
-	}
-	locations := map[string]location{}
+	locations := map[string]state.CacheLocation{}
 	stamps, err := os.ReadDir(filepath.Join(g.options.Home, "verified"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -121,54 +115,9 @@ func (g *Gateway) advertiseCacheLocations(ctx context.Context) error {
 		}); err != nil {
 			return err
 		}
-		locations[key] = location{stamp.ContentHash, size, info.ModTime().UnixNano()}
+		locations[key] = state.CacheLocation{Hash: stamp.ContentHash, Size: size, Verified: info.ModTime().UnixNano()}
 	}
-	rows, err := g.store.Reader.QueryContext(ctx, "SELECT cache_key FROM cache_locations WHERE node_id="+state.LocalNodeSQL)
-	if err != nil {
-		return err
-	}
-	var stale []string
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			rows.Close()
-			return err
-		}
-		if _, ok := locations[key]; !ok {
-			stale = append(stale, key)
-		}
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return err
-	}
-	keys := append([]string(nil), stale...)
-	for key := range locations {
-		keys = append(keys, key)
-	}
-	// Bound each replicated version so a large cache inventory still fits a sync page.
-	for batch := range slices.Chunk(keys, 64) {
-		if err := state.Transaction(ctx, g.store.DB, func(tx *sql.Tx) error {
-			for _, key := range batch {
-				item, ok := locations[key]
-				if !ok {
-					if _, err := tx.ExecContext(ctx, "DELETE FROM cache_locations WHERE cache_key=? AND node_id="+state.LocalNodeSQL, key); err != nil {
-						return err
-					}
-					continue
-				}
-				if _, err := tx.ExecContext(ctx, `INSERT INTO cache_locations(cache_key,node_id,content_hash,size,verified_at)
- VALUES (?,`+state.LocalNodeSQL+`,?,?,?) ON CONFLICT(cache_key,node_id) DO UPDATE SET
- content_hash=excluded.content_hash,size=excluded.size,verified_at=excluded.verified_at
- WHERE content_hash<>excluded.content_hash OR size<>excluded.size OR verified_at<>excluded.verified_at`, key, item.hash, item.size, item.verified); err != nil {
-					return err
-				}
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return g.store.Archive().SetLocalCache(ctx, locations)
 }
 
 func advertiseBlob(ctx context.Context, store *state.Store, id, sha string, size int64) error {
@@ -178,8 +127,5 @@ func advertiseBlob(ctx context.Context, store *state.Store, id, sha string, size
 	if !strings.HasPrefix(id, "session-") || !validPeerSessionID(id) {
 		return errors.New("invalid blob session")
 	}
-	_, err := store.DB.ExecContext(ctx, `INSERT INTO blob_locations(sha,node_id,session_id,size)
- VALUES (?,`+state.LocalNodeSQL+`,?,?) ON CONFLICT(sha,node_id) DO UPDATE SET session_id=excluded.session_id,size=excluded.size
- WHERE session_id<>excluded.session_id OR size<>excluded.size`, sha, id, size)
-	return err
+	return store.Archive().AdvertiseBlob(ctx, id, sha, size)
 }
