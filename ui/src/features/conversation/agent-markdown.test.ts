@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest"
-import { renderAgentBlocks, renderAgentMarkdown } from "./agent-markdown"
+import { beforeAll, describe, expect, it } from "vitest"
+import { markdownReady, renderAgentBlocks, renderAgentMarkdown } from "./agent-markdown"
 
+
+beforeAll(() => markdownReady)
 describe("renderAgentMarkdown", () => {
   it("highlights known fenced languages", () => {
     const html = renderAgentMarkdown("```go\nfunc main() {}\n```")

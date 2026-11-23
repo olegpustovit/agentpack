@@ -1,7 +1,10 @@
 import { act, createElement } from "react"
 import { createRoot } from "react-dom/client"
-import { describe, expect, it } from "vitest"
+import { beforeAll, describe, expect, it } from "vitest"
 import { ToolDiffBody, toolDiffUsesWordMarks } from "./tool-diff"
+import { markdownReady } from "./agent-markdown"
+
+beforeAll(() => markdownReady)
 
 describe("toolDiffUsesWordMarks", () => {
   it("marks changed tokens on edited lines", () => {
