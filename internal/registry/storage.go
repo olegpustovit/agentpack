@@ -80,14 +80,12 @@ func (s *Store) storeObject(table, id string, data []byte) error {
 	})
 }
 
-func (s *Store) removeObject(id string) error {
-	return state.Transaction(context.Background(), s.sql.DB, func(tx *sql.Tx) error {
-		if _, err := tx.Exec("DELETE FROM registry_objects WHERE digest=?", id); err != nil {
-			return err
-		}
-		_, err := tx.Exec("DELETE FROM registry_names WHERE digest=?", id)
+func removeObject(tx *sql.Tx, id string) error {
+	if _, err := tx.Exec("DELETE FROM registry_objects WHERE digest=?", id); err != nil {
 		return err
-	})
+	}
+	_, err := tx.Exec("DELETE FROM registry_names WHERE digest=?", id)
+	return err
 }
 
 func (s *Store) readBindings(id string) ([]byte, bool, error) {

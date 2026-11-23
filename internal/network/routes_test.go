@@ -71,7 +71,7 @@ func TestRoutePoliciesArePinned(t *testing.T) {
 	}
 	cliRoutes := []string{"GET /api/debug/pprof/{name...}", "POST /api/local/sessions/{id}/presence", "DELETE /api/local/sessions/{id}/presence"}
 	// A peer may call these with its verified identity alone; every other peer route needs a forwarded account.
-	identityOnly := []string{"POST /api/library/latest", "POST /api/library/draft-state", "POST /api/logs/ingest", "POST /api/mcp/credentials/{id}/refresh"}
+	identityOnly := []string{"POST /api/library/latest", "POST /api/library/draft-state", "POST /api/logs/ingest", "POST /api/mcp/credentials/{id}/refresh", "POST /api/sync/main/release"}
 	noETag := []string{"GET /api/events", "GET /api/sync/events", "GET /api/status", "GET /api/config", "GET /api/sessions/{id}/terminal", "GET /api/sessions/{id}/output"}
 	for _, row := range routeTable {
 		want := account
@@ -118,7 +118,7 @@ func TestRoutePoliciesArePinned(t *testing.T) {
 	}
 	// The peer allow list before the route table, verbatim.
 	old := []string{
-		"GET /api/cache/{cache_key}", "POST /api/logs/ingest", "GET /api/logs/trace/{trace}", "GET /api/sync/changes", "GET /api/sync/events",
+		"GET /api/cache/{cache_key}", "POST /api/logs/ingest", "GET /api/logs/trace/{trace}", "GET /api/sync/changes", "GET /api/sync/events", "POST /api/sync/main/release",
 		"GET /api/library/packages", "GET /api/library/agentpacks", "POST /api/library/agentpacks", "POST /api/library/latest", "POST /api/library/draft-state",
 		"GET /api/library/agentpacks/{id}", "PATCH /api/library/agentpacks/{id}", "DELETE /api/library/agentpacks/{id}", "GET /api/library/agentpacks/{id}/conflict",
 		"POST /api/library/agentpacks/{id}/resolve", "GET /api/library/agentpacks/{id}/revisions/{revision}/restore-preview",

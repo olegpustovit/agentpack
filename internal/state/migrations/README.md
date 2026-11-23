@@ -50,6 +50,14 @@ omp_settings replicates network-wide Oh My Pi settings, one sparse JSON row per 
 Each gateway renders the rows into its own `omp/settings.yml` overlay.
 
 agent_credentials replicates agent sign-in files, secrets included, so signing an
-agent in on one node signs it in on all of them. The newest file wins; a sign-out
+agent in on one node signs it in on all of them. Each publish raises the row's `rev`;
+the local `agent_credential_installs` table records what this machine last installed or
+published, so a changed local file is published and an unchanged one takes the latest
+revision, without comparing clocks across machines. A sign-out
 from the web UI leaves a newer empty row that stops sharing without deleting other
 nodes' files.
+
+The mesh wire version is `ReplicationVersion`, a hash of the replicated tables'
+columns. A local-only migration leaves it unchanged; adding or changing a
+replicated column fails `TestReplicationVersionIsPinned` until the constant is
+updated, and peers on the old value show Needs update until they upgrade.

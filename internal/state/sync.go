@@ -9,6 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 // SQLiteValue keeps integers exact and distinguishes an empty blob from NULL.
@@ -88,10 +92,17 @@ type Change struct {
 	TS         *string     `json:"ts"`
 }
 
+// SiteID is fixed for the life of the database, so every poll after the first reads the cached copy.
 func (s *Store) SiteID(ctx context.Context) ([]byte, error) {
+	if site := s.site.Load(); site != nil {
+		return bytes.Clone(*site), nil
+	}
 	var site []byte
-	err := s.Reader.QueryRowContext(ctx, "SELECT crsql_site_id()").Scan(&site)
-	return site, err
+	if err := s.Reader.QueryRowContext(ctx, "SELECT crsql_site_id()").Scan(&site); err != nil {
+		return nil, err
+	}
+	s.site.Store(&site)
+	return bytes.Clone(site), nil
 }
 
 // The persisted counter cannot fall when a newer value supersedes the last row of an older version.
@@ -161,8 +172,15 @@ func (s *Store) WriteVersion(ctx context.Context, version int64, exclude []byte,
 	return err
 }
 
-// Changes never splits a source version; next also advances past excluded-only versions.
-func (s *Store) Changes(ctx context.Context, since int64, exclude []byte, maxBytes int) ([]Change, int64, error) {
+// ErrCursorAhead means the peer saw versions this database no longer has: it was restored from a copy.
+var ErrCursorAhead = errors.New("sync cursor is ahead of the source database")
+
+// changeRowCost is less than any encoded change, so a page reaches its byte budget before its row limit.
+const changeRowCost = 96
+
+// ChangePage encodes complete source versions after since as one JSON array within maxBytes.
+// It never splits a source version; next also advances past excluded-only versions.
+func (s *Store) ChangePage(ctx context.Context, since int64, exclude []byte, maxBytes int) (json.RawMessage, int64, error) {
 	if since < 0 || maxBytes < 2 || len(exclude) != 0 && len(exclude) != 16 {
 		return nil, since, errors.New("invalid change page parameters")
 	}
@@ -176,54 +194,109 @@ func (s *Store) Changes(ctx context.Context, since int64, exclude []byte, maxByt
 		return nil, since, err
 	}
 	if since > high {
-		return nil, since, errors.New("sync cursor is ahead of the source database")
+		return nil, since, ErrCursorAhead
 	}
+	limit := maxBytes/changeRowCost + 1
 	rows, err := tx.QueryContext(ctx, `SELECT "table",pk,cid,val,col_version,db_version,site_id,cl,seq,ts
 		FROM crsql_changes WHERE db_version>? AND (? IS NULL OR site_id IS NOT ?)
-		ORDER BY db_version,seq,"table",pk,cid`, since, exclude, exclude)
+		ORDER BY db_version,seq,"table",pk,cid LIMIT ?`, since, exclude, exclude, limit)
 	if err != nil {
 		return nil, since, err
 	}
 	defer rows.Close()
-	result, group := []Change{}, []Change{}
-	next, version := since, int64(-1)
-	size, groupSize := 2, 0
+	var page bytes.Buffer
+	page.WriteByte('[')
+	encoder := json.NewEncoder(&page)
+	// complete is the page length through the last whole version.
+	complete, next, version, count := 1, since, int64(-1), 0
 	for rows.Next() {
+		count++
 		var change Change
 		var value any
 		if err := rows.Scan(&change.Table, &change.PK, &change.Column, &value, &change.ColVersion, &change.DBVersion, &change.SiteID, &change.CL, &change.Seq, &change.TS); err != nil {
 			return nil, since, err
 		}
 		if change.DBVersion != version {
-			result = append(result, group...)
-			size += groupSize
 			if version >= 0 {
-				next = version
+				complete, next = page.Len(), version
 			}
-			group, groupSize, version = nil, 0, change.DBVersion
+			version = change.DBVersion
 		}
-		change.Value, err = sqliteValue(value)
-		if err != nil {
+		if change.Value, err = sqliteValue(value); err != nil {
 			return nil, since, err
 		}
-		body, err := json.Marshal(change)
-		if err != nil {
+		if page.Len() > 1 {
+			page.WriteByte(',')
+		}
+		if err := encoder.Encode(change); err != nil {
 			return nil, since, err
 		}
-		cost := len(body) + 1
-		if size+groupSize+cost > maxBytes {
-			if len(result) == 0 {
-				return nil, since, &ChangeVersionTooLargeError{Version: version, Limit: maxBytes}
-			}
-			return result, next, nil
+		if page.Len()+1 > maxBytes {
+			break
 		}
-		group = append(group, change)
-		groupSize += cost
 	}
 	if err := rows.Err(); err != nil {
 		return nil, since, err
 	}
-	return append(result, group...), high, nil
+	if page.Len()+1 <= maxBytes && count < limit {
+		page.WriteByte(']')
+		return page.Bytes(), high, nil
+	}
+	if complete == 1 {
+		return nil, since, &ChangeVersionTooLargeError{Version: version, Limit: maxBytes}
+	}
+	page.Truncate(complete)
+	page.WriteByte(']')
+	return page.Bytes(), next, nil
+}
+
+// servedFile sits beside state.db, so restoring the database from a copy leaves it behind.
+func (s *Store) servedFile() string { return filepath.Join(s.home, "state.served") }
+
+// NoteServed records the highest version a peer has been sent; Open uses it to detect a restored database.
+func (s *Store) NoteServed(version int64) error {
+	if version <= s.served.Load() {
+		return nil
+	}
+	s.served.Store(version)
+	// A torn write after a crash reads as 0 and only skips detection; it never blocks opening.
+	return os.WriteFile(s.servedFile(), []byte(strconv.FormatInt(version, 10)), 0o600)
+}
+
+// catchUpServed moves the version counter past what peers already hold after a restore,
+// so new writes get versions their cursors have not passed.
+func (s *Store) catchUpServed(ctx context.Context) error {
+	data, err := os.ReadFile(s.servedFile())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	served, _ := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	s.served.Store(served)
+	_, err = s.DB.ExecContext(ctx, `INSERT INTO crsql_db_versions(site_id,db_version) SELECT crsql_site_id(),?1
+ WHERE ?1>(SELECT coalesce(max(db_version),0) FROM crsql_db_versions)
+ ON CONFLICT(site_id) DO UPDATE SET db_version=excluded.db_version WHERE db_version<excluded.db_version`, served)
+	return err
+}
+
+// ResetCursor rewinds a peer's cursor to the start, after the peer's database was restored; reapplying is idempotent.
+func (s *Store) ResetCursor(ctx context.Context, site []byte) error {
+	if len(site) != 16 {
+		return errors.New("invalid peer site ID")
+	}
+	_, err := s.DB.ExecContext(ctx, "UPDATE crsql_tracked_peers SET version=0 WHERE site_id=? AND tag=0 AND event=0", site)
+	return err
+}
+
+// Changes decodes ChangePage for callers that inspect the changes.
+func (s *Store) Changes(ctx context.Context, since int64, exclude []byte, maxBytes int) ([]Change, int64, error) {
+	page, next, err := s.ChangePage(ctx, since, exclude, maxBytes)
+	if err != nil {
+		return nil, next, err
+	}
+	var changes []Change
+	return changes, next, json.Unmarshal(page, &changes)
 }
 
 func decodeChanges(changes []Change) ([]any, error) {

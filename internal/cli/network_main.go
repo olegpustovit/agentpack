@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -70,6 +71,17 @@ func (runner Runner) runGatewayMain(ctx context.Context, home string, args []str
 		}
 		if err := store.SetMain(ctx, roles, home); err != nil {
 			return 1, err
+		}
+		// After the switch commits, so a refused switch never leaves the mesh without an acting Main.
+		if roles.MainNode != "" && roles.MainNode != local {
+			releaseCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			err := network.ReleaseMain(releaseCtx, home, roles.MainNode, roles.Epoch)
+			cancel()
+			if err != nil {
+				if _, err := fmt.Fprintf(runner.Stderr, "warning: %s did not release the main role (%v); it keeps refreshing MCP sign-ins and sending notifications until this change reaches it.\n", roles.MainName, err); err != nil {
+					return 1, err
+				}
+			}
 		}
 		_, err = fmt.Fprintln(runner.Stdout, "This machine is the main gateway.")
 	case "archive-ready":

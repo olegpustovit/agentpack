@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -323,5 +325,111 @@ func TestPreserveArchiveEditsWithoutClocksLeavesWriterFree(t *testing.T) {
 	defer cancel()
 	if err := store.preserveArchiveEdits(ctx, store.DB, changes, make([]any, len(changes))); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestChangePagesEndOnWholeVersionsAndCoverEverything(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i := range 40 {
+		if _, err := s.DB.Exec("INSERT INTO conversation_events(session_id,seq,body) VALUES ('s',?,'x'),('s',?,'y')", 2*i, 2*i+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, high, err := s.Changes(t.Context(), 0, nil, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paged []Change
+	for since, pages := int64(0), 0; since < high; pages++ {
+		changes, next, err := s.Changes(t.Context(), since, nil, 2048)
+		if err != nil || next <= since || pages > len(all) {
+			t.Fatalf("page after %d: next %d, %v", since, next, err)
+		}
+		if body, _ := json.Marshal(changes); len(body) > 2048 {
+			t.Fatalf("page of %d bytes exceeds the budget", len(body))
+		}
+		if last := changes[len(changes)-1]; last.DBVersion != next && next != high {
+			t.Fatalf("page ends inside version %d, cursor %d", last.DBVersion, next)
+		}
+		paged = append(paged, changes...)
+		since = next
+	}
+	if !reflect.DeepEqual(paged, all) {
+		t.Fatalf("paged %d changes, want %d", len(paged), len(all))
+	}
+}
+
+func TestRestoredSourceKeepsPeerCursorsValid(t *testing.T) {
+	ctx := t.Context()
+	home := t.TempDir()
+	source, err := Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	site, _ := source.SiteID(ctx)
+	pull := func() {
+		t.Helper()
+		since, _ := peer.Cursor(ctx, site)
+		changes, next, err := source.Changes(ctx, since, nil, 4<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := source.NoteServed(next); err != nil {
+			t.Fatal(err)
+		}
+		if err := peer.ApplyPage(ctx, changes, site, next); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert := func(id string) {
+		t.Helper()
+		if _, err := source.DB.Exec("INSERT INTO sessions(id,name) VALUES (?,?)", id, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("one")
+	pull()
+	snapshot := filepath.Join(t.TempDir(), "copy.db")
+	if _, err := source.DB.Exec("VACUUM INTO ?", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	insert("two")
+	insert("three")
+	pull()
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		_ = os.Remove(filepath.Join(home, "state.db"+suffix))
+	}
+	data, err := os.ReadFile(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "state.db"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if source, err = Open(home); err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	insert("after-restore")
+	pull()
+	var name string
+	if err := peer.Reader.QueryRow("SELECT name FROM sessions WHERE id='after-restore'").Scan(&name); err != nil {
+		t.Fatalf("peer missed a write made after the restore: %v", err)
+	}
+	// Without the watermark the cursor is ahead and the source says so instead of skipping versions.
+	if _, _, err := source.Changes(ctx, 1<<40, nil, 4<<20); !errors.Is(err, ErrCursorAhead) {
+		t.Fatalf("ahead cursor: %v", err)
 	}
 }

@@ -21,8 +21,7 @@ import (
 
 const syncPageLimit = 4 << 20
 
-// The local quarantine migration leaves the replicated schema unchanged.
-const replicationVersion = 44
+const replicationVersion = state.ReplicationVersion
 
 type stateChangePage struct {
 	reachable bool
@@ -33,6 +32,8 @@ type stateChangePage struct {
 	Transfer  *stateTransfer `json:"transfer,omitempty"`
 	Data      []byte         `json:"data,omitempty"`
 	Offset    int64          `json:"offset,omitempty"`
+	// Reset asks the puller to restart from 0: its cursor is past this (restored) database.
+	Reset bool `json:"reset,omitempty"`
 }
 
 // peerOnly requires the identity attached by peerHandler, never a caller's header.
@@ -71,6 +72,31 @@ func (g *Gateway) registerStateSync(mux routeRegistrar) {
 			return
 		}
 		g.serveEvents(w, r)
+	}))
+	// A new Main asks the old one to stop Main-only work before its switch replicates.
+	mux.HandleFunc("POST /api/sync/main/release", g.peerOnly(func(w http.ResponseWriter, r *http.Request) {
+		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
+		if !g.meshPeer(r.Context(), peer) {
+			http.Error(w, "mesh replication requires explicit enrollment on both machines", http.StatusForbidden)
+			return
+		}
+		var body struct {
+			Epoch int64 `json:"epoch"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&body); err != nil {
+			badRequest(w, "invalid release request")
+			return
+		}
+		released, err := g.auth.store.ReleaseMain(r.Context(), body.Epoch)
+		if errors.Is(err, state.ErrMainChanged) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"released": released})
 	}))
 	mux.HandleFunc("GET /api/sync/changes", g.peerOnly(func(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
@@ -114,11 +140,11 @@ func (g *Gateway) registerStateSync(mux routeRegistrar) {
 			}
 		}
 		site, err := g.auth.store.SiteID(r.Context())
-		var rows []state.Change
+		rows := json.RawMessage("[]")
 		var next int64
 		// Reserve space for the envelope in the 4 MiB response limit.
 		if err == nil && sinceText != "" {
-			rows, next, err = g.auth.store.Changes(r.Context(), since, exclude, syncPageLimit-1024)
+			rows, next, err = g.auth.store.ChangePage(r.Context(), since, exclude, syncPageLimit-1024)
 		}
 		var oversized *state.ChangeVersionTooLargeError
 		if errors.As(err, &oversized) {
@@ -128,6 +154,15 @@ func (g *Gateway) registerStateSync(mux routeRegistrar) {
 				writeJSON(w, stateChangePage{Schema: replicationVersion, SiteID: site, Next: oversized.Version, Transfer: transfer})
 				return
 			}
+		}
+		if errors.Is(err, state.ErrCursorAhead) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			writeJSON(w, stateChangePage{Schema: replicationVersion, SiteID: site, Reset: true})
+			return
+		}
+		if err == nil {
+			err = g.auth.store.NoteServed(next)
 		}
 		if err != nil {
 			if event := obs.From(r.Context()); event != nil {
@@ -140,11 +175,26 @@ func (g *Gateway) registerStateSync(mux routeRegistrar) {
 			http.Error(w, "state changes unavailable", status)
 			return
 		}
-		writeJSON(w, stateChangePage{Schema: replicationVersion, SiteID: site, Next: next, Changes: rows})
+		// The page is already encoded; the outer Changes field shadows the decoded one.
+		writeJSON(w, struct {
+			stateChangePage
+			Changes json.RawMessage `json:"changes"`
+		}{stateChangePage{Schema: replicationVersion, SiteID: site, Next: next}, rows})
 	}))
 }
 
-var errSyncNeedsUpdate = errors.New("peer needs update")
+// ReleaseMain asks the current Main, through the local gateway, to hand over epoch before
+// `gateway main set` switches to this machine.
+func ReleaseMain(ctx context.Context, home, node string, epoch int64) error {
+	body, _ := json.Marshal(map[string]int64{"epoch": epoch})
+	_, err := NodeRequest(ctx, home, http.MethodPost, "/api/sync/main/release?"+url.Values{"node": {node}}.Encode(), bytes.NewReader(body))
+	return err
+}
+
+var (
+	errSyncNeedsUpdate = errors.New("peer needs update")
+	errSyncReset       = errors.New("peer database was restored")
+)
 
 func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, since int64, exclude []byte) (stateChangePage, error) {
 	var page stateChangePage
@@ -167,6 +217,9 @@ func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, s
 	page.reachable = true
 	if response.StatusCode == http.StatusConflict {
 		_ = json.NewDecoder(io.LimitReader(response.Body, 1024)).Decode(&page)
+		if page.Reset && page.Schema == replicationVersion {
+			return page, errSyncReset
+		}
 		return page, errSyncNeedsUpdate
 	}
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusForbidden {
@@ -204,27 +257,42 @@ func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, s
 }
 
 // pullState resumes each source by its immutable site ID, including after gateway restarts.
-func pullState(ctx context.Context, store *state.Store, library *registry.Store, client *http.Client, target *url.URL) (stateChangePage, bool, error) {
+// site is the source's ID from the previous pull, or nil to ask for it first.
+func pullState(ctx context.Context, store *state.Store, library *registry.Store, client *http.Client, target *url.URL, site []byte) (stateChangePage, bool, error) {
 	local, err := store.SiteID(ctx)
 	if err != nil {
 		return stateChangePage{}, false, err
 	}
-	page, err := fetchStatePage(ctx, client, target, -1, local)
-	if err != nil {
-		return page, false, err
+	cached := site != nil
+	if !cached {
+		page, err := fetchStatePage(ctx, client, target, -1, local)
+		if err != nil {
+			return page, false, err
+		}
+		site = page.SiteID
 	}
-	site := page.SiteID
 	if bytes.Equal(site, local) {
-		return page, false, errors.New("cannot replicate a copy of the local database")
+		return stateChangePage{SiteID: site, reachable: true}, false, errors.New("cannot replicate a copy of the local database")
 	}
 	since, err := store.Cursor(ctx, site)
 	if err != nil {
-		return page, false, err
+		return stateChangePage{}, false, err
 	}
 	changed := false
-	page, err = fetchStatePage(ctx, client, target, since, local)
+	page, err := fetchStatePage(ctx, client, target, since, local)
+	if errors.Is(err, errSyncReset) && bytes.Equal(site, page.SiteID) {
+		if err := store.ResetCursor(ctx, site); err != nil {
+			return page, false, err
+		}
+		since = 0
+		page, err = fetchStatePage(ctx, client, target, since, local)
+	}
 	if err != nil {
 		return page, changed, err
+	}
+	if cached && !bytes.Equal(site, page.SiteID) {
+		// The cached ID is stale: the peer replaced its database.
+		return pullState(ctx, store, library, client, target, nil)
 	}
 	for {
 		if !bytes.Equal(site, page.SiteID) {
@@ -383,6 +451,7 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 	client := &http.Client{Transport: tailnetTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	// A peer failing the same way on every retry is recorded once; each record is a replicated write.
 	lastFailure := ""
+	var site []byte
 	for {
 		if !g.meshPeer(ctx, peer) {
 			return
@@ -393,24 +462,15 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 		var page stateChangePage
 		var changed bool
 		if err == nil {
-			page, changed, err = pullState(pullCtx, g.auth.store, g.options.Library.Store, client, target)
+			page, changed, err = pullState(pullCtx, g.auth.store, g.options.Library.Store, client, target, site)
+		}
+		site = nil
+		if err == nil {
+			site = page.SiteID
 		}
 		if err == nil && changed {
 			g.credentialsChanged()
-		}
-		if err == nil {
-			archiveCtx, archiveEvent := obs.Start(pullCtx, "archive.edits", "relayed history")
-			if archiveErr := g.drainArchiveEdits(archiveCtx, targetFor); archiveErr != nil {
-				archiveEvent.Fail(archiveErr)
-				archiveEvent.End()
-			} else if changed {
-				archiveEvent.End()
-			}
-			if cleanupErr := g.cleanupArchivedBlobs(archiveCtx, targetFor); cleanupErr != nil {
-				_, cleanupEvent := obs.Start(archiveCtx, "archive.cleanup", "local attachments")
-				cleanupEvent.Fail(cleanupErr)
-				cleanupEvent.End()
-			}
+			g.wakeArchive()
 		}
 		cancel()
 		if ctx.Err() != nil {

@@ -7,10 +7,12 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/registry"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func replicaStore(t *testing.T) *registry.Store {
@@ -57,7 +59,7 @@ func registryGateway(t *testing.T, node, caller string) (*Gateway, *httptest.Ser
 func pullRegistry(t *testing.T, to *Gateway, server *httptest.Server) error {
 	t.Helper()
 	target, _ := url.Parse(server.URL)
-	_, _, err := pullState(t.Context(), to.auth.store, to.options.Library.Store, server.Client(), target)
+	_, _, err := pullState(t.Context(), to.auth.store, to.options.Library.Store, server.Client(), target, nil)
 	return err
 }
 
@@ -210,5 +212,80 @@ func TestDiscoveredPeersEnrollAutomatically(t *testing.T) {
 	g.autoEnroll(t.Context(), []TailnetNode{{ID: "nPeer"}})
 	if g.meshPeer(t.Context(), "nPeer") {
 		t.Fatal("a removed peer was paired again")
+	}
+}
+
+func TestPullerRestartsWhenSourceCursorIsAhead(t *testing.T) {
+	src, srcServer := registryGateway(t, "a", "b")
+	dst, _ := registryGateway(t, "b", "a")
+	for _, g := range []*Gateway{src, dst} {
+		if err := g.options.Library.Store.EnrollPeer(map[*Gateway]string{src: "b", dst: "a"}[g]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := src.auth.store.DB.Exec("INSERT INTO sessions(id,name) VALUES ('kept','kept')"); err != nil {
+		t.Fatal(err)
+	}
+	site, _ := src.auth.store.SiteID(t.Context())
+	// The destination saw versions a restored source no longer has.
+	if err := dst.auth.store.SetCursor(t.Context(), site, 1<<40); err != nil {
+		t.Fatal(err)
+	}
+	if err := pullRegistry(t, dst, srcServer); err != nil {
+		t.Fatal(err)
+	}
+	var name string
+	if err := dst.auth.store.Reader.QueryRow("SELECT name FROM sessions WHERE id='kept'").Scan(&name); err != nil {
+		t.Fatalf("puller did not restart from the beginning: %v", err)
+	}
+	if cursor, _ := dst.auth.store.Cursor(t.Context(), site); cursor >= 1<<40 {
+		t.Fatalf("cursor stayed ahead: %d", cursor)
+	}
+}
+
+// During a handover both stores may name themselves Main; the one that released its epoch stops.
+func TestOnlyTheUnreleasedMainRefreshesAndPushes(t *testing.T) {
+	oldMain, oldServer := registryGateway(t, "a", "b")
+	newMain, _ := registryGateway(t, "b", "a")
+	if err := oldMain.options.Library.Store.EnrollPeer("b"); err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range []*Gateway{oldMain, newMain} {
+		g.store = g.auth.store
+		if err := g.auth.store.SetMain(t.Context(), state.MainState{}, g.options.Home); err != nil {
+			t.Fatal(err)
+		}
+	}
+	roles, _ := oldMain.auth.store.Main(t.Context())
+	response, err := oldServer.Client().Post(oldServer.URL+"/api/sync/main/release", "application/json", strings.NewReader(`{"epoch":`+strconv.FormatInt(roles.Epoch, 10)+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("release: HTTP %d", response.StatusCode)
+	}
+	acting := 0
+	for node, g := range map[string]*Gateway{"a": oldMain, "b": newMain} {
+		roles, err := g.auth.store.Main(t.Context())
+		if err != nil || roles.MainNode != node {
+			t.Fatalf("%s: %+v %v", node, roles, err)
+		}
+		_, refreshes, err := g.mcpRefresher(t.Context(), mcpCredential{CreatedNode: "c"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if refreshes != roles.ActsAsMain(node) {
+			t.Fatalf("%s: refresh %v, acts as Main %v", node, refreshes, roles.ActsAsMain(node))
+		}
+		if refreshes {
+			acting++
+		}
+	}
+	if acting != 1 {
+		t.Fatalf("%d gateways act as Main", acting)
+	}
+	if acts, _ := oldMain.auth.store.Main(t.Context()); acts.ActsAsMain("a") {
+		t.Fatal("released Main still acts")
 	}
 }

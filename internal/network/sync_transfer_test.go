@@ -108,7 +108,7 @@ func TestOversizedStateVersionTransfersAtomicallyInBoundedChunks(t *testing.T) {
 	}))
 	defer server.Close()
 	endpoint, _ := url.Parse(server.URL)
-	if _, _, err := pullState(t.Context(), target, nil, server.Client(), endpoint); err != nil {
+	if _, _, err := pullState(t.Context(), target, nil, server.Client(), endpoint, nil); err != nil {
 		t.Fatal(err)
 	}
 	cursor, err := target.Cursor(t.Context(), sourceSite)
@@ -131,7 +131,7 @@ func TestOversizedStateVersionTransfersAtomicallyInBoundedChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 	corrupt.Store(true)
-	if _, _, err := pullState(t.Context(), target, nil, server.Client(), endpoint); err == nil || !strings.Contains(err.Error(), "checksum") {
+	if _, _, err := pullState(t.Context(), target, nil, server.Client(), endpoint, nil); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("corrupt transfer admitted: %v", err)
 	}
 	if got, _ := target.Cursor(t.Context(), sourceSite); got != cursor {
@@ -139,7 +139,7 @@ func TestOversizedStateVersionTransfersAtomicallyInBoundedChunks(t *testing.T) {
 	}
 	corrupt.Store(false)
 	chunks.Store(0)
-	if _, changed, err := pullState(t.Context(), target, nil, server.Client(), endpoint); err != nil || !changed {
+	if _, changed, err := pullState(t.Context(), target, nil, server.Client(), endpoint, nil); err != nil || !changed {
 		t.Fatalf("retry: changed=%v err=%v", changed, err)
 	}
 	if chunks.Load() < 2 {
@@ -250,7 +250,7 @@ func TestOversizedArchivedEditReachesMainThroughPeer(t *testing.T) {
 			mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), replicaPeerKey{}, "reader")))
 		}))
 		endpoint, _ := url.Parse(server.URL)
-		_, _, err := pullState(t.Context(), link.target.auth.store, nil, server.Client(), endpoint)
+		_, _, err := pullState(t.Context(), link.target.auth.store, nil, server.Client(), endpoint, nil)
 		server.Close()
 		if err != nil {
 			t.Fatal(err)

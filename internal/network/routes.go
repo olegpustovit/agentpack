@@ -103,6 +103,7 @@ var routeTable = []route{
 	{pattern: "POST /api/push/test"},
 	{pattern: "GET /api/sync/changes", peer: peerRead},
 	{pattern: "GET /api/sync/events", peer: peerRead, noETag: true},
+	{pattern: "POST /api/sync/main/release", peer: peerRead}, // machine protocol: the new Main asks the old one to step down
 	{pattern: "GET /api/limits", peer: peerRead, timeout: timeoutSlow},
 	{pattern: "POST /api/limits/refresh", peer: peerWrite},
 	{pattern: "GET /api/usage"},

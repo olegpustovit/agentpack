@@ -16,13 +16,26 @@ type MainState struct {
 	MainName    string
 	ArchivePath string
 	ArchiveName string
+	// Epoch rises with every Main switch; Released means this machine handed the current epoch over.
+	Epoch    int64
+	Released bool
 }
+
+// ActsAsMain reports whether local may do Main-only work (MCP refresh, push): it holds the role
+// and has not released its epoch to a successor whose row has not replicated yet.
+func (m MainState) ActsAsMain(local string) bool {
+	return local != "" && m.MainNode == local && !m.Released
+}
+
+const mainEpochSQL = `coalesce((SELECT CAST(value AS INTEGER) FROM mesh_settings WHERE key='main_epoch'),0)`
 
 func (s *Store) Main(ctx context.Context) (MainState, error) {
 	var result MainState
 	err := s.Reader.QueryRowContext(ctx, `SELECT
  coalesce((SELECT value FROM mesh_settings WHERE key='main_node'),''),
- coalesce((SELECT value FROM mesh_settings WHERE key='archive_node'),'')`).Scan(&result.MainNode, &result.ArchiveNode)
+ coalesce((SELECT value FROM mesh_settings WHERE key='archive_node'),''),
+ `+mainEpochSQL+`,
+ EXISTS(SELECT 1 FROM main_release WHERE epoch>=`+mainEpochSQL+`)`).Scan(&result.MainNode, &result.ArchiveNode, &result.Epoch, &result.Released)
 	if err != nil {
 		return result, err
 	}
@@ -52,7 +65,8 @@ func (s *Store) SetMain(ctx context.Context, expected MainState, home string) er
 	}
 	return Transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		var main, archive, local string
-		if err := tx.QueryRowContext(ctx, "SELECT coalesce((SELECT value FROM mesh_settings WHERE key='main_node'),''),coalesce((SELECT value FROM mesh_settings WHERE key='archive_node'),''),node_id FROM local_node WHERE id=1").Scan(&main, &archive, &local); err != nil {
+		var epoch int64
+		if err := tx.QueryRowContext(ctx, "SELECT coalesce((SELECT value FROM mesh_settings WHERE key='main_node'),''),coalesce((SELECT value FROM mesh_settings WHERE key='archive_node'),''),"+mainEpochSQL+",node_id FROM local_node WHERE id=1").Scan(&main, &archive, &epoch, &local); err != nil {
 			return err
 		}
 		if main != expected.MainNode || archive != expected.ArchiveNode {
@@ -64,13 +78,13 @@ func (s *Store) SetMain(ctx context.Context, expected MainState, home string) er
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO mesh_nodes(node_id,name,site_id,schema_version) VALUES (?,?,?,?)
  ON CONFLICT(node_id) DO UPDATE SET name=excluded.name,site_id=excluded.site_id,schema_version=excluded.schema_version
- WHERE name IS NOT excluded.name OR site_id IS NOT excluded.site_id OR schema_version IS NOT excluded.schema_version`, local, name, site, SchemaVersion()); err != nil {
+ WHERE name IS NOT excluded.name OR site_id IS NOT excluded.site_id OR schema_version IS NOT excluded.schema_version`, local, name, site, ReplicationVersion); err != nil {
 			return err
 		}
 		if main == local {
 			return nil
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO mesh_settings(key,value) VALUES ('main_node',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", local); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO mesh_settings(key,value) VALUES ('main_node',?),('main_epoch',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", local, fmt.Sprint(epoch+1)); err != nil {
 			return err
 		}
 		if main == "" && archive == "" {
@@ -79,6 +93,29 @@ func (s *Store) SetMain(ctx context.Context, expected MainState, home string) er
 		}
 		return nil
 	})
+}
+
+// ReleaseMain records that this machine hands Main epoch over to a successor. It reports false when
+// this machine is not Main, and ErrMainChanged when the epoch moved on.
+func (s *Store) ReleaseMain(ctx context.Context, epoch int64) (bool, error) {
+	released := false
+	err := Transaction(ctx, s.DB, func(tx *sql.Tx) error {
+		var main, local string
+		var current int64
+		if err := tx.QueryRowContext(ctx, "SELECT coalesce((SELECT value FROM mesh_settings WHERE key='main_node'),''),"+mainEpochSQL+",node_id FROM local_node WHERE id=1").Scan(&main, &current, &local); err != nil {
+			return err
+		}
+		if main != local {
+			return nil
+		}
+		if current != epoch {
+			return ErrMainChanged
+		}
+		released = true
+		_, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO main_release(epoch) VALUES (?)", epoch)
+		return err
+	})
+	return released, err
 }
 
 func (s *Store) ArchiveReady(ctx context.Context, home string, empty bool) error {

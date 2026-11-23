@@ -719,7 +719,7 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 				http.Error(w, "method not allowed", 405)
 				return
 			}
-			writeJSON(w, TailnetNode{ID: self.ID, Name: self.HostName, Online: true, Version: g.options.Version, Schema: state.SchemaVersion()})
+			writeJSON(w, TailnetNode{ID: self.ID, Name: self.HostName, Online: true, Version: g.options.Version, Schema: replicationVersion})
 			return
 		}
 		peer := identity.Node.StableID

@@ -316,9 +316,9 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 	}
 	// Main notifies every device. Without a Main each gateway notifies the devices it subscribed.
 	scope, scopeArgs := "1", []any{}
-	switch roles.MainNode {
-	case local:
-	case "":
+	switch {
+	case roles.ActsAsMain(local):
+	case roles.MainNode == "":
 		scope, scopeArgs = "s.created_node=?", []any{local}
 	default:
 		g.push.seen = nil
