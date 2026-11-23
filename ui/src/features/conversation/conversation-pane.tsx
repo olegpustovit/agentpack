@@ -303,7 +303,8 @@ export default function ConversationPane({
         setStreamConnected(false)
         if (source?.readyState !== EventSource.CLOSED) return
         close()
-        retry = setTimeout(syncVisibility, reconnectDelay(attempt++))
+        retry = setTimeout(syncVisibility, reconnectDelay(attempt))
+        attempt = attempt + 1
       }
       source.onmessage = (event) => onEntry(event.data)
       source.addEventListener("truncated", onTruncated)

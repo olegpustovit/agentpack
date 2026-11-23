@@ -161,7 +161,10 @@ export function EventsProvider({ children }: { children: ReactNode }) {
         // A chat stream reopens with a fresh `since`; a plain stream the browser gave up on reopens too.
         if (chat || source?.readyState === EventSource.CLOSED) {
           close()
-          if (!document.hidden) retry = setTimeout(open, reconnectDelay(attempt++))
+          if (!document.hidden) {
+            retry = setTimeout(open, reconnectDelay(attempt))
+            attempt = attempt + 1
+          }
         }
       }
       source.onmessage = (event: MessageEvent<string>) =>
