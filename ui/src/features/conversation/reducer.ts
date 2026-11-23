@@ -1,6 +1,7 @@
 import type { GoalState, SessionInfo } from "@/lib/api-types"
 import { harnessName } from "@/lib/format"
 import type { CompactionPayload, LogEntry, QueuedPrompt, Subagent, ThreadItem, ThreadState, ToolPayload, UserAttachmentPayload, UserMessagePayload } from "./model"
+import { onSignOut } from "@/lib/persist"
 
 // Entries from a subagent carry its session id (or "tool:<id>" for agents that only tag the parent tool call).
 function subagentOf(payload: unknown): string | undefined {
@@ -140,6 +141,8 @@ function updateCompaction(state: ThreadState, compactionId: string, patch: Compa
 
 // ThreadReducer folds log entries one at a time. Items are updated in place and replaced, never mutated, so a
 // snapshot's copy of the list stays valid while later entries arrive: each new entry costs O(1) plus one copy.
+const EMPTY_THREAD: ThreadState = { items: [], needs_you: false, working: false }
+
 class ThreadReducer {
   private state: ThreadState = { items: [], needs_you: false, working: false }
   private tools: Record<string, number> = {}
@@ -150,6 +153,9 @@ class ThreadReducer {
   private compacting: string | undefined
   private goal: GoalState | undefined
   private afterPrompt = false
+  // The last snapshot while no entry has arrived since; a parent re-snapshots only the children an entry touched.
+  private last: ThreadState | undefined
+  private summaries = new Map<string, { thread: ThreadState; tools: number; lastTool?: string }>()
 
   constructor(private readonly nested = false) {}
 
@@ -166,6 +172,7 @@ class ThreadReducer {
   }
 
   apply(entry: LogEntry) {
+    this.last = undefined
     const { state, tools, meta, queue, nested } = this
     // Answers are logged by the gateway without a child stamp; each child resolves its own request by id.
     if (!nested && (entry.kind === "permission_result" || entry.kind === "elicitation_result")) for (const reducer of this.children.values()) reducer.apply(entry)
@@ -398,6 +405,7 @@ class ThreadReducer {
 
   // A new state object each call; the reducer's own list keeps changing afterwards.
   snapshot(): ThreadState {
+    if (this.last) return this.last
     const state: ThreadState = { ...this.state, items: this.state.items.slice() }
     if (this.queue.size > 0) state.queue = [...this.queue.values()]
     if (this.goal) state.goal = this.goal
@@ -405,20 +413,19 @@ class ThreadReducer {
     if (this.meta.size > 0) {
       state.subagents = {}
       for (const [id, info] of this.meta) {
-        const thread = this.children.get(id)?.snapshot() ?? new ThreadReducer(true).snapshot()
-        const tools = thread.items.filter((item) => item.kind === "tool")
-        const last = tools.at(-1)?.data as { title?: string } | undefined
-        state.subagents[id] = {
-          ...info,
-          thread,
-          tools: tools.length,
-          tokens: thread.context_tokens,
-          lastTool: last?.title,
+        const thread = this.children.get(id)?.snapshot() ?? EMPTY_THREAD
+        let summary = this.summaries.get(id)
+        if (summary?.thread !== thread) {
+          const tools = thread.items.filter((item) => item.kind === "tool")
+          summary = { thread, tools: tools.length, lastTool: (tools.at(-1)?.data as { title?: string } | undefined)?.title }
+          this.summaries.set(id, summary)
         }
+        state.subagents[id] = { ...info, ...summary, tokens: thread.context_tokens }
         // A child waiting on you makes the whole chat wait on you.
         if (thread.needs_you) state.needs_you = true
       }
     }
+    this.last = state
     return state
   }
 }
@@ -442,6 +449,7 @@ export function reduceLog(entries: LogEntry[], nested = false): ThreadState {
 // Per-chat reducers, so a streamed entry applies alone instead of replaying the log. A refetch hands over
 // new entry objects, which no longer match the last applied one, and rebuilds once.
 const threads = new Map<string, { reducer: ThreadReducer; count: number; last: LogEntry | undefined; first: LogEntry | undefined; state: ThreadState }>()
+onSignOut(() => threads.clear())
 const THREADS_KEPT = 16
 
 export function reduceThread(key: string, entries: LogEntry[]): ThreadState {
@@ -472,6 +480,9 @@ function patchCompaction(state: ThreadState, compactionId: string, patch: Partia
 // started them: the call whose result names the helper, else (agents such as Antigravity send no
 // MCP result) the first unclaimed helper started after a run_helper, start_session or fork_session
 // call. Open and Stop act on the helper chat itself, whose id follows "helper:".
+// Tool payloads are replaced, never mutated, so a render only serializes the calls that changed.
+const toolText = new WeakMap<ToolPayload, string>()
+
 export function helperSubagents(items: ThreadItem[], helpers: SessionInfo[]): Record<string, Subagent> {
   const out: Record<string, Subagent> = {}
   if (helpers.length === 0) return out
@@ -481,7 +492,8 @@ export function helperSubagents(items: ThreadItem[], helpers: SessionInfo[]): Re
     const tool = item.kind === "tool" ? (item.data as ToolPayload) : undefined
     if (!tool?.toolCallId) continue
     const free = byStart.filter((session) => !out[`helper:${session.id}`])
-    const result = JSON.stringify([tool.rawOutput, tool.content, tool.output])
+    let result = toolText.get(tool)
+    if (result === undefined) toolText.set(tool, (result = JSON.stringify([tool.rawOutput, tool.content, tool.output])))
     const helper =
       free.find((session) => result.includes(session.id)) ??
       // The worker and the helper share a clock; a second of slack covers the log's own timestamping.

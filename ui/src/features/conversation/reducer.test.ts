@@ -368,6 +368,21 @@ describe("reduceThread", () => {
     const refetched = all.map((entry) => ({ ...entry }))
     expect(reduceThread("fixture", refetched)).toEqual(reduceLog(all))
   })
+  it("re-snapshots only the subagents an entry touched", () => {
+    const all = loadJSONL("subagents.jsonl")
+    let previous = reduceThread("subagents", [])
+    for (let n = 1; n <= all.length; n++) {
+      const shown = all.slice(0, n)
+      const next = reduceThread("subagents", shown)
+      expect(next).toEqual(reduceLog(shown))
+      const touched = (all[n - 1]!.payload as { _subagent?: string } | undefined)?._subagent
+      for (const [id, sub] of Object.entries(previous.subagents ?? {})) {
+        // Answers reach every child, so only plain entries for another child prove reuse.
+        if (touched && id !== touched) expect(next.subagents?.[id]?.thread).toBe(sub.thread)
+      }
+      previous = next
+    }
+  })
 })
 
 describe("helperSubagents", () => {
