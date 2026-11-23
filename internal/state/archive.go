@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,11 +104,10 @@ func OpenArchive(home string) (*sql.DB, error) {
 	if err := os.Chmod(path, 0600); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", "file:"+url.PathEscape(filepath.ToSlash(path))+"?agentpack_plain=1&mode=rw&_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000&_txlock=immediate")
+	db, err := OpenPlain(path, PlainOptions{Durable: true})
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	if created {
 		_, err = db.Exec(archiveSchema)
@@ -135,10 +133,5 @@ func ReadArchive(home string) (*sql.DB, error) {
 	if !info.Mode().IsRegular() {
 		return nil, errors.New("archive must be a regular file")
 	}
-	db, err := sql.Open("sqlite3", "file:"+url.PathEscape(filepath.ToSlash(path))+"?agentpack_plain=1&mode=ro&_query_only=1&_busy_timeout=5000")
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	return db, nil
+	return OpenPlain(path, PlainOptions{ReadOnly: true})
 }

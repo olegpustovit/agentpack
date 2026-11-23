@@ -7,12 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 type Filter struct {
@@ -31,20 +32,7 @@ func openLogFile(path string, writable bool) (*sql.DB, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("diagnostic database must be a regular file: %s", path)
 	}
-	absolute, err := filepath.Abs(path)
-	if err != nil {
-		return nil, err
-	}
-	mode := "&mode=ro&_query_only=1"
-	if writable {
-		mode = "&mode=rw"
-	}
-	db, err := sql.Open("sqlite3", "file:"+url.PathEscape(filepath.ToSlash(absolute))+"?agentpack_plain=1&_busy_timeout=5000"+mode)
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	return db, nil
+	return state.OpenPlain(path, state.PlainOptions{ReadOnly: !writable})
 }
 
 func logDays(home string) ([]string, error) {

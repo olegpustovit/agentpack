@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -231,15 +230,10 @@ func (s *Store) openDay(day string) error {
 	if err := errors.Join(file.Chmod(0600), file.Close()); err != nil {
 		return err
 	}
-	absolute, err := filepath.Abs(path)
+	db, err := state.OpenPlain(path, state.PlainOptions{})
 	if err != nil {
 		return err
 	}
-	db, err := sql.Open("sqlite3", "file:"+url.PathEscape(filepath.ToSlash(absolute))+"?agentpack_plain=1&_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000")
-	if err != nil {
-		return err
-	}
-	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(daySchema); err != nil {
 		return errors.Join(err, db.Close())
 	}
