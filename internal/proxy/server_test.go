@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
@@ -107,5 +108,50 @@ func TestRunningAppliesClaudeEnvironmentWithoutAPIKey(t *testing.T) {
 	joined := strings.Join(command.Env, "\n")
 	if strings.Contains(joined, "ANTHROPIC_API_KEY=") || !strings.Contains(joined, "ANTHROPIC_AUTH_TOKEN=proxy-token") {
 		t.Fatalf("env=%v", command.Env)
+	}
+}
+
+// The proxy forwards each upstream event as it arrives, and a failure after the first byte
+// arrives as an Anthropic error event because the status is already sent.
+func TestServerStreamsBeforeUpstreamEnds(t *testing.T) {
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("content-type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"m\"}}\n\n"+
+			"data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":\"Hel\"}\n\n")
+		writer.(http.Flusher).Flush()
+		<-release
+		_, _ = io.WriteString(writer, "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"boom\"}}}\n\n")
+	}))
+	defer upstream.Close()
+	defer close(release)
+	server, err := NewServer(Config{Transport: TransportHTTP, RequestTimeout: 30 * time.Second, Models: DefaultModelMap()}, &staticAuth{endpoint: upstream.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := server.Start()
+	defer func() { _ = server.Shutdown(context.Background()); <-done }()
+	// The deadline only ends a buffering proxy's hang; a streaming one answers at once.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, server.BaseURL()+"/v1/messages", strings.NewReader(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hi"}],"max_tokens":10}`))
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	var head strings.Builder
+	for !strings.Contains(head.String(), `"text":"Hel"`) {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("stream ended before the first delta: %v %q", err, head.String())
+		}
+		head.WriteString(line)
+	}
+	release <- struct{}{}
+	rest, _ := io.ReadAll(reader)
+	if response.StatusCode != 200 || !strings.Contains(string(rest), "event: error") || !strings.Contains(string(rest), "boom") {
+		t.Fatalf("status %d rest %q", response.StatusCode, rest)
 	}
 }

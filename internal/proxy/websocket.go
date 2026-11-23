@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -55,10 +54,10 @@ func WebSocketPayload(body map[string]any) []byte {
 	return data
 }
 
-func (server *Server) callWebSocket(ctx context.Context, requestID uint64, snapshot AuthSnapshot, payload map[string]any, sessionID string) ([]byte, error) {
+func (server *Server) callWebSocket(ctx context.Context, requestID uint64, snapshot AuthSnapshot, payload map[string]any, sessionID string, sink func(SSEEvent) error) error {
 	rawURL, err := WebSocketURL(snapshot.EndpointURL)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	headers := http.Header{}
 	setCodexHeaders(headers, snapshot, sessionID)
@@ -74,20 +73,20 @@ func (server *Server) callWebSocket(ctx context.Context, requestID uint64, snaps
 		}
 		if (setup.Status == 401 || setup.Status == 403) && server.auth != nil {
 			if refreshed, refreshErr := server.auth.RefreshAfterUnauthorized(); refreshErr != nil {
-				return nil, refreshErr
+				return refreshErr
 			} else if refreshed {
 				renewed, _ := server.auth.Snapshot()
-				return server.callWebSocketOnce(ctx, requestID, renewed, payload, sessionID)
+				return server.callWebSocketOnce(ctx, requestID, renewed, payload, sessionID, sink)
 			}
 		}
-		return nil, setup
+		return setup
 	}
-	return server.readWebSocket(connection, requestID, payload)
+	return server.readWebSocket(connection, requestID, payload, sink)
 }
-func (server *Server) callWebSocketOnce(ctx context.Context, requestID uint64, snapshot AuthSnapshot, payload map[string]any, sessionID string) ([]byte, error) {
+func (server *Server) callWebSocketOnce(ctx context.Context, requestID uint64, snapshot AuthSnapshot, payload map[string]any, sessionID string, sink func(SSEEvent) error) error {
 	rawURL, err := WebSocketURL(snapshot.EndpointURL)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	headers := http.Header{}
 	setCodexHeaders(headers, snapshot, sessionID)
@@ -97,47 +96,48 @@ func (server *Server) callWebSocketOnce(ctx context.Context, requestID uint64, s
 		if response != nil {
 			status = response.StatusCode
 		}
-		return nil, &WebSocketSetupError{Message: err.Error(), Status: status}
+		return &WebSocketSetupError{Message: err.Error(), Status: status}
 	}
 	defer connection.Close()
-	return server.readWebSocket(connection, requestID, payload)
+	return server.readWebSocket(connection, requestID, payload, sink)
 }
-func (server *Server) readWebSocket(connection *websocket.Conn, requestID uint64, payload map[string]any) ([]byte, error) {
+func (server *Server) readWebSocket(connection *websocket.Conn, requestID uint64, payload map[string]any, sink func(SSEEvent) error) error {
 	defer connection.Close()
 	_ = connection.SetReadDeadline(time.Now().Add(server.config.WebSocketIdleTimeout))
 	if err := connection.WriteMessage(websocket.TextMessage, WebSocketPayload(payload)); err != nil {
-		return nil, fmt.Errorf("send Codex WebSocket response.create: %w", err)
+		return fmt.Errorf("send Codex WebSocket response.create: %w", err)
 	}
-	var output []byte
+	frames, size := 0, 0
 	for {
 		kind, message, err := connection.ReadMessage()
 		if err != nil {
-			if len(output) == 0 {
-				return nil, &WebSocketSetupError{Message: "Codex WebSocket closed before terminal event: " + err.Error(), RequestSent: true}
+			if frames == 0 {
+				return &WebSocketSetupError{Message: "Codex WebSocket closed before terminal event: " + err.Error(), RequestSent: true}
 			}
 			break
 		}
 		if kind != websocket.TextMessage {
-			return nil, fmt.Errorf("unexpected binary Codex WebSocket frame")
+			return fmt.Errorf("unexpected binary Codex WebSocket frame")
 		}
 		text := string(message)
-		if len(output) == 0 {
+		if frames == 0 {
 			if setup := setupError(text, true); setup != nil {
-				return nil, setup
+				return setup
 			}
 		}
-		for _, line := range strings.Split(text, "\n") {
-			output = append(output, []byte("data: "+line+"\n")...)
+		frames++
+		size += len(message)
+		if err := sink(SSEEvent{Data: text}); err != nil {
+			return err
 		}
-		output = append(output, '\n')
 		var value map[string]any
 		_ = json.Unmarshal(message, &value)
 		if oneOf(stringValue(value["type"]), "response.completed", "response.failed", "response.incomplete", "response.done", "error") {
 			break
 		}
 	}
-	server.diagnostics.Event("websocket_complete", map[string]any{"request_id": requestID, "bytes": len(output)})
-	return output, nil
+	server.diagnostics.Event("websocket_complete", map[string]any{"request_id": requestID, "bytes": size})
+	return nil
 }
 func setupError(text string, sent bool) *WebSocketSetupError {
 	var value map[string]any
