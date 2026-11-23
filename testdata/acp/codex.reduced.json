@@ -1,0 +1,50 @@
+[
+  {
+    "seq": 1,
+    "working": false,
+    "needs_you": false
+  },
+  {
+    "seq": 2,
+    "working": true,
+    "needs_you": false
+  },
+  {
+    "seq": 3,
+    "working": true,
+    "needs_you": false
+  },
+  {
+    "seq": 4,
+    "working": true,
+    "needs_you": false
+  },
+  {
+    "seq": 5,
+    "working": true,
+    "needs_you": false,
+    "context_tokens": 15135,
+    "context_limit": 475000
+  },
+  {
+    "seq": 6,
+    "working": true,
+    "needs_you": false,
+    "context_tokens": 15135,
+    "context_limit": 475000
+  },
+  {
+    "seq": 7,
+    "working": true,
+    "needs_you": false,
+    "context_tokens": 15135,
+    "context_limit": 475000
+  },
+  {
+    "seq": 8,
+    "working": false,
+    "needs_you": false,
+    "context_tokens": 15135,
+    "context_limit": 475000
+  }
+]
