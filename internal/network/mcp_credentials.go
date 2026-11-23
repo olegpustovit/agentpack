@@ -369,6 +369,7 @@ func usable(secret mcpBridgeSecret, now time.Time) bool {
 }
 
 // mcpRefresher is the one node that refreshes a credential: Main, or the node that created it.
+// A Main that released its epoch is not local, so it stops before its successor's row arrives.
 func (g *Gateway) mcpRefresher(ctx context.Context, credential mcpCredential) (refresher string, local bool, err error) {
 	self, err := g.store.NodeID(ctx)
 	if err != nil {
@@ -382,7 +383,7 @@ func (g *Gateway) mcpRefresher(ctx context.Context, credential mcpCredential) (r
 	if refresher == "" {
 		refresher = credential.CreatedNode
 	}
-	return refresher, refresher == "" || refresher == self, nil
+	return refresher, refresher == "" || refresher == self && (roles.MainNode != self || roles.ActsAsMain(self)), nil
 }
 
 // freshMCPSecret returns a credential ready to send, refreshing an OAuth token that expired or that failedGeneration was rejected with.

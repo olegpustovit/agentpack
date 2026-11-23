@@ -109,7 +109,7 @@ replicate their secrets: Main notifies every device, and without a Main each
 node notifies the subscriptions it created. The oldest key pair is current;
 each subscription signs with the key it was made with until its browser renews.
 
-`gateway main set` selects the Main gateway. Switching machines requires typing
+`gateway main set` selects the Main gateway and raises the replicated Main epoch; once committed it asks the old Main over the mesh to release its epoch, so that machine stops MCP refreshes and push before the switch replicates (unreachable: a warning, and the old Main stops when the row arrives). Switching machines requires typing
 `switch`, cleanly stopping the old gateway and copying its `archive.db` and
 archived attachment directories, then running `gateway main archive-ready` on
 the new Main. Missing attachments can also be fetched with both gateways running.

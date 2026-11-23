@@ -73,6 +73,31 @@ func (g *Gateway) registerStateSync(mux *http.ServeMux) {
 		}
 		g.serveEvents(w, r)
 	}))
+	// A new Main asks the old one to stop Main-only work before its switch replicates.
+	mux.HandleFunc("POST /api/sync/main/release", g.peerOnly(func(w http.ResponseWriter, r *http.Request) {
+		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
+		if !g.meshPeer(r.Context(), peer) {
+			http.Error(w, "mesh replication requires explicit enrollment on both machines", http.StatusForbidden)
+			return
+		}
+		var body struct {
+			Epoch int64 `json:"epoch"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&body); err != nil {
+			badRequest(w, "invalid release request")
+			return
+		}
+		released, err := g.auth.store.ReleaseMain(r.Context(), body.Epoch)
+		if errors.Is(err, state.ErrMainChanged) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"released": released})
+	}))
 	mux.HandleFunc("GET /api/sync/changes", g.peerOnly(func(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
 		if !g.meshPeer(r.Context(), peer) {
@@ -156,6 +181,14 @@ func (g *Gateway) registerStateSync(mux *http.ServeMux) {
 			Changes json.RawMessage `json:"changes"`
 		}{stateChangePage{Schema: replicationVersion, SiteID: site, Next: next}, rows})
 	}))
+}
+
+// ReleaseMain asks the current Main, through the local gateway, to hand over epoch before
+// `gateway main set` switches to this machine.
+func ReleaseMain(ctx context.Context, home, node string, epoch int64) error {
+	body, _ := json.Marshal(map[string]int64{"epoch": epoch})
+	_, err := NodeRequest(ctx, home, http.MethodPost, "/api/sync/main/release?"+url.Values{"node": {node}}.Encode(), bytes.NewReader(body))
+	return err
 }
 
 var (

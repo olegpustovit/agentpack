@@ -574,6 +574,7 @@ var peerPatterns = []string{
 	"GET /api/logs/trace/{trace}",
 	"GET /api/sync/changes",
 	"GET /api/sync/events",
+	"POST /api/sync/main/release",
 
 	"GET /api/library/packages",
 	"GET /api/library/agentpacks",
