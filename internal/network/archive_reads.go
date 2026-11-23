@@ -21,7 +21,7 @@ func archiveUnavailable(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func (g *Gateway) serveArchivedConversation(w http.ResponseWriter, r *http.Request, info SessionInfo, targetFor func(context.Context, string) (*url.URL, error)) {
-	roles, err := g.auth.store.Main(r.Context())
+	roles, err := g.store.Main(r.Context())
 	if err != nil {
 		archiveUnavailable(w, r, err)
 		return
@@ -31,7 +31,7 @@ func (g *Gateway) serveArchivedConversation(w http.ResponseWriter, r *http.Reque
 		archiveUnavailable(w, r, errors.New("archive handover is not ready"))
 		return
 	}
-	local, err := g.auth.store.NodeID(r.Context())
+	local, err := g.store.NodeID(r.Context())
 	if err != nil {
 		archiveUnavailable(w, r, err)
 		return
@@ -93,7 +93,7 @@ func (g *Gateway) serveArchivedConversation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var late bool
-	if err := g.auth.store.Reader.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM conversation_events WHERE session_id=?)", info.ID).Scan(&late); err != nil {
+	if err := g.store.Reader.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM conversation_events WHERE session_id=?)", info.ID).Scan(&late); err != nil {
 		archive.Close()
 		archiveUnavailable(w, r, err)
 		return
@@ -118,7 +118,7 @@ func (g *Gateway) serveArchivedConversation(w http.ResponseWriter, r *http.Reque
 	defer archive.Close()
 	var lastSeq int64
 	var truncated bool
-	if err := g.auth.store.Reader.QueryRowContext(r.Context(), "SELECT last_seq,conversation_truncated FROM sessions WHERE id=?", info.ID).Scan(&lastSeq, &truncated); err != nil {
+	if err := g.store.Reader.QueryRowContext(r.Context(), "SELECT last_seq,conversation_truncated FROM sessions WHERE id=?", info.ID).Scan(&lastSeq, &truncated); err != nil {
 		archiveUnavailable(w, r, err)
 		return
 	}

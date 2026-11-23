@@ -1,5 +1,53 @@
 # Home-workspace startup performance
 
+## Core repair WP-D (2026-11-23)
+
+The budget benchmarks (`BenchmarkMaterializationHome`, `BenchmarkCodexSetup/cold`
+and `/warm`) keep the 32 MiB history fixture and no packages. Separate,
+unbudgeted variants add four cached, content-hashed plugins of 2,000 files
+each: `BenchmarkMaterializationHomePackages` and `BenchmarkCodexSetup/warm-packages`.
+
+```sh
+go test ./internal/sync -run '^$' -bench 'Benchmark(MaterializationHome|MaterializationHomePackages|CodexSetup)$' -count 5
+```
+
+After merging core/integrate, Linux amd64 (i9-12900K), medians of five runs on a
+host running other workers (load average 22 to 24 on 20 threads):
+
+| Benchmark | Median (ms) | Range (ms) | Budget (ms) |
+| --- | ---: | ---: | ---: |
+| MaterializationHome | 0.721 | 0.338 to 1.258 | <1 |
+| CodexSetup/warm | 0.135 | 0.113 to 0.156 | <1 |
+| CodexSetup/cold | 25.434 | 12.422 to 27.778 | <20 |
+| MaterializationHomePackages | 0.820 | 0.318 to 0.844 | none |
+| CodexSetup/warm-packages | 21.244 | 10.496 to 22.771 | none |
+
+Cold runs swung by 2 times with the host load, so the cold median does not
+verify the budget; it still needs a run on the ARM64 reference host. With the
+package set, the warm launch's remaining cost is `cache.StatFingerprint`, the
+documented metadata walk of every cached file (8,000 here). WP-D removed the
+capability catalog's walk of every cached file (selectors now `Lstat` one path)
+and the unread `DependencyTrees`; on the same host, the fastest package-set
+warm run went from 11.6 ms to 6.7 ms before the merge.
+
+## Private staging and lock roots (2026-11-23)
+
+Linux amd64, Intel i9-12900K, Go 1.27.3, 32 MiB history fixture. Medians
+of five runs on a shared host.
+
+| Benchmark | Before (ms) | After (ms) |
+| --- | ---: | ---: |
+| MaterializationHome | 0.316 | 0.449 |
+| CodexSetup/warm | 0.123 | 0.181 |
+| CodexSetup/cold | 9.128 | 16.586 |
+
+```sh
+go test ./internal/sync -run '^$' -bench 'Benchmark(MaterializationHome|CodexSetup)$' -count=5
+```
+
+After the change, individual cold runs ranged from 14.8 to 46.7 ms. These
+shared-host measurements leave the Linux ARM64 release budget unverified.
+
 ## State migration release check — Linux ARM64
 
 Measured 2026-11-15 on the deployment host (`oracle-vm`, aarch64 Neoverse-N1,
@@ -194,3 +242,27 @@ materialization, 7.448 → 8.455 ms for cold Codex setup, and 0.139 → 0.134 ms
 warm setup on Linux amd64 (Intel i9-12900K). These benchmarks end before
 `ValidateLaunchInputs`. A separate smoke launch with `CLAUDE_CODE_PATH=/bin/true`
 exited successfully from an empty folder and left both project files absent.
+
+## One `Inputs` model and digest v2 (2026-11-23)
+
+Launch, materialized, synced and preflight lock identities are now digests of
+one `sync.Inputs`; per-harness launch inputs moved to `Harness.LaunchInputs`;
+the cache metadata fingerprint adds inode and status-change time on Unix; and
+package trees keep execute bits under `sha256-tree-v2`. Measured on Linux
+amd64 (WSL2, 20 threads), `-count 5`, default benchtime. Before is `core/wp-n`
+with only the digest v2 commit; values are median milliseconds per operation.
+
+| Benchmark | Before | After |
+| --- | ---: | ---: |
+| Materialization home | 0.372 | 0.324 |
+| Materialization home, packages | 0.322 | 0.328 |
+| Codex setup, cold | 10.289 | 7.934 |
+| Codex setup, warm | 0.138 | 0.112 |
+| Codex setup, warm with packages | 6.213 | 6.052 |
+
+The cold run is noisy on this host (one After run at 10.0 ms); no benchmark
+moved beyond run-to-run spread. Not measured on the ARM64 reference host.
+
+```sh
+go test ./internal/sync -run '^$' -bench 'BenchmarkCodexSetup|BenchmarkMaterializationHome' -count 5
+```

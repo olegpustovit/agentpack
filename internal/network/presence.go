@@ -100,10 +100,6 @@ func RegisterPresence(home, version string, info SessionInfo, process *os.Proces
 
 // Native-stdio callers use this endpoint so foreground setup never opens state.db.
 func (g *Gateway) servePresence(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Origin") != "" || g.local.Secret == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) != 1 {
-		http.Error(w, "local node authentication required", http.StatusForbidden)
-		return
-	}
 	id := r.PathValue("id")
 	_, event := obs.Start(r.Context(), "session", "presence")
 	event.Set("session_id", id)
@@ -112,7 +108,7 @@ func (g *Gateway) servePresence(w http.ResponseWriter, r *http.Request) {
 	}
 	defer event.End()
 	if r.Method == http.MethodDelete {
-		if err := endSession(r.Context(), g.auth.store.DB, id, TerminalState{ExitCode: -1}); err != nil {
+		if err := endSession(r.Context(), g.store.DB, id, TerminalState{ExitCode: -1}); err != nil {
 			event.Fail(err)
 			http.Error(w, "could not persist session end", http.StatusInternalServerError)
 			return
@@ -132,8 +128,7 @@ func (g *Gateway) servePresence(w http.ResponseWriter, r *http.Request) {
 	}
 	info.FolderID, err = FolderIdentity(info.Directory)
 	if err != nil {
-		event.Fail(err)
-		respond(w, nil, err)
+		fail(w, r, err)
 		return
 	}
 	info.ID = record.ID
@@ -148,7 +143,7 @@ func (g *Gateway) servePresence(w http.ResponseWriter, r *http.Request) {
 	}
 	info.StartedBy = &actor
 	info.State = TerminalState{Running: true, ExitCode: -1}
-	if err := upsertSession(r.Context(), g.auth.store.DB, info); err != nil {
+	if err := upsertSession(r.Context(), g.store.DB, info); err != nil {
 		event.Fail(err)
 		http.Error(w, "could not register session", http.StatusInternalServerError)
 		return

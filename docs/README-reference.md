@@ -136,7 +136,7 @@ disable = ["mcp:filesystem"]
 | `agy` | Sync + launch Antigravity with the project as a workspace dir |
 | `completion <shell>` | Generate Bash, Zsh, Fish, or PowerShell completions |
 
-Redirected harness homes do not make resume history temporary: Codex history is shared with `~/.codex`, Grok sessions with `~/.grok/sessions`, and legacy temp-staging history is imported on upgrade without overwriting native files.
+Redirected harness homes do not make resume history temporary: Codex history is shared with `~/.codex` and Grok sessions with `~/.grok/sessions`.
 
 ## Releasing (maintainers)
 

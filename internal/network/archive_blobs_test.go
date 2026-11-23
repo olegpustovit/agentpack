@@ -19,7 +19,7 @@ func TestArchiveKeepsMainAttachmentsAndVerifiesBeforePeerCleanup(t *testing.T) {
 	main, _ := identityGateway(t, t.TempDir(), nil)
 	worker, _ := identityGateway(t, t.TempDir(), nil)
 	for node, g := range map[string]*Gateway{"main": main, "worker": worker} {
-		if err := g.auth.store.BindNode(t.Context(), node); err != nil {
+		if err := g.store.BindNode(t.Context(), node); err != nil {
 			t.Fatal(err)
 		}
 		g.options.Library.Store = replicaStore(t)
@@ -102,6 +102,19 @@ func TestArchiveKeepsMainAttachmentsAndVerifiesBeforePeerCleanup(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workerDir, "environment.json"), []byte("support"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := worker.auth.store.DB.Exec(`CREATE TRIGGER fail_location_delete BEFORE DELETE ON blob_locations
+ BEGIN SELECT RAISE(ABORT,'simulated write failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.cleanupArchivedBlobs(t.Context(), target); err == nil {
+		t.Fatal("location delete unexpectedly succeeded")
+	}
+	if _, err := readSessionBlob(workerDir, sha); err != nil {
+		t.Fatal("file removed before the location commit", err)
+	}
+	if _, err := worker.auth.store.DB.Exec("DROP TRIGGER fail_location_delete"); err != nil {
+		t.Fatal(err)
+	}
 	if err := worker.cleanupArchivedBlobs(t.Context(), target); err != nil {
 		t.Fatal(err)
 	}
@@ -121,13 +134,13 @@ func TestArchiveKeepsMainAttachmentsAndVerifiesBeforePeerCleanup(t *testing.T) {
 	if _, err := readSessionBlob(mainDir, sha); err != nil {
 		t.Fatal("Main image removed", err)
 	}
-	if err := PrepareArchive(t.Context(), main.options.Home); err != nil {
+	if err := PrepareArchive(t.Context(), main.auth.store, main.options.Home); err != nil {
 		t.Fatal("valid archive attachments refused", err)
 	}
 	if err := os.Remove(blobPath(mainDir, sha)); err != nil {
 		t.Fatal(err)
 	}
-	if err := PrepareArchive(t.Context(), main.options.Home); err == nil || !strings.Contains(err.Error(), "archive attachment unavailable") {
+	if err := PrepareArchive(t.Context(), main.auth.store, main.options.Home); err == nil || !strings.Contains(err.Error(), "archive attachment unavailable") {
 		t.Fatalf("handover ignored a missing attachment: %v", err)
 	}
 }

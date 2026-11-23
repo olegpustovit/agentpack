@@ -28,17 +28,21 @@ func TestPrepareFinalizeBuildsFakeHomeAndMergesUserMCP(t *testing.T) {
 	}
 	ctx := base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}
 	h := New()
-	if err := h.Prepare(ctx); err != nil {
+	if err := h.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	packCommand := "pack"
-	if err := h.WriteMCP(mcp.Entries{"same": {Server: mcp.Server{Command: &packCommand}}, "pack": {Server: mcp.Server{Command: &packCommand}}}, ctx); err != nil {
+	projection, err := h.PlanMCP(mcp.Entries{"same": {Server: mcp.Server{Command: &packCommand}}, "pack": {Server: mcp.Server{Command: &packCommand}}}, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.WriteMCPProjection(projection); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.Finalize(nil, ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Verify(ctx); err != nil {
+	if err := h.Check(ctx); err != nil {
 		t.Fatal(err)
 	}
 	fake, _ := paths.StagingCursorHomeDirForMode(project, "default")
@@ -74,7 +78,7 @@ func TestFakeHomeSharesArtLoginAcrossRebuilds(t *testing.T) {
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
 	ctx := base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}
 	h := New()
-	if err := h.Prepare(ctx); err != nil {
+	if err := h.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	fake, err := paths.StagingCursorHomeDirForMode(project, "default")
@@ -97,7 +101,7 @@ func TestFakeHomeSharesArtLoginAcrossRebuilds(t *testing.T) {
 	}
 	// A login created after staging must be visible on the next fast launch.
 	t.Setenv("CURSOR_AGENT_PATH", os.Args[0])
-	if _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: ctx.Mode}); err != nil {
+	if _, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: ctx.Mode}); err != nil {
 		t.Fatal(err)
 	}
 	if data, err := os.ReadFile(filepath.Join(fake, ".artifacts", "config")); err != nil || string(data) != "fixture" {
@@ -164,10 +168,10 @@ func TestUserSkillsSeedFakeHomeBeforePackOverlay(t *testing.T) {
 	}
 	ctx := base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}
 	h := New()
-	if err := h.Prepare(ctx); err != nil {
+	if err := h.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	pack, err := h.StagedRoot(ctx)
+	pack, err := h.Root(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

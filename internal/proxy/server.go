@@ -12,11 +12,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
+	sse "github.com/tmaxmax/go-sse"
 )
 
 type Server struct {
@@ -111,90 +113,128 @@ func (server *Server) messages(writer http.ResponseWriter, request *http.Request
 	}
 	requestedModel := stringValue(body["model"])
 	stream, _ := body["stream"].(bool)
-	bytes, err := server.callUpstream(request.Context(), requestID, body, request.Header.Get("x-claude-code-session-id"))
-	if err != nil {
-		writeError(writer, 502, "api_error", err.Error())
-		return
-	}
 	messageID := fmt.Sprintf("msg_agentpack_%d_%d", time.Now().UnixMilli(), server.counter.Add(1))
-	if stream {
-		chunks, err := CodexToAnthropicSSE(bytes, messageID, requestedModel)
-		if err != nil {
-			writeError(writer, 502, "api_error", err.Error())
+	// Each upstream event is translated and flushed as it arrives; only a non-streaming reply is collected.
+	reducer := newCodexReducer()
+	encoder := &anthropicStream{messageID: messageID, model: requestedModel}
+	var collected []map[string]any
+	open := false
+	send := func(frames ...[]byte) {
+		if !open {
+			open = true
+			writer.Header().Set("Content-Type", "text/event-stream")
+			writer.Header().Set("Cache-Control", "no-cache")
+			writer.WriteHeader(200)
+		}
+		for _, frame := range frames {
+			_, _ = writer.Write(frame)
+		}
+		if flusher, ok := writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	}
+	emit := func(step map[string]any) {
+		if !stream {
+			collected = append(collected, step)
+		} else if frames := encoder.frames(step); len(frames) > 0 {
+			send(frames...)
+		}
+	}
+	err = server.callUpstream(request.Context(), requestID, body, request.Header.Get("x-claude-code-session-id"), func(event SSEEvent) error {
+		steps, err := reducer.event(event)
+		for _, step := range steps {
+			emit(step)
+		}
+		return err
+	})
+	var finish map[string]any
+	if err == nil {
+		finish, err = reducer.finish()
+	}
+	if err != nil {
+		if open { // the status is already sent: report the failure in the stream
+			send(EncodeSSE("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": err.Error()}}))
 			return
 		}
-		writer.Header().Set("Content-Type", "text/event-stream")
-		writer.Header().Set("Cache-Control", "no-cache")
-		writer.WriteHeader(200)
-		flusher, _ := writer.(http.Flusher)
-		for _, chunk := range chunks {
-			_, _ = writer.Write(chunk)
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
-		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
-		return
-	}
-	response, err := AccumulateCodex(bytes, messageID, requestedModel)
-	if err != nil {
 		writeError(writer, 502, "api_error", err.Error())
 		return
 	}
-	writeJSONResponse(writer, 200, response)
+	emit(finish)
+	if stream {
+		send([]byte("data: [DONE]\n\n"))
+		return
+	}
+	writeJSONResponse(writer, 200, AccumulateCodex(collected, messageID, requestedModel))
 }
-func (server *Server) callUpstream(ctx context.Context, requestID uint64, anthropic map[string]any, sessionID string) ([]byte, error) {
+
+// maxUpstreamEvent bounds one upstream event; response.completed repeats the whole output.
+const maxUpstreamEvent = 16 << 20
+
+// callUpstream hands each upstream event to sink as it arrives.
+func (server *Server) callUpstream(ctx context.Context, requestID uint64, anthropic map[string]any, sessionID string, sink func(SSEEvent) error) error {
 	snapshot, err := server.auth.Snapshot()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	requested := server.config.Models.Resolve(stringValue(anthropic["model"]))
 	copy := cloneMap(anthropic)
 	copy["model"], copy["stream"] = requested.Upstream, true
 	payload, err := TranslateAnthropic(copy, TranslateOptions{SessionID: sessionID, ServiceTier: requested.ServiceTier})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	server.diagnostics.Event("upstream_request", map[string]any{"request_id": requestID, "requested_model": requested.Requested, "upstream_model": requested.Upstream, "service_tier": requested.ServiceTier, "transport": server.config.Transport})
 	if server.config.Transport == TransportWebSocket {
-		return server.callWebSocket(ctx, requestID, snapshot, payload, sessionID)
+		return server.callWebSocket(ctx, requestID, snapshot, payload, sessionID, sink)
 	}
 	if server.config.Transport == TransportAuto {
-		bytes, wsErr := server.callWebSocket(ctx, requestID, snapshot, payload, sessionID)
-		if wsErr == nil {
-			return bytes, nil
+		delivered := false
+		wsErr := server.callWebSocket(ctx, requestID, snapshot, payload, sessionID, func(event SSEEvent) error {
+			delivered = true
+			return sink(event)
+		})
+		// Once an event reached the client the reply cannot restart over HTTP.
+		if wsErr == nil || delivered {
+			return wsErr
 		}
 		server.diagnostics.Event("transport_fallback", map[string]any{"request_id": requestID, "from": "websocket", "to": "http", "error": wsErr.Error()})
 	}
-	return server.callHTTP(ctx, requestID, snapshot, payload, sessionID)
+	return server.callHTTP(ctx, requestID, snapshot, payload, sessionID, sink)
 }
-func (server *Server) callHTTP(ctx context.Context, requestID uint64, snapshot AuthSnapshot, payload map[string]any, sessionID string) ([]byte, error) {
+func (server *Server) callHTTP(ctx context.Context, requestID uint64, snapshot AuthSnapshot, payload map[string]any, sessionID string, sink func(SSEEvent) error) error {
 	response, err := server.sendHTTP(ctx, snapshot, payload, sessionID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if response.StatusCode == 401 {
 		response.Body.Close()
 		if refreshed, refreshErr := server.auth.RefreshAfterUnauthorized(); refreshErr != nil {
-			return nil, refreshErr
+			return refreshErr
 		} else if refreshed {
 			snapshot, _ = server.auth.Snapshot()
 			response, err = server.sendHTTP(ctx, snapshot, payload, sessionID)
 			if err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return nil, err
-	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("upstream Codex request failed: %s; body=%s", response.Status, Snippet(string(body), 1000))
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return fmt.Errorf("upstream Codex request failed: %s; body=%s", response.Status, Snippet(string(body), 1000))
 	}
-	server.diagnostics.Event("http_complete", map[string]any{"request_id": requestID, "bytes": len(body)})
-	return body, nil
+	size := 0
+	for event, err := range sse.Read(response.Body, &sse.ReadConfig{MaxEventSize: maxUpstreamEvent}) {
+		if err != nil {
+			return fmt.Errorf("read upstream events: %w", err)
+		}
+		size += len(event.Data)
+		if err := sink(SSEEvent{Event: event.Type, Data: event.Data}); err != nil {
+			return err
+		}
+	}
+	server.diagnostics.Event("http_complete", map[string]any{"request_id": requestID, "bytes": size})
+	return nil
 }
 func (server *Server) sendHTTP(ctx context.Context, snapshot AuthSnapshot, payload map[string]any, sessionID string) (*http.Response, error) {
 	data, _ := json.Marshal(payload)
@@ -295,7 +335,14 @@ func (running *Running) Apply(command *exec.Cmd) {
 		environment = os.Environ()
 	}
 	environment = withoutEnvironment(environment, "ANTHROPIC_API_KEY")
-	environment = append(environment, "ANTHROPIC_BASE_URL="+running.Server.BaseURL(), "ANTHROPIC_AUTH_TOKEN="+running.Token, "ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-7", "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6", "ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5", "ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-4-5", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1")
+	environment = append(environment, "ANTHROPIC_BASE_URL="+running.Server.BaseURL(), "ANTHROPIC_AUTH_TOKEN="+running.Token, "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1")
+	// Family defaults match the /v1/models aliases; a model the user set stays theirs.
+	for _, entry := range []string{"ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-7", "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6", "ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5", "ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-4-5"} {
+		key, _, _ := strings.Cut(entry, "=")
+		if !slices.ContainsFunc(environment, func(value string) bool { return strings.HasPrefix(value, key+"=") }) {
+			environment = append(environment, entry)
+		}
+	}
 	command.Env = environment
 }
 func (running *Running) Shutdown() {

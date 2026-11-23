@@ -189,7 +189,13 @@ func hashAndCopySourceTree(source, destination string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("open %s: %w", sourcePath, err)
 		}
-		output, err := os.OpenFile(destinationPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		info, err := input.Stat()
+		if err != nil {
+			input.Close()
+			return "", fmt.Errorf("inspect %s: %w", sourcePath, err)
+		}
+		permissions := 0o644 | info.Mode().Perm()&0o111
+		output, err := os.OpenFile(destinationPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, permissions)
 		if err != nil {
 			input.Close()
 			return "", fmt.Errorf("create %s: %w", destinationPath, err)
@@ -206,6 +212,9 @@ func hashAndCopySourceTree(source, destination string) (string, error) {
 		}
 		if closeOutputErr != nil {
 			return "", fmt.Errorf("close %s: %w", destinationPath, closeOutputErr)
+		}
+		if err := os.Chmod(destinationPath, permissions); err != nil {
+			return "", fmt.Errorf("set mode %s: %w", destinationPath, err)
 		}
 	}
 	return hex.EncodeToString(hasher.Sum(nil))[:40], nil

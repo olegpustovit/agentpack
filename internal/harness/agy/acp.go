@@ -13,12 +13,13 @@ const unpromptedUsageSettle = 2 * time.Second
 
 func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	ctx.Arguments = []string{"acp"}
-	command, err := launch(ctx)
+	command, finish, err := launch(ctx)
 	if err != nil {
 		return base.ACPLaunch{}, err
 	}
 	return base.ACPLaunch{
 		Cmd:                    command,
+		Finish:                 finish,
 		ClientPermissionBypass: true,
 		UnpromptedUsageSettle:  unpromptedUsageSettle,
 	}, nil

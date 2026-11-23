@@ -208,9 +208,8 @@ func TestEventsStreamClosesOnLogout(t *testing.T) {
 	testBrowserSession(t, auth, testBrowserEmail, cookie.Value)
 
 	g := eventsGateway(nil, nil, nil)
-	g.auth = auth
-	authTick := make(chan time.Time, 1)
-	g.events.checkAuth = authTick
+	g.store, g.auth = auth.store, auth
+	g.events.checkAuth = make(chan time.Time)
 	server := httptest.NewServer(http.HandlerFunc(g.serveEvents))
 	defer server.Close()
 	request, _ := http.NewRequest(http.MethodGet, server.URL+"/api/events", nil)
@@ -223,8 +222,7 @@ func TestEventsStreamClosesOnLogout(t *testing.T) {
 
 	logout := httptest.NewRequest("POST", "https://agentpack.example/api/logout", nil)
 	logout.AddCookie(cookie)
-	auth.logout(httptest.NewRecorder(), logout)
-	authTick <- time.Now()
+	g.logout(httptest.NewRecorder(), logout)
 
 	done := make(chan struct{})
 	go func() {
@@ -275,7 +273,7 @@ func TestStateEventsNameTheTablesThatChanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := &Gateway{auth: auth}
+	g := &Gateway{store: auth.store, auth: auth}
 	before, err := auth.store.DBVersion(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -301,7 +299,7 @@ func TestStreamingProgressOnASessionRowIsNotASessionsChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := &Gateway{auth: auth}
+	g := &Gateway{store: auth.store, auth: auth}
 	if err := upsertSession(t.Context(), auth.store.DB, SessionInfo{ID: "session-stream"}); err != nil {
 		t.Fatal(err)
 	}
@@ -320,14 +318,14 @@ func TestEventsCarriesConversationFromItsOwnResumeCursor(t *testing.T) {
 	g.events.topics = []eventTopic{}
 	g.events.nodes = func(context.Context) ([]TailnetNode, error) { return nil, nil }
 	const id = "session-multiplexed"
-	if err := upsertSession(t.Context(), g.auth.store.DB, SessionInfo{ID: id, Transport: "acp", ConversationState: "starting"}); err != nil {
+	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: id, Transport: "acp", ConversationState: "starting"}); err != nil {
 		t.Fatal(err)
 	}
 	entries := []acp.LogEntry{
 		{Seq: 1, Kind: "queued_prompt", Payload: json.RawMessage(`{}`)},
 		{Seq: 2, Kind: "queued_prompt", Payload: json.RawMessage(`{}`)},
 	}
-	if err := persistConversationChangesSince(t.Context(), g.auth.store.DB, id, acp.LogChanges{Entries: entries, LastSeq: 2}, 0); err != nil {
+	if err := persistConversationChangesSince(t.Context(), g.store.DB, id, acp.LogChanges{Entries: entries, LastSeq: 2}, 0); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(g.serveEvents))
@@ -365,4 +363,44 @@ func TestEventsCarriesConversationFromItsOwnResumeCursor(t *testing.T) {
 		}
 	}
 	t.Fatal("one stream did not carry both event types")
+}
+
+func TestSessionTableChangesEmitSessionsWithoutWorkerPoll(t *testing.T) {
+	auth, err := testGatewayAuth(t, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := eventsGateway(nil, nil, nil)
+	g.store, g.auth = auth.store, auth
+	ticks := make(chan time.Time, 1)
+	topic := g.defaultEventTopics()[0]
+	topic.tick = ticks
+	events, unsubscribe := g.listen()
+	defer unsubscribe()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	go g.pollTopic(ctx, topic)
+	next := func() eventMessage {
+		t.Helper()
+		select {
+		case msg := <-events:
+			return msg
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for event")
+			return eventMessage{}
+		}
+	}
+	if got := next(); got.Topic != "state" {
+		t.Fatalf("initial event = %+v", got)
+	}
+	if err := upsertSession(ctx, auth.store.DB, SessionInfo{ID: "session-changed"}); err != nil {
+		t.Fatal(err)
+	}
+	ticks <- time.Now()
+	if got := next(); got.Topic != "state" || !reflect.DeepEqual(got.Tables, []string{"sessions"}) {
+		t.Fatalf("state event = %+v", got)
+	}
+	if got := next(); got.Topic != "sessions" {
+		t.Fatalf("sessions event = %+v", got)
+	}
 }

@@ -21,10 +21,10 @@ func TestArchivedSessionsRefuseEveryWriteAndNativeResume(t *testing.T) {
 	}
 	owner := browserActor(testBrowserEmail)
 	session := SessionInfo{ID: "session-archived", Directory: directory, FolderID: folder, Harness: "cursor", Transport: "acp", AgentSessionID: "native-archived", StartedBy: &owner}
-	if err := upsertSession(t.Context(), g.auth.store.DB, session); err != nil {
+	if err := upsertSession(t.Context(), g.store.DB, session); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := g.auth.store.DB.Exec("UPDATE sessions SET archived_at=1 WHERE id=?", session.ID); err != nil {
+	if _, err := g.store.DB.Exec("UPDATE sessions SET archived_at=1 WHERE id=?", session.ID); err != nil {
 		t.Fatal(err)
 	}
 	handler := g.Handler()
@@ -51,14 +51,14 @@ func TestArchivedSessionsRefuseEveryWriteAndNativeResume(t *testing.T) {
 			}
 		}
 	}
-	if err := upsertSession(t.Context(), g.auth.store.DB, session); !errors.Is(err, errSessionArchived) {
+	if err := upsertSession(t.Context(), g.store.DB, session); !errors.Is(err, errSessionArchived) {
 		t.Fatalf("worker revived archived metadata: %v", err)
 	}
 	entry := acp.LogEntry{Seq: 1, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"late event"}}`)}
-	if err := persistConversationChangesSince(t.Context(), g.auth.store.DB, session.ID, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{entry}}, 0); err == nil {
+	if err := persistConversationChangesSince(t.Context(), g.store.DB, session.ID, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{entry}}, 0); err == nil {
 		t.Fatal("worker added events to archived session")
 	}
-	ids, err := archivedNativeIDs(t.Context(), g.auth.store, folder, "agent")
+	ids, err := archivedNativeIDs(t.Context(), g.store, folder, "agent")
 	if err != nil || !ids[session.AgentSessionID] {
 		t.Fatalf("harness alias bypassed archive state: %v %v", ids, err)
 	}
@@ -67,16 +67,16 @@ func TestArchivedSessionsRefuseEveryWriteAndNativeResume(t *testing.T) {
 func TestMainBadgeMetadataFollowsReplicatedRole(t *testing.T) {
 	home := t.TempDir()
 	g, origin := identityGateway(t, home, nil)
-	if err := g.auth.store.BindNode(t.Context(), "local-main"); err != nil {
+	if err := g.store.BindNode(t.Context(), "local-main"); err != nil {
 		t.Fatal(err)
 	}
 	g.identityAt = time.Now()
 	g.identitySelf = tailnetSelf{ID: "local-main"}
-	roles, err := g.auth.store.Main(t.Context())
+	roles, err := g.store.Main(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := g.auth.store.SetMain(t.Context(), roles, home); err != nil {
+	if err := g.store.SetMain(t.Context(), roles, home); err != nil {
 		t.Fatal(err)
 	}
 	r := httptest.NewRequest("GET", origin.String()+"/api/identity", nil)
@@ -87,7 +87,7 @@ func TestMainBadgeMetadataFollowsReplicatedRole(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &identity); err != nil || !identity.Node.Main {
 		t.Fatalf("local main metadata: %s %v", w.Body.String(), err)
 	}
-	if _, err := g.auth.store.DB.Exec("UPDATE mesh_settings SET value='peer-main' WHERE key='main_node'; INSERT INTO mesh_nodes(node_id,name) VALUES ('peer-main','Archive computer')"); err != nil {
+	if _, err := g.store.DB.Exec("UPDATE mesh_settings SET value='peer-main' WHERE key='main_node'; INSERT INTO mesh_nodes(node_id,name) VALUES ('peer-main','Archive computer')"); err != nil {
 		t.Fatal(err)
 	}
 	nodes, err := g.meshNodes(t.Context(), nil)

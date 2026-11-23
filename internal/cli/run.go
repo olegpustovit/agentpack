@@ -19,7 +19,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/proxy"
-	"github.com/olegpustovit/agentpack/internal/staging"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
@@ -39,29 +38,65 @@ func NewRunner() Runner {
 	return Runner{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin, Service: packSync.NewService()}
 }
 
+// Run executes one command line without Fang's rendering; Execute is the
+// terminal entry point.
 func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
-	if len(arguments) == 1 && (arguments[0] == "--version" || arguments[0] == "-V") {
-		fmt.Fprintln(runner.Stdout, "agentpack "+Version)
-		return 0, nil
+	exitCode := 0
+	root := runner.rootCommand(arguments, &exitCode)
+	root.SetArgs(arguments)
+	root.SetIn(runner.Stdin)
+	root.SetOut(runner.Stdout)
+	root.SetErr(runner.Stderr)
+	err := root.ExecuteContext(ctx)
+	if err != nil && exitCode == 0 {
+		exitCode = 2
 	}
+	return exitCode, err
+}
+
+// runLauncher starts a harness. Its arguments belong to the harness, so the
+// product-owned extractor reads only agentpack's own options out of them.
+func (runner Runner) runLauncher(ctx context.Context, arguments []string) (int, error) {
 	invocation, err := Parse(arguments)
 	if err != nil {
 		return 2, err
 	}
+	runner = runner.withOutput(invocation)
+	if invocation.Global.Proxy && invocation.Command != "claude" {
+		return 2, errors.New("--proxy is only supported with `agentpack claude`")
+	}
+	packContext, err := resolveInvocationContext(invocation, true)
+	if err != nil {
+		return 1, err
+	}
+	code, err := runner.launchManaged(ctx, packContext, invocation, arguments)
+	return code, runner.reportIntegrity(err)
+}
+
+// withOutput wraps stderr for progress and installs the service's message sinks.
+func (runner Runner) withOutput(invocation Invocation) Runner {
 	if invocation.Command != "hook-exec" && invocation.Command != "mcp-exec" && invocation.Command != "mcp-bridge" {
 		runner.Stderr = &progressWriter{Writer: runner.Stderr}
 	}
-	if invocation.Command == "logs" {
-		if invocation.Global.Proxy {
-			return 1, errors.New("--proxy is only supported with agentpack claude")
-		}
-		command := runner.logsCommand()
-		command.SetArgs(invocation.Args)
-		if err := command.ExecuteContext(ctx); err != nil {
-			return 1, err
-		}
+	if runner.Service.Notify == nil {
+		runner.Service.Notify = func(message string) { fmt.Fprintln(runner.Stderr, "warning: "+message) }
+	}
+	if runner.Service.Info == nil && !invocation.Global.Quiet {
+		runner.Service.Info = func(message string) { fmt.Fprintln(runner.Stderr, message) }
+	}
+	return runner
+}
+
+// dispatch runs a non-launcher command whose flags Cobra already parsed.
+func (runner Runner) dispatch(ctx context.Context, invocation Invocation) (int, error) {
+	if invocation.Global.Version {
+		fmt.Fprintln(runner.Stdout, "agentpack "+Version)
 		return 0, nil
 	}
+	if invocation.Global.Proxy {
+		return 2, errors.New("--proxy is only supported with `agentpack claude`")
+	}
+	runner = runner.withOutput(invocation)
 	label := &stepLabel{operation: invocation.Command}
 	if !invocation.Global.Quiet && !invocation.Global.NoProgress {
 		switch invocation.Command {
@@ -78,68 +113,52 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 			defer startProgress(runner.Stderr, "mode", time.Second)()
 		}
 	}
-	if runner.Service.Notify == nil {
-		runner.Service.Notify = func(message string) { fmt.Fprintln(runner.Stderr, "warning: "+message) }
-	}
-	if runner.Service.Info == nil && !invocation.Global.Quiet {
-		runner.Service.Info = func(message string) { fmt.Fprintln(runner.Stderr, message) }
-	}
 	if runner.Service.Progress == nil && !invocation.Global.Quiet && !invocation.Global.NoProgress {
 		switch invocation.Command {
 		case "lock", "add", "remove", "update":
 			runner.Service.Progress = func(message string) { fmt.Fprintln(runner.Stderr, message) }
 		}
 	}
-	if invocation.Command != "init" && hasBeforeDoubleDash(invocation.Args, "--version", "-V") {
-		fmt.Fprintln(runner.Stdout, "agentpack "+Version)
-		return 0, nil
-	}
-	if invocation.Global.Proxy && invocation.Command != "claude" {
-		return 2, errors.New("--proxy is only supported with `agentpack claude`")
-	}
-	if invocation.Command == "hook-exec" {
-		return runner.runHook(ctx, invocation.Args)
-	}
-	if invocation.Command == "mcp-exec" {
-		return runner.runMCPExec(ctx, invocation.Args)
-	}
-	if invocation.Command == "mcp-bridge" {
-		return runner.runMCPBridge(ctx, invocation.Args)
-	}
-	if mcpCredentialAction(invocation) {
-		return runner.runMCPCredentials(ctx, invocation)
-	}
-	if invocation.Command == "session-signal" {
+	switch invocation.Command {
+	case "hook-exec":
+		return runner.runHook(ctx, invocation)
+	case "mcp-exec":
+		return runner.runMCPExec(ctx, invocation)
+	case "mcp-bridge":
+		return runner.runMCPBridge(ctx, invocation)
+	case "session-signal":
 		return runner.runSessionSignal(invocation.Args)
-	}
-	if invocation.Command == "session-worker" {
+	case "session-worker":
 		// A worker's live heap is small; a soft limit makes GC return idle memory instead of growing to 2x.
 		if os.Getenv("GOMEMLIMIT") == "" {
 			debug.SetMemoryLimit(workerMemoryLimit)
 		}
 		return runner.runSessionWorker(ctx, invocation.Args)
-	}
-	if invocation.Command == "gateway" {
-		return runner.runGateway(ctx, invocation.Args)
-	}
-	if invocation.Command == "service" {
-		if len(invocation.Args) == 1 && invocation.Args[0] == "run" {
-			return runner.runNetworkService(ctx, invocation.Args)
-		}
-		return 2, errors.New("expected service run")
-	}
-	if invocation.Command == "deploy" {
-		return runner.runDeploy(ctx, invocation.Args)
-	}
-	if invocation.Command == "init" {
+	case "gateway":
+		return runner.runGateway(ctx, invocation)
+	case "service":
+		return runner.runNetworkService(ctx, invocation.Args)
+	case "deploy":
+		return runner.runDeploy(ctx, invocation)
+	case "init":
 		if err := runner.runInit(ctx, invocation); err != nil {
 			return 1, err
 		}
 		return 0, nil
 	}
-	_, launcher := launcherTarget(invocation.Command)
+	if mcpCredentialAction(invocation) {
+		return runner.runMCPCredentials(ctx, invocation)
+	}
+	if invocation.Command == "mcp" && first(invocation.Args) == "add" {
+		// mcp add owns --env for KEY=VALUE; a bare value still names the environment.
+		for _, value := range stringsFlag(invocation, "env") {
+			if !strings.Contains(value, "=") {
+				invocation.Global.Env = value
+			}
+		}
+	}
 	allowsMissing := map[string]bool{"add": true, "env": true, "config": true, "support": true}
-	packContext, err := resolveInvocationContext(invocation, launcher || allowsMissing[invocation.Command])
+	packContext, err := resolveInvocationContext(invocation, allowsMissing[invocation.Command])
 	if err != nil {
 		return 1, err
 	}
@@ -157,34 +176,21 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 			return 1, runner.reportIntegrity(err)
 		}
 	}
-	if launcher {
-		code, err := runner.launchManaged(ctx, packContext, invocation, arguments)
-		return code, runner.reportIntegrity(err)
-	}
 	switch invocation.Command {
 	case "lock":
-		args, update := takeBool(invocation.Args, "--update")
-		args, allowUnpinned := takeBool(args, "--allow-unpinned-mcp")
-		if err := noArgs(args); err != nil {
+		if err := noArgs(invocation.Args); err != nil {
 			return 2, err
 		}
 		var locked lockfile.PackLock
-		locked, err = runner.Service.LockWithOptions(ctx, root, packSync.LockOptions{Refresh: update, AllowUnpinnedMCP: allowUnpinned})
+		locked, err = runner.Service.LockWithOptions(ctx, root, packSync.LockOptions{Refresh: boolFlag(invocation, "update"), AllowUnpinnedMCP: boolFlag(invocation, "allow-unpinned-mcp")})
 		if err == nil && !invocation.Global.Quiet {
 			fmt.Fprintf(runner.Stdout, "Wrote %s (%d package(s)).\n", paths.LockPath(root), len(locked.Packages))
 		}
 	case "add", "remove":
 		// Staging is lazy: each launcher stages its own harness when the lock
-		// changed, and running sessions are restarted below, so nothing here
-		// rebuilds every harness.
-		const noSync = true
+		// changed, and running sessions are restarted below.
 		args := invocation.Args
-		plugin, hasPlugin := "", false
-		if invocation.Command == "add" {
-			if plugin, args, hasPlugin, err = takeFlag(args, "--plugin"); err != nil {
-				return 2, err
-			}
-		}
+		plugin, hasPlugin := stringFlag(invocation, "plugin"), invocation.Command == "add" && invocation.Flags.Changed("plugin")
 		if len(args) != 1 {
 			return 2, fmt.Errorf("%s requires exactly one package spec", invocation.Command)
 		}
@@ -199,10 +205,10 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 			var added []lockfile.Package
 			if hasPlugin {
 				var pkg lockfile.Package
-				pkg, err = runner.Service.AddPlugin(ctx, root, args[0], plugin, noSync)
+				pkg, err = runner.Service.AddPlugin(ctx, root, args[0], plugin)
 				added = []lockfile.Package{pkg}
 			} else {
-				added, err = runner.Service.AddAll(ctx, root, args[0], noSync)
+				added, err = runner.Service.AddAll(ctx, root, args[0])
 			}
 			if err == nil && !invocation.Global.Quiet {
 				if len(added) > 1 {
@@ -214,7 +220,7 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 			}
 		} else {
 			var key string
-			key, err = runner.Service.Remove(ctx, root, args[0], noSync)
+			key, err = runner.Service.Remove(ctx, root, args[0])
 			if err == nil && !invocation.Global.Quiet {
 				fmt.Fprintf(runner.Stdout, "Removed %s from %s and refreshed %s.\n", key, paths.ManifestPath(root), paths.LockPath(root))
 			}
@@ -222,7 +228,7 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 	case "update":
 		args := invocation.Args
 		var updated lockfile.PackLock
-		updated, err = runner.Service.Update(ctx, root, args, true)
+		updated, err = runner.Service.Update(ctx, root, args)
 		if err == nil && !invocation.Global.Quiet {
 			if len(args) == 0 {
 				fmt.Fprintf(runner.Stdout, "Updated floating dependencies and refreshed %s (%d package(s)).\n", paths.LockPath(root), len(updated.Packages))
@@ -235,7 +241,7 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 			return 2, err
 		}
 		var listed lockfile.PackLock
-		listed, err = lockfile.Load(root)
+		listed, err = runner.Service.LoadLock(root)
 		if err == nil && !invocation.Global.Quiet {
 			project, loadErr := manifest.Load(root)
 			if loadErr != nil {
@@ -257,16 +263,13 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 			}
 		}
 	case "sync":
-		args, dry := takeBool(invocation.Args, "--dry-run")
-		args, verify := takeBool(args, "--verify-only")
-		args, update := takeBool(args, "--update-lock")
-		args, repair := takeBool(args, "--repair")
-		if err := noArgs(args); err != nil {
+		if err := noArgs(invocation.Args); err != nil {
 			return 2, err
 		}
+		dry, verify := boolFlag(invocation, "dry-run"), boolFlag(invocation, "verify-only")
 		var result packSync.SyncResult
 		result, err = runner.Service.Sync(ctx, root, packSync.SyncOptions{
-			DryRun: dry, VerifyOnly: verify, UpdateLock: update, Repair: repair,
+			DryRun: dry, VerifyOnly: verify, UpdateLock: boolFlag(invocation, "update-lock"), Repair: boolFlag(invocation, "repair"),
 			Mode: invocation.Global.Mode, WorkspaceRoot: workspace, StrictExternal: invocation.Global.StrictExternal,
 		})
 		if err == nil && !invocation.Global.Quiet {
@@ -282,18 +285,10 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 			}
 		}
 	case "preflight":
-		args := invocation.Args
-		if invocation.Global.StrictExternal && !hasBeforeDoubleDash(args, "--strict-external") {
-			args = append(append([]string{}, args...), "--strict-external")
-		}
-		code, preflightErr := runner.runPreflight(root, workspace, invocation.Global.Mode, args, invocation.Global.Quiet)
+		code, preflightErr := runner.runPreflight(root, workspace, invocation)
 		return code, runner.reportIntegrity(preflightErr)
 	case "probe":
-		args := invocation.Args
-		if invocation.Global.StrictExternal {
-			args = append(append([]string{}, args...), "--strict-external")
-		}
-		code, probeErr := runner.runProbe(ctx, root, workspace, invocation.Global.Mode, args, invocation.Global.Quiet)
+		code, probeErr := runner.runProbe(ctx, root, workspace, invocation)
 		return code, runner.reportIntegrity(probeErr)
 	case "config":
 		if len(invocation.Args) == 0 {
@@ -301,22 +296,22 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 		}
 		switch invocation.Args[0] {
 		case "compare":
-			code, compareErr := runner.runConfigCompare(workspace, invocation.Args[1:], invocation.Global.Quiet)
+			code, compareErr := runner.runConfigCompare(workspace, invocation.Args[1:], boolFlag(invocation, "json"), invocation.Global.Quiet)
 			return code, runner.reportIntegrity(compareErr)
 		default:
 			return 2, fmt.Errorf("unknown config action %q", invocation.Args[0])
 		}
 	case "support":
-		code, supportErr := runner.runSupport(workspace, invocation.Args, invocation.Global.Quiet)
+		code, supportErr := runner.runSupport(workspace, invocation)
 		return code, runner.reportIntegrity(supportErr)
 	case "env":
-		err = runner.runEnv(ctx, root, workspace, invocation.Global.Mode, invocation.Args, invocation.Global.Quiet)
+		err = runner.runEnv(ctx, root, workspace, invocation)
 	case "mcp":
-		err = runner.runMCP(ctx, root, invocation.Args, invocation.Global.Quiet)
+		err = runner.runMCP(ctx, root, invocation)
 	case "mode":
 		err = runner.runMode(root, invocation.Args, invocation.Global.Quiet)
 	case "extra":
-		err = runner.runExtra(workspace, invocation.Args, invocation.Global.Quiet)
+		err = runner.runExtra(workspace, invocation)
 	case "eject":
 		err = runner.runEject(ctx, root, workspace, invocation)
 	default:
@@ -391,16 +386,8 @@ func (runner Runner) runInit(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	args := invocation.Args
-	name, args, _, err := takeFlag(args, "--name")
-	if err != nil {
-		return err
-	}
-	version, args, _, err := takeFlag(args, "--version")
-	if err != nil {
-		return err
-	}
-	if err := noArgs(args); err != nil {
+	name, version := stringFlag(invocation, "name"), stringFlag(invocation, "version")
+	if err := noArgs(invocation.Args); err != nil {
 		return err
 	}
 	if name == "" {
@@ -475,7 +462,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (runner Runner) launch(ctx context.Context, packContext paths.Context, invocation Invocation) (int, error) {
+func (runner Runner) launch(ctx context.Context, packContext paths.Context, invocation Invocation) (code int, err error) {
 	label := &stepLabel{operation: "preparing " + invocation.Command}
 	setStep := label.set
 	setStep("waiting for another agentpack command on this project")
@@ -507,14 +494,6 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 	setStep("starting " + invocation.Command)
 	if invocation.Global.Debug {
 		fmt.Fprintf(runner.Stderr, "agentpack: target=%s mode=%s definition=%s workspace=%s fast-sync=%t\n", target, effective.Name(), packContext.DefinitionRoot, packContext.WorkspaceRoot, skipped)
-	}
-	stagingLock, err := staging.AcquireLaunchShared(packContext.DefinitionRoot, effective.Name())
-	if err != nil {
-		return 1, err
-	}
-	defer stagingLock.Unlock()
-	if err := runner.Service.ValidateLaunchInputs(packContext.DefinitionRoot, packContext.WorkspaceRoot, effective, target); err != nil {
-		return 1, err
 	}
 	if err := recordLaunchEnvironment(packContext, effective.Name(), target, skipped); err != nil {
 		return 1, err
@@ -573,10 +552,12 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 	if os.Getenv("AGENTPACK_SESSION_WORKER") == "1" {
 		launch.SessionID = os.Getenv("AGENTPACK_SESSION_ID")
 	}
-	command, err := harness.LaunchCommand(launch)
+	command, finish, err := harness.Launch(launch)
 	if err != nil {
 		return 1, err
 	}
+	// The harness's after-launch work (credentials, generation leases) runs on every path out.
+	defer func() { err = errors.Join(err, finish()) }()
 	command.Dir = packContext.WorkspaceRoot
 	// The agent starts in the workspace; PWD must say so too, because some
 	// agents (OpenCode) take the project directory from PWD, which would
@@ -590,7 +571,6 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 			i++
 		}
 	}
-	launch.Command = command
 	// Workers report restart readiness after spawning; release before the agent runs.
 	if err := mutation.Unlock(); err != nil {
 		return 1, err
@@ -612,10 +592,9 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 		running.Apply(command)
 		code, runErr := runner.runProcess(command)
 		running.Shutdown()
-		return code, errors.Join(runErr, harness.AfterLaunch(launch))
+		return code, runErr
 	}
-	code, runErr := runner.runProcess(command)
-	return code, errors.Join(runErr, harness.AfterLaunch(launch))
+	return runner.runProcess(command)
 }
 
 // withPWD returns env (the inherited environment when env is nil) with PWD

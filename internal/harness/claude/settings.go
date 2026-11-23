@@ -57,37 +57,6 @@ func WriteSettingsContents(ctx base.StageContext, data []byte) error {
 	return writeSettingsBytes(path, data)
 }
 
-func SetMCPAllowlist(ctx base.StageContext, names []string) error {
-	path, err := SettingsPath(ctx)
-	if err != nil {
-		return err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	settings := make(map[string]any)
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return fmt.Errorf("parse %s: %w", path, err)
-	}
-	if names == nil {
-		names = []string{}
-	}
-	settings["enabledMcpjsonServers"] = names
-	return writeSettings(path, settings)
-}
-
-func writeSettings(path string, settings map[string]any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeSettingsBytes(path, data)
-}
-
 func writeSettingsBytes(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

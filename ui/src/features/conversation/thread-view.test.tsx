@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { ThreadItem } from "./model"
-import { findPendingPermission, latestUserPrompt, quoteMessage, ThreadView } from "./thread-view"
+import { latestUserPrompt, quoteMessage, ThreadView } from "./thread-view"
 
 const items: ThreadItem[] = [
   { kind: "user_message_chunk", data: { text: { text: "Run the tests" } } },
@@ -154,11 +154,9 @@ describe("conversation message actions", () => {
     }
   })
 
-  it("shows the pending permission inline and finds the newest one", () => {
+  it("shows the pending permission inline", () => {
     const perm = (requestId: string, resolved?: boolean): ThreadItem => ({ kind: "permission", data: { requestId, tool: "Bash", resolved } })
     const list = [perm("a"), perm("b"), perm("c", true)]
-    expect(findPendingPermission(list)).toBe(list[1])
-    expect(findPendingPermission([list[2]!])).toBeUndefined()
     act(() => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(ThreadView, { items: list, machine: "local", sessionId: "s", agent: "Claude" }))))
     expect(container.querySelectorAll('[role="group"][data-slot="permission-card"]')).toHaveLength(2)
     expect(container.textContent).toContain("Allow Claude to run this command?")
@@ -194,5 +192,17 @@ describe("conversation message actions", () => {
     await act(async () => decline.click())
     expect(posted).toEqual([{ elicitation_id: "e1", value: "decline" }])
     vi.unstubAllGlobals()
+  })
+})
+
+describe("tool row titles (P1.34)", () => {
+  it("names an orphan update by the agent's tool name, its input, then its kind, never a bare Tool", () => {
+    const tool = (data: object): ThreadItem => ({ kind: "tool", data: { toolCallId: "t", status: "completed", ...data } })
+    // One at a time: adjacent tools collapse into a group.
+    for (const [data, name] of [[{ _meta: { claudeCode: { toolName: "Grep" } } }, "Grep"], [{ rawInput: { description: "List the worktrees" } }, "List the worktrees"], [{ kind: "fetch" }, "fetch"]] as const) {
+      act(() => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(ThreadView, { items: [tool(data)], machine: "local", sessionId: "s", agent: "Claude" }))))
+      expect(container.textContent).toContain(name)
+      expect(container.textContent).not.toMatch(/\bTool\b/)
+    }
   })
 })

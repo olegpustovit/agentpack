@@ -96,7 +96,7 @@ func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
 	}))
 	defer server.Close()
 	endpoint, _ := url.Parse(server.URL)
-	if _, _, err := pullState(t.Context(), auth.store, nil, server.Client(), endpoint); err != nil {
+	if _, _, err := pullState(t.Context(), auth.store, nil, server.Client(), endpoint, nil); err != nil {
 		t.Fatal(err)
 	}
 	w = request("/api/status", false)
@@ -116,7 +116,7 @@ func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
 
 func TestLocalAccountBindingPreservesOwnershipAndRevocation(t *testing.T) {
 	g, _ := identityGateway(t, t.TempDir(), nil)
-	if _, err := g.auth.store.DB.Exec("INSERT INTO users(email,role) VALUES ('member@example.com','member')"); err != nil {
+	if _, err := g.store.DB.Exec("INSERT INTO users(email,role) VALUES ('member@example.com','member')"); err != nil {
 		t.Fatal(err)
 	}
 	actor, err := g.localActor(t.Context())
@@ -131,7 +131,7 @@ func TestLocalAccountBindingPreservesOwnershipAndRevocation(t *testing.T) {
 	if !actor.canWriteSession(SessionInfo{StartedBy: &legacy}) {
 		t.Fatal("mapping lost this OS user's native history")
 	}
-	if err := BindLocalAccount(t.Context(), g.auth.store, " MEMBER@example.com "); err != nil {
+	if err := BindLocalAccount(t.Context(), g.store, " MEMBER@example.com "); err != nil {
 		t.Fatal(err)
 	}
 	actor, err = g.localActor(t.Context())
@@ -145,19 +145,19 @@ func TestLocalAccountBindingPreservesOwnershipAndRevocation(t *testing.T) {
 	if !actor.canWriteSession(SessionInfo{StartedBy: &member}) {
 		t.Fatal("bound member cannot write its own chat")
 	}
-	if err := BindLocalAccount(t.Context(), g.auth.store, "missing@example.com"); err == nil {
+	if err := BindLocalAccount(t.Context(), g.store, "missing@example.com"); err == nil {
 		t.Fatal("missing account bound")
 	}
-	if err := DisableUser(t.Context(), g.auth.store, "member@example.com"); err != nil {
+	if err := DisableUser(t.Context(), g.store, "member@example.com"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := g.localActor(t.Context()); err == nil {
 		t.Fatal("disabled binding silently reverted to owner")
 	}
-	if err := BindLocalAccount(t.Context(), g.auth.store, "member@example.com"); err == nil {
+	if err := BindLocalAccount(t.Context(), g.store, "member@example.com"); err == nil {
 		t.Fatal("disabled account bound")
 	}
-	if err := BindLocalAccount(t.Context(), g.auth.store, testBrowserEmail); err != nil {
+	if err := BindLocalAccount(t.Context(), g.store, testBrowserEmail); err != nil {
 		t.Fatal(err)
 	}
 }

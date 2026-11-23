@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "phase": "preflight",
+  "definition_root": "$HOME/definition",
+  "workspace_root": "$HOME/workspace",
+  "mode": "default",
+  "target": "grok",
+  "policy": "ci",
+  "strict_external": false,
+  "workspace_digest": "sha256:f88a4b8879af1680b4118a5e29f1d29c804eecf9400e84d05864dbe90d89ff20",
+  "generation_id": "sha256:439007096ef91afeaa799a1efa7a08099a3380793633725ca1384f3275050d3f",
+  "policy_digest": "sha256:409739949c42f6d34a4bb4e91d8e71802334fede50c3b630aeac7c6a6754d9fc",
+  "expected_target": {
+    "adapter": "grok"
+  },
+  "source_identity": "sha256-source-v1:c94ce60398f670b9a1142fbc65b8f2d33463de61bb5619a1ff7444c2ee834e07",
+  "lock_digest": "sha256:f1fa539503947a3455d6a1d065d60f18eadf2c133202bcf83d3aa6a04bc3a8cc",
+  "skills": 0,
+  "plugins": 0,
+  "shadowed": 0,
+  "inheritance": [
+    "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+    "Grok reads real ~/.grok and ~/.claude in addition to GROK_HOME",
+    "CI policy treats undeclared inheritance as a violation"
+  ],
+  "capabilities": {
+    "agy": "workspace-write: writes .agents/plugins/agentpack-bundle",
+    "claude": "external: uses --plugin-dir and --settings; no workspace overlay",
+    "codex": "external-home: uses CODEX_HOME; native project instructions may still apply",
+    "cursor": "workspace-write: writes .cursor/agents when agent artifacts exist",
+    "grok": "external-home: uses GROK_HOME; also reads real ~/.claude and ~/.grok",
+    "omp": "external: uses --plugin-dir; native profile, settings and credentials remain in place",
+    "opencode": "external: uses OPENCODE_CONFIG_DIR; no workspace overlay"
+  },
+  "artifacts": [
+    {
+      "properties": {
+        "exists": true,
+        "merge_order": [
+          "native user seed retained",
+          "agentpack-owned sections overlaid"
+        ],
+        "ordered_values": {
+          "model": "\u003credacted:string\u003e"
+        },
+        "source": "~/.grok/config.toml",
+        "source_digest": "sha256:5676dc800ff66ac87669b7b7e6ebb78f94c7f523fae07a7a5545536a511b6613"
+      },
+      "id": "settings-seed:grok",
+      "kind": "settings_seed",
+      "name": "~/.grok/config.toml",
+      "winner": "user_seed",
+      "evidence": "generated"
+    },
+    {
+      "properties": {
+        "merge_order": [
+          "user ~/.grok/config.toml",
+          "enable agentpack-bundle while retaining enabled plugins"
+        ],
+        "scope": "plugins",
+        "scope_digest": "49692cb666e04ef098fbce0ded0c77cb68d70d454973c40dde223617e5609e80",
+        "target": "grok"
+      },
+      "output_path": "config.toml",
+      "id": "settings:grok:plugins",
+      "kind": "settings_section",
+      "name": "plugins",
+      "winner": "agentpack_overlay",
+      "evidence": "generated"
+    },
+    {
+      "properties": {
+        "rendered_digest": "sha256:ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+        "scope": "lsp",
+        "target": "grok"
+      },
+      "output_path": "lsp.json",
+      "id": "lsp-file:grok:lsp.json",
+      "kind": "lsp_file",
+      "name": "lsp.json",
+      "winner": "merged",
+      "evidence": "generated"
+    },
+    {
+      "properties": {
+        "rendered_digest": "sha256:ff63c83fb065f7e0d828bc63d5701dacd165fbe423a786764676e99aeafc11a3",
+        "scope": "features",
+        "target": "grok"
+      },
+      "output_path": "config.toml",
+      "id": "lsp-file:grok:config.toml",
+      "kind": "lsp_file",
+      "name": "config.toml",
+      "winner": "merged",
+      "evidence": "generated"
+    }
+  ],
+  "coverage": [
+    {
+      "category": "skill",
+      "scope": "native_catalog",
+      "completeness": "none",
+      "reason": "pure preflight does not execute native CLI discovery"
+    }
+  ],
+  "findings": [
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "Grok reads real ~/.grok and ~/.claude in addition to GROK_HOME",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "CI policy treats undeclared inheritance as a violation",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITED_CONFIG",
+      "severity": "violation",
+      "source": "$HOME/.grok/config.toml",
+      "message": "native launch may read existing undeclared configuration",
+      "remedy": "use a controlled account/configuration home for CI, or use policy local",
+      "evidence": "generated"
+    },
+    {
+      "code": "INHERITED_CONFIG",
+      "severity": "violation",
+      "source": "$HOME/.claude/settings.json",
+      "message": "native launch may read existing undeclared configuration",
+      "remedy": "use a controlled account/configuration home for CI, or use policy local",
+      "evidence": "generated"
+    },
+    {
+      "code": "BINARY_MISSING",
+      "severity": "error",
+      "target": "grok",
+      "message": "could not find \"$HOME/missing-binary\"",
+      "remedy": "install the native CLI or set the harness path env var"
+    },
+    {
+      "code": "STAGING_INPUTS_UNKNOWN",
+      "severity": "warning",
+      "message": "no materialization input identity is recorded",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing",
+      "evidence": "unknown"
+    },
+    {
+      "code": "STAGING_NOT_RECORDED",
+      "severity": "warning",
+      "message": "no staged record for mode \"default\"",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing"
+    }
+  ],
+  "overall_status": "error",
+  "ok": false
+}

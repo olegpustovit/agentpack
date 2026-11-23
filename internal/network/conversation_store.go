@@ -302,9 +302,9 @@ func newConversationLog(ctx context.Context, store *state.Store, id string, fail
 
 func (g *Gateway) serveConversation(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	info, err := storedSession(r.Context(), g.auth.store.Reader, id)
+	info, err := storedSession(r.Context(), g.store.Reader, id)
 	if err == nil {
-		local, _ := g.auth.store.NodeID(r.Context())
+		local, _ := g.store.NodeID(r.Context())
 		g.serveStoredSessionConversation(w, r, info, local != "" && info.NodeID == local)
 		return
 	}
@@ -344,7 +344,7 @@ func (g *Gateway) writeStoredConversation(w http.ResponseWriter, r *http.Request
 	var entries []acp.LogEntry
 	var truncated bool
 	if err == nil {
-		entries, _, truncated, err = storedConversationRange(r.Context(), g.auth.store.Reader, id, conversationPage(r))
+		entries, _, truncated, err = storedConversationRange(r.Context(), g.store.Reader, id, conversationPage(r))
 	}
 	if err != nil {
 		if r.Context().Err() != nil {

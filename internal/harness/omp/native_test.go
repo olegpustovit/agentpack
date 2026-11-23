@@ -36,10 +36,10 @@ func TestNativeDiscovery(t *testing.T) {
 	t.Setenv("OMP_PATH", binary)
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	stage := base.StageContext{ProjectRoot: workspace}
-	if err := omp.New().Prepare(stage); err != nil {
+	if err := omp.New().Setup(stage); err != nil {
 		t.Fatal(err)
 	}
-	root, err := omp.New().StagedRoot(stage)
+	root, err := omp.New().Root(stage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestNativeDiscovery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	launchCmd, err := omp.New().LaunchCommand(base.LaunchContext{ProjectRoot: workspace, Arguments: []string{"--mode", "rpc", "--no-session", "--no-pty"}})
+	launchCmd, _, err := omp.New().Launch(base.LaunchContext{ProjectRoot: workspace, Arguments: []string{"--mode", "rpc", "--no-session", "--no-pty"}})
 	if err != nil {
 		t.Fatal(err)
 	}

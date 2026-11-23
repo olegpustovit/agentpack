@@ -4,20 +4,72 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+
+	"github.com/gofrs/flock"
 )
 
 // A command keeps its selected paths through child exit and credential recovery,
 // even when another process publishes a replacement generation.
 var stagingSelections sync.Map
 
+// stagingLeases holds a shared lock on every generation this process has
+// selected, until it exits: launchers and session workers use its files for
+// their whole life. ReclaimStagingGenerations removes only unleased ones.
+var stagingLeases sync.Map
+
+func leaseStagingGeneration(root string) {
+	if _, held := stagingLeases.Load(root); held {
+		return
+	}
+	lease := flock.New(root + ".lease")
+	// A lease that cannot be taken also cannot be taken by the reclaimer, which
+	// then keeps the generation; nothing is lost by going on without it.
+	if lease.RLock() != nil {
+		return
+	}
+	if _, loaded := stagingLeases.LoadOrStore(root, lease); loaded {
+		_ = lease.Unlock()
+	}
+}
+
 func stagingModePath(projectRoot, modeName string) (string, error) {
 	root, err := stagingRootBase(projectRoot)
 	if err != nil {
 		return "", err
 	}
+	if err := EnsureOwnedPrivateDirectory(root); err != nil {
+		return "", err
+	}
 	return filepath.Abs(filepath.Join(root, "modes", ModePathComponent(modeName)))
+}
+
+// EnsureOwnedPrivateDirectory refuses an unsafe existing directory before using it.
+func EnsureOwnedPrivateDirectory(root string) error {
+	err := checkStagingRoot(root, true)
+	if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return err
+	}
+	if err := checkStagingRoot(root, false); err != nil {
+		return err
+	}
+	return EnsurePrivateDirectory(root)
+}
+
+func checkStagingRoot(root string, existing bool) error {
+	info, err := os.Lstat(root)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("staging root must be a directory: %s", root)
+	}
+	return checkStagingOwnership(root, info, existing)
 }
 
 func selectedStagingRoot(projectRoot, modeName string) (string, error) {
@@ -33,6 +85,7 @@ func selectedStagingRoot(projectRoot, modeName string) (string, error) {
 		return "", err
 	}
 	actual, _ := stagingSelections.LoadOrStore(legacy, selected)
+	leaseStagingGeneration(actual.(string))
 	return actual.(string), nil
 }
 
@@ -65,13 +118,14 @@ func SelectStagingGeneration(projectRoot, modeName, root string) error {
 	if info, err := os.Stat(root); err != nil || !info.IsDir() {
 		return nil
 	}
+	leaseStagingGeneration(root)
 	stagingSelections.Store(legacy, root)
 	return nil
 }
 
 // StagingGeneration builds privately and publishes only after verification.
-// Old generations are retained so running sessions and their support files survive.
-// shortcut: generations accumulate, add lease-aware reclamation when disk use requires it.
+// Old generations stay while a process holds their lease or a launch record
+// names them; see ReclaimStagingGenerations.
 type StagingGeneration struct {
 	Root, previous, legacy string
 	published              bool
@@ -93,24 +147,13 @@ func BeginStagingGeneration(projectRoot, modeName string) (*StagingGeneration, e
 	if err != nil {
 		return nil, err
 	}
+	leaseStagingGeneration(root)
 	stagingSelections.Store(legacy, root)
 	return &StagingGeneration{Root: root, previous: previous, legacy: legacy}, nil
 }
 
 func (generation *StagingGeneration) Publish() error {
-	file, err := os.CreateTemp(filepath.Dir(generation.legacy), ".staging-current-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	_, writeErr := file.WriteString(filepath.Base(generation.Root) + "\n")
-	if err := file.Close(); writeErr == nil {
-		writeErr = err
-	}
-	if writeErr != nil {
-		return writeErr
-	}
-	if err := os.Rename(file.Name(), generation.legacy+".current"); err != nil {
+	if err := WriteAtomic(generation.legacy+".current", []byte(filepath.Base(generation.Root)+"\n"), 0o600); err != nil {
 		return err
 	}
 	generation.published = true
@@ -121,5 +164,39 @@ func (generation *StagingGeneration) Abort() {
 	if !generation.published {
 		stagingSelections.Store(generation.legacy, generation.previous)
 		// Keep failed generations too: they may contain credentials or recovery files.
+	}
+}
+
+// ReclaimStagingGenerations removes the mode's generations that are not
+// published, not in keep (the roots launch records return to), were fully
+// built (have a staged record), and that no running process holds a lease on.
+// A generation that failed to build is kept: it may hold recovery files.
+// Failures are ignored; reclaiming never fails a sync.
+func ReclaimStagingGenerations(projectRoot, modeName string, keep []string) {
+	legacy, err := stagingModePath(projectRoot, modeName)
+	if err != nil {
+		return
+	}
+	current, err := readStagingSelection(legacy)
+	if err != nil {
+		return
+	}
+	entries, _ := os.ReadDir(filepath.Dir(legacy))
+	for _, entry := range entries {
+		root := filepath.Join(filepath.Dir(legacy), entry.Name())
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), filepath.Base(legacy)+"-g-") || root == current || slices.Contains(keep, root) {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(root, ".staged.json")); err != nil {
+			continue
+		}
+		lease := flock.New(root + ".lease")
+		if free, err := lease.TryLock(); err != nil || !free {
+			continue
+		}
+		if os.RemoveAll(root) == nil {
+			_ = os.Remove(root + ".lease")
+		}
+		_ = lease.Unlock()
 	}
 }

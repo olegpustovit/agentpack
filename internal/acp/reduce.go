@@ -94,7 +94,14 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 		if idx, ok := reducer.tools[id]; ok {
 			state.Items[idx].Data = mergeToolUpdate(state.Items[idx].Data, entry.Payload)
 		} else {
+			// An update whose call is outside the window gets one row that later updates merge into.
 			state.Items = append(state.Items, ThreadItem{Kind: "tool", Data: expandToolDiffs(entry.Payload)})
+			if id.call != "" {
+				if reducer.tools == nil {
+					reducer.tools = map[toolInputKey]int{}
+				}
+				reducer.tools[id] = len(state.Items) - 1
+			}
 		}
 	case "plan":
 		if reducer.keepItems {

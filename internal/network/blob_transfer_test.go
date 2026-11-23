@@ -20,7 +20,7 @@ func TestPeerBlobFetchChecksHashCachesAndEnforcesQuota(t *testing.T) {
 	source, _ := identityGateway(t, t.TempDir(), nil)
 	receiver, _ := identityGateway(t, t.TempDir(), nil)
 	for node, g := range map[string]*Gateway{"source": source, "receiver": receiver} {
-		if err := g.auth.store.BindNode(t.Context(), node); err != nil {
+		if err := g.store.BindNode(t.Context(), node); err != nil {
 			t.Fatal(err)
 		}
 		g.options.Library.Store = replicaStore(t)
@@ -114,7 +114,7 @@ func TestPeerBlobFetchChecksHashCachesAndEnforcesQuota(t *testing.T) {
 func TestWorkerBlobUploadRecordsLocation(t *testing.T) {
 	g, _ := identityGateway(t, t.TempDir(), nil)
 	dir, _ := sessionBlobDir(g.options.Home, "session-upload")
-	worker := &WorkerHTTP{stateStore: g.auth.store, sessionDir: dir}
+	worker := &WorkerHTTP{stateStore: g.store, sessionDir: dir}
 	mux := http.NewServeMux()
 	worker.registerConversation(mux)
 	png := []byte{0x89, 'P', 'N', 'G', 13, 10, 26, 10}
@@ -125,7 +125,7 @@ func TestWorkerBlobUploadRecordsLocation(t *testing.T) {
 		t.Fatalf("upload: %d %s", w.Code, w.Body.String())
 	}
 	var count, size int
-	if err := g.auth.store.Reader.QueryRow("SELECT count(*),sum(size) FROM blob_locations WHERE session_id='session-upload'").Scan(&count, &size); err != nil || count != 1 || size != len(png) {
+	if err := g.store.Reader.QueryRow("SELECT count(*),sum(size) FROM blob_locations WHERE session_id='session-upload'").Scan(&count, &size); err != nil || count != 1 || size != len(png) {
 		t.Fatalf("upload location: %d %d %v", count, size, err)
 	}
 }

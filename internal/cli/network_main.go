@@ -5,15 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
-func (runner Runner) runGatewayMain(ctx context.Context, home string, args []string) (int, error) {
+func (runner Runner) runGatewayMain(ctx context.Context, home string, args []string, empty bool) (int, error) {
 	if len(args) > 0 && args[0] != "set" && args[0] != "archive-ready" {
 		return 2, errors.New("expected gateway main, main set, or main archive-ready [--empty]")
 	}
@@ -21,7 +21,6 @@ func (runner Runner) runGatewayMain(ctx context.Context, home string, args []str
 	if len(args) > 0 {
 		action, args = args[0], args[1:]
 	}
-	args, empty := takeBool(args, "--empty")
 	if len(args) != 0 || empty && action != "archive-ready" {
 		return 2, errors.New("unexpected gateway main arguments")
 	}
@@ -73,17 +72,26 @@ func (runner Runner) runGatewayMain(ctx context.Context, home string, args []str
 		if err := store.SetMain(ctx, roles, home); err != nil {
 			return 1, err
 		}
+		// After the switch commits, so a refused switch never leaves the mesh without an acting Main.
+		if roles.MainNode != "" && roles.MainNode != local {
+			releaseCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			err := network.ReleaseMain(releaseCtx, home, roles.MainNode, roles.Epoch)
+			cancel()
+			if err != nil {
+				if _, err := fmt.Fprintf(runner.Stderr, "warning: %s did not release the main role (%v); it keeps refreshing MCP sign-ins and sending notifications until this change reaches it.\n", roles.MainName, err); err != nil {
+					return 1, err
+				}
+			}
+		}
 		_, err = fmt.Fprintln(runner.Stdout, "This machine is the main gateway.")
 	case "archive-ready":
 		if roles.MainNode != local {
 			return 1, errors.New("run archive-ready on the main gateway")
 		}
-		if _, err := os.Lstat(filepath.Join(home, "archive.db")); err == nil {
-			if err := network.PrepareArchive(ctx, home); err != nil {
+		if !empty {
+			if err := network.PrepareArchive(ctx, store, home); err != nil {
 				return 1, err
 			}
-		} else if !errors.Is(err, os.ErrNotExist) || !empty {
-			return 1, err
 		}
 		if err := store.ArchiveReady(ctx, home, empty); err != nil {
 			return 1, err

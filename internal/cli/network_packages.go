@@ -8,7 +8,6 @@ import (
 	"os"
 	"slices"
 
-	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
@@ -17,10 +16,10 @@ import (
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
+// runningEnvironment is a running session the gateway can restart after a package change.
 type runningEnvironment struct {
-	session     network.SessionInfo
-	digest      string
-	target      harness.Target
+	packSync.RunningEnvironment
+	harness     string
 	operationID string
 }
 
@@ -59,7 +58,6 @@ func snapshotRunningEnvironments(ctx context.Context, definitionRoot string) ([]
 		if err != nil || !os.SameFile(root, info) {
 			continue
 		}
-		session.DefinitionRoot = definitionRoot
 		target, ok := launcherTarget(session.Harness)
 		if !ok {
 			return nil, fmt.Errorf("unknown harness %q", session.Harness)
@@ -71,7 +69,10 @@ func snapshotRunningEnvironments(ctx context.Context, definitionRoot string) ([]
 		if err != nil {
 			return nil, fmt.Errorf("check running session %s before package change: %w", session.ID, err)
 		}
-		snapshots = append(snapshots, runningEnvironment{session: session, digest: digest, target: target, operationID: rand.Text()})
+		snapshots = append(snapshots, runningEnvironment{
+			RunningEnvironment: packSync.RunningEnvironment{SessionID: session.ID, DefinitionRoot: definitionRoot, Workspace: session.Directory, Mode: session.Mode, Target: target, Digest: digest},
+			harness:            session.Harness, operationID: rand.Text(),
+		})
 	}
 	return snapshots, nil
 }
@@ -92,53 +93,33 @@ func (runner Runner) restartChangedEnvironments(ctx context.Context, snapshots [
 	for _, session := range live {
 		running[session.ID] = restartable(session)
 	}
+	byID := map[string]runningEnvironment{}
+	var before []packSync.RunningEnvironment
+	for _, snapshot := range snapshots {
+		if running[snapshot.SessionID] {
+			byID[snapshot.SessionID] = snapshot
+			before = append(before, snapshot.RunningEnvironment)
+		}
+	}
+	changed, err := runner.Service.ChangedEnvironments(ctx, before)
+	if err != nil {
+		return err
+	}
 	var failures []error
-	var changed []runningEnvironment
-	for _, before := range snapshots {
-		if !running[before.session.ID] {
+	for _, environment := range changed {
+		snapshot := byID[environment.SessionID]
+		if err := network.RestartWorkerWhenIdle(ctx, home, environment.SessionID, snapshot.operationID); err != nil {
+			failures = append(failures, fmt.Errorf("package change saved, but session %s could not restart: %w", environment.SessionID, err))
 			continue
 		}
-		after, err := packSync.EnvironmentDigest(before.session.DefinitionRoot, before.session.Directory, before.session.Mode, before.target)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("package change saved, but cannot validate session %s for restart: %w", before.session.ID, err))
-			continue
-		}
-		if before.digest == after {
-			continue
-		}
-		changed = append(changed, before)
-	}
-	if err := errors.Join(failures...); err != nil {
-		return err
-	}
-	// Prepare every affected environment before interrupting any conversation.
-	for _, before := range changed {
-		effective, _, err := runner.Service.SyncForLaunchOptions(ctx, before.session.DefinitionRoot, packSync.SyncOptions{
-			Mode: before.session.Mode, Target: &before.target, WorkspaceRoot: before.session.Directory,
-		})
-		if err == nil {
-			err = runner.Service.ValidateLaunchInputs(before.session.DefinitionRoot, before.session.Directory, effective, before.target)
-		}
-		if err != nil {
-			failures = append(failures, fmt.Errorf("package change saved, but session %s is not ready to restart: %w", before.session.ID, err))
-		}
-	}
-	if err := errors.Join(failures...); err != nil {
-		return err
-	}
-	for _, before := range changed {
-		if err := network.RestartWorkerWhenIdle(ctx, home, before.session.ID, before.operationID); err != nil {
-			failures = append(failures, fmt.Errorf("package change saved, but session %s could not restart: %w", before.session.ID, err))
-			continue
-		}
-		fmt.Fprintf(runner.Stderr, "agentpack: restarting %s in %s (mode %s) after its environment changed\n", before.session.Harness, before.session.Directory, before.session.Mode)
+		fmt.Fprintf(runner.Stderr, "agentpack: restarting %s in %s (mode %s) after its environment changed\n", snapshot.harness, environment.Workspace, environment.Mode)
 	}
 	return errors.Join(failures...)
 }
 
 func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec string, restart bool) error {
 	return runner.changeNetworkProject(ctx, directory, restart, func(root string) error {
-		_, err := runner.Service.AddAll(ctx, root, spec, true)
+		_, err := runner.Service.AddAll(ctx, root, spec)
 		return err
 	})
 }

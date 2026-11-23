@@ -1,20 +1,11 @@
 import { useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
-import { api, routeMissing } from "@/lib/api"
+import { api, errorText } from "@/lib/api"
 import { newIntentID, useIntent } from "@/lib/intent"
 import { hud } from "@/lib/hud"
 import { rowKey, sessionLabel, type ListedSession } from "./group"
 import { sessionsQuery } from "./queries"
 import { reusesOperationId } from "./rules"
-
-// An older gateway has no switch.
-export function toolsError(error: unknown): string {
-  return routeMissing(error) ? "Needs update" : errorText(error)
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : "the request did not complete"
-}
 
 export function useSessionCommands(onArchivePending?: (session: ListedSession, pending: boolean) => void) {
   const queryClient = useQueryClient()
@@ -70,7 +61,7 @@ export function useSessionCommands(onArchivePending?: (session: ListedSession, p
   const tools = useIntent({
     request: ({ session, enabled }: { session: ListedSession; enabled: boolean }) => api(`/api/sessions/${encodeURIComponent(session.id)}/tools`, { machine: session.machine, method: "POST", body: { enabled } }),
     accepted: refresh,
-    failed: (error, { enabled }, retry) => hud.error(`Couldn't turn agentpack tools ${enabled ? "on" : "off"}: ${toolsError(error)}`, retry),
+    failed: (error, { enabled }, retry) => hud.error(`Couldn't turn agentpack tools ${enabled ? "on" : "off"}: ${errorText(error)}`, retry),
   })
 
   return {

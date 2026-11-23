@@ -1,0 +1,32 @@
+[
+  {
+    "seq": 3,
+    "working": true,
+    "needs_you": false
+  },
+  {
+    "seq": 21,
+    "working": true,
+    "needs_you": false,
+    "waiting": [
+      {
+        "kind": ""
+      }
+    ]
+  },
+  {
+    "seq": 25,
+    "working": false,
+    "needs_you": false,
+    "waiting": [
+      {
+        "kind": ""
+      }
+    ]
+  },
+  {
+    "seq": 29,
+    "working": false,
+    "needs_you": false
+  }
+]

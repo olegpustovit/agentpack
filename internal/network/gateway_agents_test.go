@@ -11,24 +11,25 @@ import (
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 )
 
 // Sign-in routes are the owner's, read each agent's account, and drive one login per agent.
 func TestAgentRoutesSignInForTheOwnerOnly(t *testing.T) {
 	home := t.TempDir()
-	saved := agentLogins
-	t.Cleanup(func() { agentLogins = saved })
+	saved := agents
+	t.Cleanup(func() { agents = saved })
 	probes := 0
 	loggedOut := false
-	agentLogins = []agentLogin{{"codex", []harness.LoginMethod{{ID: "chatgpt", Label: "ChatGPT account"}}, func(context.Context) harness.Account {
+	agents = []registry.Entry{{Harness: harness.Harness{Target: harness.Codex}, Login: &harness.LoginSpec{Methods: []harness.LoginMethod{{ID: "chatgpt", Label: "ChatGPT account"}}, Account: func(context.Context) harness.Account {
 		probes++
 		return harness.Account{Installed: true}
-	}, func(string) (harness.LoginFlow, error) {
+	}, Login: func(string) (harness.LoginFlow, error) {
 		return harness.LoginFlow{Command: loginChild(t, "AGENTPACK_TEST_LOGIN_HANG=1"), Answers: []harness.LoginAnswer{{Screen: "Select login method", Keys: "\r"}}, Input: "code"}, nil
-	}, func(context.Context) error {
+	}, Logout: func(context.Context) error {
 		loggedOut = true
 		return nil
-	}, nil, nil}}
+	}}}}
 	g, origin := identityGateway(t, home, nil)
 	testBrowserSession(t, g.auth, testBrowserEmail, "owner")
 	testBrowserSession(t, g.auth, "member@example.com", "member")
@@ -75,5 +76,41 @@ func TestAgentRoutesSignInForTheOwnerOnly(t *testing.T) {
 	<-attempt.done
 	if code, body := call("GET", "/api/agents/codex/login/"+step.ID, "", "owner"); code != 200 || !strings.Contains(body, `"state":"failed"`) {
 		t.Fatal("cancelled sign-in", code, body)
+	}
+}
+
+func TestRequireOwnerActors(t *testing.T) {
+	auth, err := testGatewayAuth(t, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.store.DB.Exec("INSERT INTO users(email, password_hash, role, created_at) VALUES ('member@example.com','hash','member',2) ON CONFLICT(email) DO NOTHING"); err != nil {
+		t.Fatal(err)
+	}
+	g := &Gateway{store: auth.store, auth: auth}
+	for _, tc := range []struct {
+		name  string
+		actor Actor
+		want  bool
+	}{
+		{"browser owner", Actor{Kind: "browser", User: "owner@example.com"}, true},
+		{"browser member", Actor{Kind: "browser", User: "member@example.com"}, false},
+		{"local owner", Actor{Kind: "local", Account: true, User: "owner@example.com"}, true},
+		{"local member", Actor{Kind: "local", Account: true, User: "member@example.com"}, false},
+		{"bare peer", Actor{Kind: "peer", User: "owner@example.com"}, false},
+		{"forwarded owner", Actor{Kind: "peer", Account: true, User: "owner@example.com"}, true},
+		{"forwarded member", Actor{Kind: "peer", Account: true, User: "member@example.com"}, false},
+		{"MCP owner", Actor{Kind: "mcp", User: "owner@example.com"}, true},
+		{"MCP member", Actor{Kind: "mcp", User: "member@example.com"}, false},
+		{"unbound local with accounts", Actor{Kind: "local", User: "native"}, false},
+		{"unknown", Actor{Kind: "unknown", User: "owner@example.com"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/", nil)
+			w := httptest.NewRecorder()
+			if got := g.requireOwner(w, r.WithContext(withActor(r.Context(), tc.actor))); got != tc.want {
+				t.Fatalf("owner access = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

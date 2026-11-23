@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -225,9 +223,6 @@ func NewGatewayMCP(gateway *Gateway) (*GatewayMCP, error) {
 	if gateway.store == nil {
 		return nil, errors.New("gateway state unavailable")
 	}
-	if err := os.Remove(filepath.Join(gateway.options.Home, "network", "oauth.db")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
 	m := &GatewayMCP{gateway: gateway}
 	server := mcp.NewServer(&mcp.Implementation{Name: "agentpack", Version: "1"}, nil)
 	m.tools(server)
@@ -373,7 +368,7 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 		}
 		// A stopped chat has no worker to restart; resuming it sends nothing to its agent, so any chat's
 		// agent may revive its account's stopped chats. The resume route checks the account.
-		if info, err := storedSession(ctx, m.gateway.auth.store.Reader, in.SessionID); err == nil && info.Transport == "acp" && viewState(info) == stateStopped {
+		if info, err := storedSession(ctx, m.gateway.store.Reader, in.SessionID); err == nil && info.Transport == "acp" && viewState(info) == stateStopped {
 			_, err := m.do(ctx, in.Node, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/resume", map[string]string{"text": ""})
 			return nil, restarted{err == nil}, err
 		}
@@ -477,7 +472,7 @@ func (m *GatewayMCP) do(ctx context.Context, node, method, path string, body any
 			return nil, err
 		}
 	}
-	request, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(data))
+	request, err := http.NewRequestWithContext(withCaller(ctx, callerMCP), method, u.String(), bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}

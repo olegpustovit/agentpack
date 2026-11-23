@@ -119,14 +119,6 @@ func AgyOverlayManifestPath(projectRoot string) (string, error) {
 	return projectStateFile(projectRoot, "agy-overlay.manifest")
 }
 
-func SessionHistoryRecoveryDirForComponent(projectRoot, harness, modeComponent string) (string, error) {
-	hash, err := ProjectPathHash(projectRoot)
-	if err != nil {
-		return "", err
-	}
-	return underHome("recovery", "session-history", harness, hash, modeComponent, "conflicts")
-}
-
 func ProxyLogDir(projectRoot string) (string, error) {
 	if value := strings.TrimSpace(os.Getenv("AGENTPACK_PROXY_LOG_DIR")); value != "" {
 		return value, nil
@@ -419,4 +411,19 @@ func OrphanedProjectDirectories(parent string) []string {
 		}
 	}
 	return orphans
+}
+
+// WriteAtomic replaces path with data in one rename, so a reader or a crash
+// sees either the old file or the new one, never a truncated mix.
+func WriteAtomic(path string, data []byte, mode os.FileMode) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temporary.Name())
+	_, err = temporary.Write(data)
+	if err = errors.Join(err, temporary.Chmod(mode), temporary.Sync(), temporary.Close()); err != nil {
+		return err
+	}
+	return os.Rename(temporary.Name(), path)
 }

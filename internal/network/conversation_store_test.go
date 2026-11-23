@@ -128,10 +128,10 @@ func TestStoppedConversationMatchesLiveHistoryAndSince(t *testing.T) {
 	home := t.TempDir()
 	g, origin := identityGateway(t, home, nil)
 	id := "session-history"
-	if err := upsertSession(t.Context(), g.auth.store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
-	log, err := newConversationLog(t.Context(), g.auth.store, id, func(err error) { t.Error(err) })
+	log, err := newConversationLog(t.Context(), g.store, id, func(err error) { t.Error(err) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +446,7 @@ func TestConversationPagesReachTheFirstEventWithoutTheWorker(t *testing.T) {
 	home := t.TempDir()
 	g, origin := identityGateway(t, home, nil)
 	id := "session-long"
-	if err := upsertSession(t.Context(), g.auth.store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	payload, err := json.Marshal(map[string]string{"text": strings.Repeat("x", 200<<10)})
@@ -458,7 +458,7 @@ func TestConversationPagesReachTheFirstEventWithoutTheWorker(t *testing.T) {
 	for seq := int64(1); seq <= total; seq++ {
 		changes.Entries = append(changes.Entries, acp.LogEntry{Seq: seq, Kind: "agent_message_chunk", Payload: payload})
 	}
-	if err := persistConversationChangesSince(t.Context(), g.auth.store.DB, id, changes, 0); err != nil {
+	if err := persistConversationChangesSince(t.Context(), g.store.DB, id, changes, 0); err != nil {
 		t.Fatal(err)
 	}
 	// A running worker that cannot serve history proves older pages come from the store.
@@ -487,7 +487,7 @@ func TestConversationPagesReachTheFirstEventWithoutTheWorker(t *testing.T) {
 		}
 		return entries, w.Header().Get("X-Agentpack-Truncated") == "true"
 	}
-	tail, _, truncated, err := storedConversationTail(t.Context(), g.auth.store.Reader, id, 0)
+	tail, _, truncated, err := storedConversationTail(t.Context(), g.store.Reader, id, 0)
 	if err != nil || !truncated || tail[0].Seq == 1 {
 		t.Fatalf("tail should stop short of the first event: first=%d truncated=%t err=%v", tail[0].Seq, truncated, err)
 	}

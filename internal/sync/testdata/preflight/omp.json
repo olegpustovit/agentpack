@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "phase": "preflight",
+  "definition_root": "$HOME/definition",
+  "workspace_root": "$HOME/workspace",
+  "mode": "default",
+  "target": "omp",
+  "policy": "ci",
+  "strict_external": false,
+  "workspace_digest": "sha256:0747a248cd2c26eddb35c7f031f88f41e19d65835ed9b208055b7cc7d74522fd",
+  "generation_id": "sha256:fdd07242e9d7e1fc2e40346e5c1893453a6e3f231f6d1e99ae2e7d7d7e703f5f",
+  "policy_digest": "sha256:409739949c42f6d34a4bb4e91d8e71802334fede50c3b630aeac7c6a6754d9fc",
+  "expected_target": {
+    "adapter": "omp"
+  },
+  "source_identity": "sha256-source-v1:c94ce60398f670b9a1142fbc65b8f2d33463de61bb5619a1ff7444c2ee834e07",
+  "lock_digest": "sha256:f1fa539503947a3455d6a1d065d60f18eadf2c133202bcf83d3aa6a04bc3a8cc",
+  "skills": 0,
+  "plugins": 0,
+  "shadowed": 0,
+  "inheritance": [
+    "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+    "OMP uses an additive --plugin-dir and keeps native profile settings, credentials, sessions and project discovery",
+    "CI policy treats undeclared inheritance as a violation"
+  ],
+  "capabilities": {
+    "agy": "workspace-write: writes .agents/plugins/agentpack-bundle",
+    "claude": "external: uses --plugin-dir and --settings; no workspace overlay",
+    "codex": "external-home: uses CODEX_HOME; native project instructions may still apply",
+    "cursor": "workspace-write: writes .cursor/agents when agent artifacts exist",
+    "grok": "external-home: uses GROK_HOME; also reads real ~/.claude and ~/.grok",
+    "omp": "external: uses --plugin-dir; native profile, settings and credentials remain in place",
+    "opencode": "external: uses OPENCODE_CONFIG_DIR; no workspace overlay"
+  },
+  "artifacts": [
+    {
+      "properties": {
+        "rendered_digest": "sha256:ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+        "scope": "lsp",
+        "target": "omp"
+      },
+      "output_path": ".lsp.json",
+      "id": "lsp-file:omp:.lsp.json",
+      "kind": "lsp_file",
+      "name": ".lsp.json",
+      "winner": "merged",
+      "evidence": "generated"
+    }
+  ],
+  "coverage": [
+    {
+      "category": "skill",
+      "scope": "native_catalog",
+      "completeness": "none",
+      "reason": "pure preflight does not execute native CLI discovery"
+    }
+  ],
+  "findings": [
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "OMP uses an additive --plugin-dir and keeps native profile settings, credentials, sessions and project discovery",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "CI policy treats undeclared inheritance as a violation",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITED_CONFIG",
+      "severity": "violation",
+      "source": "$HOME/.claude/settings.json",
+      "message": "native launch may read existing undeclared configuration",
+      "remedy": "use a controlled account/configuration home for CI, or use policy local",
+      "evidence": "generated"
+    },
+    {
+      "code": "BINARY_MISSING",
+      "severity": "error",
+      "target": "omp",
+      "message": "could not find \"$HOME/missing-binary\"",
+      "remedy": "install the native CLI or set the harness path env var"
+    },
+    {
+      "code": "STAGING_INPUTS_UNKNOWN",
+      "severity": "warning",
+      "message": "no materialization input identity is recorded",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing",
+      "evidence": "unknown"
+    },
+    {
+      "code": "STAGING_NOT_RECORDED",
+      "severity": "warning",
+      "message": "no staged record for mode \"default\"",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing"
+    }
+  ],
+  "overall_status": "error",
+  "ok": false
+}

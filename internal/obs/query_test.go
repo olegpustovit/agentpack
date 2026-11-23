@@ -124,7 +124,7 @@ func TestDiagnosticResolveDoesNotRegressOnDelayedOldEvents(t *testing.T) {
 	flushStore(t, logs)
 	logs.Write(issueEvent(at.Add(time.Second), "v1.2.0"))
 	flushStore(t, logs)
-	issue, err := ChangeIssue(context.Background(), home, first.Fingerprint, "resolved", "v1.2.0", "fixed", "tester")
+	issue, err := ChangeIssue(context.Background(), canonical, home, first.Fingerprint, "resolved", "v1.2.0", "fixed", "tester")
 	if err != nil || issue.Status != "resolved" || issue.Count != 2 {
 		t.Fatalf("resolve=%+v err=%v", issue, err)
 	}

@@ -12,13 +12,6 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/harness/agy"
-	"github.com/olegpustovit/agentpack/internal/harness/claude"
-	"github.com/olegpustovit/agentpack/internal/harness/codex"
-	"github.com/olegpustovit/agentpack/internal/harness/cursor"
-	"github.com/olegpustovit/agentpack/internal/harness/grok"
-	"github.com/olegpustovit/agentpack/internal/harness/omp"
-	"github.com/olegpustovit/agentpack/internal/harness/opencode"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
@@ -81,20 +74,6 @@ func (c *limitsCache) current() savedLimits {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.saved
-}
-
-func (c *limitsCache) get(ctx context.Context) []harness.LimitSnapshot {
-	saved := c.current()
-	if saved.Snapshots == nil {
-		return c.collect(ctx, limitsCacheTTL)
-	}
-	if time.Since(saved.At) >= limitsCacheTTL && c.refreshing.CompareAndSwap(false, true) {
-		go func() {
-			defer c.refreshing.Store(false)
-			c.collect(ctx, limitsCacheTTL)
-		}()
-	}
-	return saved.Snapshots
 }
 
 // collect outlives the request: a viewer leaving the page must not cache cancelled probes as failures.
@@ -178,28 +157,15 @@ func writeLimitSamples(ctx context.Context, tx *sql.Tx, node string, at time.Tim
 	return err
 }
 
-// limitProbes reads each provider CLI. Names match session harnesses, so a finished turn can refresh its own.
-var limitProbes = []struct {
-	harness string
-	read    func(context.Context) harness.LimitSnapshot
-}{
-	{"codex", func(ctx context.Context) harness.LimitSnapshot { return codex.ReadLimits(ctx, "") }},
-	{"claude", claude.ReadLimits},
-	{"agy", agy.ReadLimits},
-	{"grok", grok.ReadLimits},
-	{"opencode", opencode.ReadLimits},
-	{"cursor", cursor.ReadLimits},
-	{"omp", omp.ReadLimits},
-}
-
 func collectLimits(ctx context.Context) []harness.LimitSnapshot {
-	snapshots := make([]harness.LimitSnapshot, len(limitProbes))
+	// Names match session harnesses, so a finished turn can refresh its own.
+	snapshots := make([]harness.LimitSnapshot, len(agents))
 	var wg sync.WaitGroup
-	for index, probe := range limitProbes {
+	for index, agent := range agents {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			snapshots[index] = probe.read(ctx)
+			snapshots[index] = agent.Limits(ctx)
 		}()
 	}
 	wg.Wait()
@@ -207,11 +173,11 @@ func collectLimits(ctx context.Context) []harness.LimitSnapshot {
 }
 
 func readLimitsOf(ctx context.Context, name string) (harness.LimitSnapshot, bool) {
-	for _, probe := range limitProbes {
-		if probe.harness == name {
+	for _, agent := range agents {
+		if string(agent.Target) == name {
 			ctx, cancel := context.WithTimeout(ctx, limitsProbeTimeout)
 			defer cancel()
-			return probe.read(ctx), true
+			return agent.Limits(ctx), true
 		}
 	}
 	return harness.LimitSnapshot{}, false
@@ -291,10 +257,10 @@ func saveLimitSnapshot(ctx context.Context, db *sql.DB, at time.Time, snapshot h
 
 func (g *Gateway) runLimitsAfterTurns(ctx context.Context, interval time.Duration) {
 	if g.logs != nil {
-		node, _ := g.auth.store.NodeID(ctx)
+		node, _ := g.store.NodeID(ctx)
 		ctx = obs.WithSink(ctx, g.logs, obs.BuildMetadata(g.options.Version, node, "gateway"))
 	}
-	turns := &turnLimits{store: g.auth.store, read: readLimitsOf, now: time.Now}
+	turns := &turnLimits{store: g.store, read: readLimitsOf, now: time.Now}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -311,12 +277,12 @@ func (g *Gateway) runLimitsAfterTurns(ctx context.Context, interval time.Duratio
 	}
 }
 
-func (g *Gateway) registerLimits(mux *http.ServeMux) {
-	nodeID, cacheErr := g.auth.store.NodeID(context.Background())
-	var cache *limitsCache
+func (g *Gateway) registerLimits(mux routeRegistrar) {
+	nodeID, cacheErr := g.nodeID(context.Background())
 	if cacheErr == nil {
-		cache, cacheErr = newLimitsCache(g.auth.store, nodeID, collectLimits)
+		g.limits, cacheErr = newLimitsCache(g.store, nodeID, collectLimits)
 	}
+	cache := g.limits
 	if cacheErr != nil && g.store != nil {
 		log.Printf("limits cache cannot be loaded: %v", cacheErr)
 	}
@@ -326,13 +292,19 @@ func (g *Gateway) registerLimits(mux *http.ServeMux) {
 			return
 		}
 		// Reads never wait for a harness or peer; refresh the local cache beside them.
-		if (r.URL.Query().Get("node") == "" || r.URL.Query().Get("node") == nodeID) && time.Since(cache.current().At) >= limitsCacheTTL && cache.refreshing.CompareAndSwap(false, true) {
-			obs.Go("gateway.limits_refresh", func() {
-				defer cache.refreshing.Store(false)
-				cache.collect(r.Context(), limitsCacheTTL)
-				// Browsers refetch on this instead of polling for the refresh to land.
-				g.emitEvent(eventMessage{Topic: "limits"})
-			})
+		local, _ := g.nodeID(r.Context())
+		if (r.URL.Query().Get("node") == "" || r.URL.Query().Get("node") == local) && time.Since(cache.current().At) >= limitsCacheTTL && cache.refreshing.CompareAndSwap(false, true) {
+			if g.beginBackground(&g.operations) {
+				obs.Go("gateway.limits_refresh", func() {
+					defer g.operations.Done()
+					defer cache.refreshing.Store(false)
+					cache.collect(r.Context(), limitsCacheTTL)
+					// Browsers refetch on this instead of polling for the refresh to land.
+					g.emitEvent(eventMessage{Topic: "limits"})
+				})
+			} else {
+				cache.refreshing.Store(false)
+			}
 		}
 		limits, err := g.meshLimits(r.Context(), r.URL.Query().Get("node"))
 		if err != nil {
@@ -359,7 +331,7 @@ type meshLimit struct {
 }
 
 func (g *Gateway) meshLimits(ctx context.Context, node string) ([]meshLimit, error) {
-	local, err := g.auth.store.NodeID(ctx)
+	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -369,7 +341,7 @@ func (g *Gateway) meshLimits(ctx context.Context, node string) ([]meshLimit, err
 		query += " WHERE node_id=?"
 		args = append(args, node)
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, query+" ORDER BY node_id,harness", args...)
+	rows, err := g.store.Reader.QueryContext(ctx, query+" ORDER BY node_id,harness", args...)
 	if err != nil {
 		return nil, err
 	}

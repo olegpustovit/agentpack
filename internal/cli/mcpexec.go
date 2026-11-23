@@ -18,13 +18,10 @@ import (
 // user cache on first use, every tarball checked against pack.lock, and the
 // package's executable runs with the server's own arguments on the agent's
 // standard input and output.
-func (runner Runner) runMCPExec(ctx context.Context, arguments []string) (int, error) {
-	specPath, args, found, err := takeFlag(arguments, "--spec")
-	if err != nil || !found {
-		return 2, flagError(err, "--spec")
-	}
-	if len(args) != 0 && args[0] == "--" {
-		args = args[1:]
+func (runner Runner) runMCPExec(ctx context.Context, invocation Invocation) (int, error) {
+	specPath, args := stringFlag(invocation, "spec"), invocation.Args
+	if specPath == "" {
+		return 2, errors.New("mcp-exec requires --spec")
 	}
 	data, err := os.ReadFile(specPath)
 	if err != nil {

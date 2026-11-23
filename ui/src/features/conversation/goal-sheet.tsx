@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Check, ChevronRight, Circle, CircleDot, Flag, Pause, Pencil, Play, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { api } from "@/lib/api"
+import { api, LOCAL } from "@/lib/api"
 import type { GoalLimits, GoalState } from "@/lib/api-types"
 import { clock, goalElapsedMs, goalStateWords } from "@/lib/goal"
 import { hud } from "@/lib/hud"
@@ -15,8 +15,9 @@ const goalPath = (sessionId: string): `/api/${string}` => `/api/sessions/${encod
 // Set, edit, pause, resume and clear. The conversation stream records each change.
 export function useGoalActions(machine: string, sessionId: string) {
   const queryClient = useQueryClient()
+  // Session rows carry the goal; the chat itself follows its stream.
   const refresh = () => {
-    void queryClient.invalidateQueries({ queryKey: ["m"] })
+    for (const key of [["m", LOCAL, "sessions"], ["m", LOCAL, "session-row"], ["m", machine, "sessions"]]) void queryClient.invalidateQueries({ queryKey: key })
   }
   const set = useMutation({
     mutationFn: ({ goal, edit }: { goal: { objective: string; checks?: string; limits?: GoalLimits }; edit: boolean }) =>

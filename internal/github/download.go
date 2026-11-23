@@ -25,6 +25,9 @@ var (
 	retryBaseWait = 400 * time.Millisecond
 )
 
+// shortcut: archives are held in memory up to this cap; stream to a temp file if packages ever need larger repositories.
+const maxTarballBytes = 1 << 30
+
 type fetchDisposition uint8
 
 const (
@@ -153,9 +156,12 @@ func fetchCodeload(ctx context.Context, client *http.Client, owner, repo, sha, t
 	defer response.Body.Close()
 	switch {
 	case response.StatusCode >= 200 && response.StatusCode < 300:
-		data, err := io.ReadAll(response.Body)
+		data, err := io.ReadAll(io.LimitReader(response.Body, maxTarballBytes+1))
 		if err != nil {
 			return fetchResult{disposition: fetchTransient, reason: "network: read body: " + err.Error()}
+		}
+		if len(data) > maxTarballBytes {
+			return fetchResult{disposition: fetchFatal, err: fmt.Errorf("GET %s: archive is larger than %d MiB", url, maxTarballBytes>>20)}
 		}
 		return fetchResult{data: data, disposition: fetchSuccess}
 	case response.StatusCode == 401 || response.StatusCode == 403 || response.StatusCode == 404:

@@ -80,9 +80,7 @@ func (worker *WorkerHTTP) registerMCP(mux *http.ServeMux) {
 			return
 		}
 		session := worker.current()
-		session.mu.Lock()
-		err = session.writeInputLocked(data)
-		session.mu.Unlock()
+		err = session.writeInput(data)
 		if err != nil {
 			message := "terminal input failed"
 			if errors.Is(err, ErrSessionEnded) {

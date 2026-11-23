@@ -2,6 +2,7 @@ package registry
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 type Tombstone struct {
@@ -343,120 +345,123 @@ func (s *Store) tombstoneFor(agentpackID string) (Tombstone, bool, error) {
 	return Tombstone{}, false, nil
 }
 
+// CollectGarbage removes what each tombstone deletes, one state transaction per tombstone; the
+// SQLite write lock serializes it, so it takes no registry file lock.
 func (s *Store) CollectGarbage() ([]string, error) {
+	entries, err := s.storedIDs("registry_tombstones")
+	if err != nil {
+		return nil, err
+	}
 	var removed []string
-	err := s.withLock(func() error {
-		var tombstones []Tombstone
-		entries, err := s.storedIDs("registry_tombstones")
+	for _, id := range entries {
+		tombstone, err := s.readTombstone(id)
 		if err != nil {
+			return nil, err
+		}
+		if err := state.Transaction(context.Background(), s.sql.DB, func(tx *sql.Tx) error {
+			ids, err := s.collectTombstone(tx, tombstone)
+			removed = append(removed, ids...)
 			return err
+		}); err != nil {
+			return nil, err
 		}
-		for _, id := range entries {
-			t, err := s.readTombstone(id)
-			if err != nil {
-				return err
-			}
-			tombstones = append(tombstones, t)
-		}
-		for _, tombstone := range tombstones {
-			var needed bool
-			if err := s.sql.Reader.QueryRow(`SELECT
+	}
+	sort.Strings(removed)
+	return removed, nil
+}
+
+func (s *Store) collectTombstone(tx *sql.Tx, tombstone Tombstone) ([]string, error) {
+	var needed bool
+	if err := tx.QueryRow(`SELECT
  EXISTS(SELECT 1 FROM registry_objects WHERE json_extract(body,'$.agentpack_id')=?)
  OR EXISTS(SELECT 1 FROM registry_names WHERE json_extract(body,'$.agentpack_id')=?)
  OR EXISTS(SELECT 1 FROM registry_heads WHERE agentpack_id=?)
  OR EXISTS(SELECT 1 FROM registry_bindings b,registry_tombstones t,json_each(t.body,'$.revisions') r
- WHERE t.digest=? AND b.revision_id=r.value)`, tombstone.Agentpack, tombstone.Agentpack, tombstone.Agentpack, tombstone.ID).Scan(&needed); err != nil {
-				return err
-			}
-			if !needed {
-				continue
-			}
-			// CRR retains deletion clocks, so an offline peer can learn collection without a separate receipt protocol.
-			packageIDs := map[string]bool{}
-			revisionIDs := map[string]bool{}
-			nameIDs := map[string]bool{}
-			for _, id := range tombstone.Revisions {
-				revisionIDs[id] = true
-			}
-			objects, err := s.objectIDs()
-			if err != nil {
-				return err
-			}
-			for _, id := range objects {
-				data, err := s.objectData(id)
-				if err != nil {
-					return err
-				}
-				obj, err := decodeImported(data)
-				if err != nil || obj.id != id {
-					return fmt.Errorf("invalid registry public object")
-				}
-				if obj.revision != nil && obj.revision.AgentpackID == tombstone.Agentpack {
-					revisionIDs[id] = true
-				}
-				if obj.name != nil && obj.name.Agentpack == tombstone.Agentpack {
-					nameIDs[id] = true
-				}
-			}
-			for nameID := range nameIDs {
-				if err := s.removeObject(nameID); err != nil {
-					return err
-				}
-				removed = append(removed, nameID)
-			}
-			for revisionID := range revisionIDs {
-				if revision, err := s.readRevision(revisionID); err == nil {
-					for _, packageID := range revision.PackageIDs {
-						packageIDs[packageID] = true
-					}
-				} else if !os.IsNotExist(err) {
-					return err
-				}
-			}
-			for revisionID := range revisionIDs {
-				if err := s.removeObject(revisionID); err != nil {
-					return err
-				}
-				removed = append(removed, revisionID)
-				if _, err := s.sql.DB.Exec("DELETE FROM registry_bindings WHERE revision_id=?", revisionID); err != nil {
-					return err
-				}
-			}
-			for packageID := range packageIDs {
-				referenced, err := s.packageReferencedOutside(tombstone.Agentpack, packageID)
-				if err != nil {
-					return err
-				}
-				if referenced {
-					continue
-				}
-				if err := s.removeObject(packageID); err != nil {
-					return err
-				}
-				removed = append(removed, packageID)
-			}
-			if _, err := s.sql.DB.Exec("DELETE FROM registry_heads WHERE agentpack_id=?", tombstone.Agentpack); err != nil {
-				return err
-			}
+ WHERE t.digest=? AND b.revision_id=r.value)`, tombstone.Agentpack, tombstone.Agentpack, tombstone.Agentpack, tombstone.ID).Scan(&needed); err != nil || !needed {
+		return nil, err
+	}
+	// CRR retains deletion clocks, so an offline peer can learn collection without a separate receipt protocol.
+	revisionIDs := map[string]bool{}
+	nameIDs := map[string]bool{}
+	for _, id := range tombstone.Revisions {
+		revisionIDs[id] = true
+	}
+	rows, err := tx.Query(`SELECT digest,0 FROM registry_objects WHERE json_extract(body,'$.agentpack_id')=?
+ UNION ALL SELECT digest,1 FROM registry_names WHERE json_extract(body,'$.agentpack_id')=?`, tombstone.Agentpack, tombstone.Agentpack)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var id string
+		var name bool
+		if err := rows.Scan(&id, &name); err != nil {
+			rows.Close()
+			return nil, err
 		}
-		sort.Strings(removed)
-		return nil
-	})
+		if name {
+			nameIDs[id] = true
+		} else {
+			revisionIDs[id] = true
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, err
+	}
+	packageIDs := map[string]bool{}
+	for revisionID := range revisionIDs {
+		if revision, err := s.readRevision(revisionID); err == nil {
+			for _, packageID := range revision.PackageIDs {
+				packageIDs[packageID] = true
+			}
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	var removed []string
+	for nameID := range nameIDs {
+		if err := removeObject(tx, nameID); err != nil {
+			return nil, err
+		}
+		removed = append(removed, nameID)
+	}
+	for revisionID := range revisionIDs {
+		if err := removeObject(tx, revisionID); err != nil {
+			return nil, err
+		}
+		removed = append(removed, revisionID)
+		if _, err := tx.Exec("DELETE FROM registry_bindings WHERE revision_id=?", revisionID); err != nil {
+			return nil, err
+		}
+	}
+	for packageID := range packageIDs {
+		referenced, err := s.packageReferencedOutside(tombstone.Agentpack, packageID)
+		if err != nil {
+			return nil, err
+		}
+		if referenced {
+			continue
+		}
+		if err := removeObject(tx, packageID); err != nil {
+			return nil, err
+		}
+		removed = append(removed, packageID)
+	}
+	_, err = tx.Exec("DELETE FROM registry_heads WHERE agentpack_id=?", tombstone.Agentpack)
 	return removed, err
 }
 
 func (s *Store) packageReferencedOutside(deletedAgentpack, packageID string) (bool, error) {
-	entries, err := s.objectIDs()
+	rows, err := s.sql.Reader.Query(`SELECT digest FROM registry_objects
+ WHERE json_extract(body,'$.agentpack_id')<>? AND EXISTS (
+ SELECT 1 FROM json_each(body,'$.package_ids') WHERE value=?)`, deletedAgentpack, packageID)
 	if err != nil {
 		return true, err
 	}
-	for _, id := range entries {
-		var shape Revision
-		if err := s.readObject(id, &shape); err != nil {
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			return true, err
-		}
-		if shape.AgentpackID == "" || shape.AgentpackID == deletedAgentpack {
-			continue
 		}
 		r, err := s.readRevision(id)
 		if err != nil {
@@ -466,7 +471,7 @@ func (s *Store) packageReferencedOutside(deletedAgentpack, packageID string) (bo
 			return true, nil
 		}
 	}
-	return false, nil
+	return false, rows.Err()
 }
 
 func (s *Store) revisionHeads(ids []string) ([]string, error) {

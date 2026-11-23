@@ -4,6 +4,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly headers?: Headers,
   ) {
     super(message)
     this.name = "ApiError"
@@ -46,45 +47,60 @@ export function responseError(res: Response, text: string): ApiError {
   }
   // A proxy in front of the gateway can answer with its own error page.
   if (!error) error = /^\s*<(!doctype|html)/i.test(text) ? unreachableMessage(res.status) : text.slice(0, 200) || res.statusText
-  return new ApiError(readableError(error.trim(), res.status), res.status)
+  return new ApiError(readableError(error.trim(), res.status), res.status, res.headers)
 }
 
-// Mutations must pass `machine` explicitly; there is no default target.
-export async function api<T>(
-  path: `/api/${string}`,
-  opts: { machine?: string; method?: string; body?: unknown; query?: Record<string, string>; idempotencyKey?: string } = {},
-): Promise<T> {
+type ApiOptions = {
+  machine?: string
+  method?: string
+  body?: unknown
+  // Sent as the raw request body with its own type, instead of JSON.
+  upload?: Blob
+  query?: Record<string, string>
+  idempotencyKey?: string
+  signal?: AbortSignal
+}
+
+// The one fetch behind every gateway call: node routing, trace, telemetry, the sign-in redirect and error text.
+// A non-2xx response throws; callers read the body of a successful one.
+async function send(path: `/api/${string}`, opts: ApiOptions) {
   const url = new URL(path, location.origin)
   if (opts.machine && opts.machine !== LOCAL) url.searchParams.set("node", opts.machine)
-  if (opts.query) {
-    for (const [key, value] of Object.entries(opts.query)) {
-      url.searchParams.set(key, value)
-    }
-  }
+  for (const [key, value] of Object.entries(opts.query ?? {})) url.searchParams.set(key, value)
   const hasBody = opts.body !== undefined
-  const method = opts.method ?? (hasBody ? "POST" : "GET")
+  const method = opts.method ?? (hasBody || opts.upload ? "POST" : "GET")
   const traceparent = traceRequest()
   const headers = new Headers({ traceparent })
   if (hasBody) headers.set("Content-Type", "application/json")
+  if (opts.upload) headers.set("Content-Type", opts.upload.type || "application/octet-stream")
   if (opts.idempotencyKey) headers.set("Idempotency-Key", opts.idempotencyKey)
   let res: Response
   try {
-    res = await fetch(url, {
-      method,
-      headers,
-      body: hasBody ? JSON.stringify(opts.body) : undefined,
-    })
+    res = await fetch(url, { method, headers, body: opts.upload ?? (hasBody ? JSON.stringify(opts.body) : undefined), signal: opts.signal })
   } catch (error) {
     recordAPI(method, path, traceparent, 0, error)
     throw error
   }
   recordAPI(method, path, traceparent, res.status)
-  const text = await res.text().catch((error) => {
-    if (res.ok) recordAPI(method, path, traceparent, 0, error)
-    throw error
-  })
   if (res.status === 401 && path !== "/api/login" && path !== "/api/claim") onUnauthorized()
-  if (!res.ok) throw responseError(res, text)
+  if (!res.ok) throw responseError(res, await res.text().catch(() => ""))
+  const text = () =>
+    res.text().catch((error: unknown) => {
+      recordAPI(method, path, traceparent, 0, error)
+      throw error
+    })
+  return { res, text }
+}
+
+// A successful response and its body text.
+export async function request(path: `/api/${string}`, opts: ApiOptions = {}): Promise<{ res: Response; text: string }> {
+  const { res, text } = await send(path, opts)
+  return { res, text: await text() }
+}
+
+// Mutations must pass `machine` explicitly; there is no default target.
+export async function api<T>(path: `/api/${string}`, opts: ApiOptions = {}): Promise<T> {
+  const { text } = await request(path, opts)
   try {
     return (text ? JSON.parse(text) : undefined) as T
   } catch {
@@ -94,18 +110,8 @@ export async function api<T>(
 
 // POSTs body and hands each NDJSON line to onLine as it arrives, so a slow check reports progress.
 export async function apiLines(path: `/api/${string}`, body: unknown, onLine: (line: unknown) => void): Promise<void> {
-  const traceparent = traceRequest()
-  const res = await fetch(new URL(path, location.origin), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", traceparent },
-    body: JSON.stringify(body),
-  })
-  recordAPI("POST", path, traceparent, res.status)
-  if (!res.ok || !res.body) {
-    if (res.status === 401) onUnauthorized()
-    const text = await res.text().catch(() => "")
-    throw new ApiError(readableError(text.trim().slice(0, 200) || res.statusText, res.status), res.status)
-  }
+  const { res } = await send(path, { body })
+  if (!res.body) throw new ApiError(res.statusText, res.status)
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
   let buffer = ""
   for (;;) {
@@ -116,4 +122,10 @@ export async function apiLines(path: `/api/${string}`, body: unknown, onLine: (l
     for (const line of lines) if (line.trim()) onLine(JSON.parse(line))
     if (done) return
   }
+}
+
+// What a failed request says to a person. A peer without the route (an older version) reads as Needs update.
+export function errorText(error: unknown, fallback = "the request did not complete"): string {
+  if (routeMissing(error)) return "Needs update"
+  return error instanceof Error ? error.message : fallback
 }

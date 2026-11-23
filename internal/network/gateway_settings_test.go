@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/olegpustovit/agentpack/internal/registry"
 
 	"github.com/olegpustovit/agentpack/internal/state"
 )
@@ -39,7 +43,7 @@ func TestGatewaySettingsSharingDoesNotStopAgents(t *testing.T) {
 	if response.Code != 200 || stopped {
 		t.Fatalf("sharing stop: %d stopped=%v", response.Code, stopped)
 	}
-	config, err := ReadSharingConfig(store, home)
+	config, err := ReadSharingConfig(store)
 	if err != nil || config.Enabled || len(config.Allow) != 1 {
 		t.Fatalf("config %+v %v", config, err)
 	}
@@ -64,7 +68,7 @@ func TestPeerHTTPRejectsBrowserAndAdministrativeRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("https://agentpack.example")
-	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home}}
+	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home}}
 	handler := g.peerHandler(&tailnetPeer{ID: "self", UserID: 7}, "100.100.1.2:7421")
 	for _, test := range []struct {
 		host, path, origin string
@@ -141,7 +145,7 @@ func TestStopAgentsSkipsACPWorkersOwnedElsewhere(t *testing.T) {
 	worker("session-foreign-terminal", SessionInfo{Transport: "terminal", StartedBy: &foreign})
 
 	g := &Gateway{
-		auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)},
+		store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)},
 		options: GatewayOptions{Home: home},
 	}
 	listRequest := httptest.NewRequest(http.MethodGet, origin.String()+"/api/sessions", nil)
@@ -226,6 +230,100 @@ func TestProfilesAreLocalOnly(t *testing.T) {
 		handler.ServeHTTP(w, r)
 		if w.Code != request.want {
 			t.Errorf("auth=%t origin=%q: %d, want %d", request.header != "", request.origin, w.Code, request.want)
+		}
+	}
+}
+
+func TestRemovedPeerCannotMutate(t *testing.T) {
+	home := t.TempDir()
+	auth, err := testGatewayAuth(t, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := registry.New(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const peer, address = "removed-peer", "100.64.0.3"
+	if err := store.EnrollPeer(peer); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemovePeer(peer); err != nil {
+		t.Fatal(err)
+	}
+	var identity tailnetIdentity
+	identity.Node.StableID, identity.Node.User = peer, 7
+	identity.Node.Addresses = []string{address + "/32"}
+	origin, _ := url.Parse("http://127.0.0.1:7420")
+	g := &Gateway{store: auth.store, auth: auth, origin: origin, options: GatewayOptions{Home: home, Library: LibraryOptions{Store: store}}}
+	g.tailnet.whois = map[netip.Addr]cachedWhois{netip.MustParseAddr(address): {at: time.Now(), identity: identity}}
+	host := "100.64.0.2:7421"
+	handler := g.peerHandler(&tailnetPeer{ID: "self", UserID: 7}, host)
+	for _, pattern := range peerPatterns() {
+		method, path, _ := strings.Cut(pattern, " ")
+		if method == http.MethodGet {
+			continue
+		}
+		path = strings.NewReplacer("{id}", "session", "{queueId}", "queue", "{revision}", "revision", "{harness}", "codex").Replace(path)
+		r := httptest.NewRequest(method, "http://"+host+path, nil)
+		r.RemoteAddr = address + ":1234"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s %s: got %d, want 403", method, path, w.Code)
+		}
+	}
+}
+
+func TestReplicationSyncOnlyWakesEnrolledWorker(t *testing.T) {
+	home := t.TempDir()
+	g, origin := identityGateway(t, home, nil)
+	store, err := registry.New(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.options.Library.Store = store
+	const peer = "test-peer"
+	if err := store.EnrollPeer(peer); err != nil {
+		t.Fatal(err)
+	}
+	wake := make(chan struct{}, 1)
+	g.statePulls.Store(peer, wake)
+	testBrowserSession(t, g.auth, testBrowserEmail, "owner")
+	testBrowserSession(t, g.auth, "member@example.com", "member")
+	call := func(token string) int {
+		r := httptest.NewRequest("POST", origin.String()+replicationPrefix+"sync", strings.NewReader(`{"peer":"test-peer"}`))
+		r.Header.Set("Origin", origin.String())
+		r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: token})
+		w := httptest.NewRecorder()
+		g.Handler().ServeHTTP(w, r)
+		return w.Code
+	}
+	if got := call("member"); got != http.StatusForbidden || len(wake) != 0 {
+		t.Fatalf("member status = %d, wake count = %d", got, len(wake))
+	}
+	for range 2 {
+		if got := call("owner"); got != http.StatusOK {
+			t.Fatalf("owner status = %d", got)
+		}
+	}
+	if len(wake) != 1 {
+		t.Fatalf("owner wake count = %d, want 1", len(wake))
+	}
+}
+
+func TestAdministrativeRoutesRejectMembers(t *testing.T) {
+	g, origin := identityGateway(t, t.TempDir(), nil)
+	testBrowserSession(t, g.auth, "member@example.com", "member")
+	for _, path := range []string{"/api/node/stop", "/api/node/update", "/api/packages", "/api/mcp/servers",
+		"/api/settings/sharing", "/api/worktrees/remove", "/api/worktrees/push"} {
+		r := httptest.NewRequest("POST", origin.String()+path, strings.NewReader("{}"))
+		r.Header.Set("Origin", origin.String())
+		r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: "member"})
+		w := httptest.NewRecorder()
+		g.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s status = %d, want 403", path, w.Code)
 		}
 	}
 }

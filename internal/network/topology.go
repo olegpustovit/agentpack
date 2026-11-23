@@ -38,7 +38,7 @@ type topologyPeer struct {
 func (g *Gateway) tailnetTopology(ctx context.Context) (topology, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	config, err := ReadSharingConfig(g.store, g.options.Home)
+	config, err := ReadSharingConfig(g.store)
 	if err != nil {
 		return topology{}, err
 	}
@@ -50,7 +50,7 @@ func (g *Gateway) tailnetTopology(ctx context.Context) (topology, error) {
 	if err != nil {
 		return result, err
 	}
-	roles, err := g.auth.store.Main(ctx)
+	roles, err := g.store.Main(ctx)
 	if err != nil {
 		return result, err
 	}

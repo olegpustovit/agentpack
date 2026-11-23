@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -117,7 +118,11 @@ func sessionTimestamp(value time.Time) int64 {
 	return value.UnixNano()
 }
 
+// sessionRowReads counts storedSession calls so tests can pin the reads per session request.
+var sessionRowReads atomic.Int64
+
 func storedSession(ctx context.Context, db *sql.DB, id string) (SessionInfo, error) {
+	sessionRowReads.Add(1)
 	info, err := scanSession(db.QueryRowContext(ctx, "SELECT "+sessionColumns+" FROM sessions WHERE id=?", id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return info, errSessionNotFound
@@ -130,9 +135,12 @@ func (g *Gateway) workerRecord(ctx context.Context, id string) (WorkerRecord, er
 	if err != nil {
 		return record, err
 	}
-	info, err := storedSession(ctx, g.auth.store.Reader, id)
+	info, cached := sessionRow(ctx, id)
+	if !cached {
+		info, err = storedSession(ctx, g.store.Reader, id)
+	}
 	if err == nil {
-		local, localErr := g.auth.store.NodeID(ctx)
+		local, localErr := g.nodeID(ctx)
 		if localErr != nil {
 			return record, localErr
 		}

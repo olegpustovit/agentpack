@@ -3,8 +3,10 @@ package paths
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFindProjectRootWalksAncestors(t *testing.T) {
@@ -91,5 +93,59 @@ func TestSharedStagingOverrideSeparatesProjectsAndGrokModes(t *testing.T) {
 	}
 	if a == b {
 		t.Fatal("Grok modes share mutable configuration")
+	}
+}
+
+func TestWriteAtomicReplacesFileAndLeavesNoTemporary(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	path := filepath.Join(directory, "agentpack.toml")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(path, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	entries, _ := os.ReadDir(directory)
+	if err != nil || string(data) != "new" || len(entries) != 1 {
+		t.Fatalf("data=%q err=%v entries=%v", data, err, entries)
+	}
+	if err := WriteAtomic(filepath.Join(directory, "missing", "file"), nil, 0o644); err == nil {
+		t.Fatal("wrote into a missing directory")
+	}
+}
+
+// A same-size rewrite with its modification time put back still changes the
+// metadata on Unix, through the inode and status-change time.
+func TestTreeMetadataSeesARewriteThatRestoresSizeAndTime(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no inode or status-change time")
+	}
+	root := t.TempDir()
+	file := filepath.Join(root, "SKILL.md")
+	if err := os.WriteFile(file, []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stamp := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(file, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := TreeMetadata(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A rename swaps the inode, as an editor's atomic save does.
+	if err := os.WriteFile(file+".new", []byte("other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(file+".new", file); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(file, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if after, _, err := TreeMetadata(root); err != nil || after == before {
+		t.Fatalf("rewrite with restored size and time went unseen: %v", err)
 	}
 }

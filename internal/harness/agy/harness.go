@@ -17,10 +17,14 @@ import (
 const workspaceOverlay = ".agents/plugins/agentpack-bundle"
 
 func New() base.Harness {
-	return base.Definition{Target: base.Agy, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, WorkspaceOverlay: finalizeWorkspace, Check: verify, Launch: launch, LaunchACP: acpLaunch}
+	return base.Harness{Target: base.Agy, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, WorkspaceOverlay: finalizeWorkspace, Check: verify, Launch: launch, LaunchACP: acpLaunch, Inheritance: base.Inheritance{
+		Note:    "Antigravity leaves HOME untouched and writes a workspace plugin overlay",
+		Paths:   func(string) []string { return base.HomeFiles(".gemini/settings.json", ".gemini/GEMINI.md") },
+		Overlay: []string{".agents/plugins/agentpack-bundle"},
+	}}
 }
 
-func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
+func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	arguments := append([]string(nil), ctx.Arguments...)
 	if !base.HasFlagValue(arguments, "--add-dir") {
 		workspace := ctx.WorkspaceRoot
@@ -34,9 +38,9 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	}
 	binary, err := base.ResolveBinary(base.Agy.Binary())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return exec.Command(binary, arguments...), nil
+	return exec.Command(binary, arguments...), base.Done, nil
 }
 func stagedRoot(ctx base.StageContext) (string, error) {
 	return paths.StagingAgyBundleDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
@@ -76,13 +80,6 @@ func prepare(ctx base.StageContext) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(rule), 0o644)
-}
-func writeMCP(entries mcp.Entries, ctx base.StageContext) error {
-	projection, err := planMCP(entries, ctx)
-	if err != nil {
-		return err
-	}
-	return base.WriteMCPProjection(projection)
 }
 func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
 	root, err := stagedRoot(ctx)

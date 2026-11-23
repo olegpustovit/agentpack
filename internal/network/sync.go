@@ -3,7 +3,6 @@ package network
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,6 +21,8 @@ import (
 
 const syncPageLimit = 4 << 20
 
+const replicationVersion = state.ReplicationVersion
+
 type stateChangePage struct {
 	reachable bool
 	Schema    int            `json:"schema"`
@@ -31,6 +32,8 @@ type stateChangePage struct {
 	Transfer  *stateTransfer `json:"transfer,omitempty"`
 	Data      []byte         `json:"data,omitempty"`
 	Offset    int64          `json:"offset,omitempty"`
+	// Reset asks the puller to restart from 0: its cursor is past this (restored) database.
+	Reset bool `json:"reset,omitempty"`
 }
 
 // peerOnly requires the identity attached by peerHandler, never a caller's header.
@@ -61,27 +64,7 @@ func (g *Gateway) meshPeer(ctx context.Context, id string) bool {
 	return false
 }
 
-func (g *Gateway) meshOwner(w http.ResponseWriter, r *http.Request) bool {
-	actor, ok := actorFrom(r.Context())
-	if ok && actor.Kind == "local" {
-		return true
-	}
-	var owner bool
-	if ok && (actor.Kind == "browser" || actor.Kind == "mcp") {
-		err := g.auth.store.Reader.QueryRowContext(r.Context(), "SELECT role='owner' AND disabled=0 FROM users WHERE email=?", actor.User).Scan(&owner)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			if event := obs.From(r.Context()); event != nil {
-				event.Fail(err)
-			}
-		}
-	}
-	if !owner {
-		http.Error(w, "mesh enrollment requires an owner", http.StatusForbidden)
-	}
-	return owner
-}
-
-func (g *Gateway) registerStateSync(mux *http.ServeMux) {
+func (g *Gateway) registerStateSync(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/sync/events", g.peerOnly(func(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
 		if !g.meshPeer(r.Context(), peer) {
@@ -89,6 +72,31 @@ func (g *Gateway) registerStateSync(mux *http.ServeMux) {
 			return
 		}
 		g.serveEvents(w, r)
+	}))
+	// A new Main asks the old one to stop Main-only work before its switch replicates.
+	mux.HandleFunc("POST /api/sync/main/release", g.peerOnly(func(w http.ResponseWriter, r *http.Request) {
+		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
+		if !g.meshPeer(r.Context(), peer) {
+			http.Error(w, "mesh replication requires explicit enrollment on both machines", http.StatusForbidden)
+			return
+		}
+		var body struct {
+			Epoch int64 `json:"epoch"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&body); err != nil {
+			badRequest(w, "invalid release request")
+			return
+		}
+		released, err := g.store.ReleaseMain(r.Context(), body.Epoch)
+		if errors.Is(err, state.ErrMainChanged) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"released": released})
 	}))
 	mux.HandleFunc("GET /api/sync/changes", g.peerOnly(func(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
@@ -101,13 +109,13 @@ func (g *Gateway) registerStateSync(mux *http.ServeMux) {
 			http.Error(w, "invalid schema version", http.StatusBadRequest)
 			return
 		}
-		if schema != state.SchemaVersion() {
+		if schema != replicationVersion {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)
 			writeJSON(w, struct {
 				Schema     int `json:"schema"`
 				PeerSchema int `json:"peer_schema"`
-			}{state.SchemaVersion(), schema})
+			}{replicationVersion, schema})
 			return
 		}
 		if r.URL.Query().Has("transfer") {
@@ -131,21 +139,30 @@ func (g *Gateway) registerStateSync(mux *http.ServeMux) {
 				return
 			}
 		}
-		site, err := g.auth.store.SiteID(r.Context())
-		var rows []state.Change
+		site, err := g.store.SiteID(r.Context())
+		rows := json.RawMessage("[]")
 		var next int64
 		// Reserve space for the envelope in the 4 MiB response limit.
 		if err == nil && sinceText != "" {
-			rows, next, err = g.auth.store.Changes(r.Context(), since, exclude, syncPageLimit-1024)
+			rows, next, err = g.store.ChangePage(r.Context(), since, exclude, syncPageLimit-1024)
 		}
 		var oversized *state.ChangeVersionTooLargeError
 		if errors.As(err, &oversized) {
 			var transfer *stateTransfer
 			transfer, err = g.newStateTransfer(r.Context(), peer, oversized.Version, exclude)
 			if err == nil {
-				writeJSON(w, stateChangePage{Schema: state.SchemaVersion(), SiteID: site, Next: oversized.Version, Transfer: transfer})
+				writeJSON(w, stateChangePage{Schema: replicationVersion, SiteID: site, Next: oversized.Version, Transfer: transfer})
 				return
 			}
+		}
+		if errors.Is(err, state.ErrCursorAhead) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			writeJSON(w, stateChangePage{Schema: replicationVersion, SiteID: site, Reset: true})
+			return
+		}
+		if err == nil {
+			err = g.store.NoteServed(next)
 		}
 		if err != nil {
 			if event := obs.From(r.Context()); event != nil {
@@ -158,16 +175,31 @@ func (g *Gateway) registerStateSync(mux *http.ServeMux) {
 			http.Error(w, "state changes unavailable", status)
 			return
 		}
-		writeJSON(w, stateChangePage{Schema: state.SchemaVersion(), SiteID: site, Next: next, Changes: rows})
+		// The page is already encoded; the outer Changes field shadows the decoded one.
+		writeJSON(w, struct {
+			stateChangePage
+			Changes json.RawMessage `json:"changes"`
+		}{stateChangePage{Schema: replicationVersion, SiteID: site, Next: next}, rows})
 	}))
 }
 
-var errSyncNeedsUpdate = errors.New("peer needs update")
+// ReleaseMain asks the current Main, through the local gateway, to hand over epoch before
+// `gateway main set` switches to this machine.
+func ReleaseMain(ctx context.Context, home, node string, epoch int64) error {
+	body, _ := json.Marshal(map[string]int64{"epoch": epoch})
+	_, err := NodeRequest(ctx, home, http.MethodPost, "/api/sync/main/release?"+url.Values{"node": {node}}.Encode(), bytes.NewReader(body))
+	return err
+}
+
+var (
+	errSyncNeedsUpdate = errors.New("peer needs update")
+	errSyncReset       = errors.New("peer database was restored")
+)
 
 func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, since int64, exclude []byte) (stateChangePage, error) {
 	var page stateChangePage
 	endpoint := target.JoinPath("/api/sync/changes")
-	query := url.Values{"schema": {strconv.Itoa(state.SchemaVersion())}, "since": {strconv.FormatInt(since, 10)}, "exclude": {hex.EncodeToString(exclude)}}
+	query := url.Values{"schema": {strconv.Itoa(replicationVersion)}, "since": {strconv.FormatInt(since, 10)}, "exclude": {hex.EncodeToString(exclude)}}
 	if since < 0 {
 		query.Del("since")
 	}
@@ -185,6 +217,9 @@ func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, s
 	page.reachable = true
 	if response.StatusCode == http.StatusConflict {
 		_ = json.NewDecoder(io.LimitReader(response.Body, 1024)).Decode(&page)
+		if page.Reset && page.Schema == replicationVersion {
+			return page, errSyncReset
+		}
 		return page, errSyncNeedsUpdate
 	}
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusForbidden {
@@ -200,7 +235,7 @@ func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, s
 	if err := json.Unmarshal(body, &page); err != nil {
 		return page, errors.New("invalid state page")
 	}
-	if page.Schema != state.SchemaVersion() {
+	if page.Schema != replicationVersion {
 		return page, errSyncNeedsUpdate
 	}
 	if len(page.SiteID) != 16 || page.Next < since {
@@ -222,40 +257,68 @@ func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, s
 }
 
 // pullState resumes each source by its immutable site ID, including after gateway restarts.
-func pullState(ctx context.Context, store *state.Store, library *registry.Store, client *http.Client, target *url.URL) (stateChangePage, bool, error) {
+// site is the source's ID from the previous pull, or nil to ask for it first.
+func pullState(ctx context.Context, store *state.Store, library *registry.Store, client *http.Client, target *url.URL, site []byte) (stateChangePage, bool, error) {
 	local, err := store.SiteID(ctx)
 	if err != nil {
 		return stateChangePage{}, false, err
 	}
-	page, err := fetchStatePage(ctx, client, target, -1, local)
-	if err != nil {
-		return page, false, err
+	cached := site != nil
+	if !cached {
+		page, err := fetchStatePage(ctx, client, target, -1, local)
+		if err != nil {
+			return page, false, err
+		}
+		site = page.SiteID
 	}
-	site := page.SiteID
 	if bytes.Equal(site, local) {
-		return page, false, errors.New("cannot replicate a copy of the local database")
+		return stateChangePage{SiteID: site, reachable: true}, false, errors.New("cannot replicate a copy of the local database")
 	}
 	since, err := store.Cursor(ctx, site)
 	if err != nil {
-		return page, false, err
+		return stateChangePage{}, false, err
 	}
 	changed := false
-	page, err = fetchStatePage(ctx, client, target, since, local)
+	page, err := fetchStatePage(ctx, client, target, since, local)
+	if errors.Is(err, errSyncReset) && bytes.Equal(site, page.SiteID) {
+		if err := store.ResetCursor(ctx, site); err != nil {
+			return page, false, err
+		}
+		since = 0
+		page, err = fetchStatePage(ctx, client, target, since, local)
+	}
 	if err != nil {
 		return page, changed, err
+	}
+	if cached && !bytes.Equal(site, page.SiteID) {
+		// The cached ID is stale: the peer replaced its database.
+		return pullState(ctx, store, library, client, target, nil)
 	}
 	for {
 		if !bytes.Equal(site, page.SiteID) {
 			return page, changed, errors.New("peer database identity changed during transfer")
 		}
-		if err := registry.ValidateChanges(store, page.Changes); err != nil {
+		rejected, err := store.ApplyValidatedPage(ctx, page.Changes, site, page.Next, func(change state.Change) (bool, error) {
+			err := registry.ValidateChanges(store, []state.Change{change})
+			if errors.Is(err, registry.ErrInvalidChange) {
+				return false, nil
+			}
+			return err == nil, err
+		})
+		if err != nil {
 			return page, changed, err
 		}
-		if err := store.ApplyPage(ctx, page.Changes, site, page.Next); err != nil {
-			return page, changed, err
+		if len(rejected) > 0 {
+			_, event := obs.Start(ctx, "state.sync", "quarantine")
+			event.Set("count", len(rejected))
+			event.Set("peer_site", hex.EncodeToString(site))
+			event.Set("version", rejected[0].Version)
+			event.Fail(errors.New(rejected[0].Reason))
+			event.End()
 		}
-		changed = changed || len(page.Changes) > 0
-		if library != nil {
+		applied := len(page.Changes) > len(rejected)
+		changed = changed || applied
+		if library != nil && applied {
 			for _, change := range page.Changes {
 				if strings.HasPrefix(change.Table, "registry_") {
 					if err := library.MergeHeads(); err != nil {
@@ -291,7 +354,7 @@ func (g *Gateway) wakeStatePeer(peer string) {
 // The manager owns worker lifetimes; each peer pulls independently so one offline node cannot stall the mesh.
 func (g *Gateway) runStateSync(ctx context.Context) {
 	if g.logs != nil {
-		nodeID, _ := g.auth.store.NodeID(ctx)
+		nodeID, _ := g.store.NodeID(ctx)
 		ctx = obs.WithSink(ctx, g.logs, obs.BuildMetadata(g.options.Version, nodeID, "gateway"))
 	}
 	if err := g.publishMeshNode(ctx); err != nil {
@@ -388,6 +451,7 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 	client := &http.Client{Transport: tailnetTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	// A peer failing the same way on every retry is recorded once; each record is a replicated write.
 	lastFailure := ""
+	var site []byte
 	for {
 		if !g.meshPeer(ctx, peer) {
 			return
@@ -398,33 +462,24 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 		var page stateChangePage
 		var changed bool
 		if err == nil {
-			page, changed, err = pullState(pullCtx, g.auth.store, g.options.Library.Store, client, target)
+			page, changed, err = pullState(pullCtx, g.store, g.options.Library.Store, client, target, site)
+		}
+		site = nil
+		if err == nil {
+			site = page.SiteID
 		}
 		if err == nil && changed {
 			g.credentialsChanged()
-		}
-		if err == nil {
-			archiveCtx, archiveEvent := obs.Start(pullCtx, "archive.edits", "relayed history")
-			if archiveErr := g.drainArchiveEdits(archiveCtx, targetFor); archiveErr != nil {
-				archiveEvent.Fail(archiveErr)
-				archiveEvent.End()
-			} else if changed {
-				archiveEvent.End()
-			}
-			if cleanupErr := g.cleanupArchivedBlobs(archiveCtx, targetFor); cleanupErr != nil {
-				_, cleanupEvent := obs.Start(archiveCtx, "archive.cleanup", "local attachments")
-				cleanupEvent.Fail(cleanupErr)
-				cleanupEvent.End()
-			}
+			g.wakeArchive()
 		}
 		cancel()
 		if ctx.Err() != nil {
 			return
 		}
 		contact := replicaContact{Reachable: page.reachable, At: time.Now().UTC(), Schema: page.Schema, Version: page.Next}
-		if prior, ok := g.replicaStatus.Load(peer); ok {
-			contact.LastSuccess = prior.(replicaContact).LastSuccess
-		}
+		previous, known := g.replicaStatus.Load(peer)
+		prior, _ := previous.(replicaContact)
+		contact.LastSuccess = prior.LastSuccess
 		if err == nil {
 			contact.LastSuccess = contact.At
 			zero := int64(0)
@@ -443,11 +498,9 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 			delay = time.Second
 		}
 		g.replicaStatus.Store(peer, contact)
-		g.emitEvent(eventMessage{Topic: "replication"})
-		if changed {
-			for _, topic := range []string{"state", "sessions", "limits", "library", "diagnostics"} {
-				g.emitEvent(eventMessage{Topic: topic})
-			}
+		if !known || prior.Reachable != contact.Reachable || prior.Error != contact.Error ||
+			prior.NeedsUpdate != contact.NeedsUpdate || prior.Schema != contact.Schema {
+			g.emitEvent(eventMessage{Topic: "replication"})
 		}
 		if err != nil && failure != lastFailure || changed {
 			event.End()
@@ -466,13 +519,13 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 }
 
 func (g *Gateway) publishMeshNode(ctx context.Context) error {
-	site, err := g.auth.store.SiteID(ctx)
+	site, err := g.store.SiteID(ctx)
 	if err != nil {
 		return err
 	}
-	_, err = g.auth.store.DB.ExecContext(ctx, `INSERT INTO mesh_nodes(node_id,name,site_id,schema_version,app_version,updated_at)
+	_, err = g.store.DB.ExecContext(ctx, `INSERT INTO mesh_nodes(node_id,name,site_id,schema_version,app_version,updated_at)
  VALUES (`+state.LocalNodeSQL+`,?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET
  name=excluded.name,site_id=excluded.site_id,schema_version=excluded.schema_version,app_version=excluded.app_version,updated_at=excluded.updated_at
- WHERE name IS NOT excluded.name OR site_id IS NOT excluded.site_id OR schema_version IS NOT excluded.schema_version OR app_version IS NOT excluded.app_version`, g.selfIdentity(ctx).displayName(), site, state.SchemaVersion(), g.options.Version, time.Now().UnixMilli())
+ WHERE name IS NOT excluded.name OR site_id IS NOT excluded.site_id OR schema_version IS NOT excluded.schema_version OR app_version IS NOT excluded.app_version`, g.selfIdentity(ctx).displayName(), site, replicationVersion, g.options.Version, time.Now().UnixMilli())
 	return err
 }

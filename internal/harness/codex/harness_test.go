@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/gofrs/flock"
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -26,12 +25,7 @@ func TestKeyringAccountUsesCanonicalSHA256Prefix(t *testing.T) {
 	if len(first) != 20 || first[:4] != "cli|" {
 		t.Fatalf("account=%q", first)
 	}
-	if got := codexKeyringTarget(authKeyringService, first); got != first+".Codex Auth" {
-		t.Fatalf("Windows Codex keyring target = %q", got)
-	}
-	if got, err := decodeCodexWindowsPassword([]byte{'k', 0, 'e', 0, 'y', 0}); err != nil || got != "key" {
-		t.Fatalf("Windows Codex keyring password = %q, %v", got, err)
-	}
+
 }
 
 func TestEncryptedCodexAuthBridgesIntoSharedFile(t *testing.T) {
@@ -343,11 +337,11 @@ func TestLoginCommandUsesIsolatedHome(t *testing.T) {
 	}
 	t.Setenv("CODEX_PATH", stub)
 	stage := base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}
-	if err := New().Prepare(stage); err != nil {
+	if err := New().Setup(stage); err != nil {
 		t.Fatal(err)
 	}
 	ctx := base.LaunchContext{ProjectRoot: project, Mode: mode.ImplicitEffective(), Arguments: []string{"login", "--device-auth"}}
-	command, err := launch(ctx)
+	command, finish, err := launch(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,8 +361,7 @@ func TestLoginCommandUsesIsolatedHome(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(childHome, "auth.json")); !os.IsNotExist(err) {
 		t.Fatalf("isolated login home inherited auth: %v", err)
 	}
-	ctx.Command = command
-	if err := afterLaunch(ctx); err != nil {
+	if err := finish(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(childHome); !os.IsNotExist(err) {
@@ -436,27 +429,6 @@ func TestInteractiveReloginPersistsBeforeNextSync(t *testing.T) {
 	}
 }
 
-func TestLegacyHistoryRecoveryRejectsActiveWriter(t *testing.T) {
-	staged := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(staged, "sessions"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(staged, "sessions", "thread.jsonl"), []byte("session"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	locks := filepath.Join(staged, "thread-writer-locks")
-	if err := os.MkdirAll(locks, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	lock := flock.New(filepath.Join(locks, "thread.lock"))
-	if err := lock.Lock(); err != nil {
-		t.Fatal(err)
-	}
-	defer lock.Unlock()
-	if err := rejectActiveWriters(staged); err == nil {
-		t.Fatal("active writer accepted")
-	}
-}
 func TestPrepareMakesAuthOAuthAndHistoryDurable(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
@@ -472,13 +444,13 @@ func TestPrepareMakesAuthOAuthAndHistoryDurable(t *testing.T) {
 	}
 	ctx := base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}
 	h := New()
-	if err := h.Prepare(ctx); err != nil {
+	if err := h.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Verify(ctx); err != nil {
+	if err := h.Check(ctx); err != nil {
 		t.Fatal(err)
 	}
-	root, _ := h.StagedRoot(ctx)
+	root, _ := h.Root(ctx)
 	if !base.DurablePathMatches(filepath.Join(root, "auth.json"), filepath.Join(native, "auth.json")) {
 		t.Fatal("auth not linked")
 	}
@@ -493,41 +465,6 @@ func TestPrepareMakesAuthOAuthAndHistoryDurable(t *testing.T) {
 		t.Fatalf("native session=%q err=%v", data, err)
 	}
 }
-func TestMCPRecoveryMergesNewerKeys(t *testing.T) {
-	project := t.TempDir()
-	t.Setenv("AGENTPACK_HOME", t.TempDir())
-	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
-	older, _ := paths.StagingCodexHomeDirForMode(project, "default")
-	newer, _ := paths.StagingCodexHomeDirForMode(project, "design")
-	for _, path := range []string{older, newer} {
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := writeCredentialStore(filepath.Join(older, credentialsFile), map[string]any{"linear": map[string]any{"token": "old"}, "github": map[string]any{"token": "keep"}}); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(5 * time.Millisecond)
-	if err := writeCredentialStore(filepath.Join(newer, credentialsFile), map[string]any{"linear": map[string]any{"token": "new"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := recoverMCPAuth(project, "default"); err != nil {
-		t.Fatal(err)
-	}
-	durable, _ := oauthCredentials(project)
-	data, err := os.ReadFile(durable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var store map[string]map[string]any
-	if err := json.Unmarshal(data, &store); err != nil {
-		t.Fatal(err)
-	}
-	if store["linear"]["token"] != "new" || store["github"]["token"] != "keep" {
-		t.Fatalf("store=%#v", store)
-	}
-}
-
 func TestPrepareStripsLegacyAttributionAndPreservesDaemonSetting(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
@@ -551,14 +488,14 @@ fast_mode = true
 
 	ctx := base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}
 	h := New()
-	if err := h.Prepare(ctx); err != nil {
+	if err := h.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Verify(ctx); err != nil {
+	if err := h.Check(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	root, _ := h.StagedRoot(ctx)
+	root, _ := h.Root(ctx)
 	data, err := os.ReadFile(filepath.Join(root, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
@@ -601,11 +538,11 @@ func TestPreparePreservesLegacyAttributionWhenRequested(t *testing.T) {
 
 	ctx := base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}
 	h := New()
-	if err := h.Prepare(ctx); err != nil {
+	if err := h.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	root, _ := h.StagedRoot(ctx)
+	root, _ := h.Root(ctx)
 	data, err := os.ReadFile(filepath.Join(root, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
@@ -640,12 +577,11 @@ func TestLaunchDoesNotInjectNoDaemon(t *testing.T) {
 		Arguments:   []string{"exec", "hello"},
 		Yolo:        true,
 	}
-	cmd, err := launch(ctx)
+	cmd, finish, err := launch(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstCommand := cmd
-	t.Cleanup(func() { finished := ctx; finished.Command = firstCommand; _ = afterLaunch(finished) })
+	t.Cleanup(func() { _ = finish() })
 	want := []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "hello"}
 	if !reflect.DeepEqual(cmd.Args[1:], want) {
 		t.Fatalf("got %v, want %v", cmd.Args[1:], want)
@@ -653,12 +589,11 @@ func TestLaunchDoesNotInjectNoDaemon(t *testing.T) {
 
 	// When --no-daemon is explicitly provided by the user, preserve it
 	ctx.Arguments = []string{"--no-daemon", "exec", "hello"}
-	cmd, err = launch(ctx)
+	cmd, finishSecond, err := launch(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondCommand := cmd
-	t.Cleanup(func() { finished := ctx; finished.Command = secondCommand; _ = afterLaunch(finished) })
+	t.Cleanup(func() { _ = finishSecond() })
 	wantExplicit := []string{"--dangerously-bypass-approvals-and-sandbox", "--no-daemon", "exec", "hello"}
 	if !reflect.DeepEqual(cmd.Args[1:], wantExplicit) {
 		t.Fatalf("got %v, want %v", cmd.Args[1:], wantExplicit)
@@ -678,14 +613,14 @@ func TestPrepareShortensHomeWhenSocketExceedsSunLen(t *testing.T) {
 	project := t.TempDir()
 	ctx := base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}
 	h := New()
-	if err := h.Prepare(ctx); err != nil {
+	if err := h.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Verify(ctx); err != nil {
+	if err := h.Check(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	root, _ := h.StagedRoot(ctx)
+	root, _ := h.Root(ctx)
 	info, err := os.Lstat(root)
 	if err != nil {
 		t.Fatal(err)
@@ -742,12 +677,11 @@ func TestLaunchDoesNotForceEmbeddedServer(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			project := t.TempDir()
-			cmd, err := launch(base.LaunchContext{ProjectRoot: project, Mode: mode.ImplicitEffective(), Arguments: tc.args})
+			cmd, finish, err := launch(base.LaunchContext{ProjectRoot: project, Mode: mode.ImplicitEffective(), Arguments: tc.args})
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx := base.LaunchContext{ProjectRoot: project, Mode: mode.ImplicitEffective(), Arguments: tc.args, Command: cmd}
-			t.Cleanup(func() { _ = afterLaunch(ctx) })
+			t.Cleanup(func() { _ = finish() })
 			if !reflect.DeepEqual(cmd.Args[1:], tc.want) {
 				t.Fatalf("got %v, want %v", cmd.Args[1:], tc.want)
 			}
@@ -786,10 +720,10 @@ func TestLaunchFinishesAgainstOriginalGenerationAfterSwitch(t *testing.T) {
 		}
 		defer transaction.Abort()
 		stage.StagedRoots = map[base.Target]string{base.Codex: transaction.Root()}
-		if err := harness.Prepare(stage); err != nil {
+		if err := harness.Setup(stage); err != nil {
 			t.Fatal(err)
 		}
-		if err := harness.Verify(stage); err != nil {
+		if err := harness.Check(stage); err != nil {
 			t.Fatal(err)
 		}
 		if err := transaction.Commit(); err != nil {
@@ -807,11 +741,10 @@ func TestLaunchFinishesAgainstOriginalGenerationAfterSwitch(t *testing.T) {
 		}
 	})
 	launchCtx := base.LaunchContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}
-	command, err := harness.LaunchCommand(launchCtx)
+	_, finish, err := harness.Launch(launchCtx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	launchCtx.Command = command
 	second := build()
 	if first == second {
 		t.Fatal("generation did not rotate")
@@ -825,7 +758,7 @@ func TestLaunchFinishesAgainstOriginalGenerationAfterSwitch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(first, credentialsFile), []byte(`{"fixture":{"access_token":"old-generation"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := harness.AfterLaunch(launchCtx); err != nil {
+	if err := finish(); err != nil {
 		t.Fatal(err)
 	}
 	shared, err := paths.SharedCodexAuthPath()

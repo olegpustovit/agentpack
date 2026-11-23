@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -221,12 +222,11 @@ func (runner Runner) runGatewayJoin(ctx context.Context, home string, args []str
 	if err := network.PrepareMeshJoin(ctx, store, peer); err != nil {
 		return 1, err
 	}
-	library, err := runner.networkLibrary(home)
+	library, err := registry.NewWithStore(store, filepath.Join(home, "registry"))
 	if err != nil {
 		return 1, err
 	}
-	defer library.Store.Close()
-	if err := library.Store.EnrollPeer(peer); err != nil {
+	if err := library.EnrollPeer(peer); err != nil {
 		return 1, err
 	}
 	_, err = fmt.Fprintf(runner.Stdout, "Joining %s. Owner claiming is disabled while accounts sync.\nRun agentpack gateway start, then approve this machine in the existing gateway's Replication settings.\n", peer)

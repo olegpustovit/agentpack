@@ -31,39 +31,20 @@ func mcpCredentialAction(invocation Invocation) bool {
 	return false
 }
 
-func (runner Runner) runMCPBridge(ctx context.Context, arguments []string) (int, error) {
-	if len(arguments) == 0 || strings.HasPrefix(arguments[0], "-") {
-		return 2, errors.New("mcp-bridge requires a credential ID")
+func (runner Runner) runMCPBridge(ctx context.Context, invocation Invocation) (int, error) {
+	args, dash := invocation.Args, invocation.Flags.ArgsLenAtDash()
+	if len(args) == 0 || dash == -1 && len(args) != 1 || dash != -1 && dash != 1 {
+		return 2, errors.New("mcp-bridge requires a credential ID, then --url or -- COMMAND")
 	}
 	home, err := paths.UserAgentpackHome()
 	if err != nil {
 		return 1, err
 	}
-	options := network.MCPBridgeOptions{Home: home, ID: arguments[0], Headers: map[string]string{}, Stdin: runner.Stdin, Stdout: runner.Stdout, Stderr: runner.Stderr}
-	args := arguments[1:]
-	for len(args) != 0 {
-		switch args[0] {
-		case "--":
-			options.Command = args[1:]
-			args = nil
-			continue
-		case "--sse":
-			options.SSE = true
-			args = args[1:]
-			continue
-		case "--url", "--header":
-			if len(args) < 2 {
-				return 2, fmt.Errorf("mcp-bridge: %s requires a value", args[0])
-			}
-			if args[0] == "--url" {
-				options.URL = args[1]
-			} else if key, value, ok := strings.Cut(args[1], "="); ok {
-				options.Headers[key] = value
-			}
-			args = args[2:]
-			continue
+	options := network.MCPBridgeOptions{Home: home, ID: args[0], Command: args[1:], URL: stringFlag(invocation, "url"), SSE: boolFlag(invocation, "sse"), Headers: map[string]string{}, Stdin: runner.Stdin, Stdout: runner.Stdout, Stderr: runner.Stderr}
+	for _, header := range stringsFlag(invocation, "header") {
+		if key, value, ok := strings.Cut(header, "="); ok {
+			options.Headers[key] = value
 		}
-		return 2, fmt.Errorf("mcp-bridge: unexpected argument %q", args[0])
 	}
 	if (options.URL == "") == (len(options.Command) == 0) {
 		return 2, errors.New("mcp-bridge requires --url or -- COMMAND")
@@ -157,29 +138,9 @@ func (runner Runner) runMCPCredentials(ctx context.Context, invocation Invocatio
 		return 0, nil
 	}
 	// login
-	label, args, _, err := takeFlag(args, "--label")
-	if err != nil {
-		return 2, err
-	}
-	header, args, hasHeader, err := takeFlag(args, "--header")
-	if err != nil {
-		return 2, err
-	}
-	var envNames []string
-	for {
-		name, rest, found, err := takeFlag(args, "--var")
-		if err != nil {
-			return 2, err
-		}
-		if !found {
-			break
-		}
-		envNames, args = append(envNames, name), rest
-	}
-	clientID, args, _, err := takeFlag(args, "--client-id")
-	if err != nil {
-		return 2, err
-	}
+	label, header, hasHeader := stringFlag(invocation, "label"), stringFlag(invocation, "header"), invocation.Flags.Changed("header")
+	envNames, clientID := stringsFlag(invocation, "var"), stringFlag(invocation, "client-id")
+	var err error
 	if len(envNames) != 0 {
 		if len(args) != 0 || label == "" {
 			return 2, errors.New("mcp login --var NAME... requires --label and no server; servers use it with credential = \"<label>\"")
@@ -272,7 +233,7 @@ func (runner Runner) mcpLoginTarget(invocation Invocation, target string) (mcp.S
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return mcp.Server{}, err
 	}
-	lock, err := lockfile.LoadUnguarded(context.DefinitionRoot)
+	lock, err := lockfile.Load(context.DefinitionRoot)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return mcp.Server{}, err
 	}

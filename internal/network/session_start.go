@@ -43,22 +43,26 @@ type chatStartRequest struct {
 	definitionRoot string
 }
 
-var errChatStartClaim = errors.New("session ID already claimed")
+var (
+	errChatStartClaim  = errors.New("session ID already claimed")
+	errInvalidChatID   = errors.New("invalid chat ID")
+	errResumeOwnFolder = errors.New("a resumed conversation keeps its own folder")
+)
 
 func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatStartRequest) (SessionInfo, error) {
 	token := strings.TrimPrefix(input.ID, "session-")
 	if input.Transport != "acp" || !validSessionID(input.ID) || len(token) != 32 || token != strings.ToLower(token) {
-		return SessionInfo{}, errors.New("invalid chat ID")
+		return SessionInfo{}, errInvalidChatID
 	}
 	if _, err := hex.DecodeString(token); err != nil {
-		return SessionInfo{}, errors.New("invalid chat ID")
+		return SessionInfo{}, errInvalidChatID
 	}
 	fingerprint := sha256.Sum256(mustRawJSON(struct {
 		Actor Actor
 		Input chatStartRequest
 		Fork  string `json:",omitempty"`
 	}{actor, input, input.forkSessionID}))
-	if info, err := readChatStartClaim(ctx, g.auth.store.Reader, input.ID, fingerprint[:]); !errors.Is(err, sql.ErrNoRows) {
+	if info, err := readChatStartClaim(ctx, g.store.Reader, input.ID, fingerprint[:]); !errors.Is(err, sql.ErrNoRows) {
 		return info, err
 	}
 	info := SessionInfo{
@@ -68,28 +72,28 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatSta
 		ConversationState: "starting", Reachable: true,
 	}
 	if input.Worktree != "" && info.AgentSessionID != "" {
-		return SessionInfo{}, errors.New("a resumed conversation keeps its own folder")
+		return SessionInfo{}, errResumeOwnFolder
 	}
 	source := info
 	if input.forkSessionID != "" {
 		source.AgentSessionID = input.forkSessionID
 	}
-	if err := authorizeACPResume(ctx, g.auth.store, actor, source); err != nil {
+	if err := authorizeACPResume(ctx, g.store, actor, source); err != nil {
 		return SessionInfo{}, err
 	}
-	if main, _, err := worktreeMain(ctx, g.options.Home, info.Directory); input.Worktree == "" && err == nil && g.startableDirectory(actor, main) {
+	if main, _, err := worktreeMain(ctx, g.options.Home, info.Directory); input.Worktree == "" && err == nil && g.startableDirectory(ctx, actor, main) {
 		info.WorktreeOf = main
 		if info.DefinitionRoot == "" {
 			info.DefinitionRoot = g.definitionRootFor(ctx, main)
 		}
-	} else if !g.startableDirectory(actor, info.Directory) {
+	} else if !g.startableDirectory(ctx, actor, info.Directory) {
 		return SessionInfo{}, errUnknownFolder
 	}
 	var err error
 	if info.FolderID, err = FolderIdentity(info.Directory); err != nil {
 		return SessionInfo{}, err
 	}
-	if info.NodeID, err = g.auth.store.NodeID(ctx); err != nil {
+	if info.NodeID, err = g.nodeID(ctx); err != nil {
 		return SessionInfo{}, err
 	}
 	info.StartedAt = time.Now().UTC()
@@ -99,7 +103,7 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatSta
 		return SessionInfo{}, err
 	}
 	inserted := false
-	err = state.Transaction(ctx, g.auth.store.DB, func(tx *sql.Tx) error {
+	err = state.Transaction(ctx, g.store.DB, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, insertSessionSQL+" ON CONFLICT(id) DO NOTHING", args...)
 		if err != nil {
 			return err
@@ -121,7 +125,7 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatSta
 		return SessionInfo{}, err
 	}
 	if !inserted {
-		existing, err := readChatStartClaim(ctx, g.auth.store.Reader, input.ID, fingerprint[:])
+		existing, err := readChatStartClaim(ctx, g.store.Reader, input.ID, fingerprint[:])
 		if errors.Is(err, sql.ErrNoRows) {
 			err = errChatStartClaim
 		}
@@ -155,7 +159,7 @@ func (g *Gateway) launchSession(ctx context.Context, info SessionInfo, forkSessi
 	info.ConversationState = "starting"
 	info.StartedAt = time.Now().UTC()
 	info.LastUsed = info.StartedAt
-	if err := upsertSession(ctx, g.auth.store.DB, info); err != nil {
+	if err := upsertSession(ctx, g.store.DB, info); err != nil {
 		return SessionInfo{}, err
 	}
 	g.startInBackground(ctx, info, forkSessionID, nil)
@@ -169,9 +173,11 @@ const chatStartTimeout = 7 * time.Minute
 const interruptedStartGrace = 2 * time.Minute
 
 func (g *Gateway) startInBackground(ctx context.Context, info SessionInfo, forkSessionID string, request *chatStartRequest) {
+	if !g.beginBackground(&g.starting) {
+		return
+	}
 	background := context.WithoutCancel(ctx)
 	g.startingChats.Store(info.ID, struct{}{})
-	g.starting.Add(1)
 	obs.Go("gateway.start_session", func() {
 		defer g.starting.Done()
 		defer g.startingChats.Delete(info.ID)
@@ -189,7 +195,7 @@ func (g *Gateway) startInBackground(ctx context.Context, info SessionInfo, forkS
 			}
 			if err == nil {
 				info.DefinitionRoot = g.definitionRootFor(startCtx, main)
-				_, err = g.auth.store.DB.ExecContext(startCtx, "UPDATE sessions SET directory=?,folder_id=?,worktree_of=?,definition_root=? WHERE id=? AND node_id="+state.LocalNodeSQL,
+				_, err = g.store.DB.ExecContext(startCtx, "UPDATE sessions SET directory=?,folder_id=?,worktree_of=?,definition_root=? WHERE id=? AND node_id="+state.LocalNodeSQL,
 					info.Directory, info.FolderID, info.WorktreeOf, info.DefinitionRoot, info.ID)
 			}
 		}
@@ -217,7 +223,7 @@ func (g *Gateway) stopSession(ctx context.Context, id, requestID string) error {
 	}
 	fingerprint := sha256.Sum256([]byte(record.Secret))
 	var claimed []byte
-	if err := g.auth.store.DB.QueryRowContext(ctx, `INSERT INTO session_stop_requests(session_id,request_id,worker_fingerprint)
+	if err := g.store.DB.QueryRowContext(ctx, `INSERT INTO session_stop_requests(session_id,request_id,worker_fingerprint)
 		VALUES (?,?,?) ON CONFLICT(session_id,request_id) DO UPDATE SET request_id=excluded.request_id RETURNING worker_fingerprint`,
 		id, requestID, fingerprint[:]).Scan(&claimed); err != nil {
 		return err
@@ -248,11 +254,11 @@ func (g *Gateway) resumeSession(ctx context.Context, id, prompt, queueID string)
 
 // claimResume restarts a stopped chat; the caller holds chatLifecycle.
 func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (SessionInfo, error) {
-	info, err := storedSession(ctx, g.auth.store.Reader, id)
+	info, err := storedSession(ctx, g.store.Reader, id)
 	if err != nil {
 		return SessionInfo{}, err
 	}
-	local, err := g.auth.store.NodeID(ctx)
+	local, err := g.nodeID(ctx)
 	if err != nil {
 		return SessionInfo{}, err
 	}
@@ -261,7 +267,7 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (
 		return SessionInfo{}, errNotResumable
 	}
 	if queueID != "" && prompt != "" {
-		seen, err := storedPromptID(ctx, g.auth.store, id, queueID)
+		seen, err := storedPromptID(ctx, g.store, id, queueID)
 		if err != nil || seen {
 			return info, err
 		}
@@ -269,12 +275,12 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (
 	if info.EndedAt.IsZero() {
 		return SessionInfo{}, errResumeConflict
 	}
-	if !g.knownDirectory(info.Directory) && !g.knownWorktree(ctx, info.Directory) {
+	if !g.knownDirectory(ctx, info.Directory) && !g.knownWorktree(ctx, info.Directory) {
 		return SessionInfo{}, errUnknownFolder
 	}
 	// The claim is atomic, so two resumes cannot start two workers for one chat.
 	now := time.Now().UTC()
-	err = state.Transaction(ctx, g.auth.store.DB, func(tx *sql.Tx) error {
+	err = state.Transaction(ctx, g.store.DB, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, "UPDATE sessions SET conversation_state='starting',ended_at=0,last_used=? WHERE id=? AND ended_at>0 AND archived_at=0 AND node_id="+state.LocalNodeSQL, sessionTimestamp(now), id)
 		if err != nil {
 			return err
@@ -304,7 +310,9 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (
 // switchHarness hands a chat to another agent. The old agent stops; a fresh session of the new one
 // continues the same transcript, and its first prompt carries what came before (handoffContext).
 func (g *Gateway) switchHarness(ctx context.Context, id, harness string) (SessionInfo, error) {
-	info, err := storedSession(ctx, g.auth.store.Reader, id)
+	g.chatLifecycle.Lock()
+	defer g.chatLifecycle.Unlock()
+	info, err := storedSession(ctx, g.store.Reader, id)
 	if err != nil {
 		return SessionInfo{}, err
 	}
@@ -322,19 +330,20 @@ func (g *Gateway) switchHarness(ctx context.Context, id, harness string) (Sessio
 				return SessionInfo{}, ctx.Err()
 			case <-time.After(100 * time.Millisecond):
 			}
-			if info, err = storedSession(ctx, g.auth.store.Reader, id); err != nil {
+			if info, err = storedSession(ctx, g.store.Reader, id); err != nil {
 				return SessionInfo{}, err
 			}
 		}
 	}
-	result, err := g.auth.store.DB.ExecContext(ctx, "UPDATE sessions SET harness=?,agent_session_id='',agent_capabilities='' WHERE id=? AND ended_at>0 AND archived_at=0 AND node_id="+state.LocalNodeSQL, harness, id)
+	result, err := g.store.DB.ExecContext(ctx, "UPDATE sessions SET harness=?,agent_session_id='',agent_capabilities='' WHERE id=? AND ended_at>0 AND archived_at=0 AND node_id="+state.LocalNodeSQL, harness, id)
 	if err != nil {
 		return SessionInfo{}, err
 	}
 	if switched, err := result.RowsAffected(); err != nil || switched != 1 {
 		return SessionInfo{}, errors.Join(errResumeConflict, err)
 	}
-	return g.resumeSession(ctx, id, "", "")
+	g.autoResume(id)
+	return g.claimResume(ctx, id, "", "")
 }
 
 // failStart leaves the error in the chat's transcript and ends the row. The notice also keeps the
@@ -346,14 +355,14 @@ func (g *Gateway) failStart(ctx context.Context, info SessionInfo, cause error) 
 		if strings.Contains(cause.Error(), notSignedIn) {
 			notice["code"], notice["harness"], notice["methods"] = "auth_required", info.Harness, loginMethods(info.Harness)
 		}
-		if err := recordStop(ctx, g.auth.store, info.ID, notice); err != nil {
+		if err := recordStop(ctx, g.store, info.ID, notice); err != nil {
 			return err
 		}
 		// A worker that failed early already ended the row, and hid it for having no prompt yet.
-		if _, err := g.auth.store.DB.ExecContext(ctx, "UPDATE sessions SET hidden=0 WHERE id=? AND archived_at=0 AND node_id="+state.LocalNodeSQL, info.ID); err != nil {
+		if _, err := g.store.DB.ExecContext(ctx, "UPDATE sessions SET hidden=0 WHERE id=? AND archived_at=0 AND node_id="+state.LocalNodeSQL, info.ID); err != nil {
 			return err
 		}
-		return endSession(ctx, g.auth.store.DB, info.ID, TerminalState{ExitCode: 1})
+		return endSession(ctx, g.store.DB, info.ID, TerminalState{ExitCode: 1})
 	}()
 	if err != nil {
 		_, event := obs.Start(ctx, "gateway", "record_start_failure")
@@ -390,7 +399,7 @@ func recordStop(ctx context.Context, store *state.Store, id string, notice map[s
 // holds chatLifecycle, so a resume cannot claim a row this is writing.
 func (g *Gateway) reapStoppedChats(ctx context.Context) {
 	g.reapWorkerEndpoints(ctx)
-	rows, err := querySessions(ctx, g.auth.store.Reader, "SELECT "+sessionColumns+` FROM sessions WHERE transport='acp' AND archived_at=0 AND node_id=`+state.LocalNodeSQL+`
+	rows, err := querySessions(ctx, g.store.Reader, "SELECT "+sessionColumns+` FROM sessions WHERE transport='acp' AND archived_at=0 AND node_id=`+state.LocalNodeSQL+`
  AND ((ended_at>0 AND (conversation_state<>'idle' OR subagents<>'' OR waiting<>'' OR json_extract(state,'$.running')))
  OR (ended_at=0 AND conversation_state='starting' AND last_used<?))`, sessionTimestamp(time.Now().Add(-interruptedStartGrace)))
 	var resume []string
@@ -412,11 +421,11 @@ func (g *Gateway) reapStoppedChats(ctx context.Context) {
 			description = "Its process ended before the turn finished, so the chat resumes by itself."
 			resume = append(resume, info.ID)
 		}
-		err = errors.Join(err, recordStop(ctx, g.auth.store, info.ID, map[string]any{"title": fmt.Sprintf("%s stopped", info.Harness), "description": description}))
+		err = errors.Join(err, recordStop(ctx, g.store, info.ID, map[string]any{"title": fmt.Sprintf("%s stopped", info.Harness), "description": description}))
 		info.State.Running, info.State.Restarting = false, false
 		body, marshalErr := json.Marshal(info.State)
 		if marshalErr == nil {
-			_, marshalErr = g.auth.store.DB.ExecContext(ctx, "UPDATE sessions SET state=?,conversation_state='idle',subagents='',waiting='' WHERE id=? AND ended_at>0 AND node_id="+state.LocalNodeSQL, string(body), info.ID)
+			_, marshalErr = g.store.DB.ExecContext(ctx, "UPDATE sessions SET state=?,conversation_state='idle',subagents='',waiting='' WHERE id=? AND ended_at>0 AND node_id="+state.LocalNodeSQL, string(body), info.ID)
 		}
 		err = errors.Join(err, marshalErr)
 	}
@@ -469,7 +478,7 @@ func (g *Gateway) runReaper(ctx context.Context, interval time.Duration) {
 // endLeftoverStarts ends chats a previous gateway was still starting when it stopped. A worker that
 // does come up rewrites its row, which clears ended_at again.
 func (g *Gateway) endLeftoverStarts(ctx context.Context) {
-	rows, err := querySessions(ctx, g.auth.store.Reader, "SELECT "+sessionColumns+" FROM sessions WHERE conversation_state='starting' AND ended_at=0 AND node_id="+state.LocalNodeSQL)
+	rows, err := querySessions(ctx, g.store.Reader, "SELECT "+sessionColumns+" FROM sessions WHERE conversation_state='starting' AND ended_at=0 AND node_id="+state.LocalNodeSQL)
 	for _, info := range rows {
 		if _, statErr := os.Stat(filepath.Join(g.options.Home, "network", "sessions", info.ID, "worker.json")); statErr == nil {
 			continue

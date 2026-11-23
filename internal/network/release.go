@@ -80,7 +80,7 @@ func (g *Gateway) updateTarget(ctx context.Context) (string, int, error) {
 	if err != nil {
 		return "", http.StatusConflict, errors.New("cannot update a gateway without a valid running version")
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, "SELECT DISTINCT app_version FROM mesh_nodes WHERE app_version<>''")
+	rows, err := g.store.Reader.QueryContext(ctx, "SELECT DISTINCT app_version FROM mesh_nodes WHERE app_version<>''")
 	if err != nil {
 		return "", http.StatusInternalServerError, err
 	}

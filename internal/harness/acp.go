@@ -28,6 +28,16 @@ type ACPLaunch struct {
 	// Steers: the adapter serves _session/steering, which hands a prompt to the running turn
 	// without session/cancel, so a steer keeps the agent's background work alive.
 	Steers bool
+	// Finish runs once the adapter has started or failed to start; nil when there is nothing to do.
+	Finish func() error
+}
+
+// Finished runs Finish when the harness set one.
+func (launch ACPLaunch) Finished() error {
+	if launch.Finish == nil {
+		return nil
+	}
+	return launch.Finish()
 }
 
 // LogKind is one synthetic event-log row produced by AdaptAgent.

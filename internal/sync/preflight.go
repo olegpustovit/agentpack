@@ -9,14 +9,9 @@ import (
 	"fmt"
 	"github.com/olegpustovit/agentpack/internal/artifacts"
 	"github.com/olegpustovit/agentpack/internal/harness/claude"
-	"github.com/olegpustovit/agentpack/internal/harness/codex"
 	"github.com/olegpustovit/agentpack/internal/harness/grok"
-	"github.com/olegpustovit/agentpack/internal/harness/omp"
-	"github.com/olegpustovit/agentpack/internal/harness/opencode"
-	"io"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -114,7 +109,7 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 	if err != nil {
 		return report, inputError(err)
 	}
-	effective, err := resolveMode(definitionRoot, project, &lock, options.Mode)
+	effective, err := resolveMode(workspace, project, &lock, options.Mode)
 	if err != nil {
 		return report, inputError(err)
 	}
@@ -132,7 +127,7 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 		return report, fmt.Errorf("identify source: %w", inputError(err))
 	}
 	report.SourceIdentity = identity
-	if digest, err := lockDigest(definitionRoot); err == nil {
+	if digest, err := fileDigest(paths.LockPath(definitionRoot)); err == nil {
 		report.LockDigest = digest
 	}
 	if binding, found, _ := environment.LoadBinding(workspace); found {
@@ -276,7 +271,7 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 	}
 
 	if options.Target != nil {
-		if path, lookErr := lookPathForTarget(*options.Target); lookErr != nil {
+		if path, lookErr := base.ResolveBinary(options.Target.Binary()); lookErr != nil {
 			report.Findings = append(report.Findings, environment.Finding{
 				Code:     "BINARY_MISSING",
 				Severity: environment.SeverityError,
@@ -323,12 +318,18 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 	if filepath.Clean(definitionRoot) != filepath.Clean(workspace) {
 		materializeRemedy = "run `agentpack env restore` to publish the selected frozen environment before probing"
 	}
-	materialized, materializedFound, materializedErr := readMaterializationDigest(definitionRoot, effective.Name())
+	// A full sync materializes every target, so it also answers for one.
+	recordedFor := options.Target
+	materialized, materializedFound, materializedErr := readMaterializationDigest(definitionRoot, effective.Name(), recordedFor)
+	if materializedErr == nil && !materializedFound && recordedFor != nil {
+		recordedFor = nil
+		materialized, materializedFound, materializedErr = readMaterializationDigest(definitionRoot, effective.Name(), nil)
+	}
 	if materializedErr != nil {
 		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_UNREADABLE", Severity: environment.SeverityError, Message: materializedErr.Error(), Evidence: environment.EvidenceUnknown, Remedy: materializeRemedy})
 	} else if !materializedFound {
 		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_INPUTS_UNKNOWN", Severity: environment.SeverityWarning, Message: "no materialization input identity is recorded", Evidence: environment.EvidenceUnknown, Remedy: materializeRemedy})
-	} else if current, err := computeMaterializationDigest(definitionRoot, workspace, effective); err != nil {
+	} else if current, err := computeMaterializationDigest(definitionRoot, workspace, effective, recordedFor); err != nil {
 		return report, err
 	} else if materialized != current {
 		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_INPUTS_STALE", Severity: environment.SeverityViolation, Message: "staged configuration was built from different definition, mode, workspace, or inherited inputs", Evidence: environment.EvidenceGenerated, Remedy: materializeRemedy})
@@ -660,15 +661,6 @@ func canonicalStrings(values []string) []string {
 	result := slices.Clone(values)
 	slices.Sort(result)
 	return result
-}
-
-func lockDigest(definitionRoot string) (string, error) {
-	data, err := os.ReadFile(paths.LockPath(definitionRoot))
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(data)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 func plannedArtifacts(lock lockfile.PackLock, effective mode.Effective, definitionRoot, workspace string, target *base.Target, cacheReady bool) ([]environment.ArtifactRecord, error) {
@@ -1044,7 +1036,7 @@ func plannedMCPArtifacts(lock lockfile.PackLock, effective mode.Effective, defin
 			return nil, err
 		}
 		ctx := base.StageContext{ProjectRoot: definitionRoot, WorkspaceRoot: workspace, Mode: effective}
-		if seedPath, label := inheritedConfigSeed(current); seedPath != "" {
+		if seedPath, label := inheritedConfigSeed(candidate.Harness); seedPath != "" {
 			seed, err := os.ReadFile(seedPath)
 			if err != nil && !os.IsNotExist(err) {
 				return nil, err
@@ -1171,30 +1163,6 @@ func plannedMCPArtifacts(lock lockfile.PackLock, effective mode.Effective, defin
 	return records, nil
 }
 
-func inheritedConfigSeed(target base.Target) (string, string) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", ""
-	}
-	switch target {
-	case base.Codex:
-		return filepath.Join(home, ".codex", "config.toml"), "~/.codex/config.toml"
-	case base.OpenCode:
-		roots, err := opencode.NativeUserConfigRoots()
-		if err != nil || len(roots) == 0 {
-			return "", ""
-		}
-		path := filepath.Join(roots[0], "opencode.json")
-		return path, path
-	case base.Grok:
-		return filepath.Join(home, ".grok", "config.toml"), "~/.grok/config.toml"
-	case base.Cursor:
-		return filepath.Join(home, ".cursor", "cli-config.json"), "~/.cursor/cli-config.json"
-	default:
-		return "", ""
-	}
-}
-
 func redactedSeedShape(path string, data []byte) (any, error) {
 	var value any
 	if strings.EqualFold(filepath.Ext(path), ".toml") {
@@ -1251,16 +1219,16 @@ func plannedHookArtifacts(lock lockfile.PackLock, effective mode.Effective, defi
 	}
 	var records []environment.ArtifactRecord
 	for _, current := range targets {
-		renderer := registry.Renderer(current)
-		if renderer == nil {
-			continue
-		}
 		candidate, err := registry.ByTarget(current)
 		if err != nil {
 			return nil, err
 		}
+		renderer := candidate.Hooks
+		if renderer == nil {
+			continue
+		}
 		ctx := base.StageContext{ProjectRoot: definitionRoot, WorkspaceRoot: workspace, Mode: effective}
-		root, err := candidate.StagedRoot(ctx)
+		root, err := candidate.Root(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -1347,21 +1315,21 @@ func appendAmbientFindings(report *environment.Report, workspace string, lock lo
 	userSkills := make(map[string]struct{})
 	userTargets := make(map[string][]string)
 	for _, candidate := range registry.All() {
-		if options.Target != nil && candidate.ID() != *options.Target {
+		if options.Target != nil && candidate.Target != *options.Target {
 			continue
 		}
 		names, err := staging.UserSkillNames(candidate.NativeUserRoots(home))
 		if err != nil {
 			report.Findings = append(report.Findings, environment.Finding{
 				Code: "AMBIENT_SCAN_FAILED", Severity: environment.SeverityWarning,
-				Target: string(candidate.ID()), Message: err.Error(), Evidence: environment.EvidenceUnknown,
+				Target: string(candidate.Target), Message: err.Error(), Evidence: environment.EvidenceUnknown,
 				Remedy: "fix permissions on the target's native user skill directories",
 			})
 			return
 		}
 		for name := range names {
 			userSkills[name] = struct{}{}
-			userTargets[name] = append(userTargets[name], string(candidate.ID()))
+			userTargets[name] = append(userTargets[name], string(candidate.Target))
 		}
 	}
 	var projectSkills map[string]struct{}
@@ -1624,46 +1592,6 @@ func regularFile(path string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-func inheritanceNotes(target *base.Target, policy environment.Policy) []string {
-	notes := []string{
-		"credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
-	}
-	if target == nil {
-		return notes
-	}
-	switch *target {
-	case base.Claude:
-		notes = append(notes, "Claude still reads real ~/.claude.json and ~/.claude/settings.json; agentpack only adds --plugin-dir/--settings")
-	case base.OpenCode:
-		notes = append(notes, "OpenCode config root is redirected; user files may be seeded into the staged root when present")
-	case base.Codex:
-		notes = append(notes, "Codex keeps native history/auth continuity under CODEX_HOME bridging")
-	case base.OMP:
-		notes = append(notes, "OMP uses an additive --plugin-dir and keeps native profile settings, credentials, sessions and project discovery")
-	case base.Grok:
-		notes = append(notes, "Grok reads real ~/.grok and ~/.claude in addition to GROK_HOME")
-	case base.Cursor:
-		notes = append(notes, "Cursor fake HOME bridges user cli-config/mcp, seeds ~/.cursor/skills, and may write .cursor/agents in the workspace")
-	case base.Agy:
-		notes = append(notes, "Antigravity leaves HOME untouched and writes a workspace plugin overlay")
-	}
-	if policy == environment.PolicyCI {
-		notes = append(notes, "CI policy treats undeclared inheritance as a violation")
-	}
-	return notes
-}
-
-func plannedOverlayWrite(target base.Target, workspace string) []string {
-	switch target {
-	case base.Cursor:
-		return []string{filepath.Join(workspace, ".cursor", "agents")}
-	case base.Agy:
-		return []string{filepath.Join(workspace, ".agents", "plugins", "agentpack-bundle")}
-	default:
-		return nil
-	}
-}
-
 func collectHookFindings(workspace, definitionRoot string, lock lockfile.PackLock, effective mode.Effective, target base.Target) ([]environment.Finding, error) {
 	seeded := ""
 	if target == base.Codex {
@@ -1673,16 +1601,16 @@ func collectHookFindings(workspace, definitionRoot string, lock lockfile.PackLoc
 	if err != nil {
 		return nil, err
 	}
-	renderer := registry.Renderer(target)
-	if renderer == nil {
-		return nil, nil
-	}
 	candidate, err := registry.ByTarget(target)
 	if err != nil {
 		return nil, err
 	}
+	renderer := candidate.Hooks
+	if renderer == nil {
+		return nil, nil
+	}
 	ctx := base.StageContext{ProjectRoot: definitionRoot, WorkspaceRoot: workspace, Mode: effective}
-	root, err := candidate.StagedRoot(ctx)
+	root, err := candidate.Root(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1726,37 +1654,6 @@ func collectHookFindings(workspace, definitionRoot string, lock lockfile.PackLoc
 	return findings, nil
 }
 
-func lookPathForTarget(target base.Target) (string, error) {
-	envName, binary := "", string(target)
-	switch target {
-	case base.Claude:
-		envName, binary = "CLAUDE_CODE_PATH", "claude"
-	case base.OpenCode:
-		envName, binary = "OPENCODE_PATH", "opencode"
-	case base.Codex:
-		envName, binary = "CODEX_PATH", "codex"
-	case base.OMP:
-		envName, binary = "OMP_PATH", "omp"
-	case base.Grok:
-		envName, binary = "GROK_PATH", "grok"
-	case base.Cursor:
-		envName, binary = "CURSOR_AGENT_PATH", "cursor-agent"
-	case base.Agy:
-		envName, binary = "AGY_PATH", "agy"
-	}
-	if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
-		info, err := os.Stat(value)
-		if err != nil {
-			return "", fmt.Errorf("native CLI configured by %s is unavailable: %w", envName, err)
-		}
-		if !info.Mode().IsRegular() {
-			return "", fmt.Errorf("native CLI configured by %s is not a regular file", envName)
-		}
-		return value, nil
-	}
-	return exec.LookPath(binary)
-}
-
 func looksLikeSecret(key string) bool {
 	upper := strings.ToUpper(key)
 	return strings.Contains(upper, "KEY") || strings.Contains(upper, "TOKEN") ||
@@ -1778,7 +1675,7 @@ func populateFreshness(report *environment.Report, options PreflightOptions, eff
 	// changes what the agent lists, so it must retire earlier observations.
 	inputs = append(inputs, filepath.Join(report.WorkspaceRoot, ".codex", "skills"), filepath.Join(report.WorkspaceRoot, ".opencode", "skills"))
 	inputs = append(inputs, inheritedConfigPaths(options.Target, report.WorkspaceRoot)...)
-	report.WorkspaceDigest, err = fingerprintInputs(inputs)
+	report.WorkspaceDigest, err = base.FingerprintFiles(inputs)
 	if err != nil {
 		return err
 	}
@@ -1797,7 +1694,7 @@ func populateFreshness(report *environment.Report, options PreflightOptions, eff
 			return err
 		}
 		ctx := base.StageContext{ProjectRoot: report.DefinitionRoot, WorkspaceRoot: report.WorkspaceRoot, Mode: effective}
-		root, err := candidate.StagedRoot(ctx)
+		root, err := candidate.Root(ctx)
 		if err != nil {
 			return err
 		}
@@ -1812,7 +1709,7 @@ func populateFreshness(report *environment.Report, options PreflightOptions, eff
 			stagedConfigs = append(stagedConfigs, path)
 		}
 	}
-	stagedConfigDigest, err := fingerprintInputs(stagedConfigs)
+	stagedConfigDigest, err := base.FingerprintFiles(stagedConfigs)
 	if err != nil {
 		return err
 	}
@@ -1829,17 +1726,12 @@ func populateFreshness(report *environment.Report, options PreflightOptions, eff
 	if options.Target != nil {
 		report.ExpectedTarget.Adapter = string(*options.Target)
 		var capability map[string]string
-		switch *options.Target {
-		case base.Claude:
-			capability = claude.Capability()
-		case base.Codex:
-			capability = codex.Capability()
-		case base.OpenCode:
-			capability = opencode.Capability()
+		if probe := selectedHarness(options.Target).Capability; probe != nil {
+			capability = probe()
 		}
 		report.ExpectedTarget.AdapterRevision = capability["adapter_revision"]
 		report.ExpectedTarget.CapabilityRevision = capability["capability_revision"]
-		if path, err := lookPathForTarget(*options.Target); err == nil {
+		if path, err := base.ResolveBinary(options.Target.Binary()); err == nil {
 			identity, err := environment.ExecutableIdentity(path)
 			if err == nil {
 				report.ExpectedTarget.ExecutableIdentity = identity
@@ -1860,128 +1752,48 @@ func workspaceConfigInputs(workspace, home string) []string {
 	return inputs
 }
 
-// Fingerprints include absence and file bytes; absolute paths stay local to this identity.
-func fingerprintInputs(inputs []string) (string, error) {
-	hash := sha256.New()
-	active := map[string]bool{}
-	var visit func(string, string) error
-	visit = func(path, relative string) error {
-		info, err := os.Lstat(path)
-		if os.IsNotExist(err) {
-			fmt.Fprintf(hash, "%q absent\n", relative)
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(hash, "%q mode=%s size=%d\n", relative, info.Mode(), info.Size())
-		if info.Mode()&os.ModeSymlink != 0 {
-			link, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(hash, "link=%q\n", link)
-			resolved, err := filepath.EvalSymlinks(path)
-			if os.IsNotExist(err) {
-				fmt.Fprintln(hash, "target absent")
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			return visit(resolved, relative+"/resolved")
-		}
-		if info.IsDir() {
-			absolute, err := filepath.Abs(path)
-			if err != nil {
-				return err
-			}
-			if active[absolute] {
-				return fmt.Errorf("cyclic configuration symlink")
-			}
-			active[absolute] = true
-			defer delete(active, absolute)
-			entries, err := os.ReadDir(path)
-			if err != nil {
-				return err
-			}
-			for _, entry := range entries {
-				if err := visit(filepath.Join(path, entry.Name()), relative+"/"+entry.Name()); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("nonregular configuration input %s", relative)
-		}
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		_, err = io.Copy(hash, file)
-		hash.Write([]byte{0})
-		return err
+func inheritedConfigSeed(harness base.Harness) (string, string) {
+	if harness.Inheritance.Seed == nil {
+		return "", ""
 	}
-	for index, root := range inputs {
-		if err := visit(root, fmt.Sprintf("input-%d", index)); err != nil {
-			return "", err
-		}
+	return harness.Inheritance.Seed()
+}
+
+// selectedHarness is the harness preflight reports on; the zero Harness when none is selected.
+func selectedHarness(target *base.Target) base.Harness {
+	if target == nil {
+		return base.Harness{}
 	}
-	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+	entry, _ := registry.ByTarget(*target)
+	return entry.Harness
 }
 
 func inheritedConfigPaths(target *base.Target, workspace string) []string {
-	if target == nil {
-		return nil
+	if paths := selectedHarness(target).Inheritance.Paths; paths != nil {
+		return paths(workspace)
 	}
-	home, _ := os.UserHomeDir()
-	var names []string
-	switch *target {
-	case base.Claude:
-		names = []string{".claude.json", ".claude/settings.json"}
-	case base.OpenCode:
-		roots, err := opencode.NativeUserConfigRoots()
-		if err != nil {
-			return nil
-		}
-		var result []string
-		seen := make(map[string]bool)
-		for _, root := range roots {
-			for _, name := range []string{"opencode.json", "opencode.jsonc"} {
-				path := filepath.Join(root, name)
-				if !seen[path] {
-					result = append(result, path)
-					seen[path] = true
-				}
-			}
-		}
-		if explicit := os.Getenv("OPENCODE_CONFIG"); explicit != "" {
-			if !filepath.IsAbs(explicit) {
-				explicit = filepath.Join(workspace, explicit)
-			}
-			if !seen[explicit] {
-				result = append(result, explicit)
-			}
-		}
-		return result
-	case base.OMP:
-		return omp.ConfigInputs(workspace)
-	case base.Codex:
-		names = []string{".codex/config.toml", ".codex/AGENTS.md"}
-	case base.Grok:
-		names = []string{".grok/config.toml", ".grok/hooks", ".claude/settings.json"}
-	case base.Cursor:
-		names = []string{".cursor/cli-config.json", ".cursor/mcp.json", ".cursor/skills"}
-	case base.Agy:
-		names = []string{".gemini/settings.json", ".gemini/GEMINI.md"}
+	return nil
+}
+
+func inheritanceNotes(target *base.Target, policy environment.Policy) []string {
+	notes := []string{
+		"credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
 	}
-	var result []string
-	for _, name := range names {
-		result = append(result, filepath.Join(home, filepath.FromSlash(name)))
+	if note := selectedHarness(target).Inheritance.Note; note != "" {
+		notes = append(notes, note)
 	}
-	return result
+	if policy == environment.PolicyCI {
+		notes = append(notes, "CI policy treats undeclared inheritance as a violation")
+	}
+	return notes
+}
+
+func plannedOverlayWrite(target base.Target, workspace string) []string {
+	var writes []string
+	for _, name := range selectedHarness(&target).Inheritance.Overlay {
+		writes = append(writes, filepath.Join(workspace, filepath.FromSlash(name)))
+	}
+	return writes
 }
 
 func appendDetectedInheritance(report *environment.Report, options PreflightOptions) {

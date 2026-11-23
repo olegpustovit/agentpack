@@ -291,17 +291,6 @@ func (g *Gateway) publicStatus(ctx context.Context) publicStatus {
 	return publicStatus{Candidate: candidate}
 }
 
-// callerIsOwner admits the owner's browser or the CLI bound to the owner; never MCP clients or peers.
-func (g *Gateway) callerIsOwner(r *http.Request) (bool, error) {
-	actor, ok := actorFrom(r.Context())
-	if !ok || actor.User == "" || actor.Kind != "browser" && actor.Kind != "local" {
-		return false, nil
-	}
-	var owner bool
-	err := g.store.Reader.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM users WHERE email=? AND role='owner' AND disabled=0)", actor.User).Scan(&owner)
-	return owner, err
-}
-
 func (g *Gateway) writePublic(ctx context.Context, origin *url.URL) error {
 	value := ""
 	if origin != nil {
@@ -399,13 +388,7 @@ func (g *Gateway) setPublic(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "claim this gateway before turning on public access", http.StatusConflict)
 		return
 	}
-	owner, err := g.callerIsOwner(r)
-	if err != nil {
-		authFailure(w, r, "account state unavailable", err)
-		return
-	}
-	if !owner {
-		http.Error(w, "only the owner can change public access", http.StatusForbidden)
+	if !g.requireOwner(w, r) {
 		return
 	}
 	var origin *url.URL

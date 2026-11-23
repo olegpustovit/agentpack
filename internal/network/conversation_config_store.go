@@ -29,14 +29,14 @@ func (g *Gateway) serveAgentSnapshot(w http.ResponseWriter, r *http.Request) {
 	owner := query.Get("owner")
 	if owner == "" || owner == "local" {
 		var err error
-		owner, err = g.auth.store.NodeID(ctx)
+		owner, err = g.store.NodeID(ctx)
 		if err != nil {
 			meshReadError(w, r, err)
 			return
 		}
 	}
 	var body string
-	err := g.auth.store.Reader.QueryRowContext(ctx, `SELECT snapshot FROM agent_snapshots
+	err := g.store.Reader.QueryRowContext(ctx, `SELECT snapshot FROM agent_snapshots
 		WHERE node_id=? AND harness=? AND definition_root=? AND mode=? ORDER BY updated_at DESC,agent_version DESC LIMIT 1`,
 		owner, query.Get("harness"), query.Get("definition_root"), cmpOr(query.Get("mode"), "default")).Scan(&body)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -96,7 +96,7 @@ func (g *Gateway) serveWantedConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	info, err := storedSession(ctx, g.auth.store.Reader, id)
+	info, err := storedSession(ctx, g.store.Reader, id)
 	if err != nil || !validSessionID(id) || info.Transport != "acp" || info.ConversationState != "starting" || !info.EndedAt.IsZero() {
 		http.Error(w, "session unavailable", http.StatusNotFound)
 		return
@@ -131,7 +131,7 @@ func (g *Gateway) serveWantedConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer lock.Close()
-	if err := saveWantedConfig(ctx, g.auth.store.DB, id, input, true); err != nil {
+	if err := saveWantedConfig(ctx, g.store.DB, id, input, true); err != nil {
 		configWriteError(w, r, err)
 		return
 	}

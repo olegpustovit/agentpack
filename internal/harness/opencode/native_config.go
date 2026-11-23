@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,9 +54,9 @@ func NativeUserConfigRoots() ([]string, error) {
 	return roots, nil
 }
 
-// NativeConfigFingerprint includes substitutions that can change server names
+// nativeConfigFingerprint includes substitutions that can change server names
 // without changing the containing config file.
-func NativeConfigFingerprint(project, workspace string) (string, error) {
+func nativeConfigFingerprint(project, workspace string) (string, error) {
 	if nativeMajor() != 1 && nativeMajor() != 2 {
 		return "", nil
 	}
@@ -335,4 +336,150 @@ func nativeServerNames(ctx base.StageContext) (nativeServers, error) {
 		return result, err
 	}
 	return result, nil
+}
+
+// inheritedConfigPaths lists the user config files a native OpenCode launch may read.
+func inheritedConfigPaths(workspace string) []string {
+	roots, err := NativeUserConfigRoots()
+	if err != nil {
+		return nil
+	}
+	var result []string
+	seen := make(map[string]bool)
+	for _, root := range roots {
+		for _, name := range []string{"opencode.json", "opencode.jsonc"} {
+			path := filepath.Join(root, name)
+			if !seen[path] {
+				result = append(result, path)
+				seen[path] = true
+			}
+		}
+	}
+	if explicit := os.Getenv("OPENCODE_CONFIG"); explicit != "" {
+		if !filepath.IsAbs(explicit) {
+			explicit = filepath.Join(workspace, explicit)
+		}
+		if !seen[explicit] {
+			result = append(result, explicit)
+		}
+	}
+	return result
+}
+
+// inheritedConfigSeed is the user config file seeded into the staged OpenCode root.
+func inheritedConfigSeed() (string, string) {
+	roots, err := NativeUserConfigRoots()
+	if err != nil || len(roots) == 0 {
+		return "", ""
+	}
+	path := filepath.Join(roots[0], "opencode.json")
+	return path, path
+}
+
+// launchInputs is everything OpenCode staging reads besides the pack: the
+// config roots and their files, custom asset names, project config up to the
+// repository root, the config environment and the binary, whose major version
+// selects the layout.
+func launchInputs(projectRoot, workspace string) (string, error) {
+	hash := sha256.New()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	globalConfig := os.Getenv("XDG_CONFIG_HOME")
+	if globalConfig == "" {
+		globalConfig = filepath.Join(home, ".config")
+	}
+	globalConfig = filepath.Join(globalConfig, "opencode")
+	configDir := os.Getenv("OPENCODE_CONFIG_DIR")
+	if configDir == "" {
+		configDir = globalConfig
+	}
+	configDir, err = filepath.Abs(configDir)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(hash, "opencode_config_dir\x00%s", configDir)
+	entries, readErr := os.ReadDir(configDir)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return "", readErr
+	}
+	for _, entry := range entries {
+		fmt.Fprintf(hash, "\x00custom_entry\x00%s\x00%s", entry.Name(), entry.Type())
+	}
+	for _, name := range []string{"config.json", "opencode.json", "opencode.jsonc"} {
+		base.DigestFile(hash, "opencode_user_"+name, filepath.Join(configDir, name))
+		base.DigestFile(hash, "opencode_global_"+name, filepath.Join(globalConfig, name))
+		base.DigestFile(hash, "opencode_seed_"+name, filepath.Join(home, ".config", "opencode", name))
+	}
+	base.DigestFile(hash, "opencode_cli_config", filepath.Join(configDir, "cli.json"))
+	for _, name := range []string{"opencode.json", "opencode.jsonc"} {
+		base.DigestFile(hash, "opencode_home_"+name, filepath.Join(home, ".opencode", name))
+	}
+	if explicit := os.Getenv("OPENCODE_CONFIG"); explicit != "" {
+		if !filepath.IsAbs(explicit) {
+			explicit = filepath.Join(workspace, explicit)
+		}
+		base.DigestFile(hash, "opencode_explicit_config\x00"+explicit, explicit)
+	}
+	fmt.Fprintf(hash, "opencode_inline_config\x00%s\x00opencode_disable_project_config\x00%s", os.Getenv("OPENCODE_CONFIG_CONTENT"), os.Getenv("OPENCODE_DISABLE_PROJECT_CONFIG"))
+	for directory := workspace; ; directory = filepath.Dir(directory) {
+		for _, name := range []string{"opencode.json", "opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc"} {
+			base.DigestFile(hash, "opencode_project\x00"+directory+"\x00"+name, filepath.Join(directory, filepath.FromSlash(name)))
+		}
+		if _, statErr := os.Stat(filepath.Join(directory, ".git")); statErr == nil || filepath.Dir(directory) == directory {
+			break
+		}
+	}
+	for _, name := range []string{"plugin", "plugins"} {
+		info, statErr := os.Stat(filepath.Join(configDir, name))
+		fmt.Fprintf(hash, "\x00%s\x00%t", name, statErr == nil && info.IsDir())
+	}
+	for _, name := range []string{"skill", "skills", "agent", "agents", "command", "commands", "mode", "modes"} {
+		if err := writeAssetNames(hash, filepath.Join(configDir, name)); err != nil {
+			return "", err
+		}
+	}
+	native, err := nativeConfigFingerprint(projectRoot, workspace)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(hash, "opencode_native_inputs\x00%s", native)
+	if binary, err := base.ResolveBinary(base.OpenCode.Binary()); err == nil {
+		if resolved, resolveErr := filepath.EvalSymlinks(binary); resolveErr == nil {
+			binary = resolved
+		}
+		if info, statErr := os.Stat(binary); statErr == nil {
+			fmt.Fprintf(hash, "opencode_binary\x00%s\x00%d\x00%d", binary, info.Size(), info.ModTime().UnixNano())
+		}
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// writeAssetNames records the names and metadata of custom assets, not their bytes.
+func writeAssetNames(hash io.Writer, root string) error {
+	resolved, err := filepath.EvalSymlinks(root)
+	if os.IsNotExist(err) {
+		fmt.Fprintf(hash, "custom_assets\x00%s\x00absent", root)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(hash, "custom_assets\x00%s\x00%s", root, resolved)
+	return filepath.WalkDir(resolved, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(resolved, path)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(hash, "\x00%s\x00%s\x00%d\x00%d", relative, info.Mode(), info.Size(), info.ModTime().UnixNano())
+		return nil
+	})
 }

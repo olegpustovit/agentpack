@@ -167,16 +167,6 @@ func TestSaveSortsPackagesWithoutMutatingCaller(t *testing.T) {
 	}
 }
 
-func TestPackageNeedsBackfill(t *testing.T) {
-	t.Parallel()
-	if !(Package{Kind: PackagePlugin, URL: "https://example.com"}).NeedsBackfill() {
-		t.Fatal("partial plugin should need backfill")
-	}
-	if (Package{Kind: PackageSkill, URL: "https://example.com"}).NeedsBackfill() {
-		t.Fatal("skill should not need plugin backfill")
-	}
-}
-
 func TestVersion2LockLoadsUnverifiedAndStaysVersion2(t *testing.T) {
 	root := t.TempDir()
 	raw := "lockfile_version = 2\n\n[meta]\nname = \"p\"\nversion = \"0.1.0\"\n\n[[packages]]\nmodule = \"github.com/acme/demo\"\nkind = \"skill\"\nurl = \"u\"\nowner = \"acme\"\nrepo = \"demo\"\ncommit = \"c\"\ncache_key = \"k\"\n"
@@ -226,6 +216,26 @@ func TestVersion3RoundTripsContentHashesAndMCPServers(t *testing.T) {
 	}
 }
 
+// A v1 hash digested a tree extracted without execute bits. In a project
+// lock it loads as an absent hash, keeping the pin; a Library snapshot keeps it.
+func TestLegacyContentHashLoadsAsAbsent(t *testing.T) {
+	root := t.TempDir()
+	raw := "lockfile_version = 3\n\n[meta]\nname = \"p\"\nversion = \"0.1.0\"\n\n[[packages]]\nmodule = \"github.com/acme/demo\"\nkind = \"skill\"\nurl = \"u\"\nowner = \"acme\"\nrepo = \"demo\"\ncommit = \"c\"\ncache_key = \"k\"\ncontent_hash = \"sha256-tree-v1:" + strings.Repeat("a", 64) + "\"\n"
+	if err := os.WriteFile(filepath.Join(root, "pack.lock"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := Load(root)
+	if err != nil || lock.LegacyContentHashes != 1 || len(lock.Packages) != 1 || lock.Packages[0].Commit != "c" || lock.Packages[0].ContentHash != "" {
+		t.Fatalf("Load() = %#v, %v", lock, err)
+	}
+	if got := lock.UnverifiedPackages(); len(got) != 1 {
+		t.Fatalf("UnverifiedPackages() = %v", got)
+	}
+	if snapshot, err := Parse([]byte(raw)); err != nil || snapshot.LegacyContentHashes != 0 || !strings.HasPrefix(snapshot.Packages[0].ContentHash, "sha256-tree-v1:") {
+		t.Fatalf("Parse() = %#v, %v", snapshot.Packages, err)
+	}
+}
+
 func TestPresentButInvalidContentHashIsRejected(t *testing.T) {
 	digest := strings.Repeat("a", 64)
 	for name, value := range map[string]string{
@@ -245,7 +255,7 @@ func TestPresentButInvalidContentHashIsRejected(t *testing.T) {
 			}
 			_, err := Load(root)
 			var invalid *ContentHashError
-			if !errors.Is(err, ErrContentHash) || !errors.As(err, &invalid) || invalid.Value != value || !strings.Contains(err.Error(), "sha256-tree-v1:") {
+			if !errors.Is(err, ErrContentHash) || !errors.As(err, &invalid) || invalid.Value != value || !strings.Contains(err.Error(), "sha256-tree-v2:") {
 				t.Fatalf("Load() error = %v", err)
 			}
 		})

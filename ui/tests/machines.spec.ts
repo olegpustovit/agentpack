@@ -88,6 +88,7 @@ function matrix(page: Page) {
 }
 
 test("machine detail shows its agents, system, projects and updates an outdated peer", async ({ page }) => {
+  await page.clock.install()
   await page.goto("/machines/n2")
 
   await expect(page.getByText("Online · direct, 14 ms · 1 session running")).toBeVisible()
@@ -105,6 +106,10 @@ test("machine detail shows its agents, system, projects and updates an outdated 
   await page.getByRole("button", { name: "Update to 0.9.2" }).click()
   await expect.poll(() => updates).toEqual(["n2"])
   await expect(page.getByRole("button", { name: "Updating…" })).toBeDisabled()
+  // A gateway that never reports another version stops the polling.
+  await page.clock.fastForward("05:00")
+  await expect(page.getByText("oracle-vm hasn't reported a new version")).toBeVisible()
+  await expect(page.getByRole("button", { name: "Update to 0.9.2" })).toBeEnabled()
 })
 
 test("the machine lists its worktrees and removes one after naming what it discards", async ({ page }) => {

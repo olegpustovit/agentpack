@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -26,7 +25,11 @@ const (
 )
 
 // ContentHashPrefix names the tree digest algorithm stored in content_hash.
-const ContentHashPrefix = "sha256-tree-v1:"
+const ContentHashPrefix = "sha256-tree-v2:"
+
+// legacyContentHashPrefix digested trees extracted without execute bits. In a
+// project lock it counts as no content hash until `agentpack lock` records v2.
+const legacyContentHashPrefix = "sha256-tree-v1:"
 
 // ErrContentHash marks a lock whose content_hash key is present but is not a
 // digest this build can check. Such a lock is never regenerated automatically.
@@ -55,9 +58,14 @@ func (err *ContentHashError) Summary() string {
 	return fmt.Sprintf("invalid content_hash for %s in pack.lock: nothing was fetched or staged", err.Module)
 }
 
-// ValidContentHash reports whether value is a complete sha256-tree-v1 digest.
+// ValidContentHash reports whether value is a complete tree digest of a known
+// algorithm. Library records and older mesh peers still carry sha256-tree-v1;
+// a lock is held to the current one by parse.
 func ValidContentHash(value string) bool {
 	digest, found := strings.CutPrefix(value, ContentHashPrefix)
+	if !found {
+		digest, found = strings.CutPrefix(value, legacyContentHashPrefix)
+	}
 	if !found || len(digest) != 64 {
 		return false
 	}
@@ -71,11 +79,7 @@ func ValidContentHash(value string) bool {
 
 // contentHashKeys reports, per [[packages]] entry in file order, whether the
 // content_hash key is written at all, so an empty value is not read as absent.
-func contentHashKeys(path string) ([]bool, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read lockfile %s: %w", path, err)
-	}
+func contentHashKeys(data []byte) ([]bool, error) {
 	var raw struct {
 		Packages []map[string]any `toml:"packages"`
 	}
@@ -174,17 +178,14 @@ type NPMTreeEntry struct {
 	CPU       []string `toml:"cpu,omitempty"`
 }
 
-func (pkg Package) NeedsBackfill() bool {
-	return pkg.Kind == PackagePlugin && pkg.URL != "" &&
-		(pkg.CacheKey == "" || pkg.Commit == "" || pkg.Owner == "" || pkg.Repo == "")
-}
-
 type PackLock struct {
 	LockfileVersion uint32      `toml:"lockfile_version"`
 	Meta            Meta        `toml:"meta"`
 	Config          Config      `toml:"config,omitempty"`
 	Packages        []Package   `toml:"packages,omitempty"`
 	MCPServers      []MCPServer `toml:"mcp_servers,omitempty"`
+	// LegacyContentHashes counts sha256-tree-v1 hashes Load treated as absent.
+	LegacyContentHashes int `toml:"-"`
 }
 
 // diskLock uses a pointer so the empty config table is omitted exactly as it
@@ -210,30 +211,26 @@ func Load(projectRoot string) (PackLock, error) {
 	return LoadFromPath(paths.LockPath(projectRoot))
 }
 
+// LoadFromPath reads a lock. Save replaces it in one rename, so a reader sees
+// a whole file; writers are serialized by the project's mutation lock.
 func LoadFromPath(path string) (PackLock, error) {
-	var result PackLock
-	err := withOperationLock(path, func() error {
-		var err error
-		result, err = loadFromPath(path)
-		return err
-	})
-	return result, err
-}
-
-// LoadUnguarded reads a lock only the caller can reach. It leaves no guard
-// directory behind, which LoadFromPath does for every project path it sees.
-func LoadUnguarded(path string) (PackLock, error) {
-	return loadFromPath(path)
-}
-
-func loadFromPath(path string) (PackLock, error) {
-	file, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return PackLock{}, fmt.Errorf("read lockfile %s: %w", path, err)
 	}
-	defer file.Close()
+	return parse(data, path, true)
+}
+
+// Parse validates an in-memory lockfile, such as a Library snapshot. Those
+// keep the sha256-tree-v1 hashes they were recorded with; only a project's
+// pack.lock treats them as absent.
+func Parse(data []byte) (PackLock, error) {
+	return parse(data, paths.LockPath(""), false)
+}
+
+func parse(data []byte, path string, dropLegacy bool) (PackLock, error) {
 	var disk diskLock
-	decoder := toml.NewDecoder(file).DisallowUnknownFields()
+	decoder := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
 	if err := decoder.Decode(&disk); err != nil {
 		var unknown *toml.StrictMissingError
 		if errors.As(err, &unknown) {
@@ -253,10 +250,11 @@ func loadFromPath(path string) (PackLock, error) {
 	if disk.LockfileVersion != baseVersion && disk.LockfileVersion != version3 && disk.LockfileVersion != Version {
 		return PackLock{}, fmt.Errorf("parse lockfile: unsupported lockfile_version %d (expected %d to %d); run `agentpack lock` to regenerate %s", disk.LockfileVersion, baseVersion, Version, path)
 	}
-	present, err := contentHashKeys(path)
+	present, err := contentHashKeys(data)
 	if err != nil {
 		return PackLock{}, err
 	}
+	legacy := 0
 	for index, pkg := range disk.Packages {
 		// go-toml assigns string kinds directly and does not call UnmarshalText, so validate here.
 		if pkg.Kind != "" {
@@ -272,8 +270,14 @@ func loadFromPath(path string) (PackLock, error) {
 		if !ValidContentHash(pkg.ContentHash) {
 			return PackLock{}, &ContentHashError{Module: pkg.Module, Value: pkg.ContentHash, Path: path}
 		}
+		// A v1 hash cannot verify a tree that keeps execute bits, so it stages
+		// like an absent one; `agentpack lock` records v2 under the same pins.
+		if dropLegacy && strings.HasPrefix(pkg.ContentHash, legacyContentHashPrefix) {
+			disk.Packages[index].ContentHash = ""
+			legacy++
+		}
 	}
-	lock := PackLock{LockfileVersion: disk.LockfileVersion, Meta: disk.Meta, Packages: disk.Packages, MCPServers: disk.MCPServers}
+	lock := PackLock{LockfileVersion: disk.LockfileVersion, Meta: disk.Meta, Packages: disk.Packages, MCPServers: disk.MCPServers, LegacyContentHashes: legacy}
 	if disk.Config != nil {
 		lock.Config = *disk.Config
 	}
@@ -356,59 +360,10 @@ func (lock PackLock) Save(projectRoot string) error {
 		return fmt.Errorf("encode lockfile: %w", err)
 	}
 	path := paths.LockPath(projectRoot)
-	if err := withOperationLock(path, func() error { return writeAtomic(path, output.Bytes(), 0o644) }); err != nil {
+	if err := paths.WriteAtomic(path, output.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("write lockfile %s: %w", path, err)
 	}
 	return nil
-}
-
-func withOperationLock(path string, operation func() error) (err error) {
-	hash, err := paths.ProjectPathHash(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	directory := filepath.Join(os.TempDir(), "agentpack-"+hash)
-	if err := os.MkdirAll(directory, 0o755); err != nil {
-		return err
-	}
-	// The directory outlives the project unless something can tell whose it
-	// was; the marker lets a later sync remove it once the project is gone.
-	_ = paths.MarkProjectDirectory(directory, filepath.Dir(path))
-	guard := flock.New(filepath.Join(directory, "pack.lock.lock"))
-	if err := guard.Lock(); err != nil {
-		return err
-	}
-	defer func() {
-		if unlockErr := guard.Unlock(); unlockErr != nil {
-			err = errors.Join(err, unlockErr)
-		}
-	}()
-	return operation()
-}
-
-func writeAtomic(path string, data []byte, mode os.FileMode) (err error) {
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".pack.lock-*")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
-	}()
-	if err := temporary.Chmod(mode); err != nil {
-		return err
-	}
-	if _, err := temporary.Write(data); err != nil {
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporaryPath, path)
 }
 
 func Init(projectRoot, name, version string) error {

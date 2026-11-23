@@ -52,12 +52,7 @@ func EnsureLockCachedVerifying(pkg lockfile.Package, restoreRemote RemoteRestore
 	if err != nil || fill == nil {
 		return false, err
 	}
-	temporary, _, err := buildVerified(pkg, fill)
-	if err != nil {
-		return false, err
-	}
-	defer os.RemoveAll(temporary)
-	if err := installEntry(temporary, out); err != nil {
+	if _, _, err := Install(pkg, fill); err != nil {
 		return false, err
 	}
 	return cacheReady(pkg, out)
@@ -101,11 +96,10 @@ func emptyOrMissingDir(path string) bool {
 	return os.IsNotExist(err) || err == nil && len(entries) == 0
 }
 
+// cacheReady reports whether out holds an installed package of pkg's kind.
+// Entries are normalized when installed and never written afterwards.
 func cacheReady(pkg lockfile.Package, out string) (bool, error) {
 	if pkg.Kind == lockfile.PackagePlugin {
-		if err := NormalizePluginLayout(out); err != nil {
-			return false, err
-		}
 		return HasPluginManifest(out), nil
 	}
 	return regularFile(filepath.Join(out, "SKILL.md")) || HasPluginManifest(out), nil

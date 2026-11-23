@@ -30,7 +30,7 @@ func TestFailedStateTransferRemovesItsTemporaryFile(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	g := &Gateway{auth: auth}
+	g := &Gateway{store: auth.store, auth: auth}
 	if _, err := g.newStateTransfer(ctx, "peer", 1, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled transfer: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestOversizedStateVersionTransfersAtomicallyInBoundedChunks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	g := &Gateway{auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
+	g := &Gateway{store: auth.store, auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
 	t.Cleanup(func() {
 		if err := g.cleanStateTransfers(time.Time{}); err != nil {
 			t.Error(err)
@@ -108,7 +108,7 @@ func TestOversizedStateVersionTransfersAtomicallyInBoundedChunks(t *testing.T) {
 	}))
 	defer server.Close()
 	endpoint, _ := url.Parse(server.URL)
-	if _, _, err := pullState(t.Context(), target, nil, server.Client(), endpoint); err != nil {
+	if _, _, err := pullState(t.Context(), target, nil, server.Client(), endpoint, nil); err != nil {
 		t.Fatal(err)
 	}
 	cursor, err := target.Cursor(t.Context(), sourceSite)
@@ -131,7 +131,7 @@ func TestOversizedStateVersionTransfersAtomicallyInBoundedChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 	corrupt.Store(true)
-	if _, _, err := pullState(t.Context(), target, nil, server.Client(), endpoint); err == nil || !strings.Contains(err.Error(), "checksum") {
+	if _, _, err := pullState(t.Context(), target, nil, server.Client(), endpoint, nil); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("corrupt transfer admitted: %v", err)
 	}
 	if got, _ := target.Cursor(t.Context(), sourceSite); got != cursor {
@@ -139,7 +139,7 @@ func TestOversizedStateVersionTransfersAtomicallyInBoundedChunks(t *testing.T) {
 	}
 	corrupt.Store(false)
 	chunks.Store(0)
-	if _, changed, err := pullState(t.Context(), target, nil, server.Client(), endpoint); err != nil || !changed {
+	if _, changed, err := pullState(t.Context(), target, nil, server.Client(), endpoint, nil); err != nil || !changed {
 		t.Fatalf("retry: changed=%v err=%v", changed, err)
 	}
 	if chunks.Load() < 2 {
@@ -166,9 +166,9 @@ func TestOversizedStateVersionTransfersAtomicallyInBoundedChunks(t *testing.T) {
 	if _, err := auth.store.DB.Exec("UPDATE conversation_events SET body='newer' WHERE session_id='oversized'"); err != nil {
 		t.Fatal(err)
 	}
-	initial := stateChangePage{Schema: state.SchemaVersion(), SiteID: sourceSite, Next: version, Transfer: transfer}
+	initial := stateChangePage{Schema: replicationVersion, SiteID: sourceSite, Next: version, Transfer: transfer}
 	// A private transfer ID cannot be replayed by another approved peer.
-	request := httptest.NewRequest("GET", "/api/sync/changes?schema="+strconv.Itoa(state.SchemaVersion())+"&transfer="+transfer.ID+"&offset=0", nil)
+	request := httptest.NewRequest("GET", "/api/sync/changes?schema="+strconv.Itoa(replicationVersion)+"&transfer="+transfer.ID+"&offset=0", nil)
 	other := httptest.NewRecorder()
 	mux.ServeHTTP(other, request.WithContext(context.WithValue(request.Context(), replicaPeerKey{}, "other")))
 	if other.Code != http.StatusNotFound {
@@ -210,7 +210,7 @@ func TestOversizedArchivedEditReachesMainThroughPeer(t *testing.T) {
 	worker, _ := identityGateway(t, t.TempDir(), nil)
 	relay, _ := identityGateway(t, t.TempDir(), nil)
 	for id, g := range map[string]*Gateway{"main": main, "worker": worker, "relay": relay} {
-		if err := g.auth.store.BindNode(t.Context(), id); err != nil {
+		if err := g.store.BindNode(t.Context(), id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -250,7 +250,7 @@ func TestOversizedArchivedEditReachesMainThroughPeer(t *testing.T) {
 			mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), replicaPeerKey{}, "reader")))
 		}))
 		endpoint, _ := url.Parse(server.URL)
-		_, _, err := pullState(t.Context(), link.target.auth.store, nil, server.Client(), endpoint)
+		_, _, err := pullState(t.Context(), link.target.auth.store, nil, server.Client(), endpoint, nil)
 		server.Close()
 		if err != nil {
 			t.Fatal(err)

@@ -294,9 +294,27 @@ test("a reload paints the last-known list before the gateway answers", async ({ 
       transaction.onerror = () => reject(transaction.error)
     }
   }))
+  // An entry from another build is dropped on the next restore.
+  const entry = (write: boolean) => page.evaluate((write) => new Promise((resolve, reject) => {
+    const opening = indexedDB.open("agentpack-cache", 2)
+    opening.onerror = () => reject(opening.error)
+    opening.onsuccess = () => {
+      const db = opening.result
+      const transaction = db.transaction("entries", write ? "readwrite" : "readonly")
+      const store = transaction.objectStore("entries")
+      const request = write ? store.put({ build: "old", at: Date.now(), chat: 0, query: { queryKey: ["status"], state: {} } }, "stale") : store.get("stale")
+      transaction.oncomplete = () => {
+        db.close()
+        resolve(request.result !== undefined)
+      }
+      transaction.onerror = () => reject(transaction.error)
+    }
+  }), write)
+  await entry(true)
   await page.route(/\/api\/sessions(\?.*)?$/, () => undefined)
   await page.reload()
   await expect(rows).toHaveCount(2)
+  await expect.poll(() => entry(false)).toBe(false)
 })
 
 test("⌘/Ctrl- and Shift-click mark rows; the menu then acts on all of them", async ({ page }) => {

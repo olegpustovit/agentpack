@@ -15,13 +15,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func archiveRoles(t *testing.T, g *Gateway, main, archive string) {
 	t.Helper()
-	if _, err := g.auth.store.DB.Exec(`INSERT INTO mesh_settings(key,value) VALUES ('main_node',?),('archive_node',?)
+	if _, err := g.store.DB.Exec(`INSERT INTO mesh_settings(key,value) VALUES ('main_node',?),('archive_node',?)
  ON CONFLICT(key) DO UPDATE SET value=excluded.value`, main, archive); err != nil {
 		t.Fatal(err)
 	}
@@ -29,13 +30,13 @@ func archiveRoles(t *testing.T, g *Gateway, main, archive string) {
 
 func archiveFixture(t *testing.T, g *Gateway, id string, at time.Time, last int64, held ...int64) {
 	t.Helper()
-	if _, err := g.auth.store.DB.Exec(`INSERT INTO sessions(id,node_id,transport,harness,last_seq,last_event_at)
+	if _, err := g.store.DB.Exec(`INSERT INTO sessions(id,node_id,transport,harness,last_seq,last_event_at)
  VALUES (?,`+state.LocalNodeSQL+`,'acp','codex',?,?)`, id, last, at.UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 	for _, seq := range held {
 		body, _ := json.Marshal(acp.LogEntry{Seq: seq, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"saved history"}}`)})
-		if _, err := g.auth.store.DB.Exec("INSERT INTO conversation_events(session_id,seq,body) VALUES (?,?,?)", id, seq, string(body)); err != nil {
+		if _, err := g.store.DB.Exec("INSERT INTO conversation_events(session_id,seq,body) VALUES (?,?,?)", id, seq, string(body)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -131,7 +132,7 @@ func TestArchiveMovesOnlyCompleteOldChatsAndReplicatesPruning(t *testing.T) {
 
 func TestArchiveRequiresBothRolesAndRechecksBeforeEachSession(t *testing.T) {
 	g, _ := identityGateway(t, t.TempDir(), nil)
-	if err := g.auth.store.BindNode(t.Context(), "main"); err != nil {
+	if err := g.store.BindNode(t.Context(), "main"); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
@@ -147,7 +148,7 @@ func TestArchiveRequiresBothRolesAndRechecksBeforeEachSession(t *testing.T) {
 		}
 	}
 	archiveRoles(t, g, "main", "main")
-	if _, err := g.auth.store.DB.Exec(`CREATE TRIGGER switch_main AFTER UPDATE OF archived_at ON sessions
+	if _, err := g.store.DB.Exec(`CREATE TRIGGER switch_main AFTER UPDATE OF archived_at ON sessions
  WHEN new.id='session-first' BEGIN UPDATE mesh_settings SET value='other' WHERE key='main_node'; END`); err != nil {
 		t.Fatal(err)
 	}
@@ -155,21 +156,21 @@ func TestArchiveRequiresBothRolesAndRechecksBeforeEachSession(t *testing.T) {
 		t.Fatalf("role switched during pass: %d %v", count, err)
 	}
 	var archived bool
-	if err := g.auth.store.Reader.QueryRow("SELECT archived_at>0 FROM sessions WHERE id='session-second'").Scan(&archived); err != nil || archived {
+	if err := g.store.Reader.QueryRow("SELECT archived_at>0 FROM sessions WHERE id='session-second'").Scan(&archived); err != nil || archived {
 		t.Fatalf("second session moved after role switch: %v %v", archived, err)
 	}
 }
 
 func TestArchiveCrashAfterCopyRetriesWithoutLosingChangedEvents(t *testing.T) {
 	g, _ := identityGateway(t, t.TempDir(), nil)
-	local, err := g.auth.store.NodeID(t.Context())
+	local, err := g.store.NodeID(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	archiveRoles(t, g, local, local)
 	now := time.Now()
 	archiveFixture(t, g, "session-crash", now.Add(-8*24*time.Hour), 1, 1)
-	if _, err := g.auth.store.DB.Exec(`CREATE TRIGGER crash_after_copy BEFORE DELETE ON conversation_events BEGIN SELECT RAISE(ABORT,'simulated crash'); END`); err != nil {
+	if _, err := g.store.DB.Exec(`CREATE TRIGGER crash_after_copy BEFORE DELETE ON conversation_events BEGIN SELECT RAISE(ABORT,'simulated crash'); END`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := g.archivePass(t.Context(), now); err == nil {
@@ -184,10 +185,10 @@ func TestArchiveCrashAfterCopyRetriesWithoutLosingChangedEvents(t *testing.T) {
 		t.Fatalf("copy not committed before prune: %d %v", rows, err)
 	}
 	archive.Close()
-	if err := g.auth.store.Reader.QueryRow("SELECT count(*) FROM conversation_events").Scan(&rows); err != nil || rows != 1 {
+	if err := g.store.Reader.QueryRow("SELECT count(*) FROM conversation_events").Scan(&rows); err != nil || rows != 1 {
 		t.Fatalf("crash removed replicated history: %d %v", rows, err)
 	}
-	if _, err := g.auth.store.DB.Exec(`DROP TRIGGER crash_after_copy;
+	if _, err := g.store.DB.Exec(`DROP TRIGGER crash_after_copy;
  UPDATE conversation_events SET body='{"seq":1,"kind":"message","payload":{"text":"new coalesced body"}}'`); err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +256,9 @@ func TestArchivedConversationReadsThroughMainAndHandlesUnavailableArchive(t *tes
 	}
 	r = httptest.NewRequest("GET", "/api/sessions/"+info.ID+"/conversation?node=main", nil)
 	w = httptest.NewRecorder()
-	handled, err := peer.routeMeshRequest(w, r)
+	r.Pattern = "GET /api/sessions/{id}/conversation"
+	r.SetPathValue("id", info.ID)
+	_, handled, err := peer.routeMeshRequest(w, r)
 	if err != nil || !handled || w.Code != 503 || strings.TrimSpace(w.Body.String()) != "archive unavailable" {
 		t.Fatalf("mesh routing bypassed archive: handled=%v %d %s %v", handled, w.Code, w.Body.String(), err)
 	}
@@ -275,7 +278,7 @@ func TestArchivedConversationReadsThroughMainAndHandlesUnavailableArchive(t *tes
 
 func TestArchiveCountMismatchKeepsReplicatedHistory(t *testing.T) {
 	g, _ := identityGateway(t, t.TempDir(), nil)
-	local, err := g.auth.store.NodeID(t.Context())
+	local, err := g.store.NodeID(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,17 +298,17 @@ func TestArchiveCountMismatchKeepsReplicatedHistory(t *testing.T) {
 	}
 	var rows int
 	var archived bool
-	if err := g.auth.store.Reader.QueryRow("SELECT count(*) FROM conversation_events").Scan(&rows); err != nil || rows != 1 {
+	if err := g.store.Reader.QueryRow("SELECT count(*) FROM conversation_events").Scan(&rows); err != nil || rows != 1 {
 		t.Fatalf("lost history: %d %v", rows, err)
 	}
-	if err := g.auth.store.Reader.QueryRow("SELECT archived_at>0 FROM sessions WHERE id='session-count'").Scan(&archived); err != nil || archived {
+	if err := g.store.Reader.QueryRow("SELECT archived_at>0 FROM sessions WHERE id='session-count'").Scan(&archived); err != nil || archived {
 		t.Fatalf("marked an incomplete copy: %v %v", archived, err)
 	}
 }
 
 func TestArchiveLoopUsesInjectedClockAndInterval(t *testing.T) {
 	g, _ := identityGateway(t, t.TempDir(), nil)
-	local, err := g.auth.store.NodeID(t.Context())
+	local, err := g.store.NodeID(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +339,7 @@ func TestArchiveLoopUsesInjectedClockAndInterval(t *testing.T) {
 	defer timeout.Stop()
 	for {
 		var archived int64
-		if err := g.auth.store.Reader.QueryRow("SELECT archived_at FROM sessions WHERE id='session-clock'").Scan(&archived); err != nil {
+		if err := g.store.Reader.QueryRow("SELECT archived_at FROM sessions WHERE id='session-clock'").Scan(&archived); err != nil {
 			t.Fatal(err)
 		}
 		if archived != 0 {
@@ -481,7 +484,7 @@ func TestArchivePendingHandoverRetainsUnacknowledgedWorkerEdit(t *testing.T) {
 	gossip, _ := identityGateway(t, t.TempDir(), nil)
 	next, _ := identityGateway(t, t.TempDir(), nil)
 	for node, g := range map[string]*Gateway{"main": main, "worker": worker, "next": next} {
-		if err := g.auth.store.BindNode(t.Context(), node); err != nil {
+		if err := g.store.BindNode(t.Context(), node); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -770,4 +773,95 @@ func TestArchivedEditsRelayThroughIntermediatePeer(t *testing.T) {
 	if err := main.auth.store.Reader.QueryRow("SELECT count(*) FROM archive_edits").Scan(&edits); err != nil || edits != 0 {
 		t.Fatalf("acknowledged edits returned: %d %v", edits, err)
 	}
+}
+
+func TestArchiveCopyAllowsWorkerWriteAndRetainsEditedLiveRows(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	ctx := t.Context()
+	local, err := g.store.NodeID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveRoles(t, g, local, local)
+	now := time.Now()
+	const id = "session-concurrent-edit"
+	archiveFixture(t, g, id, now.Add(-8*24*time.Hour), 1, 1)
+	archive, err := state.OpenArchive(g.options.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	conn, err := archive.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = conn.Raw(func(raw any) error {
+		return raw.(*sqlite3.SQLiteConn).RegisterFunc("edit_live_history", func() (int, error) {
+			writeCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			defer cancel()
+			_, err := g.store.DB.ExecContext(writeCtx, `UPDATE conversation_events
+ SET body='{"seq":1,"kind":"message","payload":{"text":"new body"}}' WHERE session_id=? AND seq=1`, id)
+			return 1, err
+		}, false)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, `CREATE TEMP TRIGGER edit_during_copy BEFORE INSERT ON conversation_events
+ BEGIN SELECT edit_live_history(); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if moved, err := g.archiveSession(ctx, archive, id, now); err != nil || moved {
+		t.Fatalf("archive moved changed history: %v %v", moved, err)
+	}
+	var live string
+	if err := g.store.Reader.QueryRowContext(ctx, "SELECT body FROM conversation_events WHERE session_id=?", id).Scan(&live); err != nil || !strings.Contains(live, "new body") {
+		t.Fatalf("worker change lost: %q %v", live, err)
+	}
+}
+
+func TestArchiveMarkerAppliesToEndedSessionWithStaleWorkingState(t *testing.T) {
+	main, _ := identityGateway(t, t.TempDir(), nil)
+	worker, _ := identityGateway(t, t.TempDir(), nil)
+	local, err := main.auth.store.NodeID(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveRoles(t, main, local, local)
+	now := time.Now()
+	const id = "session-ended-working"
+	archiveFixture(t, worker, id, now.Add(-8*24*time.Hour), 1, 1)
+	if _, err := worker.auth.store.DB.Exec("UPDATE sessions SET ended_at=1,conversation_state='working' WHERE id=?", id); err != nil {
+		t.Fatal(err)
+	}
+	syncArchiveFixture(t, worker.auth.store, main.auth.store)
+	if count, err := main.archivePass(t.Context(), now); err != nil || count != 1 {
+		t.Fatalf("archive: %d %v", count, err)
+	}
+	syncArchiveFixture(t, main.auth.store, worker.auth.store)
+	var archived bool
+	if err := worker.auth.store.Reader.QueryRow("SELECT archived_at>0 FROM sessions WHERE id=?", id).Scan(&archived); err != nil || !archived {
+		t.Fatalf("worker refused the archive marker: %v %v", archived, err)
+	}
+}
+
+// One wake after a changing pull runs the hourly pass early, and repeated wakes coalesce.
+func TestArchivePassWakesAfterAChangingPull(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	g.archiveWake = make(chan struct{}, 1)
+	passes := make(chan struct{}, 8)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		g.runArchive(ctx, time.Hour, func() time.Time { passes <- struct{}{}; return time.Now() })
+	}()
+	defer func() { cancel(); <-done }()
+	<-passes
+	g.wakeArchive()
+	g.wakeArchive() // never blocks a puller
+	<-passes
 }

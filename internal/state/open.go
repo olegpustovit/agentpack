@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
@@ -17,6 +18,8 @@ type Store struct {
 	DB     *sql.DB
 	Reader *sql.DB
 	home   string
+	site   atomic.Pointer[[]byte]
+	served atomic.Int64
 }
 
 func Open(home string) (*Store, error) {
@@ -49,8 +52,7 @@ func Open(home string) (*Store, error) {
 		return nil, fmt.Errorf("open state writer: %w", err)
 	}
 	writer.SetMaxOpenConns(1)
-	// Imported pages advance the persisted local clock; a fresh writer reloads it before its next transaction.
-	writer.SetMaxIdleConns(0)
+	writer.SetMaxIdleConns(1)
 	if err := writer.Ping(); err != nil {
 		return nil, errors.Join(fmt.Errorf("connect state writer: %w", err), writer.Close())
 	}
@@ -67,13 +69,21 @@ func Open(home string) (*Store, error) {
 	if err := reader.Ping(); err != nil {
 		return nil, errors.Join(fmt.Errorf("connect state reader: %w", err), reader.Close(), writer.Close())
 	}
-	return &Store{DB: writer, Reader: reader, home: home}, nil
+	store := &Store{DB: writer, Reader: reader, home: home}
+	if err := store.catchUpServed(context.Background()); err != nil {
+		return nil, errors.Join(fmt.Errorf("check restored state database: %w", err), store.Close())
+	}
+	return store, nil
 }
 
 func (s *Store) Close() error { return errors.Join(s.Reader.Close(), s.DB.Close()) }
 
+type transactionStarter interface {
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+}
+
 // Transaction commits only when every operation succeeds; panics also roll back.
-func Transaction(ctx context.Context, db *sql.DB, run func(*sql.Tx) error) error {
+func Transaction(ctx context.Context, db transactionStarter, run func(*sql.Tx) error) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

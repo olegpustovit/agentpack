@@ -41,4 +41,13 @@ func TestCatalogValidatesPackageAndDotAgentsPaths(t *testing.T) {
 			t.Fatalf("%s: %v", raw, err)
 		}
 	}
+	for _, raw := range []string{"package-path:github.com/acme/repo:hooks", "package-path:github.com/acme/repo:hooks/missing.json", ".agents:rules"} {
+		selector, err := mode.ParseSelector(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := catalog.Validate(selector); err == nil {
+			t.Fatalf("%s: accepted a directory or missing file", raw)
+		}
+	}
 }

@@ -5,18 +5,13 @@ import { Section } from "@/components/kit/data"
 import { FieldError } from "@/components/kit/forms"
 import { ConfirmAlert, ConfirmAlertContent, Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
-import { ApiError, api, routeMissing } from "@/lib/api"
+import { api, ApiError, errorText, routeMissing } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { plural } from "@/lib/format"
 import { hud, useCopied } from "@/lib/hud"
 import { sessionGitQuery, type SessionGit } from "@/features/sessions/git"
 
 const gitPath = (sessionId: string, action: string): `/api/${string}` => `/api/sessions/${encodeURIComponent(sessionId)}/git/${action}`
-
-function failure(error: unknown, fallback: string): string {
-  if (routeMissing(error)) return "Needs update"
-  return error instanceof Error ? error.message : fallback
-}
 
 // The session's branch, how far it is from its base, and its pull request.
 export function useSessionGit(machine: string, sessionId: string, info?: SessionInfo) {
@@ -50,7 +45,7 @@ function useGitActions(machine: string, sessionId: string) {
       if (result.url) window.open(result.url, "_blank", "noopener,noreferrer")
       else if (!result.created) hud.success("Branch pushed")
     },
-    onError: (error) => hud.error(failure(error, "Couldn't create the pull request."), routeMissing(error) ? undefined : () => pr.mutate()),
+    onError: (error) => hud.error(errorText(error, "Couldn't create the pull request."), routeMissing(error) ? undefined : () => pr.mutate()),
   })
   const merge = useMutation({
     mutationFn: () => api<{ merged: boolean }>(gitPath(sessionId, "merge"), { machine, method: "POST", body: {} }),
@@ -112,7 +107,7 @@ function CommitSheet({ initial, changed, branch, commit, onDone }: { initial: st
           autoFocus
           className="w-full resize-y rounded-(--r-ctl) border-[0.5px] border-(--sep) bg-(--field) px-(--s3) py-(--s2) text-(length:--fs) outline-none focus:ring-2 focus:ring-(--accent-soft)"
         />
-        {commit.error && <FieldError>{failure(commit.error, "Couldn't commit.")}</FieldError>}
+        {commit.error && <FieldError>{errorText(commit.error, "Couldn't commit.")}</FieldError>}
         <SheetActions>
           <Button type="submit" variant="primary" disabled={!message.trim() || commit.isPending}>
             {commit.isPending ? "Committing…" : "Commit"}
@@ -188,7 +183,7 @@ export function GitInspectorSections({
               </div>
               {actions.merge.error && (
                 <div className="mt-(--s2) flex flex-col gap-(--s2)">
-                  <FieldError>{failure(actions.merge.error, "Couldn't merge.")}</FieldError>
+                  <FieldError>{errorText(actions.merge.error, "Couldn't merge.")}</FieldError>
                   {conflict && !readOnly && (
                     <Button type="button" size="sm" className="self-start" onClick={() => onAskRebase(`Rebase this branch (${git.branch}) onto ${git.base || "the main folder's branch"} and resolve the conflicts, then commit.`)}>
                       Ask the agent to rebase

@@ -15,10 +15,17 @@ import (
 )
 
 func New() base.Harness {
-	return base.Definition{Target: base.Cursor, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, AfterStage: finalize, WorkspaceOverlay: materializeAgentsOverlay, Check: verify, Launch: launch, LaunchACP: acpLaunch}
+	return base.Harness{Target: base.Cursor, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, AfterStage: finalize, WorkspaceOverlay: materializeAgentsOverlay, Check: verify, Launch: launch, LaunchACP: acpLaunch, LaunchInputs: launchInputs, Inheritance: base.Inheritance{
+		Note: "Cursor fake HOME bridges user cli-config/mcp, seeds ~/.cursor/skills, and may write .cursor/agents in the workspace",
+		Paths: func(string) []string {
+			return base.HomeFiles(".cursor/cli-config.json", ".cursor/mcp.json", ".cursor/skills")
+		},
+		Seed:    func() (string, string) { return base.HomeFile(".cursor/cli-config.json") },
+		Overlay: []string{".cursor/agents"},
+	}}
 }
 
-func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
+func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	arguments := append([]string(nil), ctx.Arguments...)
 	if !base.HasFlagValue(arguments, "--workspace") {
 		workspace := ctx.WorkspaceRoot
@@ -35,11 +42,11 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	}
 	binary, err := base.ResolveBinary(base.Cursor.Binary())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	home, err := paths.StagingCursorHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	command := exec.Command(binary, arguments...)
 	environment := append(os.Environ(), "HOME="+home, "CURSOR_CONFIG_DIR="+filepath.Join(home, ".cursor"))
@@ -50,7 +57,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	}
 	if realHome, err := os.UserHomeDir(); err == nil {
 		if err := shareArtLogin(realHome, home); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, entry := range []struct{ key, value string }{
 			{"CARGO_HOME", filepath.Join(realHome, ".cargo")},
@@ -64,7 +71,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 		}
 	}
 	command.Env = environment
-	return command, nil
+	return command, base.Done, nil
 }
 func allowsTrust(arguments []string) bool {
 	for index, argument := range arguments {
@@ -137,13 +144,6 @@ func forceAttribution(root string) error {
 		_ = json.Unmarshal(data, &value)
 	}
 	return writeJSON(path, patchAttribution(value))
-}
-func writeMCP(entries mcp.Entries, ctx base.StageContext) error {
-	projection, err := planMCP(entries, ctx)
-	if err != nil {
-		return err
-	}
-	return base.WriteMCPProjection(projection)
 }
 func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
 	root, err := stagedRoot(ctx)
@@ -249,4 +249,9 @@ func keepAttribution() bool {
 	default:
 		return false
 	}
+}
+
+// launchInputs covers the user skills staging seeds into the fake HOME.
+func launchInputs(string, string) (string, error) {
+	return base.FingerprintFiles(base.HomeFiles(".cursor/skills"))
 }

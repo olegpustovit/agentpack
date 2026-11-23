@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api"
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Empty, Spinner } from "@/components/kit/feedback"
@@ -11,7 +12,7 @@ import type { Package, Revision } from "@/lib/api-types"
 import { basename } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { destinationsOf, expectedPins, restorePlan, type InstallItem, type RestorePlan } from "./install-state"
-import { errorText, restorePreview, restoreRevision, saveDraft } from "./mutations"
+import { restorePreview, restoreRevision, saveDraft } from "./mutations"
 import { draftsQuery } from "./queries"
 
 type Row = { key: string; machine: string; directory: string; folderId: string; plan: RestorePlan; name: string }

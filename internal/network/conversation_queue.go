@@ -60,7 +60,7 @@ func (g *Gateway) servePrompt(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	info, err := storedSession(ctx, g.auth.store.Reader, id)
+	info, err := storedSession(ctx, g.store.Reader, id)
 	if err != nil || info.Transport != "acp" || !validSessionID(id) {
 		http.Error(w, "session unavailable", http.StatusNotFound)
 		return
@@ -105,7 +105,7 @@ func (g *Gateway) servePrompt(w http.ResponseWriter, r *http.Request) {
 	if prompt.QueueID == "" {
 		prompt.QueueID = rand.Text()
 	}
-	store := g.auth.store
+	store := g.store
 	seen, err := storedPromptID(ctx, store, id, prompt.QueueID)
 	if err != nil {
 		promptQueueError(w, r, err)
@@ -159,7 +159,7 @@ func (g *Gateway) removeStartingPrompt(ctx context.Context, id, queueID string) 
 	if _, err := g.workerRecord(ctx, id); err == nil {
 		return false, nil
 	}
-	err = state.Transaction(ctx, g.auth.store.DB, func(tx *sql.Tx) error {
+	err = state.Transaction(ctx, g.store.DB, func(tx *sql.Tx) error {
 		now := time.Now()
 		entry := acp.LogEntry{TS: now.UnixMilli(), Kind: "dequeued_prompt", Payload: mustRawJSON(map[string]string{"queueId": queueID, "reason": "removed"})}
 		err := tx.QueryRowContext(ctx, `UPDATE sessions SET last_seq=last_seq+1,last_event_at=?

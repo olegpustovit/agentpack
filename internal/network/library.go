@@ -34,7 +34,7 @@ type LibraryOptions struct {
 	DraftState func(context.Context, registry.Draft) (registry.DraftState, error)
 }
 
-func (g *Gateway) registerLibrary(mux *http.ServeMux) {
+func (g *Gateway) registerLibrary(mux routeRegistrar) {
 	library := g.options.Library
 	// Discover reads public sources only, so it works without a Library store.
 	mux.HandleFunc("GET /api/library/catalog", libraryCatalog.serve)
@@ -74,7 +74,7 @@ func (g *Gateway) registerLibrary(mux *http.ServeMux) {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		if !g.knownDirectory(input.Directory) {
+		if !g.knownDirectory(r.Context(), input.Directory) {
 			http.Error(w, "choose a recent folder from this node", http.StatusBadRequest)
 			return
 		}
@@ -125,11 +125,15 @@ func (g *Gateway) registerLibrary(mux *http.ServeMux) {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 		value, err := github.LatestVersion(ctx, nil, input.Owner, input.Repo, input.Path, input.Pins)
-		respond(w, value, err)
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		writeJSON(w, value)
 	})
 	mux.HandleFunc("GET /api/library/agentpacks/{id}/revisions/{revision}/restore-preview", func(w http.ResponseWriter, r *http.Request) {
 		directory := r.URL.Query().Get("directory")
-		if !g.knownDirectory(directory) {
+		if !g.knownDirectory(r.Context(), directory) {
 			http.Error(w, "choose a recent folder from this node", http.StatusBadRequest)
 			return
 		}
@@ -144,7 +148,7 @@ func (g *Gateway) registerLibrary(mux *http.ServeMux) {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		if !g.knownDirectory(input.Directory) {
+		if !g.knownDirectory(r.Context(), input.Directory) {
 			http.Error(w, "choose a recent folder from this node", http.StatusBadRequest)
 			return
 		}
@@ -187,5 +191,9 @@ func libraryResponse(w http.ResponseWriter, value any, err error) {
 		http.Error(w, "library item not found", http.StatusNotFound)
 		return
 	}
-	respond(w, value, err)
+	if err != nil {
+		badRequest(w, err.Error())
+		return
+	}
+	writeJSON(w, value)
 }

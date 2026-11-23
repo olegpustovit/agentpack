@@ -99,7 +99,7 @@ func (resolver Resolver) Resolve(ctx context.Context, projectRoot string, projec
 		if !stat.IsDir() {
 			return lockfile.PackLock{}, fmt.Errorf("path dependency %q at %q is not a directory", key, canonical)
 		}
-		cacheKey, commit, destination, err := cache.CopyPackageDirToCache(canonical, "path:"+canonical)
+		cacheKey, commit, destination, digest, err := cache.CopyPackageDirToCache(canonical, "path:"+canonical)
 		if err != nil {
 			return lockfile.PackLock{}, err
 		}
@@ -108,9 +108,7 @@ func (resolver Resolver) Resolve(ctx context.Context, projectRoot string, projec
 		if err != nil {
 			return lockfile.PackLock{}, err
 		}
-		if pkg.ContentHash, err = cache.TreeDigest(destination); err != nil {
-			return lockfile.PackLock{}, err
-		}
+		pkg.ContentHash = digest
 		pkg.Module, pkg.Direct = key, true
 		pathPackages = append(pathPackages, pkg)
 		nested, err := manifest.LoadNestedDependencies(destination)
@@ -259,12 +257,11 @@ func (resolver Resolver) settleContentHash(pkg lockfile.Package, options Resolve
 	}
 	switch {
 	case expected != "" && fetched != "":
-		out, entryErr := cache.EntryDir(pkg.CacheKey)
-		if fetched == expected || entryErr == nil && cache.MatchesContentHash(out, expected, fetched) {
+		if fetched == expected {
 			pkg.ContentHash = expected
 			return pkg, nil
 		}
-		if entryErr == nil {
+		if out, err := cache.EntryDir(pkg.CacheKey); err == nil {
 			_ = os.RemoveAll(out)
 		}
 		pkg.ContentHash = expected

@@ -141,8 +141,17 @@ func materializeSinglePluginMarketplace(root string) (bool, error) {
 			_ = os.RemoveAll(normalized)
 		}
 	}()
+	opened, err := os.OpenRoot(canonicalRoot)
+	if err != nil {
+		return false, err
+	}
+	defer opened.Close()
 	for _, source := range sources {
-		if err := copyMergeTree(source.path, normalized); err != nil {
+		relative, err := filepath.Rel(canonicalRoot, source.path)
+		if err != nil {
+			return false, err
+		}
+		if err := copyInside(opened, filepath.ToSlash(relative), normalized, nil); err != nil {
 			return false, err
 		}
 	}

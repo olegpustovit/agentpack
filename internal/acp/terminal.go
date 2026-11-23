@@ -33,7 +33,8 @@ type TerminalPool struct {
 type managedTerminal struct {
 	mu           sync.Mutex
 	limit        int
-	output       []byte
+	output       []byte // up to twice limit; the last limit bytes are the output
+	trimmed      bool
 	done         chan struct{}
 	cmd          *exec.Cmd
 	readOut      func([]byte) (int, error)
@@ -212,7 +213,7 @@ func terminalEnv(vars []sdkacp.EnvVariable) []string {
 	}
 	out := make([]string, 0, len(os.Environ())+len(extra)+1)
 	for _, line := range os.Environ() {
-		name, _, ok := cutEnvLine(line)
+		name, _, ok := strings.Cut(line, "=")
 		if !ok || isAgentpackSessionEnv(name) {
 			continue
 		}
@@ -234,15 +235,6 @@ func isAgentpackSessionEnv(name string) bool {
 	return name == "AGENTPACK_SESSION"
 }
 
-func cutEnvLine(line string) (string, string, bool) {
-	for i := 0; i < len(line); i++ {
-		if line[i] == '=' {
-			return line[:i], line[i+1:], true
-		}
-	}
-	return line, "", false
-}
-
 func (t *managedTerminal) appendOutput(chunk []byte) {
 	if len(chunk) == 0 {
 		return
@@ -250,20 +242,23 @@ func (t *managedTerminal) appendOutput(chunk []byte) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.output = append(t.output, chunk...)
-	if extra := len(t.output) - t.limit; extra > 0 {
-		t.output = append([]byte(nil), t.output[extra:]...)
+	// Trimming only past twice the limit copies each byte a bounded number of times.
+	if len(t.output) > 2*t.limit {
+		t.output = append(t.output[:0], t.output[len(t.output)-t.limit:]...)
+		t.trimmed = true
 	}
 }
 
 func (t *managedTerminal) snapshot() sdkacp.TerminalOutputResponse {
 	t.mu.Lock()
-	raw := append([]byte(nil), t.output...)
+	raw := t.output
+	truncated := t.trimmed || len(raw) > t.limit
+	raw = append([]byte(nil), raw[max(0, len(raw)-t.limit):]...)
 	t.mu.Unlock()
 	text := string(raw)
 	if text == "" {
 		text = " "
 	}
-	truncated := len(raw) >= t.limit
 	select {
 	case <-t.done:
 		code, signal := t.exitValues()

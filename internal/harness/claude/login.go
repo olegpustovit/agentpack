@@ -18,7 +18,7 @@ var LoginMethods = []base.LoginMethod{{ID: "claudeai", Label: "Claude account"},
 
 // Account reads `claude auth status --json`; it never reads the keychain itself.
 func Account(ctx context.Context) base.Account {
-	exe, err := base.LookPathEnv(base.Claude.Binary())
+	exe, err := base.ResolveBinary(base.Claude.Binary())
 	if err != nil {
 		return base.Account{}
 	}
@@ -43,7 +43,7 @@ func Account(ctx context.Context) base.Account {
 
 // Logout runs `claude auth logout`.
 func Logout(ctx context.Context) error {
-	exe, err := base.LookPathEnv(base.Claude.Binary())
+	exe, err := base.ResolveBinary(base.Claude.Binary())
 	if err != nil {
 		return err
 	}
@@ -53,7 +53,7 @@ func Logout(ctx context.Context) error {
 // Login runs `claude auth login`. With BROWSER=true it opens nothing and prints the link; the page
 // it leads to shows a code, which the person pastes back.
 func Login(method string) (base.LoginFlow, error) {
-	exe, err := base.LookPathEnv(base.Claude.Binary())
+	exe, err := base.ResolveBinary(base.Claude.Binary())
 	if err != nil {
 		return base.LoginFlow{}, err
 	}

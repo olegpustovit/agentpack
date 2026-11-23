@@ -17,14 +17,14 @@ func TestPreparePreservesNativeSessions(t *testing.T) {
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	ctx := base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}
 	h := New()
-	if err := h.Prepare(ctx); err != nil {
+	if err := h.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	staged, _ := pathsHome(ctx)
 	if err := os.WriteFile(filepath.Join(staged, "sessions", "thread.jsonl"), []byte("session"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Verify(ctx); err != nil {
+	if err := h.Check(ctx); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(home, ".grok", "sessions", "thread.jsonl"))
@@ -43,7 +43,7 @@ func TestCredentialsSurviveRestaging(t *testing.T) {
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
 	ctx := base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}
 	h := New()
-	if err := h.Prepare(ctx); err != nil {
+	if err := h.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	staged, err := pathsHome(ctx)
@@ -64,7 +64,7 @@ func TestCredentialsSurviveRestaging(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := h.Prepare(ctx); err != nil {
+	if err := h.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"auth.json", "mcp_credentials.json"} {
@@ -72,34 +72,6 @@ func TestCredentialsSurviveRestaging(t *testing.T) {
 		if err != nil || string(data) != "credential" {
 			t.Fatalf("%s: %q %v", name, data, err)
 		}
-	}
-}
-
-func TestRecoverCredentialsFromLegacyStaging(t *testing.T) {
-	project := t.TempDir()
-	t.Setenv("AGENTPACK_HOME", t.TempDir())
-	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
-	legacy, err := paths.StagingRootForMode(project, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy = filepath.Join(legacy, "grok-home")
-	if err := os.MkdirAll(legacy, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(legacy, "auth.json"), []byte("old-login"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := recoverCredentials(project, "default"); err != nil {
-		t.Fatal(err)
-	}
-	durable, err := paths.StagingGrokHomeDirForMode(project, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(durable, "auth.json"))
-	if err != nil || string(data) != "old-login" {
-		t.Fatalf("credential=%q err=%v", data, err)
 	}
 }
 
@@ -115,19 +87,19 @@ func TestModesPreserveIndependentConfig(t *testing.T) {
 	}
 	other := base.StageContext{ProjectRoot: project, Mode: otherMode}
 	h := New()
-	if err := h.Prepare(first); err != nil {
+	if err := h.Setup(first); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Verify(first); err != nil {
+	if err := h.Check(first); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Prepare(other); err != nil {
+	if err := h.Setup(other); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Verify(first); err != nil {
+	if err := h.Check(first); err != nil {
 		t.Fatalf("other mode overwrote first config: %v", err)
 	}
-	if err := h.Verify(other); err != nil {
+	if err := h.Check(other); err != nil {
 		t.Fatal(err)
 	}
 }

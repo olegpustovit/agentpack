@@ -39,14 +39,14 @@ url = "https://researcher.microapps.space/mcp"
 ## Managing servers from the CLI
 
 ```sh
-agentpack mcp add retrieval --command uvx --args mcp-retrieval --env API_KEY=sk-...
+agentpack mcp add retrieval --command uvx --env API_KEY=sk-... -- mcp-retrieval
 agentpack mcp add research-foundry --url https://researcher.microapps.space/mcp   # remote; --type defaults to http
 agentpack mcp add internal --url https://mcp.example.com/mcp --type sse --header "Authorization=Bearer ${TOKEN}"
 agentpack mcp remove retrieval
 agentpack mcp list      # every server, with provenance (manifest / plugin / .agents) and lock status
 ```
 
-Give `add` exactly one of `--command` (with `--args` and `--env`) or `--url` (with `--type`, default `http`, and repeatable `--header KEY=VALUE`). A remote server is recorded in `pack.lock` as `unpinnable`: the host decides what runs.
+Give `add` exactly one of `--command` (with repeatable `--env KEY=VALUE` and the server arguments after `--`) or `--url` (with `--type`, default `http`, and repeatable `--header KEY=VALUE`). A remote server is recorded in `pack.lock` as `unpinnable`: the host decides what runs.
 
 `add` and `remove` edit `[mcp.servers]` and update the server records in `pack.lock`. Agents pick the change up on their next launch; `agentpack sync` stages it for every agent now.
 
@@ -169,7 +169,7 @@ The pin moves only when you ask: `agentpack lock --update` (or `agentpack update
 
 ```sh
 agentpack lock --allow-unpinned-mcp
-agentpack mcp add playwright --command npx --args @playwright/mcp@latest --allow-unpinned
+agentpack mcp add playwright --command npx --allow-unpinned -- @playwright/mcp@latest
 ```
 
 The server is then recorded with `status = "unpinned"` and `allow_unpinned = true`, runs as written, and is tried again on the next `lock`.

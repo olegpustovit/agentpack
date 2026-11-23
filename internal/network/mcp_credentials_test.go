@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -382,23 +383,23 @@ func TestMCPCredentialPeerRefreshesThroughRefresher(t *testing.T) {
 		t.Fatalf("generations main=%d peer=%d: only the refresher writes", onMain.State.Generation, onPeer.State.Generation)
 	}
 
-	// Main offline and the peer's replicated refresh token already rotated: no reuse succeeds, and the login is marked for reconnecting.
+	fresh, err := main.markNeedsLogin(t.Context(), onPeer)
+	if err != nil || fresh.State.Generation != onMain.State.Generation || fresh.State.Status != mcpStatusConnected {
+		t.Fatalf("stale reconnect overwrote the newer token: generation=%d status=%q err=%v", fresh.State.Generation, fresh.State.Status, err)
+	}
+
+	// An offline Main leaves the peer's replicated credential intact.
 	reachable = false
-	previous := mcpReplicationWait
-	mcpReplicationWait = 50 * time.Millisecond
-	defer func() { mcpReplicationWait = previous }()
 	fake.expire()
-	var secret mcpBridgeSecret
-	body, _ := json.Marshal(map[string]int64{"generation": 2})
-	if _, err := NodeRequest(context.Background(), peerHome, http.MethodPost, "/api/mcp/credentials/"+id+"/refresh", bytes.NewReader(body)); err == nil || !strings.Contains(err.Error(), "needs login") {
-		t.Fatalf("stand-in refresh with a rotated token: %v", err)
+	if _, err := peer.freshMCPSecret(t.Context(), id, 2); !errors.Is(err, errMCPRefresherUnreachable) {
+		t.Fatalf("refresh with Main offline: %v", err)
 	}
 	if count := fake.refreshes.Load(); count != 1 {
-		t.Fatalf("refreshes = %d after the stand-in", count)
+		t.Fatalf("refreshes = %d after Main went offline", count)
 	}
-	localCall(t, peerHome, http.MethodGet, "/api/mcp/credentials/"+id+"/secret", nil, &secret)
-	if secret.Status != mcpStatusNeedsLogin {
-		t.Fatalf("peer secret status %q", secret.Status)
+	onPeer, err = peer.loadMCPCredential(t.Context(), id)
+	if err != nil || onPeer.State.Status != mcpStatusConnected {
+		t.Fatalf("peer status=%q err=%v", onPeer.State.Status, err)
 	}
 }
 

@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "phase": "preflight",
+  "definition_root": "$HOME/definition",
+  "workspace_root": "$HOME/workspace",
+  "mode": "default",
+  "target": "agy",
+  "policy": "ci",
+  "strict_external": false,
+  "workspace_digest": "sha256:1384793b3bf1edd80f97e66491fb891ca5d4b29e7f061b352d980ab3aaa1dd57",
+  "generation_id": "sha256:37eae18be88793eb20a798b92fb13aa0072a4eee3156e307f28a2f055cbe7e97",
+  "policy_digest": "sha256:409739949c42f6d34a4bb4e91d8e71802334fede50c3b630aeac7c6a6754d9fc",
+  "expected_target": {
+    "adapter": "agy"
+  },
+  "source_identity": "sha256-source-v1:c94ce60398f670b9a1142fbc65b8f2d33463de61bb5619a1ff7444c2ee834e07",
+  "lock_digest": "sha256:f1fa539503947a3455d6a1d065d60f18eadf2c133202bcf83d3aa6a04bc3a8cc",
+  "skills": 0,
+  "plugins": 0,
+  "shadowed": 0,
+  "inheritance": [
+    "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+    "Antigravity leaves HOME untouched and writes a workspace plugin overlay",
+    "CI policy treats undeclared inheritance as a violation"
+  ],
+  "capabilities": {
+    "agy": "workspace-write: writes .agents/plugins/agentpack-bundle",
+    "claude": "external: uses --plugin-dir and --settings; no workspace overlay",
+    "codex": "external-home: uses CODEX_HOME; native project instructions may still apply",
+    "cursor": "workspace-write: writes .cursor/agents when agent artifacts exist",
+    "grok": "external-home: uses GROK_HOME; also reads real ~/.claude and ~/.grok",
+    "omp": "external: uses --plugin-dir; native profile, settings and credentials remain in place",
+    "opencode": "external: uses OPENCODE_CONFIG_DIR; no workspace overlay"
+  },
+  "planned_writes": [
+    "$HOME/workspace/.agents/plugins/agentpack-bundle"
+  ],
+  "coverage": [
+    {
+      "category": "skill",
+      "scope": "native_catalog",
+      "completeness": "none",
+      "reason": "pure preflight does not execute native CLI discovery"
+    }
+  ],
+  "findings": [
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "Antigravity leaves HOME untouched and writes a workspace plugin overlay",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "CI policy treats undeclared inheritance as a violation",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITED_CONFIG",
+      "severity": "violation",
+      "source": "$HOME/.gemini/settings.json",
+      "message": "native launch may read existing undeclared configuration",
+      "remedy": "use a controlled account/configuration home for CI, or use policy local",
+      "evidence": "generated"
+    },
+    {
+      "code": "WORKSPACE_WRITE_PLANNED",
+      "severity": "warning",
+      "source": "$HOME/workspace/.agents/plugins/agentpack-bundle",
+      "target": "agy",
+      "message": "compatibility mode will write a workspace overlay",
+      "remedy": "add the path to .gitignore, or use --strict-external with claude/opencode"
+    },
+    {
+      "code": "BINARY_MISSING",
+      "severity": "error",
+      "target": "agy",
+      "message": "could not find \"$HOME/missing-binary\"",
+      "remedy": "install the native CLI or set the harness path env var"
+    },
+    {
+      "code": "STAGING_INPUTS_UNKNOWN",
+      "severity": "warning",
+      "message": "no materialization input identity is recorded",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing",
+      "evidence": "unknown"
+    },
+    {
+      "code": "STAGING_NOT_RECORDED",
+      "severity": "warning",
+      "message": "no staged record for mode \"default\"",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing"
+    }
+  ],
+  "overall_status": "error",
+  "ok": false
+}

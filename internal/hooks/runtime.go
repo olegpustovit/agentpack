@@ -227,7 +227,7 @@ func runCodexExec(ctx context.Context, prompt, model, workingDirectory string) (
 }
 
 type DispatchArgs struct {
-	Target         harness.Target
+	Renderer       Renderer
 	Event          Event
 	SpecsDirectory string
 	Stdin          []byte
@@ -263,18 +263,18 @@ func Dispatch(ctx context.Context, arguments DispatchArgs) (DispatchOutcome, err
 		fired++
 	}
 	if fired == 0 && merged.Decision != Deny {
-		if arguments.Target == harness.Agy {
+		if arguments.Renderer.Target() == harness.Agy {
 			// Antigravity denies a tool call whose hook answers without a decision
-			return DispatchOutcome{JSON: HookOutput(arguments.Target, arguments.Event, Result{})}, nil
+			return DispatchOutcome{JSON: arguments.Renderer.Output(arguments.Event, Result{})}, nil
 		}
 		return DispatchOutcome{JSON: map[string]any{}}, nil
 	}
 	exitCode := 0
 	// Antigravity reads the decision from the JSON it is given.
-	if merged.Decision == Deny && arguments.Target != harness.Agy {
+	if merged.Decision == Deny && arguments.Renderer.Target() != harness.Agy {
 		exitCode = 2
 	}
-	return DispatchOutcome{JSON: HookOutput(arguments.Target, arguments.Event, merged), ExitCode: exitCode}, nil
+	return DispatchOutcome{JSON: arguments.Renderer.Output(arguments.Event, merged), ExitCode: exitCode}, nil
 }
 
 func ExtractToolName(value any) string {

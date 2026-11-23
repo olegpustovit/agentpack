@@ -2,6 +2,7 @@ package acp
 
 import (
 	"encoding/json"
+	"flag"
 	"os"
 	"path/filepath"
 	"slices"
@@ -431,5 +432,76 @@ func TestThreadReducerWaitsForAskedChatReply(t *testing.T) {
 	apply("async_task_spawned", `{"asyncTaskId":"b1","taskType":"shell"}`)
 	if state = apply("agent_exit", `{}`); len(state.Waiting) != 0 {
 		t.Fatal("agent exit kept background work", state.Waiting)
+	}
+}
+
+var updateReduced = flag.Bool("update", false, "rewrite testdata/acp/*.reduced.json")
+
+// reducedStep is one entry's effect on the derived chat state. The UI reducer test deep-equals the
+// fields it computes (everything but waiting, which the browser reads from the session row).
+type reducedStep struct {
+	Seq           int64      `json:"seq"`
+	Working       bool       `json:"working"`
+	NeedsYou      bool       `json:"needs_you"`
+	ContextTokens int        `json:"context_tokens,omitempty"`
+	ContextLimit  int        `json:"context_limit,omitempty"`
+	CostUSD       float64    `json:"cost_usd,omitempty"`
+	Waiting       []WaitItem `json:"waiting,omitempty"`
+}
+
+// TestReducedTraces pins the Go fold of every fixture, one step per entry. Go is authoritative:
+// run `go test ./internal/acp -run TestReducedTraces -update` after a deliberate change.
+func TestReducedTraces(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("..", "..", "testdata", "acp", "*.jsonl"))
+	if err != nil || len(paths) == 0 {
+		t.Fatal(paths, err)
+	}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var reducer ThreadReducer
+		steps := []reducedStep{}
+		for line := range splitLines(data) {
+			if line == "" {
+				continue
+			}
+			var entry LogEntry
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				t.Fatal(path, err)
+			}
+			state := reducer.Apply(entry)
+			steps = append(steps, reducedStep{Seq: entry.Seq, Working: state.Working, NeedsYou: state.NeedsYou,
+				ContextTokens: state.ContextTokens, ContextLimit: state.ContextLimit, CostUSD: state.CostUSD, Waiting: state.Waiting})
+		}
+		want, err := json.MarshalIndent(steps, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, '\n')
+		golden := strings.TrimSuffix(path, ".jsonl") + ".reduced.json"
+		if *updateReduced {
+			if err := os.WriteFile(golden, want, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		got, err := os.ReadFile(golden)
+		if err != nil || string(got) != string(want) {
+			t.Errorf("%s is stale (err %v); rerun with -update", golden, err)
+		}
+	}
+}
+
+func TestOrphanToolUpdatesShareOneRow(t *testing.T) {
+	reducer := ThreadReducer{keepItems: true}
+	reducer.Apply(LogEntry{Kind: "tool_call_update", Payload: json.RawMessage(`{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"in_progress"}`)})
+	state := reducer.Apply(LogEntry{Kind: "tool_call_update", Payload: json.RawMessage(`{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed"}`)})
+	if len(state.Items) != 1 {
+		t.Fatalf("orphan updates produced %d rows, want 1", len(state.Items))
+	}
+	if !strings.Contains(string(state.Items[0].Data), `"completed"`) {
+		t.Fatalf("row did not merge the later update: %s", state.Items[0].Data)
 	}
 }

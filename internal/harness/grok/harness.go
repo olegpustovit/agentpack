@@ -15,14 +15,20 @@ import (
 )
 
 func New() base.Harness {
-	return base.Definition{Target: base.Grok, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, LSP: writeLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchACP: acpLaunch, LaunchFinished: persistCredentials}
+	return base.Harness{Target: base.Grok, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchACP: acpLaunch, Inheritance: base.Inheritance{
+		Note: "Grok reads real ~/.grok and ~/.claude in addition to GROK_HOME",
+		Paths: func(string) []string {
+			return base.HomeFiles(".grok/config.toml", ".grok/hooks", ".claude/settings.json")
+		},
+		Seed: func() (string, string) { return base.HomeFile(".grok/config.toml") },
+	}}
 }
 
 func nativeUserRoots(home string) []string {
 	return []string{filepath.Join(home, ".claude"), filepath.Join(home, ".grok")}
 }
 
-func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
+func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	arguments := append([]string(nil), ctx.Arguments...)
 	if !base.HasFlagValue(arguments, "--cwd") {
 		workspace := ctx.WorkspaceRoot
@@ -36,18 +42,18 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	}
 	binary, err := base.ResolveBinary(base.Grok.Binary())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := loadSharedCredentials(home); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	command := exec.Command(binary, arguments...)
 	command.Env = append(os.Environ(), "GROK_HOME="+home)
-	return command, nil
+	return command, func() error { return persistCredentials(ctx) }, nil
 }
 func stagedRoot(ctx base.StageContext) (string, error) {
 	return paths.StagingGrokBundleDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
@@ -58,12 +64,6 @@ func resetPaths(ctx base.StageContext) ([]string, error) {
 		return nil, err
 	}
 	return []string{root}, nil
-}
-func preReset(ctx base.StageContext) error {
-	if err := recoverCredentials(ctx.ProjectRoot, ctx.Mode.Name()); err != nil {
-		return err
-	}
-	return recoverHistory(ctx.ProjectRoot, ctx.Mode.Name())
 }
 func prepare(ctx base.StageContext) error {
 	bundle, err := stagedRoot(ctx)
@@ -215,13 +215,6 @@ func writeAttribution(home string) error {
 	}
 	output += "\n\n<!-- agentpack:no-attribution:begin -->\n" + strings.TrimSpace(base.NoAttributionBody) + "\n<!-- agentpack:no-attribution:end -->\n"
 	return os.WriteFile(path, []byte(output), 0o644)
-}
-func writeMCP(entries mcp.Entries, ctx base.StageContext) error {
-	projection, err := planMCP(entries, ctx)
-	if err != nil {
-		return err
-	}
-	return base.WriteMCPProjection(projection)
 }
 func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
 	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())

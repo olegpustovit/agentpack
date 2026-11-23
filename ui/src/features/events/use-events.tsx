@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { LOCAL } from "@/lib/api"
 import { configQuery } from "@/lib/config"
@@ -7,16 +7,17 @@ import type { ConversationPage } from "@/features/conversation/queries"
 type EventMessage = { topic: string; node?: string; tables?: string[] }
 
 // What each replicated table feeds. A state change refetches only these; chat tables feed the chat stream alone.
-const STATE_FAMILIES: Record<string, string[][]> = {
+// Every replicated table must be listed (use-events.test.ts checks src/generated/replicated-tables.json).
+export const STATE_FAMILIES: Record<string, string[][]> = {
   // Usage counters arrive through usage_hourly, written in the same transaction as each turn.
   sessions: [["m", LOCAL, "sessions"], ["m", LOCAL, "session-row"]],
   limits: [["m", LOCAL, "limits"]],
   usage_hourly: [["m", LOCAL, "usage"]],
   limit_samples: [["m", LOCAL, "usage"]],
   users: [["identity"]],
-  node_settings: [["identity"], ["nodes"], ["topology"]],
+  node_settings: [["identity"], ["nodes"], ["topology"], ["settings"]],
   mesh_nodes: [["nodes"], ["topology"], ["replication"]],
-  mesh_settings: [["nodes"], ["topology"], ["replication"]],
+  mesh_settings: [["nodes"], ["topology"], ["replication"], ["settings"]],
   issues: [["diagnostics"]],
   issue_counts: [["diagnostics"]],
   conversation_events: [],
@@ -27,12 +28,19 @@ const STATE_FAMILIES: Record<string, string[][]> = {
   mcp_credentials: [["mcp-credentials"]],
   mcp_credential_approvals: [["mcp-credentials"]],
   agent_snapshots: [["agent-snapshot"]],
+  agent_credentials: [["agents"]],
+  registry_objects: [["m", LOCAL, "library"], ["drafts"]],
+  registry_names: [["m", LOCAL, "library"], ["drafts"]],
+  registry_heads: [["m", LOCAL, "library"], ["drafts"]],
+  registry_tombstones: [["m", LOCAL, "library"], ["drafts"]],
+  registry_drafts: [["m", LOCAL, "library"], ["drafts"]],
+  cache_locations: [],
   omp_settings: [["omp-settings"]],
   // Web Push state feeds no query: this device reads its subscription from the browser.
   push_keys: [],
   push_subscriptions: [],
 }
-const ALL_STATE_FAMILIES = [["identity"], ["topology"], ["m", LOCAL, "sessions"], ["m", LOCAL, "session-row"], ["m", LOCAL, "limits"], ["m", LOCAL, "usage"], ["nodes"], ["diagnostics"], ["replication"], ["mcp-credentials"], ["omp-settings"], ["agent-snapshot"]]
+const ALL_STATE_FAMILIES = [...new Map(Object.values(STATE_FAMILIES).flat().map((key) => [key.join("\0"), key])).values()]
 
 // Unknown tables, or an older gateway that sends none, refetch every family.
 export function stateFamilies(tables: string[] | undefined): string[][] {
@@ -40,6 +48,17 @@ export function stateFamilies(tables: string[] | undefined): string[][] {
   const keys = new Map<string, string[]>()
   for (const table of tables) for (const key of STATE_FAMILIES[table]!) keys.set(key.join("\0"), key)
   return [...keys.values()]
+}
+
+// A closed EventSource never reopens by itself; retries back off up to half a minute.
+export function reconnectDelay(attempt: number): number {
+  return Math.min(30_000, 1000 * 2 ** attempt)
+}
+
+// Events missed while disconnected: every replicated family plus each machine's live queries.
+function catchUpAll(queryClient: QueryClient) {
+  invalidate(queryClient, ["m"])
+  for (const key of ALL_STATE_FAMILIES) if (key[0] !== "m") invalidate(queryClient, key)
 }
 
 const EventsContext = createContext(false)
@@ -62,12 +81,15 @@ function dispatch(queryClient: QueryClient, msg: EventMessage) {
     invalidate(queryClient, ["m", LOCAL, msg.topic])
   }
   if (msg.topic === "replication") invalidate(queryClient, ["replication"])
+  if (msg.topic === "diagnostics") return invalidate(queryClient, ["diagnostics"])
   if (msg.topic === "nodes") {
     invalidate(queryClient, ["nodes"])
     invalidate(queryClient, ["topology"])
     invalidate(queryClient, ["replication"])
     return
   }
+  // Chat shells are sessions of the chat's machine; they live outside the sessions key.
+  if (msg.topic === "sessions") invalidate(queryClient, ["m", msg.node || LOCAL, "shells"])
   // An open chat follows its own stream, so a sessions change never refetches conversations.
   invalidate(queryClient, ["m", msg.node || LOCAL, msg.topic])
 }
@@ -96,13 +118,15 @@ export function EventsProvider({ children }: { children: ReactNode }) {
   const [connected, setConnected] = useState(false)
   const [conversation, setConversation] = useState<ConversationSubscription>()
   const catchUp = useRef(false)
-  const subscribe = useCallback((subscription: ConversationSubscription) => {
+  const subscribe = (subscription: ConversationSubscription) => {
     setConversation(subscription)
     return () => setConversation((current) => current === subscription ? undefined : current)
-  }, [])
+  }
   useEffect(() => {
     let source: EventSource | null = null
     let retry: ReturnType<typeof setTimeout> | undefined
+    let attempt = 0
+    let opened = false
     const chat = multiplexed ? conversation : undefined
     const connection = (open: boolean) => {
       setConnected(open)
@@ -125,18 +149,24 @@ export function EventsProvider({ children }: { children: ReactNode }) {
       }
       source = new EventSource(path)
       source.onopen = () => {
+        attempt = 0
+        opened = true
         connection(true)
         if (catchUp.current) {
           catchUp.current = false
-          for (const key of stateFamilies(undefined)) invalidate(queryClient, key)
+          catchUpAll(queryClient)
         }
       }
       source.onerror = () => {
         connection(false)
         catchUp.current = true
-        if (chat) {
+        // A chat stream reopens with a fresh `since`; a plain stream the browser gave up on reopens too.
+        if (chat || source?.readyState === EventSource.CLOSED) {
           close()
-          if (!document.hidden) retry = setTimeout(open, 1000)
+          if (!document.hidden) {
+            retry = setTimeout(open, reconnectDelay(attempt))
+            attempt = attempt + 1
+          }
         }
       }
       source.onmessage = (event: MessageEvent<string>) =>
@@ -161,6 +191,8 @@ export function EventsProvider({ children }: { children: ReactNode }) {
     return () => {
       document.removeEventListener("visibilitychange", onVisibility)
       close()
+      // The next stream (another chat, or none) starts after a gap.
+      if (opened) catchUp.current = true
     }
   }, [conversation, multiplexed, queryClient])
   return (

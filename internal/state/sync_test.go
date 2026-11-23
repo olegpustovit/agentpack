@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestChangesConvergeThroughIntermediateNode(t *testing.T) {
@@ -109,8 +112,13 @@ func TestChangesConvergeThroughIntermediateNode(t *testing.T) {
 func TestPeerCursorSeesLowVersionRelaysAndFollowingLocalWrites(t *testing.T) {
 	ctx := t.Context()
 	stores := make([]*Store, 3)
+	var receiverHome string
 	for i := range stores {
-		s, err := Open(t.TempDir())
+		home := t.TempDir()
+		if i == 1 {
+			receiverHome = home
+		}
+		s, err := Open(home)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -145,6 +153,14 @@ func TestPeerCursorSeesLowVersionRelaysAndFollowingLocalWrites(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	worker, err := Open(receiverHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	if _, err := worker.DB.Exec("UPDATE sessions SET name='worker warmed' WHERE id='old'"); err != nil {
+		t.Fatal(err)
+	}
 	transfer(b, c)
 	if _, err := a.DB.Exec("INSERT INTO sessions(id,name) VALUES ('relayed','from A')"); err != nil {
 		t.Fatal(err)
@@ -163,7 +179,7 @@ func TestPeerCursorSeesLowVersionRelaysAndFollowingLocalWrites(t *testing.T) {
 	if err := c.Reader.QueryRow("SELECT name FROM sessions WHERE id='relayed'").Scan(&name); err != nil || name != "edited on B" {
 		t.Fatalf("native edit skipped: %q %v", name, err)
 	}
-	if _, err := b.DB.Exec("DELETE FROM sessions WHERE id='relayed'"); err != nil {
+	if _, err := worker.DB.Exec("DELETE FROM sessions WHERE id='relayed'"); err != nil {
 		t.Fatal(err)
 	}
 	transfer(b, c)
@@ -197,7 +213,7 @@ func TestSQLiteValuesRoundTrip(t *testing.T) {
 	}
 }
 
-func TestChangesPreserveSQLiteStorageTypesAndRollbackCursor(t *testing.T) {
+func TestChangesPreserveSQLiteStorageTypesAndQuarantineInvalidRows(t *testing.T) {
 	ctx := t.Context()
 	a, err := Open(t.TempDir())
 	if err != nil {
@@ -234,20 +250,18 @@ func TestChangesPreserveSQLiteStorageTypesAndRollbackCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A malformed final row must roll back both earlier rows and the cursor.
-	bad := append(append([]Change{}, changes...), Change{Table: "invalid"})
-	if err := b.ApplyPage(ctx, bad, site, next); err == nil {
-		t.Fatal("invalid page accepted")
+	// A malformed final row must be quarantined without pinning the peer's cursor.
+	bad := append(append([]Change{}, changes...), Change{Table: "invalid", DBVersion: next})
+	rejected, err := b.ApplyValidatedPage(ctx, bad, site, next, nil)
+	if err != nil || len(rejected) != 1 {
+		t.Fatalf("quarantine: %v %v", rejected, err)
 	}
-	if cursor, err := b.Cursor(ctx, site); err != nil || cursor != 0 {
-		t.Fatalf("cursor advanced on failure: %d %v", cursor, err)
+	if cursor, err := b.Cursor(ctx, site); err != nil || cursor != next {
+		t.Fatalf("cursor %d, want %d: %v", cursor, next, err)
 	}
 	var count int
-	if err := b.Reader.QueryRow("SELECT count(*) FROM typed_values").Scan(&count); err != nil || count != 0 {
-		t.Fatalf("partial page committed: %d %v", count, err)
-	}
-	if err := b.ApplyPage(ctx, changes, site, next); err != nil {
-		t.Fatal(err)
+	if err := b.Reader.QueryRow("SELECT count(*) FROM sync_quarantine WHERE peer=? AND version=?", site, next).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("quarantined rows: %d %v", count, err)
 	}
 	for i, value := range []any{nil, int64(9223372036854775807), float64(1.25), "hello", []byte{}, []byte{0, 255}} {
 		var got any
@@ -285,5 +299,137 @@ func TestChangesDoNotSplitTransactionAndAdvanceExcludedVersions(t *testing.T) {
 	}
 	if len(changes) != 0 || next == 0 {
 		t.Fatalf("excluded version did not advance: %d %+v", next, changes)
+	}
+}
+
+func TestPreserveArchiveEditsWithoutClocksLeavesWriterFree(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	pk := []byte{1}
+	if err := store.Reader.QueryRow("SELECT crsql_pack_columns('session',1)").Scan(&pk); err != nil {
+		t.Fatal(err)
+	}
+	changes := make([]Change, 500)
+	for i := range changes {
+		changes[i] = Change{Table: "conversation_events", Column: "body", PK: pk}
+	}
+	held, err := store.DB.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	if err := store.preserveArchiveEdits(ctx, store.DB, changes, make([]any, len(changes))); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestChangePagesEndOnWholeVersionsAndCoverEverything(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i := range 40 {
+		if _, err := s.DB.Exec("INSERT INTO conversation_events(session_id,seq,body) VALUES ('s',?,'x'),('s',?,'y')", 2*i, 2*i+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, high, err := s.Changes(t.Context(), 0, nil, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paged []Change
+	for since, pages := int64(0), 0; since < high; pages++ {
+		changes, next, err := s.Changes(t.Context(), since, nil, 2048)
+		if err != nil || next <= since || pages > len(all) {
+			t.Fatalf("page after %d: next %d, %v", since, next, err)
+		}
+		if body, _ := json.Marshal(changes); len(body) > 2048 {
+			t.Fatalf("page of %d bytes exceeds the budget", len(body))
+		}
+		if last := changes[len(changes)-1]; last.DBVersion != next && next != high {
+			t.Fatalf("page ends inside version %d, cursor %d", last.DBVersion, next)
+		}
+		paged = append(paged, changes...)
+		since = next
+	}
+	if !reflect.DeepEqual(paged, all) {
+		t.Fatalf("paged %d changes, want %d", len(paged), len(all))
+	}
+}
+
+func TestRestoredSourceKeepsPeerCursorsValid(t *testing.T) {
+	ctx := t.Context()
+	home := t.TempDir()
+	source, err := Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	site, _ := source.SiteID(ctx)
+	pull := func() {
+		t.Helper()
+		since, _ := peer.Cursor(ctx, site)
+		changes, next, err := source.Changes(ctx, since, nil, 4<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := source.NoteServed(next); err != nil {
+			t.Fatal(err)
+		}
+		if err := peer.ApplyPage(ctx, changes, site, next); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert := func(id string) {
+		t.Helper()
+		if _, err := source.DB.Exec("INSERT INTO sessions(id,name) VALUES (?,?)", id, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("one")
+	pull()
+	snapshot := filepath.Join(t.TempDir(), "copy.db")
+	if _, err := source.DB.Exec("VACUUM INTO ?", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	insert("two")
+	insert("three")
+	pull()
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		_ = os.Remove(filepath.Join(home, "state.db"+suffix))
+	}
+	data, err := os.ReadFile(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "state.db"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if source, err = Open(home); err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	insert("after-restore")
+	pull()
+	var name string
+	if err := peer.Reader.QueryRow("SELECT name FROM sessions WHERE id='after-restore'").Scan(&name); err != nil {
+		t.Fatalf("peer missed a write made after the restore: %v", err)
+	}
+	// Without the watermark the cursor is ahead and the source says so instead of skipping versions.
+	if _, _, err := source.Changes(ctx, 1<<40, nil, 4<<20); !errors.Is(err, ErrCursorAhead) {
+		t.Fatalf("ahead cursor: %v", err)
 	}
 }

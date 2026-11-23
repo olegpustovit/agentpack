@@ -1,11 +1,11 @@
-import { useState, type CSSProperties, type ReactNode } from "react"
+import { lazy, Suspense, useState, type CSSProperties, type ReactNode } from "react"
 import { ArrowUpRight, FileCode2 } from "lucide-react"
 import { Section } from "@/components/kit/data"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { useSessionCommands } from "@/features/sessions/actions"
 import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
-import { api, routeMissing } from "@/lib/api"
+import { api, errorText } from "@/lib/api"
 import type { GoalState, SessionInfo } from "@/lib/api-types"
 import { clock, goalElapsedMs, goalStateWords } from "@/lib/goal"
 import { useNow } from "@/lib/use-now"
@@ -17,8 +17,9 @@ import type { ThreadState } from "./model"
 import type { GoalAction } from "./goal-sheet"
 import { subagentRunning, subagentStats } from "./subagent-card"
 import { fileLabel, groupByPath, listDiffChanges, reviewPrompt, type ReviewComment } from "./diff-summary"
-import { ToolDiffBody } from "./tool-diff"
 import { projectDirectory } from "@/features/sessions/git"
+
+const ToolDiffBody = lazy(() => import("./tool-diff").then((module) => ({ default: module.ToolDiffBody })))
 
 type Draft = ReviewComment & { key: string }
 
@@ -276,17 +277,19 @@ export function ConversationInspector({
                 // shortcut: line numbers count from the start of each edit, because ACP diffs carry no file offset;
                 // switch to file lines once the gateway records where each edit starts.
                 <div data-slot="inspector-diff">
-                  <ToolDiffBody
-                    content={selectedBlocks}
-                    // Line keys count blocks within this view, so they are qualified by scope and file.
-                    review={{
-                      onComment: (key, target) => {
-                        const full = `${scope}:${selected}#${key}`
-                        setEditing({ key: full, ...target, text: comments.find((c) => c.key === full)?.text ?? "" })
-                      },
-                      after: (key) => draftFor(`${scope}:${selected}#${key}`),
-                    }}
-                  />
+                  <Suspense>
+                    <ToolDiffBody
+                      content={selectedBlocks}
+                      // Line keys count blocks within this view, so they are qualified by scope and file.
+                      review={{
+                        onComment: (key, target) => {
+                          const full = `${scope}:${selected}#${key}`
+                          setEditing({ key: full, ...target, text: comments.find((c) => c.key === full)?.text ?? "" })
+                        },
+                        after: (key) => draftFor(`${scope}:${selected}#${key}`),
+                      }}
+                    />
+                  </Suspense>
                 </div>
               )}
               {comments.length > 0 && (
@@ -320,7 +323,7 @@ export function ConversationInspector({
                           api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/revert`, { machine, method: "POST", body: { turn: lastTurn } }).then(
                             () => hud.success(`Reverted turn ${lastTurn}`),
                             (error: unknown) =>
-                              setRevertError(routeMissing(error) ? "Needs update" : error instanceof Error ? error.message : "Couldn't revert this turn."),
+                              setRevertError(errorText(error, "Couldn't revert this turn.")),
                           )
                         }}
                       />

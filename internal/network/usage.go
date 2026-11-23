@@ -74,7 +74,7 @@ func (g *Gateway) serveUsage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "from and to must be Unix seconds, at most 100 days apart", http.StatusBadRequest)
 		return
 	}
-	report, err := readUsage(r.Context(), g.auth.store.Reader, from, to)
+	report, err := readUsage(r.Context(), g.store.Reader, from, to)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return

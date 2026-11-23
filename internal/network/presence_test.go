@@ -171,7 +171,7 @@ func TestPresenceEndpointRejectsBrowserCredentials(t *testing.T) {
 
 func TestPresenceStorageFailureIsRecorded(t *testing.T) {
 	g := testPresenceGateway(t, t.TempDir())
-	if err := g.auth.store.DB.Close(); err != nil {
+	if err := g.store.DB.Close(); err != nil {
 		t.Fatal(err)
 	}
 	queue := obs.NewQueue()

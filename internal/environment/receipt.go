@@ -118,20 +118,7 @@ func SaveReceipt(workspaceRoot string, receipt Receipt) (string, error) {
 	} else if err != nil && !os.IsNotExist(err) {
 		return "", err
 	}
-	file, err := os.CreateTemp(root, ".receipt-")
-	if err != nil {
-		return "", err
-	}
-	temporary := file.Name()
-	defer os.Remove(temporary)
-	if _, err := file.Write(append(data, '\n')); err != nil {
-		file.Close()
-		return "", err
-	}
-	if err := file.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Rename(temporary, path); err != nil {
+	if err := paths.WriteAtomic(path, append(data, '\n'), 0o600); err != nil {
 		return "", err
 	}
 	return path, nil

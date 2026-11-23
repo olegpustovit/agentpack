@@ -190,7 +190,12 @@ func TestTombstoneAndCollectionPropagateToOfflineAndNewPeers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if removed, err := source.CollectGarbage(); err != nil || len(removed) == 0 {
+	// Collection is database-only work: it runs while another writer holds the registry file lock.
+	var removed []string
+	if err := source.withLock(func() (err error) {
+		removed, err = source.CollectGarbage()
+		return err
+	}); err != nil || len(removed) == 0 {
 		t.Fatalf("collection: %v %v", removed, err)
 	}
 	for _, to := range []*Store{target, fresh} {
@@ -291,7 +296,7 @@ func TestImportRejectsCredentialBearingURLMetadata(t *testing.T) {
 
 func TestDraftRemoteRevalidationAndDiscard(t *testing.T) {
 	store := mustStore(t)
-	pin := PackagePin{Commit: "abc123", CacheKey: "key", ContentHash: "sha256-tree-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	pin := PackagePin{Commit: "abc123", CacheKey: "key", ContentHash: "sha256-tree-v2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 	draft, err := store.SaveDraft(DraftInput{Item: "tool", Revision: strings.Repeat("a", 64), Node: "tailnet-node", Directory: "/offline/machine/project", Reason: "offline", PackID: strings.Repeat("b", 32), FolderIdentity: "folder-identity", ExpectedPins: map[string]PackagePin{"github.com/acme/tool": pin}, NeededHolder: "build-node"})
 	if err != nil {
 		t.Fatal(err)

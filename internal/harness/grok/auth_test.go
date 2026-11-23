@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -128,5 +129,23 @@ func assertCredential(t *testing.T, path, expected string) {
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != expected {
 		t.Fatalf("credential %s = %q, %v", path, data, err)
+	}
+}
+
+func TestKeepRefreshedCredentialsPreservesNewerSharedLogin(t *testing.T) {
+	home, shared := t.TempDir(), t.TempDir()
+	stale, current := []byte(`{"token":"stale"}`), []byte(`{"token":"current"}`)
+	localPath, globalPath := filepath.Join(home, "auth.json"), filepath.Join(shared, "auth.json")
+	for path, data := range map[string][]byte{localPath: stale, globalPath: current} {
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := keepRefreshedCredentials(home, shared, map[string][32]byte{"auth.json": sha256.Sum256(stale)}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(globalPath)
+	if err != nil || string(got) != string(current) {
+		t.Fatalf("shared credential was overwritten: %v", err)
 	}
 }

@@ -163,10 +163,11 @@ func TestRestoredExternalDefinitionsKeepNativeStateAndIsolateModes(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := claude.MaterializeSettings(stage); err != nil {
+		overlay, err := claude.SettingsContents([]string{key.project + "-" + key.mode}, claude.KeepAttribution())
+		if err != nil {
 			t.Fatal(err)
 		}
-		if err := claude.SetMCPAllowlist(stage, []string{key.project + "-" + key.mode}); err != nil {
+		if err := claude.WriteSettingsContents(stage, overlay); err != nil {
 			t.Fatal(err)
 		}
 		data, err := os.ReadFile(settingPath)
@@ -197,7 +198,7 @@ func TestRestoredExternalDefinitionsKeepNativeStateAndIsolateModes(t *testing.T)
 	t.Setenv("CODEX_PATH", os.Args[0])
 	var probeOutput bytes.Buffer
 	runner := Runner{Service: service, Stdout: &probeOutput}
-	code, err := runner.runProbe(context.Background(), first.definition, first.workspace, "default", []string{"--agent", "codex", "--strict-external", "--json"}, false)
+	code, err := probeLeaf(runner, first.definition, first.workspace, "default", "codex")
 	if code != 5 || err == nil || !strings.Contains(probeOutput.String(), "PROBE_FAILED") {
 		t.Fatalf("native probe failure was not reported: code=%d err=%v output=%s", code, err, probeOutput.String())
 	}
@@ -248,7 +249,7 @@ func TestRestoreDuringLiveLaunchKeepsOriginalGeneration(t *testing.T) {
 	}
 	started, release := filepath.Join(t.TempDir(), "started"), filepath.Join(t.TempDir(), "release")
 	t.Setenv("CODEX_PATH", os.Args[0])
-	command, err := codex.New().LaunchCommand(base.LaunchContext{ProjectRoot: definition, Mode: mode.ImplicitEffective()})
+	command, finish, err := codex.New().Launch(base.LaunchContext{ProjectRoot: definition, Mode: mode.ImplicitEffective()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +278,7 @@ func TestRestoreDuringLiveLaunchKeepsOriginalGeneration(t *testing.T) {
 		if !finished {
 			_ = os.WriteFile(release, nil, 0o600)
 			_ = command.Wait()
-			_ = codex.New().AfterLaunch(base.LaunchContext{ProjectRoot: definition, Mode: mode.ImplicitEffective(), Command: command})
+			_ = finish()
 		}
 	}()
 	deadline := time.Now().Add(5 * time.Second)
@@ -306,7 +307,7 @@ func TestRestoreDuringLiveLaunchKeepsOriginalGeneration(t *testing.T) {
 		t.Fatalf("launch did not finish against original generation: %v %s", err, childOutput.String())
 	}
 	finished = true
-	if err := codex.New().AfterLaunch(base.LaunchContext{ProjectRoot: definition, Mode: mode.ImplicitEffective(), Command: command}); err != nil {
+	if err := finish(); err != nil {
 		t.Fatal(err)
 	}
 }

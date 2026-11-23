@@ -19,6 +19,9 @@ type HookRenderer struct{}
 
 func (HookRenderer) Target() harness.Target { return harness.OpenCode }
 
+// Output answers a hook in the format the agent reads.
+func (HookRenderer) Output(_ hooks.Event, result hooks.Result) any { return result }
+
 func (HookRenderer) Render(bundle hooks.Bundle, context hooks.RenderContext) (hooks.RenderOutput, error) {
 	var output hooks.RenderOutput
 	if len(bundle.Hooks) == 0 {

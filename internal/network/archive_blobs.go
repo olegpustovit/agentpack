@@ -101,7 +101,7 @@ func (g *Gateway) prepareArchiveBlobs(ctx context.Context, rows *sql.Rows, targe
 			if _, err := g.fetchBlob(ctx, id, sha, targetFor); err != nil {
 				return err
 			}
-			if _, err := g.auth.store.DB.ExecContext(ctx, "INSERT OR IGNORE INTO archive_blobs(session_id,sha) VALUES (?,?)", id, sha); err != nil {
+			if _, err := g.store.DB.ExecContext(ctx, "INSERT OR IGNORE INTO archive_blobs(session_id,sha) VALUES (?,?)", id, sha); err != nil {
 				return err
 			}
 		}
@@ -110,54 +110,25 @@ func (g *Gateway) prepareArchiveBlobs(ctx context.Context, rows *sql.Rows, targe
 }
 
 func (g *Gateway) prepareArchiveSession(ctx context.Context, id string, targetFor func(context.Context, string) (*url.URL, error)) error {
-	rows, err := g.auth.store.Reader.QueryContext(ctx, "SELECT session_id,body FROM conversation_events WHERE session_id=?", id)
+	rows, err := g.store.Reader.QueryContext(ctx, "SELECT session_id,body FROM conversation_events WHERE session_id=?", id)
 	if err != nil {
 		return err
 	}
 	return g.prepareArchiveBlobs(ctx, rows, targetFor)
 }
 
-func verifyArchiveSessionBlobs(ctx context.Context, tx *sql.Tx, home, id string) error {
-	rows, err := tx.QueryContext(ctx, "SELECT body FROM conversation_events WHERE session_id=?", id)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var body string
-		if err := rows.Scan(&body); err != nil {
-			return err
-		}
-		refs, err := archiveBlobRefs(body)
-		if err != nil {
-			return err
-		}
-		for _, sha := range refs {
-			dir, err := sessionBlobDir(home, id)
-			if err != nil {
-				return err
-			}
-			if _, err := readSessionBlob(dir, sha); err != nil {
-				return err
-			}
-			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO archive_blobs(session_id,sha) VALUES (?,?)", id, sha); err != nil {
-				return err
-			}
-		}
-	}
-	return rows.Err()
-}
-
 func (g *Gateway) drainArchiveEdits(ctx context.Context, targetFor func(context.Context, string) (*url.URL, error)) error {
-	local, err := g.auth.store.NodeID(ctx)
+	g.archiveMu.Lock()
+	defer g.archiveMu.Unlock()
+	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return err
 	}
-	roles, err := g.auth.store.Main(ctx)
+	roles, err := g.store.Main(ctx)
 	if err != nil || roles.MainNode != local || roles.ArchiveNode != local {
 		return err
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT json_extract(a.edit,'$.session'),a.body FROM archive_edits a
+	rows, err := g.store.Reader.QueryContext(ctx, `SELECT json_extract(a.edit,'$.session'),a.body FROM archive_edits a
  JOIN sessions s ON s.id=json_extract(a.edit,'$.session') WHERE s.archived_at>0 AND a.body<>''`)
 	if err != nil {
 		return err
@@ -165,11 +136,11 @@ func (g *Gateway) drainArchiveEdits(ctx context.Context, targetFor func(context.
 	if err := g.prepareArchiveBlobs(ctx, rows, targetFor); err != nil {
 		return err
 	}
-	return g.auth.store.DrainArchiveEdits(ctx)
+	return g.store.DrainArchiveEdits(ctx)
 }
 
 // PrepareArchive verifies copied attachments, fetching missing ones through the local gateway when it is running.
-func PrepareArchive(ctx context.Context, home string) (result error) {
+func PrepareArchive(ctx context.Context, store *state.Store, home string) (result error) {
 	if err := state.VerifyArchive(home); err != nil {
 		return err
 	}
@@ -178,11 +149,6 @@ func PrepareArchive(ctx context.Context, home string) (result error) {
 		return err
 	}
 	defer func() { result = errors.Join(result, archive.Close()) }()
-	store, err := state.Open(home)
-	if err != nil {
-		return err
-	}
-	defer func() { result = errors.Join(result, store.Close()) }()
 	rows, err := archive.QueryContext(ctx, `SELECT session_id,body FROM conversation_events
  WHERE json_extract(body,'$.kind') IN ('prompt','user_prompt')`)
 	if err != nil {
@@ -229,18 +195,20 @@ func PrepareArchive(ctx context.Context, home string) (result error) {
 }
 
 func (g *Gateway) cleanupArchivedBlobs(ctx context.Context, targetFor func(context.Context, string) (*url.URL, error)) error {
-	roles, err := g.auth.store.Main(ctx)
+	g.archiveMu.Lock()
+	defer g.archiveMu.Unlock()
+	roles, err := g.store.Main(ctx)
 	if err != nil {
 		return err
 	}
-	local, err := g.auth.store.NodeID(ctx)
+	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return err
 	}
 	if roles.MainNode == "" || roles.MainNode != roles.ArchiveNode || roles.MainNode == local {
 		return nil
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT s.id,s.archived_seq FROM sessions s
+	rows, err := g.store.Reader.QueryContext(ctx, `SELECT s.id,s.archived_seq FROM sessions s
  LEFT JOIN archive_cleanup c ON c.session_id=s.id
  WHERE s.archived_at>0 AND s.archived_seq=s.last_seq AND (c.archived_seq IS NULL OR c.archived_seq<s.archived_seq)`)
 	if err != nil {
@@ -267,7 +235,7 @@ func (g *Gateway) cleanupArchivedBlobs(ctx context.Context, targetFor func(conte
 		if err != nil {
 			return err
 		}
-		refs, err := archiveSessionRefs(ctx, g.auth.store.Reader, s.id)
+		refs, err := archiveSessionRefs(ctx, g.store.Reader, s.id)
 		if err != nil {
 			return err
 		}
@@ -312,7 +280,8 @@ func (g *Gateway) cleanupArchivedBlobs(ctx context.Context, targetFor func(conte
 				return errors.New("archive Main attachment copy could not be verified")
 			}
 		}
-		if err := state.Transaction(ctx, g.auth.store.DB, func(tx *sql.Tx) error {
+		committed := false
+		if err := state.Transaction(ctx, g.store.DB, func(tx *sql.Tx) error {
 			var eligible bool
 			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions WHERE id=? AND archived_at>0 AND archived_seq=? AND last_seq=archived_seq)
  AND coalesce((SELECT value FROM mesh_settings WHERE key='main_node'),'')=?
@@ -329,17 +298,22 @@ func (g *Gateway) cleanupArchivedBlobs(ctx context.Context, targetFor func(conte
 			if !slices.Equal(current, refs) {
 				return nil
 			}
-			if err := removeArchivedBlobFiles(dir); err != nil {
-				return err
-			}
 			if _, err := tx.ExecContext(ctx, "DELETE FROM blob_locations WHERE node_id=? AND session_id=?", local, s.id); err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO archive_cleanup(session_id,archived_seq) VALUES (?,?)
- ON CONFLICT(session_id) DO UPDATE SET archived_seq=excluded.archived_seq`, s.id, s.seq)
-			return err
+			committed = true
+			return nil
 		}); err != nil {
 			return err
+		}
+		if committed {
+			if err := removeArchivedBlobFiles(dir); err != nil {
+				return err
+			}
+			if _, err := g.store.DB.ExecContext(ctx, `INSERT INTO archive_cleanup(session_id,archived_seq) VALUES (?,?)
+ ON CONFLICT(session_id) DO UPDATE SET archived_seq=excluded.archived_seq WHERE excluded.archived_seq>archived_seq`, s.id, s.seq); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

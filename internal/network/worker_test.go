@@ -155,10 +155,11 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 	if err != nil || json.Unmarshal(data, &endpoint) != nil || len(endpoint) != 4 || endpoint["session"] != nil {
 		t.Fatalf("worker file contains session metadata: %s %v", data, err)
 	}
-	if _, err := HideSession(ctx, home, id); !errors.Is(err, errSessionRunning) {
+	stateStore := testSessionStore(t, home)
+	if _, err := HideSession(ctx, stateStore, home, id); !errors.Is(err, errSessionRunning) {
 		t.Fatalf("archived a running session: %v", err)
 	}
-	renamed, err := RenameSession(ctx, home, id, "Long-running review")
+	renamed, err := RenameSession(ctx, stateStore, home, id, "Long-running review")
 	if err != nil || renamed.ID != id || renamed.Name != "Long-running review" {
 		t.Fatalf("rename running worker: %+v %v", renamed, err)
 	}
@@ -246,14 +247,14 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 	if err != nil || stored.Name != "Long-running review" || stored.State.Running || stored.State.ExitCode != 7 || store.Reader.QueryRow("SELECT ended_at FROM sessions WHERE id=?", id).Scan(&ended) != nil || ended == 0 {
 		t.Fatalf("worker exit lost durable metadata: %+v ended=%d err=%v", stored, ended, err)
 	}
-	if stopped, err := RenameSession(context.Background(), home, id, "Review complete"); err != nil || stopped.State.Running || stopped.Name != "Review complete" {
+	if stopped, err := RenameSession(context.Background(), store, home, id, "Review complete"); err != nil || stopped.State.Running || stopped.Name != "Review complete" {
 		t.Fatalf("rename stopped session: %+v %v", stopped, err)
 	}
 	var hidden bool
-	if changed, err := HideSession(context.Background(), home, id); err != nil || !changed || store.Reader.QueryRow("SELECT hidden FROM sessions WHERE id=?", id).Scan(&hidden) != nil || !hidden {
+	if changed, err := HideSession(context.Background(), store, home, id); err != nil || !changed || store.Reader.QueryRow("SELECT hidden FROM sessions WHERE id=?", id).Scan(&hidden) != nil || !hidden {
 		t.Fatalf("archive stopped session: hidden=%v err=%v", hidden, err)
 	}
-	if changed, err := HideSession(context.Background(), home, id); changed || err != nil {
+	if changed, err := HideSession(context.Background(), store, home, id); changed || err != nil {
 		t.Fatalf("archive retry changed=%v err=%v", changed, err)
 	}
 	events := workerDiagnosticEvents(t, home)

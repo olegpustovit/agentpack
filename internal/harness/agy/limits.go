@@ -32,11 +32,8 @@ type usageReport struct {
 // ReadLimits runs the signed-in agy CLI's structured /usage report. Each named group keeps its
 // own buckets because model families do not share allowances.
 func ReadLimits(ctx context.Context) base.LimitSnapshot {
-	snapshot := base.LimitSnapshot{Harness: "agy", State: base.LimitStateError, Source: limitsSource, ObservedAt: time.Now().UTC()}
-	exe, err := base.LookPathEnv(base.Agy.Binary())
-	if err != nil {
-		snapshot.State = base.LimitStateUnsupported
-		snapshot.Error = "agy CLI not found"
+	snapshot, exe := base.ProbeLimits(base.Agy, limitsSource)
+	if exe == "" {
 		return snapshot
 	}
 	result, err := base.RunProbe(ctx, base.ProbePlan{

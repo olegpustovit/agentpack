@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"maps"
 	"path/filepath"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
@@ -68,4 +69,23 @@ func renderHandler(hook hooks.Hook, event hooks.Event, context hooks.RenderConte
 		return nil, err
 	}
 	return map[string]any{"type": "command", "command": hooks.HookExecCommand(hook.Handler.Kind, harness.Codex, specPath)}, nil
+}
+
+// Output answers in Codex's hook contract.
+func (HookRenderer) Output(_ hooks.Event, result hooks.Result) any {
+	value := map[string]any{"permissionDecision": result.Decision, "continue": result.Decision != hooks.Deny}
+	if result.Message != "" {
+		value["permissionDecisionReason"], value["stopReason"] = result.Message, result.Message
+	}
+	if result.AdditionalContext != "" {
+		value["additionalContext"] = result.AdditionalContext
+	}
+	if result.UpdatedInput != nil {
+		value["updatedInput"] = result.UpdatedInput
+	}
+	if result.UpdatedToolOutput != nil {
+		value["updatedMCPToolOutput"] = result.UpdatedToolOutput
+	}
+	maps.Copy(value, result.Metadata)
+	return value
 }

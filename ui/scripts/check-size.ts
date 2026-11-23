@@ -21,6 +21,12 @@ if (sum(".css") > 30_000) failures.push(`initial CSS ${sum(".css")} B > 30 KB`)
 for (const f of files)
   if (f.endsWith(".js") && !initial.includes(`assets/${f}`) && gz(`assets/${f}`) > 100_000)
     failures.push(`chunk ${f} ${gz(`assets/${f}`)} B > 100 KB`)
+// The sessions list must not load the chat: follow its route chunks' static imports.
+const staticImports = (f: string) => [...readFileSync(new URL(`assets/${f}`, dist), "utf8").matchAll(/from\s*"\.\/([^"]+\.js)"/g)].map((m) => m[1]!)
+const reached = new Set(files.filter((f) => /^sessions-.*\.js$/.test(f)))
+for (const f of reached) for (const next of staticImports(f)) reached.add(next)
+if (reached.size === 0) failures.push("no sessions route chunk found")
+for (const f of reached) if (/^(thread-view|conversation-pane)-/.test(f)) failures.push(`sessions route statically imports ${f}`)
 if (failures.length) {
   console.error(failures.join("\n"))
   process.exit(1)

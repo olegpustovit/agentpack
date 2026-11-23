@@ -62,17 +62,24 @@ type Manifest struct {
 
 func Load(projectRoot string) (*Manifest, error) {
 	path := paths.ManifestPath(projectRoot)
-	file, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read manifest %s: %w", path, err)
 	}
-	defer file.Close()
+	return parse(data, projectRoot)
+}
+
+// Parse reads an in-memory manifest using the default project name when omitted.
+func Parse(data []byte) (*Manifest, error) {
+	return parse(data, "")
+}
+
+func parse(data []byte, projectRoot string) (*Manifest, error) {
 	var schema fileSchema
-	decoder := toml.NewDecoder(file)
-	if err := decoder.Decode(&schema); err != nil {
+	if err := toml.Unmarshal(data, &schema); err != nil {
 		return nil, fmt.Errorf("parse agentpack.toml: %w", err)
 	}
 	// go-toml assigns string kinds directly and does not call UnmarshalText, so validate here.
@@ -301,7 +308,7 @@ func mutateDocument(projectRoot string, mutate func([]byte) ([]byte, error)) err
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, output, 0o644); err != nil {
+	if err := paths.WriteAtomic(path, output, 0o644); err != nil {
 		return fmt.Errorf("write manifest %s: %w", path, err)
 	}
 	return nil

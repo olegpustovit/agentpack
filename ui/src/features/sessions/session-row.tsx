@@ -1,6 +1,7 @@
 import type { KeyboardEvent } from "react"
 import { Link } from "@tanstack/react-router"
-import { Archive, Asterisk, Check, createLucideIcon, Bot, Box, Braces, Copy, GitBranch, MousePointer2, Orbit, Package, Pencil, Pi, Plug, RotateCw, Save, Square, X, Zap, type LucideIcon } from "lucide-react"
+import { Archive, Check, createLucideIcon, Copy, GitBranch, Package, Pencil, Plug, RotateCw, Save, Square, X, type LucideIcon } from "lucide-react"
+import { AgentTile } from "@/components/kit/agent-tile"
 import { SourceRow } from "@/components/kit/list"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { SubagentSummary } from "@/lib/api-types"
@@ -102,16 +103,6 @@ function renderEntries(entries: Entry[], context: boolean) {
 
 const dimWord = "shrink-0 text-(length:--fs-sm) text-(--fg3) tabular-nums sel:text-(--accent-fg)"
 
-const agentIcons: Record<string, LucideIcon> = {
-  claude: Asterisk,
-  codex: Box,
-  opencode: Braces,
-  cursor: MousePointer2,
-  agent: MousePointer2,
-  grok: Zap,
-  omp: Pi,
-  agy: Orbit,
-}
 
 const stateWords: Record<GlyphState, string> = {
   running: "Working",
@@ -122,19 +113,6 @@ const stateWords: Record<GlyphState, string> = {
   restarting: "Restarting",
   offline: "Offline",
   starting: "Starting",
-}
-
-// The agent's icon with a corner status dot. One element whose data-state changes, so refetches
-// never restart its pulse.
-export function AgentTile({ harness, state, label, title, className, unread = false }: { harness: string; state: GlyphState | "requires_action"; label: string; title?: string; className?: string; unread?: boolean }) {
-  const Icon = agentIcons[harness] ?? Bot
-  const dot = state === "needsYou" || state === "requires_action" ? "needs" : state === "running" ? "working" : state === "waiting" ? "waiting" : state === "restarting" ? "restarting" : state === "starting" ? "starting" : unread ? "done" : "none"
-  return (
-    <span data-slot="agent-tile" role="img" aria-label={label} title={title} className={cn("relative inline-grid size-[18px] shrink-0 place-items-center rounded-[5px] bg-(--track) text-(--fg2) sel:bg-(--accent-fg)/20 sel:text-(--accent-fg)", className)}>
-      <Icon aria-hidden strokeWidth={1.75} className="size-3" />
-      <span data-slot="agent-dot" data-state={dot} aria-hidden className="agent-dot" />
-    </span>
-  )
 }
 
 // Re-renders once a held state expires, so the row settles without waiting for a refetch.

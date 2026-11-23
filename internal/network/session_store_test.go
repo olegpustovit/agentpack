@@ -153,7 +153,7 @@ func TestEndedChatWithoutMessagesLeavesTheList(t *testing.T) {
 func TestWorkerEndpointRequiresCanonicalSessionMetadata(t *testing.T) {
 	home := t.TempDir()
 	store := testSessionStore(t, home)
-	g := &Gateway{auth: &gatewayAuth{store: store}, options: GatewayOptions{Home: home}}
+	g := &Gateway{store: store, auth: &gatewayAuth{store: store}, options: GatewayOptions{Home: home}}
 	id := "session-test"
 	directory := filepath.Join(home, "network", "sessions", id)
 	if err := os.MkdirAll(directory, 0700); err != nil {

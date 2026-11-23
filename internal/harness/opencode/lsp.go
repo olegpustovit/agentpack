@@ -3,7 +3,6 @@ package opencode
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,14 +17,6 @@ import (
 // initialization}; it has no setting for Claude Code's settings, transport,
 // timeouts or restart policy, so those are left out with a warning. A server
 // already named in the user's opencode.json is kept as the user wrote it.
-func writeLSP(servers map[string]json.RawMessage, ctx base.StageContext) error {
-	projection, err := planLSP(servers, ctx)
-	if err != nil {
-		return err
-	}
-	return base.WriteLSPProjection(projection)
-}
-
 func planLSP(servers map[string]json.RawMessage, ctx base.StageContext) (base.LSPProjection, error) {
 	root, err := stagedRoot(ctx)
 	if err != nil {
@@ -63,24 +54,6 @@ func planLSP(servers map[string]json.RawMessage, ctx base.StageContext) (base.LS
 		return base.LSPProjection{}, err
 	}
 	return base.LSPProjection{Files: []base.MCPProjectedFile{{Path: path, Contents: data, Scope: "lsp"}}, Warnings: warnings, Omitted: omitted}, nil
-}
-
-func MergeLSP(path string, servers map[string]json.RawMessage) error {
-	seed, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-	data, warnings, _, err := MergeLSPData(seed, servers)
-	if err != nil {
-		return fmt.Errorf("merge %s: %w", path, err)
-	}
-	for _, warning := range warnings {
-		log.Printf("warning: %s", warning)
-	}
-	if len(data) == 0 {
-		return nil
-	}
-	return os.WriteFile(path, data, 0o644)
 }
 
 func MergeLSPData(seed []byte, servers map[string]json.RawMessage) ([]byte, []string, []string, error) {

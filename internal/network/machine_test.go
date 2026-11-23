@@ -80,7 +80,7 @@ func TestLatestReleaseIsCachedAndValidated(t *testing.T) {
 			t.Fatalf("running %s: target %q status %d error %v", current, version, status, err)
 		}
 	}
-	if _, err := g.auth.store.DB.Exec("INSERT INTO mesh_nodes(node_id,name,app_version) VALUES ('peer','Peer','0.10.1-dev.10+abc')"); err != nil {
+	if _, err := g.store.DB.Exec("INSERT INTO mesh_nodes(node_id,name,app_version) VALUES ('peer','Peer','0.10.1-dev.10+abc')"); err != nil {
 		t.Fatal(err)
 	}
 	if version, status, err := g.updateTarget(t.Context()); version != "0.10.1-dev.10" || status != http.StatusOK || err != nil {

@@ -55,11 +55,6 @@ func (err *DriftError) Summary() string {
 	return fmt.Sprintf("staged tree does not match the last sync: %d file(s) differ", len(err.Changes))
 }
 
-// RecordStaged saves the manifest of the staged content as it is now.
-func (pipeline Pipeline) RecordStaged() error {
-	return pipeline.recordStaged(pipeline.context())
-}
-
 func (pipeline Pipeline) recordStaged(ctx base.StageContext) error {
 	manifest, err := pipeline.snapshotStaged(ctx, true)
 	if err != nil {
@@ -110,17 +105,17 @@ func (pipeline Pipeline) StagedDrift(full bool) (changes []string, recorded bool
 		return nil, true, err
 	}
 	for _, candidate := range pipeline.harnesses() {
-		if _, recorded := expected[candidate.ID()]; !recorded {
+		if _, recorded := expected[candidate.Target]; !recorded {
 			continue
 		}
-		root, err := candidate.StagedRoot(ctx)
+		root, err := candidate.Root(ctx)
 		if _, statErr := os.Stat(root); err != nil || statErr != nil {
-			if full && len(expected[candidate.ID()]) != 0 {
-				changes = append(changes, fmt.Sprintf("missing   the staged %s root", candidate.ID()))
+			if full && len(expected[candidate.Target]) != 0 {
+				changes = append(changes, fmt.Sprintf("missing   the staged %s root", candidate.Target))
 			}
 			continue
 		}
-		before, after := expected[candidate.ID()], actual[candidate.ID()]
+		before, after := expected[candidate.Target], actual[candidate.Target]
 		for relative, entry := range before {
 			current, found := after[relative]
 			file := filepath.Join(root, filepath.FromSlash(relative))
@@ -160,14 +155,14 @@ func (pipeline Pipeline) snapshotStaged(ctx base.StageContext, hash bool) (stage
 	var files []staged
 	manifest := make(stagedManifest)
 	for _, candidate := range pipeline.harnesses() {
-		root, err := candidate.StagedRoot(ctx)
+		root, err := candidate.Root(ctx)
 		if err != nil {
 			continue
 		}
-		manifest[candidate.ID()] = make(map[string]stagedEntry)
+		manifest[candidate.Target] = make(map[string]stagedEntry)
 		add := func(path string, info fs.FileInfo) error {
 			relative, err := filepath.Rel(root, path)
-			files = append(files, staged{candidate.ID(), filepath.ToSlash(relative), path, info})
+			files = append(files, staged{candidate.Target, filepath.ToSlash(relative), path, info})
 			return err
 		}
 		for _, name := range stagedContentFiles {

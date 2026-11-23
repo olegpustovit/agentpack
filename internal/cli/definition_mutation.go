@@ -47,7 +47,7 @@ func definitionMutation(invocation Invocation) bool {
 	case "add", "remove", "update", "lock":
 		return true
 	case "sync":
-		return !hasBeforeDoubleDash(invocation.Args, "--dry-run", "--verify-only")
+		return !boolFlag(invocation, "dry-run") && !boolFlag(invocation, "verify-only")
 	case "mcp":
 		return first(invocation.Args) == "add" || first(invocation.Args) == "remove"
 	case "mode":
@@ -58,7 +58,7 @@ func definitionMutation(invocation Invocation) bool {
 	case "env":
 		return first(invocation.Args) == "restore"
 	case "eject":
-		return !hasBeforeDoubleDash(invocation.Args, "--remove")
+		return !boolFlag(invocation, "remove")
 	}
 	return false
 }

@@ -138,7 +138,7 @@ func (g *Gateway) serveAgentMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid message", http.StatusBadRequest)
 		return
 	}
-	info, err := storedSession(ctx, g.auth.store.Reader, id)
+	info, err := storedSession(ctx, g.store.Reader, id)
 	if err != nil || info.Transport != "acp" {
 		http.Error(w, "session unavailable", http.StatusNotFound)
 		return
@@ -156,6 +156,7 @@ func (g *Gateway) serveAgentMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, strings.TrimSpace(string(body)), status)
 		return
 	}
+	g.emitEvent(eventMessage{Topic: "agent-tasks"})
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(body)
 }
@@ -164,7 +165,7 @@ var acceptedBody = []byte(`{"accepted":true}`)
 
 // applyAgentMessage updates this node's side of the task and, for ask and reply, queues the prompt.
 func (g *Gateway) applyAgentMessage(r *http.Request, id string, info SessionInfo, in agentMessage) (int, []byte, error) {
-	ctx, db, now := r.Context(), g.auth.store.DB, time.Now().UnixNano()
+	ctx, db, now := r.Context(), g.store.DB, time.Now().UnixNano()
 	switch in.Kind {
 	case "ask":
 		var since int64
@@ -252,7 +253,7 @@ func (g *Gateway) queueTaskPrompt(r *http.Request, id string, in agentMessage) (
 
 // stopTaskWork drops a canceled task's prompt from the queue, or cancels the turn working on it.
 func (g *Gateway) stopTaskWork(ctx context.Context, session, task string, since int64, operation string) error {
-	prompt, end, err := taskTurn(ctx, g.auth.store.DB, task, session, since)
+	prompt, end, err := taskTurn(ctx, g.store.DB, task, session, since)
 	if err != nil || end != 0 {
 		return err
 	}
@@ -266,7 +267,7 @@ func (g *Gateway) stopTaskWork(ctx context.Context, session, task string, since 
 	} else {
 		// Only the turn this task started is cancelled: a later prompt means that turn already ended.
 		var later bool
-		if err := g.auth.store.Reader.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM conversation_events WHERE session_id=? AND seq>?
+		if err := g.store.Reader.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM conversation_events WHERE session_id=? AND seq>?
  AND json_extract(body,'$.kind')='prompt')`, session, prompt).Scan(&later); err != nil || later {
 			return err
 		}
@@ -289,7 +290,7 @@ func (m *GatewayMCP) deliver(ctx context.Context, node, id string, message agent
 
 // localNode returns this node's ID and node with this node written as "".
 func (m *GatewayMCP) localNode(ctx context.Context, node string) (string, string, error) {
-	local, err := m.gateway.auth.store.NodeID(ctx)
+	local, err := m.gateway.store.NodeID(ctx)
 	if node == local {
 		node = ""
 	}
@@ -302,7 +303,7 @@ func (m *GatewayMCP) caller(ctx context.Context) (SessionInfo, string, error) {
 	if actor.chat == "" {
 		return SessionInfo{}, "", errNotAChat
 	}
-	self, err := storedSession(ctx, m.gateway.auth.store.Reader, actor.chat)
+	self, err := storedSession(ctx, m.gateway.store.Reader, actor.chat)
 	if err != nil {
 		return SessionInfo{}, "", err
 	}
@@ -348,7 +349,7 @@ func (m *GatewayMCP) ask(ctx context.Context, node, to, text, contextID string) 
 	if !validRef(contextID, true) {
 		return mcpAsked{}, errors.New("invalid context_id")
 	}
-	db := m.gateway.auth.store.DB
+	db := m.gateway.store.DB
 	var recent int
 	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM agent_tasks WHERE role='out' AND from_session=? AND created_at>?", self.ID, time.Now().Add(-time.Minute).UnixNano()).Scan(&recent); err != nil {
 		return mcpAsked{}, err
@@ -395,7 +396,7 @@ type outTask struct {
 
 func (m *GatewayMCP) outTask(ctx context.Context, task, from string) (outTask, error) {
 	var row outTask
-	err := m.gateway.auth.store.Reader.QueryRowContext(ctx, "SELECT to_session,to_node,context_id,hops,state FROM agent_tasks WHERE id=? AND role='out' AND from_session=?", task, from).
+	err := m.gateway.store.Reader.QueryRowContext(ctx, "SELECT to_session,to_node,context_id,hops,state FROM agent_tasks WHERE id=? AND role='out' AND from_session=?", task, from).
 		Scan(&row.to, &row.node, &row.context, &row.hops, &row.state)
 	if errors.Is(err, sql.ErrNoRows) {
 		return row, fmt.Errorf("task %s is not one this chat sent or was sent", task)
@@ -416,7 +417,7 @@ func (m *GatewayMCP) reply(ctx context.Context, task, text string, state taskSta
 	if !slices.Contains(replyStates, state) {
 		return mcpReplied{}, errors.New("state is completed, input_required, failed or rejected")
 	}
-	db, now := m.gateway.auth.store.DB, time.Now().UnixNano()
+	db, now := m.gateway.store.DB, time.Now().UnixNano()
 	result, err := db.ExecContext(ctx, "UPDATE agent_tasks SET state=?,result=?,delivered=0,updated_at=? WHERE id=? AND role='in' AND to_session=? AND state IN ('submitted','working')", state, text, now, task, self.ID)
 	if err != nil {
 		return mcpReplied{}, err
@@ -466,7 +467,7 @@ func (m *GatewayMCP) cancelTask(ctx context.Context, task string) (taskState, er
 	if err != nil {
 		return row.state, err
 	}
-	_, err = m.gateway.auth.store.DB.ExecContext(ctx, "UPDATE agent_tasks SET state=?,updated_at=? WHERE id=? AND role='out'", taskCanceled, time.Now().UnixNano(), task)
+	_, err = m.gateway.store.DB.ExecContext(ctx, "UPDATE agent_tasks SET state=?,updated_at=? WHERE id=? AND role='out'", taskCanceled, time.Now().UnixNano(), task)
 	return taskCanceled, err
 }
 
@@ -495,7 +496,7 @@ func (m *GatewayMCP) tasks(ctx context.Context, contextID string, ids []string) 
 	if len(ids) > 0 {
 		list = string(mustRawJSON(ids))
 	}
-	rows, err := m.gateway.auth.store.Reader.QueryContext(ctx, query, self.ID, contextID, list, mcpPageSize)
+	rows, err := m.gateway.store.Reader.QueryContext(ctx, query, self.ID, contextID, list, mcpPageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -569,8 +570,7 @@ func (g *Gateway) deliverReplies(ctx context.Context, only string) error {
 	if g.mcp == nil {
 		return nil
 	}
-	db := g.auth.store.DB
-	rows, err := db.QueryContext(ctx, "SELECT id,context_id,from_session,from_node,to_session,state,result,updated_at FROM agent_tasks WHERE role='in' AND delivered=0 AND (?1='' OR id=?1)", only)
+	rows, err := g.store.Reader.QueryContext(ctx, "SELECT id,context_id,from_session,from_node,to_session,state,result,updated_at FROM agent_tasks WHERE role='in' AND delivered=0 AND (?1='' OR id=?1)", only)
 	if err != nil {
 		return err
 	}
@@ -609,7 +609,7 @@ func (g *Gateway) deliverReply(ctx context.Context, message agentMessage, node, 
 	if err := g.sendFromAnswerer(ctx, message, node, to, answering, updated); err != nil {
 		return err
 	}
-	_, err := g.auth.store.DB.ExecContext(context.WithoutCancel(ctx), "UPDATE agent_tasks SET delivered=1 WHERE id=? AND role='in' AND updated_at=?", message.Task, updated)
+	_, err := g.store.DB.ExecContext(context.WithoutCancel(ctx), "UPDATE agent_tasks SET delivered=1 WHERE id=? AND role='in' AND updated_at=?", message.Task, updated)
 	return err
 }
 
@@ -620,7 +620,7 @@ func (g *Gateway) sendFromAnswerer(ctx context.Context, message agentMessage, no
 	if err != nil {
 		return err
 	}
-	answerer, err := storedSession(ctx, g.auth.store.Reader, answering)
+	answerer, err := storedSession(ctx, g.store.Reader, answering)
 	if errors.Is(err, errSessionNotFound) || err == nil && answerer.StartedBy == nil {
 		return nil // nobody can act for a removed chat
 	}
@@ -643,7 +643,7 @@ func (g *Gateway) sendFromAnswerer(ctx context.Context, message agentMessage, no
 
 func (g *Gateway) runAgentTasks(ctx context.Context, interval time.Duration) {
 	if g.logs != nil {
-		node, _ := g.auth.store.NodeID(ctx)
+		node, _ := g.store.NodeID(ctx)
 		ctx = obs.WithSink(ctx, g.logs, obs.BuildMetadata(g.options.Version, node, "gateway"))
 	}
 	ticker := time.NewTicker(interval)
@@ -669,8 +669,8 @@ func (g *Gateway) agentTasksPass(ctx context.Context) error {
 	if g.mcp == nil {
 		return nil
 	}
-	db := g.auth.store.DB
-	rows, err := db.QueryContext(ctx, `SELECT t.id,t.to_session,t.from_session,t.from_node,t.state,t.since_seq,coalesce(s.last_seq,-1),coalesce(s.ended_at,1) FROM agent_tasks t
+	db := g.store.DB
+	rows, err := g.store.Reader.QueryContext(ctx, `SELECT t.id,t.to_session,t.from_session,t.from_node,t.state,t.since_seq,coalesce(s.last_seq,-1),coalesce(s.ended_at,1) FROM agent_tasks t
  LEFT JOIN sessions s ON s.id=t.to_session WHERE t.role='in' AND t.state IN ('submitted','working')`)
 	if err != nil {
 		return err
@@ -700,7 +700,7 @@ func (g *Gateway) agentTasksPass(ctx context.Context) error {
 		if previous, ok := g.agentTaskSeen[task.id]; ok && previous == task.last && task.end == 0 {
 			continue // nothing new in that chat
 		}
-		started, state, answer, err := turnAnswer(ctx, db, task.id, task.session, task.since)
+		started, state, answer, err := turnAnswer(ctx, g.store.Reader, task.id, task.session, task.since)
 		if err != nil {
 			failures = append(failures, err)
 			continue

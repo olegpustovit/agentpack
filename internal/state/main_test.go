@@ -3,6 +3,7 @@ package state
 import (
 	"errors"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -111,5 +112,43 @@ func TestOfflineMainRoleFollowsStableNodeBinding(t *testing.T) {
 	roles, err := s.Main(t.Context())
 	if err != nil || roles.MainNode != "stable" || roles.ArchiveNode != "stable" {
 		t.Fatalf("binding orphaned main role: %+v %v", roles, err)
+	}
+}
+
+func TestArchiveReadyRequiresCompleteHistory(t *testing.T) {
+	home := t.TempDir()
+	store, err := Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := t.Context()
+	if err := store.SetMain(ctx, MainState{}, home); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec("INSERT INTO sessions(id,archived_at,archived_seq) VALUES ('short-history',1,2)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ArchiveReady(ctx, home, true); err == nil {
+		t.Fatal("accepted an empty archive with archived sessions")
+	}
+	archive, err := OpenArchive(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.Exec("INSERT INTO conversation_events VALUES ('short-history',1,'{}')"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ArchiveReady(ctx, home, false); err == nil || !strings.Contains(err.Error(), "short-history") {
+		t.Fatalf("accepted or omitted the short session: %v", err)
+	}
+	if _, err := archive.Exec("INSERT INTO conversation_events VALUES ('short-history',2,'{}')"); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ArchiveReady(ctx, home, false); err != nil {
+		t.Fatal(err)
 	}
 }
