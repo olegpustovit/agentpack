@@ -65,6 +65,11 @@ func launchDigest(projectRoot, workspace string, effective mode.Effective, targe
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// LoadLock reads a project lock and checks that its pins agree with their cache keys.
+func (Service) LoadLock(projectRoot string) (lockfile.PackLock, error) {
+	return loadCheckedLock(projectRoot)
+}
+
 // loadCheckedLock loads pack.lock and refuses one whose hashed entries are
 // not self-consistent. Every command that acts on the lock reads it this way.
 func loadCheckedLock(projectRoot string) (lockfile.PackLock, error) {

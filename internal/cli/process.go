@@ -9,17 +9,32 @@ import (
 )
 
 func (runner Runner) runProcess(command *exec.Cmd) (int, error) {
-	// The worker signals the entire PTY group. Keep this wrapper alive long
-	// enough to reap the harness and run its credential/overlay cleanup.
-	if os.Getenv("AGENTPACK_SESSION_WORKER") == "1" {
-		signals := make(chan os.Signal, 1)
-		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-		defer signal.Stop(signals)
-	}
+	// Leave terminal interrupts to the child and stay alive for cleanup.
+	signals := make(chan os.Signal, 2)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(signals)
 	err := command.Start()
 	if err != nil {
 		return 1, err
 	}
+	stop, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		for {
+			select {
+			case sig := <-signals:
+				if sig != os.Interrupt {
+					_ = command.Process.Signal(sig)
+				}
+			case <-stop:
+				return
+			}
+		}
+	}()
+	defer func() {
+		close(stop)
+		<-stopped
+	}()
 	if runner.Launch != nil {
 		cleanup, launchErr := runner.Launch(command.Process)
 		if cleanup != nil {

@@ -17,7 +17,36 @@ func stagingModePath(projectRoot, modeName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := EnsureOwnedPrivateDirectory(root); err != nil {
+		return "", err
+	}
 	return filepath.Abs(filepath.Join(root, "modes", ModePathComponent(modeName)))
+}
+
+// EnsureOwnedPrivateDirectory refuses an unsafe existing directory before using it.
+func EnsureOwnedPrivateDirectory(root string) error {
+	err := checkStagingRoot(root, true)
+	if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return err
+	}
+	if err := checkStagingRoot(root, false); err != nil {
+		return err
+	}
+	return EnsurePrivateDirectory(root)
+}
+
+func checkStagingRoot(root string, existing bool) error {
+	info, err := os.Lstat(root)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("staging root must be a directory: %s", root)
+	}
+	return checkStagingOwnership(root, info, existing)
 }
 
 func selectedStagingRoot(projectRoot, modeName string) (string, error) {

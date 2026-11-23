@@ -235,7 +235,7 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 			return 2, err
 		}
 		var listed lockfile.PackLock
-		listed, err = lockfile.Load(root)
+		listed, err = runner.Service.LoadLock(root)
 		if err == nil && !invocation.Global.Quiet {
 			project, loadErr := manifest.Load(root)
 			if loadErr != nil {

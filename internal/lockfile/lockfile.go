@@ -368,7 +368,7 @@ func withOperationLock(path string, operation func() error) (err error) {
 		return err
 	}
 	directory := filepath.Join(os.TempDir(), "agentpack-"+hash)
-	if err := os.MkdirAll(directory, 0o755); err != nil {
+	if err := paths.EnsureOwnedPrivateDirectory(directory); err != nil {
 		return err
 	}
 	// The directory outlives the project unless something can tell whose it
