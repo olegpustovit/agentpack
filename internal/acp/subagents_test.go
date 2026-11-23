@@ -117,6 +117,30 @@ func TestFlattenedSubagentFallbacks(t *testing.T) {
 	}
 }
 
+func TestAIRDraftSubagentsBecomeSubagentUpdates(t *testing.T) {
+	log := NewEventLog(0)
+	client := NewHarnessClient("", nil, log, nil)
+	spawned := `{"sessionUpdate":"subagent_spawned","subagentSessionId":"task-1","name":"Explore","task":"Find the scrubber","prompt":"p","capabilities":{}}`
+	if !AppendRawSessionUpdate(log, rawUpdate("parent", spawned)) {
+		t.Fatal("subagent_spawned must be consumed before the SDK drops its fields")
+	}
+	if kind, payload := lastPayload(t, log); kind != "subagent_update" || payload["sessionId"] != "task-1" || payload["title"] != "Explore" ||
+		payload["description"] != "Find the scrubber" || payload["state"].(map[string]any)["state"] != "running" || payload[SubagentKey] != nil {
+		t.Fatalf("spawned = %s %v", kind, payload)
+	}
+	// The child's own traffic, which still carries Claude's parentToolUseId, is stamped with the child.
+	chunk := sdkacp.UpdateAgentMessageText("searching")
+	chunk.AgentMessageChunk.Meta = map[string]any{"claudeCode": map[string]any{"parentToolUseId": "toolu_1"}}
+	_ = client.SessionUpdate(context.Background(), sdkacp.SessionNotification{SessionId: "task-1", Update: chunk})
+	if _, payload := lastPayload(t, log); payload[SubagentKey] != "task-1" {
+		t.Fatalf("child chunk = %v", payload)
+	}
+	AppendRawSessionUpdate(log, rawUpdate("parent", `{"sessionUpdate":"subagent_state_update","subagentSessionId":"task-1","state":"failed"}`))
+	if kind, payload := lastPayload(t, log); kind != "subagent_update" || payload["state"].(map[string]any)["state"] != "idle" || payload["state"].(map[string]any)["stopReason"] != "failed" {
+		t.Fatalf("state update = %s %v", kind, payload)
+	}
+}
+
 func TestRawToolCallWithSessionContentIsConsumed(t *testing.T) {
 	log := NewEventLog(0)
 	if AppendRawSessionUpdate(log, rawUpdate("s", `{"sessionUpdate":"tool_call","toolCallId":"t1","content":[{"type":"content","content":{"type":"text","text":"x"}}]}`)) {

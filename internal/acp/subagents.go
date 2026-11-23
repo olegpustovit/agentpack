@@ -135,6 +135,15 @@ func AppendRawSessionUpdate(log *EventLog, line []byte) bool {
 		return false
 	}
 	switch update.Kind {
+	case "subagent_spawned", "subagent_state_update":
+		// AIR's draft, which Claude's adapter sends because we declare AIR async tasks.
+		child, rfd := airSubagentUpdate(message.Params.Update)
+		if child == "" {
+			return false
+		}
+		log.noteSubagent(child, nil)
+		log.Append("subagent_update", time.Now().UnixMilli(), stampSubagent(rfd, log.subagentSession(message.Params.SessionID)))
+		return true
 	case "subagent_update":
 		log.noteSubagent(update.SessionID, update.Capabilities)
 	case "notice", "compaction_update", "compaction_summary_chunk", "session_message", "session_message_chunk",
@@ -150,6 +159,39 @@ func AppendRawSessionUpdate(log *EventLog, line []byte) bool {
 	id := subagentID(log.subagentSession(message.Params.SessionID), update.Meta)
 	log.Append(update.Kind, time.Now().UnixMilli(), stampSubagent(message.Params.Update, id))
 	return true
+}
+
+// airSubagentUpdate rewrites AIR's subagent_spawned / subagent_state_update as the RFD's
+// subagent_update. AIR sends a state update only when the child ends, so it becomes idle.
+func airSubagentUpdate(raw json.RawMessage) (string, json.RawMessage) {
+	var air struct {
+		Kind      string `json:"sessionUpdate"`
+		SessionID string `json:"subagentSessionId"`
+		Name      string `json:"name"`
+		Task      string `json:"task"`
+		State     string `json:"state"`
+	}
+	if json.Unmarshal(raw, &air) != nil || air.SessionID == "" {
+		return "", nil
+	}
+	update := map[string]any{"sessionUpdate": "subagent_update", "sessionId": air.SessionID}
+	if air.Kind == "subagent_spawned" {
+		if air.Name != "" {
+			update["title"] = air.Name
+		}
+		if air.Task != "" {
+			update["description"] = air.Task
+		}
+		update["state"] = map[string]string{"state": "running"}
+	} else {
+		state := map[string]string{"state": "idle"}
+		if air.State != "" && air.State != "completed" {
+			state["stopReason"] = air.State
+		}
+		update["state"] = state
+	}
+	out, _ := json.Marshal(update)
+	return air.SessionID, out
 }
 
 func hasSessionContent(content json.RawMessage) bool {
