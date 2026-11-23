@@ -64,7 +64,7 @@ func (s *Store) SetMain(ctx context.Context, expected MainState, home string) er
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO mesh_nodes(node_id,name,site_id,schema_version) VALUES (?,?,?,?)
  ON CONFLICT(node_id) DO UPDATE SET name=excluded.name,site_id=excluded.site_id,schema_version=excluded.schema_version
- WHERE name IS NOT excluded.name OR site_id IS NOT excluded.site_id OR schema_version IS NOT excluded.schema_version`, local, name, site, SchemaVersion()); err != nil {
+ WHERE name IS NOT excluded.name OR site_id IS NOT excluded.site_id OR schema_version IS NOT excluded.schema_version`, local, name, site, ReplicationVersion); err != nil {
 			return err
 		}
 		if main == local {

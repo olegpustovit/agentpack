@@ -21,8 +21,7 @@ import (
 
 const syncPageLimit = 4 << 20
 
-// The local quarantine migration leaves the replicated schema unchanged.
-const replicationVersion = 44
+const replicationVersion = state.ReplicationVersion
 
 type stateChangePage struct {
 	reachable bool

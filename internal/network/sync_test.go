@@ -40,6 +40,7 @@ func TestStateSyncRequiresEnrollmentAndMatchingSchema(t *testing.T) {
 		{"", "schema=" + schema + "&since=0", 403},
 		{"unknown", "schema=" + schema + "&since=0", 403},
 		{"trusted", "schema=0&since=0", 409},
+		{"trusted", "schema=44&since=0", 409}, // a peer still sending its migration count
 		{"trusted", "schema=oops&since=0", 400},
 		{"trusted", "schema=" + schema + "&since=-1", 400},
 		{"trusted", "schema=" + schema + "&since=0&exclude=aa", 400},

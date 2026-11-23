@@ -46,3 +46,35 @@ func TestReplicatedTablesTrackChangesAndLocalTablesStayLocal(t *testing.T) {
 		t.Fatalf("altered column was not tracked: %d %v", archived, err)
 	}
 }
+
+func TestReplicationVersionIsPinned(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	current := func() int {
+		t.Helper()
+		version, err := replicationVersion(t.Context(), store.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return version
+	}
+	base := current()
+	if base != ReplicationVersion {
+		t.Fatalf("replicated columns changed: set ReplicationVersion = %d", base)
+	}
+	if _, err := store.DB.Exec("CREATE TABLE local_only(id INTEGER PRIMARY KEY, note TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	if current() != base {
+		t.Fatal("a local-only table changed the replication version")
+	}
+	if _, err := store.DB.Exec("SELECT crsql_begin_alter('users'); ALTER TABLE users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''; SELECT crsql_commit_alter('users')"); err != nil {
+		t.Fatal(err)
+	}
+	if current() == base {
+		t.Fatal("a replicated column did not change the replication version")
+	}
+}

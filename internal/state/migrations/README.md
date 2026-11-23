@@ -53,3 +53,8 @@ agent_credentials replicates agent sign-in files, secrets included, so signing a
 agent in on one node signs it in on all of them. The newest file wins; a sign-out
 from the web UI leaves a newer empty row that stops sharing without deleting other
 nodes' files.
+
+The mesh wire version is `ReplicationVersion`, a hash of the replicated tables'
+columns. A local-only migration leaves it unchanged; adding or changing a
+replicated column fails `TestReplicationVersionIsPinned` until the constant is
+updated, and peers on the old value show Needs update until they upgrade.
