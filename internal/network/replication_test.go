@@ -212,3 +212,31 @@ func TestDiscoveredPeersEnrollAutomatically(t *testing.T) {
 		t.Fatal("a removed peer was paired again")
 	}
 }
+
+func TestPullerRestartsWhenSourceCursorIsAhead(t *testing.T) {
+	src, srcServer := registryGateway(t, "a", "b")
+	dst, _ := registryGateway(t, "b", "a")
+	for _, g := range []*Gateway{src, dst} {
+		if err := g.options.Library.Store.EnrollPeer(map[*Gateway]string{src: "b", dst: "a"}[g]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := src.auth.store.DB.Exec("INSERT INTO sessions(id,name) VALUES ('kept','kept')"); err != nil {
+		t.Fatal(err)
+	}
+	site, _ := src.auth.store.SiteID(t.Context())
+	// The destination saw versions a restored source no longer has.
+	if err := dst.auth.store.SetCursor(t.Context(), site, 1<<40); err != nil {
+		t.Fatal(err)
+	}
+	if err := pullRegistry(t, dst, srcServer); err != nil {
+		t.Fatal(err)
+	}
+	var name string
+	if err := dst.auth.store.Reader.QueryRow("SELECT name FROM sessions WHERE id='kept'").Scan(&name); err != nil {
+		t.Fatalf("puller did not restart from the beginning: %v", err)
+	}
+	if cursor, _ := dst.auth.store.Cursor(t.Context(), site); cursor >= 1<<40 {
+		t.Fatalf("cursor stayed ahead: %d", cursor)
+	}
+}

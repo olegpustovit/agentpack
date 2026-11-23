@@ -19,6 +19,7 @@ type Store struct {
 	Reader *sql.DB
 	home   string
 	site   atomic.Pointer[[]byte]
+	served atomic.Int64
 }
 
 func Open(home string) (*Store, error) {
@@ -68,7 +69,11 @@ func Open(home string) (*Store, error) {
 	if err := reader.Ping(); err != nil {
 		return nil, errors.Join(fmt.Errorf("connect state reader: %w", err), reader.Close(), writer.Close())
 	}
-	return &Store{DB: writer, Reader: reader, home: home}, nil
+	store := &Store{DB: writer, Reader: reader, home: home}
+	if err := store.catchUpServed(context.Background()); err != nil {
+		return nil, errors.Join(fmt.Errorf("check restored state database: %w", err), store.Close())
+	}
+	return store, nil
 }
 
 func (s *Store) Close() error { return errors.Join(s.Reader.Close(), s.DB.Close()) }

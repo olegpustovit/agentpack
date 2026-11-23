@@ -9,6 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 // SQLiteValue keeps integers exact and distinguishes an empty blob from NULL.
@@ -244,6 +248,45 @@ func (s *Store) ChangePage(ctx context.Context, since int64, exclude []byte, max
 	page.Truncate(complete)
 	page.WriteByte(']')
 	return page.Bytes(), next, nil
+}
+
+// servedFile sits beside state.db, so restoring the database from a copy leaves it behind.
+func (s *Store) servedFile() string { return filepath.Join(s.home, "state.served") }
+
+// NoteServed records the highest version a peer has been sent; Open uses it to detect a restored database.
+func (s *Store) NoteServed(version int64) error {
+	if version <= s.served.Load() {
+		return nil
+	}
+	s.served.Store(version)
+	// A torn write after a crash reads as 0 and only skips detection; it never blocks opening.
+	return os.WriteFile(s.servedFile(), []byte(strconv.FormatInt(version, 10)), 0o600)
+}
+
+// catchUpServed moves the version counter past what peers already hold after a restore,
+// so new writes get versions their cursors have not passed.
+func (s *Store) catchUpServed(ctx context.Context) error {
+	data, err := os.ReadFile(s.servedFile())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	served, _ := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	s.served.Store(served)
+	_, err = s.DB.ExecContext(ctx, `INSERT INTO crsql_db_versions(site_id,db_version) SELECT crsql_site_id(),?1
+ WHERE ?1>(SELECT coalesce(max(db_version),0) FROM crsql_db_versions)
+ ON CONFLICT(site_id) DO UPDATE SET db_version=excluded.db_version WHERE db_version<excluded.db_version`, served)
+	return err
+}
+
+// ResetCursor rewinds a peer's cursor to the start, after the peer's database was restored; reapplying is idempotent.
+func (s *Store) ResetCursor(ctx context.Context, site []byte) error {
+	if len(site) != 16 {
+		return errors.New("invalid peer site ID")
+	}
+	_, err := s.DB.ExecContext(ctx, "UPDATE crsql_tracked_peers SET version=0 WHERE site_id=? AND tag=0 AND event=0", site)
+	return err
 }
 
 // Changes decodes ChangePage for callers that inspect the changes.

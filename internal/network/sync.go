@@ -32,6 +32,8 @@ type stateChangePage struct {
 	Transfer  *stateTransfer `json:"transfer,omitempty"`
 	Data      []byte         `json:"data,omitempty"`
 	Offset    int64          `json:"offset,omitempty"`
+	// Reset asks the puller to restart from 0: its cursor is past this (restored) database.
+	Reset bool `json:"reset,omitempty"`
 }
 
 // peerOnly requires the identity attached by peerHandler, never a caller's header.
@@ -128,6 +130,15 @@ func (g *Gateway) registerStateSync(mux *http.ServeMux) {
 				return
 			}
 		}
+		if errors.Is(err, state.ErrCursorAhead) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			writeJSON(w, stateChangePage{Schema: replicationVersion, SiteID: site, Reset: true})
+			return
+		}
+		if err == nil {
+			err = g.auth.store.NoteServed(next)
+		}
 		if err != nil {
 			if event := obs.From(r.Context()); event != nil {
 				event.Fail(err)
@@ -147,7 +158,10 @@ func (g *Gateway) registerStateSync(mux *http.ServeMux) {
 	}))
 }
 
-var errSyncNeedsUpdate = errors.New("peer needs update")
+var (
+	errSyncNeedsUpdate = errors.New("peer needs update")
+	errSyncReset       = errors.New("peer database was restored")
+)
 
 func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, since int64, exclude []byte) (stateChangePage, error) {
 	var page stateChangePage
@@ -170,6 +184,9 @@ func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, s
 	page.reachable = true
 	if response.StatusCode == http.StatusConflict {
 		_ = json.NewDecoder(io.LimitReader(response.Body, 1024)).Decode(&page)
+		if page.Reset && page.Schema == replicationVersion {
+			return page, errSyncReset
+		}
 		return page, errSyncNeedsUpdate
 	}
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusForbidden {
@@ -230,6 +247,13 @@ func pullState(ctx context.Context, store *state.Store, library *registry.Store,
 	}
 	changed := false
 	page, err := fetchStatePage(ctx, client, target, since, local)
+	if errors.Is(err, errSyncReset) && bytes.Equal(site, page.SiteID) {
+		if err := store.ResetCursor(ctx, site); err != nil {
+			return page, false, err
+		}
+		since = 0
+		page, err = fetchStatePage(ctx, client, target, since, local)
+	}
 	if err != nil {
 		return page, changed, err
 	}
