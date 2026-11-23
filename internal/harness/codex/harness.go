@@ -313,13 +313,10 @@ func preReset(ctx base.StageContext) error {
 	if err != nil {
 		return err
 	}
-	if err := recoverHistory(ctx.ProjectRoot, ctx.Mode.Name()); err != nil {
-		return err
-	}
 	if err := preserveAuth(root); err != nil {
 		return err
 	}
-	return recoverMCPAuth(ctx.ProjectRoot, ctx.Mode.Name())
+	return reconcileAllMCPAuth(ctx.ProjectRoot, ctx.Mode.Name())
 }
 
 func prepare(ctx base.StageContext) error {

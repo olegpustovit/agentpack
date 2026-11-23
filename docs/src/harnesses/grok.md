@@ -17,7 +17,7 @@ agentpack --yolo grok       # adds --always-approve
 
 The project home is **seeded** from your real `~/.grok/` (`config.toml`, `skills`, `agents`, `commands`, `plugins`) so user config keeps working. Grok credentials are copied into `$AGENTPACK_HOME/shared/grok/` after each launch and loaded into every project home before the next launch. Existing `~/.grok` credentials and credentials from older agentpack project homes are imported on first use. Grok can replace credential files while refreshing tokens, so a file link alone would not keep them shared.
 
-Grok session transcripts are durable too: staged `sessions/` links to `~/.grok/sessions/`. This makes agentpack and direct Grok launches share the same resume history across staging rebuilds and machine restarts. On upgrade, surviving session files from old staging modes are imported without overwriting native files; collisions are saved under `$AGENTPACK_HOME/recovery/session-history/grok/`.
+Grok session transcripts are durable too: staged `sessions/` links to `~/.grok/sessions/`. This makes agentpack and direct Grok launches share the same resume history across staging rebuilds and machine restarts.
 
 ## Layout
 

@@ -4,11 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/gofrs/flock"
 	base "github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 var durableDirectories = []string{"sessions", "archived_sessions"}
@@ -56,100 +53,6 @@ func verifyHistory(staged, native string) error {
 	}
 	if _, exists := root["sqlite_home"]; !exists {
 		return fmt.Errorf("codex staged config is missing durable sqlite_home")
-	}
-	return nil
-}
-func recoverHistory(projectRoot, currentMode string) error {
-	native, ok := nativeHome()
-	if !ok {
-		return nil
-	}
-	modeRoot, err := paths.StagingRootForMode(projectRoot, currentMode)
-	if err != nil {
-		return err
-	}
-	modes := filepath.Dir(modeRoot)
-	entries, err := os.ReadDir(modes)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		modeDir := filepath.Join(modes, entry.Name())
-		modeInfo, err := os.Stat(modeDir)
-		if err != nil || !modeInfo.IsDir() {
-			continue
-		}
-		staged := filepath.Join(modeDir, "codex-home")
-		info, err := os.Stat(staged)
-		if err != nil || !info.IsDir() {
-			continue
-		}
-		needed, err := needsHistoryRecovery(staged, native)
-		if err != nil {
-			return err
-		}
-		if !needed {
-			continue
-		}
-		if err := rejectActiveWriters(staged); err != nil {
-			return err
-		}
-		conflicts, err := paths.SessionHistoryRecoveryDirForComponent(projectRoot, "codex", entry.Name())
-		if err != nil {
-			return err
-		}
-		for _, name := range durableDirectories {
-			if err := base.RecoverWithoutOverwrite(filepath.Join(staged, name), filepath.Join(native, name), filepath.Join(conflicts, name)); err != nil {
-				return err
-			}
-		}
-		if err := base.RecoverWithoutOverwrite(filepath.Join(staged, promptHistory), filepath.Join(native, promptHistory), filepath.Join(conflicts, promptHistory)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-func needsHistoryRecovery(staged, native string) (bool, error) {
-	for _, name := range append(append([]string{}, durableDirectories...), promptHistory) {
-		path := filepath.Join(staged, name)
-		if _, err := os.Lstat(path); os.IsNotExist(err) {
-			continue
-		} else if err != nil {
-			return false, err
-		}
-		if !base.DurablePathMatches(path, filepath.Join(native, name)) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-func rejectActiveWriters(staged string) error {
-	directory := filepath.Join(staged, "thread-writer-locks")
-	entries, err := os.ReadDir(directory)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".lock") {
-			continue
-		}
-		lock := flock.New(filepath.Join(directory, entry.Name()))
-		acquired, err := lock.TryLock()
-		if err != nil {
-			return err
-		}
-		if !acquired {
-			return fmt.Errorf("active Codex session is writing under %s; close it and retry sync", staged)
-		}
-		if err := lock.Unlock(); err != nil {
-			return err
-		}
 	}
 	return nil
 }

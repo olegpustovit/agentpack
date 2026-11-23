@@ -75,34 +75,6 @@ func TestCredentialsSurviveRestaging(t *testing.T) {
 	}
 }
 
-func TestRecoverCredentialsFromLegacyStaging(t *testing.T) {
-	project := t.TempDir()
-	t.Setenv("AGENTPACK_HOME", t.TempDir())
-	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
-	legacy, err := paths.StagingRootForMode(project, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy = filepath.Join(legacy, "grok-home")
-	if err := os.MkdirAll(legacy, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(legacy, "auth.json"), []byte("old-login"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := recoverCredentials(project, "default"); err != nil {
-		t.Fatal(err)
-	}
-	durable, err := paths.StagingGrokHomeDirForMode(project, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(durable, "auth.json"))
-	if err != nil || string(data) != "old-login" {
-		t.Fatalf("credential=%q err=%v", data, err)
-	}
-}
-
 func TestModesPreserveIndependentConfig(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)

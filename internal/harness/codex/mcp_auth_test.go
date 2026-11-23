@@ -143,7 +143,7 @@ func TestMCPAuthRecoveryAppliesUnfinishedLogout(t *testing.T) {
 	if err := os.Remove(stagedFile); err != nil {
 		t.Fatal(err)
 	}
-	if err := recoverMCPAuth(project, "default"); err != nil {
+	if err := reconcileAllMCPAuth(project, "default"); err != nil {
 		t.Fatal(err)
 	}
 	durable, err := oauthCredentials(project)

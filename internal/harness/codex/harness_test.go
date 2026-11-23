@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/gofrs/flock"
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -430,27 +429,6 @@ func TestInteractiveReloginPersistsBeforeNextSync(t *testing.T) {
 	}
 }
 
-func TestLegacyHistoryRecoveryRejectsActiveWriter(t *testing.T) {
-	staged := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(staged, "sessions"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(staged, "sessions", "thread.jsonl"), []byte("session"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	locks := filepath.Join(staged, "thread-writer-locks")
-	if err := os.MkdirAll(locks, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	lock := flock.New(filepath.Join(locks, "thread.lock"))
-	if err := lock.Lock(); err != nil {
-		t.Fatal(err)
-	}
-	defer lock.Unlock()
-	if err := rejectActiveWriters(staged); err == nil {
-		t.Fatal("active writer accepted")
-	}
-}
 func TestPrepareMakesAuthOAuthAndHistoryDurable(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
@@ -487,41 +465,6 @@ func TestPrepareMakesAuthOAuthAndHistoryDurable(t *testing.T) {
 		t.Fatalf("native session=%q err=%v", data, err)
 	}
 }
-func TestMCPRecoveryMergesNewerKeys(t *testing.T) {
-	project := t.TempDir()
-	t.Setenv("AGENTPACK_HOME", t.TempDir())
-	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
-	older, _ := paths.StagingCodexHomeDirForMode(project, "default")
-	newer, _ := paths.StagingCodexHomeDirForMode(project, "design")
-	for _, path := range []string{older, newer} {
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := writeCredentialStore(filepath.Join(older, credentialsFile), map[string]any{"linear": map[string]any{"token": "old"}, "github": map[string]any{"token": "keep"}}); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(5 * time.Millisecond)
-	if err := writeCredentialStore(filepath.Join(newer, credentialsFile), map[string]any{"linear": map[string]any{"token": "new"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := recoverMCPAuth(project, "default"); err != nil {
-		t.Fatal(err)
-	}
-	durable, _ := oauthCredentials(project)
-	data, err := os.ReadFile(durable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var store map[string]map[string]any
-	if err := json.Unmarshal(data, &store); err != nil {
-		t.Fatal(err)
-	}
-	if store["linear"]["token"] != "new" || store["github"]["token"] != "keep" {
-		t.Fatalf("store=%#v", store)
-	}
-}
-
 func TestPrepareStripsLegacyAttributionAndPreservesDaemonSetting(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)

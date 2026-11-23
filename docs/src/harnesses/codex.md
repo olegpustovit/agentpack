@@ -45,7 +45,7 @@ The generated home is replaceable, but Codex resume state is not. agentpack link
 
 This is the one thing agentpack creates in your real `~/.codex`: every `sync` (not only `agentpack codex`) makes sure `~/.codex/sessions/`, `~/.codex/archived_sessions/` and `~/.codex/history.jsonl` exist, creating them empty when they do not, because the staged home links to them and the links are verified. It happens on a machine where Codex was never run as well. Nothing else under `~/.codex` is written; `config.toml`, `skills` and `themes` are only read.
 
-On the first sync after upgrading, agentpack imports surviving history from every old staging mode before rebuilding it. Existing native files always win; differing collisions are retained under `$AGENTPACK_HOME/recovery/session-history/codex/` for manual inspection. An explicitly configured `sqlite_home` is preserved.
+An explicitly configured `sqlite_home` is preserved.
 
 ## Staged layout
 

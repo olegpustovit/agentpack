@@ -179,9 +179,6 @@ func newestCredential(name, home string) (string, error) {
 	}
 	for _, project := range projects {
 		if project.IsDir() {
-			if err := consider(filepath.Join(root, "projects", project.Name(), "grok-home", name)); err != nil {
-				return "", err
-			}
 			modes, err := os.ReadDir(filepath.Join(root, "projects", project.Name(), "grok-homes"))
 			if err != nil && !os.IsNotExist(err) {
 				return "", err

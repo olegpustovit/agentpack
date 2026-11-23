@@ -119,14 +119,6 @@ func AgyOverlayManifestPath(projectRoot string) (string, error) {
 	return projectStateFile(projectRoot, "agy-overlay.manifest")
 }
 
-func SessionHistoryRecoveryDirForComponent(projectRoot, harness, modeComponent string) (string, error) {
-	hash, err := ProjectPathHash(projectRoot)
-	if err != nil {
-		return "", err
-	}
-	return underHome("recovery", "session-history", harness, hash, modeComponent, "conflicts")
-}
-
 func ProxyLogDir(projectRoot string) (string, error) {
 	if value := strings.TrimSpace(os.Getenv("AGENTPACK_PROXY_LOG_DIR")); value != "" {
 		return value, nil
