@@ -45,7 +45,7 @@ func TestFolderListing(t *testing.T) {
 	g, origin := identityGateway(t, t.TempDir(), nil)
 	testBrowserSession(t, g.auth, "viewer@example.com", "browse-folders")
 	g.options.Packages = func(context.Context, string) (network.ProjectContents, error) {
-		return network.ProjectContents{Packages: []network.ProjectPackage{{Module: "example/pack"}}}, nil
+		return network.ProjectContents{Packages: []network.ProjectPackage{{Module: "example/pack"}}, MCP: []network.ProjectMCP{{Name: "linear", URL: "https://mcp.linear.app/mcp", Login: "c-2"}}}, nil
 	}
 	project := folderFixture(t, home, "project")
 	folderFixture(t, home, ".hidden")
@@ -93,6 +93,9 @@ func TestFolderListing(t *testing.T) {
 	}
 	if listing.Path != home || listing.Parent != filepath.Dir(home) || listing.Row == nil || listing.Row.Directory != home || len(listing.Row.Packages) != 1 || len(listing.Row.Launches) != 0 {
 		t.Fatalf("listing metadata: %+v", listing)
+	}
+	if !strings.Contains(w.Body.String(), `"login":"c-2"`) {
+		t.Fatalf("project MCP login missing: %s", w.Body.String())
 	}
 	if n := len(listing.Entries); n != 2 && !(linked && n == 3) || !listing.Entries[0].Hidden || listing.Entries[0].Name != ".hidden" {
 		t.Fatalf("directory entries: %+v", listing.Entries)

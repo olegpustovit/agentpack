@@ -139,6 +139,7 @@ var routeTable = []route{
 	{pattern: "DELETE /api/mcp/credentials/{id}/approvals", timeout: timeoutMinute},
 	{pattern: "GET /api/mcp/credentials/{id}/secret", timeout: timeoutMinute},
 	{pattern: "POST /api/mcp/credentials/{id}/refresh", peer: peerRead, timeout: timeoutMinute},
+	{pattern: "PUT /api/projects/mcp-login", peer: peerWrite, timeout: timeoutMinute},
 	{pattern: "POST /api/mcp/logins", timeout: timeoutMinute},
 	{pattern: "GET /api/mcp/logins/{login}", timeout: timeoutMinute},
 
