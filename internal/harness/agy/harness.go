@@ -77,13 +77,6 @@ func prepare(ctx base.StageContext) error {
 	}
 	return os.WriteFile(path, []byte(rule), 0o644)
 }
-func writeMCP(entries mcp.Entries, ctx base.StageContext) error {
-	projection, err := planMCP(entries, ctx)
-	if err != nil {
-		return err
-	}
-	return base.WriteMCPProjection(projection)
-}
 func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
 	root, err := stagedRoot(ctx)
 	if err != nil {

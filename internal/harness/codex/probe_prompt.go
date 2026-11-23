@@ -85,23 +85,6 @@ var promptRootLine = regexp.MustCompile("(?m)^- `(r[0-9]+)` = `([^`\\n]+)`$")
 
 var promptSkillLine = regexp.MustCompile(`(?m)^- ([A-Za-z0-9_.-]+): [^\n]*\(file: (r[0-9]+)/[^\n]+/SKILL\.md\)$`)
 
-// parsePromptSkills returns the distinct skill names of the inventory.
-func parsePromptSkills(output string) ([]string, error) {
-	entries, err := parsePromptEntries(output)
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	seen := map[string]bool{}
-	for _, entry := range entries {
-		if !seen[entry.Name] {
-			seen[entry.Name] = true
-			names = append(names, entry.Name)
-		}
-	}
-	return names, nil
-}
-
 // parsePromptEntries keeps every inventory entry: the native prompt can list one name several
 // times when the checkout and the home both provide it.
 func parsePromptEntries(output string) ([]promptSkill, error) {

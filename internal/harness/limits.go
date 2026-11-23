@@ -34,3 +34,17 @@ type LimitWindow struct {
 	ResetAt          *time.Time `json:"reset_at,omitempty"`
 	ResetText        string     `json:"reset_text,omitempty"`
 }
+
+// ProbeLimits initializes a usage snapshot and resolves the CLI for command-backed probes.
+func ProbeLimits(target Target, source string) (LimitSnapshot, string) {
+	snapshot := LimitSnapshot{Harness: string(target), State: LimitStateError, Source: source, ObservedAt: time.Now().UTC()}
+	if target == Cursor {
+		return snapshot, ""
+	}
+	executable, err := ResolveBinary(target.Binary())
+	if err != nil {
+		snapshot.State = LimitStateUnsupported
+		snapshot.Error = string(target) + " CLI not found"
+	}
+	return snapshot, executable
+}

@@ -26,12 +26,7 @@ func TestKeyringAccountUsesCanonicalSHA256Prefix(t *testing.T) {
 	if len(first) != 20 || first[:4] != "cli|" {
 		t.Fatalf("account=%q", first)
 	}
-	if got := codexKeyringTarget(authKeyringService, first); got != first+".Codex Auth" {
-		t.Fatalf("Windows Codex keyring target = %q", got)
-	}
-	if got, err := decodeCodexWindowsPassword([]byte{'k', 0, 'e', 0, 'y', 0}); err != nil || got != "key" {
-		t.Fatalf("Windows Codex keyring password = %q, %v", got, err)
-	}
+
 }
 
 func TestEncryptedCodexAuthBridgesIntoSharedFile(t *testing.T) {

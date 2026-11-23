@@ -2,24 +2,19 @@ package opencode
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/mcp"
 )
 
 func TestMergeMCPPreservesUserAndConvertsStdio(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "opencode.json")
-	if err := os.WriteFile(path, []byte("{\n  // user configuration\n  \"homepage\": \"https://example.test/a//b\",\n  \"mcp\": {\"user\": {\"type\": \"local\", \"command\": [\"user\"],},},\n}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	seed := []byte("{\n  // user configuration\n  \"homepage\": \"https://example.test/a//b\",\n  \"mcp\": {\"user\": {\"type\": \"local\", \"command\": [\"user\"],},},\n}")
 	command := "pack"
 	entries := mcp.Entries{"user": {Server: mcp.Server{Command: &command}}, "new": {Server: mcp.Server{Command: &command, Args: []string{"serve"}, Env: map[string]string{"A": "B"}}}}
-	if err := MergeMCP(path, entries); err != nil {
+	data, _, _, err := MergeMCPData(seed, entries)
+	if err != nil {
 		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(path)
 	var root map[string]any
 	if err := json.Unmarshal(data, &root); err != nil {
 		t.Fatal(err)

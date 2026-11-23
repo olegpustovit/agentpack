@@ -38,7 +38,7 @@ type currentPeriodUsage struct {
 // ReadLimits uses the same read-only usage RPC and credential store as Cursor CLI.
 // It never starts an agent or sends an inference request.
 func ReadLimits(ctx context.Context) base.LimitSnapshot {
-	snapshot := base.LimitSnapshot{Harness: "cursor", State: base.LimitStateError, Source: limitsSource, ObservedAt: time.Now().UTC()}
+	snapshot, _ := base.ProbeLimits(base.Cursor, limitsSource)
 	token, err := usageToken()
 	if err != nil {
 		snapshot.Error = err.Error()

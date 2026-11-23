@@ -138,13 +138,6 @@ func forceAttribution(root string) error {
 	}
 	return writeJSON(path, patchAttribution(value))
 }
-func writeMCP(entries mcp.Entries, ctx base.StageContext) error {
-	projection, err := planMCP(entries, ctx)
-	if err != nil {
-		return err
-	}
-	return base.WriteMCPProjection(projection)
-}
 func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
 	root, err := stagedRoot(ctx)
 	if err != nil {

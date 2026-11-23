@@ -30,11 +30,8 @@ type usageLimitsResponse struct {
 // ReadLimits reads OpenCode's usage-limit operation from the signed-in local server.
 // It only reads usage and sends no inference turns.
 func ReadLimits(ctx context.Context) base.LimitSnapshot {
-	snapshot := base.LimitSnapshot{Harness: "opencode", State: base.LimitStateError, Source: limitsSource, ObservedAt: time.Now().UTC()}
-	exe, err := base.LookPathEnv(base.OpenCode.Binary())
-	if err != nil {
-		snapshot.State = base.LimitStateUnsupported
-		snapshot.Error = "opencode CLI not found"
+	snapshot, exe := base.ProbeLimits(base.OpenCode, limitsSource)
+	if exe == "" {
 		return snapshot
 	}
 	result, err := base.RunProbe(ctx, base.ProbePlan{

@@ -4,15 +4,18 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
 const limitsSource = "grok agent stdio _x.ai/billing"
@@ -37,11 +40,8 @@ type billingEnvelope struct {
 // ReadLimits asks the signed-in Grok CLI for included-credit usage over ACP. It makes no REST or
 // browser-auth calls. A wallet without a utilization value is not reported as 0% usage.
 func ReadLimits(ctx context.Context) base.LimitSnapshot {
-	snapshot := base.LimitSnapshot{Harness: "grok", State: base.LimitStateError, Source: limitsSource, ObservedAt: time.Now().UTC()}
-	exe, err := base.ResolveBinary(base.Grok.Binary())
-	if err != nil {
-		snapshot.State = base.LimitStateUnsupported
-		snapshot.Error = "grok CLI not found"
+	snapshot, exe := base.ProbeLimits(base.Grok, limitsSource)
+	if exe == "" {
 		return snapshot
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -55,12 +55,33 @@ func ReadLimits(ctx context.Context) base.LimitSnapshot {
 			return snapshot
 		}
 		defer os.RemoveAll(home)
-		if err := loadSharedCredentials(home); err != nil {
+		shared, lock, err := lockSharedCredentials()
+		if err != nil {
+			snapshot.Error = "lock limits credentials: " + err.Error()
+			return snapshot
+		}
+		defer lock.Unlock()
+		if err := loadCredentials(home, shared); err != nil {
 			snapshot.Error = "prepare limits credentials: " + err.Error()
 			return snapshot
 		}
 		// Runs after the process below has stopped, and before the home is removed.
-		defer keepRefreshedCredentials(home)
+		loaded := make(map[string][32]byte, len(credentialFiles))
+		for _, name := range credentialFiles {
+			data, err := os.ReadFile(filepath.Join(home, name))
+			if err != nil && !os.IsNotExist(err) {
+				snapshot.Error = "read limits credentials: " + err.Error()
+				return snapshot
+			}
+			loaded[name] = sha256.Sum256(data)
+		}
+		defer func() {
+			if err := keepRefreshedCredentials(home, shared, loaded); err != nil {
+				_, event := obs.Start(obs.ProcessTrace(ctx), "harness", "persist Grok limits credentials")
+				event.Fail(err)
+				event.End()
+			}
+		}()
 		cmd.Env = append(cmd.Env, "GROK_HOME="+home)
 	}
 	cmd.Stderr = io.Discard

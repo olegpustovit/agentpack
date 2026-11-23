@@ -1,8 +1,6 @@
 package grok
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,11 +9,10 @@ import (
 
 func TestMergeMCPWritesRemoteURL(t *testing.T) {
 	url := "https://example.test/mcp"
-	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := MergeMCP(path, mcp.Entries{"remote": {Server: mcp.Server{URL: &url}}}); err != nil {
+	data, _, _, err := MergeMCPData(nil, mcp.Entries{"remote": {Server: mcp.Server{URL: &url}}})
+	if err != nil {
 		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(path)
 	if !strings.Contains(string(data), url) {
 		t.Fatalf("output = %s", data)
 	}

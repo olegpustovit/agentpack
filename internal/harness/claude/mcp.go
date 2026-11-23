@@ -3,31 +3,10 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
-	"log"
-	"os"
 	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/mcp"
 )
-
-// WriteMCP writes the servers as Claude Code's .mcp.json. A remote server
-// keeps its headers and its OAuth client (oauth.clientId, callbackPort,
-// authServerMetadataUrl, scopes). Claude Code documents no working directory
-// for a stdio server and takes an OAuth client secret from the keychain, not
-// from the file, so those two are left out with a warning.
-func WriteMCP(path string, entries mcp.Entries) error {
-	data, warnings, err := RenderMCP(entries)
-	if err != nil {
-		return err
-	}
-	for _, warning := range warnings {
-		log.Printf("warning: %s", warning)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return nil
-}
 
 func RenderMCP(entries mcp.Entries) ([]byte, []string, error) {
 	servers := make(map[string]map[string]any)
@@ -78,15 +57,4 @@ func RenderMCP(entries mcp.Entries) ([]byte, []string, error) {
 		return nil, warnings, fmt.Errorf("encode MCP servers: %w", err)
 	}
 	return data, warnings, nil
-}
-
-func writeJSON(path string, value any) error {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode %s: %w", path, err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return nil
 }

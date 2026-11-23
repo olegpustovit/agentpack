@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,7 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf16"
 
 	"filippo.io/age"
 	base "github.com/olegpustovit/agentpack/internal/harness"
@@ -26,21 +24,6 @@ import (
 const authKeyringService = "Codex Auth"
 const authLogoutMarker = "logged-out"
 const encryptedAuthKeyringService = "codex"
-
-func codexKeyringTarget(service, account string) string {
-	return account + "." + service
-}
-
-func decodeCodexWindowsPassword(blob []byte) (string, error) {
-	if len(blob)%2 != 0 {
-		return "", fmt.Errorf("invalid Codex Windows keyring password length")
-	}
-	units := make([]uint16, len(blob)/2)
-	for index := range units {
-		units[index] = binary.LittleEndian.Uint16(blob[index*2:])
-	}
-	return string(utf16.Decode(units)), nil
-}
 
 func keyringAccount(codexHome string) string {
 	canonical, err := filepath.EvalSymlinks(codexHome)
@@ -115,19 +98,30 @@ func materializeEncryptedAuth(userHome, destination string) (bool, error) {
 	return true, atomicWriteAuth(destination, auth)
 }
 func atomicWriteAuth(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	temporary := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
-	if err := os.WriteFile(temporary, data, 0o600); err != nil {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".codex-auth-*")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
+	defer os.Remove(temporary.Name())
+	_, writeErr := temporary.Write(data)
+	if err := errors.Join(writeErr, temporary.Close()); err != nil {
 		return err
 	}
-	return nil
+	return os.Rename(temporary.Name(), path)
 }
+
+// SharedAuthFile finds Codex credentials using the same rules as staged launches.
+func SharedAuthFile() (string, error) {
+	native, ok := nativeHome()
+	if !ok {
+		return "", fmt.Errorf("cannot resolve native Codex home")
+	}
+	return sharedAuthSource(native)
+}
+
 func sharedAuthSource(userHome string) (string, error) {
 	user := filepath.Join(userHome, "auth.json")
 	if info, err := os.Stat(user); err == nil && info.Mode().IsRegular() {
@@ -144,7 +138,7 @@ func sharedAuthSource(userHome string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(shared), 0o755); err != nil {
+	if err := paths.EnsurePrivateDirectory(filepath.Dir(shared)); err != nil {
 		return "", err
 	}
 	if info, err := os.Stat(shared); err == nil && info.Mode().IsRegular() {

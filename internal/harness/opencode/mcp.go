@@ -3,31 +3,11 @@ package opencode
 import (
 	"encoding/json"
 	"fmt"
-	"log"
-	"os"
 	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/tailscale/hujson"
 )
-
-func MergeMCP(path string, entries mcp.Entries) error {
-	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-	output, warnings, _, err := MergeMCPData(data, entries)
-	if err != nil {
-		return err
-	}
-	for _, warning := range warnings {
-		log.Printf("warning: %s", warning)
-	}
-	if err := os.WriteFile(path, output, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return nil
-}
 
 func MergeMCPData(data []byte, entries mcp.Entries) ([]byte, []string, []string, error) {
 	root := map[string]any{"$schema": "https://opencode.ai/config.json"}

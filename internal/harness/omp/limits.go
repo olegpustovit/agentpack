@@ -10,10 +10,8 @@ import (
 )
 
 func ReadLimits(ctx context.Context) base.LimitSnapshot {
-	snapshot := base.LimitSnapshot{Harness: "omp", State: base.LimitStateError, Source: "omp usage --json --no-extensions", ObservedAt: time.Now().UTC()}
-	binary, err := base.LookPathEnv(base.OMP.Binary())
-	if err != nil {
-		snapshot.State, snapshot.Error = base.LimitStateUnsupported, "omp CLI not found"
+	snapshot, binary := base.ProbeLimits(base.OMP, "omp usage --json --no-extensions")
+	if binary == "" {
 		return snapshot
 	}
 	result, err := base.RunProbe(ctx, base.ProbePlan{Executable: binary, Argv: []string{"usage", "--json", "--no-extensions"}, Timeout: 20 * time.Second, Categories: []string{"usage"}, Network: "provider_usage", WriteScope: "native_usage_cache"})

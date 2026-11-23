@@ -13,7 +13,7 @@ VERSION := $(shell sh scripts/build-version.sh)
 
 .PHONY: help all build release install uninstall minor patch ship-minor ship-patch ship-dev _ship check-clean fmt fmt-check lint test race ci hooks release-check ui-install ui-lint ui-typecheck ui-test ui-build ui-stage ui-e2e artifact dev-deploy local-release
 
-.PHONY: crsqlite crsqlite-build
+.PHONY: crsqlite crsqlite-build deadcode
 
 .DEFAULT_GOAL := help
 
@@ -33,7 +33,7 @@ help:
 	@echo "  lint            run go vet"
 	@echo "  test            run the full Go test suite"
 	@echo "  race            run tests with the race detector"
-	@echo "  ci              fmt-check + vet + test + race + build"
+	@echo "  ci              fmt-check + vet + test + race + build + deadcode"
 	@echo "  release-check   validate and snapshot-build GoReleaser artifacts"
 	@echo "  hooks           install tracked git hooks"
 	@echo ""
@@ -78,7 +78,12 @@ test: crsqlite
 race: crsqlite
 	$(GO) test -race ./...
 
-ci: fmt-check lint test race build
+deadcode: crsqlite
+	@findings=$$($(GO) run golang.org/x/tools/cmd/deadcode@v0.53.0 -filter '/internal/(harness(/.*)?|network|cache)$$' ./cmd/...) || exit $$?; \
+	printf '%s\n' "$$findings"; \
+	case "$$findings" in *internal/harness/*) exit 1;; esac
+
+ci: fmt-check lint test race build deadcode
 
 release-check:
 	$(GORELEASER) check
