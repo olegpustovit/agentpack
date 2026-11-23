@@ -29,6 +29,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
+	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
 // MCP credentials are stored once in the replicated mcp_credentials table and
@@ -804,11 +805,26 @@ func (g *Gateway) writeMCPIndex(ctx context.Context) error {
 		if err := os.Rename(temporary, path); err != nil {
 			return err
 		}
+		// Staging routes matching servers through the bridge by this index: reload the sessions it reroutes.
+		obs.Go("gateway.reload_sessions", func() { g.reloadStaleSessions(context.WithoutCancel(ctx)) })
 	}
 	g.mcpBroker.mu.Lock()
 	g.mcpBroker.indexed = data
 	g.mcpBroker.mu.Unlock()
 	return nil
+}
+
+// reloadStaleSessions reloads this node's running sessions whose environment moved, each when idle.
+func (g *Gateway) reloadStaleSessions(ctx context.Context) {
+	ctx, event := obs.Start(ctx, "gateway", "reload_sessions")
+	defer event.End()
+	sessions, err := network.SessionsIn(ctx, g.store.Reader, g.options.Home)
+	if err == nil {
+		var reloads []network.Reload
+		reloads, err = network.RestartStaleSessions(ctx, g.options.Home, packSync.NewService(), "", sessions)
+		event.Set("reloads", len(reloads))
+	}
+	event.Fail(err)
 }
 
 // runMCPCredentials keeps the staging index current and, on the refresher,
