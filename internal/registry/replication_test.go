@@ -190,7 +190,12 @@ func TestTombstoneAndCollectionPropagateToOfflineAndNewPeers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if removed, err := source.CollectGarbage(); err != nil || len(removed) == 0 {
+	// Collection is database-only work: it runs while another writer holds the registry file lock.
+	var removed []string
+	if err := source.withLock(func() (err error) {
+		removed, err = source.CollectGarbage()
+		return err
+	}); err != nil || len(removed) == 0 {
 		t.Fatalf("collection: %v %v", removed, err)
 	}
 	for _, to := range []*Store{target, fresh} {
