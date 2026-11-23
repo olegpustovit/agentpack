@@ -9,13 +9,13 @@ import { Input } from "@/components/ui/input"
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
 import { projectsQuery } from "@/features/sessions/queries"
 import { SaveForm } from "@/features/sessions/session-sheets"
-import { routeMissing } from "@/lib/api"
+import { errorText } from "@/lib/api"
 import type { MCPServerInput } from "@/lib/api-types"
 import { basename, plural } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { destinationState } from "./install-state"
 import type { PackageItem } from "./model"
-import { errorText, installMCP, installPackage } from "./mutations"
+import { installMCP, installPackage } from "./mutations"
 import { useLibrary } from "./use-library"
 
 // Opened from ?add=1 (or ?add=<spec> from Discover) on the Library, or from a project row with that project preselected.
@@ -117,7 +117,7 @@ function InstallMCPForm({ server, onDone }: { server: MCPServerInput; onDone: ()
     install.mutate()
   }
 
-  const failure = routeMissing(install.error) ? "Needs update" : install.error && errorText(install.error)
+  const failure = install.error && errorText(install.error)
   return (
     <form onSubmit={submit} className="contents">
       <SheetTitle>{`Install ${server.name}`}</SheetTitle>

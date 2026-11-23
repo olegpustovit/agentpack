@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api"
 import { useState, type FormEvent } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Empty } from "@/components/kit/feedback"
@@ -9,7 +10,7 @@ import { useMachineQueries, useMachines } from "@/features/machines/queries"
 import { projectsQuery } from "@/features/sessions/queries"
 import { basename } from "@/lib/format"
 import { hud } from "@/lib/hud"
-import { errorText, renameAgentpack, saveRevision } from "./mutations"
+import { renameAgentpack, saveRevision } from "./mutations"
 
 // Opened from ?save=1 on an agentpack. Captures one available project as a new revision of it.
 export function SaveRevisionSheet({

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { api, ApiError, responseError, routeMissing } from "./api"
+import { api, ApiError, errorText, request, responseError, routeMissing } from "./api"
 
 const page = '<!DOCTYPE html> <!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US"> <![endif]-->'
 
@@ -51,5 +51,32 @@ describe("responseError", () => {
     const error = responseError(new Response(null, { status: 502 }), "<!DOCTYPE html><html><body>Cloudflare</body></html>")
     expect(error.message).not.toContain("<")
     expect(error.status).toBe(502)
+  })
+})
+
+describe("one fetch core", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("routes to the node, sends an upload with its type and keeps the failing response's headers", async () => {
+    vi.stubGlobal("location", { origin: "https://gateway.test" })
+    const sent: { url: string; init: RequestInit }[] = []
+    vi.stubGlobal("fetch", async (url: URL, init: RequestInit) => {
+      sent.push({ url: String(url), init })
+      return new Response("archive unavailable", { status: 503, headers: { "X-Agentpack-Archive-Main": "main-1" } })
+    })
+    const file = new Blob(["png"], { type: "image/png" })
+    const error = await request("/api/sessions/s1/conversation/blobs", { machine: "peer-1", upload: file }).catch((caught: unknown) => caught)
+    expect(sent[0]!.url).toBe("https://gateway.test/api/sessions/s1/conversation/blobs?node=peer-1")
+    expect(sent[0]!.init.method).toBe("POST")
+    expect(sent[0]!.init.body).toBe(file)
+    expect(new Headers(sent[0]!.init.headers).get("Content-Type")).toBe("image/png")
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).headers?.get("X-Agentpack-Archive-Main")).toBe("main-1")
+  })
+
+  it("says Needs update for a peer without the route, and the message otherwise", () => {
+    expect(errorText(new ApiError("404 page not found", 404))).toBe("Needs update")
+    expect(errorText(new ApiError("session unavailable", 404))).toBe("session unavailable")
+    expect(errorText("boom", "Couldn't commit.")).toBe("Couldn't commit.")
   })
 })

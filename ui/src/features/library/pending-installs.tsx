@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api"
 import { useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Banner, Spinner } from "@/components/kit/feedback"
@@ -11,7 +12,7 @@ import type { Draft } from "@/lib/api-types"
 import { basename, plural } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { canApplyDraft } from "./install-state"
-import { applyDraft, discardDraft, errorText, reviewDraft, type DraftReview, type PackageDiff } from "./mutations"
+import { applyDraft, discardDraft, reviewDraft, type DraftReview, type PackageDiff } from "./mutations"
 import { draftsQuery } from "./queries"
 
 const signs = { add: "+", update: "~", remove: "−" } as const

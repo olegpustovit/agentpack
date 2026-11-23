@@ -1,4 +1,4 @@
-import { LOCAL, responseError } from "@/lib/api"
+import { request } from "@/lib/api"
 
 export type PendingAttachment = {
   sha: string
@@ -13,12 +13,8 @@ export async function uploadConversationBlob(
   sessionId: string,
   file: File,
 ): Promise<PendingAttachment> {
-  const url = new URL(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/blobs`, location.origin)
-  if (machine && machine !== LOCAL) url.searchParams.set("node", machine)
-  const res = await fetch(url, { method: "POST", body: file, headers: { "Content-Type": file.type || "application/octet-stream" } })
-  const text = await res.text()
-  // A proxy's error page (Cloudflare during a restart) must not reach the person as HTML.
-  if (!res.ok) throw responseError(res, text)
+  // request() turns a proxy's error page (Cloudflare during a restart) into a sentence.
+  const { text } = await request(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/blobs`, { machine, upload: file })
   let data: { sha?: string }
   try {
     data = JSON.parse(text) as { sha?: string }

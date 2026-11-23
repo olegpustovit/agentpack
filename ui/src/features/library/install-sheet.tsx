@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api"
 import { useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { Banner, Empty, Spinner } from "@/components/kit/feedback"
@@ -9,7 +10,7 @@ import { projectsQuery, sessionsQuery } from "@/features/sessions/queries"
 import { basename, shortHash } from "@/lib/format"
 import { draftsQuery } from "./queries"
 import { affectedAgents, destinationsOf, destinationState, expectedPins, installLabel, restartCopy, runLimited, type Destination, type InstallItem, type InstallPhase } from "./install-state"
-import { errorText, installPackage, saveDraft } from "./mutations"
+import { installPackage, saveDraft } from "./mutations"
 
 type Row = { key: string; target: Destination; disabled: boolean; draftReason: string; text: string }
 type Status = { text: string; failed: boolean }

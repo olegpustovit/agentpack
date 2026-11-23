@@ -10,7 +10,7 @@ import { useEventsConnected } from "@/features/events/use-events"
 import { replicationQuery } from "@/features/library/queries"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { sessionsQuery } from "@/features/sessions/queries"
-import { api, LOCAL } from "@/lib/api"
+import { api, errorText, LOCAL } from "@/lib/api"
 import { plural } from "@/lib/format"
 import { machinesToUpdate, topologyQuery, useMachines, useReplicatedQueries } from "./queries"
 import {
@@ -60,7 +60,7 @@ export function TopologyView() {
           const result = await api<{ version: string }>("/api/node/update", { machine: machine.id, method: "POST" })
           hud.success(`Updating ${machine.name} to ${result.version}`)
         } catch (error) {
-          hud.error(`Couldn't update ${machine.name}: ${error instanceof Error ? error.message : String(error)}`)
+          hud.error(`Couldn't update ${machine.name}: ${errorText(error)}`)
         }
       }
       await Promise.all(targets.filter((machine) => machine.id !== LOCAL).map(update))
