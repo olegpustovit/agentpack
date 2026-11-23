@@ -23,6 +23,14 @@ type PackagedNames struct {
 	Agents   []string
 }
 
+// ProbeRequest is what `agentpack probe` asks of an agent: observe the current staging of a
+// definition and record what the native agent discovers.
+type ProbeRequest struct {
+	DefinitionRoot, WorkspaceRoot, Mode string
+	SourceIdentity, LockDigest          string
+	Packaged                            PackagedNames
+}
+
 // ProbePlan is a fixed, non-shell native diagnostic invocation.
 type ProbePlan struct {
 	Executable string

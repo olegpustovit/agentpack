@@ -262,7 +262,7 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 		if err != nil {
 			return "", err
 		}
-		stageInWorker = agent.ACPInitializeBeforeStage() && os.Getenv("AGENTPACK_TEST_ACP") == ""
+		stageInWorker = agent.ACPStageAtSession && os.Getenv("AGENTPACK_TEST_ACP") == ""
 		if !stageInWorker {
 			if _, statErr := os.Stat(executable); statErr == nil && os.Getenv("AGENTPACK_FULL_VERIFY") != "1" {
 				err = prepareRemoteACP(ctx, stage, agent.PrepareACP)

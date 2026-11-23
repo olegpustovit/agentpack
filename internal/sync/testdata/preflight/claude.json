@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "phase": "preflight",
+  "definition_root": "$HOME/definition",
+  "workspace_root": "$HOME/workspace",
+  "mode": "default",
+  "target": "claude",
+  "policy": "ci",
+  "strict_external": false,
+  "workspace_digest": "sha256:fc1128d0fbd34b795aab0053d64496984e976a8919b8c7b95062a56dfc3b0f12",
+  "generation_id": "sha256:a142cd166810d10a0f824567469ed1f25d56796b75b603c7d68412779b8d9ed3",
+  "policy_digest": "sha256:409739949c42f6d34a4bb4e91d8e71802334fede50c3b630aeac7c6a6754d9fc",
+  "expected_target": {
+    "adapter": "claude",
+    "adapter_revision": "claude-observe-2026-10",
+    "capability_revision": "claude-probe-v4"
+  },
+  "source_identity": "sha256-source-v1:c94ce60398f670b9a1142fbc65b8f2d33463de61bb5619a1ff7444c2ee834e07",
+  "lock_digest": "sha256:f1fa539503947a3455d6a1d065d60f18eadf2c133202bcf83d3aa6a04bc3a8cc",
+  "skills": 0,
+  "plugins": 0,
+  "shadowed": 0,
+  "inheritance": [
+    "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+    "Claude still reads real ~/.claude.json and ~/.claude/settings.json; agentpack only adds --plugin-dir/--settings",
+    "CI policy treats undeclared inheritance as a violation"
+  ],
+  "capabilities": {
+    "agy": "workspace-write: writes .agents/plugins/agentpack-bundle",
+    "claude": "external: uses --plugin-dir and --settings; no workspace overlay",
+    "codex": "external-home: uses CODEX_HOME; native project instructions may still apply",
+    "cursor": "workspace-write: writes .cursor/agents when agent artifacts exist",
+    "grok": "external-home: uses GROK_HOME; also reads real ~/.claude and ~/.grok",
+    "omp": "external: uses --plugin-dir; native profile, settings and credentials remain in place",
+    "opencode": "external: uses OPENCODE_CONFIG_DIR; no workspace overlay"
+  },
+  "artifacts": [
+    {
+      "properties": {
+        "merge_order": [
+          "agentpack_attribution_policy",
+          "merged_mcp_allowlist"
+        ],
+        "rendered_digest": "sha256:9ffc0ba2466e5bc26461f5eba5b1b111595d09bcf23390f5abf0e4f79a5f2482",
+        "target": "claude"
+      },
+      "output_path": "agentpack-settings.json",
+      "id": "settings:claude:agentpack-overlay",
+      "kind": "settings_file",
+      "name": "agentpack-settings.json",
+      "winner": "agentpack_overlay",
+      "evidence": "generated"
+    },
+    {
+      "properties": {
+        "rendered_digest": "sha256:ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+        "scope": "lsp",
+        "target": "claude"
+      },
+      "output_path": ".lsp.json",
+      "id": "lsp-file:claude:.lsp.json",
+      "kind": "lsp_file",
+      "name": ".lsp.json",
+      "winner": "merged",
+      "evidence": "generated"
+    }
+  ],
+  "coverage": [
+    {
+      "category": "skill",
+      "scope": "native_catalog",
+      "completeness": "none",
+      "reason": "pure preflight does not execute native CLI discovery"
+    }
+  ],
+  "findings": [
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "Claude still reads real ~/.claude.json and ~/.claude/settings.json; agentpack only adds --plugin-dir/--settings",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "CI policy treats undeclared inheritance as a violation",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITED_CONFIG",
+      "severity": "violation",
+      "source": "$HOME/.claude.json",
+      "message": "native launch may read existing undeclared configuration",
+      "remedy": "use a controlled account/configuration home for CI, or use policy local",
+      "evidence": "generated"
+    },
+    {
+      "code": "INHERITED_CONFIG",
+      "severity": "violation",
+      "source": "$HOME/.claude/settings.json",
+      "message": "native launch may read existing undeclared configuration",
+      "remedy": "use a controlled account/configuration home for CI, or use policy local",
+      "evidence": "generated"
+    },
+    {
+      "code": "BINARY_MISSING",
+      "severity": "error",
+      "target": "claude",
+      "message": "could not find \"$HOME/missing-binary\"",
+      "remedy": "install the native CLI or set the harness path env var"
+    },
+    {
+      "code": "STAGING_INPUTS_UNKNOWN",
+      "severity": "warning",
+      "message": "no materialization input identity is recorded",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing",
+      "evidence": "unknown"
+    },
+    {
+      "code": "STAGING_NOT_RECORDED",
+      "severity": "warning",
+      "message": "no staged record for mode \"default\"",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing"
+    }
+  ],
+  "overall_status": "error",
+  "ok": false
+}

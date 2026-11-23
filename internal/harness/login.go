@@ -95,3 +95,17 @@ func RefreshToken(ctx context.Context, endpoint string, grant map[string]string,
 	}
 	return json.NewDecoder(response.Body).Decode(reply)
 }
+
+// LoginSpec is how the gateway reads and signs in one agent on this machine.
+type LoginSpec struct {
+	Methods []LoginMethod
+	Account func(context.Context) Account
+	Login   func(method string) (LoginFlow, error)
+	Logout  func(context.Context) error // nil when the agent has no way to sign out without a terminal
+	// Credential is the file holding the agent's sign-in, shared with every node; nil when its
+	// sign-in is not a file another machine can use (Cursor's keychain, OMP's database).
+	Credential func() string
+	// Refresh renews a rotating sign-in ahead of the agent, returning nil when it is not due; only
+	// the machine that published the shared sign-in calls it.
+	Refresh func(context.Context, []byte) ([]byte, error)
+}

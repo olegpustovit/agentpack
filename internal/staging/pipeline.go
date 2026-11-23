@@ -39,12 +39,12 @@ type Pipeline struct {
 	Info func(message string)
 }
 
-func (pipeline Pipeline) harnesses() []base.Harness {
+func (pipeline Pipeline) harnesses() []registry.Entry {
 	all := registry.All()
 	if pipeline.Target == nil {
 		return all
 	}
-	return slices.DeleteFunc(all, func(candidate base.Harness) bool { return candidate.ID() != *pipeline.Target })
+	return slices.DeleteFunc(all, func(candidate registry.Entry) bool { return candidate.Target != *pipeline.Target })
 }
 
 func (pipeline Pipeline) includes(target base.Target) bool {
@@ -73,11 +73,11 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 		return nil, fmt.Errorf("recover interrupted staging: %w", err)
 	}
 	for _, candidate := range registry.All() {
-		if !pipeline.includes(candidate.ID()) && !candidate.ID().UsesWorkspaceOverlay() {
+		if !pipeline.includes(candidate.Target) && !candidate.Target.UsesWorkspaceOverlay() {
 			continue
 		}
 		if err := candidate.PreReset(ctx); err != nil {
-			return nil, fmt.Errorf("pre-reset %s: %w", candidate.ID(), err)
+			return nil, fmt.Errorf("pre-reset %s: %w", candidate.Target, err)
 		}
 	}
 	var transactions []base.RebuildTransaction
@@ -92,11 +92,11 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 	for _, candidate := range harnesses {
 		transaction, err := candidate.BeginRebuild(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("begin rebuild %s: %w", candidate.ID(), err)
+			return nil, fmt.Errorf("begin rebuild %s: %w", candidate.Target, err)
 		}
 		if transaction != nil {
 			transactions = append(transactions, transaction)
-			ctx.StagedRoots[candidate.ID()] = transaction.Root()
+			ctx.StagedRoots[candidate.Target] = transaction.Root()
 		}
 	}
 	backups, err := backupRebuildPaths(managed, journalPath)
@@ -106,17 +106,17 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 	published := false
 	defer func() { rebuildErr = errors.Join(rebuildErr, finishRebuildJournal(journalPath, backups, published)) }()
 	for _, candidate := range harnesses {
-		if err := candidate.Prepare(ctx); err != nil {
-			return nil, fmt.Errorf("prepare %s: %w", candidate.ID(), err)
+		if err := candidate.Setup(ctx); err != nil {
+			return nil, fmt.Errorf("prepare %s: %w", candidate.Target, err)
 		}
 	}
 	roots := make([]HarnessRoot, 0, len(harnesses))
 	for _, candidate := range harnesses {
-		root, err := candidate.StagedRoot(ctx)
+		root, err := candidate.Root(ctx)
 		if err != nil {
 			return nil, err
 		}
-		roots = append(roots, HarnessRoot{candidate.ID(), root})
+		roots = append(roots, HarnessRoot{candidate.Target, root})
 	}
 	packagePlans, err := StagePackOverlay(pipeline.Lock, roots, pipeline.Mode)
 	if err != nil {
@@ -131,7 +131,7 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 	if err != nil {
 		return nil, err
 	}
-	codexRoot, err := codexHarness.StagedRoot(ctx)
+	codexRoot, err := codexHarness.Root(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -180,10 +180,10 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 		for _, candidate := range harnesses {
 			projection, err := candidate.PlanMCP(merged, ctx)
 			if err != nil {
-				return nil, fmt.Errorf("plan MCP %s: %w", candidate.ID(), err)
+				return nil, fmt.Errorf("plan MCP %s: %w", candidate.Target, err)
 			}
 			if err := base.WriteMCPProjection(projection); err != nil {
-				return nil, fmt.Errorf("write MCP %s: %w", candidate.ID(), err)
+				return nil, fmt.Errorf("write MCP %s: %w", candidate.Target, err)
 			}
 			mcpProjections = append(mcpProjections, projection)
 		}
@@ -205,17 +205,17 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 		for _, candidate := range harnesses {
 			projection, err := candidate.PlanLSP(languageServers, ctx)
 			if errors.Is(err, base.ErrNoLSP) {
-				log.Printf("warning: skipping language server(s) %s for %s: it has no language server setting", strings.Join(names, ", "), base.DisplayName(candidate.ID()))
+				log.Printf("warning: skipping language server(s) %s for %s: it has no language server setting", strings.Join(names, ", "), base.DisplayName(candidate.Target))
 				continue
 			}
 			if err != nil {
-				return nil, fmt.Errorf("plan language servers %s: %w", candidate.ID(), err)
+				return nil, fmt.Errorf("plan language servers %s: %w", candidate.Target, err)
 			}
 			for _, warning := range projection.Warnings {
 				log.Printf("warning: %s", warning)
 			}
 			if err := base.WriteLSPProjection(projection); err != nil {
-				return nil, fmt.Errorf("write language servers %s: %w", candidate.ID(), err)
+				return nil, fmt.Errorf("write language servers %s: %w", candidate.Target, err)
 			}
 		}
 	}
@@ -226,13 +226,13 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 	if guidance != "" {
 		for _, candidate := range harnesses {
 			if err := candidate.InjectGuidance(guidance, ctx); err != nil {
-				return nil, fmt.Errorf("inject guidance %s: %w", candidate.ID(), err)
+				return nil, fmt.Errorf("inject guidance %s: %w", candidate.Target, err)
 			}
 		}
 	}
 	for _, candidate := range harnesses {
 		if err := candidate.Finalize(merged, ctx); err != nil {
-			return nil, fmt.Errorf("finalize %s: %w", candidate.ID(), err)
+			return nil, fmt.Errorf("finalize %s: %w", candidate.Target, err)
 		}
 	}
 	if pipeline.Target != nil {
@@ -296,8 +296,8 @@ func (pipeline Pipeline) Verify() error {
 func (pipeline Pipeline) verify(ctx base.StageContext) error {
 	harnesses := pipeline.harnesses()
 	for _, candidate := range harnesses {
-		if err := candidate.Verify(ctx); err != nil {
-			return fmt.Errorf("verify %s: %w", candidate.ID(), err)
+		if err := candidate.Check(ctx); err != nil {
+			return fmt.Errorf("verify %s: %w", candidate.Target, err)
 		}
 	}
 	if err := pipeline.verifyPluginRoots(); err != nil {
@@ -326,16 +326,16 @@ func (pipeline Pipeline) verify(ctx base.StageContext) error {
 	nativeSkills := make(map[base.Target]map[string]struct{})
 	home, _ := os.UserHomeDir()
 	for _, candidate := range harnesses {
-		root, err := candidate.StagedRoot(ctx)
+		root, err := candidate.Root(ctx)
 		if err != nil {
 			return err
 		}
 		skillRoots = append(skillRoots, root)
-		names, err := ResolveCollisions(root, string(candidate.ID()), candidate.NativeUserRoots(home))
+		names, err := ResolveCollisions(root, string(candidate.Target), candidate.NativeUserRoots(home))
 		if err != nil {
 			return err
 		}
-		nativeSkills[candidate.ID()] = names
+		nativeSkills[candidate.Target] = names
 	}
 	projectClaudeSkills, err := ProjectClaudeSkillNames(pipeline.workspace())
 	if err != nil {
@@ -362,17 +362,17 @@ func (pipeline Pipeline) verify(ctx base.StageContext) error {
 		}
 		name := SkillFolderName(skill)
 		for index, root := range skillRoots {
-			if _, native := nativeSkills[harnesses[index].ID()][strings.ToLower(name)]; native {
+			if _, native := nativeSkills[harnesses[index].Target][strings.ToLower(name)]; native {
 				continue
 			}
-			if harnesses[index].ID() == base.Claude {
+			if harnesses[index].Target == base.Claude {
 				if _, omitted := projectClaudeSkills[strings.ToLower(name)]; omitted {
 					continue
 				}
 			}
 			path := filepath.Join(root, "skills", name, "SKILL.md")
 			if _, err := os.Stat(path); err != nil {
-				return fmt.Errorf("%s staging missing skill SKILL.md %s", harnesses[index].ID(), path)
+				return fmt.Errorf("%s staging missing skill SKILL.md %s", harnesses[index].Target, path)
 			}
 		}
 	}
@@ -398,12 +398,12 @@ func (pipeline Pipeline) HookDiagnostics() ([]hooks.Diagnostic, hooks.RenderSumm
 	var diagnostics []hooks.Diagnostic
 	var summary hooks.RenderSummary
 	for _, candidate := range pipeline.harnesses() {
-		target := candidate.ID()
-		renderer := registry.Renderer(target)
+		target := candidate.Target
+		renderer := candidate.Hooks
 		if renderer == nil {
 			continue
 		}
-		root, err := candidate.StagedRoot(pipeline.context())
+		root, err := candidate.Root(pipeline.context())
 		if err != nil {
 			return nil, hooks.RenderSummary{}, err
 		}
@@ -420,7 +420,7 @@ func (pipeline Pipeline) HookDiagnostics() ([]hooks.Diagnostic, hooks.RenderSumm
 	return diagnostics, summary, nil
 }
 
-func (pipeline Pipeline) stageHooks(ctx base.StageContext, harnesses []base.Harness) ([]hooks.TargetPlan, error) {
+func (pipeline Pipeline) stageHooks(ctx base.StageContext, harnesses []registry.Entry) ([]hooks.TargetPlan, error) {
 	seeded := ""
 	if pipeline.includes(base.Codex) {
 		home, err := os.UserHomeDir()
@@ -441,15 +441,15 @@ func (pipeline Pipeline) stageHooks(ctx base.StageContext, harnesses []base.Harn
 	}
 	var plans []hooks.TargetPlan
 	for _, candidate := range harnesses {
-		renderer := registry.Renderer(candidate.ID())
+		renderer := candidate.Hooks
 		if renderer == nil {
 			continue
 		}
-		root, err := candidate.StagedRoot(ctx)
+		root, err := candidate.Root(ctx)
 		if err != nil {
 			return nil, err
 		}
-		plan, err := hooks.PlanTarget(bundle, candidate.ID(), renderer, hooks.RenderContext{ProjectRoot: pipeline.ProjectRoot, TargetRoot: root}, pipeline.Mode)
+		plan, err := hooks.PlanTarget(bundle, candidate.Target, renderer, hooks.RenderContext{ProjectRoot: pipeline.ProjectRoot, TargetRoot: root}, pipeline.Mode)
 		if err != nil {
 			return nil, err
 		}
@@ -459,7 +459,7 @@ func (pipeline Pipeline) stageHooks(ctx base.StageContext, harnesses []base.Harn
 			// left out or lost something is a warning.
 			if diagnostic.Level == "native" || diagnostic.Level == "emulated" {
 				if pipeline.Info != nil {
-					pipeline.Info(fmt.Sprintf("hook for %s: %s: %s", candidate.ID(), diagnostic.Source, diagnostic.Message))
+					pipeline.Info(fmt.Sprintf("hook for %s: %s: %s", candidate.Target, diagnostic.Source, diagnostic.Message))
 				}
 				continue
 			}
@@ -506,10 +506,10 @@ func (pipeline Pipeline) RebuildPending() (bool, error) {
 	return err == nil, err
 }
 
-func (pipeline Pipeline) managedRebuildPaths(ctx base.StageContext, harnesses []base.Harness) ([]string, error) {
+func (pipeline Pipeline) managedRebuildPaths(ctx base.StageContext, harnesses []registry.Entry) ([]string, error) {
 	var managed []string
 	for _, candidate := range harnesses {
-		if candidate.ID() == base.Codex {
+		if candidate.Target == base.Codex {
 			continue
 		}
 		reset, err := candidate.ResetPaths(ctx)
@@ -517,7 +517,7 @@ func (pipeline Pipeline) managedRebuildPaths(ctx base.StageContext, harnesses []
 			return nil, err
 		}
 		managed = append(managed, reset...)
-		root, err := candidate.StagedRoot(ctx)
+		root, err := candidate.Root(ctx)
 		if err != nil {
 			return nil, err
 		}

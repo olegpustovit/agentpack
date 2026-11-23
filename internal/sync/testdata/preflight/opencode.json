@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "phase": "preflight",
+  "definition_root": "$HOME/definition",
+  "workspace_root": "$HOME/workspace",
+  "mode": "default",
+  "target": "opencode",
+  "policy": "ci",
+  "strict_external": false,
+  "workspace_digest": "sha256:5a3113d2a4569b5b7f29cd7f5a9d5586ce9ab36dabbd87509aa43affe04ae595",
+  "generation_id": "sha256:73f238d6b05e2edba95f73f1781f988dc6ac82c28afb2d32ebd05ada5c681de6",
+  "policy_digest": "sha256:409739949c42f6d34a4bb4e91d8e71802334fede50c3b630aeac7c6a6754d9fc",
+  "expected_target": {
+    "adapter": "opencode",
+    "adapter_revision": "opencode-observe-2026-10",
+    "capability_revision": "opencode-probe-v1"
+  },
+  "source_identity": "sha256-source-v1:c94ce60398f670b9a1142fbc65b8f2d33463de61bb5619a1ff7444c2ee834e07",
+  "lock_digest": "sha256:f1fa539503947a3455d6a1d065d60f18eadf2c133202bcf83d3aa6a04bc3a8cc",
+  "skills": 0,
+  "plugins": 0,
+  "shadowed": 0,
+  "inheritance": [
+    "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+    "OpenCode keeps its native config root; agentpack composes pack assets with native config and plugins",
+    "CI policy treats undeclared inheritance as a violation"
+  ],
+  "capabilities": {
+    "agy": "workspace-write: writes .agents/plugins/agentpack-bundle",
+    "claude": "external: uses --plugin-dir and --settings; no workspace overlay",
+    "codex": "external-home: uses CODEX_HOME; native project instructions may still apply",
+    "cursor": "workspace-write: writes .cursor/agents when agent artifacts exist",
+    "grok": "external-home: uses GROK_HOME; also reads real ~/.claude and ~/.grok",
+    "omp": "external: uses --plugin-dir; native profile, settings and credentials remain in place",
+    "opencode": "external: uses OPENCODE_CONFIG_DIR; no workspace overlay"
+  },
+  "artifacts": [
+    {
+      "properties": {
+        "exists": true,
+        "merge_order": [
+          "native user seed retained",
+          "agentpack-owned sections overlaid"
+        ],
+        "ordered_values": {
+          "model": "\u003credacted:string\u003e"
+        },
+        "source": "$HOME/.config/opencode/opencode.json",
+        "source_digest": "sha256:78b0e11c6754fc9671c2034f4a068d3a0e53c1c22a5a33900dd46bc8cd9136f3"
+      },
+      "id": "settings-seed:opencode",
+      "kind": "settings_seed",
+      "name": "$HOME/.config/opencode/opencode.json",
+      "winner": "user_seed",
+      "evidence": "generated"
+    },
+    {
+      "properties": {
+        "rendered_digest": "sha256:19ff0403aae1a0a34c2f0e4f08718ee31c1f8af156a1b2b4386a60414ac80f31",
+        "scope": "lsp",
+        "target": "opencode"
+      },
+      "output_path": "opencode.json",
+      "id": "lsp-file:opencode:opencode.json",
+      "kind": "lsp_file",
+      "name": "opencode.json",
+      "winner": "merged",
+      "evidence": "generated"
+    }
+  ],
+  "coverage": [
+    {
+      "category": "skill",
+      "scope": "native_catalog",
+      "completeness": "none",
+      "reason": "pure preflight does not execute native CLI discovery"
+    }
+  ],
+  "findings": [
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "OpenCode keeps its native config root; agentpack composes pack assets with native config and plugins",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "CI policy treats undeclared inheritance as a violation",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITED_CONFIG",
+      "severity": "violation",
+      "source": "$HOME/.config/opencode/opencode.json",
+      "message": "native launch may read existing undeclared configuration",
+      "remedy": "use a controlled account/configuration home for CI, or use policy local",
+      "evidence": "generated"
+    },
+    {
+      "code": "BINARY_MISSING",
+      "severity": "error",
+      "target": "opencode",
+      "message": "could not find \"$HOME/missing-binary\"",
+      "remedy": "install the native CLI or set the harness path env var"
+    },
+    {
+      "code": "STAGING_INPUTS_UNKNOWN",
+      "severity": "warning",
+      "message": "no materialization input identity is recorded",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing",
+      "evidence": "unknown"
+    },
+    {
+      "code": "STAGING_NOT_RECORDED",
+      "severity": "warning",
+      "message": "no staged record for mode \"default\"",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing"
+    }
+  ],
+  "overall_status": "error",
+  "ok": false
+}

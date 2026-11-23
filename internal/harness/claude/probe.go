@@ -451,3 +451,18 @@ func parseSkillInventory(text string) ([]string, error) {
 	}
 	return names, nil
 }
+
+// Probe observes the staged Claude bundle.
+func Probe(ctx context.Context, request base.ProbeRequest) (environment.Receipt, error) {
+	plugins, err := paths.StagingPluginsDirForMode(request.DefinitionRoot, request.Mode)
+	if err != nil {
+		return environment.Receipt{}, err
+	}
+	bundle := filepath.Join(plugins, paths.StagedAgentpackBundleName)
+	// A bundle without a plugin manifest is still probed: staging removes the manifest when a
+	// project skill replaces every packaged one, and the session shows who holds the names.
+	if _, err := os.Stat(bundle); err != nil {
+		return environment.Receipt{}, fmt.Errorf("staged Claude bundle missing; run agentpack sync first: %w", err)
+	}
+	return ProbeBundle(ctx, bundle, request.WorkspaceRoot, request.SourceIdentity, request.LockDigest, request.Mode, request.Packaged)
+}

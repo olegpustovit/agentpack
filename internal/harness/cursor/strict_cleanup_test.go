@@ -25,7 +25,7 @@ func TestStrictPreparationPreservesExistingWorkspaceOverlay(t *testing.T) {
 	if err := New().PreReset(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := New().Prepare(ctx); err != nil {
+	if err := New().Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(overlay)

@@ -336,3 +336,41 @@ func nativeServerNames(ctx base.StageContext) (nativeServers, error) {
 	}
 	return result, nil
 }
+
+// inheritedConfigPaths lists the user config files a native OpenCode launch may read.
+func inheritedConfigPaths(workspace string) []string {
+	roots, err := NativeUserConfigRoots()
+	if err != nil {
+		return nil
+	}
+	var result []string
+	seen := make(map[string]bool)
+	for _, root := range roots {
+		for _, name := range []string{"opencode.json", "opencode.jsonc"} {
+			path := filepath.Join(root, name)
+			if !seen[path] {
+				result = append(result, path)
+				seen[path] = true
+			}
+		}
+	}
+	if explicit := os.Getenv("OPENCODE_CONFIG"); explicit != "" {
+		if !filepath.IsAbs(explicit) {
+			explicit = filepath.Join(workspace, explicit)
+		}
+		if !seen[explicit] {
+			result = append(result, explicit)
+		}
+	}
+	return result
+}
+
+// inheritedConfigSeed is the user config file seeded into the staged OpenCode root.
+func inheritedConfigSeed() (string, string) {
+	roots, err := NativeUserConfigRoots()
+	if err != nil || len(roots) == 0 {
+		return "", ""
+	}
+	path := filepath.Join(roots[0], "opencode.json")
+	return path, path
+}

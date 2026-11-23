@@ -1,21 +1,32 @@
 package registry
 
 import (
-	base "github.com/olegpustovit/agentpack/internal/harness"
 	"testing"
+
+	base "github.com/olegpustovit/agentpack/internal/harness"
 )
 
 func TestRegistryContainsEveryHarnessOnce(t *testing.T) {
-	seen := map[base.Target]bool{}
-	for _, candidate := range All() {
-		if seen[candidate.ID()] {
-			t.Fatalf("duplicate %s", candidate.ID())
-		}
-		seen[candidate.ID()] = true
+	entries := All()
+	if len(entries) != len(base.AllTargets()) {
+		t.Fatalf("%d entries for %d targets", len(entries), len(base.AllTargets()))
 	}
 	for _, target := range base.AllTargets() {
-		if !seen[target] {
-			t.Fatalf("missing %s", target)
+		count := 0
+		for _, entry := range entries {
+			if entry.Target != target {
+				continue
+			}
+			count++
+			if entry.Hooks != nil && entry.Hooks.Target() != target {
+				t.Fatalf("%s hook renderer names %s", target, entry.Hooks.Target())
+			}
+			if entry.Limits == nil || entry.Login == nil || entry.Launch == nil || entry.LaunchACP == nil {
+				t.Fatalf("%s entry is incomplete", target)
+			}
+		}
+		if count != 1 {
+			t.Fatalf("%s has %d entries", target, count)
 		}
 	}
 }

@@ -26,11 +26,11 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	if !hasCredentials {
 		return base.ACPLaunch{}, errors.New("Grok ACP requires a stored login; sign in with Grok before starting chat")
 	}
-	command, err := launch(ctx)
+	command, finish, err := launch(ctx)
 	if err != nil {
 		return base.ACPLaunch{}, err
 	}
-	return base.ACPLaunch{Cmd: command, AdaptAgent: adaptAgentLine, AuthenticateMethodID: "grok.com"}, nil
+	return base.ACPLaunch{Cmd: command, Finish: finish, AdaptAgent: adaptAgentLine, AuthenticateMethodID: "grok.com"}, nil
 }
 
 func grokACPCredentialsAvailable(home string) (bool, error) {

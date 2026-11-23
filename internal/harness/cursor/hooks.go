@@ -1,6 +1,7 @@
 package cursor
 
 import (
+	"maps"
 	"path/filepath"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
@@ -142,4 +143,28 @@ func cursorStep(event hooks.Event) (string, bool) {
 		}
 		return event.CursorName()
 	}
+}
+
+// Output answers in Cursor's hook contract.
+func (HookRenderer) Output(event hooks.Event, result hooks.Result) any {
+	value := make(map[string]any)
+	if event == hooks.PreToolUse || event == hooks.PermissionRequest {
+		value["permission"] = result.Decision
+	} else {
+		value["continue"] = result.Decision != hooks.Deny
+	}
+	if result.Message != "" {
+		value["user_message"] = result.Message
+	}
+	if result.AdditionalContext != "" {
+		value["additional_context"] = result.AdditionalContext
+	}
+	if result.UpdatedInput != nil {
+		value["updated_input"] = result.UpdatedInput
+	}
+	if result.UpdatedToolOutput != nil {
+		value["updated_mcp_tool_output"] = result.UpdatedToolOutput
+	}
+	maps.Copy(value, result.Metadata)
+	return value
 }

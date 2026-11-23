@@ -475,7 +475,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (runner Runner) launch(ctx context.Context, packContext paths.Context, invocation Invocation) (int, error) {
+func (runner Runner) launch(ctx context.Context, packContext paths.Context, invocation Invocation) (code int, err error) {
 	label := &stepLabel{operation: "preparing " + invocation.Command}
 	setStep := label.set
 	setStep("waiting for another agentpack command on this project")
@@ -573,10 +573,12 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 	if os.Getenv("AGENTPACK_SESSION_WORKER") == "1" {
 		launch.SessionID = os.Getenv("AGENTPACK_SESSION_ID")
 	}
-	command, err := harness.LaunchCommand(launch)
+	command, finish, err := harness.Launch(launch)
 	if err != nil {
 		return 1, err
 	}
+	// The harness's after-launch work (credentials, generation leases) runs on every path out.
+	defer func() { err = errors.Join(err, finish()) }()
 	command.Dir = packContext.WorkspaceRoot
 	// The agent starts in the workspace; PWD must say so too, because some
 	// agents (OpenCode) take the project directory from PWD, which would
@@ -590,7 +592,6 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 			i++
 		}
 	}
-	launch.Command = command
 	// Workers report restart readiness after spawning; release before the agent runs.
 	if err := mutation.Unlock(); err != nil {
 		return 1, err
@@ -612,10 +613,9 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 		running.Apply(command)
 		code, runErr := runner.runProcess(command)
 		running.Shutdown()
-		return code, errors.Join(runErr, harness.AfterLaunch(launch))
+		return code, runErr
 	}
-	code, runErr := runner.runProcess(command)
-	return code, errors.Join(runErr, harness.AfterLaunch(launch))
+	return runner.runProcess(command)
 }
 
 // withPWD returns env (the inherited environment when env is nil) with PWD

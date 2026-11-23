@@ -12,6 +12,7 @@ import (
 type planTestRenderer struct{ target harness.Target }
 
 func (renderer planTestRenderer) Target() harness.Target { return renderer.target }
+func (planTestRenderer) Output(Event, Result) any        { return nil }
 func (renderer planTestRenderer) Render(bundle Bundle, context RenderContext) (RenderOutput, error) {
 	output := RenderOutput{}
 	for _, hook := range bundle.Hooks {

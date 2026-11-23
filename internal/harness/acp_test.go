@@ -70,8 +70,8 @@ func TestHarnessACPLaunchCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, candidate := range registry.All() {
-		t.Run(string(candidate.ID()), func(t *testing.T) {
-			launch, err := candidate.ACP(ctx)
+		t.Run(string(candidate.Target), func(t *testing.T) {
+			launch, err := candidate.LaunchACP(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -12,13 +12,6 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/harness/agy"
-	"github.com/olegpustovit/agentpack/internal/harness/claude"
-	"github.com/olegpustovit/agentpack/internal/harness/codex"
-	"github.com/olegpustovit/agentpack/internal/harness/cursor"
-	"github.com/olegpustovit/agentpack/internal/harness/grok"
-	"github.com/olegpustovit/agentpack/internal/harness/omp"
-	"github.com/olegpustovit/agentpack/internal/harness/opencode"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
@@ -178,28 +171,15 @@ func writeLimitSamples(ctx context.Context, tx *sql.Tx, node string, at time.Tim
 	return err
 }
 
-// limitProbes reads each provider CLI. Names match session harnesses, so a finished turn can refresh its own.
-var limitProbes = []struct {
-	harness string
-	read    func(context.Context) harness.LimitSnapshot
-}{
-	{"codex", func(ctx context.Context) harness.LimitSnapshot { return codex.ReadLimits(ctx, "") }},
-	{"claude", claude.ReadLimits},
-	{"agy", agy.ReadLimits},
-	{"grok", grok.ReadLimits},
-	{"opencode", opencode.ReadLimits},
-	{"cursor", cursor.ReadLimits},
-	{"omp", omp.ReadLimits},
-}
-
 func collectLimits(ctx context.Context) []harness.LimitSnapshot {
-	snapshots := make([]harness.LimitSnapshot, len(limitProbes))
+	// Names match session harnesses, so a finished turn can refresh its own.
+	snapshots := make([]harness.LimitSnapshot, len(agents))
 	var wg sync.WaitGroup
-	for index, probe := range limitProbes {
+	for index, agent := range agents {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			snapshots[index] = probe.read(ctx)
+			snapshots[index] = agent.Limits(ctx)
 		}()
 	}
 	wg.Wait()
@@ -207,11 +187,11 @@ func collectLimits(ctx context.Context) []harness.LimitSnapshot {
 }
 
 func readLimitsOf(ctx context.Context, name string) (harness.LimitSnapshot, bool) {
-	for _, probe := range limitProbes {
-		if probe.harness == name {
+	for _, agent := range agents {
+		if string(agent.Target) == name {
 			ctx, cancel := context.WithTimeout(ctx, limitsProbeTimeout)
 			defer cancel()
-			return probe.read(ctx), true
+			return agent.Limits(ctx), true
 		}
 	}
 	return harness.LimitSnapshot{}, false

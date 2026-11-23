@@ -109,7 +109,7 @@ func TestClaudeSettingsIsolatedAcrossProjectsAndModes(t *testing.T) {
 	}
 	var previous *exec.Cmd
 	for index, ctx := range contexts {
-		command, err := launch(base.LaunchContext{ProjectRoot: ctx.ProjectRoot, Mode: ctx.Mode})
+		command, _, err := launch(base.LaunchContext{ProjectRoot: ctx.ProjectRoot, Mode: ctx.Mode})
 		if err != nil {
 			t.Fatal(err)
 		}

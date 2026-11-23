@@ -11,24 +11,25 @@ import (
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 )
 
 // Sign-in routes are the owner's, read each agent's account, and drive one login per agent.
 func TestAgentRoutesSignInForTheOwnerOnly(t *testing.T) {
 	home := t.TempDir()
-	saved := agentLogins
-	t.Cleanup(func() { agentLogins = saved })
+	saved := agents
+	t.Cleanup(func() { agents = saved })
 	probes := 0
 	loggedOut := false
-	agentLogins = []agentLogin{{"codex", []harness.LoginMethod{{ID: "chatgpt", Label: "ChatGPT account"}}, func(context.Context) harness.Account {
+	agents = []registry.Entry{{Harness: harness.Harness{Target: harness.Codex}, Login: &harness.LoginSpec{Methods: []harness.LoginMethod{{ID: "chatgpt", Label: "ChatGPT account"}}, Account: func(context.Context) harness.Account {
 		probes++
 		return harness.Account{Installed: true}
-	}, func(string) (harness.LoginFlow, error) {
+	}, Login: func(string) (harness.LoginFlow, error) {
 		return harness.LoginFlow{Command: loginChild(t, "AGENTPACK_TEST_LOGIN_HANG=1"), Answers: []harness.LoginAnswer{{Screen: "Select login method", Keys: "\r"}}, Input: "code"}, nil
-	}, func(context.Context) error {
+	}, Logout: func(context.Context) error {
 		loggedOut = true
 		return nil
-	}, nil, nil}}
+	}}}}
 	g, origin := identityGateway(t, home, nil)
 	testBrowserSession(t, g.auth, testBrowserEmail, "owner")
 	testBrowserSession(t, g.auth, "member@example.com", "member")

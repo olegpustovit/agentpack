@@ -8,48 +8,26 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/harness/agy"
-	"github.com/olegpustovit/agentpack/internal/harness/claude"
-	"github.com/olegpustovit/agentpack/internal/harness/codex"
-	"github.com/olegpustovit/agentpack/internal/harness/cursor"
-	"github.com/olegpustovit/agentpack/internal/harness/grok"
-	"github.com/olegpustovit/agentpack/internal/harness/omp"
-	"github.com/olegpustovit/agentpack/internal/harness/opencode"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"golang.org/x/sync/singleflight"
 )
 
-// agentLogin reads and signs in one agent on this machine. Names match session harnesses.
-type agentLogin struct {
-	harness string
-	methods []harness.LoginMethod
-	account func(context.Context) harness.Account
-	login   func(method string) (harness.LoginFlow, error)
-	logout  func(context.Context) error // nil when the agent has no way to sign out without a terminal
-	// credential is the file holding the agent's sign-in, shared with every node; nil when its
-	// sign-in is not a file another machine can use (Cursor's keychain, OMP's database).
-	credential func() string
-	// refresh renews a rotating sign-in ahead of the agent, returning nil when it is not due; only
-	// the machine that published the shared sign-in calls it.
-	refresh func(context.Context, []byte) ([]byte, error)
-}
+// agents are the registry entries the gateway reads, signs in and probes; tests replace them.
+var agents = registry.All()
 
-var agentLogins = []agentLogin{
-	{"claude", claude.LoginMethods, claude.Account, claude.Login, claude.Logout, claude.CredentialFile, claude.RefreshCredential},
-	{"codex", codex.LoginMethods, codex.Account, codex.Login, codex.Logout, codex.CredentialFile, codex.RefreshCredential},
-	{"omp", omp.LoginMethods, omp.Account, omp.Login, nil, nil, nil},
-	{"agy", agy.LoginMethods, agy.Account, agy.Login, nil, agy.CredentialFile, nil},
-	{"cursor", cursor.LoginMethods, cursor.Account, cursor.Login, cursor.Logout, nil, nil},
-	{"grok", grok.LoginMethods, grok.Account, grok.Login, grok.Logout, grok.CredentialFile, nil},
-	{"opencode", opencode.LoginMethods, opencode.Account, opencode.Login, nil, opencode.CredentialFile, nil},
+func agentEntry(name string) (registry.Entry, bool) {
+	index := slices.IndexFunc(agents, func(entry registry.Entry) bool { return string(entry.Target) == name && entry.Login != nil })
+	if index < 0 {
+		return registry.Entry{}, false
+	}
+	return agents[index], true
 }
 
 // loginMethods are an agent's ways to sign in, known without asking its CLI.
 func loginMethods(name string) []harness.LoginMethod {
-	for _, agent := range agentLogins {
-		if agent.harness == name {
-			return agent.methods
-		}
+	if agent, ok := agentEntry(name); ok {
+		return agent.Login.Methods
 	}
 	return nil
 }
@@ -86,19 +64,23 @@ func (c *agentAccounts) read(ctx context.Context, fresh bool) []agentAccount {
 		// One reader leaving must not cut the probes short for the others.
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 		defer cancel()
-		accounts := make([]agentAccount, len(agentLogins))
+		accounts := make([]agentAccount, len(agents))
 		var wg sync.WaitGroup
-		for i, agent := range agentLogins {
+		for i, agent := range agents {
+			if agent.Login == nil {
+				continue
+			}
 			wg.Go(func() {
-				account := agent.account(ctx)
+				account := agent.Login.Account(ctx)
 				if account.Installed {
-					account.Methods = agent.methods
-					account.SignOut = account.SignedIn && agent.logout != nil
+					account.Methods = agent.Login.Methods
+					account.SignOut = account.SignedIn && agent.Login.Logout != nil
 				}
-				accounts[i] = agentAccount{Account: account, Harness: agent.harness}
+				accounts[i] = agentAccount{Account: account, Harness: string(agent.Target)}
 			})
 		}
 		wg.Wait()
+		accounts = slices.DeleteFunc(accounts, func(account agentAccount) bool { return account.Harness == "" })
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if generation == c.generation {
@@ -141,13 +123,8 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 			return
 		}
 		name := r.PathValue("harness")
-		index := -1
-		for i, agent := range agentLogins {
-			if agent.harness == name {
-				index = i
-			}
-		}
-		if index < 0 {
+		agent, ok := agentEntry(name)
+		if !ok {
 			http.Error(w, "unknown agent", http.StatusBadRequest)
 			return
 		}
@@ -155,7 +132,7 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 		if event != nil {
 			event.Set("harness", name)
 		}
-		flow, err := agentLogins[index].login(input.Method)
+		flow, err := agent.Login.Login(input.Method)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -208,17 +185,17 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 			return
 		}
 		name := r.PathValue("harness")
-		index := slices.IndexFunc(agentLogins, func(agent agentLogin) bool { return agent.harness == name && agent.logout != nil })
-		if index < 0 {
+		agent, ok := agentEntry(name)
+		if !ok || agent.Login.Logout == nil {
 			http.Error(w, "this agent can't be signed out from here", http.StatusBadRequest)
 			return
 		}
 		if event := obs.From(r.Context()); event != nil {
 			event.Set("harness", name)
 		}
-		err := agentLogins[index].logout(r.Context())
+		err := agent.Login.Logout(r.Context())
 		if err == nil {
-			err = g.stopSharingAgentCredential(r.Context(), agentLogins[index])
+			err = g.stopSharingAgentCredential(r.Context(), agent)
 		}
 		g.agents.forget()
 		if err != nil {

@@ -3,15 +3,10 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/olegpustovit/agentpack/internal/environment"
 	base "github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/harness/claude"
-	"github.com/olegpustovit/agentpack/internal/harness/codex"
-	"github.com/olegpustovit/agentpack/internal/harness/opencode"
-	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/staging"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
@@ -57,9 +52,11 @@ func (runner Runner) runProbe(ctx context.Context, definitionRoot, workspaceRoot
 	if agent == "agent" {
 		target = base.Cursor
 	}
-	switch target {
-	case base.Claude, base.Codex, base.OpenCode:
-	default:
+	entry, err := registry.ByTarget(target)
+	if err != nil {
+		return 2, err
+	}
+	if entry.Probe == nil {
 		return 2, fmt.Errorf("probe currently supports claude, codex and opencode only (got %s)", target)
 	}
 
@@ -92,7 +89,6 @@ func (runner Runner) runProbe(ctx context.Context, definitionRoot, workspaceRoot
 			return 5, fmt.Errorf("probe cannot observe current staging: %s; restore/sync and resolve preflight findings first", finding.Code)
 		}
 	}
-	var packaged []string
 	var plan base.PackagedNames
 	for _, artifact := range report.Artifacts {
 		if artifact.Module == "user" || artifact.Module == "project" {
@@ -100,7 +96,6 @@ func (runner Runner) runProbe(ctx context.Context, definitionRoot, workspaceRoot
 		}
 		switch artifact.Kind {
 		case "skill":
-			packaged = append(packaged, artifact.Name)
 			plan.Skills = append(plan.Skills, artifact.Name)
 			// Where an agent has no commands or subagents, they are rendered as skills; keep their kind.
 			switch artifact.Properties["source_kind"] {
@@ -115,41 +110,9 @@ func (runner Runner) runProbe(ctx context.Context, definitionRoot, workspaceRoot
 			plan.Agents = append(plan.Agents, artifact.Name)
 		}
 	}
-	var receipt environment.Receipt
-	switch target {
-	case base.OpenCode:
-		configDir, dirErr := paths.StagingOpenCodeDirForMode(definitionRoot, mode)
-		if dirErr != nil {
-			return 5, dirErr
-		}
-		receipt, err = opencode.ProbeConfigDir(ctx, configDir, workspaceRoot, report.SourceIdentity, report.LockDigest, mode, packaged...)
-		if err != nil {
-			return 5, err
-		}
-	case base.Claude:
-		plugins, err := paths.StagingPluginsDirForMode(definitionRoot, mode)
-		if err != nil {
-			return 5, err
-		}
-		bundle := filepath.Join(plugins, paths.StagedAgentpackBundleName)
-		// A bundle without a plugin manifest is still probed: staging removes the manifest when a
-		// project skill replaces every packaged one, and the session shows who holds the names.
-		if _, err := os.Stat(bundle); err != nil {
-			return 5, fmt.Errorf("staged Claude bundle missing; run agentpack sync first: %w", err)
-		}
-		receipt, err = claude.ProbeBundle(ctx, bundle, workspaceRoot, report.SourceIdentity, report.LockDigest, mode, plan)
-		if err != nil {
-			return 5, err
-		}
-	case base.Codex:
-		codexHome, homeErr := codex.CurrentHome(definitionRoot, mode)
-		if homeErr != nil {
-			return 5, homeErr
-		}
-		receipt, err = codex.ProbeHome(ctx, codexHome, workspaceRoot, report.SourceIdentity, report.LockDigest, mode, plan)
-		if err != nil {
-			return 5, err
-		}
+	receipt, err := entry.Probe(ctx, base.ProbeRequest{DefinitionRoot: definitionRoot, WorkspaceRoot: workspaceRoot, Mode: mode, SourceIdentity: report.SourceIdentity, LockDigest: report.LockDigest, Packaged: plan})
+	if err != nil {
+		return 5, err
 	}
 
 	if receipt.Coverage == nil {
