@@ -97,7 +97,8 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $bin = Join-Path $env:USERPROFILE '.local\bin'
 $new = Join-Path $bin 'ap.exe.new'
-& (Join-Path $bin 'ap.exe') gateway stop *> $null
+# Like the Unix branch's `|| true`: Windows PowerShell turns any stderr line into a terminating error under Stop.
+& { $ErrorActionPreference = 'Continue'; & (Join-Path $bin 'ap.exe') gateway stop *> $null }
 $stamp = [guid]::NewGuid().ToString('N')
 foreach ($name in 'ap.exe','agentpack.exe') {
   $path = Join-Path $bin $name
@@ -105,7 +106,8 @@ foreach ($name in 'ap.exe','agentpack.exe') {
   Copy-Item $new $path
 }
 Remove-Item $new
-& (Join-Path $bin 'ap.exe') gateway start *> $null
+& { $ErrorActionPreference = 'Continue'; & (Join-Path $bin 'ap.exe') gateway start *> $null }
+if ($LASTEXITCODE) { throw "gateway start exited $LASTEXITCODE" }
 "$env:COMPUTERNAME`: $(& (Join-Path $bin 'ap.exe') --version)"
 EOF
 )
