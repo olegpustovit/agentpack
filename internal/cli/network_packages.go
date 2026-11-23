@@ -135,7 +135,7 @@ func (runner Runner) restartChangedEnvironments(ctx context.Context, snapshots [
 
 func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec string, restart bool) error {
 	return runner.changeNetworkProject(ctx, directory, restart, func(root string) error {
-		_, err := runner.Service.AddAll(ctx, root, spec, true)
+		_, err := runner.Service.AddAll(ctx, root, spec)
 		return err
 	})
 }

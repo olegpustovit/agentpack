@@ -242,7 +242,7 @@ func (service Service) LockWithOptions(ctx context.Context, projectRoot string, 
 
 // Update refreshes every floating dependency when specs is empty. Otherwise it
 // refreshes only the requested direct dependencies, using their manifest pins.
-func (service Service) Update(ctx context.Context, projectRoot string, specs []string, noSync bool) (lockfile.PackLock, error) {
+func (service Service) Update(ctx context.Context, projectRoot string, specs []string) (lockfile.PackLock, error) {
 	if _, err := paths.EnsureUserAgentpackLayout(); err != nil {
 		return lockfile.PackLock{}, err
 	}
@@ -266,22 +266,14 @@ func (service Service) Update(ctx context.Context, projectRoot string, specs []s
 	if refresh {
 		pinMode = mcpRefresh
 	}
-	lock, err := service.resolve(ctx, projectRoot, project, resolveRun{options: resolve.ResolveOptions{RefreshFloating: refresh, RefreshModules: modules, RecordContentHashes: true}, pinMode: pinMode, explicit: true})
-	if err != nil {
-		return lockfile.PackLock{}, err
-	}
-	if !noSync {
-		_, err = service.Sync(ctx, projectRoot, SyncOptions{})
-	}
-	return lock, err
+	return service.resolve(ctx, projectRoot, project, resolveRun{options: resolve.ResolveOptions{RefreshFloating: refresh, RefreshModules: modules, RecordContentHashes: true}, pinMode: pinMode, explicit: true})
 }
 
-// Add records a package in agentpack.toml, locks it and stages it. When any
-// of that fails, agentpack.toml and pack.lock are left exactly as they were:
-// a package that could not be staged is not half-added.
-func (service Service) Add(ctx context.Context, projectRoot, spec string, noSync bool) (lockfile.Package, error) {
+// Add records a package in agentpack.toml and locks it; staging is lazy. When
+// either fails, agentpack.toml and pack.lock are left exactly as they were.
+func (service Service) Add(ctx context.Context, projectRoot, spec string) (lockfile.Package, error) {
 	restore := keepProjectFiles(projectRoot)
-	pkg, err := service.add(ctx, projectRoot, spec, noSync)
+	pkg, err := service.add(ctx, projectRoot, spec)
 	if err != nil {
 		if restoreErr := restore(); restoreErr != nil {
 			return pkg, errors.Join(err, fmt.Errorf("restore agentpack.toml and pack.lock: %w", restoreErr))
@@ -290,7 +282,7 @@ func (service Service) Add(ctx context.Context, projectRoot, spec string, noSync
 	return pkg, err
 }
 
-func (service Service) add(ctx context.Context, projectRoot, spec string, noSync bool) (lockfile.Package, error) {
+func (service Service) add(ctx context.Context, projectRoot, spec string) (lockfile.Package, error) {
 	if _, err := paths.EnsureUserAgentpackLayout(); err != nil {
 		return lockfile.Package{}, err
 	}
@@ -314,11 +306,7 @@ func (service Service) add(ctx context.Context, projectRoot, spec string, noSync
 		if err != nil {
 			return lockfile.Package{}, err
 		}
-		pkg := findPackage(lock, name)
-		if !noSync {
-			_, err = service.Sync(ctx, projectRoot, SyncOptions{})
-		}
-		return pkg, err
+		return findPackage(lock, name), nil
 	}
 	resolved, err := NewAddResolver(service.client()).Resolve(ctx, projectRoot, spec)
 	if err != nil {
@@ -339,13 +327,9 @@ func (service Service) add(ctx context.Context, projectRoot, spec string, noSync
 	if err != nil {
 		return lockfile.Package{}, err
 	}
-	pkg := findPackage(lock, key)
-	if !noSync {
-		_, err = service.Sync(ctx, projectRoot, SyncOptions{})
-	}
-	return pkg, err
+	return findPackage(lock, key), nil
 }
-func (service Service) Remove(ctx context.Context, projectRoot, spec string, noSync bool) (string, error) {
+func (service Service) Remove(ctx context.Context, projectRoot, spec string) (string, error) {
 	project, err := manifest.Load(projectRoot)
 	if err != nil {
 		return "", err
@@ -363,12 +347,7 @@ func (service Service) Remove(ctx context.Context, projectRoot, spec string, noS
 	if project, err = manifest.Load(projectRoot); err != nil {
 		return "", err
 	}
-	if _, err := service.resolveAndSave(ctx, projectRoot, project, false, nil); err != nil {
-		return "", err
-	}
-	if !noSync {
-		_, err = service.Sync(ctx, projectRoot, SyncOptions{})
-	}
+	_, err = service.resolveAndSave(ctx, projectRoot, project, false, nil)
 	return key, err
 }
 func (service Service) Sync(ctx context.Context, projectRoot string, options SyncOptions) (SyncResult, error) {

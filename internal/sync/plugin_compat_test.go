@@ -177,7 +177,7 @@ func TestAddRecordsThePackagesMCPServersInTheLock(t *testing.T) {
 		"browser/.mcp.json": `{"playwright":{"command":"npx","args":["@playwright/mcp@latest"]},"gitlab":{"type":"http","url":"https://gitlab.com/api/v4/mcp"}}`,
 	}
 	fixture.writeManifest("\n[dependencies]\n")
-	if _, err := fixture.service.Add(context.Background(), fixture.project, "acme/skills/browser@"+commitTwo, false); err != nil {
+	if _, err := fixture.service.Add(context.Background(), fixture.project, "acme/skills/browser@"+commitTwo); err != nil {
 		t.Fatal(err)
 	}
 	lock := fixture.loadLock()
@@ -189,6 +189,7 @@ func TestAddRecordsThePackagesMCPServersInTheLock(t *testing.T) {
 	if fixture.noticed("no current record in pack.lock") {
 		t.Fatalf("notices = %v", fixture.notices)
 	}
+	fixture.sync(SyncOptions{})
 	if staged := fixture.stagedMCP(); !strings.Contains(staged, `"@playwright/mcp@0.0.41"`) || !strings.Contains(staged, "https://gitlab.com/api/v4/mcp") {
 		t.Fatalf("staged MCP = %s", staged)
 	}
@@ -203,13 +204,14 @@ func TestAddKeepsThePackageWhenItsMCPServerCannotBePinned(t *testing.T) {
 	}
 	fixture.writeManifest("\n[dependencies]\n")
 	fixture.upstream.registryDown = true
-	pkg, err := fixture.service.Add(context.Background(), fixture.project, "acme/skills/browser@"+commitTwo, false)
+	pkg, err := fixture.service.Add(context.Background(), fixture.project, "acme/skills/browser@"+commitTwo)
 	if err != nil || pkg.ContentHash == "" {
 		t.Fatalf("add = %#v, %v", pkg, err)
 	}
 	if _, recorded := fixture.loadLock().MCPServer("playwright"); recorded {
 		t.Fatal("an unreachable registry produced a record")
 	}
+	fixture.sync(SyncOptions{})
 	if !fixture.noticed(`MCP server "playwright" (npm package @playwright/mcp@latest) could not be pinned`) || !strings.Contains(fixture.stagedMCP(), `"@playwright/mcp@latest"`) {
 		t.Fatalf("notices = %v\nstaged = %s", fixture.notices, fixture.stagedMCP())
 	}
@@ -287,8 +289,7 @@ func TestPluginRootVariableBecomesAStagedCopyOfThePluginForEveryAgent(t *testing
 	fixture.sync(SyncOptions{VerifyOnly: true})
 }
 
-// stripe/ai providers/claude/plugin failed in sync on a hook event, and the
-// manifest and lock already named it. Whatever makes an add fail, the project
+// Whatever makes an add fail after it has edited agentpack.toml, the project
 // files stay as they were.
 func TestFailedAddLeavesManifestAndLockUnchanged(t *testing.T) {
 	fixture := newIntegrityFixture(t)
@@ -302,13 +303,11 @@ func TestFailedAddLeavesManifestAndLockUnchanged(t *testing.T) {
 	fixture.upstream.tarballs[commitTwo] = map[string]string{
 		"browser/.claude-plugin/plugin.json": `{"name":"browser","version":"1.0.0"}`,
 		"browser/commands/open.md":           "Open.\n",
+		// A dependency that cannot be resolved fails the add after agentpack.toml names it.
+		"browser/agentpack.toml": "[dependencies]\n\"github.com/acme/skills/missing\" = { commit = \"3333333333333333333333333333333333333333\" }\n",
 	}
-	// Staging cannot be written, so the add fails after it has locked.
-	blocked := filepath.Join(t.TempDir(), "not-a-directory")
-	writeIntegrityFile(t, blocked, "")
-	t.Setenv("AGENTPACK_STAGING_ROOT", blocked)
-	if _, err := fixture.service.Add(context.Background(), fixture.project, "acme/skills/browser@"+commitTwo, false); err == nil {
-		t.Fatal("add succeeded without a staging directory")
+	if _, err := fixture.service.Add(context.Background(), fixture.project, "acme/skills/browser@"+commitTwo); err == nil {
+		t.Fatal("add succeeded with an unresolvable dependency")
 	}
 	manifestAfter, _ := os.ReadFile(paths.ManifestPath(fixture.project))
 	if string(manifestAfter) != string(manifestBefore) || fixture.lockText() != lockBefore {
@@ -317,8 +316,8 @@ func TestFailedAddLeavesManifestAndLockUnchanged(t *testing.T) {
 
 	// In a directory with no project yet, a failed add creates none.
 	empty := t.TempDir()
-	if _, err := fixture.service.Add(context.Background(), empty, "acme/skills/browser@"+commitTwo, false); err == nil {
-		t.Fatal("add succeeded without a staging directory")
+	if _, err := fixture.service.Add(context.Background(), empty, "acme/skills/browser@"+commitTwo); err == nil {
+		t.Fatal("add succeeded with an unresolvable dependency")
 	}
 	for _, path := range []string{paths.ManifestPath(empty), paths.LockPath(empty)} {
 		if !fixtureMissing(path) {
@@ -353,7 +352,7 @@ func TestAddPluginResolvesAMarketplaceEntryToItsOwnRepositoryAndCommit(t *testin
 	fixture.upstream.refs["v1"] = commitTwo
 	fixture.writeManifest("\n[dependencies]\n")
 	add := func(marketplace, plugin string) (string, error) {
-		pkg, err := fixture.service.AddPlugin(context.Background(), fixture.project, marketplace, plugin, false)
+		pkg, err := fixture.service.AddPlugin(context.Background(), fixture.project, marketplace, plugin)
 		return pkg.Module + "@" + pkg.Commit, err
 	}
 	for plugin, want := range map[string]string{
@@ -380,6 +379,7 @@ func TestAddPluginResolvesAMarketplaceEntryToItsOwnRepositoryAndCommit(t *testin
 	if server, found := lock.MCPServer("stripe"); !found || server.Host != "mcp.stripe.com" {
 		t.Fatalf("mcp_servers = %#v", lock.MCPServers)
 	}
+	fixture.sync(SyncOptions{})
 	// The stripe plugin's PostToolBatch hook is a Claude Code event and no other agent's.
 	if got := hookEvents(t, filepath.Join(fixture.bundle(), "hooks", "hooks.json")); got != "PostToolBatch PostToolUse" {
 		t.Fatalf("claude hook events = %q", got)
@@ -419,13 +419,13 @@ func TestAddAllAddsEveryPluginOfAMarketplace(t *testing.T) {
 		"one/skills/first/SKILL.md":       "---\nname: first\ndescription: First\n---\nFirst.\n",
 	}
 	fixture.writeManifest("\n[dependencies]\n")
-	if _, err := fixture.service.AddAll(context.Background(), fixture.project, "acme/pm@"+commitTwo, false); err == nil || !strings.Contains(err.Error(), `"npm" source`) {
+	if _, err := fixture.service.AddAll(context.Background(), fixture.project, "acme/pm@"+commitTwo); err == nil || !strings.Contains(err.Error(), `"npm" source`) {
 		t.Fatalf("add of a marketplace with an npm entry: %v", err)
 	}
 	if !fixtureMissing(paths.LockPath(fixture.project)) {
 		t.Fatal("a failed add of a marketplace left pack.lock behind")
 	}
-	added, err := fixture.service.AddAll(context.Background(), fixture.project, "acme/pm@"+commitOne, false)
+	added, err := fixture.service.AddAll(context.Background(), fixture.project, "acme/pm@"+commitOne)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,6 +439,7 @@ func TestAddAllAddsEveryPluginOfAMarketplace(t *testing.T) {
 	if lock := fixture.loadLock(); len(lock.Packages) != 2 {
 		t.Fatalf("packages = %#v", lock.Packages)
 	}
+	fixture.sync(SyncOptions{})
 	if _, err := os.Stat(filepath.Join(fixture.bundle(), "skills", "first", "SKILL.md")); err != nil {
 		t.Fatal(err)
 	}

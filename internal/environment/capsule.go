@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 // SupportCapsule is a redacted, opt-in diagnostic export. It never includes
@@ -91,7 +92,7 @@ func WriteSupportCapsule(destination string, capsule SupportCapsule) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(destination, append(data, '\n'), 0o600)
+	return paths.WriteAtomic(destination, append(data, '\n'), 0o600)
 }
 
 func prefixDigest(value string, n int) string {

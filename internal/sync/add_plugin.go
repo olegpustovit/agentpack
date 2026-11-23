@@ -19,12 +19,12 @@ import (
 // another repository (optionally a directory of it) at a ref or commit. The
 // plugin is then added like any other package, so the manifest names the
 // plugin's own repository and path and pack.lock pins its commit.
-func (service Service) AddPlugin(ctx context.Context, projectRoot, marketplace, plugin string, noSync bool) (lockfile.Package, error) {
+func (service Service) AddPlugin(ctx context.Context, projectRoot, marketplace, plugin string) (lockfile.Package, error) {
 	spec, err := service.catalogPluginSpec(ctx, marketplace, plugin)
 	if err != nil {
 		return lockfile.Package{}, err
 	}
-	return service.Add(ctx, projectRoot, spec, noSync)
+	return service.Add(ctx, projectRoot, spec)
 }
 
 func (service Service) catalogPluginSpec(ctx context.Context, marketplace, plugin string) (string, error) {
@@ -116,8 +116,8 @@ func keepProjectFiles(projectRoot string) func() error {
 // several plugins, it adds every plugin the catalog lists, each as its own
 // package, and syncs once at the end. Either all of them are added or the
 // project files are left as they were.
-func (service Service) AddAll(ctx context.Context, projectRoot, spec string, noSync bool) ([]lockfile.Package, error) {
-	pkg, err := service.Add(ctx, projectRoot, spec, noSync)
+func (service Service) AddAll(ctx context.Context, projectRoot, spec string) ([]lockfile.Package, error) {
+	pkg, err := service.Add(ctx, projectRoot, spec)
 	var several *cache.MultiplePluginsError
 	if !errors.As(err, &several) {
 		if err != nil {
@@ -126,7 +126,7 @@ func (service Service) AddAll(ctx context.Context, projectRoot, spec string, noS
 		return []lockfile.Package{pkg}, nil
 	}
 	restore := keepProjectFiles(projectRoot)
-	packages, err := service.addCatalog(ctx, projectRoot, spec, several.Names, noSync)
+	packages, err := service.addCatalog(ctx, projectRoot, spec, several.Names)
 	if err != nil {
 		if restoreErr := restore(); restoreErr != nil {
 			return nil, errors.Join(err, fmt.Errorf("restore agentpack.toml and pack.lock: %w", restoreErr))
@@ -136,23 +136,18 @@ func (service Service) AddAll(ctx context.Context, projectRoot, spec string, noS
 	return packages, nil
 }
 
-func (service Service) addCatalog(ctx context.Context, projectRoot, marketplace string, names []string, noSync bool) ([]lockfile.Package, error) {
+func (service Service) addCatalog(ctx context.Context, projectRoot, marketplace string, names []string) ([]lockfile.Package, error) {
 	packages := make([]lockfile.Package, 0, len(names))
 	for _, name := range names {
 		spec, err := service.catalogPluginSpec(ctx, marketplace, name)
 		if err != nil {
 			return nil, fmt.Errorf("plugin %s of %s: %w", name, marketplace, err)
 		}
-		pkg, err := service.add(ctx, projectRoot, spec, true)
+		pkg, err := service.add(ctx, projectRoot, spec)
 		if err != nil {
 			return nil, fmt.Errorf("plugin %s of %s: %w", name, marketplace, err)
 		}
 		packages = append(packages, pkg)
-	}
-	if !noSync {
-		if _, err := service.Sync(ctx, projectRoot, SyncOptions{}); err != nil {
-			return nil, err
-		}
 	}
 	return packages, nil
 }

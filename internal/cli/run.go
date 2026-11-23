@@ -174,9 +174,7 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 		}
 	case "add", "remove":
 		// Staging is lazy: each launcher stages its own harness when the lock
-		// changed, and running sessions are restarted below, so nothing here
-		// rebuilds every harness.
-		const noSync = true
+		// changed, and running sessions are restarted below.
 		args := invocation.Args
 		plugin, hasPlugin := "", false
 		if invocation.Command == "add" {
@@ -198,10 +196,10 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 			var added []lockfile.Package
 			if hasPlugin {
 				var pkg lockfile.Package
-				pkg, err = runner.Service.AddPlugin(ctx, root, args[0], plugin, noSync)
+				pkg, err = runner.Service.AddPlugin(ctx, root, args[0], plugin)
 				added = []lockfile.Package{pkg}
 			} else {
-				added, err = runner.Service.AddAll(ctx, root, args[0], noSync)
+				added, err = runner.Service.AddAll(ctx, root, args[0])
 			}
 			if err == nil && !invocation.Global.Quiet {
 				if len(added) > 1 {
@@ -213,7 +211,7 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 			}
 		} else {
 			var key string
-			key, err = runner.Service.Remove(ctx, root, args[0], noSync)
+			key, err = runner.Service.Remove(ctx, root, args[0])
 			if err == nil && !invocation.Global.Quiet {
 				fmt.Fprintf(runner.Stdout, "Removed %s from %s and refreshed %s.\n", key, paths.ManifestPath(root), paths.LockPath(root))
 			}
@@ -221,7 +219,7 @@ func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
 	case "update":
 		args := invocation.Args
 		var updated lockfile.PackLock
-		updated, err = runner.Service.Update(ctx, root, args, true)
+		updated, err = runner.Service.Update(ctx, root, args)
 		if err == nil && !invocation.Global.Quiet {
 			if len(args) == 0 {
 				fmt.Fprintf(runner.Stdout, "Updated floating dependencies and refreshed %s (%d package(s)).\n", paths.LockPath(root), len(updated.Packages))

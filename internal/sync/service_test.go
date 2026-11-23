@@ -55,8 +55,11 @@ func TestServiceAddsPathDependencyAndStagesIt(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	pkg, err := NewService().Add(context.Background(), project, source, false)
+	pkg, err := NewService().Add(context.Background(), project, source)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewService().Sync(context.Background(), project, SyncOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if pkg.Module != "demo" {
