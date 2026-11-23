@@ -40,7 +40,8 @@ func (in Inputs) generation(effective mode.Effective, workspaceDigest, stagedCon
 }
 
 // EnvironmentDigest is Content.Selected for a definition, mode and target: it
-// compares selected runtime inputs across a package mutation. It excludes lock bookkeeping and generation paths. MCP credentials influence
+// compares selected runtime inputs across a package mutation. It excludes lock bookkeeping and generation paths.
+// The MCP connections that reroute a selected server (their ID and URL, never a secret) influence
 // the digest, so persist it only in private local state and never publish it.
 func EnvironmentDigest(definitionRoot, workspace, selectedMode string, target harness.Target) (string, error) {
 	file, err := loadLockOrEmpty(definitionRoot)
@@ -159,6 +160,16 @@ func selectedContent(workspace string, project *manifest.Manifest, lock lockfile
 		return "", err
 	}
 	pinned := mcp.ApplyPins(entries, lock.MCPServers)
+	indexPath, err := paths.MCPCredentialIndexPath()
+	if err != nil {
+		return "", err
+	}
+	index, err := mcp.ReadCredentialIndex(indexPath)
+	if err != nil {
+		return "", err
+	}
+	// Staging's own matcher: a connection that reroutes a server through the bridge changes what the agent runs.
+	bridged, _ := mcp.ApplyCredentials(pinned, index, "agentpack")
 	for _, name := range entries.Names() {
 		server := pinned[name].Server
 		if err := encoder.Encode(struct {
@@ -167,6 +178,14 @@ func selectedContent(workspace string, project *manifest.Manifest, lock lockfile
 			OAuth  *mcp.OAuth
 		}{name, server, server.OAuth}); err != nil {
 			return "", err
+		}
+		if bridge := bridged[name].Server; !slices.Equal(bridge.Args, server.Args) {
+			if err := encoder.Encode(struct {
+				Name   string
+				Bridge []string
+			}{name, bridge.Args}); err != nil {
+				return "", err
+			}
 		}
 		for _, record := range lock.MCPServers {
 			if record.Name != name || record.Definition != entries[name].Server.Definition() || !mcp.StartsWithNPX(entries[name].Server) {
