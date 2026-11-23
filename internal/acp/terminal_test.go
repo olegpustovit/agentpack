@@ -20,7 +20,7 @@ func TestTerminalEnvForcesSessionMarker(t *testing.T) {
 	env := terminalEnv(vars)
 	markerCount := 0
 	for _, line := range env {
-		name, value, ok := cutEnvLine(line)
+		name, value, ok := strings.Cut(line, "=")
 		if !ok || !isAgentpackSessionEnv(name) {
 			continue
 		}
@@ -219,5 +219,32 @@ func TestHarnessClientTerminal(t *testing.T) {
 	}
 	if _, err := client.ReleaseTerminal(ctx, sdkacp.ReleaseTerminalRequest{TerminalId: created.TerminalId}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Thousands of tiny redraw chunks keep the newest limit bytes, in order, within twice the limit.
+func TestTerminalOutputKeepsTailOfTinyChunks(t *testing.T) {
+	term := &managedTerminal{limit: 1000, done: make(chan struct{})}
+	var all strings.Builder
+	for i := range 100_000 {
+		chunk := []byte{byte('a' + i%26)}
+		all.Write(chunk)
+		term.appendOutput(chunk)
+		if cap(term.output) > 4*term.limit {
+			t.Fatalf("buffer capacity %d after %d chunks", cap(term.output), i)
+		}
+	}
+	got := term.snapshot()
+	if want := all.String()[all.Len()-1000:]; got.Output != want || !got.Truncated {
+		t.Fatalf("output %q truncated=%v, want the last 1000 bytes truncated", got.Output[:20], got.Truncated)
+	}
+}
+
+func BenchmarkTerminalAppendOutput(b *testing.B) {
+	term := &managedTerminal{limit: maxTerminalOutputLimit}
+	chunk := []byte("x")
+	b.ReportAllocs()
+	for b.Loop() {
+		term.appendOutput(chunk)
 	}
 }
