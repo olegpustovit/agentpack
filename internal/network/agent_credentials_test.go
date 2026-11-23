@@ -2,6 +2,8 @@ package network
 
 import (
 	"context"
+	"github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,16 +16,16 @@ import (
 func TestAgentCredentialsShareTheNewestSignIn(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, "agy", "token")
-	saved := agentLogins
-	t.Cleanup(func() { agentLogins = saved })
+	saved := agents
+	t.Cleanup(func() { agents = saved })
 	renewals := 0
-	agentLogins = []agentLogin{{harness: "agy", credential: func() string { return path }, refresh: func(_ context.Context, data []byte) ([]byte, error) {
+	agents = []registry.Entry{{Harness: harness.Harness{Target: harness.Agy}, Login: &harness.LoginSpec{Credential: func() string { return path }, Refresh: func(_ context.Context, data []byte) ([]byte, error) {
 		if !strings.HasPrefix(string(data), `{"renew"`) {
 			return nil, nil // not due
 		}
 		renewals++
 		return []byte(`{"renewed":1}`), nil
-	}}}
+	}}}}
 	g, _ := identityGateway(t, home, nil)
 	ctx := context.Background()
 	write := func(data string, modified time.Time) {
@@ -112,7 +114,7 @@ func TestAgentCredentialsShareTheNewestSignIn(t *testing.T) {
 	}
 
 	// After a sign-out, an older file elsewhere is neither republished nor removed.
-	if err := g.stopSharingAgentCredential(ctx, agentLogins[0]); err != nil {
+	if err := g.stopSharingAgentCredential(ctx, agents[0]); err != nil {
 		t.Fatal(err)
 	}
 	write(`{"c":3}`, base.Add(2*time.Minute))

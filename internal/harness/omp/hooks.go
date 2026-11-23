@@ -15,6 +15,11 @@ type HookRenderer struct{}
 
 func (HookRenderer) Target() base.Target { return base.OMP }
 
+// Output answers a hook in the format the agent reads.
+func (HookRenderer) Output(_ hooks.Event, result hooks.Result) any {
+	return hooks.DefaultOutput(result)
+}
+
 func mappedEvent(event hooks.Event) string {
 	switch event {
 	case hooks.PreToolUse, hooks.PermissionRequest:

@@ -47,13 +47,13 @@ func TestPrepareSeedsConfigAndAttributionIdempotently(t *testing.T) {
 	}
 	ctx := base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}
 	harness := New()
-	if err := harness.Prepare(ctx); err != nil {
+	if err := harness.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := harness.Prepare(ctx); err != nil {
+	if err := harness.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	root, _ := harness.StagedRoot(ctx)
+	root, _ := harness.Root(ctx)
 	data, _ := os.ReadFile(filepath.Join(root, "opencode.json"))
 	var config map[string]any
 	if err := json.Unmarshal(data, &config); err != nil {
@@ -85,7 +85,7 @@ func TestYoloDoesNotPersistAndPreservesInlineConfig(t *testing.T) {
 	if err := os.WriteFile(path, []byte(staged), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cmd, err := launch(ctx)
+	cmd, _, err := launch(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestYoloDoesNotPersistAndPreservesInlineConfig(t *testing.T) {
 		t.Fatalf("staged config = %q, %v", data, err)
 	}
 	ctx.Yolo = false
-	cmd, err = launch(ctx)
+	cmd, _, err = launch(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestYoloOverridesNativePermissionRules(t *testing.T) {
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
 	t.Setenv("OPENCODE_PATH", os.Args[0])
 	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"permissions":[{"action":"*","resource":"*","effect":"deny"}]}`)
-	cmd, err := launch(base.LaunchContext{ProjectRoot: t.TempDir(), Mode: mode.ImplicitEffective(), Yolo: true})
+	cmd, _, err := launch(base.LaunchContext{ProjectRoot: t.TempDir(), Mode: mode.ImplicitEffective(), Yolo: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestPrepareV2UsesCallerPluginDirectory(t *testing.T) {
 	if err := prepare(ctx); err != nil {
 		t.Fatal(err)
 	}
-	command, err := launch(base.LaunchContext{ProjectRoot: project, Mode: ctx.Mode})
+	command, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: ctx.Mode})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func TestUnsupportedMajorIsRejected(t *testing.T) {
 	if err := prepare(ctx); err == nil || !strings.Contains(err.Error(), "unsupported OpenCode major") {
 		t.Fatalf("prepare error = %v", err)
 	}
-	if _, err := launch(base.LaunchContext{ProjectRoot: ctx.ProjectRoot, Mode: ctx.Mode}); err == nil || !strings.Contains(err.Error(), "unsupported OpenCode major") {
+	if _, _, err := launch(base.LaunchContext{ProjectRoot: ctx.ProjectRoot, Mode: ctx.Mode}); err == nil || !strings.Contains(err.Error(), "unsupported OpenCode major") {
 		t.Fatalf("launch error = %v", err)
 	}
 }
@@ -328,7 +328,7 @@ func TestLaunchRejectsNullGeneratedConfig(t *testing.T) {
 	if err := os.WriteFile(packConfigPath(root), []byte("null"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := launch(ctx); err == nil || !strings.Contains(err.Error(), "must be an object") {
+	if _, _, err := launch(ctx); err == nil || !strings.Contains(err.Error(), "must be an object") {
 		t.Fatalf("launch error = %v", err)
 	}
 }

@@ -21,6 +21,16 @@ type ACPLaunch struct {
 	// parent usage_update stays quiet for this long (Antigravity's background-task wakeups
 	// stream session/update notifications with no session/prompt RPC or idle signal).
 	UnpromptedUsageSettle time.Duration
+	// Finish runs once the adapter has started or failed to start; nil when there is nothing to do.
+	Finish func() error
+}
+
+// Finished runs Finish when the harness set one.
+func (launch ACPLaunch) Finished() error {
+	if launch.Finish == nil {
+		return nil
+	}
+	return launch.Finish()
 }
 
 // LogKind is one synthetic event-log row produced by AdaptAgent.

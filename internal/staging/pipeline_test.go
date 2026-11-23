@@ -168,7 +168,7 @@ func TestFailedCodexRebuildKeepsPublishedGeneration(t *testing.T) {
 	if current != first {
 		t.Fatalf("failed rebuild replaced %s with %s", first, current)
 	}
-	if err := codex.New().Verify(base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}); err != nil {
+	if err := codex.New().Check(base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}); err != nil {
 		t.Fatalf("published home was damaged by failed rebuild: %v", err)
 	}
 }
@@ -187,7 +187,7 @@ func TestFailedMCPRebuildRestoresEveryPublishedRoot(t *testing.T) {
 	ctx := pipeline.context()
 	var roots []string
 	for _, candidate := range registry.All() {
-		root, err := candidate.StagedRoot(ctx)
+		root, err := candidate.Root(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -470,16 +470,16 @@ func TestPipelineLaunchStagesOnlySelectedHarness(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, candidate := range registry.All() {
-				root, err := candidate.StagedRoot(pipeline.context())
+				root, err := candidate.Root(pipeline.context())
 				if err != nil {
 					t.Fatal(err)
 				}
 				_, err = os.Stat(root)
-				if candidate.ID() == target && err != nil {
+				if candidate.Target == target && err != nil {
 					t.Fatalf("selected %s missing: %v", target, err)
 				}
-				if candidate.ID() != target && !os.IsNotExist(err) {
-					t.Fatalf("unselected %s was staged: %s (%v)", candidate.ID(), root, err)
+				if candidate.Target != target && !os.IsNotExist(err) {
+					t.Fatalf("unselected %s was staged: %s (%v)", candidate.Target, root, err)
 				}
 			}
 		})
@@ -585,15 +585,15 @@ func TestPipelineUserCollisionsAreHarnessScoped(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, candidate := range pipeline.harnesses() {
-				root, err := candidate.StagedRoot(pipeline.context())
+				root, err := candidate.Root(pipeline.context())
 				if err != nil {
 					t.Fatal(err)
 				}
 				for i, name := range names {
 					_, err := os.Stat(filepath.Join(root, "skills", name, "SKILL.md"))
-					omitted := candidate.ID() == base.Grok || candidate.ID() == base.Claude && i%2 == 0
+					omitted := candidate.Target == base.Grok || candidate.Target == base.Claude && i%2 == 0
 					if omitted && !os.IsNotExist(err) || !omitted && err != nil {
-						t.Errorf("%s skill %s: omitted=%v, stat=%v", candidate.ID(), name, omitted, err)
+						t.Errorf("%s skill %s: omitted=%v, stat=%v", candidate.Target, name, omitted, err)
 					}
 					native := ".claude"
 					if i%2 == 1 {
@@ -612,7 +612,7 @@ func TestPipelineUserCollisionsAreHarnessScoped(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			root, err := candidate.StagedRoot(pipeline.context())
+			root, err := candidate.Root(pipeline.context())
 			if err != nil {
 				t.Fatal(err)
 			}

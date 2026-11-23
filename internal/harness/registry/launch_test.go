@@ -37,16 +37,15 @@ func TestHarnessLaunchCommandsOwnArgumentsAndEnvironment(t *testing.T) {
 		candidate, _ := ByTarget(test.target)
 		ctx := base.LaunchContext{ProjectRoot: project, WorkspaceRoot: project, Arguments: test.arguments, Mode: effective, Yolo: true}
 		if test.target == base.Claude {
-			if err := candidate.Prepare(base.StageContext{ProjectRoot: project, Mode: effective}); err != nil {
+			if err := candidate.Setup(base.StageContext{ProjectRoot: project, Mode: effective}); err != nil {
 				t.Fatal(err)
 			}
 		}
-		command, err := candidate.LaunchCommand(ctx)
+		command, finish, err := candidate.Launch(ctx)
 		if err != nil {
 			t.Fatalf("%s: %v", test.target, err)
 		}
-		ctx.Command = command
-		t.Cleanup(func() { _ = candidate.AfterLaunch(ctx) })
+		t.Cleanup(func() { _ = finish() })
 		got := command.Args[1:]
 		if test.target == base.Claude {
 			if len(got) < 2 || got[0] != "--settings" {
@@ -80,7 +79,7 @@ func TestHarnessLaunchCommandsOwnArgumentsAndEnvironment(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "opencode.json"), []byte(`{}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	command, err := open.LaunchCommand(base.LaunchContext{ProjectRoot: project, Mode: effective, Yolo: true})
+	command, _, err := open.Launch(base.LaunchContext{ProjectRoot: project, Mode: effective, Yolo: true})
 	if err != nil {
 		t.Fatal(err)
 	}

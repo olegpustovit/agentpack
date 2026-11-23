@@ -11,6 +11,7 @@ import (
 	"time"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/hooks"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
@@ -33,6 +34,11 @@ func (runner Runner) runHook(ctx context.Context, arguments []string) (int, erro
 	if err != nil {
 		return 2, err
 	}
+	entry, err := registry.ByTarget(target)
+	if err != nil {
+		return 2, err
+	}
+	noRenderer := fmt.Errorf("%s has no agentpack hooks", target)
 	stdin, err := io.ReadAll(runner.Stdin)
 	if err != nil {
 		return 1, err
@@ -53,7 +59,10 @@ func (runner Runner) runHook(ctx context.Context, arguments []string) (int, erro
 		if !ok {
 			return 2, fmt.Errorf("unknown hook event %q", eventText)
 		}
-		outcome, err := hooks.Dispatch(ctx, hooks.DispatchArgs{Target: target, Event: event, SpecsDirectory: directory, Stdin: stdin})
+		if entry.Hooks == nil {
+			return 2, noRenderer
+		}
+		outcome, err := hooks.Dispatch(ctx, hooks.DispatchArgs{Renderer: entry.Hooks, Event: event, SpecsDirectory: directory, Stdin: stdin})
 		if err != nil {
 			return 1, err
 		}
@@ -82,7 +91,8 @@ func (runner Runner) runHook(ctx context.Context, arguments []string) (int, erro
 		if !ok {
 			return 2, fmt.Errorf("unknown hook event %q", eventText)
 		}
-		return 0, writeJSON(runner.Stdout, guidanceOutput(target, event, string(body)))
+		// Only Claude stages the inject-guidance hook.
+		return 0, writeJSON(runner.Stdout, hooks.GuidanceHookSpecific(string(body), event))
 	}
 	if kind == "session-state" {
 		id, args, found, err := takeFlag(args, "--session")
@@ -173,7 +183,10 @@ func (runner Runner) runHook(ctx context.Context, arguments []string) (int, erro
 	if err != nil {
 		return 1, err
 	}
-	return 0, writeJSON(runner.Stdout, hooks.HookOutput(target, spec.Event, result))
+	if entry.Hooks == nil {
+		return 2, noRenderer
+	}
+	return 0, writeJSON(runner.Stdout, entry.Hooks.Output(spec.Event, result))
 }
 
 func flagError(err error, name string) error {
@@ -181,14 +194,4 @@ func flagError(err error, name string) error {
 		return err
 	}
 	return fmt.Errorf("hook-exec requires %s", name)
-}
-func guidanceOutput(target base.Target, event hooks.Event, body string) any {
-	switch target {
-	case base.Claude:
-		return hooks.GuidanceHookSpecific(body, event)
-	case base.Cursor, base.OpenCode:
-		return hooks.GuidanceAdditionalContextContinue(body)
-	default:
-		return hooks.GuidanceAdditionalContext(body)
-	}
 }

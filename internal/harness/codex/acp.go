@@ -31,7 +31,6 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	}
 	command := base.ACPAdapterCommand(binary)
 	command.Env = append(os.Environ(), "CODEX_HOME="+home)
-	pendingGenerationLeases.Store(command, lease)
 	keepLease = true
-	return base.ACPLaunch{Cmd: command, Rewrite: repairOnLoad(home)}, nil
+	return base.ACPLaunch{Cmd: command, Rewrite: repairOnLoad(home), Finish: func() error { return finishLaunch(ctx, home, "", lease) }}, nil
 }

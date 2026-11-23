@@ -12,7 +12,7 @@ import (
 
 func TestResolveCollisionsUsesOnlyTargetNativeRoots(t *testing.T) {
 	for _, candidate := range registry.All() {
-		t.Run(string(candidate.ID()), func(t *testing.T) {
+		t.Run(string(candidate.Target), func(t *testing.T) {
 			home, bundle := t.TempDir(), t.TempDir()
 			files := []string{"skills/Code-Tutor/SKILL.md", "commands/nested/Deploy.md", "agents/nested/Reviewer.md"}
 			for _, native := range []string{".claude", ".grok"} {
@@ -21,11 +21,11 @@ func TestResolveCollisionsUsesOnlyTargetNativeRoots(t *testing.T) {
 						writeTree(t, filepath.Join(home, native), map[string]string{file: "user"})
 						writeTree(t, bundle, map[string]string{strings.ToLower(file): "pack"})
 					}
-					names, err := ResolveCollisions(bundle, string(candidate.ID()), candidate.NativeUserRoots(home))
+					names, err := ResolveCollisions(bundle, string(candidate.Target), candidate.NativeUserRoots(home))
 					if err != nil {
 						t.Fatal(err)
 					}
-					wantRemoved := candidate.ID() == base.Grok || candidate.ID() == base.Claude && native == ".claude"
+					wantRemoved := candidate.Target == base.Grok || candidate.Target == base.Claude && native == ".claude"
 					_, removed := names["code-tutor"]
 					if removed != wantRemoved {
 						t.Fatalf("native skills = %v", names)

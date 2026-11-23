@@ -23,20 +23,24 @@ import (
 const instructionsFile = "agentpack-no-attribution.md"
 
 func New() base.Harness {
-	return base.Definition{Target: base.OpenCode, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, AfterStage: finalizeSources, Check: verify, Launch: launch, LaunchACP: acpLaunch}
+	return base.Harness{Target: base.OpenCode, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, AfterStage: finalizeSources, Check: verify, Launch: launch, LaunchACP: acpLaunch, Capability: Capability, Inheritance: base.Inheritance{
+		Note:  "OpenCode keeps its native config root; agentpack composes pack assets with native config and plugins",
+		Paths: inheritedConfigPaths,
+		Seed:  inheritedConfigSeed,
+	}}
 }
 
-func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
+func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	if nativeMajor() < 0 {
-		return nil, fmt.Errorf("unsupported OpenCode major version; use a tested OpenCode 1 or 2 release")
+		return nil, nil, fmt.Errorf("unsupported OpenCode major version; use a tested OpenCode 1 or 2 release")
 	}
 	root, err := paths.StagingOpenCodeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	binary, err := base.ResolveBinary(base.OpenCode.Binary())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	command := exec.Command(binary, ctx.Arguments...)
 	major := nativeMajor()
@@ -49,15 +53,15 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 		if major == 1 || packConfigPath(root) != filepath.Join(root, "opencode.json") {
 			data, err := os.ReadFile(packConfigPath(root))
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			decoder := json.NewDecoder(bytes.NewReader(data))
 			decoder.UseNumber()
 			if err := decoder.Decode(&value); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if value == nil {
-				return nil, fmt.Errorf("generated OpenCode config must be an object")
+				return nil, nil, fmt.Errorf("generated OpenCode config must be an object")
 			}
 			for _, key := range []string{"plugin", "instructions"} {
 				if list, ok := value[key].([]any); ok {
@@ -82,21 +86,21 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 		if content := os.Getenv("OPENCODE_CONFIG_CONTENT"); content != "" {
 			reserved, err := json.Marshal(value)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			content, placeholders = protectInlineVariables(content, string(reserved))
 			standard, err := hujson.Standardize([]byte(content))
 			if err != nil {
-				return nil, fmt.Errorf("parse OPENCODE_CONFIG_CONTENT: %w", err)
+				return nil, nil, fmt.Errorf("parse OPENCODE_CONFIG_CONTENT: %w", err)
 			}
 			var user map[string]any
 			decoder := json.NewDecoder(bytes.NewReader(standard))
 			decoder.UseNumber()
 			if err := decoder.Decode(&user); err != nil {
-				return nil, fmt.Errorf("parse OPENCODE_CONFIG_CONTENT: %w", err)
+				return nil, nil, fmt.Errorf("parse OPENCODE_CONFIG_CONTENT: %w", err)
 			}
 			if user == nil {
-				return nil, fmt.Errorf("OPENCODE_CONFIG_CONTENT must be an object")
+				return nil, nil, fmt.Errorf("OPENCODE_CONFIG_CONTENT must be an object")
 			}
 			if major == 2 {
 				mergeSkills(value, user)
@@ -111,7 +115,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 		}
 		content, err := json.Marshal(value)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for placeholder, original := range placeholders {
 			encoded, _ := json.Marshal(placeholder)
@@ -124,7 +128,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	if _, set := os.LookupEnv("OPENCODE_EXPERIMENTAL_LSP_TOOL"); !set && stagesLSP(packConfigPath(root)) {
 		command.Env = append(command.Env, "OPENCODE_EXPERIMENTAL_LSP_TOOL=true")
 	}
-	return command, nil
+	return command, base.Done, nil
 }
 
 func stagedRoot(ctx base.StageContext) (string, error) {

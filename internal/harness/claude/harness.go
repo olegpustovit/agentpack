@@ -13,17 +13,20 @@ import (
 )
 
 func New() base.Harness {
-	return base.Definition{Target: base.Claude, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, AfterStage: finalize, Check: verify, Launch: launch, ACPAdapter: claudeACPPackage, ACPStageAtSession: true, LaunchACP: acpLaunch}
+	return base.Harness{Target: base.Claude, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, AfterStage: finalize, Check: verify, Launch: launch, ACPAdapter: claudeACPPackage, ACPStageAtSession: true, LaunchACP: acpLaunch, Capability: Capability, Inheritance: base.Inheritance{
+		Note:  "Claude still reads real ~/.claude.json and ~/.claude/settings.json; agentpack only adds --plugin-dir/--settings",
+		Paths: func(string) []string { return base.HomeFiles(".claude.json", ".claude/settings.json") },
+	}}
 }
 
 func nativeUserRoots(home string) []string {
 	return []string{filepath.Join(home, ".claude")}
 }
 
-func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
+func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	binary, err := base.ResolveBinary(base.Claude.Binary())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	arguments := append([]string(nil), ctx.Arguments...)
 	if ctx.Yolo {
@@ -32,22 +35,22 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	command := exec.Command(binary)
 	settings, err := SettingsPath(base.StageContext{ProjectRoot: ctx.ProjectRoot, WorkspaceRoot: ctx.WorkspaceRoot, Mode: ctx.Mode})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	data, err := os.ReadFile(settings)
 	if err != nil {
-		return nil, fmt.Errorf("read staged Claude settings: %w", err)
+		return nil, nil, fmt.Errorf("read staged Claude settings: %w", err)
 	}
 	var value map[string]any
 	if err := json.Unmarshal(data, &value); err != nil {
-		return nil, fmt.Errorf("parse staged Claude settings: %w", err)
+		return nil, nil, fmt.Errorf("parse staged Claude settings: %w", err)
 	}
 	if ctx.SessionID != "" {
 		// Per launch, never staged: the session ID would otherwise enter the cached bundle.
 		if executable, err := os.Executable(); err == nil {
 			addSessionStateHooks(value, executable, ctx.SessionID)
 			if data, err = json.Marshal(value); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 	}
@@ -55,7 +58,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	command.Args = append(command.Args, "--settings", string(data))
 	plugins, err := paths.StagingPluginsDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	entries, _ := os.ReadDir(plugins)
 	for _, entry := range entries {
@@ -65,7 +68,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 		}
 	}
 	command.Args = append(command.Args, arguments...)
-	return command, nil
+	return command, base.Done, nil
 }
 
 // addSessionStateHooks makes a terminal Claude report its turns to the agentpack worker running it:

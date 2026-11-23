@@ -22,7 +22,7 @@
   "shadowed": 0,
   "inheritance": [
     "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
-    "OpenCode config root is redirected; user files may be seeded into the staged root when present",
+    "OpenCode keeps its native config root; agentpack composes pack assets with native config and plugins",
     "CI policy treats undeclared inheritance as a violation"
   ],
   "capabilities": {
@@ -86,7 +86,7 @@
     {
       "code": "INHERITANCE_BOUNDARY",
       "severity": "info",
-      "message": "OpenCode config root is redirected; user files may be seeded into the staged root when present",
+      "message": "OpenCode keeps its native config root; agentpack composes pack assets with native config and plugins",
       "evidence": "declared"
     },
     {

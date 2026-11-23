@@ -51,6 +51,8 @@ type RenderContext struct {
 type Renderer interface {
 	Target() harness.Target
 	Render(Bundle, RenderContext) (RenderOutput, error)
+	// Output answers a hook in the format the agent reads.
+	Output(Event, Result) any
 }
 
 type ExecutionSpec struct {

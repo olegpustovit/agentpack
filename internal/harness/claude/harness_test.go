@@ -17,17 +17,17 @@ func TestHarnessPrepareFinalizeAndVerify(t *testing.T) {
 	t.Setenv("AGENTPACK_KEEP_ATTRIBUTION", "")
 	ctx := base.StageContext{ProjectRoot: project, Mode: mode.ImplicitEffective()}
 	harness := New()
-	if err := harness.Prepare(ctx); err != nil {
+	if err := harness.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	command := "server"
 	if err := harness.Finalize(mcp.Entries{"demo": {Server: mcp.Server{Command: &command}}}, ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := harness.Verify(ctx); err != nil {
+	if err := harness.Check(ctx); err != nil {
 		t.Fatal(err)
 	}
-	root, _ := harness.StagedRoot(ctx)
+	root, _ := harness.Root(ctx)
 	if _, err := os.Stat(filepath.Join(root, ".claude-plugin", "plugin.json")); err != nil {
 		t.Fatal(err)
 	}

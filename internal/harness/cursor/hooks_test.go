@@ -1,9 +1,15 @@
 package cursor
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/hooks"
 )
 
@@ -65,5 +71,42 @@ func TestRendererKeepsCursorHooksNativeAndMapsSharedEvents(t *testing.T) {
 	}
 	if len(events) != 4 || output.Summary.Omitted != 1 || !strings.Contains(output.Diagnostics[len(output.Diagnostics)-1].Message, "skipping StopFailure hook") {
 		t.Fatalf("events = %#v\ndiagnostics = %#v", events, output.Diagnostics)
+	}
+}
+func TestDispatchFiltersSpecsAndDenyWins(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX command fixture")
+	}
+	root := t.TempDir()
+	writeSpec := func(name string, spec hooks.ExecutionSpec) {
+		data, err := json.Marshal(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSpec("allow.json", hooks.ExecutionSpec{Target: harness.Cursor, Event: hooks.PreToolUse, Matcher: "Bash", Handler: hooks.Handler{Kind: hooks.CommandHandler, Command: `printf '{"decision":"allow","message":"ok"}'`}, WorkingDir: root})
+	writeSpec("deny.json", hooks.ExecutionSpec{Target: harness.Cursor, Event: hooks.PreToolUse, Matcher: "Shell", Handler: hooks.Handler{Kind: hooks.CommandHandler, Command: `printf '{"decision":"deny","message":"no"}'; exit 2`}, WorkingDir: root})
+	writeSpec("other.json", hooks.ExecutionSpec{Target: harness.Cursor, Event: hooks.PostToolUse, Handler: hooks.Handler{Kind: hooks.CommandHandler, Command: "exit 2"}, WorkingDir: root})
+	outcome, err := hooks.Dispatch(context.Background(), hooks.DispatchArgs{Renderer: HookRenderer{}, Event: hooks.PreToolUse, SpecsDirectory: root, Stdin: []byte(`{"tool_name":"Shell"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.ExitCode != 2 {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+	value := outcome.JSON.(map[string]any)
+	if value["permission"] != hooks.Deny || value["user_message"] != "ok\nno" {
+		t.Fatalf("JSON = %#v", value)
+	}
+}
+
+func TestHookOutputShapes(t *testing.T) {
+	t.Parallel()
+	result := hooks.Result{Decision: hooks.Ask, Message: "why", AdditionalContext: "ctx", UpdatedInput: 1, UpdatedToolOutput: 2}
+	if output := (HookRenderer{}).Output(hooks.PreToolUse, result).(map[string]any); output["permission"] != hooks.Ask {
+		t.Fatalf("output = %#v", output)
 	}
 }
