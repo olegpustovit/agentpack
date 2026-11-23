@@ -31,7 +31,7 @@ function ConflictPanel({ machine, id }: { machine: string; id: string }) {
     mutationFn: () => resolveConflict(machine, id, data?.heads ?? [], choices),
     onSuccess: () => {
       hud.success("Conflict resolved")
-      void queryClient.invalidateQueries({ queryKey: ["m"] })
+      void queryClient.invalidateQueries({ queryKey: ["m", machine, "library"] })
     },
     onError: (error) => hud.error(`Couldn't resolve the conflict: ${errorText(error)}`),
   })

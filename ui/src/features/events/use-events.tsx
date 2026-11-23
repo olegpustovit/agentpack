@@ -88,6 +88,8 @@ function dispatch(queryClient: QueryClient, msg: EventMessage) {
     invalidate(queryClient, ["replication"])
     return
   }
+  // Chat shells are sessions of the chat's machine; they live outside the sessions key.
+  if (msg.topic === "sessions") invalidate(queryClient, ["m", msg.node || LOCAL, "shells"])
   // An open chat follows its own stream, so a sessions change never refetches conversations.
   invalidate(queryClient, ["m", msg.node || LOCAL, msg.topic])
 }

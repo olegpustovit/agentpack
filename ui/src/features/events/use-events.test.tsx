@@ -43,6 +43,7 @@ function Probe() {
   useQuery(tracked(["m", "local", "sessions"]))
   useQuery(tracked(["m", "peer-1", "sessions"]))
   useQuery(tracked(["m", "local", "projects"]))
+  useQuery(tracked(["m", "local", "shells", "s1"]))
   useQuery(tracked(["nodes"]))
   useQuery(tracked(["topology"]))
   useQuery(tracked(["diagnostics", "issues"]))
@@ -88,13 +89,13 @@ afterEach(async () => {
 })
 
 describe("event stream", () => {
-  it("refetches only the local sessions key for a local sessions event", async () => {
+  it("refetches the local sessions key and its chat shells for a local sessions event", async () => {
     const source = FakeEventSource.instances[0]!
     await act(async () => {
       source.emit({ topic: "sessions", node: "" })
       await flush()
     })
-    expect(calls).toEqual(["m/local/sessions"])
+    expect(calls.sort()).toEqual(["m/local/sessions", "m/local/shells/s1"])
   })
 
   it("refetches unified sessions and the peer's key for a peer event", async () => {
@@ -140,7 +141,7 @@ describe("event stream", () => {
       source.onopen?.()
       await flush()
     })
-    expect(calls.sort()).toEqual(["diagnostics/issues", "m/local/projects", "m/local/sessions", "m/peer-1/sessions", "nodes", "topology"])
+    expect(calls.sort()).toEqual(["diagnostics/issues", "m/local/projects", "m/local/sessions", "m/local/shells/s1", "m/peer-1/sessions", "nodes", "topology"])
   })
 
   it("reopens a stream the browser closed, backing off", async () => {
