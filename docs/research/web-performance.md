@@ -56,6 +56,17 @@ Same x86_64 development host and reproduction (copied `state.db` of 163 MB plus 
 
 The push sender polls every 3 s only while a subscription exists; with none it does no work. Not re-measured on the ARM64 reference host.
 
+## Idle gateway with and without a browser (2026-11-23)
+
+Same x86_64 development host, a copy of the development `state.db` (562 MB: 510 sessions, 239k conversation events, upgraded from schema 44), sharing off, tailscale socket hidden, 60 s after a 15 s warm-up. The idle tab is one authenticated `GET /api/events` subscriber, which starts every event topic just as an open browser tab does.
+
+| Metric | No browser | One idle tab | Budget |
+| --- | ---: | ---: | ---: |
+| Idle gateway CPU | 0.12–0.18% | 0.25–0.5% | < 1% |
+| Idle gateway read I/O | 24–29 KB/s | 376–384 KB/s | < 1 MB/s |
+
+Both are within budget, so the 2 s `state` topic stays a poll. Its query, `max(db_version)` over `crsql_db_versions`, reads one row per site; it was not visible in the profile. A 40 s CPU profile with the tab open had 100 ms of samples. The Library topic's 10 s `registry.dbVersion` and `ListPackages` took 40%, and `changedTables` took 30%. `changedTables` ran only because the reproduction's pulls fail while sharing is off, and each recorded failure is a replicated `issue_counts` write. Most of the tab's reads come from the 10 s Library and projects topics and the 30 s sessions digest. Moving them onto the `state` table-change signal is P2.5's next step if the budget tightens.
+
 ## Reproduce
 
 ```sh
