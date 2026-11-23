@@ -3,6 +3,7 @@ package network
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -20,8 +21,15 @@ const agentCredentialLimit = 1 << 20
 // it stops sharing that sign-in without deleting other machines' files.
 type sharedAgentCredential struct {
 	Data     []byte `json:"data,omitempty"`
-	Modified int64  `json:"modified"`       // the file's modification time, Unix ms, where it was published
+	Rev      int64  `json:"rev,omitempty"`  // raised by every publish; the higher rev wins, never a clock
+	Modified int64  `json:"modified"`       // publish time, Unix ms; orders rows only before a machine has a rev record
 	Node     string `json:"node,omitempty"` // the publisher, which alone renews a rotating sign-in
+}
+
+// installedCredential is what this machine last installed or published for a key (local, not replicated).
+type installedCredential struct {
+	Hash []byte
+	Rev  int64
 }
 
 // runAgentCredentials shares agent sign-ins across the mesh: an agent signed in on any machine is
@@ -70,9 +78,10 @@ func (g *Gateway) syncAgentCredentials(ctx context.Context) {
 	}
 }
 
-// syncAgentCredential publishes the local file when it is newer than the shared one, installs the
-// shared one when that is newer, and renews the shared one ahead of the agent when this machine
-// published it. It reports whether it replaced the local file.
+// syncAgentCredential publishes the local file when it changed since this machine last installed or
+// published it, installs the shared one when its rev is higher and the local file is unchanged, and
+// renews the shared one ahead of the agent when this machine published it. It reports whether it
+// replaced the local file.
 func (g *Gateway) syncAgentCredential(ctx context.Context, agent agentLogin, path, node string) (bool, error) {
 	key := agent.harness + "/" + filepath.Base(path)
 	shared, err := g.sharedAgentCredential(ctx, key)
@@ -83,27 +92,64 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent agentLogin, pat
 	if err != nil || modified < 0 {
 		return false, err
 	}
+	record, known, err := g.installedAgentCredential(ctx, key)
+	if err != nil {
+		return false, err
+	}
+	localDigest, sharedDigest := sha256.Sum256(local), sha256.Sum256(shared.Data)
+	// The row moved since this machine last touched it: a higher rev, or a concurrent publish of the same rev that won.
+	localChanged, sharedNewer := !bytes.Equal(localDigest[:], record.Hash), shared.Rev != record.Rev || !bytes.Equal(sharedDigest[:], record.Hash)
+	if !known {
+		// First sight of this key here: only file times can order the two copies, once.
+		localChanged, sharedNewer = modified > shared.Modified, shared.Modified > modified
+	}
+	same := bytes.Equal(local, shared.Data)
 	switch {
-	case local != nil && modified > shared.Modified && !bytes.Equal(local, shared.Data):
-		return false, g.publishAgentCredential(ctx, key, sharedAgentCredential{Data: local, Modified: modified, Node: node})
-	case shared.Data != nil && shared.Modified > modified && !bytes.Equal(local, shared.Data):
-		return true, installAgentCredential(path, shared)
-	case shared.Node == "" && local != nil && bytes.Equal(local, shared.Data):
+	case local != nil && localChanged && !same:
+		return false, g.publishAgentCredential(ctx, key, sharedAgentCredential{Data: local, Rev: shared.Rev + 1, Modified: time.Now().UnixMilli(), Node: node})
+	case shared.Data != nil && (local == nil || sharedNewer && !localChanged) && !same:
+		if err := installAgentCredential(path, shared); err != nil {
+			return false, err
+		}
+		return true, g.recordAgentCredential(ctx, key, shared)
+	case shared.Node == "" && local != nil && same:
 		// A row published before rows named their publisher: a holder adopts it, hours before
 		// any renewal is due, so the replicated choice settles on one machine first.
 		shared.Node = node
 		return false, g.publishAgentCredential(ctx, key, shared)
-	case agent.refresh != nil && shared.Node == node && local != nil && bytes.Equal(local, shared.Data):
+	case local != nil && same && (!known || localChanged || sharedNewer):
+		return false, g.recordAgentCredential(ctx, key, shared)
+	case agent.refresh != nil && shared.Node == node && local != nil && same:
 		renewed, err := agent.refresh(ctx, local)
 		if renewed == nil || err != nil {
 			return false, err
 		}
 		// The old refresh token is spent: keep the new one locally even if publishing fails, and
 		// in the table even if the file write fails; the next round reconciles either.
-		credential := sharedAgentCredential{Data: renewed, Modified: time.Now().UnixMilli(), Node: node}
-		return true, errors.Join(g.publishAgentCredential(ctx, key, credential), installAgentCredential(path, credential))
+		credential := sharedAgentCredential{Data: renewed, Rev: shared.Rev + 1, Modified: time.Now().UnixMilli(), Node: node}
+		publishErr := g.publishAgentCredential(ctx, key, credential)
+		if err := installAgentCredential(path, credential); err != nil {
+			// The spent file stays recorded as unchanged, so the next round installs the renewal instead of publishing it.
+			return false, errors.Join(publishErr, err, g.recordAgentCredential(ctx, key, sharedAgentCredential{Data: local, Rev: credential.Rev}))
+		}
+		return true, publishErr
 	}
 	return false, nil
+}
+
+func (g *Gateway) installedAgentCredential(ctx context.Context, key string) (installedCredential, bool, error) {
+	var record installedCredential
+	err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT hash,rev FROM agent_credential_installs WHERE key=?", key).Scan(&record.Hash, &record.Rev)
+	if errors.Is(err, sql.ErrNoRows) {
+		return record, false, nil
+	}
+	return record, err == nil, err
+}
+
+func (g *Gateway) recordAgentCredential(ctx context.Context, key string, credential sharedAgentCredential) error {
+	digest := sha256.Sum256(credential.Data)
+	_, err := g.auth.store.DB.ExecContext(ctx, "INSERT INTO agent_credential_installs(key,hash,rev) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET hash=excluded.hash,rev=excluded.rev", key, digest[:], credential.Rev)
+	return err
 }
 
 func (g *Gateway) sharedAgentCredential(ctx context.Context, key string) (sharedAgentCredential, error) {
@@ -124,8 +170,11 @@ func (g *Gateway) publishAgentCredential(ctx context.Context, key string, creden
 	if err != nil {
 		return err
 	}
-	_, err = g.auth.store.DB.ExecContext(ctx, "INSERT INTO agent_credentials(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, string(value))
-	return err
+	if _, err = g.auth.store.DB.ExecContext(ctx, "INSERT INTO agent_credentials(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, string(value)); err != nil || credential.Data == nil {
+		// A sign-out keeps the record of the file this machine holds, so that file is not republished.
+		return err
+	}
+	return g.recordAgentCredential(ctx, key, credential)
 }
 
 // stopSharingAgentCredential follows a sign-out with a newer empty row, so no machine republishes
@@ -136,7 +185,12 @@ func (g *Gateway) stopSharingAgentCredential(ctx context.Context, agent agentLog
 	}
 	g.credentialsMu.Lock()
 	defer g.credentialsMu.Unlock()
-	return g.publishAgentCredential(ctx, agent.harness+"/"+filepath.Base(agent.credential()), sharedAgentCredential{Modified: time.Now().UnixMilli()})
+	key := agent.harness + "/" + filepath.Base(agent.credential())
+	shared, err := g.sharedAgentCredential(ctx, key)
+	if err != nil {
+		return err
+	}
+	return g.publishAgentCredential(ctx, key, sharedAgentCredential{Rev: shared.Rev + 1, Modified: time.Now().UnixMilli()})
 }
 
 // readAgentCredential returns nil for a missing file, and a negative time for a file to leave alone
@@ -159,8 +213,7 @@ func readAgentCredential(path string) ([]byte, int64, error) {
 	return data, info.ModTime().UnixMilli(), nil
 }
 
-// installAgentCredential replaces the file atomically and gives it the publisher's time, so this
-// machine does not publish it back.
+// installAgentCredential replaces the file atomically.
 func installAgentCredential(path string, credential sharedAgentCredential) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
@@ -175,10 +228,6 @@ func installAgentCredential(path string, credential sharedAgentCredential) error
 		return err
 	}
 	if err := temporary.Close(); err != nil {
-		return err
-	}
-	modified := time.UnixMilli(credential.Modified)
-	if err := os.Chtimes(temporary.Name(), modified, modified); err != nil {
 		return err
 	}
 	return os.Rename(temporary.Name(), path)
