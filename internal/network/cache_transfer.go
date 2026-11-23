@@ -95,7 +95,7 @@ func (g *Gateway) serveCacheFrom(w http.ResponseWriter, r *http.Request, targetF
 				meshReadError(w, r, err)
 				return
 			}
-			if cache.MatchesContentHash(root, ownHash, actual) {
+			if actual == ownHash {
 				w.Header().Set("Content-Type", "application/x-tar")
 				if err := cache.WritePeerTar(root, w); err != nil {
 					if event := obs.From(r.Context()); event != nil {

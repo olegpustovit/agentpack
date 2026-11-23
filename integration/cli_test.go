@@ -97,7 +97,7 @@ func TestCompiledCLIAddLocalDependencyFromWorkingDirectory(t *testing.T) {
 		t.Fatalf("manifest=%q", manifest)
 	}
 	lock := readFile(t, filepath.Join(project, "pack.lock"))
-	if !strings.Contains(lock, "lockfile_version = 3") || !strings.Contains(lock, "content_hash = 'sha256-tree-v1:") || !(strings.Contains(lock, "module = \"local-skill\"") || strings.Contains(lock, "module = 'local-skill'")) {
+	if !strings.Contains(lock, "lockfile_version = 3") || !strings.Contains(lock, "content_hash = 'sha256-tree-v2:") || !(strings.Contains(lock, "module = \"local-skill\"") || strings.Contains(lock, "module = 'local-skill'")) {
 		t.Fatalf("lock=%q", lock)
 	}
 }
@@ -294,7 +294,7 @@ func TestCompiledCLIRefusesTamperedCacheUntilRepaired(t *testing.T) {
 
 	for _, arguments := range [][]string{{"sync"}, {"sync", "--verify-only"}, {"codex"}} {
 		result := runCLIWithEnv(t, project, arguments, "CODEX_PATH="+fakeCodex)
-		if result.err == nil || !strings.Contains(result.stderr, "content hash mismatch: local-skill\n  expected  sha256-tree-v1:") || !strings.Contains(result.stderr, "\n  cache     "+filepath.Dir(entries[0])+"\n") || !strings.Contains(result.stderr, "\n  repair    agentpack sync --repair") {
+		if result.err == nil || !strings.Contains(result.stderr, "content hash mismatch: local-skill\n  expected  sha256-tree-v2:") || !strings.Contains(result.stderr, "\n  cache     "+filepath.Dir(entries[0])+"\n") || !strings.Contains(result.stderr, "\n  repair    agentpack sync --repair") {
 			t.Fatalf("%v: stdout=%q stderr=%q err=%v", arguments, result.stdout, result.stderr, result.err)
 		}
 		if readFile(t, staged) != body || !strings.Contains(readFile(t, entries[0]), "TAMPER") {
@@ -340,13 +340,23 @@ func TestCompiledCLIRefusesInvalidContentHashWithoutRewritingTheLock(t *testing.
 		writeFile(t, lockPath, tampered)
 		for _, arguments := range [][]string{{"sync"}, {"sync", "--verify-only"}, {"lock"}} {
 			result := runCLI(t, project, arguments...)
-			if result.err == nil || !strings.Contains(result.stderr, "invalid content_hash in pack.lock: local-skill") || !strings.Contains(result.stderr, "expected  sha256-tree-v1:<64 lowercase hex digits>") {
+			if result.err == nil || !strings.Contains(result.stderr, "invalid content_hash in pack.lock: local-skill") || !strings.Contains(result.stderr, "expected  sha256-tree-v2:<64 lowercase hex digits>") {
 				t.Fatalf("%s, %v: stdout=%q stderr=%q err=%v", name, arguments, result.stdout, result.stderr, result.err)
 			}
 			if readFile(t, lockPath) != tampered {
 				t.Fatalf("%s, %v rewrote pack.lock:\n%s", name, arguments, readFile(t, lockPath))
 			}
 		}
+	}
+	// A hash from before execute bits were kept is refused with the fix, and
+	// `lock` keeps the pins while recording the current hash.
+	legacy := strings.Replace(good, "sha256-tree-v2:", "sha256-tree-v1:", 1)
+	writeFile(t, lockPath, legacy)
+	if result := runCLI(t, project, "sync"); result.err == nil || !strings.Contains(result.stderr, "run `agentpack lock`") || readFile(t, lockPath) != legacy {
+		t.Fatalf("sync on a v1 lock: stderr=%q err=%v", result.stderr, result.err)
+	}
+	if result := runCLI(t, project, "lock"); result.err != nil || readFile(t, lockPath) != good {
+		t.Fatalf("lock on a v1 lock: stderr=%q err=%v\n%s", result.stderr, result.err, readFile(t, lockPath))
 	}
 }
 

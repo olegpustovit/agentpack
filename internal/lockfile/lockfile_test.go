@@ -216,6 +216,28 @@ func TestVersion3RoundTripsContentHashesAndMCPServers(t *testing.T) {
 	}
 }
 
+// A v1 hash digested a tree extracted without execute bits. A project lock
+// holding one is refused with the fix, but its pins come back for `lock`;
+// a Library snapshot keeps it.
+func TestLegacyContentHashAsksForLockAndKeepsPins(t *testing.T) {
+	root := t.TempDir()
+	raw := "lockfile_version = 3\n\n[meta]\nname = \"p\"\nversion = \"0.1.0\"\n\n[[packages]]\nmodule = \"github.com/acme/demo\"\nkind = \"skill\"\nurl = \"u\"\nowner = \"acme\"\nrepo = \"demo\"\ncommit = \"c\"\ncache_key = \"k\"\ncontent_hash = \"sha256-tree-v1:" + strings.Repeat("a", 64) + "\"\n"
+	if err := os.WriteFile(filepath.Join(root, "pack.lock"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := Load(root)
+	var legacy *ContentHashError
+	if !errors.As(err, &legacy) || !legacy.Legacy || !strings.Contains(err.Error(), "run `agentpack lock`") || !strings.Contains(legacy.Details(), "agentpack lock") {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(lock.Packages) != 1 || lock.Packages[0].Commit != "c" || lock.Packages[0].ContentHash != "" {
+		t.Fatalf("Load() lock = %#v, want the pin without its old hash", lock.Packages)
+	}
+	if snapshot, err := Parse([]byte(raw)); err != nil || !strings.HasPrefix(snapshot.Packages[0].ContentHash, "sha256-tree-v1:") {
+		t.Fatalf("Parse() = %#v, %v", snapshot.Packages, err)
+	}
+}
+
 func TestPresentButInvalidContentHashIsRejected(t *testing.T) {
 	digest := strings.Repeat("a", 64)
 	for name, value := range map[string]string{
@@ -235,7 +257,7 @@ func TestPresentButInvalidContentHashIsRejected(t *testing.T) {
 			}
 			_, err := Load(root)
 			var invalid *ContentHashError
-			if !errors.Is(err, ErrContentHash) || !errors.As(err, &invalid) || invalid.Value != value || !strings.Contains(err.Error(), "sha256-tree-v1:") {
+			if !errors.Is(err, ErrContentHash) || !errors.As(err, &invalid) || invalid.Value != value || invalid.Legacy || !strings.Contains(err.Error(), "sha256-tree-v2:") {
 				t.Fatalf("Load() error = %v", err)
 			}
 		})

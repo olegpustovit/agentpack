@@ -106,7 +106,7 @@ func GitHubRestore(ctx context.Context, client *http.Client) RemoteRestoreFunc {
 	return func(pkg lockfile.Package, destination string) error {
 		if peer, ok := ctx.Value(peerRestoreKey{}).(func(context.Context, lockfile.Package, string) error); ok && pkg.ContentHash != "" {
 			if err := peer(ctx, pkg, destination); err == nil {
-				if actual, err := TreeDigest(destination); err == nil && MatchesContentHash(destination, pkg.ContentHash, actual) {
+				if actual, err := TreeDigest(destination); err == nil && actual == pkg.ContentHash {
 					return nil
 				}
 			}

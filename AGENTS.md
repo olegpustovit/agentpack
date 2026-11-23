@@ -181,9 +181,9 @@ A repository root with **`.claude-plugin/marketplace.json`**, **`.cursor-plugin/
 - **Rust v2 compatibility is mandatory.** `lockfile_version` and `disabled_plugins` are the canonical underscore keys emitted by Rust `v0.3.12`. The reader also accepts the erroneous `lockfile-version` spelling emitted briefly by the early Go port, but the writer always emits the canonical underscore spelling. Decoder implementation terms such as “strict mode” must never leak into CLI errors; unsupported fields are reported by name with a regeneration command.
 - **`sync`** refreshes **`pack.lock`** from **`agentpack.toml`** only when **`[dependencies]`** is **non-empty**. With an **empty** dependency table, **`sync`** treats the existing lock as authoritative (manual edits, tests, or hybrid workflows).
 - Run **`agentpack lock`** to force a full resolve from the manifest (requires **`agentpack.toml`**).
-- **Lockfile v3 = v2 + `content_hash` per package + `[[mcp_servers]]`.** The reader accepts 2 and 3. The writer emits 3 as soon as a lock holds either addition and 2 otherwise, so a lock that was never re-locked stays byte-compatible with older binaries. `content_hash` carries an algorithm prefix (**`sha256-tree-v1:`**); an unknown prefix is rejected.
-- **Extraction keeps in-package links.** A symbolic link in a GitHub archive whose target is a clean relative path inside the extracted tree is created as a link; any other link becomes an empty file. A `content_hash` written by 0.4.8 or earlier (every link an empty file) still verifies through `cache.MatchesContentHash`.
-- **`sha256-tree-v1`** hashes the materialized cache entry (after extraction and `NormalizePluginLayout`): every regular file and symlink, sorted bytewise by slash-separated relative path, each written as `kind 0x00 path 0x00 decimal-length 0x00 payload` with kind `f` (regular), `x` (any execute bit), or `l` (symlink; payload is the target, never followed). Directories, other permission bits, owners, and times are ignored. `docs/src/concepts/integrity.md` is the normative description. **Changing extraction or layout normalization changes the digest of existing packages and requires a new prefix**; `TestTreeDigestOfNormalizedPluginIsPinned` guards this.
+- **Lockfile v3 = v2 + `content_hash` per package + `[[mcp_servers]]`.** The reader accepts 2 and 3. The writer emits 3 as soon as a lock holds either addition and 2 otherwise, so a lock that was never re-locked stays byte-compatible with older binaries. `content_hash` carries an algorithm prefix (**`sha256-tree-v2:`**); an unknown prefix is rejected. A `pack.lock` holding a **`sha256-tree-v1:`** hash (extracted without execute bits) is refused with "run `agentpack lock`", which keeps the pins and re-fetches to record v2; Library snapshots and older peers may still carry v1 and are read as they are.
+- **Extraction keeps in-package links and execute bits.** A symbolic link in a GitHub archive whose target is a clean relative path inside the extracted tree is created as a link; any other link becomes an empty file. A file with any execute bit in the archive (or a path dependency's source) is cached `0755`, everything else `0644`, and staging keeps the bit, so hook and MCP scripts run by path.
+- **`sha256-tree-v2`** hashes the materialized cache entry (after extraction and `NormalizePluginLayout`): every regular file and symlink, sorted bytewise by slash-separated relative path, each written as `kind 0x00 path 0x00 decimal-length 0x00 payload` with kind `f` (regular), `x` (any execute bit), or `l` (symlink; payload is the target, never followed). Directories, other permission bits, owners, and times are ignored. `docs/src/concepts/integrity.md` is the normative description. **Changing extraction or layout normalization changes the digest of existing packages and requires a new prefix**; `TestTreeDigestOfNormalizedPluginIsPinned` guards this.
 - **A content hash is only recorded from bytes fetched in the same command**, never read off an existing cache entry. `lock`, `add`, `remove`, and `update` record one for every package and re-download any package that has none; `sync` and launchers record one only for packages they must download. A hash already in the lock for a `cache_key` always wins.
 - **Every read of the cache for resolving or staging verifies it first.** `sync`, `lock` and the other explicit commands hash the content. A launch that rebuilds uses `cache.VerifyPackageIncremental`, which reuses a stamp from an earlier full check while the entry's metadata is unchanged; `AGENTPACK_FULL_VERIFY=1` turns that off. A stamp is never written for an entry modified within `racyMetadataWindow` of the check. A mismatch is a `cache.IntegrityError`: the command exits non-zero, nothing is staged, the entry is left as found, and the CLI prints expected/actual digests and the cache path as plain lines. Nothing heals silently. **`agentpack sync --repair`** re-fetches the pinned commit into a temporary directory, verifies it against the lock, replaces the entry, and reports it. Freshly downloaded content is verified before it enters the cache; a download that contradicts the lock is discarded.
 - **"No content hash" means the key is absent.** A `content_hash` that is present but malformed, empty, or of an unknown algorithm is `lockfile.ErrContentHash`: every command refuses the lock and none rewrites it, `lock` included. `cache.CheckLockEntries` additionally refuses a content-hashed GitHub entry whose `cache_key` is not the key of its own owner/repo/path/commit (a hand-edited `commit`). All commands load the lock through `loadCheckedLock`.
@@ -501,7 +501,7 @@ repo = "skills"
 path = "skills/canvas-design"
 commit = "<40 hex>"
 cache_key = "<64 hex>"
-content_hash = "sha256-tree-v1:<64 hex>"
+content_hash = "sha256-tree-v2:<64 hex>"
 
 [[packages]]
 module = "github.com/anthropics/claude-plugins-official/plugins/hookify"
@@ -513,7 +513,7 @@ repo = "claude-plugins-official"
 path = "plugins/hookify"
 commit = "<40 hex>"
 cache_key = "<64 hex>"
-content_hash = "sha256-tree-v1:<64 hex>"
+content_hash = "sha256-tree-v2:<64 hex>"
 name = "hookify"
 
 [[mcp_servers]]

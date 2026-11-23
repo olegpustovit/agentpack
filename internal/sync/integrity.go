@@ -76,7 +76,7 @@ func (Service) LoadLock(projectRoot string) (lockfile.PackLock, error) {
 func loadCheckedLock(projectRoot string) (lockfile.PackLock, error) {
 	lock, err := lockfile.Load(projectRoot)
 	if err != nil {
-		return lockfile.PackLock{}, err
+		return lock, err // a legacy-hash lock comes back with its pins for `lock`
 	}
 	return lock, cache.CheckLockEntries(lock)
 }

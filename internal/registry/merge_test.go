@@ -15,7 +15,7 @@ func snapshot(deps map[string]string) ([]byte, []byte) {
 			continue
 		}
 		manifest += "\"" + module + "\" = { commit = \"" + commit + "\" }\n"
-		lock += "[[packages]]\nmodule = \"" + module + "\"\nkind = \"skill\"\ncommit = \"" + commit + "\"\ncache_key = \"" + commit + "\"\ncontent_hash = \"sha256-tree-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n"
+		lock += "[[packages]]\nmodule = \"" + module + "\"\nkind = \"skill\"\ncommit = \"" + commit + "\"\ncache_key = \"" + commit + "\"\ncontent_hash = \"sha256-tree-v2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n"
 	}
 	return []byte(manifest), []byte(lock)
 }

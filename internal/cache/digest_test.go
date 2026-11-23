@@ -29,7 +29,7 @@ func TestTreeDigestFollowsTheDocumentedRecordFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "sha256-tree-v1:"+hex.EncodeToString(want.Sum(nil)) {
+	if got != "sha256-tree-v2:"+hex.EncodeToString(want.Sum(nil)) {
 		t.Fatalf("TreeDigest() = %s", got)
 	}
 }
@@ -100,7 +100,7 @@ func TestTreeDigestNeverFollowsLinks(t *testing.T) {
 	}
 	want := sha256.New()
 	fmt.Fprintf(want, "l\x00skill\x00%d\x00%s", len(real), real)
-	if got := mustDigest(t, inside); got != "sha256-tree-v1:"+hex.EncodeToString(want.Sum(nil)) {
+	if got := mustDigest(t, inside); got != "sha256-tree-v2:"+hex.EncodeToString(want.Sum(nil)) {
 		t.Fatalf("directory link was not hashed as a link: %s", got)
 	}
 }
@@ -109,13 +109,20 @@ func TestTreeDigestNeverFollowsLinks(t *testing.T) {
 // normalization changed what it writes: existing locks would stop verifying, so
 // the algorithm prefix must change with it.
 func TestTreeDigestOfNormalizedPluginIsPinned(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes")
+	}
 	root := t.TempDir()
 	writeTestFile(t, filepath.Join(root, ".claude-plugin", "plugin.json"), `{"name":"demo","version":"1.2.3","description":"Demo"}`)
 	writeTestFile(t, filepath.Join(root, ".mcp.json"), `{"mcpServers":{}}`)
+	writeTestFile(t, filepath.Join(root, "hooks", "run.sh"), "#!/bin/sh\n")
+	if err := os.Chmod(filepath.Join(root, "hooks", "run.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := NormalizePluginLayout(root); err != nil {
 		t.Fatal(err)
 	}
-	const want = "sha256-tree-v1:c23f5d16de5e797be4675c72476ec76c09d9abbce416cbc5b289805fd3d684f6"
+	const want = "sha256-tree-v2:b08900c5d141080ed4d47afdf7577f9b1dbe62b672a99a3c292f4ddde18ab5f9"
 	if got := mustDigest(t, root); got != want {
 		t.Fatalf("normalized plugin digest = %s, want %s", got, want)
 	}
@@ -435,87 +442,6 @@ func mustDigest(t *testing.T, root string) string {
 		t.Fatal(err)
 	}
 	return digest
-}
-
-// agentpack 0.4.8 wrote each link of a GitHub archive as an empty file and
-// locked that tree. The same package extracted with its links must still
-// verify against such a lock, and only then.
-func TestContentHashLockedBeforeLinksWereExtractedStillVerifies(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX links")
-	}
-	old, current := t.TempDir(), t.TempDir()
-	for _, root := range []string{old, current} {
-		writeTestFile(t, filepath.Join(root, "engineering", "devops", "SKILL.md"), "# DevOps")
-	}
-	writeTestFile(t, filepath.Join(old, "skills", "devops"), "")
-	if err := os.MkdirAll(filepath.Join(current, "skills"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink("../engineering/devops", filepath.Join(current, "skills", "devops")); err != nil {
-		t.Fatal(err)
-	}
-	locked, actual := mustDigest(t, old), mustDigest(t, current)
-	if locked == actual {
-		t.Fatal("a link and an empty file must not share a digest")
-	}
-	if !MatchesContentHash(current, locked, actual) || !MatchesContentHash(current, actual, actual) {
-		t.Fatal("the tree with its links does not verify against the lock of the tree without them")
-	}
-	writeTestFile(t, filepath.Join(current, "engineering", "devops", "SKILL.md"), "# Tampered")
-	if MatchesContentHash(current, locked, mustDigest(t, current)) {
-		t.Fatal("changed file content verified")
-	}
-	// A link that leaves the package is never taken for an empty file.
-	writeTestFile(t, filepath.Join(current, "engineering", "devops", "SKILL.md"), "# DevOps")
-	if err := os.Remove(filepath.Join(current, "skills", "devops")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink("/etc", filepath.Join(current, "skills", "devops")); err != nil {
-		t.Fatal(err)
-	}
-	if MatchesContentHash(current, locked, mustDigest(t, current)) {
-		t.Fatal("a link out of the package verified as an empty file")
-	}
-}
-
-// A lock written by 0.4.8 pins the tree with empty files in place of links.
-// Fetching the package again with its links must install it, not report a
-// download that contradicts the lock.
-func TestEnsureLockCachedInstallsALinkedTreeAgainstAnOlderLock(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX links")
-	}
-	t.Setenv("AGENTPACK_HOME", t.TempDir())
-	old := t.TempDir()
-	writeTestFile(t, filepath.Join(old, "SKILL.md"), "# Demo")
-	writeTestFile(t, filepath.Join(old, "engineering", "devops", "SKILL.md"), "# DevOps")
-	writeTestFile(t, filepath.Join(old, "skills", "devops"), "")
-	pkg := lockfile.Package{Module: "github.com/acme/demo", Kind: lockfile.PackageSkill, Owner: "acme", Repo: "demo", Commit: strings.Repeat("a", 40), CacheKey: "linked", ContentHash: mustDigest(t, old)}
-	restore := func(_ lockfile.Package, destination string) error {
-		writeTestFile(t, filepath.Join(destination, "SKILL.md"), "# Demo")
-		writeTestFile(t, filepath.Join(destination, "engineering", "devops", "SKILL.md"), "# DevOps")
-		if err := os.MkdirAll(filepath.Join(destination, "skills"), 0o755); err != nil {
-			return err
-		}
-		return os.Symlink("../engineering/devops", filepath.Join(destination, "skills", "devops"))
-	}
-	ready, err := EnsureLockCached(pkg, restore)
-	if err != nil || !ready {
-		t.Fatalf("EnsureLockCached() = %v, %v", ready, err)
-	}
-	out, _ := EntryDir(pkg.CacheKey)
-	if body, err := os.ReadFile(filepath.Join(out, "skills", "devops", "SKILL.md")); err != nil || string(body) != "# DevOps" {
-		t.Fatalf("linked skill = %q, %v", body, err)
-	}
-	if err := VerifyPackage(pkg); err != nil {
-		t.Fatalf("the installed entry does not verify against the older lock: %v", err)
-	}
-	writeTestFile(t, filepath.Join(out, "engineering", "devops", "SKILL.md"), "# Tampered")
-	var mismatch *IntegrityError
-	if err := VerifyPackage(pkg); !errors.As(err, &mismatch) {
-		t.Fatalf("tampered entry verified: %v", err)
-	}
 }
 
 func TestVerifyPackageIncrementalReusesProofOnlyWhileMetadataHolds(t *testing.T) {

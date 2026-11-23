@@ -598,12 +598,12 @@ func TestSourceIdentityIncludesLockedPackageContentHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lock.Packages = []lockfile.Package{{Module: "github.com/team/skills", Kind: lockfile.PackageSkill, Direct: true, Commit: "abc123", ContentHash: "sha256-tree-v1:first"}}
+	lock.Packages = []lockfile.Package{{Module: "github.com/team/skills", Kind: lockfile.PackageSkill, Direct: true, Commit: "abc123", ContentHash: "sha256-tree-v2:first"}}
 	one, err := sourceIdentity(root, lock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lock.Packages[0].ContentHash = "sha256-tree-v1:second"
+	lock.Packages[0].ContentHash = "sha256-tree-v2:second"
 	two, err := sourceIdentity(root, lock)
 	if err != nil {
 		t.Fatal(err)

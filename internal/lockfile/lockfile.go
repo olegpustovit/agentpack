@@ -25,22 +25,44 @@ const (
 )
 
 // ContentHashPrefix names the tree digest algorithm stored in content_hash.
-const ContentHashPrefix = "sha256-tree-v1:"
+const ContentHashPrefix = "sha256-tree-v2:"
+
+// legacyContentHashPrefix digested trees extracted without execute bits. A
+// lock holding one is refused until `agentpack lock` records the current one.
+const legacyContentHashPrefix = "sha256-tree-v1:"
 
 // ErrContentHash marks a lock whose content_hash key is present but is not a
 // digest this build can check. Such a lock is never regenerated automatically.
 var ErrContentHash = errors.New("invalid content hash in lockfile")
 
-// ContentHashError is the ErrContentHash for one package.
-type ContentHashError struct{ Module, Value, Path string }
+// ContentHashError is the ErrContentHash for one package. Legacy marks a
+// well-formed sha256-tree-v1 hash, which `agentpack lock` replaces.
+type ContentHashError struct {
+	Module, Value, Path string
+	Legacy              bool
+}
 
 func (err *ContentHashError) Unwrap() error { return ErrContentHash }
 
+const legacyHashFix = "run `agentpack lock` to fetch every package again and record " + ContentHashPrefix + " hashes"
+
 func (err *ContentHashError) Error() string {
+	if err.Legacy {
+		return fmt.Sprintf("%v: package %s has a %s content hash in %s, written by an older agentpack that did not record executable files; nothing was fetched or staged; %s", ErrContentHash, err.Module, strings.TrimSuffix(legacyContentHashPrefix, ":"), err.Path, legacyHashFix)
+	}
 	return fmt.Sprintf("%v: package %s has content_hash %q in %s, but a content hash must be %s followed by 64 lowercase hex digits; nothing was fetched or staged; restore pack.lock from version control, or upgrade agentpack if a newer version wrote it", ErrContentHash, err.Module, err.Value, err.Path, ContentHashPrefix)
 }
 
 func (err *ContentHashError) Details() string {
+	if err.Legacy {
+		return strings.Join([]string{
+			"outdated content_hash in pack.lock: " + err.Module,
+			"  found     " + legacyContentHashPrefix + "…",
+			"  expected  " + ContentHashPrefix + "<64 lowercase hex digits>",
+			"  lockfile  " + err.Path,
+			"  fix       " + legacyHashFix,
+		}, "\n") + "\n"
+	}
 	return strings.Join([]string{
 		"invalid content_hash in pack.lock: " + err.Module,
 		"  found     " + fmt.Sprintf("%q", err.Value),
@@ -54,9 +76,14 @@ func (err *ContentHashError) Summary() string {
 	return fmt.Sprintf("invalid content_hash for %s in pack.lock: nothing was fetched or staged", err.Module)
 }
 
-// ValidContentHash reports whether value is a complete sha256-tree-v1 digest.
+// ValidContentHash reports whether value is a complete tree digest of a known
+// algorithm. Library records and older mesh peers still carry sha256-tree-v1;
+// a lock is held to the current one by parse.
 func ValidContentHash(value string) bool {
 	digest, found := strings.CutPrefix(value, ContentHashPrefix)
+	if !found {
+		digest, found = strings.CutPrefix(value, legacyContentHashPrefix)
+	}
 	if !found || len(digest) != 64 {
 		return false
 	}
@@ -207,15 +234,17 @@ func LoadFromPath(path string) (PackLock, error) {
 	if err != nil {
 		return PackLock{}, fmt.Errorf("read lockfile %s: %w", path, err)
 	}
-	return parse(data, path)
+	return parse(data, path, true)
 }
 
-// Parse validates an in-memory lockfile.
+// Parse validates an in-memory lockfile, such as a Library snapshot. Those
+// keep the sha256-tree-v1 hashes they were recorded with; only a project's
+// pack.lock is refused for them.
 func Parse(data []byte) (PackLock, error) {
-	return parse(data, paths.LockPath(""))
+	return parse(data, paths.LockPath(""), false)
 }
 
-func parse(data []byte, path string) (PackLock, error) {
+func parse(data []byte, path string, refuseLegacy bool) (PackLock, error) {
 	var disk diskLock
 	decoder := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
 	if err := decoder.Decode(&disk); err != nil {
@@ -241,6 +270,7 @@ func parse(data []byte, path string) (PackLock, error) {
 	if err != nil {
 		return PackLock{}, err
 	}
+	var legacy *ContentHashError
 	for index, pkg := range disk.Packages {
 		// go-toml assigns string kinds directly and does not call UnmarshalText, so validate here.
 		if pkg.Kind != "" {
@@ -256,10 +286,20 @@ func parse(data []byte, path string) (PackLock, error) {
 		if !ValidContentHash(pkg.ContentHash) {
 			return PackLock{}, &ContentHashError{Module: pkg.Module, Value: pkg.ContentHash, Path: path}
 		}
+		if refuseLegacy && strings.HasPrefix(pkg.ContentHash, legacyContentHashPrefix) {
+			if legacy == nil {
+				legacy = &ContentHashError{Module: pkg.Module, Value: pkg.ContentHash, Path: path, Legacy: true}
+			}
+			disk.Packages[index].ContentHash = ""
+		}
 	}
 	lock := PackLock{LockfileVersion: disk.LockfileVersion, Meta: disk.Meta, Packages: disk.Packages, MCPServers: disk.MCPServers}
 	if disk.Config != nil {
 		lock.Config = *disk.Config
+	}
+	if legacy != nil {
+		// The pins stay usable: `agentpack lock` keeps them and hashes again.
+		return lock, legacy
 	}
 	return lock, nil
 }

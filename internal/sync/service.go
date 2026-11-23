@@ -148,8 +148,13 @@ func (service Service) resolveAdded(ctx context.Context, projectRoot string, pro
 func (service Service) resolve(ctx context.Context, projectRoot string, project *manifest.Manifest, run resolveRun) (lockfile.PackLock, error) {
 	previous, err := loadCheckedLock(projectRoot)
 	exists := err == nil
+	var hashErr *lockfile.ContentHashError
 	switch {
 	case err == nil:
+	case run.regenerate && errors.As(err, &hashErr) && hashErr.Legacy:
+		// Parse cleared the old hashes, so every package is fetched again under its pin.
+		service.notify("pack.lock holds content hashes from an older agentpack; every package is fetched again to record %s hashes", strings.TrimSuffix(lockfile.ContentHashPrefix, ":"))
+		exists = true
 	case os.IsNotExist(rootCause(err)):
 		previous = lockfile.PackLock{}
 	case run.regenerate && !errors.Is(err, lockfile.ErrContentHash) && !errors.As(err, new(*cache.LockEntryError)):
