@@ -155,7 +155,7 @@ class ThreadReducer {
   private afterPrompt = false
   // The last snapshot while no entry has arrived since; a parent re-snapshots only the children an entry touched.
   private last: ThreadState | undefined
-  private summaries = new Map<string, { thread: ThreadState; tools: number; lastTool?: string }>()
+  private summaries = new Map<string, { source: ThreadState; brief?: string; thread: ThreadState; tools: number; lastTool?: string }>()
 
   constructor(private readonly nested = false) {}
 
@@ -449,16 +449,24 @@ class ThreadReducer {
     if (this.meta.size > 0) {
       state.subagents = {}
       for (const [id, info] of this.meta) {
-        const thread = this.children.get(id)?.snapshot() ?? EMPTY_THREAD
+        const source = this.children.get(id)?.snapshot() ?? EMPTY_THREAD
+        // The brief a child works from: Claude (AIR) sends it only as the announcement's description, a
+        // flattened child only in its parent tool call's input. An RFD session message already shows it.
+        const call = info.toolCallId === undefined ? undefined : this.tools[info.toolCallId]
+        const input = (call === undefined ? undefined : (this.state.items[call]?.data as ToolPayload | undefined)?.rawInput) as { prompt?: unknown } | undefined
+        const brief = info.description || (typeof input?.prompt === "string" ? input.prompt : undefined)
         let summary = this.summaries.get(id)
-        if (summary?.thread !== thread) {
-          const tools = thread.items.filter((item) => item.kind === "tool")
-          summary = { thread, tools: tools.length, lastTool: (tools.at(-1)?.data as { title?: string } | undefined)?.title }
+        if (summary?.source !== source || summary.brief !== brief) {
+          const tools = source.items.filter((item) => item.kind === "tool")
+          const thread = brief && !source.items.some((item) => item.kind === "task")
+            ? { ...source, items: [{ kind: "task", data: { text: { text: brief } }, ts: info.startedTs }, ...source.items] }
+            : source
+          summary = { source, brief, thread, tools: tools.length, lastTool: (tools.at(-1)?.data as { title?: string } | undefined)?.title }
           this.summaries.set(id, summary)
         }
-        state.subagents[id] = { ...info, ...summary, tokens: thread.context_tokens }
+        state.subagents[id] = { ...info, thread: summary.thread, tools: summary.tools, lastTool: summary.lastTool, tokens: source.context_tokens }
         // A child waiting on you makes the whole chat wait on you.
-        if (thread.needs_you) state.needs_you = true
+        if (source.needs_you) state.needs_you = true
       }
     }
     this.last = state
