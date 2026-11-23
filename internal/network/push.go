@@ -498,9 +498,9 @@ func pendingPermission(ctx context.Context, db *sql.DB, session string) (pending
 	var request pendingPermissionRequest
 	var payload string
 	err := db.QueryRowContext(ctx, `SELECT json_extract(body,'$.payload') FROM conversation_events e
- WHERE session_id=? AND json_extract(body,'$.kind')='permission_request'
+ WHERE session_id=? AND kind='permission_request'
  AND NOT EXISTS(SELECT 1 FROM conversation_events r WHERE r.session_id=e.session_id AND r.seq>e.seq
-  AND json_extract(r.body,'$.kind')='permission_result'
+  AND r.kind='permission_result'
   AND json_extract(r.body,'$.payload.requestId')=json_extract(e.body,'$.payload.requestId'))
  ORDER BY seq DESC LIMIT 1`, session).Scan(&payload)
 	if errors.Is(err, sql.ErrNoRows) {

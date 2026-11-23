@@ -342,3 +342,48 @@ func TestReplicatedAlterMigrationMarkers(t *testing.T) {
 		}
 	}
 }
+
+// Readers filter events by kind through the derived column and its index, never by parsing every body.
+func TestConversationEventKindIsIndexed(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.DB.Exec(`INSERT INTO conversation_events(session_id,seq,body) VALUES
+		('s',1,'{"seq":1,"kind":"prompt","payload":{}}'),('s',2,'not json'),('s',3,'')`); err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	rows, err := store.Reader.Query("SELECT coalesce(kind,'-') FROM conversation_events WHERE session_id='s' ORDER BY seq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var kind string
+		if err := rows.Scan(&kind); err != nil {
+			t.Fatal(err)
+		}
+		kinds = append(kinds, kind)
+	}
+	if strings.Join(kinds, ",") != "prompt,-,-" {
+		t.Fatalf("kinds = %v", kinds)
+	}
+	var plan strings.Builder
+	rows, err = store.Reader.Query("EXPLAIN QUERY PLAN SELECT seq FROM conversation_events WHERE session_id='s' AND kind='prompt' ORDER BY seq DESC LIMIT 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(detail + "\n")
+	}
+	if !strings.Contains(plan.String(), "conversation_events_kind") {
+		t.Fatalf("plan does not use the kind index:\n%s", plan.String())
+	}
+}

@@ -268,7 +268,7 @@ func (g *Gateway) stopTaskWork(ctx context.Context, session, task string, since 
 		// Only the turn this task started is cancelled: a later prompt means that turn already ended.
 		var later bool
 		if err := g.store.Reader.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM conversation_events WHERE session_id=? AND seq>?
- AND json_extract(body,'$.kind')='prompt')`, session, prompt).Scan(&later); err != nil || later {
+ AND kind='prompt')`, session, prompt).Scan(&later); err != nil || later {
 			return err
 		}
 	}
@@ -746,7 +746,7 @@ func (g *Gateway) agentTasksPass(ctx context.Context) error {
 // taskTurn finds the prompt that delivered task's message and the end of the turn it started; 0 when not (yet) there.
 func taskTurn(ctx context.Context, db *sql.DB, task, session string, since int64) (int64, int64, error) {
 	var start, end int64
-	err := db.QueryRowContext(ctx, `SELECT seq FROM conversation_events WHERE session_id=? AND seq>? AND json_extract(body,'$.kind')='prompt'
+	err := db.QueryRowContext(ctx, `SELECT seq FROM conversation_events WHERE session_id=? AND seq>? AND kind='prompt'
  AND json_extract(body,'$.payload.from.task')=? ORDER BY seq LIMIT 1`, session, since, task).Scan(&start)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, 0, nil
@@ -754,7 +754,7 @@ func taskTurn(ctx context.Context, db *sql.DB, task, session string, since int64
 	if err != nil {
 		return 0, 0, err
 	}
-	err = db.QueryRowContext(ctx, `SELECT seq FROM conversation_events WHERE session_id=? AND seq>? AND json_extract(body,'$.kind') IN ('turn_end','agent_exit')
+	err = db.QueryRowContext(ctx, `SELECT seq FROM conversation_events WHERE session_id=? AND seq>? AND kind IN ('turn_end','agent_exit')
  AND json_extract(body,'$.payload._subagent') IS NULL ORDER BY seq LIMIT 1`, session, start).Scan(&end)
 	if errors.Is(err, sql.ErrNoRows) {
 		return start, 0, nil

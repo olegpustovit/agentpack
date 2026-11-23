@@ -164,7 +164,7 @@ func endSession(ctx context.Context, db *sql.DB, id string, terminal TerminalSta
 	}
 	// A chat that ended before its first message has nothing to keep in the list, unless it failed to start.
 	_, err = db.ExecContext(ctx, `UPDATE sessions SET hidden=1 WHERE id=? AND transport='acp' AND hidden=0 AND node_id=`+state.LocalNodeSQL+`
- AND NOT EXISTS (SELECT 1 FROM conversation_events WHERE session_id=sessions.id AND (body LIKE '%"kind":"prompt"%' OR body LIKE '%"kind":"notice"%"severity":"error"%'))`, id)
+ AND NOT EXISTS (SELECT 1 FROM conversation_events WHERE session_id=sessions.id AND (kind='prompt' OR kind='notice' AND json_extract(body,'$.payload.severity')='error'))`, id)
 	return err
 }
 

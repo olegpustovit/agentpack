@@ -100,7 +100,7 @@ func recordUsage(ctx context.Context, tx *sql.Tx, id string, entry acp.LogEntry,
 		// Stored as the difference from the previous total; a smaller total means the adapter started over.
 		var previous sql.NullString
 		err := tx.QueryRowContext(ctx, `SELECT body FROM conversation_events WHERE session_id=? AND seq<? AND seq>?
-			AND json_extract(body,'$.kind')='usage_update' AND json_extract(body,'$.payload.cost.amount') IS NOT NULL
+			AND kind='usage_update' AND json_extract(body,'$.payload.cost.amount') IS NOT NULL
 			AND json_extract(body,'$.payload._subagent') IS NULL ORDER BY seq DESC LIMIT 1`, id, entry.Seq, restoredSeq).Scan(&previous)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
@@ -118,8 +118,8 @@ func recordUsage(ctx context.Context, tx *sql.Tx, id string, entry acp.LogEntry,
 		// Agent time runs from this turn's prompt; an autonomous cycle has none and adds no time.
 		var kind string
 		var at int64
-		err := tx.QueryRowContext(ctx, `SELECT json_extract(body,'$.kind'),json_extract(body,'$.ts') FROM conversation_events
-			WHERE session_id=? AND seq<? AND json_extract(body,'$.kind') IN ('prompt','turn_end') ORDER BY seq DESC LIMIT 1`, id, entry.Seq).Scan(&kind, &at)
+		err := tx.QueryRowContext(ctx, `SELECT kind,json_extract(body,'$.ts') FROM conversation_events
+			WHERE session_id=? AND seq<? AND kind IN ('prompt','turn_end') ORDER BY seq DESC LIMIT 1`, id, entry.Seq).Scan(&kind, &at)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -403,7 +403,7 @@ func storedPromptID(ctx context.Context, store *state.Store, session, id string)
 	var exists bool
 	err := store.Reader.QueryRowContext(ctx, `SELECT EXISTS(
 		SELECT 1 FROM conversation_events WHERE session_id=? AND json_extract(body, '$.payload.queueId')=?
-		AND json_valid(body) AND json_extract(body, '$.kind') IN ('queued_prompt', 'prompt', 'dequeued_prompt')
+		AND kind IN ('queued_prompt', 'prompt', 'dequeued_prompt')
 	)`, session, id).Scan(&exists)
 	return exists, err
 }
