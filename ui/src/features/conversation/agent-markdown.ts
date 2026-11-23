@@ -46,10 +46,6 @@ marked.use({
 
 const sanitize = (html: string) => DOMPurify.sanitize(html, { FORBID_TAGS: ["img"], ALLOWED_URI_REGEXP: /^https?:/i })
 
-export function renderAgentMarkdown(text: string): string {
-  return sanitize(marked.parse(text, { async: false }) as string)
-}
-
 // One sanitized HTML string per top-level block. While streaming, remend closes half-typed
 // syntax first, so a reply never flashes raw ** or an open fence. Finished blocks yield the same
 // string on every chunk, so React leaves their DOM (and any selection in it) alone.

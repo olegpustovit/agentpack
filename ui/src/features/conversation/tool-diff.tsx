@@ -208,21 +208,3 @@ export function ToolDiffBody({ content, toolId, review }: { content: ToolDiffBlo
     </div>
   )
 }
-
-// For tests: true when word-level marks appear inside a changed line.
-export function toolDiffUsesWordMarks(oldText: string, newText: string): boolean {
-  const changes = diffLines(oldText, newText)
-  for (let index = 0; index < changes.length; index++) {
-    const part = changes[index]!
-    const next = changes[index + 1]
-    if (!part.removed || !next?.added) continue
-    const oldLines = trimSplit(part.value)
-    const newLines = trimSplit(next.value)
-    for (let line = 0; line < Math.min(oldLines.length, newLines.length); line++) {
-      const words = diffWordsWithSpace(oldLines[line]!, newLines[line]!)
-      if (words.some((chunk) => chunk.added || chunk.removed)) return true
-    }
-    index++
-  }
-  return false
-}

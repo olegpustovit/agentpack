@@ -1,18 +1,11 @@
 import { act, createElement } from "react"
 import { createRoot } from "react-dom/client"
 import { beforeAll, describe, expect, it } from "vitest"
-import { ToolDiffBody, toolDiffUsesWordMarks } from "./tool-diff"
+import { ToolDiffBody } from "./tool-diff"
 import { markdownReady } from "./agent-markdown"
 
 beforeAll(() => markdownReady)
 
-describe("toolDiffUsesWordMarks", () => {
-  it("marks changed tokens on edited lines", () => {
-    const oldText = "\tconn, err := dial(ctx, record, 0)\n"
-    const newText = "\tsince := record.lastOffset.Load()\n\tconn, err := dial(ctx, record, since)\n"
-    expect(toolDiffUsesWordMarks(oldText, newText)).toBe(true)
-  })
-})
 describe("ToolDiffBody", () => {
   it("syntax-highlights Go diff lines while retaining word marks", () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })

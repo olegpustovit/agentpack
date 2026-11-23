@@ -1,5 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest"
-import { markdownReady, renderAgentBlocks, renderAgentMarkdown } from "./agent-markdown"
+import { markdownReady, renderAgentBlocks } from "./agent-markdown"
+
+const renderAgentMarkdown = (text: string) => renderAgentBlocks(text).join("")
 
 
 beforeAll(() => markdownReady)

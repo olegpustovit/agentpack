@@ -356,10 +356,6 @@ function ToolGroup({ tools, fresh, machine, sessionId }: { tools: ThreadItem[]; 
   )
 }
 
-export function findPendingPermission(items: ThreadItem[]): ThreadItem | undefined {
-  return items.findLast((item) => item.kind === "permission" && isOpenRequest(item))
-}
-
 function MessageContextMenu({
   text,
   children,

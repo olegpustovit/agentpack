@@ -124,14 +124,6 @@ export function useAgentpackVersions(): (machine: string) => { version?: string;
   }
 }
 
-// A peer's identity is proxied through the gateway, so OS and version come from the machine itself.
-export const machineIdentityQuery = (machine: string) =>
-  queryOptions({
-    queryKey: ["m", machine, "identity"],
-    queryFn: () => api<Identity>("/api/identity", { machine }),
-    staleTime: 60 * 60 * 1000,
-  })
-
 export const nodesQuery = (live: boolean, discover = false) =>
   queryOptions({
     queryKey: discover ? ["nodes", "discovery"] : ["nodes"],
