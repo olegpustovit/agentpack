@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -334,7 +335,14 @@ func (running *Running) Apply(command *exec.Cmd) {
 		environment = os.Environ()
 	}
 	environment = withoutEnvironment(environment, "ANTHROPIC_API_KEY")
-	environment = append(environment, "ANTHROPIC_BASE_URL="+running.Server.BaseURL(), "ANTHROPIC_AUTH_TOKEN="+running.Token, "ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-7", "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6", "ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5", "ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-4-5", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1")
+	environment = append(environment, "ANTHROPIC_BASE_URL="+running.Server.BaseURL(), "ANTHROPIC_AUTH_TOKEN="+running.Token, "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1")
+	// Family defaults match the /v1/models aliases; a model the user set stays theirs.
+	for _, entry := range []string{"ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-7", "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6", "ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5", "ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-4-5"} {
+		key, _, _ := strings.Cut(entry, "=")
+		if !slices.ContainsFunc(environment, func(value string) bool { return strings.HasPrefix(value, key+"=") }) {
+			environment = append(environment, entry)
+		}
+	}
 	command.Env = environment
 }
 func (running *Running) Shutdown() {

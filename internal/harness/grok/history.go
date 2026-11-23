@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func nativeHome() (string, bool) {
@@ -22,104 +21,5 @@ func verifyHistory(staged, native string) error {
 	if !base.DurablePathMatches(filepath.Join(staged, "sessions"), filepath.Join(native, "sessions")) {
 		return os.ErrInvalid
 	}
-	return nil
-}
-func recoverHistory(projectRoot, currentMode string) error {
-	native, ok := nativeHome()
-	if !ok {
-		return nil
-	}
-	state, err := paths.ProjectStateDir(projectRoot)
-	if err != nil {
-		return err
-	}
-	conflicts, err := paths.SessionHistoryRecoveryDirForComponent(projectRoot, "grok", "legacy-durable")
-	if err != nil {
-		return err
-	}
-	if err := base.RecoverWithoutOverwrite(filepath.Join(state, "grok-home", "sessions"), filepath.Join(native, "sessions"), filepath.Join(conflicts, "sessions")); err != nil {
-		return err
-	}
-	current, err := paths.StagingRootForMode(projectRoot, currentMode)
-	if err != nil {
-		return err
-	}
-	modes := filepath.Dir(current)
-	entries, err := os.ReadDir(modes)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		staged := filepath.Join(modes, entry.Name(), "grok-home")
-		info, err := os.Lstat(staged)
-		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			continue
-		}
-		conflicts, err := paths.SessionHistoryRecoveryDirForComponent(projectRoot, "grok", entry.Name())
-		if err != nil {
-			return err
-		}
-		if err := base.RecoverWithoutOverwrite(filepath.Join(staged, "sessions"), filepath.Join(native, "sessions"), filepath.Join(conflicts, "sessions")); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func recoverCredentials(projectRoot, mode string) error {
-	legacy, err := paths.StagingRootForMode(projectRoot, mode)
-	if err != nil {
-		return err
-	}
-	durable, err := paths.StagingGrokHomeDirForMode(projectRoot, mode)
-	if err != nil {
-		return err
-	}
-	state, err := paths.ProjectStateDir(projectRoot)
-	if err != nil {
-		return err
-	}
-	sources := []string{filepath.Join(legacy, "grok-home"), filepath.Join(state, "grok-home"), filepath.Join(state, "grok-homes", paths.ModePathComponent(mode))}
-	if override := os.Getenv("AGENTPACK_STAGING_ROOT"); override != "" {
-		sources = append(sources, filepath.Join(override, "modes", paths.ModePathComponent(mode), "grok-home"))
-	}
-	for _, sourceRoot := range sources {
-		for _, name := range []string{"auth.json", "mcp_credentials.json"} {
-			destination := filepath.Join(durable, name)
-			if _, err := os.Lstat(destination); err == nil {
-				continue
-			} else if !os.IsNotExist(err) {
-				return err
-			}
-			source := filepath.Join(sourceRoot, name)
-			info, err := os.Lstat(source)
-			if os.IsNotExist(err) {
-				continue
-			}
-			if err != nil {
-				return err
-			}
-			if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-				continue
-			}
-			data, err := os.ReadFile(source)
-			if err != nil {
-				return err
-			}
-			if err := os.MkdirAll(durable, 0o700); err != nil {
-				return err
-			}
-			if err := os.WriteFile(destination, data, 0o600); err != nil {
-				return err
-			}
-		}
-	}
-
 	return nil
 }

@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -183,7 +182,7 @@ func reconcileMCPAuthHome(projectRoot, staged string) error {
 func reconcileMCPAuthModeLocked(staged, durable string) error {
 	baselinePath := filepath.Join(staged, credentialsBaselineFile)
 	if info, err := os.Lstat(baselinePath); os.IsNotExist(err) {
-		return nil // pre-snapshot staging is handled by legacy recovery
+		return nil // nothing was handed to this home
 	} else if err != nil {
 		return err
 	} else if !info.Mode().IsRegular() {
@@ -269,18 +268,13 @@ func reconcileMCPAuthModeLocked(staged, durable string) error {
 	return atomicWriteAuth(baselinePath, data)
 }
 
-type credentialCandidate struct {
-	modified time.Time
-	path     string
-}
-
-func recoverMCPAuth(projectRoot, currentMode string) error {
+func reconcileAllMCPAuth(projectRoot, currentMode string) error {
 	return withMCPOAuthLock(projectRoot, func() error {
-		return recoverMCPAuthLocked(projectRoot, currentMode)
+		return reconcileAllMCPAuthLocked(projectRoot, currentMode)
 	})
 }
 
-func recoverMCPAuthLocked(projectRoot, currentMode string) error {
+func reconcileAllMCPAuthLocked(projectRoot, currentMode string) error {
 	modeRoot, err := paths.StagingRootForMode(projectRoot, currentMode)
 	if err != nil {
 		return err
@@ -312,84 +306,6 @@ func recoverMCPAuthLocked(projectRoot, currentMode string) error {
 			return fmt.Errorf("reconcile Codex MCP credentials for generation %s: %w", staged, err)
 		}
 	}
-	candidates, err := credentialCandidates(modes, durable)
-	if err != nil {
-		return err
-	}
-	hasLegacy := false
-	for _, candidate := range candidates {
-		if candidate.path != durable {
-			hasLegacy = true
-		}
-	}
-	if !hasLegacy {
-		return nil
-	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].modified.Equal(candidates[j].modified) {
-			return candidates[i].path < candidates[j].path
-		}
-		return candidates[i].modified.Before(candidates[j].modified)
-	})
-	merged := make(map[string]any)
-	for _, candidate := range candidates {
-		store, err := readCredentialStore(candidate.path)
-		if err != nil {
-			return err
-		}
-		for key, value := range store {
-			merged[key] = value
-		}
-	}
-	return writeCredentialStore(durable, merged)
-}
-func credentialCandidates(modes, durable string) ([]credentialCandidate, error) {
-	var candidates []credentialCandidate
-	if err := appendCredentialCandidate(&candidates, durable, durable); err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(modes)
-	if os.IsNotExist(err) {
-		return candidates, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	for _, entry := range entries {
-		modeDir := filepath.Join(modes, entry.Name())
-		modeInfo, err := os.Stat(modeDir)
-		if err != nil || !modeInfo.IsDir() {
-			continue
-		}
-		if _, err := os.Lstat(filepath.Join(modeDir, "codex-home", credentialsBaselineFile)); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
-			return nil, err
-		}
-		if err := appendCredentialCandidate(&candidates, filepath.Join(modeDir, "codex-home", credentialsFile), durable); err != nil {
-			return nil, err
-		}
-	}
-	return candidates, nil
-}
-func appendCredentialCandidate(candidates *[]credentialCandidate, path, durable string) error {
-	info, err := os.Lstat(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if path != durable && base.DurablePathMatches(path, durable) {
-		return nil
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing to recover unexpected Codex MCP credential symlink %s", path)
-	}
-	if !info.Mode().IsRegular() {
-		return nil
-	}
-	*candidates = append(*candidates, credentialCandidate{info.ModTime(), path})
 	return nil
 }
 func readCredentialStore(path string) (map[string]any, error) {

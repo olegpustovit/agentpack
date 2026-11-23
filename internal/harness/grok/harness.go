@@ -15,7 +15,7 @@ import (
 )
 
 func New() base.Harness {
-	return base.Harness{Target: base.Grok, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchACP: acpLaunch, Inheritance: base.Inheritance{
+	return base.Harness{Target: base.Grok, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchACP: acpLaunch, Inheritance: base.Inheritance{
 		Note: "Grok reads real ~/.grok and ~/.claude in addition to GROK_HOME",
 		Paths: func(string) []string {
 			return base.HomeFiles(".grok/config.toml", ".grok/hooks", ".claude/settings.json")
@@ -64,12 +64,6 @@ func resetPaths(ctx base.StageContext) ([]string, error) {
 		return nil, err
 	}
 	return []string{root}, nil
-}
-func preReset(ctx base.StageContext) error {
-	if err := recoverCredentials(ctx.ProjectRoot, ctx.Mode.Name()); err != nil {
-		return err
-	}
-	return recoverHistory(ctx.ProjectRoot, ctx.Mode.Name())
 }
 func prepare(ctx base.StageContext) error {
 	bundle, err := stagedRoot(ctx)

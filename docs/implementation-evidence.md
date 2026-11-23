@@ -1,6 +1,6 @@
 # v0.9.2 implementation evidence
 
-Starting commit: `7004652234cbd73e0d7f656a024c947a79af2d67` (v0.8.7). The main implementation is `6ace12b5ed83edb461eb0f168c10d452272aa55b` (v0.9.0); the release endpoint is the commit identified by tag `v0.9.2`, including Windows CI corrections. Existing terminal-close cleanup changes were preserved. This delivery covers [PLAN.md](../PLAN.md) and the [gateway reference](gateway-workspace-plan.md).
+Starting commit: `7004652234cbd73e0d7f656a024c947a79af2d67` (v0.8.7). The main implementation is `6ace12b5ed83edb461eb0f168c10d452272aa55b` (v0.9.0); the release endpoint is the commit identified by tag `v0.9.2`, including Windows CI corrections. Existing terminal-close cleanup changes were preserved. This delivery covers the v0.9 specification and the [gateway reference](gateway-workspace-plan.md).
 
 ## Required invariants
 
