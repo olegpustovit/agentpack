@@ -22,22 +22,6 @@ type replicaContact struct {
 	Lag         *int64    `json:"lag,omitempty"`
 }
 
-func (g *Gateway) enrolledPeer(id string) bool {
-	if g.options.Library.Store == nil || id == "" {
-		return false
-	}
-	peers, err := g.options.Library.Store.ListPeers()
-	if err != nil {
-		return false
-	}
-	for _, peer := range peers {
-		if peer.Node == id {
-			return true
-		}
-	}
-	return false
-}
-
 // enrollPeer pairs an allowed peer; an unclaimed gateway first closes its claim window to join the mesh's accounts.
 func (g *Gateway) enrollPeer(ctx context.Context, peer string) error {
 	var claimed bool
@@ -114,7 +98,7 @@ func (g *Gateway) registerRegistryReplication(mux routeRegistrar) {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		if !g.meshPeer(r.Context(), input.Peer) {
+		if !g.peer(input.Peer).Mesh {
 			http.Error(w, "state peer is not enrolled for mesh sync", http.StatusBadRequest)
 			return
 		}

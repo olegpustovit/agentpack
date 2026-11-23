@@ -253,7 +253,7 @@ func (g *Gateway) cleanupArchivedBlobs(ctx context.Context, targetFor func(conte
 				break
 			}
 			// A stale location alone is insufficient proof that Main still has the bytes.
-			if !g.meshPeer(ctx, roles.MainNode) {
+			if !g.peer(roles.MainNode).Mesh {
 				return errors.New("archive Main is unavailable for attachment verification")
 			}
 			target, err := targetFor(ctx, roles.MainNode)

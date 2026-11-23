@@ -77,6 +77,16 @@ func (s *Store) ListPeers() ([]PeerReplica, error) {
 	return peers, rows.Err()
 }
 
+// Peer returns an enrolled (not removed) peer; Node is "" when there is none.
+func (s *Store) Peer(node string) (PeerReplica, error) {
+	peer := PeerReplica{}
+	err := s.sql.Reader.QueryRow("SELECT node_id,mesh FROM registry_peers WHERE node_id=? AND removed=0", node).Scan(&peer.Node, &peer.Mesh)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PeerReplica{}, nil
+	}
+	return peer, err
+}
+
 func (s *Store) RemovePeer(node string) error {
 	if err := ValidatePeer(node); err != nil {
 		return err

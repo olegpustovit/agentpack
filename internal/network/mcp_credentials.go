@@ -499,7 +499,7 @@ func (g *Gateway) markNeedsLogin(ctx context.Context, credential mcpCredential) 
 }
 
 func (g *Gateway) remoteMCPRefresh(ctx context.Context, node string, credential mcpCredential, failedGeneration int64) (mcpBridgeSecret, error) {
-	if !g.meshPeer(ctx, node) {
+	if !g.peer(node).Mesh {
 		return mcpBridgeSecret{}, errMCPRefresherUnreachable
 	}
 	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
@@ -746,7 +746,7 @@ func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
 			return
 		}
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-		allowed := actor.Kind == "local" && g.localRequest(r) || actor.Kind == "peer" && actor.Account && g.meshPeer(r.Context(), peer)
+		allowed := actor.Kind == "local" && g.localRequest(r) || actor.Kind == "peer" && actor.Account && g.peer(peer).Mesh
 		if !allowed || !g.accountEnabled(r.Context(), credential.Account) {
 			http.Error(w, "local or mesh access only", http.StatusForbidden)
 			return

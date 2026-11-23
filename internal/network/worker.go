@@ -441,7 +441,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			persistSessionJSON(context.Background(), store.DB, record.ID, "waiting", waiting, len(waiting) == 0)
 		}
 		current.permissionChange = func(mode string) {
-			if _, err := store.DB.ExecContext(context.Background(), "INSERT INTO mesh_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", permissionSettingKey, mode); err != nil {
+			if err := store.Mesh().SetSetting(context.Background(), permissionSettingKey, mode); err != nil {
 				_, event := obs.Start(ctx, "worker", "remember_permissions")
 				event.Fail(err)
 				event.End()

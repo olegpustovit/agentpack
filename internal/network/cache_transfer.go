@@ -63,7 +63,7 @@ func (g *Gateway) serveCacheFrom(w http.ResponseWriter, r *http.Request, targetF
 	peer, _ := r.Context().Value(replicaPeerKey{}).(string)
 	actor, ok := actorFrom(r.Context())
 	if peer != "" {
-		if !g.meshPeer(r.Context(), peer) {
+		if !g.peer(peer).Mesh {
 			http.Error(w, "cache transfer requires mesh enrollment", http.StatusForbidden)
 			return
 		}
@@ -135,7 +135,7 @@ func (g *Gateway) serveCacheFrom(w http.ResponseWriter, r *http.Request, targetF
 		return
 	}
 	for _, id := range peers {
-		if !g.meshPeer(r.Context(), id) {
+		if !g.peer(id).Mesh {
 			continue
 		}
 		target, err := targetFor(r.Context(), id)

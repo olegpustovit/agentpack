@@ -85,7 +85,7 @@ func (g *Gateway) fetchBlob(ctx context.Context, id, sha string, targetFor func(
 	}
 	lastErr := error(os.ErrNotExist)
 	for _, item := range locations {
-		if !g.meshPeer(ctx, item.node) {
+		if !g.peer(item.node).Mesh {
 			continue
 		}
 		if _, err := sessionBlobDir(g.options.Home, item.session); err != nil {
@@ -151,7 +151,7 @@ func (g *Gateway) serveBlob(w http.ResponseWriter, r *http.Request) {
 	}
 	var data []byte
 	if peer, _ := r.Context().Value(replicaPeerKey{}).(string); peer != "" {
-		if !g.meshPeer(r.Context(), peer) {
+		if !g.peer(peer).Mesh {
 			http.Error(w, "blob transfer requires mesh enrollment", http.StatusForbidden)
 			return
 		}

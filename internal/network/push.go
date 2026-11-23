@@ -372,9 +372,8 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 func (g *Gateway) pushMessageFor(ctx context.Context, s pushSession, kind, machine string) (pushMessage, error) {
 	agent := harness.DisplayName(harness.Target(s.agent))
 	if machine != "local" {
-		var name string
-		err := g.store.Reader.QueryRowContext(ctx, "SELECT name FROM mesh_nodes WHERE node_id=?", s.node).Scan(&name)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		name, err := g.store.Mesh().NodeName(ctx, s.node)
+		if err != nil {
 			return pushMessage{}, err
 		}
 		if name != "" {

@@ -334,7 +334,7 @@ func (g *Gateway) buildHandler() http.Handler {
 				authFailure(w, r, "account state unavailable", err)
 				return
 			}
-			if !hasAccounts && (!g.meshPeer(r.Context(), peer) || !(r.Method == http.MethodGet && (r.URL.Path == "/api/sync/changes" || r.URL.Path == "/api/sync/events" || r.URL.Path == "/api/events"))) {
+			if !hasAccounts && (!g.peer(peer).Mesh || !(r.Method == http.MethodGet && (r.URL.Path == "/api/sync/changes" || r.URL.Path == "/api/sync/events" || r.URL.Path == "/api/events"))) {
 				http.Error(w, "waiting for mesh accounts", http.StatusForbidden)
 				return
 			}
@@ -957,7 +957,7 @@ func (g *Gateway) serveRoute(row route, handler http.Handler) http.Handler {
 			}
 		}
 		if node := r.URL.Query().Get("node"); node != "" && strings.HasPrefix(r.URL.Path, "/api/") &&
-			!(r.Method == http.MethodGet && meshListRoute(r.URL.Path) && g.meshPeer(r.Context(), node)) {
+			!(r.Method == http.MethodGet && meshListRoute(r.URL.Path) && g.peer(node).Mesh) {
 			w.Header().Del("Cache-Control") // the peer's Cache-Control passes through unchanged
 			g.proxyTailnet(w, r, node)
 			return

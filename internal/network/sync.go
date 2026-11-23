@@ -40,7 +40,7 @@ type stateChangePage struct {
 func (g *Gateway) peerOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-		if !g.enrolledPeer(peer) {
+		if g.peer(peer).Node == "" {
 			http.Error(w, "replication requires enrollment on both machines", http.StatusForbidden)
 			return
 		}
@@ -48,26 +48,19 @@ func (g *Gateway) peerOnly(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (g *Gateway) meshPeer(ctx context.Context, id string) bool {
+// peer is the enrolled peer for id; Node is "" when it is not enrolled. Mesh peers also share state.
+func (g *Gateway) peer(id string) registry.PeerReplica {
 	if g.options.Library.Store == nil || id == "" {
-		return false
+		return registry.PeerReplica{}
 	}
-	peers, err := g.options.Library.Store.ListPeers()
-	if err != nil {
-		return false
-	}
-	for _, peer := range peers {
-		if peer.Node == id {
-			return peer.Mesh
-		}
-	}
-	return false
+	peer, _ := g.options.Library.Store.Peer(id)
+	return peer
 }
 
 func (g *Gateway) registerStateSync(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/sync/events", g.peerOnly(func(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-		if !g.meshPeer(r.Context(), peer) {
+		if !g.peer(peer).Mesh {
 			http.Error(w, "mesh replication requires explicit enrollment on both machines", http.StatusForbidden)
 			return
 		}
@@ -76,7 +69,7 @@ func (g *Gateway) registerStateSync(mux routeRegistrar) {
 	// A new Main asks the old one to stop Main-only work before its switch replicates.
 	mux.HandleFunc("POST /api/sync/main/release", g.peerOnly(func(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-		if !g.meshPeer(r.Context(), peer) {
+		if !g.peer(peer).Mesh {
 			http.Error(w, "mesh replication requires explicit enrollment on both machines", http.StatusForbidden)
 			return
 		}
@@ -100,7 +93,7 @@ func (g *Gateway) registerStateSync(mux routeRegistrar) {
 	}))
 	mux.HandleFunc("GET /api/sync/changes", g.peerOnly(func(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-		if !g.meshPeer(r.Context(), peer) {
+		if !g.peer(peer).Mesh {
 			http.Error(w, "mesh replication requires explicit enrollment on both machines", http.StatusForbidden)
 			return
 		}
@@ -357,7 +350,7 @@ func (g *Gateway) runStateSync(ctx context.Context) {
 		nodeID, _ := g.store.NodeID(ctx)
 		ctx = obs.WithSink(ctx, g.logs, obs.BuildMetadata(g.options.Version, nodeID, "gateway"))
 	}
-	if err := g.publishMeshNode(ctx); err != nil {
+	if err := g.store.Mesh().Publish(ctx, g.selfIdentity(ctx).displayName(), g.options.Version); err != nil {
 		_, event := obs.Start(ctx, "sync.pull", "register node")
 		event.Fail(err)
 		event.End()
@@ -453,7 +446,7 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 	lastFailure := ""
 	var site []byte
 	for {
-		if !g.meshPeer(ctx, peer) {
+		if !g.peer(peer).Mesh {
 			return
 		}
 		pullCtx, cancel := context.WithTimeout(ctx, time.Minute)
@@ -516,16 +509,4 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 		case <-timer.C:
 		}
 	}
-}
-
-func (g *Gateway) publishMeshNode(ctx context.Context) error {
-	site, err := g.store.SiteID(ctx)
-	if err != nil {
-		return err
-	}
-	_, err = g.store.DB.ExecContext(ctx, `INSERT INTO mesh_nodes(node_id,name,site_id,schema_version,app_version,updated_at)
- VALUES (`+state.LocalNodeSQL+`,?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET
- name=excluded.name,site_id=excluded.site_id,schema_version=excluded.schema_version,app_version=excluded.app_version,updated_at=excluded.updated_at
- WHERE name IS NOT excluded.name OR site_id IS NOT excluded.site_id OR schema_version IS NOT excluded.schema_version OR app_version IS NOT excluded.app_version`, g.selfIdentity(ctx).displayName(), site, replicationVersion, g.options.Version, time.Now().UnixMilli())
-	return err
 }
