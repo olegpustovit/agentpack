@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -141,25 +142,40 @@ func TestNativeGoalUsesAgentCommandAndSnapshots(t *testing.T) {
 	agent.goalUntil(t, func(goal *Goal) bool { return goal == nil })
 }
 
-func TestSubagentSummaryTracksBusyChildren(t *testing.T) {
+// Claude's background Agent tasks arrive as AIR's subagent_spawned / subagent_state_update; the
+// session tree lists them while they run and the most recent once they finish.
+func TestSubagentSummaryTracksBackgroundAgents(t *testing.T) {
 	session, _ := newFakeAgentSession(t)
-	saved := make(chan []SubagentSummary, 8)
+	saved := make(chan []SubagentSummary, 32)
 	session.subagentsChange = func(list []SubagentSummary) { saved <- list }
-	update := func(id string, fields map[string]any) {
-		fields["sessionUpdate"], fields["sessionId"] = "subagent_update", id
-		session.log.Append("subagent_update", 5, mustRawJSON(fields))
+	air := func(update string) {
+		line := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"parent","update":` + update + `}}`
+		if !acp.AppendRawSessionUpdate(session.log, []byte(line)) {
+			t.Fatalf("not consumed: %s", update)
+		}
 	}
-	update("child", map[string]any{"title": "Search", "state": map[string]string{"state": "running"}})
-	if list := <-saved; len(list) != 1 || list[0].Title != "Search" || list[0].State != "running" || list[0].StartedAt != 5 {
-		t.Fatalf("list = %+v", list)
+	spawn := func(id string) {
+		air(`{"sessionUpdate":"subagent_spawned","subagentSessionId":"` + id + `","name":"Worker ` + id + `","task":"t","capabilities":{}}`)
 	}
-	update("child", map[string]any{"description": "same state"})
-	update("child", map[string]any{"state": map[string]string{"state": "idle"}})
-	if list := <-saved; len(list) != 0 {
-		t.Fatalf("an unchanged update was saved, or idle child kept: %+v", list)
+	spawn("a")
+	if list := <-saved; len(list) != 1 || list[0].Title != "Worker a" || list[0].State != "running" {
+		t.Fatalf("running = %+v", list)
 	}
-	update("other", map[string]any{"state": map[string]string{"state": "requires_action"}})
-	<-saved
+	air(`{"sessionUpdate":"subagent_state_update","subagentSessionId":"a","state":"completed"}`)
+	if list := <-saved; len(list) != 1 || list[0].State != "idle" || list[0].EndedAt == 0 {
+		t.Fatalf("a finished background agent stays in the tree: %+v", list)
+	}
+	for _, id := range []string{"b", "c", "d", "e", "f", "g"} {
+		spawn(id)
+		<-saved
+		air(`{"sessionUpdate":"subagent_state_update","subagentSessionId":"` + id + `","state":"completed"}`)
+		<-saved
+	}
+	spawn("h")
+	list := <-saved
+	if len(list) != finishedSubagentsShown+1 || list[len(list)-1].ID != "h" || slices.ContainsFunc(list, func(s SubagentSummary) bool { return s.ID == "a" }) {
+		t.Fatalf("tree = %+v; want the running one and the %d most recent finished", list, finishedSubagentsShown)
+	}
 	session.log.Append("agent_exit", 6, []byte(`{}`))
 	if list := <-saved; list != nil {
 		t.Fatalf("exit kept %+v", list)
