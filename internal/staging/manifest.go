@@ -55,11 +55,6 @@ func (err *DriftError) Summary() string {
 	return fmt.Sprintf("staged tree does not match the last sync: %d file(s) differ", len(err.Changes))
 }
 
-// RecordStaged saves the manifest of the staged content as it is now.
-func (pipeline Pipeline) RecordStaged() error {
-	return pipeline.recordStaged(pipeline.context())
-}
-
 func (pipeline Pipeline) recordStaged(ctx base.StageContext) error {
 	manifest, err := pipeline.snapshotStaged(ctx, true)
 	if err != nil {

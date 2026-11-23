@@ -250,6 +250,16 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 			return nil, err
 		}
 	}
+	home, _ := os.UserHomeDir()
+	for _, candidate := range harnesses {
+		root, err := candidate.StagedRoot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := ResolveCollisions(root, string(candidate.ID()), candidate.NativeUserRoots(home)); err != nil {
+			return nil, err
+		}
+	}
 	if err := pipeline.verify(ctx); err != nil {
 		return nil, err
 	}
@@ -331,7 +341,7 @@ func (pipeline Pipeline) verify(ctx base.StageContext) error {
 			return err
 		}
 		skillRoots = append(skillRoots, root)
-		names, err := ResolveCollisions(root, string(candidate.ID()), candidate.NativeUserRoots(home))
+		names, err := collisions(root, string(candidate.ID()), candidate.NativeUserRoots(home), false)
 		if err != nil {
 			return err
 		}

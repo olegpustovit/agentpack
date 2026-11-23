@@ -104,7 +104,7 @@ func keepProjectFiles(projectRoot string) func() error {
 			if current, err := os.ReadFile(file.path); err == nil && string(current) == string(file.data) {
 				continue
 			}
-			if err := os.WriteFile(file.path, file.data, 0o644); err != nil {
+			if err := paths.WriteAtomic(file.path, file.data, 0o644); err != nil {
 				return err
 			}
 		}
