@@ -37,13 +37,6 @@ export function readConnections(value: unknown): Connections {
   }
 }
 
-// The gateway refreshes tokens before they expire, so an expiry is shown only when sign-in is needed.
-export function connectionStatus(connection: Connection): { text: string; problem: boolean } {
-  if (connection.status === "needs_login") return { text: "Needs sign-in. Reconnect to restore it for every agent.", problem: true }
-  const kind = { oauth: "Signed in", header: "Token header", env: "Environment variables" }[connection.kind] ?? connection.kind
-  return { text: `${kind} · shared with every machine`, problem: false }
-}
-
 export const connectionsQuery = (live: boolean) => queryOptions({
   queryKey: ["mcp-credentials"],
   queryFn: async () => readConnections(await api<unknown>("/api/mcp/credentials")),
@@ -62,4 +55,20 @@ export type ServerLogin = "connected" | "needs_login" | "none"
 export function serverLogin(url: string, credentials: Connection[]): ServerLogin {
   const connection = url ? credentials.find((item) => item.kind !== "env" && item.match === url) : undefined
   return !connection ? "none" : connection.status === "needs_login" ? "needs_login" : "connected"
+}
+
+// Every saved login for one server in the order the resolver tries them: the first is the default.
+export function loginsFor(url: string, credentials: Connection[]): Connection[] {
+  return url ? credentials.filter((item) => item.kind !== "env" && item.match === url) : []
+}
+
+// Server groups in Settings: one per endpoint, named after its host.
+export function serverName(match: string): string {
+  try {
+    const host = new URL(match).hostname.replace(/^(mcp|api)\./, "")
+    const name = host.split(".").at(-2) ?? host
+    return name === "githubcopilot" ? "GitHub" : name.charAt(0).toUpperCase() + name.slice(1)
+  } catch {
+    return match
+  }
 }
