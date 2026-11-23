@@ -174,6 +174,8 @@ func (cs *ConversationSession) Submit(ctx context.Context, input acp.PromptInput
 		obs.Go("acp.turns", func() { cs.runTurns(ctx, &input, result) })
 		return "", result, nil
 	}
+	// An agent message must not wait out a long turn: steer it in when the agent cannot take it queued.
+	steer = steer || input.From != nil && cs.steer != nil && !cs.queuesPrompts
 	item := QueuedPrompt{ID: input.QueueID, Input: input, Steer: steer}
 	if item.ID == "" {
 		item.ID = rand.Text()

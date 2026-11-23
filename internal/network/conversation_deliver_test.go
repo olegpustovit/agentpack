@@ -190,7 +190,11 @@ func TestSteerHandsThePromptToTheRunningTurn(t *testing.T) {
 	if err := session.SteerQueued(ctx, "q1"); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(steered, []string{"look here", "queued"}) || cancels != 0 || len(queuedIDs(session)) != 0 {
+	// An agent message steers in on its own, without waiting for the turn to end.
+	if _, _, err := session.Submit(ctx, acp.PromptInput{QueueID: "a1", Text: "from agent", From: &acp.PromptFrom{Session: "session-a", Task: "t_0123456789abcdef", Kind: "ask"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(steered, []string{"look here", "queued", "from agent"}) || cancels != 0 || len(queuedIDs(session)) != 0 {
 		t.Fatalf("steered %v with %d cancels, queue %v", steered, cancels, queuedIDs(session))
 	}
 	close(release)
