@@ -83,7 +83,7 @@ func buildDeploymentBinary(ctx context.Context, binary string, run func(*exec.Cm
 }
 
 func requireStagedUI(root string) error {
-	if _, err := os.Stat(filepath.Join(root, "internal", "network", "webdist", "index.html")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "internal", "gateway", "webdist", "index.html")); err != nil {
 		return errors.New("gateway UI is not built; run make ui-stage before deploying")
 	}
 	return nil

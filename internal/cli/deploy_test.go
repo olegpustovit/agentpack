@@ -189,7 +189,7 @@ func TestRequireStagedUI(t *testing.T) {
 	if err := requireStagedUI(root); err == nil || !strings.Contains(err.Error(), "make ui-stage") {
 		t.Fatalf("unstaged checkout: got %v", err)
 	}
-	web := filepath.Join(root, "internal", "network", "webdist")
+	web := filepath.Join(root, "internal", "gateway", "webdist")
 	if err := os.MkdirAll(web, 0o755); err != nil {
 		t.Fatal(err)
 	}
