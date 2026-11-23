@@ -65,8 +65,9 @@ func checkStagingOwnership(path string, _ os.FileInfo, existing bool) error {
 	if err != nil {
 		return err
 	}
+	// Earlier releases left the inherited ACL on a root the user owns; make it private instead of refusing it.
 	if control&windows.SE_DACL_PROTECTED == 0 || dacl == nil || dacl.AceCount != 1 {
-		return fmt.Errorf("staging root must have a private ACL: %s", path)
+		return EnsurePrivateDirectory(path)
 	}
 	var ace *windows.ACCESS_ALLOWED_ACE
 	if err := windows.GetAce(dacl, 0, &ace); err != nil {
@@ -74,7 +75,7 @@ func checkStagingOwnership(path string, _ os.FileInfo, existing bool) error {
 	}
 	sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 	if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || !sid.Equals(user.User.Sid) {
-		return fmt.Errorf("staging root must grant access only to the current user: %s", path)
+		return EnsurePrivateDirectory(path)
 	}
 	return nil
 }

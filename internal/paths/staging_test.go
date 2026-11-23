@@ -133,19 +133,32 @@ func TestStagingGenerationRefusesPublicRoot(t *testing.T) {
 	if os.Geteuid() < 0 {
 		t.Skip("Unix mode check")
 	}
-	project := t.TempDir()
-	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
-	root, err := stagingRootBase(project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := BeginStagingGeneration(project, "default"); err == nil {
-		t.Fatal("accepted a staging root readable by other users")
+	for _, test := range []struct {
+		mode   os.FileMode
+		accept bool
+	}{
+		{0o755, true},  // an earlier release's root: tightened to 0700 and used
+		{0o777, false}, // others could have written into it
+		{0o775, false},
+	} {
+		project := t.TempDir()
+		t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+		root, err := stagingRootBase(project)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(root, test.mode); err != nil {
+			t.Fatal(err)
+		}
+		_, err = BeginStagingGeneration(project, "default")
+		if test.accept != (err == nil) {
+			t.Fatalf("mode %o: err = %v, want accept=%v", test.mode, err, test.accept)
+		}
+		if info, statErr := os.Stat(root); test.accept && (statErr != nil || info.Mode().Perm() != 0o700) {
+			t.Fatalf("mode %o was not tightened: %v %v", test.mode, info.Mode().Perm(), statErr)
+		}
 	}
 }
