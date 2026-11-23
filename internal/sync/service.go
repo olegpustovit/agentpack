@@ -146,7 +146,15 @@ func (service Service) resolveAdded(ctx context.Context, projectRoot string, pro
 }
 
 func (service Service) resolve(ctx context.Context, projectRoot string, project *manifest.Manifest, run resolveRun) (lockfile.PackLock, error) {
-	previous, err := loadCheckedLock(projectRoot)
+	current, err := loadLockFile(projectRoot)
+	saved, err := service.resolveFile(ctx, projectRoot, project, run, current, err)
+	return saved.lock, err
+}
+
+// resolveFile resolves against current, the pack.lock the caller read (readErr
+// is that read's error), and returns the lock now on disk without reading it.
+func (service Service) resolveFile(ctx context.Context, projectRoot string, project *manifest.Manifest, run resolveRun, current lockFile, readErr error) (lockFile, error) {
+	previous, err := current.lock, readErr
 	exists := err == nil
 	switch {
 	case err == nil:
@@ -156,7 +164,7 @@ func (service Service) resolve(ctx context.Context, projectRoot string, project 
 		service.notify("the existing pack.lock could not be read and is regenerated from agentpack.toml; pins it held are resolved again (%v)", err)
 		previous = lockfile.PackLock{}
 	default:
-		return lockfile.PackLock{}, err
+		return lockFile{}, err
 	}
 	locked := previous
 	locked.Packages = append([]lockfile.Package(nil), previous.Packages...)
@@ -184,16 +192,21 @@ func (service Service) resolve(ctx context.Context, projectRoot string, project 
 	}
 	resolved, err := resolve.NewResolver(ctx, service.client()).Resolve(ctx, projectRoot, project, options)
 	if err != nil {
-		return lockfile.PackLock{}, err
+		return lockFile{}, err
 	}
 	resolved.Config = locked.Config
 	if resolved.MCPServers, err = service.settleMCPServers(ctx, projectRoot, project, resolved, locked.MCPServers, run.pinMode, run.allowUnpinnedMCP, run.softMCP); err != nil {
-		return lockfile.PackLock{}, err
+		return lockFile{}, err
 	}
 	// An implicit run leaves the file alone unless what it records changed.
+	saved := current
 	if run.explicit || !exists || !sameLock(locked, resolved) {
-		if err := resolved.Save(projectRoot); err != nil {
-			return lockfile.PackLock{}, err
+		data, err := resolved.SaveBytes(projectRoot)
+		if err == nil {
+			saved, err = parseLockFile(projectRoot, data)
+		}
+		if err != nil {
+			return lockFile{}, err
 		}
 	}
 	if exists {
@@ -210,7 +223,7 @@ func (service Service) resolve(ctx context.Context, projectRoot string, project 
 	if recorded != 0 {
 		service.notify("recorded content hashes for %d package(s) in %s that had none", recorded, paths.LockPath(projectRoot))
 	}
-	return resolved, nil
+	return saved, nil
 }
 func (service Service) Lock(ctx context.Context, projectRoot string, refresh bool) (lockfile.PackLock, error) {
 	return service.LockWithOptions(ctx, projectRoot, LockOptions{Refresh: refresh})
@@ -353,13 +366,32 @@ func (service Service) Remove(ctx context.Context, projectRoot, spec string) (st
 	_, err = service.resolveAndSave(ctx, projectRoot, project, false, nil)
 	return key, err
 }
+
+// Sync holds the definition mutation lock unless it only reads (DryRun,
+// VerifyOnly) or ctx already carries it (see LockDefinition).
 func (service Service) Sync(ctx context.Context, projectRoot string, options SyncOptions) (SyncResult, error) {
 	if _, err := paths.EnsureUserAgentpackLayout(); err != nil {
 		return SyncResult{}, err
 	}
+	if !options.DryRun && !options.VerifyOnly {
+		held, release, err := LockDefinition(ctx, projectRoot)
+		if err != nil {
+			return SyncResult{}, err
+		}
+		defer release()
+		ctx = held
+	}
+	file, err := loadLockFile(projectRoot)
+	result, _, err := service.sync(ctx, projectRoot, options, file, err)
+	return result, err
+}
+
+// sync is Sync on file, the pack.lock its caller read under the lock (readErr
+// is that read's error). It returns the lock it staged.
+func (service Service) sync(ctx context.Context, projectRoot string, options SyncOptions, file lockFile, readErr error) (SyncResult, lockFile, error) {
 	project, err := manifest.Load(projectRoot)
 	if err != nil {
-		return SyncResult{}, err
+		return SyncResult{}, file, err
 	}
 	if options.Progress == nil {
 		options.Progress = service.Step
@@ -381,27 +413,27 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		options.step("resolving dependencies")
 		resolveOptions := resolve.ResolveOptions{RefreshFloating: options.UpdateLock, RepairCache: options.Repair, Verify: verify}
 		run := resolveRun{options: resolveOptions, explicit: options.UpdateLock, progress: options.Progress}
-		if _, err := service.resolve(ctx, projectRoot, project, run); err != nil {
-			return SyncResult{}, err
+		if file, err = service.resolveFile(ctx, projectRoot, project, run, file, readErr); err != nil {
+			return SyncResult{}, file, err
 		}
+		readErr = nil
 		// Resolving just checked every package; a second pass reads it all again.
 		verify = func(lockfile.Package) error { return nil }
 	}
-	lock, err := loadCheckedLock(projectRoot)
-	if os.IsNotExist(rootCause(err)) && options.Target != nil && !options.Frozen {
-		lock = lockfile.EmptyForProject(projectRoot)
-		err = nil
+	if os.IsNotExist(rootCause(readErr)) && options.Target != nil && !options.Frozen {
+		file, readErr = lockFile{lock: lockfile.EmptyForProject(projectRoot), digest: missingDigest}, nil
 	}
-	if err != nil {
-		return SyncResult{}, err
+	if readErr != nil {
+		return SyncResult{}, file, readErr
 	}
+	lock := file.lock
 	workspace := options.WorkspaceRoot
 	if workspace == "" {
 		workspace = projectRoot
 	}
 	effective, err := resolveMode(workspace, project, &lock, options.Mode)
 	if err != nil {
-		return SyncResult{}, err
+		return SyncResult{}, file, err
 	}
 	plugins := lock.Plugins()
 	shadowed := 0
@@ -412,7 +444,7 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 	}
 	result := SyncResult{Skills: lock.SkillCount(), Plugins: lock.PluginCount(), Shadowed: shadowed, Mode: effective}
 	if options.DryRun {
-		return result, nil
+		return result, file, nil
 	}
 	for _, pkg := range lock.Packages {
 		if pkg.CacheKey == "" {
@@ -431,11 +463,11 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 			}
 		}
 		if err != nil {
-			return result, err
+			return result, file, err
 		}
 		if !ready {
 			if options.Frozen {
-				return result, fmt.Errorf("cache missing and source unavailable for %s", pkg.Module)
+				return result, file, fmt.Errorf("cache missing and source unavailable for %s", pkg.Module)
 			}
 			result.Warnings = append(result.Warnings, fmt.Sprintf("%s %s: cache missing and source unavailable", pkg.Kind, pkg.CacheKey))
 		}
@@ -444,11 +476,11 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		}
 		record := cache.EntryRecord{Kind: pkg.Kind, SourceURL: pkg.URL, Owner: pkg.Owner, Repo: pkg.Repo, Path: pkg.Path, Commit: pkg.Commit, FetchedAtUnix: time.Now().Unix()}
 		if err := cache.UpsertEntry(pkg.CacheKey, record, nil); err != nil {
-			return result, err
+			return result, file, err
 		}
 	}
 	if err := service.checkLockRecords(projectRoot, project, lock); err != nil {
-		return result, err
+		return result, file, err
 	}
 	pipeline := staging.Pipeline{
 		ProjectRoot:    projectRoot,
@@ -465,7 +497,7 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 	}
 	drift, recorded, driftErr := pipeline.StagedDrift(options.VerifyOnly)
 	if driftErr != nil {
-		return result, driftErr
+		return result, file, driftErr
 	}
 	if options.VerifyOnly {
 		switch {
@@ -476,8 +508,8 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		default:
 			err = pipeline.Verify()
 		}
-	} else if fresh, freshErr := service.stagingIsCurrent(pipeline, options, recorded && len(drift) == 0); freshErr != nil {
-		return result, freshErr
+	} else if fresh, freshErr := service.stagingIsCurrent(pipeline, options, recorded && len(drift) == 0, file.digest); freshErr != nil {
+		return result, file, freshErr
 	} else if fresh {
 		tidyTempDirectories(projectRoot, false, "")
 	} else {
@@ -497,12 +529,12 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		options.step("waiting for another rebuild of this project")
 		publisher, lockErr := staging.AcquirePublisher(ctx, projectRoot, effective.Name())
 		if lockErr != nil {
-			return result, lockErr
+			return result, file, lockErr
 		}
 		defer publisher.Unlock()
 		generation, generationErr := paths.BeginStagingGeneration(projectRoot, effective.Name())
 		if generationErr != nil {
-			return result, generationErr
+			return result, file, generationErr
 		}
 		defer generation.Abort()
 		options.step("staging skills, commands and MCP config")
@@ -511,7 +543,7 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		if err == nil {
 			var in Inputs
 			var digest string
-			if in, err = readInputs(projectRoot, workspace, effective, options.Target); err == nil {
+			if in, err = readInputs(projectRoot, workspace, effective, options.Target, file.digest); err == nil {
 				digest, err = in.materialized(workspace, options.Target)
 			}
 			if err == nil {
@@ -529,11 +561,11 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		}
 	}
 	if err != nil {
-		return result, err
+		return result, file, err
 	}
 	keys, err := cache.ListKeys()
 	result.IndexEntries = len(keys)
-	return result, err
+	return result, file, err
 }
 
 func (service Service) SyncForLaunch(ctx context.Context, projectRoot, selectedMode string, target base.Target) (mode.Effective, bool, error) {
@@ -549,18 +581,24 @@ func (service Service) SyncForLaunchOptions(ctx context.Context, projectRoot str
 	if _, err := paths.EnsureUserAgentpackLayout(); err != nil {
 		return mode.Effective{}, false, err
 	}
+	ctx, release, err := LockDefinition(ctx, projectRoot)
+	if err != nil {
+		return mode.Effective{}, false, err
+	}
+	defer release()
 	project, err := manifest.Load(projectRoot)
 	if err != nil {
 		return mode.Effective{}, false, err
 	}
-	lock, err := loadCheckedLock(projectRoot)
+	file, readErr := loadLockFile(projectRoot)
+	used, err := file, readErr
 	if os.IsNotExist(rootCause(err)) {
-		lock = lockfile.EmptyForProject(projectRoot)
-		err = nil
+		used, err = lockFile{lock: lockfile.EmptyForProject(projectRoot), digest: missingDigest}, nil
 	}
 	if err != nil {
 		return mode.Effective{}, false, err
 	}
+	lock := used.lock
 	workspace := options.WorkspaceRoot
 	if workspace == "" {
 		workspace = projectRoot
@@ -577,7 +615,7 @@ func (service Service) SyncForLaunchOptions(ctx context.Context, projectRoot str
 	if err := selectLaunchGeneration(projectRoot, effective.Name(), target); err != nil {
 		return mode.Effective{}, false, err
 	}
-	current, err := launchDigest(projectRoot, workspace, effective, target, lock)
+	current, err := launchDigest(projectRoot, workspace, effective, target, used)
 	if err != nil {
 		return mode.Effective{}, false, err
 	}
@@ -602,20 +640,15 @@ func (service Service) SyncForLaunchOptions(ctx context.Context, projectRoot str
 			return effective, true, nil
 		}
 	}
-	result, err := service.Sync(ctx, projectRoot, SyncOptions{
+	result, staged, err := service.sync(ctx, projectRoot, SyncOptions{
 		Mode: effective.Name(), Target: &target,
 		WorkspaceRoot: workspace, StrictExternal: options.StrictExternal, Progress: options.Progress,
-	})
+	}, file, readErr)
 	if err != nil {
 		return mode.Effective{}, false, err
 	}
 	effective = result.Mode
-	if lock, err = loadCheckedLock(projectRoot); os.IsNotExist(rootCause(err)) {
-		lock = lockfile.EmptyForProject(projectRoot)
-	} else if err != nil {
-		return mode.Effective{}, false, err
-	}
-	digest, err := launchDigest(projectRoot, workspace, effective, target, lock)
+	digest, err := launchDigest(projectRoot, workspace, effective, target, staged)
 	if err != nil {
 		return mode.Effective{}, false, err
 	}
@@ -696,7 +729,7 @@ func rootCause(err error) error {
 // stagingIsCurrent reports whether a plain sync can keep the published staging:
 // the cache was verified above and staging matches its record (unchanged),
 // and nothing it is built from has changed since the last full sync.
-func (service Service) stagingIsCurrent(pipeline staging.Pipeline, options SyncOptions, unchanged bool) (bool, error) {
+func (service Service) stagingIsCurrent(pipeline staging.Pipeline, options SyncOptions, unchanged bool, lockDigest string) (bool, error) {
 	if options.Target != nil || !unchanged {
 		return false, nil
 	}
@@ -719,7 +752,7 @@ func (service Service) stagingIsCurrent(pipeline staging.Pipeline, options SyncO
 	if workspace == "" {
 		workspace = pipeline.ProjectRoot
 	}
-	in, err := readInputs(pipeline.ProjectRoot, workspace, pipeline.Mode, nil)
+	in, err := readInputs(pipeline.ProjectRoot, workspace, pipeline.Mode, nil, lockDigest)
 	if err != nil {
 		return false, err
 	}

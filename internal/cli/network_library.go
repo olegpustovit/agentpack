@@ -55,11 +55,12 @@ func (runner Runner) networkLibrary(home string) (network.LibraryOptions, error)
 			if err != nil {
 				return network.SavedAgentpack{}, err
 			}
-			mutation, err := acquireDefinitionMutation(ctx, definition)
+			held, release, err := packSync.LockDefinition(ctx, definition)
 			if err != nil {
 				return network.SavedAgentpack{}, err
 			}
-			defer mutation.Unlock()
+			defer release()
+			ctx = held
 			capture, err := registry.ProjectCapture(definition, input.Directory, node, input.Mode)
 			if err != nil {
 				return network.SavedAgentpack{}, err
@@ -84,11 +85,12 @@ func (runner Runner) networkLibrary(home string) (network.LibraryOptions, error)
 			if err != nil {
 				return err
 			}
-			mutation, err := acquireDefinitionMutation(ctx, definition)
+			held, release, err := packSync.LockDefinition(ctx, definition)
 			if err != nil {
 				return err
 			}
-			defer mutation.Unlock()
+			defer release()
+			ctx = held
 			selected, _, err := store.Preview(id, revision, definition)
 			if err != nil {
 				return err

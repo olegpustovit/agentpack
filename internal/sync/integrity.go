@@ -48,12 +48,12 @@ func envEnabled(name string) bool {
 }
 
 // launchDigest is the launch identity of target's harness.
-func launchDigest(projectRoot, workspace string, effective mode.Effective, target base.Target, lock lockfile.PackLock) (string, error) {
-	in, err := readInputs(projectRoot, workspace, effective, &target)
+func launchDigest(projectRoot, workspace string, effective mode.Effective, target base.Target, file lockFile) (string, error) {
+	in, err := readInputs(projectRoot, workspace, effective, &target, file.digest)
 	if err != nil {
 		return "", err
 	}
-	return in.launch(lock)
+	return in.launch(file.lock)
 }
 
 // LoadLock reads a project lock and checks that its pins agree with their cache keys.
@@ -61,14 +61,54 @@ func (Service) LoadLock(projectRoot string) (lockfile.PackLock, error) {
 	return loadCheckedLock(projectRoot)
 }
 
-// loadCheckedLock loads pack.lock and refuses one whose hashed entries are
-// not self-consistent. Every command that acts on the lock reads it this way.
-func loadCheckedLock(projectRoot string) (lockfile.PackLock, error) {
-	lock, err := lockfile.Load(projectRoot)
+// lockFile is pack.lock as a command read it, once: the checked lock and the
+// digest of the bytes it was parsed from, so every later check describes the
+// lock the command acted on even if the file changes meanwhile.
+type lockFile struct {
+	lock   lockfile.PackLock
+	digest string
+}
+
+// readLockFile is the one read of pack.lock; tests count calls through it.
+var readLockFile = func(projectRoot string) ([]byte, error) {
+	path := paths.LockPath(projectRoot)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return lockfile.PackLock{}, err
+		return nil, fmt.Errorf("read lockfile %s: %w", path, err)
 	}
-	return lock, cache.CheckLockEntries(lock)
+	return data, nil
+}
+
+// loadLockFile loads pack.lock and refuses one whose hashed entries are not
+// self-consistent. Every command that acts on the lock reads it this way.
+func loadLockFile(projectRoot string) (lockFile, error) {
+	data, err := readLockFile(projectRoot)
+	if err != nil {
+		return lockFile{digest: missingDigest}, err
+	}
+	return parseLockFile(projectRoot, data)
+}
+
+func parseLockFile(projectRoot string, data []byte) (lockFile, error) {
+	lock, err := lockfile.ParseProject(projectRoot, data)
+	if err != nil {
+		return lockFile{digest: missingDigest}, err
+	}
+	return lockFile{lock: lock, digest: bytesDigest(data)}, cache.CheckLockEntries(lock)
+}
+
+func loadCheckedLock(projectRoot string) (lockfile.PackLock, error) {
+	file, err := loadLockFile(projectRoot)
+	return file.lock, err
+}
+
+// loadLockOrEmpty is loadLockFile with a missing lock read as an empty one.
+func loadLockOrEmpty(projectRoot string) (lockFile, error) {
+	file, err := loadLockFile(projectRoot)
+	if os.IsNotExist(rootCause(err)) {
+		return lockFile{lock: lockfile.EmptyForProject(projectRoot), digest: missingDigest}, nil
+	}
+	return file, err
 }
 
 // sameLock reports whether two locks record the same thing, ignoring order.

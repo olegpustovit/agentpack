@@ -118,7 +118,7 @@ func (runner Runner) restartChangedEnvironments(ctx context.Context, snapshots [
 }
 
 func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec string, restart bool) error {
-	return runner.changeNetworkProject(ctx, directory, restart, func(root string) error {
+	return runner.changeNetworkProject(ctx, directory, restart, func(ctx context.Context, root string) error {
 		_, err := runner.Service.AddAll(ctx, root, spec)
 		return err
 	})
@@ -130,23 +130,24 @@ func (runner Runner) installNetworkMCP(ctx context.Context, directory string, in
 	if err != nil {
 		return err
 	}
-	return runner.changeNetworkProject(ctx, directory, restart, func(root string) error {
+	return runner.changeNetworkProject(ctx, directory, restart, func(ctx context.Context, root string) error {
 		return runner.addMCPServer(ctx, root, input.Name, server, false, true)
 	})
 }
 
 // changeNetworkProject applies a gateway install under the definition lock, captures the
 // project for the Library, and restarts the running agents the change affects.
-func (runner Runner) changeNetworkProject(ctx context.Context, directory string, restart bool, change func(root string) error) error {
+func (runner Runner) changeNetworkProject(ctx context.Context, directory string, restart bool, change func(ctx context.Context, root string) error) error {
 	packContext, err := resolveInvocationContext(Invocation{Global: Global{WorkspaceRoot: directory}}, true)
 	if err != nil {
 		return err
 	}
-	mutation, err := acquireDefinitionMutation(ctx, packContext.DefinitionRoot)
+	held, release, err := packSync.LockDefinition(ctx, packContext.DefinitionRoot)
 	if err != nil {
 		return err
 	}
-	defer mutation.Unlock()
+	defer release()
+	ctx = held
 	var before []runningEnvironment
 	if restart {
 		before, err = snapshotRunningEnvironments(ctx, packContext.DefinitionRoot)
@@ -154,7 +155,7 @@ func (runner Runner) changeNetworkProject(ctx context.Context, directory string,
 			return err
 		}
 	}
-	if err := change(packContext.DefinitionRoot); err != nil {
+	if err := change(ctx, packContext.DefinitionRoot); err != nil {
 		return err
 	}
 	if err := captureNetworkEnvironment(packContext.DefinitionRoot, directory, ""); err != nil {

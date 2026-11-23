@@ -15,6 +15,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
+	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
 func TestDefinitionMutationChild(t *testing.T) {
@@ -42,11 +43,11 @@ func TestDefinitionMutationsSerializeAcrossProcesses(t *testing.T) {
 	if err := lockfile.Init(root, "test", "1.0.0"); err != nil {
 		t.Fatal(err)
 	}
-	mutation, err := acquireDefinitionMutation(context.Background(), root)
+	_, release, err := packSync.LockDefinition(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mutation.Unlock()
+	defer release()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	type child struct {
@@ -85,7 +86,7 @@ func TestDefinitionMutationsSerializeAcrossProcesses(t *testing.T) {
 	if err := manifest.CreateMode(root, "parent"); err != nil {
 		t.Fatal(err)
 	}
-	if err := mutation.Unlock(); err != nil {
+	if err := release(); err != nil {
 		t.Fatal(err)
 	}
 	for _, child := range children {
@@ -110,11 +111,11 @@ func TestGatewayInstallWaitsForCLIMutationAndCancels(t *testing.T) {
 	if err := manifest.WriteStub(root, "test", "1.0.0"); err != nil {
 		t.Fatal(err)
 	}
-	mutation, err := acquireDefinitionMutation(context.Background(), root)
+	_, release, err := packSync.LockDefinition(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mutation.Unlock()
+	defer release()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	runner := NewRunner()

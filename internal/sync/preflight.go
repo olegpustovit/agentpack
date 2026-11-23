@@ -105,10 +105,11 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 	if err != nil {
 		return report, inputError(err)
 	}
-	lock, err := loadCheckedLock(definitionRoot)
+	file, err := loadLockFile(definitionRoot)
 	if err != nil {
 		return report, inputError(err)
 	}
+	lock := file.lock
 	effective, err := resolveMode(workspace, project, &lock, options.Mode)
 	if err != nil {
 		return report, inputError(err)
@@ -127,9 +128,7 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 		return report, fmt.Errorf("identify source: %w", inputError(err))
 	}
 	report.SourceIdentity = identity
-	if digest, err := fileDigest(paths.LockPath(definitionRoot)); err == nil {
-		report.LockDigest = digest
-	}
+	report.LockDigest = file.digest
 	if binding, found, _ := environment.LoadBinding(workspace); found {
 		report.Environment = binding.Environment
 	}
@@ -329,7 +328,7 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_UNREADABLE", Severity: environment.SeverityError, Message: materializedErr.Error(), Evidence: environment.EvidenceUnknown, Remedy: materializeRemedy})
 	} else if !materializedFound {
 		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_INPUTS_UNKNOWN", Severity: environment.SeverityWarning, Message: "no materialization input identity is recorded", Evidence: environment.EvidenceUnknown, Remedy: materializeRemedy})
-	} else if current, err := computeMaterializationDigest(definitionRoot, workspace, effective, recordedFor); err != nil {
+	} else if current, err := computeMaterializationDigest(definitionRoot, workspace, effective, recordedFor, file.digest); err != nil {
 		return report, err
 	} else if materialized != current {
 		report.Findings = append(report.Findings, environment.Finding{Code: "STAGING_INPUTS_STALE", Severity: environment.SeverityViolation, Message: "staged configuration was built from different definition, mode, workspace, or inherited inputs", Evidence: environment.EvidenceGenerated, Remedy: materializeRemedy})

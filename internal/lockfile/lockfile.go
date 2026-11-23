@@ -211,6 +211,12 @@ func Load(projectRoot string) (PackLock, error) {
 	return LoadFromPath(paths.LockPath(projectRoot))
 }
 
+// ParseProject parses bytes read from (or written to) projectRoot's pack.lock,
+// exactly as Load would, for a caller that also digests those bytes.
+func ParseProject(projectRoot string, data []byte) (PackLock, error) {
+	return parse(data, paths.LockPath(projectRoot), true)
+}
+
 // LoadFromPath reads a lock. Save replaces it in one rename, so a reader sees
 // a whole file; writers are serialized by the project's mutation lock.
 func LoadFromPath(path string) (PackLock, error) {
@@ -332,6 +338,12 @@ func (lock PackLock) packagesByKind(kind PackageKind) []Package {
 }
 
 func (lock PackLock) Save(projectRoot string) error {
+	_, err := lock.SaveBytes(projectRoot)
+	return err
+}
+
+// SaveBytes is Save that also returns the bytes it wrote.
+func (lock PackLock) SaveBytes(projectRoot string) ([]byte, error) {
 	snapshot := lock
 	snapshot.Packages = append([]Package(nil), lock.Packages...)
 	sort.Slice(snapshot.Packages, func(i, j int) bool {
@@ -357,13 +369,13 @@ func (lock PackLock) Save(projectRoot string) error {
 	}
 	var output bytes.Buffer
 	if err := toml.NewEncoder(&output).Encode(disk); err != nil {
-		return fmt.Errorf("encode lockfile: %w", err)
+		return nil, fmt.Errorf("encode lockfile: %w", err)
 	}
 	path := paths.LockPath(projectRoot)
 	if err := paths.WriteAtomic(path, output.Bytes(), 0o644); err != nil {
-		return fmt.Errorf("write lockfile %s: %w", path, err)
+		return nil, fmt.Errorf("write lockfile %s: %w", path, err)
 	}
-	return nil
+	return output.Bytes(), nil
 }
 
 func Init(projectRoot, name, version string) error {

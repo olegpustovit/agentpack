@@ -46,8 +46,9 @@ type Inputs struct {
 	Binary    string
 }
 
-func readInputs(projectRoot, workspace string, effective mode.Effective, target *base.Target) (Inputs, error) {
-	in := Inputs{Lock: fileDigestOrMissing(paths.LockPath(projectRoot)), Manifest: fileDigestOrMissing(paths.ManifestPath(projectRoot)), PerTarget: map[base.Target]string{}, Binary: executableStamp()}
+// lockDigest is the lockFile digest of the pack.lock the caller already read.
+func readInputs(projectRoot, workspace string, effective mode.Effective, target *base.Target, lockDigest string) (Inputs, error) {
+	in := Inputs{Lock: lockDigest, Manifest: fileDigestOrMissing(paths.ManifestPath(projectRoot)), PerTarget: map[base.Target]string{}, Binary: executableStamp()}
 	dot, err := hashDotAgents(paths.ProjectDotAgentsDir(workspace))
 	if err != nil {
 		return Inputs{}, err
@@ -136,8 +137,8 @@ func (in Inputs) materialized(workspace string, target *base.Target) (string, er
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-func computeMaterializationDigest(definition, workspace string, effective mode.Effective, target *base.Target) (string, error) {
-	in, err := readInputs(definition, workspace, effective, target)
+func computeMaterializationDigest(definition, workspace string, effective mode.Effective, target *base.Target, lockDigest string) (string, error) {
+	in, err := readInputs(definition, workspace, effective, target, lockDigest)
 	if err != nil {
 		return "", err
 	}
@@ -149,20 +150,18 @@ func (in Inputs) synced(materialized string) string {
 	return materialized + "\x00" + in.Binary
 }
 
-func fileDigest(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
+const missingDigest = "__missing__"
+
+func bytesDigest(data []byte) string {
 	sum := sha256.Sum256(data)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func fileDigestOrMissing(path string) string {
-	if digest, err := fileDigest(path); err == nil {
-		return digest
+	if data, err := os.ReadFile(path); err == nil {
+		return bytesDigest(data)
 	}
-	return "__missing__"
+	return missingDigest
 }
 
 func hashDotAgents(root string) ([]byte, error) {

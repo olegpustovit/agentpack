@@ -166,11 +166,12 @@ func (runner Runner) dispatch(ctx context.Context, invocation Invocation) (int, 
 	workspace := packContext.WorkspaceRoot
 	var runningBefore []runningEnvironment
 	if definitionMutation(invocation) {
-		mutation, lockErr := acquireDefinitionMutation(ctx, root)
+		held, release, lockErr := packSync.LockDefinition(ctx, root)
 		if lockErr != nil {
 			return 1, lockErr
 		}
-		defer mutation.Unlock()
+		defer release()
+		ctx = held
 		runningBefore, err = snapshotRunningEnvironments(ctx, root)
 		if err != nil {
 			return 1, runner.reportIntegrity(err)
@@ -396,11 +397,12 @@ func (runner Runner) runInit(ctx context.Context, invocation Invocation) error {
 	if version == "" {
 		version = "0.0.1"
 	}
-	mutation, err := acquireDefinitionMutation(ctx, root)
+	held, release, err := packSync.LockDefinition(ctx, root)
 	if err != nil {
 		return err
 	}
-	defer mutation.Unlock()
+	defer release()
+	ctx = held
 	if !invocation.Global.Quiet {
 		fmt.Fprintln(runner.Stdout, "Initializing agentpack…")
 	}
@@ -471,11 +473,12 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 		stopProgress = watchProgress(runner.Stderr, label.String, time.Second)
 	}
 	defer stopProgress()
-	mutation, err := acquireDefinitionMutation(ctx, packContext.DefinitionRoot)
+	held, release, err := packSync.LockDefinition(ctx, packContext.DefinitionRoot)
 	if err != nil {
 		return 1, err
 	}
-	defer mutation.Unlock()
+	defer release()
+	ctx = held
 	target, ok := launcherTarget(invocation.Command)
 	if !ok {
 		return 1, fmt.Errorf("unknown harness %q", invocation.Command)
@@ -572,7 +575,7 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 		}
 	}
 	// Workers report restart readiness after spawning; release before the agent runs.
-	if err := mutation.Unlock(); err != nil {
+	if err := release(); err != nil {
 		return 1, err
 	}
 	command.Stdin, command.Stdout, command.Stderr = runner.Stdin, runner.Stdout, runner.Stderr
