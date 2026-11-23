@@ -276,6 +276,32 @@ func TestServiceRejectsModeSelectorsMissingFromCapabilityCatalog(t *testing.T) {
 	}
 }
 
+// Staging reads .agents from the workspace, so mode selectors resolve there too.
+func TestModeSelectorsResolveAgainstTheWorkspace(t *testing.T) {
+	definition, workspace := t.TempDir(), t.TempDir()
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	contents := "name = \"demo\"\nversion = \"0.0.1\"\n\n[dependencies]\n\n[modes.default]\nbase = \"all\"\ndisable = [\".agents:rules/a.mdc\"]\n"
+	if err := os.WriteFile(filepath.Join(definition, "agentpack.toml"), []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(definition, "demo", "0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, ".agents", "rules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".agents", "rules", "a.mdc"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewService().Sync(context.Background(), definition, SyncOptions{DryRun: true, WorkspaceRoot: workspace}); err != nil {
+		t.Fatalf("Sync(workspace) = %v", err)
+	}
+	if _, err := NewService().Sync(context.Background(), definition, SyncOptions{DryRun: true}); err == nil || !strings.Contains(err.Error(), "unknown .agents selector target") {
+		t.Fatalf("Sync(definition) = %v", err)
+	}
+}
+
 func TestCursorUserSkillsRefreshOnLaunch(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)

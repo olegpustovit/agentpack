@@ -114,7 +114,7 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 	if err != nil {
 		return report, inputError(err)
 	}
-	effective, err := resolveMode(definitionRoot, project, &lock, options.Mode)
+	effective, err := resolveMode(workspace, project, &lock, options.Mode)
 	if err != nil {
 		return report, inputError(err)
 	}

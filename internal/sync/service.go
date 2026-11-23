@@ -404,7 +404,11 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 	if err != nil {
 		return SyncResult{}, err
 	}
-	effective, err := resolveMode(projectRoot, project, &lock, options.Mode)
+	workspace := options.WorkspaceRoot
+	if workspace == "" {
+		workspace = projectRoot
+	}
+	effective, err := resolveMode(workspace, project, &lock, options.Mode)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -509,10 +513,6 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		// Rebuild verifies what it staged before returning.
 		_, err = pipeline.Rebuild()
 		if err == nil {
-			workspace := options.WorkspaceRoot
-			if workspace == "" {
-				workspace = projectRoot
-			}
 			var digest string
 			digest, err = computeMaterializationDigest(projectRoot, workspace, effective, options.Target)
 			if err == nil {
@@ -562,13 +562,13 @@ func (service Service) SyncForLaunchOptions(ctx context.Context, projectRoot str
 	if err != nil {
 		return mode.Effective{}, false, err
 	}
-	effective, err := resolveMode(projectRoot, project, &lock, options.Mode)
-	if err != nil {
-		return mode.Effective{}, false, err
-	}
 	workspace := options.WorkspaceRoot
 	if workspace == "" {
 		workspace = projectRoot
+	}
+	effective, err := resolveMode(workspace, project, &lock, options.Mode)
+	if err != nil {
+		return mode.Effective{}, false, err
 	}
 	pending, err := (staging.Pipeline{ProjectRoot: projectRoot, WorkspaceRoot: workspace, Mode: effective, Target: &target}).RebuildPending()
 	if err != nil {
@@ -625,7 +625,9 @@ func (service Service) SyncForLaunchOptions(ctx context.Context, projectRoot str
 	}
 	return effective, false, nil
 }
-func resolveMode(projectRoot string, project *manifest.Manifest, lock *lockfile.PackLock, name string) (mode.Effective, error) {
+// resolveMode validates the selected mode against what staging will read: the
+// lock, the manifest and the workspace's .agents directory.
+func resolveMode(workspace string, project *manifest.Manifest, lock *lockfile.PackLock, name string) (mode.Effective, error) {
 	if name == "" {
 		name = mode.DefaultName
 	}
@@ -639,7 +641,7 @@ func resolveMode(projectRoot string, project *manifest.Manifest, lock *lockfile.
 	} else if name != mode.DefaultName {
 		return mode.Effective{}, fmt.Errorf("unknown mode: %s", name)
 	}
-	catalog, err := modecatalog.BuildCapabilityCatalog(projectRoot, lock, project)
+	catalog, err := modecatalog.BuildCapabilityCatalog(workspace, lock, project)
 	if err != nil {
 		return mode.Effective{}, fmt.Errorf("build mode capability catalog: %w", err)
 	}
