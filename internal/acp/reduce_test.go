@@ -493,3 +493,15 @@ func TestReducedTraces(t *testing.T) {
 		}
 	}
 }
+
+func TestOrphanToolUpdatesShareOneRow(t *testing.T) {
+	reducer := ThreadReducer{keepItems: true}
+	reducer.Apply(LogEntry{Kind: "tool_call_update", Payload: json.RawMessage(`{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"in_progress"}`)})
+	state := reducer.Apply(LogEntry{Kind: "tool_call_update", Payload: json.RawMessage(`{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed"}`)})
+	if len(state.Items) != 1 {
+		t.Fatalf("orphan updates produced %d rows, want 1", len(state.Items))
+	}
+	if !strings.Contains(string(state.Items[0].Data), `"completed"`) {
+		t.Fatalf("row did not merge the later update: %s", state.Items[0].Data)
+	}
+}
