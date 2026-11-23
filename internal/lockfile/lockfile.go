@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -205,23 +204,16 @@ func Load(projectRoot string) (PackLock, error) {
 	return LoadFromPath(paths.LockPath(projectRoot))
 }
 
-func LoadFromPath(path string) (PackLock, error) {
-	var result PackLock
-	err := withOperationLock(path, func() error {
-		var err error
-		result, err = loadFromPath(path)
-		return err
-	})
-	return result, err
-}
-
-// LoadUnguarded reads a lock only the caller can reach. It leaves no guard
-// directory behind, which LoadFromPath does for every project path it sees.
+// LoadUnguarded is LoadFromPath. Loading no longer takes a guard; the name
+// stays for callers on the core/wp-e branch.
+// shortcut: forwarding name kept only until core/wp-e merges; repoint its callers to LoadFromPath and delete it.
 func LoadUnguarded(path string) (PackLock, error) {
-	return loadFromPath(path)
+	return LoadFromPath(path)
 }
 
-func loadFromPath(path string) (PackLock, error) {
+// LoadFromPath reads a lock. Save replaces it in one rename, so a reader sees
+// a whole file; writers are serialized by the project's mutation lock.
+func LoadFromPath(path string) (PackLock, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return PackLock{}, fmt.Errorf("read lockfile %s: %w", path, err)
@@ -351,34 +343,10 @@ func (lock PackLock) Save(projectRoot string) error {
 		return fmt.Errorf("encode lockfile: %w", err)
 	}
 	path := paths.LockPath(projectRoot)
-	if err := withOperationLock(path, func() error { return paths.WriteAtomic(path, output.Bytes(), 0o644) }); err != nil {
+	if err := paths.WriteAtomic(path, output.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("write lockfile %s: %w", path, err)
 	}
 	return nil
-}
-
-func withOperationLock(path string, operation func() error) (err error) {
-	hash, err := paths.ProjectPathHash(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	directory := filepath.Join(os.TempDir(), "agentpack-"+hash)
-	if err := os.MkdirAll(directory, 0o755); err != nil {
-		return err
-	}
-	// The directory outlives the project unless something can tell whose it
-	// was; the marker lets a later sync remove it once the project is gone.
-	_ = paths.MarkProjectDirectory(directory, filepath.Dir(path))
-	guard := flock.New(filepath.Join(directory, "pack.lock.lock"))
-	if err := guard.Lock(); err != nil {
-		return err
-	}
-	defer func() {
-		if unlockErr := guard.Unlock(); unlockErr != nil {
-			err = errors.Join(err, unlockErr)
-		}
-	}()
-	return operation()
 }
 
 func Init(projectRoot, name, version string) error {

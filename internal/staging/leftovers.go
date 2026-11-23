@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
@@ -30,14 +29,13 @@ func MarkProjectDirectories(projectRoot string) {
 // longer exists, is removed; a Codex home that a running session still holds
 // is left for a later run. Failures are ignored: tidying never fails a sync.
 func RemoveOrphanedProjectDirectories(projectRoot string) {
-	// The system temporary directory holds each project's pack.lock guard
-	// (agentpack-<hash>) and, when no staging root is configured, its staging.
+	// The system temporary directory holds each project's staging
+	// (agentpack-<hash>) when no staging root is configured.
 	for _, orphan := range paths.OrphanedProjectDirectories(os.TempDir()) {
 		if strings.HasPrefix(filepath.Base(orphan), "agentpack-") {
 			_ = os.RemoveAll(orphan)
 		}
 	}
-	removeStaleLockGuards(os.TempDir())
 	homes, err := codex.ProjectHomes(projectRoot)
 	if err != nil {
 		return
@@ -63,37 +61,4 @@ func codexHomesInUse(directory string) bool {
 		_ = lease.Unlock()
 	}
 	return false
-}
-
-// removeStaleLockGuards removes the agentpack-<hash> directories that hold
-// nothing but a pack.lock guard file nobody has touched for a day and nobody
-// holds. Versions before the project marker left one per project and test
-// run, with no way to tell whose it was.
-func removeStaleLockGuards(parent string) {
-	entries, err := os.ReadDir(parent)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "agentpack-") || len(entry.Name()) != len("agentpack-")+16 {
-			continue
-		}
-		directory := filepath.Join(parent, entry.Name())
-		contents, err := os.ReadDir(directory)
-		if err != nil || len(contents) != 1 || contents[0].Name() != "pack.lock.lock" {
-			continue
-		}
-		guardPath := filepath.Join(directory, "pack.lock.lock")
-		info, err := os.Stat(guardPath)
-		if err != nil || time.Since(info.ModTime()) < 24*time.Hour {
-			continue
-		}
-		guard := flock.New(guardPath)
-		if free, err := guard.TryLock(); err != nil || !free {
-			continue
-		}
-		_ = os.Remove(guardPath)
-		_ = guard.Unlock()
-		_ = os.Remove(directory)
-	}
 }

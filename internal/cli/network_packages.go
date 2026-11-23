@@ -113,12 +113,9 @@ func (runner Runner) restartChangedEnvironments(ctx context.Context, snapshots [
 	}
 	// Prepare every affected environment before interrupting any conversation.
 	for _, before := range changed {
-		effective, _, err := runner.Service.SyncForLaunchOptions(ctx, before.session.DefinitionRoot, packSync.SyncOptions{
+		_, _, err := runner.Service.SyncForLaunchOptions(ctx, before.session.DefinitionRoot, packSync.SyncOptions{
 			Mode: before.session.Mode, Target: &before.target, WorkspaceRoot: before.session.Directory,
 		})
-		if err == nil {
-			err = runner.Service.ValidateLaunchInputs(before.session.DefinitionRoot, before.session.Directory, effective, before.target)
-		}
 		if err != nil {
 			failures = append(failures, fmt.Errorf("package change saved, but session %s is not ready to restart: %w", before.session.ID, err))
 		}

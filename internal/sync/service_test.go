@@ -13,7 +13,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
-	"github.com/olegpustovit/agentpack/internal/staging"
 )
 
 func TestPlainFolderLaunchLeavesProjectFilesAbsent(t *testing.T) {
@@ -25,16 +24,7 @@ func TestPlainFolderLaunchLeavesProjectFilesAbsent(t *testing.T) {
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
 
 	service := NewService()
-	effective, _, err := service.SyncForLaunch(t.Context(), project, "", base.Claude)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lease, err := staging.AcquireLaunchShared(project, effective.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lease.Unlock()
-	if err := service.ValidateLaunchInputs(project, project, effective, base.Claude); err != nil {
+	if _, _, err := service.SyncForLaunch(t.Context(), project, "", base.Claude); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{paths.LockPath(project), paths.ManifestPath(project)} {
@@ -174,15 +164,9 @@ func TestSyncForLaunchOfAnotherAgentWhileOneIsRunning(t *testing.T) {
 		}
 	}
 	service := NewService()
-	effective, _, err := service.SyncForLaunch(context.Background(), project, "", base.Claude)
-	if err != nil {
+	if _, _, err := service.SyncForLaunch(context.Background(), project, "", base.Claude); err != nil {
 		t.Fatal(err)
 	}
-	running, err := staging.AcquireLaunchShared(project, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer running.Unlock()
 	// twice round, so that a launch after Cursor's or Antigravity's overlay is covered too
 	for _, target := range []base.Target{base.Claude, base.Codex, base.OpenCode, base.Grok, base.Cursor, base.Agy,
 		base.Claude, base.Codex, base.Agy, base.Cursor, base.Claude} {
@@ -191,9 +175,6 @@ func TestSyncForLaunchOfAnotherAgentWhileOneIsRunning(t *testing.T) {
 		}
 		if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", target); err != nil || !skipped {
 			t.Fatalf("%s repeat: skipped=%v err=%v", target, skipped, err)
-		}
-		if err := service.ValidateLaunchInputs(project, project, effective, target); err != nil {
-			t.Fatalf("%s: %v", target, err)
 		}
 	}
 }
@@ -208,14 +189,6 @@ func TestChangedInputsRebuildAlongsideRunningSessionWithoutChangingItsFiles(t *t
 		t.Fatal(err)
 	}
 	oldSkill := fixture.stagedPath()
-	running, err := staging.AcquireLaunchShared(fixture.project, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer running.Unlock()
-	if _, err := staging.TryAcquireRebuildExclusive(fixture.project, "default"); err == nil {
-		t.Fatal("fixture did not hold the running session's lock")
-	}
 	fixture.manifest(demoKey, commitTwo)
 	for _, target := range []base.Target{base.Codex, base.Claude, base.Grok, base.OpenCode, base.Cursor, base.Agy} {
 		if _, _, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", target); err != nil {

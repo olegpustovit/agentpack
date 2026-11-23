@@ -19,7 +19,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/proxy"
-	"github.com/olegpustovit/agentpack/internal/staging"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
@@ -507,14 +506,6 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 	setStep("starting " + invocation.Command)
 	if invocation.Global.Debug {
 		fmt.Fprintf(runner.Stderr, "agentpack: target=%s mode=%s definition=%s workspace=%s fast-sync=%t\n", target, effective.Name(), packContext.DefinitionRoot, packContext.WorkspaceRoot, skipped)
-	}
-	stagingLock, err := staging.AcquireLaunchShared(packContext.DefinitionRoot, effective.Name())
-	if err != nil {
-		return 1, err
-	}
-	defer stagingLock.Unlock()
-	if err := runner.Service.ValidateLaunchInputs(packContext.DefinitionRoot, packContext.WorkspaceRoot, effective, target); err != nil {
-		return 1, err
 	}
 	if err := recordLaunchEnvironment(packContext, effective.Name(), target, skipped); err != nil {
 		return 1, err

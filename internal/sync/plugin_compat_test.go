@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
@@ -491,16 +490,6 @@ func TestSyncRemovesTheTempDirectoriesOfProjectsThatAreGone(t *testing.T) {
 		make(temporary, "agentpack-0000000000000002", alive), make(temporary, "agentpack-0000000000000003", ""),
 		make(homesBase, "0000000000000002", alive), make(homesBase, "0000000000000003", ""),
 	}
-	// A guard directory from before the marker: old and unheld goes, recent stays.
-	stale, recent := filepath.Join(temporary, "agentpack-00000000000000aa"), filepath.Join(temporary, "agentpack-00000000000000bb")
-	for _, directory := range []string{stale, recent} {
-		writeIntegrityFile(t, filepath.Join(directory, "pack.lock.lock"), "")
-	}
-	old := time.Now().Add(-48 * time.Hour)
-	if err := os.Chtimes(filepath.Join(stale, "pack.lock.lock"), old, old); err != nil {
-		t.Fatal(err)
-	}
-	orphans, kept = append(orphans, stale), append(kept, recent)
 	fixture.sync(SyncOptions{})
 	for _, directory := range orphans {
 		if !fixtureMissing(directory) {
