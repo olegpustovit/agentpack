@@ -31,7 +31,7 @@ var (
 	errChatCredential = errors.New("invalid chat credential")
 	errChatToolsOff   = errors.New("agentpack tools are off for this chat")
 	errAgentAnswer    = errors.New("only a person can answer permission prompts and questions")
-	errAgentScope     = errors.New("a chat's agent can change only itself and the helper chats it started on this machine, and cannot use terminals or install packages")
+	errAgentScope     = errors.New("a chat's agent can change only itself and the helper chats it started on this machine, and cannot use terminals")
 )
 
 // Helper limits per root chat: how deep helpers may start helpers, and how many may run at once.
@@ -164,7 +164,7 @@ func (m *Server) agentMayChange(ctx context.Context, node, id string) error {
 	return errAgentScope
 }
 
-// refuseAgentOnly refuses what no agent may do at all: raw terminal input and package installs.
+// refuseAgentOnly refuses what no agent may do at all: raw terminal input.
 func refuseAgentOnly(ctx context.Context) error {
 	if actor, _ := session.ActorFrom(ctx); actor.Chat != "" {
 		return errAgentScope

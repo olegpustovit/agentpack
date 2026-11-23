@@ -460,11 +460,6 @@ func (m *Server) tools(server *mcp.Server) {
 	addTool(server, "install_package", "Install an agentpack package in a previously used folder and automatically restart affected running agents.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpInstallInput) (*mcp.CallToolResult, struct {
 		Installed bool `json:"installed"`
 	}, error) {
-		if err := refuseAgentOnly(ctx); err != nil {
-			return nil, struct {
-				Installed bool `json:"installed"`
-			}{}, err
-		}
 		out, err := callAPI[struct {
 			Installed bool `json:"installed"`
 		}](ctx, m, in.Node, "POST", "/api/packages", struct {

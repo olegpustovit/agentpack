@@ -183,7 +183,7 @@ func chatFixture(t *testing.T, h *oauthHarness, id, parent string) string {
 // What the tools answer an agent that oversteps; the person reads these.
 const (
 	agentAnswerRefusal  = "only a person can answer permission prompts and questions"
-	agentScopeRefusal   = "a chat's agent can change only itself and the helper chats it started on this machine, and cannot use terminals or install packages"
+	agentScopeRefusal   = "a chat's agent can change only itself and the helper chats it started on this machine, and cannot use terminals"
 	agentSendRefusal    = "an agent sends messages with ask, which names it and returns the answer to it"
 	chatToolsOffRefusal = "agentpack tools are off for this chat"
 )
@@ -207,14 +207,13 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 			t.Fatalf("%s accepted from an agent: %s", call.name, text)
 		}
 	}
-	// An agent stays in its own tree: no terminals, packages, other machines or a person's chats.
+	// An agent stays in its own tree: no terminals, other machines or a person's chats.
 	chatFixture(t, h, "session-person", "")
 	for _, call := range []struct {
 		name string
 		args map[string]any
 	}{
 		{"write_terminal", map[string]any{"session_id": "session-person", "input": "1\r"}},
-		{"install_package", map[string]any{"directory": "/tmp", "spec": "owner/repo"}},
 		{"start_session", map[string]any{"directory": "/tmp", "agent": "codex", "terminal": true}},
 		{"start_session", map[string]any{"directory": "/tmp", "agent": "codex", "node": "peer"}},
 		{"stop_session", map[string]any{"session_id": "session-person"}},
@@ -249,6 +248,18 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 	info := started.Load()
 	if result.IsError || info == nil || info.ParentID != "session-chat" || !info.Tools || info.StartedBy.User != testBrowserEmail || info.StartedBy.Agent != "claude" {
 		t.Fatalf("helper start: %s %+v", text, info)
+	}
+	// An agent installs packages like a person does.
+	var installed atomic.Pointer[string]
+	h.gateway.options.Install = func(_ context.Context, gotDirectory, spec string, _ bool) error {
+		installed.Store(&spec)
+		if gotDirectory != directory {
+			t.Errorf("install directory %q", gotDirectory)
+		}
+		return nil
+	}
+	if result, text := callTool(t, clientSession, "install_package", map[string]any{"directory": directory, "spec": "owner/repo"}); result.IsError || installed.Load() == nil || *installed.Load() != "owner/repo" {
+		t.Fatalf("local install from an agent: %s", text)
 	}
 	// A running chat of the person stays out of reach, but once stopped any of its account's agents may revive it.
 	restart := map[string]any{"session_id": "session-person", "operation_id": "revive-session-person"}
