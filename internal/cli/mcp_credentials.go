@@ -233,7 +233,7 @@ func (runner Runner) mcpLoginTarget(invocation Invocation, target string) (mcp.S
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return mcp.Server{}, err
 	}
-	lock, err := lockfile.LoadFromPath(context.DefinitionRoot)
+	lock, err := lockfile.Load(context.DefinitionRoot)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return mcp.Server{}, err
 	}
