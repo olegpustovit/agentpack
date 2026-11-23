@@ -170,6 +170,20 @@ The installed gateway used 11–16% of a core while nothing happened. A CPU prof
 
 Shared MCP logins add one read of `$AGENTPACK_HOME/mcp-credentials.json` (a few hundred bytes, written by the gateway) to the launch digest, so connecting or removing a login restages the next launch. Staging reads the same file once per rebuild. Measured on an x86_64 WSL2 host (20 threads), not the ARM64 reference host, medians of five runs of 10 iterations: `BenchmarkMaterializationHome` 0.33 ms, `BenchmarkCodexSetup/cold` 6.8 ms, `warm` 0.13 ms. All are inside the budgets. The gateway's credential loop runs every 30 s with one indexed query and rewrites the file only when its bytes change.
 
+## Per-project MCP login picks in the launch digest (2026-11-23)
+
+A project's pick among several logins for one server lives in `$AGENTPACK_HOME/projects/<hash>/mcp-logins.json`. The launch context digests it next to the credential index, so changing a pick restages only that project's next launch; staging reads it once per rebuild. One more small file read (usually a missing-file stat) per launch. Same x86_64 WSL2 host (20 threads), not the ARM64 reference host, medians of five runs of 10 iterations:
+
+| Benchmark | Before | After | Budget |
+| --- | ---: | ---: | ---: |
+| `BenchmarkMaterializationHome` | 0.39 ms | 0.39 ms | 1 ms |
+| `BenchmarkCodexSetup/cold` | 7.8 ms | 8.1 ms | 20 ms |
+| `BenchmarkCodexSetup/warm` | 0.14 ms | 0.16 ms | 1 ms |
+
+```sh
+go test ./internal/sync -run '^$' -bench '^Benchmark(MaterializationHome|CodexSetup)$' -benchtime=10x -count=5
+```
+
 ## ACP adapter verification stamp
 
 The adapter stores a verification stamp beside the installed npm tree after checking its full digest and confirming that its metadata stayed stable. If an entry changes or `AGENTPACK_FULL_VERIFY=1`, the next launch hashes the bytes.
