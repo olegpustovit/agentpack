@@ -7,36 +7,38 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
+	"github.com/olegpustovit/agentpack/internal/state/statetest"
 )
 
-func testRememberACPConversationOwner(t *testing.T, home string, session SessionInfo, fallback string) error {
+func testRememberACPConversationOwner(t *testing.T, home string, info session.SessionInfo, fallback string) error {
 	t.Helper()
-	store := testSessionStore(t, home)
-	if session.ID == "" {
-		session.ID = "session-" + rand.Text()
+	store := statetest.Open(t, home)
+	if info.ID == "" {
+		info.ID = "session-" + rand.Text()
 	}
-	pending := session
+	pending := info
 	pending.AgentSessionID = ""
-	if err := upsertSession(t.Context(), store.DB, pending); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, pending); err != nil {
 		return err
 	}
-	return rememberACPConversationOwner(t.Context(), store, session, fallback)
+	return RememberACPConversationOwner(t.Context(), store, info, fallback)
 }
 
 func TestNativeOwnerClaimIsAtomicAndCreatesNoFiles(t *testing.T) {
 	home, directory := t.TempDir(), t.TempDir()
-	stores := []*state.Store{testSessionStore(t, home), testSessionStore(t, home)}
+	stores := []*state.Store{statetest.Open(t, home), statetest.Open(t, home)}
 	folderID, err := FolderIdentity(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessions := []SessionInfo{
-		{ID: "session-first", Directory: directory, FolderID: folderID, Harness: "agent", Transport: "acp", StartedBy: &Actor{Kind: "browser", User: "first@example.com", Node: "host"}},
-		{ID: "session-second", Directory: directory, FolderID: folderID, Harness: "cursor", Transport: "acp", StartedBy: &Actor{Kind: "browser", User: "second@example.com", Node: "host"}},
+	sessions := []session.SessionInfo{
+		{ID: "session-first", Directory: directory, FolderID: folderID, Harness: "agent", Transport: "acp", StartedBy: &session.Actor{Kind: "browser", User: "first@example.com", Node: "host"}},
+		{ID: "session-second", Directory: directory, FolderID: folderID, Harness: "cursor", Transport: "acp", StartedBy: &session.Actor{Kind: "browser", User: "second@example.com", Node: "host"}},
 	}
-	for i, session := range sessions {
-		if err := upsertSession(t.Context(), stores[i].DB, session); err != nil {
+	for i, info := range sessions {
+		if err := session.UpsertSession(t.Context(), stores[i].DB, info); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -46,7 +48,7 @@ func TestNativeOwnerClaimIsAtomicAndCreatesNoFiles(t *testing.T) {
 		go func() {
 			<-start
 			session.AgentSessionID = "native-shared"
-			results <- rememberACPConversationOwner(t.Context(), stores[i], session, "")
+			results <- RememberACPConversationOwner(t.Context(), stores[i], session, "")
 		}()
 	}
 	close(start)
@@ -55,7 +57,7 @@ func TestNativeOwnerClaimIsAtomicAndCreatesNoFiles(t *testing.T) {
 		switch err := <-results; {
 		case err == nil:
 			won++
-		case errors.Is(err, errACPResumeDenied):
+		case errors.Is(err, ErrACPResumeDenied):
 			denied++
 		default:
 			t.Fatal(err)
@@ -64,7 +66,7 @@ func TestNativeOwnerClaimIsAtomicAndCreatesNoFiles(t *testing.T) {
 	if won != 1 || denied != 1 {
 		t.Fatalf("owner claims: accepted=%d denied=%d", won, denied)
 	}
-	owner, found, err := readACPConversationOwner(t.Context(), stores[0], folderID, "cursor", "native-shared")
+	owner, found, err := ReadACPConversationOwner(t.Context(), stores[0], folderID, "cursor", "native-shared")
 	if err != nil || !found || owner.User == "" {
 		t.Fatalf("owner not durable: %+v %t %v", owner, found, err)
 	}

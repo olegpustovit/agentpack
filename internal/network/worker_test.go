@@ -23,6 +23,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state/statetest"
 )
 
 func TestWorkerExitChild(t *testing.T) {
@@ -82,11 +84,11 @@ func TestRunWorkerCancellationDrainsCleanup(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("worker startup timeout")
 	}
-	record, err := workerRecord(home, id)
+	record, err := ReadWorkerRecord(home, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	connection, err := attachWorker(context.Background(), record, true, 0)
+	connection, err := AttachWorker(context.Background(), record, true, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +109,7 @@ func TestRunWorkerCancellationDrainsCleanup(t *testing.T) {
 			output.Write(data)
 			return false
 		}
-		var notice terminalNotice
+		var notice TerminalNotice
 		return json.Unmarshal(data, &notice) == nil && notice.Type == "ended"
 	})
 	if !strings.Contains(output.String(), "CREDENTIAL CLEANUP COMPLETE") {
@@ -146,7 +148,7 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("worker startup timeout")
 	}
-	record, err := workerRecord(home, id)
+	record, err := ReadWorkerRecord(home, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,21 +157,21 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 	if err != nil || json.Unmarshal(data, &endpoint) != nil || len(endpoint) != 4 || endpoint["session"] != nil {
 		t.Fatalf("worker file contains session metadata: %s %v", data, err)
 	}
-	stateStore := testSessionStore(t, home)
-	if _, err := HideSession(ctx, stateStore, home, id); !errors.Is(err, errSessionRunning) {
+	stateStore := statetest.Open(t, home)
+	if _, err := HideSession(ctx, stateStore, home, id); !errors.Is(err, ErrSessionRunning) {
 		t.Fatalf("archived a running session: %v", err)
 	}
 	renamed, err := RenameSession(ctx, stateStore, home, id, "Long-running review")
 	if err != nil || renamed.ID != id || renamed.Name != "Long-running review" {
 		t.Fatalf("rename running worker: %+v %v", renamed, err)
 	}
-	renamedRecord, err := workerRecord(home, id)
+	renamedRecord, err := ReadWorkerRecord(home, id)
 	if err != nil || renamedRecord.ID != record.ID || renamedRecord.Address != record.Address || renamedRecord.Secret != record.Secret || renamedRecord.Session.Name != "" {
 		t.Fatalf("rename changed worker identity: %+v %v", renamedRecord, err)
 	}
 	attach := func() *websocket.Conn {
 		t.Helper()
-		connection, err := attachWorker(ctx, record, true, 0)
+		connection, err := AttachWorker(ctx, record, true, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -185,7 +187,7 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 		readWorker(t, connection, func(kind int, data []byte) bool {
-			var notice terminalNotice
+			var notice TerminalNotice
 			if kind != websocket.TextMessage || json.Unmarshal(data, &notice) != nil || notice.Type != "ended" {
 				return false
 			}
@@ -195,7 +197,7 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 			return true
 		})
 		connection.Close()
-		current, err := workerRecord(home, id)
+		current, err := ReadWorkerRecord(home, id)
 		if err != nil || current.ID != record.ID || current.Address != record.Address || current.Secret != record.Secret {
 			t.Fatalf("worker identity changed: %v", err)
 		}
@@ -221,7 +223,7 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	readWorker(t, connection, func(kind int, data []byte) bool {
-		var notice terminalNotice
+		var notice TerminalNotice
 		if kind != websocket.TextMessage || json.Unmarshal(data, &notice) != nil || notice.Type != "ended" {
 			return false
 		}
@@ -241,8 +243,8 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, "network", "sessions", id)); !os.IsNotExist(err) {
 		t.Fatal("worker record survived exit")
 	}
-	store := testSessionStore(t, home)
-	stored, err := storedSession(context.Background(), store.Reader, id)
+	store := statetest.Open(t, home)
+	stored, err := session.StoredSession(context.Background(), store.Reader, id)
 	var ended int64
 	if err != nil || stored.Name != "Long-running review" || stored.State.Running || stored.State.ExitCode != 7 || store.Reader.QueryRow("SELECT ended_at FROM sessions WHERE id=?", id).Scan(&ended) != nil || ended == 0 {
 		t.Fatalf("worker exit lost durable metadata: %+v ended=%d err=%v", stored, ended, err)
@@ -309,11 +311,11 @@ func runFastExitWorker(t *testing.T, restart bool) {
 		t.Fatal("worker startup timeout")
 	}
 	if restart {
-		record, err := workerRecord(home, id)
+		record, err := ReadWorkerRecord(home, id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		connection, err := attachWorker(ctx, record, true, 0)
+		connection, err := AttachWorker(ctx, record, true, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -326,7 +328,7 @@ func runFastExitWorker(t *testing.T, restart bool) {
 		}
 		connection.Close()
 	}
-	record, err := workerRecord(home, id)
+	record, err := ReadWorkerRecord(home, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,9 +336,9 @@ func runFastExitWorker(t *testing.T, restart bool) {
 	// under full-suite load without shortening its final-output window.
 	wait, stopWaiting := context.WithTimeout(ctx, 30*time.Second)
 	defer stopWaiting()
-	var state TerminalState
+	var state session.TerminalState
 	for {
-		response, err := workerRequest(wait, record, http.MethodGet, "/state", "")
+		response, err := WorkerRequest(wait, record, http.MethodGet, "/state", "")
 		if err == nil {
 			err = json.NewDecoder(response.Body).Decode(&state)
 			response.Body.Close()
@@ -355,7 +357,7 @@ func runFastExitWorker(t *testing.T, restart bool) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	connection, err := attachWorker(ctx, record, true, 0)
+	connection, err := AttachWorker(ctx, record, true, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +368,7 @@ func runFastExitWorker(t *testing.T, restart bool) {
 			output.Write(data)
 			return false
 		}
-		var notice terminalNotice
+		var notice TerminalNotice
 		if json.Unmarshal(data, &notice) != nil || notice.Type != "ended" {
 			return false
 		}
@@ -394,7 +396,7 @@ func TestWorkerRestartFailureEndsWithoutOverlap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker.start = func(rows, columns uint16) (*Session, error) {
+	worker.Start = func(rows, columns uint16) (*Session, error) {
 		if session.State().Running {
 			t.Error("starting replacement before old agent exited")
 		}
@@ -434,7 +436,7 @@ func TestWorkerRejectsReplacedWorkspaceWithoutStoppingAgent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ready, done := make(chan string, 1), make(chan error, 1)
 	go func() {
-		_, err := RunWorker(ctx, home, "test", WorkerLaunch{Program: executable, Arguments: []string{"-test.run=^TestTerminalChild$"}, Directory: directory, Environment: append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1"), Rows: 24, Columns: 80, Session: SessionInfo{Directory: directory, Harness: "codex"}}, func(id string) error { ready <- id; return nil })
+		_, err := RunWorker(ctx, home, "test", WorkerLaunch{Program: executable, Arguments: []string{"-test.run=^TestTerminalChild$"}, Directory: directory, Environment: append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1"), Rows: 24, Columns: 80, Session: session.SessionInfo{Directory: directory, Harness: "codex"}}, func(id string) error { ready <- id; return nil })
 		done <- err
 	}()
 	t.Cleanup(func() {
@@ -453,8 +455,8 @@ func TestWorkerRejectsReplacedWorkspaceWithoutStoppingAgent(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("worker did not start")
 	}
-	store := testSessionStore(t, home)
-	info, err := storedSession(t.Context(), store.Reader, id)
+	store := statetest.Open(t, home)
+	info, err := session.StoredSession(t.Context(), store.Reader, id)
 	if err != nil || info.FolderID == "" {
 		t.Fatalf("missing worker identity: %v", err)
 	}
@@ -464,7 +466,7 @@ func TestWorkerRejectsReplacedWorkspaceWithoutStoppingAgent(t *testing.T) {
 	if err := os.Mkdir(directory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := RestartWorker(ctx, home, id, rand.Text()); !errors.Is(err, errWorkerControlRejected) {
+	if err := RestartWorker(ctx, home, id, rand.Text()); !errors.Is(err, ErrWorkerControlRejected) {
 		t.Fatalf("replaced folder restart: %v", err)
 	}
 	sessions, err := Sessions(ctx, home)

@@ -1,7 +1,7 @@
 # Gateway UI
 
 Static frontend embedded by the Go gateway. The Vite build in `ui/dist` is staged into
-`internal/network/webdist` by `make ui-stage` and served at `/`. It uses Agentnet's macOS system font,
+`internal/gateway/webdist` by `make ui-stage` and served at `/`. It uses Agentnet's macOS system font,
 OKLCH color and spacing tokens, with light/dark modes and responsive navigation.
 Terminal bytes are rendered by locally bundled MIT-licensed xterm.js; the terminal grid stays
 at the remote host dimensions while fit changes the font size. It never uses a CSS transform.

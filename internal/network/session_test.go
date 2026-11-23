@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/session"
 	"golang.org/x/term"
 )
 
@@ -242,7 +243,7 @@ func TestSessionSerializesConcurrentLocalAndBrowserInput(t *testing.T) {
 }
 
 func TestSlowObserverAndBoundedReplay(t *testing.T) {
-	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment)}
+	session := &Session{Status: session.TerminalState{Running: true}, Attachments: make(map[uint64]*Attachment)}
 	slow, _, err := session.Attach(false, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -250,9 +251,9 @@ func TestSlowObserverAndBoundedReplay(t *testing.T) {
 	if session.State().Responder != slow.ID {
 		t.Fatal("first browser was not chosen as responder")
 	}
-	chunk := bytes.Repeat([]byte("x"), chunkSize)
-	for range replayLimit/chunkSize + 2 {
-		session.publish(chunk)
+	chunk := bytes.Repeat([]byte("x"), ChunkSize)
+	for range ReplayLimit/ChunkSize + 2 {
+		session.Publish(chunk)
 	}
 	if !errors.Is(session.AttachmentError(slow), ErrSlowObserver) {
 		t.Fatal("lagging observer not disconnected")
@@ -265,14 +266,14 @@ func TestSlowObserverAndBoundedReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(replay.Data) != replayLimit || replay.Offset != 2*chunkSize {
+	if len(replay.Data) != ReplayLimit || replay.Offset != 2*ChunkSize {
 		t.Fatalf("replay = %d at %d", len(replay.Data), replay.Offset)
 	}
 	replay.Data[0] = 'z'
-	if session.replay[0] != 'x' {
+	if session.Replay[0] != 'x' {
 		t.Fatal("replay exposes mutable session storage")
 	}
-	session.publish([]byte("next"))
+	session.Publish([]byte("next"))
 	<-fresh.Ready
 	data, _ := fresh.ReadOutput()
 	if got := string(data); got != "next" {
@@ -298,7 +299,7 @@ func TestSessionValidatesBeforeSpawn(t *testing.T) {
 }
 
 func TestObserverRetainsTinyOutputBursts(t *testing.T) {
-	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment)}
+	session := &Session{Status: session.TerminalState{Running: true}, Attachments: make(map[uint64]*Attachment)}
 	for _, local := range []bool{false, true} {
 		attachment, _, err := session.Attach(local, 0)
 		if err != nil {
@@ -308,7 +309,7 @@ func TestObserverRetainsTinyOutputBursts(t *testing.T) {
 		for i := range 4096 {
 			chunk := []byte(fmt.Sprintf("%d\r", i))
 			want.Write(chunk)
-			session.publish(chunk)
+			session.Publish(chunk)
 		}
 		if err := session.AttachmentError(attachment); err != nil {
 			t.Fatal(err)
@@ -323,7 +324,7 @@ func TestObserverRetainsTinyOutputBursts(t *testing.T) {
 }
 
 func TestAttachReplayResumesWithinWindow(t *testing.T) {
-	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment), offset: 100, replay: []byte("abcdefgh")}
+	session := &Session{Status: session.TerminalState{Running: true}, Attachments: make(map[uint64]*Attachment), offset: 100, Replay: []byte("abcdefgh")}
 	for _, test := range []struct {
 		since, offset uint64
 		data          string
@@ -352,7 +353,7 @@ func TestSessionStuckInputDoesNotBlockOutput(t *testing.T) {
 	session.writeMu.Lock() // the child's input buffer is full
 	written := make(chan error, 1)
 	go func() { written <- session.WriteInput(local, []byte("x\n")) }()
-	session.publish([]byte("still flowing"))
+	session.Publish([]byte("still flowing"))
 	if _, _, err := session.Attach(false, 0); err != nil || !session.State().Running {
 		t.Fatal("session blocked behind input", err)
 	}
@@ -389,10 +390,10 @@ func TestSessionAnswersDeviceAttributesWithoutViewer(t *testing.T) {
 
 // Past the replay window a tiny chunk costs the same as before it: output stays linear.
 func BenchmarkSessionPublishTinyChunks(b *testing.B) {
-	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment)}
+	session := &Session{Status: session.TerminalState{Running: true}, Attachments: make(map[uint64]*Attachment)}
 	chunk := []byte("x")
 	b.ReportAllocs()
 	for b.Loop() {
-		session.publish(chunk)
+		session.Publish(chunk)
 	}
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/tmaxmax/go-sse"
 )
 
@@ -53,7 +54,7 @@ func TestConversationGatewayProxyStreamsUntilCancelled(t *testing.T) {
 	writer := &conversationStreamWriter{header: make(http.Header), writes: make(chan string, 1)}
 	done := make(chan struct{})
 	go func() {
-		proxyWorkerConversation(writer, request, WorkerRecord{Address: strings.TrimPrefix(worker.URL, "http://")}, "")
+		ProxyWorkerConversation(writer, request, WorkerRecord{Address: strings.TrimPrefix(worker.URL, "http://")}, "")
 		close(done)
 	}()
 	var got string
@@ -87,7 +88,7 @@ func TestConversationGatewayProxyForwardsSSEAccept(t *testing.T) {
 	r.Header.Set("Last-Event-ID", "8")
 	r = r.WithContext(obs.WithTrace(r.Context(), "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"))
 	w := httptest.NewRecorder()
-	proxyWorkerConversation(w, r, WorkerRecord{Address: strings.TrimPrefix(worker.URL, "http://")}, "")
+	ProxyWorkerConversation(w, r, WorkerRecord{Address: strings.TrimPrefix(worker.URL, "http://")}, "")
 	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "text/event-stream" || w.Body.String() != "data: {}\n\n" {
 		t.Fatalf("SSE negotiation changed: %d %s", w.Code, w.Body.String())
 	}
@@ -148,9 +149,9 @@ func TestConversationTruncationEventIsOneShot(t *testing.T) {
 func TestConversationSnapshotPreservesTruncationHeader(t *testing.T) {
 	log := acp.NewEventLog(0)
 	log.MarkTruncated()
-	worker := &WorkerHTTP{conversation: NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))}
+	worker := &WorkerHTTP{Conversation: NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))}
 	mux := http.NewServeMux()
-	worker.registerConversation(mux)
+	worker.RegisterConversation(mux)
 	request := httptest.NewRequest(http.MethodGet, "/conversation?since=0", nil)
 	response := httptest.NewRecorder()
 	mux.ServeHTTP(response, request)
@@ -178,7 +179,7 @@ func TestACPAgentExitStopsStateButKeepsConversationAndRestart(t *testing.T) {
 	stateRequest := httptest.NewRequest(http.MethodGet, "/state", nil)
 	stateRequest.Header.Set("Authorization", "Bearer "+strings.Repeat("s", 64))
 	worker.ServeHTTP(state, stateRequest)
-	var got TerminalState
+	var got session.TerminalState
 	if err := json.Unmarshal(state.Body.Bytes(), &got); err != nil || got.Running {
 		t.Fatalf("state after agent exit = %s, err=%v", state.Body.String(), err)
 	}
@@ -208,9 +209,9 @@ func TestACPAgentExitStopsStateButKeepsConversationAndRestart(t *testing.T) {
 	}
 }
 func TestConversationSnapshotRespectsGatewayByteBoundary(t *testing.T) {
-	for _, lineSize := range []int{maxConversationSnapshotBytes, maxConversationSnapshotBytes + 1} {
+	for _, lineSize := range []int{MaxConversationSnapshotBytes, MaxConversationSnapshotBytes + 1} {
 		name := "exact"
-		if lineSize > maxConversationSnapshotBytes {
+		if lineSize > MaxConversationSnapshotBytes {
 			name = "over"
 		}
 		t.Run(name, func(t *testing.T) {
@@ -222,24 +223,24 @@ func TestConversationSnapshotRespectsGatewayByteBoundary(t *testing.T) {
 			bodySize := lineSize - len(encoded) - 1
 			entry.Payload = json.RawMessage(`{"body":"` + strings.Repeat("x", bodySize) + `"}`)
 
-			log := acp.NewEventLog(maxConversationSnapshotBytes)
+			log := acp.NewEventLog(MaxConversationSnapshotBytes)
 			log.Append(entry.Kind, entry.TS, entry.Payload)
-			worker := &WorkerHTTP{conversation: NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))}
+			worker := &WorkerHTTP{Conversation: NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))}
 			mux := http.NewServeMux()
-			worker.registerConversation(mux)
+			worker.RegisterConversation(mux)
 			upstream := httptest.NewServer(mux)
 			defer upstream.Close()
 
 			request := httptest.NewRequest(http.MethodGet, "/api/sessions/session/conversation", nil)
 			response := httptest.NewRecorder()
-			proxyWorkerConversation(response, request, WorkerRecord{Address: strings.TrimPrefix(upstream.URL, "http://")}, "")
+			ProxyWorkerConversation(response, request, WorkerRecord{Address: strings.TrimPrefix(upstream.URL, "http://")}, "")
 
-			entries, err := readConversationNDJSON(bytes.NewReader(response.Body.Bytes()))
+			entries, err := ReadConversationNDJSON(bytes.NewReader(response.Body.Bytes()))
 			if err != nil {
 				t.Fatalf("snapshot is not valid NDJSON: %v", err)
 			}
-			if lineSize == maxConversationSnapshotBytes {
-				if response.Code != http.StatusOK || response.Body.Len() != maxConversationSnapshotBytes || len(entries) != 1 || entries[0].Seq != 1 {
+			if lineSize == MaxConversationSnapshotBytes {
+				if response.Code != http.StatusOK || response.Body.Len() != MaxConversationSnapshotBytes || len(entries) != 1 || entries[0].Seq != 1 {
 					t.Fatalf("exact-boundary snapshot = status %d, %d bytes, %d entries", response.Code, response.Body.Len(), len(entries))
 				}
 				return
@@ -259,14 +260,14 @@ func TestConversationSnapshotRespectsGatewayByteBoundary(t *testing.T) {
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			_, _ = w.Write(first)
-			_, _ = w.Write([]byte(strings.Repeat("x", maxConversationSnapshotBytes+1)))
+			_, _ = w.Write([]byte(strings.Repeat("x", MaxConversationSnapshotBytes+1)))
 		}))
 		defer upstream.Close()
 
 		request := httptest.NewRequest(http.MethodGet, "/api/sessions/session/conversation", nil)
 		response := httptest.NewRecorder()
-		proxyWorkerConversation(response, request, WorkerRecord{Address: strings.TrimPrefix(upstream.URL, "http://")}, "")
-		entries, err := readConversationNDJSON(bytes.NewReader(response.Body.Bytes()))
+		ProxyWorkerConversation(response, request, WorkerRecord{Address: strings.TrimPrefix(upstream.URL, "http://")}, "")
+		entries, err := ReadConversationNDJSON(bytes.NewReader(response.Body.Bytes()))
 		if err != nil || response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), first) ||
 			len(entries) != 1 || entries[0].Seq != 1 || response.Header().Get("X-Agentpack-Truncated") != "true" {
 			t.Fatalf("gateway snapshot = status %d, %d bytes, entries=%+v truncated=%q, err=%v", response.Code, response.Body.Len(), entries, response.Header().Get("X-Agentpack-Truncated"), err)
@@ -292,14 +293,14 @@ func TestConversationProxyPassesWorker404sThrough(t *testing.T) {
 		strings.NewReader(`{"text":"look","images":[]}`),
 	)
 	response := httptest.NewRecorder()
-	proxyWorkerConversation(response, request, WorkerRecord{Address: strings.TrimPrefix(upstream.URL, "http://")}, "/prompt/images")
+	ProxyWorkerConversation(response, request, WorkerRecord{Address: strings.TrimPrefix(upstream.URL, "http://")}, "/prompt/images")
 	// An older worker without the route: the UI reads Go's own text as Needs update.
 	if gotPath != "/conversation/prompt/images" || response.Code != http.StatusNotFound || response.Body.String() != "404 page not found\n" {
 		t.Fatalf("peer path=%q response=%d %q", gotPath, response.Code, response.Body.String())
 	}
 	// The worker's own 404 keeps its reason, never "Needs update".
 	response = httptest.NewRecorder()
-	proxyWorkerConversation(response, httptest.NewRequest(http.MethodDelete, "/api/sessions/session-peer/conversation/goal", nil), WorkerRecord{Address: strings.TrimPrefix(upstream.URL, "http://")}, "/goal")
+	ProxyWorkerConversation(response, httptest.NewRequest(http.MethodDelete, "/api/sessions/session-peer/conversation/goal", nil), WorkerRecord{Address: strings.TrimPrefix(upstream.URL, "http://")}, "/goal")
 	if response.Code != http.StatusNotFound || response.Body.String() != "no goal is set\n" {
 		t.Fatalf("goal response=%d %q", response.Code, response.Body.String())
 	}
@@ -308,9 +309,9 @@ func TestConversationProxyPassesWorker404sThrough(t *testing.T) {
 func TestConversationSnapshotIsNamedBySequence(t *testing.T) {
 	log := acp.NewEventLog(0)
 	log.Append("prompt", 1, json.RawMessage(`{"text":{"text":"hi"}}`))
-	worker := &WorkerHTTP{conversation: NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))}
+	worker := &WorkerHTTP{Conversation: NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))}
 	mux := http.NewServeMux()
-	worker.registerConversation(mux)
+	worker.RegisterConversation(mux)
 	get := func(match string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, "/conversation", nil)
 		if match != "" {

@@ -8,7 +8,7 @@ import (
 	"os"
 	"slices"
 
-	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
@@ -26,7 +26,7 @@ func (runner Runner) runSharing(ctx context.Context, args []string) (int, error)
 		return 1, err
 	}
 	defer store.Close()
-	config, err := network.ReadSharingConfig(store)
+	config, err := gateway.ReadSharingConfig(store)
 	if err != nil {
 		return 1, err
 	}
@@ -42,7 +42,7 @@ func (runner Runner) runSharing(ctx context.Context, args []string) (int, error)
 		}
 		config.Enabled = args[0] == "on"
 		if config.Enabled {
-			if err = network.CheckTailnet(ctx); err != nil {
+			if err = gateway.CheckTailnet(ctx); err != nil {
 				return 1, err
 			}
 		}
@@ -59,18 +59,18 @@ func (runner Runner) runSharing(ctx context.Context, args []string) (int, error)
 	default:
 		return 2, fmt.Errorf("unknown sharing action %q", args[0])
 	}
-	if err = network.WriteSharingConfig(store, config); err != nil {
+	if err = gateway.WriteSharingConfig(store, config); err != nil {
 		return 1, err
 	}
 	if args[0] == "on" {
-		if err := network.SetGatewayEnabled(home, true); err != nil {
+		if err := gateway.SetGatewayEnabled(home, true); err != nil {
 			return 1, err
 		}
 		executable, err := os.Executable()
 		if err != nil {
 			return 1, err
 		}
-		if err = network.EnsureNode(ctx, home, executable); err != nil {
+		if err = gateway.EnsureNode(ctx, home, executable); err != nil {
 			return 1, err
 		}
 	}

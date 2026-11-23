@@ -8,11 +8,14 @@ import (
 	"os"
 	"slices"
 
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/registry"
+	"github.com/olegpustovit/agentpack/internal/session"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
@@ -24,7 +27,7 @@ type runningEnvironment struct {
 }
 
 // restartable: chats (ACP) and browser terminals; native-stdio presence has no worker to restart.
-func restartable(session network.SessionInfo) bool {
+func restartable(session session.SessionInfo) bool {
 	return (session.Transport == "acp" || session.Transport != "shell" && session.State.Interactive) &&
 		session.State.Running && !session.State.Restarting
 }
@@ -125,7 +128,7 @@ func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec 
 }
 
 // installNetworkMCP is `agentpack mcp add` for a recent folder, from POST /api/mcp/servers.
-func (runner Runner) installNetworkMCP(ctx context.Context, directory string, input network.MCPServerInput, restart bool) error {
+func (runner Runner) installNetworkMCP(ctx context.Context, directory string, input registry.MCPServerInput, restart bool) error {
 	server, err := mcpServerFrom(input)
 	if err != nil {
 		return err
@@ -167,16 +170,16 @@ func (runner Runner) changeNetworkProject(ctx context.Context, directory string,
 // projectContents converts pack.lock into the node's project view. Commands, arguments,
 // environment and headers never leave the node.
 // shortcut: lists only servers recorded in pack.lock, extend when mcp list provenance moves out of cli
-func projectContents(locked lockfile.PackLock, project *manifest.Manifest) network.ProjectContents {
-	contents := network.ProjectContents{Packages: []network.ProjectPackage{}, MCP: []network.ProjectMCP{}, Modes: []network.ProjectMode{}}
+func projectContents(locked lockfile.PackLock, project *manifest.Manifest) gateway.ProjectContents {
+	contents := gateway.ProjectContents{Packages: []gateway.ProjectPackage{}, MCP: []gateway.ProjectMCP{}, Modes: []gateway.ProjectMode{}}
 	for _, pkg := range locked.Packages {
-		contents.Packages = append(contents.Packages, network.ProjectPackage{
+		contents.Packages = append(contents.Packages, gateway.ProjectPackage{
 			Module: pkg.Module, Commit: pkg.Commit, ContentHash: pkg.ContentHash, CacheKey: pkg.CacheKey,
 			Kind: string(pkg.Kind), Name: pkg.Name, URL: pkg.URL, Direct: pkg.Direct,
 		})
 	}
 	for _, server := range locked.MCPServers {
-		contents.MCP = append(contents.MCP, network.ProjectMCP{
+		contents.MCP = append(contents.MCP, gateway.ProjectMCP{
 			Name: server.Name, Source: server.Source, Launcher: server.Launcher, Status: server.Status,
 			Package: server.Package, Version: server.Version, Integrity: server.Integrity, Host: server.Host, Reason: server.Reason,
 		})
@@ -197,7 +200,7 @@ func projectContents(locked lockfile.PackLock, project *manifest.Manifest) netwo
 
 // projectMode reports what a mode turns off, so the new-session sheet can show it before launch.
 // A package is off when its package-level selectors and base exclude it; any path selector marks it partial.
-func projectMode(name string, definition mode.Definition, contents network.ProjectContents) network.ProjectMode {
+func projectMode(name string, definition mode.Definition, contents gateway.ProjectContents) gateway.ProjectMode {
 	definition.ApplyDefaults()
 	parse := func(raws []string) []mode.Selector {
 		selectors := []mode.Selector{}
@@ -209,7 +212,7 @@ func projectMode(name string, definition mode.Definition, contents network.Proje
 		return selectors
 	}
 	enabled, disabled := parse(definition.Enable), parse(definition.Disable)
-	view := network.ProjectMode{Name: name, OffPackages: []string{}, PartialPackages: []string{}, OffMCP: []string{}}
+	view := gateway.ProjectMode{Name: name, OffPackages: []string{}, PartialPackages: []string{}, OffMCP: []string{}}
 	effective, err := mode.NewEffective(name, definition, nil)
 	if err != nil {
 		return view // launching this mode fails anyway; the launch reports why

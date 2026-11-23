@@ -16,10 +16,10 @@ Read `AGENTS.md` first and follow it. In particular:
 | Concern | Current location |
 |---|---|
 | Frontend source | `ui/src/` (React and Vite, built by `bun run build` in `ui/`) |
-| Markup, styles | `ui/index.html`, `ui/public/`, `ui/src/` (embedded by `internal/network/assets.go` after `make ui-stage`) |
+| Markup, styles | `ui/index.html`, `ui/public/`, `ui/src/` (embedded by `internal/gateway/assets.go` after `make ui-stage`) |
 | Browser tests | `ui/tests/` (Playwright, `bun run e2e`) |
-| HTTP API | `internal/network/gateway.go` (`Handler()`), contract in `ui/README.md` |
-| Peer routing | `internal/network/discovery.go`: `peerRoute()` allowlist, `?node=<tailnet id>` proxies to that machine |
+| HTTP API | `internal/gateway/gateway.go` (`Handler()`), contract in `ui/README.md` |
+| Peer routing | `internal/gateway/discovery.go`: `peerRoute()` allowlist, `?node=<tailnet id>` proxies to that machine |
 | Machines | `GET /api/nodes` → `[{id,name,online}]` (`TailnetNode`) |
 | Sessions | `GET /api/sessions` → `SessionInfo{id,directory,harness,mode,state{running,owner,epoch,rows,columns,exit_code,…}}` |
 | Trusted folders | `GET /api/recent` → `{directory,harness,mode,last_used,available,unavailable_reason}` |
@@ -177,5 +177,5 @@ Done when:
 - Install and restore always show every destination with its current state before any action, and nothing changes until the user confirms.
 - No silent fallbacks: show unreachable peers, missing bytes, refused control and failed installs per row.
 - Build the frontend with `bun install --frozen-lockfile && bun run build` in `ui/`, and publish it with `make ui-stage`.
-- Run `go test ./internal/network/...` and `bun run e2e` (Chromium and WebKit) before each PR. Keep one phase per PR.
+- Run `go test ./internal/gateway/... ./internal/network/...` and `bun run e2e` (Chromium and WebKit) before each PR. Keep one phase per PR.
 

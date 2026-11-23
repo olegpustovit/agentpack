@@ -7,17 +7,8 @@ import (
 	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
-
-// SubagentSummary is a subagent shown under its chat in the session sidebar: every one that is
-// still doing something, and the most recent that finished.
-type SubagentSummary struct {
-	ID        string `json:"id"`
-	Title     string `json:"title,omitempty"`
-	State     string `json:"state"` // running, requires_action, unknown or idle (finished)
-	StartedAt int64  `json:"started_at"`
-	EndedAt   int64  `json:"ended_at,omitempty"`
-}
 
 // finishedSubagentsShown bounds the finished subagents a chat lists, so a long goal stays short.
 const finishedSubagentsShown = 5
@@ -67,8 +58,8 @@ func (fold *conversationFold) applySubagent(entry acp.LogEntry) {
 }
 
 // subagentSummaries lists the busy subagents and the latest finished ones, oldest first.
-func (fold *conversationFold) subagentSummaries() []SubagentSummary {
-	var busy []SubagentSummary
+func (fold *conversationFold) subagentSummaries() []session.SubagentSummary {
+	var busy []session.SubagentSummary
 	var finished []*subagentState
 	finishedIDs := map[*subagentState]string{}
 	for id, child := range fold.Subagents {
@@ -76,14 +67,14 @@ func (fold *conversationFold) subagentSummaries() []SubagentSummary {
 			finished = append(finished, child)
 			finishedIDs[child] = id
 		} else {
-			busy = append(busy, SubagentSummary{ID: id, Title: child.Title, State: child.State, StartedAt: child.StartedAt})
+			busy = append(busy, session.SubagentSummary{ID: id, Title: child.Title, State: child.State, StartedAt: child.StartedAt})
 		}
 	}
 	slices.SortFunc(finished, func(a, b *subagentState) int { return cmp.Compare(b.EndedSeq, a.EndedSeq) })
 	for _, child := range finished[:min(len(finished), finishedSubagentsShown)] {
-		busy = append(busy, SubagentSummary{ID: finishedIDs[child], Title: child.Title, State: child.State, StartedAt: child.StartedAt, EndedAt: child.EndedAt})
+		busy = append(busy, session.SubagentSummary{ID: finishedIDs[child], Title: child.Title, State: child.State, StartedAt: child.StartedAt, EndedAt: child.EndedAt})
 	}
-	slices.SortFunc(busy, func(a, b SubagentSummary) int {
+	slices.SortFunc(busy, func(a, b session.SubagentSummary) int {
 		return cmp.Or(cmp.Compare(a.StartedAt, b.StartedAt), strings.Compare(a.ID, b.ID))
 	})
 	return busy

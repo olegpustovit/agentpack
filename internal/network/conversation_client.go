@@ -11,29 +11,30 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // ConversationLog reads the worker conversation NDJSON log for a local session.
 func ConversationLog(ctx context.Context, home, sessionID string, since int64) ([]acp.LogEntry, error) {
-	record, err := workerRecord(home, sessionID)
+	record, err := ReadWorkerRecord(home, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	path := "/conversation?since=" + strconv.FormatInt(since, 10)
-	response, err := workerRequest(ctx, record, "GET", path, "")
+	response, err := WorkerRequest(ctx, record, "GET", path, "")
 	if err != nil {
 		return nil, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, errSessionUnavailable
+		return nil, session.ErrSessionUnavailable
 	}
-	return readConversationNDJSON(response.Body)
+	return ReadConversationNDJSON(response.Body)
 }
 
 // ConversationAnswerPermission forwards a permission answer to the session worker.
 func ConversationAnswerPermission(ctx context.Context, home, sessionID, requestID, optionID string) error {
-	record, err := workerRecord(home, sessionID)
+	record, err := ReadWorkerRecord(home, sessionID)
 	if err != nil {
 		return err
 	}
@@ -55,14 +56,14 @@ func ConversationAnswerPermission(ctx context.Context, home, sessionID, requestI
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return errSessionUnavailable
+		return session.ErrSessionUnavailable
 	}
 	return nil
 }
 
 // ConversationPrompt sends a text prompt to the session worker.
 func ConversationPrompt(ctx context.Context, home, sessionID, text string) error {
-	record, err := workerRecord(home, sessionID)
+	record, err := ReadWorkerRecord(home, sessionID)
 	if err != nil {
 		return err
 	}
@@ -84,14 +85,14 @@ func ConversationPrompt(ctx context.Context, home, sessionID, text string) error
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return errSessionUnavailable
+		return session.ErrSessionUnavailable
 	}
 	return nil
 }
 
 // ConversationPromptImages sends a prompt with stored image attachments to the session worker.
 func ConversationPromptImages(ctx context.Context, home, sessionID, text string, images []acp.PromptImage) error {
-	record, err := workerRecord(home, sessionID)
+	record, err := ReadWorkerRecord(home, sessionID)
 	if err != nil {
 		return err
 	}
@@ -126,14 +127,14 @@ func ConversationPromptImages(ctx context.Context, home, sessionID, text string,
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return errSessionUnavailable
+		return session.ErrSessionUnavailable
 	}
 	return nil
 }
 
 // ConversationAnswerElicitation forwards an elicitation answer to the session worker.
 func ConversationAnswerElicitation(ctx context.Context, home, sessionID, elicitationID, value string) error {
-	record, err := workerRecord(home, sessionID)
+	record, err := ReadWorkerRecord(home, sessionID)
 	if err != nil {
 		return err
 	}
@@ -155,12 +156,12 @@ func ConversationAnswerElicitation(ctx context.Context, home, sessionID, elicita
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return errSessionUnavailable
+		return session.ErrSessionUnavailable
 	}
 	return nil
 }
 
-func readConversationNDJSON(r io.Reader) ([]acp.LogEntry, error) {
+func ReadConversationNDJSON(r io.Reader) ([]acp.LogEntry, error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64<<10), 4<<20)
 	var entries []acp.LogEntry

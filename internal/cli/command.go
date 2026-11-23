@@ -11,7 +11,7 @@ import (
 
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/fang"
-	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -22,7 +22,7 @@ import (
 // owns discovery, contextual help, completion, version, and error rendering.
 func (runner Runner) Execute(ctx context.Context, arguments []string) (int, error) {
 	ctx = obs.ProcessTrace(ctx)
-	ctx = network.WithPeerCache(ctx, "")
+	ctx = gateway.WithPeerCache(ctx, "")
 	if len(arguments) == 1 && arguments[0] == "-V" {
 		arguments = slices.Clone(arguments)
 		arguments[0] = "--version"

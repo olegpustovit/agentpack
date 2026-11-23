@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // conversationFold is the one derivation of a chat's state from its log. The log applies it to
@@ -22,11 +23,11 @@ type conversationFold struct {
 
 // conversationDerived is what the session row and the browser's derived frame show.
 type conversationDerived struct {
-	State     string            `json:"conversation_state"`
-	Working   bool              `json:"working"`
-	NeedsYou  bool              `json:"needs_you"`
-	Waiting   []acp.WaitItem    `json:"waiting,omitempty"`
-	Subagents []SubagentSummary `json:"subagents,omitempty"`
+	State     string                    `json:"conversation_state"`
+	Working   bool                      `json:"working"`
+	NeedsYou  bool                      `json:"needs_you"`
+	Waiting   []acp.WaitItem            `json:"waiting,omitempty"`
+	Subagents []session.SubagentSummary `json:"subagents,omitempty"`
 	// Through is the last sequence folded in. Not "seq": an older relay reads a frame's seq as an entry's.
 	Through int64 `json:"through"`
 }
@@ -37,7 +38,7 @@ func (fold *conversationFold) Apply(entry acp.LogEntry) {
 	fold.applySubagent(entry)
 	switch entry.Kind {
 	case "goal_update":
-		var goal Goal
+		var goal session.Goal
 		if json.Unmarshal(entry.Payload, &goal) != nil {
 			return
 		}
@@ -52,14 +53,14 @@ func (fold *conversationFold) Apply(entry acp.LogEntry) {
 	}
 }
 
-func (fold *conversationFold) Checkpoint() json.RawMessage { return mustRawJSON(fold) }
+func (fold *conversationFold) Checkpoint() json.RawMessage { return MustRawJSON(fold) }
 
 // liveDerived is the session's state now, from its log's fold.
-func (session *ConversationSession) liveDerived() json.RawMessage {
+func (cs *ConversationSession) liveDerived() json.RawMessage {
 	var derived json.RawMessage
-	session.log.ReadFold(func(fold acp.Fold) {
+	cs.Log.ReadFold(func(fold acp.Fold) {
 		if fold, ok := fold.(*conversationFold); ok {
-			derived = mustRawJSON(fold.derived())
+			derived = MustRawJSON(fold.derived())
 		}
 	})
 	return derived
@@ -76,5 +77,5 @@ func sessionJSON[T any](items []T) string {
 	if len(items) == 0 {
 		return ""
 	}
-	return string(mustRawJSON(items))
+	return string(MustRawJSON(items))
 }

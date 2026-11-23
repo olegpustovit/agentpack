@@ -1,6 +1,7 @@
 package network
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -12,18 +13,19 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 const (
-	maxBlobBytes        = 20 << 20
-	maxSessionBlobBytes = 100 << 20
+	MaxBlobBytes        = 20 << 20
+	MaxSessionBlobBytes = 100 << 20
 	maxSessionBlobFiles = 128
 )
 
-var errSessionBlobQuota = errors.New("session image storage limit reached")
-var errBlobIntegrity = errors.New("blob integrity mismatch")
+var ErrSessionBlobQuota = errors.New("session image storage limit reached")
+var ErrBlobIntegrity = errors.New("blob integrity mismatch")
 
-func validateBlobSHA(sha string) (string, error) {
+func ValidateBlobSHA(sha string) (string, error) {
 	sha = strings.ToLower(strings.TrimSpace(sha))
 	if len(sha) != 64 {
 		return "", errors.New("invalid sha")
@@ -34,11 +36,11 @@ func validateBlobSHA(sha string) (string, error) {
 	return sha, nil
 }
 
-func blobPath(sessionDir, sha string) string {
+func BlobPath(sessionDir, sha string) string {
 	return filepath.Join(sessionDir, "blobs", sha)
 }
 
-func sniffBlobMIME(data []byte) string {
+func SniffBlobMIME(data []byte) string {
 	if len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff {
 		return "image/jpeg"
 	}
@@ -55,21 +57,21 @@ func sniffBlobMIME(data []byte) string {
 }
 
 func serveSessionBlob(w http.ResponseWriter, _ *http.Request, sessionDir, shaParam string) {
-	sha, err := validateBlobSHA(shaParam)
+	sha, err := ValidateBlobSHA(shaParam)
 	if err != nil || sessionDir == "" {
 		http.Error(w, "blob not found", http.StatusNotFound)
 		return
 	}
-	data, err := readSessionBlob(sessionDir, sha)
+	data, err := ReadSessionBlob(sessionDir, sha)
 	if err != nil {
 		http.Error(w, "blob not found", http.StatusNotFound)
 		return
 	}
-	writeSessionBlob(w, data)
+	WriteSessionBlob(w, data)
 }
 
-func writeSessionBlob(w http.ResponseWriter, data []byte) {
-	ctype := sniffBlobMIME(data)
+func WriteSessionBlob(w http.ResponseWriter, data []byte) {
+	ctype := SniffBlobMIME(data)
 	if ctype == "" {
 		http.Error(w, "blob not found", http.StatusNotFound)
 		return
@@ -82,7 +84,7 @@ func writeSessionBlob(w http.ResponseWriter, data []byte) {
 	_, _ = w.Write(data)
 }
 
-func readSessionBlob(sessionDir, sha string) ([]byte, error) {
+func ReadSessionBlob(sessionDir, sha string) ([]byte, error) {
 	root, err := os.OpenRoot(sessionDir)
 	if err != nil {
 		return nil, err
@@ -93,27 +95,27 @@ func readSessionBlob(sessionDir, sha string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > maxBlobBytes {
-		return nil, errBlobIntegrity
+	if !info.Mode().IsRegular() || info.Size() > MaxBlobBytes {
+		return nil, ErrBlobIntegrity
 	}
 	file, err := root.Open(name)
 	if err != nil {
 		return nil, err
 	}
-	data, readErr := io.ReadAll(io.LimitReader(file, maxBlobBytes+1))
+	data, readErr := io.ReadAll(io.LimitReader(file, MaxBlobBytes+1))
 	if err := errors.Join(readErr, file.Close()); err != nil {
 		return nil, err
 	}
 	sum := sha256.Sum256(data)
-	if len(data) > maxBlobBytes || hex.EncodeToString(sum[:]) != sha {
-		return nil, errBlobIntegrity
+	if len(data) > MaxBlobBytes || hex.EncodeToString(sum[:]) != sha {
+		return nil, ErrBlobIntegrity
 	}
 	return data, nil
 }
 
 func proxySessionBlob(w http.ResponseWriter, response *http.Response) {
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxBlobBytes+1))
-	if err != nil || len(data) > maxBlobBytes {
+	data, err := io.ReadAll(io.LimitReader(response.Body, MaxBlobBytes+1))
+	if err != nil || len(data) > MaxBlobBytes {
 		http.Error(w, "blob response unavailable", http.StatusBadGateway)
 		return
 	}
@@ -127,7 +129,7 @@ func proxySessionBlob(w http.ResponseWriter, response *http.Response) {
 }
 
 func blobQuotaExceeded(usedBytes int64, files int, incomingBytes int64) bool {
-	return files >= maxSessionBlobFiles || usedBytes+incomingBytes > maxSessionBlobBytes
+	return files >= maxSessionBlobFiles || usedBytes+incomingBytes > MaxSessionBlobBytes
 }
 
 func sessionBlobUsage(dir string) (int, int64, error) {
@@ -144,7 +146,7 @@ func sessionBlobUsage(dir string) (int, int64, error) {
 		return 0, 0, err
 	}
 	if len(entries) > maxSessionBlobFiles {
-		return len(entries), 0, errSessionBlobQuota
+		return len(entries), 0, ErrSessionBlobQuota
 	}
 	var used int64
 	for _, entry := range entries {
@@ -156,11 +158,11 @@ func sessionBlobUsage(dir string) (int, int64, error) {
 	return len(entries), used, nil
 }
 
-func storeSessionBlob(sessionDir string, data []byte) (string, error) {
-	if len(data) == 0 || len(data) > maxBlobBytes {
+func StoreSessionBlob(sessionDir string, data []byte) (string, error) {
+	if len(data) == 0 || len(data) > MaxBlobBytes {
 		return "", errors.New("invalid blob size")
 	}
-	if sniffBlobMIME(data) == "" {
+	if SniffBlobMIME(data) == "" {
 		return "", errors.New("unsupported blob type")
 	}
 	if sessionDir == "" {
@@ -177,12 +179,12 @@ func storeSessionBlob(sessionDir string, data []byte) (string, error) {
 		return "", err
 	}
 	defer lock.Unlock()
-	path := blobPath(sessionDir, sha)
+	path := BlobPath(sessionDir, sha)
 	if info, err := os.Lstat(path); err == nil {
 		if !info.Mode().IsRegular() {
 			return "", errors.New("invalid blob file")
 		}
-		if _, err := readSessionBlob(sessionDir, sha); err != nil {
+		if _, err := ReadSessionBlob(sessionDir, sha); err != nil {
 			return "", err
 		}
 		return sha, nil
@@ -194,7 +196,7 @@ func storeSessionBlob(sessionDir string, data []byte) (string, error) {
 		return "", err
 	}
 	if blobQuotaExceeded(used, files, int64(len(data))) {
-		return "", errSessionBlobQuota
+		return "", ErrSessionBlobQuota
 	}
 	file, err := os.CreateTemp(dir, ".blob-*")
 	if err != nil {
@@ -214,4 +216,18 @@ func storeSessionBlob(sessionDir string, data []byte) (string, error) {
 		return "", err
 	}
 	return sha, nil
+}
+
+func AdvertiseBlob(ctx context.Context, store *state.Store, id, sha string, size int64) error {
+	if store == nil {
+		return nil
+	}
+	if !strings.HasPrefix(id, "session-") || !ValidPeerSessionID(id) {
+		return errors.New("invalid blob session")
+	}
+	return store.Archive().AdvertiseBlob(ctx, id, sha, size)
+}
+
+func ValidPeerSessionID(id string) bool {
+	return id != "" && id != "." && id != ".." && !strings.ContainsAny(id, "/\\")
 }

@@ -24,77 +24,25 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
-type AgentCapabilities struct {
-	LoadSession         bool                      `json:"loadSession,omitempty"`
-	PromptCapabilities  *AgentPromptCapabilities  `json:"promptCapabilities,omitempty"`
-	SessionCapabilities *AgentSessionCapabilities `json:"sessionCapabilities,omitempty"`
-	// Steering: a steer joins the running turn instead of interrupting it (harness.ACPLaunch.Steers).
-	Steering bool `json:"steering,omitempty"`
-}
-
-type AgentPromptCapabilities struct {
-	Image bool `json:"image,omitempty"`
-}
-
-type AgentSessionCapabilities struct {
-	Resume *struct{} `json:"resume,omitempty"`
-	Fork   *struct{} `json:"fork,omitempty"`
-}
-
-type SessionInfo struct {
-	NodeID            string             `json:"node_id,omitempty"`
-	Reachable         bool               `json:"reachable"`
-	LastSync          time.Time          `json:"last_sync,omitzero"`
-	EndedAt           time.Time          `json:"ended_at,omitzero"`
-	ArchivedAt        time.Time          `json:"archived_at,omitzero"`
-	LastUsed          time.Time          `json:"last_used,omitzero"`
-	LastEventAt       time.Time          `json:"last_event_at,omitzero"`
-	FolderID          string             `json:"folder_id,omitempty"`
-	ID                string             `json:"id"`
-	Name              string             `json:"name,omitempty"`
-	Title             string             `json:"title,omitempty"`
-	Directory         string             `json:"directory"`
-	DefinitionRoot    string             `json:"definition_root,omitempty"`
-	Harness           string             `json:"harness"`
-	Mode              string             `json:"mode"`
-	Transport         string             `json:"transport,omitempty"`
-	AgentSessionID    string             `json:"agent_session_id,omitempty"`
-	AgentCapabilities *AgentCapabilities `json:"agent_capabilities,omitempty"`
-	ConversationState string             `json:"conversation_state,omitempty"`
-	State             TerminalState      `json:"state"`
-	StartedAt         time.Time          `json:"started_at,omitzero"`
-	StartedBy         *Actor             `json:"started_by,omitempty"`
-	Goal              *Goal              `json:"goal,omitempty"`
-	Subagents         []SubagentSummary  `json:"subagents,omitempty"`
-	// Waiting is the background work an idle chat will wake for; older peers omit it.
-	Waiting []acp.WaitItem `json:"waiting,omitempty"`
-	// ParentID is the chat that owns this shell or whose agent started this helper session.
-	ParentID string `json:"parent_id,omitempty"`
-	// Tools lets the chat's agent call the agentpack MCP server.
-	Tools bool `json:"tools,omitempty"`
-	// WorktreeOf is the main folder of the agentpack worktree Directory is in. Older peers omit it.
-	WorktreeOf string `json:"worktree_of,omitempty"`
-}
-
-func workerRecord(home, id string) (WorkerRecord, error) {
+func ReadWorkerRecord(home, id string) (WorkerRecord, error) {
 	var record WorkerRecord
-	if !validSessionID(id) {
+	if !ValidSessionID(id) {
 		return record, errors.New("invalid session ID")
 	}
 	data, err := os.ReadFile(filepath.Join(home, "network", "sessions", id, "worker.json"))
 	if err != nil {
 		return record, err
 	}
-	return parseWorkerRecord(data, id)
+	return ParseWorkerRecord(data, id)
 }
 
-func parseWorkerRecord(data []byte, id string) (WorkerRecord, error) {
+func ParseWorkerRecord(data []byte, id string) (WorkerRecord, error) {
 	var record WorkerRecord
 	var err error
 	if err = json.Unmarshal(data, &record); err != nil {
@@ -107,7 +55,12 @@ func parseWorkerRecord(data []byte, id string) (WorkerRecord, error) {
 	return record, nil
 }
 
-func workerRequest(ctx context.Context, record WorkerRecord, method, path, operationID string, body ...io.Reader) (*http.Response, error) {
+func WorkerRequest(ctx context.Context, record WorkerRecord, method, path, operationID string, body ...io.Reader) (*http.Response, error) {
+	return LocalRequest(ctx, record, method, path, operationID, WorkerRequestTimeout(method, path), body...)
+}
+
+// LocalRequest calls a loopback endpoint holding record's secret: a worker, or the gateway's API.
+func LocalRequest(ctx context.Context, record WorkerRecord, method, path, operationID string, timeout time.Duration, body ...io.Reader) (*http.Response, error) {
 	var reader io.Reader
 	if len(body) > 0 {
 		reader = body[0]
@@ -129,18 +82,18 @@ func workerRequest(ctx context.Context, record WorkerRecord, method, path, opera
 		transport = &http.Transport{Proxy: nil}
 		defer transport.CloseIdleConnections()
 	}
-	client := http.Client{Timeout: workerRequestTimeout(method, path), Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := http.Client{Timeout: timeout, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	return client.Do(request)
 }
 
 // ReportAgentState sends a terminal agent's turn state (working, idle or needs_you) to the worker
 // running the session, from the agent's own hooks.
 func ReportAgentState(ctx context.Context, home, id, state string) error {
-	record, err := workerRecord(home, id)
+	record, err := ReadWorkerRecord(home, id)
 	if err != nil {
 		return err
 	}
-	response, err := workerRequest(ctx, record, http.MethodPost, "/agent-state", "", strings.NewReader(string(mustRawJSON(map[string]string{"state": state}))))
+	response, err := WorkerRequest(ctx, record, http.MethodPost, "/agent-state", "", strings.NewReader(string(MustRawJSON(map[string]string{"state": state}))))
 	if err != nil {
 		return err
 	}
@@ -154,18 +107,18 @@ func ReportAgentState(ctx context.Context, home, id, state string) error {
 // workerTransport keeps loopback read connections to workers alive, so the 2 s session polls do not reconnect each time.
 var workerTransport = &http.Transport{Proxy: nil, MaxIdleConnsPerHost: 2, IdleConnTimeout: 30 * time.Second}
 
-// workerStates asks every listed local worker for its live terminal state at once; a worker that does not answer is left out.
-func workerStates(ctx context.Context, home string, sessions []SessionInfo) map[string]TerminalState {
+// WorkerStates asks every listed local worker for its live terminal state at once; a worker that does not answer is left out.
+func WorkerStates(ctx context.Context, home string, sessions []session.SessionInfo) map[string]session.TerminalState {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	states := map[string]TerminalState{}
+	states := map[string]session.TerminalState{}
 	for _, info := range sessions {
-		record, err := workerRecord(home, info.ID)
+		record, err := ReadWorkerRecord(home, info.ID)
 		if err != nil {
 			continue
 		}
 		wg.Go(func() {
-			if terminal, err := sessionState(ctx, record); err == nil {
+			if terminal, err := SessionState(ctx, record); err == nil {
 				mu.Lock()
 				states[info.ID] = terminal
 				mu.Unlock()
@@ -176,23 +129,23 @@ func workerStates(ctx context.Context, home string, sessions []SessionInfo) map[
 	return states
 }
 
-func Sessions(ctx context.Context, home string) ([]SessionInfo, error) {
+func Sessions(ctx context.Context, home string) ([]session.SessionInfo, error) {
 	store, err := state.Open(home)
 	if err != nil {
 		return nil, err
 	}
 	defer store.Close()
-	return sessionsIn(ctx, store.Reader, home)
+	return SessionsIn(ctx, store.Reader, home)
 }
 
-// sessionsIn lists this node's live sessions from an open store; the gateway passes its own.
-func sessionsIn(ctx context.Context, db *sql.DB, home string) ([]SessionInfo, error) {
-	sessions, err := querySessions(ctx, db, "SELECT "+sessionColumns+" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND ended_at=0 ORDER BY id")
+// SessionsIn lists this node's live sessions from an open store; the gateway passes its own.
+func SessionsIn(ctx context.Context, db *sql.DB, home string) ([]session.SessionInfo, error) {
+	sessions, err := session.QuerySessions(ctx, db, "SELECT "+session.SessionColumns+" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND ended_at=0 ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
-	states := workerStates(ctx, home, sessions)
-	result := []SessionInfo{}
+	states := WorkerStates(ctx, home, sessions)
+	result := []session.SessionInfo{}
 	for _, info := range sessions {
 		if terminal, ok := states[info.ID]; ok {
 			info.State = terminal
@@ -280,7 +233,7 @@ func StartWorker(ctx context.Context, home, executable string, launch WorkerLaun
 	defer timer.Stop()
 	select {
 	case id := <-ready:
-		if _, err = workerRecord(home, id); err != nil {
+		if _, err = ReadWorkerRecord(home, id); err != nil {
 			if id == "" {
 				// It exited without announcing itself; wait (briefly) for its last words.
 				done := make(chan struct{})
@@ -307,7 +260,7 @@ func StartWorker(ctx context.Context, home, executable string, launch WorkerLaun
 	}
 }
 
-func attachWorker(ctx context.Context, record WorkerRecord, local bool, since uint64) (*websocket.Conn, error) {
+func AttachWorker(ctx context.Context, record WorkerRecord, local bool, since uint64) (*websocket.Conn, error) {
 	headers := http.Header{"Authorization": []string{"Bearer " + record.Secret}}
 	if local {
 		headers.Set("X-Agentpack-Local-Terminal", "1")
@@ -330,7 +283,7 @@ func StopWorker(ctx context.Context, home, id string) error {
 }
 
 func RestartWorker(ctx context.Context, home, id, operationID string) error {
-	if !validOperationID(operationID) {
+	if !ValidOperationID(operationID) {
 		return errors.New("restart requires a valid operation_id")
 	}
 	return controlWorker(ctx, home, id, "restart", operationID)
@@ -338,30 +291,30 @@ func RestartWorker(ctx context.Context, home, id, operationID string) error {
 
 // RestartWorkerWhenIdle restarts a chat once its current turn and approvals settle; other sessions restart now.
 func RestartWorkerWhenIdle(ctx context.Context, home, id, operationID string) error {
-	if !validOperationID(operationID) {
+	if !ValidOperationID(operationID) {
 		return errors.New("restart requires a valid operation_id")
 	}
 	return controlWorker(ctx, home, id, "restart?when=idle", operationID)
 }
 
-var errWorkerControlRejected = errors.New("worker operation rejected")
+var ErrWorkerControlRejected = errors.New("worker operation rejected")
 
 func controlWorker(ctx context.Context, home, id, action, operationID string) error {
-	record, err := workerRecord(home, id)
+	record, err := ReadWorkerRecord(home, id)
 	if err != nil {
 		return err
 	}
-	return controlWorkerRecord(ctx, record, action, operationID)
+	return ControlWorkerRecord(ctx, record, action, operationID)
 }
 
-func controlWorkerRecord(ctx context.Context, record WorkerRecord, action, operationID string) error {
-	response, err := workerRequest(ctx, record, "POST", "/"+action, operationID)
+func ControlWorkerRecord(ctx context.Context, record WorkerRecord, action, operationID string) error {
+	response, err := WorkerRequest(ctx, record, "POST", "/"+action, operationID)
 	if err != nil {
 		return err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
-		return fmt.Errorf("%w: worker %s returned %s", errWorkerControlRejected, action, response.Status)
+		return fmt.Errorf("%w: worker %s returned %s", ErrWorkerControlRejected, action, response.Status)
 	}
 	return nil
 }
@@ -406,4 +359,15 @@ func (w *workerStderr) lastLine() string {
 		}
 	}
 	return ""
+}
+
+// WorkerRequestTimeout bounds a CLI or gateway call to a worker endpoint.
+func WorkerRequestTimeout(method, path string) time.Duration {
+	path, _, _ = strings.Cut(path, "?")
+	if method == http.MethodPost && (path == "/stop" || path == "/restart" ||
+		strings.HasSuffix(path, "/conversation/prompt") || strings.HasSuffix(path, "/conversation/message") || strings.HasSuffix(path, "/conversation/blobs")) ||
+		method == http.MethodGet && strings.Contains(path, "/blobs/") {
+		return 2 * time.Minute
+	}
+	return 2 * time.Second
 }

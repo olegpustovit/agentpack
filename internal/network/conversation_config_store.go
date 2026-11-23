@@ -1,56 +1,26 @@
 package network
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
-	"path/filepath"
 	"slices"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
-	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 type agentSnapshot struct {
-	Config       json.RawMessage    `json:"config"`
-	Commands     json.RawMessage    `json:"commands,omitempty"`
-	Capabilities *AgentCapabilities `json:"capabilities,omitempty"`
+	Config       json.RawMessage            `json:"config"`
+	Commands     json.RawMessage            `json:"commands,omitempty"`
+	Capabilities *session.AgentCapabilities `json:"capabilities,omitempty"`
 }
 
-func (g *Gateway) serveAgentSnapshot(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	query := r.URL.Query()
-	owner := query.Get("owner")
-	if owner == "" || owner == "local" {
-		var err error
-		owner, err = g.store.NodeID(ctx)
-		if err != nil {
-			meshReadError(w, r, err)
-			return
-		}
-	}
-	var body string
-	err := g.store.Reader.QueryRowContext(ctx, `SELECT snapshot FROM agent_snapshots
-		WHERE node_id=? AND harness=? AND definition_root=? AND mode=? ORDER BY updated_at DESC,agent_version DESC LIMIT 1`,
-		owner, query.Get("harness"), query.Get("definition_root"), cmpOr(query.Get("mode"), "default")).Scan(&body)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeJSON(w, nil)
-		return
-	}
-	if err != nil {
-		meshReadError(w, r, err)
-		return
-	}
-	writeJSON(w, json.RawMessage(body))
-}
-
-func persistAgentSnapshot(ctx context.Context, db *sql.DB, info SessionInfo, conv *ConversationSession) {
+func persistAgentSnapshot(ctx context.Context, db *sql.DB, info session.SessionInfo, conv *ConversationSession) {
 	conv.mu.Lock()
 	snapshot := agentSnapshot{Config: conv.configJSONLocked(), Commands: conv.agentCommands, Capabilities: conv.agentCapabilities}
 	version := conv.agentVersion
@@ -58,7 +28,7 @@ func persistAgentSnapshot(ctx context.Context, db *sql.DB, info SessionInfo, con
 	_, err := db.ExecContext(ctx, `INSERT INTO agent_snapshots(node_id,harness,definition_root,mode,agent_version,snapshot,updated_at)
 		VALUES (`+state.LocalNodeSQL+`,?,?,?,?,?,?)
 		ON CONFLICT DO UPDATE SET snapshot=excluded.snapshot,updated_at=excluded.updated_at WHERE snapshot<>excluded.snapshot`,
-		info.Harness, cmpOr(info.DefinitionRoot, info.Directory), cmpOr(info.Mode, "default"), version, string(mustRawJSON(snapshot)), time.Now().UnixMilli())
+		info.Harness, CmpOr(info.DefinitionRoot, info.Directory), CmpOr(info.Mode, "default"), version, string(MustRawJSON(snapshot)), time.Now().UnixMilli())
 	if err != nil {
 		_, event := obs.Start(ctx, "worker", "save_agent_snapshot")
 		event.Set("session_id", info.ID)
@@ -67,12 +37,12 @@ func persistAgentSnapshot(ctx context.Context, db *sql.DB, info SessionInfo, con
 	}
 }
 
-type configSelection struct {
+type ConfigSelection struct {
 	Key   string          `json:"key"`
 	Value json.RawMessage `json:"value"`
 }
 
-func (selection configSelection) valid() bool {
+func (selection ConfigSelection) Valid() bool {
 	if len(selection.Key) == 0 || len(selection.Key) > 128 || len(selection.Value) > 4096 {
 		return false
 	}
@@ -88,58 +58,8 @@ func (selection configSelection) valid() bool {
 	}
 }
 
-func (g *Gateway) serveWantedConfig(w http.ResponseWriter, r *http.Request) {
-	ctx, id := r.Context(), r.PathValue("id")
-	if record, err := g.workerRecord(ctx, id); err == nil {
-		if authorizeACPWrite(w, r, record.Session) {
-			proxyWorkerConversation(w, r, record, "/config")
-		}
-		return
-	}
-	info, err := storedSession(ctx, g.store.Reader, id)
-	if err != nil || !validSessionID(id) || info.Transport != "acp" || info.ConversationState != "starting" || !info.EndedAt.IsZero() {
-		http.Error(w, "session unavailable", http.StatusNotFound)
-		return
-	}
-	if !authorizeACPWrite(w, r, info) {
-		return
-	}
-	var input configSelection
-	if !readJSON(w, r, &input) {
-		return
-	}
-	if !input.valid() {
-		http.Error(w, "valid key and value are required", http.StatusBadRequest)
-		return
-	}
-	directory := filepath.Join(g.options.Home, "network", "sessions", id)
-	if err := paths.EnsurePrivateDirectory(directory); err != nil {
-		configWriteError(w, r, err)
-		return
-	}
-	lock, err := lockPromptHandoff(ctx, directory)
-	if err != nil {
-		configWriteError(w, r, err)
-		return
-	}
-	if record, err := g.workerRecord(ctx, id); err == nil {
-		_ = lock.Close()
-		r.Body = io.NopCloser(bytes.NewReader(mustRawJSON(input)))
-		if authorizeACPWrite(w, r, record.Session) {
-			proxyWorkerConversation(w, r, record, "/config")
-		}
-		return
-	}
-	defer lock.Close()
-	if err := saveWantedConfig(ctx, g.store.DB, id, input, true); err != nil {
-		configWriteError(w, r, err)
-		return
-	}
-	writeJSON(w, map[string]bool{"accepted": true})
-}
-
-func configWriteError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, errSessionUnavailable) {
+func ConfigWriteError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, session.ErrSessionUnavailable) {
 		http.Error(w, "session unavailable", http.StatusConflict)
 		return
 	}
@@ -149,8 +69,8 @@ func configWriteError(w http.ResponseWriter, r *http.Request, err error) {
 	http.Error(w, "could not save config", http.StatusInternalServerError)
 }
 
-func saveWantedConfig(ctx context.Context, db *sql.DB, id string, choice configSelection, starting bool) error {
-	patch := string(mustRawJSON(map[string]json.RawMessage{choice.Key: choice.Value}))
+func SaveWantedConfig(ctx context.Context, db *sql.DB, id string, choice ConfigSelection, starting bool) error {
+	patch := string(MustRawJSON(map[string]json.RawMessage{choice.Key: choice.Value}))
 	query := `UPDATE sessions SET wanted_config=json_patch(wanted_config,?)
 		WHERE id=? AND node_id=` + state.LocalNodeSQL + ` AND archived_at=0`
 	if starting {
@@ -162,12 +82,12 @@ func saveWantedConfig(ctx context.Context, db *sql.DB, id string, choice configS
 	}
 	count, err := result.RowsAffected()
 	if err == nil && count == 0 {
-		return errSessionUnavailable
+		return session.ErrSessionUnavailable
 	}
 	return err
 }
 
-func savedConfig(ctx context.Context, store *state.Store, info SessionInfo) (map[string]json.RawMessage, error) {
+func savedConfig(ctx context.Context, store *state.Store, info session.SessionInfo) (map[string]json.RawMessage, error) {
 	var body string
 	if err := store.Reader.QueryRowContext(ctx, "SELECT wanted_config FROM sessions WHERE id=?", info.ID).Scan(&body); err != nil {
 		return nil, err
@@ -176,7 +96,7 @@ func savedConfig(ctx context.Context, store *state.Store, info SessionInfo) (map
 		err := store.Reader.QueryRowContext(ctx, `SELECT wanted_config FROM sessions WHERE id<>? AND harness=?
 			AND node_id=`+state.LocalNodeSQL+` AND owner_email=(SELECT owner_email FROM sessions WHERE id=?)
 			AND coalesce(nullif(definition_root,''),directory)=? AND wanted_config<>'{}'
-			ORDER BY last_used DESC LIMIT 1`, info.ID, info.Harness, info.ID, cmpOr(info.DefinitionRoot, info.Directory)).Scan(&body)
+			ORDER BY last_used DESC LIMIT 1`, info.ID, info.Harness, info.ID, CmpOr(info.DefinitionRoot, info.Directory)).Scan(&body)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -202,11 +122,11 @@ type agentConfigChoice struct {
 
 func hasConfigChoice(choices []agentConfigChoice, value string) bool {
 	return slices.ContainsFunc(choices, func(choice agentConfigChoice) bool {
-		return cmpOr(choice.Value, choice.ID) == value || hasConfigChoice(choice.Options, value)
+		return CmpOr(choice.Value, choice.ID) == value || hasConfigChoice(choice.Options, value)
 	})
 }
 
-func (session *ConversationSession) wantedChoice(key string, value json.RawMessage) (allowed, unchanged bool) {
+func (cs *ConversationSession) wantedChoice(key string, value json.RawMessage) (allowed, unchanged bool) {
 	var config struct {
 		ConfigOptions []struct {
 			ID      string              `json:"id"`
@@ -219,7 +139,7 @@ func (session *ConversationSession) wantedChoice(key string, value json.RawMessa
 			Options []agentConfigChoice `json:"availableModes"`
 		} `json:"modes"`
 	}
-	if json.Unmarshal(session.ConfigJSON(), &config) != nil {
+	if json.Unmarshal(cs.ConfigJSON(), &config) != nil {
 		return false, false
 	}
 	var choice string
@@ -242,7 +162,7 @@ func (session *ConversationSession) wantedChoice(key string, value json.RawMessa
 	return false, false
 }
 
-func (session *ConversationSession) applyWantedConfig(ctx context.Context, wanted map[string]json.RawMessage) {
+func (cs *ConversationSession) applyWantedConfig(ctx context.Context, wanted map[string]json.RawMessage) {
 	keys := make([]string, 0, len(wanted))
 	for key := range wanted {
 		keys = append(keys, key)
@@ -254,25 +174,25 @@ func (session *ConversationSession) applyWantedConfig(ctx context.Context, wante
 	}
 	for _, key := range keys {
 		value := wanted[key]
-		if allowed, unchanged := session.wantedChoice(key, value); allowed {
+		if allowed, unchanged := cs.wantedChoice(key, value); allowed {
 			if unchanged {
 				continue
 			}
-			if err := session.SetConfigOption(ctx, key, value); err == nil {
+			if err := cs.SetConfigOption(ctx, key, value); err == nil {
 				continue
 			} else {
 				_, event := obs.Start(ctx, "worker", "apply_saved_config")
-				event.Set("session_id", session.sessionID)
+				event.Set("session_id", cs.sessionID)
 				event.Fail(err)
 				event.End()
 			}
 		}
-		session.log.Append("notice", time.Now().UnixMilli(), mustRawJSON(map[string]string{
+		cs.Log.Append("notice", time.Now().UnixMilli(), MustRawJSON(map[string]string{
 			"sessionUpdate": "notice", "severity": "info", "title": "A saved agent option could not be applied", "description": key,
 		}))
 	}
 }
 
-func (session *ConversationSession) logConfiguration() {
-	session.log.Append("agent_configuration", time.Now().UnixMilli(), session.ConfigJSON())
+func (cs *ConversationSession) logConfiguration() {
+	cs.Log.Append("agent_configuration", time.Now().UnixMilli(), cs.ConfigJSON())
 }

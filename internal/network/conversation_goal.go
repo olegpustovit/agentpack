@@ -8,38 +8,16 @@ import (
 	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
-// Goal is a standing objective the agent works toward across turns. Every change is logged as
-// goal_update and saved on the session row, so every viewer and peer sees the same goal.
-type Goal struct {
-	Objective  string      `json:"objective"`
-	Checks     string      `json:"checks,omitempty"`
-	State      string      `json:"state"`  // active, paused, blocked, limited, met or cleared
-	Engine     string      `json:"engine"` // native (the agent's /goal command) or gateway (this worker's loop)
-	StartedAt  int64       `json:"started_at"`
-	ActiveMS   int64       `json:"active_ms"`            // active time before the current active stretch
-	ResumedAt  int64       `json:"resumed_at,omitempty"` // set only while active
-	Turns      int         `json:"turns"`
-	LastReason string      `json:"last_reason,omitempty"`
-	Limits     *GoalLimits `json:"limits,omitempty"`
-	UpdatedAt  int64       `json:"updated_at"`
-}
-
-type GoalLimits struct {
-	Minutes float64 `json:"minutes,omitempty"`
-	CostUSD float64 `json:"cost_usd,omitempty"`
-	Tokens  int64   `json:"tokens,omitempty"`
-	Turns   int     `json:"turns,omitempty"`
-}
-
-var errNoGoal = errors.New("no goal is set")
+var ErrNoGoal = errors.New("no goal is set")
 
 // goalStopRuns is how many consecutive blocked or tool-free turns stop a gateway goal.
 const goalStopRuns = 3
 
 // setGoalState moves the goal and keeps active time: only time spent active accumulates.
-func setGoalState(goal *Goal, state, reason string, now int64) {
+func setGoalState(goal *session.Goal, state, reason string, now int64) {
 	if goal.State == "active" && state != "active" {
 		goal.ActiveMS += max(0, now-goal.ResumedAt)
 		goal.ResumedAt = 0
@@ -54,7 +32,7 @@ func setGoalState(goal *Goal, state, reason string, now int64) {
 	goal.UpdatedAt = now
 }
 
-func goalActiveMS(goal *Goal, now int64) int64 {
+func goalActiveMS(goal *session.Goal, now int64) int64 {
 	if goal.State == "active" {
 		return goal.ActiveMS + max(0, now-goal.ResumedAt)
 	}
@@ -62,8 +40,8 @@ func goalActiveMS(goal *Goal, now int64) int64 {
 }
 
 // goalWantsTurn reports whether this worker should prompt for the goal. The caller holds mu.
-func (session *ConversationSession) goalWantsTurn() bool {
-	return session.goal != nil && session.goal.State == "active" && session.goal.Engine == "gateway" && !session.userCancelled
+func (cs *ConversationSession) goalWantsTurn() bool {
+	return cs.goal != nil && cs.goal.State == "active" && cs.goal.Engine == "gateway" && !cs.userCancelled
 }
 
 func nativeGoalCommand(objective, checks string) string {
@@ -75,7 +53,7 @@ func nativeGoalCommand(objective, checks string) string {
 }
 
 // goalContinuation is the gateway engine's turn prompt, modelled on Codex's goal continuation.
-func goalContinuation(goal *Goal) string {
+func goalContinuation(goal *session.Goal) string {
 	var prompt strings.Builder
 	prompt.WriteString("Continue working toward this goal.\n\nGoal: ")
 	prompt.WriteString(goal.Objective)
@@ -117,7 +95,7 @@ func goalVerdict(reply string) (verdict, reason string) {
 	return "", ""
 }
 
-func goalLimitReached(goal *Goal, used int64, cost float64, now int64) string {
+func goalLimitReached(goal *session.Goal, used int64, cost float64, now int64) string {
 	limits := goal.Limits
 	switch {
 	case limits == nil:
@@ -135,12 +113,12 @@ func goalLimitReached(goal *Goal, used int64, cost float64, now int64) string {
 }
 
 // observeGoalEntry tracks what the goal engines read from the log. The caller holds mu.
-func (session *ConversationSession) observeGoalEntry(entry acp.LogEntry) {
+func (cs *ConversationSession) observeGoalEntry(entry acp.LogEntry) {
 	switch entry.Kind {
 	case "prompt":
-		session.turnText, session.turnTools = session.turnText[:0], 0
+		cs.turnText, cs.turnTools = cs.turnText[:0], 0
 	case "tool_call":
-		session.turnTools++
+		cs.turnTools++
 	case "agent_message_chunk":
 		var chunk struct {
 			Text struct {
@@ -148,10 +126,10 @@ func (session *ConversationSession) observeGoalEntry(entry acp.LogEntry) {
 			} `json:"text"`
 		}
 		if json.Unmarshal(entry.Payload, &chunk) == nil {
-			session.turnText = append(session.turnText, chunk.Text.Text...)
+			cs.turnText = append(cs.turnText, chunk.Text.Text...)
 			// Only the reply's last line matters.
-			if over := len(session.turnText) - 8<<10; over > 0 {
-				session.turnText = append(session.turnText[:0], session.turnText[over:]...)
+			if over := len(cs.turnText) - 8<<10; over > 0 {
+				cs.turnText = append(cs.turnText[:0], cs.turnText[over:]...)
 			}
 		}
 	case "usage_update":
@@ -162,9 +140,9 @@ func (session *ConversationSession) observeGoalEntry(entry acp.LogEntry) {
 			} `json:"cost"`
 		}
 		if json.Unmarshal(entry.Payload, &usage) == nil {
-			session.usageUsed = usage.Used
+			cs.usageUsed = usage.Used
 			if usage.Cost != nil {
-				session.usageCost = usage.Cost.Amount
+				cs.usageCost = usage.Cost.Amount
 			}
 		}
 	case "available_commands_update":
@@ -174,7 +152,7 @@ func (session *ConversationSession) observeGoalEntry(entry acp.LogEntry) {
 			} `json:"availableCommands"`
 		}
 		if json.Unmarshal(entry.Payload, &update) == nil {
-			session.nativeGoal = slices.ContainsFunc(update.AvailableCommands, func(command struct {
+			cs.nativeGoal = slices.ContainsFunc(update.AvailableCommands, func(command struct {
 				Name string `json:"name"`
 			}) bool {
 				return strings.TrimPrefix(command.Name, "/") == "goal"
@@ -191,18 +169,18 @@ func (session *ConversationSession) observeGoalEntry(entry acp.LogEntry) {
 			} `json:"_meta"`
 		}
 		if json.Unmarshal(entry.Payload, &update) == nil && len(update.Meta.JetBrains.Air.Goal) > 0 {
-			session.applyNativeGoal(update.Meta.JetBrains.Air.Goal, entry.TS)
+			cs.applyNativeGoal(update.Meta.JetBrains.Air.Goal, entry.TS)
 		}
 	}
 }
 
 // applyNativeGoal follows the agent's own goal snapshot. The caller holds mu.
-func (session *ConversationSession) applyNativeGoal(raw json.RawMessage, now int64) {
+func (cs *ConversationSession) applyNativeGoal(raw json.RawMessage, now int64) {
 	if string(raw) == "null" {
-		if session.goal != nil {
-			cleared := *session.goal
+		if cs.goal != nil {
+			cleared := *cs.goal
 			setGoalState(&cleared, "cleared", "", now)
-			session.goal, session.goalCleared, session.goalDirty = nil, &cleared, true
+			cs.goal, cs.goalCleared, cs.goalDirty = nil, &cleared, true
 		}
 		return
 	}
@@ -220,7 +198,7 @@ func (session *ConversationSession) applyNativeGoal(raw json.RawMessage, now int
 	if state == "" {
 		return
 	}
-	goal := session.goal
+	goal := cs.goal
 	if goal == nil {
 		started := int64(snapshot.CreatedAt)
 		if started > 0 && started < 1e12 {
@@ -229,8 +207,8 @@ func (session *ConversationSession) applyNativeGoal(raw json.RawMessage, now int
 		if started <= 0 {
 			started = now
 		}
-		goal = &Goal{Engine: "native", State: "paused", StartedAt: started}
-		session.goal = goal
+		goal = &session.Goal{Engine: "native", State: "paused", StartedAt: started}
+		cs.goal = goal
 	}
 	if snapshot.Objective != "" {
 		goal.Objective = snapshot.Objective
@@ -245,168 +223,168 @@ func (session *ConversationSession) applyNativeGoal(raw json.RawMessage, now int
 		goal.LastReason = snapshot.LastReason
 	}
 	goal.UpdatedAt = now
-	session.goalDirty = true
+	cs.goalDirty = true
 }
 
 // followNativeGoal ends a native goal when the agent stops on its own, since no adapter reports it to
 // us: Claude's /goal ends its turn, Codex keeps going without a prompt until its thread is idle.
 // Unprompted work after that (Codex continuing) revives it. The caller holds mu.
-func (session *ConversationSession) followNativeGoal(entry acp.LogEntry, state string) {
-	goal := session.goal
+func (cs *ConversationSession) followNativeGoal(entry acp.LogEntry, state string) {
+	goal := cs.goal
 	if goal == nil || goal.Engine != "native" {
 		return
 	}
 	switch {
-	case state == string(stateIdle) && session.state == string(stateWorking) && goal.State == "active" && session.userCancelled:
+	case state == string(StateIdle) && cs.state == string(StateWorking) && goal.State == "active" && cs.userCancelled:
 		// A prompted turn is paused by finishTurn; unprompted work has no turn to finish.
 		setGoalState(goal, "paused", "stopped by the user", entry.TS)
-		session.goalDirty, session.goalPauseDue = true, !session.running
-	case state == string(stateIdle) && session.state == string(stateWorking) && goal.State == "active" &&
-		session.stopReason != "error" && session.stopReason != "failed" && session.stopReason != "cancelled":
+		cs.goalDirty, cs.goalPauseDue = true, !cs.running
+	case state == string(StateIdle) && cs.state == string(StateWorking) && goal.State == "active" &&
+		cs.stopReason != "error" && cs.stopReason != "failed" && cs.stopReason != "cancelled":
 		setGoalState(goal, "met", "the agent finished", entry.TS)
-		session.goalSettled, session.goalDirty = true, true
-	case state == string(stateWorking) && entry.Kind != "prompt" && goal.State == "met" && session.goalSettled:
+		cs.goalSettled, cs.goalDirty = true, true
+	case state == string(StateWorking) && entry.Kind != "prompt" && goal.State == "met" && cs.goalSettled:
 		setGoalState(goal, "active", "", entry.TS)
 		goal.LastReason = ""
-		session.goalSettled, session.goalDirty = false, true
+		cs.goalSettled, cs.goalDirty = false, true
 	}
 }
 
 // finishTurn counts a goal turn and applies the stop rules once the agent's turn has ended.
-func (session *ConversationSession) finishTurn(ctx context.Context, err error) {
-	session.mu.Lock()
-	if errors.Is(err, errSessionArchived) {
-		session.archived = true
+func (cs *ConversationSession) finishTurn(ctx context.Context, err error) {
+	cs.mu.Lock()
+	if errors.Is(err, session.ErrSessionArchived) {
+		cs.archived = true
 	}
-	goal := session.goal
+	goal := cs.goal
 	if goal == nil || goal.State != "active" {
-		session.mu.Unlock()
+		cs.mu.Unlock()
 		return
 	}
-	now := session.clock().UnixMilli()
+	now := cs.clock().UnixMilli()
 	goal.Turns++
 	goal.UpdatedAt = now
 	native := goal.Engine == "native"
 	switch {
-	case session.userCancelled:
+	case cs.userCancelled:
 		setGoalState(goal, "paused", "stopped by the user", now)
 	case native:
-	case session.stopReason == "error" || session.stopReason == "failed" || err != nil && !errors.Is(err, context.Canceled):
+	case cs.stopReason == "error" || cs.stopReason == "failed" || err != nil && !errors.Is(err, context.Canceled):
 		setGoalState(goal, "blocked", "the agent turn failed", now)
 	default:
-		session.applyGatewayStopRules(goal, now)
+		cs.applyGatewayStopRules(goal, now)
 	}
 	paused := native && goal.State == "paused"
-	session.mu.Unlock()
-	session.publishGoal()
+	cs.mu.Unlock()
+	cs.publishGoal()
 	if paused {
-		_, _, _ = session.Submit(ctx, acp.PromptInput{Text: "/goal pause"}, false)
+		_, _, _ = cs.Submit(ctx, acp.PromptInput{Text: "/goal pause"}, false)
 	}
 }
 
 // applyGatewayStopRules reads the reply's verdict, progress and limits. The caller holds mu.
-func (session *ConversationSession) applyGatewayStopRules(goal *Goal, now int64) {
-	verdict, reason := goalVerdict(string(session.turnText))
+func (cs *ConversationSession) applyGatewayStopRules(goal *session.Goal, now int64) {
+	verdict, reason := goalVerdict(string(cs.turnText))
 	switch verdict {
 	case "met":
 		setGoalState(goal, "met", reason, now)
 		return
 	case "blocked":
-		session.goalBlocked++
+		cs.goalBlocked++
 		if reason == "" {
 			reason = "the agent is blocked"
 		}
 		goal.LastReason = reason
-		if session.goalBlocked >= goalStopRuns {
+		if cs.goalBlocked >= goalStopRuns {
 			setGoalState(goal, "blocked", reason, now)
 			return
 		}
 	default:
-		session.goalBlocked = 0
+		cs.goalBlocked = 0
 	}
-	if session.turnTools == 0 {
-		session.goalIdle++
-		if session.goalIdle >= goalStopRuns {
+	if cs.turnTools == 0 {
+		cs.goalIdle++
+		if cs.goalIdle >= goalStopRuns {
 			setGoalState(goal, "blocked", "no progress", now)
 			return
 		}
 	} else {
-		session.goalIdle = 0
+		cs.goalIdle = 0
 	}
-	if reason := goalLimitReached(goal, session.usageUsed, session.usageCost, now); reason != "" {
+	if reason := goalLimitReached(goal, cs.usageUsed, cs.usageCost, now); reason != "" {
 		setGoalState(goal, "limited", reason, now)
 	}
 }
 
 // publishGoal logs the current goal unless it is unchanged since the last publish.
-func (session *ConversationSession) publishGoal() {
-	session.goalPublishMu.Lock()
-	defer session.goalPublishMu.Unlock()
-	session.mu.Lock()
-	goal := session.goal
+func (cs *ConversationSession) publishGoal() {
+	cs.goalPublishMu.Lock()
+	defer cs.goalPublishMu.Unlock()
+	cs.mu.Lock()
+	goal := cs.goal
 	if goal == nil {
-		goal = session.goalCleared
+		goal = cs.goalCleared
 	}
 	if goal == nil {
-		session.mu.Unlock()
+		cs.mu.Unlock()
 		return
 	}
-	payload := mustRawJSON(goal)
-	if string(payload) == session.goalPublished {
-		session.mu.Unlock()
+	payload := MustRawJSON(goal)
+	if string(payload) == cs.goalPublished {
+		cs.mu.Unlock()
 		return
 	}
-	session.goalPublished = string(payload)
-	session.mu.Unlock()
+	cs.goalPublished = string(payload)
+	cs.mu.Unlock()
 	// The sink saves it on the session row with the entry (conversationFold).
-	session.log.Append("goal_update", session.clock().UnixMilli(), payload)
+	cs.Log.Append("goal_update", cs.clock().UnixMilli(), payload)
 }
 
 // SetGoal replaces the goal and starts working on it.
-func (session *ConversationSession) SetGoal(ctx context.Context, objective, checks string, limits *GoalLimits) error {
-	session.mu.Lock()
-	if err := session.closedErr(); err != nil {
-		session.mu.Unlock()
+func (cs *ConversationSession) SetGoal(ctx context.Context, objective, checks string, limits *session.GoalLimits) error {
+	cs.mu.Lock()
+	if err := cs.closedErr(); err != nil {
+		cs.mu.Unlock()
 		return err
 	}
-	now := session.clock().UnixMilli()
+	now := cs.clock().UnixMilli()
 	engine := "gateway"
-	if session.nativeGoal {
+	if cs.nativeGoal {
 		engine = "native"
 	}
-	session.goal = &Goal{Objective: objective, Checks: checks, State: "active", Engine: engine,
+	cs.goal = &session.Goal{Objective: objective, Checks: checks, State: "active", Engine: engine,
 		StartedAt: now, ResumedAt: now, Limits: limits, UpdatedAt: now}
-	session.goalBlocked, session.goalIdle, session.goalSettled = 0, 0, false
-	session.mu.Unlock()
-	session.publishGoal()
+	cs.goalBlocked, cs.goalIdle, cs.goalSettled = 0, 0, false
+	cs.mu.Unlock()
+	cs.publishGoal()
 	if engine == "native" {
-		_, _, err := session.Submit(ctx, acp.PromptInput{Text: nativeGoalCommand(objective, checks)}, false)
+		_, _, err := cs.Submit(ctx, acp.PromptInput{Text: nativeGoalCommand(objective, checks)}, false)
 		return err
 	}
-	session.maybeDrain()
+	cs.maybeDrain()
 	return nil
 }
 
 // GoalChange is a PATCH: an action (pause or resume), or new objective, checks or limits.
 type GoalChange struct {
-	Action    string      `json:"action"`
-	Objective *string     `json:"objective"`
-	Checks    *string     `json:"checks"`
-	Limits    *GoalLimits `json:"limits"`
+	Action    string              `json:"action"`
+	Objective *string             `json:"objective"`
+	Checks    *string             `json:"checks"`
+	Limits    *session.GoalLimits `json:"limits"`
 }
 
-func (session *ConversationSession) UpdateGoal(ctx context.Context, change GoalChange) error {
-	session.mu.Lock()
-	goal := session.goal
+func (cs *ConversationSession) UpdateGoal(ctx context.Context, change GoalChange) error {
+	cs.mu.Lock()
+	goal := cs.goal
 	if goal == nil {
-		session.mu.Unlock()
-		return errNoGoal
+		cs.mu.Unlock()
+		return ErrNoGoal
 	}
-	if err := session.closedErr(); err != nil {
-		session.mu.Unlock()
+	if err := cs.closedErr(); err != nil {
+		cs.mu.Unlock()
 		return err
 	}
-	now := session.clock().UnixMilli()
+	now := cs.clock().UnixMilli()
 	command := ""
 	switch change.Action {
 	case "pause":
@@ -418,7 +396,7 @@ func (session *ConversationSession) UpdateGoal(ctx context.Context, change GoalC
 		if goal.State != "active" {
 			setGoalState(goal, "active", "", now)
 			goal.LastReason = ""
-			session.goalBlocked, session.goalIdle, session.userCancelled = 0, 0, false
+			cs.goalBlocked, cs.goalIdle, cs.userCancelled = 0, 0, false
 			command = "/goal resume"
 		}
 	case "":
@@ -436,48 +414,48 @@ func (session *ConversationSession) UpdateGoal(ctx context.Context, change GoalC
 		}
 		goal.UpdatedAt = now
 	default:
-		session.mu.Unlock()
+		cs.mu.Unlock()
 		return errors.New("unknown goal action")
 	}
 	native := goal.Engine == "native"
-	session.mu.Unlock()
-	session.publishGoal()
+	cs.mu.Unlock()
+	cs.publishGoal()
 	if native && command != "" {
-		_, _, err := session.Submit(ctx, acp.PromptInput{Text: command}, false)
+		_, _, err := cs.Submit(ctx, acp.PromptInput{Text: command}, false)
 		return err
 	}
-	session.maybeDrain()
+	cs.maybeDrain()
 	return nil
 }
 
 // restoreGoal adopts the goal saved on the session row when replaying the transcript found none:
 // replay reads only a bounded tail, so a long chat's last goal update can lie before it.
-func (session *ConversationSession) restoreGoal(saved *Goal) {
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	if saved == nil || saved.State == "cleared" || session.goal != nil || session.goalCleared != nil {
+func (cs *ConversationSession) restoreGoal(saved *session.Goal) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if saved == nil || saved.State == "cleared" || cs.goal != nil || cs.goalCleared != nil {
 		return
 	}
 	goal := *saved
-	session.goal = &goal
-	session.goalPublished = string(mustRawJSON(&goal))
+	cs.goal = &goal
+	cs.goalPublished = string(MustRawJSON(&goal))
 }
 
-func (session *ConversationSession) ClearGoal(ctx context.Context) error {
-	session.mu.Lock()
-	goal := session.goal
+func (cs *ConversationSession) ClearGoal(ctx context.Context) error {
+	cs.mu.Lock()
+	goal := cs.goal
 	if goal == nil {
-		session.mu.Unlock()
-		return errNoGoal
+		cs.mu.Unlock()
+		return ErrNoGoal
 	}
 	cleared := *goal
-	setGoalState(&cleared, "cleared", "", session.clock().UnixMilli())
-	session.goal, session.goalCleared = nil, &cleared
-	native, closed := goal.Engine == "native", session.closedErr() != nil
-	session.mu.Unlock()
-	session.publishGoal()
+	setGoalState(&cleared, "cleared", "", cs.clock().UnixMilli())
+	cs.goal, cs.goalCleared = nil, &cleared
+	native, closed := goal.Engine == "native", cs.closedErr() != nil
+	cs.mu.Unlock()
+	cs.publishGoal()
 	if native && !closed {
-		_, _, err := session.Submit(ctx, acp.PromptInput{Text: "/goal clear"}, false)
+		_, _, err := cs.Submit(ctx, acp.PromptInput{Text: "/goal clear"}, false)
 		return err
 	}
 	return nil

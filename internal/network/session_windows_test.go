@@ -159,7 +159,7 @@ func TestWindowsConsolePipeDeadline(t *testing.T) {
 	if err := master.SetWriteDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := master.Write(bytes.Repeat([]byte("x"), chunkSize*4)); !errors.Is(err, os.ErrDeadlineExceeded) {
+	if _, err := master.Write(bytes.Repeat([]byte("x"), ChunkSize*4)); !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("blocked console input did not expire: %v", err)
 	}
 }

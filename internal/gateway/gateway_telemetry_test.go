@@ -1,0 +1,234 @@
+package gateway
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/obs"
+)
+
+func storedBrowserErrors(t *testing.T, g *Gateway) []map[string]any {
+	t.Helper()
+	if err := g.logs.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(g.options.Home, "logs", time.Now().UTC().Format(time.DateOnly)+".db")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return []map[string]any{}
+	}
+	db, err := sql.Open("sqlite3", "file:"+url.PathEscape(filepath.ToSlash(path))+"?agentpack_plain=1&mode=ro&_query_only=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows, err := db.Query("SELECT lower(hex(trace_id)),node_id,user,ts,json(attrs) FROM events WHERE kind='ui.error'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	result := []map[string]any{}
+	for rows.Next() {
+		var trace, node, user, at, attrs string
+		if err := rows.Scan(&trace, &node, &user, &at, &attrs); err != nil {
+			t.Fatal(err)
+		}
+		var data map[string]any
+		if err := json.Unmarshal([]byte(attrs), &data); err != nil {
+			t.Fatal(err)
+		}
+		result = append(result, map[string]any{"trace_id": trace, "node_id": node, "user": user, "ts": at, "attrs": data})
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func TestBrowserTelemetryTrustLimitsAndPersistence(t *testing.T) {
+	g, origin := identityGateway(t, t.TempDir(), nil)
+	logs, err := obs.Open(g.options.Home, obs.StoreOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logs.Close()
+	g.logs = logs
+	testBrowserSession(t, g.auth, testBrowserEmail, "browser")
+	handler := g.Handler()
+	request := func(body, token string) int {
+		r := httptest.NewRequest("POST", origin.String()+"/api/telemetry", strings.NewReader(body))
+		r.Header.Set("Origin", origin.String())
+		if token != "" {
+			r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: token})
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w.Code
+	}
+	if code := request(`{"events":[]}`, ""); code != 401 {
+		t.Fatal("unauthenticated", code)
+	}
+	local := httptest.NewRequest("POST", origin.String()+"/api/telemetry", strings.NewReader(`{"events":[]}`))
+	local.Header.Set("Authorization", "Bearer "+g.local.Secret)
+	localResponse := httptest.NewRecorder()
+	handler.ServeHTTP(localResponse, local)
+	if localResponse.Code != 401 {
+		t.Fatal("local bearer authorized browser telemetry", localResponse.Code)
+	}
+	if code := request(strings.Repeat(" ", 64<<10)+"{}", "browser"); code != 413 {
+		t.Fatal("oversized", code)
+	}
+	if code := request(`{"events":[]} {}`, "browser"); code != 400 {
+		t.Fatal("trailing JSON", code)
+	}
+	const header = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+	body := `{"events":[{"name":"TypeError","message":"component failed","stack":"fixture stack","traceparent":"` + header + `","route":"/sessions","user":"forged-user","node_id":"forged-node","ts":"1900-01-01","search":{"password":"private-password","view":"active"},"viewport":[1280,800],"breadcrumbs":[{"kind":"api","name":"GET /api/sessions","trace_id":"0123456789abcdef0123456789abcdef","status":200,"prompt":"private prompt"}]}]}`
+	if code := request(body, "browser"); code != 204 {
+		t.Fatal("valid", code)
+	}
+	events := storedBrowserErrors(t, g)
+	nodeID, err := g.store.NodeID(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0]["trace_id"] != "0123456789abcdef0123456789abcdef" || events[0]["user"] != testBrowserEmail || events[0]["node_id"] != nodeID {
+		t.Fatalf("stored %+v", events)
+	}
+	encoded, _ := json.Marshal(events)
+	for _, secret := range []string{"forged-user", "forged-node", "1900-01-01", "private-password", "private prompt"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatal("telemetry trusted/leaked", secret)
+		}
+	}
+	for range 59 {
+		if code := request(body, "browser"); code != 204 {
+			t.Fatal("within rate", code)
+		}
+	}
+	if code := request(body, "browser"); code != 429 {
+		t.Fatal("rate limit", code)
+	}
+	testBrowserSession(t, g.auth, testBrowserEmail, "other")
+	if code := request(body, "other"); code != 204 {
+		t.Fatal("separate session", code)
+	}
+	r := httptest.NewRequest("POST", origin.String()+"/api/telemetry", nil)
+	r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: "browser"})
+	if code := g.auth.allowTelemetry(r, 1, time.Now().Add(time.Minute)); code != 204 {
+		t.Fatal("window reset", code)
+	}
+}
+
+func TestPublicUIConfiguration(t *testing.T) {
+	g, origin := identityGateway(t, t.TempDir(), nil)
+	g.options.UIBuildID = "EntryHash"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", origin.String()+"/api/config", nil)
+	r.Header.Set("If-None-Match", "*")
+	g.Handler().ServeHTTP(w, r)
+	if w.Code != 200 || w.Header().Get("ETag") != "" || w.Header().Get("Cache-Control") != "no-store" || strings.TrimSpace(w.Body.String()) != `{"conversation_config_log":true,"conversation_events":true,"ui_build_id":"EntryHash"}` {
+		t.Fatalf("public config %d %s %s", w.Code, w.Header(), w.Body.String())
+	}
+}
+
+// This subprocess fixture gives Playwright a real day store, without a production test endpoint.
+func TestTelemetryBrowserFixture(t *testing.T) {
+	if os.Getenv("AGENTPACK_TELEMETRY_FIXTURE") != "1" {
+		return
+	}
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	logs, err := obs.Open(g.options.Home, obs.StoreOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logs.Close()
+	g.logs = logs
+	testBrowserSession(t, g.auth, testBrowserEmail, "telemetry-browser")
+	g.options.Assets = http.FileServer(http.Dir("../../ui/dist"))
+	g.options.UIBuildID = uiBuildID(os.DirFS("../../ui/dist"))
+	server := httptest.NewUnstartedServer(nil)
+	defer server.Close()
+	g.origin, _ = url.Parse("http://" + server.Listener.Addr().String())
+	mux := http.NewServeMux()
+	stop := make(chan struct{}, 1)
+	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) {
+		var data any = []any{}
+		switch r.URL.Path {
+		case "/api/config":
+			data = map[string]string{"ui_build_id": g.options.UIBuildID}
+		case "/api/status":
+			data = map[string]any{"authenticated": true, "claimed": true, "legacy": false, "email": testBrowserEmail}
+		case "/api/identity":
+			data = map[string]any{"node": map[string]any{"id": "gateway", "name": "Gateway", "os": "linux", "version": "test"}, "auth": testBrowserEmail}
+		case "/api/settings":
+			data = map[string]any{"running": true, "platform": "linux", "sharing_enabled": false, "allowed_peers": []any{}}
+		case "/api/limits":
+			data = map[string]any{"limits": []any{}}
+		case "/api/sessions":
+			data = map[string]any{} // Make the real component throw on the malformed list.
+		}
+		network.WriteJSON(w, data)
+	})
+	mux.HandleFunc("GET /__test_events", func(w http.ResponseWriter, r *http.Request) { network.WriteJSON(w, storedBrowserErrors(t, g)) })
+	mux.HandleFunc("POST /__test_stop", func(w http.ResponseWriter, r *http.Request) { stop <- struct{}{}; w.WriteHeader(204) })
+	mux.Handle("/", g.Handler())
+	server.Config.Handler = mux
+	server.Start()
+	fmt.Println("TELEMETRY", server.URL)
+	select {
+	case <-stop:
+	case <-time.After(15 * time.Second):
+		t.Error("browser fixture timed out")
+	}
+}
+
+func TestChatTimingsAreLocalAndContentFree(t *testing.T) {
+	g, origin := identityGateway(t, t.TempDir(), nil)
+	testBrowserSession(t, g.auth, testBrowserEmail, "browser")
+	handler := g.Handler()
+	request := func(method, body string, browser, forwarded bool) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, origin.String()+"/api/debug/timings", strings.NewReader(body))
+		r.RemoteAddr = "127.0.0.1:32100"
+		if browser {
+			r.Header.Set("Origin", origin.String())
+			r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: "browser"})
+		} else {
+			r.Header.Set("Authorization", "Bearer "+g.local.Secret)
+		}
+		if forwarded {
+			r.Header.Set("X-Forwarded-For", "192.0.2.1")
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	body := `{"name":"chat-first-frame","duration_ms":84.25}`
+	if w := request(http.MethodPost, body, true, true); w.Code == http.StatusNoContent {
+		t.Fatal("accepted a forwarded timing")
+	}
+	if w := request(http.MethodGet, "", true, false); w.Code == http.StatusOK {
+		t.Fatal("browser could read CLI timing diagnostics")
+	}
+	if w := request(http.MethodPost, `{"name":"prompt text","duration_ms":23}`, true, false); w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid measurement status=%d: %s", w.Code, w.Body)
+	}
+	if w := request(http.MethodPost, body, true, false); w.Code != http.StatusNoContent {
+		t.Fatalf("local timing status=%d: %s", w.Code, w.Body)
+	}
+	result := request(http.MethodGet, "", false, false)
+	var samples map[string]float64
+	if err := json.Unmarshal(result.Body.Bytes(), &samples); result.Code != http.StatusOK || err != nil || len(samples) != 1 || samples["chat-first-frame"] != 84.25 {
+		t.Fatalf("timings read status=%d: %s (%v)", result.Code, result.Body, err)
+	}
+}

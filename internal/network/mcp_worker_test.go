@@ -70,7 +70,7 @@ func TestMCPWorkerOutputAndSharedInput(t *testing.T) {
 	if !session.State().SharedInput {
 		t.Fatal("new session did not advertise shared input")
 	}
-	if status, _ := request("POST", "/input", strings.Repeat("x", chunkSize+1)); status != 400 {
+	if status, _ := request("POST", "/input", strings.Repeat("x", ChunkSize+1)); status != 400 {
 		t.Fatal("oversized input accepted")
 	}
 }

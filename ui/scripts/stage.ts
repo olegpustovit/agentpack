@@ -1,11 +1,11 @@
-// Publishes ui/dist into internal/network/webdist, the tree the gateway embeds.
+// Publishes ui/dist into internal/gateway/webdist, the tree the gateway embeds.
 import { existsSync } from "node:fs"
 import { cp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises"
 import { gzipSync } from "node:zlib"
 
 const dist = new URL("../dist/", import.meta.url)
-const target = new URL("../../internal/network/webdist/", import.meta.url)
-const staging = new URL("../../internal/network/webdist.tmp/", import.meta.url)
+const target = new URL("../../internal/gateway/webdist/", import.meta.url)
+const staging = new URL("../../internal/gateway/webdist.tmp/", import.meta.url)
 
 if (!existsSync(new URL("index.html", dist))) throw new Error("ui/dist/index.html missing; run bun run build first")
 

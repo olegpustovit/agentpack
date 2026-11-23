@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state/statetest"
 )
 
 // A terminal agent's hooks (ap hook-exec session-state) report turns through its worker to the session row.
@@ -18,21 +21,18 @@ func TestTerminalAgentStateReachesSessionRow(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	auth, err := testGatewayAuth(t, home)
-	if err != nil {
+	store := statetest.Open(t, home)
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id}); err != nil {
 		t.Fatal(err)
 	}
-	if err := upsertSession(t.Context(), auth.store.DB, SessionInfo{ID: id}); err != nil {
-		t.Fatal(err)
-	}
-	session := &Session{state: TerminalState{Running: true, Interactive: true}, done: make(chan struct{}), attachments: make(map[uint64]*Attachment)}
-	t.Cleanup(func() { close(session.done) })
+	session := &Session{Status: session.TerminalState{Running: true, Interactive: true}, Done: make(chan struct{}), Attachments: make(map[uint64]*Attachment)}
+	t.Cleanup(func() { close(session.Done) })
 	secret := strings.Repeat("s", 64)
 	worker, err := WorkerHandler(context.Background(), session, nil, secret, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker.stateStore = auth.store
+	worker.StateStore = store
 	server := httptest.NewServer(worker)
 	t.Cleanup(server.Close)
 	record, _ := json.Marshal(WorkerRecord{ID: id, Address: server.Listener.Addr().String(), Secret: secret})
@@ -41,7 +41,7 @@ func TestTerminalAgentStateReachesSessionRow(t *testing.T) {
 	}
 	state := func() string {
 		var value string
-		if err := auth.store.DB.QueryRow("SELECT conversation_state FROM sessions WHERE id=?", id).Scan(&value); err != nil {
+		if err := store.DB.QueryRow("SELECT conversation_state FROM sessions WHERE id=?", id).Scan(&value); err != nil {
 			t.Fatal(err)
 		}
 		return value
@@ -66,7 +66,7 @@ func TestTerminalAgentStateReachesSessionRow(t *testing.T) {
 		t.Fatalf("OSC idle report: %q", state())
 	}
 	// A repeated report never rewrites the row.
-	if _, err := auth.store.DB.Exec("UPDATE sessions SET conversation_state='needs_you' WHERE id=?", id); err != nil {
+	if _, err := store.DB.Exec("UPDATE sessions SET conversation_state='needs_you' WHERE id=?", id); err != nil {
 		t.Fatal(err)
 	}
 	session.scanAgentState([]byte("\x1b]7501;state=idle:app=codex\x07"))

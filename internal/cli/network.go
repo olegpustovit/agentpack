@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
@@ -22,6 +23,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/staging"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 	"golang.org/x/sync/errgroup"
@@ -96,11 +98,11 @@ func (runner Runner) runGateway(ctx context.Context, invocation Invocation) (int
 				if err := exec.CommandContext(ctx, "systemctl", "--user", "restart", gatewayServiceName).Run(); err != nil {
 					return 1, fmt.Errorf("restart deployed gateway: %w", err)
 				}
-				return 0, network.WaitForGateway(ctx, home)
+				return 0, gateway.WaitForGateway(ctx, home)
 			}
 		}
 		if !gatewayServiceAvailable(ctx, runtime.GOOS) {
-			if err := network.StopGateway(ctx, home); err != nil {
+			if err := gateway.StopGateway(ctx, home); err != nil {
 				return 1, err
 			}
 		}
@@ -114,11 +116,11 @@ func (runner Runner) runGateway(ctx context.Context, invocation Invocation) (int
 		if gatewayServiceAvailable(ctx, runtime.GOOS) {
 			return runner.runNetworkService(ctx, []string{"stop"})
 		}
-		if err := network.SetGatewayEnabled(home, false); err != nil {
+		if err := gateway.SetGatewayEnabled(home, false); err != nil {
 			return 1, err
 		}
-		if _, err := network.NodeRequest(ctx, home, "GET", "/healthz"); err == nil {
-			if err := network.StopGateway(ctx, home); err != nil {
+		if _, err := gateway.NodeRequest(ctx, home, "GET", "/healthz"); err == nil {
+			if err := gateway.StopGateway(ctx, home); err != nil {
 				return 1, err
 			}
 		}
@@ -129,7 +131,7 @@ func (runner Runner) runGateway(ctx context.Context, invocation Invocation) (int
 		if action == "stop-agents" {
 			method, path = "POST", "/api/node/stop-agents"
 		}
-		data, err := network.NodeRequest(ctx, home, method, path)
+		data, err := gateway.NodeRequest(ctx, home, method, path)
 		if err != nil {
 			return 1, err
 		}
@@ -143,7 +145,7 @@ func (runner Runner) runGateway(ctx context.Context, invocation Invocation) (int
 	}
 }
 
-func (runner Runner) startRemoteSession(ctx context.Context, home, executable string, info network.SessionInfo, forkSessionID string) (string, error) {
+func (runner Runner) startRemoteSession(ctx context.Context, home, executable string, info session.SessionInfo, forkSessionID string) (string, error) {
 	if info.Transport == "shell" {
 		program, arguments := loginShell(ctx)
 		return network.StartWorker(ctx, home, executable, network.WorkerLaunch{
@@ -193,7 +195,7 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 	// A fresh worktree has no launch yet: git must list it for a main folder launched here, whose
 	// definition root it then shares.
 	if !known {
-		main, err := network.WorktreeMain(ctx, home, info.Directory)
+		main, err := gateway.WorktreeMain(ctx, home, info.Directory)
 		for _, entry := range recent {
 			if err != nil {
 				break
@@ -273,8 +275,8 @@ func (runner Runner) launchManaged(ctx context.Context, packContext paths.Contex
 	if err != nil {
 		return 1, err
 	}
-	if err = network.EnsureNode(ctx, home, executable); err != nil {
-		if errors.Is(err, network.ErrGatewayDisabled) {
+	if err = gateway.EnsureNode(ctx, home, executable); err != nil {
+		if errors.Is(err, gateway.ErrGatewayDisabled) {
 			return runner.launch(ctx, packContext, invocation)
 		}
 		fmt.Fprintf(runner.Stderr, "warning: shared gateway unavailable (%v); continuing with a local session\n", err)
@@ -282,7 +284,7 @@ func (runner Runner) launchManaged(ctx context.Context, packContext paths.Contex
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		runner.Launch = func(process *os.Process) (func(), error) {
-			cleanup, err := network.RegisterPresence(home, Version, network.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode}, process)
+			cleanup, err := gateway.RegisterPresence(home, Version, session.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode}, process)
 			if err != nil {
 				fmt.Fprintf(runner.Stderr, "warning: could not register native-stdio session: %v\n", err)
 				return nil, nil
@@ -299,8 +301,8 @@ func (runner Runner) launchManaged(ctx context.Context, packContext paths.Contex
 	if err != nil {
 		return 1, err
 	}
-	cliActor := network.LocalActor("cli")
-	info := network.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode, StartedBy: &cliActor}
+	cliActor := session.LocalActor("cli")
+	info := session.SessionInfo{Directory: packContext.WorkspaceRoot, DefinitionRoot: packContext.DefinitionRoot, Harness: invocation.Command, Mode: invocation.Global.Mode, StartedBy: &cliActor}
 	// tmux pane closure sends SIGHUP; let the local attachment stop its worker.
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGHUP, syscall.SIGTERM)
 	defer stop()
@@ -309,7 +311,7 @@ func (runner Runner) launchManaged(ctx context.Context, packContext paths.Contex
 		return 1, err
 	}
 	fmt.Fprintf(runner.Stderr, "agentpack: session %s; local and browser input are shared\n", id)
-	if url, err := network.GatewayURL(home); err == nil {
+	if url, err := gateway.GatewayURL(home); err == nil {
 		fmt.Fprintln(runner.Stderr, "agentpack: browser "+url+" (sign in or claim the gateway)")
 	}
 	return network.RunTerminal(ctx, home, id, os.Stdin, runner.Stdout)
@@ -332,19 +334,19 @@ func (runner Runner) runSessionSignal(arguments []string) (int, error) {
 func (runner Runner) serveGateway(ctx context.Context, home, executable, address string) (int, error) {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	options := network.GatewayOptions{Home: home, Address: address, PublicURL: os.Getenv("AGENTPACK_PUBLIC_URL"), Assets: network.WebAssets(), Version: Version}
-	options.Start = func(ctx context.Context, info network.SessionInfo, forkSessionID string) (string, error) {
+	options := gateway.GatewayOptions{Home: home, Address: address, PublicURL: os.Getenv("AGENTPACK_PUBLIC_URL"), Assets: gateway.WebAssets(), Version: Version}
+	options.Start = func(ctx context.Context, info session.SessionInfo, forkSessionID string) (string, error) {
 		return runner.startRemoteSession(ctx, home, executable, info, forkSessionID)
 	}
 	options.Update = runner.updateGateway
-	options.Packages = func(ctx context.Context, directory string) (network.ProjectContents, error) {
+	options.Packages = func(ctx context.Context, directory string) (gateway.ProjectContents, error) {
 		packContext, err := resolveInvocationContext(Invocation{Global: Global{WorkspaceRoot: directory}}, true)
 		if err != nil {
-			return network.ProjectContents{}, err
+			return gateway.ProjectContents{}, err
 		}
 		locked, err := lockfile.LoadFromPath(paths.LockPath(packContext.DefinitionRoot))
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return network.ProjectContents{}, err
+			return gateway.ProjectContents{}, err
 		}
 		// A folder without agentpack.toml still has the implicit default mode.
 		project, _ := manifest.Load(packContext.DefinitionRoot)
@@ -364,6 +366,6 @@ func (runner Runner) serveGateway(ctx context.Context, home, executable, address
 	if err != nil {
 		return 1, err
 	}
-	serveErr := network.ServeGateway(ctx, options)
+	serveErr := gateway.ServeGateway(ctx, options)
 	return 0, errors.Join(serveErr, options.Library.Store.Close())
 }

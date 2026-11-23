@@ -23,6 +23,8 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
+	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state/statetest"
 )
 
 const workerTestSecret = "01234567890123456789012345678901"
@@ -88,7 +90,7 @@ func TestWorkerAuthenticationAndStateBoundary(t *testing.T) {
 	}
 }
 
-func dialWorker(t *testing.T, server *httptest.Server, local bool) (*websocket.Conn, terminalNotice) {
+func dialWorker(t *testing.T, server *httptest.Server, local bool) (*websocket.Conn, TerminalNotice) {
 	t.Helper()
 	header := http.Header{"Authorization": []string{"Bearer " + workerTestSecret}}
 	if local {
@@ -100,7 +102,7 @@ func dialWorker(t *testing.T, server *httptest.Server, local bool) (*websocket.C
 	}
 	t.Cleanup(func() { connection.Close() })
 	_ = connection.SetReadDeadline(time.Now().Add(5 * time.Second))
-	var attached terminalNotice
+	var attached TerminalNotice
 	if err := connection.ReadJSON(&attached); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +136,7 @@ func TestWorkerReportsReplayCompletionWatermark(t *testing.T) {
 			replayed += uint64(len(data))
 			return false
 		}
-		var notice terminalNotice
+		var notice TerminalNotice
 		if err := json.Unmarshal(data, &notice); err != nil {
 			t.Fatal(err)
 		}
@@ -321,11 +323,11 @@ func TestLocalTerminalReconnectsAfterDroppedConnection(t *testing.T) {
 	waitForAttach()
 	// A slow attachment ends while the underlying agent remains alive.
 	session.mu.Lock()
-	for id, attachment := range session.attachments {
+	for id, attachment := range session.Attachments {
 		if attachment.local {
 			attachment.err = ErrSlowObserver
 			close(attachment.ready)
-			delete(session.attachments, id)
+			delete(session.Attachments, id)
 		}
 	}
 	session.updateResponderLocked()
@@ -448,7 +450,7 @@ func TestClosingLocalTerminalStopsWorker(t *testing.T) {
 }
 
 func TestWorkerAttachResumesFromSince(t *testing.T) {
-	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment), offset: 100, replay: []byte("abcdefgh")}
+	session := &Session{Status: session.TerminalState{Running: true}, Attachments: make(map[uint64]*Attachment), offset: 100, Replay: []byte("abcdefgh")}
 	server := testWorkerServer(t, session)
 	headers := http.Header{"Authorization": []string{"Bearer " + workerTestSecret}}
 	for _, test := range []struct {
@@ -464,7 +466,7 @@ func TestWorkerAttachResumesFromSince(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var attached, complete terminalNotice
+		var attached, complete TerminalNotice
 		_, notice, err := connection.ReadMessage()
 		if err == nil {
 			err = json.Unmarshal(notice, &attached)
@@ -540,15 +542,15 @@ func TestConversationReplayFromFixture(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("worker startup timeout")
 	}
-	record, err := workerRecord(home, id)
+	record, err := ReadWorkerRecord(home, id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Peers only see the replicated row, so it must say the chat is live.
-	if stored, err := storedSession(context.Background(), testSessionStore(t, home).Reader, id); err != nil || !stored.State.Running {
+	if stored, err := session.StoredSession(context.Background(), statetest.Open(t, home).Reader, id); err != nil || !stored.State.Running {
 		t.Fatalf("replicated ACP session = %+v, %v; want running", stored.State, err)
 	}
-	response, err := workerRequest(context.Background(), record, http.MethodGet, "/conversation?since=0", "")
+	response, err := WorkerRequest(context.Background(), record, http.MethodGet, "/conversation?since=0", "")
 	if err != nil {
 		t.Fatal(err)
 	}

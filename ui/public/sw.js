@@ -35,7 +35,7 @@ self.addEventListener("fetch", (event) => {
   else if (url.pathname.startsWith("/assets/")) event.respondWith(caches.match(request).then((hit) => hit ?? cached(request, request)))
 })
 
-// Web Push (internal/network/push.go). Payloads carry labels and IDs only, never prompt or reply text.
+// Web Push (internal/gateway/push.go). Payloads carry labels and IDs only, never prompt or reply text.
 self.addEventListener("push", (event) => {
   let data = {}
   try {

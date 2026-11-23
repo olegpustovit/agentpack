@@ -15,8 +15,8 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/cli"
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
-	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
@@ -583,7 +583,7 @@ func stopTestGateway(t *testing.T, home string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, _ = network.NodeRequest(ctx, home, "POST", "/api/node/stop")
+	_, _ = gateway.NodeRequest(ctx, home, "POST", "/api/node/stop")
 	// The RPC acknowledges shutdown; the process lock covers its final disk flush.
 	lock := flock.New(filepath.Join(home, "network", "gateway.lock"))
 	acquired, err := lock.TryLockContext(ctx, 10*time.Millisecond)

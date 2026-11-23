@@ -52,15 +52,15 @@ func TestUnpromptedUsageSettleClosesAntigravityWakeup(t *testing.T) {
 	}
 
 	// Reactive wakeup starts: thought -> usage_update -> tool_call (should NOT settle while working).
-	session.log.Append("tool_call_update", 10, mustRawJSON(map[string]any{"toolCallId": "bg", "status": "completed"}))
-	session.log.Append("agent_thought_chunk", 11, mustRawJSON(map[string]any{"text": map[string]string{"text": "Build done."}}))
+	session.Log.Append("tool_call_update", 10, MustRawJSON(map[string]any{"toolCallId": "bg", "status": "completed"}))
+	session.Log.Append("agent_thought_chunk", 11, MustRawJSON(map[string]any{"text": map[string]string{"text": "Build done."}}))
 	waitConversationState(t, session, "working")
-	session.log.Append("usage_update", 12, mustRawJSON(map[string]any{"sessionUpdate": "usage_update", "used": 120, "size": 1000}))
+	session.Log.Append("usage_update", 12, MustRawJSON(map[string]any{"sessionUpdate": "usage_update", "used": 120, "size": 1000}))
 	thoughtCall := <-scheduled
 	if thoughtCall.delay < 15*time.Second {
 		t.Fatalf("thought usage settle delay = %v, want >= 15s", thoughtCall.delay)
 	}
-	session.log.Append("tool_call", 13, mustRawJSON(map[string]any{"toolCallId": "t2", "status": "in_progress"}))
+	session.Log.Append("tool_call", 13, MustRawJSON(map[string]any{"toolCallId": "t2", "status": "in_progress"}))
 	// Stale timer firing after tool_call arrived must be ignored.
 	thoughtCall.run()
 	if got := session.ConversationState(); got != "working" {
@@ -68,32 +68,32 @@ func TestUnpromptedUsageSettleClosesAntigravityWakeup(t *testing.T) {
 	}
 
 	// Commentary + tool_call in the same step: tool_call arriving before settle cancels it.
-	session.log.Append("agent_message_chunk", 14, mustRawJSON(map[string]any{"text": map[string]string{"text": "Checking status..."}}))
-	session.log.Append("usage_update", 15, mustRawJSON(map[string]any{"sessionUpdate": "usage_update", "used": 140, "size": 1000}))
+	session.Log.Append("agent_message_chunk", 14, MustRawJSON(map[string]any{"text": map[string]string{"text": "Checking status..."}}))
+	session.Log.Append("usage_update", 15, MustRawJSON(map[string]any{"sessionUpdate": "usage_update", "used": 140, "size": 1000}))
 	commentaryCall := <-scheduled
 	if commentaryCall.delay != 2*time.Second {
 		t.Fatalf("message usage settle delay = %v, want 2s", commentaryCall.delay)
 	}
-	session.log.Append("tool_call", 16, mustRawJSON(map[string]any{"toolCallId": "t3", "status": "in_progress"}))
+	session.Log.Append("tool_call", 16, MustRawJSON(map[string]any{"toolCallId": "t3", "status": "in_progress"}))
 	commentaryCall.run()
 	if got := session.ConversationState(); got != "working" {
 		t.Fatalf("stale commentary timer changed state to %q", got)
 	}
 
 	// Final reply -> usage_update, followed only by harmless metadata and subagent events -> settles to idle.
-	session.log.Append("tool_call_update", 17, mustRawJSON(map[string]any{"toolCallId": "t3", "status": "completed"}))
-	session.log.Append("agent_message_chunk", 18, mustRawJSON(map[string]any{"text": map[string]string{"text": "Done!"}}))
-	session.log.Append("usage_update", 19, mustRawJSON(map[string]any{"sessionUpdate": "usage_update", "used": 180, "size": 1000}))
+	session.Log.Append("tool_call_update", 17, MustRawJSON(map[string]any{"toolCallId": "t3", "status": "completed"}))
+	session.Log.Append("agent_message_chunk", 18, MustRawJSON(map[string]any{"text": map[string]string{"text": "Done!"}}))
+	session.Log.Append("usage_update", 19, MustRawJSON(map[string]any{"sessionUpdate": "usage_update", "used": 180, "size": 1000}))
 	finalCall := <-scheduled
 	if finalCall.delay != 2*time.Second {
 		t.Fatalf("final usage settle delay = %v, want 2s", finalCall.delay)
 	}
-	session.log.Append("session_info_update", 20, mustRawJSON(map[string]any{"sessionUpdate": "session_info_update", "title": "Deployed"}))
-	session.log.Append("agent_message_chunk", 21, mustRawJSON(map[string]any{"_subagent": "child-1", "text": map[string]string{"text": "ignored"}}))
+	session.Log.Append("session_info_update", 20, MustRawJSON(map[string]any{"sessionUpdate": "session_info_update", "title": "Deployed"}))
+	session.Log.Append("agent_message_chunk", 21, MustRawJSON(map[string]any{"_subagent": "child-1", "text": map[string]string{"text": "ignored"}}))
 	finalCall.run()
 	waitConversationState(t, session, "idle")
 
-	entries := session.log.Snapshot()
+	entries := session.Log.Snapshot()
 	last := entries[len(entries)-1]
 	if last.Kind != "turn_end" {
 		t.Fatalf("last entry = %q, want turn_end", last.Kind)
@@ -113,7 +113,7 @@ func TestUnpromptedUsageSettleCancelAndReplay(t *testing.T) {
 	session.after = func(delay time.Duration, run func()) { scheduled <- scheduledCall{delay: delay, run: run} }
 	session.SetUnpromptedUsageSettle(2 * time.Second)
 
-	session.log.Append("agent_message_chunk", 1, mustRawJSON(map[string]any{"text": map[string]string{"text": "Working..."}}))
+	session.Log.Append("agent_message_chunk", 1, MustRawJSON(map[string]any{"text": map[string]string{"text": "Working..."}}))
 	waitConversationState(t, session, "working")
 	if err := session.Cancel(context.Background()); err != nil {
 		t.Fatal(err)
@@ -121,17 +121,17 @@ func TestUnpromptedUsageSettleCancelAndReplay(t *testing.T) {
 	call := <-scheduled
 	call.run()
 	waitConversationState(t, session, "idle")
-	entries := session.log.Snapshot()
+	entries := session.Log.Snapshot()
 	if last := entries[len(entries)-1]; last.Kind != "turn_end" || string(last.Payload) != `{"stopReason":"cancelled"}` {
 		t.Fatalf("cancel turn_end = %s %s", last.Kind, last.Payload)
 	}
 
 	// Replayed log already ending on an unprompted message -> usage_update settles once configured.
 	log := acp.NewEventLog(0)
-	log.Append("prompt", 1, mustRawJSON(map[string]any{"text": map[string]string{"text": "go"}}))
-	log.Append("turn_end", 2, mustRawJSON(map[string]string{"stopReason": "end_turn"}))
-	log.Append("agent_message_chunk", 3, mustRawJSON(map[string]any{"text": map[string]string{"text": "Finished."}}))
-	log.Append("usage_update", 4, mustRawJSON(map[string]any{"sessionUpdate": "usage_update", "used": 50, "size": 1000}))
+	log.Append("prompt", 1, MustRawJSON(map[string]any{"text": map[string]string{"text": "go"}}))
+	log.Append("turn_end", 2, MustRawJSON(map[string]string{"stopReason": "end_turn"}))
+	log.Append("agent_message_chunk", 3, MustRawJSON(map[string]any{"text": map[string]string{"text": "Finished."}}))
+	log.Append("usage_update", 4, MustRawJSON(map[string]any{"sessionUpdate": "usage_update", "used": 50, "size": 1000}))
 
 	replayed := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
 	if got := replayed.ConversationState(); got != "working" {
@@ -151,9 +151,9 @@ func TestUnpromptedUsageSettleDisabledByDefault(t *testing.T) {
 	scheduled := make(chan scheduledCall, 4)
 	session.after = func(delay time.Duration, run func()) { scheduled <- scheduledCall{delay: delay, run: run} }
 
-	session.log.Append("agent_message_chunk", 1, mustRawJSON(map[string]any{"text": map[string]string{"text": "Codex step"}}))
+	session.Log.Append("agent_message_chunk", 1, MustRawJSON(map[string]any{"text": map[string]string{"text": "Codex step"}}))
 	waitConversationState(t, session, "working")
-	session.log.Append("usage_update", 2, mustRawJSON(map[string]any{"sessionUpdate": "usage_update", "used": 50, "size": 1000}))
+	session.Log.Append("usage_update", 2, MustRawJSON(map[string]any{"sessionUpdate": "usage_update", "used": 50, "size": 1000}))
 	select {
 	case call := <-scheduled:
 		t.Fatalf("disabled settle scheduled timer (%v)", call.delay)
@@ -166,17 +166,17 @@ func TestUnpromptedUsageSettleRealTimer(t *testing.T) {
 	session.SetUnpromptedUsageSettle(25 * time.Millisecond)
 
 	// First usage_update gets superseded by a tool_call before the real timer fires.
-	session.log.Append("agent_message_chunk", 1, mustRawJSON(map[string]any{"text": map[string]string{"text": "Step 1"}}))
-	session.log.Append("usage_update", 2, mustRawJSON(map[string]any{"sessionUpdate": "usage_update", "used": 10, "size": 1000}))
-	session.log.Append("tool_call", 3, mustRawJSON(map[string]any{"toolCallId": "t1", "status": "in_progress"}))
+	session.Log.Append("agent_message_chunk", 1, MustRawJSON(map[string]any{"text": map[string]string{"text": "Step 1"}}))
+	session.Log.Append("usage_update", 2, MustRawJSON(map[string]any{"sessionUpdate": "usage_update", "used": 10, "size": 1000}))
+	session.Log.Append("tool_call", 3, MustRawJSON(map[string]any{"toolCallId": "t1", "status": "in_progress"}))
 	time.Sleep(50 * time.Millisecond)
 	if got := session.ConversationState(); got != "working" {
 		t.Fatalf("superseded real timer changed state to %q", got)
 	}
 
 	// Quiet message -> usage_update settles via real time.AfterFunc.
-	session.log.Append("tool_call_update", 4, mustRawJSON(map[string]any{"toolCallId": "t1", "status": "completed"}))
-	session.log.Append("agent_message_chunk", 5, mustRawJSON(map[string]any{"text": map[string]string{"text": "All done"}}))
-	session.log.Append("usage_update", 6, mustRawJSON(map[string]any{"sessionUpdate": "usage_update", "used": 20, "size": 1000}))
+	session.Log.Append("tool_call_update", 4, MustRawJSON(map[string]any{"toolCallId": "t1", "status": "completed"}))
+	session.Log.Append("agent_message_chunk", 5, MustRawJSON(map[string]any{"text": map[string]string{"text": "All done"}}))
+	session.Log.Append("usage_update", 6, MustRawJSON(map[string]any{"sessionUpdate": "usage_update", "used": 20, "size": 1000}))
 	waitConversationState(t, session, "idle")
 }

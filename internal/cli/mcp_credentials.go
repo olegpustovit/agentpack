@@ -14,10 +14,10 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mcp"
-	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/staging"
 )
@@ -40,7 +40,7 @@ func (runner Runner) runMCPBridge(ctx context.Context, invocation Invocation) (i
 	if err != nil {
 		return 1, err
 	}
-	options := network.MCPBridgeOptions{Home: home, ID: args[0], Command: args[1:], URL: stringFlag(invocation, "url"), SSE: boolFlag(invocation, "sse"), Headers: map[string]string{}, Stdin: runner.Stdin, Stdout: runner.Stdout, Stderr: runner.Stderr}
+	options := gateway.MCPBridgeOptions{Home: home, ID: args[0], Command: args[1:], URL: stringFlag(invocation, "url"), SSE: boolFlag(invocation, "sse"), Headers: map[string]string{}, Stdin: runner.Stdin, Stdout: runner.Stdout, Stderr: runner.Stderr}
 	for _, header := range stringsFlag(invocation, "header") {
 		if key, value, ok := strings.Cut(header, "="); ok {
 			options.Headers[key] = value
@@ -49,7 +49,7 @@ func (runner Runner) runMCPBridge(ctx context.Context, invocation Invocation) (i
 	if (options.URL == "") == (len(options.Command) == 0) {
 		return 2, errors.New("mcp-bridge requires --url or -- COMMAND")
 	}
-	code, err := network.RunMCPBridge(ctx, options)
+	code, err := gateway.RunMCPBridge(ctx, options)
 	if err != nil {
 		fmt.Fprintf(runner.Stderr, "agentpack mcp-bridge: %v\n", err)
 	}
@@ -57,7 +57,7 @@ func (runner Runner) runMCPBridge(ctx context.Context, invocation Invocation) (i
 }
 
 type mcpCredentialList struct {
-	Credentials []network.MCPCredentialInfo `json:"credentials"`
+	Credentials []gateway.MCPCredentialInfo `json:"credentials"`
 	CallbackURL string                      `json:"callback_url"`
 }
 
@@ -72,7 +72,7 @@ func gatewayCall(ctx context.Context, method, path string, input, output any) er
 			return err
 		}
 	}
-	data, err := network.NodeRequest(ctx, home, method, path, bytes.NewReader(body))
+	data, err := gateway.NodeRequest(ctx, home, method, path, bytes.NewReader(body))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return errors.New("the agentpack gateway is not running; run `ap` first")
@@ -266,13 +266,13 @@ func (runner Runner) readMCPSecret(name string) (string, error) {
 	return string(value), nil
 }
 
-func findMCPCredential(ctx context.Context, reference string) (network.MCPCredentialInfo, error) {
+func findMCPCredential(ctx context.Context, reference string) (gateway.MCPCredentialInfo, error) {
 	var list mcpCredentialList
 	if err := gatewayCall(ctx, http.MethodGet, "/api/mcp/credentials", nil, &list); err != nil {
-		return network.MCPCredentialInfo{}, err
+		return gateway.MCPCredentialInfo{}, err
 	}
 	canonical, _ := mcp.CanonicalURL(reference)
-	var found []network.MCPCredentialInfo
+	var found []gateway.MCPCredentialInfo
 	for _, credential := range list.Credentials {
 		if credential.ID == reference || strings.EqualFold(credential.Label, reference) || canonical != "" && credential.Match == canonical {
 			found = append(found, credential)
@@ -280,9 +280,9 @@ func findMCPCredential(ctx context.Context, reference string) (network.MCPCreden
 	}
 	switch len(found) {
 	case 0:
-		return network.MCPCredentialInfo{}, fmt.Errorf("no MCP connection %q; see `agentpack mcp connections`", reference)
+		return gateway.MCPCredentialInfo{}, fmt.Errorf("no MCP connection %q; see `agentpack mcp connections`", reference)
 	case 1:
 		return found[0], nil
 	}
-	return network.MCPCredentialInfo{}, fmt.Errorf("%q matches %d connections; name one by label or ID", reference, len(found))
+	return gateway.MCPCredentialInfo{}, fmt.Errorf("%q matches %d connections; name one by label or ID", reference, len(found))
 }

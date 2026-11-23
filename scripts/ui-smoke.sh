@@ -4,7 +4,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 bin="$root/bin/ap"
-webdist="$root/internal/network/webdist"
+webdist="$root/internal/gateway/webdist"
 smoke_home=$(mktemp -d)
 port=$((20000 + RANDOM % 20000))
 base="http://127.0.0.1:$port"

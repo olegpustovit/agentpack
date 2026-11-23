@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state/statetest"
 )
 
 type fakeTurn struct {
@@ -41,7 +44,7 @@ func newFakeAgentSession(t *testing.T, history ...acp.LogEntry) (*ConversationSe
 	agent := &fakeAgent{log: log, prompts: make(chan acp.PromptInput, 16), turns: make(chan fakeTurn, 16),
 		cancels: make(chan struct{}, 16), now: time.UnixMilli(1_000_000)}
 	broker := acp.NewBroker(func(_ context.Context, input acp.PromptInput) error {
-		log.Append("prompt", 1, promptLogPayload(input))
+		log.Append("prompt", 1, PromptLogPayload(input))
 		agent.prompts <- input
 		turn := <-agent.turns
 		agent.mu.Lock()
@@ -50,7 +53,7 @@ func newFakeAgentSession(t *testing.T, history ...acp.LogEntry) (*ConversationSe
 		for _, entry := range turn.entries {
 			log.Append(entry.Kind, 1, entry.Payload)
 		}
-		log.Append("turn_end", 1, mustRawJSON(map[string]string{"stopReason": cmp.Or(turn.stop, "end_turn")}))
+		log.Append("turn_end", 1, MustRawJSON(map[string]string{"stopReason": cmp.Or(turn.stop, "end_turn")}))
 		return nil
 	}, func(context.Context) error {
 		agent.cancels <- struct{}{}
@@ -77,7 +80,7 @@ func (agent *fakeAgent) nextPrompt(t *testing.T) acp.PromptInput {
 }
 
 // goalUntil returns the first logged goal for which done is true; the row's goal is the last one (conversationFold).
-func (agent *fakeAgent) goalUntil(t *testing.T, done func(*Goal) bool) *Goal {
+func (agent *fakeAgent) goalUntil(t *testing.T, done func(*session.Goal) bool) *session.Goal {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
 	for {
@@ -88,7 +91,7 @@ func (agent *fakeAgent) goalUntil(t *testing.T, done func(*Goal) bool) *Goal {
 			if entry.Kind != "goal_update" {
 				continue
 			}
-			goal := &Goal{}
+			goal := &session.Goal{}
 			if err := json.Unmarshal(entry.Payload, goal); err != nil {
 				t.Fatal(err)
 			}
@@ -108,12 +111,12 @@ func (agent *fakeAgent) goalUntil(t *testing.T, done func(*Goal) bool) *Goal {
 	}
 }
 
-func goalIn(state string) func(*Goal) bool {
-	return func(goal *Goal) bool { return goal != nil && goal.State == state }
+func goalIn(state string) func(*session.Goal) bool {
+	return func(goal *session.Goal) bool { return goal != nil && goal.State == state }
 }
 
 func entry(kind string, payload any) acp.LogEntry {
-	return acp.LogEntry{Kind: kind, TS: 1, Payload: mustRawJSON(payload)}
+	return acp.LogEntry{Kind: kind, TS: 1, Payload: MustRawJSON(payload)}
 }
 
 func reply(text string, tool bool) fakeTurn {
@@ -192,14 +195,14 @@ func TestQueueSendsInOrderSteerJumpsAheadAndEditsApply(t *testing.T) {
 
 func TestQueuedPromptsSurviveAWorkerRestart(t *testing.T) {
 	images := acp.PromptInput{Text: "look", Images: []acp.PromptImage{{Sha: strings.Repeat("a", 64), Name: "x.png", Kind: "image", Width: 3, Height: 4}}}
-	decoded, err := promptInputFromLog(queuedPromptPayload(queuedPrompt{ID: "q", Input: images}))
+	decoded, err := PromptInputFromLog(QueuedPromptPayload(QueuedPrompt{ID: "q", Input: images}))
 	if err != nil || decoded.Text != "look" || len(decoded.Images) != 1 || decoded.Images[0].Sha != images.Images[0].Sha || decoded.Images[0].Width != 3 {
 		t.Fatalf("decoded = %+v, %v", decoded, err)
 	}
 	history := []acp.LogEntry{
-		{Kind: "queued_prompt", TS: 1, Payload: queuedPromptPayload(queuedPrompt{ID: "one", Input: acp.PromptInput{Text: "one"}})},
-		{Kind: "queued_prompt", TS: 1, Payload: queuedPromptPayload(queuedPrompt{ID: "two", Input: acp.PromptInput{Text: "two"}})},
-		{Kind: "dequeued_prompt", TS: 1, Payload: mustRawJSON(map[string]string{"queueId": "one", "reason": "sent"})},
+		{Kind: "queued_prompt", TS: 1, Payload: QueuedPromptPayload(QueuedPrompt{ID: "one", Input: acp.PromptInput{Text: "one"}})},
+		{Kind: "queued_prompt", TS: 1, Payload: QueuedPromptPayload(QueuedPrompt{ID: "two", Input: acp.PromptInput{Text: "two"}})},
+		{Kind: "dequeued_prompt", TS: 1, Payload: MustRawJSON(map[string]string{"queueId": "one", "reason": "sent"})},
 	}
 	session, agent := newFakeAgentSession(t, history...)
 	session.ResumeTurns()
@@ -214,9 +217,9 @@ func TestQueueRoutes(t *testing.T) {
 	promptAcceptWait = time.Millisecond // the first turn is still running when the request returns
 	t.Cleanup(func() { promptAcceptWait = previous })
 	session, agent := newFakeAgentSession(t)
-	worker := &WorkerHTTP{conversation: session}
+	worker := &WorkerHTTP{Conversation: session}
 	mux := http.NewServeMux()
-	worker.registerConversation(mux)
+	worker.RegisterConversation(mux)
 	call := func(method, path, body string) *httptest.ResponseRecorder {
 		recorder := httptest.NewRecorder()
 		mux.ServeHTTP(recorder, httptest.NewRequest(method, path, strings.NewReader(body)))
@@ -269,26 +272,26 @@ func TestClientPromptIDIsAcceptedOnceAcrossReplay(t *testing.T) {
 	if id, _, err := restarted.Submit(t.Context(), input, false); err != nil || id != input.QueueID {
 		t.Fatalf("retry = %q, %v", id, err)
 	}
-	if len(restarted.queue) != 0 || len(next.prompts) != 0 {
+	if len(restarted.Queue) != 0 || len(next.prompts) != 0 {
 		t.Fatal("replayed prompt was queued or sent twice")
 	}
 }
 
 func TestClientPromptLookupSurvivesADroppedReplayTail(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
+	store := statetest.Open(t, t.TempDir())
 	id := "session-stored-intent"
-	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	input := acp.PromptInput{Text: "first message", QueueID: "5a6057ea65564edfb5222d0c394e0b43"}
-	logged := entry("prompt", json.RawMessage(promptLogPayload(input)))
+	logged := entry("prompt", json.RawMessage(PromptLogPayload(input)))
 	logged.Seq = 1
-	if err := persistConversationChangesSince(t.Context(), store.DB, id, acp.LogChanges{Entries: []acp.LogEntry{logged}, LastSeq: 1}, 0, false); err != nil {
+	if err := PersistConversationChangesSince(t.Context(), store.DB, id, acp.LogChanges{Entries: []acp.LogEntry{logged}, LastSeq: 1}, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	session, agent := newFakeAgentSession(t)
 	session.promptStored = func(ctx context.Context, key string) (bool, error) {
-		return storedPromptID(ctx, store, id, key)
+		return StoredPromptID(ctx, store, id, key)
 	}
 	if id, _, err := session.Submit(t.Context(), input, false); err != nil || id != input.QueueID || len(agent.log.Snapshot()) != 0 {
 		t.Fatalf("retry of an old prompt wrote a new event: id=%q err=%v log=%v", id, err, logKinds(agent.log))
@@ -324,5 +327,35 @@ func TestIdleRestartWaitsForTheQueue(t *testing.T) {
 	case <-restarted:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the restart never ran")
+	}
+}
+
+// TestStartingPromptsDrainInOrder replays the queued_prompt entries a gateway writes while a chat
+// starts (appendStartingPrompt) and checks the worker sends each once, in order, with its queue ID.
+func TestStartingPromptsDrainInOrder(t *testing.T) {
+	var entries []acp.LogEntry
+	for i, text := range []string{"one", "two", "three"} {
+		item := QueuedPrompt{ID: fmt.Sprintf("request-00000000%d", i+1), Input: acp.PromptInput{Text: text}}
+		entries = append(entries, acp.LogEntry{Seq: int64(i + 1), TS: time.Now().UnixMilli(), Kind: "queued_prompt", Payload: QueuedPromptPayload(item)})
+	}
+	session, agent := newFakeAgentSession(t, entries...)
+	session.ResumeTurns()
+	for _, want := range []string{"one", "two", "three"} {
+		if got := agent.nextPrompt(t); got.Text != want {
+			t.Fatalf("drained %q, want %q", got.Text, want)
+		}
+		agent.turns <- fakeTurn{}
+	}
+	var prompts int
+	for _, entry := range agent.log.Snapshot() {
+		if entry.Kind == "prompt" {
+			prompts++
+			if body, err := PromptInputFromLog(entry.Payload); err != nil || body.QueueID == "" {
+				t.Fatalf("prompt omitted its queue ID: %s", entry.Payload)
+			}
+		}
+	}
+	if prompts != 3 {
+		t.Fatalf("agent received %d prompts", prompts)
 	}
 }

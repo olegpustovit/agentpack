@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/gateway"
 )
 
 func TestSuccessfulLocalLaunchWritesNoDiagnostics(t *testing.T) {
@@ -21,7 +21,7 @@ func TestSuccessfulLocalLaunchWritesNoDiagnostics(t *testing.T) {
 	project := t.TempDir()
 	home := filepath.Join(project, "_agentpack")
 	// Isolate the foreground launch from the gateway's independent HTTP events.
-	if err := network.SetGatewayEnabled(home, false); err != nil {
+	if err := gateway.SetGatewayEnabled(home, false); err != nil {
 		t.Fatal(err)
 	}
 	if result := runCLI(t, project, "init"); result.err != nil {

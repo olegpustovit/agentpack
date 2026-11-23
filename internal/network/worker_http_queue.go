@@ -2,6 +2,7 @@ package network
 
 import (
 	"errors"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"net/http"
 	"strings"
 )
@@ -12,7 +13,7 @@ func (worker *WorkerHTTP) registerQueueAndGoal(mux *http.ServeMux) {
 		var input struct {
 			Text string `json:"text"`
 		}
-		if !readJSON(w, r, &input) {
+		if !ReadJSON(w, r, &input) {
 			return
 		}
 		writeQueueResult(w, worker.conversationSession().EditQueued(r.PathValue("queueId"), strings.TrimSpace(input.Text)))
@@ -25,11 +26,11 @@ func (worker *WorkerHTTP) registerQueueAndGoal(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /conversation/goal", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
-			Objective string      `json:"objective"`
-			Checks    string      `json:"checks"`
-			Limits    *GoalLimits `json:"limits"`
+			Objective string              `json:"objective"`
+			Checks    string              `json:"checks"`
+			Limits    *session.GoalLimits `json:"limits"`
 		}
-		if !readJSON(w, r, &input) {
+		if !ReadJSON(w, r, &input) {
 			return
 		}
 		objective := strings.TrimSpace(input.Objective)
@@ -41,7 +42,7 @@ func (worker *WorkerHTTP) registerQueueAndGoal(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("PATCH /conversation/goal", func(w http.ResponseWriter, r *http.Request) {
 		var change GoalChange
-		if !readJSON(w, r, &change) {
+		if !ReadJSON(w, r, &change) {
 			return
 		}
 		if change.Action != "" && change.Action != "pause" && change.Action != "resume" {
@@ -64,12 +65,12 @@ func (worker *WorkerHTTP) registerQueueAndGoal(mux *http.ServeMux) {
 func writeQueueResult(w http.ResponseWriter, err error) {
 	switch {
 	case err == nil:
-		writeJSON(w, map[string]bool{"accepted": true})
-	case errors.Is(err, errNotQueued), errors.Is(err, errNoGoal):
+		WriteJSON(w, map[string]bool{"accepted": true})
+	case errors.Is(err, errNotQueued), errors.Is(err, ErrNoGoal):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, errEmptyPrompt):
+	case errors.Is(err, ErrEmptyPrompt):
 		http.Error(w, err.Error(), http.StatusBadRequest)
-	case errors.Is(err, errSessionArchived):
+	case errors.Is(err, session.ErrSessionArchived):
 		http.Error(w, "archived", http.StatusConflict)
 	default:
 		http.Error(w, "session unavailable", http.StatusConflict)

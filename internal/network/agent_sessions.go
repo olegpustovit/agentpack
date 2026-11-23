@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"os"
 	"sync"
 	"time"
@@ -44,7 +45,7 @@ func ListAgentSessions(ctx context.Context, home, directory, harness, definition
 	entries, err := probeHarnessAgentSessions(ctx, WorkerLaunch{
 		Transport: "acp",
 		Directory: directory,
-		Session: SessionInfo{
+		Session: session.SessionInfo{
 			Directory:      directory,
 			DefinitionRoot: definitionRoot,
 			Harness:        harness,

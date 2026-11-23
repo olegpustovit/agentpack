@@ -20,6 +20,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/acp/acptest"
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 type diagnosticExitAgent struct{ *acptest.ReplayAgent }
@@ -45,7 +46,7 @@ func TestACPAdapterExitRecordsCodeAndStderr(t *testing.T) {
 			defer cancel()
 			directory := t.TempDir()
 			command := exec.Command(os.Args[0], "-test.run=^TestACPAdapterExitRecordsCodeAndStderr$")
-			launch := WorkerLaunch{Session: SessionInfo{Harness: "fixture"}, Environment: append(os.Environ(), "AGENTPACK_TEST_DIAGNOSTIC_ADAPTER=1")}
+			launch := WorkerLaunch{Session: session.SessionInfo{Harness: "fixture"}, Environment: append(os.Environ(), "AGENTPACK_TEST_DIAGNOSTIC_ADAPTER=1")}
 			session, cleanup, err := startACPAgentProcess(ctx, launch, base.LaunchContext{WorkspaceRoot: directory}, "", base.ACPLaunch{Cmd: command}, directory, NewConversationSession(acp.NewEventLog(0), nil), nil)
 			if err != nil {
 				t.Fatal(err)
@@ -143,9 +144,9 @@ func TestConversationTurnSummarySurvivesReplayEvictionWithoutChat(t *testing.T) 
 	log := acp.NewEventLog(512)
 	var fail bool
 	broker := acp.NewBroker(func(ctx context.Context, input acp.PromptInput) error {
-		log.Append("prompt", 1, mustRawJSON(map[string]string{"text": input.Text}))
+		log.Append("prompt", 1, MustRawJSON(map[string]string{"text": input.Text}))
 		for range 50 {
-			log.Append("agent_message_chunk", 2, mustRawJSON(map[string]string{"text": "private reply text"}))
+			log.Append("agent_message_chunk", 2, MustRawJSON(map[string]string{"text": "private reply text"}))
 		}
 		log.Append("tool_call", 3, json.RawMessage(`{"toolCallId":"a","title":"private tool arguments"}`))
 		log.Append("tool_call_update", 4, json.RawMessage(`{"toolCallId":"a"}`))
@@ -244,7 +245,7 @@ func TestACPProcessInitializesWhileStageIsPending(t *testing.T) {
 	stage := make(chan error, 1)
 	command := exec.Command(os.Args[0], "-test.run=^TestACPAdapterExitRecordsCodeAndStderr$")
 	launch := WorkerLaunch{
-		Session:     SessionInfo{Harness: "fixture"},
+		Session:     session.SessionInfo{Harness: "fixture"},
 		Environment: append(os.Environ(), "AGENTPACK_TEST_DIAGNOSTIC_ADAPTER=1"),
 	}
 	adapter := base.ACPLaunch{

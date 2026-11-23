@@ -9,16 +9,19 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/olegpustovit/agentpack/internal/cache"
+	"github.com/olegpustovit/agentpack/internal/state/statetest"
 )
 
 func TestStoreAndServeSessionBlob(t *testing.T) {
 	dir := t.TempDir()
 	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00}
-	sha, err := storeSessionBlob(dir, png)
+	sha, err := StoreSessionBlob(dir, png)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(blobPath(dir, sha)); err != nil {
+	if _, err := os.Stat(BlobPath(dir, sha)); err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
@@ -52,7 +55,7 @@ func TestServeSessionBlobRejectsBadSHA(t *testing.T) {
 }
 
 func TestStoreSessionBlobRejectsSVG(t *testing.T) {
-	_, err := storeSessionBlob(filepath.Join(t.TempDir()), []byte("<svg></svg>"))
+	_, err := StoreSessionBlob(filepath.Join(t.TempDir()), []byte("<svg></svg>"))
 	if err == nil {
 		t.Fatal("expected rejection")
 	}
@@ -88,22 +91,22 @@ func TestProxySessionBlobPreservesSafeHeadersAndCapsBody(t *testing.T) {
 	proxySessionBlob(oversized, &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", maxBlobBytes+1))),
+		Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", MaxBlobBytes+1))),
 	})
 	if oversized.Code != http.StatusBadGateway {
 		t.Fatalf("oversized response status = %d, want 502", oversized.Code)
 	}
 }
 func TestBlobQuotaLimitsBytesAndFileCount(t *testing.T) {
-	if blobQuotaExceeded(maxSessionBlobBytes-1, 1, 1) {
+	if blobQuotaExceeded(MaxSessionBlobBytes-1, 1, 1) {
 		t.Fatal("last byte within quota was rejected")
 	}
 	for _, tc := range []struct {
 		used, incoming int64
 		files          int
 	}{
-		{used: maxSessionBlobBytes, incoming: 1},
-		{used: maxSessionBlobBytes - 1, incoming: 2},
+		{used: MaxSessionBlobBytes, incoming: 1},
+		{used: MaxSessionBlobBytes - 1, incoming: 2},
 		{used: 0, files: maxSessionBlobFiles, incoming: 1},
 	} {
 		if !blobQuotaExceeded(tc.used, tc.files, tc.incoming) {
@@ -117,17 +120,17 @@ func TestWorkerBlobUploadEnforcesSessionQuota(t *testing.T) {
 	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
 	for i := 0; i < maxSessionBlobFiles; i++ {
 		image := append(append([]byte(nil), png...), byte(i))
-		if _, err := storeSessionBlob(sessionDir, image); err != nil {
+		if _, err := StoreSessionBlob(sessionDir, image); err != nil {
 			t.Fatalf("store image %d: %v", i, err)
 		}
 	}
 	duplicate := append(append([]byte(nil), png...), byte(0))
-	if _, err := storeSessionBlob(sessionDir, duplicate); err != nil {
+	if _, err := StoreSessionBlob(sessionDir, duplicate); err != nil {
 		t.Fatalf("deduplicated image: %v", err)
 	}
-	worker := &WorkerHTTP{sessionDir: sessionDir}
+	worker := &WorkerHTTP{SessionDir: sessionDir}
 	mux := http.NewServeMux()
-	worker.registerConversation(mux)
+	worker.RegisterConversation(mux)
 	image := append(append([]byte(nil), png...), byte(0xff))
 	server := httptest.NewServer(mux)
 	defer server.Close()
@@ -160,8 +163,35 @@ func TestConversationBlobProxyAcceptsMoreThanJSONBodyLimit(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/conversation/blobs", bytes.NewReader(make([]byte, size)))
 	request.Header.Set("Content-Type", "image/png")
 	recorder := httptest.NewRecorder()
-	proxyWorkerConversation(recorder, request, record, "/blobs")
+	ProxyWorkerConversation(recorder, request, record, "/blobs")
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("proxy status = %d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestBlobLocationsFollowWorkerUploadAndStableNodeBinding(t *testing.T) {
+	home := t.TempDir()
+	store := statetest.Open(t, home)
+	worker := &WorkerHTTP{StateStore: store, SessionDir: filepath.Join(home, "network", "sessions", "session-image")}
+	sha := strings.Repeat("a", 64)
+	if err := AdvertiseBlob(t.Context(), worker.StateStore, filepath.Base(worker.SessionDir), sha, 123); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindNode(t.Context(), "stable"); err != nil {
+		t.Fatal(err)
+	}
+	if err := AdvertiseBlob(t.Context(), worker.StateStore, filepath.Base(worker.SessionDir), sha, 123); err != nil {
+		t.Fatal(err)
+	}
+	var node, session string
+	var size int64
+	if err := store.Reader.QueryRow("SELECT node_id,session_id,size FROM blob_locations WHERE sha=?", sha).Scan(&node, &session, &size); err != nil || node != "stable" || session != "session-image" || size != 123 {
+		t.Fatalf("blob location: %s %s %d %v", node, session, size, err)
+	}
+	if _, err := store.DB.Exec("INSERT INTO cache_locations(cache_key,node_id) VALUES (?,?)", cache.ComputeKey("pending"), "stable"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindNode(t.Context(), "another"); err == nil {
+		t.Fatal("stable node rebound unexpectedly")
 	}
 }

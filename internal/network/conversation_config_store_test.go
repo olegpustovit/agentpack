@@ -7,23 +7,25 @@ import (
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state/statetest"
 )
 
 func TestWantedModelAppliesBeforeQueuedPrompt(t *testing.T) {
 	ctx := t.Context()
-	store := testSessionStore(t, t.TempDir())
-	info := SessionInfo{ID: "session-saved-model", Harness: "claude", Directory: "/project", Transport: "acp", ConversationState: "starting"}
-	if err := upsertSession(ctx, store.DB, info); err != nil {
+	store := statetest.Open(t, t.TempDir())
+	info := session.SessionInfo{ID: "session-saved-model", Harness: "claude", Directory: "/project", Transport: "acp", ConversationState: "starting"}
+	if err := session.UpsertSession(ctx, store.DB, info); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveWantedConfig(ctx, store.DB, info.ID, configSelection{Key: "model", Value: json.RawMessage(`"opus"`)}, true); err != nil {
+	if err := SaveWantedConfig(ctx, store.DB, info.ID, ConfigSelection{Key: "model", Value: json.RawMessage(`"opus"`)}, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveWantedConfig(ctx, store.DB, info.ID, configSelection{Key: "effort", Value: json.RawMessage(`"missing"`)}, true); err != nil {
+	if err := SaveWantedConfig(ctx, store.DB, info.ID, ConfigSelection{Key: "effort", Value: json.RawMessage(`"missing"`)}, true); err != nil {
 		t.Fatal(err)
 	}
 	log := acp.NewEventLog(0)
-	log.Append("queued_prompt", 1, queuedPromptPayload(queuedPrompt{ID: "queue", Input: acp.PromptInput{Text: "check the budgets"}}))
+	log.Append("queued_prompt", 1, QueuedPromptPayload(QueuedPrompt{ID: "queue", Input: acp.PromptInput{Text: "check the budgets"}}))
 	applied := make(chan string, 2)
 	broker := acp.NewBroker(func(_ context.Context, input acp.PromptInput) error {
 		applied <- input.Text
