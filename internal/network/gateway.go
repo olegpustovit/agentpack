@@ -4,6 +4,7 @@ import (
 	"compress/flate"
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -62,6 +64,14 @@ type nodeRecord struct {
 }
 
 type Gateway struct {
+	handlerOnce sync.Once
+	nodeIDCache atomic.Value
+	handler     http.Handler
+	limits      *limitsCache
+	operations  sync.WaitGroup
+	operationMu sync.Mutex
+	closing     bool
+
 	options        GatewayOptions
 	startingChats  sync.Map
 	starting       sync.WaitGroup       // chats launching in the background; tests wait on it
@@ -98,6 +108,9 @@ type Gateway struct {
 	omp            ompSettings
 	found          folderDiscovery
 	credentialsMu  sync.Mutex // one agent credential sync at a time
+
+	worktreeHistoryMu sync.Mutex
+	worktreeHistory   map[string]worktreeDivergence
 }
 
 // browserPingInterval keeps idle terminal connections alive through proxies. Tests shorten it.
@@ -134,14 +147,17 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 		return err
 	}
 	defer func() { result = errors.Join(result, store.Close()) }()
-	if snapshot, err := tailnetSnapshot(ctx); err == nil {
-		if err := store.BindNode(ctx, snapshot.Self.ID); err != nil {
-			return err
-		}
-	}
 	nodeID, err := store.NodeID(context.Background())
 	if err != nil {
 		return err
+	}
+	if strings.HasPrefix(nodeID, "site:") {
+		if snapshot, err := tailnetSnapshot(ctx); err == nil {
+			if err := store.BindNode(ctx, snapshot.Self.ID); err != nil {
+				return err
+			}
+			nodeID = snapshot.Self.ID
+		}
 	}
 	if err := os.Remove(filepath.Join(options.Home, "network", "limits.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove legacy limits cache: %w", err)
@@ -160,6 +176,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	gateway := &Gateway{options: options, store: store, logs: logs, auth: auth, local: nodeRecord{listener.Addr().String(), randomToken()}, origin: origin, stop: cancel, done: ctx.Done()}
+	gateway.nodeIDCache.Store(nodeID)
 	defer func() { result = errors.Join(result, gateway.cleanStateTransfers(time.Time{})) }()
 	if err := gateway.loadPublic(context.Background()); err != nil {
 		return err
@@ -173,6 +190,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if err != nil {
 		return err
 	}
+	handler := gateway.Handler()
 	var background sync.WaitGroup
 	for _, task := range []struct {
 		name string
@@ -181,14 +199,22 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 		background.Add(1)
 		obs.Go(task.name, func() { defer background.Done(); task.run(ctx) })
 	}
-	defer func() { cancel(); background.Wait() }()
+	defer func() {
+		cancel()
+		gateway.operationMu.Lock()
+		gateway.closing = true
+		gateway.operationMu.Unlock()
+		background.Wait()
+		gateway.starting.Wait()
+		gateway.operations.Wait()
+	}()
 	data, _ := json.Marshal(gateway.local)
 	record := filepath.Join(options.Home, "network", "node.json")
 	if err = os.WriteFile(record, data, 0600); err != nil {
 		return err
 	}
 	defer os.Remove(record)
-	server := &http.Server{Handler: gateway.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
 	defer server.Close()
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
@@ -203,6 +229,17 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 		defer cancel()
 		return server.Shutdown(shutdown)
 	}
+}
+
+// beginBackground serializes admission with shutdown before the store closes.
+func (g *Gateway) beginBackground(group *sync.WaitGroup) bool {
+	g.operationMu.Lock()
+	defer g.operationMu.Unlock()
+	if g.closing {
+		return false
+	}
+	group.Add(1)
+	return true
 }
 
 func (g *Gateway) runLogSpool(ctx context.Context) {
@@ -229,7 +266,12 @@ func (g *Gateway) localRequest(r *http.Request) bool {
 }
 
 func (g *Gateway) Handler() http.Handler {
-	nodeID, nodeErr := g.auth.store.NodeID(context.Background())
+	g.handlerOnce.Do(func() { g.handler = g.buildHandler() })
+	return g.handler
+}
+
+func (g *Gateway) buildHandler() http.Handler {
+	nodeID, nodeErr := g.nodeID(context.Background())
 	if nodeErr != nil {
 		log.Printf("gateway node identity unavailable: %v", nodeErr)
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -296,6 +338,9 @@ func (g *Gateway) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/machine", g.machine)
 	mux.HandleFunc("POST /api/node/update", func(w http.ResponseWriter, r *http.Request) {
+		if !g.requireOwner(w, r) {
+			return
+		}
 		if g.options.Update == nil {
 			http.Error(w, "gateway updates are unavailable", http.StatusNotImplemented)
 			return
@@ -318,10 +363,16 @@ func (g *Gateway) Handler() http.Handler {
 			http.Error(w, "an update is already running", http.StatusConflict)
 			return
 		}
+		if !g.beginBackground(&g.operations) {
+			g.updateMu.Unlock()
+			http.Error(w, "gateway is shutting down", http.StatusServiceUnavailable)
+			return
+		}
 		g.updating = true
 		g.updateError = ""
 		g.updateMu.Unlock()
 		obs.Go("gateway.update", func() {
+			defer g.operations.Done()
 			ctx, event := obs.Start(obs.WithRecording(context.Background(), r.Context()), "gateway", "update")
 			event.Set("target_version", version)
 			err := g.options.Update(ctx, version)
@@ -340,13 +391,17 @@ func (g *Gateway) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /api/claim", g.auth.claim)
 	mux.HandleFunc("POST /api/login", g.auth.login)
-	mux.HandleFunc("POST /api/logout", g.auth.logout)
+	mux.HandleFunc("POST /api/logout", g.logout)
 	mux.HandleFunc("POST /api/logout-all", g.auth.logoutAll)
 	mux.HandleFunc("GET /api/events", g.serveEvents)
 	mux.HandleFunc("GET /api/nodes", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("discover") == "1" {
 			value, err := g.tailnetNodes(r.Context())
-			respond(w, value, err)
+			if err != nil {
+				fail(w, r, err)
+				return
+			}
+			writeJSON(w, value)
 			return
 		}
 		value, err := g.meshNodes(r.Context(), nil)
@@ -354,11 +409,15 @@ func (g *Gateway) Handler() http.Handler {
 			meshReadError(w, r, err)
 			return
 		}
-		respond(w, value, nil)
+		writeJSON(w, value)
 	})
 	mux.HandleFunc("GET /api/topology", func(w http.ResponseWriter, r *http.Request) {
 		value, err := g.tailnetTopology(r.Context())
-		respond(w, value, err)
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		writeJSON(w, value)
 	})
 	mux.HandleFunc("POST /api/local/sessions/{id}/presence", g.servePresence)
 	mux.HandleFunc("DELETE /api/local/sessions/{id}/presence", g.servePresence)
@@ -380,7 +439,7 @@ func (g *Gateway) Handler() http.Handler {
 			meshReadError(w, r, err)
 			return
 		}
-		respond(w, value, err)
+		writeJSON(w, value)
 	})
 	mux.HandleFunc("DELETE /api/recent", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -391,7 +450,11 @@ func (g *Gateway) Handler() http.Handler {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		respond(w, map[string]bool{"forgotten": true}, ForgetRecent(g.options.Home, SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode}))
+		if err := ForgetRecent(g.options.Home, SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode}); err != nil {
+			fail(w, r, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"forgotten": true})
 	})
 	mux.HandleFunc("POST /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		var input chatStartRequest
@@ -408,7 +471,7 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		if input.ID != "" {
 			info, err := g.claimChatStart(r.Context(), actor, input)
-			writeSessionStart(w, info, err)
+			writeSessionStart(w, r, info, err)
 			return
 		}
 		if input.Resume != "" && input.AgentSessionID == "" {
@@ -434,7 +497,7 @@ func (g *Gateway) Handler() http.Handler {
 			// agentpack tools are on for new chats unless the request turns them off.
 			ParentID: input.ParentID, Tools: input.Transport == "acp" && (input.Tools == nil || *input.Tools),
 		}, "")
-		writeSessionStart(w, info, err)
+		writeSessionStart(w, r, info, err)
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/fork", func(w http.ResponseWriter, r *http.Request) {
 		record, err := g.workerRecord(r.Context(), r.PathValue("id"))
@@ -468,7 +531,7 @@ func (g *Gateway) Handler() http.Handler {
 				Mode: record.Session.Mode, Transport: "acp", ParentID: input.ParentID, Tools: &record.Session.Tools,
 				forkSessionID: record.Session.AgentSessionID, definitionRoot: record.Session.DefinitionRoot,
 			})
-			writeSessionStart(w, info, err)
+			writeSessionStart(w, r, info, err)
 			return
 		}
 		info, err := g.startSession(r.Context(), actor, SessionInfo{
@@ -480,7 +543,7 @@ func (g *Gateway) Handler() http.Handler {
 			ParentID:       input.ParentID,
 			Tools:          record.Session.Tools,
 		}, record.Session.AgentSessionID)
-		writeSessionStart(w, info, err)
+		writeSessionStart(w, r, info, err)
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/harness", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -520,7 +583,11 @@ func (g *Gateway) Handler() http.Handler {
 			http.Error(w, "invalid stop request ID", http.StatusBadRequest)
 			return
 		}
-		respond(w, map[string]bool{"stopped": true}, g.stopSession(r.Context(), r.PathValue("id"), requestID))
+		if err := g.stopSession(r.Context(), r.PathValue("id"), requestID); err != nil {
+			fail(w, r, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"stopped": true})
 	})
 	mux.HandleFunc("PATCH /api/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -538,7 +605,7 @@ func (g *Gateway) Handler() http.Handler {
 			legacyArchive = err == nil && info.StartedBy != nil && info.StartedBy.Kind == "peer" && !info.EndedAt.IsZero() && info.ArchivedAt.IsZero()
 		}
 		if legacyArchive {
-			if !g.ownerOnly(w, r) {
+			if !g.requireOwner(w, r) {
 				return
 			}
 		} else if !g.authorizeACPWriteByID(w, r, id) {
@@ -735,20 +802,31 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{id}/blobs/{sha}", g.serveBlob)
 	mux.HandleFunc("GET /api/packages", func(w http.ResponseWriter, r *http.Request) {
 		directory := r.URL.Query().Get("directory")
-		if !g.knownDirectory(directory) {
+		if !g.knownDirectory(r.Context(), directory) {
 			http.Error(w, "choose a recent folder from this node", 400)
 			return
 		}
 		contents, err := g.options.Packages(r.Context(), directory)
-		respond(w, contents.Packages, err)
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		writeJSON(w, contents.Packages)
 	})
 	mux.HandleFunc("GET /api/projects", func(w http.ResponseWriter, r *http.Request) {
 		value, err := g.projects(r.Context())
-		respond(w, value, err)
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		writeJSON(w, value)
 	})
 	mux.HandleFunc("GET /api/folders", g.serveFolders)
 	mux.HandleFunc("GET /api/folders/found", g.serveFoundFolders)
 	mux.HandleFunc("POST /api/packages", func(w http.ResponseWriter, r *http.Request) {
+		if !g.requireOwner(w, r) {
+			return
+		}
 		var input struct {
 			Directory string `json:"directory"`
 			Spec      string `json:"spec"`
@@ -757,13 +835,20 @@ func (g *Gateway) Handler() http.Handler {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		if !g.knownDirectory(input.Directory) || input.Spec == "" {
+		if !g.knownDirectory(r.Context(), input.Directory) || input.Spec == "" {
 			http.Error(w, "choose a recent folder and package", 400)
 			return
 		}
-		respond(w, map[string]bool{"installed": true}, g.options.Install(r.Context(), input.Directory, input.Spec, input.Restart == nil || *input.Restart))
+		if err := g.options.Install(r.Context(), input.Directory, input.Spec, input.Restart == nil || *input.Restart); err != nil {
+			fail(w, r, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"installed": true})
 	})
 	mux.HandleFunc("POST /api/mcp/servers", func(w http.ResponseWriter, r *http.Request) {
+		if !g.requireOwner(w, r) {
+			return
+		}
 		var input struct {
 			MCPServerInput
 			Directory string `json:"directory"`
@@ -772,17 +857,23 @@ func (g *Gateway) Handler() http.Handler {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		if !g.knownDirectory(input.Directory) || input.Name == "" {
+		if !g.knownDirectory(r.Context(), input.Directory) || input.Name == "" {
 			http.Error(w, "choose a recent folder and MCP server", 400)
 			return
 		}
 		err := g.options.InstallMCP(r.Context(), input.Directory, input.MCPServerInput, input.Restart == nil || *input.Restart)
-		obs.From(r.Context()).Fail(err)
-		respond(w, map[string]bool{"installed": true}, err)
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"installed": true})
 	})
 	mux.HandleFunc("POST /api/node/stop", func(w http.ResponseWriter, r *http.Request) {
+		if !g.requireOwner(w, r) {
+			return
+		}
 		if err := SetGatewayEnabled(g.options.Home, false); err != nil {
-			http.Error(w, "could not persist gateway stop", 500)
+			fail(w, r, err)
 			return
 		}
 		writeJSON(w, map[string]bool{"stopping": true})
@@ -804,7 +895,11 @@ func (g *Gateway) Handler() http.Handler {
 				err = errors.Join(err, StopWorker(r.Context(), g.options.Home, session.ID))
 			}
 		}
-		respond(w, map[string]any{"stopped": err == nil, "skipped": skipped}, err)
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		writeJSON(w, map[string]any{"stopped": true, "skipped": skipped})
 	})
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -944,14 +1039,17 @@ func publicSession(info SessionInfo) SessionInfo {
 	return info
 }
 
-func respond(w http.ResponseWriter, value any, err error) {
-	if err != nil {
-		http.Error(w, err.Error(), 400)
-		return
-	}
-	writeJSON(w, value)
+func badRequest(w http.ResponseWriter, message string) {
+	http.Error(w, message, http.StatusBadRequest)
 }
-func writeSessionStart(w http.ResponseWriter, info SessionInfo, err error) {
+
+func fail(w http.ResponseWriter, r *http.Request, err error) {
+	if event := obs.From(r.Context()); event != nil {
+		event.Fail(err)
+	}
+	http.Error(w, "gateway operation failed", http.StatusInternalServerError)
+}
+func writeSessionStart(w http.ResponseWriter, r *http.Request, info SessionInfo, err error) {
 	if errors.Is(err, errChatStartClaim) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -968,7 +1066,15 @@ func writeSessionStart(w http.ResponseWriter, info SessionInfo, err error) {
 		http.Error(w, "could not verify ACP session owner", http.StatusInternalServerError)
 		return
 	}
-	respond(w, publicSession(info), err)
+	if errors.Is(err, errUnknownFolder) || errors.Is(err, errInvalidChatID) || errors.Is(err, errResumeOwnFolder) {
+		badRequest(w, err.Error())
+		return
+	}
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, publicSession(info))
 }
 func authorizeACPWrite(w http.ResponseWriter, r *http.Request, session SessionInfo) bool {
 	if !session.ArchivedAt.IsZero() {
@@ -1020,12 +1126,12 @@ func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInf
 	}
 	// A new worktree is accepted only when git lists it for an authorized main folder, which the row records.
 	info.WorktreeOf = ""
-	if main, _, err := worktreeMain(ctx, g.options.Home, info.Directory); err == nil && g.startableDirectory(actor, main) {
+	if main, _, err := worktreeMain(ctx, g.options.Home, info.Directory); err == nil && g.startableDirectory(ctx, actor, main) {
 		info.WorktreeOf = main
 		if info.DefinitionRoot == "" {
 			info.DefinitionRoot = g.definitionRootFor(ctx, main)
 		}
-	} else if !g.startableDirectory(actor, info.Directory) {
+	} else if !g.startableDirectory(ctx, actor, info.Directory) {
 		return SessionInfo{}, errUnknownFolder
 	}
 	info.Directory = filepath.Clean(info.Directory)
@@ -1034,7 +1140,7 @@ func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInf
 		return SessionInfo{}, errUnknownFolder
 	}
 	info.FolderID = folderID
-	local, err := g.auth.store.NodeID(ctx)
+	local, err := g.nodeID(ctx)
 	if err != nil {
 		return SessionInfo{}, err
 	}
@@ -1047,21 +1153,23 @@ func (g *Gateway) startSession(ctx context.Context, actor Actor, info SessionInf
 	return g.launchSession(ctx, info, forkSessionID)
 }
 
-func (g *Gateway) knownDirectory(directory string) bool {
+func (g *Gateway) knownDirectory(ctx context.Context, directory string) bool {
 	if !filepath.IsAbs(directory) {
 		return false
 	}
-	recent, err := recentIn(context.Background(), g.auth.store.Reader)
-	if err != nil {
+	identity, err := FolderIdentity(directory)
+	if err != nil || identity == "" {
 		return false
 	}
-	for _, entry := range recent {
-		if filepath.Clean(entry.Directory) == filepath.Clean(directory) {
-			identity, err := FolderIdentity(directory)
-			return err == nil && SameFolder(entry.FolderID, identity)
-		}
-	}
-	return false
+	var known bool
+	err = g.auth.store.Reader.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM (
+			SELECT folder_id FROM sessions WHERE node_id=`+state.LocalNodeSQL+`
+			AND hidden=0 AND transport<>'shell' AND directory=?
+			ORDER BY last_used DESC,id DESC LIMIT 1
+		) WHERE folder_id=? OR (? AND substr(folder_id, -length(?))=?)
+	)`, filepath.Clean(directory), identity, !strings.Contains(identity, ":"), ":"+identity, ":"+identity).Scan(&known)
+	return err == nil && known
 }
 
 // SameFolder also accepts identities recorded before Unix dropped the device ("dev:inode").
@@ -1082,37 +1190,31 @@ func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
 
 	directory := r.URL.Query().Get("directory")
 	harness := r.URL.Query().Get("harness")
-	if !g.knownDirectory(directory) || harness == "" {
+	if !g.knownDirectory(r.Context(), directory) || harness == "" {
 		http.Error(w, "choose a recent folder from this node", http.StatusBadRequest)
 		return
 	}
 	var definitionRoot, modeName string
-	recent, err := recentIn(r.Context(), g.auth.store.Reader)
-	if err != nil {
-		respond(w, nil, err)
+	err := g.auth.store.Reader.QueryRowContext(r.Context(), `SELECT definition_root,mode FROM sessions
+		WHERE node_id=`+state.LocalNodeSQL+` AND hidden=0 AND transport<>'shell' AND directory=? AND harness=?
+		ORDER BY last_used DESC,id DESC LIMIT 1`, filepath.Clean(directory), harness).Scan(&definitionRoot, &modeName)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		fail(w, r, err)
 		return
-	}
-	clean := filepath.Clean(directory)
-	for _, entry := range recent {
-		if filepath.Clean(entry.Directory) == clean && entry.Harness == harness {
-			definitionRoot = entry.DefinitionRoot
-			modeName = entry.Mode
-			break
-		}
 	}
 	sessions, err := ListAgentSessions(r.Context(), g.options.Home, directory, harness, definitionRoot, modeName)
 	if err != nil {
-		respond(w, nil, err)
+		fail(w, r, err)
 		return
 	}
-	local, err := g.auth.store.NodeID(r.Context())
+	local, err := g.nodeID(r.Context())
 	if err != nil {
 		meshReadError(w, r, err)
 		return
 	}
 	folderID, err := FolderIdentity(directory)
 	if err != nil {
-		respond(w, nil, err)
+		fail(w, r, err)
 		return
 	}
 	archived, err := archivedNativeIDs(r.Context(), g.auth.store, folderID, harness)
@@ -1187,11 +1289,35 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 	}
 	go copyFrames(worker, browser)
 	go copyFrames(browser, worker)
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	private := g.localRequest(r)
+	peer, _ := r.Context().Value(replicaPeerKey{}).(string)
+	var events <-chan eventMessage
+	var checkAuth <-chan time.Time
+	if !private || peer != "" {
+		checkAuth = g.events.checkAuth
+		if checkAuth == nil {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			checkAuth = ticker.C
+		}
+		stream, unsubscribe := g.subscribe()
+		defer unsubscribe()
+		events = stream
+	}
 	ping := time.NewTicker(browserPingInterval)
 	defer ping.Stop()
-	private := g.localRequest(r)
+	allowed := func() bool {
+		if peer == "" {
+			return private || g.auth.authenticated(r)
+		}
+		actor, _ := actorFrom(r.Context())
+		if !actor.Account {
+			return false
+		}
+		actor.Account = false
+		forwarded, err := g.forwardedAccount(r.Context(), actor, actor.User)
+		return err == nil && forwarded.Account
+	}
 	for {
 		select {
 		case <-done:
@@ -1204,8 +1330,12 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 			if browser.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)) != nil {
 				return
 			}
-		case <-ticker.C:
-			if !private && !g.auth.authenticated(r) {
+		case event, open := <-events:
+			if !open || authChanged(event) && !allowed() {
+				return
+			}
+		case <-checkAuth:
+			if !allowed() {
 				return
 			}
 		}

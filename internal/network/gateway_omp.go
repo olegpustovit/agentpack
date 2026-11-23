@@ -36,7 +36,7 @@ func (g *Gateway) registerOMP(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/omp/settings", func(w http.ResponseWriter, r *http.Request) {
 		network, err := g.ompNetwork(r.Context())
 		if err != nil {
-			respond(w, nil, err)
+			fail(w, r, err)
 			return
 		}
 		c := &g.omp
@@ -71,7 +71,7 @@ func (g *Gateway) registerOMP(mux *http.ServeMux) {
 		writeJSON(w, map[string]any{"models": c.models})
 	})
 	mux.HandleFunc("PUT /api/omp/settings/{key}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.ownerOnly(w, r) {
+		if !g.requireOwner(w, r) {
 			return
 		}
 		var input struct {
@@ -99,7 +99,7 @@ func (g *Gateway) registerOMP(mux *http.ServeMux) {
 		g.respondOMPNetwork(w, r, err)
 	})
 	mux.HandleFunc("DELETE /api/omp/settings/{key}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.ownerOnly(w, r) {
+		if !g.requireOwner(w, r) {
 			return
 		}
 		// Resetting a record resets its entries too.

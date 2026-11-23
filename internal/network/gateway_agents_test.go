@@ -77,3 +77,39 @@ func TestAgentRoutesSignInForTheOwnerOnly(t *testing.T) {
 		t.Fatal("cancelled sign-in", code, body)
 	}
 }
+
+func TestRequireOwnerActors(t *testing.T) {
+	auth, err := testGatewayAuth(t, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.store.DB.Exec("INSERT INTO users(email, password_hash, role, created_at) VALUES ('member@example.com','hash','member',2) ON CONFLICT(email) DO NOTHING"); err != nil {
+		t.Fatal(err)
+	}
+	g := &Gateway{auth: auth}
+	for _, tc := range []struct {
+		name  string
+		actor Actor
+		want  bool
+	}{
+		{"browser owner", Actor{Kind: "browser", User: "owner@example.com"}, true},
+		{"browser member", Actor{Kind: "browser", User: "member@example.com"}, false},
+		{"local owner", Actor{Kind: "local", Account: true, User: "owner@example.com"}, true},
+		{"local member", Actor{Kind: "local", Account: true, User: "member@example.com"}, false},
+		{"bare peer", Actor{Kind: "peer", User: "owner@example.com"}, false},
+		{"forwarded owner", Actor{Kind: "peer", Account: true, User: "owner@example.com"}, true},
+		{"forwarded member", Actor{Kind: "peer", Account: true, User: "member@example.com"}, false},
+		{"MCP owner", Actor{Kind: "mcp", User: "owner@example.com"}, true},
+		{"MCP member", Actor{Kind: "mcp", User: "member@example.com"}, false},
+		{"unbound local with accounts", Actor{Kind: "local", User: "native"}, false},
+		{"unknown", Actor{Kind: "unknown", User: "owner@example.com"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/", nil)
+			w := httptest.NewRecorder()
+			if got := g.requireOwner(w, r.WithContext(withActor(r.Context(), tc.actor))); got != tc.want {
+				t.Fatalf("owner access = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
@@ -215,4 +216,27 @@ func (g *Gateway) localActor(ctx context.Context) (Actor, error) {
 	actor.User = email
 	actor.Account = true
 	return actor, nil
+}
+
+func (g *Gateway) nodeID(ctx context.Context) (string, error) {
+	if id, ok := g.nodeIDCache.Load().(string); ok {
+		return id, nil
+	}
+	return g.auth.store.NodeID(ctx)
+}
+
+// bindTailnetNode publishes the stable identity after the one-time store migration.
+func (g *Gateway) bindTailnetNode(ctx context.Context, stable string) error {
+	id, err := g.nodeID(ctx)
+	if err != nil || id == stable {
+		return err
+	}
+	if !strings.HasPrefix(id, "site:") {
+		return errors.New("state belongs to a different stable node identity")
+	}
+	if err := g.store.BindNode(ctx, stable); err != nil {
+		return err
+	}
+	g.nodeIDCache.Store(stable)
+	return nil
 }

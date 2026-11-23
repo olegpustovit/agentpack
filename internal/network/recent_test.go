@@ -82,7 +82,7 @@ func TestKnownDirectoryRejectsReplacementUntilLocalLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	gateway := Gateway{auth: auth, options: GatewayOptions{Home: home}}
-	if !gateway.knownDirectory(directory) {
+	if !gateway.knownDirectory(t.Context(), directory) {
 		t.Fatal("remembered folder rejected")
 	}
 	// Keep the original alive so filesystem identity cannot be recycled.
@@ -92,13 +92,13 @@ func TestKnownDirectoryRejectsReplacementUntilLocalLaunch(t *testing.T) {
 	if err := os.Mkdir(directory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if gateway.knownDirectory(directory) {
+	if gateway.knownDirectory(t.Context(), directory) {
 		t.Fatal("replacement folder trusted without a local launch")
 	}
 	if err := remember(home, info); err != nil {
 		t.Fatal(err)
 	}
-	if !gateway.knownDirectory(directory) {
+	if !gateway.knownDirectory(t.Context(), directory) {
 		t.Fatal("local launch did not authorize replacement")
 	}
 }
@@ -122,7 +122,7 @@ func TestKnownDirectorySurvivesDeviceRenumbering(t *testing.T) {
 		t.Fatal(err)
 	}
 	gateway := Gateway{auth: auth, options: GatewayOptions{Home: home}}
-	if !gateway.knownDirectory(directory) {
+	if !gateway.knownDirectory(t.Context(), directory) {
 		t.Fatal("folder recorded with an older device number rejected")
 	}
 	if SameFolder("1000012:"+identity, "") || SameFolder("1:2:3", "2:3") {
@@ -242,5 +242,27 @@ func TestNormalizeFolderIDsKeepsOwnershipAndUsage(t *testing.T) {
 	var rows, turns int
 	if err := store.Reader.QueryRow("SELECT count(*),sum(turns) FROM usage_hourly").Scan(&rows, &turns); err != nil || rows != 1 || turns != 3 {
 		t.Fatalf("usage rows=%d turns=%d %v", rows, turns, err)
+	}
+}
+
+func TestKnownDirectoryBeyondRecentList(t *testing.T) {
+	home, directory := t.TempDir(), t.TempDir()
+	if err := remember(home, SessionInfo{Directory: directory, Harness: "codex"}); err != nil {
+		t.Fatal(err)
+	}
+	auth, err := testGatewayAuth(t, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = auth.store.DB.Exec(`WITH RECURSIVE newer(i) AS (
+		SELECT 1 UNION ALL SELECT i+1 FROM newer WHERE i<100
+	) INSERT INTO sessions(id,node_id,directory,last_used)
+	SELECT 'known-directory-test-'||i,`+state.LocalNodeSQL+`,?||i,? FROM newer`, directory, time.Now().Add(time.Hour).UnixNano())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &Gateway{auth: auth}
+	if !g.knownDirectory(t.Context(), directory) {
+		t.Fatal("a known folder outside the recent list was rejected")
 	}
 }

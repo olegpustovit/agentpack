@@ -312,11 +312,11 @@ func (g *Gateway) runLimitsAfterTurns(ctx context.Context, interval time.Duratio
 }
 
 func (g *Gateway) registerLimits(mux *http.ServeMux) {
-	nodeID, cacheErr := g.auth.store.NodeID(context.Background())
-	var cache *limitsCache
+	nodeID, cacheErr := g.nodeID(context.Background())
 	if cacheErr == nil {
-		cache, cacheErr = newLimitsCache(g.auth.store, nodeID, collectLimits)
+		g.limits, cacheErr = newLimitsCache(g.auth.store, nodeID, collectLimits)
 	}
+	cache := g.limits
 	if cacheErr != nil && g.store != nil {
 		log.Printf("limits cache cannot be loaded: %v", cacheErr)
 	}
@@ -326,13 +326,19 @@ func (g *Gateway) registerLimits(mux *http.ServeMux) {
 			return
 		}
 		// Reads never wait for a harness or peer; refresh the local cache beside them.
-		if (r.URL.Query().Get("node") == "" || r.URL.Query().Get("node") == nodeID) && time.Since(cache.current().At) >= limitsCacheTTL && cache.refreshing.CompareAndSwap(false, true) {
-			obs.Go("gateway.limits_refresh", func() {
-				defer cache.refreshing.Store(false)
-				cache.collect(r.Context(), limitsCacheTTL)
-				// Browsers refetch on this instead of polling for the refresh to land.
-				g.emitEvent(eventMessage{Topic: "limits"})
-			})
+		local, _ := g.nodeID(r.Context())
+		if (r.URL.Query().Get("node") == "" || r.URL.Query().Get("node") == local) && time.Since(cache.current().At) >= limitsCacheTTL && cache.refreshing.CompareAndSwap(false, true) {
+			if g.beginBackground(&g.operations) {
+				obs.Go("gateway.limits_refresh", func() {
+					defer g.operations.Done()
+					defer cache.refreshing.Store(false)
+					cache.collect(r.Context(), limitsCacheTTL)
+					// Browsers refetch on this instead of polling for the refresh to land.
+					g.emitEvent(eventMessage{Topic: "limits"})
+				})
+			} else {
+				cache.refreshing.Store(false)
+			}
 		}
 		limits, err := g.meshLimits(r.Context(), r.URL.Query().Get("node"))
 		if err != nil {

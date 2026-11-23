@@ -131,7 +131,7 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 		writeJSON(w, map[string]any{"agents": g.agents.read(r.Context(), r.URL.Query().Get("fresh") == "1")})
 	})
 	mux.HandleFunc("POST /api/agents/{harness}/login", func(w http.ResponseWriter, r *http.Request) {
-		if !g.ownerOnly(w, r) {
+		if !g.requireOwner(w, r) {
 			return
 		}
 		var input struct {
@@ -168,7 +168,7 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 		g.agents.mu.Unlock()
 		attempt, err := startLogin(flow)
 		if err != nil {
-			respond(w, nil, err)
+			fail(w, r, err)
 			return
 		}
 		g.agents.mu.Lock()
@@ -197,10 +197,14 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 			}
 		})
 		step, err := attempt.waitLink(r.Context())
-		respond(w, step, err)
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		writeJSON(w, step)
 	})
 	mux.HandleFunc("POST /api/agents/{harness}/logout", func(w http.ResponseWriter, r *http.Request) {
-		if !g.ownerOnly(w, r) {
+		if !g.requireOwner(w, r) {
 			return
 		}
 		name := r.PathValue("harness")
@@ -217,10 +221,14 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 			err = g.stopSharingAgentCredential(r.Context(), agentLogins[index])
 		}
 		g.agents.forget()
-		respond(w, map[string]bool{"signed_out": err == nil}, err)
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"signed_out": true})
 	})
 	mux.HandleFunc("GET /api/agents/{harness}/login/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.ownerOnly(w, r) {
+		if !g.requireOwner(w, r) {
 			return
 		}
 		if attempt := g.agents.attempt(r.PathValue("harness"), r.PathValue("id")); attempt != nil {
@@ -230,7 +238,7 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 		http.Error(w, "sign-in not found", http.StatusGone)
 	})
 	mux.HandleFunc("POST /api/agents/{harness}/login/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.ownerOnly(w, r) {
+		if !g.requireOwner(w, r) {
 			return
 		}
 		var input struct {
@@ -251,7 +259,7 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 		writeJSON(w, attempt.current())
 	})
 	mux.HandleFunc("DELETE /api/agents/{harness}/login/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.ownerOnly(w, r) {
+		if !g.requireOwner(w, r) {
 			return
 		}
 		if attempt := g.agents.attempt(r.PathValue("harness"), r.PathValue("id")); attempt != nil {
@@ -261,13 +269,16 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 	})
 }
 
-// ownerOnly admits the owner: their browser, the CLI bound to them, or their request forwarded
-// by an approved peer. Agent sign-ins and agent settings change what every chat runs as.
-func (g *Gateway) ownerOnly(w http.ResponseWriter, r *http.Request) bool {
+// requireOwner admits enabled owners through browser, CLI, MCP or a peer
+// forwarding an account. Bare peer identities and unknown actors are denied.
+// The local CLI retains setup and shutdown authority before the first account exists.
+func (g *Gateway) requireOwner(w http.ResponseWriter, r *http.Request) bool {
 	actor, ok := actorFrom(r.Context())
 	allowed := false
-	if ok && actor.User != "" && (actor.Kind == "browser" || actor.Kind == "local" || actor.Kind == "peer" && actor.Account) {
-		err := g.auth.store.Reader.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM users WHERE email=? AND role='owner' AND disabled=0)", actor.User).Scan(&allowed)
+	if ok && (actor.Kind == "browser" || actor.Kind == "local" || actor.Kind == "mcp" || actor.Kind == "peer" && actor.Account) {
+		err := g.auth.store.Reader.QueryRowContext(r.Context(), `SELECT EXISTS(
+			SELECT 1 FROM users WHERE email=? AND role='owner' AND disabled=0
+		) OR (? AND NOT EXISTS(SELECT 1 FROM users))`, actor.User, actor.Kind == "local" && !actor.Account).Scan(&allowed)
 		if err != nil {
 			if event := obs.From(r.Context()); event != nil {
 				event.Fail(err)

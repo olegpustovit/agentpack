@@ -19,6 +19,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/acp/acptest"
+	"github.com/olegpustovit/agentpack/internal/harness"
 )
 
 func mcpClient(t *testing.T, h *oauthHarness, token string) *mcp.ClientSession {
@@ -521,5 +522,38 @@ func TestHelperReplyEndsAtTheFirstTurn(t *testing.T) {
 	)
 	if done, reply := helperReply(entries); !done || reply != "Looking\n\nIt is line 4." {
 		t.Fatalf("ended: done=%v reply=%q", done, reply)
+	}
+}
+
+func TestMCPGetLimitsSharesStaleRefresh(t *testing.T) {
+	h := newOAuthHarness(t)
+	session := mcpClient(t, h, h.exchange(t, h.codeForm(h.code(t)), 200).Access)
+	cache := h.gateway.limits
+	probes := make(chan struct{}, 3)
+	release := make(chan struct{})
+	cache.saved.At = time.Now().Add(-2 * limitsCacheTTL)
+	cache.probe = func(context.Context) []harness.LimitSnapshot {
+		probes <- struct{}{}
+		<-release
+		return []harness.LimitSnapshot{{Harness: "codex"}}
+	}
+	defer func() {
+		close(release)
+		h.gateway.operations.Wait()
+	}()
+	for range 3 {
+		if result, body := callTool(t, session, "get_limits", map[string]any{}); result.IsError {
+			t.Fatal(body)
+		}
+	}
+	select {
+	case <-probes:
+	case <-time.After(time.Second):
+		t.Fatal("stale cache did not refresh")
+	}
+	select {
+	case <-probes:
+		t.Fatal("stale cache started a second probe")
+	default:
 	}
 }

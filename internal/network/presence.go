@@ -132,8 +132,7 @@ func (g *Gateway) servePresence(w http.ResponseWriter, r *http.Request) {
 	}
 	info.FolderID, err = FolderIdentity(info.Directory)
 	if err != nil {
-		event.Fail(err)
-		respond(w, nil, err)
+		fail(w, r, err)
 		return
 	}
 	info.ID = record.ID

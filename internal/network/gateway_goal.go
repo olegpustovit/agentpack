@@ -32,7 +32,7 @@ func (g *Gateway) clearGoal(w http.ResponseWriter, r *http.Request) {
 	}
 	if goal.Engine == "native" {
 		if err := ConversationPrompt(r.Context(), g.options.Home, id, "/goal clear"); err != nil {
-			respond(w, nil, err)
+			fail(w, r, err)
 			return
 		}
 	}
