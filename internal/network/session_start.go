@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -247,8 +246,7 @@ func (g *Gateway) resumeSession(ctx context.Context, id, prompt, queueID string)
 	defer g.chatLifecycle.Unlock()
 	// A worker that died without ending its row is settled first, so the claim below sees it stopped.
 	// The person's own message resumes this chat, so the reaper doesn't resume it too.
-	g.autoResume(id)
-	g.reapStoppedChats(ctx)
+	g.reapStoppedChatsExcept(ctx, id)
 	return g.claimResume(ctx, id, prompt, queueID)
 }
 
@@ -342,7 +340,6 @@ func (g *Gateway) switchHarness(ctx context.Context, id, harness string) (Sessio
 	if switched, err := result.RowsAffected(); err != nil || switched != 1 {
 		return SessionInfo{}, errors.Join(errResumeConflict, err)
 	}
-	g.autoResume(id)
 	return g.claimResume(ctx, id, "", "")
 }
 
@@ -397,7 +394,10 @@ func recordStop(ctx context.Context, store *state.Store, id string, notice map[s
 // reapStoppedChats ends rows whose worker died without ending them, then settles ended chats that
 // still claim a turn, a question or subagents: such a worker never recorded its exit. The caller
 // holds chatLifecycle, so a resume cannot claim a row this is writing.
-func (g *Gateway) reapStoppedChats(ctx context.Context) {
+func (g *Gateway) reapStoppedChats(ctx context.Context) { g.reapStoppedChatsExcept(ctx, "") }
+
+// reapStoppedChatsExcept never resumes manual, the chat its caller is about to resume.
+func (g *Gateway) reapStoppedChatsExcept(ctx context.Context, manual string) {
 	g.reapWorkerEndpoints(ctx)
 	rows, err := querySessions(ctx, g.store.Reader, "SELECT "+sessionColumns+` FROM sessions WHERE transport='acp' AND archived_at=0 AND node_id=`+state.LocalNodeSQL+`
  AND ((ended_at>0 AND (conversation_state<>'idle' OR subagents<>'' OR waiting<>'' OR json_extract(state,'$.running')))
@@ -415,7 +415,12 @@ func (g *Gateway) reapStoppedChats(ctx context.Context) {
 			continue
 		}
 		// A turn cut off by sleep, a reboot or a crash carries on by itself, once per stop window.
-		auto := info.ConversationState == "working" && info.AgentSessionID != "" && g.autoResume(info.ID)
+		auto := false
+		if info.AgentSessionID != "" && info.ID != manual {
+			var cutErr error
+			auto, cutErr = cutOffTurn(ctx, g.store.Reader, info.ID, time.Now())
+			err = errors.Join(err, cutErr)
+		}
 		description := "Its process ended before the turn finished. Send a message to resume the chat."
 		if auto {
 			description = "Its process ended before the turn finished, so the chat resumes by itself."
@@ -446,17 +451,20 @@ const autoResumePrompt = "Your last turn was cut off because this machine went o
 // autoResumeWindow keeps a chat whose agent dies again right after resuming from resuming forever.
 const autoResumeWindow = 10 * time.Minute
 
-// autoResume reports whether a chat may resume by itself now, and records that it did.
-func (g *Gateway) autoResume(id string) bool {
-	if at, ok := g.autoResumed[id]; ok && time.Since(at) < autoResumeWindow {
-		return false
-	}
-	if g.autoResumed == nil {
-		g.autoResumed = map[string]time.Time{}
-	}
-	maps.DeleteFunc(g.autoResumed, func(_ string, at time.Time) bool { return time.Since(at) >= autoResumeWindow })
-	g.autoResumed[id] = time.Now()
-	return true
+// cutOffTurn reads from the log whether a stopped chat may resume by itself: its own last prompt has
+// no turn end after it, and it has not resumed by itself within autoResumeWindow (the reaper logs
+// autoResumePrompt as the chat's queued prompt when it does).
+func cutOffTurn(ctx context.Context, db *sql.DB, id string, now time.Time) (bool, error) {
+	var cut bool
+	err := db.QueryRowContext(ctx, `SELECT
+ coalesce((SELECT max(seq) FROM conversation_events WHERE session_id=?1 AND kind='prompt'
+  AND json_extract(body,'$.payload._subagent') IS NULL),0) >
+ coalesce((SELECT max(seq) FROM conversation_events WHERE session_id=?1 AND kind IN ('turn_end','agent_exit')
+  AND json_extract(body,'$.payload._subagent') IS NULL),0)
+ AND NOT EXISTS(SELECT 1 FROM conversation_events WHERE session_id=?1 AND kind='queued_prompt'
+  AND json_extract(body,'$.payload.text.text')=?2 AND json_extract(body,'$.ts')>?3)`,
+		id, autoResumePrompt, now.Add(-autoResumeWindow).UnixMilli()).Scan(&cut)
+	return cut, err
 }
 
 // runReaper notices workers that died while this gateway runs.
