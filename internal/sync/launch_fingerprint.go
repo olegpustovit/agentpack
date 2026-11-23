@@ -2,6 +2,7 @@ package sync
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -197,6 +198,7 @@ func hashDotAgents(root string) ([]byte, error) {
 	// Antigravity's launch puts the staged bundle here (a link, or a copy where
 	// links are refused). It is Agentpack's own output, not an input.
 	overlay := filepath.Join(root, "plugins", paths.StagedAgentpackBundleName)
+	sizes := map[string]int64{}
 	var files []string
 	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -212,6 +214,7 @@ func hashDotAgents(root string) ([]byte, error) {
 			info, err := entry.Info()
 			if err == nil && info.Mode().IsRegular() {
 				files = append(files, path)
+				sizes[path] = info.Size()
 			}
 		}
 		return nil
@@ -230,13 +233,7 @@ func hashDotAgents(root string) ([]byte, error) {
 		}
 		hash.Write([]byte(relative))
 		hash.Write([]byte{0})
-		info, _ := os.Stat(path)
-		size := uint64(info.Size())
-		var encoded [8]byte
-		for index := 0; index < 8; index++ {
-			encoded[index] = byte(size >> (8 * index))
-		}
-		hash.Write(encoded[:])
+		hash.Write(binary.LittleEndian.AppendUint64(nil, uint64(sizes[path])))
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
@@ -358,23 +355,7 @@ func writeDigestState(path, digest, root string) error {
 	if err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".sync-state-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if _, err := file.Write(data); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), path)
+	return paths.WriteAtomic(path, data, 0o600)
 }
 
 // A plain sync skips the rebuild when its inputs, the staged tree and the

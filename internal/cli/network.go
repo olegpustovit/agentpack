@@ -104,7 +104,10 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 				return network.ProjectContents{}, err
 			}
 			// A folder without agentpack.toml still has the implicit default mode.
-			project, _ := manifest.Load(packContext.DefinitionRoot)
+			project, err := manifest.Load(packContext.DefinitionRoot)
+			if err != nil {
+				return network.ProjectContents{}, err
+			}
 			contents := projectContents(locked, project)
 			// The Library matches a remote server to its shared login by URL and starts one from it.
 			if plan, err := staging.CollectMCPPlan(packContext.WorkspaceRoot, locked, project, nil); err == nil {

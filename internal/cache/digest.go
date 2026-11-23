@@ -347,15 +347,7 @@ func recordVerified(pkg lockfile.Package, root string, checkedAt time.Time) {
 	if err != nil || os.MkdirAll(filepath.Dir(path), 0o755) != nil {
 		return
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".stamp-*")
-	if err != nil {
-		return
-	}
-	defer os.Remove(file.Name())
-	_, writeErr := file.Write(data)
-	if file.Close() == nil && writeErr == nil {
-		_ = os.Rename(file.Name(), path)
-	}
+	_ = paths.WriteAtomic(path, data, 0o600)
 }
 
 // VerifyPackage recomputes the cache entry digest and compares it with the

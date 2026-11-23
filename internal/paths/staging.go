@@ -98,19 +98,7 @@ func BeginStagingGeneration(projectRoot, modeName string) (*StagingGeneration, e
 }
 
 func (generation *StagingGeneration) Publish() error {
-	file, err := os.CreateTemp(filepath.Dir(generation.legacy), ".staging-current-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	_, writeErr := file.WriteString(filepath.Base(generation.Root) + "\n")
-	if err := file.Close(); writeErr == nil {
-		writeErr = err
-	}
-	if writeErr != nil {
-		return writeErr
-	}
-	if err := os.Rename(file.Name(), generation.legacy+".current"); err != nil {
+	if err := WriteAtomic(generation.legacy+".current", []byte(filepath.Base(generation.Root)+"\n"), 0o600); err != nil {
 		return err
 	}
 	generation.published = true

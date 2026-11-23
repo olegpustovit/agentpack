@@ -570,23 +570,7 @@ func writeRebuildJournal(path string, journal rebuildJournal) error {
 	if err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".rebuild-journal-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if _, err := file.Write(data); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), path)
+	return paths.WriteAtomic(path, data, 0o600)
 }
 
 func backupRebuildPaths(values []string, journalPath string) ([]rebuildBackup, error) {

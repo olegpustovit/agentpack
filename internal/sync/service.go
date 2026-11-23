@@ -306,7 +306,10 @@ func (service Service) add(ctx context.Context, projectRoot, spec string, noSync
 		if err := manifest.AppendPathDependency(projectRoot, name, filepath.ToSlash(relative)); err != nil {
 			return lockfile.Package{}, err
 		}
-		project, _ := manifest.Load(projectRoot)
+		project, err := manifest.Load(projectRoot)
+		if err != nil {
+			return lockfile.Package{}, err
+		}
 		lock, err := service.resolveAdded(ctx, projectRoot, project, nil)
 		if err != nil {
 			return lockfile.Package{}, err
@@ -328,7 +331,10 @@ func (service Service) add(ctx context.Context, projectRoot, spec string, noSync
 	if err := RecordFetched(resolved.Package, resolved.Shorthand); err != nil {
 		return lockfile.Package{}, err
 	}
-	project, _ := manifest.Load(projectRoot)
+	project, err := manifest.Load(projectRoot)
+	if err != nil {
+		return lockfile.Package{}, err
+	}
 	lock, err := service.resolveAdded(ctx, projectRoot, project, []lockfile.Package{resolved.Package})
 	if err != nil {
 		return lockfile.Package{}, err
@@ -354,7 +360,9 @@ func (service Service) Remove(ctx context.Context, projectRoot, spec string, noS
 	if err := manifest.RemoveDependencyEntry(projectRoot, key); err != nil {
 		return "", err
 	}
-	project, _ = manifest.Load(projectRoot)
+	if project, err = manifest.Load(projectRoot); err != nil {
+		return "", err
+	}
 	if _, err := service.resolveAndSave(ctx, projectRoot, project, false, nil); err != nil {
 		return "", err
 	}
