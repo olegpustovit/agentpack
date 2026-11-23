@@ -17,7 +17,7 @@ import { LOCAL } from "@/lib/api"
 import { basename, harnessName, plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useSessionCommands } from "./actions"
-import { groupSessions, matchesSession, nestHelpers, rowKey, sessionLabel, type GroupMode, type ListedSession, type SessionSubhead } from "./group"
+import { groupSessions, matchesSession, nestHelpers, rowKey, sessionLabel, treeSessions, type GroupMode, type ListedSession, type SessionSubhead } from "./group"
 import { NotifyOffer } from "@/features/shell/attention"
 import { NewSessionSheet } from "./new-session-sheet"
 import { loadStartChoices } from "./choices"
@@ -88,7 +88,7 @@ export function SessionList() {
   const selectedKey = cursor?.from === routeKey ? cursor?.key : routeKey
 
   const query = search.q ?? ""
-  const shown = sessions.filter((session) => !archiving.has(rowKey(session)) && matchesSession(session, query))
+  const shown = treeSessions(sessions).filter((session) => !archiving.has(rowKey(session)) && matchesSession(session, query))
   // Pinned above the machine and project groups, and listed only there.
   const needsYou = shown.filter((session) => sessionGlyphState(session) === "needsYou")
   const pinned = new Set(needsYou)
@@ -267,7 +267,7 @@ export function SessionList() {
   function renderRow(session: ListedSession, nested = false) {
     const key = rowKey(session)
     const selected = key === selectedKey
-    // Subagents show under their chat on every width: running ones, then the latest that finished.
+    // Running subagents show under their chat on every width; treeSessions drops finished ones.
     const children = session.offline || session.archived_at ? [] : session.subagents ?? []
     return (
       <div key={key}>

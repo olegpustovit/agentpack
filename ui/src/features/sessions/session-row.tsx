@@ -224,9 +224,8 @@ export function SessionRow({
 
 // A running subagent, indented under its chat. Opens it in the main view.
 export function SubagentRow({ session, subagent, selected }: { session: ListedSession; subagent: SubagentSummary; selected: boolean }) {
-  const done = subagent.state === "idle"
-  const now = useNow(!done)
-  const elapsed = subagent.started_at ? clock((done && subagent.ended_at ? subagent.ended_at : now) - subagent.started_at) : undefined
+  const now = useNow(true)
+  const elapsed = subagent.started_at ? clock(now - subagent.started_at) : undefined
   return (
     <SourceRow
       render={
@@ -241,7 +240,7 @@ export function SubagentRow({ session, subagent, selected }: { session: ListedSe
       data-subagent-row={subagent.id}
       className="ps-(--s7) text-(length:--fs-sm)"
     >
-      <AgentTile className="ms-(--s6)" harness={session.harness} state={done ? "idle" : subagent.state === "requires_action" ? "requires_action" : "running"} label={done ? "Done" : subagent.state === "requires_action" ? "Needs you" : "Running"} />
+      <AgentTile className="ms-(--s6)" harness={session.harness} state={subagent.state === "requires_action" ? "requires_action" : "running"} label={subagent.state === "requires_action" ? "Needs you" : "Running"} />
       <span className="min-w-0 flex-1 truncate">{subagent.title || "Subagent"}</span>
       {elapsed && <span aria-hidden className={dimWord}>{elapsed}</span>}
     </SourceRow>

@@ -374,7 +374,7 @@ test("archive hides the row immediately and restores it if the request fails", a
 
 test("a chat's row menu switches agentpack tools, and its helpers list under it", async ({ page }) => {
   const chat = { ...sessions[0], id: "c1", name: "lead", transport: "acp", conversation_state: "idle", tools: true }
-  const helper = { ...chat, id: "c2", name: "helper", parent_id: "c1", started_by: { kind: "browser", user: "oleg@", agent: "claude" } }
+  const helper = { ...chat, id: "c2", name: "helper", parent_id: "c1", conversation_state: "working", started_by: { kind: "browser", user: "oleg@", agent: "claude" } }
   reply = [helper, sessions[1], chat]
   const bodies: unknown[] = []
   await page.route("**/api/sessions/c1/tools", (route) => {
