@@ -21,6 +21,9 @@ import (
 
 const syncPageLimit = 4 << 20
 
+// The local quarantine migration leaves the replicated schema unchanged.
+const replicationVersion = 44
+
 type stateChangePage struct {
 	reachable bool
 	Schema    int            `json:"schema"`
@@ -80,13 +83,13 @@ func (g *Gateway) registerStateSync(mux *http.ServeMux) {
 			http.Error(w, "invalid schema version", http.StatusBadRequest)
 			return
 		}
-		if schema != state.SchemaVersion() {
+		if schema != replicationVersion {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)
 			writeJSON(w, struct {
 				Schema     int `json:"schema"`
 				PeerSchema int `json:"peer_schema"`
-			}{state.SchemaVersion(), schema})
+			}{replicationVersion, schema})
 			return
 		}
 		if r.URL.Query().Has("transfer") {
@@ -122,7 +125,7 @@ func (g *Gateway) registerStateSync(mux *http.ServeMux) {
 			var transfer *stateTransfer
 			transfer, err = g.newStateTransfer(r.Context(), peer, oversized.Version, exclude)
 			if err == nil {
-				writeJSON(w, stateChangePage{Schema: state.SchemaVersion(), SiteID: site, Next: oversized.Version, Transfer: transfer})
+				writeJSON(w, stateChangePage{Schema: replicationVersion, SiteID: site, Next: oversized.Version, Transfer: transfer})
 				return
 			}
 		}
@@ -137,7 +140,7 @@ func (g *Gateway) registerStateSync(mux *http.ServeMux) {
 			http.Error(w, "state changes unavailable", status)
 			return
 		}
-		writeJSON(w, stateChangePage{Schema: state.SchemaVersion(), SiteID: site, Next: next, Changes: rows})
+		writeJSON(w, stateChangePage{Schema: replicationVersion, SiteID: site, Next: next, Changes: rows})
 	}))
 }
 
@@ -146,7 +149,7 @@ var errSyncNeedsUpdate = errors.New("peer needs update")
 func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, since int64, exclude []byte) (stateChangePage, error) {
 	var page stateChangePage
 	endpoint := target.JoinPath("/api/sync/changes")
-	query := url.Values{"schema": {strconv.Itoa(state.SchemaVersion())}, "since": {strconv.FormatInt(since, 10)}, "exclude": {hex.EncodeToString(exclude)}}
+	query := url.Values{"schema": {strconv.Itoa(replicationVersion)}, "since": {strconv.FormatInt(since, 10)}, "exclude": {hex.EncodeToString(exclude)}}
 	if since < 0 {
 		query.Del("since")
 	}
@@ -179,7 +182,7 @@ func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, s
 	if err := json.Unmarshal(body, &page); err != nil {
 		return page, errors.New("invalid state page")
 	}
-	if page.Schema != state.SchemaVersion() {
+	if page.Schema != replicationVersion {
 		return page, errSyncNeedsUpdate
 	}
 	if len(page.SiteID) != 16 || page.Next < since {
@@ -227,14 +230,27 @@ func pullState(ctx context.Context, store *state.Store, library *registry.Store,
 		if !bytes.Equal(site, page.SiteID) {
 			return page, changed, errors.New("peer database identity changed during transfer")
 		}
-		if err := registry.ValidateChanges(store, page.Changes); err != nil {
+		rejected, err := store.ApplyValidatedPage(ctx, page.Changes, site, page.Next, func(change state.Change) (bool, error) {
+			err := registry.ValidateChanges(store, []state.Change{change})
+			if errors.Is(err, registry.ErrInvalidChange) {
+				return false, nil
+			}
+			return err == nil, err
+		})
+		if err != nil {
 			return page, changed, err
 		}
-		if err := store.ApplyPage(ctx, page.Changes, site, page.Next); err != nil {
-			return page, changed, err
+		if len(rejected) > 0 {
+			_, event := obs.Start(ctx, "state.sync", "quarantine")
+			event.Set("count", len(rejected))
+			event.Set("peer_site", hex.EncodeToString(site))
+			event.Set("version", rejected[0].Version)
+			event.Fail(errors.New(rejected[0].Reason))
+			event.End()
 		}
-		changed = changed || len(page.Changes) > 0
-		if library != nil {
+		applied := len(page.Changes) > len(rejected)
+		changed = changed || applied
+		if library != nil && applied {
 			for _, change := range page.Changes {
 				if strings.HasPrefix(change.Table, "registry_") {
 					if err := library.MergeHeads(); err != nil {
@@ -401,9 +417,9 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 			return
 		}
 		contact := replicaContact{Reachable: page.reachable, At: time.Now().UTC(), Schema: page.Schema, Version: page.Next}
-		if prior, ok := g.replicaStatus.Load(peer); ok {
-			contact.LastSuccess = prior.(replicaContact).LastSuccess
-		}
+		previous, known := g.replicaStatus.Load(peer)
+		prior, _ := previous.(replicaContact)
+		contact.LastSuccess = prior.LastSuccess
 		if err == nil {
 			contact.LastSuccess = contact.At
 			zero := int64(0)
@@ -422,11 +438,9 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 			delay = time.Second
 		}
 		g.replicaStatus.Store(peer, contact)
-		g.emitEvent(eventMessage{Topic: "replication"})
-		if changed {
-			for _, topic := range []string{"state", "sessions", "limits", "library", "diagnostics"} {
-				g.emitEvent(eventMessage{Topic: topic})
-			}
+		if !known || prior.Reachable != contact.Reachable || prior.Error != contact.Error ||
+			prior.NeedsUpdate != contact.NeedsUpdate || prior.Schema != contact.Schema {
+			g.emitEvent(eventMessage{Topic: "replication"})
 		}
 		if err != nil && failure != lastFailure || changed {
 			event.End()
@@ -452,6 +466,6 @@ func (g *Gateway) publishMeshNode(ctx context.Context) error {
 	_, err = g.auth.store.DB.ExecContext(ctx, `INSERT INTO mesh_nodes(node_id,name,site_id,schema_version,app_version,updated_at)
  VALUES (`+state.LocalNodeSQL+`,?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET
  name=excluded.name,site_id=excluded.site_id,schema_version=excluded.schema_version,app_version=excluded.app_version,updated_at=excluded.updated_at
- WHERE name IS NOT excluded.name OR site_id IS NOT excluded.site_id OR schema_version IS NOT excluded.schema_version OR app_version IS NOT excluded.app_version`, g.selfIdentity(ctx).displayName(), site, state.SchemaVersion(), g.options.Version, time.Now().UnixMilli())
+ WHERE name IS NOT excluded.name OR site_id IS NOT excluded.site_id OR schema_version IS NOT excluded.schema_version OR app_version IS NOT excluded.app_version`, g.selfIdentity(ctx).displayName(), site, replicationVersion, g.options.Version, time.Now().UnixMilli())
 	return err
 }

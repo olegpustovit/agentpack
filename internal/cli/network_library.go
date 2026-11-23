@@ -37,7 +37,7 @@ func (runner Runner) networkLibrary(home string) (network.LibraryOptions, error)
 		Bootstrap: func() error {
 			bootstrapMu.Lock()
 			defer bootstrapMu.Unlock()
-			if err := bootstrapLibraryProjects(home, store, node); err != nil {
+			if err := bootstrapLibraryProjects(store, node); err != nil {
 				return err
 			}
 			stamp := ""
@@ -127,8 +127,8 @@ func (runner Runner) networkLibrary(home string) (network.LibraryOptions, error)
 	}, nil
 }
 
-func bootstrapLibraryProjects(home string, store *registry.Store, node string) error {
-	recent, err := network.Recent(home)
+func bootstrapLibraryProjects(store *registry.Store, node string) error {
+	recent, err := network.RecentIn(context.Background(), store.StateStore().Reader)
 	if err != nil {
 		return fmt.Errorf("read recent projects for Library: %w", err)
 	}

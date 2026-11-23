@@ -143,7 +143,7 @@ func (g *Gateway) readStateTransfer(r *http.Request, peer string) (stateChangePa
 	if err != nil {
 		return page, http.StatusInternalServerError, err
 	}
-	page = stateChangePage{Schema: state.SchemaVersion(), SiteID: transfer.site, Next: transfer.Version, Transfer: &transfer.stateTransfer, Data: data, Offset: offset + int64(len(data))}
+	page = stateChangePage{Schema: replicationVersion, SiteID: transfer.site, Next: transfer.Version, Transfer: &transfer.stateTransfer, Data: data, Offset: offset + int64(len(data))}
 	return page, http.StatusOK, nil
 }
 
@@ -163,7 +163,7 @@ func fetchStateTransfer(ctx context.Context, client *http.Client, target *url.UR
 	out := io.MultiWriter(file, hash)
 	for offset := int64(0); offset < transfer.Size; {
 		endpoint := target.JoinPath("/api/sync/changes")
-		endpoint.RawQuery = url.Values{"schema": {strconv.Itoa(state.SchemaVersion())}, "transfer": {transfer.ID}, "offset": {strconv.FormatInt(offset, 10)}}.Encode()
+		endpoint.RawQuery = url.Values{"schema": {strconv.Itoa(replicationVersion)}, "transfer": {transfer.ID}, "offset": {strconv.FormatInt(offset, 10)}}.Encode()
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 		if err != nil {
 			return nil, err

@@ -86,7 +86,7 @@ func (g *Gateway) newSessionWorktree(ctx context.Context, actor Actor, main, wor
 // definitionRootFor is what a session in a worktree of main uses for packages and modes: the main
 // folder's own definition root, so staging, logins and MCP sign-ins stay the project's.
 func (g *Gateway) definitionRootFor(ctx context.Context, main string) string {
-	recent, err := recentIn(ctx, g.auth.store.Reader)
+	recent, err := RecentIn(ctx, g.auth.store.Reader)
 	if err == nil {
 		for _, entry := range recent {
 			if filepath.Clean(entry.Directory) == filepath.Clean(main) && entry.DefinitionRoot != "" {

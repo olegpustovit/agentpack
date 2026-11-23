@@ -32,7 +32,7 @@ func TestStateSyncRequiresEnrollmentAndMatchingSchema(t *testing.T) {
 	g := &Gateway{auth: auth, options: GatewayOptions{Library: LibraryOptions{Store: library}}}
 	mux := http.NewServeMux()
 	g.registerStateSync(mux)
-	schema := strconv.Itoa(state.SchemaVersion())
+	schema := strconv.Itoa(replicationVersion)
 	for _, test := range []struct {
 		peer, query string
 		status      int
@@ -89,7 +89,7 @@ func TestStateSyncPagesCommitCompleteVersions(t *testing.T) {
 	defer target.Close()
 	since, pages := int64(0), 0
 	for {
-		r := httptest.NewRequest("GET", fmt.Sprintf("/api/sync/changes?schema=%d&since=%d", state.SchemaVersion(), since), nil)
+		r := httptest.NewRequest("GET", fmt.Sprintf("/api/sync/changes?schema=%d&since=%d", replicationVersion, since), nil)
 		r = r.WithContext(context.WithValue(r.Context(), replicaPeerKey{}, "trusted"))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, r)
@@ -137,7 +137,7 @@ func TestLegacyLibraryPeersCannotReadMeshState(t *testing.T) {
 	mux := http.NewServeMux()
 	g.registerStateSync(mux)
 	request := func() int {
-		r := httptest.NewRequest("GET", fmt.Sprintf("/api/sync/changes?schema=%d&since=0", state.SchemaVersion()), nil)
+		r := httptest.NewRequest("GET", fmt.Sprintf("/api/sync/changes?schema=%d&since=0", replicationVersion), nil)
 		r = r.WithContext(context.WithValue(r.Context(), replicaPeerKey{}, "legacy"))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, r)

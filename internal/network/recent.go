@@ -16,11 +16,11 @@ func Recent(home string) ([]SessionInfo, error) {
 		return nil, err
 	}
 	defer store.Close()
-	return recentIn(context.Background(), store.Reader)
+	return RecentIn(context.Background(), store.Reader)
 }
 
-// recentIn reads recent launches from an open store; the gateway passes its own.
-func recentIn(ctx context.Context, db *sql.DB) ([]SessionInfo, error) {
+// RecentIn reads recent launches from an open store; the gateway passes its own.
+func RecentIn(ctx context.Context, db *sql.DB) ([]SessionInfo, error) {
 	entries, err := querySessions(ctx, db, `SELECT `+sessionColumns+` FROM (
         SELECT *,row_number() OVER (PARTITION BY directory,harness,mode ORDER BY last_used DESC,id DESC) AS rank
         FROM sessions WHERE node_id=`+state.LocalNodeSQL+` AND hidden=0 AND transport<>'shell' AND directory<>''
@@ -65,13 +65,8 @@ func recentFolders(recent []SessionInfo) []RecentFolder {
 	return folders
 }
 
-func ForgetRecent(home string, info SessionInfo) error {
-	store, err := state.Open(home)
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-	_, err = store.DB.Exec(`UPDATE sessions SET hidden=1 WHERE node_id=`+state.LocalNodeSQL+` AND directory=?
+func ForgetRecent(ctx context.Context, store *state.Store, info SessionInfo) error {
+	_, err := store.DB.ExecContext(ctx, `UPDATE sessions SET hidden=1 WHERE node_id=`+state.LocalNodeSQL+` AND directory=?
         AND (?='' OR harness=?) AND (?='' OR mode=?)`,
 		filepath.Clean(info.Directory), info.Harness, info.Harness, info.Mode, info.Mode)
 	return err

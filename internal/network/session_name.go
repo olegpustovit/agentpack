@@ -46,16 +46,11 @@ func normalizeSessionName(name string) (string, error) {
 	return name, nil
 }
 
-func RenameSession(ctx context.Context, home, id, name string) (SessionInfo, error) {
+func RenameSession(ctx context.Context, store *state.Store, home, id, name string) (SessionInfo, error) {
 	name, err := normalizeSessionName(name)
 	if err != nil {
 		return SessionInfo{}, err
 	}
-	store, err := state.Open(home)
-	if err != nil {
-		return SessionInfo{}, err
-	}
-	defer store.Close()
 	info, err := storedSession(ctx, store.Reader, id)
 	if err != nil {
 		return info, err
@@ -81,14 +76,9 @@ var errSessionRunning = errors.New("session is running")
 
 // HideSession archives a stopped session from the user's view: it leaves every list on the mesh, and its
 // history stays in place until the hourly mover takes it to the archive like any other idle chat.
-func HideSession(ctx context.Context, home, id string) (bool, error) {
-	store, err := state.Open(home)
-	if err != nil {
-		return false, err
-	}
-	defer store.Close()
+func HideSession(ctx context.Context, store *state.Store, home, id string) (bool, error) {
 	var hidden, starting bool
-	err = store.Reader.QueryRowContext(ctx, `SELECT hidden, conversation_state='starting' AND ended_at=0 FROM sessions WHERE id=?`, id).Scan(&hidden, &starting)
+	err := store.Reader.QueryRowContext(ctx, `SELECT hidden, conversation_state='starting' AND ended_at=0 FROM sessions WHERE id=?`, id).Scan(&hidden, &starting)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, errSessionNotFound
 	}

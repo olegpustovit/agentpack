@@ -161,7 +161,7 @@ func TestForgetRecentWithoutHarnessOrModeRemovesWholeFolder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := ForgetRecent(home, SessionInfo{Directory: directory}); err != nil {
+	if err := ForgetRecent(t.Context(), testSessionStore(t, home), SessionInfo{Directory: directory}); err != nil {
 		t.Fatal(err)
 	}
 	remaining, err := Recent(home)

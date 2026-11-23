@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -228,16 +229,20 @@ func (s *Store) Changes(ctx context.Context, since int64, exclude []byte, maxByt
 func decodeChanges(changes []Change) ([]any, error) {
 	values := make([]any, len(changes))
 	for i, change := range changes {
-		if change.Table == "" || change.Column == "" || len(change.Table) > 255 || len(change.Column) > 255 || len(change.PK) == 0 || len(change.SiteID) != 16 || change.ColVersion < 0 || change.DBVersion < 0 || change.CL < 0 || change.Seq < 0 {
-			return nil, errors.New("invalid replicated change identity or version")
-		}
-		value, err := change.Value.value()
+		value, err := decodeChange(change)
 		if err != nil {
 			return nil, err
 		}
 		values[i] = value
 	}
 	return values, nil
+}
+
+func decodeChange(change Change) (any, error) {
+	if change.Table == "" || change.Column == "" || len(change.Table) > 255 || len(change.Column) > 255 || len(change.PK) == 0 || len(change.SiteID) != 16 || change.ColVersion < 0 || change.DBVersion < 0 || change.CL < 0 || change.Seq < 0 {
+		return nil, errors.New("invalid replicated change identity or version")
+	}
+	return change.Value.value()
 }
 
 func (s *Store) applyChanges(ctx context.Context, tx *sql.Tx, changes []Change, values []any) error {
@@ -304,10 +309,7 @@ func (s *Store) Apply(ctx context.Context, changes []Change) error {
 	if err != nil {
 		return err
 	}
-	if err := s.preserveArchiveEdits(ctx, changes, values); err != nil {
-		return err
-	}
-	return Transaction(ctx, s.DB, func(tx *sql.Tx) error { return s.applyChanges(ctx, tx, changes, values) })
+	return s.applyReplication(ctx, changes, values, nil)
 }
 
 func (s *Store) Cursor(ctx context.Context, site []byte) (int64, error) {
@@ -337,25 +339,122 @@ func (s *Store) SetCursor(ctx context.Context, site []byte, version int64) error
 
 // ApplyPage commits the received data and its cursor together, or neither.
 func (s *Store) ApplyPage(ctx context.Context, changes []Change, site []byte, next int64) error {
+	_, err := s.ApplyValidatedPage(ctx, changes, site, next, nil)
+	return err
+}
+
+type RejectedChange struct {
+	Version int64
+	Reason  string
+}
+
+// ApplyValidatedPage quarantines malformed input alongside the cursor commit.
+// Archive conflicts and storage failures stay retryable so a later pull can preserve history.
+func (s *Store) ApplyValidatedPage(ctx context.Context, changes []Change, site []byte, next int64, validate func(Change) (bool, error)) ([]RejectedChange, error) {
 	if len(site) != 16 || next < 0 {
-		return errors.New("invalid peer cursor")
+		return nil, errors.New("invalid peer cursor")
 	}
+	valid := make([]Change, 0, len(changes))
+	values := make([]any, 0, len(changes))
+	columns := map[string]map[string]bool{}
+	var rejected []RejectedChange
 	for _, change := range changes {
-		if change.DBVersion > next {
-			return fmt.Errorf("change version %d exceeds its page cursor %d", change.DBVersion, next)
+		value, err := decodeChange(change)
+		reason := ""
+		switch {
+		case change.DBVersion > next:
+			reason = "change version exceeds page cursor"
+		case err != nil:
+			reason = "invalid replicated change"
+		default:
+			known, ok := columns[change.Table]
+			if !ok {
+				known, err = s.replicatedColumns(ctx, change.Table)
+				if err != nil {
+					return nil, err
+				}
+				columns[change.Table] = known
+			}
+			if !known[change.Column] {
+				reason = "unknown replicated table or column"
+			} else if validate != nil {
+				accepted, err := validate(change)
+				if err != nil {
+					return nil, err
+				}
+				if !accepted {
+					reason = "invalid registry change"
+				}
+			}
 		}
+		if reason != "" {
+			rejected = append(rejected, RejectedChange{Version: change.DBVersion, Reason: reason})
+			continue
+		}
+		valid = append(valid, change)
+		values = append(values, value)
 	}
-	values, err := decodeChanges(changes)
-	if err != nil {
-		return err
-	}
-	if err := s.preserveArchiveEdits(ctx, changes, values); err != nil {
-		return err
-	}
-	return Transaction(ctx, s.DB, func(tx *sql.Tx) error {
-		if err := s.applyChanges(ctx, tx, changes, values); err != nil {
-			return err
+	err := s.applyReplication(ctx, valid, values, func(tx *sql.Tx) error {
+		for _, change := range rejected {
+			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO sync_quarantine(peer,version,reason) VALUES (?,?,?)", site, change.Version, change.Reason); err != nil {
+				return err
+			}
 		}
 		return setCursor(ctx, tx, site, next)
 	})
+	if err != nil {
+		return nil, err
+	}
+	return rejected, nil
+}
+
+func (s *Store) replicatedColumns(ctx context.Context, table string) (map[string]bool, error) {
+	rows, err := s.Reader.QueryContext(ctx, `SELECT name FROM pragma_table_info(?)
+ WHERE EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?||'__crsql_clock')`, table, table)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	columns := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		columns[name] = true
+	}
+	if len(columns) > 0 {
+		columns["-1"] = true
+	}
+	return columns, rows.Err()
+}
+
+func (s *Store) applyReplication(ctx context.Context, changes []Change, values []any, finish func(*sql.Tx) error) error {
+	conn, err := s.DB.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	// Keep the writer leased between journaling and applying so a local prune cannot race the clock read.
+	if err := s.preserveArchiveEdits(ctx, conn, changes, values); err != nil {
+		return err
+	}
+	if err := Transaction(ctx, conn, func(tx *sql.Tx) error {
+		if len(changes) > 0 {
+			if err := s.applyChanges(ctx, tx, changes, values); err != nil {
+				return err
+			}
+		}
+		if finish != nil {
+			return finish(tx)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(changes) > 0 {
+		// The extension caches its local clock, which replication advances directly.
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
+	return nil
 }

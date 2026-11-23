@@ -145,7 +145,7 @@ func Projects(ctx context.Context, home string, contents func(context.Context, s
 }
 
 func (g *Gateway) projects(ctx context.Context) ([]ProjectRow, error) {
-	recent, err := recentIn(ctx, g.auth.store.Reader)
+	recent, err := RecentIn(ctx, g.auth.store.Reader)
 	if err != nil {
 		return nil, err
 	}

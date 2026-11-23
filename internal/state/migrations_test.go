@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -309,5 +311,34 @@ func TestAheadSchemaIsNotChanged(t *testing.T) {
 	var version int
 	if err := db.QueryRow("SELECT version FROM schema_meta").Scan(&version); err != nil || version != SchemaVersion()+1 {
 		t.Fatalf("newer schema was changed: %d %v", version, err)
+	}
+}
+
+func TestReplicatedAlterMigrationMarkers(t *testing.T) {
+	files, err := fs.Glob(migrationFiles, "migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enroll := regexp.MustCompile(`(?i)\bcrsql_as_crr\s*\(\s*'([a-z0-9_]+)'\s*\)`)
+	alter := regexp.MustCompile(`(?i)\bALTER\s+TABLE\s+["\x60\[]?([a-z0-9_]+)`)
+	replicated := map[string]bool{}
+	for _, file := range files {
+		body, err := migrationFiles.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, _, _ := strings.Cut(string(body), "\n")
+		sqlText := regexp.MustCompile(`(?m)--[^\n]*`).ReplaceAllString(string(body), "")
+		for _, statement := range strings.Split(sqlText, ";") {
+			for _, match := range alter.FindAllStringSubmatch(statement, -1) {
+				table := strings.ToLower(match[1])
+				if replicated[table] && first != "-- crsql-alter: "+table {
+					t.Errorf("%s alters replicated table %s without its first-line marker", file, table)
+				}
+			}
+			for _, match := range enroll.FindAllStringSubmatch(statement, -1) {
+				replicated[strings.ToLower(match[1])] = true
+			}
+		}
 	}
 }

@@ -33,8 +33,9 @@ const (
 var ErrNotFound = errors.New("registry item not found")
 
 type Store struct {
-	root string
-	sql  *state.Store
+	root    string
+	sql     *state.Store
+	ownsSQL bool
 	// memo holds validated objects by digest and replicated conflict position.
 	memo       sync.Map
 	stamps     stampCache
@@ -46,14 +47,24 @@ func New(home string) (*Store, error) {
 	if strings.TrimSpace(home) == "" {
 		return nil, fmt.Errorf("agentpack home is required")
 	}
-	root, err := filepath.Abs(filepath.Join(home, "registry"))
+	db, err := state.Open(home)
 	if err != nil {
 		return nil, err
 	}
-	return open(root)
+	s, err := NewWithStore(db, filepath.Join(home, "registry"))
+	if err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	s.ownsSQL = true
+	return s, nil
 }
 
-func open(root string) (*Store, error) {
+// NewWithStore opens the Library using a caller-owned state store.
+func NewWithStore(db *state.Store, root string) (*Store, error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("create registry: %w", err)
 	}
@@ -72,18 +83,21 @@ func open(root string) (*Store, error) {
 			return nil, fmt.Errorf("registry storage directory is invalid")
 		}
 	}
-	db, err := state.Open(filepath.Dir(root))
-	if err != nil {
-		return nil, err
-	}
 	s := &Store{root: root, sql: db}
 	if err := s.importLegacy(); err != nil {
-		return nil, errors.Join(err, db.Close())
+		return nil, err
 	}
 	return s, nil
 }
 
-func (s *Store) Close() error { return s.sql.Close() }
+func (s *Store) StateStore() *state.Store { return s.sql }
+
+func (s *Store) Close() error {
+	if s.ownsSQL {
+		return s.sql.Close()
+	}
+	return nil
+}
 
 type Package struct {
 	ID          string `json:"id"`

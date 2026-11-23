@@ -88,7 +88,8 @@ type Gateway struct {
 	done           <-chan struct{}
 	chatTimings    sync.Map // latest browser duration per measurement
 	replicaStatus  sync.Map
-	statePulls     sync.Map // peer → coalesced pull notification
+	statePulls     sync.Map   // peer → coalesced pull notification
+	archiveMu      sync.Mutex // serializes archive copies with edits to archive.db
 	syncTransferMu sync.Mutex
 	syncTransfers  map[string]*stateTransferFile
 	identityMu     sync.Mutex
@@ -142,11 +143,16 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if address, ok := listener.Addr().(*net.TCPAddr); !ok || !address.IP.IsLoopback() && options.PublicURL == "" {
 		return errors.New("remote gateway requires HTTPS")
 	}
-	store, err := state.Open(options.Home)
-	if err != nil {
-		return err
+	var store *state.Store
+	if options.Library.Store != nil {
+		store = options.Library.Store.StateStore()
+	} else {
+		store, err = state.Open(options.Home)
+		if err != nil {
+			return err
+		}
+		defer func() { result = errors.Join(result, store.Close()) }()
 	}
-	defer func() { result = errors.Join(result, store.Close()) }()
 	nodeID, err := store.NodeID(context.Background())
 	if err != nil {
 		return err
@@ -450,7 +456,7 @@ func (g *Gateway) buildHandler() http.Handler {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		if err := ForgetRecent(g.options.Home, SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode}); err != nil {
+		if err := ForgetRecent(r.Context(), g.auth.store, SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode}); err != nil {
 			fail(w, r, err)
 			return
 		}
@@ -613,7 +619,7 @@ func (g *Gateway) buildHandler() http.Handler {
 		}
 		if input.Hidden != nil && *input.Hidden {
 			archived, _ := storedSession(r.Context(), g.auth.store.Reader, r.PathValue("id"))
-			changed, err := HideSession(r.Context(), g.options.Home, r.PathValue("id"))
+			changed, err := HideSession(r.Context(), g.auth.store, g.options.Home, r.PathValue("id"))
 			if changed && err == nil {
 				g.removeArchivedWorktree(r.Context(), archived)
 			}
@@ -638,7 +644,7 @@ func (g *Gateway) buildHandler() http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		info, err := RenameSession(r.Context(), g.options.Home, r.PathValue("id"), name)
+		info, err := RenameSession(r.Context(), g.auth.store, g.options.Home, r.PathValue("id"), name)
 		switch {
 		case errors.Is(err, errSessionNotFound):
 			http.Error(w, "session not found", http.StatusNotFound)

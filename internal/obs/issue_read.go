@@ -356,7 +356,7 @@ func readIssues(ctx context.Context, home, status, fingerprint string) ([]Issue,
 	return result, nil
 }
 
-func ChangeIssue(ctx context.Context, home, fingerprint, status, version, note, who string) (Issue, error) {
+func ChangeIssue(ctx context.Context, store *state.Store, home, fingerprint, status, version, note, who string) (Issue, error) {
 	if status != "open" && status != "resolved" && status != "ignored" {
 		return Issue{}, errors.New("invalid issue status")
 	}
@@ -367,11 +367,6 @@ func ChangeIssue(ctx context.Context, home, fingerprint, status, version, note, 
 	if err != nil {
 		return Issue{}, err
 	}
-	store, err := state.Open(home)
-	if err != nil {
-		return Issue{}, err
-	}
-	defer store.Close()
 	err = state.Transaction(ctx, store.DB, func(tx *sql.Tx) error {
 		sample := ""
 		if issue.Sample != nil {

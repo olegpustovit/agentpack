@@ -17,11 +17,11 @@ even after users are deleted. Do not reset that key when reclaiming an owner.
 archive_event_clocks replicates conflict positions, not chat bodies. Keep each
 clock in one JSON cell so a Main handover cannot mix fields from different
 positions. Archive pruning records original clocks before tombstones. Sync writes immutable
-archive_edits backups before applying a page that could absorb a newer body. Each
-backup is a separate bounded source version; the received page and cursor remain
-atomic. Main deletes each backup only after its archive commits it. These
+archive_edits backups in one transaction before applying a page that could absorb
+a newer body. The received page and cursor commit together. Main deletes each backup only after its archive commits it. These
 independent backups may survive a rejected page and are safe to relay or retry.
-archive_blobs retains required attachment references; archive_cleanup is local.
+archive_blobs retains required attachment references; archive_cleanup is local. sync_quarantine is also local and records rejected
+incoming change versions without copying their values.
 
 
 mcp_credentials and mcp_credential_approvals replicate MCP logins, secrets
