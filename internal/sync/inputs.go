@@ -32,10 +32,11 @@ type launchState struct {
 //	launch        Lock, Manifest, DotAgents, Context, PerTarget[target], cache metadata, Binary
 //	materialized  Lock, Manifest, DotAgents, Context, PerTarget[each target], ambient configuration
 //	synced        materialized and Binary
+//	environment   Content.Selected
+//	preflight     Lock (lock digest), Content.Source (source identity), generation (generation ID)
 //
-// preflight reports Lock as its lock digest. EnvironmentDigest and the
-// preflight source identity hash parsed package content and stay independent
-// of host paths, so they are not built from these file digests.
+// The file digests name host paths; Content does not, so the environment and
+// preflight identities compare across checkouts and machines.
 type Inputs struct {
 	Lock, Manifest string // sha256 of the file bytes, or __missing__
 	DotAgents      string
@@ -44,6 +45,7 @@ type Inputs struct {
 	// PerTarget holds Harness.LaunchInputs for the selected harness, or every harness when none is.
 	PerTarget map[base.Target]string
 	Binary    string
+	Content   Content
 }
 
 // lockDigest is the lockFile digest of the pack.lock the caller already read.
@@ -172,27 +174,12 @@ func hashDotAgents(root string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Antigravity's launch puts the staged bundle here (a link, or a copy where
-	// links are refused). It is Agentpack's own output, not an input.
-	overlay := filepath.Join(root, "plugins", paths.StagedAgentpackBundleName)
 	sizes := map[string]int64{}
 	var files []string
-	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if path == overlay {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !entry.IsDir() {
-			info, err := entry.Info()
-			if err == nil && info.Mode().IsRegular() {
-				files = append(files, path)
-				sizes[path] = info.Size()
-			}
+	if err := walkDotAgents(root, func(_, path string, entry os.DirEntry) error {
+		if info, err := entry.Info(); err == nil && info.Mode().IsRegular() {
+			files = append(files, path)
+			sizes[path] = info.Size()
 		}
 		return nil
 	}); err != nil {
