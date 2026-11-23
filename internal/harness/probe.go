@@ -128,15 +128,6 @@ func (b *cappedProbeBuffer) String() string {
 	return b.buffer.String()
 }
 
-// LookPathEnv returns an executable path from env override or PATH.
-func LookPathEnv(envName, binary string) (string, error) {
-	if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
-
-		return exec.LookPath(value)
-	}
-	return exec.LookPath(binary)
-}
-
 // SaveProbeEvidence retains bounded raw diagnostics privately; support exports must omit these references.
 func SaveProbeEvidence(workspace, receiptID, phase string, result ProbeResult) (string, error) {
 	if len(result.Stdout) > 256<<10 || len(result.Stderr) > 64<<10 {

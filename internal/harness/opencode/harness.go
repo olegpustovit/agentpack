@@ -23,7 +23,7 @@ import (
 const instructionsFile = "agentpack-no-attribution.md"
 
 func New() base.Harness {
-	return base.Definition{Target: base.OpenCode, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, LSP: writeLSP, Guidance: injectGuidance, AfterStage: finalizeSources, Check: verify, Launch: launch, LaunchACP: acpLaunch}
+	return base.Definition{Target: base.OpenCode, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, AfterStage: finalizeSources, Check: verify, Launch: launch, LaunchACP: acpLaunch}
 }
 
 func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
@@ -290,13 +290,6 @@ func AttributionData(seed []byte) ([]byte, error) {
 	return append(data, '\n'), err
 }
 
-func writeMCP(entries mcp.Entries, ctx base.StageContext) error {
-	projection, err := planMCP(entries, ctx)
-	if err != nil {
-		return err
-	}
-	return base.WriteMCPProjection(projection)
-}
 func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
 	root, err := stagedRoot(ctx)
 	if err != nil {

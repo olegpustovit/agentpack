@@ -163,10 +163,11 @@ func TestRestoredExternalDefinitionsKeepNativeStateAndIsolateModes(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := claude.MaterializeSettings(stage); err != nil {
+		overlay, err := claude.SettingsContents([]string{key.project + "-" + key.mode}, claude.KeepAttribution())
+		if err != nil {
 			t.Fatal(err)
 		}
-		if err := claude.SetMCPAllowlist(stage, []string{key.project + "-" + key.mode}); err != nil {
+		if err := claude.WriteSettingsContents(stage, overlay); err != nil {
 			t.Fatal(err)
 		}
 		data, err := os.ReadFile(settingPath)

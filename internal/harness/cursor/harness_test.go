@@ -32,7 +32,11 @@ func TestPrepareFinalizeBuildsFakeHomeAndMergesUserMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	packCommand := "pack"
-	if err := h.WriteMCP(mcp.Entries{"same": {Server: mcp.Server{Command: &packCommand}}, "pack": {Server: mcp.Server{Command: &packCommand}}}, ctx); err != nil {
+	projection, err := h.PlanMCP(mcp.Entries{"same": {Server: mcp.Server{Command: &packCommand}}, "pack": {Server: mcp.Server{Command: &packCommand}}}, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.WriteMCPProjection(projection); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.Finalize(nil, ctx); err != nil {

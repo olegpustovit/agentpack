@@ -15,7 +15,7 @@ import (
 )
 
 func New() base.Harness {
-	return base.Definition{Target: base.Grok, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, LSP: writeLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchACP: acpLaunch, LaunchFinished: persistCredentials}
+	return base.Definition{Target: base.Grok, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchACP: acpLaunch, LaunchFinished: persistCredentials}
 }
 
 func nativeUserRoots(home string) []string {
@@ -215,13 +215,6 @@ func writeAttribution(home string) error {
 	}
 	output += "\n\n<!-- agentpack:no-attribution:begin -->\n" + strings.TrimSpace(base.NoAttributionBody) + "\n<!-- agentpack:no-attribution:end -->\n"
 	return os.WriteFile(path, []byte(output), 0o644)
-}
-func writeMCP(entries mcp.Entries, ctx base.StageContext) error {
-	projection, err := planMCP(entries, ctx)
-	if err != nil {
-		return err
-	}
-	return base.WriteMCPProjection(projection)
 }
 func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
 	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())

@@ -500,7 +500,11 @@ func TestNativeV1CustomDirectoryPluginKeepsItsOrigin(t *testing.T) {
 	}
 	stage.StagedRoots = map[base.Target]string{}
 	pack := "pack-server"
-	if err := writeMCP(mcp.Entries{"shared": {Server: mcp.Server{Command: &pack}}, "pack-only": {Server: mcp.Server{Command: &pack}}}, stage); err != nil {
+	projection, err := planMCP(mcp.Entries{"shared": {Server: mcp.Server{Command: &pack}}, "pack-only": {Server: mcp.Server{Command: &pack}}}, stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.WriteMCPProjection(projection); err != nil {
 		t.Fatal(err)
 	}
 	root, err := stagedRoot(stage)
@@ -783,11 +787,19 @@ func TestNativeV1ProjectModelOverridesGlobalConfig(t *testing.T) {
 	stage.StagedRoots = map[base.Target]string{}
 	packCommand := "pack-server"
 	entries := mcp.Entries{"shared": {Server: mcp.Server{Command: &packCommand}}, "pack-only": {Server: mcp.Server{Command: &packCommand}}}
-	if err := writeMCP(entries, stage); err != nil {
+	projection, err := planMCP(entries, stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.WriteMCPProjection(projection); err != nil {
 		t.Fatal(err)
 	}
 	lsp := map[string]json.RawMessage{"gopls": json.RawMessage(`{"command":"pack-gopls","extensionToLanguage":{".go":"go"}}`), "pack-lsp": json.RawMessage(`{"command":"pack-lsp","extensionToLanguage":{".test":"test"}}`)}
-	if err := writeLSP(lsp, stage); err != nil {
+	lspProjection, err := planLSP(lsp, stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.WriteLSPProjection(lspProjection); err != nil {
 		t.Fatal(err)
 	}
 	staged, err := stagedRoot(stage)
@@ -945,7 +957,11 @@ func TestNativeV2PluginKeepsItsOrigin(t *testing.T) {
 	}
 	stage.StagedRoots = map[base.Target]string{}
 	pack := "pack-server"
-	if err := writeMCP(mcp.Entries{"shared": {Server: mcp.Server{Command: &pack}}, "pack-only": {Server: mcp.Server{Command: &pack}}}, stage); err != nil {
+	projection, err := planMCP(mcp.Entries{"shared": {Server: mcp.Server{Command: &pack}}, "pack-only": {Server: mcp.Server{Command: &pack}}}, stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.WriteMCPProjection(projection); err != nil {
 		t.Fatal(err)
 	}
 	stageRoot, err := stagedRoot(stage)

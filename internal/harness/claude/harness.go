@@ -13,7 +13,7 @@ import (
 )
 
 func New() base.Harness {
-	return base.Definition{Target: base.Claude, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, LSP: writeLSP, Guidance: injectGuidance, AfterStage: finalize, Check: verify, Launch: launch, ACPAdapter: claudeACPPackage, ACPStageAtSession: true, LaunchACP: acpLaunch}
+	return base.Definition{Target: base.Claude, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, AfterStage: finalize, Check: verify, Launch: launch, ACPAdapter: claudeACPPackage, ACPStageAtSession: true, LaunchACP: acpLaunch}
 }
 
 func nativeUserRoots(home string) []string {
@@ -123,13 +123,6 @@ func prepare(ctx base.StageContext) error {
 	return MaterializeSettings(ctx)
 }
 
-func writeMCP(entries mcp.Entries, ctx base.StageContext) error {
-	projection, err := planMCP(entries, ctx)
-	if err != nil {
-		return err
-	}
-	return base.WriteMCPProjection(projection)
-}
 func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
 	root, err := stagedRoot(ctx)
 	if err != nil {

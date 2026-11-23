@@ -16,7 +16,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -276,7 +275,7 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 	}
 
 	if options.Target != nil {
-		if path, lookErr := lookPathForTarget(*options.Target); lookErr != nil {
+		if path, lookErr := base.ResolveBinary(options.Target.Binary()); lookErr != nil {
 			report.Findings = append(report.Findings, environment.Finding{
 				Code:     "BINARY_MISSING",
 				Severity: environment.SeverityError,
@@ -1726,37 +1725,6 @@ func collectHookFindings(workspace, definitionRoot string, lock lockfile.PackLoc
 	return findings, nil
 }
 
-func lookPathForTarget(target base.Target) (string, error) {
-	envName, binary := "", string(target)
-	switch target {
-	case base.Claude:
-		envName, binary = "CLAUDE_CODE_PATH", "claude"
-	case base.OpenCode:
-		envName, binary = "OPENCODE_PATH", "opencode"
-	case base.Codex:
-		envName, binary = "CODEX_PATH", "codex"
-	case base.OMP:
-		envName, binary = "OMP_PATH", "omp"
-	case base.Grok:
-		envName, binary = "GROK_PATH", "grok"
-	case base.Cursor:
-		envName, binary = "CURSOR_AGENT_PATH", "cursor-agent"
-	case base.Agy:
-		envName, binary = "AGY_PATH", "agy"
-	}
-	if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
-		info, err := os.Stat(value)
-		if err != nil {
-			return "", fmt.Errorf("native CLI configured by %s is unavailable: %w", envName, err)
-		}
-		if !info.Mode().IsRegular() {
-			return "", fmt.Errorf("native CLI configured by %s is not a regular file", envName)
-		}
-		return value, nil
-	}
-	return exec.LookPath(binary)
-}
-
 func looksLikeSecret(key string) bool {
 	upper := strings.ToUpper(key)
 	return strings.Contains(upper, "KEY") || strings.Contains(upper, "TOKEN") ||
@@ -1839,7 +1807,7 @@ func populateFreshness(report *environment.Report, options PreflightOptions, eff
 		}
 		report.ExpectedTarget.AdapterRevision = capability["adapter_revision"]
 		report.ExpectedTarget.CapabilityRevision = capability["capability_revision"]
-		if path, err := lookPathForTarget(*options.Target); err == nil {
+		if path, err := base.ResolveBinary(options.Target.Binary()); err == nil {
 			identity, err := environment.ExecutableIdentity(path)
 			if err == nil {
 				report.ExpectedTarget.ExecutableIdentity = identity

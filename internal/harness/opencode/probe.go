@@ -45,7 +45,7 @@ type listedSkill struct {
 // ProbeConfigDir samples which file OpenCode resolves for each packaged skill name in a session
 // started in the checkout. expected names the packaged skills of the plan.
 func ProbeConfigDir(ctx context.Context, configDir, workspace, sourceID, lockDigest, mode string, expected ...string) (environment.Receipt, error) {
-	exe, err := base.LookPathEnv(base.OpenCode.Binary())
+	exe, err := base.ResolveBinary(base.OpenCode.Binary())
 	if err != nil {
 		return environment.Receipt{}, err
 	}

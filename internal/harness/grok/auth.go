@@ -1,26 +1,44 @@
 package grok
 
 import (
-	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/gofrs/flock"
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 var credentialFiles = []string{"auth.json", "mcp_credentials.json"}
 
-func loadSharedCredentials(home string) error {
+func lockSharedCredentials() (string, *flock.Flock, error) {
 	shared, err := paths.SharedGrokCredentialsDir()
+	if err != nil {
+		return "", nil, err
+	}
+	if err := os.MkdirAll(shared, 0o700); err != nil {
+		return "", nil, err
+	}
+	lock := flock.New(filepath.Join(shared, ".lock"), flock.SetPermissions(0o600))
+	if err := lock.Lock(); err != nil {
+		return "", nil, err
+	}
+	return shared, lock, nil
+}
+
+func loadSharedCredentials(home string) error {
+	shared, lock, err := lockSharedCredentials()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(shared, 0o700); err != nil {
-		return err
-	}
+	defer lock.Unlock()
+	return loadCredentials(home, shared)
+}
+
+func loadCredentials(home, shared string) error {
 	for _, name := range credentialFiles {
 		global := filepath.Join(shared, name)
 		local := filepath.Join(home, name)
@@ -72,22 +90,21 @@ func loadSharedCredentials(home string) error {
 
 // Grok rotates its refresh token when the access token expires, so a token refreshed in a throwaway
 // home must be kept: the old one is already spent, and losing the new one signs the user out.
-func keepRefreshedCredentials(home string) {
-	shared, err := paths.SharedGrokCredentialsDir()
-	if err != nil {
-		return
-	}
+func keepRefreshedCredentials(home, shared string, loaded map[string][32]byte) error {
 	for _, name := range credentialFiles {
 		local, global := filepath.Join(home, name), filepath.Join(shared, name)
 		data, err := os.ReadFile(local)
 		if err != nil || !json.Valid(data) {
 			continue
 		}
-		if existing, err := os.ReadFile(global); err == nil && bytes.Equal(existing, data) {
+		if sha256.Sum256(data) == loaded[name] {
 			continue
 		}
-		_ = copyCredential(local, global)
+		if err := copyCredential(local, global); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func persistCredentials(ctx base.LaunchContext) error {
@@ -95,13 +112,11 @@ func persistCredentials(ctx base.LaunchContext) error {
 	if err != nil {
 		return err
 	}
-	shared, err := paths.SharedGrokCredentialsDir()
+	shared, lock, err := lockSharedCredentials()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(shared, 0o700); err != nil {
-		return err
-	}
+	defer lock.Unlock()
 	for _, name := range credentialFiles {
 		local, global := filepath.Join(home, name), filepath.Join(shared, name)
 		localInfo, err := os.Stat(local)

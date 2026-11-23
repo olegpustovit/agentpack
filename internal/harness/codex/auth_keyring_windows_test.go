@@ -35,3 +35,13 @@ func TestWindowsCodexKeyringInterop(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWindowsKeyringEncoding(t *testing.T) {
+	first := keyringAccount(t.TempDir())
+	if got := codexKeyringTarget(authKeyringService, first); got != first+".Codex Auth" {
+		t.Fatalf("Windows Codex keyring target = %q", got)
+	}
+	if got, err := decodeCodexWindowsPassword([]byte{'k', 0, 'e', 0, 'y', 0}); err != nil || got != "key" {
+		t.Fatalf("Windows Codex keyring password = %q, %v", got, err)
+	}
+}

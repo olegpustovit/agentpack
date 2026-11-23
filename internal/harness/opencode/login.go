@@ -28,7 +28,7 @@ var copilotCode = regexp.MustCompile(`\b[A-Z0-9]{4}-[A-Z0-9]{4}\b`)
 // Account lists the providers OpenCode holds credentials for: v2 reports them as JSON, v1 keeps
 // them as the keys of its auth.json.
 func Account(ctx context.Context) base.Account {
-	exe, err := base.LookPathEnv(base.OpenCode.Binary())
+	exe, err := base.ResolveBinary(base.OpenCode.Binary())
 	if err != nil {
 		return base.Account{}
 	}
@@ -82,7 +82,7 @@ func Login(method string) (base.LoginFlow, error) {
 	if !slices.ContainsFunc(LoginMethods, func(provider base.LoginMethod) bool { return provider.ID == method }) {
 		return base.LoginFlow{}, fmt.Errorf("choose a provider to sign OpenCode in to")
 	}
-	exe, err := base.LookPathEnv(base.OpenCode.Binary())
+	exe, err := base.ResolveBinary(base.OpenCode.Binary())
 	if err != nil {
 		return base.LoginFlow{}, err
 	}

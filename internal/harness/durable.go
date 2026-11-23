@@ -106,14 +106,14 @@ func RecoverWithoutOverwrite(source, destination, conflictsRoot string) error {
 }
 
 func recoverFile(source, destination, conflictsRoot, relative string) error {
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return err
 	}
 	before, err := os.Stat(source)
 	if err != nil {
 		return err
 	}
-	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		input, openErr := os.Open(source)
 		if openErr != nil {
@@ -160,14 +160,14 @@ func recoverFile(source, destination, conflictsRoot, relative string) error {
 	if existing, err := hashFile(conflict); err == nil && existing == sourceHash {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(conflict), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(conflict), 0o700); err != nil {
 		return err
 	}
 	data, err := os.ReadFile(source)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(conflict, data, 0o644)
+	return os.WriteFile(conflict, data, 0o600)
 }
 
 func hashFile(path string) ([32]byte, error) {

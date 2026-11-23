@@ -50,7 +50,7 @@ func (runner Runner) runMCP(ctx context.Context, root string, arguments []string
 		if err != nil {
 			return err
 		}
-		lock, err := lockfile.Load(root)
+		lock, err := runner.Service.LoadLock(root)
 		if err != nil {
 			return err
 		}

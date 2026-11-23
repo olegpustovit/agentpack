@@ -40,7 +40,7 @@ func ProbeHome(ctx context.Context, codexHome, workspace, sourceID, lockDigest, 
 	if len(packaged) > 0 {
 		plan = packaged[0]
 	}
-	exe, err := base.LookPathEnv(base.Codex.Binary())
+	exe, err := base.ResolveBinary(base.Codex.Binary())
 	if err != nil {
 		return environment.Receipt{}, err
 	}

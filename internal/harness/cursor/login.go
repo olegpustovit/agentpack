@@ -13,7 +13,7 @@ var LoginMethods = []base.LoginMethod{{ID: "cursor", Label: "Cursor account"}}
 
 // Account looks for the token Cursor CLI keeps, the same one the usage probe reads.
 func Account(context.Context) base.Account {
-	if _, err := base.LookPathEnv(base.Cursor.Binary()); err != nil {
+	if _, err := base.ResolveBinary(base.Cursor.Binary()); err != nil {
 		return base.Account{}
 	}
 	account := base.Account{Installed: true}
@@ -27,7 +27,7 @@ func Account(context.Context) base.Account {
 
 // Logout runs `cursor-agent logout` with the real HOME, where Cursor keeps its login.
 func Logout(ctx context.Context) error {
-	exe, err := base.LookPathEnv(base.Cursor.Binary())
+	exe, err := base.ResolveBinary(base.Cursor.Binary())
 	if err != nil {
 		return err
 	}
@@ -37,7 +37,7 @@ func Logout(ctx context.Context) error {
 // Login runs `cursor-agent login` with the real HOME, where Cursor keeps its login. With
 // NO_OPEN_BROWSER it prints the link and waits for the browser sign-in; nothing is pasted back.
 func Login(string) (base.LoginFlow, error) {
-	exe, err := base.LookPathEnv(base.Cursor.Binary())
+	exe, err := base.ResolveBinary(base.Cursor.Binary())
 	if err != nil {
 		return base.LoginFlow{}, err
 	}

@@ -182,7 +182,8 @@ func bootstrapLibraryProjects(home string, store *registry.Store, node string) e
 		if _, err := manifest.Load(definition); err != nil {
 			continue
 		}
-		if _, err := lockfile.Load(definition); err != nil {
+		locked, err := lockfile.LoadUnguarded(paths.LockPath(definition))
+		if err != nil || cache.CheckLockEntries(locked) != nil {
 			continue
 		}
 		capture, err := registryCapture(definition, entry.Directory, node, entry.Mode)
@@ -290,7 +291,7 @@ func registryDraftState(store *registry.Store, draft registry.Draft) (registry.D
 	if err != nil {
 		return state, err
 	}
-	locked, err := lockfile.Load(packContext.DefinitionRoot)
+	locked, err := lockfile.LoadUnguarded(paths.LockPath(packContext.DefinitionRoot))
 	if err != nil {
 		return state, err
 	}

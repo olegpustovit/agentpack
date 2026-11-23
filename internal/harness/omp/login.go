@@ -25,7 +25,7 @@ var LoginMethods = []base.LoginMethod{
 // logins it doesn't store (Claude Code's, for one), so its own credential table isn't enough.
 // Running it refreshes OMP's model cache, as any omp run does.
 func Account(ctx context.Context) base.Account {
-	binary, err := base.LookPathEnv(base.OMP.Binary())
+	binary, err := base.ResolveBinary(base.OMP.Binary())
 	if err != nil {
 		return base.Account{}
 	}
@@ -58,7 +58,7 @@ func Login(method string) (base.LoginFlow, error) {
 	if !slices.ContainsFunc(LoginMethods, func(provider base.LoginMethod) bool { return provider.ID == method }) {
 		return base.LoginFlow{}, fmt.Errorf("choose a provider to sign Oh My Pi in to")
 	}
-	binary, err := base.LookPathEnv(base.OMP.Binary())
+	binary, err := base.ResolveBinary(base.OMP.Binary())
 	if err != nil {
 		return base.LoginFlow{}, err
 	}

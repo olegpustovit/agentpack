@@ -22,6 +22,7 @@ import (
 )
 
 const MaxSpoolBytes = 16 << 20
+const spoolSegmentBytes = 256 << 10
 
 type SpoolOptions struct {
 	Proc string
@@ -76,6 +77,8 @@ func (s *Spool) run() {
 		}
 	}
 	ready := false
+	var path string
+	var minute int64
 	write := func(event Event) {
 		if !ready {
 			if err := paths.EnsurePrivateDirectory(s.directory); err != nil {
@@ -83,14 +86,6 @@ func (s *Spool) run() {
 				return
 			}
 			ready = true
-		}
-		path := filepath.Join(s.directory, fmt.Sprintf("%s-%d-%d.ndjson", s.options.Proc, os.Getpid(), s.options.Now().Unix()/60))
-		if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
-			record(errors.New("spool must be a regular file"))
-			return
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			record(err)
-			return
 		}
 		data, err := json.Marshal(event)
 		if err != nil {
@@ -103,11 +98,37 @@ func (s *Spool) run() {
 			return
 		}
 		defer lock.Unlock()
-		if _, _, err := trimSpool(s.directory, MaxSpoolBytes-int64(len(data)+1)); err != nil {
-			record(err)
-			return
+		currentMinute := s.options.Now().Unix() / 60
+		if currentMinute == minute && path != "" {
+			info, err := os.Lstat(path)
+			switch {
+			case err == nil && !info.Mode().IsRegular():
+				record(errors.New("spool must be a regular file"))
+				return
+			case err == nil && info.Size()+int64(len(data)+1) <= spoolSegmentBytes:
+			case err == nil || errors.Is(err, os.ErrNotExist):
+				path = ""
+			default:
+				record(err)
+				return
+			}
+		} else {
+			path = ""
+			minute = currentMinute
 		}
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		var file *os.File
+		if path == "" {
+			if _, _, err := trimSpool(s.directory, MaxSpoolBytes-spoolSegmentBytes); err != nil {
+				record(err)
+				return
+			}
+			file, err = os.CreateTemp(s.directory, fmt.Sprintf("%s-%d.segment-*-%d.ndjson", s.options.Proc, os.Getpid(), minute))
+			if err == nil {
+				path = file.Name()
+			}
+		} else {
+			file, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+		}
 		if err != nil {
 			record(err)
 			return
@@ -216,7 +237,8 @@ func (s *Store) IngestSpool(ctx context.Context) (SpoolStats, error) {
 	return stats, nil
 }
 
-// Callers hold the spool lock through pruning and any append that reserves space.
+// Reserve each segment's capacity so concurrent writers can append under the
+// lock without scanning the directory on every event.
 func trimSpool(directory string, limit int64) (SpoolStats, []spoolFile, error) {
 	var stats SpoolStats
 	files, err := spoolFiles(directory)
@@ -225,19 +247,27 @@ func trimSpool(directory string, limit int64) (SpoolStats, []spoolFile, error) {
 	}
 	var total int64
 	for _, file := range files {
-		total += file.size
+		total += spoolCapacity(file)
 	}
 	for len(files) > 0 && total > limit {
 		file := files[0]
 		if err := os.Remove(filepath.Join(directory, file.name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return stats, nil, err
 		}
-		total -= file.size
+		total -= spoolCapacity(file)
 		stats.DroppedFiles++
 		stats.DroppedBytes += file.size
 		files = files[1:]
 	}
 	return stats, files, nil
+}
+
+// shortcut: closed segments keep their reservation until ingestion, track active writers if retention is too short.
+func spoolCapacity(file spoolFile) int64 {
+	if strings.Contains(file.name, ".segment-") {
+		return max(file.size, spoolSegmentBytes)
+	}
+	return file.size
 }
 
 func (s *Store) ingestSpoolFile(ctx context.Context, path string) (SpoolStats, error) {

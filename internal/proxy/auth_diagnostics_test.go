@@ -28,7 +28,7 @@ func TestAuthPrefersEnvironmentAndLoadsCodexTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Token != "access" || state.RefreshToken != "refresh" || state.AccountID != "acct" || state.URL != codexEndpoint {
+	if state.Token != "access" || state.AccountID != "acct" || state.URL != codexEndpoint {
 		t.Fatalf("state=%#v", state)
 	}
 }
@@ -58,5 +58,33 @@ func TestDiagnosticsWritesJSONLAndLatest(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"kind":"test"`) {
 		t.Fatalf("log=%s", data)
+	}
+}
+
+func TestUnauthorizedRereadsCodexCredentials(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	path := filepath.Join(t.TempDir(), "auth.json")
+	t.Setenv("AGENTPACK_PROXY_AUTH_JSON", path)
+	write := func(tokens string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(tokens), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"tokens":{"access_token":"old","account_id":"first"}}`)
+	auth, err := LoadUpstreamAuth()
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(`{"tokens":{"access_token":"new","account_id":"second"}}`)
+	if updated, err := auth.RefreshAfterUnauthorized(); err != nil || !updated {
+		t.Fatalf("reread = %t, %v", updated, err)
+	}
+	snapshot, _ := auth.Snapshot()
+	if snapshot.AccessToken != "new" || snapshot.AccountID != "second" {
+		t.Fatal("snapshot did not pick up the new credentials")
+	}
+	if updated, err := auth.RefreshAfterUnauthorized(); updated || err == nil || !strings.Contains(err.Error(), "no Codex refresh endpoint") {
+		t.Fatalf("rejected unchanged credentials = %t, %v", updated, err)
 	}
 }

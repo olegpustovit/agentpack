@@ -195,12 +195,8 @@ type Harness interface {
 	PreReset(StageContext) error
 	BeginRebuild(StageContext) (RebuildTransaction, error)
 	Prepare(StageContext) error
-	WriteMCP(mcp.Entries, StageContext) error
 	PlanMCP(mcp.Entries, StageContext) (MCPProjection, error)
 	PlanLSP(map[string]json.RawMessage, StageContext) (LSPProjection, error)
-	// WriteLSP writes language servers (Claude Code format, by name); it
-	// returns ErrNoLSP when the agent has no language server setting.
-	WriteLSP(map[string]json.RawMessage, StageContext) error
 	InjectGuidance(string, StageContext) error
 	Finalize(mcp.Entries, StageContext) error
 	FinalizeWorkspaceOverlay(StageContext) error
@@ -220,10 +216,8 @@ type Definition struct {
 	BeforeReset       func(StageContext) error
 	Begin             func(StageContext) (RebuildTransaction, error)
 	Setup             func(StageContext) error
-	MCP               func(mcp.Entries, StageContext) error
 	ProjectMCP        func(mcp.Entries, StageContext) (MCPProjection, error)
 	ProjectLSP        func(map[string]json.RawMessage, StageContext) (LSPProjection, error)
-	LSP               func(map[string]json.RawMessage, StageContext) error
 	Guidance          func(string, StageContext) error
 	AfterStage        func(mcp.Entries, StageContext) error
 	WorkspaceOverlay  func(StageContext) error
@@ -273,20 +267,6 @@ func (definition Definition) Prepare(ctx StageContext) error {
 	}
 	return definition.Setup(ctx)
 }
-func (definition Definition) WriteMCP(entries mcp.Entries, ctx StageContext) error {
-	if definition.ProjectMCP != nil {
-		projection, err := definition.ProjectMCP(entries, ctx)
-		if err != nil {
-			return err
-		}
-		return WriteMCPProjection(projection)
-	}
-	if definition.MCP != nil {
-		return definition.MCP(entries, ctx)
-	}
-	return nil
-}
-
 func WriteMCPProjection(projection MCPProjection) error {
 	for _, file := range projection.Files {
 		if err := os.MkdirAll(filepath.Dir(file.Path), 0o755); err != nil {
@@ -320,12 +300,6 @@ func (definition Definition) PlanLSP(servers map[string]json.RawMessage, ctx Sta
 // be configured for it.
 var ErrNoLSP = errors.New("no language server setting")
 
-func (definition Definition) WriteLSP(servers map[string]json.RawMessage, ctx StageContext) error {
-	if definition.LSP == nil {
-		return ErrNoLSP
-	}
-	return definition.LSP(servers, ctx)
-}
 func (definition Definition) InjectGuidance(blob string, ctx StageContext) error {
 	if definition.Guidance != nil {
 		return definition.Guidance(blob, ctx)

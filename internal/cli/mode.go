@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"os"
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
@@ -22,8 +24,10 @@ func (runner Runner) runMode(root string, arguments []string, quiet bool) error 
 	}
 	action, args := arguments[0], arguments[1:]
 	var locked *lockfile.PackLock
-	if value, loadErr := lockfile.Load(root); loadErr == nil {
+	if value, loadErr := runner.Service.LoadLock(root); loadErr == nil {
 		locked = &value
+	} else if !errors.Is(loadErr, os.ErrNotExist) {
+		return loadErr
 	}
 	catalog, err := modecatalog.BuildCapabilityCatalog(root, locked, project)
 	if err != nil {
