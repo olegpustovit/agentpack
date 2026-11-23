@@ -80,7 +80,7 @@ func guardArchiveMarkers(ctx context.Context, tx *sql.Tx, changes []Change, valu
 		for id := range markers {
 			var pending bool
 			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions WHERE id=? AND node_id=`+LocalNodeSQL+`
- AND conversation_state IN ('working','needs_you'))`, id).Scan(&pending); err != nil {
+ AND ended_at=0 AND conversation_state IN ('working','needs_you'))`, id).Scan(&pending); err != nil {
 				return err
 			}
 			if pending {
