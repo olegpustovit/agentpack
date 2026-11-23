@@ -24,9 +24,6 @@ func DependencyKey(module, owner, repo, path string) string {
 }
 
 func ClassifyMaterialized(root, displayURL string, source githubsource.Source, commit, cacheKey string) (lockfile.Package, error) {
-	if err := NormalizePluginLayout(root); err != nil {
-		return lockfile.Package{}, err
-	}
 	kind := lockfile.PackageSkill
 	if HasPluginManifest(root) {
 		if err := EnsurePlugin(root); err != nil {

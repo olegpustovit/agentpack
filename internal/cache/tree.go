@@ -4,93 +4,73 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 
+	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
-func CopyPackageDirToCache(source, identityPrefix string) (cacheKey, commit, destination string, err error) {
+// CopyPackageDirToCache installs the source files of a local directory (see
+// SourceFiles: no links, ignored files left out). The cache key and commit
+// derive from those files, so an unchanged directory keeps its entry as it is.
+func CopyPackageDirToCache(source, identityPrefix string) (cacheKey, commit, destination, digest string, err error) {
 	if _, err := paths.EnsureUserAgentpackLayout(); err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
-	cacheRoot, err := paths.CacheDir()
+	temporary, digest, err := stage(lockfile.Package{URL: FileURL(source)}, func(directory string) (err error) {
+		commit, err = hashAndCopySourceTree(source, directory)
+		return err
+	})
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
-	temporary, err := os.MkdirTemp(cacheRoot, ".tmp-copy-")
-	if err != nil {
-		return "", "", "", fmt.Errorf("create cache temporary directory: %w", err)
-	}
-	keepTemporary := false
-	defer func() {
-		if !keepTemporary {
-			_ = os.RemoveAll(temporary)
-		}
-	}()
-	commit, err = hashAndCopySourceTree(source, temporary)
-	if err != nil {
-		return "", "", "", err
-	}
+	defer os.RemoveAll(temporary)
 	cacheKey = ComputeKey(identityPrefix + "\x00" + commit)
-	destination, err = EntryDir(cacheKey)
-	if err != nil {
-		return "", "", "", err
+	if destination, err = EntryDir(cacheKey); err != nil {
+		return "", "", "", "", err
 	}
-	if err := os.RemoveAll(destination); err != nil {
-		return "", "", "", fmt.Errorf("remove existing cache entry %s: %w", destination, err)
+	if _, err := swap(temporary, destination, digest); err != nil {
+		return "", "", "", "", err
 	}
-	if err := os.Rename(temporary, destination); err != nil {
-		if copyErr := copyMergeTree(temporary, destination); copyErr != nil {
-			return "", "", "", errors.Join(fmt.Errorf("rename cache entry: %w", err), copyErr)
-		}
-		if removeErr := os.RemoveAll(temporary); removeErr != nil {
-			return "", "", "", fmt.Errorf("remove copied cache temporary directory: %w", removeErr)
-		}
-	}
-	keepTemporary = true
-	if err := NormalizePluginLayout(destination); err != nil {
-		return "", "", "", err
-	}
-	return cacheKey, commit, destination, nil
+	return cacheKey, commit, destination, digest, nil
 }
 
-// copyMergeTree copies source over destination, following symbolic links. A
-// link back to a directory that is being copied is skipped, so a cycle of
-// links cannot recurse without end.
-func copyMergeTree(source, destination string) error {
-	return copyMergeTreeGuarded(source, destination, make(map[string]bool))
-}
-
-func copyMergeTreeGuarded(source, destination string, open map[string]bool) error {
-	resolved, err := filepath.EvalSymlinks(source)
-	if errors.Is(err, os.ErrNotExist) {
+// copyInside copies the file or directory source of root into destination,
+// following links that stay inside root; os.Root refuses any other. A link
+// back to a directory being copied is skipped, so a cycle cannot recurse.
+func copyInside(root *os.Root, source, destination string, open []os.FileInfo) error {
+	info, err := root.Stat(source)
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("resolve copy source %s: %w", source, err)
-	}
-	info, err := os.Stat(resolved)
-	if err != nil {
-		return fmt.Errorf("inspect copy source %s: %w", resolved, err)
+		return fmt.Errorf("inspect copy source %s: %w", source, err)
 	}
 	if !info.IsDir() {
-		return copyFile(resolved, destination)
+		input, err := root.Open(source)
+		if err != nil {
+			return fmt.Errorf("open copy source %s: %w", source, err)
+		}
+		defer input.Close()
+		return copyReader(input, destination)
 	}
-	if open[resolved] {
-		return nil
+	for _, ancestor := range open {
+		if os.SameFile(ancestor, info) {
+			return nil
+		}
 	}
-	open[resolved] = true
-	defer delete(open, resolved)
 	if err := os.MkdirAll(destination, 0o755); err != nil {
 		return fmt.Errorf("create copy destination %s: %w", destination, err)
 	}
-	entries, err := os.ReadDir(resolved)
+	entries, err := fs.ReadDir(root.FS(), source)
 	if err != nil {
-		return fmt.Errorf("read copy source %s: %w", resolved, err)
+		return fmt.Errorf("read copy source %s: %w", source, err)
 	}
 	for _, entry := range entries {
-		if err := copyMergeTreeGuarded(filepath.Join(resolved, entry.Name()), filepath.Join(destination, entry.Name()), open); err != nil {
+		if err := copyInside(root, path.Join(source, entry.Name()), filepath.Join(destination, entry.Name()), append(open, info)); err != nil {
 			return err
 		}
 	}
@@ -98,26 +78,25 @@ func copyMergeTreeGuarded(source, destination string, open map[string]bool) erro
 }
 
 func copyFile(source, destination string) error {
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-		return fmt.Errorf("create copy parent %s: %w", filepath.Dir(destination), err)
-	}
 	input, err := os.Open(source)
 	if err != nil {
 		return fmt.Errorf("open copy source %s: %w", source, err)
 	}
+	defer input.Close()
+	return copyReader(input, destination)
+}
+
+func copyReader(input io.Reader, destination string) error {
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return fmt.Errorf("create copy parent %s: %w", filepath.Dir(destination), err)
+	}
 	output, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
-		input.Close()
 		return fmt.Errorf("create copy destination %s: %w", destination, err)
 	}
 	_, copyErr := io.Copy(output, input)
-	inputCloseErr := input.Close()
-	outputCloseErr := output.Close()
-	if copyErr != nil {
-		return fmt.Errorf("copy %s to %s: %w", source, destination, copyErr)
-	}
-	if inputCloseErr != nil || outputCloseErr != nil {
-		return errors.Join(inputCloseErr, outputCloseErr)
+	if err := errors.Join(copyErr, output.Close()); err != nil {
+		return fmt.Errorf("copy to %s: %w", destination, err)
 	}
 	return nil
 }

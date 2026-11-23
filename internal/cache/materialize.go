@@ -3,6 +3,7 @@ package cache
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -68,42 +69,36 @@ func MaterializeGitHubTree(ctx context.Context, client *http.Client, source gith
 	if err != nil {
 		return lockfile.Package{}, err
 	}
-	fetched := false
+	displayURL = githubsource.CanonicalTreeURL(effective)
+	digest := ""
 	if !IsPackageRoot(out) {
-		fetched = true
-		if len(prefetched) == 0 {
-			prefetched, err = githubsource.DownloadTarball(ctx, client, source.Owner, source.Repo, commit)
-			if err != nil {
-				return lockfile.Package{}, err
+		fill := func(directory string) error {
+			if len(prefetched) == 0 {
+				if prefetched, err = githubsource.DownloadTarball(ctx, client, source.Owner, source.Repo, commit); err != nil {
+					return err
+				}
 			}
+			written, err := githubsource.ExtractTarballWithPrefix(bytes.NewReader(prefetched), effective.Path, directory)
+			if err != nil {
+				return err
+			}
+			if written == 0 && effective.Path != "" {
+				return fmt.Errorf("no files matched repository path %q in %s/%s archive at %.8s", effective.Path, effective.Owner, effective.Repo, commit)
+			}
+			if !IsPackageRoot(directory) {
+				// Not a package by itself: the repository's catalog entry may define it.
+				_, err = writeCatalogManifest(prefetched, effective, directory)
+			}
+			return err
 		}
-		written, err := githubsource.ExtractTarballWithPrefix(bytes.NewReader(prefetched), effective.Path, out)
-		if err != nil {
+		if digest, _, err = Install(lockfile.Package{URL: displayURL, CacheKey: cacheKey}, fill); err != nil {
 			return lockfile.Package{}, err
 		}
-		if written == 0 && effective.Path != "" {
-			return lockfile.Package{}, fmt.Errorf("no files matched repository path %q in %s/%s archive at %.8s", effective.Path, effective.Owner, effective.Repo, commit)
-		}
-		if !IsPackageRoot(out) {
-			// Not a package by itself: the repository's catalog entry may
-			// define it. Leave nothing in the cache if that fails.
-			if _, err := writeCatalogManifest(prefetched, effective, out); err != nil {
-				_ = os.RemoveAll(out)
-				return lockfile.Package{}, err
-			}
-		}
 	}
-	pkg, err := ClassifyMaterialized(out, githubsource.CanonicalTreeURL(effective), effective, commit, cacheKey)
-	if err != nil && fetched {
-		// Nothing that failed to classify stays where a later command would take it for a package.
-		_ = os.RemoveAll(out)
-	}
-	if err != nil || !fetched {
-		return pkg, err
-	}
+	pkg, err := ClassifyMaterialized(out, displayURL, effective, commit, cacheKey)
 	// Only bytes downloaded by this call may set the hash; an entry that was
 	// already cached is left for the resolver to verify against the lock.
-	pkg.ContentHash, err = TreeDigest(out)
+	pkg.ContentHash = digest
 	return pkg, err
 }
 
@@ -128,12 +123,15 @@ func GitHubRestore(ctx context.Context, client *http.Client) RemoteRestoreFunc {
 		if err != nil {
 			return err
 		}
+		// Whatever a peer left is not part of the archive.
+		if err := errors.Join(os.RemoveAll(destination), os.Mkdir(destination, 0o755)); err != nil {
+			return err
+		}
 		written, err := githubsource.ExtractTarballWithPrefix(bytes.NewReader(data), pkg.Path, destination)
 		if err != nil {
 			return err
 		}
 		if written == 0 && pkg.Path != "" {
-			_ = os.RemoveAll(destination)
 			return fmt.Errorf("no files matched repository path %q", pkg.Path)
 		}
 		if !IsPackageRoot(destination) {

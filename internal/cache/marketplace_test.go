@@ -146,7 +146,7 @@ func TestCopyPackageDirToCacheUsesContentAddressedDestination(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("# Skill\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	key, commit, destination, err := CopyPackageDirToCache(source, "path:"+source)
+	key, commit, destination, _, err := CopyPackageDirToCache(source, "path:"+source)
 	if err != nil {
 		t.Fatal(err)
 	}

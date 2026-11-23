@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -103,31 +102,6 @@ func materializeTarball(t *testing.T, files map[string]string) []byte {
 		t.Fatal(err)
 	}
 	return output.Bytes()
-}
-
-func TestCopyMergeTreeStopsAtALinkBackToADirectoryBeingCopied(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX links")
-	}
-	source, destination := t.TempDir(), filepath.Join(t.TempDir(), "copy")
-	writeTestFile(t, filepath.Join(source, "skills", "demo", "SKILL.md"), "# Demo")
-	if err := os.Symlink("..", filepath.Join(source, "skills", "loop")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink("demo", filepath.Join(source, "skills", "alias")); err != nil {
-		t.Fatal(err)
-	}
-	if err := copyMergeTree(source, destination); err != nil {
-		t.Fatal(err)
-	}
-	for _, relative := range []string{"skills/demo/SKILL.md", "skills/alias/SKILL.md"} {
-		if _, err := os.Stat(filepath.Join(destination, filepath.FromSlash(relative))); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(destination, "skills", "loop", "skills")); err == nil {
-		t.Fatal("the link back to the copied directory was followed")
-	}
 }
 
 // gopls-lsp, lua-lsp, php-lsp and pyright-lsp of anthropics/claude-plugins-official

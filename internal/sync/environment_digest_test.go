@@ -55,7 +55,7 @@ func TestEnvironmentDigestUsesModeInputsAndVerifiesIntegrity(t *testing.T) {
 	var cached string
 	copyPackage := func() {
 		t.Helper()
-		key, commit, directory, err := cache.CopyPackageDirToCache(source, "digest-test")
+		key, commit, directory, _, err := cache.CopyPackageDirToCache(source, "digest-test")
 		if err != nil {
 			t.Fatal(err)
 		}
