@@ -44,7 +44,9 @@ function RenameForm({ row, onDone }: { row: ListedSession; onDone: () => void })
     mutationFn: (next: string) =>
       api<SessionInfo>(`/api/sessions/${encodeURIComponent(row.id)}`, { machine: row.machine, method: "PATCH", body: { name: next } }),
     // The list shows the new name at once; the sheet stays open so a refusal still shows under the field.
-    onMutate: (next) => {
+    // A refetch already in flight would land the old name over the optimistic one.
+    onMutate: async (next) => {
+      await queryClient.cancelQueries({ queryKey: listKey, exact: true })
       const previous = queryClient.getQueryData<SessionInfo[]>(listKey)?.find((item) => item.id === row.id)?.name
       setListedName(next)
       return { previous }

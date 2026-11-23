@@ -7,6 +7,7 @@ import type { SessionInfo } from "@/lib/api-types"
 import { saveStartChoices } from "./choices"
 import { sessionsQuery } from "./queries"
 import { reusesOperationId, startSessionBody, type SessionView } from "./rules"
+import { onSignOut } from "@/lib/persist"
 
 // `prompt` is the new chat's first queued message.
 // `worktree` is "new", an existing worktree of directory, or "" for the folder itself (remembered as the
@@ -18,6 +19,7 @@ function requestedSessionID(input: StartInput, intentID: string): string | undef
 }
 
 const chatClaims = new Map<string, Promise<SessionInfo>>()
+onSignOut(() => chatClaims.clear())
 
 export function pendingChatClaim(id: string): Promise<SessionInfo> | undefined {
   return chatClaims.get(id)
@@ -96,6 +98,7 @@ export function useStartSession() {
             ...info,
             state: input.view === "terminal" ? { ...info.state, interactive: true } : info.state,
             node_id: info.node_id ?? (input.machine === LOCAL ? undefined : input.machine),
+            started_at: info.started_at ?? new Date().toISOString(),
             provisionalStart: "replica",
           }, ...(current ?? []).filter((row) => row.id !== id && row.id !== info.id)]
         })

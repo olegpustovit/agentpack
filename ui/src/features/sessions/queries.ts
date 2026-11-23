@@ -23,14 +23,24 @@ function parseProjects(raw: unknown): ProjectRow[] {
   })
 }
 
+// A start shows a provisional row until the list reports the session. An accepted start whose
+// row never replicates (a peer gone quiet, a session that ended at once) stops showing after this.
+const PROVISIONAL_REPLICA_MS = 2 * 60 * 1000
+
+export function mergeProvisional(current: SessionInfo[] | undefined, rows: SessionInfo[], now = Date.now()): SessionInfo[] {
+  const ids = new Set(rows.map((row) => row.id))
+  const kept = (current ?? []).filter((row) =>
+    row.provisionalStart && !ids.has(row.id) &&
+    (row.provisionalStart === "claim" || now - Date.parse(row.started_at ?? "") < PROVISIONAL_REPLICA_MS))
+  return [...kept, ...rows]
+}
+
 export const sessionsQuery = (live: boolean) =>
   queryOptions({
     queryKey: ["m", LOCAL, "sessions"],
     queryFn: async ({ client, queryKey }): Promise<SessionInfo[]> => {
       const rows = (await api<SessionInfo[] | null>("/api/sessions")) ?? []
-      const current = client.getQueryData<SessionInfo[]>(queryKey)
-      const ids = new Set(rows.map((row) => row.id))
-      return [...(current ?? []).filter((row) => row.provisionalStart && !ids.has(row.id)), ...rows]
+      return mergeProvisional(client.getQueryData<SessionInfo[]>(queryKey), rows)
     },
     staleTime: 15 * 1000,
     // Events cover changes; polling covers only a dropped stream.

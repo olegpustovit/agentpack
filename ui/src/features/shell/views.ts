@@ -1,5 +1,6 @@
 import { linkOptions, useRouterState } from "@tanstack/react-router"
 import { ChartColumn, Library, Server, Settings, Terminal } from "lucide-react"
+import { onSignOut } from "@/lib/persist"
 
 export const views = [
   { id: "sessions", label: "Sessions", to: "/sessions", icon: Terminal },
@@ -17,6 +18,7 @@ export const listDetailViews = ["sessions", "library", "machines", "usage", "set
 export type LastSession = { machine: string; sessionId: string; search: { q?: string; group?: string } }
 
 const LAST_SESSION_KEY = "agentpack-last-session"
+onSignOut(() => rememberSession(undefined))
 
 // Per tab, as the terminal pool is: another browser tab keeps its own selection. A new tab
 // starts from the chat this browser had open last.

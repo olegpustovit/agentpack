@@ -1,7 +1,8 @@
 import { diffLines, diffWordsWithSpace } from "diff"
 import type { ReactNode } from "react"
 import type { ToolDiffBlock } from "./model"
-import { highlightCodeLines } from "./agent-markdown"
+import { useHighlighter } from "./agent-markdown"
+import type { highlightCodeLines } from "./highlight"
 import { diffAnchorId } from "./diff-summary"
 
 function trimSplit(text: string): string[] {
@@ -12,9 +13,11 @@ function trimSplit(text: string): string[] {
 
 const MAX_DIFF_ROWS = 400
 
-function highlighted(lines: string[], language?: string): string[] | undefined {
+type Highlight = typeof highlightCodeLines
+
+function highlighted(lines: string[], language?: string, highlight?: Highlight): string[] | undefined {
   const text = lines.join("\n")
-  return language && text.length <= 200_000 ? highlightCodeLines(text, language) : undefined
+  return highlight && language && text.length <= 200_000 ? highlight(text, language) : undefined
 }
 
 function codeLine(text: string, html: string | undefined): ReactNode {
@@ -121,7 +124,7 @@ export type DiffReview = {
   after: (key: string) => ReactNode
 }
 
-function diffBlock(oldText: string, newText: string, language?: string, review?: { path: string; index: number; hooks: DiffReview }): ReactNode[] {
+function diffBlock(oldText: string, newText: string, language: string | undefined, highlight: Highlight | undefined, review?: { path: string; index: number; hooks: DiffReview }): ReactNode[] {
   const rows: ReactNode[] = []
   let oldNum = 1
   let newNum = 1
@@ -149,8 +152,8 @@ function diffBlock(oldText: string, newText: string, language?: string, review?:
       const remaining = MAX_DIFF_ROWS - rows.length
       const oldLines = trimSplit(part.value).slice(0, remaining)
       const newLines = trimSplit(next.value).slice(0, remaining)
-      const oldHighlight = highlighted(oldLines, language)
-      const newHighlight = highlighted(newLines, language)
+      const oldHighlight = highlighted(oldLines, language, highlight)
+      const newHighlight = highlighted(newLines, language, highlight)
       const pairs = Math.max(oldLines.length, newLines.length)
       for (let line = 0; line < pairs && rows.length < MAX_DIFF_ROWS; line++) {
         const oldLine = oldLines[line]
@@ -169,13 +172,13 @@ function diffBlock(oldText: string, newText: string, language?: string, review?:
     }
     if (part.removed) {
       const lines = trimSplit(part.value).slice(0, MAX_DIFF_ROWS - rows.length)
-      const content = highlighted(lines, language)
+      const content = highlighted(lines, language, highlight)
       lines.forEach((line, index) => push("del", oldNum++, codeLine(line, content?.[index])))
       continue
     }
     if (part.added) {
       const lines = trimSplit(part.value).slice(0, MAX_DIFF_ROWS - rows.length)
-      const content = highlighted(lines, language)
+      const content = highlighted(lines, language, highlight)
       lines.forEach((line, index) => push("add", newNum++, codeLine(line, content?.[index])))
     }
   }
@@ -187,6 +190,7 @@ function diffBlock(oldText: string, newText: string, language?: string, review?:
 
 // With `review` this is the inspector's copy, which is not a scroll target, so it carries no anchor id.
 export function ToolDiffBody({ content, toolId, review }: { content: ToolDiffBlock[] | undefined; toolId?: string; review?: DiffReview }) {
+  const highlighter = useHighlighter()
   const diffs = (content ?? []).filter((block) => block.type === "diff" && !block.newTextFromInput && (block.oldText || block.newText))
   if (diffs.length === 0) return null
   return (
@@ -197,28 +201,10 @@ export function ToolDiffBody({ content, toolId, review }: { content: ToolDiffBlo
             <p className="border-b-[0.5px] border-(--sep) bg-(--code) px-(--s3) py-(--s2) font-(family-name:--mono) text-(length:--fs-xs) text-(--fg2)">{block.path}</p>
           )}
           <div className="flex flex-col gap-px overflow-x-auto py-(--s1)">
-            {diffBlock(block.oldText ?? "", block.newText ?? "", diffLanguage(block.path), review && { path: block.path?.trim() || "change", index, hooks: review })}
+            {diffBlock(block.oldText ?? "", block.newText ?? "", diffLanguage(block.path), highlighter?.highlightCodeLines, review && { path: block.path?.trim() || "change", index, hooks: review })}
           </div>
         </div>
       ))}
     </div>
   )
-}
-
-// For tests: true when word-level marks appear inside a changed line.
-export function toolDiffUsesWordMarks(oldText: string, newText: string): boolean {
-  const changes = diffLines(oldText, newText)
-  for (let index = 0; index < changes.length; index++) {
-    const part = changes[index]!
-    const next = changes[index + 1]
-    if (!part.removed || !next?.added) continue
-    const oldLines = trimSplit(part.value)
-    const newLines = trimSplit(next.value)
-    for (let line = 0; line < Math.min(oldLines.length, newLines.length); line++) {
-      const words = diffWordsWithSpace(oldLines[line]!, newLines[line]!)
-      if (words.some((chunk) => chunk.added || chunk.removed)) return true
-    }
-    index++
-  }
-  return false
 }

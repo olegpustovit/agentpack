@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api"
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { getRouteApi } from "@tanstack/react-router"
@@ -5,7 +6,7 @@ import { Boxes } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Hash, Inspector, InspectorHead, KeyValue, Section } from "@/components/kit/data"
 import { Banner, Empty } from "@/components/kit/feedback"
 import { hud } from "@/lib/hud"
-import { errorText, resolveConflict } from "./mutations"
+import { resolveConflict } from "./mutations"
 import { conflictQuery } from "./queries"
 import { plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -31,7 +32,7 @@ function ConflictPanel({ machine, id }: { machine: string; id: string }) {
     mutationFn: () => resolveConflict(machine, id, data?.heads ?? [], choices),
     onSuccess: () => {
       hud.success("Conflict resolved")
-      void queryClient.invalidateQueries({ queryKey: ["m"] })
+      void queryClient.invalidateQueries({ queryKey: ["m", machine, "library"] })
     },
     onError: (error) => hud.error(`Couldn't resolve the conflict: ${errorText(error)}`),
   })

@@ -91,6 +91,3 @@ export async function applyDraft(draft: Draft, restart: boolean) {
   await discardDraft(draft.id)
 }
 
-export function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : "the request did not complete"
-}

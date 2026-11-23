@@ -1,3 +1,5 @@
+import { onSignOut } from "@/lib/persist"
+
 export const terminalCommandEvent = "agentpack:terminal-command"
 export type TerminalCommand = "toggle" | "new"
 
@@ -19,6 +21,10 @@ export function terminalShortcut(event: KeyboardEvent, isMac: boolean) {
 type Chat = { machine: string; sessionId: string }
 let lastChat: Chat | undefined
 let pending: { chat: Chat; command: "open" | "new" } | undefined
+onSignOut(() => {
+  lastChat = undefined
+  pending = undefined
+})
 
 export function rememberChatTerminal(chat: Chat) {
   lastChat = chat

@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { highlightCode } from "./agent-markdown"
+import { useHighlighter } from "./agent-markdown"
 
 // Lines shown before "Show all"; highlighting stops past HIGHLIGHT_LIMIT characters either way.
 export const PREVIEW_LINES = 400
@@ -82,18 +82,19 @@ const frame =
 // first PREVIEW_LINES until asked; code past HIGHLIGHT_LIMIT stays plain to keep the thread responsive.
 export function ToolOutput({ text, path, command, slot = "tool-output" }: { text: string; path?: string; command?: string; slot?: string }) {
   const [all, setAll] = useState(false)
+  const highlighter = useHighlighter()
   const { language, lines } = classifyOutput(text, { path })
   const shown = all ? lines : lines.slice(0, PREVIEW_LINES)
   const hidden = lines.length - shown.length
   const gutter = shown.some((line) => line.n !== undefined)
   const code = shown.map((line) => line.text).join("\n")
-  const html = language && code.length <= HIGHLIGHT_LIMIT ? highlightCode(code, language) : undefined
+  const html = highlighter && language && code.length <= HIGHLIGHT_LIMIT ? highlighter.highlightCode(code, language) : undefined
   return (
     <div data-slot={slot} data-language={language ?? "text"} className={frame}>
       {command && command.includes("\n") && (
         <pre className="border-b-[0.5px] border-(--sep) px-(--s4) py-(--s3) whitespace-pre-wrap break-words text-(--fg2)">
           <span aria-hidden className="select-none text-(--fg3)">$ </span>
-          <code dangerouslySetInnerHTML={{ __html: highlightCode(command, "bash") }} />
+          {highlighter ? <code dangerouslySetInnerHTML={{ __html: highlighter.highlightCode(command, "bash") }} /> : <code>{command}</code>}
         </pre>
       )}
       <div className={gutter || html !== undefined ? "flex min-w-max" : undefined}>

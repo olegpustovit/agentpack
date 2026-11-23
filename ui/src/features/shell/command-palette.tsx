@@ -14,7 +14,7 @@ import { isWorktreePath } from "@/features/sessions/git"
 import { useStartSession } from "@/features/sessions/start"
 import { sessionRules } from "@/features/sessions/rules"
 import { sessionGlyphState } from "@/features/sessions/session-status"
-import { api, routeMissing } from "@/lib/api"
+import { api, errorText } from "@/lib/api"
 import { basename, harnessName } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
@@ -162,7 +162,7 @@ export default function CommandPalette({
               if (result.url) window.open(result.url, "_blank", "noopener,noreferrer")
               else hud.success("Branch pushed")
             },
-            (error: unknown) => hud.error(`Couldn't create a pull request for ${sessionLabel(session)}: ${routeMissing(error) ? "Needs update" : error instanceof Error ? error.message : String(error)}`),
+            (error: unknown) => hud.error(`Couldn't create a pull request for ${sessionLabel(session)}: ${errorText(error)}`),
           ),
       })
     }
@@ -178,7 +178,7 @@ export default function CommandPalette({
         run: () =>
           void api(`/api/sessions/${encodeURIComponent(session.id)}/conversation/prompt`, { machine: session.machine, method: "POST", body: { text: "/compact" } }).then(
             () => queryClient.invalidateQueries({ queryKey: ["conversation", session.machine, session.id] }),
-            (error: unknown) => hud.error(`Couldn't compact ${sessionLabel(session)}: ${error instanceof Error ? error.message : String(error)}`),
+            (error: unknown) => hud.error(`Couldn't compact ${sessionLabel(session)}: ${errorText(error)}`),
           ),
       })
     }

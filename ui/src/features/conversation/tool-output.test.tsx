@@ -1,7 +1,10 @@
 import { act, createElement } from "react"
 import { createRoot } from "react-dom/client"
-import { describe, expect, it } from "vitest"
+import { beforeAll, describe, expect, it } from "vitest"
 import { classifyOutput, languageForPath, PREVIEW_LINES, ToolOutput } from "./tool-output"
+import { markdownReady } from "./agent-markdown"
+
+beforeAll(() => markdownReady)
 
 describe("classifyOutput", () => {
   it("moves Read and cat -n line numbers into a gutter and takes the language from the path", () => {
