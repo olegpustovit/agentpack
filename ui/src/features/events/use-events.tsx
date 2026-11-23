@@ -7,16 +7,17 @@ import type { ConversationPage } from "@/features/conversation/queries"
 type EventMessage = { topic: string; node?: string; tables?: string[] }
 
 // What each replicated table feeds. A state change refetches only these; chat tables feed the chat stream alone.
-const STATE_FAMILIES: Record<string, string[][]> = {
+// Every replicated table must be listed (use-events.test.ts checks src/generated/replicated-tables.json).
+export const STATE_FAMILIES: Record<string, string[][]> = {
   // Usage counters arrive through usage_hourly, written in the same transaction as each turn.
   sessions: [["m", LOCAL, "sessions"], ["m", LOCAL, "session-row"]],
   limits: [["m", LOCAL, "limits"]],
   usage_hourly: [["m", LOCAL, "usage"]],
   limit_samples: [["m", LOCAL, "usage"]],
   users: [["identity"]],
-  node_settings: [["identity"], ["nodes"], ["topology"]],
+  node_settings: [["identity"], ["nodes"], ["topology"], ["settings"]],
   mesh_nodes: [["nodes"], ["topology"], ["replication"]],
-  mesh_settings: [["nodes"], ["topology"], ["replication"]],
+  mesh_settings: [["nodes"], ["topology"], ["replication"], ["settings"]],
   issues: [["diagnostics"]],
   issue_counts: [["diagnostics"]],
   conversation_events: [],
@@ -27,12 +28,19 @@ const STATE_FAMILIES: Record<string, string[][]> = {
   mcp_credentials: [["mcp-credentials"]],
   mcp_credential_approvals: [["mcp-credentials"]],
   agent_snapshots: [["agent-snapshot"]],
+  agent_credentials: [["agents"]],
+  registry_objects: [["m", LOCAL, "library"], ["drafts"]],
+  registry_names: [["m", LOCAL, "library"], ["drafts"]],
+  registry_heads: [["m", LOCAL, "library"], ["drafts"]],
+  registry_tombstones: [["m", LOCAL, "library"], ["drafts"]],
+  registry_drafts: [["m", LOCAL, "library"], ["drafts"]],
+  cache_locations: [],
   omp_settings: [["omp-settings"]],
   // Web Push state feeds no query: this device reads its subscription from the browser.
   push_keys: [],
   push_subscriptions: [],
 }
-const ALL_STATE_FAMILIES = [["identity"], ["topology"], ["m", LOCAL, "sessions"], ["m", LOCAL, "session-row"], ["m", LOCAL, "limits"], ["m", LOCAL, "usage"], ["nodes"], ["diagnostics"], ["replication"], ["mcp-credentials"], ["omp-settings"], ["agent-snapshot"]]
+const ALL_STATE_FAMILIES = [...new Map(Object.values(STATE_FAMILIES).flat().map((key) => [key.join("\0"), key])).values()]
 
 // Unknown tables, or an older gateway that sends none, refetch every family.
 export function stateFamilies(tables: string[] | undefined): string[][] {

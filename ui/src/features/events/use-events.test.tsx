@@ -4,7 +4,8 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createQueryClient } from "@/lib/query-client"
 import { LOCAL } from "@/lib/api"
-import { EventsProvider, stateFamilies, useEventsConnected } from "./use-events"
+import replicated from "@/generated/replicated-tables.json"
+import { EventsProvider, STATE_FAMILIES, stateFamilies, useEventsConnected } from "./use-events"
 
 class FakeEventSource {
   static instances: FakeEventSource[] = []
@@ -139,11 +140,19 @@ describe("stateFamilies", () => {
   it("refetches nothing for chat writes, only the readers of known tables, and everything otherwise", () => {
     expect(stateFamilies(["conversation_events"])).toEqual([])
     expect(stateFamilies(["sessions", "conversation_events"])).toEqual([["m", LOCAL, "sessions"], ["m", LOCAL, "session-row"]])
-    expect(stateFamilies(["mesh_nodes", "mesh_settings"])).toHaveLength(3)
+    expect(stateFamilies(["mesh_nodes", "mesh_settings"])).toHaveLength(4)
     expect(stateFamilies(["mcp_credentials", "mcp_credential_approvals"])).toEqual([["mcp-credentials"]])
     expect(stateFamilies(["agent_snapshots"])).toEqual([["agent-snapshot"]])
     expect(stateFamilies(["omp_settings"])).toEqual([["omp-settings"]])
-    expect(stateFamilies(undefined)).toHaveLength(12)
-    expect(stateFamilies(["a_future_table"])).toHaveLength(12)
+    expect(stateFamilies(["agent_credentials"])).toEqual([["agents"]])
+    expect(stateFamilies(["registry_heads"])).toEqual([["m", LOCAL, "library"], ["drafts"]])
+    expect(stateFamilies(["node_settings"])).toContainEqual(["settings"])
+    expect(stateFamilies(undefined)).toHaveLength(16)
+    expect(stateFamilies(["a_future_table"])).toHaveLength(16)
+  })
+
+  // internal/state TestReplicatedTablesMatchUIList keeps the JSON in step with the schema.
+  it("maps exactly the tables the gateway replicates", () => {
+    expect(Object.keys(STATE_FAMILIES).sort()).toEqual(replicated)
   })
 })
