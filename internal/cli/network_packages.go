@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 
 	"github.com/olegpustovit/agentpack/internal/gateway"
@@ -88,7 +90,11 @@ func (runner Runner) changeNetworkProject(ctx context.Context, directory string,
 		return errors.Join(captureErr, err)
 	}
 	release = nil
-	return errors.Join(captureErr, runner.restartStaleSessions(ctx, packContext.DefinitionRoot))
+	reloadErr := runner.restartStaleSessions(ctx, packContext.DefinitionRoot)
+	if reloadErr != nil {
+		reloadErr = errors.Join(gateway.ErrProjectReload, reloadErr)
+	}
+	return errors.Join(captureErr, reloadErr)
 }
 
 // projectContents converts pack.lock into the node's project view. Commands, arguments,
@@ -245,9 +251,9 @@ func (runner Runner) saveNetworkProject(ctx context.Context, input gateway.Proje
 				return err
 			}
 		}
-		if len(input.PluginLogins) > 0 {
+		if len(input.PluginLogins)+len(input.MCPEnabled) > 0 {
 			locked, err := runner.Service.LoadLock(root)
-			if err != nil {
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
 			project, err := manifest.Load(root)
@@ -263,7 +269,24 @@ func (runner Runner) saveNetworkProject(ctx context.Context, input gateway.Proje
 					return gateway.ErrProjectPluginServerChanged
 				}
 			}
-			return mcp.SaveProjectPluginLogins(pluginLoginPath, input.PluginLogins)
+			for name := range input.MCPEnabled {
+				if _, ok := plan.Entries[name]; !ok {
+					return gateway.ErrProjectPluginServerChanged
+				}
+			}
+			if len(input.MCPEnabled) > 0 {
+				if project == nil {
+					if err := manifest.WriteStub(root, filepath.Base(root), "0.0.1"); err != nil {
+						return err
+					}
+				}
+				if err := manifest.SetMCPEnabled(root, input.MCPEnabled); err != nil {
+					return err
+				}
+			}
+			if len(input.PluginLogins) > 0 {
+				return mcp.SaveProjectPluginLogins(pluginLoginPath, input.PluginLogins)
+			}
 		}
 		return nil
 	})

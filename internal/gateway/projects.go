@@ -12,6 +12,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/registry"
 )
 
@@ -202,9 +203,11 @@ type ProjectSettingsInput struct {
 	RemoveMCP    []string                   `json:"remove_mcp"`
 	Logins       map[string]string          `json:"logins"`
 	PluginLogins map[string]mcp.PluginLogin `json:"plugin_logins"`
+	MCPEnabled   map[string]bool            `json:"mcp_enabled"`
 }
 
-var ErrProjectPluginServerChanged = errors.New("the plugin's MCP server changed; reopen Project Settings and choose its login again")
+var ErrProjectPluginServerChanged = errors.New("the MCP server changed. Reopen Project Settings and choose it again")
+var ErrProjectReload = errors.New("project settings saved, but a session could not reload")
 
 func (g *Gateway) saveProjectSettings(w http.ResponseWriter, r *http.Request) {
 	var input ProjectSettingsInput
@@ -252,6 +255,10 @@ func (g *Gateway) saveProjectSettings(w http.ResponseWriter, r *http.Request) {
 			login.URL = url
 			input.PluginLogins[name] = login
 		}
+		if err := g.writeMCPIndex(r.Context()); err != nil {
+			fail(w, r, err)
+			return
+		}
 	}
 	if g.options.SaveProject == nil {
 		http.Error(w, "project settings are unavailable on this machine", http.StatusServiceUnavailable)
@@ -260,6 +267,13 @@ func (g *Gateway) saveProjectSettings(w http.ResponseWriter, r *http.Request) {
 	if err := g.options.SaveProject(r.Context(), input); err != nil {
 		if errors.Is(err, ErrProjectPluginServerChanged) {
 			http.Error(w, ErrProjectPluginServerChanged.Error(), http.StatusConflict)
+			return
+		}
+		if errors.Is(err, ErrProjectReload) {
+			if event := obs.From(r.Context()); event != nil {
+				event.Fail(err)
+			}
+			http.Error(w, ErrProjectReload.Error()+". Save again to retry.", http.StatusBadGateway)
 			return
 		}
 		fail(w, r, err)

@@ -290,3 +290,19 @@ moved beyond run-to-run spread. Not measured on the ARM64 reference host.
 ```sh
 go test ./internal/sync -run '^$' -bench 'BenchmarkCodexSetup|BenchmarkMaterializationHome' -count 5
 ```
+
+## Project Settings MCP switches (2026-11-23)
+
+Before and after adding the project-level MCP enable switches, the Linux ARM64
+reference host ran the same 32 MiB fixture benchmarks. Medians of five runs
+of 10 iterations, with `v0.14.5-dev.187` as the baseline.
+
+| Benchmark | Before | After | Budget |
+| --- | ---: | ---: | ---: |
+| `BenchmarkMaterializationHome` | 0.824 ms | 0.818 ms | 1 ms |
+| `BenchmarkCodexSetup/cold` | 17.920 ms | 16.233 ms | 20 ms |
+| `BenchmarkCodexSetup/warm` | 0.362 ms | 0.370 ms | 1 ms |
+
+```sh
+go test ./internal/sync -run '^$' -bench '^(BenchmarkMaterializationHome|BenchmarkCodexSetup)$' -benchtime=10x -count=5
+```

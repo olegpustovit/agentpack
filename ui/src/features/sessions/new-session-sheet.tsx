@@ -550,7 +550,7 @@ function LoadedContents({ project, mode, machine, machineName }: { project: Proj
   const credentials = useQuery(connectionsQuery(useEventsConnected())).data?.credentials ?? []
   const choosable = project.mcp.some((server) => server.source !== "plugin" && loginsFor(server.url ?? "", credentials).length > 1)
   const effect = modeEffect(project, mode)
-  const off = project.packages.filter((pkg) => effect.offPackages.has(pkg.module)).length + project.mcp.filter((server) => effect.offMCP.has(server.name)).length
+  const off = project.packages.filter((pkg) => effect.offPackages.has(pkg.module)).length + project.mcp.filter((server) => server.disabled || effect.offMCP.has(server.name)).length
   const active = project.packages.length + project.mcp.length - off
   return (
     <section aria-label="Loaded in this session" className="flex min-w-0 flex-col gap-(--s3)">
@@ -585,7 +585,7 @@ function LoadedContents({ project, mode, machine, machineName }: { project: Proj
                 name={server.name}
                 detail={[server.package && (server.version ? `${server.package}@${server.version}` : server.package), server.host, server.source && `from ${server.source}`].filter(Boolean).join(" · ")}
                 tag={server.launcher}
-                off={effect.offMCP.has(server.name)}
+                off={server.disabled || effect.offMCP.has(server.name)}
                 status={server.status}
                 tone={server.status === "pinned" ? "ok" : server.status === "unpinned" ? "warn" : undefined}
                 mode={mode}
@@ -651,7 +651,7 @@ function LoginPicker({ project, server, logins, machine }: { project: ProjectRow
   const value = save.isPending ? save.variables || logins[0]!.id : logins.some((login) => login.id === server.login) ? server.login! : logins[0]!.id
   const chosen = logins.find((login) => login.id === value)!
   if (plugin && !(server.project_login && server.login) && !chosen.plugins.includes(server.module ?? "")) {
-    return <Tag className="text-(--warn-word)">Allow login in Project Settings</Tag>
+    return <Tag className="text-(--warn-word)">Choose login in Project Settings</Tag>
   }
   const expired = chosen.status === "needs_login"
   const reconnect = (

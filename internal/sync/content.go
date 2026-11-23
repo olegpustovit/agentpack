@@ -317,6 +317,7 @@ func sourceIdentity(definitionRoot string, lock lockfile.PackLock) (string, erro
 		Name: project.Name, Version: project.Version, Description: project.Description,
 		Dependencies: make(map[string]sourceDependency, len(project.Dependencies)),
 		MCPServers:   make(map[string]sourceMCPServer, len(project.MCP.Servers)),
+		MCPEnabled:   project.MCP.Enabled,
 		Modes:        project.Modes,
 	}
 	// manifest.Load defaults an omitted name from DefinitionRoot, which is a host path.
@@ -394,6 +395,7 @@ type sourceManifest struct {
 	Description  string                      `json:"description"`
 	Dependencies map[string]sourceDependency `json:"dependencies"`
 	MCPServers   map[string]sourceMCPServer  `json:"mcp_servers"`
+	MCPEnabled   map[string]bool             `json:"mcp_enabled,omitempty"`
 	Modes        map[string]mode.Definition  `json:"modes"`
 }
 

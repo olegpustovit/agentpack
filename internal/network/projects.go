@@ -30,6 +30,7 @@ type ProjectMCP struct {
 	Name      string `json:"name"`
 	Source    string `json:"source"`
 	Module    string `json:"module,omitempty"`
+	Disabled  bool   `json:"disabled,omitempty"`
 	Launcher  string `json:"launcher"`
 	Status    string `json:"status"`
 	Package   string `json:"package"`

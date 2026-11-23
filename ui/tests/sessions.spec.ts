@@ -214,7 +214,7 @@ test("a session opens project settings and saves packages, MCP and the login tog
   const linear = "https://mcp.linear.app/mcp"
   const module = "github.com/acme/linear"
   const project = projectRow(directory, [], {
-    mcp: [{ name: "linear", launcher: "remote", source: "plugin", module, url: linear, login: "c2" }],
+    mcp: [{ name: "linear", launcher: "remote", source: "plugin", module, url: linear, disabled: true }],
   })
   await page.route("**/api/projects", (route) => route.fulfill({ json: [project] }))
   await page.route("**/api/library/packages", (route) => route.fulfill({ json: [
@@ -239,10 +239,11 @@ test("a session opens project settings and saves packages, MCP and the login tog
   await expect(settings).toContainText(directory)
   await settings.getByRole("textbox", { name: "Search Library packages" }).fill("tools")
   await settings.getByRole("checkbox", { name: "Add Tools" }).check()
+  await settings.getByRole("checkbox", { name: "Enable linear" }).check()
+  await settings.getByRole("combobox", { name: "linear login" }).click()
+  await page.getByRole("option", { name: "Client", exact: true }).click()
   await expect(settings.getByRole("combobox", { name: "linear login" })).toContainText("Client")
-  await expect(settings.getByText(/needs permission to use Client/)).toBeVisible()
-  await settings.getByRole("button", { name: "Allow in this project" }).click()
-  await expect(settings.getByText(/Save allows .* to use Client in this project/)).toBeVisible()
+  await expect(settings.getByRole("button", { name: "Allow in this project" })).toHaveCount(0)
   await settings.getByRole("button", { name: "Add MCP server…" }).click()
   await settings.getByLabel("Server name").fill("docs")
   await settings.getByLabel("Server URL").fill("https://mcp.example.com/docs")
@@ -255,7 +256,46 @@ test("a session opens project settings and saves packages, MCP and the login tog
     directory, add: ["github.com/acme/tools@abcd1234"], remove: [], remove_mcp: [],
     servers: [{ name: "docs", url: "https://mcp.example.com/docs" }], logins: {},
     plugin_logins: { linear: { module, url: linear, credential: "c2" } },
+    mcp_enabled: { linear: true },
   }])
+})
+
+test("a project sign-in selects the returned login for Save", async ({ page, context }) => {
+  const directory = sessions[0]!.directory
+  const url = "https://mcp.linear.app/mcp"
+  const module = "github.com/acme/linear"
+  let connected = false
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow(directory, [], {
+    mcp: [{ name: "linear", source: "plugin", launcher: "remote", module, url }],
+  })] }))
+  await page.route("**/api/mcp/credentials", (route) => route.fulfill({ json: { credentials: [
+    { id: "first", match: url, kind: "oauth", label: "Other team", status: "connected" },
+    ...(connected ? [{ id: "new", match: url, kind: "oauth", label: "TrustMind", status: "connected" }] : []),
+  ] } }))
+  await page.route("**/api/mcp/logins", (route) => route.fulfill({ json: {
+    login: "oauth-1", authorize_url: new URL("/test-mcp-oauth", page.url()).href,
+  } }))
+  await context.route("**/test-mcp-oauth", (route) => {
+    connected = true
+    return route.fulfill({ contentType: "text/plain", body: "Signed in" })
+  })
+  await page.route("**/api/mcp/logins/oauth-1", (route) => route.fulfill({ json: connected
+    ? { status: "connected", credential_id: "new" } : { status: "pending" } }))
+  const saved: unknown[] = []
+  await page.route("**/api/projects/settings", (route) => {
+    saved.push(route.request().postDataJSON())
+    return route.fulfill({ status: 204 })
+  })
+  await page.goto("/sessions")
+  await page.getByRole("navigation", { name: "Sessions" }).getByRole("link", { name: /build/ }).click({ button: "right" })
+  await page.getByRole("menuitem", { name: "Project settings…" }).click()
+  const settings = page.getByRole("dialog", { name: "Project settings" })
+  await settings.getByRole("button", { name: "Sign in…" }).click()
+  await expect(settings.getByRole("combobox", { name: "linear login" })).toContainText("TrustMind")
+  expect(saved).toHaveLength(0)
+  await settings.getByRole("button", { name: "Save", exact: true }).click()
+  await expect(settings).toBeHidden()
+  expect(saved).toEqual([expect.objectContaining({ plugin_logins: { linear: { module, url, credential: "new" } } })])
 })
 
 test("+ opens the composer while the chat claim is still in flight", async ({ page }) => {

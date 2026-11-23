@@ -122,6 +122,7 @@ type mcpBridgeSecret struct {
 
 type mcpBroker struct {
 	mu      sync.Mutex
+	indexMu sync.Mutex
 	locks   map[string]*sync.Mutex
 	fresh   map[string]mcpBridgeSecret // tokens from the refresher that replication has not delivered yet
 	logins  map[string]*mcpLogin
@@ -822,6 +823,8 @@ func newStaticMCPCredential(account, kind, rawURL, label string, values map[stri
 
 // writeMCPIndex lists the credentials of the account bound to this machine for staging. No secret values.
 func (g *Gateway) writeMCPIndex(ctx context.Context) error {
+	g.mcpBroker.indexMu.Lock()
+	defer g.mcpBroker.indexMu.Unlock()
 	actor, err := g.localActor(ctx)
 	if err != nil {
 		if errors.Is(err, errLocalAccountUnavailable) {
@@ -844,9 +847,7 @@ func (g *Gateway) writeMCPIndex(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	g.mcpBroker.mu.Lock()
 	same := bytes.Equal(data, g.mcpBroker.indexed)
-	g.mcpBroker.mu.Unlock()
 	path := filepath.Join(g.options.Home, paths.MCPCredentialIndexName)
 	if same {
 		if _, err := os.Stat(path); err == nil {
@@ -864,9 +865,7 @@ func (g *Gateway) writeMCPIndex(ctx context.Context) error {
 		// Staging routes matching servers through the bridge by this index: reload the sessions it reroutes.
 		obs.Go("gateway.reload_sessions", func() { g.reloadStaleSessions(context.WithoutCancel(ctx)) })
 	}
-	g.mcpBroker.mu.Lock()
 	g.mcpBroker.indexed = data
-	g.mcpBroker.mu.Unlock()
 	return nil
 }
 

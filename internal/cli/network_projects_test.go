@@ -169,6 +169,11 @@ func TestSaveNetworkProjectLetsTheWorkerRestage(t *testing.T) {
 	if err := lockfile.Init(root, "test", "0.1.0"); err != nil {
 		t.Fatal(err)
 	}
+	endpoint := "https://example.com/mcp"
+	disabled := true
+	if err := manifest.AddMCPServer(root, "example", mcp.Server{URL: &endpoint, Disabled: &disabled}); err != nil {
+		t.Fatal(err)
+	}
 	const id = "session-reload"
 	var reloaded atomic.Bool
 	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -210,7 +215,24 @@ func TestSaveNetworkProjectLetsTheWorkerRestage(t *testing.T) {
 	if err := network.RecordLaunchEnvironment(home, id, root, root, "default", harness.Codex); err != nil {
 		t.Fatal(err)
 	}
-	input := gateway.ProjectSettingsInput{Directory: root, Servers: []registry.MCPServerInput{{Name: "example", URL: "https://example.com/mcp"}}}
+	environmentFile := filepath.Join(dir, "environment")
+	data, err := os.ReadFile(environmentFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var launch network.Environment
+	if err := json.Unmarshal(data, &launch); err != nil {
+		t.Fatal(err)
+	}
+	launch.Binary = "previous binary"
+	data, err = json.Marshal(launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environmentFile, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input := gateway.ProjectSettingsInput{Directory: root, MCPEnabled: map[string]bool{"example": true}}
 	if err := NewRunner().saveNetworkProject(t.Context(), input); err != nil {
 		t.Fatalf("settings save must let the worker lock the definition during reload: %v", err)
 	}

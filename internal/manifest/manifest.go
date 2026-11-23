@@ -3,10 +3,12 @@ package manifest
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -40,6 +42,7 @@ func (dependency Dependency) PathValue() (string, bool) {
 
 type MCPSection struct {
 	Servers map[string]mcp.Server `toml:"servers"`
+	Enabled map[string]bool       `toml:"enabled"`
 }
 
 type fileSchema struct {
@@ -184,6 +187,20 @@ func AddMCPServer(projectRoot, name string, server mcp.Server) error {
 			return nil, err
 		}
 		return insertAssignment(data, []string{"mcp", "servers"}, name, renderMCPServer(server), false)
+	})
+}
+
+func SetMCPEnabled(projectRoot string, enabled map[string]bool) error {
+	return mutateDocument(projectRoot, func(data []byte) ([]byte, error) {
+		for _, name := range slices.Sorted(maps.Keys(enabled)) {
+			next, err := insertAssignment(data, []string{"mcp", "enabled"}, name, strconv.FormatBool(enabled[name]), false)
+			if err != nil {
+				return nil, err
+			}
+			data = next
+		}
+		_, err := parse(data, projectRoot)
+		return data, err
 	})
 }
 

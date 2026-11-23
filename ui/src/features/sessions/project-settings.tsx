@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react"
+import { useEffect, useRef, useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { GroupHeader } from "@/components/kit/list"
 import { Field, FieldError, FieldLabel, PopupSelect } from "@/components/kit/forms"
@@ -9,8 +9,8 @@ import { Input } from "@/components/ui/input"
 import type { PackageItem } from "@/features/library/model"
 import { packagesQuery } from "@/features/library/queries"
 import { useLibrary } from "@/features/library/use-library"
-import { connectionsQuery, loginsFor, startSignIn, type Connection } from "@/features/settings/connections-model"
-import { api, errorText, routeMissing } from "@/lib/api"
+import { connectionsQuery, loginsFor, startSignIn, waitForSignIn, type Connection } from "@/features/settings/connections-model"
+import { api, ApiError, errorText, LOCAL, routeMissing } from "@/lib/api"
 import type { MCPServerInput, ProjectMCP } from "@/lib/api-types"
 import { hud } from "@/lib/hud"
 import type { ListedSession } from "./group"
@@ -50,12 +50,16 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
   const [removeMCP, setRemoveMCP] = useState<string[]>([])
   const [logins, setLogins] = useState<Record<string, string>>({})
   const [pluginLogins, setPluginLogins] = useState<Record<string, PluginLogin>>({})
+  const [mcpEnabled, setMCPEnabled] = useState<Record<string, boolean>>({})
   const [edit, setEdit] = useState<MCPServerInput>()
   const [editingExisting, setEditingExisting] = useState(false)
   const [servers, setServers] = useState<MCPServerInput[]>([])
   const [args, setArgs] = useState("")
   const [loginError, setLoginError] = useState("")
   const [connecting, setConnecting] = useState(false)
+  const signInRequest = useRef<AbortController | null>(null)
+  const justConnected = useRef(false)
+  useEffect(() => () => signInRequest.current?.abort(), [])
   const editedServer: MCPServerInput | undefined = edit && {
     name: edit.name.trim(),
     ...(edit.command !== undefined
@@ -65,6 +69,16 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
   const savedServers = editedServer
     ? [...servers.filter((server) => server.name !== editedServer.name), editedServer]
     : servers
+  // An explicit login saved before plugin login selection used the URL alone.
+  const savedPluginLogins = { ...pluginLogins }
+  for (const server of project?.mcp ?? []) {
+    if (server.source === "plugin" && server.module && server.url && server.login && !server.project_login &&
+        !savedPluginLogins[server.name] && (mcpEnabled[server.name] ?? !server.disabled) &&
+        !savedServers.some((edit) => edit.name === server.name) &&
+        loginsFor(server.url, credentials).some((login) => login.id === server.login)) {
+      savedPluginLogins[server.name] = { module: server.module, url: server.url, credential: server.login }
+    }
+  }
   const save = useMutation({
     mutationFn: () => api("/api/projects/settings", {
       machine,
@@ -76,9 +90,16 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
         remove_mcp: removeMCP.filter((name) => !savedServers.some((server) => server.name === name)),
         servers: savedServers,
         logins,
-        ...(Object.keys(pluginLogins).length > 0 && { plugin_logins: pluginLogins }),
+        ...(Object.keys(savedPluginLogins).length > 0 && { plugin_logins: savedPluginLogins }),
+        ...(Object.keys(mcpEnabled).length > 0 && {
+          mcp_enabled: Object.fromEntries(Object.entries(mcpEnabled).filter(([name]) => !removeMCP.includes(name))),
+        }),
       },
     }),
+    // A new credential can reach the project's machine just after the browser's OAuth callback.
+    retry: (count, error) => justConnected.current && machine !== LOCAL && count < 3 &&
+      error instanceof ApiError && error.status === 404 && !routeMissing(error),
+    retryDelay: 1500,
     onSuccess: async () => {
       await Promise.all([
         refreshProjects(),
@@ -91,7 +112,7 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
     onError: () => void refreshProjects(),
   })
   const busy = save.isPending || connecting
-  const changed = Boolean(Object.keys(add).length || spec.trim() || remove.length || removeMCP.length || savedServers.length || Object.keys(logins).length || Object.keys(pluginLogins).length)
+  const changed = Boolean(Object.keys(add).length || spec.trim() || remove.length || removeMCP.length || savedServers.length || Object.keys(logins).length || Object.keys(savedPluginLogins).length || Object.keys(mcpEnabled).length)
   const installed = project?.packages ?? []
   const editURL = loginURL(edit?.url ?? "")
   const choices = library.items.filter((item): item is PackageItem =>
@@ -105,40 +126,48 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
     if (project?.available && changed && !busy) save.mutate()
   }
 
-  async function connect(url: string, label: string) {
+  async function connect(url: string, label: string, selectLogin: (id: string) => void) {
     const tab = window.open("about:blank", "_blank")
     if (!tab) {
       setLoginError("Allow pop-ups to sign in without losing your edits.")
       return
     }
     tab.opener = null
+    const request = new AbortController()
+    signInRequest.current = request
     setLoginError("")
     setConnecting(true)
     try {
-      tab.location.href = await startSignIn({ url, label })
+      const started = await startSignIn({ url, label })
+      request.signal.throwIfAborted()
+      tab.location.href = started.authorize_url
+      const id = await waitForSignIn(started.login, request.signal)
+      await connections.refetch({ throwOnError: true })
+      if (!request.signal.aborted) {
+        justConnected.current = true
+        selectLogin(id)
+      }
     } catch (error) {
-      tab.close()
-      setLoginError(errorText(error))
+      if (!request.signal.aborted) setLoginError(errorText(error))
     }
-    setConnecting(false)
+    tab.close()
+    if (!request.signal.aborted) setConnecting(false)
   }
 
   function loginControl(name: string, url: string, server?: ProjectMCP) {
     const pending = pluginLogins[name]
-    const plugin = server?.source === "plugin" ? {
-      module: server.module,
-      allowed: Boolean(pending ? pending.credential : server.project_login && server.login),
-      pending: Boolean(pending?.credential),
-    } : undefined
+    const plugin = server?.source === "plugin"
+    const outdated = plugin && !server.module
     return <ProjectLogin name={name} url={url}
-      current={plugin ? pending?.credential ?? server?.login : logins[url] ?? server?.login}
-      credentials={credentials} plugin={plugin}
+      current={plugin ? pending?.credential ?? server.login : logins[url] ?? server?.login}
+      credentials={credentials} plugin={plugin} outdated={outdated}
       busy={busy} canConnect={connections.isSuccess} connect={connect}
       onChange={(value) => {
         if (plugin) {
-          if (plugin.module) setPluginLogins({ ...pluginLogins, [name]: { module: plugin.module, url, credential: value } })
+          const module = server.module
+          if (module) setPluginLogins((current) => ({ ...current, [name]: { module, url, credential: value } }))
         } else {
-          setLogins({ ...logins, [url]: value })
+          setLogins((current) => ({ ...current, [url]: value }))
         }
       }} />
   }
@@ -206,10 +235,19 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
               {project.mcp.length === 0 && <p className="text-(--fg2)">No MCP servers configured.</p>}
               {project.mcp.filter((server) => !servers.some((draft) => draft.name === server.name)).map((server) => {
                 const url = server.url
+                const enabled = mcpEnabled[server.name] ?? !server.disabled
                 return (
                   <div key={server.name} className={itemRow}>
-                    <span className="min-w-0 flex-1 break-all">{server.name} <span className="text-(--fg2)">{server.host || server.launcher}</span></span>
-                    {url && !removeMCP.includes(server.name) && loginControl(server.name, url, server)}
+                    <label className="flex min-w-0 flex-1 items-center gap-(--s3)">
+                      <Checkbox checked={enabled} disabled={busy || removeMCP.includes(server.name)} aria-label={`Enable ${server.name}`} onCheckedChange={(checked) => setMCPEnabled((current) => {
+                        const next = { ...current }
+                        if (checked === !server.disabled) delete next[server.name]
+                        else next[server.name] = checked
+                        return next
+                      })} />
+                      <span className="min-w-0 break-all">{server.name} <span className="text-(--fg2)">{server.host || server.launcher}</span></span>
+                    </label>
+                    {url && enabled && !removeMCP.includes(server.name) && loginControl(server.name, url, server)}
                     {server.source === "manifest" && (
                       <>
                         {url && <Button type="button" size="sm" disabled={busy || Boolean(edit)} onClick={() => openEditor({ name: server.name, url, type: server.transport }, true)}>Edit<span className="sr-only"> {server.name}</span></Button>}
@@ -279,6 +317,13 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
                 </>
               ) : <Button type="button" size="sm" className="self-start" disabled={busy} onClick={() => openEditor({ name: "", url: "" }, false)}>Add MCP server…</Button>}
               {loginError && <FieldError>{loginError}</FieldError>}
+              {connecting && <div className="flex items-center gap-(--s3)">
+                <p role="status" className="text-(--fg2)">Waiting for sign-in…</p>
+                <Button type="button" size="sm" onClick={() => {
+                  signInRequest.current?.abort()
+                  setConnecting(false)
+                }}>Cancel sign-in</Button>
+              </div>}
             </section>
             <p className="text-(length:--fs-sm) text-(--fg2)">Affected agents reload when idle. New sessions use the saved settings.</p>
           </>
@@ -294,51 +339,47 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
   )
 }
 
-function ProjectLogin({ name, url, current, credentials, plugin, busy, canConnect, connect, onChange }: {
+function ProjectLogin({ name, url, current, credentials, plugin, outdated, busy, canConnect, connect, onChange }: {
   name: string
   url: string
   current?: string
   credentials: Connection[]
-  plugin?: { module?: string; allowed: boolean; pending: boolean }
+  plugin: boolean
+  outdated: boolean
   busy: boolean
   canConnect: boolean
-  connect: (url: string, label: string) => Promise<void>
+  connect: (url: string, label: string, selectLogin: (id: string) => void) => Promise<void>
   onChange: (value: string) => void
 }) {
   const logins = loginsFor(url, credentials)
   const chosen = logins.find((login) => login.id === current)
-  const missing = Boolean(plugin?.allowed && current && !chosen && canConnect)
-  const active = missing ? undefined : chosen ?? logins[0]
-  const module = plugin?.module
-  const needsPermission = Boolean(active && module && !plugin.allowed && !active.plugins.includes(module))
-  const outdated = Boolean(plugin && !module)
+  const missing = Boolean(current && !chosen && canConnect)
+  const active = missing ? undefined : chosen ?? (plugin ? undefined : logins[0])
+  function signIn() {
+    const labels = new Set(logins.map((login) => login.label.toLowerCase()))
+    let label = name
+    for (let number = 2; labels.has(label.toLowerCase()); number++) label = `${name} ${number}`
+    void connect(url, active?.label ?? label, onChange)
+  }
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-(--s2)">
       {logins.length > 0 && (
         <PopupSelect label={`${name} login`} value={missing ? "missing" : chosen?.id ?? "default"} disabled={busy || outdated}
           items={[
             ...(missing ? [{ value: "missing", label: "Selected login unavailable", disabled: true }] : []),
-            { value: "default", label: `Default · ${logins[0]!.label}` },
+            plugin ? { value: "default", label: "Choose login", disabled: true } : { value: "default", label: `Default · ${logins[0]!.label}` },
             ...logins.map((login) => ({ value: login.id, label: login.status === "needs_login" ? `${login.label} · Needs sign-in` : login.label })),
           ]}
           onValueChange={(value) => onChange(value === "default" ? "" : value)}
         />
       )}
-      {canConnect && (!active || active.status === "needs_login") && (
-        <Button type="button" size="sm" disabled={busy} onClick={() => void connect(url, active?.label ?? name)} title="Opens in a new tab">
+      {canConnect && !outdated && (!active || active.status === "needs_login") && (
+        <Button type="button" size="sm" disabled={busy} onClick={signIn} title="Opens in a new tab">
           {active ? "Reconnect…" : "Sign in…"}
         </Button>
       )}
-      {active && needsPermission && (
-        <Button type="button" size="sm" disabled={busy} onClick={() => onChange(active.id)}>Allow in this project</Button>
-      )}
       {outdated && <span className="text-(length:--fs-xs) text-(--fg2)">Update this machine to allow plugin logins.</span>}
       {missing && logins.length === 0 && <span className="text-(length:--fs-xs) text-(--warn-word)">Selected login unavailable.</span>}
-      {active && (needsPermission || plugin?.pending) && (
-        <p className="basis-full break-all text-(length:--fs-xs) text-(--fg2)">
-          {needsPermission ? `${module} needs permission to use ${active.label}.` : `Save allows ${module} to use ${active.label} in this project.`}
-        </p>
-      )}
     </div>
   )
 }

@@ -141,6 +141,7 @@ export type ProjectMCP = {
   name: string
   source: string
   module?: string
+  disabled?: boolean
   launcher: string
   status: string
   package: string

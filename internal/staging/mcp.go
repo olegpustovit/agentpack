@@ -72,16 +72,26 @@ func CollectMCPPlan(projectRoot string, lock lockfile.PackLock, projectManifest 
 		}
 	}
 	dotPath := filepath.Join(paths.ProjectDotAgentsDir(projectRoot), "mcp.json")
+	allowDotAgents := true
 	if effective != nil {
 		allowed, err := effective.AllowsDotAgentsPath("mcp.json")
 		if err != nil {
 			return MCPCollectionPlan{}, err
 		}
-		if !allowed {
-			return MCPCollectionPlan{Entries: merged, Warnings: warnings}, nil
+		allowDotAgents = allowed
+	}
+	if allowDotAgents {
+		mergeMCPFile(dotPath, mcp.Entry{Source: mcp.DotAgents}, ".agents/mcp.json", effective, merged, &warnings)
+	}
+	if projectManifest != nil {
+		for name, enabled := range projectManifest.MCP.Enabled {
+			if entry, ok := merged[name]; ok {
+				disabled := !enabled
+				entry.Server.Disabled = &disabled
+				merged[name] = entry
+			}
 		}
 	}
-	mergeMCPFile(dotPath, mcp.Entry{Source: mcp.DotAgents}, ".agents/mcp.json", effective, merged, &warnings)
 	return MCPCollectionPlan{Entries: merged, Warnings: warnings}, nil
 }
 

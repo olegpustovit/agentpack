@@ -58,10 +58,10 @@ func SessionEnvironment(home, id string) (Environment, error) {
 	if err != nil {
 		return Environment{}, err
 	}
-	return readEnvironment(path)
+	return readEnvironment(path, true)
 }
 
-func readEnvironment(path string) (Environment, error) {
+func readEnvironment(path string, matchBinary bool) (Environment, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return Environment{}, nil
@@ -70,7 +70,7 @@ func readEnvironment(path string) (Environment, error) {
 		return Environment{}, err
 	}
 	var environment Environment
-	if json.Unmarshal(data, &environment) != nil || environment.Binary == "" || environment.Binary != BinaryTag() {
+	if json.Unmarshal(data, &environment) != nil || matchBinary && (environment.Binary == "" || environment.Binary != BinaryTag()) {
 		return Environment{}, nil
 	}
 	if decoded, err := hex.DecodeString(environment.Digest); err != nil || len(decoded) != 32 {
@@ -112,7 +112,7 @@ func (launch launchEnvironment) current() (Environment, error) {
 	if err != nil {
 		return Environment{}, err
 	}
-	if cached, err := readEnvironment(cache); err != nil || cached.Stamp == stamp && cached.Digest != "" {
+	if cached, err := readEnvironment(cache, true); err != nil || cached.Stamp == stamp && cached.Digest != "" {
 		return cached, err
 	}
 	environment := Environment{Stamp: stamp}
@@ -132,7 +132,7 @@ func (launch launchEnvironment) record() (previous, current Environment, err err
 	if err != nil {
 		return Environment{}, Environment{}, err
 	}
-	if previous, err = readEnvironment(path); err != nil {
+	if previous, err = readEnvironment(path, true); err != nil {
 		return Environment{}, Environment{}, err
 	}
 	if current, err = launch.current(); err != nil {
@@ -148,7 +148,7 @@ func (launch launchEnvironment) stale() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	recorded, err := readEnvironment(path)
+	recorded, err := readEnvironment(path, true)
 	if err != nil || recorded.Digest == "" {
 		return false, err
 	}
@@ -243,7 +243,12 @@ func RestartStaleSessions(ctx context.Context, home string, service packSync.Ser
 		if err != nil {
 			return nil, err
 		}
-		recorded, err := SessionEnvironment(home, info.ID)
+		path, err := environmentPath(home, info.ID)
+		if err != nil {
+			return nil, err
+		}
+		// A deliberate project change can also reach workers already running across an update.
+		recorded, err := readEnvironment(path, root == nil)
 		if err != nil {
 			return nil, fmt.Errorf("check running session %s: %w", info.ID, err)
 		}

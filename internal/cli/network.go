@@ -384,6 +384,7 @@ func (runner Runner) serveGateway(ctx context.Context, home, executable, address
 			if entry, ok := plan.Entries[server.Name]; ok {
 				server.Source = string(entry.Source)
 				server.Module = entry.Module
+				server.Disabled = entry.Server.Disabled != nil && *entry.Server.Disabled
 				server.URL = mcp.LoginURL(entry.Server)
 				server.Login, server.ProjectLogin = logins.ForServer(server.Name, entry)
 				if entry.Server.Type != nil && server.URL != "" {
