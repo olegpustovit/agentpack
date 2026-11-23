@@ -77,22 +77,11 @@ if [ "${1:-}" != --install-host ]; then
     exit "$result"
 fi
 
-# Windows OpenSSH has no uname; its default shell is cmd or PowerShell.
-platform=$(ssh "$host" uname -sm 2>/dev/null) || {
-    if [ "$?" -eq 255 ]; then
-        echo "$host: SSH unavailable" >&2
-        exit 1
-    fi
-    platform=Windows
-}
-case $platform in
-        "Linux x86_64") binary=ap-linux-amd64 ;;
-        "Linux aarch64") binary=ap-linux-arm64 ;;
-        "Darwin arm64") binary=ap-darwin-arm64 ;;
-        Windows|MINGW*|MSYS*|CYGWIN*)
-            scp -q "$out/ap-windows-amd64.exe" "$host:.local/bin/ap.exe.new"
-            # A running exe cannot be overwritten but can be renamed; the old copies are left beside it.
-            script=$(cat <<'EOF'
+# PowerShell for Windows hosts. A running exe cannot be overwritten but can be renamed; the old
+# copies are left beside it. A heredoc inside $(...) breaks bash 3.2 (macOS /bin/sh) when it holds
+# quotes or backticks, so the script lives in a function.
+windows_install() {
+    cat <<'EOF'
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $bin = Join-Path $env:USERPROFILE '.local\bin'
@@ -110,7 +99,23 @@ Remove-Item $new
 if ($LASTEXITCODE) { throw "gateway start exited $LASTEXITCODE" }
 "$env:COMPUTERNAME`: $(& (Join-Path $bin 'ap.exe') --version)"
 EOF
-)
+}
+
+# Windows OpenSSH has no uname; its default shell is cmd or PowerShell.
+platform=$(ssh "$host" uname -sm 2>/dev/null) || {
+    if [ "$?" -eq 255 ]; then
+        echo "$host: SSH unavailable" >&2
+        exit 1
+    fi
+    platform=Windows
+}
+case $platform in
+        "Linux x86_64") binary=ap-linux-amd64 ;;
+        "Linux aarch64") binary=ap-linux-arm64 ;;
+        "Darwin arm64") binary=ap-darwin-arm64 ;;
+        Windows|MINGW*|MSYS*|CYGWIN*)
+            scp -q "$out/ap-windows-amd64.exe" "$host:.local/bin/ap.exe.new"
+            script=$(windows_install)
             ssh "$host" "powershell -NoProfile -NonInteractive -EncodedCommand $(printf '%s' "$script" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)"
             exit 0 ;;
         *) echo "$host: no binary for this platform" >&2; exit 1 ;;
