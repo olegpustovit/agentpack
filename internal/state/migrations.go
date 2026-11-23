@@ -52,7 +52,8 @@ func migrate(ctx context.Context, db *sql.DB, source fs.FS) error {
 }
 
 // migratePending applies every missing migration in one transaction: one sync instead of one per
-// migration, so a fresh database opens several times faster, and a failed upgrade leaves the old version.
+// migration, so a fresh database opens several times faster, and a failed upgrade leaves the last
+// committed version.
 func migratePending(ctx context.Context, conn *sql.Conn, files, contents []string) (err error) {
 	// Serialise version checks with other gateways/workers before reading the version.
 	if _, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
@@ -96,6 +97,20 @@ func migratePending(ctx context.Context, conn *sql.Conn, files, contents []strin
 		}
 		if err != nil {
 			return fmt.Errorf("state migration %s: %w", files[version-1], err)
+		}
+		// cr-sqlite does not see tables created later in the transaction that altered a table, so
+		// an upgrade commits each alteration; a fresh database has no rows to trip on.
+		if current > 0 && version < latest && strings.HasPrefix(first, "-- crsql-alter: ") {
+			if _, err = conn.ExecContext(ctx, "UPDATE schema_meta SET version = ?", version); err != nil {
+				return err
+			}
+			if _, err = conn.ExecContext(ctx, "COMMIT"); err != nil {
+				return err
+			}
+			if _, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+				committed = true
+				return err
+			}
 		}
 	}
 	if current == 0 {
