@@ -348,13 +348,15 @@ func TestCompiledCLIRefusesInvalidContentHashWithoutRewritingTheLock(t *testing.
 			}
 		}
 	}
-	// A hash from before execute bits were kept is refused with the fix, and
-	// `lock` keeps the pins while recording the current hash.
+	// A hash from before execute bits were kept stages like an absent one.
+	// This local package is copied again on every sync, which records v2, as
+	// it would for an absent hash; GitHub pins are left alone (internal/sync).
 	legacy := strings.Replace(good, "sha256-tree-v2:", "sha256-tree-v1:", 1)
 	writeFile(t, lockPath, legacy)
-	if result := runCLI(t, project, "sync"); result.err == nil || !strings.Contains(result.stderr, "run `agentpack lock`") || readFile(t, lockPath) != legacy {
+	if result := runCLI(t, project, "sync"); result.err != nil {
 		t.Fatalf("sync on a v1 lock: stderr=%q err=%v", result.stderr, result.err)
 	}
+	writeFile(t, lockPath, legacy)
 	if result := runCLI(t, project, "lock"); result.err != nil || readFile(t, lockPath) != good {
 		t.Fatalf("lock on a v1 lock: stderr=%q err=%v\n%s", result.stderr, result.err, readFile(t, lockPath))
 	}

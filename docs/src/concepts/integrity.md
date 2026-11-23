@@ -6,7 +6,7 @@
 
 `content_hash` looks like `sha256-tree-v2:<64 hex>`. The prefix names the algorithm, so another tool can recompute the value and a future algorithm can sit next to this one.
 
-A `sha256-tree-v1` hash was computed over a tree extracted without execute bits. A `pack.lock` that still holds one is refused by every other command, which asks you to run `agentpack lock`; `lock` keeps every pin, fetches each package again and records `sha256-tree-v2`. Library snapshots and older mesh peers may still carry v1 hashes and are read as they are.
+A `sha256-tree-v1` hash was computed over a tree extracted without execute bits, so it cannot verify the current tree. In a project `pack.lock` it counts as no content hash: `sync` and launches stage the package with a one-line warning to run `agentpack lock` to record v2, and leave the lock as it is, and `AGENTPACK_REQUIRE_VERIFIED=1` refuses it (see below). `agentpack lock` keeps every pin, fetches each package again and records `sha256-tree-v2`. Library snapshots and older mesh peers may still carry v1 hashes and are read as they are.
 
 "No content hash" means exactly one thing: the `content_hash` key is absent from the entry. A key that is present must be the prefix followed by 64 lowercase hex digits. Anything else (an unknown or missing prefix, a short or uppercase digest, an empty string) makes every command refuse the lock before it fetches or stages anything, and no command rewrites it, `lock` included:
 

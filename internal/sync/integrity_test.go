@@ -218,6 +218,32 @@ func TestTamperedCacheIsRefusedBySyncVerifyOnlyAndLaunchThenRepaired(t *testing.
 	}
 }
 
+// A sha256-tree-v1 hash (a tree extracted without execute bits) stages like
+// an absent one: sync and launches warn and leave pack.lock as it is, the
+// strict setting refuses, and lock records v2 under the same pin.
+func TestV1ContentHashStagesLikeAnAbsentOne(t *testing.T) {
+	fixture := newIntegrityFixture(t)
+	fixture.manifest(demoKey, commitOne)
+	locked := fixture.lock()
+	fixture.editLock("sha256-tree-v2:", "sha256-tree-v1:")
+	before := fixture.lockText()
+	fixture.sync(SyncOptions{})
+	if fixture.staged() != skillOne || !fixture.noticed("pack.lock has v1 content hashes; run `agentpack lock` to record v2") || fixture.lockText() != before {
+		t.Fatalf("staged=%q notices=%v lock:\n%s", fixture.staged(), fixture.notices, fixture.lockText())
+	}
+	if _, _, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", base.Claude); err != nil || fixture.lockText() != before {
+		t.Fatalf("launch: %v", err)
+	}
+	t.Setenv(RequireVerifiedEnv, "1")
+	if _, err := fixture.service.Sync(context.Background(), fixture.project, SyncOptions{}); err == nil || !strings.Contains(err.Error(), "agentpack lock") {
+		t.Fatalf("strict sync error = %v", err)
+	}
+	t.Setenv(RequireVerifiedEnv, "")
+	if relocked := fixture.lock(); relocked.Packages[0].ContentHash != locked.Packages[0].ContentHash || relocked.Packages[0].Commit != locked.Packages[0].Commit {
+		t.Fatalf("lock recorded %#v, want %#v", relocked.Packages[0], locked.Packages[0])
+	}
+}
+
 func TestLaunchFastPathNeverStagesAnEditItCannotSee(t *testing.T) {
 	fixture := newIntegrityFixture(t)
 	fixture.manifest(demoKey, commitOne)

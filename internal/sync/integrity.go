@@ -66,7 +66,7 @@ func (Service) LoadLock(projectRoot string) (lockfile.PackLock, error) {
 func loadCheckedLock(projectRoot string) (lockfile.PackLock, error) {
 	lock, err := lockfile.Load(projectRoot)
 	if err != nil {
-		return lock, err // a legacy-hash lock comes back with its pins for `lock`
+		return lockfile.PackLock{}, err
 	}
 	return lock, cache.CheckLockEntries(lock)
 }
@@ -138,7 +138,11 @@ func (service Service) checkLockRecords(projectRoot string, project *manifest.Ma
 		if envEnabled(RequireVerifiedEnv) {
 			return fmt.Errorf("%s has %d package(s) without a content hash (%s) and %s is set; run `agentpack lock` to record them", paths.LockPath(projectRoot), len(unverified), strings.Join(unverified, ", "), RequireVerifiedEnv)
 		}
-		service.notify("%d package(s) in pack.lock have no content hash and are not verified; run `agentpack lock` to record them", len(unverified))
+		if lock.LegacyContentHashes != 0 {
+			service.notify("pack.lock has v1 content hashes; run `agentpack lock` to record v2 (%d package(s) are not verified)", len(unverified))
+		} else {
+			service.notify("%d package(s) in pack.lock have no content hash and are not verified; run `agentpack lock` to record them", len(unverified))
+		}
 	}
 	entries, err := staging.CollectMCP(projectRoot, lock, project, nil)
 	if err != nil {
