@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/olegpustovit/agentpack/internal/session"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -16,6 +15,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func folderFixture(t *testing.T, root string, paths ...string) string {
@@ -42,8 +44,8 @@ func TestFolderListing(t *testing.T) {
 	home := folderTestHome(t)
 	g, origin := identityGateway(t, t.TempDir(), nil)
 	testBrowserSession(t, g.auth, "viewer@example.com", "browse-folders")
-	g.options.Packages = func(context.Context, string) (ProjectContents, error) {
-		return ProjectContents{Packages: []ProjectPackage{{Module: "example/pack"}}}, nil
+	g.options.Packages = func(context.Context, string) (network.ProjectContents, error) {
+		return network.ProjectContents{Packages: []network.ProjectPackage{{Module: "example/pack"}}}, nil
 	}
 	project := folderFixture(t, home, "project")
 	folderFixture(t, home, ".hidden")

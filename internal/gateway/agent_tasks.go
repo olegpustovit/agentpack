@@ -122,7 +122,7 @@ func (g *Gateway) serveAgentMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session unavailable", http.StatusNotFound)
 		return
 	}
-	if !authorizeACPWrite(w, r, info) {
+	if !session.AuthorizeWrite(w, r, info) {
 		return
 	}
 	status, body, err := g.applyAgentMessage(r, id, info, in)

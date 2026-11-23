@@ -3,8 +3,6 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"github.com/olegpustovit/agentpack/internal/network"
-	"github.com/olegpustovit/agentpack/internal/session"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +11,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // gitRepo makes a repository with one commit and isolates git from the user's configuration.
@@ -158,7 +159,7 @@ func worktreeGateway(t *testing.T) (*Gateway, string, func(method, path, body st
 	main := gitRepo(t)
 	home := t.TempDir()
 	g, origin := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) { return info.ID, nil })
-	g.options.Packages = func(context.Context, string) (ProjectContents, error) { return ProjectContents{}, nil }
+	g.options.Packages = func(context.Context, string) (network.ProjectContents, error) { return network.ProjectContents{}, nil }
 	if err := remember(home, session.SessionInfo{Directory: main, Harness: "claude", Mode: "default"}); err != nil {
 		t.Fatal(err)
 	}

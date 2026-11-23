@@ -41,7 +41,7 @@ import (
 type GatewayOptions struct {
 	Home, Address, PublicURL string
 	Start                    func(context.Context, session.SessionInfo, string) (string, error)
-	Packages                 func(context.Context, string) (ProjectContents, error)
+	Packages                 func(context.Context, string) (network.ProjectContents, error)
 	Install                  func(context.Context, string, string, bool) error
 	InstallMCP               func(context.Context, string, registry.MCPServerInput, bool) error
 	Update                   func(ctx context.Context, version string) error
@@ -582,7 +582,7 @@ func (g *Gateway) routes() routeMux {
 			http.Error(w, "only ACP sessions with a native session ID can be forked", http.StatusBadRequest)
 			return
 		}
-		if !authorizeACPWrite(w, r, record.Session) {
+		if !session.AuthorizeWrite(w, r, record.Session) {
 			return
 		}
 		actor, ok := session.ActorFrom(r.Context())
@@ -966,7 +966,7 @@ func (g *Gateway) forwardToWorker(suffix string) http.HandlerFunc {
 			http.Error(w, "session unavailable", http.StatusNotFound)
 			return
 		}
-		if !authorizeACPWrite(w, r, record.Session) {
+		if !session.AuthorizeWrite(w, r, record.Session) {
 			return
 		}
 		network.ProxyWorkerConversation(w, r, record, strings.Replace(suffix, "{queueId}", url.PathEscape(r.PathValue("queueId")), 1))
@@ -1020,25 +1020,6 @@ func writeSessionStart(w http.ResponseWriter, r *http.Request, info session.Sess
 	}
 	network.WriteJSON(w, publicSession(info))
 }
-func authorizeACPWrite(w http.ResponseWriter, r *http.Request, info session.SessionInfo) bool {
-	if !info.ArchivedAt.IsZero() {
-		http.Error(w, "archived", http.StatusConflict)
-		return false
-	}
-	if info.Transport != "acp" && info.Transport != "shell" {
-		return true
-	}
-	actor, ok := session.ActorFrom(r.Context())
-	if !ok {
-		actor = session.BrowserActor("")
-	}
-	if actor.CanWriteSession(info) {
-		return true
-	}
-	http.Error(w, "read-only actor cannot modify this session", http.StatusForbidden)
-	return false
-}
-
 func (g *Gateway) authorizeACPWriteByID(w http.ResponseWriter, r *http.Request, id string) bool {
 	info, ok := sessionRow(r.Context(), id)
 	if !ok {
@@ -1051,7 +1032,7 @@ func (g *Gateway) authorizeACPWriteByID(w http.ResponseWriter, r *http.Request, 
 			return false
 		}
 	}
-	return authorizeACPWrite(w, r, info)
+	return session.AuthorizeWrite(w, r, info)
 }
 
 // startSession records the actor that started the session, then starts its worker.
@@ -1174,7 +1155,7 @@ func (g *Gateway) terminal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session unavailable", 404)
 		return
 	}
-	if record.Session.Transport == "shell" && !authorizeACPWrite(w, r, record.Session) {
+	if record.Session.Transport == "shell" && !session.AuthorizeWrite(w, r, record.Session) {
 		return
 	}
 	since, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)

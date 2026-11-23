@@ -13,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func (g *Gateway) serveShow(w http.ResponseWriter, r *http.Request) {
@@ -21,7 +22,7 @@ func (g *Gateway) serveShow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session unavailable", http.StatusNotFound)
 		return
 	}
-	if !authorizeACPWrite(w, r, record.Session) {
+	if !session.AuthorizeWrite(w, r, record.Session) {
 		return
 	}
 	network.ProxyWorkerConversation(w, r, record, "/show")

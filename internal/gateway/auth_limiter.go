@@ -1,38 +1,17 @@
 package gateway
 
 import (
-	"math"
 	"net/http"
 	"net/netip"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/network"
 )
 
 type loginFailure struct {
 	count       int
 	last, until time.Time
-}
-
-// clientWindow counts requests per client address in one-minute windows. The ceiling across all
-// clients bounds memory and work when many addresses take part.
-type clientWindow struct {
-	reset  time.Time
-	total  int
-	counts map[string]int
-}
-
-// take admits one request from client, or returns how long to wait. The caller holds its lock.
-func (c *clientWindow) take(now time.Time, client string, perClient, ceiling int) time.Duration {
-	if !now.Before(c.reset) {
-		c.reset, c.total, c.counts = now.Add(time.Minute), 0, map[string]int{}
-	}
-	if c.counts[client] >= perClient || c.total >= ceiling {
-		return c.reset.Sub(now)
-	}
-	c.counts[client]++
-	c.total++
-	return 0
 }
 
 // limiterKey is who a request counts against: an IPv6 client by its /64, which one host can rotate
@@ -50,21 +29,9 @@ func limiterKey(r *http.Request) (key string, local bool) {
 	return address.String(), address.IsLoopback()
 }
 
-// limiterCeiling is the cap across all clients, which the local origin never shares.
-func limiterCeiling(local bool, ceiling int) int {
-	if local {
-		return math.MaxInt
-	}
-	return ceiling
-}
-
 func loginKeys(r *http.Request, email string) [2]string {
 	key, _ := limiterKey(r)
 	return [2]string{"email:" + email, "address:" + key}
-}
-
-func retryAfter(w http.ResponseWriter, wait time.Duration) {
-	w.Header().Set("Retry-After", strconv.Itoa(max(1, int((wait+time.Second-1)/time.Second))))
 }
 
 func (a *gatewayAuth) allowLogin(w http.ResponseWriter, r *http.Request, email string) bool {
@@ -72,7 +39,7 @@ func (a *gatewayAuth) allowLogin(w http.ResponseWriter, r *http.Request, email s
 	defer a.mu.Unlock()
 	now := a.now()
 	client, local := limiterKey(r)
-	wait := a.attempts.take(now, client, 10, limiterCeiling(local, 100))
+	wait := a.attempts.Take(now, client, 10, network.LimiterCeiling(local, 100))
 	for _, key := range loginKeys(r, email) {
 		// Failed internet logins must not lock the owner out of this machine's own UI.
 		if local && strings.HasPrefix(key, "email:") {
@@ -83,7 +50,7 @@ func (a *gatewayAuth) allowLogin(w http.ResponseWriter, r *http.Request, email s
 		}
 	}
 	if wait > 0 {
-		retryAfter(w, wait)
+		network.RetryAfter(w, wait)
 		http.Error(w, "too many attempts; retry later", http.StatusTooManyRequests)
 		return false
 	}

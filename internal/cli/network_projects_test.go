@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
+	"github.com/olegpustovit/agentpack/internal/network"
 )
 
 func TestProjectContentsOmitsMCPCommandsAndSecrets(t *testing.T) {
@@ -50,7 +50,7 @@ func TestProjectModesReportWhatEachModeTurnsOff(t *testing.T) {
 		"lean":   {Base: mode.BaseNone, Enable: []string{"package:github.com/a/light", "mcp:docs"}},
 	}}
 	modes := projectContents(locked, project).Modes
-	got := map[string]gateway.ProjectMode{}
+	got := map[string]network.ProjectMode{}
 	for _, m := range modes {
 		got[m.Name] = m
 	}

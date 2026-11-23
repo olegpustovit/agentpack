@@ -30,9 +30,9 @@ type GatewayMCP struct {
 	gateway  *Gateway
 	handler  http.Handler
 	mu       sync.Mutex
-	window   clientWindow
+	window   network.ClientWindow
 	metadata map[string]cachedClient        // Client ID Metadata Documents by URL
-	fetches  clientWindow                   // uncached document fetches, which anyone can trigger before sign-in
+	fetches  network.ClientWindow           // uncached document fetches, which anyone can trigger before sign-in
 	fetcher  *http.Client                   // nil: metadataFetcher; tests point it at a local server
 	peer     func(node string) http.Handler // nil: the mesh; tests stand another gateway in for a node
 }
@@ -92,12 +92,12 @@ func (m *GatewayMCP) routes(mux *http.ServeMux) {
 func (m *GatewayMCP) limited(w http.ResponseWriter, r *http.Request) bool {
 	m.mu.Lock()
 	client, local := limiterKey(r)
-	wait := m.window.take(time.Now(), client, 120, limiterCeiling(local, 1200))
+	wait := m.window.Take(time.Now(), client, 120, network.LimiterCeiling(local, 1200))
 	m.mu.Unlock()
 	if wait == 0 {
 		return false
 	}
-	retryAfter(w, wait)
+	network.RetryAfter(w, wait)
 	oauthError(w, 429, "rate_limited")
 	return true
 }
@@ -521,7 +521,7 @@ func (m *GatewayMCP) metadataClient(ctx context.Context, id string) (*oauthClien
 	fetcher := m.fetcher
 	fresh := ok && now.Before(cached.expires)
 	// The authorize page fetches before sign-in, so the gateway must not become anyone's request cannon.
-	busy := !fresh && m.fetches.take(now, u.Hostname(), 10, 60) > 0
+	busy := !fresh && m.fetches.Take(now, u.Hostname(), 10, 60) > 0
 	m.mu.Unlock()
 	if fresh {
 		return &cached.client, nil

@@ -77,7 +77,7 @@ func (g *Gateway) terminalData(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session unavailable", 404)
 		return
 	}
-	if record.Session.Transport == "shell" && !authorizeACPWrite(w, r, record.Session) {
+	if record.Session.Transport == "shell" && !session.AuthorizeWrite(w, r, record.Session) {
 		return
 	}
 	path := "/output"

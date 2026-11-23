@@ -324,14 +324,7 @@ func (g *Gateway) registerLimits(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/usage", g.serveUsage)
 }
 
-type meshLimit struct {
-	harness.LimitSnapshot
-	NodeID    string    `json:"node_id"`
-	Reachable bool      `json:"reachable"`
-	LastSync  time.Time `json:"last_sync,omitzero"`
-}
-
-func (g *Gateway) meshLimits(ctx context.Context, node string) ([]meshLimit, error) {
+func (g *Gateway) meshLimits(ctx context.Context, node string) ([]harness.NodeLimit, error) {
 	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return nil, err
@@ -347,9 +340,9 @@ func (g *Gateway) meshLimits(ctx context.Context, node string) ([]meshLimit, err
 		return nil, err
 	}
 	defer rows.Close()
-	result := []meshLimit{}
+	result := []harness.NodeLimit{}
 	for rows.Next() {
-		var entry meshLimit
+		var entry harness.NodeLimit
 		var body string
 		if err := rows.Scan(&entry.NodeID, &body); err != nil {
 			return nil, err

@@ -137,7 +137,7 @@ type mcpIssueInput struct {
 }
 type mcpResolveIssueInput struct {
 	mcpIssueInput
-	issueResolution
+	obs.IssueResolution
 }
 
 // mcpSession is the compact session view every session tool returns.
@@ -301,7 +301,7 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 		return nil, trace, err
 	})
 	addTool(server, "resolve_issue", "Resolve an issue with the version containing its fix; newer occurrences can reopen it.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpResolveIssueInput) (*mcp.CallToolResult, obs.Issue, error) {
-		issue, err := callAPI[obs.Issue](ctx, m, "", "POST", "/api/logs/issues/"+url.PathEscape(in.Fingerprint)+"/resolve", in.issueResolution)
+		issue, err := callAPI[obs.Issue](ctx, m, "", "POST", "/api/logs/issues/"+url.PathEscape(in.Fingerprint)+"/resolve", in.IssueResolution)
 		return nil, issue, err
 	})
 	addTool(server, "list_nodes", "List computers explicitly available through this personal tailnet gateway.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, struct {
@@ -397,13 +397,13 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 		return nil, out, err
 	})
 	addTool(server, "list_packages", "List packages installed in a previously used folder.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpPackagesInput) (*mcp.CallToolResult, struct {
-		Packages []ProjectPackage `json:"packages"`
+		Packages []network.ProjectPackage `json:"packages"`
 	}, error) {
 		var out struct {
-			Packages []ProjectPackage `json:"packages"`
+			Packages []network.ProjectPackage `json:"packages"`
 		}
 		var err error
-		out.Packages, err = callAPI[[]ProjectPackage](ctx, m, in.Node, "GET", "/api/packages?directory="+url.QueryEscape(in.Directory), nil)
+		out.Packages, err = callAPI[[]network.ProjectPackage](ctx, m, in.Node, "GET", "/api/packages?directory="+url.QueryEscape(in.Directory), nil)
 		return nil, out, err
 	})
 	addTool(server, "install_package", "Install an agentpack package in a previously used folder and automatically restart affected running agents.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpInstallInput) (*mcp.CallToolResult, struct {

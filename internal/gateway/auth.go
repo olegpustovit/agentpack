@@ -31,7 +31,7 @@ type gatewayAuth struct {
 	home      string
 	now       func() time.Time
 	telemetry map[[32]byte]telemetryWindow
-	attempts  clientWindow
+	attempts  network.ClientWindow
 	failures  map[string]loginFailure
 }
 

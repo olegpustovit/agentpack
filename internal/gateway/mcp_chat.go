@@ -801,5 +801,5 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 }
 
 type mcpLimits struct {
-	Limits []meshLimit `json:"limits"`
+	Limits []harness.NodeLimit `json:"limits"`
 }
