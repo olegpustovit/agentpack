@@ -39,7 +39,7 @@ func TestSpoolsIngestOnceAfterTwoMinutes(t *testing.T) {
 	if err != nil || len(files) != 2 {
 		t.Fatalf("spool files=%v err=%v", files, err)
 	}
-	if !strings.Contains(files[0].name, "-"+strconv.Itoa(os.Getpid())+"-") || !strings.HasSuffix(files[0].name, fmt.Sprintf("-%d.ndjson", at.Unix()/60)) {
+	if !strings.Contains(files[0].name, "-"+strconv.Itoa(os.Getpid())+".segment-") || !strings.HasSuffix(files[0].name, fmt.Sprintf("-%d.ndjson", at.Unix()/60)) {
 		t.Fatal("spool filename omits process/minute", files[0].name)
 	}
 	replay, err := os.ReadFile(filepath.Join(directory, files[0].name))
@@ -263,5 +263,31 @@ func TestEmptySpoolWritesNothingAndRejectsInvalidProcess(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, "logs")); !os.IsNotExist(err) {
 		t.Fatalf("empty spool touched logs: %v", err)
+	}
+}
+
+func TestSpoolRotatesAtSegmentCapacity(t *testing.T) {
+	home := t.TempDir()
+	at := time.Now()
+	spool, err := OpenSpool(home, SpoolOptions{Proc: "worker", Now: func() time.Time { return at }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := logEvent(at, "worker")
+	event.Attrs["message"] = strings.Repeat("x", 4096)
+	for range 100 {
+		spool.Write(event)
+	}
+	if err := spool.Close(); err != nil {
+		t.Fatal(err)
+	}
+	files, err := spoolFiles(filepath.Join(home, "logs", "spool"))
+	if err != nil || len(files) != 2 {
+		t.Fatalf("segments = %v, %v", files, err)
+	}
+	for _, file := range files {
+		if file.size > spoolSegmentBytes {
+			t.Fatalf("segment exceeded capacity: %d", file.size)
+		}
 	}
 }
