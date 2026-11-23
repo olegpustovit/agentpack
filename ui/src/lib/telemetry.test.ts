@@ -114,3 +114,22 @@ it("splits multibyte bursts below the server's byte limit without dropping error
   expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(1)
   for (const [, options] of vi.mocked(fetch).mock.calls) expect(new Blob([String(options?.body)]).size).toBeLessThanOrEqual(64 << 10)
 })
+
+it("reports unexpected query and mutation errors once, skipping sign-in, older peers and aborts", async () => {
+  const { ApiError } = await import("./api")
+  const { createQueryClient } = await import("./query-client")
+  const { flushTelemetry } = await import("./telemetry")
+  const client = createQueryClient()
+  const fail = (key: string, error: unknown) => client.fetchQuery({ queryKey: [key], queryFn: () => Promise.reject(error), retry: false }).catch(() => {})
+  await fail("signed-out", new ApiError("unauthorized", 401))
+  await fail("old-peer", new ApiError("not found", 404))
+  await fail("aborted", new DOMException("The operation was aborted.", "AbortError"))
+  await fail("shape", new Error("unexpected sessions in gateway response"))
+  await fail("shape-again", new Error("unexpected sessions in gateway response"))
+  const pending = client.fetchQuery({ queryKey: ["slow"], queryFn: () => new Promise(() => {}) }).catch(() => {})
+  await client.cancelQueries({ queryKey: ["slow"] })
+  await pending
+  await client.getMutationCache().build(client, { mutationFn: () => Promise.reject(new TypeError("bad mutation input")) }).execute(undefined).catch(() => {})
+  flushTelemetry()
+  expect(batches().map((event) => event.message)).toEqual(["unexpected sessions in gateway response", "bad mutation input"])
+})

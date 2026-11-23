@@ -3,6 +3,8 @@ import path from "node:path"
 import { expect, test } from "@playwright/test"
 
 let origin = ""
+// Both tests read the one fixture's stored events, so the render case must see only its own.
+test.describe.configure({ mode: "serial" })
 
 test.beforeAll(async () => {
   const binary = process.env.AGENTPACK_TELEMETRY_TEST_BINARY
@@ -45,4 +47,16 @@ test("a throwing component persists one browser error on pagehide with breadcrum
   expect(event.attrs.breadcrumbs.length).toBeGreaterThan(0)
   expect(event.trace_id).toBe(event.attrs.breadcrumbs.filter((crumb) => crumb.kind === "api").at(-1)?.trace_id)
   expect(events).toHaveLength(1)
+})
+
+test("a query function that throws persists one browser error", async ({ page, context }) => {
+  test.skip(!origin, "make ui-e2e prepares the Go telemetry fixture")
+  await context.addCookies([{ name: "agentpack_session", value: "telemetry-browser", url: origin, sameSite: "Strict" }])
+  // A null body makes the limits queryFn throw while destructuring, outside any render.
+  await page.route("**/api/limits", (route) => route.fulfill({ contentType: "application/json", body: "null" }))
+  await page.goto(origin)
+  await expect.poll(async () => {
+    const events: { attrs: { message: string } }[] = await (await page.request.get(`${origin}/__test_events`)).json()
+    return events.filter((event) => event.attrs.message.includes("'limits'")).length
+  }).toBe(1)
 })
