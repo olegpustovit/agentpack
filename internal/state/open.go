@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
@@ -17,6 +18,7 @@ type Store struct {
 	DB     *sql.DB
 	Reader *sql.DB
 	home   string
+	site   atomic.Pointer[[]byte]
 }
 
 func Open(home string) (*Store, error) {

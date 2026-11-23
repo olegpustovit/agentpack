@@ -325,3 +325,38 @@ func TestPreserveArchiveEditsWithoutClocksLeavesWriterFree(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestChangePagesEndOnWholeVersionsAndCoverEverything(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i := range 40 {
+		if _, err := s.DB.Exec("INSERT INTO conversation_events(session_id,seq,body) VALUES ('s',?,'x'),('s',?,'y')", 2*i, 2*i+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, high, err := s.Changes(t.Context(), 0, nil, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paged []Change
+	for since, pages := int64(0), 0; since < high; pages++ {
+		changes, next, err := s.Changes(t.Context(), since, nil, 2048)
+		if err != nil || next <= since || pages > len(all) {
+			t.Fatalf("page after %d: next %d, %v", since, next, err)
+		}
+		if body, _ := json.Marshal(changes); len(body) > 2048 {
+			t.Fatalf("page of %d bytes exceeds the budget", len(body))
+		}
+		if last := changes[len(changes)-1]; last.DBVersion != next && next != high {
+			t.Fatalf("page ends inside version %d, cursor %d", last.DBVersion, next)
+		}
+		paged = append(paged, changes...)
+		since = next
+	}
+	if !reflect.DeepEqual(paged, all) {
+		t.Fatalf("paged %d changes, want %d", len(paged), len(all))
+	}
+}

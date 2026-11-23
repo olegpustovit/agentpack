@@ -113,11 +113,11 @@ func (g *Gateway) registerStateSync(mux *http.ServeMux) {
 			}
 		}
 		site, err := g.auth.store.SiteID(r.Context())
-		var rows []state.Change
+		rows := json.RawMessage("[]")
 		var next int64
 		// Reserve space for the envelope in the 4 MiB response limit.
 		if err == nil && sinceText != "" {
-			rows, next, err = g.auth.store.Changes(r.Context(), since, exclude, syncPageLimit-1024)
+			rows, next, err = g.auth.store.ChangePage(r.Context(), since, exclude, syncPageLimit-1024)
 		}
 		var oversized *state.ChangeVersionTooLargeError
 		if errors.As(err, &oversized) {
@@ -139,7 +139,11 @@ func (g *Gateway) registerStateSync(mux *http.ServeMux) {
 			http.Error(w, "state changes unavailable", status)
 			return
 		}
-		writeJSON(w, stateChangePage{Schema: replicationVersion, SiteID: site, Next: next, Changes: rows})
+		// The page is already encoded; the outer Changes field shadows the decoded one.
+		writeJSON(w, struct {
+			stateChangePage
+			Changes json.RawMessage `json:"changes"`
+		}{stateChangePage{Schema: replicationVersion, SiteID: site, Next: next}, rows})
 	}))
 }
 
@@ -203,27 +207,35 @@ func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, s
 }
 
 // pullState resumes each source by its immutable site ID, including after gateway restarts.
-func pullState(ctx context.Context, store *state.Store, library *registry.Store, client *http.Client, target *url.URL) (stateChangePage, bool, error) {
+// site is the source's ID from the previous pull, or nil to ask for it first.
+func pullState(ctx context.Context, store *state.Store, library *registry.Store, client *http.Client, target *url.URL, site []byte) (stateChangePage, bool, error) {
 	local, err := store.SiteID(ctx)
 	if err != nil {
 		return stateChangePage{}, false, err
 	}
-	page, err := fetchStatePage(ctx, client, target, -1, local)
-	if err != nil {
-		return page, false, err
+	cached := site != nil
+	if !cached {
+		page, err := fetchStatePage(ctx, client, target, -1, local)
+		if err != nil {
+			return page, false, err
+		}
+		site = page.SiteID
 	}
-	site := page.SiteID
 	if bytes.Equal(site, local) {
-		return page, false, errors.New("cannot replicate a copy of the local database")
+		return stateChangePage{SiteID: site, reachable: true}, false, errors.New("cannot replicate a copy of the local database")
 	}
 	since, err := store.Cursor(ctx, site)
 	if err != nil {
-		return page, false, err
+		return stateChangePage{}, false, err
 	}
 	changed := false
-	page, err = fetchStatePage(ctx, client, target, since, local)
+	page, err := fetchStatePage(ctx, client, target, since, local)
 	if err != nil {
 		return page, changed, err
+	}
+	if cached && !bytes.Equal(site, page.SiteID) {
+		// The cached ID is stale: the peer replaced its database.
+		return pullState(ctx, store, library, client, target, nil)
 	}
 	for {
 		if !bytes.Equal(site, page.SiteID) {
@@ -382,6 +394,7 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 	client := &http.Client{Transport: tailnetTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	// A peer failing the same way on every retry is recorded once; each record is a replicated write.
 	lastFailure := ""
+	var site []byte
 	for {
 		if !g.meshPeer(ctx, peer) {
 			return
@@ -392,7 +405,11 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 		var page stateChangePage
 		var changed bool
 		if err == nil {
-			page, changed, err = pullState(pullCtx, g.auth.store, g.options.Library.Store, client, target)
+			page, changed, err = pullState(pullCtx, g.auth.store, g.options.Library.Store, client, target, site)
+		}
+		site = nil
+		if err == nil {
+			site = page.SiteID
 		}
 		if err == nil && changed {
 			g.credentialsChanged()

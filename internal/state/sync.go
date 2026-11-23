@@ -88,10 +88,17 @@ type Change struct {
 	TS         *string     `json:"ts"`
 }
 
+// SiteID is fixed for the life of the database, so every poll after the first reads the cached copy.
 func (s *Store) SiteID(ctx context.Context) ([]byte, error) {
+	if site := s.site.Load(); site != nil {
+		return bytes.Clone(*site), nil
+	}
 	var site []byte
-	err := s.Reader.QueryRowContext(ctx, "SELECT crsql_site_id()").Scan(&site)
-	return site, err
+	if err := s.Reader.QueryRowContext(ctx, "SELECT crsql_site_id()").Scan(&site); err != nil {
+		return nil, err
+	}
+	s.site.Store(&site)
+	return bytes.Clone(site), nil
 }
 
 // The persisted counter cannot fall when a newer value supersedes the last row of an older version.
@@ -161,8 +168,15 @@ func (s *Store) WriteVersion(ctx context.Context, version int64, exclude []byte,
 	return err
 }
 
-// Changes never splits a source version; next also advances past excluded-only versions.
-func (s *Store) Changes(ctx context.Context, since int64, exclude []byte, maxBytes int) ([]Change, int64, error) {
+// ErrCursorAhead means the peer saw versions this database no longer has: it was restored from a copy.
+var ErrCursorAhead = errors.New("sync cursor is ahead of the source database")
+
+// changeRowCost is less than any encoded change, so a page reaches its byte budget before its row limit.
+const changeRowCost = 96
+
+// ChangePage encodes complete source versions after since as one JSON array within maxBytes.
+// It never splits a source version; next also advances past excluded-only versions.
+func (s *Store) ChangePage(ctx context.Context, since int64, exclude []byte, maxBytes int) (json.RawMessage, int64, error) {
 	if since < 0 || maxBytes < 2 || len(exclude) != 0 && len(exclude) != 16 {
 		return nil, since, errors.New("invalid change page parameters")
 	}
@@ -176,54 +190,70 @@ func (s *Store) Changes(ctx context.Context, since int64, exclude []byte, maxByt
 		return nil, since, err
 	}
 	if since > high {
-		return nil, since, errors.New("sync cursor is ahead of the source database")
+		return nil, since, ErrCursorAhead
 	}
+	limit := maxBytes/changeRowCost + 1
 	rows, err := tx.QueryContext(ctx, `SELECT "table",pk,cid,val,col_version,db_version,site_id,cl,seq,ts
 		FROM crsql_changes WHERE db_version>? AND (? IS NULL OR site_id IS NOT ?)
-		ORDER BY db_version,seq,"table",pk,cid`, since, exclude, exclude)
+		ORDER BY db_version,seq,"table",pk,cid LIMIT ?`, since, exclude, exclude, limit)
 	if err != nil {
 		return nil, since, err
 	}
 	defer rows.Close()
-	result, group := []Change{}, []Change{}
-	next, version := since, int64(-1)
-	size, groupSize := 2, 0
+	var page bytes.Buffer
+	page.WriteByte('[')
+	encoder := json.NewEncoder(&page)
+	// complete is the page length through the last whole version.
+	complete, next, version, count := 1, since, int64(-1), 0
 	for rows.Next() {
+		count++
 		var change Change
 		var value any
 		if err := rows.Scan(&change.Table, &change.PK, &change.Column, &value, &change.ColVersion, &change.DBVersion, &change.SiteID, &change.CL, &change.Seq, &change.TS); err != nil {
 			return nil, since, err
 		}
 		if change.DBVersion != version {
-			result = append(result, group...)
-			size += groupSize
 			if version >= 0 {
-				next = version
+				complete, next = page.Len(), version
 			}
-			group, groupSize, version = nil, 0, change.DBVersion
+			version = change.DBVersion
 		}
-		change.Value, err = sqliteValue(value)
-		if err != nil {
+		if change.Value, err = sqliteValue(value); err != nil {
 			return nil, since, err
 		}
-		body, err := json.Marshal(change)
-		if err != nil {
+		if page.Len() > 1 {
+			page.WriteByte(',')
+		}
+		if err := encoder.Encode(change); err != nil {
 			return nil, since, err
 		}
-		cost := len(body) + 1
-		if size+groupSize+cost > maxBytes {
-			if len(result) == 0 {
-				return nil, since, &ChangeVersionTooLargeError{Version: version, Limit: maxBytes}
-			}
-			return result, next, nil
+		if page.Len()+1 > maxBytes {
+			break
 		}
-		group = append(group, change)
-		groupSize += cost
 	}
 	if err := rows.Err(); err != nil {
 		return nil, since, err
 	}
-	return append(result, group...), high, nil
+	if page.Len()+1 <= maxBytes && count < limit {
+		page.WriteByte(']')
+		return page.Bytes(), high, nil
+	}
+	if complete == 1 {
+		return nil, since, &ChangeVersionTooLargeError{Version: version, Limit: maxBytes}
+	}
+	page.Truncate(complete)
+	page.WriteByte(']')
+	return page.Bytes(), next, nil
+}
+
+// Changes decodes ChangePage for callers that inspect the changes.
+func (s *Store) Changes(ctx context.Context, since int64, exclude []byte, maxBytes int) ([]Change, int64, error) {
+	page, next, err := s.ChangePage(ctx, since, exclude, maxBytes)
+	if err != nil {
+		return nil, next, err
+	}
+	var changes []Change
+	return changes, next, json.Unmarshal(page, &changes)
 }
 
 func decodeChanges(changes []Change) ([]any, error) {

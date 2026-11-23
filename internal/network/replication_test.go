@@ -57,7 +57,7 @@ func registryGateway(t *testing.T, node, caller string) (*Gateway, *httptest.Ser
 func pullRegistry(t *testing.T, to *Gateway, server *httptest.Server) error {
 	t.Helper()
 	target, _ := url.Parse(server.URL)
-	_, _, err := pullState(t.Context(), to.auth.store, to.options.Library.Store, server.Client(), target)
+	_, _, err := pullState(t.Context(), to.auth.store, to.options.Library.Store, server.Client(), target, nil)
 	return err
 }
 

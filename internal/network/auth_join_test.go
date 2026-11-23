@@ -96,7 +96,7 @@ func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
 	}))
 	defer server.Close()
 	endpoint, _ := url.Parse(server.URL)
-	if _, _, err := pullState(t.Context(), auth.store, nil, server.Client(), endpoint); err != nil {
+	if _, _, err := pullState(t.Context(), auth.store, nil, server.Client(), endpoint, nil); err != nil {
 		t.Fatal(err)
 	}
 	w = request("/api/status", false)

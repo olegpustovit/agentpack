@@ -235,7 +235,7 @@ func TestStatePullConvergesThroughPeerAndHealsPartition(t *testing.T) {
 	}
 	pull := func(dst *Gateway, src *httptest.Server) error {
 		target, _ := url.Parse(src.URL)
-		_, _, err := pullState(t.Context(), dst.auth.store, dst.options.Library.Store, src.Client(), target)
+		_, _, err := pullState(t.Context(), dst.auth.store, dst.options.Library.Store, src.Client(), target, nil)
 		return err
 	}
 	if err := pull(b, as); err != nil {
