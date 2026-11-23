@@ -9,6 +9,8 @@ import { EventsProvider, STATE_FAMILIES, stateFamilies, useEventsConnected } fro
 
 class FakeEventSource {
   static instances: FakeEventSource[] = []
+  static CLOSED = 2
+  readyState = 0
   closed = false
   onopen: (() => void) | null = null
   onerror: (() => void) | null = null
@@ -43,6 +45,7 @@ function Probe() {
   useQuery(tracked(["m", "local", "projects"]))
   useQuery(tracked(["nodes"]))
   useQuery(tracked(["topology"]))
+  useQuery(tracked(["diagnostics", "issues"]))
   return null
 }
 
@@ -108,7 +111,15 @@ describe("event stream", () => {
       FakeEventSource.instances[0]!.emit({ topic: "state", node: "peer-1" })
       await flush()
     })
-    expect(calls.sort()).toEqual(["m/local/sessions", "nodes", "topology"])
+    expect(calls.sort()).toEqual(["diagnostics/issues", "m/local/sessions", "nodes", "topology"])
+  })
+
+  it("refreshes the issue list for a diagnostics event", async () => {
+    await act(async () => {
+      FakeEventSource.instances[0]!.emit({ topic: "diagnostics" })
+      await flush()
+    })
+    expect(calls).toEqual(["diagnostics/issues"])
   })
 
   it("refreshes nodes and topology for a nodes event", async () => {
@@ -118,6 +129,40 @@ describe("event stream", () => {
       await flush()
     })
     expect(calls.sort()).toEqual(["nodes", "topology"])
+  })
+
+  it("catches up every live query after a reconnect, including per-machine ones", async () => {
+    const source = FakeEventSource.instances[0]!
+    await act(async () => source.onopen?.())
+    await act(async () => source.onerror?.())
+    calls = []
+    await act(async () => {
+      source.onopen?.()
+      await flush()
+    })
+    expect(calls.sort()).toEqual(["diagnostics/issues", "m/local/projects", "m/local/sessions", "m/peer-1/sessions", "nodes", "topology"])
+  })
+
+  it("reopens a stream the browser closed, backing off", async () => {
+    vi.useFakeTimers()
+    try {
+      const first = FakeEventSource.instances[0]!
+      first.readyState = FakeEventSource.CLOSED
+      act(() => first.onerror?.())
+      expect(first.closed).toBe(true)
+      act(() => vi.advanceTimersByTime(999))
+      expect(FakeEventSource.instances).toHaveLength(1)
+      act(() => vi.advanceTimersByTime(1))
+      const second = FakeEventSource.instances[1]!
+      second.readyState = FakeEventSource.CLOSED
+      act(() => second.onerror?.())
+      act(() => vi.advanceTimersByTime(1999))
+      expect(FakeEventSource.instances).toHaveLength(2)
+      act(() => vi.advanceTimersByTime(1))
+      expect(FakeEventSource.instances).toHaveLength(3)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("reports connected after open and closes while the tab is hidden", async () => {

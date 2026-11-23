@@ -16,7 +16,7 @@ import { sessionLabel } from "@/features/sessions/group"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { openWaits, waitingDetail } from "@/features/sessions/session-status"
 import { agentIds } from "@/features/sessions/rules"
-import { useConversationEvents, useEventsConnected } from "@/features/events/use-events"
+import { reconnectDelay, useConversationEvents, useEventsConnected } from "@/features/events/use-events"
 import { identityQuery, useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName, relativeTime } from "@/lib/format"
@@ -273,7 +273,10 @@ export default function ConversationPane({
     }
     let source: EventSource | undefined
     let untrack: (() => void) | undefined
+    let retry: ReturnType<typeof setTimeout> | undefined
+    let attempt = 0
     const close = () => {
+      clearTimeout(retry)
       source?.close()
       source = undefined
       untrack?.()
@@ -292,8 +295,16 @@ export default function ConversationPane({
       if (machine && machine !== LOCAL) url.searchParams.set("node", machine)
       source = new EventSource(url)
       untrack = trackStreamingQuery(key)
-      source.onopen = () => setStreamConnected(true)
-      source.onerror = () => setStreamConnected(false)
+      source.onopen = () => {
+        attempt = 0
+        setStreamConnected(true)
+      }
+      source.onerror = () => {
+        setStreamConnected(false)
+        if (source?.readyState !== EventSource.CLOSED) return
+        close()
+        retry = setTimeout(syncVisibility, reconnectDelay(attempt++))
+      }
       source.onmessage = (event) => onEntry(event.data)
       source.addEventListener("truncated", onTruncated)
     }

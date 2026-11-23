@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { LOCAL } from "@/lib/api"
 import { configQuery } from "@/lib/config"
@@ -50,6 +50,17 @@ export function stateFamilies(tables: string[] | undefined): string[][] {
   return [...keys.values()]
 }
 
+// A closed EventSource never reopens by itself; retries back off up to half a minute.
+export function reconnectDelay(attempt: number): number {
+  return Math.min(30_000, 1000 * 2 ** attempt)
+}
+
+// Events missed while disconnected: every replicated family plus each machine's live queries.
+function catchUpAll(queryClient: QueryClient) {
+  invalidate(queryClient, ["m"])
+  for (const key of ALL_STATE_FAMILIES) if (key[0] !== "m") invalidate(queryClient, key)
+}
+
 const EventsContext = createContext(false)
 
 // True while the /api/events stream is open. Polling queries read it to stop their timers.
@@ -70,6 +81,7 @@ function dispatch(queryClient: QueryClient, msg: EventMessage) {
     invalidate(queryClient, ["m", LOCAL, msg.topic])
   }
   if (msg.topic === "replication") invalidate(queryClient, ["replication"])
+  if (msg.topic === "diagnostics") return invalidate(queryClient, ["diagnostics"])
   if (msg.topic === "nodes") {
     invalidate(queryClient, ["nodes"])
     invalidate(queryClient, ["topology"])
@@ -102,13 +114,15 @@ export function EventsProvider({ children }: { children: ReactNode }) {
   const [connected, setConnected] = useState(false)
   const [conversation, setConversation] = useState<ConversationSubscription>()
   const catchUp = useRef(false)
-  const subscribe = useCallback((subscription: ConversationSubscription) => {
+  const subscribe = (subscription: ConversationSubscription) => {
     setConversation(subscription)
     return () => setConversation((current) => current === subscription ? undefined : current)
-  }, [])
+  }
   useEffect(() => {
     let source: EventSource | null = null
     let retry: ReturnType<typeof setTimeout> | undefined
+    let attempt = 0
+    let opened = false
     const chat = multiplexed ? conversation : undefined
     const connection = (open: boolean) => {
       setConnected(open)
@@ -131,18 +145,21 @@ export function EventsProvider({ children }: { children: ReactNode }) {
       }
       source = new EventSource(path)
       source.onopen = () => {
+        attempt = 0
+        opened = true
         connection(true)
         if (catchUp.current) {
           catchUp.current = false
-          for (const key of stateFamilies(undefined)) invalidate(queryClient, key)
+          catchUpAll(queryClient)
         }
       }
       source.onerror = () => {
         connection(false)
         catchUp.current = true
-        if (chat) {
+        // A chat stream reopens with a fresh `since`; a plain stream the browser gave up on reopens too.
+        if (chat || source?.readyState === EventSource.CLOSED) {
           close()
-          if (!document.hidden) retry = setTimeout(open, 1000)
+          if (!document.hidden) retry = setTimeout(open, reconnectDelay(attempt++))
         }
       }
       source.onmessage = (event: MessageEvent<string>) =>
@@ -166,6 +183,8 @@ export function EventsProvider({ children }: { children: ReactNode }) {
     return () => {
       document.removeEventListener("visibilitychange", onVisibility)
       close()
+      // The next stream (another chat, or none) starts after a gap.
+      if (opened) catchUp.current = true
     }
   }, [conversation, multiplexed, queryClient])
   return (
