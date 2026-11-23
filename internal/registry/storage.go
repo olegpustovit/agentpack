@@ -80,7 +80,10 @@ func (s *Store) storeObject(table, id string, data []byte) error {
 	})
 }
 
-func removeObject(tx *sql.Tx, id string) error {
+func (s *Store) removeObject(tx *sql.Tx, id string) error {
+	for _, kind := range memoKinds {
+		s.memo.Delete(memoKey{kind, id})
+	}
 	if _, err := tx.Exec("DELETE FROM registry_objects WHERE digest=?", id); err != nil {
 		return err
 	}

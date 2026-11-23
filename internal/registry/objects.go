@@ -82,24 +82,34 @@ func (s *Store) readObject(id string, target any) error {
 }
 
 type objectStamp struct {
-	kind, id, site string
-	version, cl    int64
+	id, site    string
+	version, cl int64
 }
 
+type memoKey struct{ kind, id string }
+
+type memoEntry struct {
+	stamp objectStamp
+	value any
+}
+
+var memoKinds = []string{"package", "revision", "index"}
+
 // Immutable objects are revalidated when their replicated conflict position changes.
+// One entry per digest keeps the memo bounded by the live objects; removeObject drops it.
 func memoized[T any](s *Store, kind, id string, load func() (T, error)) (T, error) {
 	stamps, err := s.bodyStamps()
 	stamp, ok := stamps[id]
 	if err != nil || !ok {
 		return load()
 	}
-	stamp.kind = kind
-	if value, ok := s.memo.Load(stamp); ok {
-		return value.(T), nil
+	key := memoKey{kind, id}
+	if entry, ok := s.memo.Load(key); ok && entry.(memoEntry).stamp == stamp {
+		return entry.(memoEntry).value.(T), nil
 	}
 	value, err := load()
 	if err == nil {
-		s.memo.Store(stamp, value)
+		s.memo.Store(key, memoEntry{stamp, value})
 	}
 	return value, err
 }

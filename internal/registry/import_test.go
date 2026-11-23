@@ -114,7 +114,7 @@ func TestLegacyRegistryImportVerifiesBeforeRemovingFiles(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, "registry", objectsDir)); !os.IsNotExist(err) {
 		t.Fatalf("legacy object directory retained: %v", err)
 	}
-	changes, _, err := imported.sql.Changes(t.Context(), 0, nil, 4<<20)
+	changes, _, err := imported.sql.Replicator().Changes(t.Context(), 0, nil, 4<<20)
 	if err != nil {
 		t.Fatal(err)
 	}

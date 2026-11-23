@@ -125,3 +125,36 @@ func TestArchiveRefusesReplicatedStateCopiedToArchivePath(t *testing.T) {
 		t.Fatal("replicated state database accepted as a plain archive")
 	}
 }
+
+func TestOpenPlainNeverLoadsCRSQLite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plain.db")
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := OpenPlain(path, PlainOptions{Durable: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var mode, sync string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("PRAGMA synchronous").Scan(&sync); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "wal" || sync != "2" {
+		t.Fatalf("journal_mode=%s synchronous=%s", mode, sync)
+	}
+	if _, err := db.Exec("SELECT crsql_site_id()"); err == nil {
+		t.Fatal("plain database loaded cr-sqlite")
+	}
+	ro, err := OpenPlain(path, PlainOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	if _, err := ro.Exec("CREATE TABLE t(x)"); err == nil {
+		t.Fatal("read-only plain database accepted a write")
+	}
+}

@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -40,7 +42,7 @@ type stateChangePage struct {
 func (g *Gateway) peerOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-		if !g.enrolledPeer(peer) {
+		if g.peer(peer).Node == "" {
 			http.Error(w, "replication requires enrollment on both machines", http.StatusForbidden)
 			return
 		}
@@ -48,26 +50,19 @@ func (g *Gateway) peerOnly(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (g *Gateway) meshPeer(ctx context.Context, id string) bool {
+// peer is the enrolled peer for id; Node is "" when it is not enrolled. Mesh peers also share state.
+func (g *Gateway) peer(id string) registry.PeerReplica {
 	if g.options.Library.Store == nil || id == "" {
-		return false
+		return registry.PeerReplica{}
 	}
-	peers, err := g.options.Library.Store.ListPeers()
-	if err != nil {
-		return false
-	}
-	for _, peer := range peers {
-		if peer.Node == id {
-			return peer.Mesh
-		}
-	}
-	return false
+	peer, _ := g.options.Library.Store.Peer(id)
+	return peer
 }
 
 func (g *Gateway) registerStateSync(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/sync/events", g.peerOnly(func(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-		if !g.meshPeer(r.Context(), peer) {
+		if !g.peer(peer).Mesh {
 			http.Error(w, "mesh replication requires explicit enrollment on both machines", http.StatusForbidden)
 			return
 		}
@@ -76,7 +71,7 @@ func (g *Gateway) registerStateSync(mux routeRegistrar) {
 	// A new Main asks the old one to stop Main-only work before its switch replicates.
 	mux.HandleFunc("POST /api/sync/main/release", g.peerOnly(func(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-		if !g.meshPeer(r.Context(), peer) {
+		if !g.peer(peer).Mesh {
 			http.Error(w, "mesh replication requires explicit enrollment on both machines", http.StatusForbidden)
 			return
 		}
@@ -100,7 +95,7 @@ func (g *Gateway) registerStateSync(mux routeRegistrar) {
 	}))
 	mux.HandleFunc("GET /api/sync/changes", g.peerOnly(func(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-		if !g.meshPeer(r.Context(), peer) {
+		if !g.peer(peer).Mesh {
 			http.Error(w, "mesh replication requires explicit enrollment on both machines", http.StatusForbidden)
 			return
 		}
@@ -144,7 +139,7 @@ func (g *Gateway) registerStateSync(mux routeRegistrar) {
 		var next int64
 		// Reserve space for the envelope in the 4 MiB response limit.
 		if err == nil && sinceText != "" {
-			rows, next, err = g.store.ChangePage(r.Context(), since, exclude, syncPageLimit-1024)
+			rows, next, err = g.store.Replicator().ChangePage(r.Context(), since, exclude, syncPageLimit-1024)
 		}
 		var oversized *state.ChangeVersionTooLargeError
 		if errors.As(err, &oversized) {
@@ -162,7 +157,7 @@ func (g *Gateway) registerStateSync(mux routeRegistrar) {
 			return
 		}
 		if err == nil {
-			err = g.store.NoteServed(next)
+			err = g.store.Replicator().NoteServed(next)
 		}
 		if err != nil {
 			if event := obs.From(r.Context()); event != nil {
@@ -258,7 +253,7 @@ func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, s
 
 // pullState resumes each source by its immutable site ID, including after gateway restarts.
 // site is the source's ID from the previous pull, or nil to ask for it first.
-func pullState(ctx context.Context, store *state.Store, library *registry.Store, client *http.Client, target *url.URL, site []byte) (stateChangePage, bool, error) {
+func pullState(ctx context.Context, store *state.Store, client *http.Client, target *url.URL, site []byte) (stateChangePage, bool, error) {
 	local, err := store.SiteID(ctx)
 	if err != nil {
 		return stateChangePage{}, false, err
@@ -274,14 +269,14 @@ func pullState(ctx context.Context, store *state.Store, library *registry.Store,
 	if bytes.Equal(site, local) {
 		return stateChangePage{SiteID: site, reachable: true}, false, errors.New("cannot replicate a copy of the local database")
 	}
-	since, err := store.Cursor(ctx, site)
+	since, err := store.Replicator().Cursor(ctx, site)
 	if err != nil {
 		return stateChangePage{}, false, err
 	}
 	changed := false
 	page, err := fetchStatePage(ctx, client, target, since, local)
 	if errors.Is(err, errSyncReset) && bytes.Equal(site, page.SiteID) {
-		if err := store.ResetCursor(ctx, site); err != nil {
+		if err := store.Replicator().ResetCursor(ctx, site); err != nil {
 			return page, false, err
 		}
 		since = 0
@@ -292,19 +287,13 @@ func pullState(ctx context.Context, store *state.Store, library *registry.Store,
 	}
 	if cached && !bytes.Equal(site, page.SiteID) {
 		// The cached ID is stale: the peer replaced its database.
-		return pullState(ctx, store, library, client, target, nil)
+		return pullState(ctx, store, client, target, nil)
 	}
 	for {
 		if !bytes.Equal(site, page.SiteID) {
 			return page, changed, errors.New("peer database identity changed during transfer")
 		}
-		rejected, err := store.ApplyValidatedPage(ctx, page.Changes, site, page.Next, func(change state.Change) (bool, error) {
-			err := registry.ValidateChanges(store, []state.Change{change})
-			if errors.Is(err, registry.ErrInvalidChange) {
-				return false, nil
-			}
-			return err == nil, err
-		})
+		rejected, err := store.Replicator().ApplyPage(ctx, page.Changes, site, page.Next)
 		if err != nil {
 			return page, changed, err
 		}
@@ -316,21 +305,7 @@ func pullState(ctx context.Context, store *state.Store, library *registry.Store,
 			event.Fail(errors.New(rejected[0].Reason))
 			event.End()
 		}
-		applied := len(page.Changes) > len(rejected)
-		changed = changed || applied
-		if library != nil && applied {
-			for _, change := range page.Changes {
-				if strings.HasPrefix(change.Table, "registry_") {
-					if err := library.MergeHeads(); err != nil {
-						return page, changed, err
-					}
-					if _, err := library.CollectGarbage(); err != nil {
-						return page, changed, err
-					}
-					break
-				}
-			}
-		}
+		changed = changed || len(page.Changes) > len(rejected)
 		if page.Next == since || len(page.Changes) == 0 {
 			return page, changed, nil
 		}
@@ -340,6 +315,38 @@ func pullState(ctx context.Context, store *state.Store, library *registry.Store,
 			return page, changed, err
 		}
 	}
+}
+
+// runReplicationEffects is the one consumer of the tables peer pages changed.
+func (g *Gateway) runReplicationEffects(ctx context.Context) {
+	replicator := g.store.Replicator()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-replicator.Changed():
+			g.replicationApplied(ctx, replicator.TakeChanged())
+		}
+	}
+}
+
+func (g *Gateway) replicationApplied(ctx context.Context, tables map[string]bool) {
+	if len(tables) == 0 {
+		return
+	}
+	if library := g.options.Library.Store; library != nil && slices.ContainsFunc(slices.Collect(maps.Keys(tables)), func(table string) bool { return strings.HasPrefix(table, "registry_") }) {
+		err := library.MergeHeads()
+		if err == nil {
+			_, err = library.CollectGarbage()
+		}
+		if err != nil {
+			_, event := obs.Start(ctx, "sync.pull", "merge library")
+			event.Fail(err)
+			event.End()
+		}
+	}
+	g.credentialsChanged()
+	g.wakeArchive()
 }
 
 func (g *Gateway) wakeStatePeer(peer string) {
@@ -357,7 +364,7 @@ func (g *Gateway) runStateSync(ctx context.Context) {
 		nodeID, _ := g.store.NodeID(ctx)
 		ctx = obs.WithSink(ctx, g.logs, obs.BuildMetadata(g.options.Version, nodeID, "gateway"))
 	}
-	if err := g.publishMeshNode(ctx); err != nil {
+	if err := g.store.Mesh().Publish(ctx, g.selfIdentity(ctx).displayName(), g.options.Version); err != nil {
 		_, event := obs.Start(ctx, "sync.pull", "register node")
 		event.Fail(err)
 		event.End()
@@ -453,7 +460,7 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 	lastFailure := ""
 	var site []byte
 	for {
-		if !g.meshPeer(ctx, peer) {
+		if !g.peer(peer).Mesh {
 			return
 		}
 		pullCtx, cancel := context.WithTimeout(ctx, time.Minute)
@@ -462,15 +469,11 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 		var page stateChangePage
 		var changed bool
 		if err == nil {
-			page, changed, err = pullState(pullCtx, g.store, g.options.Library.Store, client, target, site)
+			page, changed, err = pullState(pullCtx, g.store, client, target, site)
 		}
 		site = nil
 		if err == nil {
 			site = page.SiteID
-		}
-		if err == nil && changed {
-			g.credentialsChanged()
-			g.wakeArchive()
 		}
 		cancel()
 		if ctx.Err() != nil {
@@ -516,16 +519,4 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 		case <-timer.C:
 		}
 	}
-}
-
-func (g *Gateway) publishMeshNode(ctx context.Context) error {
-	site, err := g.store.SiteID(ctx)
-	if err != nil {
-		return err
-	}
-	_, err = g.store.DB.ExecContext(ctx, `INSERT INTO mesh_nodes(node_id,name,site_id,schema_version,app_version,updated_at)
- VALUES (`+state.LocalNodeSQL+`,?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET
- name=excluded.name,site_id=excluded.site_id,schema_version=excluded.schema_version,app_version=excluded.app_version,updated_at=excluded.updated_at
- WHERE name IS NOT excluded.name OR site_id IS NOT excluded.site_id OR schema_version IS NOT excluded.schema_version OR app_version IS NOT excluded.app_version`, g.selfIdentity(ctx).displayName(), site, replicationVersion, g.options.Version, time.Now().UnixMilli())
-	return err
 }

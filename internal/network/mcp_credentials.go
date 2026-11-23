@@ -25,6 +25,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 // MCP credentials are stored once in the replicated mcp_credentials table and
@@ -159,69 +160,44 @@ func (g *Gateway) connectURL() string {
 	return g.preferredOrigin() + "/settings/connections"
 }
 
-const mcpCredentialColumns = "id,match,kind,label,account,client,state,created_node,created_at"
-
-func scanMCPCredential(row interface{ Scan(...any) error }) (mcpCredential, error) {
-	var credential mcpCredential
-	var client, state string
-	var created int64
-	if err := row.Scan(&credential.ID, &credential.Match, &credential.Kind, &credential.Label, &credential.Account, &client, &state, &credential.CreatedNode, &created); err != nil {
-		return credential, err
-	}
-	credential.CreatedAt = time.UnixMilli(created).UTC()
-	if client != "" {
-		if err := json.Unmarshal([]byte(client), &credential.Client); err != nil {
+func decodeMCPCredential(row state.MCPCredential) (mcpCredential, error) {
+	credential := mcpCredential{ID: row.ID, Match: row.Match, Kind: row.Kind, Label: row.Label, Account: row.Account, CreatedNode: row.CreatedNode, CreatedAt: time.UnixMilli(row.CreatedAt).UTC(), Plugins: row.Plugins}
+	if row.Client != "" {
+		if err := json.Unmarshal([]byte(row.Client), &credential.Client); err != nil {
 			return credential, fmt.Errorf("MCP credential %s has an unreadable client", credential.ID)
 		}
 	}
-	if err := json.Unmarshal([]byte(state), &credential.State); err != nil {
+	if err := json.Unmarshal([]byte(row.State), &credential.State); err != nil {
 		return credential, fmt.Errorf("MCP credential %s has an unreadable state", credential.ID)
 	}
 	return credential, nil
 }
 
 func (g *Gateway) loadMCPCredential(ctx context.Context, id string) (mcpCredential, error) {
-	credential, err := scanMCPCredential(g.store.Reader.QueryRowContext(ctx, "SELECT "+mcpCredentialColumns+" FROM mcp_credentials WHERE id=?", id))
+	row, err := g.store.Credentials().MCP(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return credential, errMCPCredentialNotFound
+		return mcpCredential{}, errMCPCredentialNotFound
 	}
-	return credential, err
+	if err != nil {
+		return mcpCredential{}, err
+	}
+	return decodeMCPCredential(row)
 }
 
 func (g *Gateway) listMCPCredentials(ctx context.Context, account string) ([]mcpCredential, error) {
-	rows, err := g.store.Reader.QueryContext(ctx, "SELECT "+mcpCredentialColumns+" FROM mcp_credentials WHERE account=? ORDER BY created_at,id", account)
+	rows, err := g.store.Credentials().MCPForAccount(ctx, account)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var credentials []mcpCredential
-	for rows.Next() {
-		credential, err := scanMCPCredential(rows)
+	for _, row := range rows {
+		credential, err := decodeMCPCredential(row)
 		if err != nil {
 			return nil, err
 		}
 		credentials = append(credentials, credential)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	approvals, err := g.store.Reader.QueryContext(ctx, "SELECT a.credential_id,a.module FROM mcp_credential_approvals a JOIN mcp_credentials c ON c.id=a.credential_id WHERE c.account=? ORDER BY a.module", account)
-	if err != nil {
-		return nil, err
-	}
-	defer approvals.Close()
-	for approvals.Next() {
-		var id, module string
-		if err := approvals.Scan(&id, &module); err != nil {
-			return nil, err
-		}
-		for i := range credentials {
-			if credentials[i].ID == id {
-				credentials[i].Plugins = append(credentials[i].Plugins, module)
-			}
-		}
-	}
-	return credentials, approvals.Err()
+	return credentials, nil
 }
 
 func (g *Gateway) writeMCPState(ctx context.Context, id string, state mcpCredentialState) error {
@@ -234,18 +210,16 @@ func (g *Gateway) writeMCPState(ctx context.Context, id string, state mcpCredent
 	if err != nil {
 		return err
 	}
-	query := "UPDATE mcp_credentials SET state=? WHERE id=?"
-	args := []any{string(data), id}
+	var generation *int64
 	if state.Status == mcpStatusNeedsLogin {
-		query += " AND coalesce(json_extract(state,'$.generation'),0)<=?"
-		args = append(args, state.Generation)
+		generation = &state.Generation
 	}
-	result, err := g.store.DB.ExecContext(ctx, query, args...)
+	changed, err := g.store.Credentials().SetMCPState(ctx, id, string(data), generation)
 	if err != nil {
 		return err
 	}
-	if count, _ := result.RowsAffected(); count == 0 {
-		if state.Status == mcpStatusNeedsLogin {
+	if !changed {
+		if generation != nil {
 			_, err := g.loadMCPCredential(ctx, id)
 			return err
 		}
@@ -266,60 +240,22 @@ func (g *Gateway) saveMCPCredential(ctx context.Context, credential mcpCredentia
 	if err != nil {
 		return "", err
 	}
-	tx, err := g.store.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
-	var existing string
-	var state string
-	err = tx.QueryRowContext(ctx, "SELECT id,state FROM mcp_credentials WHERE account=? AND kind=? AND match=? AND label=?", credential.Account, credential.Kind, credential.Match, credential.Label).Scan(&existing, &state)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
-	if existing != "" {
-		var previous mcpCredentialState
-		if json.Unmarshal([]byte(state), &previous) == nil && previous.Generation >= credential.State.Generation {
-			credential.State.Generation = previous.Generation + 1
-		}
-		credential.ID = existing
-	} else {
-		credential.ID = "mcpc-" + randomToken()[:24]
-	}
 	credential.State.UpdatedAt, credential.State.UpdatedBy = time.Now().UTC(), nodeID
 	stateData, err := json.Marshal(credential.State)
 	if err != nil {
 		return "", err
 	}
-	if existing != "" {
-		_, err = tx.ExecContext(ctx, "UPDATE mcp_credentials SET client=?,state=? WHERE id=?", string(client), string(stateData), existing)
-	} else {
-		_, err = tx.ExecContext(ctx, "INSERT INTO mcp_credentials("+mcpCredentialColumns+") VALUES (?,?,?,?,?,?,?,?,?)",
-			credential.ID, credential.Match, credential.Kind, credential.Label, credential.Account, string(client), string(stateData), nodeID, time.Now().UnixMilli())
-	}
+	id, err := g.store.Credentials().SaveMCP(ctx, state.MCPCredential{Match: credential.Match, Kind: credential.Kind, Label: credential.Label, Account: credential.Account,
+		Client: string(client), State: string(stateData), CreatedNode: nodeID}, "mcpc-"+randomToken()[:24])
 	if err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
 		return "", err
 	}
 	g.credentialsChanged()
-	return credential.ID, nil
+	return id, nil
 }
 
 func (g *Gateway) deleteMCPCredential(ctx context.Context, id string) error {
-	tx, err := g.store.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, "DELETE FROM mcp_credential_approvals WHERE credential_id=?", id); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM mcp_credentials WHERE id=?", id); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
+	if err := g.store.Credentials().DeleteMCP(ctx, id); err != nil {
 		return err
 	}
 	g.credentialsChanged()
@@ -499,7 +435,7 @@ func (g *Gateway) markNeedsLogin(ctx context.Context, credential mcpCredential) 
 }
 
 func (g *Gateway) remoteMCPRefresh(ctx context.Context, node string, credential mcpCredential, failedGeneration int64) (mcpBridgeSecret, error) {
-	if !g.meshPeer(ctx, node) {
+	if !g.peer(node).Mesh {
 		return mcpBridgeSecret{}, errMCPRefresherUnreachable
 	}
 	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
@@ -697,7 +633,7 @@ func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
 			http.Error(w, "a package module ID is required", http.StatusBadRequest)
 			return
 		}
-		if _, err := g.store.DB.ExecContext(r.Context(), "INSERT OR IGNORE INTO mcp_credential_approvals(credential_id,module,created_at) VALUES (?,?,?)", credential.ID, module, time.Now().UnixMilli()); err != nil {
+		if err := g.store.Credentials().Approve(r.Context(), credential.ID, module); err != nil {
 			credentialFailure(w, r, err)
 			return
 		}
@@ -715,7 +651,7 @@ func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		if _, err := g.store.DB.ExecContext(r.Context(), "DELETE FROM mcp_credential_approvals WHERE credential_id=? AND module=?", credential.ID, input.Module); err != nil {
+		if err := g.store.Credentials().Revoke(r.Context(), credential.ID, input.Module); err != nil {
 			credentialFailure(w, r, err)
 			return
 		}
@@ -746,7 +682,7 @@ func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
 			return
 		}
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-		allowed := actor.Kind == "local" && g.localRequest(r) || actor.Kind == "peer" && actor.Account && g.meshPeer(r.Context(), peer)
+		allowed := actor.Kind == "local" && g.localRequest(r) || actor.Kind == "peer" && actor.Account && g.peer(peer).Mesh
 		if !allowed || !g.accountEnabled(r.Context(), credential.Account) {
 			http.Error(w, "local or mesh access only", http.StatusForbidden)
 			return
@@ -895,14 +831,14 @@ func (g *Gateway) runMCPCredentials(ctx context.Context, interval time.Duration)
 }
 
 func (g *Gateway) renewMCPTokens(ctx context.Context) {
-	rows, err := g.store.Reader.QueryContext(ctx, "SELECT "+mcpCredentialColumns+" FROM mcp_credentials WHERE kind=?", mcp.CredentialOAuth)
+	rows, err := g.store.Credentials().MCPOfKind(ctx, mcp.CredentialOAuth)
 	if err != nil {
 		return
 	}
 	var due []mcpCredential
 	now := time.Now()
-	for rows.Next() {
-		credential, err := scanMCPCredential(rows)
+	for _, row := range rows {
+		credential, err := decodeMCPCredential(row)
 		token := credential.State.Token
 		if err != nil || token == nil || token.RefreshToken == "" || token.Expiry.IsZero() || credential.State.Status == mcpStatusNeedsLogin {
 			continue
@@ -911,7 +847,6 @@ func (g *Gateway) renewMCPTokens(ctx context.Context) {
 			due = append(due, credential)
 		}
 	}
-	rows.Close()
 	for _, credential := range due {
 		if _, local, err := g.mcpRefresher(ctx, credential); err != nil || !local || !g.accountEnabled(ctx, credential.Account) {
 			continue

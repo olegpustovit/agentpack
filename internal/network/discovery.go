@@ -402,7 +402,7 @@ func (g *Gateway) autoEnroll(ctx context.Context, discovered []TailnetNode) {
 		return
 	}
 	for _, node := range discovered {
-		if g.meshPeer(ctx, node.ID) {
+		if g.peer(node.ID).Mesh {
 			continue
 		}
 		removed, err := g.options.Library.Store.PeerRemoved(node.ID)
@@ -458,16 +458,15 @@ func (g *Gateway) meshNodes(ctx context.Context, discovered []TailnetNode) ([]Ta
 	for _, node := range discovered {
 		nodes[node.ID] = node
 	}
-	rows, err := g.store.Reader.QueryContext(ctx, "SELECT node_id,name,app_version,schema_version FROM mesh_nodes WHERE node_id<>?", local)
+	recorded, err := g.store.Mesh().Nodes(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var node TailnetNode
-		if err := rows.Scan(&node.ID, &node.Name, &node.Version, &node.Schema); err != nil {
-			return nil, err
+	for _, row := range recorded {
+		if row.ID == local {
+			continue
 		}
+		node := TailnetNode{ID: row.ID, Name: row.Name, Version: row.AppVersion, Schema: row.Schema}
 		if node.Name == "" {
 			node.Name = node.ID
 		}
@@ -488,9 +487,6 @@ func (g *Gateway) meshNodes(ctx context.Context, discovered []TailnetNode) ([]Ta
 			}
 		}
 		nodes[node.ID] = node
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 	if store := g.options.Library.Store; store != nil {
 		peers, err := store.ListPeers()
@@ -567,12 +563,12 @@ func (g *Gateway) proxyTailnet(w http.ResponseWriter, r *http.Request, id string
 	}
 	target, err := g.tailnetTarget(r.Context(), id)
 	if err != nil {
-		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/conversation") && g.meshPeer(r.Context(), id) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/conversation") && g.peer(id).Mesh {
 			g.serveConversation(w, r)
 			return
 		}
 		status := http.StatusBadGateway
-		if g.meshPeer(r.Context(), id) {
+		if g.peer(id).Mesh {
 			status = http.StatusServiceUnavailable
 		}
 		http.Error(w, err.Error(), status)
@@ -615,7 +611,7 @@ func (g *Gateway) proxyTailnetTo(w http.ResponseWriter, r *http.Request, id stri
 		if event := obs.From(r.Context()); event != nil {
 			event.Fail(err)
 		}
-		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/conversation") && g.meshPeer(r.Context(), id) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/conversation") && g.peer(id).Mesh {
 			g.serveConversation(w, r)
 			return
 		}
@@ -624,7 +620,7 @@ func (g *Gateway) proxyTailnetTo(w http.ResponseWriter, r *http.Request, id stri
 		http.Error(w, "remote node connection failed; the gateway logged the network error", http.StatusBadGateway)
 	}
 	proxy.ModifyResponse = func(response *http.Response) error {
-		if response.StatusCode >= 500 && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/conversation") && g.meshPeer(r.Context(), id) {
+		if response.StatusCode >= 500 && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/conversation") && g.peer(id).Mesh {
 			return errors.New("remote conversation is temporarily unavailable")
 		}
 
@@ -723,7 +719,7 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			return
 		}
 		peer := identity.Node.StableID
-		if !g.enrolledPeer(peer) {
+		if g.peer(peer).Node == "" {
 			http.Error(w, "peer is not enrolled", http.StatusForbidden)
 			return
 		}

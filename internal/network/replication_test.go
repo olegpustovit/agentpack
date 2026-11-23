@@ -59,7 +59,9 @@ func registryGateway(t *testing.T, node, caller string) (*Gateway, *httptest.Ser
 func pullRegistry(t *testing.T, to *Gateway, server *httptest.Server) error {
 	t.Helper()
 	target, _ := url.Parse(server.URL)
-	_, _, err := pullState(t.Context(), to.auth.store, to.options.Library.Store, server.Client(), target, nil)
+	_, _, err := pullState(t.Context(), to.auth.store, server.Client(), target, nil)
+	// The gateway's replication consumer merges heads; run it inline so the test sees its result.
+	to.replicationApplied(t.Context(), to.store.Replicator().TakeChanged())
 	return err
 }
 
@@ -149,7 +151,7 @@ func TestLibraryStatePageQuarantinesChangedDigestAndAdvancesCursor(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cursor, err := b.auth.store.Cursor(t.Context(), site)
+	cursor, err := b.auth.store.Replicator().Cursor(t.Context(), site)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +161,7 @@ func TestLibraryStatePageQuarantinesChangedDigestAndAdvancesCursor(t *testing.T)
 	if err := pullRegistry(t, b, server); err != nil {
 		t.Fatal(err)
 	}
-	if after, err := b.auth.store.Cursor(t.Context(), site); err != nil || after <= cursor {
+	if after, err := b.auth.store.Replicator().Cursor(t.Context(), site); err != nil || after <= cursor {
 		t.Fatalf("quarantine did not advance cursor: %d %d %v", cursor, after, err)
 	}
 	var rejected int
@@ -198,7 +200,7 @@ func TestDiscoveredPeersEnrollAutomatically(t *testing.T) {
 	g, _ := registryGateway(t, "nSelf", "")
 	// An unclaimed gateway pairs with every discovered peer, not only the first one it joins.
 	g.autoEnroll(t.Context(), []TailnetNode{{ID: "nPeer", Name: "gigacomp", Online: true}, {ID: "nOther"}})
-	if !g.meshPeer(t.Context(), "nPeer") || !g.meshPeer(t.Context(), "nOther") {
+	if !g.peer("nPeer").Mesh || !g.peer("nOther").Mesh {
 		t.Fatal("a discovered peer was not paired")
 	}
 	g.autoEnroll(t.Context(), []TailnetNode{{ID: "nPeer"}})
@@ -210,7 +212,7 @@ func TestDiscoveredPeersEnrollAutomatically(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.autoEnroll(t.Context(), []TailnetNode{{ID: "nPeer"}})
-	if g.meshPeer(t.Context(), "nPeer") {
+	if g.peer("nPeer").Mesh {
 		t.Fatal("a removed peer was paired again")
 	}
 }
@@ -228,7 +230,7 @@ func TestPullerRestartsWhenSourceCursorIsAhead(t *testing.T) {
 	}
 	site, _ := src.auth.store.SiteID(t.Context())
 	// The destination saw versions a restored source no longer has.
-	if err := dst.auth.store.SetCursor(t.Context(), site, 1<<40); err != nil {
+	if err := dst.auth.store.Replicator().SetCursor(t.Context(), site, 1<<40); err != nil {
 		t.Fatal(err)
 	}
 	if err := pullRegistry(t, dst, srcServer); err != nil {
@@ -238,7 +240,7 @@ func TestPullerRestartsWhenSourceCursorIsAhead(t *testing.T) {
 	if err := dst.auth.store.Reader.QueryRow("SELECT name FROM sessions WHERE id='kept'").Scan(&name); err != nil {
 		t.Fatalf("puller did not restart from the beginning: %v", err)
 	}
-	if cursor, _ := dst.auth.store.Cursor(t.Context(), site); cursor >= 1<<40 {
+	if cursor, _ := dst.auth.store.Replicator().Cursor(t.Context(), site); cursor >= 1<<40 {
 		t.Fatalf("cursor stayed ahead: %d", cursor)
 	}
 }

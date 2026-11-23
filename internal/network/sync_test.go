@@ -104,7 +104,7 @@ func TestStateSyncPagesCommitCompleteVersions(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
 			t.Fatal(err)
 		}
-		if err := target.ApplyPage(t.Context(), page.Changes, page.SiteID, page.Next); err != nil {
+		if _, err := target.Replicator().ApplyPage(t.Context(), page.Changes, page.SiteID, page.Next); err != nil {
 			t.Fatal(err)
 		}
 		if page.Next == since {
@@ -236,7 +236,7 @@ func TestStatePullConvergesThroughPeerAndHealsPartition(t *testing.T) {
 	}
 	pull := func(dst *Gateway, src *httptest.Server) error {
 		target, _ := url.Parse(src.URL)
-		_, _, err := pullState(t.Context(), dst.auth.store, dst.options.Library.Store, src.Client(), target, nil)
+		_, _, err := pullState(t.Context(), dst.auth.store, src.Client(), target, nil)
 		return err
 	}
 	if err := pull(b, as); err != nil {

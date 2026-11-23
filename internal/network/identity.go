@@ -160,7 +160,7 @@ func (g *Gateway) identity(w http.ResponseWriter, r *http.Request) {
 
 // An account assertion has authority only after both machines explicitly approved mesh membership.
 func (g *Gateway) forwardedAccount(ctx context.Context, actor Actor, email string) (Actor, error) {
-	if email == "" || !g.meshPeer(ctx, actor.StableNodeID) {
+	if email == "" || !g.peer(actor.StableNodeID).Mesh {
 		return actor, nil
 	}
 	normalized, err := normalizeEmail(email)

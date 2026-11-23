@@ -196,7 +196,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	for _, task := range []struct {
 		name string
 		run  func(context.Context)
-	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}, {"gateway.push", func(ctx context.Context) { gateway.runPush(ctx, pushInterval) }}, {"gateway.agent_tasks", func(ctx context.Context) { gateway.runAgentTasks(ctx, agentTasksInterval) }}, {"gateway.omp_settings", func(ctx context.Context) { gateway.runOMPSettings(ctx, 30*time.Second) }}, {"gateway.agent_credentials", func(ctx context.Context) { gateway.runAgentCredentials(ctx, 30*time.Second) }}} {
+	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.replication_effects", gateway.runReplicationEffects}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}, {"gateway.push", func(ctx context.Context) { gateway.runPush(ctx, pushInterval) }}, {"gateway.agent_tasks", func(ctx context.Context) { gateway.runAgentTasks(ctx, agentTasksInterval) }}, {"gateway.omp_settings", func(ctx context.Context) { gateway.runOMPSettings(ctx, 30*time.Second) }}, {"gateway.agent_credentials", func(ctx context.Context) { gateway.runAgentCredentials(ctx, 30*time.Second) }}} {
 		background.Add(1)
 		obs.Go(task.name, func() { defer background.Done(); task.run(ctx) })
 	}
@@ -334,7 +334,7 @@ func (g *Gateway) buildHandler() http.Handler {
 				authFailure(w, r, "account state unavailable", err)
 				return
 			}
-			if !hasAccounts && (!g.meshPeer(r.Context(), peer) || !(r.Method == http.MethodGet && (r.URL.Path == "/api/sync/changes" || r.URL.Path == "/api/sync/events" || r.URL.Path == "/api/events"))) {
+			if !hasAccounts && (!g.peer(peer).Mesh || !(r.Method == http.MethodGet && (r.URL.Path == "/api/sync/changes" || r.URL.Path == "/api/sync/events" || r.URL.Path == "/api/events"))) {
 				http.Error(w, "waiting for mesh accounts", http.StatusForbidden)
 				return
 			}
@@ -957,7 +957,7 @@ func (g *Gateway) serveRoute(row route, handler http.Handler) http.Handler {
 			}
 		}
 		if node := r.URL.Query().Get("node"); node != "" && strings.HasPrefix(r.URL.Path, "/api/") &&
-			!(r.Method == http.MethodGet && meshListRoute(r.URL.Path) && g.meshPeer(r.Context(), node)) {
+			!(r.Method == http.MethodGet && meshListRoute(r.URL.Path) && g.peer(node).Mesh) {
 			w.Header().Del("Cache-Control") // the peer's Cache-Control passes through unchanged
 			g.proxyTailnet(w, r, node)
 			return

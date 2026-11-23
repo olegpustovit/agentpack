@@ -335,7 +335,7 @@ func (g *Gateway) relayPeer(ctx context.Context, client *http.Client, node strin
 
 func (g *Gateway) readPeerEvents(ctx context.Context, client *http.Client, node string, target *url.URL) (bool, error) {
 	path := "/api/events"
-	if g.meshPeer(ctx, node) {
+	if g.peer(node).Mesh {
 		path = "/api/sync/events"
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.JoinPath(path).String(), nil)
@@ -410,9 +410,9 @@ func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
 		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
 		if peer != "" {
 			if r.URL.Path == "/api/sync/events" {
-				return g.meshPeer(r.Context(), peer)
+				return g.peer(peer).Mesh
 			}
-			return g.enrolledPeer(peer)
+			return g.peer(peer).Node != ""
 		}
 		return private || g.auth.authenticated(r)
 	}

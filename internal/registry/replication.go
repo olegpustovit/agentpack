@@ -77,6 +77,16 @@ func (s *Store) ListPeers() ([]PeerReplica, error) {
 	return peers, rows.Err()
 }
 
+// Peer returns an enrolled (not removed) peer; Node is "" when there is none.
+func (s *Store) Peer(node string) (PeerReplica, error) {
+	peer := PeerReplica{}
+	err := s.sql.Reader.QueryRow("SELECT node_id,mesh FROM registry_peers WHERE node_id=? AND removed=0", node).Scan(&peer.Node, &peer.Mesh)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PeerReplica{}, nil
+	}
+	return peer, err
+}
+
 func (s *Store) RemovePeer(node string) error {
 	if err := ValidatePeer(node); err != nil {
 		return err
@@ -419,13 +429,13 @@ func (s *Store) collectTombstone(tx *sql.Tx, tombstone Tombstone) ([]string, err
 	}
 	var removed []string
 	for nameID := range nameIDs {
-		if err := removeObject(tx, nameID); err != nil {
+		if err := s.removeObject(tx, nameID); err != nil {
 			return nil, err
 		}
 		removed = append(removed, nameID)
 	}
 	for revisionID := range revisionIDs {
-		if err := removeObject(tx, revisionID); err != nil {
+		if err := s.removeObject(tx, revisionID); err != nil {
 			return nil, err
 		}
 		removed = append(removed, revisionID)
@@ -441,7 +451,7 @@ func (s *Store) collectTombstone(tx *sql.Tx, tombstone Tombstone) ([]string, err
 		if referenced {
 			continue
 		}
-		if err := removeObject(tx, packageID); err != nil {
+		if err := s.removeObject(tx, packageID); err != nil {
 			return nil, err
 		}
 		removed = append(removed, packageID)

@@ -24,7 +24,7 @@ type traceUpload struct {
 
 func (g *Gateway) ingestTraces(w http.ResponseWriter, r *http.Request) {
 	peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-	if !g.meshPeer(r.Context(), peer) {
+	if !g.peer(peer).Mesh {
 		http.Error(w, "diagnostics require explicit mesh enrollment", http.StatusForbidden)
 		return
 	}
@@ -62,7 +62,7 @@ func (g *Gateway) ingestTraces(w http.ResponseWriter, r *http.Request) {
 
 func (g *Gateway) localTrace(w http.ResponseWriter, r *http.Request) {
 	peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-	if !g.meshPeer(r.Context(), peer) {
+	if !g.peer(peer).Mesh {
 		http.Error(w, "diagnostics require explicit mesh enrollment", http.StatusForbidden)
 		return
 	}
@@ -79,7 +79,7 @@ func (g *Gateway) forwardErrorTraces(ctx context.Context, targetFor func(context
 	if err != nil || roles.MainNode == "" || roles.MainNode == local || g.logs == nil {
 		return err
 	}
-	if !g.meshPeer(ctx, roles.MainNode) {
+	if !g.peer(roles.MainNode).Mesh {
 		return errors.New("main gateway is not an approved mesh peer")
 	}
 	return g.logs.ForwardErrors(ctx, roles.MainNode, func(ctx context.Context, events []obs.Event) error {
@@ -246,7 +246,7 @@ func (g *Gateway) tracePage(ctx context.Context, trace, cursor string, all bool,
 	results := make(chan result, len(peers))
 	pending := 0
 	for _, peer := range peers {
-		if peer == "" || peer == local || !g.meshPeer(ctx, peer) {
+		if peer == "" || peer == local || !g.peer(peer).Mesh {
 			continue
 		}
 		pending++

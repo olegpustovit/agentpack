@@ -265,8 +265,8 @@ func (session *ConversationSession) BypassingPermissions() bool {
 // applyRememberedPermissions puts a starting agent in the permission mode last chosen for it.
 // An agent that does not offer that mode keeps its own.
 func (session *ConversationSession) applyRememberedPermissions(ctx context.Context, store *state.Store, settingKey string) {
-	var mode string
-	if err := store.Reader.QueryRowContext(ctx, "SELECT value FROM mesh_settings WHERE key=?", settingKey).Scan(&mode); err != nil || mode == "" {
+	mode, err := store.Mesh().Setting(ctx, settingKey)
+	if err != nil || mode == "" {
 		return
 	}
 	key, current := session.permissionMode()

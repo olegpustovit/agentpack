@@ -186,9 +186,7 @@ func (s *Store) DrainArchiveEdits(ctx context.Context) (result error) {
 	for _, id := range ids {
 		if err := Transaction(ctx, s.DB, func(tx *sql.Tx) error {
 			var ready bool
-			if err := tx.QueryRowContext(ctx, `SELECT
- coalesce((SELECT value FROM mesh_settings WHERE key='main_node'),'')=`+LocalNodeSQL+`
- AND coalesce((SELECT value FROM mesh_settings WHERE key='archive_node'),'')=`+LocalNodeSQL).Scan(&ready); err != nil {
+			if err := tx.QueryRowContext(ctx, "SELECT "+LocalArchiveSQL).Scan(&ready); err != nil {
 				return err
 			}
 			if !ready {

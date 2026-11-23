@@ -126,7 +126,8 @@ func (e *ChangeVersionTooLargeError) Error() string {
 func (e *ChangeVersionTooLargeError) Unwrap() error { return ErrChangeVersionTooLarge }
 
 // WriteVersion freezes one oversized source version in a read snapshot without buffering it all.
-func (s *Store) WriteVersion(ctx context.Context, version int64, exclude []byte, out io.Writer) error {
+func (r *Replicator) WriteVersion(ctx context.Context, version int64, exclude []byte, out io.Writer) error {
+	s := r.s
 	if version < 0 || len(exclude) != 0 && len(exclude) != 16 {
 		return errors.New("invalid change version parameters")
 	}
@@ -180,7 +181,8 @@ const changeRowCost = 96
 
 // ChangePage encodes complete source versions after since as one JSON array within maxBytes.
 // It never splits a source version; next also advances past excluded-only versions.
-func (s *Store) ChangePage(ctx context.Context, since int64, exclude []byte, maxBytes int) (json.RawMessage, int64, error) {
+func (r *Replicator) ChangePage(ctx context.Context, since int64, exclude []byte, maxBytes int) (json.RawMessage, int64, error) {
+	s := r.s
 	if since < 0 || maxBytes < 2 || len(exclude) != 0 && len(exclude) != 16 {
 		return nil, since, errors.New("invalid change page parameters")
 	}
@@ -254,7 +256,8 @@ func (s *Store) ChangePage(ctx context.Context, since int64, exclude []byte, max
 func (s *Store) servedFile() string { return filepath.Join(s.home, "state.served") }
 
 // NoteServed records the highest version a peer has been sent; Open uses it to detect a restored database.
-func (s *Store) NoteServed(version int64) error {
+func (r *Replicator) NoteServed(version int64) error {
+	s := r.s
 	if version <= s.served.Load() {
 		return nil
 	}
@@ -281,7 +284,8 @@ func (s *Store) catchUpServed(ctx context.Context) error {
 }
 
 // ResetCursor rewinds a peer's cursor to the start, after the peer's database was restored; reapplying is idempotent.
-func (s *Store) ResetCursor(ctx context.Context, site []byte) error {
+func (r *Replicator) ResetCursor(ctx context.Context, site []byte) error {
+	s := r.s
 	if len(site) != 16 {
 		return errors.New("invalid peer site ID")
 	}
@@ -290,8 +294,8 @@ func (s *Store) ResetCursor(ctx context.Context, site []byte) error {
 }
 
 // Changes decodes ChangePage for callers that inspect the changes.
-func (s *Store) Changes(ctx context.Context, since int64, exclude []byte, maxBytes int) ([]Change, int64, error) {
-	page, next, err := s.ChangePage(ctx, since, exclude, maxBytes)
+func (r *Replicator) Changes(ctx context.Context, since int64, exclude []byte, maxBytes int) ([]Change, int64, error) {
+	page, next, err := r.ChangePage(ctx, since, exclude, maxBytes)
 	if err != nil {
 		return nil, next, err
 	}
@@ -377,7 +381,8 @@ func (s *Store) applyChanges(ctx context.Context, tx *sql.Tx, changes []Change, 
 	return nil
 }
 
-func (s *Store) Apply(ctx context.Context, changes []Change) error {
+func (r *Replicator) Apply(ctx context.Context, changes []Change) error {
+	s := r.s
 	values, err := decodeChanges(changes)
 	if err != nil {
 		return err
@@ -385,7 +390,8 @@ func (s *Store) Apply(ctx context.Context, changes []Change) error {
 	return s.applyReplication(ctx, changes, values, nil)
 }
 
-func (s *Store) Cursor(ctx context.Context, site []byte) (int64, error) {
+func (r *Replicator) Cursor(ctx context.Context, site []byte) (int64, error) {
+	s := r.s
 	if len(site) != 16 {
 		return 0, errors.New("invalid peer site ID")
 	}
@@ -406,14 +412,9 @@ func setCursor(ctx context.Context, tx *sql.Tx, site []byte, version int64) erro
 	return err
 }
 
-func (s *Store) SetCursor(ctx context.Context, site []byte, version int64) error {
+func (r *Replicator) SetCursor(ctx context.Context, site []byte, version int64) error {
+	s := r.s
 	return Transaction(ctx, s.DB, func(tx *sql.Tx) error { return setCursor(ctx, tx, site, version) })
-}
-
-// ApplyPage commits the received data and its cursor together, or neither.
-func (s *Store) ApplyPage(ctx context.Context, changes []Change, site []byte, next int64) error {
-	_, err := s.ApplyValidatedPage(ctx, changes, site, next, nil)
-	return err
 }
 
 type RejectedChange struct {
@@ -421,9 +422,11 @@ type RejectedChange struct {
 	Reason  string
 }
 
-// ApplyValidatedPage quarantines malformed input alongside the cursor commit.
-// Archive conflicts and storage failures stay retryable so a later pull can preserve history.
-func (s *Store) ApplyValidatedPage(ctx context.Context, changes []Change, site []byte, next int64, validate func(Change) (bool, error)) ([]RejectedChange, error) {
+// ApplyPage commits a peer page and its cursor together, or neither. Malformed changes and ones a
+// validation hook refuses are quarantined in the same commit; archive conflicts and storage
+// failures stay retryable so a later pull can preserve history.
+func (r *Replicator) ApplyPage(ctx context.Context, changes []Change, site []byte, next int64) ([]RejectedChange, error) {
+	s := r.s
 	if len(site) != 16 || next < 0 {
 		return nil, errors.New("invalid peer cursor")
 	}
@@ -450,14 +453,8 @@ func (s *Store) ApplyValidatedPage(ctx context.Context, changes []Change, site [
 			}
 			if !known[change.Column] {
 				reason = "unknown replicated table or column"
-			} else if validate != nil {
-				accepted, err := validate(change)
-				if err != nil {
-					return nil, err
-				}
-				if !accepted {
-					reason = "invalid registry change"
-				}
+			} else if reason, err = r.validate(change); err != nil {
+				return nil, err
 			}
 		}
 		if reason != "" {
@@ -478,6 +475,7 @@ func (s *Store) ApplyValidatedPage(ctx context.Context, changes []Change, site [
 	if err != nil {
 		return nil, err
 	}
+	r.signal(valid)
 	return rejected, nil
 }
 

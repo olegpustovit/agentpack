@@ -80,25 +80,16 @@ func (g *Gateway) updateTarget(ctx context.Context) (string, int, error) {
 	if err != nil {
 		return "", http.StatusConflict, errors.New("cannot update a gateway without a valid running version")
 	}
-	rows, err := g.store.Reader.QueryContext(ctx, "SELECT DISTINCT app_version FROM mesh_nodes WHERE app_version<>''")
+	nodes, err := g.store.Mesh().Nodes(ctx)
 	if err != nil {
 		return "", http.StatusInternalServerError, err
 	}
-	defer rows.Close()
 	newest := current
-	for rows.Next() {
-		var version string
-		if err := rows.Scan(&version); err != nil {
-			return "", http.StatusInternalServerError, err
-		}
-		if candidate, err := semver.StrictNewVersion(strings.TrimPrefix(version, "v")); err == nil && candidate.GreaterThan(newest) {
+	for _, node := range nodes {
+		if candidate, err := semver.StrictNewVersion(strings.TrimPrefix(node.AppVersion, "v")); err == nil && candidate.GreaterThan(newest) {
 			newest = candidate
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return "", http.StatusInternalServerError, err
-	}
-	rows.Close()
 	latest, _, releaseErr := fetchLatestRelease(ctx)
 	if candidate, err := semver.StrictNewVersion(latest); err == nil && candidate.GreaterThan(newest) {
 		newest = candidate

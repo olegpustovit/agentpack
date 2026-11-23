@@ -57,7 +57,7 @@ func TestCaptureRedactsAndRestoresLocalBindings(t *testing.T) {
 			t.Fatalf("snapshot retained %q", secret)
 		}
 	}
-	changes, _, err := store.sql.Changes(t.Context(), 0, nil, 4<<20)
+	changes, _, err := store.sql.Replicator().Changes(t.Context(), 0, nil, 4<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,5 +620,28 @@ func TestIndexVersionIgnoresWritesOutsideTheLibrary(t *testing.T) {
 	}
 	if after, _ := store.dbVersion(); after <= before {
 		t.Fatalf("a Library write left the version at %d", after)
+	}
+}
+
+func TestCollectedObjectsLeaveTheMemo(t *testing.T) {
+	store := mustStore(t)
+	pack, revision, err := store.Capture(CaptureInput{Name: "Gone", Project: "/workspace/gone", Manifest: []byte("name='gone'\n"), Lock: lockWithCommit("abc123")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.readRevision(revision.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.memo.Load(memoKey{"revision", revision.ID}); !ok {
+		t.Fatal("revision was not memoized")
+	}
+	if _, err := store.DeleteAgentpack(pack.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CollectGarbage(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.memo.Load(memoKey{"revision", revision.ID}); ok {
+		t.Fatal("collected revision is still memoized")
 	}
 }

@@ -2,7 +2,6 @@ package network
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"io"
 	"net/http"
@@ -63,7 +62,7 @@ func (g *Gateway) serveCacheFrom(w http.ResponseWriter, r *http.Request, targetF
 	peer, _ := r.Context().Value(replicaPeerKey{}).(string)
 	actor, ok := actorFrom(r.Context())
 	if peer != "" {
-		if !g.meshPeer(r.Context(), peer) {
+		if !g.peer(peer).Mesh {
 			http.Error(w, "cache transfer requires mesh enrollment", http.StatusForbidden)
 			return
 		}
@@ -76,18 +75,12 @@ func (g *Gateway) serveCacheFrom(w http.ResponseWriter, r *http.Request, targetF
 		http.Error(w, "invalid content hash", http.StatusBadRequest)
 		return
 	}
-	local, err := g.store.NodeID(r.Context())
+	ownHash, err := g.store.Archive().LocalCacheHash(r.Context(), key)
 	if err != nil {
 		meshReadError(w, r, err)
 		return
 	}
-	var ownHash string
-	err = g.store.Reader.QueryRowContext(r.Context(), "SELECT content_hash FROM cache_locations WHERE cache_key=? AND node_id=?", key, local).Scan(&ownHash)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		meshReadError(w, r, err)
-		return
-	}
-	if err == nil && (expected == "" || expected == ownHash) {
+	if ownHash != "" && (expected == "" || expected == ownHash) {
 		root := filepath.Join(g.options.Home, "cache", key)
 		if info, err := os.Lstat(root); err == nil && info.IsDir() {
 			actual, err := cache.TreeDigest(root)
@@ -115,27 +108,13 @@ func (g *Gateway) serveCacheFrom(w http.ResponseWriter, r *http.Request, targetF
 		http.Error(w, "cache entry unavailable", http.StatusNotFound)
 		return
 	}
-	rows, err := g.store.Reader.QueryContext(r.Context(), "SELECT node_id FROM cache_locations WHERE cache_key=? AND content_hash=? AND node_id<>? ORDER BY node_id", key, expected, local)
+	peers, err := g.store.Archive().CacheHolders(r.Context(), key, expected)
 	if err != nil {
 		meshReadError(w, r, err)
 		return
 	}
-	var peers []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			meshReadError(w, r, err)
-			return
-		}
-		peers = append(peers, id)
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		meshReadError(w, r, err)
-		return
-	}
 	for _, id := range peers {
-		if !g.meshPeer(r.Context(), id) {
+		if !g.peer(id).Mesh {
 			continue
 		}
 		target, err := targetFor(r.Context(), id)

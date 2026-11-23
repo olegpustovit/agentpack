@@ -19,6 +19,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 // Web Push. A browser subscribes through the gateway origin it is using. VAPID key pairs and
@@ -109,9 +110,7 @@ func (g *Gateway) registerPush(mux routeRegistrar) {
 			return
 		}
 		// The browser subscribed with the key GET /api/push/key returned: the current one.
-		if _, err := g.store.DB.ExecContext(r.Context(), `INSERT INTO push_subscriptions(endpoint,email,p256dh,auth,public_key,created_node,created_at) VALUES (?,?,?,?,?,?,?)
- ON CONFLICT(endpoint) DO UPDATE SET email=excluded.email,p256dh=excluded.p256dh,auth=excluded.auth,public_key=excluded.public_key,created_node=excluded.created_node,created_at=excluded.created_at`,
-			input.Endpoint, email, input.Keys.P256dh, input.Keys.Auth, public, node, time.Now().UnixMilli()); err != nil {
+		if err := g.store.Push().Subscribe(r.Context(), state.PushSubscriber{Endpoint: input.Endpoint, Email: email, P256dh: input.Keys.P256dh, Auth: input.Keys.Auth, Public: public, Node: node}); err != nil {
 			authFailure(w, r, "push subscription unavailable", err)
 			return
 		}
@@ -128,7 +127,7 @@ func (g *Gateway) registerPush(mux routeRegistrar) {
 			}
 			return
 		}
-		if _, err := g.store.DB.ExecContext(r.Context(), "DELETE FROM push_subscriptions WHERE endpoint=? AND email=?", input.Endpoint, email); err != nil {
+		if err := g.store.Push().Unsubscribe(r.Context(), input.Endpoint, email); err != nil {
 			authFailure(w, r, "push subscription unavailable", err)
 			return
 		}
@@ -145,7 +144,7 @@ func (g *Gateway) registerPush(mux routeRegistrar) {
 			}
 			return
 		}
-		subs, err := g.pushSubscribers(r.Context(), "s.endpoint=? AND s.email=?", input.Endpoint, email)
+		subs, err := g.store.Push().Subscribers(r.Context(), state.PushFilter{Endpoint: input.Endpoint, Email: email})
 		if err != nil {
 			authFailure(w, r, "push subscription unavailable", err)
 			return
@@ -186,55 +185,12 @@ func validPushSubscription(input pushSubscription) bool {
 		len(input.Keys.P256dh) <= pushMaxKey && len(input.Keys.Auth) <= pushMaxKey
 }
 
-// currentPushKey picks the mesh's VAPID key pair. Nodes that each created one before they met
-// converge on the oldest, ties broken by public key.
-const currentPushKey = "SELECT public_key,private_key FROM push_keys ORDER BY created_at,public_key LIMIT 1"
-
 // pushKeys returns the mesh's current VAPID key pair, creating one on first use.
 func (g *Gateway) pushKeys(ctx context.Context) (public, private string, err error) {
-	err = g.store.Reader.QueryRowContext(ctx, currentPushKey).Scan(&public, &private)
-	if !errors.Is(err, sql.ErrNoRows) {
-		return public, private, err
-	}
-	private, public, err = webpush.GenerateVAPIDKeys()
-	if err != nil {
-		return "", "", err
-	}
-	if _, err = g.store.DB.ExecContext(ctx, "INSERT INTO push_keys(public_key,private_key,created_at) SELECT ?,?,? WHERE NOT EXISTS(SELECT 1 FROM push_keys)",
-		public, private, time.Now().UnixMilli()); err != nil {
-		return "", "", err
-	}
-	// A concurrent first request may have won; everyone uses the stored pair.
-	err = g.store.DB.QueryRowContext(ctx, currentPushKey).Scan(&public, &private)
-	return public, private, err
+	return g.store.Push().Keys(ctx, webpush.GenerateVAPIDKeys)
 }
 
-type pushSubscriber struct {
-	endpoint, email, p256dh, auth, node, public, private string
-}
-
-// pushSubscribers lists subscriptions whose account is enabled and that were created after the
-// account's last sign-out everywhere or password change, with the key pair each was made with.
-func (g *Gateway) pushSubscribers(ctx context.Context, where string, args ...any) ([]pushSubscriber, error) {
-	rows, err := g.store.Reader.QueryContext(ctx, `SELECT s.endpoint,s.email,s.p256dh,s.auth,s.created_node,k.public_key,k.private_key FROM push_subscriptions s
- JOIN users u ON u.email=s.email JOIN push_keys k ON k.public_key=s.public_key
- WHERE u.disabled=0 AND s.created_at>=u.sessions_valid_after AND `+where, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []pushSubscriber
-	for rows.Next() {
-		var sub pushSubscriber
-		if err := rows.Scan(&sub.endpoint, &sub.email, &sub.p256dh, &sub.auth, &sub.node, &sub.public, &sub.private); err != nil {
-			return nil, err
-		}
-		result = append(result, sub)
-	}
-	return result, rows.Err()
-}
-
-func (g *Gateway) sendPush(ctx context.Context, sub pushSubscriber, message pushMessage) error {
+func (g *Gateway) sendPush(ctx context.Context, sub state.PushSubscriber, message pushMessage) error {
 	payload, err := json.Marshal(message)
 	if err != nil {
 		return err
@@ -245,8 +201,8 @@ func (g *Gateway) sendPush(ctx context.Context, sub pushSubscriber, message push
 	if client == nil {
 		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
-	response, err := webpush.SendNotificationWithContext(ctx, payload, &webpush.Subscription{Endpoint: sub.endpoint, Keys: webpush.Keys{P256dh: sub.p256dh, Auth: sub.auth}},
-		&webpush.Options{HTTPClient: client, Subscriber: pushContact, VAPIDPublicKey: sub.public, VAPIDPrivateKey: sub.private, TTL: pushTTL, Urgency: webpush.UrgencyHigh, Topic: pushTopic(message.Tag)})
+	response, err := webpush.SendNotificationWithContext(ctx, payload, &webpush.Subscription{Endpoint: sub.Endpoint, Keys: webpush.Keys{P256dh: sub.P256dh, Auth: sub.Auth}},
+		&webpush.Options{HTTPClient: client, Subscriber: pushContact, VAPIDPublicKey: sub.Public, VAPIDPrivateKey: sub.Private, TTL: pushTTL, Urgency: webpush.UrgencyHigh, Topic: pushTopic(message.Tag)})
 	if err != nil {
 		return errors.New("push service unreachable")
 	}
@@ -256,8 +212,7 @@ func (g *Gateway) sendPush(ctx context.Context, sub pushSubscriber, message push
 	switch {
 	case response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone:
 		// The browser dropped the subscription; forget it.
-		_, err := g.store.DB.ExecContext(ctx, "DELETE FROM push_subscriptions WHERE endpoint=?", sub.endpoint)
-		return err
+		return g.store.Push().Unsubscribe(ctx, sub.Endpoint, "")
 	case response.StatusCode >= 300:
 		return fmt.Errorf("push service returned HTTP %d: %.200s", response.StatusCode, strings.TrimSpace(string(body)))
 	}
@@ -315,17 +270,17 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	// Main notifies every device. Without a Main each gateway notifies the devices it subscribed.
-	scope, scopeArgs := "1", []any{}
+	scope := ""
 	switch {
 	case roles.ActsAsMain(local):
 	case roles.MainNode == "":
-		scope, scopeArgs = "s.created_node=?", []any{local}
+		scope = local
 	default:
 		g.push.seen = nil
 		return 0, nil
 	}
-	var subscribed bool
-	if err := g.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM push_subscriptions s WHERE "+scope+")", scopeArgs...).Scan(&subscribed); err != nil {
+	subscribed, err := g.store.Push().Subscribed(ctx, scope)
+	if err != nil {
 		return 0, err
 	}
 	if !subscribed {
@@ -378,7 +333,7 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 			continue
 		}
 		g.push.sent[s.id] = key
-		subs, err := g.pushSubscribers(ctx, "(s.email=? OR (?='' AND u.role='owner')) AND "+scope, append([]any{s.owner, s.owner}, scopeArgs...)...)
+		subs, err := g.store.Push().Subscribers(ctx, state.PushFilter{Node: scope, Recipient: &s.owner})
 		if err != nil {
 			failures = append(failures, err)
 			continue
@@ -386,7 +341,7 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 		for _, sub := range subs {
 			// The device opens the link on the gateway it subscribed through, which calls itself "local".
 			machine := s.node
-			if machine == sub.node || machine == "" {
+			if machine == sub.Node || machine == "" {
 				machine = "local"
 			}
 			message, err := g.pushMessageFor(ctx, s, kind, machine)
@@ -417,9 +372,8 @@ func (g *Gateway) pushPass(ctx context.Context) (int, error) {
 func (g *Gateway) pushMessageFor(ctx context.Context, s pushSession, kind, machine string) (pushMessage, error) {
 	agent := harness.DisplayName(harness.Target(s.agent))
 	if machine != "local" {
-		var name string
-		err := g.store.Reader.QueryRowContext(ctx, "SELECT name FROM mesh_nodes WHERE node_id=?", s.node).Scan(&name)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		name, err := g.store.Mesh().NodeName(ctx, s.node)
+		if err != nil {
 			return pushMessage{}, err
 		}
 		if name != "" {

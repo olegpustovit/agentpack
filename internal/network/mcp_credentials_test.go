@@ -311,7 +311,7 @@ func replicateCredential(t *testing.T, from, to *Gateway, id string) {
 	}
 	client, _ := json.Marshal(credential.Client)
 	state, _ := json.Marshal(credential.State)
-	if _, err := to.store.DB.Exec("INSERT OR REPLACE INTO mcp_credentials("+mcpCredentialColumns+") VALUES (?,?,?,?,?,?,?,?,?)",
+	if _, err := to.store.DB.Exec("INSERT OR REPLACE INTO mcp_credentials(id,match,kind,label,account,client,state,created_node,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
 		credential.ID, credential.Match, credential.Kind, credential.Label, credential.Account, string(client), string(state), credential.CreatedNode, credential.CreatedAt.UnixMilli()); err != nil {
 		t.Fatal(err)
 	}

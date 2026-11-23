@@ -37,7 +37,7 @@ func (g *Gateway) serveArchivedConversation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if local != roles.MainNode {
-		if !g.meshPeer(r.Context(), roles.MainNode) || r.Header.Get("X-Agentpack-Archive-Proxy") != "" {
+		if !g.peer(roles.MainNode).Mesh || r.Header.Get("X-Agentpack-Archive-Proxy") != "" {
 			archiveUnavailable(w, r, errors.New("archive main is unavailable or changed during the read"))
 			return
 		}

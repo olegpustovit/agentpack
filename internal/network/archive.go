@@ -124,8 +124,7 @@ func (g *Gateway) archivePass(ctx context.Context, now time.Time) (count int, re
 const archiveStateQuery = `SELECT last_seq,archived_at FROM sessions WHERE id=?
  AND (archived_at>0 OR (last_event_at>0 AND last_event_at<?)) AND transport='acp' AND hidden=0
  AND NOT (ended_at=0 AND conversation_state IN ('working','needs_you'))
- AND coalesce((SELECT value FROM mesh_settings WHERE key='main_node'),'')=` + state.LocalNodeSQL + `
- AND coalesce((SELECT value FROM mesh_settings WHERE key='archive_node'),'')=` + state.LocalNodeSQL
+ AND ` + state.LocalArchiveSQL
 
 // The pinned clock tables have indexed event keys. Joining through crsql_changes scans it for each event.
 const archiveProgressQuery = `SELECT count(*),coalesce(max(seq),0),coalesce((

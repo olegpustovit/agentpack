@@ -101,7 +101,7 @@ func (g *Gateway) prepareArchiveBlobs(ctx context.Context, rows *sql.Rows, targe
 			if _, err := g.fetchBlob(ctx, id, sha, targetFor); err != nil {
 				return err
 			}
-			if _, err := g.store.DB.ExecContext(ctx, "INSERT OR IGNORE INTO archive_blobs(session_id,sha) VALUES (?,?)", id, sha); err != nil {
+			if err := g.store.Archive().KeepBlob(ctx, id, sha); err != nil {
 				return err
 			}
 		}
@@ -186,7 +186,7 @@ func PrepareArchive(ctx context.Context, store *state.Store, home string) (resul
 			if err := advertiseBlob(ctx, store, id, sha, int64(len(data))); err != nil {
 				return err
 			}
-			if _, err := store.DB.ExecContext(ctx, "INSERT OR IGNORE INTO archive_blobs(session_id,sha) VALUES (?,?)", id, sha); err != nil {
+			if err := store.Archive().KeepBlob(ctx, id, sha); err != nil {
 				return err
 			}
 		}
@@ -253,7 +253,7 @@ func (g *Gateway) cleanupArchivedBlobs(ctx context.Context, targetFor func(conte
 				break
 			}
 			// A stale location alone is insufficient proof that Main still has the bytes.
-			if !g.meshPeer(ctx, roles.MainNode) {
+			if !g.peer(roles.MainNode).Mesh {
 				return errors.New("archive Main is unavailable for attachment verification")
 			}
 			target, err := targetFor(ctx, roles.MainNode)
@@ -310,8 +310,7 @@ func (g *Gateway) cleanupArchivedBlobs(ctx context.Context, targetFor func(conte
 			if err := removeArchivedBlobFiles(dir); err != nil {
 				return err
 			}
-			if _, err := g.store.DB.ExecContext(ctx, `INSERT INTO archive_cleanup(session_id,archived_seq) VALUES (?,?)
- ON CONFLICT(session_id) DO UPDATE SET archived_seq=excluded.archived_seq WHERE excluded.archived_seq>archived_seq`, s.id, s.seq); err != nil {
+			if err := g.store.Archive().NoteCleanup(ctx, s.id, s.seq); err != nil {
 				return err
 			}
 		}

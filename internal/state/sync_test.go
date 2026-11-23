@@ -44,7 +44,7 @@ func TestChangesConvergeThroughIntermediateNode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		since, err := to.Cursor(ctx, site)
+		since, err := to.Replicator().Cursor(ctx, site)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -53,7 +53,7 @@ func TestChangesConvergeThroughIntermediateNode(t *testing.T) {
 			t.Fatal(err)
 		}
 		for {
-			changes, next, err := from.Changes(ctx, since, exclude, 4<<20)
+			changes, next, err := from.Replicator().Changes(ctx, since, exclude, 4<<20)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -64,10 +64,10 @@ func TestChangesConvergeThroughIntermediateNode(t *testing.T) {
 			if err = json.Unmarshal(body, &changes); err != nil {
 				t.Fatal(err)
 			}
-			if err = to.ApplyPage(ctx, changes, site, next); err != nil {
+			if _, err = to.Replicator().ApplyPage(ctx, changes, site, next); err != nil {
 				t.Fatal(err)
 			}
-			if err = to.ApplyPage(ctx, changes, site, next); err != nil {
+			if _, err = to.Replicator().ApplyPage(ctx, changes, site, next); err != nil {
 				t.Fatal(err)
 			}
 			if next == since {
@@ -136,15 +136,15 @@ func TestPeerCursorSeesLowVersionRelaysAndFollowingLocalWrites(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		since, err := to.Cursor(ctx, site)
+		since, err := to.Replicator().Cursor(ctx, site)
 		if err != nil {
 			t.Fatal(err)
 		}
-		changes, next, err := from.Changes(ctx, since, exclude, 4<<20)
+		changes, next, err := from.Replicator().Changes(ctx, since, exclude, 4<<20)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := to.ApplyPage(ctx, changes, site, next); err != nil {
+		if _, err := to.Replicator().ApplyPage(ctx, changes, site, next); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -235,7 +235,7 @@ func TestChangesPreserveSQLiteStorageTypesAndQuarantineInvalidRows(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	changes, next, err := a.Changes(ctx, 0, nil, 1<<20)
+	changes, next, err := a.Replicator().Changes(ctx, 0, nil, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,11 +252,11 @@ func TestChangesPreserveSQLiteStorageTypesAndQuarantineInvalidRows(t *testing.T)
 	}
 	// A malformed final row must be quarantined without pinning the peer's cursor.
 	bad := append(append([]Change{}, changes...), Change{Table: "invalid", DBVersion: next})
-	rejected, err := b.ApplyValidatedPage(ctx, bad, site, next, nil)
+	rejected, err := b.Replicator().ApplyPage(ctx, bad, site, next)
 	if err != nil || len(rejected) != 1 {
 		t.Fatalf("quarantine: %v %v", rejected, err)
 	}
-	if cursor, err := b.Cursor(ctx, site); err != nil || cursor != next {
+	if cursor, err := b.Replicator().Cursor(ctx, site); err != nil || cursor != next {
 		t.Fatalf("cursor %d, want %d: %v", cursor, next, err)
 	}
 	var count int
@@ -286,14 +286,14 @@ func TestChangesDoNotSplitTransactionAndAdvanceExcludedVersions(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.Changes(t.Context(), 0, nil, 32); !errors.Is(err, ErrChangeVersionTooLarge) {
+	if _, _, err := s.Replicator().Changes(t.Context(), 0, nil, 32); !errors.Is(err, ErrChangeVersionTooLarge) {
 		t.Fatalf("split transaction: %v", err)
 	}
 	site, err := s.SiteID(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	changes, next, err := s.Changes(t.Context(), 0, site, 32)
+	changes, next, err := s.Replicator().Changes(t.Context(), 0, site, 32)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,13 +339,13 @@ func TestChangePagesEndOnWholeVersionsAndCoverEverything(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	all, high, err := s.Changes(t.Context(), 0, nil, 1<<20)
+	all, high, err := s.Replicator().Changes(t.Context(), 0, nil, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var paged []Change
 	for since, pages := int64(0), 0; since < high; pages++ {
-		changes, next, err := s.Changes(t.Context(), since, nil, 2048)
+		changes, next, err := s.Replicator().Changes(t.Context(), since, nil, 2048)
 		if err != nil || next <= since || pages > len(all) {
 			t.Fatalf("page after %d: next %d, %v", since, next, err)
 		}
@@ -378,15 +378,15 @@ func TestRestoredSourceKeepsPeerCursorsValid(t *testing.T) {
 	site, _ := source.SiteID(ctx)
 	pull := func() {
 		t.Helper()
-		since, _ := peer.Cursor(ctx, site)
-		changes, next, err := source.Changes(ctx, since, nil, 4<<20)
+		since, _ := peer.Replicator().Cursor(ctx, site)
+		changes, next, err := source.Replicator().Changes(ctx, since, nil, 4<<20)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := source.NoteServed(next); err != nil {
+		if err := source.Replicator().NoteServed(next); err != nil {
 			t.Fatal(err)
 		}
-		if err := peer.ApplyPage(ctx, changes, site, next); err != nil {
+		if _, err := peer.Replicator().ApplyPage(ctx, changes, site, next); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -429,7 +429,7 @@ func TestRestoredSourceKeepsPeerCursorsValid(t *testing.T) {
 		t.Fatalf("peer missed a write made after the restore: %v", err)
 	}
 	// Without the watermark the cursor is ahead and the source says so instead of skipping versions.
-	if _, _, err := source.Changes(ctx, 1<<40, nil, 4<<20); !errors.Is(err, ErrCursorAhead) {
+	if _, _, err := source.Replicator().Changes(ctx, 1<<40, nil, 4<<20); !errors.Is(err, ErrCursorAhead) {
 		t.Fatalf("ahead cursor: %v", err)
 	}
 }

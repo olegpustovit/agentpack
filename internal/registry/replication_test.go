@@ -13,7 +13,7 @@ import (
 
 func registryChanges(t *testing.T, s *Store) []state.Change {
 	t.Helper()
-	changes, _, err := s.sql.Changes(t.Context(), 0, nil, 4<<20)
+	changes, _, err := s.sql.Replicator().Changes(t.Context(), 0, nil, 4<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,10 +22,10 @@ func registryChanges(t *testing.T, s *Store) []state.Change {
 
 func applyRegistryChanges(t *testing.T, to *Store, changes []state.Change) {
 	t.Helper()
-	if err := ValidateChanges(to.sql, changes); err != nil {
+	if err := validateChanges(to.sql, changes); err != nil {
 		t.Fatal(err)
 	}
-	if err := to.sql.Apply(t.Context(), changes); err != nil {
+	if err := to.sql.Replicator().Apply(t.Context(), changes); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -153,7 +153,7 @@ func TestRegistryChangesRejectChangedDigestAndMalformedObjects(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := ValidateChanges(target.sql, registryChanges(t, source)); err == nil {
+	if err := validateChanges(target.sql, registryChanges(t, source)); err == nil {
 		t.Fatal("malformed object accepted")
 	}
 	source = mustStore(t)
@@ -167,7 +167,7 @@ func TestRegistryChangesRejectChangedDigestAndMalformedObjects(t *testing.T) {
 			break
 		}
 	}
-	if err := ValidateChanges(target.sql, changes); err == nil || !strings.Contains(err.Error(), "object") {
+	if err := validateChanges(target.sql, changes); err == nil || !strings.Contains(err.Error(), "object") {
 		t.Fatalf("changed digest accepted: %v", err)
 	}
 	if ids, err := target.objectIDs(); err != nil || len(ids) != 0 {

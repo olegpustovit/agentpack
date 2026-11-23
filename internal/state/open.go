@@ -20,6 +20,8 @@ type Store struct {
 	home   string
 	site   atomic.Pointer[[]byte]
 	served atomic.Int64
+
+	replicator *Replicator
 }
 
 func Open(home string) (*Store, error) {
@@ -70,6 +72,7 @@ func Open(home string) (*Store, error) {
 		return nil, errors.Join(fmt.Errorf("connect state reader: %w", err), reader.Close(), writer.Close())
 	}
 	store := &Store{DB: writer, Reader: reader, home: home}
+	store.replicator = newReplicator(store)
 	if err := store.catchUpServed(context.Background()); err != nil {
 		return nil, errors.Join(fmt.Errorf("check restored state database: %w", err), store.Close())
 	}
