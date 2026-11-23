@@ -111,6 +111,19 @@ func (a Archive) BlobHolders(ctx context.Context, sha, session string) ([]BlobHo
 	return holders, rows.Err()
 }
 
+// KeepBlob records that archived session id references image sha, so the archive keeps it.
+func (a Archive) KeepBlob(ctx context.Context, id, sha string) error {
+	_, err := a.s.DB.ExecContext(ctx, "INSERT OR IGNORE INTO archive_blobs(session_id,sha) VALUES (?,?)", id, sha)
+	return err
+}
+
+// NoteCleanup records that this machine removed session id's archived images through seq.
+func (a Archive) NoteCleanup(ctx context.Context, id string, seq int64) error {
+	_, err := a.s.DB.ExecContext(ctx, `INSERT INTO archive_cleanup(session_id,archived_seq) VALUES (?,?)
+ ON CONFLICT(session_id) DO UPDATE SET archived_seq=excluded.archived_seq WHERE excluded.archived_seq>archived_seq`, id, seq)
+	return err
+}
+
 func queryStrings(ctx context.Context, db *sql.DB, query string, args ...any) ([]string, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
