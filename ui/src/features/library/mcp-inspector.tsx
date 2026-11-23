@@ -4,7 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query"
 import { Plug } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useEventsConnected } from "@/features/events/use-events"
-import { connectionsQuery, serverLogin, signIn, type ServerLogin } from "@/features/settings/connections-model"
+import { connectionsQuery, loginsFor, serverLogin, signIn, type ServerLogin } from "@/features/settings/connections-model"
 import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Inspector, InspectorHead, KeyValue, Section } from "@/components/kit/data"
@@ -101,21 +101,24 @@ export function useServerLogin(server: MCPItem): ServerLogin | undefined {
 
 function LoginControl({ server }: { server: MCPItem }) {
   const login = useServerLogin(server)
+  const connections = useQuery(connectionsQuery(useEventsConnected()))
+  const logins = loginsFor(server.url ?? "", connections.data?.credentials ?? [])
   const connect = useMutation<void, Error, void>({
-    mutationFn: () => signIn({ url: server.url, label: server.name, return_to: location.pathname + location.search }),
+    mutationFn: () => signIn({ url: server.url, label: logins[0]?.label ?? server.name, return_to: location.pathname + location.search }),
     onError: (error) => hud.error(`Couldn't start the sign-in for ${server.name}: ${errorText(error)}`, () => connect.mutate()),
   })
   const manage = (
     <Link to="/settings/$pane" params={{ pane: "connections" }} className="text-(--accent) underline-offset-2 hover:underline">
-      Manage connections…
+      {logins.length > 1 ? "Manage logins…" : "Manage connections…"}
     </Link>
   )
   if (!login) return manage
+  const first = logins[0]
   return (
     <span className="flex flex-wrap items-center gap-(--s3)">
       <span className="flex items-center gap-(--s2)">
         <LoginGlyph login={login} />
-        {login === "connected" ? "Connected for every agent" : loginWords[login]}
+        {first ? `${first.label}${login === "needs_login" ? " · Needs sign-in" : ""}${logins.length > 1 ? ` · default of ${logins.length} logins` : ""}` : loginWords[login]}
       </span>
       {login === "connected" ? manage : (
         <Button size="sm" variant="primary" disabled={connect.isPending} onClick={() => connect.mutate()}>
