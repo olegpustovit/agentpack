@@ -123,12 +123,11 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 			report.Shadowed++
 		}
 	}
-	identity, err := sourceIdentity(definitionRoot, lock)
-	if err != nil {
+	in := Inputs{Lock: file.digest}
+	if in.Content.Source, err = sourceIdentity(definitionRoot, lock); err != nil {
 		return report, fmt.Errorf("identify source: %w", inputError(err))
 	}
-	report.SourceIdentity = identity
-	report.LockDigest = file.digest
+	report.SourceIdentity, report.LockDigest = in.Content.Source, in.Lock
 	if binding, found, _ := environment.LoadBinding(workspace); found {
 		report.Environment = binding.Environment
 	}
@@ -165,7 +164,7 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 			}
 		}
 	}
-	if err := populateFreshness(&report, options, effective); err != nil {
+	if err := populateFreshness(&report, in, options, effective); err != nil {
 		return report, fmt.Errorf("fingerprint preflight inputs: %w", err)
 	}
 	appendAmbientFindings(&report, workspace, lock, options)
@@ -397,194 +396,6 @@ func (service Service) RestoreFrozenOptions(ctx context.Context, definitionRoot 
 	options.VerifyOnly = false
 	_, err := service.Sync(ctx, definitionRoot, options)
 	return err
-}
-
-func sourceIdentity(definitionRoot string, lock lockfile.PackLock) (string, error) {
-	manifestPath := paths.ManifestPath(definitionRoot)
-	manifestBytes, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return "", err
-	}
-	project, err := manifest.Load(definitionRoot)
-	if err != nil {
-		return "", err
-	}
-	if project == nil {
-		return "", fmt.Errorf("source identity requires %s", paths.ManifestName)
-	}
-	var rawManifest map[string]any
-	if err := toml.Unmarshal(manifestBytes, &rawManifest); err != nil {
-		return "", fmt.Errorf("parse manifest for source identity: %w", err)
-	}
-
-	semanticManifest := sourceManifest{
-		Name: project.Name, Version: project.Version, Description: project.Description,
-		Dependencies: make(map[string]sourceDependency, len(project.Dependencies)),
-		MCPServers:   make(map[string]sourceMCPServer, len(project.MCP.Servers)),
-		Modes:        project.Modes,
-	}
-	// manifest.Load defaults an omitted name from DefinitionRoot, which is a host path.
-	if _, declared := rawManifest["name"]; !declared {
-		semanticManifest.Name = ""
-	}
-	for module, dependency := range project.Dependencies {
-		item := sourceDependency{}
-		if dependency.Short != nil {
-			item.Short = *dependency.Short
-		}
-		if dependency.Table != nil {
-			item.Commit, item.Tag, item.Branch, item.Version = dependency.Table.Commit, dependency.Table.Tag, dependency.Table.Branch, dependency.Table.Version
-			// A local path is deliberately omitted; its actual package bytes are in the lock.
-			item.Local = dependency.Table.Path != nil
-		}
-		semanticManifest.Dependencies[module] = item
-	}
-	for name, server := range project.MCP.Servers {
-		semanticManifest.MCPServers[name] = sourceMCPServerFrom(server)
-	}
-	contract := json.RawMessage(nil)
-	contractPath := filepath.Join(definitionRoot, "contract.json")
-	if _, err := os.Stat(contractPath); err == nil {
-		validated, err := environment.LoadContract(contractPath)
-		if err != nil {
-			return "", fmt.Errorf("load contract for source identity: %w", err)
-		}
-		contract, err = json.Marshal(validated)
-		if err != nil {
-			return "", err
-		}
-	} else if !os.IsNotExist(err) {
-		return "", err
-	}
-
-	packages := make([]sourcePackage, 0, len(lock.Packages))
-	for _, pkg := range lock.Packages {
-		packages = append(packages, sourcePackage{Module: pkg.Module, Kind: pkg.Kind, Direct: pkg.Direct, Commit: pkg.Commit, ContentHash: pkg.ContentHash})
-	}
-	slices.SortFunc(packages, func(a, b sourcePackage) int { return strings.Compare(a.Module, b.Module) })
-	disabled := slices.Clone(lock.Config.DisabledPlugins)
-	slices.Sort(disabled)
-	servers := make([]sourceLockedMCP, 0, len(lock.MCPServers))
-	for _, server := range lock.MCPServers {
-		item := sourceLockedMCP{Name: server.Name, Source: server.Source, Launcher: server.Launcher, Status: server.Status, Package: server.Package, Version: server.Version, Integrity: server.Integrity, AllowUnpinned: server.AllowUnpinned, Bin: server.Bin, TreeDigest: server.TreeDigest}
-		item.Tree = make([]sourceNPMTreeEntry, 0, len(server.Tree))
-		for _, entry := range server.Tree {
-			item.Tree = append(item.Tree, sourceNPMTreeEntry{Path: entry.Path, Version: entry.Version, Integrity: entry.Integrity, Optional: entry.Optional, OS: canonicalStrings(entry.OS), CPU: canonicalStrings(entry.CPU)})
-		}
-		slices.SortFunc(item.Tree, func(a, b sourceNPMTreeEntry) int { return strings.Compare(a.Path, b.Path) })
-		servers = append(servers, item)
-	}
-	slices.SortFunc(servers, func(a, b sourceLockedMCP) int { return strings.Compare(a.Name, b.Name) })
-
-	envelope := struct {
-		Version    string            `json:"version"`
-		Manifest   sourceManifest    `json:"manifest"`
-		Contract   json.RawMessage   `json:"contract,omitempty"`
-		Packages   []sourcePackage   `json:"packages"`
-		Disabled   []string          `json:"disabled_plugins,omitempty"`
-		MCPServers []sourceLockedMCP `json:"mcp_servers,omitempty"`
-	}{Version: "agentpack-source-v1", Manifest: semanticManifest, Contract: contract, Packages: packages, Disabled: disabled, MCPServers: servers}
-	data, err := json.Marshal(envelope)
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.Sum256(data)
-	return "sha256-source-v1:" + hex.EncodeToString(digest[:]), nil
-}
-
-type sourceManifest struct {
-	Name         string                      `json:"name"`
-	Version      string                      `json:"version"`
-	Description  string                      `json:"description"`
-	Dependencies map[string]sourceDependency `json:"dependencies"`
-	MCPServers   map[string]sourceMCPServer  `json:"mcp_servers"`
-	Modes        map[string]mode.Definition  `json:"modes"`
-}
-
-type sourceDependency struct {
-	Short   string  `json:"short,omitempty"`
-	Commit  *string `json:"commit,omitempty"`
-	Tag     *string `json:"tag,omitempty"`
-	Branch  *string `json:"branch,omitempty"`
-	Version *string `json:"version,omitempty"`
-	Local   bool    `json:"local,omitempty"`
-}
-
-type sourceMCPServer struct {
-	Type       *string      `json:"type,omitempty"`
-	Command    *string      `json:"command,omitempty"`
-	Args       []string     `json:"args,omitempty"`
-	EnvNames   []string     `json:"env_names,omitempty"`
-	URL        *string      `json:"url,omitempty"`
-	Disabled   *bool        `json:"disabled,omitempty"`
-	HeaderKeys []string     `json:"header_keys,omitempty"`
-	Cwd        string       `json:"cwd,omitempty"`
-	OAuth      *sourceOAuth `json:"oauth,omitempty"`
-}
-
-type sourceOAuth struct {
-	ClientID     string   `json:"client_id,omitempty"`
-	CallbackPort int      `json:"callback_port,omitempty"`
-	Scopes       []string `json:"scopes,omitempty"`
-	MetadataURL  string   `json:"metadata_url,omitempty"`
-}
-
-type sourcePackage struct {
-	Module      string               `json:"module"`
-	Kind        lockfile.PackageKind `json:"kind"`
-	Direct      bool                 `json:"direct,omitempty"`
-	Commit      string               `json:"commit,omitempty"`
-	ContentHash string               `json:"content_hash,omitempty"`
-}
-
-type sourceNPMTreeEntry struct {
-	Path      string   `json:"path"`
-	Version   string   `json:"version"`
-	Integrity string   `json:"integrity"`
-	Optional  bool     `json:"optional,omitempty"`
-	OS        []string `json:"os,omitempty"`
-	CPU       []string `json:"cpu,omitempty"`
-}
-
-type sourceLockedMCP struct {
-	Name          string               `json:"name"`
-	Source        string               `json:"source,omitempty"`
-	Launcher      string               `json:"launcher,omitempty"`
-	Status        string               `json:"status,omitempty"`
-	Package       string               `json:"package,omitempty"`
-	Version       string               `json:"version,omitempty"`
-	Integrity     string               `json:"integrity,omitempty"`
-	AllowUnpinned bool                 `json:"allow_unpinned,omitempty"`
-	Bin           string               `json:"bin,omitempty"`
-	TreeDigest    string               `json:"tree_digest,omitempty"`
-	Tree          []sourceNPMTreeEntry `json:"tree,omitempty"`
-}
-
-func sourceMCPServerFrom(server mcp.Server) sourceMCPServer {
-	item := sourceMCPServer{Type: server.Type, Args: RedactCredentialArgs(server.Args), Disabled: server.Disabled}
-	if server.Command != nil {
-		command := portablePathValue(*server.Command)
-		item.Command = &command
-	}
-	for key := range server.Env {
-		item.EnvNames = append(item.EnvNames, key)
-	}
-	for key := range server.Headers {
-		item.HeaderKeys = append(item.HeaderKeys, key)
-	}
-	slices.Sort(item.EnvNames)
-	slices.Sort(item.HeaderKeys)
-	if server.URL != nil {
-		clean := redactCredentialURL(*server.URL)
-		item.URL = &clean
-	}
-	if server.Cwd != nil && !isHostAbsolutePath(*server.Cwd) {
-		item.Cwd = filepath.ToSlash(filepath.Clean(*server.Cwd))
-	}
-	if server.OAuth != nil {
-		item.OAuth = &sourceOAuth{ClientID: server.OAuth.ClientID, CallbackPort: server.OAuth.CallbackPort, Scopes: slices.Clone(server.OAuth.Scopes), MetadataURL: redactCredentialURL(server.OAuth.MetadataURL)}
-	}
-	return item
 }
 
 // RedactCredentialArgs removes flag credentials and private path prefixes.
@@ -1664,7 +1475,7 @@ func digestBytes(data []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func populateFreshness(report *environment.Report, options PreflightOptions, effective mode.Effective) error {
+func populateFreshness(report *environment.Report, in Inputs, options PreflightOptions, effective mode.Effective) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -1712,7 +1523,7 @@ func populateFreshness(report *environment.Report, options PreflightOptions, eff
 	if err != nil {
 		return err
 	}
-	report.GenerationID = digestBytes(append([]byte(report.SourceIdentity+"\x00"+effective.FingerprintMaterial()+"\x00"+report.WorkspaceDigest+"\x00"+stagedConfigDigest+"\x00"), stagedBytes...))
+	report.GenerationID = in.generation(effective, report.WorkspaceDigest, stagedConfigDigest, stagedBytes)
 	contractPath := options.ContractPath
 	if contractPath == "" {
 		contractPath = filepath.Join(report.DefinitionRoot, "contract.json")

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
@@ -18,9 +20,11 @@ func stagedDigest(definition, workspace string, effective mode.Effective, target
 
 // Every identity derives from one Inputs, so each input moves exactly the
 // identities that read it: a launch ignores configuration it does not stage
-// from, and the materialized record ignores the binary.
+// from, the materialized record ignores the binary, and the content
+// identities (environment, preflight source and generation) ignore lock
+// bookkeeping and where the project lives.
 func TestEachInputFlipsExactlyItsIdentities(t *testing.T) {
-	home, project := t.TempDir(), t.TempDir()
+	home, project := t.TempDir(), filepath.Join(t.TempDir(), "project")
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -29,6 +33,7 @@ func TestEachInputFlipsExactlyItsIdentities(t *testing.T) {
 	for _, name := range []string{"PI_CONFIG_DIR", "OMP_PROFILE", "PI_PROFILE", "PI_CODING_AGENT_DIR", "PI_CONFIG_FILES", "OPENCODE_PATH", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT"} {
 		t.Setenv(name, "")
 	}
+	t.Setenv("CLAUDE_CODE_PATH", filepath.Join(home, "missing-claude")) // preflight would probe a real one
 	binary := filepath.Join(t.TempDir(), "agentpack")
 	write := func(path, body string) {
 		t.Helper()
@@ -43,6 +48,15 @@ func TestEachInputFlipsExactlyItsIdentities(t *testing.T) {
 	previous := executable
 	executable = func() (string, error) { return binary, nil }
 	t.Cleanup(func() { executable = previous })
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := manifest.WriteStub(project, "demo", "0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(project, "demo", "0.1.0"); err != nil {
+		t.Fatal(err)
+	}
 	effective := mode.ImplicitEffective()
 	identities := func() map[string]string {
 		t.Helper()
@@ -63,20 +77,38 @@ func TestEachInputFlipsExactlyItsIdentities(t *testing.T) {
 			t.Fatal(err)
 		}
 		result["materialized"], result["synced"] = materialized, in.synced(materialized)
+		if result["environment"], err = EnvironmentDigest(project, project, "", base.Claude); err != nil {
+			t.Fatal(err)
+		}
+		target := base.Claude
+		report, err := NewService().Preflight(project, PreflightOptions{Target: &target})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result["source"], result["generation"] = report.SourceIdentity, report.GenerationID
 		return result
 	}
-	all := []string{"launch claude", "launch omp", "materialized", "synced"}
+	all := []string{"launch claude", "launch omp", "materialized", "synced", "environment", "source", "generation"}
+	files := []string{"launch claude", "launch omp", "materialized", "synced"}
 	for _, step := range []struct {
 		name   string
 		change func()
 		flips  []string
 	}{
-		{"lock", func() { write(filepath.Join(project, "pack.lock"), "lockfile_version = 2") }, all},
-		{"manifest", func() { write(filepath.Join(project, "agentpack.toml"), "name = 'x'") }, all},
-		{".agents", func() { write(filepath.Join(project, ".agents", "skills", "a", "SKILL.md"), "# A") }, all},
+		// Rewriting the lock without changing a pin is bookkeeping, not content.
+		{"lock", func() { write(filepath.Join(project, "pack.lock"), "lockfile_version = 2") }, files},
+		{"manifest", func() { write(filepath.Join(project, "agentpack.toml"), "name = 'x'") }, append(files, "source", "generation")},
+		{".agents", func() { write(filepath.Join(project, ".agents", "skills", "a", "SKILL.md"), "# A") }, append(files, "environment", "generation")},
 		{"OMP config", func() { write(filepath.Join(home, ".omp", "agent", "config.yml"), "a: 1") }, []string{"launch omp", "materialized", "synced"}},
 		{"binary", func() { write(binary, "v2 longer") }, []string{"launch claude", "launch omp", "synced"}},
-		{"workspace CLAUDE.md", func() { write(filepath.Join(project, "CLAUDE.md"), "# Rules") }, []string{"materialized", "synced"}},
+		{"workspace CLAUDE.md", func() { write(filepath.Join(project, "CLAUDE.md"), "# Rules") }, []string{"materialized", "synced", "generation"}},
+		{"host path", func() {
+			moved := filepath.Join(t.TempDir(), "elsewhere")
+			if err := os.Rename(project, moved); err != nil {
+				t.Fatal(err)
+			}
+			project = moved
+		}, files},
 	} {
 		before := identities()
 		step.change()
