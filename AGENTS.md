@@ -279,7 +279,8 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 |---|---|
 | `/` | none (redirects to `/sessions`) |
 | `/login` | `return_to` |
-| `/sessions`, `/sessions/$machine/$sessionId` | `q`, `group`, `new` |
+| `/sessions` | `q`, `group`, `new` |
+| `/sessions/$machine/$sessionId` | same, plus `sub` (the subagent open in the main view) |
 | `/library` | `q`, `type`, `sort`, `add` |
 | `/library/package/$` | same, plus `install` |
 | `/library/mcp/$name` | same |
@@ -428,7 +429,7 @@ For Cursor specifically, **`$STAGING/cursor-home/.cursor/cli-config.json`** is m
 
 ### Portable environments
 
-**DefinitionRoot** holds **`agentpack.toml`** / **`pack.lock`**. **WorkspaceRoot** is the checkout (`.agents/`, overlays). Legacy **`--project-root`** alone keeps them equal. Prefer **`--env <name|path>`** or **`--definition-root`** + **`--workspace`**, or **`agentpack env use|bind <ref> --project <checkout>`** (binding under **`$AGENTPACK_HOME/projects/<hash>/environment.toml`**). Invalid **`--env`** fails (no fallthrough). Environments may live under **`$AGENTPACK_HOME/environments/<name>/`**. **`agentpack preflight`** is the pure offline check (no lock/cache/staging/repo writes); optional **`contract.json`**, ambient skill shadow findings, exit codes **`0/2/3/4/5`**. **`agentpack probe`** writes native observation receipts (Claude plugin/skill presence and Codex 0.159.2 static skill discovery; explicit controlled_projection scope, other supported Codex versions runtime-only). **`agentpack support export`** writes a redacted capsule. **`env restore`** is frozen (cache + staging, no lock rewrite) and refuses rebuild while a launch holds the staging lock. **`--strict-external`** refuses Cursor/Agy workspace overlays; Claude and OpenCode are the validated no-checkout-write adapters. See **`docs/src/concepts/environments.md`**.
+**DefinitionRoot** holds **`agentpack.toml`** / **`pack.lock`**. **WorkspaceRoot** is the checkout (`.agents/`, overlays). Legacy **`--project-root`** alone keeps them equal. Prefer **`--env <name|path>`** or **`--definition-root`** + **`--workspace`**, or **`agentpack env use|bind <ref> --project <checkout>`** (binding under **`$AGENTPACK_HOME/projects/<hash>/environment.toml`**). Invalid **`--env`** fails (no fallthrough). Environments may live under **`$AGENTPACK_HOME/environments/<name>/`**. **`agentpack preflight`** is the pure offline check (no lock/cache/staging/repo writes); optional **`contract.json`**, ambient skill shadow findings, exit codes **`0/2/3/4/5`**. **`agentpack probe`** writes native observation receipts (Claude plugin/skill presence and Codex 0.159.2 static skill discovery; explicit controlled_projection scope, other supported Codex versions runtime-only). **`agentpack support export`** writes a redacted capsule. **`env restore`** is frozen (cache + staging, no lock rewrite); it publishes a new generation while a running launch keeps its original one. **`--strict-external`** refuses Cursor/Agy workspace overlays; Claude and OpenCode are the validated no-checkout-write adapters. See **`docs/src/concepts/environments.md`**.
 
 ### Global CLI flags
 
