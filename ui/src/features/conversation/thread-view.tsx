@@ -1,4 +1,5 @@
 import { lazy, Suspense, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react"
+// virtual-core is pinned exactly: React Compiler refuses @tanstack/react-virtual, so this drives its private _didMount/_willUpdate (virtualizer.test.ts).
 import { elementScroll, observeElementOffset, observeElementRect, Virtualizer, type VirtualItem } from "@tanstack/virtual-core"
 import { BookOpen, Check, ChevronRight, Copy, ExternalLink, Flag, Folder, GitFork, Globe, Pencil, Lock, Quote, RotateCcw, Search, Sparkles, SquareTerminal, Wrench } from "lucide-react"
 import { RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"

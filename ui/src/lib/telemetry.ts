@@ -19,7 +19,12 @@ export function traceRequest() {
   return `00-${lastTrace}-${lastTrace.slice(0, 16)}-01`
 }
 
+// Expected failures: API errors are recorded by recordAPI, and an aborted request is the app moving on.
+// DOMException may come from another realm, so match the name on any object.
+const expected = (error: unknown) => typeof error === "object" && error !== null && (["ApiError", "AbortError"].includes(String((error as Error).name)) || reported.has(error))
+
 export function recordAPI(method: string, path: string, traceparent: string, status: number, cause?: unknown) {
+  if (expected(cause)) return
   if (cause && typeof cause === "object") reported.add(cause)
   lastTrace = traceparent.slice(3, 35)
   breadcrumb({ kind: "api", name: `${method} ${path.split("?")[0]}`, trace_id: traceparent.slice(3, 35), status })
@@ -27,7 +32,7 @@ export function recordAPI(method: string, path: string, traceparent: string, sta
 }
 
 export function reportError(error: unknown, traceparent = lastTrace ? `00-${lastTrace}-${lastTrace.slice(0, 16)}-01` : traceRequest()) {
-  if (error instanceof Error && (error.name === "ApiError" || reported.has(error))) return
+  if (expected(error)) return
   const { route, search, ui_build_id } = page()
   const name = (error instanceof Error ? error.name : "Error").slice(0, 80)
   const message = (error instanceof Error ? error.message : "Unhandled rejection").slice(0, 1024)
