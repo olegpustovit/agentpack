@@ -387,3 +387,44 @@ func TestConversationEventKindIsIndexed(t *testing.T) {
 		t.Fatalf("plan does not use the kind index:\n%s", plan.String())
 	}
 }
+
+// Native ownership bindings move out of sessions with their owner; import markers are dropped.
+func TestOwnerBindingsMigrationMovesPseudoRows(t *testing.T) {
+	db, err := sql.Open(driverName, "file:"+filepath.ToSlash(filepath.Join(t.TempDir(), "state.db")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	previous := fstest.MapFS{}
+	names, err := fs.Glob(migrationFiles, "migrations/00[0-4][0-9]_*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		body, err := migrationFiles.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous[name] = &fstest.MapFile{Data: body}
+	}
+	if err := migrate(context.Background(), db, previous); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO sessions(id,node_id,folder_id,harness,started_by,owner_email,hidden) VALUES
+		('ownership-0a1b-key1','n','f','claude','{"user":"a@b.c"}','a@b.c',1),
+		('ownership-0a1b-pending','n','','','','',1),
+		('session-real','n','f','claude','{"user":"a@b.c"}','a@b.c',0)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(context.Background(), db, migrationFiles); err != nil {
+		t.Fatal(err)
+	}
+	var key, owner string
+	var count int
+	if err := db.QueryRow("SELECT key,started_by,(SELECT count(*) FROM acp_session_owners) FROM acp_session_owners").Scan(&key, &owner, &count); err != nil || key != "key1" || owner != `{"user":"a@b.c"}` || count != 1 {
+		t.Fatalf("binding = %q %q count=%d err=%v", key, owner, count, err)
+	}
+	if err := db.QueryRow("SELECT count(*) FROM sessions").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("sessions left = %d, %v", count, err)
+	}
+}

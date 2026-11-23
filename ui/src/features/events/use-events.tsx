@@ -21,6 +21,8 @@ export const STATE_FAMILIES: Record<string, string[][]> = {
   issues: [["diagnostics"]],
   issue_counts: [["diagnostics"]],
   conversation_events: [],
+  // Native chat ownership is read only by resume checks on the gateway.
+  acp_session_owners: [],
   archive_blobs: [],
   archive_edits: [],
   archive_event_clocks: [],

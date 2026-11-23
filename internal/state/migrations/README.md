@@ -10,6 +10,9 @@ in `crsql_begin_alter` and `crsql_commit_alter`, inside the version transaction.
 Use one replicated table per alteration file. Creating a new table uses ordinary
 SQL followed by `SELECT crsql_as_crr('<table>')` when it should replicate.
 
+acp_session_owners replicates native ACP session ownership (formerly hidden `ownership-*` rows in
+sessions); each node reads only its own bindings.
+
 Machine-local account bindings and pending joins live in local_node. Browser
 session epochs stay local; mesh_settings retains the shared revocation epoch
 even after users are deleted. Do not reset that key when reclaiming an owner.
