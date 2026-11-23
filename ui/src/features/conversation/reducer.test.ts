@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs"
+import { readdirSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
@@ -389,5 +389,31 @@ describe("helperSubagents", () => {
   it("shows a finished helper as done", () => {
     const done = { ...helper, conversation_state: "idle" } as SessionInfo
     expect(helperSubagents([tool(1, "start", "session-H1")], [done])["helper:session-H1"]).toMatchObject({ state: "idle", cancellable: false })
+  })
+})
+
+// Go is authoritative: TestReducedTraces in internal/acp writes each fixture's per-entry state.
+describe("Go reducer conformance", () => {
+  const dir = dirname(fixture)
+  for (const name of readdirSync(dir).filter((file) => file.endsWith(".reduced.json"))) {
+    it(`matches ${name}`, () => {
+      const entries = readFileSync(join(dir, name.replace(".reduced.json", ".jsonl")), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as LogEntry)
+      const want = (JSON.parse(readFileSync(join(dir, name), "utf8")) as Record<string, unknown>[]).map(({ waiting: _waiting, ...step }) => step)
+      const got = entries.map((entry, i) => {
+        const state = reduceLog(entries.slice(0, i + 1))
+        return {
+          seq: entry.seq,
+          working: state.working,
+          needs_you: state.needs_you,
+          ...(state.context_tokens ? { context_tokens: state.context_tokens } : {}),
+          ...(state.context_limit ? { context_limit: state.context_limit } : {}),
+          ...(state.cost_usd ? { cost_usd: state.cost_usd } : {}),
+        }
+      })
+      expect(got).toEqual(want)
+    })
+  }  it("opens a compaction from a summary chunk that arrives before its status", () => {
+    const state = reduceLog([{ seq: 1, ts: 1, kind: "compaction_summary_chunk", payload: { compactionId: "c0", content: { type: "text", text: "Summary" } } }])
+    expect(state.items.map((item) => item.data)).toEqual([{ compactionId: "c0", status: "in_progress", summary: "Summary" }])
   })
 })

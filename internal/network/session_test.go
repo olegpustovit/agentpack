@@ -345,6 +345,27 @@ func TestAttachReplayResumesWithinWindow(t *testing.T) {
 }
 
 // Nobody is attached when a shell first probes the terminal, so the worker answers for it.
+// A write stuck on a child that does not read input must not stall output, state or attachments.
+func TestSessionStuckInputDoesNotBlockOutput(t *testing.T) {
+	session := testSession(t)
+	local, _ := attachTest(t, session, true)
+	session.writeMu.Lock() // the child's input buffer is full
+	written := make(chan error, 1)
+	go func() { written <- session.WriteInput(local, []byte("x\n")) }()
+	session.publish([]byte("still flowing"))
+	if _, _, err := session.Attach(false, 0); err != nil || !session.State().Running {
+		t.Fatal("session blocked behind input", err)
+	}
+	<-local.Ready
+	if data, _ := local.ReadOutput(); !bytes.Contains(data, []byte("still flowing")) {
+		t.Fatalf("output %q", data)
+	}
+	session.writeMu.Unlock()
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSessionAnswersDeviceAttributesWithoutViewer(t *testing.T) {
 	command := exec.Command(os.Args[0], "-test.run=^TestTerminalChild$")
 	command.Env = append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1", "AGENTPACK_TEST_TERMINAL_DA=1")
@@ -363,5 +384,15 @@ func TestSessionAnswersDeviceAttributesWithoutViewer(t *testing.T) {
 	}
 	if want := `DA "\x1b[?1;2c"`; !strings.Contains(string(replay.Data), want) {
 		t.Fatalf("replay %q lacks %s", replay.Data, want)
+	}
+}
+
+// Past the replay window a tiny chunk costs the same as before it: output stays linear.
+func BenchmarkSessionPublishTinyChunks(b *testing.B) {
+	session := &Session{state: TerminalState{Running: true}, attachments: make(map[uint64]*Attachment)}
+	chunk := []byte("x")
+	b.ReportAllocs()
+	for b.Loop() {
+		session.publish(chunk)
 	}
 }
