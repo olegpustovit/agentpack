@@ -540,6 +540,7 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 			err = generation.Publish()
 		}
 		if err == nil {
+			paths.ReclaimStagingGenerations(projectRoot, effective.Name(), recordedGenerations(projectRoot, effective.Name()))
 			tidyTempDirectories(projectRoot, options.Target != nil)
 		}
 	}

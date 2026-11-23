@@ -310,6 +310,28 @@ func materializationStatePath(projectRoot, modeName string, target *base.Target)
 	return paths.ProjectStateFile(projectRoot, name+".json")
 }
 
+// recordedGenerations lists the staging generations this mode's launch and
+// sync records point at. Each harness returns to its own on the next launch,
+// so reclaiming one would make switching agents rebuild.
+func recordedGenerations(projectRoot, modeName string) []string {
+	pattern, err := paths.ProjectStateFile(projectRoot, "launch-sync-"+paths.ModePathComponent(modeName)+".*.state")
+	if err != nil {
+		return nil
+	}
+	files, _ := filepath.Glob(pattern)
+	if synced, err := syncedStatePath(projectRoot, modeName); err == nil {
+		files = append(files, synced)
+	}
+	var roots []string
+	for _, file := range files {
+		var state launchState
+		if data, err := os.ReadFile(file); err == nil && json.Unmarshal(data, &state) == nil && state.Root != "" {
+			roots = append(roots, state.Root)
+		}
+	}
+	return roots
+}
+
 func readMaterializationDigest(projectRoot, modeName string, target *base.Target) (string, bool, error) {
 	path, err := materializationStatePath(projectRoot, modeName, target)
 	if err != nil {
