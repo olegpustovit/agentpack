@@ -78,7 +78,7 @@ func (agent *authReplayAgent) SetSessionConfigOption(_ context.Context, request 
 func authReplayConnection(agent *authReplayAgent) (*sdkacp.ClientSideConnection, func()) {
 	clientToAgentReader, clientToAgentWriter := io.Pipe()
 	agentToClientReader, agentToClientWriter := io.Pipe()
-	client := acp.NewHarnessClient("", nil, nil, nil)
+	client := acp.NewHarnessClient("", nil, nil)
 	clientConn := client.NewClientSideConnection(clientToAgentWriter, agentToClientReader)
 	agentConn := sdkacp.NewAgentSideConnection(agent, agentToClientWriter, clientToAgentReader)
 	agent.ReplayAgent.SetConnection(agentConn)
@@ -107,7 +107,7 @@ func TestAdaptAgentStdoutPassesThroughAndDropsExplicitEmpty(t *testing.T) {
 	log := acp.NewEventLog(0)
 	received := make(chan struct{}, 1)
 	log.SetOnAppend(func(acp.LogEntry) { received <- struct{}{} })
-	client := acp.NewHarnessClient("", nil, log, nil)
+	client := acp.NewHarnessClient("", log, nil)
 	clientInput, clientInputWriter := io.Pipe()
 	agentOutput, agentOutputWriter := io.Pipe()
 	defer clientInput.Close()
@@ -790,7 +790,7 @@ func newHeldPrompter(t *testing.T) (*acpPrompter, *heldAgent) {
 	clientToAgentReader, clientToAgentWriter := io.Pipe()
 	agentToClientReader, agentToClientWriter := io.Pipe()
 	log := acp.NewEventLog(0)
-	clientConn := acp.NewHarnessClient("", nil, log, nil).NewClientSideConnection(clientToAgentWriter, agentToClientReader)
+	clientConn := acp.NewHarnessClient("", log, nil).NewClientSideConnection(clientToAgentWriter, agentToClientReader)
 	agent.SetConnection(sdkacp.NewAgentSideConnection(agent, agentToClientWriter, clientToAgentReader))
 	t.Cleanup(func() {
 		for _, pipe := range []io.Closer{clientToAgentWriter, agentToClientWriter, clientToAgentReader, agentToClientReader} {

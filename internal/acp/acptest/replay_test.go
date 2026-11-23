@@ -61,7 +61,7 @@ func TestReplayFullFixture(t *testing.T) {
 	root := t.TempDir()
 	log := acp.NewEventLog(0)
 	client := &replayTestClient{
-		HarnessClient: acp.NewHarnessClient(root, nil, log, nil),
+		HarnessClient: acp.NewHarnessClient(root, log, nil),
 		permissions:   make(chan string, 1),
 		rawPayloads:   make(map[string][][]byte),
 	}

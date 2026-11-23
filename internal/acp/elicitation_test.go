@@ -64,7 +64,7 @@ func TestSessionUpdateForwardsRawACPUsage(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			log := NewEventLog(0)
-			client := NewHarnessClient("", nil, log, nil)
+			client := NewHarnessClient("", log, nil)
 			if err := client.SessionUpdate(context.Background(), sdkacp.SessionNotification{
 				Update: sdkacp.SessionUpdate{UsageUpdate: &sdkacp.SessionUsageUpdate{
 					SessionUpdate: "usage_update",
@@ -131,7 +131,7 @@ func TestSessionUpdateForwardsRemainingSDKVariants(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {
 			log := NewEventLog(0)
-			client := NewHarnessClient("", nil, log, nil)
+			client := NewHarnessClient("", log, nil)
 			if err := client.SessionUpdate(context.Background(), sdkacp.SessionNotification{Update: test.update}); err != nil {
 				t.Fatal(err)
 			}
@@ -148,7 +148,7 @@ func TestSessionUpdateForwardsRemainingSDKVariants(t *testing.T) {
 }
 
 func TestCursorAskQuestionWaitsForSequentialAnswers(t *testing.T) {
-	client := NewHarnessClient("", nil, nil, nil)
+	client := NewHarnessClient("", nil, nil)
 	var questions []string
 	client.Log.SetOnAppend(func(entry LogEntry) {
 		if entry.Kind != "elicitation" {
@@ -213,7 +213,7 @@ func TestCursorAskQuestionWaitsForSequentialAnswers(t *testing.T) {
 
 func TestCursorCreatePlanNeedsExplicitDecision(t *testing.T) {
 	params := json.RawMessage(`{"toolCallId":"tool-2","name":"Refactor","plan":"Inspect and update.","todos":[{"id":"t1","content":"Inspect","status":"pending"}]}`)
-	client := NewHarnessClient("", nil, nil, nil)
+	client := NewHarnessClient("", nil, nil)
 	client.Log.SetOnAppend(func(entry LogEntry) {
 		var payload struct {
 			ElicitationID string `json:"elicitationId"`
@@ -247,7 +247,7 @@ func TestCursorCreatePlanNeedsExplicitDecision(t *testing.T) {
 		t.Fatalf("plan rejection outcome = %q", response.Outcome.Outcome)
 	}
 
-	cancelled := NewHarnessClient("", nil, nil, nil)
+	cancelled := NewHarnessClient("", nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	result, err = cancelled.HandleExtensionMethod(ctx, "_agentpack/cursor/create_plan", params)
@@ -296,7 +296,7 @@ func TestElicitationFieldsReadAskUserQuestionForm(t *testing.T) {
 }
 
 func TestWithdrawnElicitationStopsNeedingTheUser(t *testing.T) {
-	client := NewHarnessClient("", nil, nil, nil)
+	client := NewHarnessClient("", nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	request := sdkacp.NewUnstableCreateElicitationRequestForm(sdkacp.UnstableElicitationSchema{Type: sdkacp.UnstableElicitationSchemaTypeObject})
@@ -311,14 +311,14 @@ func TestWithdrawnElicitationStopsNeedingTheUser(t *testing.T) {
 }
 
 func TestRequestPermissionRejectsEmptyRequestID(t *testing.T) {
-	client := NewHarnessClient("", nil, nil, nil)
+	client := NewHarnessClient("", nil, nil)
 	if _, err := client.RequestPermission(context.Background(), sdkacp.RequestPermissionRequest{}); err == nil {
 		t.Fatal("empty permission request ID should be rejected")
 	}
 }
 
 func TestPermissionRequestIDDoesNotReuseToolCallID(t *testing.T) {
-	client := NewHarnessClient("", nil, nil, nil)
+	client := NewHarnessClient("", nil, nil)
 	toolCallID := sdkacp.ToolCallId("agent-tool-1")
 	first, err := client.permissionRequestID(toolCallID)
 	if err != nil {
@@ -369,7 +369,7 @@ func TestPermissionRequestIDDoesNotReuseToolCallID(t *testing.T) {
 
 func TestBypassModeAnswersPermissionWithoutAskingOrLogging(t *testing.T) {
 	log := NewEventLog(0)
-	client := NewHarnessClient("", nil, log, nil)
+	client := NewHarnessClient("", log, nil)
 	bypass := true
 	client.AutoApprove = func() bool { return bypass }
 	request := sdkacp.RequestPermissionRequest{
@@ -406,7 +406,7 @@ func TestBypassModeAnswersPermissionWithoutAskingOrLogging(t *testing.T) {
 // link, and the person's Done or Decline becomes the agent's accept or decline.
 func TestURLElicitationShowsTheLinkAndAnswersAcceptOrDecline(t *testing.T) {
 	for _, test := range []struct{ answer, want string }{{"done", "accept"}, {"decline", "decline"}} {
-		client := NewHarnessClient("", nil, nil, nil)
+		client := NewHarnessClient("", nil, nil)
 		var shown map[string]string
 		client.Log.SetOnAppend(func(entry LogEntry) {
 			if entry.Kind != "elicitation" || json.Unmarshal(entry.Payload, &shown) != nil {

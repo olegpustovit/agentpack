@@ -35,7 +35,7 @@ func lastPayload(t *testing.T, log *EventLog) (string, map[string]any) {
 
 func TestSubagentUpdatesAreLoggedAndChildEventsStamped(t *testing.T) {
 	log := NewEventLog(0)
-	client := NewHarnessClient("", nil, log, nil)
+	client := NewHarnessClient("", log, nil)
 	ctx := context.Background()
 
 	announce := `{"sessionUpdate":"subagent_update","sessionId":"child-1","title":"Explore","capabilities":{"cancel":{}},"state":{"state":"running"}}`
@@ -99,7 +99,7 @@ func TestSubagentUpdatesAreLoggedAndChildEventsStamped(t *testing.T) {
 
 func TestFlattenedSubagentFallbacks(t *testing.T) {
 	log := NewEventLog(0)
-	client := NewHarnessClient("", nil, log, nil)
+	client := NewHarnessClient("", log, nil)
 	claude := sdkacp.UpdateAgentMessageText("inside task")
 	claude.AgentMessageChunk.Meta = map[string]any{"claudeCode": map[string]any{"parentToolUseId": "toolu_1"}}
 	_ = client.SessionUpdate(context.Background(), sdkacp.SessionNotification{SessionId: "s", Update: claude})
@@ -119,7 +119,7 @@ func TestFlattenedSubagentFallbacks(t *testing.T) {
 
 func TestAIRDraftSubagentsBecomeSubagentUpdates(t *testing.T) {
 	log := NewEventLog(0)
-	client := NewHarnessClient("", nil, log, nil)
+	client := NewHarnessClient("", log, nil)
 	spawned := `{"sessionUpdate":"subagent_spawned","subagentSessionId":"task-1","name":"Explore","task":"Find the scrubber","prompt":"p","capabilities":{}}`
 	if !AppendRawSessionUpdate(log, rawUpdate("parent", spawned)) {
 		t.Fatal("subagent_spawned must be consumed before the SDK drops its fields")
@@ -199,7 +199,7 @@ func TestStampSubagentEmptyObject(t *testing.T) {
 
 func TestCancelSubagentSendsSessionCancelForTheChild(t *testing.T) {
 	log := NewEventLog(0)
-	client := NewHarnessClient("", nil, log, nil)
+	client := NewHarnessClient("", log, nil)
 	toAgent, fromClient := io.Pipe()
 	fromAgent, _ := io.Pipe()
 	client.NewClientSideConnection(fromClient, fromAgent)

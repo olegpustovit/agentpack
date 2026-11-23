@@ -68,7 +68,7 @@ func TestConversationStoreMergeAndResumeDoNotReuseSequence(t *testing.T) {
 	log.Append("agent_message_chunk", 1, payload)
 	log.Append("agent_message_chunk", 2, payload)
 	if err := log.EnableSink(func(changes acp.LogChanges) error {
-		return persistConversationChanges(t.Context(), store.DB, id, changes)
+		return persistConversationChangesSince(t.Context(), store.DB, id, changes, 0)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestConversationStoreTailIsBoundedByUTF8Bytes(t *testing.T) {
 	for seq := int64(1); seq <= 8; seq++ {
 		changes.Entries = append(changes.Entries, acp.LogEntry{Seq: seq, Kind: "tool_call_update", Payload: payload})
 	}
-	if err := persistConversationChanges(t.Context(), store.DB, id, changes); err != nil {
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, changes, 0); err != nil {
 		t.Fatal(err)
 	}
 	entries, lastSeq, truncated, err := storedConversationTail(t.Context(), store.Reader, id, 0)
@@ -232,11 +232,11 @@ func TestConversationStoreRejectedBatchRollsBackRowsAndProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "prompt", Payload: json.RawMessage(`{}`)}}}
-	if err := persistConversationChanges(t.Context(), store.DB, id, first); err != nil {
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, first, 0); err != nil {
 		t.Fatal(err)
 	}
 	bad := acp.LogChanges{LastSeq: 2, Removed: []int64{1}, Entries: []acp.LogEntry{{Seq: 2, Kind: "prompt", Payload: json.RawMessage(`invalid`)}}}
-	if err := persistConversationChanges(t.Context(), store.DB, id, bad); err == nil {
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, bad, 0); err == nil {
 		t.Fatal("invalid batch accepted")
 	}
 	entries, lastSeq, _, err := storedConversationTail(t.Context(), store.Reader, id, 0)
@@ -337,7 +337,7 @@ func TestConversationStoreNativeLoadDoesNotDuplicateHistory(t *testing.T) {
 	defer clientOutput.Close()
 	defer agentInput.Close()
 	defer agentOutput.Close()
-	client := acp.NewHarnessClient(t.TempDir(), nil, log, nil)
+	client := acp.NewHarnessClient(t.TempDir(), log, nil)
 	connection := client.NewClientSideConnection(clientOutput, clientInput)
 	agent := &historyLoadAgent{authReplayAgent: &authReplayAgent{ReplayAgent: acptest.NewReplayAgent(nil), agentCapabilities: sdkacp.AgentCapabilities{LoadSession: true}}}
 	agent.conn = sdkacp.NewAgentSideConnection(agent, agentOutput, agentInput)
@@ -368,7 +368,7 @@ func TestConversationStoreRestartAcceptsPromptAfterOldExit(t *testing.T) {
 	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp", State: TerminalState{Running: true, ExitCode: -1}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := persistConversationChanges(t.Context(), store.DB, id, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "agent_exit", Payload: json.RawMessage(`{}`)}}}); err != nil {
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "agent_exit", Payload: json.RawMessage(`{}`)}}}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if info, err := storedSession(t.Context(), store.Reader, id); err != nil || info.State.Running {
@@ -458,7 +458,7 @@ func TestConversationPagesReachTheFirstEventWithoutTheWorker(t *testing.T) {
 	for seq := int64(1); seq <= total; seq++ {
 		changes.Entries = append(changes.Entries, acp.LogEntry{Seq: seq, Kind: "agent_message_chunk", Payload: payload})
 	}
-	if err := persistConversationChanges(t.Context(), g.auth.store.DB, id, changes); err != nil {
+	if err := persistConversationChangesSince(t.Context(), g.auth.store.DB, id, changes, 0); err != nil {
 		t.Fatal(err)
 	}
 	// A running worker that cannot serve history proves older pages come from the store.
@@ -547,7 +547,7 @@ func TestConversationReaderBackfillsEvictedEntries(t *testing.T) {
 	}
 	log := acp.NewEventLog(512)
 	if err := log.EnableSink(func(changes acp.LogChanges) error {
-		return persistConversationChanges(t.Context(), store.DB, id, changes)
+		return persistConversationChangesSince(t.Context(), store.DB, id, changes, 0)
 	}); err != nil {
 		t.Fatal(err)
 	}

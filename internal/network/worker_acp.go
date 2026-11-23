@@ -135,7 +135,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 	conv.mu.Unlock()
 	log.SetReplaying(replaying)
 	defer log.SetReplaying(false)
-	client := acp.NewHarnessClient(workspace, nil, log, broker)
+	client := acp.NewHarnessClient(workspace, log, broker)
 	client.AutoApprove = conv.BypassingPermissions
 	client.StoreImage = conv.storeImage
 	agent := acptest.NewReplayAgent(entries)
@@ -219,7 +219,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	conv.mu.Unlock()
 	log.SetReplaying(replaying)
 	defer log.SetReplaying(false)
-	client := acp.NewHarnessClient(workspace, nil, log, broker)
+	client := acp.NewHarnessClient(workspace, log, broker)
 	client.AutoApprove = conv.BypassingPermissions
 	client.StoreImage = conv.storeImage
 	rewriter := &rewriteStdin{w: stdinWriter, rewrite: func(line []byte) []byte {
@@ -822,18 +822,6 @@ func readACPFrame(reader *bufio.Reader, source io.Closer, drainTimeout time.Dura
 	}
 }
 
-func loadEventLogFixture(path string) (*acp.EventLog, error) {
-	entries, err := loadEventLogFixtureEntries(path)
-	if err != nil {
-		return nil, err
-	}
-	log := acp.NewEventLog(0)
-	for _, entry := range entries {
-		log.Append(entry.Kind, entry.TS, entry.Payload)
-	}
-	return log, nil
-}
-
 func loadEventLogFixtureEntries(path string) ([]acp.LogEntry, error) {
 	file, err := os.Open(filepath.Clean(path))
 	if err != nil {
@@ -905,7 +893,7 @@ func listACPAgentSessions(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	cmd.Env = append(cmd.Env, "AGENTPACK_TRACE="+obs.ParseTraceParent(obs.TraceParent(ctx)).ID)
 
 	log := acp.NewEventLog(0)
-	client := acp.NewHarnessClient(workspace, nil, log, acp.NewBroker(nil, nil, nil, nil))
+	client := acp.NewHarnessClient(workspace, log, acp.NewBroker(nil, nil, nil, nil))
 	rewriter := &rewriteStdin{w: stdinWriter, rewrite: func(line []byte) []byte {
 		line = acp.AddSessionCapabilities(line)
 		if acpLaunch.Rewrite != nil {

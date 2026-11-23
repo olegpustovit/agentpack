@@ -21,10 +21,6 @@ import (
 	"github.com/tmaxmax/go-sse"
 )
 
-func persistConversationChanges(ctx context.Context, db *sql.DB, id string, changes acp.LogChanges) error {
-	return persistConversationChangesSince(ctx, db, id, changes, 0)
-}
-
 // persistConversationChangesSince is for a live log restored at restoredSeq: its agent process is new,
 // so a running cost total logged before then belongs to the previous process.
 func persistConversationChangesSince(ctx context.Context, db *sql.DB, id string, changes acp.LogChanges, restoredSeq int64) error {

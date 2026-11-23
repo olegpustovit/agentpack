@@ -16,7 +16,6 @@ import (
 // HarnessClient is the agentpack ACP client: permissions via Broker, updates to EventLog, fs confined to workspace.
 type HarnessClient struct {
 	Root      string
-	Extra     []string
 	Log       *EventLog
 	Broker    *Broker
 	Terminals *TerminalPool
@@ -37,14 +36,14 @@ var _ sdkacp.Client = (*HarnessClient)(nil)
 var _ sdkacp.ExtensionMethodHandler = (*HarnessClient)(nil)
 
 // NewHarnessClient wires a client implementation for ClientSideConnection.
-func NewHarnessClient(root string, extra []string, log *EventLog, broker *Broker) *HarnessClient {
+func NewHarnessClient(root string, log *EventLog, broker *Broker) *HarnessClient {
 	if broker == nil {
 		broker = NewBroker(nil, nil, nil, nil)
 	}
 	if log == nil {
 		log = NewEventLog(0)
 	}
-	return &HarnessClient{Root: root, Extra: extra, Log: log, Broker: broker, Terminals: NewTerminalPool(), requestPrefix: rand.Text()}
+	return &HarnessClient{Root: root, Log: log, Broker: broker, Terminals: NewTerminalPool(), requestPrefix: rand.Text()}
 }
 func (c *HarnessClient) nextRequestID(kind string) string {
 	return kind + "-" + c.requestPrefix + "-" + strconv.FormatUint(c.requestSequence.Add(1), 10)
@@ -306,7 +305,7 @@ func (c *HarnessClient) waitAnswer(ctx context.Context, kind, idField, id string
 }
 
 func (c *HarnessClient) ReadTextFile(ctx context.Context, p sdkacp.ReadTextFileRequest) (sdkacp.ReadTextFileResponse, error) {
-	content, err := ReadWorkspaceFile(c.Root, c.Extra, p.Path, p.Line, p.Limit)
+	content, err := ReadWorkspaceFile(c.Root, nil, p.Path, p.Line, p.Limit)
 	if err != nil {
 		return sdkacp.ReadTextFileResponse{}, err
 	}
@@ -314,7 +313,7 @@ func (c *HarnessClient) ReadTextFile(ctx context.Context, p sdkacp.ReadTextFileR
 }
 
 func (c *HarnessClient) WriteTextFile(ctx context.Context, p sdkacp.WriteTextFileRequest) (sdkacp.WriteTextFileResponse, error) {
-	if err := WriteWorkspaceFile(c.Root, c.Extra, p.Path, p.Content); err != nil {
+	if err := WriteWorkspaceFile(c.Root, nil, p.Path, p.Content); err != nil {
 		return sdkacp.WriteTextFileResponse{}, err
 	}
 	return sdkacp.WriteTextFileResponse{}, nil
@@ -324,7 +323,7 @@ func (c *HarnessClient) CreateTerminal(ctx context.Context, p sdkacp.CreateTermi
 	if c.Terminals == nil {
 		c.Terminals = NewTerminalPool()
 	}
-	id, err := c.Terminals.create(c.Root, c.Extra, p)
+	id, err := c.Terminals.create(c.Root, nil, p)
 	if err != nil {
 		return sdkacp.CreateTerminalResponse{}, err
 	}

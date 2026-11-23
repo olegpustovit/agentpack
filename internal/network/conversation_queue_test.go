@@ -269,7 +269,7 @@ func TestClientPromptLookupSurvivesADroppedReplayTail(t *testing.T) {
 	input := acp.PromptInput{Text: "first message", QueueID: "5a6057ea65564edfb5222d0c394e0b43"}
 	logged := entry("prompt", json.RawMessage(promptLogPayload(input)))
 	logged.Seq = 1
-	if err := persistConversationChanges(t.Context(), store.DB, id, acp.LogChanges{Entries: []acp.LogEntry{logged}, LastSeq: 1}); err != nil {
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, acp.LogChanges{Entries: []acp.LogEntry{logged}, LastSeq: 1}, 0); err != nil {
 		t.Fatal(err)
 	}
 	session, agent := newFakeAgentSession(t)

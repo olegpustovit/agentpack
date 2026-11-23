@@ -55,7 +55,7 @@ func TestArchivedSessionsRefuseEveryWriteAndNativeResume(t *testing.T) {
 		t.Fatalf("worker revived archived metadata: %v", err)
 	}
 	entry := acp.LogEntry{Seq: 1, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"late event"}}`)}
-	if err := persistConversationChanges(t.Context(), g.auth.store.DB, session.ID, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{entry}}); err == nil {
+	if err := persistConversationChangesSince(t.Context(), g.auth.store.DB, session.ID, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{entry}}, 0); err == nil {
 		t.Fatal("worker added events to archived session")
 	}
 	ids, err := archivedNativeIDs(t.Context(), g.auth.store, folder, "agent")

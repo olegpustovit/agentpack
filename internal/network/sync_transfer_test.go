@@ -227,7 +227,7 @@ func TestOversizedArchivedEditReachesMainThroughPeer(t *testing.T) {
 	if !json.Valid(payload) {
 		t.Fatal("invalid large journal fixture")
 	}
-	if err := persistConversationChanges(t.Context(), worker.auth.store.DB, id, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "agent_message_chunk", Payload: payload}}}); err != nil {
+	if err := persistConversationChangesSince(t.Context(), worker.auth.store.DB, id, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "agent_message_chunk", Payload: payload}}}, 0); err != nil {
 		t.Fatal(err)
 	}
 	for _, link := range []struct{ source, target *Gateway }{{worker, relay}, {relay, main}} {
