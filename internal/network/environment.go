@@ -1,7 +1,6 @@
 package network
 
 import (
-	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -223,7 +222,14 @@ func RestartStaleSessions(ctx context.Context, home string, service packSync.Ser
 		if !restartable(info) {
 			continue
 		}
-		definition := cmp.Or(info.DefinitionRoot, info.Directory)
+		definition := info.DefinitionRoot
+		if definition == "" {
+			// Recorded empty when the launch found no separate root; a manifest above the folder may own it now.
+			definition = info.Directory
+			if pack, err := paths.ResolveContextOrCWD("", "", info.Directory, ""); err == nil {
+				definition = pack.DefinitionRoot
+			}
+		}
 		if root != nil {
 			if stat, err := os.Stat(definition); err != nil || !os.SameFile(root, stat) {
 				continue
