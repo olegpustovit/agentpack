@@ -194,3 +194,15 @@ describe("conversation message actions", () => {
     vi.unstubAllGlobals()
   })
 })
+
+describe("tool row titles (P1.34)", () => {
+  it("names an orphan update by the agent's tool name, its input, then its kind, never a bare Tool", () => {
+    const tool = (data: object): ThreadItem => ({ kind: "tool", data: { toolCallId: "t", status: "completed", ...data } })
+    // One at a time: adjacent tools collapse into a group.
+    for (const [data, name] of [[{ _meta: { claudeCode: { toolName: "Grep" } } }, "Grep"], [{ rawInput: { description: "List the worktrees" } }, "List the worktrees"], [{ kind: "fetch" }, "fetch"]] as const) {
+      act(() => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(ThreadView, { items: [tool(data)], machine: "local", sessionId: "s", agent: "Claude" }))))
+      expect(container.textContent).toContain(name)
+      expect(container.textContent).not.toMatch(/\bTool\b/)
+    }
+  })
+})
