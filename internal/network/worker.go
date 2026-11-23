@@ -315,8 +315,16 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		}
 		if acpCleanup != nil {
 			defer func() {
+				// Under the lifecycle lock, after any restart in progress: a restart that swapped the
+				// agent is cleaned up here, and none can start a new one afterwards.
+				if handler != nil {
+					handler.lifecycle.Lock()
+					defer handler.lifecycle.Unlock()
+					handler.stopping = true
+				}
 				if acpCleanup != nil {
 					acpCleanup()
+					acpCleanup = nil
 				}
 			}()
 		}
