@@ -290,9 +290,10 @@ func TestConversationStoreTwoWritersAndSessionReader(t *testing.T) {
 	if err := <-readerDone; err != nil {
 		t.Fatal(err)
 	}
-	var count int
-	if err := first.Reader.QueryRow("SELECT count(*) FROM conversation_events").Scan(&count); err != nil || count != 10000 {
-		t.Fatalf("concurrent events=%d err=%v", count, err)
+	// Streamed chunks are stored joined into a few rows; every character must be there once.
+	var count, text int
+	if err := first.Reader.QueryRow("SELECT count(*),sum(length(json_extract(body,'$.payload.text.text'))) FROM conversation_events").Scan(&count, &text); err != nil || text != 10000 || count > 100 {
+		t.Fatalf("concurrent rows=%d text=%d err=%v", count, text, err)
 	}
 }
 

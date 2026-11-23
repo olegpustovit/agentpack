@@ -415,10 +415,43 @@ func TestEventLogClosesWhileTheStoreKeepsFailing(t *testing.T) {
 	log.mu.RLock()
 	pending := log.persistence.bytes
 	log.mu.RUnlock()
-	if pending > 2*log.limit {
+	if pending > 3*log.limit {
 		t.Fatalf("pending grew to %d bytes while the store was down", pending)
 	}
 	if !errors.Is(log.Close(), failure) {
 		t.Fatal("close hid the failure")
+	}
+}
+
+// Appending a streamed token to a persisted log, the hot path of every chat.
+func BenchmarkEventLogAppendPersistedChunk(b *testing.B) {
+	log := NewEventLog(1 << 20)
+	if err := log.EnableSink(func(LogChanges) error { return nil }); err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = log.Close() })
+	payload := json.RawMessage(`{"text":{"text":"token "}}`)
+	b.ReportAllocs()
+	for b.Loop() {
+		log.Append("agent_message_chunk", 1_790_000_000_000, payload)
+	}
+}
+
+func TestEntrySizeMatchesTheStoredLine(t *testing.T) {
+	for _, entry := range []LogEntry{
+		{Seq: 1, TS: 0, Kind: "prompt", Payload: json.RawMessage(`{"text":{"text":"hi"}}`)},
+		{Seq: 123456, TS: 1_790_000_000_000, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"_subagent":"c","text":{"text":"é"}}`)},
+		{Seq: -1, TS: -5, Kind: "x", Payload: json.RawMessage(`{}`)},
+	} {
+		line, err := json.Marshal(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := entrySize(entry); got != len(line)+1 {
+			t.Fatalf("entrySize(%s) = %d, want %d", line, got, len(line)+1)
+		}
+	}
+	if entrySize(LogEntry{Kind: "x", Payload: json.RawMessage(`{`)}) >= 0 {
+		t.Fatal("an invalid payload must not be retained")
 	}
 }

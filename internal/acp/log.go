@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -40,16 +41,15 @@ type LogChanges struct {
 	Truncated bool
 }
 
-// eventLogPersistence hands batches to the sink. pending and removed are guarded by the log's mu;
+// eventLogPersistence hands batches to the sink. pending is guarded by the log's mu;
 // writeMu makes one writer at a time, and the sink runs outside mu so readers never wait on IO.
 type eventLogPersistence struct {
 	sink             func(LogChanges) error
 	stop, done       chan struct{}
 	writeMu          sync.Mutex
 	pending          map[int64]LogEntry
-	removed          map[int64]struct{}
 	bytes            int
-	sentSeq          int64 // newest sequence handed to the sink, written or not
+	tail             LogEntry // the newest stored row, which the next text chunk may join
 	flushedSeq       int64
 	flushedTruncated bool
 	err              error // the last write's failure; cleared by the next success
@@ -238,11 +238,13 @@ func (log *EventLog) EnableSink(sink func(LogChanges) error) error {
 	}
 	persistence := &eventLogPersistence{
 		sink: sink, stop: make(chan struct{}), done: make(chan struct{}),
-		pending: map[int64]LogEntry{}, removed: map[int64]struct{}{},
+		pending: map[int64]LogEntry{},
 	}
 	for _, entry := range log.entries {
 		persistence.put(entry)
 	}
+	// Entries the log holds now may already be stored rows; one a joined row absorbs is deleted.
+	persistence.flushedSeq = log.seq
 	log.mu.Unlock()
 	err := log.flushChanges(persistence)
 	log.mu.Lock()
@@ -359,66 +361,106 @@ func (p *eventLogPersistence) put(entry LogEntry) {
 	p.bytes += entrySize(entry)
 }
 
-func (p *eventLogPersistence) absorb(seq int64) {
-	if old, ok := p.pending[seq]; ok {
-		delete(p.pending, seq)
-		p.bytes -= entrySize(old)
-	}
-	if seq <= p.sentSeq {
-		if _, ok := p.removed[seq]; !ok {
-			p.removed[seq] = struct{}{}
-			p.bytes += 8
-		}
-	}
-}
-
 // flushChanges writes what is pending. The caller must not hold log.mu: the batch is taken out
 // under it and written outside it, so appends and readers go on during a slow write.
 func (log *EventLog) flushChanges(p *eventLogPersistence) error {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
 	log.mu.Lock()
-	if len(p.pending) == 0 && len(p.removed) == 0 && p.flushedSeq == log.seq && p.flushedTruncated == log.truncated {
+	if len(p.pending) == 0 && p.flushedSeq == log.seq && p.flushedTruncated == log.truncated {
 		log.mu.Unlock()
 		return nil
 	}
 	changes := LogChanges{LastSeq: log.seq, Truncated: log.truncated}
-	for _, entry := range p.pending {
-		changes.Entries = append(changes.Entries, entry)
-	}
-	slices.SortFunc(changes.Entries, func(a, b LogEntry) int { return cmp.Compare(a.Seq, b.Seq) })
-	for seq := range p.removed {
-		changes.Removed = append(changes.Removed, seq)
-	}
-	slices.Sort(changes.Removed)
-	pending, removed := p.pending, p.removed
-	p.pending, p.removed, p.bytes, p.sentSeq = map[int64]LogEntry{}, map[int64]struct{}{}, 0, log.seq
+	batch := slices.SortedFunc(maps.Values(p.pending), func(a, b LogEntry) int { return cmp.Compare(a.Seq, b.Seq) })
+	pending, flushedSeq, tail := p.pending, p.flushedSeq, p.tail
+	p.pending, p.bytes = map[int64]LogEntry{}, 0
 	log.mu.Unlock()
 
+	// A streamed reply is one stored and replicated row per run of chunks, not one per token.
+	for _, entry := range batch {
+		if joined, ok := joinStoredChunks(tail, entry); ok {
+			tail.Payload = joined
+			if entry.Seq <= flushedSeq {
+				changes.Removed = append(changes.Removed, entry.Seq) // a restored row the run absorbed
+			}
+			if n := len(changes.Entries); n > 0 && changes.Entries[n-1].Seq == tail.Seq {
+				changes.Entries[n-1] = tail
+			} else {
+				changes.Entries = append(changes.Entries, tail)
+			}
+			continue
+		}
+		tail = entry
+		changes.Entries = append(changes.Entries, entry)
+	}
 	err := p.sink(changes)
 
 	log.mu.Lock()
 	defer log.mu.Unlock()
 	p.err = err
 	if err == nil {
-		p.flushedSeq, p.flushedTruncated = changes.LastSeq, changes.Truncated
+		p.flushedSeq, p.flushedTruncated, p.tail = changes.LastSeq, changes.Truncated, tail
 		return nil
 	}
-	// Put the batch back under anything newer that arrived during the write.
-	for seq, entry := range pending {
-		if _, newer := p.pending[seq]; !newer {
-			if _, absorbed := p.removed[seq]; !absorbed {
-				p.put(entry)
-			}
-		}
-	}
-	for seq := range removed {
-		if _, ok := p.removed[seq]; !ok {
-			p.removed[seq] = struct{}{}
-			p.bytes += 8
-		}
+	// Put the batch back; the next write joins it again.
+	for _, entry := range pending {
+		p.put(entry)
 	}
 	return err
+}
+
+// maxStoredChunk bounds a joined row, which every later chunk of its run rewrites and replicates.
+const maxStoredChunk = 4 << 10
+
+// joinStoredChunks joins next onto the stored row tail when both are plain text chunks of one
+// speaker and next follows it, so nothing but text is joined.
+func joinStoredChunks(tail, next LogEntry) (json.RawMessage, bool) {
+	if tail.Kind != next.Kind || tail.Kind != "agent_message_chunk" && tail.Kind != "agent_thought_chunk" ||
+		tail.Seq >= next.Seq || len(tail.Payload)+len(next.Payload) > maxStoredChunk {
+		return nil, false
+	}
+	headA, _, okA := splitTextChunk(tail.Payload)
+	headB, _, okB := splitTextChunk(next.Payload)
+	if !okA || !okB || !bytes.Equal(headA, headB) {
+		return nil, false
+	}
+	joined, err := mergeTextChunks(tail.Payload, next.Payload)
+	return joined, err == nil
+}
+
+// splitTextChunk splits {"text":{"text":"…"}}, optionally led by "_subagent", into everything up to
+// the text's opening quote and the still-escaped text. Any other shape is not ok.
+func splitTextChunk(payload []byte) (head, text []byte, ok bool) {
+	const open = `"text":{"text":"`
+	i := bytes.Index(payload, []byte(open))
+	if i < 0 || !bytes.HasSuffix(payload, []byte(`"}}`)) || len(payload) < i+len(open)+3 {
+		return nil, nil, false
+	}
+	head, text = payload[:i+len(open)], payload[i+len(open):len(payload)-3]
+	switch {
+	case i == 1 && payload[0] == '{':
+	case bytes.HasPrefix(head, []byte(`{"`+SubagentKey+`":"`)) && bytes.HasSuffix(head, []byte(`",`+open)):
+		if !plainString(head[len(`{"`+SubagentKey+`":"`) : len(head)-len(`",`+open)]) {
+			return nil, nil, false
+		}
+	default:
+		return nil, nil, false
+	}
+	return head, text, plainString(text)
+}
+
+// plainString reports escaped string content with no unescaped quote, so it is one JSON string.
+func plainString(content []byte) bool {
+	for i := 0; i < len(content); i++ {
+		switch content[i] {
+		case '\\':
+			i++
+		case '"':
+			return false
+		}
+	}
+	return true
 }
 
 // Restore seeds a new log without renumbering events or notifying live subscribers.
@@ -527,10 +569,7 @@ func (log *EventLog) coalesceDropOldest() {
 				log.entries[1] = candidate
 				log.entries = log.entries[1:]
 				log.bytes += candidateSize
-				if log.persistence != nil {
-					log.persistence.put(candidate)
-					log.persistence.absorb(second.Seq)
-				}
+				// Memory only: the store keeps the rows it has, and joins chunks as it writes them.
 				log.truncated = true
 				return
 			}
@@ -541,17 +580,38 @@ func (log *EventLog) coalesceDropOldest() {
 	log.bytes -= entrySize(dropped)
 	log.truncated = true
 }
+
+// entrySize is the length of the entry's stored JSON line, counted without encoding it: every
+// streamed token is sized several times. An invalid payload is -1 and never retained.
 func entrySize(entry LogEntry) int {
-	line, err := json.Marshal(entry)
-	if err != nil {
+	if !json.Valid(entry.Payload) {
 		return -1
 	}
-	return len(line) + 1
+	const fixed = len(`{"seq":,"ts":,"kind":"","payload":}`) + 1
+	return fixed + digits(entry.Seq) + digits(entry.TS) + len(entry.Kind) + len(entry.Payload)
+}
+
+func digits(n int64) int {
+	count := 1
+	if n < 0 {
+		count++
+	}
+	for n /= 10; n != 0; n /= 10 {
+		count++
+	}
+	return count
 }
 
 // mergeTextChunks joins two text chunks of the same speaker, keeping every image or link either one
 // carries; chunks of different subagents never merge.
 func mergeTextChunks(a, b json.RawMessage) (json.RawMessage, error) {
+	// Plain text of one speaker, the shape of nearly every streamed token, joins without decoding.
+	if headA, textA, ok := splitTextChunk(a); ok {
+		if headB, textB, ok := splitTextChunk(b); ok && bytes.Equal(headA, headB) {
+			out := make(json.RawMessage, 0, len(headA)+len(textA)+len(textB)+3)
+			return append(append(append(append(out, headA...), textA...), textB...), `"}}`...), nil
+		}
+	}
 	type chunk struct {
 		Subagent string `json:"_subagent,omitempty"`
 		Text     struct {
