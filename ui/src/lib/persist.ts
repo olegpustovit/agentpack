@@ -87,6 +87,22 @@ export async function restoreQueries(client: QueryClient, build: string): Promis
   } catch {
     // IndexedDB may be blocked.
   }
+  void evictStale(build)
+}
+
+// Entries of other builds and expired ones are never restored; drop them so the store stays small.
+function evictStale(build: string): Promise<unknown> {
+  return withStore("readwrite", (store) => {
+    const cursor = store.openCursor()
+    cursor.onsuccess = () => {
+      const entry = cursor.result
+      if (!entry) return
+      const saved = entry.value as Saved
+      if (saved.build !== build || Date.now() - saved.at >= MAX_AGE) entry.delete()
+      entry.continue()
+    }
+    return undefined
+  }).catch(() => undefined)
 }
 
 export async function restoreChatQuery(client: QueryClient, build: string, key: QueryKey): Promise<void> {
@@ -201,7 +217,24 @@ export function persistQueries(client: QueryClient, build: string): () => void {
   }
 }
 
+const resets = new Set<() => void>()
+
+// Per-account state kept outside the query cache registers here, so the next account starts clean.
+export function onSignOut(reset: () => void): void {
+  resets.add(reset)
+}
+
+function resetSessionState() {
+  for (const reset of resets) reset()
+  try {
+    for (const key of Object.keys(sessionStorage)) if (key.startsWith("agentpack:draft:")) sessionStorage.removeItem(key)
+  } catch {
+    // Storage can be blocked; nothing was saved there then.
+  }
+}
+
 export function forgetQueries(): void {
   generation++
+  resetSessionState()
   void withStore("readwrite", (store) => store.clear()).catch(() => undefined)
 }
