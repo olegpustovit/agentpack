@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestCanonicalURL(t *testing.T) {
@@ -40,7 +42,7 @@ func TestApplyCredentials(t *testing.T) {
 		{ID: "c-lin-b", Match: "https://mcp.linear.app/mcp", Label: "Linear B", Kind: CredentialOAuth},
 		{ID: "c-st", Match: "https://stale.example.com/mcp", Label: "Stale first", Kind: CredentialOAuth},
 	}}
-	logins := ProjectLogins{"https://mcp.linear.app/mcp": "c-lin-b", "https://stale.example.com/mcp": "c-removed"}
+	logins := ProjectLogins{URLs: map[string]string{"https://mcp.linear.app/mcp": "c-lin-b", "https://stale.example.com/mcp": "c-removed"}}
 	entries := Entries{
 		"github":     {Server: Server{URL: str("https://api.githubcopilot.com/mcp/"), Headers: map[string]string{"X-Toolsets": "repos"}}, Source: Manifest},
 		"sse":        {Server: Server{Type: str("sse"), URL: str("https://pat.example.com/mcp")}, Source: DotAgents},
@@ -83,7 +85,7 @@ func TestApplyCredentials(t *testing.T) {
 		t.Fatalf("bridged servers kept the wrong fields: %+v %+v", got["stdio-env"].Server, got["github"].Server)
 	}
 	joined := strings.Join(notes, "\n")
-	for _, fragment := range []string{"plugin-no from github.com/acme/other", "approve GitHub github.com/acme/other", `names credential "nope"`, `wrong-kind: credential "GitHub" (oauth) does not apply`, `stale-pick: the login picked for this project is gone; using "Stale first"`} {
+	for _, fragment := range []string{`plugin-no from github.com/acme/other needs permission to use "GitHub"`, `names credential "nope"`, `wrong-kind: credential "GitHub" (oauth) does not apply`, `stale-pick: the login picked for this project is gone; using "Stale first"`} {
 		if !strings.Contains(joined, fragment) {
 			t.Errorf("notes lack %q:\n%s", fragment, joined)
 		}
@@ -97,7 +99,7 @@ func TestApplyCredentialsWithoutPicksUsesTheFirstLogin(t *testing.T) {
 	url := "https://mcp.linear.app/mcp"
 	index := CredentialIndex{Credentials: []CredentialRef{{ID: "a", Match: url, Kind: CredentialOAuth}, {ID: "b", Match: url, Kind: CredentialOAuth}}}
 	entries := Entries{"linear": {Server: Server{URL: &url}, Source: Manifest}}
-	for _, logins := range []ProjectLogins{nil, {"https://other.example/mcp": "b"}} {
+	for _, logins := range []ProjectLogins{{}, {URLs: map[string]string{"https://other.example/mcp": "b"}}} {
 		got, notes := ApplyCredentials(entries, index, logins, "/ap")
 		if args := got["linear"].Server.Args; len(args) < 2 || args[1] != "a" || len(notes) != 0 {
 			t.Fatalf("logins %v: args %q notes %q", logins, args, notes)
@@ -106,8 +108,13 @@ func TestApplyCredentialsWithoutPicksUsesTheFirstLogin(t *testing.T) {
 }
 
 func TestSaveProjectLoginRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "projects", "h", "mcp-logins.json")
-	if logins, err := ReadProjectLogins(path); err != nil || len(logins) != 0 {
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	root := t.TempDir()
+	path, err := paths.ProjectMCPLoginsPath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logins, err := ReadProjectLogins(root); err != nil || len(logins.URLs) != 0 {
 		t.Fatalf("missing file = %v, %v", logins, err)
 	}
 	if err := SaveProjectLogin(path, "https://MCP.Linear.app/mcp/", "b"); err != nil {
@@ -116,8 +123,8 @@ func TestSaveProjectLoginRoundTrip(t *testing.T) {
 	if err := SaveProjectLogin(path, "https://x.example/mcp", "c"); err != nil {
 		t.Fatal(err)
 	}
-	logins, err := ReadProjectLogins(path)
-	if err != nil || !reflect.DeepEqual(logins, ProjectLogins{"https://mcp.linear.app/mcp": "b", "https://x.example/mcp": "c"}) {
+	logins, err := ReadProjectLogins(root)
+	if err != nil || !reflect.DeepEqual(logins.URLs, map[string]string{"https://mcp.linear.app/mcp": "b", "https://x.example/mcp": "c"}) {
 		t.Fatalf("logins = %v, %v", logins, err)
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
@@ -126,7 +133,7 @@ func TestSaveProjectLoginRoundTrip(t *testing.T) {
 	if err := SaveProjectLogin(path, "https://mcp.linear.app/mcp", ""); err != nil {
 		t.Fatal(err)
 	}
-	if logins, _ := ReadProjectLogins(path); !reflect.DeepEqual(logins, ProjectLogins{"https://x.example/mcp": "c"}) {
+	if logins, _ := ReadProjectLogins(root); !reflect.DeepEqual(logins.URLs, map[string]string{"https://x.example/mcp": "c"}) {
 		t.Fatalf("after delete = %v", logins)
 	}
 	if err := SaveProjectLogin(path, "https://x.example/mcp/", ""); err != nil {
@@ -137,6 +144,55 @@ func TestSaveProjectLoginRoundTrip(t *testing.T) {
 	}
 	if err := SaveProjectLogin(path, "ftp://x", "c"); err == nil {
 		t.Fatal("saved a non-http URL")
+	}
+}
+
+func TestProjectPluginLoginAppliesOnlyToTheApprovedServer(t *testing.T) {
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	root, otherRoot := t.TempDir(), t.TempDir()
+	url := "https://mcp.linear.app/mcp"
+	module := "github.com/acme/linear"
+	index := CredentialIndex{Credentials: []CredentialRef{
+		{ID: "default", Match: url, Kind: CredentialOAuth},
+		{ID: "trustmind", Match: url, Kind: CredentialOAuth},
+	}}
+	entry := Entry{Server: Server{URL: &url}, Source: Plugin, Module: module}
+	entries := Entries{"linear": entry, "another": entry}
+	path, err := paths.ProjectMCPPluginLoginsPath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveProjectPluginLogins(path, map[string]PluginLogin{
+		"linear": {Module: module, URL: url, Credential: "trustmind"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	logins, err := ReadProjectLogins(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := ApplyCredentials(entries, index, logins, "/ap")
+	if args := got["linear"].Server.Args; len(args) < 2 || args[1] != "trustmind" || got["another"].Server.Command != nil {
+		t.Fatalf("project permission escaped the server or used the wrong login: %+v", got)
+	}
+	other, err := ReadProjectLogins(otherRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ = ApplyCredentials(entries, index, other, "/ap")
+	if got["linear"].Server.Command != nil {
+		t.Fatal("the plugin got the login in another project")
+	}
+	replaced := entry
+	replaced.Module = "github.com/acme/replacement"
+	got, _ = ApplyCredentials(Entries{"linear": replaced}, index, logins, "/ap")
+	if got["linear"].Server.Command != nil {
+		t.Fatal("the replacement plugin inherited the permission")
+	}
+	index.Credentials = index.Credentials[:1]
+	got, _ = ApplyCredentials(entries, index, logins, "/ap")
+	if disabled := got["linear"].Server.Disabled; disabled == nil || !*disabled || got["linear"].Server.Command != nil {
+		t.Fatal("a missing selected login must not fall through to another account")
 	}
 }
 

@@ -184,6 +184,16 @@ A project's pick among several logins for one server lives in `$AGENTPACK_HOME/p
 go test ./internal/sync -run '^$' -bench '^Benchmark(MaterializationHome|CodexSetup)$' -benchtime=10x -count=5
 ```
 
+Project permissions for plugin MCP servers add `mcp-plugin-logins.json` to the
+same fingerprint. The Linux ARM64 reference host measured these medians over
+five runs of 10 iterations, using `v0.14.5-dev.185` as the baseline.
+
+| Benchmark | Before | After | Budget |
+| --- | ---: | ---: | ---: |
+| `BenchmarkMaterializationHome` | 0.798 ms | 0.826 ms | 1 ms |
+| `BenchmarkCodexSetup/cold` | 15.105 ms | 16.695 ms | 20 ms |
+| `BenchmarkCodexSetup/warm` | 0.342 ms | 0.407 ms | 1 ms |
+
 ## ACP adapter verification stamp
 
 The adapter stores a verification stamp beside the installed npm tree after checking its full digest and confirming that its metadata stayed stable. If an entry changes or `AGENTPACK_FULL_VERIFY=1`, the next launch hashes the bytes.

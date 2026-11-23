@@ -29,6 +29,7 @@ type ProjectPackage struct {
 type ProjectMCP struct {
 	Name      string `json:"name"`
 	Source    string `json:"source"`
+	Module    string `json:"module,omitempty"`
 	Launcher  string `json:"launcher"`
 	Status    string `json:"status"`
 	Package   string `json:"package"`
@@ -39,6 +40,7 @@ type ProjectMCP struct {
 	// URL is set for a remote server that a shared MCP login can serve (mcp.LoginURL).
 	URL string `json:"url,omitempty"`
 	// Login is the credential ID this project picked for URL; empty means the first login.
-	Login     string `json:"login,omitempty"`
-	Transport string `json:"transport,omitempty"`
+	Login        string `json:"login,omitempty"`
+	ProjectLogin bool   `json:"project_login,omitempty"` // the plugin's own project-scoped choice
+	Transport    string `json:"transport,omitempty"`
 }

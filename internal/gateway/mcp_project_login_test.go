@@ -75,4 +75,37 @@ func TestProjectMCPLoginChecksTheCredential(t *testing.T) {
 	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] {
 		t.Fatalf("hook calls %+v, want %+v", calls, want)
 	}
+
+	// Saving a project permission has the same credential ownership and URL checks.
+	directory = seedFolder(t, home)
+	var saved []mcp.PluginLogin
+	g.options.SaveProject = func(_ context.Context, input ProjectSettingsInput) error {
+		saved = append(saved, input.PluginLogins["linear"])
+		return nil
+	}
+	for _, test := range []struct {
+		id     string
+		status int
+	}{{own, http.StatusNoContent}, {other, http.StatusNotFound}, {elsewhere, http.StatusNotFound}, {env, http.StatusNotFound}} {
+		body, err := json.Marshal(ProjectSettingsInput{
+			Directory: directory,
+			PluginLogins: map[string]mcp.PluginLogin{
+				"linear": {Module: "github.com/acme/linear", URL: "https://MCP.linear.app/mcp/", Credential: test.id},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := network.LocalRequest(t.Context(), network.WorkerRecord{Address: record.Address, Secret: record.Secret}, http.MethodPut, "/api/projects/settings", "", 0, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != test.status {
+			t.Errorf("plugin login: status %d, want %d", response.StatusCode, test.status)
+		}
+	}
+	if len(saved) != 1 || saved[0].Credential != own || saved[0].URL != linear {
+		t.Fatalf("unexpected project plugin selections: %+v", saved)
+	}
 }

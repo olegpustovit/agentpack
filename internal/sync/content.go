@@ -215,11 +215,7 @@ func selectedContent(definitionRoot, workspace string, project *manifest.Manifes
 	if err != nil {
 		return "", nil, err
 	}
-	loginsPath, err := paths.ProjectMCPLoginsPath(definitionRoot)
-	if err != nil {
-		return "", nil, err
-	}
-	logins, err := mcp.ReadProjectLogins(loginsPath)
+	logins, err := mcp.ReadProjectLogins(definitionRoot)
 	if err != nil {
 		return "", nil, err
 	}
@@ -235,7 +231,13 @@ func selectedContent(definitionRoot, workspace string, project *manifest.Manifes
 			return "", nil, err
 		}
 		items["MCP "+name] = true
-		if bridge := bridged[name].Server; !slices.Equal(bridge.Args, server.Args) {
+		bridge := bridged[name].Server
+		if bridge.Disabled != server.Disabled {
+			if err := encoder.Encode(struct{ Disabled string }{name}); err != nil {
+				return "", nil, err
+			}
+		}
+		if !slices.Equal(bridge.Args, server.Args) {
 			items["MCP "+name+" connected"] = true
 			if err := encoder.Encode(struct {
 				Name   string

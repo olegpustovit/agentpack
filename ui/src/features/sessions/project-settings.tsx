@@ -11,7 +11,7 @@ import { packagesQuery } from "@/features/library/queries"
 import { useLibrary } from "@/features/library/use-library"
 import { connectionsQuery, loginsFor, startSignIn, type Connection } from "@/features/settings/connections-model"
 import { api, errorText, routeMissing } from "@/lib/api"
-import type { MCPServerInput } from "@/lib/api-types"
+import type { MCPServerInput, ProjectMCP } from "@/lib/api-types"
 import { hud } from "@/lib/hud"
 import type { ListedSession } from "./group"
 import { projectDirectory } from "./git"
@@ -31,6 +31,8 @@ function loginURL(value: string) {
 
 const itemRow = "flex min-w-0 flex-wrap items-center justify-between gap-(--s3) border-t border-(--sep-soft) py-(--s2)"
 
+type PluginLogin = { module: string; url: string; credential: string }
+
 export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: () => void }) {
   const { machine } = row
   const directory = projectDirectory(row)
@@ -47,6 +49,7 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
   const [remove, setRemove] = useState<string[]>([])
   const [removeMCP, setRemoveMCP] = useState<string[]>([])
   const [logins, setLogins] = useState<Record<string, string>>({})
+  const [pluginLogins, setPluginLogins] = useState<Record<string, PluginLogin>>({})
   const [edit, setEdit] = useState<MCPServerInput>()
   const [editingExisting, setEditingExisting] = useState(false)
   const [servers, setServers] = useState<MCPServerInput[]>([])
@@ -73,6 +76,7 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
         remove_mcp: removeMCP.filter((name) => !savedServers.some((server) => server.name === name)),
         servers: savedServers,
         logins,
+        ...(Object.keys(pluginLogins).length > 0 && { plugin_logins: pluginLogins }),
       },
     }),
     onSuccess: async () => {
@@ -87,7 +91,7 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
     onError: () => void refreshProjects(),
   })
   const busy = save.isPending || connecting
-  const changed = Boolean(Object.keys(add).length || spec.trim() || remove.length || removeMCP.length || savedServers.length || Object.keys(logins).length)
+  const changed = Boolean(Object.keys(add).length || spec.trim() || remove.length || removeMCP.length || savedServers.length || Object.keys(logins).length || Object.keys(pluginLogins).length)
   const installed = project?.packages ?? []
   const editURL = loginURL(edit?.url ?? "")
   const choices = library.items.filter((item): item is PackageItem =>
@@ -119,10 +123,24 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
     setConnecting(false)
   }
 
-  function loginControl(name: string, url: string, current?: string) {
-    return <ProjectLogin name={name} url={url} current={logins[url] ?? current} credentials={credentials}
+  function loginControl(name: string, url: string, server?: ProjectMCP) {
+    const pending = pluginLogins[name]
+    const plugin = server?.source === "plugin" ? {
+      module: server.module,
+      allowed: Boolean(pending ? pending.credential : server.project_login && server.login),
+      pending: Boolean(pending?.credential),
+    } : undefined
+    return <ProjectLogin name={name} url={url}
+      current={plugin ? pending?.credential ?? server?.login : logins[url] ?? server?.login}
+      credentials={credentials} plugin={plugin}
       busy={busy} canConnect={connections.isSuccess} connect={connect}
-      onChange={(value) => setLogins({ ...logins, [url]: value })} />
+      onChange={(value) => {
+        if (plugin) {
+          if (plugin.module) setPluginLogins({ ...pluginLogins, [name]: { module: plugin.module, url, credential: value } })
+        } else {
+          setLogins({ ...logins, [url]: value })
+        }
+      }} />
   }
 
   function openEditor(server: MCPServerInput, existing: boolean) {
@@ -191,7 +209,7 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
                 return (
                   <div key={server.name} className={itemRow}>
                     <span className="min-w-0 flex-1 break-all">{server.name} <span className="text-(--fg2)">{server.host || server.launcher}</span></span>
-                    {url && !removeMCP.includes(server.name) && loginControl(server.name, url, server.login)}
+                    {url && !removeMCP.includes(server.name) && loginControl(server.name, url, server)}
                     {server.source === "manifest" && (
                       <>
                         {url && <Button type="button" size="sm" disabled={busy || Boolean(edit)} onClick={() => openEditor({ name: server.name, url, type: server.transport }, true)}>Edit<span className="sr-only"> {server.name}</span></Button>}
@@ -249,7 +267,7 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
                   )}
                   {editURL && <Field>
                     <FieldLabel>Login</FieldLabel>
-                    {loginControl(edit.name || "New MCP server", editURL, project.mcp.find((server) => server.name === edit.name && server.url === editURL)?.login)}
+                    {loginControl(edit.name || "New MCP server", editURL, project.mcp.find((server) => server.name === edit.name && server.url === editURL && server.source === "manifest"))}
                   </Field>}
                   <div className="flex flex-wrap gap-(--s3)">
                     <Button type="button" size="sm" disabled={busy || !editedServer?.name || !(editedServer.url || editedServer.command)} onClick={() => {
@@ -276,11 +294,12 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
   )
 }
 
-function ProjectLogin({ name, url, current, credentials, busy, canConnect, connect, onChange }: {
+function ProjectLogin({ name, url, current, credentials, plugin, busy, canConnect, connect, onChange }: {
   name: string
   url: string
   current?: string
   credentials: Connection[]
+  plugin?: { module?: string; allowed: boolean; pending: boolean }
   busy: boolean
   canConnect: boolean
   connect: (url: string, label: string) => Promise<void>
@@ -288,12 +307,17 @@ function ProjectLogin({ name, url, current, credentials, busy, canConnect, conne
 }) {
   const logins = loginsFor(url, credentials)
   const chosen = logins.find((login) => login.id === current)
-  const active = chosen ?? logins[0]
+  const missing = Boolean(plugin?.allowed && current && !chosen && canConnect)
+  const active = missing ? undefined : chosen ?? logins[0]
+  const module = plugin?.module
+  const needsPermission = Boolean(active && module && !plugin.allowed && !active.plugins.includes(module))
+  const outdated = Boolean(plugin && !module)
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-(--s2)">
       {logins.length > 0 && (
-        <PopupSelect label={`${name} login`} value={chosen?.id ?? "default"} disabled={busy}
+        <PopupSelect label={`${name} login`} value={missing ? "missing" : chosen?.id ?? "default"} disabled={busy || outdated}
           items={[
+            ...(missing ? [{ value: "missing", label: "Selected login unavailable", disabled: true }] : []),
             { value: "default", label: `Default · ${logins[0]!.label}` },
             ...logins.map((login) => ({ value: login.id, label: login.status === "needs_login" ? `${login.label} · Needs sign-in` : login.label })),
           ]}
@@ -304,6 +328,16 @@ function ProjectLogin({ name, url, current, credentials, busy, canConnect, conne
         <Button type="button" size="sm" disabled={busy} onClick={() => void connect(url, active?.label ?? name)} title="Opens in a new tab">
           {active ? "Reconnect…" : "Sign in…"}
         </Button>
+      )}
+      {active && needsPermission && (
+        <Button type="button" size="sm" disabled={busy} onClick={() => onChange(active.id)}>Allow in this project</Button>
+      )}
+      {outdated && <span className="text-(length:--fs-xs) text-(--fg2)">Update this machine to allow plugin logins.</span>}
+      {missing && logins.length === 0 && <span className="text-(length:--fs-xs) text-(--warn-word)">Selected login unavailable.</span>}
+      {active && (needsPermission || plugin?.pending) && (
+        <p className="basis-full break-all text-(length:--fs-xs) text-(--fg2)">
+          {needsPermission ? `${module} needs permission to use ${active.label}.` : `Save allows ${module} to use ${active.label} in this project.`}
+        </p>
       )}
     </div>
   )

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/registry"
 )
@@ -193,13 +195,16 @@ func projectRows(ctx context.Context, folders []network.RecentFolder, contents f
 }
 
 type ProjectSettingsInput struct {
-	Directory string                    `json:"directory"`
-	Add       []string                  `json:"add"`
-	Remove    []string                  `json:"remove"`
-	Servers   []registry.MCPServerInput `json:"servers"`
-	RemoveMCP []string                  `json:"remove_mcp"`
-	Logins    map[string]string         `json:"logins"`
+	Directory    string                     `json:"directory"`
+	Add          []string                   `json:"add"`
+	Remove       []string                   `json:"remove"`
+	Servers      []registry.MCPServerInput  `json:"servers"`
+	RemoveMCP    []string                   `json:"remove_mcp"`
+	Logins       map[string]string          `json:"logins"`
+	PluginLogins map[string]mcp.PluginLogin `json:"plugin_logins"`
 }
+
+var ErrProjectPluginServerChanged = errors.New("the plugin's MCP server changed; reopen Project Settings and choose its login again")
 
 func (g *Gateway) saveProjectSettings(w http.ResponseWriter, r *http.Request) {
 	var input ProjectSettingsInput
@@ -216,7 +221,7 @@ func (g *Gateway) saveProjectSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if len(input.Logins) > 0 {
+	if len(input.Logins)+len(input.PluginLogins) > 0 {
 		_, account, ok := credentialAccount(r)
 		if !ok {
 			http.Error(w, "an enabled account is required for MCP credentials", http.StatusForbidden)
@@ -235,12 +240,28 @@ func (g *Gateway) saveProjectSettings(w http.ResponseWriter, r *http.Request) {
 			logins[url] = id
 		}
 		input.Logins = logins
+		for name, login := range input.PluginLogins {
+			if name == "" || login.Module == "" {
+				badRequest(w, "a plugin and its MCP server name are required")
+				return
+			}
+			url, ok := g.validateProjectLogin(w, r, account, login.URL, login.Credential)
+			if !ok {
+				return
+			}
+			login.URL = url
+			input.PluginLogins[name] = login
+		}
 	}
 	if g.options.SaveProject == nil {
 		http.Error(w, "project settings are unavailable on this machine", http.StatusServiceUnavailable)
 		return
 	}
 	if err := g.options.SaveProject(r.Context(), input); err != nil {
+		if errors.Is(err, ErrProjectPluginServerChanged) {
+			http.Error(w, ErrProjectPluginServerChanged.Error(), http.StatusConflict)
+			return
+		}
 		fail(w, r, err)
 		return
 	}

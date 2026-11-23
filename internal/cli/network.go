@@ -212,6 +212,15 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 	if !known && !browserStart {
 		return "", errors.New("folder has not been used before; launch an agent locally before starting it remotely")
 	}
+	if info.DefinitionRoot == "" {
+		pack, err := resolveInvocationContext(Invocation{Global: Global{WorkspaceRoot: info.Directory}}, true)
+		if err != nil {
+			return "", err
+		}
+		if pack.DefinitionRoot != pack.WorkspaceRoot {
+			info.DefinitionRoot = pack.DefinitionRoot
+		}
+	}
 	// A folder that holds its own agentpack.toml records no separate definition root. The worker
 	// then stages and launches from the folder itself, so the pre-launch sync must use it too; an
 	// empty root would stage the gateway's working directory and leave the agent's home unbuilt.
@@ -355,9 +364,7 @@ func (runner Runner) serveGateway(ctx context.Context, home, executable, address
 		plan, planErr := staging.CollectMCPPlan(packContext.WorkspaceRoot, locked, project, nil)
 		var logins mcp.ProjectLogins
 		if planErr == nil {
-			if path, err := paths.ProjectMCPLoginsPath(packContext.DefinitionRoot); err == nil {
-				logins, _ = mcp.ReadProjectLogins(path)
-			}
+			logins, _ = mcp.ReadProjectLogins(packContext.DefinitionRoot)
 			recorded := make(map[string]lockfile.MCPServer, len(locked.MCPServers))
 			for _, server := range locked.MCPServers {
 				recorded[server.Name] = server
@@ -373,11 +380,15 @@ func (runner Runner) serveGateway(ctx context.Context, home, executable, address
 		}
 		contents := projectContents(locked, project)
 		for i := range contents.MCP {
-			server := plan.Entries[contents.MCP[i].Name].Server
-			contents.MCP[i].URL = mcp.LoginURL(server)
-			contents.MCP[i].Login = logins[contents.MCP[i].URL]
-			if server.Type != nil && contents.MCP[i].URL != "" {
-				contents.MCP[i].Transport = *server.Type
+			server := &contents.MCP[i]
+			if entry, ok := plan.Entries[server.Name]; ok {
+				server.Source = string(entry.Source)
+				server.Module = entry.Module
+				server.URL = mcp.LoginURL(entry.Server)
+				server.Login, server.ProjectLogin = logins.ForServer(server.Name, entry)
+				if entry.Server.Type != nil && server.URL != "" {
+					server.Transport = *entry.Server.Type
+				}
 			}
 		}
 		return contents, nil

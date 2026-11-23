@@ -140,6 +140,7 @@ export type ProjectPackage = {
 export type ProjectMCP = {
   name: string
   source: string
+  module?: string
   launcher: string
   status: string
   package: string
@@ -151,6 +152,7 @@ export type ProjectMCP = {
   url?: string
   /** The login this project picked for url; absent means the first (default) login. */
   login?: string
+  project_login?: boolean
   transport?: string
 }
 

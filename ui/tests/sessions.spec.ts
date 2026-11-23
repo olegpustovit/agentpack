@@ -212,8 +212,9 @@ test("New session saves the project's pick among several logins", async ({ page 
 test("a session opens project settings and saves packages, MCP and the login together", async ({ page }) => {
   const directory = sessions[0]!.directory
   const linear = "https://mcp.linear.app/mcp"
+  const module = "github.com/acme/linear"
   const project = projectRow(directory, [], {
-    mcp: [{ name: "linear", launcher: "remote", source: "manifest", url: linear }],
+    mcp: [{ name: "linear", launcher: "remote", source: "plugin", module, url: linear, login: "c2" }],
   })
   await page.route("**/api/projects", (route) => route.fulfill({ json: [project] }))
   await page.route("**/api/library/packages", (route) => route.fulfill({ json: [
@@ -238,8 +239,10 @@ test("a session opens project settings and saves packages, MCP and the login tog
   await expect(settings).toContainText(directory)
   await settings.getByRole("textbox", { name: "Search Library packages" }).fill("tools")
   await settings.getByRole("checkbox", { name: "Add Tools" }).check()
-  await settings.getByRole("combobox", { name: "linear login" }).click()
-  await page.getByRole("option", { name: "Client" }).click()
+  await expect(settings.getByRole("combobox", { name: "linear login" })).toContainText("Client")
+  await expect(settings.getByText(/needs permission to use Client/)).toBeVisible()
+  await settings.getByRole("button", { name: "Allow in this project" }).click()
+  await expect(settings.getByText(/Save allows .* to use Client in this project/)).toBeVisible()
   await settings.getByRole("button", { name: "Add MCP server…" }).click()
   await settings.getByLabel("Server name").fill("docs")
   await settings.getByLabel("Server URL").fill("https://mcp.example.com/docs")
@@ -250,7 +253,8 @@ test("a session opens project settings and saves packages, MCP and the login tog
   await expect(settings).toBeHidden()
   expect(saves).toEqual([{
     directory, add: ["github.com/acme/tools@abcd1234"], remove: [], remove_mcp: [],
-    servers: [{ name: "docs", url: "https://mcp.example.com/docs" }], logins: { [linear]: "c2" },
+    servers: [{ name: "docs", url: "https://mcp.example.com/docs" }], logins: {},
+    plugin_logins: { linear: { module, url: linear, credential: "c2" } },
   }])
 })
 

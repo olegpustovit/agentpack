@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"os"
@@ -52,20 +53,59 @@ func ReadCredentialIndex(path string) (CredentialIndex, error) {
 	return index, nil
 }
 
-// ProjectLogins is the login a project picked for each remote server: canonical URL to
-// credential ID. A server without a pick uses the first matching login.
-type ProjectLogins map[string]string
+type ProjectLogins struct {
+	URLs    map[string]string      // canonical URL to credential ID
+	Plugins map[string]PluginLogin // server name to a project-only permission
+}
 
-// ReadProjectLogins reads a project's picks; a missing file has none.
-func ReadProjectLogins(path string) (ProjectLogins, error) {
-	logins := ProjectLogins{}
+// PluginLogin permits one declared server to use one connection in this project.
+// An empty credential restores automatic selection, with no project permission.
+type PluginLogin struct {
+	Module     string `json:"module"`
+	URL        string `json:"url"`
+	Credential string `json:"credential"`
+}
+
+func (login PluginLogin) Matches(entry Entry) bool {
+	return entry.Source == Plugin && login.Module != "" && login.Module == entry.Module &&
+		login.URL != "" && login.URL == LoginURL(entry.Server)
+}
+
+// ForServer returns the preferred credential and whether it is specific to this plugin server.
+func (logins ProjectLogins) ForServer(name string, entry Entry) (string, bool) {
+	if login := logins.Plugins[name]; login.Matches(entry) {
+		return login.Credential, true
+	}
+	return logins.URLs[LoginURL(entry.Server)], false
+}
+
+// ReadProjectLogins reads the selections and permissions used by staging.
+func ReadProjectLogins(root string) (ProjectLogins, error) {
+	urlPath, err := paths.ProjectMCPLoginsPath(root)
+	if err != nil {
+		return ProjectLogins{}, err
+	}
+	urls, err := readLoginFile[string](urlPath)
+	if err != nil {
+		return ProjectLogins{}, err
+	}
+	pluginPath, err := paths.ProjectMCPPluginLoginsPath(root)
+	if err != nil {
+		return ProjectLogins{}, err
+	}
+	plugins, err := readLoginFile[PluginLogin](pluginPath)
+	return ProjectLogins{URLs: urls, Plugins: plugins}, err
+}
+
+func readLoginFile[T any](path string) (map[string]T, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return logins, nil
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	var logins map[string]T
 	if err := json.Unmarshal(data, &logins); err != nil {
 		return nil, fmt.Errorf("MCP project logins %s: %w", path, err)
 	}
@@ -79,15 +119,34 @@ func SaveProjectLogin(path, rawURL, id string) error {
 	if err != nil {
 		return err
 	}
-	logins, err := ReadProjectLogins(path)
+	logins, err := readLoginFile[string](path)
 	if err != nil {
 		return err
 	}
 	if id == "" {
 		delete(logins, canonical)
 	} else {
+		if logins == nil {
+			logins = make(map[string]string)
+		}
 		logins[canonical] = id
 	}
+	return writeLoginFile(path, logins)
+}
+
+func SaveProjectPluginLogins(path string, updates map[string]PluginLogin) error {
+	logins, err := readLoginFile[PluginLogin](path)
+	if err != nil {
+		return err
+	}
+	if logins == nil {
+		logins = make(map[string]PluginLogin, len(updates))
+	}
+	maps.Copy(logins, updates)
+	return writeLoginFile(path, logins)
+}
+
+func writeLoginFile[T any](path string, logins map[string]T) error {
 	if len(logins) == 0 {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -156,11 +215,10 @@ func hasHeader(headers map[string]string, name string) bool {
 // `agentpack mcp-bridge`, which adds the credential at run time, so no secret
 // reaches staging. A remote server matches by canonical URL unless it already
 // sends its own Authorization header; a server naming `credential` uses that
-// one. A plugin's server matches only after its module was approved for the
-// credential. Among several logins for one URL, the project's pick in logins
-// wins over the first one. The returned lines explain servers left unchanged.
+// one. A plugin needs module-wide approval or permission for this server in the
+// project. A project's login choice takes precedence over the first login.
 func ApplyCredentials(entries Entries, index CredentialIndex, logins ProjectLogins, executable string) (Entries, []string) {
-	if len(entries) == 0 || len(index.Credentials) == 0 && !namesCredential(entries) {
+	if len(entries) == 0 || len(index.Credentials) == 0 && len(logins.Plugins) == 0 && !namesCredential(entries) {
 		return entries, nil
 	}
 	result := make(Entries, len(entries))
@@ -173,6 +231,7 @@ func ApplyCredentials(entries Entries, index CredentialIndex, logins ProjectLogi
 			continue
 		}
 		var ref *CredentialRef
+		var projectPermission string
 		if server.Credential != "" {
 			for i, candidate := range index.Credentials {
 				if candidate.ID == server.Credential || strings.EqualFold(candidate.Label, server.Credential) {
@@ -189,9 +248,15 @@ func ApplyCredentials(entries Entries, index CredentialIndex, logins ProjectLogi
 			if err != nil {
 				continue
 			}
-			picked := logins[canonical]
+			picked, scoped := logins.ForServer(name, entry)
+			if scoped {
+				projectPermission = picked
+			} else {
+				picked = logins.URLs[canonical]
+			}
 			for i, candidate := range index.Credentials {
-				if candidate.Kind == CredentialEnv || candidate.Match != canonical {
+				if candidate.Kind == CredentialEnv || candidate.Match != canonical ||
+					projectPermission != "" && candidate.ID != projectPermission {
 					continue
 				}
 				if ref == nil || candidate.ID == picked {
@@ -201,6 +266,13 @@ func ApplyCredentials(entries Entries, index CredentialIndex, logins ProjectLogi
 					break
 				}
 			}
+			if projectPermission != "" && ref == nil {
+				disabled := true
+				entry.Server.Disabled = &disabled
+				result[name] = entry
+				notes = append(notes, fmt.Sprintf("MCP server %s: its selected login is unavailable; choose a login in Project Settings", name))
+				continue
+			}
 			if picked != "" && ref != nil && ref.ID != picked {
 				notes = append(notes, fmt.Sprintf("MCP server %s: the login picked for this project is gone; using %q", name, ref.Label))
 			}
@@ -208,8 +280,8 @@ func ApplyCredentials(entries Entries, index CredentialIndex, logins ProjectLogi
 		if ref == nil {
 			continue
 		}
-		if entry.Source == Plugin && !slices.Contains(ref.Plugins, entry.Module) {
-			notes = append(notes, fmt.Sprintf("MCP server %s from %s matches credential %q; approve it with `agentpack mcp approve %s %s`", name, entry.Module, ref.Label, ref.Label, entry.Module))
+		if entry.Source == Plugin && (projectPermission == "" || ref.ID != projectPermission) && !slices.Contains(ref.Plugins, entry.Module) {
+			notes = append(notes, fmt.Sprintf("MCP server %s from %s needs permission to use %q; allow it in Project Settings or with `agentpack mcp approve`", name, entry.Module, ref.Label))
 			continue
 		}
 		bridged := Server{Command: &executable, Disabled: server.Disabled}

@@ -189,11 +189,7 @@ func applyMCPCredentials(projectRoot string, entries mcp.Entries) (mcp.Entries, 
 	if err != nil {
 		return nil, err
 	}
-	loginsPath, err := paths.ProjectMCPLoginsPath(projectRoot)
-	if err != nil {
-		return nil, err
-	}
-	logins, err := mcp.ReadProjectLogins(loginsPath)
+	logins, err := mcp.ReadProjectLogins(projectRoot)
 	if err != nil {
 		return nil, err
 	}

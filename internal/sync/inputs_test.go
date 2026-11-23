@@ -109,6 +109,13 @@ func TestEachInputFlipsExactlyItsIdentities(t *testing.T) {
 			}
 			write(path, `{"https://mcp.linear.app/mcp":"c-2"}`)
 		}, files},
+		{"MCP plugin logins", func() {
+			path, err := paths.ProjectMCPPluginLoginsPath(project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			write(path, `{"linear":{"module":"github.com/acme/linear","url":"https://mcp.linear.app/mcp","credential":"c-2"}}`)
+		}, files},
 		{"host path", func() {
 			moved := filepath.Join(t.TempDir(), "elsewhere")
 			if err := os.Rename(project, moved); err != nil {

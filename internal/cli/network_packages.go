@@ -14,6 +14,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/registry"
+	"github.com/olegpustovit/agentpack/internal/staging"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
@@ -67,9 +68,12 @@ func (runner Runner) changeNetworkProject(ctx context.Context, directory string,
 	if err != nil {
 		return err
 	}
-	defer release()
-	ctx = held
-	if err := change(ctx, packContext.DefinitionRoot); err != nil {
+	defer func() {
+		if release != nil {
+			_ = release()
+		}
+	}()
+	if err := change(held, packContext.DefinitionRoot); err != nil {
 		return err
 	}
 	captureErr := captureNetworkEnvironment(packContext.DefinitionRoot, directory, "")
@@ -79,6 +83,11 @@ func (runner Runner) changeNetworkProject(ctx context.Context, directory string,
 	if !restart {
 		return captureErr
 	}
+	// A restarting worker takes the definition lock to stage its new environment.
+	if err := release(); err != nil {
+		return errors.Join(captureErr, err)
+	}
+	release = nil
 	return errors.Join(captureErr, runner.restartStaleSessions(ctx, packContext.DefinitionRoot))
 }
 
@@ -160,7 +169,11 @@ func (runner Runner) saveNetworkProject(ctx context.Context, input gateway.Proje
 		if err != nil {
 			return err
 		}
-		rollback, err := packSync.KeepProjectFiles(root, loginPath)
+		pluginLoginPath, err := paths.ProjectMCPPluginLoginsPath(root)
+		if err != nil {
+			return err
+		}
+		rollback, err := packSync.KeepProjectFiles(root, loginPath, pluginLoginPath)
 		if err != nil {
 			return err
 		}
@@ -231,6 +244,26 @@ func (runner Runner) saveNetworkProject(ctx context.Context, input gateway.Proje
 			if err := mcp.SaveProjectLogin(loginPath, url, id); err != nil {
 				return err
 			}
+		}
+		if len(input.PluginLogins) > 0 {
+			locked, err := runner.Service.LoadLock(root)
+			if err != nil {
+				return err
+			}
+			project, err := manifest.Load(root)
+			if err != nil {
+				return err
+			}
+			plan, err := staging.CollectMCPPlan(input.Directory, locked, project, nil)
+			if err != nil {
+				return err
+			}
+			for name, login := range input.PluginLogins {
+				if !login.Matches(plan.Entries[name]) {
+					return gateway.ErrProjectPluginServerChanged
+				}
+			}
+			return mcp.SaveProjectPluginLogins(pluginLoginPath, input.PluginLogins)
 		}
 		return nil
 	})

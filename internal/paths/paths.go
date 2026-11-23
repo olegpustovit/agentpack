@@ -337,6 +337,11 @@ func ProjectMCPLoginsPath(projectRoot string) (string, error) {
 	return projectStateFile(projectRoot, "mcp-logins.json")
 }
 
+// ProjectMCPPluginLoginsPath holds this project's permissions for plugin MCP logins.
+func ProjectMCPPluginLoginsPath(projectRoot string) (string, error) {
+	return projectStateFile(projectRoot, "mcp-plugin-logins.json")
+}
+
 func canonical(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {

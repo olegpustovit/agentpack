@@ -548,7 +548,7 @@ function Choice({ label, note, children }: { label: string; note?: string; child
 // Everything the session loads from pack.lock, with what the chosen mode turns off.
 function LoadedContents({ project, mode, machine, machineName }: { project: ProjectRow; mode: string; machine: string; machineName: string }) {
   const credentials = useQuery(connectionsQuery(useEventsConnected())).data?.credentials ?? []
-  const choosable = project.mcp.some((server) => loginsFor(server.url ?? "", credentials).length > 1)
+  const choosable = project.mcp.some((server) => server.source !== "plugin" && loginsFor(server.url ?? "", credentials).length > 1)
   const effect = modeEffect(project, mode)
   const off = project.packages.filter((pkg) => effect.offPackages.has(pkg.module)).length + project.mcp.filter((server) => effect.offMCP.has(server.name)).length
   const active = project.packages.length + project.mcp.length - off
@@ -644,14 +644,21 @@ function LoginPicker({ project, server, logins, machine }: { project: ProjectRow
   })
   // An older peer has no route to save a pick: its sessions keep the default.
   const outdated = routeMissing(save.error)
+  const plugin = server.source === "plugin"
+  if (plugin && server.project_login && server.login && !logins.some((login) => login.id === server.login)) {
+    return <Tag className="text-(--warn-word)">Selected login unavailable</Tag>
+  }
   const value = save.isPending ? save.variables || logins[0]!.id : logins.some((login) => login.id === server.login) ? server.login! : logins[0]!.id
   const chosen = logins.find((login) => login.id === value)!
+  if (plugin && !(server.project_login && server.login) && !chosen.plugins.includes(server.module ?? "")) {
+    return <Tag className="text-(--warn-word)">Allow login in Project Settings</Tag>
+  }
   const expired = chosen.status === "needs_login"
   const reconnect = (
     <Button type="button" size="sm" variant="primary" onClick={() => void signIn({ url: chosen.match, label: chosen.label, return_to: location.pathname + location.search })}>Reconnect…</Button>
   )
-  // One login reads as a status; there is nothing to choose.
-  if (logins.length === 1) {
+  // Plugin permissions are edited in Project Settings.
+  if (plugin || logins.length === 1) {
     return (
       <span className="flex shrink-0 items-center gap-(--s3) text-(length:--fs-sm) text-(--fg2)">
         {expired && reconnect}

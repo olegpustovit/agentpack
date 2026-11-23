@@ -68,6 +68,9 @@ func readInputs(projectRoot, workspace string, effective mode.Effective, target 
 	if logins, err := paths.ProjectMCPLoginsPath(projectRoot); err == nil {
 		base.DigestFile(context, "mcp_logins", logins)
 	}
+	if logins, err := paths.ProjectMCPPluginLoginsPath(projectRoot); err == nil {
+		base.DigestFile(context, "mcp_plugin_logins", logins)
+	}
 	name := "__none__"
 	if target != nil {
 		name = string(*target)

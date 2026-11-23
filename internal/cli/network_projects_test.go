@@ -1,14 +1,21 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/olegpustovit/agentpack/internal/gateway"
+	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mcp"
@@ -16,6 +23,9 @@ import (
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/registry"
+	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state"
+	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
 func TestProjectContentsOmitsMCPCommandsAndSecrets(t *testing.T) {
@@ -107,12 +117,104 @@ func TestSaveNetworkProjectCommitsTheBatchOrRestoresTheDefinition(t *testing.T) 
 	if err != nil || len(locked.Packages) != 1 || len(locked.MCPServers) != 1 {
 		t.Fatalf("saved lock: %+v %v", locked, err)
 	}
-	path, err := paths.ProjectMCPLoginsPath(root)
+	logins, err := mcp.ReadProjectLogins(root)
+	if err != nil || logins.URLs[url] != "login" {
+		t.Fatalf("saved logins: %+v %v", logins, err)
+	}
+}
+
+func TestSaveNetworkProjectChecksThePluginMCPSource(t *testing.T) {
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	root := t.TempDir()
+	source := filepath.Join(t.TempDir(), "linear-plugin")
+	if err := os.MkdirAll(filepath.Join(source, ".codex-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		".codex-plugin/plugin.json": `{"name":"linear-plugin"}`,
+		".mcp.json":                 `{"mcpServers":{"linear":{"url":"https://mcp.linear.app/mcp"}}}`,
+	} {
+		if err := os.WriteFile(filepath.Join(source, path), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := NewRunner()
+	login := mcp.PluginLogin{Module: "github.com/acme/unrelated", URL: "https://mcp.linear.app/mcp", Credential: "trustmind"}
+	input := gateway.ProjectSettingsInput{Directory: root, Add: []string{source}, PluginLogins: map[string]mcp.PluginLogin{"linear": login}}
+	if err := runner.saveNetworkProject(t.Context(), input); !errors.Is(err, gateway.ErrProjectPluginServerChanged) {
+		t.Fatalf("wrong module: %v", err)
+	}
+	if _, err := os.Stat(paths.ManifestPath(root)); !os.IsNotExist(err) {
+		t.Fatalf("failed approval left changes in the manifest: %v", err)
+	}
+	login.Module = "linear-plugin"
+	input.PluginLogins["linear"] = login
+	if err := runner.saveNetworkProject(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	logins, err := mcp.ReadProjectLogins(root)
+	if err != nil || logins.Plugins["linear"] != login {
+		t.Fatalf("plugin login: %+v %v", logins.Plugins, err)
+	}
+}
+
+func TestSaveNetworkProjectLetsTheWorkerRestage(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	t.Setenv("AGENTPACK_HOME", home)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	if err := manifest.WriteStub(root, "test", "0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(root, "test", "0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	const id = "session-reload"
+	var reloaded atomic.Bool
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/state" {
+			network.WriteJSON(w, session.TerminalState{Running: true})
+			return
+		}
+		if r.URL.Path != "/restart" || r.URL.Query().Get("when") != "idle" {
+			http.NotFound(w, r)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+		defer cancel()
+		_, release, err := packSync.LockDefinition(ctx, root)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		defer release()
+		reloaded.Store(true)
+		network.WriteJSON(w, map[string]bool{"deferred": false})
+	}))
+	defer worker.Close()
+	dir := filepath.Join(home, "network", "sessions", id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := network.PublishWorkerEndpoint(dir, network.WorkerRecord{ID: id, Secret: strings.Repeat("a", 64), Address: strings.TrimPrefix(worker.URL, "http://")}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.Open(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	logins, err := mcp.ReadProjectLogins(path)
-	if err != nil || logins[url] != "login" {
-		t.Fatalf("saved logins: %+v %v", logins, err)
+	err = session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Directory: root, DefinitionRoot: root, Harness: "codex", Mode: "default", Transport: "acp"})
+	if err := errors.Join(err, store.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if err := network.RecordLaunchEnvironment(home, id, root, root, "default", harness.Codex); err != nil {
+		t.Fatal(err)
+	}
+	input := gateway.ProjectSettingsInput{Directory: root, Servers: []registry.MCPServerInput{{Name: "example", URL: "https://example.com/mcp"}}}
+	if err := NewRunner().saveNetworkProject(t.Context(), input); err != nil {
+		t.Fatalf("settings save must let the worker lock the definition during reload: %v", err)
+	}
+	if !reloaded.Load() {
+		t.Fatal("the running chat did not reload")
 	}
 }

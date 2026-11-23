@@ -70,6 +70,33 @@ func TestRemoteTerminalLaunchAcceptsGatewayVerifiedFolder(t *testing.T) {
 	}
 }
 
+func TestRemoteChatInheritsDefinitionFromParent(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	child := filepath.Join(project, "checkout")
+	t.Setenv("AGENTPACK_HOME", home)
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	t.Setenv("AGENTPACK_TEST_ACP", "1")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "agentpack.toml"), []byte("[modes.review]\nbase = 'all'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := network.FolderIdentity(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := session.SessionInfo{Harness: "codex", Mode: "review", Directory: child, Transport: "acp", FolderID: identity, StartedBy: &session.Actor{Kind: "browser"}}
+	runner := NewRunner()
+	_, err = runner.startRemoteSession(t.Context(), home, filepath.Join(home, "missing-worker"), info, "")
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected to stage the parent's mode and reach the worker launch, got %v", err)
+	}
+	if _, err := codex.CurrentHome(project, "review"); err != nil {
+		t.Fatalf("Codex was not staged under the inherited definition: %v", err)
+	}
+}
+
 func TestNativePresenceCLIChild(t *testing.T) {
 	if os.Getenv("AGENTPACK_TEST_NATIVE_EXIT") == "1" {
 		os.Exit(23)
