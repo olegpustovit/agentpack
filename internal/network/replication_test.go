@@ -127,7 +127,7 @@ func TestLibraryUsesStatePagesAndConcurrentConflictResolution(t *testing.T) {
 	}
 }
 
-func TestLibraryStatePageRejectsChangedDigestBeforeCursor(t *testing.T) {
+func TestLibraryStatePageQuarantinesChangedDigestAndAdvancesCursor(t *testing.T) {
 	a, server := registryGateway(t, "a", "b")
 	b, _ := registryGateway(t, "b", "a")
 	if err := a.options.Library.Store.EnrollPeer("b"); err != nil {
@@ -154,11 +154,15 @@ func TestLibraryStatePageRejectsChangedDigestBeforeCursor(t *testing.T) {
 	if _, err := a.auth.store.DB.Exec("UPDATE registry_objects SET body='{}' WHERE digest=?", revision.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := pullRegistry(t, b, server); err == nil {
-		t.Fatal("changed object digest accepted")
+	if err := pullRegistry(t, b, server); err != nil {
+		t.Fatal(err)
 	}
-	if after, err := b.auth.store.Cursor(t.Context(), site); err != nil || after != cursor {
-		t.Fatalf("failed validation advanced cursor: %d %d %v", cursor, after, err)
+	if after, err := b.auth.store.Cursor(t.Context(), site); err != nil || after <= cursor {
+		t.Fatalf("quarantine did not advance cursor: %d %d %v", cursor, after, err)
+	}
+	var rejected int
+	if err := b.auth.store.Reader.QueryRow("SELECT count(*) FROM sync_quarantine WHERE peer=? AND version>?", site, cursor).Scan(&rejected); err != nil || rejected != 1 {
+		t.Fatalf("quarantined rows: %d %v", rejected, err)
 	}
 	var body string
 	if err := b.auth.store.Reader.QueryRow("SELECT body FROM registry_objects WHERE digest=?", revision.ID).Scan(&body); err != nil || !strings.Contains(body, "digest") {

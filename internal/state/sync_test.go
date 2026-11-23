@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestChangesConvergeThroughIntermediateNode(t *testing.T) {
@@ -109,8 +110,13 @@ func TestChangesConvergeThroughIntermediateNode(t *testing.T) {
 func TestPeerCursorSeesLowVersionRelaysAndFollowingLocalWrites(t *testing.T) {
 	ctx := t.Context()
 	stores := make([]*Store, 3)
+	var receiverHome string
 	for i := range stores {
-		s, err := Open(t.TempDir())
+		home := t.TempDir()
+		if i == 1 {
+			receiverHome = home
+		}
+		s, err := Open(home)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -145,6 +151,14 @@ func TestPeerCursorSeesLowVersionRelaysAndFollowingLocalWrites(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	worker, err := Open(receiverHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	if _, err := worker.DB.Exec("UPDATE sessions SET name='worker warmed' WHERE id='old'"); err != nil {
+		t.Fatal(err)
+	}
 	transfer(b, c)
 	if _, err := a.DB.Exec("INSERT INTO sessions(id,name) VALUES ('relayed','from A')"); err != nil {
 		t.Fatal(err)
@@ -163,7 +177,7 @@ func TestPeerCursorSeesLowVersionRelaysAndFollowingLocalWrites(t *testing.T) {
 	if err := c.Reader.QueryRow("SELECT name FROM sessions WHERE id='relayed'").Scan(&name); err != nil || name != "edited on B" {
 		t.Fatalf("native edit skipped: %q %v", name, err)
 	}
-	if _, err := b.DB.Exec("DELETE FROM sessions WHERE id='relayed'"); err != nil {
+	if _, err := worker.DB.Exec("DELETE FROM sessions WHERE id='relayed'"); err != nil {
 		t.Fatal(err)
 	}
 	transfer(b, c)
@@ -197,7 +211,7 @@ func TestSQLiteValuesRoundTrip(t *testing.T) {
 	}
 }
 
-func TestChangesPreserveSQLiteStorageTypesAndRollbackCursor(t *testing.T) {
+func TestChangesPreserveSQLiteStorageTypesAndQuarantineInvalidRows(t *testing.T) {
 	ctx := t.Context()
 	a, err := Open(t.TempDir())
 	if err != nil {
@@ -234,20 +248,18 @@ func TestChangesPreserveSQLiteStorageTypesAndRollbackCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A malformed final row must roll back both earlier rows and the cursor.
-	bad := append(append([]Change{}, changes...), Change{Table: "invalid"})
-	if err := b.ApplyPage(ctx, bad, site, next); err == nil {
-		t.Fatal("invalid page accepted")
+	// A malformed final row must be quarantined without pinning the peer's cursor.
+	bad := append(append([]Change{}, changes...), Change{Table: "invalid", DBVersion: next})
+	rejected, err := b.ApplyValidatedPage(ctx, bad, site, next, nil)
+	if err != nil || len(rejected) != 1 {
+		t.Fatalf("quarantine: %v %v", rejected, err)
 	}
-	if cursor, err := b.Cursor(ctx, site); err != nil || cursor != 0 {
-		t.Fatalf("cursor advanced on failure: %d %v", cursor, err)
+	if cursor, err := b.Cursor(ctx, site); err != nil || cursor != next {
+		t.Fatalf("cursor %d, want %d: %v", cursor, next, err)
 	}
 	var count int
-	if err := b.Reader.QueryRow("SELECT count(*) FROM typed_values").Scan(&count); err != nil || count != 0 {
-		t.Fatalf("partial page committed: %d %v", count, err)
-	}
-	if err := b.ApplyPage(ctx, changes, site, next); err != nil {
-		t.Fatal(err)
+	if err := b.Reader.QueryRow("SELECT count(*) FROM sync_quarantine WHERE peer=? AND version=?", site, next).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("quarantined rows: %d %v", count, err)
 	}
 	for i, value := range []any{nil, int64(9223372036854775807), float64(1.25), "hello", []byte{}, []byte{0, 255}} {
 		var got any
@@ -285,5 +297,31 @@ func TestChangesDoNotSplitTransactionAndAdvanceExcludedVersions(t *testing.T) {
 	}
 	if len(changes) != 0 || next == 0 {
 		t.Fatalf("excluded version did not advance: %d %+v", next, changes)
+	}
+}
+
+func TestPreserveArchiveEditsWithoutClocksLeavesWriterFree(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	pk := []byte{1}
+	if err := store.Reader.QueryRow("SELECT crsql_pack_columns('session',1)").Scan(&pk); err != nil {
+		t.Fatal(err)
+	}
+	changes := make([]Change, 500)
+	for i := range changes {
+		changes[i] = Change{Table: "conversation_events", Column: "body", PK: pk}
+	}
+	held, err := store.DB.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	if err := store.preserveArchiveEdits(ctx, store.DB, changes, make([]any, len(changes))); err != nil {
+		t.Fatal(err)
 	}
 }

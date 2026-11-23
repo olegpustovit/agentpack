@@ -166,9 +166,9 @@ func TestOversizedStateVersionTransfersAtomicallyInBoundedChunks(t *testing.T) {
 	if _, err := auth.store.DB.Exec("UPDATE conversation_events SET body='newer' WHERE session_id='oversized'"); err != nil {
 		t.Fatal(err)
 	}
-	initial := stateChangePage{Schema: state.SchemaVersion(), SiteID: sourceSite, Next: version, Transfer: transfer}
+	initial := stateChangePage{Schema: replicationVersion, SiteID: sourceSite, Next: version, Transfer: transfer}
 	// A private transfer ID cannot be replayed by another approved peer.
-	request := httptest.NewRequest("GET", "/api/sync/changes?schema="+strconv.Itoa(state.SchemaVersion())+"&transfer="+transfer.ID+"&offset=0", nil)
+	request := httptest.NewRequest("GET", "/api/sync/changes?schema="+strconv.Itoa(replicationVersion)+"&transfer="+transfer.ID+"&offset=0", nil)
 	other := httptest.NewRecorder()
 	mux.ServeHTTP(other, request.WithContext(context.WithValue(request.Context(), replicaPeerKey{}, "other")))
 	if other.Code != http.StatusNotFound {
