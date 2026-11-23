@@ -20,6 +20,8 @@ type archiveEdit struct {
 	Deleted bool   `json:"deleted"`
 }
 
+var errInvalidEventKey = errors.New("invalid archived event key")
+
 func eventKey(ctx context.Context, tx *sql.Tx, pk []byte) (string, int64, error) {
 	rows, err := tx.QueryContext(ctx, "SELECT cell FROM crsql_unpack_columns(?)", pk)
 	if err != nil {
@@ -29,7 +31,7 @@ func eventKey(ctx context.Context, tx *sql.Tx, pk []byte) (string, int64, error)
 	var id string
 	var seq int64
 	if !rows.Next() || rows.Scan(&id) != nil || !rows.Next() || rows.Scan(&seq) != nil || rows.Next() || id == "" || len(id) > 256 || seq <= 0 {
-		return "", 0, errors.New("invalid archived event key")
+		return "", 0, errInvalidEventKey
 	}
 	return id, seq, rows.Err()
 }
@@ -87,15 +89,18 @@ func (s *Store) preserveArchiveEdits(ctx context.Context, writer transactionStar
 			}
 			if err := func() error {
 				id, seq, err := eventKey(ctx, tx, change.PK)
+				if errors.Is(err, errInvalidEventKey) {
+					return archiveDataError{change.DBVersion, err}
+				}
 				if err != nil {
 					return err
 				}
 				var previous archiveClock
 				if err := json.Unmarshal([]byte(encoded), &previous); err != nil {
-					return err
+					return archiveDataError{change.DBVersion, err}
 				}
 				if previous.CL <= 0 || previous.Version < 0 || len(previous.Site) != 16 {
-					return errors.New("invalid archived event clock")
+					return archiveDataError{change.DBVersion, errors.New("invalid archived event clock")}
 				}
 				body, _ := values[i].(string)
 				clock := archiveClock{CL: change.CL, Version: change.ColVersion, Site: change.SiteID}
@@ -121,7 +126,7 @@ func (s *Store) preserveArchiveEdits(ctx context.Context, writer transactionStar
 						Seq int64 `json:"seq"`
 					}
 					if json.Unmarshal([]byte(body), &entry) != nil || entry.Seq != seq {
-						return errors.New("invalid archived event body")
+						return archiveDataError{change.DBVersion, errors.New("invalid archived event body")}
 					}
 				}
 				edit := archiveEdit{PK: change.PK, Session: id, CL: clock.CL, Version: clock.Version, Site: clock.Site, Deleted: deleted}

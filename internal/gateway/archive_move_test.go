@@ -868,3 +868,69 @@ func TestArchivePassWakesAfterAChangingPull(t *testing.T) {
 	g.wakeArchive() // never blocks a puller
 	<-passes
 }
+
+func TestArchiveGuardDefersOnlyTheLiveSessionAndReplaysAfterRestart(t *testing.T) {
+	main, _ := identityGateway(t, t.TempDir(), nil)
+	worker, _ := identityGateway(t, t.TempDir(), nil)
+	if err := main.auth.store.BindNode(t.Context(), "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.auth.store.BindNode(t.Context(), "worker"); err != nil {
+		t.Fatal(err)
+	}
+	archiveRoles(t, main, "main", "main")
+	now := time.Now()
+	const id = "session-guarded"
+	archiveFixture(t, worker, id, now.Add(-8*24*time.Hour), 1, 1)
+	syncArchiveFixture(t, worker.auth.store, main.auth.store)
+	if count, err := main.archivePass(t.Context(), now); err != nil || count != 1 {
+		t.Fatalf("archive: %d %v", count, err)
+	}
+	if err := network.PatchWorkerConversationState(t.Context(), worker.auth.store.DB, id, "working"); err != nil {
+		t.Fatal(err)
+	}
+	// A later version on the same chat must wait behind the archive marker; other chats apply.
+	if _, err := main.store.DB.Exec("UPDATE sessions SET title='renamed on main' WHERE id=?", id); err != nil {
+		t.Fatal(err)
+	}
+	archiveFixture(t, main, "session-unrelated", now, 1, 1)
+	syncArchiveFixture(t, main.auth.store, worker.auth.store)
+	mainSite, err := main.auth.store.SiteID(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	high, err := main.auth.store.DBVersion(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor, err := worker.auth.store.Replicator().Cursor(t.Context(), mainSite); err != nil || cursor != high {
+		t.Fatalf("guarded version held the peer cursor: %d of %d %v", cursor, high, err)
+	}
+	expect := func(store *state.Store, events, archived, deferred int, title string) {
+		t.Helper()
+		var gotEvents, gotArchived, gotDeferred, unrelated int
+		var gotTitle string
+		if err := store.Reader.QueryRow(`SELECT (SELECT count(*) FROM conversation_events WHERE session_id=?),
+ (SELECT archived_at>0 FROM sessions WHERE id=?),(SELECT count(*) FROM sync_deferred),
+ (SELECT count(*) FROM sessions WHERE id='session-unrelated'),(SELECT title FROM sessions WHERE id=?)`, id, id, id).Scan(&gotEvents, &gotArchived, &gotDeferred, &unrelated, &gotTitle); err != nil {
+			t.Fatal(err)
+		}
+		if gotEvents != events || gotArchived != archived || gotDeferred != deferred || unrelated != 1 || gotTitle != title {
+			t.Fatalf("events %d archived %d deferred %d unrelated %d title %q", gotEvents, gotArchived, gotDeferred, unrelated, gotTitle)
+		}
+	}
+	expect(worker.auth.store, 1, 0, 2, "")
+	// The deferral is durable: a fresh store over the same database still holds and replays it.
+	restarted, err := state.Open(worker.options.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	syncArchiveFixture(t, main.auth.store, restarted)
+	expect(restarted, 1, 0, 2, "")
+	if err := network.PatchWorkerConversationState(t.Context(), restarted.DB, id, "idle"); err != nil {
+		t.Fatal(err)
+	}
+	syncArchiveFixture(t, main.auth.store, restarted)
+	expect(restarted, 0, 1, 0, "renamed on main")
+}
