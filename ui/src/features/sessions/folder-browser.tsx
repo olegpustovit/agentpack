@@ -1,12 +1,13 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Folder, CornerLeftUp } from "lucide-react"
 import { GroupHeader, SearchField, SourceList, SourceRow } from "@/components/kit/list"
 import { Button } from "@/components/ui/button"
 import type { Machine } from "@/features/machines/queries"
-import { ApiError, LOCAL, routeMissing } from "@/lib/api"
+import { api, ApiError, LOCAL, routeMissing } from "@/lib/api"
 import type { ProjectRow } from "@/lib/api-types"
 import { basename } from "@/lib/format"
+import { object, string } from "@/lib/validate"
 import { isFolderPath, matchingFolders, parentFolderInput, splitFolderPath } from "./folder-path"
 import { foldersQuery } from "./queries"
 import { placeKey, stubRow } from "./rules"
@@ -21,6 +22,18 @@ export function useFolderBrowser(machine: Machine | undefined, needsUpdate: bool
   const { dir, segment } = splitFolderPath(query)
   const listing = useQuery({ ...foldersQuery(machineId, dir), enabled: browsing && machine?.online === true && !needsUpdate })
   const data = listing.data
+  const queryClient = useQueryClient()
+  const creation = useMutation({
+    mutationFn: async ({ machine, parent, name }: { machine: string; dir: string; parent: string; name: string }) => {
+      const created = object(await api<unknown>("/api/folders", { machine, body: { parent, name } }), "created folder")
+      return string(created.path, "created folder path")
+    },
+    onSettled: (_, error, { machine, dir }) => {
+      if (!error || (error instanceof ApiError && error.status === 409)) {
+        void queryClient.invalidateQueries({ queryKey: foldersQuery(machine, dir).queryKey, exact: true })
+      }
+    },
+  })
   const key = `${machineId}\0${query}`
   const choices: FolderChoice[] = []
   const error = machine && !machine.online
@@ -48,7 +61,7 @@ export function useFolderBrowser(machine: Machine | undefined, needsUpdate: bool
   }
   const active = selection.key === key && choices.length ? Math.min(selection.index, choices.length - 1) : 0
   return {
-    active, browsing, choices, listing: data, dir, segment, error, machineId,
+    active, browsing, choices, creation, listing: data, dir, segment, error, machineId, machineName,
     preview: choices[active]?.row,
     moved: selection.key === key,
     select: (index: number) => setSelection({ key, index }),
@@ -66,7 +79,10 @@ export function FolderBrowser({ browser, query, setQuery, pick, filters, childre
 }) {
   const id = useId()
   const aside = useRef<HTMLElement>(null)
-  const { active, browsing, choices, listing: data, dir, segment, error, machineId, moved, select, reset } = browser
+  const { active, browsing, choices, creation, listing: data, dir, segment, error, machineId, machineName, moved, select, reset } = browser
+  const canCreate = Boolean(data?.path && segment.trim() && segment !== "." && segment !== ".." && !data.entries.some((entry) => entry.name === segment))
+  const createError = creation.variables?.machine === machineId && creation.variables.dir === dir && creation.variables.name === segment
+    ? creation.error : null
 
   useEffect(() => {
     if (browsing && moved && choices.length) {
@@ -79,6 +95,18 @@ export function FolderBrowser({ browser, query, setQuery, pick, filters, childre
     if (choice.go) setQuery(choice.go)
     else if (choice.row) pick(machineId, choice.row)
     aside.current?.querySelector("input")?.focus()
+  }
+
+  function createFolder() {
+    if (!canCreate || !data || creation.isPending) return
+    creation.mutate({ machine: machineId, dir, parent: data.path, name: segment }, {
+      onSuccess: (path) => {
+        reset()
+        pick(machineId, stubRow(path))
+        setQuery(withSlash(path))
+      },
+      onSettled: () => requestAnimationFrame(() => aside.current?.querySelector("input")?.focus()),
+    })
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -121,6 +149,7 @@ export function FolderBrowser({ browser, query, setQuery, pick, filters, childre
           autoComplete="off"
           spellCheck={false}
           aria-controls={browsing ? id : undefined}
+          disabled={creation.isPending}
           value={query}
           onChange={(event) => {
             reset()
@@ -137,7 +166,7 @@ export function FolderBrowser({ browser, query, setQuery, pick, filters, childre
             <>
               {!data && <p className="px-(--s3) text-(--fg2)">Loading folders…</p>}
               {choices.map((choice, index) => (
-                <SourceRow key={choice.name + index} id={`${id}-${index}`} type="button" selected={active === index} onClick={() => commit(choice)}>
+                <SourceRow key={choice.name + index} id={`${id}-${index}`} type="button" selected={active === index} disabled={creation.isPending} onClick={() => commit(choice)}>
                   {choice.name === ".." ? <CornerLeftUp aria-hidden className="size-4" /> : <Folder aria-hidden className="size-4" />}
                   <span className="min-w-0 flex-1 truncate">
                     {!choice.go && <strong>Use this folder </strong>}{choice.name}
@@ -147,14 +176,22 @@ export function FolderBrowser({ browser, query, setQuery, pick, filters, childre
                   ))}
                 </SourceRow>
               ))}
-              {data && !choices.length && <p className="px-(--s3) text-(--fg2)">{segment ? `No folder starting with “${segment}”.` : "No folders here."}</p>}
+              {canCreate && (
+                <Button type="button" size="sm" className="w-full justify-start" disabled={creation.isPending} onClick={createFolder}>
+                  <span className="truncate">{creation.isPending ? "Creating folder…" : `Create folder “${segment}”`}</span>
+                </Button>
+              )}
+              {createError && <p role="alert" className="px-(--s3) text-(--fg2)">
+                {routeMissing(createError) ? `Update Agentpack on ${machineName} to create folders.` : createError.message}
+              </p>}
+              {data && !choices.length && !canCreate && <p className="px-(--s3) text-(--fg2)">{segment ? `No folder starting with “${segment}”.` : "No folders here."}</p>}
               {data?.truncated && <p className="px-(--s3) text-(length:--fs-xs) text-(--fg2)">Showing the first 1,000 folders.</p>}
             </>
           )}
         </SourceList>
       ) : children}
       <div className="border-t-[0.5px] border-(--sep) px-(--s3) pb-(--s2)">
-        <Button type="button" variant="ghost" size="sm" className="w-full justify-start" onClick={() => {
+        <Button type="button" variant="ghost" size="sm" className="w-full justify-start" disabled={creation.isPending} onClick={() => {
           setQuery("~/")
           reset()
           aside.current?.querySelector("input")?.focus()

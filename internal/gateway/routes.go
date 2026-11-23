@@ -173,6 +173,7 @@ var routeTable = []route{
 	{pattern: "GET /api/projects", peer: peerRead},
 	{pattern: "PUT /api/projects/settings", policy: owner, peer: peerWrite, timeout: timeoutLong},
 	{pattern: "GET /api/folders", peer: peerRead},
+	{pattern: "POST /api/folders", peer: peerWrite},
 	{pattern: "GET /api/folders/found", peer: peerRead, timeout: timeoutProbe},
 	{pattern: "GET /api/worktrees", peer: peerRead},
 	{pattern: "POST /api/worktrees/remove", policy: owner, peer: peerWrite},

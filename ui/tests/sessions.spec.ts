@@ -151,6 +151,38 @@ test("New session browses and starts in an unlisted folder using the keyboard", 
   expect((await posted).postDataJSON()).toMatchObject({ directory: "/home/viewer/projects" })
 })
 
+test("New session creates and selects a folder on the chosen machine", async ({ page }) => {
+  const parent = "/Users/viewer/projects"
+  const path = parent + "/new-project"
+  const onMachine = (url: URL) => url.searchParams.get("node") === "mac-air"
+  await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "mac-air", name: "MacBook Air", online: true }] }))
+  await page.route((url) => url.pathname === "/api/folders" && onMachine(url), (route) => {
+    if (route.request().method() === "POST") return route.fulfill({ json: { path } })
+    const directory = new URL(route.request().url()).searchParams.get("path") === "~/projects/" ? parent : path
+    return route.fulfill({ json: {
+      path: directory, parent, row: projectRow(directory, [], { last_used: "" }), entries: [], truncated: false,
+    } })
+  })
+  await page.route((url) => url.pathname === "/api/sessions" && onMachine(url), (route) =>
+    route.request().method() === "POST" ? route.fulfill({ json: { ...sessions[0], id: "created", directory: path } }) : route.fallback(),
+  )
+  await page.goto("/sessions?new=1&machine=mac-air")
+  const field = page.getByPlaceholder("Search projects, or type a path")
+  await field.fill("~/projects/new-project")
+  const created = page.waitForRequest((req) => req.method() === "POST" && new URL(req.url()).pathname === "/api/folders")
+  await page.getByRole("button", { name: "Create folder “new-project”" }).click()
+  const request = await created
+  expect(onMachine(new URL(request.url()))).toBe(true)
+  expect(request.postDataJSON()).toEqual({ parent, name: "new-project" })
+  await expect(field).toHaveValue(path + "/")
+  await expect(page.getByRole("heading", { name: "new-project", exact: true })).toBeVisible()
+  const started = page.waitForRequest((req) => req.method() === "POST" && new URL(req.url()).pathname === "/api/sessions")
+  await page.getByRole("button", { name: "Start session" }).click()
+  const launch = await started
+  expect(onMachine(new URL(launch.url()))).toBe(true)
+  expect(launch.postDataJSON()).toMatchObject({ directory: path })
+})
+
 test("New session shows what the chosen mode loads", async ({ page }) => {
   const project = {
     directory: "/home/oleg/agentpack",

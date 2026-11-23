@@ -113,6 +113,80 @@ func TestFolderListing(t *testing.T) {
 	}
 }
 
+func TestCreateFolder(t *testing.T) {
+	root := t.TempDir()
+	parent := folderFixture(t, root, "projects")
+	g, origin := identityGateway(t, t.TempDir(), nil)
+	testBrowserSession(t, g.auth, "member@example.com", "create-folder")
+	call := func(parent, name string, authorize func(*http.Request)) *httptest.ResponseRecorder {
+		body, err := json.Marshal(map[string]string{"parent": parent, "name": name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/folders", strings.NewReader(string(body)))
+		r.Header.Set("Origin", origin.String())
+		authorize(r)
+		w := httptest.NewRecorder()
+		g.Handler().ServeHTTP(w, r)
+		return w
+	}
+	browser := func(r *http.Request) {
+		r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: "create-folder"})
+	}
+	if w := call(parent, "new-project", func(*http.Request) {}); w.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthed create: %d", w.Code)
+	}
+	if w := call(parent, "new-project", func(r *http.Request) {
+		browser(r)
+		r.Header.Set("Origin", "https://other.example")
+	}); w.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin create: %d", w.Code)
+	}
+	for _, input := range []struct {
+		parent string
+		name   string
+		want   int
+	}{
+		{"projects", "new-project", http.StatusBadRequest},
+		{parent, "..", http.StatusBadRequest},
+		{parent, "../outside", http.StatusBadRequest},
+		{parent, `..\outside`, http.StatusBadRequest},
+		{parent, "nested/child", http.StatusBadRequest},
+		{filepath.Join(parent, "missing"), "new-project", http.StatusNotFound},
+	} {
+		if w := call(input.parent, input.name, browser); w.Code != input.want || strings.Contains(w.Body.String(), root) {
+			t.Errorf("create %q under %q: %d %s", input.name, input.parent, w.Code, w.Body.String())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "outside")); !os.IsNotExist(err) {
+		t.Fatal("create changed a path outside the parent", err)
+	}
+	path := filepath.Join(parent, "new-project")
+	w := call(parent, "new-project", browser)
+	var created struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); w.Code != http.StatusOK || err != nil || created.Path != path {
+		t.Fatalf("create: %d %s (%v)", w.Code, w.Body.String(), err)
+	}
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		t.Fatalf("created path is not a directory: %v", err)
+	}
+	if w := call(parent, "new-project", browser); w.Code != http.StatusConflict {
+		t.Fatalf("duplicate create: %d %s", w.Code, w.Body.String())
+	}
+	file := filepath.Join(parent, "notes")
+	if err := os.WriteFile(file, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if w := call(parent, "notes", browser); w.Code != http.StatusConflict {
+		t.Fatalf("file collision: %d %s", w.Code, w.Body.String())
+	}
+	if data, err := os.ReadFile(file); err != nil || string(data) != "keep" {
+		t.Fatal("folder creation changed an existing file", err)
+	}
+}
+
 func TestFoundFoldersUseBoundedDiscoveryAndLiveRecents(t *testing.T) {
 	home := folderTestHome(t)
 	g, _ := identityGateway(t, folderFixture(t, home, "data"), nil)

@@ -820,6 +820,7 @@ func (g *Gateway) routes() routeMux {
 		network.WriteJSON(w, value)
 	})
 	mux.HandleFunc("GET /api/folders", g.serveFolders)
+	mux.HandleFunc("POST /api/folders", serveCreateFolder)
 	mux.HandleFunc("GET /api/folders/found", g.serveFoundFolders)
 	mux.HandleFunc("POST /api/packages", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {

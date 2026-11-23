@@ -252,7 +252,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   else if (!browsing && !projectQueries.firstLoadPending && total === 0 && !row) hint = "Open a folder to start a session."
   else if (chatUnavailableHint) hint = chatUnavailableHint
   else if (view === "chat" && pastSessions.error && !signInError(pastSessions.error)) hint = `Couldn't load conversations: ${(pastSessions.error as Error).message}`
-  const blocked = (browsing && !pathProject) || !startable || start.isPending || (view === "chat" && Boolean(chatUnavailableHint))
+  const blocked = (browsing && !pathProject) || !startable || start.isPending || browser.creation.isPending || (view === "chat" && Boolean(chatUnavailableHint))
   const failedMachines = machines.filter((machine) => machine.online && projectQueries.byMachine[machine.id]?.error)
 
   const machineItems = [...machines].sort((a, b) =>
@@ -316,6 +316,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
             <div className="flex min-w-0 items-center gap-(--s2) px-(--s4)">
               <PopupSelect
                 label="Filter by machine"
+                disabled={browser.creation.isPending}
                 value={browsing ? browserMachine?.id ?? LOCAL : machineFilter}
                 onValueChange={(machine) => changeFilters({ ...filters, machine })}
                 items={browsing ? machineItems : [

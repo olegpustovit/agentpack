@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/network"
@@ -92,6 +93,10 @@ func folderFailure(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		status, message = http.StatusGatewayTimeout, "Folder read timed out."
 	}
+	folderProblem(w, r, status, message)
+}
+
+func folderProblem(w http.ResponseWriter, r *http.Request, status int, message string) {
 	obs.From(r.Context()).Fail(errors.New(message))
 	http.Error(w, message, status)
 }
@@ -101,6 +106,47 @@ func (g *Gateway) serveFolders(w http.ResponseWriter, r *http.Request) {
 	readFolders(w, r, folderReadTimeout, folderReadSlots, func(ctx context.Context) (folderListing, error) {
 		return g.listFolders(ctx, path)
 	})
+}
+
+func serveCreateFolder(w http.ResponseWriter, r *http.Request) {
+	actor, _ := session.ActorFrom(r.Context())
+	if !actor.CanStartNewFolder() {
+		folderProblem(w, r, http.StatusForbidden, "A browser account is required to create folders.")
+		return
+	}
+	var input struct {
+		Parent string `json:"parent"`
+		Name   string `json:"name"`
+	}
+	if !network.ReadJSON(w, r, &input) {
+		return
+	}
+	if !filepath.IsAbs(input.Parent) || strings.ContainsRune(input.Parent, 0) {
+		folderProblem(w, r, http.StatusBadRequest, errFolderPath.Error())
+		return
+	}
+	name := input.Name
+	invalidWindowsName := runtime.GOOS == "windows" && (strings.TrimRight(name, ". ") != name || strings.ContainsAny(name, `<>"|?*`))
+	if strings.TrimSpace(name) == "" || name == "." || !filepath.IsLocal(name) || strings.ContainsAny(name, "/\\\x00") || invalidWindowsName {
+		folderProblem(w, r, http.StatusBadRequest, "Enter a single folder name.")
+		return
+	}
+	path := filepath.Join(input.Parent, name)
+	err := os.Mkdir(path, 0o700)
+	switch {
+	case err == nil:
+		network.WriteJSON(w, struct {
+			Path string `json:"path"`
+		}{path})
+	case errors.Is(err, fs.ErrExist):
+		folderProblem(w, r, http.StatusConflict, "That name is already in use.")
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+		folderProblem(w, r, http.StatusNotFound, "Parent folder not found.")
+	case errors.Is(err, fs.ErrPermission):
+		folderProblem(w, r, http.StatusForbidden, "Parent folder is inaccessible.")
+	default:
+		folderProblem(w, r, http.StatusInternalServerError, "Couldn't create the folder.")
+	}
 }
 
 func (g *Gateway) listFolders(ctx context.Context, path string) (folderListing, error) {
