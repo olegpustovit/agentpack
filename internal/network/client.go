@@ -34,6 +34,8 @@ type AgentCapabilities struct {
 	LoadSession         bool                      `json:"loadSession,omitempty"`
 	PromptCapabilities  *AgentPromptCapabilities  `json:"promptCapabilities,omitempty"`
 	SessionCapabilities *AgentSessionCapabilities `json:"sessionCapabilities,omitempty"`
+	// Steering: a steer joins the running turn instead of interrupting it (harness.ACPLaunch.Steers).
+	Steering bool `json:"steering,omitempty"`
 }
 
 type AgentPromptCapabilities struct {

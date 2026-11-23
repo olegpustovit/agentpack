@@ -373,16 +373,25 @@ func (g *Gateway) failStart(ctx context.Context, info SessionInfo, cause error) 
 }
 
 // recordStop ends a chat's transcript with why it stopped. Only call it while no worker writes the log.
+// It appends the two rows directly instead of restoring the replay tail into a log.
 func recordStop(ctx context.Context, store *state.Store, id string, notice map[string]any) error {
-	log, err := newConversationLog(ctx, store, id, func(error) {})
-	if err != nil {
-		return err
-	}
-	now := time.Now().UnixMilli()
+	now := time.Now()
 	notice["sessionUpdate"], notice["severity"] = "notice", "error"
-	log.Append("notice", now, mustRawJSON(notice))
-	log.Append("agent_exit", now, json.RawMessage(`{}`))
-	return log.Flush()
+	return state.Transaction(ctx, store.DB, func(tx *sql.Tx) error {
+		for _, entry := range []acp.LogEntry{
+			{TS: now.UnixMilli(), Kind: "notice", Payload: mustRawJSON(notice)},
+			{TS: now.UnixMilli(), Kind: "agent_exit", Payload: json.RawMessage(`{}`)},
+		} {
+			if err := tx.QueryRowContext(ctx, `UPDATE sessions SET last_seq=last_seq+1,last_event_at=?
+				WHERE id=? AND archived_at=0 AND node_id=`+state.LocalNodeSQL+` RETURNING last_seq`, now.UnixNano(), id).Scan(&entry.Seq); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, "INSERT INTO conversation_events(session_id,seq,body) VALUES (?,?,?)", id, entry.Seq, string(mustRawJSON(entry))); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // reapStoppedChats ends rows whose worker died without ending them, then settles ended chats that

@@ -18,7 +18,7 @@ func TestConversationCancelRouteCancelsOneSubagent(t *testing.T) {
 	broker := acp.NewBroker(nil, func(context.Context) error { parentCancels++; return nil }, nil, nil)
 	toAgent, fromClient := io.Pipe()
 	fromAgent, _ := io.Pipe()
-	acp.NewHarnessClient("", nil, log, broker).NewClientSideConnection(fromClient, fromAgent)
+	acp.NewHarnessClient("", log, broker).NewClientSideConnection(fromClient, fromAgent)
 	acp.AppendRawSessionUpdate(log, []byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"parent","update":{"sessionUpdate":"subagent_update","sessionId":"child-1","capabilities":{"cancel":{}}}}}`))
 	mux := http.NewServeMux()
 	(&WorkerHTTP{conversation: NewConversationSession(log, broker)}).registerConversation(mux)

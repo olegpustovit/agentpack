@@ -267,7 +267,7 @@ export function SessionList() {
   function renderRow(session: ListedSession, nested = false) {
     const key = rowKey(session)
     const selected = key === selectedKey
-    // Running subagents show under their chat on every width; finished ones leave the list.
+    // Subagents show under their chat on every width: running ones, then the latest that finished.
     const children = session.offline || session.archived_at ? [] : session.subagents ?? []
     return (
       <div key={key}>

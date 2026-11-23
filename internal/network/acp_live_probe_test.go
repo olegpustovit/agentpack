@@ -44,7 +44,7 @@ func TestLiveACPProbe(t *testing.T) {
 	if err := session.Prompt(ctx, input); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
-	entries, _ := session.Attach(0)
+	entries, _, _ := session.Attach(0)
 	home, _ := os.UserHomeDir()
 	var lines []string
 	for _, entry := range entries {

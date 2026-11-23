@@ -44,7 +44,7 @@ func (g *Gateway) registerDiagnostics(mux routeRegistrar) {
 			}
 			status := map[string]string{"resolve": "resolved", "reopen": "open", "ignore": "ignored"}[action]
 			actor, _ := actorFrom(r.Context())
-			issue, err := obs.ChangeIssue(r.Context(), g.auth.store, g.options.Home, r.PathValue("fingerprint"), status, input.Version, input.Note, actor.User)
+			issue, err := obs.ChangeIssue(r.Context(), g.store, g.options.Home, r.PathValue("fingerprint"), status, input.Version, input.Note, actor.User)
 			writeDiagnostics(w, r, issue, err)
 		})
 	}

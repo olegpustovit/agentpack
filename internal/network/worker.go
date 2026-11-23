@@ -315,8 +315,16 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		}
 		if acpCleanup != nil {
 			defer func() {
+				// Under the lifecycle lock, after any restart in progress: a restart that swapped the
+				// agent is cleaned up here, and none can start a new one afterwards.
+				if handler != nil {
+					handler.lifecycle.Lock()
+					defer handler.lifecycle.Unlock()
+					handler.stopping = true
+				}
 				if acpCleanup != nil {
 					acpCleanup()
+					acpCleanup = nil
 				}
 			}()
 		}
@@ -535,7 +543,8 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		return 1, fmt.Errorf("announce worker: %w", err)
 	}
 	if instant && conversation != nil {
-		persistConversationState(conversation)(conversation.ConversationState())
+		// Through publishState, so a turn that already changed the state is never overwritten by an older read.
+		conversation.SetStateChange("starting", persistConversationState(conversation))
 	}
 	started.End()
 	select {

@@ -87,7 +87,7 @@ func (g *Gateway) registerStateSync(mux routeRegistrar) {
 			badRequest(w, "invalid release request")
 			return
 		}
-		released, err := g.auth.store.ReleaseMain(r.Context(), body.Epoch)
+		released, err := g.store.ReleaseMain(r.Context(), body.Epoch)
 		if errors.Is(err, state.ErrMainChanged) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -139,12 +139,12 @@ func (g *Gateway) registerStateSync(mux routeRegistrar) {
 				return
 			}
 		}
-		site, err := g.auth.store.SiteID(r.Context())
+		site, err := g.store.SiteID(r.Context())
 		rows := json.RawMessage("[]")
 		var next int64
 		// Reserve space for the envelope in the 4 MiB response limit.
 		if err == nil && sinceText != "" {
-			rows, next, err = g.auth.store.ChangePage(r.Context(), since, exclude, syncPageLimit-1024)
+			rows, next, err = g.store.ChangePage(r.Context(), since, exclude, syncPageLimit-1024)
 		}
 		var oversized *state.ChangeVersionTooLargeError
 		if errors.As(err, &oversized) {
@@ -162,7 +162,7 @@ func (g *Gateway) registerStateSync(mux routeRegistrar) {
 			return
 		}
 		if err == nil {
-			err = g.auth.store.NoteServed(next)
+			err = g.store.NoteServed(next)
 		}
 		if err != nil {
 			if event := obs.From(r.Context()); event != nil {
@@ -354,7 +354,7 @@ func (g *Gateway) wakeStatePeer(peer string) {
 // The manager owns worker lifetimes; each peer pulls independently so one offline node cannot stall the mesh.
 func (g *Gateway) runStateSync(ctx context.Context) {
 	if g.logs != nil {
-		nodeID, _ := g.auth.store.NodeID(ctx)
+		nodeID, _ := g.store.NodeID(ctx)
 		ctx = obs.WithSink(ctx, g.logs, obs.BuildMetadata(g.options.Version, nodeID, "gateway"))
 	}
 	if err := g.publishMeshNode(ctx); err != nil {
@@ -462,7 +462,7 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 		var page stateChangePage
 		var changed bool
 		if err == nil {
-			page, changed, err = pullState(pullCtx, g.auth.store, g.options.Library.Store, client, target, site)
+			page, changed, err = pullState(pullCtx, g.store, g.options.Library.Store, client, target, site)
 		}
 		site = nil
 		if err == nil {
@@ -519,11 +519,11 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 }
 
 func (g *Gateway) publishMeshNode(ctx context.Context) error {
-	site, err := g.auth.store.SiteID(ctx)
+	site, err := g.store.SiteID(ctx)
 	if err != nil {
 		return err
 	}
-	_, err = g.auth.store.DB.ExecContext(ctx, `INSERT INTO mesh_nodes(node_id,name,site_id,schema_version,app_version,updated_at)
+	_, err = g.store.DB.ExecContext(ctx, `INSERT INTO mesh_nodes(node_id,name,site_id,schema_version,app_version,updated_at)
  VALUES (`+state.LocalNodeSQL+`,?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET
  name=excluded.name,site_id=excluded.site_id,schema_version=excluded.schema_version,app_version=excluded.app_version,updated_at=excluded.updated_at
  WHERE name IS NOT excluded.name OR site_id IS NOT excluded.site_id OR schema_version IS NOT excluded.schema_version OR app_version IS NOT excluded.app_version`, g.selfIdentity(ctx).displayName(), site, replicationVersion, g.options.Version, time.Now().UnixMilli())

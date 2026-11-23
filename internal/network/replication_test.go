@@ -251,8 +251,7 @@ func TestOnlyTheUnreleasedMainRefreshesAndPushes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, g := range []*Gateway{oldMain, newMain} {
-		g.store = g.auth.store
-		if err := g.auth.store.SetMain(t.Context(), state.MainState{}, g.options.Home); err != nil {
+		if err := g.store.SetMain(t.Context(), state.MainState{}, g.options.Home); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -267,7 +266,7 @@ func TestOnlyTheUnreleasedMainRefreshesAndPushes(t *testing.T) {
 	}
 	acting := 0
 	for node, g := range map[string]*Gateway{"a": oldMain, "b": newMain} {
-		roles, err := g.auth.store.Main(t.Context())
+		roles, err := g.store.Main(t.Context())
 		if err != nil || roles.MainNode != node {
 			t.Fatalf("%s: %+v %v", node, roles, err)
 		}

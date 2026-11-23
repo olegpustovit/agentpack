@@ -535,7 +535,7 @@ func (g *Gateway) routes() routeMux {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		if err := ForgetRecent(r.Context(), g.auth.store, SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode}); err != nil {
+		if err := ForgetRecent(r.Context(), g.store, SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode}); err != nil {
 			fail(w, r, err)
 			return
 		}
@@ -712,7 +712,7 @@ func (g *Gateway) routes() routeMux {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		info, err := RenameSession(r.Context(), g.auth.store, g.options.Home, r.PathValue("id"), name)
+		info, err := RenameSession(r.Context(), g.store, g.options.Home, r.PathValue("id"), name)
 		switch {
 		case errors.Is(err, errSessionNotFound):
 			http.Error(w, "session not found", http.StatusNotFound)

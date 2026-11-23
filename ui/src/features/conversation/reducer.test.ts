@@ -321,6 +321,17 @@ describe("reduceLog queue, goal and turns", () => {
     expect(state.queue?.map((item) => [item.queueId, item.text?.text])).toEqual([["q1", "a2"]])
   })
 
+  it("shows a delivered prompt in the queue until the agent takes it in", () => {
+    const delivered: LogEntry[] = [
+      { seq: 1, ts: 1, kind: "prompt", payload: { text: { text: "go" } } },
+      { seq: 2, ts: 2, kind: "queued_prompt", payload: { queueId: "q1", text: { text: "also" }, delivered: true } },
+    ]
+    expect(reduceLog(delivered).queue).toMatchObject([{ queueId: "q1", delivered: true }])
+    const taken = reduceLog([...delivered, { seq: 3, ts: 3, kind: "prompt", payload: { queueId: "q1", text: { text: "also" } } }])
+    expect(taken.queue).toBeUndefined()
+    expect(taken.items.filter((item) => item.kind === "user_message_chunk")).toHaveLength(2)
+  })
+
   it("keeps the latest goal and records one thread line per state change", () => {
     const goal = { objective: "Ship", state: "active" as const, active_ms: 0 }
     const state = reduceLog([

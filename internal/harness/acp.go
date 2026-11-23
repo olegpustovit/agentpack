@@ -21,6 +21,13 @@ type ACPLaunch struct {
 	// parent usage_update stays quiet for this long (Antigravity's background-task wakeups
 	// stream session/update notifications with no session/prompt RPC or idle signal).
 	UnpromptedUsageSettle time.Duration
+	// QueuesPrompts: the adapter accepts a session/prompt while a turn runs and the agent takes
+	// it in at its next model-cycle boundary, answering each prompt separately. Agentpack then
+	// sends agent messages at once and queued prompts at each cycle end instead of at turn_end.
+	QueuesPrompts bool
+	// Steers: the adapter serves _session/steering, which hands a prompt to the running turn
+	// without session/cancel, so a steer keeps the agent's background work alive.
+	Steers bool
 	// Finish runs once the adapter has started or failed to start; nil when there is nothing to do.
 	Finish func() error
 }

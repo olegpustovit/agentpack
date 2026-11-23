@@ -63,3 +63,36 @@ func TestNetworkDropRetriesTheTurn(t *testing.T) {
 		t.Fatalf("%d retry notices", notices)
 	}
 }
+
+// A subagent's reply, usage and turn end belong to the subagent: its connection error neither
+// retries the chat's turn nor changes the chat's usage or stop reason.
+func TestSubagentOutputDoesNotDriveTheChat(t *testing.T) {
+	session, agent := newFakeAgentSession(t)
+	scheduled := make(chan func(), 4)
+	session.after = func(_ time.Duration, run func()) { scheduled <- run }
+	if _, _, err := session.Submit(context.Background(), acp.PromptInput{Text: "fix it"}, false); err != nil {
+		t.Fatal(err)
+	}
+	agent.nextPrompt(t)
+	child := func(kind string, fields map[string]any) acp.LogEntry {
+		fields["_subagent"] = "child-1"
+		return entry(kind, fields)
+	}
+	agent.turns <- fakeTurn{entries: []acp.LogEntry{
+		entry("agent_message_chunk", map[string]any{"text": map[string]string{"text": "Done."}}),
+		child("agent_message_chunk", map[string]any{"text": map[string]string{"text": "\nAPI Error: Connection error."}}),
+		child("usage_update", map[string]any{"used": 99, "cost": map[string]any{"amount": 9.0, "currency": "USD"}}),
+	}}
+	waitConversationState(t, session, "idle")
+	select {
+	case <-scheduled:
+		t.Fatal("a subagent's connection error retried the chat's turn")
+	case <-time.After(50 * time.Millisecond):
+	}
+	session.mu.Lock()
+	used, cost, text := session.usageUsed, session.usageCost, string(session.turnText)
+	session.mu.Unlock()
+	if used != 0 || cost != 0 || text != "Done." {
+		t.Fatalf("chat usage %d/%v and reply %q took the subagent's", used, cost, text)
+	}
+}

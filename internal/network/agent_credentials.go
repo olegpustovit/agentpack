@@ -140,7 +140,7 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 
 func (g *Gateway) installedAgentCredential(ctx context.Context, key string) (installedCredential, bool, error) {
 	var record installedCredential
-	err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT hash,rev FROM agent_credential_installs WHERE key=?", key).Scan(&record.Hash, &record.Rev)
+	err := g.store.Reader.QueryRowContext(ctx, "SELECT hash,rev FROM agent_credential_installs WHERE key=?", key).Scan(&record.Hash, &record.Rev)
 	if errors.Is(err, sql.ErrNoRows) {
 		return record, false, nil
 	}
@@ -149,7 +149,7 @@ func (g *Gateway) installedAgentCredential(ctx context.Context, key string) (ins
 
 func (g *Gateway) recordAgentCredential(ctx context.Context, key string, credential sharedAgentCredential) error {
 	digest := sha256.Sum256(credential.Data)
-	_, err := g.auth.store.DB.ExecContext(ctx, "INSERT INTO agent_credential_installs(key,hash,rev) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET hash=excluded.hash,rev=excluded.rev", key, digest[:], credential.Rev)
+	_, err := g.store.DB.ExecContext(ctx, "INSERT INTO agent_credential_installs(key,hash,rev) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET hash=excluded.hash,rev=excluded.rev", key, digest[:], credential.Rev)
 	return err
 }
 

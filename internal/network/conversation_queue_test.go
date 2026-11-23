@@ -269,7 +269,7 @@ func TestClientPromptLookupSurvivesADroppedReplayTail(t *testing.T) {
 	input := acp.PromptInput{Text: "first message", QueueID: "5a6057ea65564edfb5222d0c394e0b43"}
 	logged := entry("prompt", json.RawMessage(promptLogPayload(input)))
 	logged.Seq = 1
-	if err := persistConversationChanges(t.Context(), store.DB, id, acp.LogChanges{Entries: []acp.LogEntry{logged}, LastSeq: 1}); err != nil {
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, acp.LogChanges{Entries: []acp.LogEntry{logged}, LastSeq: 1}, 0); err != nil {
 		t.Fatal(err)
 	}
 	session, agent := newFakeAgentSession(t)
@@ -278,5 +278,37 @@ func TestClientPromptLookupSurvivesADroppedReplayTail(t *testing.T) {
 	}
 	if id, _, err := session.Submit(t.Context(), input, false); err != nil || id != input.QueueID || len(agent.log.Snapshot()) != 0 {
 		t.Fatalf("retry of an old prompt wrote a new event: id=%q err=%v log=%v", id, err, logKinds(agent.log))
+	}
+}
+
+// A restart for when the chat is idle waits until the queue has run.
+func TestIdleRestartWaitsForTheQueue(t *testing.T) {
+	session, agent := newFakeAgentSession(t)
+	ctx := context.Background()
+	if _, _, err := session.Submit(ctx, acp.PromptInput{Text: "first"}, false); err != nil {
+		t.Fatal(err)
+	}
+	agent.nextPrompt(t)
+	if _, _, err := session.Submit(ctx, acp.PromptInput{QueueID: "q1", Text: "second"}, false); err != nil {
+		t.Fatal(err)
+	}
+	restarted := make(chan struct{}, 1)
+	if !session.whenIdle(func() { restarted <- struct{}{} }) {
+		t.Fatal("the chat is working")
+	}
+	agent.turns <- fakeTurn{}
+	if input := agent.nextPrompt(t); input.Text != "second" {
+		t.Fatalf("next = %q", input.Text)
+	}
+	select {
+	case <-restarted:
+		t.Fatal("the restart ran between the turn and the queued prompt")
+	default:
+	}
+	agent.turns <- fakeTurn{}
+	select {
+	case <-restarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the restart never ran")
 	}
 }

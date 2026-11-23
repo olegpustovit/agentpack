@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -59,7 +60,7 @@ func (g *Gateway) servePrompt(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	info, err := storedSession(ctx, g.auth.store.Reader, id)
+	info, err := storedSession(ctx, g.store.Reader, id)
 	if err != nil || info.Transport != "acp" || !validSessionID(id) {
 		http.Error(w, "session unavailable", http.StatusNotFound)
 		return
@@ -104,7 +105,7 @@ func (g *Gateway) servePrompt(w http.ResponseWriter, r *http.Request) {
 	if prompt.QueueID == "" {
 		prompt.QueueID = rand.Text()
 	}
-	store := g.auth.store
+	store := g.store
 	seen, err := storedPromptID(ctx, store, id, prompt.QueueID)
 	if err != nil {
 		promptQueueError(w, r, err)
@@ -158,7 +159,7 @@ func (g *Gateway) removeStartingPrompt(ctx context.Context, id, queueID string) 
 	if _, err := g.workerRecord(ctx, id); err == nil {
 		return false, nil
 	}
-	err = state.Transaction(ctx, g.auth.store.DB, func(tx *sql.Tx) error {
+	err = state.Transaction(ctx, g.store.DB, func(tx *sql.Tx) error {
 		now := time.Now()
 		entry := acp.LogEntry{TS: now.UnixMilli(), Kind: "dequeued_prompt", Payload: mustRawJSON(map[string]string{"queueId": queueID, "reason": "removed"})}
 		err := tx.QueryRowContext(ctx, `UPDATE sessions SET last_seq=last_seq+1,last_event_at=?
@@ -241,7 +242,8 @@ func (session *ConversationSession) closedErr() error {
 func (session *ConversationSession) Submit(ctx context.Context, input acp.PromptInput, steer bool) (queueID string, first <-chan error, err error) {
 	session.queueMu.Lock()
 	defer session.queueMu.Unlock()
-	if input.QueueID != "" {
+	idempotent := input.QueueID != ""
+	if idempotent {
 		if _, seen := session.seenPrompts[input.QueueID]; seen {
 			return input.QueueID, nil, nil
 		}
@@ -257,7 +259,7 @@ func (session *ConversationSession) Submit(ctx context.Context, input acp.Prompt
 		session.mu.Unlock()
 		return "", nil, err
 	}
-	if input.QueueID == "" && !session.starting && !session.running && len(session.queue) == 0 {
+	if !idempotent && !session.starting && !session.running && len(session.queue) == 0 {
 		session.running, session.userCancelled = true, false
 		session.mu.Unlock()
 		result := make(chan error, 1)
@@ -268,13 +270,12 @@ func (session *ConversationSession) Submit(ctx context.Context, input acp.Prompt
 	item := queuedPrompt{ID: input.QueueID, Input: input, Steer: steer}
 	if item.ID == "" {
 		item.ID = rand.Text()
-		if session.starting {
-			item.Input.QueueID = item.ID
-		}
 	}
+	// The prompt entry that sends it carries the ID, which is what takes it off every viewer's queue.
+	item.Input.QueueID = item.ID
 	session.mu.Unlock()
 	session.log.Append("queued_prompt", session.clock().UnixMilli(), queuedPromptPayload(item))
-	if item.Input.QueueID != "" {
+	if idempotent {
 		if err := session.log.Flush(); err != nil {
 			return "", nil, err
 		}
@@ -288,28 +289,62 @@ func (session *ConversationSession) Submit(ctx context.Context, input acp.Prompt
 	return item.ID, nil, nil
 }
 
-// afterQueued starts the queue or interrupts the current turn for a steer. The caller holds queueMu.
+// afterQueued starts the queue, hands an agent message to a running turn, or steers the current
+// turn. An agent that serves _session/steering takes a steer into its turn; any other is
+// interrupted with session/cancel first, which the UI warns about. The caller holds queueMu.
 func (session *ConversationSession) afterQueued(ctx context.Context, steer, running bool) {
 	if !running {
 		session.maybeDrain()
 		return
 	}
 	if !steer {
+		session.deliverDuringTurnLocked(false)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	session.mu.Lock()
+	broker, steerTurn := session.broker, session.steer
+	var item queuedPrompt
+	if len(session.queue) > 0 {
+		item = session.queue[0]
+	}
+	session.mu.Unlock()
+	if steerTurn != nil && item.Steer {
+		session.steerInto(ctx, steerTurn, item)
 		return
 	}
 	session.log.Append("notice", session.clock().UnixMilli(), mustRawJSON(map[string]string{
 		"sessionUpdate": "notice", "severity": "info", "title": "Interrupted to steer",
 	}))
-	session.mu.Lock()
-	broker := session.broker
-	session.mu.Unlock()
-	cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-	if err := broker.Cancel(cancelCtx); err != nil {
+	if err := broker.Cancel(ctx); err != nil {
 		_, event := obs.Start(ctx, "acp.turn", "steer_cancel")
 		event.Set("session_id", session.sessionID)
 		event.Fail(err)
 		event.End()
+	}
+}
+
+// steerInto hands a steered prompt to the running turn. While queueMu is held no turn loop can
+// send it too; when no turn takes it, it stays first in the queue for the next turn.
+func (session *ConversationSession) steerInto(ctx context.Context, steerTurn func(context.Context, acp.PromptInput) (bool, error), item queuedPrompt) {
+	session.writes.RLock()
+	injected, err := steerTurn(ctx, item.Input)
+	session.writes.RUnlock()
+	if err != nil {
+		_, event := obs.Start(ctx, "acp.turn", "steer")
+		event.Set("session_id", session.sessionID)
+		event.Fail(err)
+		event.End()
+		session.log.Append("notice", session.clock().UnixMilli(), mustRawJSON(map[string]string{
+			"sessionUpdate": "notice", "severity": "warning", "title": "The message goes in when this turn ends", "description": err.Error(),
+		}))
+		return
+	}
+	if injected {
+		session.mu.Lock()
+		session.queue = slices.DeleteFunc(session.queue, func(queued queuedPrompt) bool { return queued.ID == item.ID })
+		session.mu.Unlock()
 	}
 }
 
@@ -385,6 +420,67 @@ func (session *ConversationSession) SteerQueued(ctx context.Context, id string) 
 	return nil
 }
 
+// deliverDuringTurn hands queued prompts to an agent that takes them in while its turn runs
+// (QueuesPrompts): agent messages at once, and the next user prompt when a model cycle ends, so
+// neither waits for a long turn such as a native /goal. User prompts stay editable until then.
+// Other agents get both from runTurns when the turn ends.
+func (session *ConversationSession) deliverDuringTurn(cycleEnd bool) {
+	session.queueMu.Lock()
+	defer session.queueMu.Unlock()
+	session.deliverDuringTurnLocked(cycleEnd)
+}
+
+// deliverDuringTurnLocked is deliverDuringTurn with queueMu held.
+func (session *ConversationSession) deliverDuringTurnLocked(cycleEnd bool) {
+	session.mu.Lock()
+	// An open permission request does not hold them: the agent queues them behind its answer.
+	if !session.queuesPrompts || session.delivering == 0 || session.closedErr() != nil {
+		session.mu.Unlock()
+		return
+	}
+	var send []queuedPrompt
+	session.queue = slices.DeleteFunc(session.queue, func(item queuedPrompt) bool {
+		take := !item.Steer && (item.Input.From != nil || cycleEnd)
+		if take {
+			cycleEnd = cycleEnd && item.Input.From != nil // one user prompt per cycle
+			send = append(send, item)
+		}
+		return take
+	})
+	broker := session.broker
+	session.delivering += len(send)
+	session.mu.Unlock()
+	for _, item := range send {
+		sent, answered := make(chan struct{}), make(chan struct{})
+		ctx := acp.WithAccepted(context.Background(), sync.OnceFunc(func() { close(sent) }))
+		obs.Go("acp.deliver", func() {
+			defer close(answered)
+			session.writes.RLock()
+			defer session.writes.RUnlock()
+			if err := session.deliver(ctx, broker, item.Input); err != nil {
+				select {
+				case <-sent:
+				default:
+					session.dropUnsent(item.ID, err)
+				}
+			}
+		})
+		// The next one waits until this one is logged and on its way, so the agent gets them in order.
+		select {
+		case <-sent:
+		case <-answered:
+		}
+	}
+}
+
+// dropUnsent records a queued prompt the agent never received, so it does not vanish unexplained.
+func (session *ConversationSession) dropUnsent(id string, err error) {
+	session.log.Append("notice", session.clock().UnixMilli(), mustRawJSON(map[string]string{
+		"sessionUpdate": "notice", "severity": "error", "title": "The agent could not run this prompt", "description": err.Error(),
+	}))
+	session.logDequeued(id, "failed")
+}
+
 func (session *ConversationSession) logDequeued(id, reason string) {
 	session.log.Append("dequeued_prompt", session.clock().UnixMilli(), mustRawJSON(map[string]string{"queueId": id, "reason": reason}))
 }
@@ -399,20 +495,18 @@ func (session *ConversationSession) runTurns(ctx context.Context, input *acp.Pro
 			}
 			input = &next
 		}
-		turnCtx, accepted := ctx, false
-		if first != nil {
-			// The HTTP request waits only until the prompt is logged; later failures land in the event log.
-			report := first
-			turnCtx = acp.WithAccepted(ctx, func() {
-				if !accepted {
-					accepted = true
-					report <- nil
-				}
-			})
-		}
+		accepted, report := false, first
+		// The HTTP request waits only until the prompt is logged; later failures land in the event log.
+		turnCtx := acp.WithAccepted(ctx, func() {
+			if !accepted && report != nil {
+				report <- nil
+			}
+			accepted = true
+		})
 		err := session.Prompt(turnCtx, *input)
-		if err != nil && input.QueueID != "" {
-			session.logDequeued(input.QueueID, "failed")
+		session.awaitDelivered()
+		if err != nil && !accepted && input.QueueID != "" {
+			session.dropUnsent(input.QueueID, err)
 		}
 		if first != nil {
 			if !accepted {
@@ -446,9 +540,6 @@ func (session *ConversationSession) nextPrompt() (acp.PromptInput, bool) {
 	item := session.queue[0]
 	session.queue = session.queue[1:]
 	session.mu.Unlock()
-	if item.Input.QueueID == "" {
-		session.logDequeued(item.ID, "sent")
-	}
 	return item.Input, true
 }
 

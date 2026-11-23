@@ -32,10 +32,12 @@ export function useConversationStream(machine: string, sessionId: string, enable
     const onTruncated = () => {
       queryClient.setQueryData<ConversationPage>(key, (current) => current && !current.truncated ? { ...current, truncated: true } : current)
     }
+    // The stream skipped entries the worker could no longer send: reload the tail instead of showing a hole.
+    const onGap = () => void queryClient.refetchQueries({ queryKey: key, exact: true })
     if (subscribe && !legacyStream) {
       let untrack: (() => void) | undefined
       const unsubscribe = subscribe({
-        machine, sessionId, onEntry, onTruncated,
+        machine, sessionId, onEntry, onTruncated, onGap,
         onConnection: (connected) => {
           if (connected) {
             if (!untrack) untrack = trackStreamingQuery(key)
@@ -90,6 +92,7 @@ export function useConversationStream(machine: string, sessionId: string, enable
       }
       source.onmessage = (event) => onEntry(event.data)
       source.addEventListener("truncated", onTruncated)
+      source.addEventListener("gap", onGap)
     }
     document.addEventListener("visibilitychange", syncVisibility)
     syncVisibility()

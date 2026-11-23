@@ -134,4 +134,16 @@ describe("nestHelpers", () => {
     expect(nested.map((entry) => `${entry.session.id}${entry.nested ? "+" : ""}`)).toEqual(["x", "p", "h+", "g+", "o"])
     expect(sessionDetail(helper)).toContain("started by Claude")
   })
+
+  it("places a helper with its parent whatever its agent, folder or machine", () => {
+    const parent = session("p", laptop, "laptop", "/repo")
+    const helper = { ...session("h", "desk", "desk", "/elsewhere/worktree"), harness: "codex", parent_id: "p" }
+    for (const mode of ["machine", "project"] as const) {
+      const groups = groupSessions([helper, parent], mode)
+      expect(groups).toHaveLength(1)
+      const heads = groups[0]!.subheads
+      expect(heads).toHaveLength(1)
+      expect(nestHelpers(heads[0]!.sessions).map((entry) => `${entry.session.id}${entry.nested ? "+" : ""}`)).toEqual(["p", "h+"])
+    }
+  })
 })

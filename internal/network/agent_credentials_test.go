@@ -56,7 +56,7 @@ func TestAgentCredentialsShareTheNewestSignIn(t *testing.T) {
 	// peerPublish writes the row as replication would, leaving this machine's install record alone.
 	peerPublish := func(credential sharedAgentCredential) error {
 		value, _ := json.Marshal(credential)
-		_, err := g.auth.store.DB.Exec("INSERT INTO agent_credentials(key,value) VALUES ('agy/token',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", string(value))
+		_, err := g.store.DB.Exec("INSERT INTO agent_credentials(key,value) VALUES ('agy/token',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", string(value))
 		return err
 	}
 	base := time.Now().Add(-time.Hour).Truncate(time.Millisecond)

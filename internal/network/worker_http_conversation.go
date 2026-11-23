@@ -66,8 +66,8 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
-		entries, truncated := conv.Attach(since)
-		writeConversationEntries(w, r, entries, truncated)
+		entries, truncated, gap := worker.conversationSince(r.Context(), conv, since)
+		writeConversationEntries(w, r, entries, truncated || gap)
 	})
 	mux.HandleFunc("POST /conversation/prompt", worker.receivePrompt)
 	mux.HandleFunc("POST /conversation/prompt/images", worker.receivePrompt)
@@ -369,7 +369,15 @@ func (worker *WorkerHTTP) serveConversationSSE(w http.ResponseWriter, r *http.Re
 	for {
 		// Take the wake channel before reading so an append between the two is never missed.
 		changed := conv.log.Changed()
-		entries, truncated := conv.Attach(since)
+		entries, truncated, gap := worker.conversationSince(r.Context(), conv, since)
+		if gap {
+			// The reader refetches the tail rather than show a conversation with a hole in it.
+			var message sse.Message
+			message.Type = sse.Type("gap")
+			if _, err := message.WriteTo(w); err != nil {
+				return
+			}
+		}
 		for _, entry := range entries {
 			since = entry.Seq
 			if err := writeConversationSSE(w, entry); err != nil {
@@ -379,7 +387,7 @@ func (worker *WorkerHTTP) serveConversationSSE(w http.ResponseWriter, r *http.Re
 		if err := writeTruncatedSSE(w, truncated, &truncatedSent); err != nil {
 			return
 		}
-		if len(entries) > 0 || truncated {
+		if len(entries) > 0 || truncated || gap {
 			flusher.Flush()
 		}
 		select {
@@ -403,6 +411,27 @@ func (worker *WorkerHTTP) serveConversationSSE(w http.ResponseWriter, r *http.Re
 		case <-coalesce.C:
 		}
 	}
+}
+
+// conversationSince returns the entries after since. Ones the replay tail already evicted are read
+// back from state.db; gap reports that some are still missing.
+func (worker *WorkerHTTP) conversationSince(ctx context.Context, conv *ConversationSession, since int64) (entries []acp.LogEntry, truncated, gap bool) {
+	entries, truncated, gap = conv.Attach(since)
+	if !gap || worker.stateStore == nil {
+		return entries, truncated, gap
+	}
+	// What memory evicted may still be waiting for its write.
+	_ = conv.log.Flush()
+	before := conv.log.Seq() + 1
+	if len(entries) > 0 {
+		before = entries[0].Seq
+	}
+	// A page cut by its byte budget leaves the older part of the hole.
+	stored, _, cut, err := storedConversationRange(ctx, worker.stateStore.Reader, filepath.Base(worker.sessionDir), conversationRange{since: since, before: before})
+	if err != nil || len(stored) == 0 {
+		return entries, truncated, true
+	}
+	return append(stored, entries...), truncated, cut
 }
 
 var conversationHeartbeatInterval = 25 * time.Second

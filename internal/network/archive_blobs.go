@@ -101,7 +101,7 @@ func (g *Gateway) prepareArchiveBlobs(ctx context.Context, rows *sql.Rows, targe
 			if _, err := g.fetchBlob(ctx, id, sha, targetFor); err != nil {
 				return err
 			}
-			if _, err := g.auth.store.DB.ExecContext(ctx, "INSERT OR IGNORE INTO archive_blobs(session_id,sha) VALUES (?,?)", id, sha); err != nil {
+			if _, err := g.store.DB.ExecContext(ctx, "INSERT OR IGNORE INTO archive_blobs(session_id,sha) VALUES (?,?)", id, sha); err != nil {
 				return err
 			}
 		}
@@ -110,7 +110,7 @@ func (g *Gateway) prepareArchiveBlobs(ctx context.Context, rows *sql.Rows, targe
 }
 
 func (g *Gateway) prepareArchiveSession(ctx context.Context, id string, targetFor func(context.Context, string) (*url.URL, error)) error {
-	rows, err := g.auth.store.Reader.QueryContext(ctx, "SELECT session_id,body FROM conversation_events WHERE session_id=?", id)
+	rows, err := g.store.Reader.QueryContext(ctx, "SELECT session_id,body FROM conversation_events WHERE session_id=?", id)
 	if err != nil {
 		return err
 	}
@@ -120,15 +120,15 @@ func (g *Gateway) prepareArchiveSession(ctx context.Context, id string, targetFo
 func (g *Gateway) drainArchiveEdits(ctx context.Context, targetFor func(context.Context, string) (*url.URL, error)) error {
 	g.archiveMu.Lock()
 	defer g.archiveMu.Unlock()
-	local, err := g.auth.store.NodeID(ctx)
+	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return err
 	}
-	roles, err := g.auth.store.Main(ctx)
+	roles, err := g.store.Main(ctx)
 	if err != nil || roles.MainNode != local || roles.ArchiveNode != local {
 		return err
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT json_extract(a.edit,'$.session'),a.body FROM archive_edits a
+	rows, err := g.store.Reader.QueryContext(ctx, `SELECT json_extract(a.edit,'$.session'),a.body FROM archive_edits a
  JOIN sessions s ON s.id=json_extract(a.edit,'$.session') WHERE s.archived_at>0 AND a.body<>''`)
 	if err != nil {
 		return err
@@ -136,7 +136,7 @@ func (g *Gateway) drainArchiveEdits(ctx context.Context, targetFor func(context.
 	if err := g.prepareArchiveBlobs(ctx, rows, targetFor); err != nil {
 		return err
 	}
-	return g.auth.store.DrainArchiveEdits(ctx)
+	return g.store.DrainArchiveEdits(ctx)
 }
 
 // PrepareArchive verifies copied attachments, fetching missing ones through the local gateway when it is running.
@@ -197,18 +197,18 @@ func PrepareArchive(ctx context.Context, store *state.Store, home string) (resul
 func (g *Gateway) cleanupArchivedBlobs(ctx context.Context, targetFor func(context.Context, string) (*url.URL, error)) error {
 	g.archiveMu.Lock()
 	defer g.archiveMu.Unlock()
-	roles, err := g.auth.store.Main(ctx)
+	roles, err := g.store.Main(ctx)
 	if err != nil {
 		return err
 	}
-	local, err := g.auth.store.NodeID(ctx)
+	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return err
 	}
 	if roles.MainNode == "" || roles.MainNode != roles.ArchiveNode || roles.MainNode == local {
 		return nil
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT s.id,s.archived_seq FROM sessions s
+	rows, err := g.store.Reader.QueryContext(ctx, `SELECT s.id,s.archived_seq FROM sessions s
  LEFT JOIN archive_cleanup c ON c.session_id=s.id
  WHERE s.archived_at>0 AND s.archived_seq=s.last_seq AND (c.archived_seq IS NULL OR c.archived_seq<s.archived_seq)`)
 	if err != nil {
@@ -235,7 +235,7 @@ func (g *Gateway) cleanupArchivedBlobs(ctx context.Context, targetFor func(conte
 		if err != nil {
 			return err
 		}
-		refs, err := archiveSessionRefs(ctx, g.auth.store.Reader, s.id)
+		refs, err := archiveSessionRefs(ctx, g.store.Reader, s.id)
 		if err != nil {
 			return err
 		}
@@ -281,7 +281,7 @@ func (g *Gateway) cleanupArchivedBlobs(ctx context.Context, targetFor func(conte
 			}
 		}
 		committed := false
-		if err := state.Transaction(ctx, g.auth.store.DB, func(tx *sql.Tx) error {
+		if err := state.Transaction(ctx, g.store.DB, func(tx *sql.Tx) error {
 			var eligible bool
 			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions WHERE id=? AND archived_at>0 AND archived_seq=? AND last_seq=archived_seq)
  AND coalesce((SELECT value FROM mesh_settings WHERE key='main_node'),'')=?
@@ -310,7 +310,7 @@ func (g *Gateway) cleanupArchivedBlobs(ctx context.Context, targetFor func(conte
 			if err := removeArchivedBlobFiles(dir); err != nil {
 				return err
 			}
-			if _, err := g.auth.store.DB.ExecContext(ctx, `INSERT INTO archive_cleanup(session_id,archived_seq) VALUES (?,?)
+			if _, err := g.store.DB.ExecContext(ctx, `INSERT INTO archive_cleanup(session_id,archived_seq) VALUES (?,?)
  ON CONFLICT(session_id) DO UPDATE SET archived_seq=excluded.archived_seq WHERE excluded.archived_seq>archived_seq`, s.id, s.seq); err != nil {
 				return err
 			}

@@ -19,7 +19,7 @@ func TestArchiveKeepsMainAttachmentsAndVerifiesBeforePeerCleanup(t *testing.T) {
 	main, _ := identityGateway(t, t.TempDir(), nil)
 	worker, _ := identityGateway(t, t.TempDir(), nil)
 	for node, g := range map[string]*Gateway{"main": main, "worker": worker} {
-		if err := g.auth.store.BindNode(t.Context(), node); err != nil {
+		if err := g.store.BindNode(t.Context(), node); err != nil {
 			t.Fatal(err)
 		}
 		g.options.Library.Store = replicaStore(t)

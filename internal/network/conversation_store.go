@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
@@ -20,10 +20,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/state"
 	"github.com/tmaxmax/go-sse"
 )
-
-func persistConversationChanges(ctx context.Context, db *sql.DB, id string, changes acp.LogChanges) error {
-	return persistConversationChangesSince(ctx, db, id, changes, 0)
-}
 
 // persistConversationChangesSince is for a live log restored at restoredSeq: its agent process is new,
 // so a running cost total logged before then belongs to the previous process.
@@ -281,23 +277,23 @@ func newConversationLog(ctx context.Context, store *state.Store, id string, fail
 	if err := log.Restore(entries, lastSeq, truncated); err != nil {
 		return nil, err
 	}
-	var report sync.Once
+	// A failing write is retried by the log, which keeps the events in memory meanwhile; only an
+	// archived chat stops the worker. Each run of failures is recorded once.
+	var failing atomic.Bool
 	err = log.EnableSink(func(changes acp.LogChanges) error {
 		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		err := persistConversationChangesSince(writeCtx, store.DB, id, changes, lastSeq)
-		if err != nil {
-			if err == errSessionArchived {
-				fail(err)
-				return err
-			}
-			report.Do(func() {
-				_, event := obs.Start(ctx, "worker", "persist_conversation")
-				event.Set("session_id", id)
-				event.Fail(err)
-				event.End()
-				fail(err)
-			})
+		switch {
+		case err == errSessionArchived:
+			fail(err)
+		case err != nil && !failing.Swap(true):
+			_, event := obs.Start(ctx, "worker", "persist_conversation")
+			event.Set("session_id", id)
+			event.Fail(err)
+			event.End()
+		case err == nil:
+			failing.Store(false)
 		}
 		return err
 	})
@@ -306,9 +302,9 @@ func newConversationLog(ctx context.Context, store *state.Store, id string, fail
 
 func (g *Gateway) serveConversation(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	info, err := storedSession(r.Context(), g.auth.store.Reader, id)
+	info, err := storedSession(r.Context(), g.store.Reader, id)
 	if err == nil {
-		local, _ := g.auth.store.NodeID(r.Context())
+		local, _ := g.store.NodeID(r.Context())
 		g.serveStoredSessionConversation(w, r, info, local != "" && info.NodeID == local)
 		return
 	}
@@ -348,7 +344,7 @@ func (g *Gateway) writeStoredConversation(w http.ResponseWriter, r *http.Request
 	var entries []acp.LogEntry
 	var truncated bool
 	if err == nil {
-		entries, _, truncated, err = storedConversationRange(r.Context(), g.auth.store.Reader, id, conversationPage(r))
+		entries, _, truncated, err = storedConversationRange(r.Context(), g.store.Reader, id, conversationPage(r))
 	}
 	if err != nil {
 		if r.Context().Err() != nil {

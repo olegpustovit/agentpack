@@ -304,7 +304,7 @@ func TestStreamingProgressOnASessionRowIsNotASessionsChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := auth.store.DBVersion(t.Context())
-	if err := persistConversationChanges(t.Context(), auth.store.DB, "session-stream", acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "agent_message_chunk", Payload: json.RawMessage(`{}`)}}}); err != nil {
+	if err := persistConversationChangesSince(t.Context(), auth.store.DB, "session-stream", acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "agent_message_chunk", Payload: json.RawMessage(`{}`)}}}, 0); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := auth.store.DBVersion(t.Context())
@@ -325,7 +325,7 @@ func TestEventsCarriesConversationFromItsOwnResumeCursor(t *testing.T) {
 		{Seq: 1, Kind: "queued_prompt", Payload: json.RawMessage(`{}`)},
 		{Seq: 2, Kind: "queued_prompt", Payload: json.RawMessage(`{}`)},
 	}
-	if err := persistConversationChanges(t.Context(), g.store.DB, id, acp.LogChanges{Entries: entries, LastSeq: 2}); err != nil {
+	if err := persistConversationChangesSince(t.Context(), g.store.DB, id, acp.LogChanges{Entries: entries, LastSeq: 2}, 0); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(g.serveEvents))

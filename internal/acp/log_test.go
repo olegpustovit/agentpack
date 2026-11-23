@@ -3,8 +3,10 @@ package acp
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func chunk(text string) json.RawMessage {
@@ -51,7 +53,7 @@ func TestEventLogCoalescesTinyChunks(t *testing.T) {
 	if log.bytes > log.limit {
 		t.Fatalf("log bytes %d exceeded limit %d", log.bytes, log.limit)
 	}
-	all, truncated := log.ReadSince(0)
+	all, truncated, _ := log.ReadSince(0)
 	if !truncated {
 		t.Fatal("expected truncated flag after bound pressure")
 	}
@@ -177,14 +179,13 @@ func TestEventLogSinkReplacesAlreadyPersistedMergedChunks(t *testing.T) {
 	}
 }
 
-func TestEventLogSinkRetriesFailedBatchOnClose(t *testing.T) {
-	log := NewEventLog(128)
+func TestEventLogKeepsEventsThroughAFailedWrite(t *testing.T) {
+	log := NewEventLog(1 << 10)
 	failure := errors.New("sink failed")
-	calls := 0
+	failing := true
 	stored := map[int64]LogEntry{}
 	if err := log.EnableSink(func(changes LogChanges) error {
-		calls++
-		if calls == 1 {
+		if failing {
 			return failure
 		}
 		applyLogChanges(stored, changes)
@@ -192,13 +193,62 @@ func TestEventLogSinkRetriesFailedBatchOnClose(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	log.Append("tool_call_update", 1, chunk("x"))
-	log.Append("tool_call_update", 2, chunk("x"))
-	if !errors.Is(log.Close(), failure) {
-		t.Fatal("sink failure was hidden")
+	var seen []string
+	log.SetOnAppend(func(entry LogEntry) { seen = append(seen, entry.Kind) })
+	log.Append("prompt", 1, chunk("go"))
+	if !errors.Is(log.Flush(), failure) {
+		t.Fatal("flush hid the failure")
 	}
-	if len(stored) != 2 {
-		t.Fatalf("failed batch was lost: %d rows", len(stored))
+	// Later events still reach memory and subscribers while the store fails.
+	log.Append("turn_end", 2, chunk("done"))
+	if got := strings.Join(seen, ","); !strings.HasPrefix(got, "prompt") || !strings.Contains(got, "turn_end") {
+		t.Fatalf("subscribers saw %q", got)
+	}
+	if entries, _, _ := log.ReadSince(0); len(entries) < 2 {
+		t.Fatalf("memory kept %d entries", len(entries))
+	}
+	failing = false
+	if err := log.Flush(); err != nil {
+		t.Fatalf("a successful retry clears the failure: %v", err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stored[1]; !ok {
+		t.Fatal("the failed batch was lost")
+	}
+	if _, ok := stored[2]; !ok {
+		t.Fatal("an event appended during the failure was lost")
+	}
+}
+
+func TestEventLogSinkDoesNotBlockReaders(t *testing.T) {
+	log := NewEventLog(1 << 10)
+	release := make(chan struct{})
+	writing := make(chan struct{}, 1)
+	if err := log.EnableSink(func(changes LogChanges) error {
+		if len(changes.Entries) > 0 {
+			writing <- struct{}{}
+			<-release
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	log.Append("prompt", 1, chunk("go"))
+	flushed := make(chan error, 1)
+	go func() { flushed <- log.Flush() }()
+	<-writing
+	if entries, _, _ := log.ReadSince(0); len(entries) != 1 {
+		t.Fatalf("read during a write = %d entries", len(entries))
+	}
+	log.Append("turn_end", 2, chunk("done"))
+	close(release)
+	if err := <-flushed; err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -256,7 +306,7 @@ func BenchmarkEventLogReadSinceTail(b *testing.B) {
 	since := log.seq - 1
 	b.ReportAllocs()
 	for b.Loop() {
-		if entries, _ := log.ReadSince(since); len(entries) != 1 {
+		if entries, _, _ := log.ReadSince(since); len(entries) != 1 {
 			b.Fatal(len(entries))
 		}
 	}
@@ -337,5 +387,71 @@ func TestEventLogStoresMatchingDiffTextOnce(t *testing.T) {
 	reduced := string(ReduceLog(log.Snapshot()).Items[0].Data)
 	if !strings.Contains(reduced, `"newText":"new file content used by the tool"`) || !strings.Contains(reduced, `"newText":"different"`) {
 		t.Fatalf("reduced tool = %s", reduced)
+	}
+}
+
+func TestEventLogClosesWhileTheStoreKeepsFailing(t *testing.T) {
+	delay, retry := persistFlushDelay, persistRetry
+	persistFlushDelay, persistRetry = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { persistFlushDelay, persistRetry = delay, retry })
+	log := NewEventLog(512)
+	failure := errors.New("sink failed")
+	if err := log.EnableSink(func(LogChanges) error { return failure }); err != nil {
+		t.Fatal(err)
+	}
+	log.Append("prompt", 1, chunk("go"))
+	// The writer fails, appends its notice and retries; Close must not wait on it forever.
+	deadline := time.After(2 * time.Second)
+	for !slices.ContainsFunc(log.Snapshot(), func(entry LogEntry) bool { return entry.Kind == "notice" }) {
+		select {
+		case <-deadline:
+			t.Fatal("no notice about the failing store")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	for i := range 50 {
+		log.Append("agent_message_chunk", int64(i), chunk(strings.Repeat("x", 40)))
+	}
+	log.mu.RLock()
+	pending := log.persistence.bytes
+	log.mu.RUnlock()
+	if pending > 3*log.limit {
+		t.Fatalf("pending grew to %d bytes while the store was down", pending)
+	}
+	if !errors.Is(log.Close(), failure) {
+		t.Fatal("close hid the failure")
+	}
+}
+
+// Appending a streamed token to a persisted log, the hot path of every chat.
+func BenchmarkEventLogAppendPersistedChunk(b *testing.B) {
+	log := NewEventLog(1 << 20)
+	if err := log.EnableSink(func(LogChanges) error { return nil }); err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = log.Close() })
+	payload := json.RawMessage(`{"text":{"text":"token "}}`)
+	b.ReportAllocs()
+	for b.Loop() {
+		log.Append("agent_message_chunk", 1_790_000_000_000, payload)
+	}
+}
+
+func TestEntrySizeMatchesTheStoredLine(t *testing.T) {
+	for _, entry := range []LogEntry{
+		{Seq: 1, TS: 0, Kind: "prompt", Payload: json.RawMessage(`{"text":{"text":"hi"}}`)},
+		{Seq: 123456, TS: 1_790_000_000_000, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"_subagent":"c","text":{"text":"é"}}`)},
+		{Seq: -1, TS: -5, Kind: "x", Payload: json.RawMessage(`{}`)},
+	} {
+		line, err := json.Marshal(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := entrySize(entry); got != len(line)+1 {
+			t.Fatalf("entrySize(%s) = %d, want %d", line, got, len(line)+1)
+		}
+	}
+	if entrySize(LogEntry{Kind: "x", Payload: json.RawMessage(`{`)}) >= 0 {
+		t.Fatal("an invalid payload must not be retained")
 	}
 }

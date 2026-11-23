@@ -70,14 +70,14 @@ func (g *Gateway) followConversation(r *http.Request) <-chan conversationStreamF
 }
 
 func (g *Gateway) readConversationStream(ctx context.Context, id, node string, since int64, send func(conversationStreamFrame) bool) (int64, error) {
-	info, err := storedSession(ctx, g.auth.store.Reader, id)
+	info, err := storedSession(ctx, g.store.Reader, id)
 	if err == nil && (info.Transport != "acp" || !info.ArchivedAt.IsZero()) {
 		return since, errConversationStreamUnsupported
 	}
 	if err != nil && !errors.Is(err, errSessionNotFound) {
 		return since, err
 	}
-	local, err := g.auth.store.NodeID(ctx)
+	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return since, err
 	}
@@ -95,7 +95,7 @@ func (g *Gateway) readConversationStream(ctx context.Context, id, node string, s
 		record, err := workerRecord(g.options.Home, id)
 		if err != nil {
 			// A starting session can already contain prompts accepted directly by the gateway.
-			entries, _, truncated, err := storedConversationTail(ctx, g.auth.store.Reader, id, since)
+			entries, _, truncated, err := storedConversationTail(ctx, g.store.Reader, id, since)
 			if err != nil {
 				return since, errSessionUnavailable
 			}
@@ -151,8 +151,8 @@ func (g *Gateway) readConversationStream(ctx context.Context, id, node string, s
 		if err != nil {
 			return since, err
 		}
-		if entry.Type == "truncated" {
-			if !send(conversationStreamFrame{event: "conversation_truncated"}) {
+		if entry.Type == "truncated" || entry.Type == "gap" {
+			if !send(conversationStreamFrame{event: "conversation_" + entry.Type}) {
 				return since, ctx.Err()
 			}
 			continue

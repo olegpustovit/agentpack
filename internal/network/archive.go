@@ -17,7 +17,7 @@ const archiveAge = 7 * 24 * time.Hour
 
 func (g *Gateway) runArchive(ctx context.Context, interval time.Duration, now func() time.Time) {
 	if g.logs != nil {
-		node, _ := g.auth.store.NodeID(ctx)
+		node, _ := g.store.NodeID(ctx)
 		ctx = obs.WithSink(ctx, g.logs, obs.BuildMetadata(g.options.Version, node, "gateway"))
 	}
 	ticker := time.NewTicker(interval)
@@ -51,11 +51,11 @@ func (g *Gateway) wakeArchive() {
 }
 
 func (g *Gateway) archivePass(ctx context.Context, now time.Time) (count int, result error) {
-	local, err := g.auth.store.NodeID(ctx)
+	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return 0, err
 	}
-	roles, err := g.auth.store.Main(ctx)
+	roles, err := g.store.Main(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -65,7 +65,7 @@ func (g *Gateway) archivePass(ctx context.Context, now time.Time) (count int, re
 	if err := g.drainArchiveEdits(ctx, g.tailnetTarget); err != nil {
 		return 0, err
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT id FROM sessions
+	rows, err := g.store.Reader.QueryContext(ctx, `SELECT id FROM sessions
  WHERE transport='acp' AND NOT (ended_at=0 AND conversation_state IN ('working','needs_you')) AND
  ((archived_at=0 AND last_event_at>0 AND last_event_at<?) OR
  (archived_at>0 AND EXISTS(SELECT 1 FROM conversation_events WHERE session_id=sessions.id)))
@@ -87,7 +87,7 @@ func (g *Gateway) archivePass(ctx context.Context, now time.Time) (count int, re
 	}
 	if _, err := os.Lstat(filepath.Join(g.options.Home, "archive.db")); errors.Is(err, os.ErrNotExist) {
 		var archived bool
-		if err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sessions WHERE archived_at>0)").Scan(&archived); err != nil {
+		if err := g.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sessions WHERE archived_at>0)").Scan(&archived); err != nil {
 			return 0, err
 		}
 		if archived {
@@ -139,7 +139,7 @@ const archiveProgressQuery = `SELECT count(*),coalesce(max(seq),0),coalesce((
 func (g *Gateway) archiveSession(ctx context.Context, archive *sql.DB, id string, now time.Time) (bool, error) {
 	g.archiveMu.Lock()
 	defer g.archiveMu.Unlock()
-	store := g.auth.store
+	store := g.store
 	snapshot, err := store.Reader.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err

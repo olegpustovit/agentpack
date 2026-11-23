@@ -197,7 +197,7 @@ func TestHarnessClientTerminal(t *testing.T) {
 		t.Skip("PTY terminals are unix-only in this build")
 	}
 	root := t.TempDir()
-	client := NewHarnessClient(root, nil, nil, nil)
+	client := NewHarnessClient(root, nil, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	created, err := client.CreateTerminal(ctx, sdkacp.CreateTerminalRequest{Command: "sh", Args: []string{"-c", "echo hello-acp"}})

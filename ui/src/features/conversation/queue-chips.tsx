@@ -8,8 +8,8 @@ import { promptText, type QueuedPrompt } from "./model"
 import { conversationErrorMessage, conversationNeedsUpdate } from "./queries"
 
 // Queued messages live in the worker, so every viewer sees and can change the same queue.
-export function QueueChips({ queue, machine, sessionId, readOnly, steering, onSteer }: {
-  queue: QueuedPrompt[]; machine: string; sessionId: string; readOnly?: boolean; steering?: string; onSteer: (id: string) => void
+export function QueueChips({ queue, machine, sessionId, readOnly, steering, steerJoins, onSteer }: {
+  queue: QueuedPrompt[]; machine: string; sessionId: string; readOnly?: boolean; steering?: string; steerJoins?: boolean; onSteer: (id: string) => void
 }) {
   const [editing, setEditing] = useState<{ id: string; text: string }>()
   const path = (id: string): `/api/${string}` => `/api/sessions/${encodeURIComponent(sessionId)}/conversation/queue/${encodeURIComponent(id)}`
@@ -63,15 +63,15 @@ export function QueueChips({ queue, machine, sessionId, readOnly, steering, onSt
               </form>
             ) : (
               <span className="min-w-0 flex-1 truncate" title={text}>
-                <span className="text-(--fg3)">{isSteering ? "Steering next: " : "Queued: "}</span>
+                <span className="text-(--fg3)">{item.delivered ? "Delivered: " : isSteering ? "Steering next: " : "Queued: "}</span>
                 {text || (images ? `${images} ${images === 1 ? "image" : "images"}` : "")}
                 {text && images > 0 && <span className="text-(--fg3)"> · {images} {images === 1 ? "image" : "images"}</span>}
               </span>
             )}
-            {!readOnly && !isEditing && (
+            {!readOnly && !isEditing && !item.delivered && (
               <>
                 {!isSteering && (
-                  <Button type="button" size="sm" variant="ghost" title="Interrupt the agent and send this now" disabled={change.isPending || steering !== undefined} onClick={() => onSteer(item.queueId)}>
+                  <Button type="button" size="sm" variant="ghost" title={steerJoins ? "Send this into the agent's current turn now" : "Interrupt the agent and send this now"} disabled={change.isPending || steering !== undefined} onClick={() => onSteer(item.queueId)}>
                     <Send aria-hidden /> Steer now
                   </Button>
                 )}

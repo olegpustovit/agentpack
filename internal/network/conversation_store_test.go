@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -67,7 +68,7 @@ func TestConversationStoreMergeAndResumeDoNotReuseSequence(t *testing.T) {
 	log.Append("agent_message_chunk", 1, payload)
 	log.Append("agent_message_chunk", 2, payload)
 	if err := log.EnableSink(func(changes acp.LogChanges) error {
-		return persistConversationChanges(t.Context(), store.DB, id, changes)
+		return persistConversationChangesSince(t.Context(), store.DB, id, changes, 0)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +96,7 @@ func TestConversationStoreMergeAndResumeDoNotReuseSequence(t *testing.T) {
 	}
 }
 
-func TestConversationStoreFailureCancelsWorkerAndRedactsDiagnostics(t *testing.T) {
+func TestConversationStoreFailureKeepsWorkerAndRedactsDiagnostics(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-failed"
 	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
@@ -113,8 +114,8 @@ func TestConversationStoreFailureCancelsWorkerAndRedactsDiagnostics(t *testing.T
 		t.Fatal(err)
 	}
 	log.Append("prompt", 1, json.RawMessage(`{"text":"SENTINEL-PRIVATE-CHAT"}`))
-	if log.Close() == nil || context.Cause(ctx) == nil || len(queue.Events) != 1 {
-		t.Fatalf("write failure was hidden: cause=%v events=%d", context.Cause(ctx), len(queue.Events))
+	if log.Close() == nil || context.Cause(ctx) != nil || len(queue.Events) != 1 {
+		t.Fatalf("write failure hidden or fatal: cause=%v events=%d", context.Cause(ctx), len(queue.Events))
 	}
 	event := <-queue.Events
 	data, err := json.Marshal(event)
@@ -127,10 +128,10 @@ func TestStoppedConversationMatchesLiveHistoryAndSince(t *testing.T) {
 	home := t.TempDir()
 	g, origin := identityGateway(t, home, nil)
 	id := "session-history"
-	if err := upsertSession(t.Context(), g.auth.store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
-	log, err := newConversationLog(t.Context(), g.auth.store, id, func(err error) { t.Error(err) })
+	log, err := newConversationLog(t.Context(), g.store, id, func(err error) { t.Error(err) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +207,7 @@ func TestConversationStoreTailIsBoundedByUTF8Bytes(t *testing.T) {
 	for seq := int64(1); seq <= 8; seq++ {
 		changes.Entries = append(changes.Entries, acp.LogEntry{Seq: seq, Kind: "tool_call_update", Payload: payload})
 	}
-	if err := persistConversationChanges(t.Context(), store.DB, id, changes); err != nil {
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, changes, 0); err != nil {
 		t.Fatal(err)
 	}
 	entries, lastSeq, truncated, err := storedConversationTail(t.Context(), store.Reader, id, 0)
@@ -231,11 +232,11 @@ func TestConversationStoreRejectedBatchRollsBackRowsAndProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "prompt", Payload: json.RawMessage(`{}`)}}}
-	if err := persistConversationChanges(t.Context(), store.DB, id, first); err != nil {
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, first, 0); err != nil {
 		t.Fatal(err)
 	}
 	bad := acp.LogChanges{LastSeq: 2, Removed: []int64{1}, Entries: []acp.LogEntry{{Seq: 2, Kind: "prompt", Payload: json.RawMessage(`invalid`)}}}
-	if err := persistConversationChanges(t.Context(), store.DB, id, bad); err == nil {
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, bad, 0); err == nil {
 		t.Fatal("invalid batch accepted")
 	}
 	entries, lastSeq, _, err := storedConversationTail(t.Context(), store.Reader, id, 0)
@@ -289,9 +290,10 @@ func TestConversationStoreTwoWritersAndSessionReader(t *testing.T) {
 	if err := <-readerDone; err != nil {
 		t.Fatal(err)
 	}
-	var count int
-	if err := first.Reader.QueryRow("SELECT count(*) FROM conversation_events").Scan(&count); err != nil || count != 10000 {
-		t.Fatalf("concurrent events=%d err=%v", count, err)
+	// Streamed chunks are stored joined into a few rows; every character must be there once.
+	var count, text int
+	if err := first.Reader.QueryRow("SELECT count(*),sum(length(json_extract(body,'$.payload.text.text'))) FROM conversation_events").Scan(&count, &text); err != nil || text != 10000 || count > 100 {
+		t.Fatalf("concurrent rows=%d text=%d err=%v", count, text, err)
 	}
 }
 
@@ -335,7 +337,7 @@ func TestConversationStoreNativeLoadDoesNotDuplicateHistory(t *testing.T) {
 	defer clientOutput.Close()
 	defer agentInput.Close()
 	defer agentOutput.Close()
-	client := acp.NewHarnessClient(t.TempDir(), nil, log, nil)
+	client := acp.NewHarnessClient(t.TempDir(), log, nil)
 	connection := client.NewClientSideConnection(clientOutput, clientInput)
 	agent := &historyLoadAgent{authReplayAgent: &authReplayAgent{ReplayAgent: acptest.NewReplayAgent(nil), agentCapabilities: sdkacp.AgentCapabilities{LoadSession: true}}}
 	agent.conn = sdkacp.NewAgentSideConnection(agent, agentOutput, agentInput)
@@ -366,7 +368,7 @@ func TestConversationStoreRestartAcceptsPromptAfterOldExit(t *testing.T) {
 	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp", State: TerminalState{Running: true, ExitCode: -1}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := persistConversationChanges(t.Context(), store.DB, id, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "agent_exit", Payload: json.RawMessage(`{}`)}}}); err != nil {
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "agent_exit", Payload: json.RawMessage(`{}`)}}}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if info, err := storedSession(t.Context(), store.Reader, id); err != nil || info.State.Running {
@@ -444,7 +446,7 @@ func TestConversationPagesReachTheFirstEventWithoutTheWorker(t *testing.T) {
 	home := t.TempDir()
 	g, origin := identityGateway(t, home, nil)
 	id := "session-long"
-	if err := upsertSession(t.Context(), g.auth.store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+	if err := upsertSession(t.Context(), g.store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	payload, err := json.Marshal(map[string]string{"text": strings.Repeat("x", 200<<10)})
@@ -456,7 +458,7 @@ func TestConversationPagesReachTheFirstEventWithoutTheWorker(t *testing.T) {
 	for seq := int64(1); seq <= total; seq++ {
 		changes.Entries = append(changes.Entries, acp.LogEntry{Seq: seq, Kind: "agent_message_chunk", Payload: payload})
 	}
-	if err := persistConversationChanges(t.Context(), g.auth.store.DB, id, changes); err != nil {
+	if err := persistConversationChangesSince(t.Context(), g.store.DB, id, changes, 0); err != nil {
 		t.Fatal(err)
 	}
 	// A running worker that cannot serve history proves older pages come from the store.
@@ -485,7 +487,7 @@ func TestConversationPagesReachTheFirstEventWithoutTheWorker(t *testing.T) {
 		}
 		return entries, w.Header().Get("X-Agentpack-Truncated") == "true"
 	}
-	tail, _, truncated, err := storedConversationTail(t.Context(), g.auth.store.Reader, id, 0)
+	tail, _, truncated, err := storedConversationTail(t.Context(), g.store.Reader, id, 0)
 	if err != nil || !truncated || tail[0].Seq == 1 {
 		t.Fatalf("tail should stop short of the first event: first=%d truncated=%t err=%v", tail[0].Seq, truncated, err)
 	}
@@ -533,5 +535,38 @@ func TestBypassingPermissionsFollowsTheAgentMode(t *testing.T) {
 	log.Append("current_mode_update", 3, json.RawMessage(`{"currentModeId":"agent-full-access"}`))
 	if !session.BypassingPermissions() {
 		t.Fatal("Codex full access must bypass")
+	}
+}
+
+// A reader whose position the replay tail already evicted gets the missing entries from state.db.
+func TestConversationReaderBackfillsEvictedEntries(t *testing.T) {
+	store := testSessionStore(t, t.TempDir())
+	id := "session-gap"
+	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+		t.Fatal(err)
+	}
+	log := acp.NewEventLog(512)
+	if err := log.EnableSink(func(changes acp.LogChanges) error {
+		return persistConversationChangesSince(t.Context(), store.DB, id, changes, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 20 {
+		log.Append("tool_call", int64(i), mustRawJSON(map[string]string{"toolCallId": strconv.Itoa(i), "title": strings.Repeat("x", 40)}))
+	}
+	conv := NewConversationSession(log, nil)
+	if _, _, gap := conv.Attach(2); !gap {
+		t.Fatal("memory still holds entry 3; make the entries larger")
+	}
+	if _, _, gap := (&WorkerHTTP{}).conversationSince(t.Context(), conv, 2); !gap {
+		t.Fatal("without a store the hole must be reported")
+	}
+	worker := &WorkerHTTP{stateStore: store, sessionDir: filepath.Join(t.TempDir(), id)}
+	entries, _, gap := worker.conversationSince(t.Context(), conv, 2)
+	if gap || len(entries) != 18 || entries[0].Seq != 3 || entries[len(entries)-1].Seq != 20 {
+		t.Fatalf("gap=%t, %d entries from %d", gap, len(entries), entries[0].Seq)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
