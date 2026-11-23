@@ -275,6 +275,28 @@ describe("reduceLog subagents", () => {
     expect(state.needs_you).toBe(false)
   })
 
+  it("opens a Claude child with its brief, then its own text and tools", () => {
+    // Claude (AIR) never logs the Agent tool call: the brief arrives only as the announcement's description.
+    const child = reduceLog(loadJSONL("subagents-claude.jsonl")).subagents?.["a8e94770c47f3bd03"]
+    expect(child?.thread.items.map((item) => item.kind)).toEqual(["task", "agent_message_chunk", "tool", "agent_message_chunk"])
+    expect(child?.thread.items[0]?.data).toEqual({ text: { text: "Read the reducer and find where the child's brief is dropped." } })
+    expect(child?.tools).toBe(1)
+    // An RFD child already has its brief as a session message; the short description is not repeated.
+    const explore = reduceLog(loadJSONL("subagents.jsonl")).subagents?.["sub-explore"]
+    expect(explore?.thread.items.filter((item) => item.kind === "task")).toEqual([expect.objectContaining({ data: { text: { text: "Find where POST /conversation/cancel is handled." } } })])
+  })
+
+  it("briefs a flattened child from its parent tool call's prompt", () => {
+    const state = reduceLog([
+      { seq: 1, ts: 1, kind: "tool_call", payload: { toolCallId: "t1", title: "Task", rawInput: { description: "Find it", prompt: "Find the cancel route." } } },
+      { seq: 2, ts: 2, kind: "agent_message_chunk", payload: { _subagent: "tool:t1", text: { text: "Searching." } } },
+    ])
+    expect(state.subagents?.["tool:t1"]?.thread.items.map((item) => [item.kind, item.data])).toEqual([
+      ["task", { text: { text: "Find the cancel route." } }],
+      ["agent_message_chunk", { _subagent: "tool:t1", text: { text: "Searching." } }],
+    ])
+  })
+
   it("a pending child permission makes the chat need you", () => {
     const entries = loadJSONL("subagents.jsonl")
     const cut = entries.findIndex((entry) => entry.kind === "permission_result")
