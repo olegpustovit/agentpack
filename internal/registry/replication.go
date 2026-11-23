@@ -419,13 +419,13 @@ func (s *Store) collectTombstone(tx *sql.Tx, tombstone Tombstone) ([]string, err
 	}
 	var removed []string
 	for nameID := range nameIDs {
-		if err := removeObject(tx, nameID); err != nil {
+		if err := s.removeObject(tx, nameID); err != nil {
 			return nil, err
 		}
 		removed = append(removed, nameID)
 	}
 	for revisionID := range revisionIDs {
-		if err := removeObject(tx, revisionID); err != nil {
+		if err := s.removeObject(tx, revisionID); err != nil {
 			return nil, err
 		}
 		removed = append(removed, revisionID)
@@ -441,7 +441,7 @@ func (s *Store) collectTombstone(tx *sql.Tx, tombstone Tombstone) ([]string, err
 		if referenced {
 			continue
 		}
-		if err := removeObject(tx, packageID); err != nil {
+		if err := s.removeObject(tx, packageID); err != nil {
 			return nil, err
 		}
 		removed = append(removed, packageID)

@@ -36,7 +36,7 @@ type Store struct {
 	root    string
 	sql     *state.Store
 	ownsSQL bool
-	// memo holds validated objects by digest and replicated conflict position.
+	// memo holds one validated object per kind and digest, stamped with its conflict position.
 	memo       sync.Map
 	stamps     stampCache
 	indexCache indexCache
