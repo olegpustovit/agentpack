@@ -113,21 +113,6 @@ func ReadSessionBlob(sessionDir, sha string) ([]byte, error) {
 	return data, nil
 }
 
-func proxySessionBlob(w http.ResponseWriter, response *http.Response) {
-	data, err := io.ReadAll(io.LimitReader(response.Body, MaxBlobBytes+1))
-	if err != nil || len(data) > MaxBlobBytes {
-		http.Error(w, "blob response unavailable", http.StatusBadGateway)
-		return
-	}
-	for _, name := range []string{"Content-Type", "Content-Disposition", "Content-Security-Policy", "X-Content-Type-Options"} {
-		if value := response.Header.Get(name); value != "" {
-			w.Header().Set(name, value)
-		}
-	}
-	w.WriteHeader(response.StatusCode)
-	_, _ = w.Write(data)
-}
-
 func blobQuotaExceeded(usedBytes int64, files int, incomingBytes int64) bool {
 	return files >= maxSessionBlobFiles || usedBytes+incomingBytes > MaxSessionBlobBytes
 }

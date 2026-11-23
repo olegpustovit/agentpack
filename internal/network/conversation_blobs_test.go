@@ -60,43 +60,6 @@ func TestStoreSessionBlobRejectsSVG(t *testing.T) {
 		t.Fatal("expected rejection")
 	}
 }
-func TestProxySessionBlobPreservesSafeHeadersAndCapsBody(t *testing.T) {
-	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
-	headers := make(http.Header)
-	headers.Set("Content-Type", "image/png")
-	headers.Set("Content-Disposition", "inline")
-	headers.Set("Content-Security-Policy", "sandbox")
-	headers.Set("X-Content-Type-Options", "nosniff")
-	recorder := httptest.NewRecorder()
-	proxySessionBlob(recorder, &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     headers,
-		Body:       io.NopCloser(bytes.NewReader(png)),
-	})
-	if recorder.Code != http.StatusOK || !bytes.Equal(recorder.Body.Bytes(), png) {
-		t.Fatalf("response = %d %x", recorder.Code, recorder.Body.Bytes())
-	}
-	for name, want := range map[string]string{
-		"Content-Type":            "image/png",
-		"Content-Disposition":     "inline",
-		"Content-Security-Policy": "sandbox",
-		"X-Content-Type-Options":  "nosniff",
-	} {
-		if got := recorder.Header().Get(name); got != want {
-			t.Errorf("%s = %q, want %q", name, got, want)
-		}
-	}
-
-	oversized := httptest.NewRecorder()
-	proxySessionBlob(oversized, &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", MaxBlobBytes+1))),
-	})
-	if oversized.Code != http.StatusBadGateway {
-		t.Fatalf("oversized response status = %d, want 502", oversized.Code)
-	}
-}
 func TestBlobQuotaLimitsBytesAndFileCount(t *testing.T) {
 	if blobQuotaExceeded(MaxSessionBlobBytes-1, 1, 1) {
 		t.Fatal("last byte within quota was rejected")
