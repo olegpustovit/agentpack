@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
@@ -281,23 +281,23 @@ func newConversationLog(ctx context.Context, store *state.Store, id string, fail
 	if err := log.Restore(entries, lastSeq, truncated); err != nil {
 		return nil, err
 	}
-	var report sync.Once
+	// A failing write is retried by the log, which keeps the events in memory meanwhile; only an
+	// archived chat stops the worker. Each run of failures is recorded once.
+	var failing atomic.Bool
 	err = log.EnableSink(func(changes acp.LogChanges) error {
 		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		err := persistConversationChangesSince(writeCtx, store.DB, id, changes, lastSeq)
-		if err != nil {
-			if err == errSessionArchived {
-				fail(err)
-				return err
-			}
-			report.Do(func() {
-				_, event := obs.Start(ctx, "worker", "persist_conversation")
-				event.Set("session_id", id)
-				event.Fail(err)
-				event.End()
-				fail(err)
-			})
+		switch {
+		case err == errSessionArchived:
+			fail(err)
+		case err != nil && !failing.Swap(true):
+			_, event := obs.Start(ctx, "worker", "persist_conversation")
+			event.Set("session_id", id)
+			event.Fail(err)
+			event.End()
+		case err == nil:
+			failing.Store(false)
 		}
 		return err
 	})

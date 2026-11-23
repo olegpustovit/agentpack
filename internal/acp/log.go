@@ -40,15 +40,19 @@ type LogChanges struct {
 	Truncated bool
 }
 
+// eventLogPersistence hands batches to the sink. pending and removed are guarded by the log's mu;
+// writeMu makes one writer at a time, and the sink runs outside mu so readers never wait on IO.
 type eventLogPersistence struct {
 	sink             func(LogChanges) error
 	stop, done       chan struct{}
+	writeMu          sync.Mutex
 	pending          map[int64]LogEntry
 	removed          map[int64]struct{}
 	bytes            int
+	sentSeq          int64 // newest sequence handed to the sink, written or not
 	flushedSeq       int64
 	flushedTruncated bool
-	err              error
+	err              error // the last write's failure; cleared by the next success
 }
 
 func NewEventLog(limitBytes int) *EventLog {
@@ -77,13 +81,8 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 		log.mu.Unlock()
 		return entry
 	}
+	// A failing store never drops events: they stay in memory and pending until a write succeeds.
 	persistence := log.persistence
-	if persistence != nil && persistence.err != nil {
-		log.truncated = true
-		log.signal()
-		log.mu.Unlock()
-		return entry
-	}
 	log.entries = append(log.entries, entry)
 	log.bytes += size
 	if persistence != nil {
@@ -92,14 +91,19 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 	for log.bytes > log.limit && len(log.entries) > 0 {
 		log.coalesceDropOldest()
 	}
-	if persistence != nil && persistence.bytes >= log.limit {
-		// Apply backpressure before a pending batch can grow beyond the memory budget.
-		log.flushChanges(persistence)
+	// Backpressure keeps a pending batch within the memory budget while the store keeps up.
+	pressure := persistence != nil && persistence.bytes >= log.limit && persistence.err == nil
+	if persistence != nil && persistence.bytes >= log.limit && persistence.err != nil {
+		// While the store is down, events memory has evicted are given up, so pending stays bounded.
+		persistence.dropBefore(log.entries[0].Seq)
 	}
 	log.signal()
 	onAppend := log.onAppend
 	log.mu.Unlock()
 
+	if pressure {
+		_ = log.flushChanges(persistence)
+	}
 	if onAppend != nil {
 		onAppend(entry)
 	}
@@ -219,8 +223,8 @@ func (log *EventLog) SetOnAppend(onAppend func(LogEntry)) []LogEntry {
 	return entries
 }
 
-// EnableSink calls sink serially under the log lock; sink must not call log methods.
-// Failed writes remain pending for retry, and Close reports the first failure.
+// EnableSink calls sink serially from one writer at a time; sink must not call log methods.
+// Failed writes remain pending and are retried with backoff; Close reports a failure that remains.
 func (log *EventLog) EnableSink(sink func(LogChanges) error) error {
 	if sink == nil {
 		return errors.New("event log sink is required")
@@ -236,80 +240,113 @@ func (log *EventLog) EnableSink(sink func(LogChanges) error) error {
 		sink: sink, stop: make(chan struct{}), done: make(chan struct{}),
 		pending: map[int64]LogEntry{}, removed: map[int64]struct{}{},
 	}
-	log.persistence = persistence
 	for _, entry := range log.entries {
 		persistence.put(entry)
 	}
-	log.flushChanges(persistence)
-	if persistence.err != nil {
-		log.persistence = nil
-		return persistence.err
+	log.mu.Unlock()
+	err := log.flushChanges(persistence)
+	log.mu.Lock()
+	if err != nil {
+		return err
 	}
+	log.persistence = persistence
 	go log.persistLoop(persistence)
 	return nil
 }
 
+// Close stops later appends, then writes what is pending. It does not hold notifyMu while the
+// writer stops, because the writer appends its own notice.
 func (log *EventLog) Close() error {
 	log.notifyMu.Lock()
-	defer log.notifyMu.Unlock()
 	log.mu.Lock()
 	persistence := log.persistence
+	if persistence != nil && !log.closed {
+		log.closed = true
+	} else {
+		persistence = nil
+	}
 	log.mu.Unlock()
+	log.notifyMu.Unlock()
 	if persistence == nil {
 		return nil
 	}
 	close(persistence.stop)
 	<-persistence.done
+	err := log.flushChanges(persistence)
 	log.mu.Lock()
-	defer log.mu.Unlock()
 	log.persistence = nil
-	log.closed = true
-	return persistence.err
+	log.mu.Unlock()
+	return err
 }
 
 // Flush makes a turn boundary durable before its acknowledgement or idle state is visible.
 func (log *EventLog) Flush() error {
 	log.mu.Lock()
-	defer log.mu.Unlock()
-	if log.closed {
+	closed, persistence := log.closed, log.persistence
+	log.mu.Unlock()
+	if closed {
 		return errors.New("event log closed")
 	}
-	if log.persistence == nil {
+	if persistence == nil {
 		return nil
 	}
-	log.flushChanges(log.persistence)
-	return log.persistence.err
+	return log.flushChanges(persistence)
 }
 
 // persistFlushDelay batches a burst of appends into one write transaction.
-const persistFlushDelay = 250 * time.Millisecond
+var persistFlushDelay = 250 * time.Millisecond
+
+// persistRetry is the first wait after a failed write; it doubles up to persistRetryMax.
+var persistRetry, persistRetryMax = time.Second, 30 * time.Second
 
 // persistLoop sleeps until an append, then flushes after persistFlushDelay; an idle log never wakes it.
+// A failed write is retried with backoff, and each run of failures leaves one notice in the chat.
 func (log *EventLog) persistLoop(persistence *eventLogPersistence) {
 	defer close(persistence.done)
-	flush := func() {
-		log.mu.Lock()
-		log.flushChanges(persistence)
-		log.mu.Unlock()
-	}
 	delay := time.NewTimer(persistFlushDelay)
 	delay.Stop()
+	wait := func(d time.Duration) bool {
+		delay.Reset(d)
+		select {
+		case <-delay.C:
+			return true
+		case <-persistence.stop:
+			delay.Stop()
+			return false
+		}
+	}
+	retry, failing := persistRetry, false
 	for {
 		// Taken before flushing, so an append that races the flush still wakes the next wait.
 		changed := log.Changed()
-		flush()
+		if err := log.flushChanges(persistence); err != nil {
+			if !failing {
+				failing = true
+				log.Append("notice", time.Now().UnixMilli(), json.RawMessage(`{"sessionUpdate":"notice","severity":"warning","title":"Chat history is not being saved","description":"agentpack keeps the conversation in memory and retries."}`))
+			}
+			if !wait(retry) {
+				return
+			}
+			retry = min(retry*2, persistRetryMax)
+			continue
+		}
+		retry, failing = persistRetry, false
 		select {
 		case <-changed:
 		case <-persistence.stop:
-			flush()
 			return
 		}
-		delay.Reset(persistFlushDelay)
-		select {
-		case <-delay.C:
-		case <-persistence.stop:
-			flush()
+		if !wait(persistFlushDelay) {
 			return
+		}
+	}
+}
+
+func (p *eventLogPersistence) dropBefore(seq int64) {
+	for pending, entry := range p.pending {
+		if pending < seq {
+			delete(p.pending, pending)
+			p.bytes -= entrySize(entry)
 		}
 	}
 }
@@ -327,7 +364,7 @@ func (p *eventLogPersistence) absorb(seq int64) {
 		delete(p.pending, seq)
 		p.bytes -= entrySize(old)
 	}
-	if seq <= p.flushedSeq {
+	if seq <= p.sentSeq {
 		if _, ok := p.removed[seq]; !ok {
 			p.removed[seq] = struct{}{}
 			p.bytes += 8
@@ -335,10 +372,15 @@ func (p *eventLogPersistence) absorb(seq int64) {
 	}
 }
 
-// flushChanges requires log.mu. Keeping the lock applies backpressure during slow writes.
-func (log *EventLog) flushChanges(p *eventLogPersistence) {
+// flushChanges writes what is pending. The caller must not hold log.mu: the batch is taken out
+// under it and written outside it, so appends and readers go on during a slow write.
+func (log *EventLog) flushChanges(p *eventLogPersistence) error {
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	log.mu.Lock()
 	if len(p.pending) == 0 && len(p.removed) == 0 && p.flushedSeq == log.seq && p.flushedTruncated == log.truncated {
-		return
+		log.mu.Unlock()
+		return nil
 	}
 	changes := LogChanges{LastSeq: log.seq, Truncated: log.truncated}
 	for _, entry := range p.pending {
@@ -349,16 +391,34 @@ func (log *EventLog) flushChanges(p *eventLogPersistence) {
 		changes.Removed = append(changes.Removed, seq)
 	}
 	slices.Sort(changes.Removed)
-	if err := p.sink(changes); err != nil {
-		if p.err == nil {
-			p.err = err
-		}
-		return
+	pending, removed := p.pending, p.removed
+	p.pending, p.removed, p.bytes, p.sentSeq = map[int64]LogEntry{}, map[int64]struct{}{}, 0, log.seq
+	log.mu.Unlock()
+
+	err := p.sink(changes)
+
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	p.err = err
+	if err == nil {
+		p.flushedSeq, p.flushedTruncated = changes.LastSeq, changes.Truncated
+		return nil
 	}
-	clear(p.pending)
-	clear(p.removed)
-	p.bytes, p.flushedSeq = 0, log.seq
-	p.flushedTruncated = log.truncated
+	// Put the batch back under anything newer that arrived during the write.
+	for seq, entry := range pending {
+		if _, newer := p.pending[seq]; !newer {
+			if _, absorbed := p.removed[seq]; !absorbed {
+				p.put(entry)
+			}
+		}
+	}
+	for seq := range removed {
+		if _, ok := p.removed[seq]; !ok {
+			p.removed[seq] = struct{}{}
+			p.bytes += 8
+		}
+	}
+	return err
 }
 
 // Restore seeds a new log without renumbering events or notifying live subscribers.

@@ -95,7 +95,7 @@ func TestConversationStoreMergeAndResumeDoNotReuseSequence(t *testing.T) {
 	}
 }
 
-func TestConversationStoreFailureCancelsWorkerAndRedactsDiagnostics(t *testing.T) {
+func TestConversationStoreFailureKeepsWorkerAndRedactsDiagnostics(t *testing.T) {
 	store := testSessionStore(t, t.TempDir())
 	id := "session-failed"
 	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
@@ -113,8 +113,8 @@ func TestConversationStoreFailureCancelsWorkerAndRedactsDiagnostics(t *testing.T
 		t.Fatal(err)
 	}
 	log.Append("prompt", 1, json.RawMessage(`{"text":"SENTINEL-PRIVATE-CHAT"}`))
-	if log.Close() == nil || context.Cause(ctx) == nil || len(queue.Events) != 1 {
-		t.Fatalf("write failure was hidden: cause=%v events=%d", context.Cause(ctx), len(queue.Events))
+	if log.Close() == nil || context.Cause(ctx) != nil || len(queue.Events) != 1 {
+		t.Fatalf("write failure hidden or fatal: cause=%v events=%d", context.Cause(ctx), len(queue.Events))
 	}
 	event := <-queue.Events
 	data, err := json.Marshal(event)
