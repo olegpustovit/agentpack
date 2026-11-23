@@ -176,14 +176,10 @@ func TestConversationSessionFollowsAgentOptionAndModeUpdates(t *testing.T) {
 func TestConversationSessionReportsTheAgentsTitle(t *testing.T) {
 	log := acp.NewEventLog(0)
 	session := NewConversationSession(log, nil)
-	var titles []string
-	session.mu.Lock()
-	session.titleChange = func(title string) { titles = append(titles, title) }
-	session.mu.Unlock()
 	log.Append("session_info_update", 1, []byte(`{"sessionUpdate":"session_info_update","title":"  Fix the reattach offset "}`))
 	log.Append("session_info_update", 2, []byte(`{"sessionUpdate":"session_info_update","updatedAt":"2026-11-18T00:00:00Z"}`))
-	if len(titles) != 1 || titles[0] != "Fix the reattach offset" {
-		t.Fatalf("titles = %q", titles)
+	if title := session.fold.Title; title != "Fix the reattach offset" {
+		t.Fatalf("title = %q", title)
 	}
 }
 

@@ -10,6 +10,9 @@ in `crsql_begin_alter` and `crsql_commit_alter`, inside the version transaction.
 Use one replicated table per alteration file. Creating a new table uses ordinary
 SQL followed by `SELECT crsql_as_crr('<table>')` when it should replicate.
 
+acp_session_owners replicates native ACP session ownership (formerly hidden `ownership-*` rows in
+sessions); each node reads only its own bindings.
+
 Machine-local account bindings and pending joins live in local_node. Browser
 session epochs stay local; mesh_settings retains the shared revocation epoch
 even after users are deleted. Do not reset that key when reclaiming an owner.
@@ -20,6 +23,9 @@ positions. Archive pruning records original clocks before tombstones. Sync write
 archive_edits backups in one transaction before applying a page that could absorb
 a newer body. The received page and cursor commit together. Main deletes each backup only after its archive commits it. These
 independent backups may survive a rejected page and are safe to relay or retry.
+conversation_checkpoints is local: the owning worker's fold of a chat's log, written in the same
+transaction as the events and the sessions row's derived columns (conversation_state, waiting,
+subagents, goal, title). conversation_events.kind is a virtual column derived from body, so it never replicates.
 archive_blobs retains required attachment references; archive_cleanup is local. sync_quarantine is also local and records rejected
 incoming change versions without copying their values.
 

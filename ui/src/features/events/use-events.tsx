@@ -21,6 +21,8 @@ export const STATE_FAMILIES: Record<string, string[][]> = {
   issues: [["diagnostics"]],
   issue_counts: [["diagnostics"]],
   conversation_events: [],
+  // Native chat ownership is read only by resume checks on the gateway.
+  acp_session_owners: [],
   archive_blobs: [],
   archive_edits: [],
   archive_event_clocks: [],
@@ -101,6 +103,8 @@ type ConversationSubscription = {
   onTruncated: () => void
   // Entries after the last one shown were evicted before this stream sent them.
   onGap: () => void
+  // The server's fold of the chat's log (internal/network conversationDerived); older owners send none.
+  onDerived: (data: string) => void
   onConnection: (connected: boolean) => void
   onFallback: () => void
 }
@@ -175,6 +179,7 @@ export function EventsProvider({ children }: { children: ReactNode }) {
         source.addEventListener("conversation", (event: MessageEvent<string>) => chat.onEntry(event.data))
         source.addEventListener("conversation_truncated", chat.onTruncated)
         source.addEventListener("conversation_gap", chat.onGap)
+        source.addEventListener("conversation_derived", (event: MessageEvent<string>) => chat.onDerived(event.data))
         source.addEventListener("conversation_fallback", chat.onFallback)
       }
     }

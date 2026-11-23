@@ -15,7 +15,7 @@ import (
 const sessionWriteColumns = `id,last_used,folder_id,name,directory,definition_root,harness,mode,
 	transport,agent_session_id,agent_capabilities,conversation_state,state,started_at,started_by,title,worktree_of`
 
-// goal, subagents and waiting are written only by the worker (worker_record_patch.go), so upserts never clobber them.
+// goal, subagents, waiting and an ACP chat's conversation_state are written by its log's sink (storeConversationFold), so upserts never clobber them.
 // worktree_of, parent_id and tools are set on insert only: tools is the gateway's switch (POST /tools).
 const sessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at,goal,subagents,waiting,last_event_at,parent_id,tools"
 
@@ -57,7 +57,8 @@ func upsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
 		last_used=excluded.last_used,folder_id=excluded.folder_id,directory=excluded.directory,
 		definition_root=excluded.definition_root,harness=excluded.harness,mode=excluded.mode,
 		transport=excluded.transport,agent_session_id=excluded.agent_session_id,
-		agent_capabilities=excluded.agent_capabilities,conversation_state=excluded.conversation_state,
+		agent_capabilities=excluded.agent_capabilities,
+		conversation_state=CASE WHEN excluded.transport='acp' THEN sessions.conversation_state ELSE excluded.conversation_state END,
 		state=excluded.state,started_at=excluded.started_at,started_by=excluded.started_by,
 		node_id=excluded.node_id,owner_email=excluded.owner_email,ended_at=0 WHERE sessions.archived_at=0`, args...)
 	if err == nil {
@@ -164,7 +165,7 @@ func endSession(ctx context.Context, db *sql.DB, id string, terminal TerminalSta
 	}
 	// A chat that ended before its first message has nothing to keep in the list, unless it failed to start.
 	_, err = db.ExecContext(ctx, `UPDATE sessions SET hidden=1 WHERE id=? AND transport='acp' AND hidden=0 AND node_id=`+state.LocalNodeSQL+`
- AND NOT EXISTS (SELECT 1 FROM conversation_events WHERE session_id=sessions.id AND (body LIKE '%"kind":"prompt"%' OR body LIKE '%"kind":"notice"%"severity":"error"%'))`, id)
+ AND NOT EXISTS (SELECT 1 FROM conversation_events WHERE session_id=sessions.id AND (kind='prompt' OR kind='notice' AND json_extract(body,'$.payload.severity')='error'))`, id)
 	return err
 }
 

@@ -1,4 +1,5 @@
 [
+  "acp_session_owners",
   "agent_credentials",
   "agent_snapshots",
   "archive_blobs",

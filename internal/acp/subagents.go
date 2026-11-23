@@ -114,6 +114,15 @@ func payloadSubagent(payload json.RawMessage) string {
 // whether the line was consumed. It also registers announced subagents before their own updates
 // reach the SDK, so HarnessClient can stamp them.
 func AppendRawSessionUpdate(log *EventLog, line []byte) bool {
+	apply := rawSessionUpdate(line)
+	if apply != nil {
+		apply(log)
+	}
+	return apply != nil
+}
+
+// rawSessionUpdate decides whether AppendRawSessionUpdate consumes line, without logging it yet.
+func rawSessionUpdate(line []byte) func(*EventLog) {
 	var message struct {
 		Method string `json:"method"`
 		Params struct {
@@ -122,7 +131,7 @@ func AppendRawSessionUpdate(log *EventLog, line []byte) bool {
 		} `json:"params"`
 	}
 	if json.Unmarshal(line, &message) != nil || message.Method != "session/update" || len(message.Params.Update) == 0 {
-		return false
+		return nil
 	}
 	var update struct {
 		Kind         string          `json:"sessionUpdate"`
@@ -132,33 +141,62 @@ func AppendRawSessionUpdate(log *EventLog, line []byte) bool {
 		Meta         map[string]any  `json:"_meta"`
 	}
 	if json.Unmarshal(message.Params.Update, &update) != nil {
-		return false
+		return nil
 	}
 	switch update.Kind {
 	case "subagent_spawned", "subagent_state_update":
 		// AIR's draft, which Claude's adapter sends because we declare AIR async tasks.
 		child, rfd := airSubagentUpdate(message.Params.Update)
 		if child == "" {
-			return false
+			return nil
 		}
-		log.noteSubagent(child, nil)
-		log.Append("subagent_update", time.Now().UnixMilli(), stampSubagent(rfd, log.subagentSession(message.Params.SessionID)))
-		return true
+		return func(log *EventLog) {
+			log.noteSubagent(child, nil)
+			log.Append("subagent_update", time.Now().UnixMilli(), stampSubagent(rfd, log.subagentSession(message.Params.SessionID)))
+		}
 	case "subagent_update":
-		log.noteSubagent(update.SessionID, update.Capabilities)
 	case "notice", "compaction_update", "compaction_summary_chunk", "session_message", "session_message_chunk",
 		"async_task_spawned", "async_task_progress", "async_task_state_update":
 	case "tool_call", "tool_call_update":
 		// The SDK rejects the RFD's {"type":"session"} tool call content.
 		if !hasSessionContent(update.Content) {
-			return false
+			return nil
 		}
 	default:
-		return false
+		return nil
 	}
-	id := subagentID(log.subagentSession(message.Params.SessionID), update.Meta)
-	log.Append(update.Kind, time.Now().UnixMilli(), stampSubagent(message.Params.Update, id))
-	return true
+	return func(log *EventLog) {
+		if update.Kind == "subagent_update" {
+			log.noteSubagent(update.SessionID, update.Capabilities)
+		}
+		id := subagentID(log.subagentSession(message.Params.SessionID), update.Meta)
+		log.Append(update.Kind, time.Now().UnixMilli(), stampSubagent(message.Params.Update, id))
+	}
+}
+
+// logMethod carries an entry a harness adapter derived from the agent's output in wire order (AgentLogLine).
+const logMethod = "_agentpack/log"
+
+// AgentLogLine is a line for the agent's output stream that logs kind and payload when the
+// client reaches it, after every update the agent sent before it.
+func AgentLogLine(kind string, payload json.RawMessage) []byte {
+	line, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": logMethod, "params": map[string]any{"kind": kind, "payload": payload}})
+	return line
+}
+
+// agentLogLine reverses AgentLogLine.
+func agentLogLine(line []byte) func(*EventLog) {
+	var message struct {
+		Method string `json:"method"`
+		Params struct {
+			Kind    string          `json:"kind"`
+			Payload json.RawMessage `json:"payload"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(line, &message) != nil || message.Method != logMethod || message.Params.Kind == "" {
+		return nil
+	}
+	return func(log *EventLog) { log.Append(message.Params.Kind, time.Now().UnixMilli(), message.Params.Payload) }
 }
 
 // airSubagentUpdate rewrites AIR's subagent_spawned / subagent_state_update as the RFD's

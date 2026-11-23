@@ -9,7 +9,7 @@ import (
 )
 
 func TestDrainSessionUpdatesWaitsForHandlersAndHonorsCancellation(t *testing.T) {
-	gate := newNotificationGate(strings.NewReader(""))
+	gate := newNotificationGate(strings.NewReader(""), nil)
 	gate.inflight = 2
 	client := &HarnessClient{updates: gate}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)

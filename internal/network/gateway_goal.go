@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 // clearGoal asks the worker to clear the chat's goal. A worker that lost the goal (one that predates
@@ -36,6 +38,10 @@ func (g *Gateway) clearGoal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	persistSessionJSON(r.Context(), g.store.DB, id, "goal", nil, true)
+	// That worker's log has no fold to clear it (a current worker's sink owns the column).
+	if _, err := g.store.DB.ExecContext(r.Context(), "UPDATE sessions SET goal='' WHERE id=? AND archived_at=0 AND node_id="+state.LocalNodeSQL, id); err != nil {
+		fail(w, r, err)
+		return
+	}
 	writeJSON(w, map[string]bool{"accepted": true})
 }

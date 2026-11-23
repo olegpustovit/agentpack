@@ -74,9 +74,8 @@ type Gateway struct {
 
 	options        GatewayOptions
 	startingChats  sync.Map
-	starting       sync.WaitGroup       // chats launching in the background; tests wait on it
-	chatLifecycle  sync.Mutex           // serializes resume claims with settling dead chats
-	autoResumed    map[string]time.Time // chats the reaper resumed; guarded by chatLifecycle
+	starting       sync.WaitGroup // chats launching in the background; tests wait on it
+	chatLifecycle  sync.Mutex     // serializes resume claims with settling dead chats
 	store          *state.Store
 	logs           *obs.Store
 	auth           *gatewayAuth

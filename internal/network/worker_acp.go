@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -182,25 +183,12 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		return nil, nil, errors.New("harness ACP launch returned nil command")
 	}
 	workspace := launchCtx.WorkspaceRoot
-	agentOutR, agentOutW := io.Pipe()
-	clientInR, clientInW := io.Pipe()
-	cmd.Stdout = agentOutW
 	stderr := &diagnosticStderr{}
 	defer func() {
 		if event := obs.From(ctx); event != nil {
 			event.Set("stderr", stderr.Redacted())
 		}
 	}()
-	cmd.Stderr = io.MultiWriter(os.Stderr, stderr)
-	cmd.Dir = workspace
-	cmd.Env = workerAgentEnvironment(launch.Environment, cmd.Env, workspace)
-	cmd.Env = append(cmd.Env, "AGENTPACK_TRACE="+obs.ParseTraceParent(obs.TraceParent(ctx)).ID)
-
-	stdinWriter, err := cmd.StdinPipe()
-	if err != nil {
-		closeACPEventLog(log)
-		return nil, nil, errors.Join(fmt.Errorf("open ACP adapter stdin: %w", err), acpLaunch.Finished())
-	}
 	prompter := &acpPrompter{log: log, sessionDir: sessionDir, harness: launch.Session.Harness}
 	// A fresh agent on a chat with history took it over from another agent: it gets that history once.
 	if launch.Session.AgentSessionID == "" && launch.ForkSessionID == "" {
@@ -222,33 +210,19 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	client := acp.NewHarnessClient(workspace, log, broker)
 	client.AutoApprove = conv.BypassingPermissions
 	client.StoreImage = conv.storeImage
-	rewriter := &rewriteStdin{w: stdinWriter, rewrite: func(line []byte) []byte {
-		line = acp.AddSessionCapabilities(line)
-		if acpLaunch.Rewrite != nil {
-			line = acpLaunch.Rewrite(line)
-		}
-		return line
-	}}
-	stdinToAgent := io.Writer(rewriter)
-	clientConn := client.NewClientSideConnection(stdinToAgent, clientInR)
+	process, err := connectACP(ctx, launch, workspace, &acpLaunch, client, io.MultiWriter(os.Stderr, stderr))
+	if err != nil {
+		closeACPEventLog(log)
+		return nil, nil, err
+	}
+	stdinWriter, rewriter, clientConn := process.stdin, process.rewriter, process.conn
+	agentOutR, agentOutW, clientInR, adaptDone := process.agentOutR, process.agentOutW, process.clientInR, process.adapted
 	prompter.mu.Lock()
 	prompter.conn = clientConn
 	prompter.mu.Unlock()
-	adaptDone := make(chan struct{})
-	go func() {
-		defer close(adaptDone)
-		adaptAgentStdout(agentOutR, clientInW, acpLaunch.AdaptAgent, log)
-	}()
-
-	if err := cmd.Start(); err != nil {
-		_ = stdinWriter.Close()
-		_ = agentOutR.Close()
-		_ = agentOutW.Close()
-		_ = clientInR.Close()
-		_ = clientInW.Close()
-		<-adaptDone
+	if err := process.start(); err != nil {
 		closeACPEventLog(log)
-		return nil, nil, errors.Join(err, acpLaunch.Finished())
+		return nil, nil, err
 	}
 	if err := acpLaunch.Finished(); err != nil {
 		_ = stdinWriter.Close()
@@ -259,7 +233,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		appendACPAgentExit(log)
 		closeACPEventLog(log)
 		_ = clientInR.Close()
-		_ = clientInW.Close()
+		_ = process.clientInW.Close()
 		return nil, nil, err
 	}
 
@@ -371,6 +345,63 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 }
 
 // startStep records how long one session start step took, so a slow start names its cause.
+// acpProcess is an ACP adapter process wired to a client connection.
+type acpProcess struct {
+	cmd                  *exec.Cmd
+	conn                 *sdkacp.ClientSideConnection
+	stdin                io.WriteCloser
+	rewriter             *rewriteStdin
+	agentOutR, clientInR *io.PipeReader
+	agentOutW, clientInW *io.PipeWriter
+	adapted              chan struct{} // closed once the agent's stdout is forwarded to the end
+	finished             func() error  // the launch's own completion, reported with a failed start
+}
+
+// connectACP wires launch's adapter process to client: the agent's stdin through the launch's
+// rewrites (acpLaunch.Rewrite is read per line, so a later PrepareSession can replace it), its
+// stdout through adaptAgentStdout into the client connection. start runs it.
+func connectACP(ctx context.Context, launch WorkerLaunch, workspace string, acpLaunch *base.ACPLaunch, client *acp.HarnessClient, stderr io.Writer) (*acpProcess, error) {
+	cmd := acpLaunch.Cmd
+	agentOutR, agentOutW := io.Pipe()
+	clientInR, clientInW := io.Pipe()
+	cmd.Stdout, cmd.Stderr, cmd.Dir = agentOutW, stderr, workspace
+	cmd.Env = workerAgentEnvironment(launch.Environment, cmd.Env, workspace)
+	cmd.Env = append(cmd.Env, "AGENTPACK_TRACE="+obs.ParseTraceParent(obs.TraceParent(ctx)).ID)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("open ACP adapter stdin: %w", err), acpLaunch.Finished())
+	}
+	rewriter := &rewriteStdin{w: stdin, rewrite: func(line []byte) []byte {
+		line = acp.AddSessionCapabilities(line)
+		if acpLaunch.Rewrite != nil {
+			line = acpLaunch.Rewrite(line)
+		}
+		return line
+	}}
+	process := &acpProcess{cmd: cmd, stdin: stdin, rewriter: rewriter, agentOutR: agentOutR, agentOutW: agentOutW,
+		clientInR: clientInR, clientInW: clientInW, adapted: make(chan struct{}), finished: acpLaunch.Finished}
+	process.conn = client.NewClientSideConnection(rewriter, clientInR)
+	go func() {
+		defer close(process.adapted)
+		adaptAgentStdout(agentOutR, clientInW, acpLaunch.AdaptAgent, client.Log)
+	}()
+	return process, nil
+}
+
+// start runs the process; a failure closes every pipe.
+func (p *acpProcess) start() error {
+	if err := p.cmd.Start(); err != nil {
+		_ = p.stdin.Close()
+		_ = p.agentOutR.Close()
+		_ = p.agentOutW.Close()
+		_ = p.clientInR.Close()
+		_ = p.clientInW.Close()
+		<-p.adapted
+		return errors.Join(err, p.finished())
+	}
+	return nil
+}
+
 func startStep(ctx context.Context, name string) func(error) {
 	_, event := obs.Start(ctx, "worker", name)
 	return func(err error) {
@@ -727,18 +758,21 @@ func adaptAgentStdoutWithDrainTimeout(r io.ReadCloser, w io.WriteCloser, adapt f
 			return
 		}
 		if !oversized && len(line) > 0 {
-			forward := line
+			// Everything goes down the one pipe the client reads, which logs it in wire order (P3.6).
+			lines := [][]byte{line}
 			if adapt != nil {
 				result := adapt(line)
-				ts := time.Now().UnixMilli()
+				lines = lines[:0]
 				for _, kind := range result.Log {
-					log.Append(kind.Kind, ts, kind.Payload)
+					lines = append(lines, acp.AgentLogLine(kind.Kind, kind.Payload))
 				}
-				if result.Forward != nil {
-					forward = result.Forward
+				if result.Forward == nil {
+					lines = append(lines, line)
+				} else if len(result.Forward) > 0 {
+					lines = append(lines, result.Forward)
 				}
 			}
-			if len(forward) > 0 && !appendRawSessionUpdate(log, forward) {
+			for _, forward := range lines {
 				if _, err := w.Write(append(forward, '\n')); err != nil {
 					return
 				}
@@ -748,10 +782,6 @@ func adaptAgentStdoutWithDrainTimeout(r io.ReadCloser, w io.WriteCloser, adapt f
 			return
 		}
 	}
-}
-
-func appendRawSessionUpdate(log *acp.EventLog, line []byte) bool {
-	return acp.AppendRawSessionUpdate(log, line)
 }
 
 const maxACPFrameBytes = 4 << 20
@@ -879,53 +909,27 @@ func listACPAgentSessions(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		return nil, errors.New("harness ACP launch returned nil command")
 	}
 	workspace := launchCtx.WorkspaceRoot
-	stdinWriter, err := cmd.StdinPipe()
+	client := acp.NewHarnessClient(workspace, acp.NewEventLog(0), acp.NewBroker(nil, nil, nil, nil))
+	process, err := connectACP(ctx, launch, workspace, &acpLaunch, client, os.Stderr)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("open ACP adapter stdin: %w", err), acpLaunch.Finished())
+		return nil, err
 	}
-	agentOutR, agentOutW := io.Pipe()
-	clientInR, clientInW := io.Pipe()
-	cmd.Stdout = agentOutW
-	cmd.Stderr = os.Stderr
-	cmd.Dir = workspace
-	cmd.Env = workerAgentEnvironment(launch.Environment, cmd.Env, workspace)
-	cmd.Env = append(cmd.Env, "AGENTPACK_TRACE="+obs.ParseTraceParent(obs.TraceParent(ctx)).ID)
-
-	log := acp.NewEventLog(0)
-	client := acp.NewHarnessClient(workspace, log, acp.NewBroker(nil, nil, nil, nil))
-	rewriter := &rewriteStdin{w: stdinWriter, rewrite: func(line []byte) []byte {
-		line = acp.AddSessionCapabilities(line)
-		if acpLaunch.Rewrite != nil {
-			line = acpLaunch.Rewrite(line)
-		}
-		return line
-	}}
-	stdinToAgent := io.Writer(rewriter)
-	clientConn := client.NewClientSideConnection(stdinToAgent, clientInR)
-	go adaptAgentStdout(agentOutR, clientInW, acpLaunch.AdaptAgent, log)
-
-	if err := cmd.Start(); err != nil {
-		_ = stdinWriter.Close()
-		_ = agentOutR.Close()
-		_ = agentOutW.Close()
-		_ = clientInR.Close()
-		_ = clientInW.Close()
-		return nil, errors.Join(err, acpLaunch.Finished())
+	if err := process.start(); err != nil {
+		return nil, err
 	}
+	clientConn := process.conn
 	cleanup := func() {
 		if client.Terminals != nil {
 			_ = client.Terminals.Close()
 		}
-		_ = stdinWriter.Close()
-		if rewriter != nil {
-			_ = rewriter.Close()
-		}
-		_ = agentOutW.Close()
-		_ = clientInW.Close()
+		_ = process.stdin.Close()
+		_ = process.rewriter.Close()
+		_ = process.agentOutW.Close()
+		_ = process.clientInW.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		_ = agentOutR.Close()
-		_ = clientInR.Close()
+		_ = process.agentOutR.Close()
+		_ = process.clientInR.Close()
 	}
 	defer cleanup()
 	if err := acpLaunch.Finished(); err != nil {

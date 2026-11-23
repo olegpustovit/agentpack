@@ -26,7 +26,7 @@ func TestUsageReplayedEventCountsOnce(t *testing.T) {
 	}}
 	// The worker's flush retry and a restored log both send already stored events again.
 	for range 3 {
-		if err := persistConversationChangesSince(t.Context(), store.DB, id, changes, 0); err != nil {
+		if err := persistConversationChangesSince(t.Context(), store.DB, id, changes, 0, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -62,7 +62,7 @@ func TestUsageCostResetCountsTheNewTotal(t *testing.T) {
 	// 0.50 then 0.80 adds 0.30; the adapter restarts and reports 0.10, then 0.30.
 	for seq, amount := range []string{"0.5", "0.8", "0.1", "0.3"} {
 		changes := acp.LogChanges{LastSeq: int64(seq + 1), Entries: []acp.LogEntry{{Seq: int64(seq + 1), TS: 3_600_000, Kind: "usage_update", Payload: cost(amount)}}}
-		if err := persistConversationChangesSince(t.Context(), store.DB, id, changes, 0); err != nil {
+		if err := persistConversationChangesSince(t.Context(), store.DB, id, changes, 0, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -85,7 +85,7 @@ func TestUsageWithoutReportedCostStaysUnknown(t *testing.T) {
 		t.Fatal(err)
 	}
 	changes := acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, TS: 1, Kind: "turn_end", Payload: json.RawMessage(`{"usage":{"outputTokens":5}}`)}}}
-	if err := persistConversationChangesSince(t.Context(), store.DB, id, changes, 0); err != nil {
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, changes, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	var cost int64
@@ -109,7 +109,7 @@ func TestFinishedTurnsRefreshTheirAgentsLimitsOncePerGate(t *testing.T) {
 	}}
 	turn := func(seq int64) {
 		changes := acp.LogChanges{LastSeq: seq, Entries: []acp.LogEntry{{Seq: seq, TS: now.UnixMilli(), Kind: "turn_end", Payload: json.RawMessage(`{}`)}}}
-		if err := persistConversationChangesSince(t.Context(), store.DB, "chat", changes, 0); err != nil {
+		if err := persistConversationChangesSince(t.Context(), store.DB, "chat", changes, 0, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -170,11 +170,11 @@ func TestUsageCostAfterWorkerRestartCountsTheNewProcessInFull(t *testing.T) {
 	cost := func(seq int64, amount string) acp.LogChanges {
 		return acp.LogChanges{LastSeq: seq, Entries: []acp.LogEntry{{Seq: seq, TS: 3_600_000, Kind: "usage_update", Payload: json.RawMessage(`{"cost":{"amount":` + amount + `,"currency":"USD"}}`)}}}
 	}
-	if err := persistConversationChangesSince(t.Context(), store.DB, id, cost(1, "0.09"), 0); err != nil {
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, cost(1, "0.09"), 0, false); err != nil {
 		t.Fatal(err)
 	}
 	// The worker restarted after seq 1; the new agent's first total (0.40) is not a delta from 0.09.
-	if err := persistConversationChangesSince(t.Context(), store.DB, id, cost(2, "0.4"), 1); err != nil {
+	if err := persistConversationChangesSince(t.Context(), store.DB, id, cost(2, "0.4"), 1, false); err != nil {
 		t.Fatal(err)
 	}
 	var session int64

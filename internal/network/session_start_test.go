@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func TestChatStartAnswersBeforeTheAgentIsUp(t *testing.T) {
@@ -141,6 +143,23 @@ func stuckChat(t *testing.T, g *Gateway, dir, id string) {
 	if _, err := g.store.DB.Exec(`UPDATE sessions SET ended_at=1,subagents='[{"id":"a"}]' WHERE id=?`, id); err != nil {
 		t.Fatal(err)
 	}
+	appendStoredEvent(t, g, id, "prompt", mustRawJSON(map[string]any{"text": map[string]string{"text": "go"}}))
+}
+
+// appendStoredEvent logs an event as a worker that died right after would have.
+func appendStoredEvent(t *testing.T, g *Gateway, id, kind string, payload json.RawMessage) {
+	t.Helper()
+	err := state.Transaction(t.Context(), g.store.DB, func(tx *sql.Tx) error {
+		entry := acp.LogEntry{TS: time.Now().UnixMilli(), Kind: kind, Payload: payload}
+		if err := tx.QueryRow("UPDATE sessions SET last_seq=last_seq+1 WHERE id=? RETURNING last_seq", id).Scan(&entry.Seq); err != nil {
+			return err
+		}
+		_, err := tx.Exec("INSERT INTO conversation_events(session_id,seq,body) VALUES (?,?,?)", id, entry.Seq, string(mustRawJSON(entry)))
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestReaperSettlesAChatWhoseWorkerDiedAndResumesItOnce(t *testing.T) {
@@ -149,7 +168,8 @@ func TestReaperSettlesAChatWhoseWorkerDiedAndResumesItOnce(t *testing.T) {
 	var g *Gateway
 	g, _ = identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
 		launched <- info
-		// The resumed agent dies at once, like a machine that drops off again.
+		// The resumed agent takes its prompt and dies, like a machine that drops off again.
+		appendStoredEvent(t, g, info.ID, "prompt", mustRawJSON(map[string]any{"text": map[string]string{"text": autoResumePrompt}}))
 		_, err := g.store.DB.Exec(`UPDATE sessions SET ended_at=2,conversation_state='working' WHERE id=?`, info.ID)
 		return info.ID, err
 	})
@@ -174,6 +194,17 @@ func TestReaperSettlesAChatWhoseWorkerDiedAndResumesItOnce(t *testing.T) {
 	var body string
 	if err := g.store.Reader.QueryRow("SELECT group_concat(body) FROM conversation_events WHERE session_id=?", "session-dead").Scan(&body); err != nil || !strings.Contains(body, "resumes by itself") || !strings.Contains(body, "Send a message to resume") {
 		t.Fatalf("transcript %q, %v", body, err)
+	}
+	// The window is read from the log: once its auto-resume is old, a cut-off turn resumes again.
+	if cut, err := cutOffTurn(t.Context(), g.store.Reader, "session-dead", time.Now()); err != nil || cut {
+		t.Fatalf("settled chat cut off = %t, %v", cut, err)
+	}
+	appendStoredEvent(t, g, "session-dead", "prompt", mustRawJSON(map[string]any{"text": map[string]string{"text": "again"}}))
+	if cut, err := cutOffTurn(t.Context(), g.store.Reader, "session-dead", time.Now()); err != nil || cut {
+		t.Fatalf("resumed again inside the window: %t, %v", cut, err)
+	}
+	if cut, err := cutOffTurn(t.Context(), g.store.Reader, "session-dead", time.Now().Add(autoResumeWindow)); err != nil || !cut {
+		t.Fatalf("not resumed after the window: %t, %v", cut, err)
 	}
 }
 

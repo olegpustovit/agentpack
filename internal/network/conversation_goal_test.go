@@ -146,8 +146,8 @@ func TestNativeGoalUsesAgentCommandAndSnapshots(t *testing.T) {
 // session tree lists them while they run and the most recent once they finish.
 func TestSubagentSummaryTracksBackgroundAgents(t *testing.T) {
 	session, _ := newFakeAgentSession(t)
-	saved := make(chan []SubagentSummary, 32)
-	session.subagentsChange = func(list []SubagentSummary) { saved <- list }
+	// The fold is applied as each update is appended, so its summary is current after every call.
+	summary := func() []SubagentSummary { return session.fold.subagentSummaries() }
 	air := func(update string) {
 		line := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"parent","update":` + update + `}}`
 		if !acp.AppendRawSessionUpdate(session.log, []byte(line)) {
@@ -158,49 +158,25 @@ func TestSubagentSummaryTracksBackgroundAgents(t *testing.T) {
 		air(`{"sessionUpdate":"subagent_spawned","subagentSessionId":"` + id + `","name":"Worker ` + id + `","task":"t","capabilities":{}}`)
 	}
 	spawn("a")
-	if list := <-saved; len(list) != 1 || list[0].Title != "Worker a" || list[0].State != "running" {
+	if list := summary(); len(list) != 1 || list[0].Title != "Worker a" || list[0].State != "running" {
 		t.Fatalf("running = %+v", list)
 	}
 	air(`{"sessionUpdate":"subagent_state_update","subagentSessionId":"a","state":"completed"}`)
-	if list := <-saved; len(list) != 1 || list[0].State != "idle" || list[0].EndedAt == 0 {
+	if list := summary(); len(list) != 1 || list[0].State != "idle" || list[0].EndedAt == 0 {
 		t.Fatalf("a finished background agent stays in the tree: %+v", list)
 	}
 	for _, id := range []string{"b", "c", "d", "e", "f", "g"} {
 		spawn(id)
-		<-saved
 		air(`{"sessionUpdate":"subagent_state_update","subagentSessionId":"` + id + `","state":"completed"}`)
-		<-saved
 	}
 	spawn("h")
-	list := <-saved
+	list := summary()
 	if len(list) != finishedSubagentsShown+1 || list[len(list)-1].ID != "h" || slices.ContainsFunc(list, func(s SubagentSummary) bool { return s.ID == "a" }) {
 		t.Fatalf("tree = %+v; want the running one and the %d most recent finished", list, finishedSubagentsShown)
 	}
 	session.log.Append("agent_exit", 6, []byte(`{}`))
-	if list := <-saved; list != nil {
+	if list := summary(); list != nil {
 		t.Fatalf("exit kept %+v", list)
-	}
-}
-
-func TestGoalAndSubagentsPersistOnSessionRow(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
-	info := SessionInfo{ID: "session-goal", Directory: t.TempDir(), Harness: "codex", Transport: "acp"}
-	if err := upsertSession(t.Context(), store.DB, info); err != nil {
-		t.Fatal(err)
-	}
-	goal := &Goal{Objective: "ship", State: "active", Engine: "gateway", StartedAt: 1, ResumedAt: 1, UpdatedAt: 1}
-	persistSessionJSON(t.Context(), store.DB, info.ID, "goal", goal, false)
-	persistSessionJSON(t.Context(), store.DB, info.ID, "subagents", []SubagentSummary{{ID: "c", State: "running"}}, false)
-	if err := upsertSession(t.Context(), store.DB, info); err != nil { // an upsert must not clobber worker-owned columns
-		t.Fatal(err)
-	}
-	stored, err := storedSession(t.Context(), store.Reader, info.ID)
-	if err != nil || stored.Goal == nil || stored.Goal.Objective != "ship" || len(stored.Subagents) != 1 {
-		t.Fatalf("stored = %+v %v", stored, err)
-	}
-	persistSessionJSON(t.Context(), store.DB, info.ID, "goal", (*Goal)(nil), true)
-	if stored, _ = storedSession(t.Context(), store.Reader, info.ID); stored.Goal != nil {
-		t.Fatalf("cleared goal = %+v", stored.Goal)
 	}
 }
 

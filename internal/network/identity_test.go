@@ -380,7 +380,7 @@ func TestPeerACPResumeRequiresRecordedOwner(t *testing.T) {
 	}
 
 	store := testSessionStore(t, home)
-	if _, err := store.DB.Exec("UPDATE sessions SET started_by='{' WHERE folder_id=? AND id LIKE 'ownership-%'", folderID); err != nil {
+	if _, err := store.DB.Exec("UPDATE acp_session_owners SET started_by='{' WHERE folder_id=?", folderID); err != nil {
 		t.Fatal(err)
 	}
 	if got := resume("prior-1", renamedOwner).Code; got != http.StatusInternalServerError || len(started) != 1 {

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -266,34 +267,54 @@ func TestACPNeedsYouPersistsWithoutConversationReader(t *testing.T) {
 	if err := upsertSession(ctx, store.DB, info); err != nil {
 		t.Fatal(err)
 	}
-	log := acp.NewEventLog(0)
-	conversation := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
-	conversation.SetStateChange("idle", func(value string) {
-		if err := patchWorkerConversationState(ctx, store.DB, info.ID, value); err != nil {
-			t.Error(err)
-		}
-	})
+	log, err := newConversationLog(ctx, store, info.ID, func(err error) { t.Error(err) }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
 	log.Append("permission_request", 1, json.RawMessage(`{"requestId":"p1"}`))
 	got, err := storedSession(ctx, store.Reader, info.ID)
 	if err != nil || got.ConversationState != "needs_you" {
 		t.Fatalf("state without a reader=%q err=%v", got.ConversationState, err)
 	}
 }
-func TestConversationStateWritesOnlyOnLabelTransitions(t *testing.T) {
+
+// A state change is stored with the events behind it before anything acts on it; streamed
+// chunks in between are left to the batching writer.
+func TestConversationStateIsStoredOnTransitions(t *testing.T) {
 	log := acp.NewEventLog(0)
-	conversation := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
-	var writes []string
-	conversation.SetStateChange("idle", func(state string) { writes = append(writes, state) })
+	NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
+	var mu sync.Mutex
+	var states []string
+	if err := log.EnableSink(func(changes acp.LogChanges) error {
+		var fold conversationFold
+		if err := json.Unmarshal(changes.Checkpoint, &fold); err != nil {
+			return err
+		}
+		mu.Lock()
+		states = append(states, fold.derived().State)
+		mu.Unlock()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	last := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return states[len(states)-1]
+	}
 	log.Append("prompt", 1, json.RawMessage(`{}`))
+	if last() != "working" {
+		t.Fatalf("stored states after prompt = %v", states)
+	}
 	for i := range 1_000 {
 		log.Append("agent_message_chunk", int64(i+2), json.RawMessage(`{"text":{"text":"x"}}`))
 	}
-	if len(writes) != 1 || writes[0] != "working" {
-		t.Fatalf("state writes across streamed chunks = %v", writes)
-	}
 	log.Append("turn_end", 2_000, json.RawMessage(`{}`))
-	if len(writes) != 2 || writes[1] != "idle" {
-		t.Fatalf("state writes after turn end = %v", writes)
+	if last() != "idle" {
+		t.Fatalf("stored states after turn end = %v", states)
 	}
 }
 func TestConversationStateSeedsFromRetainedEvents(t *testing.T) {
@@ -442,7 +463,7 @@ func TestRawSessionNoticeAndCompactionUpdatesReachEventLog(t *testing.T) {
 	log := acp.NewEventLog(0)
 	for _, update := range updates {
 		line := []byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":` + update.payload + `}}`)
-		appendRawSessionUpdate(log, line)
+		acp.AppendRawSessionUpdate(log, line)
 	}
 	entries := log.Snapshot()
 	if len(entries) != len(updates) {
@@ -714,16 +735,28 @@ func TestConversationStreamPushesAppendsWithoutPolling(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	lines := make(chan string, 8)
+	lines, derived := make(chan string, 8), make(chan string, 8)
 	go func() {
 		scanner := bufio.NewScanner(response.Body)
+		event := ""
 		for scanner.Scan() {
-			if text := scanner.Text(); strings.HasPrefix(text, "data:") {
+			switch text := scanner.Text(); {
+			case strings.HasPrefix(text, "event:"):
+				event = strings.TrimSpace(strings.TrimPrefix(text, "event:"))
+			case strings.HasPrefix(text, "data:") && event == "derived":
+				derived <- text
+			case strings.HasPrefix(text, "data:"):
 				lines <- text
+			case text == "":
+				event = ""
 			}
 		}
 		close(lines)
 	}()
+	// The server's fold comes first, so a browser shows the state before any entry arrives.
+	if got := <-derived; !strings.Contains(got, `"working":true`) || !strings.Contains(got, `"through":1`) {
+		t.Fatalf("first derived frame = %s", got)
+	}
 	started := time.Now()
 	log.Append("agent_message_chunk", 2, json.RawMessage(`{"text":"new"}`))
 	select {
@@ -736,6 +769,17 @@ func TestConversationStreamPushesAppendsWithoutPolling(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("append never reached the stream")
+	}
+	log.Append("turn_end", 3, json.RawMessage(`{}`))
+	for got := ""; !strings.Contains(got, `"through":3`); {
+		select {
+		case got = <-derived:
+			if strings.Contains(got, `"through":3`) && !strings.Contains(got, `"conversation_state":"idle"`) {
+				t.Fatalf("derived after turn end = %s", got)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("state change never reached the stream")
+		}
 	}
 }
 
@@ -856,5 +900,59 @@ func TestSteerJoinsTheTurnWithoutCancel(t *testing.T) {
 	entries := prompter.log.Snapshot()
 	if len(entries) != 1 || entries[0].Kind != "prompt" || !strings.Contains(string(entries[0].Payload), `"queueId":"q1"`) {
 		t.Fatalf("only the injected steer is a prompt entry: %s", logEntryKinds(prompter.log))
+	}
+}
+
+// P3.6: updates the SDK decodes, raw updates it cannot and adapter log entries reach the log in the
+// order the agent wrote them, however far the SDK's handlers lag behind.
+func TestAgentStdoutIsLoggedInWireOrder(t *testing.T) {
+	log := acp.NewEventLog(0)
+	client := acp.NewHarnessClient("", log, nil)
+	clientInput, clientInputWriter := io.Pipe()
+	agentOutput, agentOutputWriter := io.Pipe()
+	defer clientInput.Close()
+	conn := client.NewClientSideConnection(io.Discard, clientInput)
+	adapt := func(line []byte) base.AgentAdaptResult {
+		if bytes.Contains(line, []byte(`"text":"adapted"`)) {
+			return base.AgentAdaptResult{Log: []base.LogKind{{Kind: "tool_call", Payload: json.RawMessage(`{"toolCallId":"grouped"}`)}}}
+		}
+		return base.AgentAdaptResult{}
+	}
+	done := make(chan struct{})
+	go func() {
+		adaptAgentStdout(agentOutput, clientInputWriter, adapt, log)
+		close(done)
+	}()
+	chunk := func(text string) string {
+		return `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"` + text + `"}}}}`
+	}
+	notice := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"notice","severity":"warning","title":"t"}}}`
+	var want []string
+	var input strings.Builder
+	for round := range 20 {
+		for i := range 30 {
+			input.WriteString(chunk(fmt.Sprintf("r%dc%d", round, i)) + "\n")
+			want = append(want, "agent_message_chunk")
+		}
+		input.WriteString(notice + "\n")
+		want = append(want, "notice")
+		input.WriteString(chunk("adapted") + "\n")
+		want = append(want, "tool_call", "agent_message_chunk")
+	}
+	if _, err := agentOutputWriter.Write([]byte(input.String())); err != nil {
+		t.Fatal(err)
+	}
+	_ = agentOutputWriter.Close()
+	<-done
+	<-conn.Done()
+	if err := client.DrainSessionUpdates(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, entry := range log.Snapshot() {
+		got = append(got, entry.Kind)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("logged order differs from the wire (%d entries, want %d):\n%v", len(got), len(want), got)
 	}
 }

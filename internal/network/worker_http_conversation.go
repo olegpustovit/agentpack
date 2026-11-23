@@ -362,6 +362,7 @@ func (worker *WorkerHTTP) serveConversationSSE(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 	truncatedSent := false
+	var derivedSent string
 	coalesce := time.NewTimer(conversationStreamCoalesce)
 	defer coalesce.Stop()
 	heartbeat := time.NewTicker(conversationHeartbeatInterval)
@@ -387,7 +388,19 @@ func (worker *WorkerHTTP) serveConversationSSE(w http.ResponseWriter, r *http.Re
 		if err := writeTruncatedSSE(w, truncated, &truncatedSent); err != nil {
 			return
 		}
-		if len(entries) > 0 || truncated || gap {
+		// The state the entries add up to, from the server's fold; a browser without it reduces them itself.
+		derived := conv.liveDerived()
+		changedDerived := derived != nil && string(derived) != derivedSent
+		if changedDerived {
+			derivedSent = string(derived)
+			var message sse.Message
+			message.Type = sse.Type("derived")
+			message.AppendData(derivedSent)
+			if _, err := message.WriteTo(w); err != nil {
+				return
+			}
+		}
+		if len(entries) > 0 || truncated || gap || changedDerived {
 			flusher.Flush()
 		}
 		select {

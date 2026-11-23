@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"time"
 
 	"github.com/olegpustovit/agentpack/internal/state"
 )
@@ -36,14 +35,6 @@ func acpOwnerKey(folderID, harness, sessionID string) (key, canonical string, er
 	return hex.EncodeToString(digest[:]), canonical, nil
 }
 
-func ownerBindingID(ctx context.Context, tx *sql.Tx, key string) (string, error) {
-	var site []byte
-	if err := tx.QueryRowContext(ctx, "SELECT crsql_site_id()").Scan(&site); err != nil {
-		return "", err
-	}
-	return "ownership-" + hex.EncodeToString(site) + "-" + key, nil
-}
-
 func decodeACPAccountOwner(body, email string) (Actor, error) {
 	var owner Actor
 	if err := json.Unmarshal([]byte(body), &owner); err != nil {
@@ -66,25 +57,10 @@ func loadACPConversationOwner(ctx context.Context, tx *sql.Tx, folderID, harness
 	if err != nil {
 		return Actor{}, false, err
 	}
-	id, err := ownerBindingID(ctx, tx, key)
-	if err != nil {
-		return Actor{}, false, err
-	}
-	pendingID, err := ownerBindingID(ctx, tx, "pending")
-	if err != nil {
-		return Actor{}, false, err
-	}
-	var pending bool
-	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sessions WHERE id=? AND node_id="+state.LocalNodeSQL+")", pendingID).Scan(&pending); err != nil {
-		return Actor{}, false, err
-	}
-	if pending {
-		return Actor{}, false, errACPResumeOwnerStorage
-	}
 	var body, email, storedFolder, storedHarness string
 	var owner Actor
 	found := false
-	err = tx.QueryRowContext(ctx, "SELECT started_by,owner_email,folder_id,harness FROM sessions WHERE id=? AND node_id="+state.LocalNodeSQL, id).Scan(&body, &email, &storedFolder, &storedHarness)
+	err = tx.QueryRowContext(ctx, "SELECT started_by,owner_email,folder_id,harness FROM acp_session_owners WHERE key=? AND node_id="+state.LocalNodeSQL, key).Scan(&body, &email, &storedFolder, &storedHarness)
 	if err == nil {
 		if storedFolder != folderID || storedHarness != canonical {
 			return Actor{}, false, errACPResumeOwnerStorage
@@ -197,12 +173,8 @@ func authorizeACPResume(ctx context.Context, store *state.Store, actor Actor, se
 	return nil
 }
 
-// Hidden binding rows keep immutable native ownership even after legacy worker directories vanished.
+// A binding keeps immutable native ownership even after the chats that recorded it are gone.
 func insertOwnerBinding(ctx context.Context, tx *sql.Tx, key string, record acpConversationOwnerRecord) error {
-	id, err := ownerBindingID(ctx, tx, key)
-	if err != nil {
-		return err
-	}
 	body, err := json.Marshal(record.Owner)
 	if err != nil {
 		return err
@@ -211,19 +183,12 @@ func insertOwnerBinding(ctx context.Context, tx *sql.Tx, key string, record acpC
 	if _, err := decodeACPAccountOwner(string(body), email); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO sessions(id,node_id,folder_id,harness,started_by,owner_email,hidden,ended_at)
-        VALUES (?,`+state.LocalNodeSQL+`,?,?,?,?,1,?)`, id, record.FolderID, record.Harness, string(body), email, time.Now().UnixNano())
-	if err != nil {
-		return err
-	}
-	// Only an import marker has an empty scope and owner; valid bindings stay immutable.
-	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET folder_id=?,harness=?,started_by=?,owner_email=?
-		WHERE id=? AND node_id=`+state.LocalNodeSQL+` AND folder_id='' AND harness='' AND started_by='' AND owner_email=''`,
-		record.FolderID, record.Harness, string(body), email, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO acp_session_owners(node_id,key,folder_id,harness,started_by,owner_email)
+        VALUES (`+state.LocalNodeSQL+`,?,?,?,?,?)`, key, record.FolderID, record.Harness, string(body), email); err != nil {
 		return err
 	}
 	var existing, existingEmail string
-	if err := tx.QueryRowContext(ctx, "SELECT started_by,owner_email FROM sessions WHERE id=? AND node_id="+state.LocalNodeSQL, id).Scan(&existing, &existingEmail); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT started_by,owner_email FROM acp_session_owners WHERE key=? AND node_id="+state.LocalNodeSQL, key).Scan(&existing, &existingEmail); err != nil {
 		return err
 	}
 	owner, err := decodeACPAccountOwner(existing, existingEmail)

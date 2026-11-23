@@ -14,11 +14,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -152,32 +150,9 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		return 1, fmt.Errorf("listen for worker attachments: %w", err)
 	}
 	defer listener.Close()
-	launchIdentity, err := FolderIdentity(launch.Directory)
+	validate, err := guardWorkerFolders(&launch)
 	if err != nil {
 		return 1, err
-	}
-	if launch.Session.Directory != "" {
-		identity, err := FolderIdentity(launch.Session.Directory)
-		if err != nil {
-			return 1, err
-		}
-		if launch.Session.FolderID != "" && !SameFolder(launch.Session.FolderID, identity) {
-			return 1, errors.New("workspace has changed before launch")
-		}
-		launch.Session.FolderID = identity
-	}
-	validate := func() error {
-		identity, err := FolderIdentity(launch.Directory)
-		if err != nil || identity != launchIdentity {
-			return errors.New("launch folder has changed; launch the agent locally again")
-		}
-		if launch.Session.Directory != "" {
-			identity, err = FolderIdentity(launch.Session.Directory)
-			if err != nil || identity != launch.Session.FolderID {
-				return errors.New("workspace has changed; launch the agent locally again")
-			}
-		}
-		return nil
 	}
 	start := func(rows, columns uint16) (*Session, error) {
 		if err := validate(); err != nil {
@@ -263,45 +238,11 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		server = &http.Server{Handler: httpHandler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
 		obs.Go("worker.http", func() { serveDone <- server.Serve(listener) })
 	}
+	// An instant start's row stays "starting" until the worker serves; see Republish after ready.
+	var starting atomic.Bool
+	starting.Store(launch.Session.ConversationState == "starting")
 	if launch.Transport == "acp" {
-		lock, err := lockPromptHandoff(ctx, directory)
-		if err != nil {
-			return 1, err
-		}
-		var prepared *ConversationSession
-		err = func() error {
-			defer lock.Close()
-			log, err := newConversationLog(ctx, store, launch.Session.ID, cancelWorker)
-			if err != nil {
-				return err
-			}
-			prepared = NewConversationSession(log, nil)
-			if err := restorePendingQueue(ctx, store.Reader, record.ID, prepared); err != nil {
-				return errors.Join(err, log.Close())
-			}
-			prepared.starting, prepared.agentExited, prepared.promptStored = true, false, lookupPrompt
-			bootstrap, err := WorkerHandler(ctx, nil, prepared, record.Secret, directory)
-			if err != nil {
-				return errors.Join(err, log.Close())
-			}
-			bootstrap.stateStore = store
-			if err := publishWorkerEndpoint(directory, record); err != nil {
-				return errors.Join(err, log.Close())
-			}
-			serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if active := readyHTTP.Load(); active != nil {
-					active.ServeHTTP(w, r)
-					return
-				}
-				switch r.Method + " " + r.URL.Path {
-				case "GET /conversation", "POST /conversation/prompt", "POST /conversation/prompt/images", "POST /conversation/config":
-					bootstrap.ServeHTTP(w, r)
-				default:
-					http.Error(w, "agent is starting", http.StatusServiceUnavailable)
-				}
-			}))
-			return nil
-		}()
+		prepared, err := prepareACPWorker(ctx, store, record, directory, &starting, cancelWorker, lookupPrompt, serve, &readyHTTP)
 		if err != nil {
 			return 1, err
 		}
@@ -345,18 +286,9 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		}
 	}
 	record.Session = launch.Session
-	// An instant start stays "starting" in the row until the endpoint serves; see the patch after ready.
-	instant := launch.Session.ConversationState == "starting"
 	if launch.Transport == "acp" {
 		record.Session.Transport = "acp"
 		record.Session.AgentSessionID = launch.Session.AgentSessionID
-		if conversation != nil {
-			record.Session.ConversationState = conversation.ConversationState()
-		}
-	}
-	liveState := record.Session.ConversationState
-	if instant {
-		record.Session.ConversationState = "starting"
 	}
 	if session != nil {
 		record.Session.State = session.State()
@@ -369,101 +301,12 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			return 1, err
 		}
 	}
-	var stateWriteWarning sync.Once
-	persistConversationState := func(current *ConversationSession) func(string) {
-		return func(state string) {
-			var err error
-			if state != "working" {
-				err = current.log.Flush()
-			}
-			if err == nil {
-				err = patchWorkerConversationState(context.Background(), store.DB, record.ID, state)
-			}
-			if err != nil {
-				if err == errSessionArchived {
-					cancelWorker(err)
-					return
-				}
-				stateWriteWarning.Do(func() {
-					_, event := obs.Start(ctx, "worker", "persist_state")
-					event.Set("session_id", record.ID)
-					event.Fail(err)
-					event.End()
-					fmt.Fprintln(os.Stderr, "warning: ACP worker state could not be persisted")
-				})
-			}
-		}
-	}
-	persistTitle := func(title string) {
-		if _, err := store.DB.ExecContext(context.Background(), "UPDATE sessions SET title=? WHERE id=? AND archived_at=0 AND node_id="+state.LocalNodeSQL, title, record.ID); err != nil {
-			_, event := obs.Start(ctx, "worker", "set_title")
-			event.Set("session_id", record.ID)
-			event.Fail(err)
-			event.End()
-		}
-	}
-	// The permission mode last chosen for this agent, on any chat and machine of the network.
-	permissionSettingKey := "permission_mode." + launch.Session.Harness
 	wireConversation := func(current *ConversationSession) {
-		current.queueMu.Lock()
-		current.promptStored = lookupPrompt
-		current.queueMu.Unlock()
-		current.restoreGoal(launch.Session.Goal)
-		current.mu.Lock()
-		current.titleChange = persistTitle
-		current.imageStore = func(data []byte) (string, error) {
-			sha, err := storeSessionBlob(directory, data)
-			switch {
-			case errors.Is(err, errSessionBlobQuota):
-				return "", err
-			case err != nil && sniffBlobMIME(data) == "":
-				return "", errors.New("unsupported image type")
-			case err != nil:
-				return "", errors.New("could not store it")
-			}
-			// The image shows on this machine either way; peers find it once its location is recorded.
-			if err := advertiseBlob(context.Background(), store, record.ID, sha, int64(len(data))); err != nil {
-				_, event := obs.Start(ctx, "worker", "advertise_blob")
-				event.Set("session_id", record.ID)
-				event.Fail(err)
-				event.End()
-			}
-			return sha, nil
-		}
-		current.snapshotChanged = func() { persistAgentSnapshot(ctx, store.DB, record.Session, current) }
-		current.goalChange = func(goal *Goal) {
-			persistSessionJSON(context.Background(), store.DB, record.ID, "goal", goal, goal == nil)
-		}
-		current.subagentsChange = func(subagents []SubagentSummary) {
-			persistSessionJSON(context.Background(), store.DB, record.ID, "subagents", subagents, len(subagents) == 0)
-		}
-		current.waitingChange = func(waiting []acp.WaitItem) {
-			persistSessionJSON(context.Background(), store.DB, record.ID, "waiting", waiting, len(waiting) == 0)
-		}
-		current.permissionChange = func(mode string) {
-			if err := store.Mesh().SetSetting(context.Background(), permissionSettingKey, mode); err != nil {
-				_, event := obs.Start(ctx, "worker", "remember_permissions")
-				event.Fail(err)
-				event.End()
-			}
-		}
-		current.mu.Unlock()
-		current.applyRememberedPermissions(ctx, store, permissionSettingKey)
-		wanted, err := savedConfig(ctx, store, record.Session)
-		if err != nil {
-			_, event := obs.Start(ctx, "worker", "load_saved_config")
-			event.Set("session_id", record.ID)
-			event.Fail(err)
-			event.End()
-		} else {
-			current.applyWantedConfig(ctx, wanted)
-		}
-		current.logConfiguration()
+		wireWorkerConversation(ctx, store, record, directory, launch.Session.Goal, lookupPrompt, current)
 	}
 	if conversation != nil {
 		conversation.configMu.Lock()
 		wireConversation(conversation)
-		conversation.SetStateChange(liveState, persistConversationState(conversation))
 		conversation.ResumeTurns()
 		conversation.configMu.Unlock()
 	}
@@ -495,7 +338,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 				acpCleanup()
 				acpCleanup = nil
 			}
-			log, err := newConversationLog(ctx, store, launch.Session.ID, cancelWorker)
+			log, err := newConversationLog(ctx, store, launch.Session.ID, cancelWorker, nil)
 			if err != nil {
 				return err
 			}
@@ -529,9 +372,8 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			handler.mu.Lock()
 			handler.conversation = next
 			handler.mu.Unlock()
-			next.SetStateChange(next.ConversationState(), persistConversationState(next))
 			next.ResumeTurns()
-			return nil
+			return next.log.Republish()
 		}
 	}
 	if server == nil {
@@ -542,9 +384,15 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if err := ready(record.ID); err != nil {
 		return 1, fmt.Errorf("announce worker: %w", err)
 	}
-	if instant && conversation != nil {
-		// Through publishState, so a turn that already changed the state is never overwritten by an older read.
-		conversation.SetStateChange("starting", persistConversationState(conversation))
+	starting.Store(false)
+	if conversation != nil {
+		// Through the log's writer, so the state follows every batch already stored and none overwrites a newer one.
+		if err := conversation.log.Republish(); err != nil {
+			_, event := obs.Start(ctx, "worker", "persist_state")
+			event.Set("session_id", record.ID)
+			event.Fail(err)
+			event.End()
+		}
 	}
 	started.End()
 	select {
@@ -590,4 +438,129 @@ func publishWorkerEndpoint(directory string, record WorkerRecord) error {
 		return fmt.Errorf("publish worker record: %w", err)
 	}
 	return nil
+}
+
+// wireWorkerConversation connects a started conversation to its worker: stored prompt IDs, the
+// goal saved on its row, image storage, the agent snapshot, and the permission mode last chosen
+// for this agent on any chat and machine of the network.
+func wireWorkerConversation(ctx context.Context, store *state.Store, record WorkerRecord, directory string, goal *Goal, lookupPrompt func(context.Context, string) (bool, error), current *ConversationSession) {
+	permissionSettingKey := "permission_mode." + record.Session.Harness
+	current.queueMu.Lock()
+	current.promptStored = lookupPrompt
+	current.queueMu.Unlock()
+	current.restoreGoal(goal)
+	current.mu.Lock()
+	current.imageStore = func(data []byte) (string, error) {
+		sha, err := storeSessionBlob(directory, data)
+		switch {
+		case errors.Is(err, errSessionBlobQuota):
+			return "", err
+		case err != nil && sniffBlobMIME(data) == "":
+			return "", errors.New("unsupported image type")
+		case err != nil:
+			return "", errors.New("could not store it")
+		}
+		// The image shows on this machine either way; peers find it once its location is recorded.
+		if err := advertiseBlob(context.Background(), store, record.ID, sha, int64(len(data))); err != nil {
+			_, event := obs.Start(ctx, "worker", "advertise_blob")
+			event.Set("session_id", record.ID)
+			event.Fail(err)
+			event.End()
+		}
+		return sha, nil
+	}
+	current.snapshotChanged = func() { persistAgentSnapshot(ctx, store.DB, record.Session, current) }
+	current.permissionChange = func(mode string) {
+		if err := store.Mesh().SetSetting(context.Background(), permissionSettingKey, mode); err != nil {
+			_, event := obs.Start(ctx, "worker", "remember_permissions")
+			event.Fail(err)
+			event.End()
+		}
+	}
+	current.mu.Unlock()
+	current.applyRememberedPermissions(ctx, store, permissionSettingKey)
+	wanted, err := savedConfig(ctx, store, record.Session)
+	if err != nil {
+		_, event := obs.Start(ctx, "worker", "load_saved_config")
+		event.Set("session_id", record.ID)
+		event.Fail(err)
+		event.End()
+	} else {
+		current.applyWantedConfig(ctx, wanted)
+	}
+	current.logConfiguration()
+}
+
+// prepareACPWorker restores the chat's log and, under the prompt hand-off lock, publishes the
+// endpoint with the requests a starting chat answers: its conversation, prompts and config.
+// Once ready holds the full handler, it serves everything.
+func prepareACPWorker(ctx context.Context, store *state.Store, record WorkerRecord, directory string, starting *atomic.Bool, fail func(error),
+	lookupPrompt func(context.Context, string) (bool, error), serve func(http.Handler), ready *atomic.Pointer[WorkerHTTP]) (*ConversationSession, error) {
+	lock, err := lockPromptHandoff(ctx, directory)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	log, err := newConversationLog(ctx, store, record.ID, fail, starting)
+	if err != nil {
+		return nil, err
+	}
+	prepared := NewConversationSession(log, nil)
+	if err := restorePendingQueue(ctx, store.Reader, record.ID, prepared); err != nil {
+		return nil, errors.Join(err, log.Close())
+	}
+	prepared.starting, prepared.agentExited, prepared.promptStored = true, false, lookupPrompt
+	bootstrap, err := WorkerHandler(ctx, nil, prepared, record.Secret, directory)
+	if err != nil {
+		return nil, errors.Join(err, log.Close())
+	}
+	bootstrap.stateStore = store
+	if err := publishWorkerEndpoint(directory, record); err != nil {
+		return nil, errors.Join(err, log.Close())
+	}
+	serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if active := ready.Load(); active != nil {
+			active.ServeHTTP(w, r)
+			return
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /conversation", "POST /conversation/prompt", "POST /conversation/prompt/images", "POST /conversation/config":
+			bootstrap.ServeHTTP(w, r)
+		default:
+			http.Error(w, "agent is starting", http.StatusServiceUnavailable)
+		}
+	}))
+	return prepared, nil
+}
+
+// guardWorkerFolders records the launch's folder identities (the workspace's on the session) and
+// returns the check that both are still the folders the launch was made for.
+func guardWorkerFolders(launch *WorkerLaunch) (func() error, error) {
+	launchIdentity, err := FolderIdentity(launch.Directory)
+	if err != nil {
+		return nil, err
+	}
+	if launch.Session.Directory != "" {
+		identity, err := FolderIdentity(launch.Session.Directory)
+		if err != nil {
+			return nil, err
+		}
+		if launch.Session.FolderID != "" && !SameFolder(launch.Session.FolderID, identity) {
+			return nil, errors.New("workspace has changed before launch")
+		}
+		launch.Session.FolderID = identity
+	}
+	return func() error {
+		identity, err := FolderIdentity(launch.Directory)
+		if err != nil || identity != launchIdentity {
+			return errors.New("launch folder has changed; launch the agent locally again")
+		}
+		if launch.Session.Directory != "" {
+			identity, err = FolderIdentity(launch.Session.Directory)
+			if err != nil || identity != launch.Session.FolderID {
+				return errors.New("workspace has changed; launch the agent locally again")
+			}
+		}
+		return nil
+	}, nil
 }

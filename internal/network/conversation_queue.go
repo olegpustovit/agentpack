@@ -189,13 +189,10 @@ func restorePendingQueue(ctx context.Context, db *sql.DB, id string, conversatio
 		return nil
 	}
 	rows, err := db.QueryContext(ctx, `SELECT queued.body FROM conversation_events queued
-		WHERE queued.session_id=? AND json_valid(queued.body)
-		AND json_extract(queued.body, '$.kind')='queued_prompt'
+		WHERE queued.session_id=? AND queued.kind='queued_prompt'
 		AND NOT EXISTS (
 			SELECT 1 FROM conversation_events finished WHERE finished.session_id=queued.session_id
-			AND json_valid(finished.body)
-			AND json_extract(finished.body, '$.kind') IN ('queued_prompt','prompt','dequeued_prompt')
-			AND json_extract(finished.body, '$.kind') IN ('prompt','dequeued_prompt')
+			AND finished.kind IN ('prompt','dequeued_prompt')
 			AND json_extract(finished.body, '$.payload.queueId')=json_extract(queued.body, '$.payload.queueId')
 			AND finished.seq>queued.seq
 		) ORDER BY queued.seq`, id)

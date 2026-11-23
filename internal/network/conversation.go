@@ -20,10 +20,9 @@ type ConversationSession struct {
 	mu                sync.Mutex
 	promptMu          sync.Mutex
 	writes            sync.RWMutex
-	stateWriteMu      sync.Mutex
 	log               *acp.EventLog
 	broker            *acp.Broker
-	reducer           acp.ThreadReducer
+	fold              *conversationFold // the log's fold; read only while the log notifies or at start
 	state             string
 	agentExited       bool
 	initialized       chan struct{}
@@ -34,12 +33,9 @@ type ConversationSession struct {
 	snapshotChanged   func()
 	agentCapabilities *AgentCapabilities
 	agentSessionID    string
-	stateChange       func(string)
-	titleChange       func(string) // the agent named the chat (session_info_update)
 	permissionChange  func(string) // someone chose a permission mode; remembered for the agent
 	clientMode        string       // Agentpack permission override; "" when unsupported
-	publishedState    string
-	afterIdle         func() // one-shot, run when the conversation next settles idle
+	afterIdle         func()       // one-shot, run when the conversation next settles idle
 	lastSeq           int64
 	toolCalls         uint64
 	permissions       uint64
@@ -77,7 +73,6 @@ type ConversationSession struct {
 	goalSettled            bool // the native goal was marked met because the agent went idle
 	goalPauseDue           bool // the user stopped unprompted native goal work; tell the agent to pause
 	goalPublishMu          sync.Mutex
-	goalChange             func(*Goal)
 	nativeGoal             bool // the agent advertises a /goal command
 	turnText               []byte
 	turnTools              int
@@ -85,11 +80,6 @@ type ConversationSession struct {
 	goalIdle               int
 	usageUsed              int64
 	usageCost              float64
-	subagents              map[string]*subagentState
-	subagentsSaved         string
-	subagentsChange        func([]SubagentSummary)
-	waitingSaved           string
-	waitingChange          func([]acp.WaitItem)
 	unpromptedUsageSettle  time.Duration // quiet delay after an unprompted usage_update before closing the cycle
 	inPromptTurn           bool
 	lastParentKind         string
@@ -102,7 +92,15 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 	if log == nil {
 		log = acp.NewEventLog(0)
 	}
-	session := &ConversationSession{log: log, broker: broker, state: "idle", initialized: make(chan struct{}), seenPrompts: make(map[string]struct{})}
+	fold, _ := log.Fold().(*conversationFold)
+	if fold == nil {
+		fold = &conversationFold{}
+		log.SetFold(fold, 0)
+	}
+	session := &ConversationSession{log: log, broker: broker, fold: fold, initialized: make(chan struct{}), seenPrompts: make(map[string]struct{})}
+	// A checkpoint carries usage from before the replay tail; entries in the tail update it.
+	thread := fold.Thread.State()
+	session.usageUsed, session.usageCost = int64(thread.ContextTokens), thread.CostUSD
 	entries := log.SetOnAppend(session.applyLogEntry)
 	for _, entry := range entries {
 		session.observeEntry(entry)
@@ -110,8 +108,8 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 		if entry.Kind == "agent_exit" {
 			session.agentExited = true
 		}
-		session.state = conversationState(session.reducer.Apply(entry))
 	}
+	session.state = conversationState(fold.Thread.State())
 	close(session.initialized)
 	return session
 }
@@ -138,10 +136,8 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	if entry.Kind == "agent_exit" {
 		session.agentExited = true
 	}
-	thread := session.reducer.Apply(entry)
-	state := conversationState(thread)
-	waiting, waitingChanged := session.noteWaiting(thread.Waiting)
-	waitingChange := session.waitingChange
+	// The log applied this entry to the fold before notifying, and holds later appends until this returns.
+	state := conversationState(session.fold.Thread.State())
 	changed := state != session.state
 	if changed {
 		session.followNativeGoal(entry, state)
@@ -157,12 +153,14 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 		settleDelay, settleGen, settleAfter = session.unpromptedSettlePlan()
 		cycleEnd = session.queuesPrompts && session.delivering > 0 && bytes.Contains(entry.Payload, []byte(`"cost"`))
 	}
-	titleChange, title := session.titleChange, agentTitle(entry)
 	goalDirty, pause := session.goalDirty, session.goalPauseDue
 	session.goalDirty, session.goalPauseDue = false, false
-	subagents, subagentsChanged := session.applySubagent(entry)
-	subagentsChange := session.subagentsChange
 	snapshotChanged := session.snapshotChanged
+	var afterIdle func()
+	// Not while the queue or a goal is about to start the next turn: a restart would cut it off.
+	if changed && state == string(stateIdle) && len(session.queue) == 0 && !session.goalWantsTurn() {
+		afterIdle, session.afterIdle = session.afterIdle, nil
+	}
 	session.mu.Unlock()
 	if snapshotChanged != nil && parent {
 		switch entry.Kind {
@@ -173,15 +171,6 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	if settleDelay > 0 {
 		session.scheduleUnpromptedSettle(settleDelay, settleGen, "end_turn", settleAfter)
 	}
-	if titleChange != nil && title != "" {
-		titleChange(title)
-	}
-	if subagentsChanged && subagentsChange != nil {
-		subagentsChange(subagents)
-	}
-	if waitingChanged && waitingChange != nil {
-		waitingChange(waiting)
-	}
 	if goalDirty {
 		// Appending from inside a log callback would deadlock; publish once this entry is done.
 		obs.Go("acp.goal_publish", session.publishGoal)
@@ -190,7 +179,12 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 		obs.Go("acp.goal_pause", func() { _, _, _ = session.Submit(context.Background(), acp.PromptInput{Text: "/goal pause"}, false) })
 	}
 	if changed {
-		session.publishState()
+		// The sink stores the new state with the events behind it before anything acts on it;
+		// a failed write stays pending in the log, which retries it.
+		_ = session.log.Flush()
+		if afterIdle != nil {
+			afterIdle()
+		}
 		session.maybeDrain()
 	}
 	if cycleEnd {
@@ -345,36 +339,6 @@ func (session *ConversationSession) AgentExited() bool {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	return session.agentExited
-}
-
-func (session *ConversationSession) SetStateChange(persistedState string, callback func(string)) {
-	session.mu.Lock()
-	session.stateChange = callback
-	session.publishedState = persistedState
-	session.mu.Unlock()
-	session.publishState()
-}
-
-func (session *ConversationSession) publishState() {
-	session.stateWriteMu.Lock()
-	defer session.stateWriteMu.Unlock()
-	session.mu.Lock()
-	callback, state := session.stateChange, session.state
-	var afterIdle func()
-	// Not while the queue or a goal is about to start the next turn: a restart would cut it off.
-	if state == string(stateIdle) && len(session.queue) == 0 && !session.goalWantsTurn() {
-		afterIdle, session.afterIdle = session.afterIdle, nil
-	}
-	if afterIdle != nil {
-		defer afterIdle()
-	}
-	if callback == nil || state == session.publishedState {
-		session.mu.Unlock()
-		return
-	}
-	session.publishedState = state
-	session.mu.Unlock()
-	callback(state)
 }
 
 // whenIdle registers run for the next idle settle, replacing any earlier one; false means
@@ -789,19 +753,4 @@ func (session *ConversationSession) storeImage(data []byte) (string, error) {
 		return "", errors.New("image storage unavailable")
 	}
 	return store(data)
-}
-
-// noteWaiting copies the reducer's waiting list and reports whether it changed since the last save.
-// The caller holds mu.
-func (session *ConversationSession) noteWaiting(items []acp.WaitItem) ([]acp.WaitItem, bool) {
-	waiting := slices.Clone(items)
-	saved := ""
-	if len(waiting) > 0 {
-		saved = string(mustRawJSON(waiting))
-	}
-	if saved == session.waitingSaved {
-		return waiting, false
-	}
-	session.waitingSaved = saved
-	return waiting, true
 }

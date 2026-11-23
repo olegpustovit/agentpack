@@ -3,6 +3,7 @@ package acp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 )
@@ -711,3 +712,43 @@ func taskKind(taskType string) string {
 	}
 	return "task"
 }
+
+// reducerCheckpoint is everything Apply carries from one entry to the next, so a reducer restored
+// from it continues exactly where the saved one stopped. Only the worker's reducer (no transcript
+// items) is checkpointed.
+type reducerCheckpoint struct {
+	State       ThreadState       `json:"state"`
+	WaitKeys    []string          `json:"wait_keys,omitempty"` // State.Waiting's keys, in order
+	AfterPrompt bool              `json:"after_prompt,omitempty"`
+	InTurn      bool              `json:"in_turn,omitempty"`
+	TurnTask    string            `json:"turn_task,omitempty"`
+	WaitTools   map[string]string `json:"wait_tools,omitempty"`
+}
+
+func (reducer *ThreadReducer) MarshalJSON() ([]byte, error) {
+	checkpoint := reducerCheckpoint{State: reducer.state, AfterPrompt: reducer.afterPrompt, InTurn: reducer.inTurn,
+		TurnTask: reducer.turnTask, WaitTools: reducer.waitTools}
+	for _, wait := range reducer.state.Waiting {
+		checkpoint.WaitKeys = append(checkpoint.WaitKeys, wait.key)
+	}
+	return json.Marshal(checkpoint)
+}
+
+func (reducer *ThreadReducer) UnmarshalJSON(data []byte) error {
+	var checkpoint reducerCheckpoint
+	if err := json.Unmarshal(data, &checkpoint); err != nil {
+		return err
+	}
+	if len(checkpoint.WaitKeys) != len(checkpoint.State.Waiting) {
+		return errors.New("invalid reducer checkpoint")
+	}
+	for i := range checkpoint.State.Waiting {
+		checkpoint.State.Waiting[i].key = checkpoint.WaitKeys[i]
+	}
+	*reducer = ThreadReducer{state: checkpoint.State, afterPrompt: checkpoint.AfterPrompt, inTurn: checkpoint.InTurn,
+		turnTask: checkpoint.TurnTask, waitTools: checkpoint.WaitTools}
+	return nil
+}
+
+// State is the reducer's view after the last applied entry.
+func (reducer *ThreadReducer) State() ThreadState { return reducer.state }
