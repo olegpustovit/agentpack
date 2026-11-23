@@ -535,7 +535,8 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		return 1, fmt.Errorf("announce worker: %w", err)
 	}
 	if instant && conversation != nil {
-		persistConversationState(conversation)(conversation.ConversationState())
+		// Through publishState, so a turn that already changed the state is never overwritten by an older read.
+		conversation.SetStateChange("starting", persistConversationState(conversation))
 	}
 	started.End()
 	select {
