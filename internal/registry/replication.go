@@ -378,25 +378,26 @@ func (s *Store) CollectGarbage() ([]string, error) {
 			for _, id := range tombstone.Revisions {
 				revisionIDs[id] = true
 			}
-			objects, err := s.objectIDs()
+			rows, err := s.sql.Reader.Query(`SELECT digest,0 FROM registry_objects WHERE json_extract(body,'$.agentpack_id')=?
+ UNION ALL SELECT digest,1 FROM registry_names WHERE json_extract(body,'$.agentpack_id')=?`, tombstone.Agentpack, tombstone.Agentpack)
 			if err != nil {
 				return err
 			}
-			for _, id := range objects {
-				data, err := s.objectData(id)
-				if err != nil {
+			for rows.Next() {
+				var id string
+				var name bool
+				if err := rows.Scan(&id, &name); err != nil {
+					rows.Close()
 					return err
 				}
-				obj, err := decodeImported(data)
-				if err != nil || obj.id != id {
-					return fmt.Errorf("invalid registry public object")
-				}
-				if obj.revision != nil && obj.revision.AgentpackID == tombstone.Agentpack {
+				if name {
+					nameIDs[id] = true
+				} else {
 					revisionIDs[id] = true
 				}
-				if obj.name != nil && obj.name.Agentpack == tombstone.Agentpack {
-					nameIDs[id] = true
-				}
+			}
+			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+				return err
 			}
 			for nameID := range nameIDs {
 				if err := s.removeObject(nameID); err != nil {
@@ -446,17 +447,17 @@ func (s *Store) CollectGarbage() ([]string, error) {
 }
 
 func (s *Store) packageReferencedOutside(deletedAgentpack, packageID string) (bool, error) {
-	entries, err := s.objectIDs()
+	rows, err := s.sql.Reader.Query(`SELECT digest FROM registry_objects
+ WHERE json_extract(body,'$.agentpack_id')<>? AND EXISTS (
+ SELECT 1 FROM json_each(body,'$.package_ids') WHERE value=?)`, deletedAgentpack, packageID)
 	if err != nil {
 		return true, err
 	}
-	for _, id := range entries {
-		var shape Revision
-		if err := s.readObject(id, &shape); err != nil {
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			return true, err
-		}
-		if shape.AgentpackID == "" || shape.AgentpackID == deletedAgentpack {
-			continue
 		}
 		r, err := s.readRevision(id)
 		if err != nil {
@@ -466,7 +467,7 @@ func (s *Store) packageReferencedOutside(deletedAgentpack, packageID string) (bo
 			return true, nil
 		}
 	}
-	return false, nil
+	return false, rows.Err()
 }
 
 func (s *Store) revisionHeads(ids []string) ([]string, error) {

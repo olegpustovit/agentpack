@@ -37,13 +37,21 @@ func archiveUpdatePending(clock archiveClock, body string, previous archiveClock
 
 // RememberArchiveClocks retains original event clocks before archive pruning creates tombstones.
 func RememberArchiveClocks(ctx context.Context, tx *sql.Tx, id string) error {
-	rows, err := tx.QueryContext(ctx, `SELECT c.pk,c.cl,c.col_version,c.site_id,c.val,crsql_site_id() FROM crsql_changes c
- JOIN conversation_events e ON c.pk=crsql_pack_columns(e.session_id,e.seq)
- WHERE c."table"='conversation_events' AND c.cid='body' AND e.session_id=?`, id)
+	rows, err := tx.QueryContext(ctx, `WITH keys AS MATERIALIZED (
+ SELECT crsql_pack_columns(session_id,seq) AS pk FROM conversation_events WHERE session_id=?
+ )
+ SELECT c.pk,c.cl,c.col_version,c.site_id,c.val,crsql_site_id()
+ FROM crsql_changes c CROSS JOIN keys k ON c.pk=k.pk
+ WHERE c."table"='conversation_events' AND c.cid='body'`, id)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
+	insert, err := tx.PrepareContext(ctx, "INSERT OR IGNORE INTO archive_event_clocks(pk,clock) VALUES (?,?)")
+	if err != nil {
+		return err
+	}
+	defer insert.Close()
 	for rows.Next() {
 		var pk []byte
 		var clock archiveClock
@@ -56,7 +64,7 @@ func RememberArchiveClocks(ctx context.Context, tx *sql.Tx, id string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO archive_event_clocks(pk,clock) VALUES (?,?)", pk, string(body)); err != nil {
+		if _, err := insert.ExecContext(ctx, pk, string(body)); err != nil {
 			return err
 		}
 	}

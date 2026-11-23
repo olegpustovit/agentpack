@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -78,12 +77,10 @@ func (runner Runner) runGatewayMain(ctx context.Context, home string, args []str
 		if roles.MainNode != local {
 			return 1, errors.New("run archive-ready on the main gateway")
 		}
-		if _, err := os.Lstat(filepath.Join(home, "archive.db")); err == nil {
-			if err := network.PrepareArchive(ctx, home); err != nil {
+		if !empty {
+			if err := network.PrepareArchive(ctx, store, home); err != nil {
 				return 1, err
 			}
-		} else if !errors.Is(err, os.ErrNotExist) || !empty {
-			return 1, err
 		}
 		if err := store.ArchiveReady(ctx, home, empty); err != nil {
 			return 1, err

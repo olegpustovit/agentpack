@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type MainState struct {
@@ -91,15 +93,10 @@ func (s *Store) ArchiveReady(ctx context.Context, home string, empty bool) error
 	if roles.MainNode != local {
 		return errors.New("run archive-ready on the main gateway")
 	}
-	if _, err := os.Lstat(filepath.Join(home, "archive.db")); err != nil && !(errors.Is(err, os.ErrNotExist) && empty) {
-		return err
-	}
-	archive, err := OpenArchive(home)
-	if err != nil {
-		return err
-	}
-	if err := archive.Close(); err != nil {
-		return err
+	if !empty {
+		if err := VerifyArchive(home); err != nil {
+			return err
+		}
 	}
 	return Transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		var main string
@@ -109,7 +106,53 @@ func (s *Store) ArchiveReady(ctx context.Context, home string, empty bool) error
 		if main != local {
 			return ErrMainChanged
 		}
-		_, err := tx.ExecContext(ctx, "INSERT INTO mesh_settings(key,value) VALUES ('archive_node',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", local)
+		if empty {
+			var archived bool
+			if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sessions WHERE archived_at>0)").Scan(&archived); err != nil {
+				return err
+			}
+			if archived {
+				return errors.New("cannot use --empty while archived sessions exist")
+			}
+			archive, err := OpenArchive(home)
+			if err != nil {
+				return err
+			}
+			if err := archive.Close(); err != nil {
+				return err
+			}
+		}
+		archive, err := ReadArchive(home)
+		if err != nil {
+			return err
+		}
+		defer archive.Close()
+		rows, err := tx.QueryContext(ctx, "SELECT id,archived_seq FROM sessions WHERE archived_at>0 ORDER BY id")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		var short []string
+		for rows.Next() {
+			var id string
+			var want, have int64
+			if err := rows.Scan(&id, &want); err != nil {
+				return err
+			}
+			if err := archive.QueryRowContext(ctx, "SELECT coalesce(max(seq),0) FROM conversation_events WHERE session_id=?", id).Scan(&have); err != nil {
+				return err
+			}
+			if have < want {
+				short = append(short, fmt.Sprintf("%s (%d of %d)", id, have, want))
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if len(short) > 0 {
+			return fmt.Errorf("archive history is incomplete for %s", strings.Join(short, ", "))
+		}
+		_, err = tx.ExecContext(ctx, "INSERT INTO mesh_settings(key,value) VALUES ('archive_node',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", local)
 		return err
 	})
 }

@@ -33,7 +33,7 @@ func TestRecentForgetsOnlyMatchingLaunchWithoutDeletingFolder(t *testing.T) {
 	if err != nil || len(entries) != 2 {
 		t.Fatal(entries, err)
 	}
-	if err := ForgetRecent(home, first); err != nil {
+	if err := ForgetRecent(t.Context(), testSessionStore(t, home), first); err != nil {
 		t.Fatal(err)
 	}
 	entries, err = Recent(home)

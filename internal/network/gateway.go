@@ -78,7 +78,8 @@ type Gateway struct {
 	done           <-chan struct{}
 	chatTimings    sync.Map // latest browser duration per measurement
 	replicaStatus  sync.Map
-	statePulls     sync.Map // peer → coalesced pull notification
+	statePulls     sync.Map   // peer → coalesced pull notification
+	archiveMu      sync.Mutex // serializes archive copies with edits to archive.db
 	syncTransferMu sync.Mutex
 	syncTransfers  map[string]*stateTransferFile
 	identityMu     sync.Mutex
@@ -129,11 +130,16 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if address, ok := listener.Addr().(*net.TCPAddr); !ok || !address.IP.IsLoopback() && options.PublicURL == "" {
 		return errors.New("remote gateway requires HTTPS")
 	}
-	store, err := state.Open(options.Home)
-	if err != nil {
-		return err
+	var store *state.Store
+	if options.Library.Store != nil {
+		store = options.Library.Store.StateStore()
+	} else {
+		store, err = state.Open(options.Home)
+		if err != nil {
+			return err
+		}
+		defer func() { result = errors.Join(result, store.Close()) }()
 	}
-	defer func() { result = errors.Join(result, store.Close()) }()
 	if snapshot, err := tailnetSnapshot(ctx); err == nil {
 		if err := store.BindNode(ctx, snapshot.Self.ID); err != nil {
 			return err
@@ -391,7 +397,7 @@ func (g *Gateway) Handler() http.Handler {
 		if !readJSON(w, r, &input) {
 			return
 		}
-		respond(w, map[string]bool{"forgotten": true}, ForgetRecent(g.options.Home, SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode}))
+		respond(w, map[string]bool{"forgotten": true}, ForgetRecent(r.Context(), g.auth.store, SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode}))
 	})
 	mux.HandleFunc("POST /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		var input chatStartRequest
@@ -546,7 +552,7 @@ func (g *Gateway) Handler() http.Handler {
 		}
 		if input.Hidden != nil && *input.Hidden {
 			archived, _ := storedSession(r.Context(), g.auth.store.Reader, r.PathValue("id"))
-			changed, err := HideSession(r.Context(), g.options.Home, r.PathValue("id"))
+			changed, err := HideSession(r.Context(), g.auth.store, g.options.Home, r.PathValue("id"))
 			if changed && err == nil {
 				g.removeArchivedWorktree(r.Context(), archived)
 			}
@@ -571,7 +577,7 @@ func (g *Gateway) Handler() http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		info, err := RenameSession(r.Context(), g.options.Home, r.PathValue("id"), name)
+		info, err := RenameSession(r.Context(), g.auth.store, g.options.Home, r.PathValue("id"), name)
 		switch {
 		case errors.Is(err, errSessionNotFound):
 			http.Error(w, "session not found", http.StatusNotFound)
@@ -1051,7 +1057,7 @@ func (g *Gateway) knownDirectory(directory string) bool {
 	if !filepath.IsAbs(directory) {
 		return false
 	}
-	recent, err := recentIn(context.Background(), g.auth.store.Reader)
+	recent, err := RecentIn(context.Background(), g.auth.store.Reader)
 	if err != nil {
 		return false
 	}
@@ -1087,7 +1093,7 @@ func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var definitionRoot, modeName string
-	recent, err := recentIn(r.Context(), g.auth.store.Reader)
+	recent, err := RecentIn(r.Context(), g.auth.store.Reader)
 	if err != nil {
 		respond(w, nil, err)
 		return

@@ -12,6 +12,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -135,17 +136,22 @@ func (runner Runner) logsCommand() *cobra.Command {
 				}
 				return runner.printIssue(issue)
 			case "resolve", "reopen", "ignore":
-				state := "open"
+				nextStatus := "open"
 				if action == "resolve" {
-					state = "resolved"
+					nextStatus = "resolved"
 				} else if action == "ignore" {
-					state = "ignored"
+					nextStatus = "ignored"
 				}
 				who := ""
 				if current, err := user.Current(); err == nil {
 					who = current.Username
 				}
-				issue, err := obs.ChangeIssue(ctx, home, args[0], state, version, note, who)
+				store, err := state.Open(home)
+				if err != nil {
+					return err
+				}
+				defer store.Close()
+				issue, err := obs.ChangeIssue(ctx, store, home, args[0], nextStatus, version, note, who)
 				if err != nil {
 					return err
 				}

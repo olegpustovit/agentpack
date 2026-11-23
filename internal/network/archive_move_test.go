@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
@@ -769,5 +770,78 @@ func TestArchivedEditsRelayThroughIntermediatePeer(t *testing.T) {
 	syncArchiveFixture(t, relay.auth.store, main.auth.store)
 	if err := main.auth.store.Reader.QueryRow("SELECT count(*) FROM archive_edits").Scan(&edits); err != nil || edits != 0 {
 		t.Fatalf("acknowledged edits returned: %d %v", edits, err)
+	}
+}
+
+func TestArchiveCopyAllowsWorkerWriteAndRetainsEditedLiveRows(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	ctx := t.Context()
+	local, err := g.auth.store.NodeID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveRoles(t, g, local, local)
+	now := time.Now()
+	const id = "session-concurrent-edit"
+	archiveFixture(t, g, id, now.Add(-8*24*time.Hour), 1, 1)
+	archive, err := state.OpenArchive(g.options.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	conn, err := archive.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = conn.Raw(func(raw any) error {
+		return raw.(*sqlite3.SQLiteConn).RegisterFunc("edit_live_history", func() (int, error) {
+			writeCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			defer cancel()
+			_, err := g.auth.store.DB.ExecContext(writeCtx, `UPDATE conversation_events
+ SET body='{"seq":1,"kind":"message","payload":{"text":"new body"}}' WHERE session_id=? AND seq=1`, id)
+			return 1, err
+		}, false)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, `CREATE TEMP TRIGGER edit_during_copy BEFORE INSERT ON conversation_events
+ BEGIN SELECT edit_live_history(); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if moved, err := g.archiveSession(ctx, archive, id, now); err != nil || moved {
+		t.Fatalf("archive moved changed history: %v %v", moved, err)
+	}
+	var live string
+	if err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT body FROM conversation_events WHERE session_id=?", id).Scan(&live); err != nil || !strings.Contains(live, "new body") {
+		t.Fatalf("worker change lost: %q %v", live, err)
+	}
+}
+
+func TestArchiveMarkerAppliesToEndedSessionWithStaleWorkingState(t *testing.T) {
+	main, _ := identityGateway(t, t.TempDir(), nil)
+	worker, _ := identityGateway(t, t.TempDir(), nil)
+	local, err := main.auth.store.NodeID(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveRoles(t, main, local, local)
+	now := time.Now()
+	const id = "session-ended-working"
+	archiveFixture(t, worker, id, now.Add(-8*24*time.Hour), 1, 1)
+	if _, err := worker.auth.store.DB.Exec("UPDATE sessions SET ended_at=1,conversation_state='working' WHERE id=?", id); err != nil {
+		t.Fatal(err)
+	}
+	syncArchiveFixture(t, worker.auth.store, main.auth.store)
+	if count, err := main.archivePass(t.Context(), now); err != nil || count != 1 {
+		t.Fatalf("archive: %d %v", count, err)
+	}
+	syncArchiveFixture(t, main.auth.store, worker.auth.store)
+	var archived bool
+	if err := worker.auth.store.Reader.QueryRow("SELECT archived_at>0 FROM sessions WHERE id=?", id).Scan(&archived); err != nil || !archived {
+		t.Fatalf("worker refused the archive marker: %v %v", archived, err)
 	}
 }

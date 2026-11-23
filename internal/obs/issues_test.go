@@ -367,7 +367,7 @@ func TestReplicatedIssuesCombineMachineCountsAndResolution(t *testing.T) {
 	if err := stores[1].Reader.QueryRow("SELECT sample FROM issues WHERE fingerprint=?", sample.Fingerprint).Scan(&sampleJSON); err != nil || !json.Valid([]byte(sampleJSON)) {
 		t.Fatalf("replicated sample: %q %v", sampleJSON, err)
 	}
-	if _, err := ChangeIssue(ctx, homes[1], sample.Fingerprint, "resolved", "v1.1.0", "fixed", "owner@example.com"); err != nil {
+	if _, err := ChangeIssue(ctx, stores[1], homes[1], sample.Fingerprint, "resolved", "v1.1.0", "fixed", "owner@example.com"); err != nil {
 		t.Fatal(err)
 	}
 	sync(stores[1], stores[0])

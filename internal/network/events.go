@@ -164,7 +164,7 @@ func (g *Gateway) defaultEventTopics() []eventTopic {
 			return digestOf(value, err)
 		}},
 		{name: "projects", interval: 10 * time.Second, digest: func(ctx context.Context) (string, error) {
-			recent, err := recentIn(ctx, g.auth.store.Reader)
+			recent, err := RecentIn(ctx, g.auth.store.Reader)
 			if err != nil {
 				return "", err
 			}
