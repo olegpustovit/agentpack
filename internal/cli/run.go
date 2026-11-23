@@ -17,6 +17,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
+	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/proxy"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
@@ -164,7 +165,6 @@ func (runner Runner) dispatch(ctx context.Context, invocation Invocation) (int, 
 	}
 	root := packContext.DefinitionRoot
 	workspace := packContext.WorkspaceRoot
-	var runningBefore []runningEnvironment
 	if definitionMutation(invocation) {
 		held, release, lockErr := packSync.LockDefinition(ctx, root)
 		if lockErr != nil {
@@ -172,10 +172,6 @@ func (runner Runner) dispatch(ctx context.Context, invocation Invocation) (int, 
 		}
 		defer release()
 		ctx = held
-		runningBefore, err = snapshotRunningEnvironments(ctx, root)
-		if err != nil {
-			return 1, runner.reportIntegrity(err)
-		}
 	}
 	switch invocation.Command {
 	case "lock":
@@ -326,8 +322,10 @@ func (runner Runner) dispatch(ctx context.Context, invocation Invocation) (int, 
 			return 1, fmt.Errorf("environment saved, but library capture failed: %w", err)
 		}
 	}
-	if err = runner.restartChangedEnvironments(ctx, runningBefore); err != nil {
-		return 1, runner.reportIntegrity(err)
+	if definitionMutation(invocation) {
+		if err = runner.restartStaleSessions(ctx, root); err != nil {
+			return 1, runner.reportIntegrity(err)
+		}
 	}
 	return 0, nil
 }
@@ -498,8 +496,14 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 	if invocation.Global.Debug {
 		fmt.Fprintf(runner.Stderr, "agentpack: target=%s mode=%s definition=%s workspace=%s fast-sync=%t\n", target, effective.Name(), packContext.DefinitionRoot, packContext.WorkspaceRoot, skipped)
 	}
-	if err := recordLaunchEnvironment(packContext, effective.Name(), target, skipped); err != nil {
-		return 1, err
+	if id := os.Getenv("AGENTPACK_SESSION_ID"); id != "" && os.Getenv("AGENTPACK_SESSION_WORKER") == "1" {
+		home, err := paths.UserAgentpackHome()
+		if err == nil {
+			err = network.RecordLaunchEnvironment(home, id, packContext.DefinitionRoot, packContext.WorkspaceRoot, effective.Name(), target)
+		}
+		if err != nil {
+			return 1, err
+		}
 	}
 	if invocation.Global.StrictExternal {
 		options := packSync.PreflightOptions{Mode: effective.Name(), Target: &target, Policy: environment.PolicyLocal, WorkspaceRoot: packContext.WorkspaceRoot, StrictExternal: true}

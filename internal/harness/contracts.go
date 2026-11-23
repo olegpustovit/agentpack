@@ -216,6 +216,9 @@ type Harness struct {
 	// staging reads none. Unlike Inheritance.Paths it leaves out files the
 	// agent rewrites on every run.
 	LaunchInputs func(projectRoot, workspace string) (string, error)
+	// ResumeArgs are the arguments that relaunch the agent on its own session agentSessionID, for
+	// a terminal restart; nil when the agent cannot resume one by ID.
+	ResumeArgs func(agentSessionID string) []string
 }
 
 // Inheritance is what a native launch of the agent reads or writes outside agentpack's staging,

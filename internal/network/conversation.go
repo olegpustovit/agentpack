@@ -46,7 +46,8 @@ type ConversationSession struct {
 	agentCapabilities *session.AgentCapabilities
 	agentSessionID    string
 	clientMode        string // Agentpack permission override; "" when unsupported
-	afterIdle         func() // one-shot, run when the conversation next settles idle
+	afterIdle         func() // one-shot, run when nothing would be cut off (readyToReload)
+	waiting           int    // background work items the idle agent will wake for
 	lastSeq           int64
 	toolCalls         uint64
 	permissions       uint64
@@ -81,7 +82,8 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 			session.agentExited = true
 		}
 	}
-	session.state = conversationState(fold.Thread.State())
+	thread = fold.Thread.State()
+	session.state, session.waiting = conversationState(thread), len(thread.Waiting)
 	close(session.initialized)
 	return session
 }
@@ -109,8 +111,10 @@ func (cs *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 		cs.agentExited = true
 	}
 	// The log applied this entry to the fold before notifying, and holds later appends until this returns.
-	state := conversationState(cs.fold.Thread.State())
+	thread := cs.fold.Thread.State()
+	state := conversationState(thread)
 	changed := state != cs.state
+	cs.waiting = len(thread.Waiting)
 	if changed {
 		cs.followNativeGoal(entry, state)
 	}
@@ -128,8 +132,7 @@ func (cs *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	goalDirty, pause := cs.goalDirty, cs.goalPauseDue
 	cs.goalDirty, cs.goalPauseDue = false, false
 	var afterIdle func()
-	// Not while the queue or a goal is about to start the next turn: a restart would cut it off.
-	if changed && state == string(StateIdle) && len(cs.Queue) == 0 && !cs.goalWantsTurn() {
+	if cs.afterIdle != nil && cs.idleLocked() {
 		afterIdle, cs.afterIdle = cs.afterIdle, nil
 	}
 	if parent {
@@ -138,7 +141,7 @@ func (cs *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 			cs.later(cs.saveSnapshot)
 		}
 	}
-	if changed {
+	if changed || afterIdle != nil {
 		// The sink stores the new state with the events behind it before anything acts on it; a
 		// failed write stays pending in the log, which retries it. On the writer, so a slow store
 		// never holds up this append.
@@ -315,16 +318,25 @@ func (cs *ConversationSession) AgentExited() bool {
 	return cs.agentExited
 }
 
-// whenIdle registers run for the next idle settle, replacing any earlier one; false means
-// the conversation is idle now and run was not registered.
-func (cs *ConversationSession) whenIdle(run func()) bool {
+// idleLocked reports whether swapping the agent would cut nothing off: the chat is idle, nothing is
+// queued, no goal wants a turn and no background work will wake the agent. The caller holds mu.
+func (cs *ConversationSession) idleLocked() bool {
+	return cs.state == string(StateIdle) && len(cs.Queue) == 0 && !cs.goalWantsTurn() && cs.waiting == 0
+}
+
+// readyToReload is idleLocked for a caller that holds queueMu, the lock that admits prompts, so
+// none starts while the agent is swapped. Otherwise run is registered for the moment it is ready,
+// replacing any earlier one.
+func (cs *ConversationSession) readyToReload(run func()) bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	if cs.state == string(StateIdle) {
-		return false
+	if cs.idleLocked() {
+		return true
 	}
-	cs.afterIdle = run
-	return true
+	if run != nil {
+		cs.afterIdle = run
+	}
+	return false
 }
 
 func (cs *ConversationSession) Prompt(ctx context.Context, input acp.PromptInput) (result error) {

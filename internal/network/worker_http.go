@@ -39,20 +39,26 @@ type WorkerHTTP struct {
 	SessionDir   string
 	StateStore   *state.Store
 	// agentState is the last turn state a terminal agent reported (hooks, notify or its own output).
-	agentState  atomic.Value
-	Start       func(uint16, uint16) (*Session, error)
-	restartACP  func(context.Context) error
-	stopACP     func(context.Context) error
-	validate    func() error
-	lifecycle   sync.Mutex
-	done        chan struct{}
-	Finished    bool
-	stopping    bool
-	Diagnostics context.Context
-	err         error
-	attached    chan struct{}
-	Restarts    map[string]error
-	RestartIDs  []string
+	agentState atomic.Value
+	// agentSession is the agent's own session ID a terminal agent's hooks reported, for a native resume.
+	agentSession atomic.Value
+	// environment is what a chat's agent launched with, checked before a prompt; nil for terminals.
+	environment *launchEnvironment
+	// reloadFailed marks a chat whose last reload failed; its next prompt retries.
+	reloadFailed atomic.Bool
+	Start        func(uint16, uint16) (*Session, error)
+	restartACP   func(context.Context) error
+	stopACP      func(context.Context) error
+	validate     func() error
+	lifecycle    sync.Mutex
+	done         chan struct{}
+	Finished     bool
+	stopping     bool
+	Diagnostics  context.Context
+	err          error
+	attached     chan struct{}
+	Restarts     map[string]error
+	RestartIDs   []string
 }
 
 type RestartOperation struct {
@@ -176,13 +182,10 @@ func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (resu
 		if worker.restartACP == nil {
 			return errors.New("session cannot restart")
 		}
-		if err := worker.restartACP(ctx); err != nil {
-			worker.err = err
-			worker.Finished = true
-			close(worker.done)
-			return err
-		}
-		return nil
+		// A failed reload keeps the chat open with a notice, and its next prompt retries.
+		err := worker.restartACP(ctx)
+		worker.reloadFailed.Store(err != nil)
+		return errors.Join(err, worker.setReloadPending(err != nil))
 	}
 	if worker.Start == nil {
 		return errors.New("session cannot restart")
@@ -211,7 +214,7 @@ func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (resu
 			worker.attached = make(chan struct{})
 			worker.mu.Unlock()
 			obs.Go("worker.watch", func() { worker.watch(replacement) })
-			return nil
+			return worker.setReloadPending(false)
 		}
 	}
 	session.mu.Lock()
@@ -324,20 +327,22 @@ func WorkerHandler(ctx context.Context, pty *Session, conversation *Conversation
 			http.Error(w, "restart requires a valid Idempotency-Key", http.StatusBadRequest)
 			return
 		}
-		// A package change must not cut off a turn or a pending approval: restart once the chat is idle.
-		if conversation := worker.conversationSession(); r.URL.Query().Get("when") == "idle" && conversation != nil &&
-			conversation.whenIdle(func() {
-				obs.Go("worker.restart_when_idle", func() {
-					ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-					defer cancel()
-					_ = worker.Restart(ctx, rand.Text()) // Restart records its own failure
-				})
-			}) {
-			WriteJSON(w, map[string]bool{"deferred": true})
-			return
-		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 90*time.Second)
 		defer cancel()
+		// A change must not cut off a turn, a pending approval or a terminal agent's turn: reload once idle.
+		if r.URL.Query().Get("when") == "idle" {
+			deferred, err := worker.reloadWhenIdle(ctx, operationID)
+			if err != nil {
+				http.Error(w, "could not restart session", http.StatusConflict)
+				return
+			}
+			if deferred {
+				WriteJSON(w, map[string]bool{"deferred": true})
+				return
+			}
+			WriteJSON(w, map[string]bool{"restarted": true})
+			return
+		}
 		if err := worker.Restart(ctx, operationID); err != nil {
 			http.Error(w, "could not restart session", http.StatusConflict)
 			return
@@ -356,14 +361,21 @@ func WorkerHandler(ctx context.Context, pty *Session, conversation *Conversation
 	// A terminal agent's hooks report its turns here (ReportAgentState); chats have their own state.
 	mux.HandleFunc("POST /agent-state", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			State string `json:"state"`
+			State          string `json:"state"`
+			AgentSessionID string `json:"agent_session_id,omitempty"`
 		}
-		if pty == nil || worker.StateStore == nil || json.NewDecoder(http.MaxBytesReader(w, r.Body, 256)).Decode(&body) != nil ||
+		if pty == nil || worker.StateStore == nil || json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body) != nil ||
 			(body.State != string(StateWorking) && body.State != string(StateIdle) && body.State != string(StateNeedsYou)) {
 			http.Error(w, "invalid agent state", http.StatusBadRequest)
 			return
 		}
 		worker.agentState.Store(body.State)
+		if body.AgentSessionID != "" {
+			worker.agentSession.Store(body.AgentSessionID)
+		}
+		if body.State == string(StateIdle) && worker.reloadPending() {
+			worker.reloadLater()
+		}
 		if err := PatchWorkerConversationState(r.Context(), worker.StateStore.DB, filepath.Base(worker.SessionDir), body.State); err != nil && !errors.Is(err, session.ErrSessionArchived) {
 			_, event := obs.Start(r.Context(), "worker", "agent_state")
 			event.Fail(err)
@@ -376,7 +388,9 @@ func WorkerHandler(ctx context.Context, pty *Session, conversation *Conversation
 	mux.HandleFunc("GET /state", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if conversation := worker.conversationSession(); conversation != nil {
-			_ = json.NewEncoder(w).Encode(session.TerminalState{Running: !conversation.AgentExited(), ExitCode: -1})
+			// A pending reload shows as restarting; a failed one keeps the chat open for the retry.
+			pending := worker.reloadPending()
+			_ = json.NewEncoder(w).Encode(session.TerminalState{Running: !conversation.AgentExited() || pending, Restarting: pending && !worker.reloadFailed.Load(), ExitCode: -1})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(worker.current().State())

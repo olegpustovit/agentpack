@@ -1,15 +1,19 @@
 package sync
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
 
+	"github.com/olegpustovit/agentpack/internal/artifacts"
 	"github.com/olegpustovit/agentpack/internal/cache"
 	"github.com/olegpustovit/agentpack/internal/environment"
 	"github.com/olegpustovit/agentpack/internal/harness"
@@ -40,32 +44,73 @@ func (in Inputs) generation(effective mode.Effective, workspaceDigest, stagedCon
 }
 
 // EnvironmentDigest is Content.Selected for a definition, mode and target: it
-// compares selected runtime inputs across a package mutation. It excludes lock bookkeeping and generation paths. MCP credentials influence
+// compares selected runtime inputs across a package mutation. It excludes lock bookkeeping and generation paths.
+// The MCP connections that reroute a selected server (their ID and URL, never a secret) influence
 // the digest, so persist it only in private local state and never publish it.
 func EnvironmentDigest(definitionRoot, workspace, selectedMode string, target harness.Target) (string, error) {
+	digest, _, err := SelectedEnvironment(definitionRoot, workspace, selectedMode, target)
+	return digest, err
+}
+
+// SelectedEnvironment is EnvironmentDigest with the sorted names of what it selects ("skill x",
+// "command y", "MCP z", "MCP z connected"), which a reload notice compares.
+func SelectedEnvironment(definitionRoot, workspace, selectedMode string, target harness.Target) (string, []string, error) {
 	file, err := loadLockOrEmpty(definitionRoot)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	lock := file.lock
 	for _, pkg := range lock.Packages {
 		if err := cache.VerifyPackageIncremental(pkg); err != nil {
-			return "", err
+			return "", nil, err
 		}
+	}
+	project, err := manifest.Load(definitionRoot)
+	if err != nil {
+		return "", nil, err
+	}
+	effective, err := resolveMode(workspace, project, &lock, selectedMode)
+	if err != nil {
+		return "", nil, err
+	}
+	return selectedContent(workspace, project, lock, effective, target)
+}
+
+// LaunchFingerprint is the launch identity of a project's current inputs, as a launch compares it
+// with the one its last sync stored. It costs what the launch fast path does, never a content hash.
+func LaunchFingerprint(definitionRoot, workspace, selectedMode string, target harness.Target) (string, error) {
+	file, err := loadLockOrEmpty(definitionRoot)
+	if err != nil {
+		return "", err
 	}
 	project, err := manifest.Load(definitionRoot)
 	if err != nil {
 		return "", err
 	}
-	effective, err := resolveMode(workspace, project, &lock, selectedMode)
+	effective, err := resolveMode(workspace, project, &file.lock, selectedMode)
 	if err != nil {
 		return "", err
 	}
-	return selectedContent(workspace, project, lock, effective, target)
+	return launchDigest(definitionRoot, workspace, effective, target, file)
 }
 
-// selectedContent computes Content.Selected.
-func selectedContent(workspace string, project *manifest.Manifest, lock lockfile.PackLock, effective mode.Effective, target harness.Target) (string, error) {
+// environmentItem names what a selected file gives the agent, as a reload notice lists it; "" for support files.
+func environmentItem(module, name, virtual string) string {
+	parts := strings.Split(artifacts.StripHarnessPrefix(virtual), "/")
+	switch {
+	case len(parts) == 1 && parts[0] == "SKILL.md":
+		return "skill " + cmp.Or(name, path.Base(module))
+	case len(parts) >= 3 && parts[0] == "skills" && parts[len(parts)-1] == "SKILL.md":
+		return "skill " + parts[len(parts)-2]
+	case len(parts) == 2 && slices.Contains([]string{"commands", "agents", "rules"}, parts[0]):
+		return strings.TrimSuffix(parts[0], "s") + " " + strings.TrimSuffix(parts[1], path.Ext(parts[1]))
+	}
+	return ""
+}
+
+// selectedContent computes Content.Selected and the names of what it selects.
+func selectedContent(workspace string, project *manifest.Manifest, lock lockfile.PackLock, effective mode.Effective, target harness.Target) (string, []string, error) {
+	items := map[string]bool{}
 	hash := sha256.New()
 	encoder := json.NewEncoder(hash)
 	file := func(module, name, virtual, path string) error {
@@ -80,6 +125,9 @@ func selectedContent(workspace string, project *manifest.Manifest, lock lockfile
 		if err != nil {
 			return err
 		}
+		if item := environmentItem(module, name, virtual); item != "" {
+			items[item] = true
+		}
 		return encoder.Encode(struct {
 			Module, Name, Path string
 			Executable         bool
@@ -93,11 +141,11 @@ func selectedContent(workspace string, project *manifest.Manifest, lock lockfile
 		}
 		root, err := cache.EntryDir(pkg.CacheKey)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		files, err := staging.PackageFiles(root, pkg.Module, pkg.Kind == lockfile.PackagePlugin)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		// These definitions are represented by their filtered effective values below.
 		definitions := map[string]bool{"mcp.json": true, ".mcp.json": true}
@@ -111,7 +159,7 @@ func selectedContent(workspace string, project *manifest.Manifest, lock lockfile
 				} // CollectMCP reports invalid declarations using staging's policy.
 				relative, err := filepath.Rel(root, resolved)
 				if err != nil {
-					return "", err
+					return "", nil, err
 				}
 				definitions[filepath.ToSlash(relative)] = true
 			}
@@ -119,13 +167,13 @@ func selectedContent(workspace string, project *manifest.Manifest, lock lockfile
 		for _, input := range files {
 			allowed, err := effective.AllowsPackagePath(pkg.Module, input.Real)
 			if err != nil {
-				return "", err
+				return "", nil, err
 			}
 			if !allowed || definitions[input.Real] {
 				continue
 			}
 			if err := file(pkg.Module, pkg.Name, input.Virtual, input.Path); err != nil {
-				return "", err
+				return "", nil, err
 			}
 		}
 	}
@@ -141,24 +189,34 @@ func selectedContent(workspace string, project *manifest.Manifest, lock lockfile
 		return file(".agents", "", relative, path)
 	})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	bundle, err := hooks.Collect(workspace, lock, "", effective)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	bundle = bundle.ForTarget(target)
 	for _, hook := range bundle.Hooks {
 		hook.Origin.CacheKey, hook.Origin.SourceRoot, hook.Origin.SourceFile, hook.Origin.PackageKey = "", "", "", ""
 		if err := encoder.Encode(hook); err != nil {
-			return "", err
+			return "", nil, err
 		}
 	}
 	entries, err := staging.CollectMCP(workspace, lock, project, &effective)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	pinned := mcp.ApplyPins(entries, lock.MCPServers)
+	indexPath, err := paths.MCPCredentialIndexPath()
+	if err != nil {
+		return "", nil, err
+	}
+	index, err := mcp.ReadCredentialIndex(indexPath)
+	if err != nil {
+		return "", nil, err
+	}
+	// Staging's own matcher: a connection that reroutes a server through the bridge changes what the agent runs.
+	bridged, _ := mcp.ApplyCredentials(pinned, index, "agentpack")
 	for _, name := range entries.Names() {
 		server := pinned[name].Server
 		if err := encoder.Encode(struct {
@@ -166,7 +224,17 @@ func selectedContent(workspace string, project *manifest.Manifest, lock lockfile
 			Server mcp.Server
 			OAuth  *mcp.OAuth
 		}{name, server, server.OAuth}); err != nil {
-			return "", err
+			return "", nil, err
+		}
+		items["MCP "+name] = true
+		if bridge := bridged[name].Server; !slices.Equal(bridge.Args, server.Args) {
+			items["MCP "+name+" connected"] = true
+			if err := encoder.Encode(struct {
+				Name   string
+				Bridge []string
+			}{name, bridge.Args}); err != nil {
+				return "", nil, err
+			}
 		}
 		for _, record := range lock.MCPServers {
 			if record.Name != name || record.Definition != entries[name].Server.Definition() || !mcp.StartsWithNPX(entries[name].Server) {
@@ -174,15 +242,16 @@ func selectedContent(workspace string, project *manifest.Manifest, lock lockfile
 			}
 			if spec, ok := mcp.SpecFor(record); ok {
 				if mcp.TreeDigest(spec.Tree) != spec.TreeDigest {
-					return "", fmt.Errorf("MCP server %q has an invalid locked tree digest", name)
+					return "", nil, fmt.Errorf("MCP server %q has an invalid locked tree digest", name)
 				}
 				if err := encoder.Encode(spec); err != nil {
-					return "", err
+					return "", nil, err
 				}
 			}
 		}
 	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	names := slices.Sorted(maps.Keys(items))
+	return hex.EncodeToString(hash.Sum(nil)), names, nil
 }
 
 // walkDotAgents visits the regular files under a project's .agents in walk

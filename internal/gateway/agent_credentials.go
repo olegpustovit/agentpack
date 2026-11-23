@@ -75,6 +75,8 @@ func (g *Gateway) syncAgentCredentials(ctx context.Context) {
 		}
 		if installed {
 			g.agents.forget()
+			// A sign-in made on another machine arrived: the chats here that waited for it continue.
+			obs.Go("gateway.reload_signed_out_chats", func() { g.reloadSignedOutChats(context.WithoutCancel(ctx), string(agent.Target)) })
 		}
 	}
 }

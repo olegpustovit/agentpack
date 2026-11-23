@@ -126,3 +126,34 @@ func TestEnvironmentDigestUsesModeInputsAndVerifiesIntegrity(t *testing.T) {
 		t.Fatalf("unverified cache was hashed: %v", err)
 	}
 }
+
+// A connection that reroutes a selected server changes the environment; an unrelated one does not.
+func TestEnvironmentDigestFollowsMatchingMCPConnections(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENTPACK_HOME", home)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "agentpack.toml"), []byte("name = \"test\"\nversion = \"0.1.0\"\n\n[mcp.servers.docs]\nurl = \"https://mcp.example.com/mcp\"\ntype = \"http\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockfile.Init(root, "test", "0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	digest := func(credentials string) string {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(home, "mcp-credentials.json"), []byte(`{"credentials":[`+credentials+`]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		value, err := EnvironmentDigest(root, root, "", harness.Claude)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	none := digest("")
+	if unrelated := digest(`{"id":"other","match":"https://elsewhere.example.com/mcp","label":"other","kind":"oauth"}`); unrelated != none {
+		t.Fatal("an unrelated connection changed the environment")
+	}
+	if matched := digest(`{"id":"docs","match":"https://mcp.example.com/mcp","label":"docs","kind":"oauth"}`); matched == none {
+		t.Fatal("a matching connection left the environment unchanged")
+	}
+}

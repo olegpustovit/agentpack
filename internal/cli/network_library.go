@@ -96,13 +96,6 @@ func (runner Runner) networkLibrary(home string) (gateway.LibraryOptions, error)
 			if err != nil {
 				return err
 			}
-			var before []runningEnvironment
-			if restart {
-				before, err = snapshotRunningEnvironments(ctx, definition)
-				if err != nil {
-					return err
-				}
-			}
 			if err := store.Restore(id, revision, definition, func() error {
 				return runner.Service.RestoreFrozenOptions(ctx, definition, packSync.SyncOptions{WorkspaceRoot: directory, Mode: selected.Mode})
 			}); err != nil {
@@ -116,7 +109,10 @@ func (runner Runner) networkLibrary(home string) (gateway.LibraryOptions, error)
 			if _, _, err := store.Capture(capture); err != nil {
 				return fmt.Errorf("environment restored, but recording its revision failed: %w", err)
 			}
-			return runner.restartChangedEnvironments(ctx, before)
+			if !restart {
+				return nil
+			}
+			return runner.restartStaleSessions(ctx, definition)
 		},
 	}, nil
 }

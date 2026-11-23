@@ -47,11 +47,11 @@ func TestTerminalAgentStateReachesSessionRow(t *testing.T) {
 		return value
 	}
 	for _, want := range []string{"working", "needs_you", "idle"} {
-		if err := ReportAgentState(t.Context(), home, id, want); err != nil || state() != want {
+		if err := ReportAgentState(t.Context(), home, id, want, ""); err != nil || state() != want {
 			t.Fatalf("report %s: err=%v state=%q", want, err, state())
 		}
 	}
-	if err := ReportAgentState(t.Context(), home, id, "starting"); err == nil || state() != "idle" {
+	if err := ReportAgentState(t.Context(), home, id, "starting", ""); err == nil || state() != "idle" {
 		t.Fatalf("an unknown state was accepted: err=%v state=%q", err, state())
 	}
 

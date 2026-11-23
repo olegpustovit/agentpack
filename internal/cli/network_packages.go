@@ -2,10 +2,7 @@ package cli
 
 import (
 	"context"
-	"crypto/rand"
-	"errors"
 	"fmt"
-	"os"
 	"slices"
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
@@ -14,109 +11,28 @@ import (
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/registry"
-	"github.com/olegpustovit/agentpack/internal/session"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
-// runningEnvironment is a running session the gateway can restart after a package change.
-type runningEnvironment struct {
-	packSync.RunningEnvironment
-	harness     string
-	operationID string
-}
-
-// restartable: chats (ACP) and browser terminals; native-stdio presence has no worker to restart.
-func restartable(session session.SessionInfo) bool {
-	return (session.Transport == "acp" || session.Transport != "shell" && session.State.Interactive) &&
-		session.State.Running && !session.State.Restarting
-}
-
-func snapshotRunningEnvironments(ctx context.Context, definitionRoot string) ([]runningEnvironment, error) {
+// restartStaleSessions reloads the running sessions a change to definitionRoot affected.
+func (runner Runner) restartStaleSessions(ctx context.Context, definitionRoot string) error {
 	home, err := paths.UserAgentpackHome()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	sessions, err := network.Sessions(ctx, home)
 	if err != nil {
-		return nil, err
-	}
-	if len(sessions) == 0 {
-		return nil, nil
-	}
-	root, err := os.Stat(definitionRoot)
-	if err != nil {
-		return nil, err
-	}
-	var snapshots []runningEnvironment
-	for _, session := range sessions {
-		if !restartable(session) {
-			continue
-		}
-		definition := session.DefinitionRoot
-		if definition == "" {
-			definition = session.Directory
-		}
-		info, err := os.Stat(definition)
-		if err != nil || !os.SameFile(root, info) {
-			continue
-		}
-		target, ok := launcherTarget(session.Harness)
-		if !ok {
-			return nil, fmt.Errorf("unknown harness %q", session.Harness)
-		}
-		digest, err := network.SessionEnvironment(home, session.ID)
-		if err == nil && digest == "" {
-			digest, err = packSync.EnvironmentDigest(definitionRoot, session.Directory, session.Mode, target)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("check running session %s before package change: %w", session.ID, err)
-		}
-		snapshots = append(snapshots, runningEnvironment{
-			RunningEnvironment: packSync.RunningEnvironment{SessionID: session.ID, DefinitionRoot: definitionRoot, Workspace: session.Directory, Mode: session.Mode, Target: target, Digest: digest},
-			harness:            session.Harness, operationID: rand.Text(),
-		})
-	}
-	return snapshots, nil
-}
-
-func (runner Runner) restartChangedEnvironments(ctx context.Context, snapshots []runningEnvironment) error {
-	if len(snapshots) == 0 {
-		return nil
-	}
-	home, err := paths.UserAgentpackHome()
-	if err != nil {
 		return err
 	}
-	live, err := network.Sessions(ctx, home)
-	if err != nil {
-		return err
-	}
-	running := make(map[string]bool, len(live))
-	for _, session := range live {
-		running[session.ID] = restartable(session)
-	}
-	byID := map[string]runningEnvironment{}
-	var before []packSync.RunningEnvironment
-	for _, snapshot := range snapshots {
-		if running[snapshot.SessionID] {
-			byID[snapshot.SessionID] = snapshot
-			before = append(before, snapshot.RunningEnvironment)
+	reloads, err := network.RestartStaleSessions(ctx, home, runner.Service, definitionRoot, sessions)
+	for _, reload := range reloads {
+		when := "restarting"
+		if reload.Deferred {
+			when = "will reload when idle:"
 		}
+		fmt.Fprintf(runner.Stderr, "agentpack: %s %s in %s (mode %s) after its environment changed\n", when, reload.Harness, reload.Workspace, reload.Mode)
 	}
-	changed, err := runner.Service.ChangedEnvironments(ctx, before)
-	if err != nil {
-		return err
-	}
-	var failures []error
-	for _, environment := range changed {
-		snapshot := byID[environment.SessionID]
-		if err := network.RestartWorkerWhenIdle(ctx, home, environment.SessionID, snapshot.operationID); err != nil {
-			failures = append(failures, fmt.Errorf("package change saved, but session %s could not restart: %w", environment.SessionID, err))
-			continue
-		}
-		fmt.Fprintf(runner.Stderr, "agentpack: restarting %s in %s (mode %s) after its environment changed\n", snapshot.harness, environment.Workspace, environment.Mode)
-	}
-	return errors.Join(failures...)
+	return err
 }
 
 func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec string, restart bool) error {
@@ -150,20 +66,16 @@ func (runner Runner) changeNetworkProject(ctx context.Context, directory string,
 	}
 	defer release()
 	ctx = held
-	var before []runningEnvironment
-	if restart {
-		before, err = snapshotRunningEnvironments(ctx, packContext.DefinitionRoot)
-		if err != nil {
-			return err
-		}
-	}
 	if err := change(ctx, packContext.DefinitionRoot); err != nil {
 		return err
 	}
 	if err := captureNetworkEnvironment(packContext.DefinitionRoot, directory, ""); err != nil {
 		return fmt.Errorf("installed, but library capture failed: %w", err)
 	}
-	return runner.restartChangedEnvironments(ctx, before)
+	if !restart {
+		return nil
+	}
+	return runner.restartStaleSessions(ctx, packContext.DefinitionRoot)
 }
 
 // projectContents converts pack.lock into the node's project view. Commands, arguments,

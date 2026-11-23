@@ -13,14 +13,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
+	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
 // WorkerLaunch is delivered through a private startup pipe, never HTTP or disk.
@@ -118,6 +122,10 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		return 1, fmt.Errorf("create worker directory: %w", err)
 	}
 	defer func() { result = errors.Join(result, removeWorkerEndpoint(directory)) }()
+	// A fresh agent starts with the current environment, so no earlier reload is still due.
+	if err := os.Remove(filepath.Join(directory, "restart_pending")); err != nil && !os.IsNotExist(err) {
+		return 1, err
+	}
 	store, err := state.Open(home)
 	if err != nil {
 		return 1, err
@@ -155,6 +163,8 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if err != nil {
 		return 1, err
 	}
+	// agentSession is the terminal agent's own session, which a restart resumes; empty at first launch.
+	agentSession := func() string { return "" }
 	start := func(rows, columns uint16) (*Session, error) {
 		if err := validate(); err != nil {
 			return nil, err
@@ -163,7 +173,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		if err := os.Remove(filepath.Join(directory, "environment")); err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
-		command := exec.Command(launch.Program, launch.Arguments...)
+		command := exec.Command(launch.Program, resumeArguments(launch, agentSession)...)
 		environment := launch.Environment
 		if environment == nil {
 			environment = os.Environ()
@@ -240,7 +250,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	var starting atomic.Bool
 	starting.Store(launch.Session.ConversationState == "starting")
 	if launch.Transport == "acp" {
-		agent = &acpAgent{store: store, launch: &launch, record: record, directory: directory, cancel: cancelWorker}
+		agent = &acpAgent{home: home, store: store, launch: &launch, record: record, directory: directory, cancel: cancelWorker}
 		prepared, err := prepareACPWorker(ctx, store, record, directory, &starting, cancelWorker, serve, &readyHTTP)
 		if err != nil {
 			return 1, err
@@ -252,6 +262,17 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		conversation, agent.cleanup, err = startACPConversation(startCtx, launch, directory, prepared)
 		if err != nil {
 			return 1, err
+		}
+		// What this agent launched with, the base later changes are compared with; off the start path.
+		if environment, ok := agent.environment(); ok {
+			obs.Go("worker.record_environment", func() {
+				if _, _, err := environment.record(); err != nil {
+					_, event := obs.Start(ctx, "worker", "record_environment")
+					event.Set("session_id", record.ID)
+					event.Fail(err)
+					event.End()
+				}
+			})
 		}
 		if agent.cleanup != nil {
 			defer func() {
@@ -314,7 +335,11 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if pty != nil {
 		handler.Start = start
 		handler.validate = validate
+		agentSession = func() string { id, _ := handler.agentSession.Load().(string); return id }
 	} else if conversation != nil {
+		if environment, ok := agent.environment(); ok {
+			handler.environment = &environment
+		}
 		handler.validate = validate
 		agent.handler = handler
 		agent.wire = wireConversation
@@ -488,6 +513,7 @@ const LocalStateNode = "local"
 // acpAgent owns a worker's running ACP agent process: it stops it, and on restart starts a new one
 // on a fresh conversation log and swaps it into the worker's handler.
 type acpAgent struct {
+	home      string
 	store     *state.Store
 	launch    *WorkerLaunch
 	record    WorkerRecord
@@ -520,12 +546,50 @@ func (agent *acpAgent) stop(ctx context.Context) error {
 	return nil
 }
 
-func (agent *acpAgent) restart(ctx context.Context) error {
+// environment is what the chat's agent runs with, for recording and checking it; false in the
+// ACP fixture modes, which have no project.
+func (agent *acpAgent) environment() (launchEnvironment, bool) {
+	if os.Getenv("AGENTPACK_TEST_ACP") != "" {
+		return launchEnvironment{}, false
+	}
+	launchCtx, err := workerLaunchContext(*agent.launch)
+	if err != nil {
+		return launchEnvironment{}, false
+	}
+	target, err := HarnessTarget(agent.launch.Session.Harness)
+	if err != nil {
+		return launchEnvironment{}, false
+	}
+	return launchEnvironment{home: agent.home, id: agent.record.ID, definition: launchCtx.ProjectRoot, workspace: launchCtx.WorkspaceRoot, mode: launchCtx.Mode.Name(), target: target}, true
+}
+
+// restart replaces the agent with one started on the current environment, which resumes the same
+// conversation. When that fails the chat stays open on a log that says why (see hold).
+func (agent *acpAgent) restart(ctx context.Context) (result error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	agent.close()
+	environment, recordable := agent.environment()
 	launch, store := agent.launch, agent.store
+	if recordable && !launch.StageInWorker {
+		// The worker stages only an agent that stages at session start; restage the others here.
+		launchCtx, err := workerLaunchContext(*launch)
+		if err != nil {
+			return err
+		}
+		if _, _, err := packSync.NewService().SyncForLaunchOptions(ctx, launchCtx.ProjectRoot, packSync.SyncOptions{
+			Mode: launchCtx.Mode.Name(), Target: &environment.target, WorkspaceRoot: launchCtx.WorkspaceRoot,
+		}); err != nil {
+			appendReloadFailed(agent.current().Log, err) // the running agent keeps the chat
+			return err
+		}
+	}
+	agent.close()
+	defer func() {
+		if result != nil {
+			agent.hold(ctx, result)
+		}
+	}()
 	log, err := NewConversationLog(ctx, store, launch.Session.ID, agent.cancel, nil)
 	if err != nil {
 		return err
@@ -559,6 +623,61 @@ func (agent *acpAgent) restart(ctx context.Context) error {
 	agent.handler.mu.Lock()
 	agent.handler.Conversation = next
 	agent.handler.mu.Unlock()
+	if recordable {
+		if previous, current, err := environment.record(); err != nil {
+			_, event := obs.Start(ctx, "worker", "record_environment")
+			event.Set("session_id", agent.record.ID)
+			event.Fail(err)
+			event.End()
+		} else if previous.Digest != "" && previous.Digest != current.Digest {
+			next.Log.Append("notice", time.Now().UnixMilli(), MustRawJSON(map[string]string{
+				"sessionUpdate": "notice", "severity": "info", "title": reloadNotice(previous.Items, current.Items),
+			}))
+		}
+	}
 	next.ResumeTurns()
 	return next.Log.Republish()
+}
+
+// hold keeps a chat whose reload failed open: its log says why, and its next prompt retries the
+// reload. Only when even that log cannot open does the worker end, as before.
+func (agent *acpAgent) hold(ctx context.Context, cause error) {
+	ctx = context.WithoutCancel(ctx)
+	log, err := NewConversationLog(ctx, agent.store, agent.launch.Session.ID, agent.cancel, nil)
+	if err != nil {
+		agent.cancel(errors.Join(cause, err))
+		return
+	}
+	held := NewConversationSession(log, nil)
+	held.mu.Lock()
+	held.agentExited, held.sessionID = true, agent.record.ID
+	held.mu.Unlock()
+	appendReloadFailed(log, cause)
+	agent.cleanup = func() { closeACPEventLog(log) }
+	agent.handler.mu.Lock()
+	agent.handler.Conversation = held
+	agent.handler.mu.Unlock()
+}
+
+func appendReloadFailed(log *acp.EventLog, cause error) {
+	log.Append("notice", time.Now().UnixMilli(), MustRawJSON(map[string]string{
+		"sessionUpdate": "notice", "severity": "error", "title": "Couldn't reload", "description": cause.Error() + ". Send a message to retry.",
+	}))
+}
+
+// resumeArguments relaunch a terminal agent on its own session when its harness resumes by ID.
+func resumeArguments(launch WorkerLaunch, agentSession func() string) []string {
+	id := agentSession()
+	if id == "" || launch.Transport == "shell" {
+		return launch.Arguments
+	}
+	target, err := HarnessTarget(launch.Session.Harness)
+	if err != nil {
+		return launch.Arguments
+	}
+	entry, err := registry.ByTarget(target)
+	if err != nil || entry.ResumeArgs == nil {
+		return launch.Arguments
+	}
+	return append(slices.Clone(launch.Arguments), entry.ResumeArgs(id)...)
 }

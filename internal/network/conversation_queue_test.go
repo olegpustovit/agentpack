@@ -310,7 +310,7 @@ func TestIdleRestartWaitsForTheQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarted := make(chan struct{}, 1)
-	if !session.whenIdle(func() { restarted <- struct{}{} }) {
+	if session.readyToReload(func() { restarted <- struct{}{} }) {
 		t.Fatal("the chat is working")
 	}
 	agent.turns <- fakeTurn{}
@@ -327,6 +327,22 @@ func TestIdleRestartWaitsForTheQueue(t *testing.T) {
 	case <-restarted:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the restart never ran")
+	}
+}
+
+// Background work the idle agent will wake for holds a reload until it ends.
+func TestIdleRestartWaitsForBackgroundWork(t *testing.T) {
+	session, _ := newFakeAgentSession(t)
+	session.Log.Append("async_task_spawned", 1, MustRawJSON(map[string]string{"asyncTaskId": "build", "taskType": "bash"}))
+	restarted := make(chan struct{}, 1)
+	if session.readyToReload(func() { restarted <- struct{}{} }) {
+		t.Fatal("a reload would cut off background work")
+	}
+	session.Log.Append("async_task_state_update", 2, MustRawJSON(map[string]string{"asyncTaskId": "build", "state": "completed"}))
+	select {
+	case <-restarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the reload never ran after the background work ended")
 	}
 }
 

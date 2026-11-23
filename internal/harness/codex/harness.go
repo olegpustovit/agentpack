@@ -37,6 +37,7 @@ func New() base.Harness {
 		ACPAdapter:  codexACPPackage,
 		LaunchACP:   acpLaunch,
 		Capability:  Capability,
+		ResumeArgs:  resumeArgs,
 		Inheritance: base.Inheritance{
 			Note:  "Codex keeps native history/auth continuity under CODEX_HOME bridging",
 			Paths: func(string) []string { return base.HomeFiles(".codex/config.toml", ".codex/AGENTS.md") },
@@ -471,6 +472,9 @@ func keepAttribution() bool {
 		return false
 	}
 }
+
+// resumeArgs relaunch a terminal Codex on the thread it had.
+func resumeArgs(id string) []string { return []string{"resume", id} }
 
 // sessionNotify is a -c override that makes a terminal Codex report each finished turn to the
 // agentpack worker running it. Codex runs one notify program, so a notify the user configured is
