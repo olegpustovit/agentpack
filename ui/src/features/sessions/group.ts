@@ -83,8 +83,19 @@ function sortByLabel<T extends { label: string; key: string }>(items: T[]): T[] 
 // Projects merge by folder basename across machines. Two directories with one basename on one
 // machine stay separate and show their parent folder.
 export function groupSessions(sessions: ListedSession[], group: GroupMode): SessionGroup[] {
+  // A helper chat is placed with the chat that started it, whatever its own folder or machine.
+  const byId = new Map(sessions.map((session) => [session.id, session]))
+  const anchorOf = (session: ListedSession) => {
+    const seen = new Set<string>()
+    let anchor = session
+    for (let parent = byId.get(anchor.parent_id ?? ""); parent && !seen.has(parent.id); parent = byId.get(anchor.parent_id ?? "")) {
+      seen.add(anchor.id)
+      anchor = parent
+    }
+    return anchor
+  }
   const directoriesByFolder = new Map<string, Set<string>>()
-  for (const session of sessions) {
+  for (const session of sessions.map(anchorOf)) {
     const directory = trimSlashes(projectDirectory(session))
     const key = `${session.machine}\0${basename(directory)}`
     directoriesByFolder.set(key, (directoriesByFolder.get(key) ?? new Set<string>()).add(directory))
@@ -93,32 +104,33 @@ export function groupSessions(sessions: ListedSession[], group: GroupMode): Sess
   type Pending = Omit<SessionGroup, "subheads"> & { heads: Map<string, SessionSubhead> }
   const groups = new Map<string, Pending>()
   for (const session of sessions) {
-    const directory = trimSlashes(projectDirectory(session))
+    const anchor = anchorOf(session)
+    const directory = trimSlashes(projectDirectory(anchor))
     const folder = basename(directory)
     const byMachine = group === "machine"
-    const groupKey = byMachine ? `machine\0${session.machine}` : `project\0${folder}`
+    const groupKey = byMachine ? `machine\0${anchor.machine}` : `project\0${folder}`
     let entry = groups.get(groupKey)
     if (!entry) {
       entry = {
         key: groupKey,
-        label: byMachine ? session.machineName : folder || UNKNOWN_PROJECT,
-        offline: session.offline,
+        label: byMachine ? anchor.machineName : folder || UNKNOWN_PROJECT,
+        offline: anchor.offline,
         heads: new Map(),
       }
       groups.set(groupKey, entry)
     }
 
-    const headKey = `${session.machine}\0${directory}`
+    const headKey = `${anchor.machine}\0${directory}`
     let head = entry.heads.get(headKey)
     if (!head) {
-      const shared = (directoriesByFolder.get(`${session.machine}\0${folder}`)?.size ?? 0) > 1
+      const shared = (directoriesByFolder.get(`${anchor.machine}\0${folder}`)?.size ?? 0) > 1
       head = {
         key: headKey,
-        label: byMachine ? folder || UNKNOWN_PROJECT : session.machineName,
+        label: byMachine ? folder || UNKNOWN_PROJECT : anchor.machineName,
         parent: shared ? parentName(directory) : null,
-        machine: session.machine,
+        machine: anchor.machine,
         directory,
-        offline: session.offline,
+        offline: anchor.offline,
         sessions: [],
       }
       entry.heads.set(headKey, head)
