@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -256,6 +257,41 @@ func TestGoalBeyondTheReplayedTailIsRestoredAndClears(t *testing.T) {
 	}
 	if input := agent.nextPrompt(t); input.Text != "/goal clear" {
 		t.Fatalf("sent %q", input.Text)
+	}
+	agent.turns <- fakeTurn{}
+}
+
+// A stop that lands while the turn loop is between turns pauses the native goal when the loop
+// lets the agent go; it has no turn left whose end would send the pause.
+func TestStopBetweenTurnsPausesNativeGoalOnRelease(t *testing.T) {
+	session, agent := newFakeAgentSession(t, entry("available_commands_update", map[string]any{
+		"sessionUpdate": "available_commands_update", "availableCommands": []map[string]string{{"name": "goal", "description": "goal"}},
+	}))
+	if err := session.SetGoal(t.Context(), "ship it", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	agent.nextPrompt(t)
+	agent.turns <- fakeTurn{}
+	agent.goalUntil(t, goalIn("met"))
+	agent.log.Append("agent_message_chunk", 2, MustRawJSON(map[string]any{"text": map[string]string{"text": "still going"}}))
+	agent.goalUntil(t, goalIn("active"))
+	session.mu.Lock()
+	for session.running { // wait for the first loop to let go, then pose as one between turns
+		session.mu.Unlock()
+		runtime.Gosched()
+		session.mu.Lock()
+	}
+	session.running = true
+	session.mu.Unlock()
+	if err := session.Cancel(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	agent.log.Append("session_info_update", 3, MustRawJSON(map[string]any{"sessionUpdate": "session_info_update",
+		"_meta": map[string]any{"codex": map[string]any{"threadStatus": map[string]string{"type": "idle"}}}}))
+	agent.goalUntil(t, goalIn("paused"))
+	go session.runTurns(context.Background(), nil, nil)
+	if prompt := agent.nextPrompt(t); prompt.Text != "/goal pause" {
+		t.Fatalf("prompt = %q", prompt.Text)
 	}
 	agent.turns <- fakeTurn{}
 }

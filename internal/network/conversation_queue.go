@@ -30,11 +30,13 @@ type QueuedPrompt struct {
 // and delivery during a turn. It acts on derived state only after the sink stored it (see
 // ConversationSession.applyLogEntry), like an outbox.
 //
-// Lock order: queueMu, then the core's mu. queueMu orders queue changes and goal publishes with
-// their log entries, so it is never taken inside a log callback. Every other field is guarded by
-// the core's mu, because the log callback reads them.
+// Lock order: queueMu, then the core's mu. queueMu orders queue changes with their log entries,
+// so it is never taken inside a log callback; goalPublishMu only orders goal publishes, apart from
+// queueMu so a publish never holds up the next turn. Every other field is guarded by the core's
+// mu, because the log callback reads them.
 type turnRunner struct {
 	queueMu       sync.Mutex
+	goalPublishMu sync.Mutex // orders goal publishes; a leaf apart from the log
 	Queue         []QueuedPrompt
 	SeenPrompts   map[string]struct{}
 	starting      bool
@@ -56,13 +58,15 @@ type turnRunner struct {
 	goalDirty      bool // the agent reported a native goal snapshot
 	goalSettled    bool // the native goal was marked met because the agent went idle
 	goalPauseDue   bool // the user stopped unprompted native goal work; tell the agent to pause
-	nativeGoal     bool // the agent advertises a /goal command
-	turnText       []byte
-	turnTools      int
-	goalBlocked    int
-	goalIdle       int
-	usageUsed      int64
-	usageCost      float64
+	// goalPauseOnRelease is goalPauseDue for a turn loop that was between turns at the time.
+	goalPauseOnRelease bool
+	nativeGoal         bool // the agent advertises a /goal command
+	turnText           []byte
+	turnTools          int
+	goalBlocked        int
+	goalIdle           int
+	usageUsed          int64
+	usageCost          float64
 	// An unprompted cycle (a native goal, a Stop-hook continuation) is closed with a synthetic
 	// turn_end once its last usage_update stays quiet for unpromptedUsageSettle.
 	unpromptedUsageSettle  time.Duration
@@ -391,8 +395,11 @@ func (cs *ConversationSession) logDequeued(id, reason string) {
 func (cs *ConversationSession) runTurns(ctx context.Context, input *acp.PromptInput, first chan<- error) {
 	for {
 		if input == nil {
-			next, ok := cs.nextPrompt()
+			next, ok, pause := cs.nextPrompt()
 			if !ok {
+				if pause {
+					_, _, _ = cs.Submit(ctx, acp.PromptInput{Text: "/goal pause"}, false)
+				}
 				return
 			}
 			input = &next
@@ -423,26 +430,28 @@ func (cs *ConversationSession) runTurns(ctx context.Context, input *acp.PromptIn
 }
 
 // nextPrompt picks what to send after a turn, or releases the agent. It never sends while the
-// user must answer a request, after the agent exited, or once the chat is archived.
-func (cs *ConversationSession) nextPrompt() (acp.PromptInput, bool) {
+// user must answer a request, after the agent exited, or once the chat is archived. pause asks
+// the caller to tell the agent to pause its native goal once released.
+func (cs *ConversationSession) nextPrompt() (_ acp.PromptInput, ok, pause bool) {
 	cs.queueMu.Lock()
 	defer cs.queueMu.Unlock()
 	cs.mu.Lock()
+	pause, cs.goalPauseOnRelease = cs.goalPauseOnRelease, false
 	if cs.closedErr() != nil || cs.state == "needs_you" || len(cs.Queue) == 0 && !cs.goalWantsTurn() {
 		cs.running = false
 		cs.mu.Unlock()
-		return acp.PromptInput{}, false
+		return acp.PromptInput{}, false, pause && cs.closedErr() == nil
 	}
 	cs.userCancelled = false
 	if len(cs.Queue) == 0 {
 		prompt := goalContinuation(cs.goal)
 		cs.mu.Unlock()
-		return acp.PromptInput{Text: prompt}, true
+		return acp.PromptInput{Text: prompt}, true, false
 	}
 	item := cs.Queue[0]
 	cs.Queue = cs.Queue[1:]
 	cs.mu.Unlock()
-	return item.Input, true
+	return item.Input, true, false
 }
 
 // maybeDrain starts the turn loop when the agent is free and a queued prompt or goal turn is due.

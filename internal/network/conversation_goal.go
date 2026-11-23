@@ -239,6 +239,8 @@ func (cs *ConversationSession) followNativeGoal(entry acp.LogEntry, state string
 		// A prompted turn is paused by finishTurn; unprompted work has no turn to finish.
 		setGoalState(goal, "paused", "stopped by the user", entry.TS)
 		cs.goalDirty, cs.goalPauseDue = true, !cs.running
+		// A turn loop between turns has no turn left to finish: it pauses the agent as it lets go.
+		cs.goalPauseOnRelease = cs.running && cs.delivering == 0
 	case state == string(StateIdle) && cs.state == string(StateWorking) && goal.State == "active" &&
 		cs.stopReason != "error" && cs.stopReason != "failed" && cs.stopReason != "cancelled":
 		setGoalState(goal, "met", "the agent finished", entry.TS)
@@ -318,8 +320,8 @@ func (cs *ConversationSession) applyGatewayStopRules(goal *session.Goal, now int
 
 // publishGoal logs the current goal unless it is unchanged since the last publish.
 func (cs *ConversationSession) publishGoal() {
-	cs.queueMu.Lock()
-	defer cs.queueMu.Unlock()
+	cs.goalPublishMu.Lock()
+	defer cs.goalPublishMu.Unlock()
 	cs.mu.Lock()
 	goal := cs.goal
 	if goal == nil {
