@@ -175,7 +175,8 @@ func TestTelemetryBrowserFixture(t *testing.T) {
 		case "/api/limits":
 			data = map[string]any{"limits": []any{}}
 		case "/api/sessions":
-			data = map[string]any{} // Make the real component throw on the malformed list.
+			// The list query only merges rows, so a malformed row reaches the real component and throws there.
+			data = []any{map[string]any{"id": "broken", "directory": 0}}
 		}
 		network.WriteJSON(w, data)
 	})
