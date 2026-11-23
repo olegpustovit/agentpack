@@ -129,7 +129,7 @@ func redactValue(value any, depth int, budget *int) any {
 			}
 			switch lower {
 			case "cookie", "set-cookie", "env", "environment", "prompt", "reply", "body",
-				"request_body", "response_body", "args", "arguments", "output", "result", "text", "content", "stderr":
+				"request_body", "response_body", "args", "arguments", "output", "result", "text", "content":
 				continue
 			}
 			key = boundedString(key, 128)

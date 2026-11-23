@@ -10,7 +10,9 @@ func TestRedactMetadataAndPayloads(t *testing.T) {
 		{"signal", "TERM", "TERM"}, {"author", "test", "test"}, {"design", "test", "test"},
 		{"clientSecret", "test", nil}, {"access_token", "test", nil},
 		{"args", "test", nil}, {"arguments", "test", nil}, {"output", "test", nil},
-		{"result", "test", nil}, {"text", "test", nil}, {"content", "test", nil}, {"stderr", "test", nil},
+		{"result", "test", nil}, {"text", "test", nil}, {"content", "test", nil},
+		// An adapter crash keeps its bounded stderr tail; values inside are still pattern-redacted.
+		{"stderr", "test", "test"}, {"stderr", "sk-ant-test1234567890", "[redacted]"},
 		{"message", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc123", "[redacted]"},
 		{"message", "sk-ant-test1234567890", "[redacted]"},
 	} {
