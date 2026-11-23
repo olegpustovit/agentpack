@@ -59,7 +59,8 @@ func NewResolver(ctx context.Context, client *http.Client) Resolver {
 }
 
 func (resolver Resolver) Resolve(ctx context.Context, projectRoot string, project *manifest.Manifest, options ResolveOptions) (lockfile.PackLock, error) {
-	fetchCtx := githubsource.ReuseTarballs(ctx)
+	fetchCtx, removeTarballs := githubsource.ReuseTarballs(ctx)
+	defer removeTarballs()
 	lock := lockfile.PackLock{LockfileVersion: lockfile.Version, Meta: lockfile.Meta{Name: project.Name, Version: project.Version}}
 	if len(project.Dependencies) == 0 {
 		return lock, nil

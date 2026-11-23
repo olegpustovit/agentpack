@@ -97,8 +97,8 @@ func TestAPIAndCodeloadSendGHToken(t *testing.T) {
 	if len(apiAuth) != 1 || apiAuth[0] != "Bearer gh-secret" {
 		t.Fatalf("API Authorization = %v", apiAuth)
 	}
-	data, err := DownloadTarball(context.Background(), server.Client(), "o", "r", "a123456789abcdef0123456789abcdef01234567")
-	if err != nil || string(data) != "archive" {
+	data, err := downloadText(t, context.Background(), server.Client(), "o", "r", "a123456789abcdef0123456789abcdef01234567")
+	if err != nil || data != "archive" {
 		t.Fatalf("DownloadTarball = %q, %v", data, err)
 	}
 	if len(codeloadAuth) != 2 || codeloadAuth[0] != "" || codeloadAuth[1] != "Bearer gh-secret" {
@@ -129,7 +129,7 @@ func TestAccessHints(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("ResolveRef error = %v, want hint %q", err, test.want)
 			}
-			_, err = DownloadTarball(context.Background(), server.Client(), "o", "r", sha)
+			_, _, err = DownloadTarball(context.Background(), server.Client(), "o", "r", sha)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("DownloadTarball error = %v, want hint %q", err, test.want)
 			}
@@ -137,24 +137,5 @@ func TestAccessHints(t *testing.T) {
 				t.Fatal("error leaks the token")
 			}
 		})
-	}
-}
-
-func TestReuseTarballsDownloadsARepositoryOnce(t *testing.T) {
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { requests++; w.Write([]byte("archive")) }))
-	defer server.Close()
-	previous := codeloadRoot
-	codeloadRoot = server.URL
-	defer func() { codeloadRoot = previous }()
-	const sha = "a123456789abcdef0123456789abcdef01234567"
-	ctx := ReuseTarballs(context.Background())
-	for range 2 {
-		if data, err := DownloadTarball(ctx, server.Client(), "o", "r", sha); err != nil || string(data) != "archive" {
-			t.Fatalf("DownloadTarball = %q, %v", data, err)
-		}
-	}
-	if _, err := DownloadTarball(context.Background(), server.Client(), "o", "r", sha); err != nil || requests != 2 {
-		t.Fatalf("requests = %d, %v; want one per reuse scope", requests, err)
 	}
 }

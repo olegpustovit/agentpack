@@ -2,7 +2,6 @@ package github
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
 	"context"
 	"errors"
@@ -18,6 +17,8 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 var (
@@ -25,8 +26,8 @@ var (
 	retryBaseWait = 400 * time.Millisecond
 )
 
-// shortcut: archives are held in memory up to this cap; stream to a temp file if packages ever need larger repositories.
-const maxTarballBytes = 1 << 30
+// maxTarballBytes caps one spooled archive; a variable so tests can lower it.
+var maxTarballBytes int64 = 1 << 30
 
 type fetchDisposition uint8
 
@@ -38,50 +39,83 @@ const (
 )
 
 type fetchResult struct {
-	data        []byte
 	disposition fetchDisposition
 	reason      string
 	denied      bool
 	err         error
 }
 
-// DownloadTarball tries anonymous codeload first, authenticated codeload for
-// private repositories second, then the Git protocol. Transient HTTP failures
-// receive the same three-attempt exponential retry policy as other sources.
-func DownloadTarball(ctx context.Context, client *http.Client, owner, repo, sha string) ([]byte, error) {
-	reused, _ := ctx.Value(tarballReuseKey{}).(*sync.Map)
-	if reused == nil {
-		return downloadTarball(ctx, client, owner, repo, sha)
+// DownloadTarball spools the repository archive to a file in the cache
+// directory and returns its path. It tries anonymous codeload first,
+// authenticated codeload for private repositories second, then the Git
+// protocol; transient HTTP failures get three attempts with exponential
+// backoff. The caller reads the file by path and calls release, never nil,
+// when done.
+func DownloadTarball(ctx context.Context, client *http.Client, owner, repo, sha string) (path string, release func(), err error) {
+	scope, _ := ctx.Value(tarballReuseKey{}).(*tarballScope)
+	if scope == nil {
+		path, err = downloadTarball(ctx, client, owner, repo, sha)
+		if err != nil {
+			return "", func() {}, err
+		}
+		return path, func() { _ = os.Remove(path) }, nil
 	}
-	value, _ := reused.LoadOrStore(owner+"/"+repo+"@"+sha, &reusedTarball{})
+	value, _ := scope.files.LoadOrStore(owner+"/"+repo+"@"+sha, &reusedTarball{})
 	entry := value.(*reusedTarball)
 	entry.Lock()
 	defer entry.Unlock()
-	if entry.data != nil {
-		return entry.data, nil
+	if entry.path == "" {
+		if entry.path, err = downloadTarball(ctx, client, owner, repo, sha); err != nil {
+			return "", func() {}, err
+		}
 	}
-	data, err := downloadTarball(ctx, client, owner, repo, sha)
-	if err == nil {
-		entry.data = data
-	}
-	return data, err
+	// The scope's cleanup removes the file.
+	return entry.path, func() {}, nil
 }
 
 type tarballReuseKey struct{}
 
+type tarballScope struct{ files sync.Map }
+
 type reusedTarball struct {
 	sync.Mutex
-	data []byte
+	path string
 }
 
 // ReuseTarballs makes DownloadTarball keep each archive it fetches for ctx: a
 // resolve walks sibling paths of one repository, and each would otherwise
-// download the whole repository again. Callers only read the bytes.
-func ReuseTarballs(ctx context.Context) context.Context {
-	return context.WithValue(ctx, tarballReuseKey{}, &sync.Map{})
+// download the whole repository again. cleanup removes every spooled file;
+// call it once the scope's work, including on error, has ended.
+func ReuseTarballs(ctx context.Context) (scoped context.Context, cleanup func()) {
+	scope := &tarballScope{}
+	return context.WithValue(ctx, tarballReuseKey{}, scope), func() {
+		scope.files.Range(func(_, value any) bool {
+			entry := value.(*reusedTarball)
+			entry.Lock()
+			if entry.path != "" {
+				_ = os.Remove(entry.path)
+				entry.path = ""
+			}
+			entry.Unlock()
+			return true
+		})
+	}
 }
 
-func downloadTarball(ctx context.Context, client *http.Client, owner, repo, sha string) ([]byte, error) {
+// spoolFile creates the temporary archive file next to the cache entries, so
+// extraction reads from the same filesystem it writes to.
+func spoolFile() (*os.File, error) {
+	root, err := paths.CacheDir()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return nil, fmt.Errorf("create cache directory %s: %w", root, err)
+	}
+	return os.CreateTemp(root, ".tmp-archive-*.tar.gz")
+}
+
+func downloadTarball(ctx context.Context, client *http.Client, owner, repo, sha string) (string, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Minute}
 	}
@@ -96,19 +130,28 @@ func downloadTarball(ctx context.Context, client *http.Client, owner, repo, sha 
 	var attempts []string
 	denied := true
 	for _, source := range sources {
-		result := fetchCodeloadWithRetry(ctx, client, owner, repo, sha, source.token)
-		if result.disposition == fetchSuccess {
-			return result.data, nil
+		file, err := spoolFile()
+		if err != nil {
+			return "", err
 		}
-		if result.disposition == fetchFatal {
-			return nil, result.err
+		result := fetchCodeloadWithRetry(ctx, client, owner, repo, sha, source.token, file)
+		closeErr := file.Close()
+		if result.disposition == fetchSuccess && closeErr == nil {
+			return file.Name(), nil
+		}
+		_ = os.Remove(file.Name())
+		switch {
+		case result.disposition == fetchSuccess:
+			return "", closeErr
+		case result.disposition == fetchFatal:
+			return "", result.err
 		}
 		attempts = append(attempts, source.name+": "+result.reason)
 		denied = denied && result.denied
 	}
-	data, err := fetchTarballWithGit(ctx, owner, repo, sha)
+	path, err := fetchTarballWithGit(ctx, owner, repo, sha)
 	if err == nil {
-		return data, nil
+		return path, nil
 	}
 	attempts = append(attempts, "git-protocol: "+err.Error())
 	short := sha
@@ -119,13 +162,13 @@ func downloadTarball(ctx context.Context, client *http.Client, owner, repo, sha 
 	if denied {
 		message += "\n  hint: " + accessHint(owner, repo, githubToken() != "")
 	}
-	return nil, errors.New(message)
+	return "", errors.New(message)
 }
 
-func fetchCodeloadWithRetry(ctx context.Context, client *http.Client, owner, repo, sha, token string) fetchResult {
+func fetchCodeloadWithRetry(ctx context.Context, client *http.Client, owner, repo, sha, token string, file *os.File) fetchResult {
 	var result fetchResult
 	for attempt := 0; attempt < 3; attempt++ {
-		result = fetchCodeload(ctx, client, owner, repo, sha, token)
+		result = fetchCodeload(ctx, client, owner, repo, sha, token, file)
 		if result.disposition != fetchTransient || attempt == 2 {
 			return result
 		}
@@ -140,7 +183,8 @@ func fetchCodeloadWithRetry(ctx context.Context, client *http.Client, owner, rep
 	return result
 }
 
-func fetchCodeload(ctx context.Context, client *http.Client, owner, repo, sha, token string) fetchResult {
+// fetchCodeload writes the archive into file, replacing what an earlier attempt left.
+func fetchCodeload(ctx context.Context, client *http.Client, owner, repo, sha, token string, file *os.File) fetchResult {
 	url := fmt.Sprintf("%s/%s/%s/tar.gz/%s", codeloadRoot, owner, repo, sha)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -156,14 +200,20 @@ func fetchCodeload(ctx context.Context, client *http.Client, owner, repo, sha, t
 	defer response.Body.Close()
 	switch {
 	case response.StatusCode >= 200 && response.StatusCode < 300:
-		data, err := io.ReadAll(io.LimitReader(response.Body, maxTarballBytes+1))
+		if err := errors.Join(file.Truncate(0), seekStart(file)); err != nil {
+			return fetchResult{disposition: fetchFatal, err: err}
+		}
+		written, err := io.Copy(file, io.LimitReader(response.Body, maxTarballBytes+1))
 		if err != nil {
+			if ctx.Err() != nil {
+				return fetchResult{disposition: fetchFatal, err: ctx.Err()}
+			}
 			return fetchResult{disposition: fetchTransient, reason: "network: read body: " + err.Error()}
 		}
-		if len(data) > maxTarballBytes {
+		if written > maxTarballBytes {
 			return fetchResult{disposition: fetchFatal, err: fmt.Errorf("GET %s: archive is larger than %d MiB", url, maxTarballBytes>>20)}
 		}
-		return fetchResult{data: data, disposition: fetchSuccess}
+		return fetchResult{disposition: fetchSuccess}
 	case response.StatusCode == 401 || response.StatusCode == 403 || response.StatusCode == 404:
 		return fetchResult{disposition: fetchPermanent, reason: response.Status, denied: true}
 	case response.StatusCode == 429 || response.StatusCode >= 500:
@@ -173,22 +223,27 @@ func fetchCodeload(ctx context.Context, client *http.Client, owner, repo, sha, t
 	}
 }
 
-func fetchTarballWithGit(ctx context.Context, owner, repo, sha string) ([]byte, error) {
+func seekStart(file *os.File) error {
+	_, err := file.Seek(0, io.SeekStart)
+	return err
+}
+
+func fetchTarballWithGit(ctx context.Context, owner, repo, sha string) (string, error) {
 	if !isFullCommit(sha) {
-		return nil, fmt.Errorf("invalid commit sha %q", sha)
+		return "", fmt.Errorf("invalid commit sha %q", sha)
 	}
 	checkout, err := os.MkdirTemp("", "agentpack-git-archive-")
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	defer os.RemoveAll(checkout)
 	repository, err := git.PlainInit(checkout, false)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	remote, err := repository.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{gitRemoteURL(owner, repo)}})
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	// One commit at depth 1, never the whole history: a full clone of a large repository takes minutes.
 	options := &git.FetchOptions{RefSpecs: []config.RefSpec{config.RefSpec(sha + ":refs/heads/agentpack")}, Depth: 1, Tags: git.NoTags}
@@ -200,21 +255,29 @@ func fetchTarballWithGit(ctx context.Context, owner, repo, sha string) ([]byte, 
 		}
 	}
 	if err != nil && err != git.NoErrAlreadyUpToDate {
-		return nil, fmt.Errorf("git fetch: %w", err)
+		return "", fmt.Errorf("git fetch: %w", err)
 	}
 	worktree, err := repository.Worktree()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if err := worktree.Checkout(&git.CheckoutOptions{Hash: plumbing.NewHash(sha), Force: true}); err != nil {
-		return nil, fmt.Errorf("git checkout %s: %w", sha, err)
+		return "", fmt.Errorf("git checkout %s: %w", sha, err)
 	}
-	return archiveCheckout(checkout, repo+"-"+sha)
+	file, err := spoolFile()
+	if err != nil {
+		return "", err
+	}
+	err = errors.Join(archiveCheckout(file, checkout, repo+"-"+sha), file.Close())
+	if err != nil {
+		_ = os.Remove(file.Name())
+		return "", err
+	}
+	return file.Name(), nil
 }
 
-func archiveCheckout(root, prefix string) ([]byte, error) {
-	var output bytes.Buffer
-	gzipWriter := gzip.NewWriter(&output)
+func archiveCheckout(output io.Writer, root, prefix string) error {
+	gzipWriter := gzip.NewWriter(output)
 	tarWriter := tar.NewWriter(gzipWriter)
 	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
@@ -263,13 +326,7 @@ func archiveCheckout(root, prefix string) ([]byte, error) {
 		return closeErr
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := tarWriter.Close(); err != nil {
-		return nil, err
-	}
-	if err := gzipWriter.Close(); err != nil {
-		return nil, err
-	}
-	return bytes.Clone(output.Bytes()), nil
+	return errors.Join(tarWriter.Close(), gzipWriter.Close())
 }

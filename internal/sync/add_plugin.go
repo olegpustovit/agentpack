@@ -52,11 +52,17 @@ func (service Service) catalogPluginSpec(ctx context.Context, marketplace, plugi
 	if err != nil {
 		return "", err
 	}
-	archive, err := githubsource.DownloadTarball(ctx, service.client(), source.Owner, source.Repo, commit)
+	archive, release, err := githubsource.DownloadTarball(ctx, service.client(), source.Owner, source.Repo, commit)
 	if err != nil {
 		return "", err
 	}
-	entry, err := cache.ResolveCatalogPlugin(archive, source.Path, plugin)
+	defer release()
+	file, err := os.Open(archive)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	entry, err := cache.ResolveCatalogPlugin(file, source.Path, plugin)
 	if err != nil {
 		return "", fmt.Errorf("%s/%s: %w", source.Owner, source.Repo, err)
 	}

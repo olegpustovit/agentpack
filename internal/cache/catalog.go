@@ -1,9 +1,9 @@
 package cache
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -43,13 +43,13 @@ var componentFields = map[string]bool{"commands": true, "agents": true, "skills"
 // entry as the plugin's manifest; so does agentpack, by writing the entry's
 // manifest fields to .claude-plugin/plugin.json in out. It returns false when
 // no catalog lists the directory.
-func writeCatalogManifest(archive []byte, source githubsource.Source, out string) (bool, error) {
+func writeCatalogManifest(archive io.Reader, source githubsource.Source, out string) (bool, error) {
 	catalogs := make([]string, 0, len(marketplaceManifestPaths))
 	for _, relative := range marketplaceManifestPaths {
 		catalogs = append(catalogs, filepath.ToSlash(relative))
 	}
 	catalogs = append(catalogs, ".omp-plugin/marketplace.json")
-	files, err := githubsource.ReadRepoFiles(bytes.NewReader(archive), catalogs...)
+	files, err := githubsource.ReadRepoFiles(archive, catalogs...)
 	if err != nil {
 		return false, nil
 	}
@@ -140,7 +140,7 @@ type CatalogPlugin struct {
 // names a directory or a git repository: a relative path, {"source":"local"},
 // {"source":"github"}, {"source":"url"} and {"source":"git-subdir"}. An entry
 // pinned with "sha" resolves to that commit, otherwise to its "ref".
-func ResolveCatalogPlugin(archive []byte, directory, name string) (CatalogPlugin, error) {
+func ResolveCatalogPlugin(archive io.Reader, directory, name string) (CatalogPlugin, error) {
 	directory = strings.Trim(directory, "/")
 	var catalogs []string
 	// Claude Code's catalog first: it is the one that carries external sources.
@@ -152,7 +152,7 @@ func ResolveCatalogPlugin(archive []byte, directory, name string) (CatalogPlugin
 		catalogs = append(catalogs, relative)
 	}
 	catalogs = append(catalogs, filepath.ToSlash(filepath.Join(directory, ".omp-plugin", "marketplace.json")))
-	files, err := githubsource.ReadRepoFiles(bytes.NewReader(archive), catalogs...)
+	files, err := githubsource.ReadRepoFiles(archive, catalogs...)
 	if err != nil {
 		return CatalogPlugin{}, err
 	}
