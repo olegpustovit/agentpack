@@ -1,6 +1,6 @@
 import type { MouseEvent } from "react"
 import { copyText } from "@/lib/hud"
-import { renderAgentBlocks } from "./agent-markdown"
+import { renderAgentBlocks, useHighlighter } from "./agent-markdown"
 import { stripAgentText } from "./agent-text"
 
 const mdClass =
@@ -20,10 +20,11 @@ function copyCode(event: MouseEvent<HTMLDivElement>) {
 
 export function AgentMessageBody({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const cleaned = stripAgentText(text)
+  const highlighter = useHighlighter()
   let blocks: string[] = []
   if (cleaned) {
     try {
-      blocks = renderAgentBlocks(cleaned, streaming)
+      blocks = renderAgentBlocks(cleaned, streaming, highlighter)
     } catch {
       blocks = []
     }

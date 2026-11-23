@@ -18,14 +18,11 @@ func TestSettingsAttributionAndAllowlist(t *testing.T) {
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("AGENTPACK_KEEP_ATTRIBUTION", "")
 	ctx := base.StageContext{ProjectRoot: t.TempDir(), Mode: mode.ImplicitEffective()}
-	if err := MaterializeSettings(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := SetMCPAllowlist(ctx, []string{"linear"}); err != nil {
+	data, err := SettingsContents([]string{"linear"}, KeepAttribution())
+	if err != nil {
 		t.Fatal(err)
 	}
 	path, _ := SettingsPath(ctx)
-	data, _ := os.ReadFile(path)
 	var value map[string]any
 	if err := json.Unmarshal(data, &value); err != nil {
 		t.Fatal(err)
@@ -95,11 +92,12 @@ func TestClaudeSettingsIsolatedAcrossProjectsAndModes(t *testing.T) {
 		group.Add(1)
 		go func(index int, ctx base.StageContext) {
 			defer group.Done()
-			if err := MaterializeSettings(ctx); err != nil {
+			data, err := SettingsContents([]string{fmt.Sprintf("server-%d", index)}, KeepAttribution())
+			if err != nil {
 				failures <- err
 				return
 			}
-			failures <- SetMCPAllowlist(ctx, []string{fmt.Sprintf("server-%d", index)})
+			failures <- WriteSettingsContents(ctx, data)
 		}(index, ctx)
 	}
 	group.Wait()
@@ -111,7 +109,7 @@ func TestClaudeSettingsIsolatedAcrossProjectsAndModes(t *testing.T) {
 	}
 	var previous *exec.Cmd
 	for index, ctx := range contexts {
-		command, err := launch(base.LaunchContext{ProjectRoot: ctx.ProjectRoot, Mode: ctx.Mode})
+		command, _, err := launch(base.LaunchContext{ProjectRoot: ctx.ProjectRoot, Mode: ctx.Mode})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -130,7 +128,7 @@ func TestClaudeSettingsIsolatedAcrossProjectsAndModes(t *testing.T) {
 			previous = command
 		}
 	}
-	if err := SetMCPAllowlist(contexts[0], nil); err != nil {
+	if err := MaterializeSettings(contexts[0]); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(previous.Args[2], "server-0") {

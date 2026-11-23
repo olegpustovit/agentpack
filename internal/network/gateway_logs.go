@@ -12,7 +12,7 @@ type issueResolution struct {
 	Note    string `json:"note,omitempty" jsonschema:"Optional explanation of the fix."`
 }
 
-func (g *Gateway) registerDiagnostics(mux *http.ServeMux) {
+func (g *Gateway) registerDiagnostics(mux routeRegistrar) {
 	mux.HandleFunc("POST /api/logs/ingest", g.peerOnly(g.ingestTraces))
 	mux.HandleFunc("GET /api/logs/trace/{trace}", g.peerOnly(g.localTrace))
 	mux.HandleFunc("GET /api/logs/issues", func(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +44,7 @@ func (g *Gateway) registerDiagnostics(mux *http.ServeMux) {
 			}
 			status := map[string]string{"resolve": "resolved", "reopen": "open", "ignore": "ignored"}[action]
 			actor, _ := actorFrom(r.Context())
-			issue, err := obs.ChangeIssue(r.Context(), g.options.Home, r.PathValue("fingerprint"), status, input.Version, input.Note, actor.User)
+			issue, err := obs.ChangeIssue(r.Context(), g.auth.store, g.options.Home, r.PathValue("fingerprint"), status, input.Version, input.Note, actor.User)
 			writeDiagnostics(w, r, issue, err)
 		})
 	}

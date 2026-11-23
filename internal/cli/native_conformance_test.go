@@ -72,7 +72,7 @@ func TestNativeRestoredPackConformance(t *testing.T) {
 		var output bytes.Buffer
 		runner := NewRunner()
 		runner.Stdout = &output
-		code, probeErr := runner.runProbe(context.Background(), definition, workspace, "default", []string{"--agent", string(target), "--strict-external", "--json"}, false)
+		code, probeErr := probeLeaf(runner, definition, workspace, "default", string(target))
 		if code != 0 || probeErr != nil {
 			t.Fatalf("native CLI probe %s: code=%d err=%v output=%s", target, code, probeErr, output.String())
 		}
@@ -106,7 +106,7 @@ func TestNativeRestoredPackConformance(t *testing.T) {
 			t.Fatal(err)
 		}
 		output.Reset()
-		code, probeErr = runner.runProbe(context.Background(), definition, workspace, "held-out", []string{"--agent", string(target), "--strict-external", "--json"}, false)
+		code, probeErr = probeLeaf(runner, definition, workspace, "held-out", string(target))
 		if code != 0 && code != 4 {
 			t.Fatalf("held-out native probe %s: code=%d err=%v output=%s", target, code, probeErr, output.String())
 		}
@@ -139,4 +139,14 @@ func TestNativeRestoredPackConformance(t *testing.T) {
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("restoration/probes wrote checkout: %v %v", entries, err)
 	}
+}
+
+// probeLeaf runs `probe --agent AGENT --strict-external --json` for a mode.
+func probeLeaf(runner Runner, definition, workspace, mode, agent string) (int, error) {
+	invocation, err := parseLeaf([]string{"probe", "--agent", agent, "--json"})
+	if err != nil {
+		return 2, err
+	}
+	invocation.Global = Global{Mode: mode, StrictExternal: true}
+	return runner.runProbe(context.Background(), definition, workspace, invocation)
 }

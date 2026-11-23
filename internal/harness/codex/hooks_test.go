@@ -36,3 +36,10 @@ func TestRendererMapsPermissionAndOmitsUnsupportedLifecycle(t *testing.T) {
 		t.Fatalf("events = %#v", hooksFile)
 	}
 }
+func TestHookOutputShapes(t *testing.T) {
+	t.Parallel()
+	result := hooks.Result{Decision: hooks.Ask, Message: "why", AdditionalContext: "ctx", UpdatedInput: 1, UpdatedToolOutput: 2}
+	if output := (HookRenderer{}).Output(hooks.PreToolUse, result).(map[string]any); output["permissionDecision"] != hooks.Ask || output["continue"] != true || output["updatedMCPToolOutput"] != 2 {
+		t.Fatalf("output = %#v", output)
+	}
+}

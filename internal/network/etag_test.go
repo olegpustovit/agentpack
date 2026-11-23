@@ -12,9 +12,12 @@ import (
 
 func serveConditional(t *testing.T, body string, method, path, ifNoneMatch string) *httptest.ResponseRecorder {
 	t.Helper()
-	handler := conditionalAPI(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(body))
-	}))
+	})
+	if row, _ := routeFor(method, path); row.etag() {
+		handler = conditionalAPI(handler)
+	}
 	req := httptest.NewRequest(method, path, nil)
 	if ifNoneMatch != "" {
 		req.Header.Set("If-None-Match", ifNoneMatch)

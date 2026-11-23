@@ -47,7 +47,7 @@ func TestLaunchAddsOverlayOnlyWhenWritten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command, err := launch(ctx)
+	command, _, err := launch(ctx)
 	if err != nil || slices.Contains(command.Args, "--config") {
 		t.Fatalf("args without overlay = %q, %v", command.Args, err)
 	}
@@ -65,7 +65,7 @@ func TestLaunchAddsOverlayOnlyWhenWritten(t *testing.T) {
 		t.Fatalf("ACP args = %q", args)
 	}
 	ctx.Arguments = []string{"--config", overlay}
-	command, err = launch(ctx)
+	command, _, err = launch(ctx)
 	if err != nil || slices.Index(command.Args, overlay) != len(command.Args)-1 {
 		t.Fatalf("caller's overlay duplicated: %q, %v", command.Args, err)
 	}

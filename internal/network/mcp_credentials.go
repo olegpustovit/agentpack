@@ -234,11 +234,21 @@ func (g *Gateway) writeMCPState(ctx context.Context, id string, state mcpCredent
 	if err != nil {
 		return err
 	}
-	result, err := g.store.DB.ExecContext(ctx, "UPDATE mcp_credentials SET state=? WHERE id=?", string(data), id)
+	query := "UPDATE mcp_credentials SET state=? WHERE id=?"
+	args := []any{string(data), id}
+	if state.Status == mcpStatusNeedsLogin {
+		query += " AND coalesce(json_extract(state,'$.generation'),0)<=?"
+		args = append(args, state.Generation)
+	}
+	result, err := g.store.DB.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
 	if count, _ := result.RowsAffected(); count == 0 {
+		if state.Status == mcpStatusNeedsLogin {
+			_, err := g.loadMCPCredential(ctx, id)
+			return err
+		}
 		return errMCPCredentialNotFound
 	}
 	g.credentialsChanged()
@@ -403,11 +413,9 @@ func (g *Gateway) freshMCPSecret(ctx context.Context, id string, failedGeneratio
 			g.mcpBroker.mu.Unlock()
 			return remote, nil
 		}
-		if !errors.Is(err, errMCPRefresherUnreachable) {
-			return secret, err
-		}
+		return secret, err
 	}
-	credential, err = g.refreshMCPToken(ctx, id, max(failedGeneration, secret.Generation), !local)
+	credential, err = g.refreshMCPToken(ctx, id, max(failedGeneration, secret.Generation))
 	if err != nil {
 		return g.bridgeSecret(credential), err
 	}
@@ -415,10 +423,8 @@ func (g *Gateway) freshMCPSecret(ctx context.Context, id string, failedGeneratio
 }
 
 // refreshMCPToken refreshes on this node under the credential's lock, unless
-// another refresh already moved past the failed generation. A stand-in for an
-// unreachable refresher waits one sync interval for a newer token before it
-// gives up on a refresh token the refresher may already have rotated.
-func (g *Gateway) refreshMCPToken(ctx context.Context, id string, failedGeneration int64, standIn bool) (mcpCredential, error) {
+// another refresh already moved past the failed generation.
+func (g *Gateway) refreshMCPToken(ctx context.Context, id string, failedGeneration int64) (mcpCredential, error) {
 	lock := g.mcpBroker.lock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -428,6 +434,13 @@ func (g *Gateway) refreshMCPToken(ctx context.Context, id string, failedGenerati
 	}
 	if credential.State.Generation > failedGeneration && usable(g.bridgeSecret(credential), time.Now()) {
 		return credential, nil
+	}
+	_, local, err := g.mcpRefresher(ctx, credential)
+	if err != nil {
+		return credential, err
+	}
+	if !local {
+		return credential, errMCPRefresherUnreachable
 	}
 	// This node now writes its own state: count past a token the refresher handed out, and stop serving that copy.
 	g.mcpBroker.mu.Lock()
@@ -452,11 +465,6 @@ func (g *Gateway) refreshMCPToken(ctx context.Context, id string, failedGenerati
 			// Never pass the token endpoint's body on: it may echo credentials.
 			return credential, errors.New("MCP token refresh failed: token endpoint unreachable")
 		}
-		if standIn {
-			if newer, ok := g.awaitNewerMCPToken(ctx, id, credential.State.Generation); ok {
-				return newer, nil
-			}
-		}
 		return g.markNeedsLogin(ctx, credential)
 	}
 	state := credential.State
@@ -474,30 +482,19 @@ func (g *Gateway) refreshMCPToken(ctx context.Context, id string, failedGenerati
 	return credential, nil
 }
 
-// mcpReplicationWait is how long a stand-in waits for a rotated token to replicate; tests shorten it.
-var mcpReplicationWait = 30 * time.Second
-
-func (g *Gateway) awaitNewerMCPToken(ctx context.Context, id string, generation int64) (mcpCredential, bool) {
-	deadline := time.Now().Add(mcpReplicationWait)
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return mcpCredential{}, false
-		case <-time.After(min(2*time.Second, mcpReplicationWait)):
-		}
-		if credential, err := g.loadMCPCredential(ctx, id); err == nil && credential.State.Generation > generation {
-			return credential, true
-		}
-	}
-	return mcpCredential{}, false
-}
-
 func (g *Gateway) markNeedsLogin(ctx context.Context, credential mcpCredential) (mcpCredential, error) {
 	credential.State.Status = mcpStatusNeedsLogin
 	if err := g.writeMCPState(ctx, credential.ID, credential.State); err != nil {
 		return credential, err
 	}
-	return credential, errMCPNeedsLogin
+	current, err := g.loadMCPCredential(ctx, credential.ID)
+	if err != nil {
+		return credential, err
+	}
+	if current.State.Status != mcpStatusNeedsLogin {
+		return current, nil
+	}
+	return current, errMCPNeedsLogin
 }
 
 func (g *Gateway) remoteMCPRefresh(ctx context.Context, node string, credential mcpCredential, failedGeneration int64) (mcpBridgeSecret, error) {
@@ -597,7 +594,7 @@ func (g *Gateway) accountEnabled(ctx context.Context, email string) bool {
 	return g.store.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE email=? AND disabled=0)", email).Scan(&enabled) == nil && enabled
 }
 
-func (g *Gateway) registerMCPCredentials(mux *http.ServeMux) {
+func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/mcp/credentials", func(w http.ResponseWriter, r *http.Request) {
 		_, account, ok := credentialAccount(r)
 		if !ok {
@@ -764,7 +761,7 @@ func (g *Gateway) registerMCPCredentials(mux *http.ServeMux) {
 		if actor.Kind == "peer" {
 			// This node was asked because it is the refresher: never forward again.
 			var refreshed mcpCredential
-			refreshed, err = g.refreshMCPToken(r.Context(), credential.ID, input.Generation, false)
+			refreshed, err = g.refreshMCPToken(r.Context(), credential.ID, input.Generation)
 			secret = g.bridgeSecret(refreshed)
 		} else {
 			secret, err = g.freshMCPSecret(r.Context(), credential.ID, input.Generation)
@@ -918,7 +915,7 @@ func (g *Gateway) renewMCPTokens(ctx context.Context) {
 		if _, local, err := g.mcpRefresher(ctx, credential); err != nil || !local || !g.accountEnabled(ctx, credential.Account) {
 			continue
 		}
-		if _, err := g.refreshMCPToken(ctx, credential.ID, credential.State.Generation, false); err != nil && ctx.Err() == nil {
+		if _, err := g.refreshMCPToken(ctx, credential.ID, credential.State.Generation); err != nil && ctx.Err() == nil {
 			_, event := obs.Start(ctx, "mcp.credentials", "renew token")
 			event.Set("credential", credential.ID)
 			event.Fail(err)

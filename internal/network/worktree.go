@@ -51,11 +51,19 @@ func (e *gitError) Error() string {
 }
 func (e *gitError) Unwrap() error { return e.err }
 
+var worktreeGitSlots = make(chan struct{}, 8)
+
 // runGit runs git in dir with the machine's own credentials and never prompts. The error carries
 // git's first stderr lines, which never include credentials: git redacts them from URLs.
 func runGit(ctx context.Context, timeout time.Duration, dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	select {
+	case worktreeGitSlots <- struct{}{}:
+		defer func() { <-worktreeGitSlots }()
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 	command := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
 	var stderr bytes.Buffer

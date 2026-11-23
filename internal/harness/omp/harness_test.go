@@ -17,17 +17,17 @@ func TestBundleAndLaunch(t *testing.T) {
 	t.Setenv("OMP_PATH", os.Args[0])
 	ctx := base.StageContext{ProjectRoot: t.TempDir()}
 	h := New()
-	if err := h.Prepare(ctx); err != nil {
+	if err := h.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Verify(ctx); err != nil {
+	if err := h.Check(ctx); err != nil {
 		t.Fatal(err)
 	}
-	root, err := h.StagedRoot(ctx)
+	root, err := h.Root(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd, err := h.LaunchCommand(base.LaunchContext{ProjectRoot: ctx.ProjectRoot, Yolo: true, Arguments: []string{"--profile", "work", "--", "hello"}})
+	cmd, _, err := h.Launch(base.LaunchContext{ProjectRoot: ctx.ProjectRoot, Yolo: true, Arguments: []string{"--profile", "work", "--", "hello"}})
 	if err != nil {
 		t.Fatal(err)
 	}

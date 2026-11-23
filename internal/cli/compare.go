@@ -6,8 +6,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/environment"
 )
 
-func (runner Runner) runConfigCompare(workspace string, arguments []string, quiet bool) (int, error) {
-	args, jsonOut := takeBool(arguments, "--json")
+func (runner Runner) runConfigCompare(workspace string, args []string, jsonOut, quiet bool) (int, error) {
 	if len(args) != 2 {
 		return 2, fmt.Errorf("config compare requires RECEIPT_A RECEIPT_B")
 	}

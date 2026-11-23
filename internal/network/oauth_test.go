@@ -312,7 +312,7 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workerDirectory, "worker.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := upsertSession(t.Context(), h.gateway.auth.store.DB, SessionInfo{ID: record.ID}); err != nil {
+	if err := upsertSession(t.Context(), h.gateway.store.DB, SessionInfo{ID: record.ID}); err != nil {
 		t.Fatal(err)
 	}
 	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "restart_session", Arguments: map[string]any{"session_id": record.ID}})

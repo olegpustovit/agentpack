@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -11,16 +12,17 @@ import (
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
-func (runner Runner) runEnv(ctx context.Context, definition, workspace, mode string, arguments []string, quiet bool) error {
+func (runner Runner) runEnv(ctx context.Context, definition, workspace string, invocation Invocation) error {
+	arguments, mode, quiet := invocation.Args, invocation.Global.Mode, invocation.Global.Quiet
 	if len(arguments) == 0 {
 		return fmt.Errorf("env requires an action (init|use|bind|unuse|list|status|export|import|restore)")
 	}
 	action, args := arguments[0], arguments[1:]
 	switch action {
 	case "init":
-		return runner.envInit(args, quiet)
+		return runner.envInit(args, stringFlag(invocation, "name"), stringFlag(invocation, "dir"), stringFlag(invocation, "from"), quiet)
 	case "use", "bind":
-		return runner.envUse(workspace, args, quiet)
+		return runner.envUse(cmp.Or(stringFlag(invocation, "project"), workspace), args, quiet)
 	case "unuse":
 		return runner.envUnuse(workspace, args, quiet)
 	case "list":
@@ -34,9 +36,9 @@ func (runner Runner) runEnv(ctx context.Context, definition, workspace, mode str
 		}
 		return runner.envStatus(workspace, quiet)
 	case "export":
-		return runner.envExport(definition, workspace, args, quiet)
+		return runner.envExport(definition, workspace, args, stringFlag(invocation, "from"), quiet)
 	case "import":
-		return runner.envImport(args, quiet)
+		return runner.envImport(args, stringFlag(invocation, "name"), stringFlag(invocation, "dir"), quiet)
 	case "restore":
 		if err := noArgs(args); err != nil {
 			return err
@@ -47,19 +49,7 @@ func (runner Runner) runEnv(ctx context.Context, definition, workspace, mode str
 	}
 }
 
-func (runner Runner) envInit(args []string, quiet bool) error {
-	name, args, _, err := takeFlag(args, "--name")
-	if err != nil {
-		return err
-	}
-	dir, args, _, err := takeFlag(args, "--dir")
-	if err != nil {
-		return err
-	}
-	from, args, _, err := takeFlag(args, "--from")
-	if err != nil {
-		return err
-	}
+func (runner Runner) envInit(args []string, name, dir, from string, quiet bool) error {
 	if len(args) == 1 && name == "" {
 		name = args[0]
 		args = args[1:]
@@ -81,13 +71,6 @@ func (runner Runner) envInit(args []string, quiet bool) error {
 }
 
 func (runner Runner) envUse(workspace string, args []string, quiet bool) error {
-	project, args, _, err := takeFlag(args, "--project")
-	if err != nil {
-		return err
-	}
-	if project != "" {
-		workspace = project
-	}
 	if len(args) != 1 {
 		return fmt.Errorf("env use requires an environment name or path")
 	}
@@ -167,11 +150,7 @@ func (runner Runner) envStatus(workspace string, quiet bool) error {
 	return nil
 }
 
-func (runner Runner) envExport(definition, workspace string, args []string, quiet bool) error {
-	from, args, _, err := takeFlag(args, "--from")
-	if err != nil {
-		return err
-	}
+func (runner Runner) envExport(definition, workspace string, args []string, from string, quiet bool) (err error) {
 	if from != "" {
 		definition, err = environment.ResolveRef(from)
 		if err != nil {
@@ -198,15 +177,7 @@ func (runner Runner) envExport(definition, workspace string, args []string, quie
 	return nil
 }
 
-func (runner Runner) envImport(args []string, quiet bool) error {
-	name, args, _, err := takeFlag(args, "--name")
-	if err != nil {
-		return err
-	}
-	dir, args, _, err := takeFlag(args, "--dir")
-	if err != nil {
-		return err
-	}
+func (runner Runner) envImport(args []string, name, dir string, quiet bool) (err error) {
 	if len(args) != 1 {
 		return fmt.Errorf("env import requires a bundle path")
 	}

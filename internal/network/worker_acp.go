@@ -89,7 +89,7 @@ func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir s
 	}
 	var stageDone <-chan error
 	if launch.StageInWorker {
-		if !harness.ACPInitializeBeforeStage() {
+		if !harness.ACPStageAtSession {
 			return nil, nil, errors.New("ACP adapter requires staging before startup")
 		}
 		stageCtx, cancelStage := context.WithCancel(WithPeerCache(ctx, ""))
@@ -109,12 +109,12 @@ func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir s
 		}()
 	}
 	done = startStep(ctx, "acp_adapter")
-	acpLaunch, err := harness.ACP(launchCtx)
+	acpLaunch, err := harness.LaunchACP(launchCtx)
 	done(err)
 	if err != nil {
 		return nil, nil, err
 	}
-	return startACPAgentProcess(ctx, launch, launchCtx, harness, acpLaunch, sessionDir, conv, stageDone)
+	return startACPAgentProcess(ctx, launch, launchCtx, harness.Target, acpLaunch, sessionDir, conv, stageDone)
 }
 
 func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir string, entries []acp.LogEntry, conv *ConversationSession) (*ConversationSession, func(), error) {
@@ -224,7 +224,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 	return conv, cleanup, nil
 }
 
-func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx base.LaunchContext, harness base.Harness, acpLaunch base.ACPLaunch, sessionDir string, conv *ConversationSession, stageDone <-chan error) (*ConversationSession, func(), error) {
+func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx base.LaunchContext, target base.Target, acpLaunch base.ACPLaunch, sessionDir string, conv *ConversationSession, stageDone <-chan error) (*ConversationSession, func(), error) {
 	log := conv.log
 	cmd := acpLaunch.Cmd
 	if cmd == nil {
@@ -248,7 +248,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	stdinWriter, err := cmd.StdinPipe()
 	if err != nil {
 		closeACPEventLog(log)
-		return nil, nil, fmt.Errorf("open ACP adapter stdin: %w", err)
+		return nil, nil, errors.Join(fmt.Errorf("open ACP adapter stdin: %w", err), acpLaunch.Finished())
 	}
 	var (
 		connMu          sync.Mutex
@@ -346,7 +346,6 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		adaptAgentStdout(agentOutR, clientInW, acpLaunch.AdaptAgent, log)
 	}()
 
-	launchCtx.Command = cmd
 	if err := cmd.Start(); err != nil {
 		_ = stdinWriter.Close()
 		_ = agentOutR.Close()
@@ -355,9 +354,9 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		_ = clientInW.Close()
 		<-adaptDone
 		closeACPEventLog(log)
-		return nil, nil, err
+		return nil, nil, errors.Join(err, acpLaunch.Finished())
 	}
-	if err := harness.AfterLaunch(launchCtx); err != nil {
+	if err := acpLaunch.Finished(); err != nil {
 		_ = stdinWriter.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
@@ -445,7 +444,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	log.SetReplaying(false)
 	if err != nil {
 		cleanup()
-		return nil, nil, explainACPAuthRequired(err, harness.ID())
+		return nil, nil, explainACPAuthRequired(err, target)
 	}
 	connMu.Lock()
 	sessID = sdkacp.SessionId(setup.AgentSessionID)
@@ -980,14 +979,14 @@ func probeHarnessAgentSessions(ctx context.Context, launch WorkerLaunch) ([]Agen
 	}); syncErr != nil {
 		return nil, syncErr
 	}
-	acpLaunch, err := harness.ACP(launchCtx)
+	acpLaunch, err := harness.LaunchACP(launchCtx)
 	if err != nil {
 		return nil, err
 	}
-	return listACPAgentSessions(ctx, launch, launchCtx, harness, acpLaunch)
+	return listACPAgentSessions(ctx, launch, launchCtx, acpLaunch)
 }
 
-func listACPAgentSessions(ctx context.Context, launch WorkerLaunch, launchCtx base.LaunchContext, harness base.Harness, acpLaunch base.ACPLaunch) ([]AgentSession, error) {
+func listACPAgentSessions(ctx context.Context, launch WorkerLaunch, launchCtx base.LaunchContext, acpLaunch base.ACPLaunch) ([]AgentSession, error) {
 	cmd := acpLaunch.Cmd
 	if cmd == nil {
 		return nil, errors.New("harness ACP launch returned nil command")
@@ -995,7 +994,7 @@ func listACPAgentSessions(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	workspace := launchCtx.WorkspaceRoot
 	stdinWriter, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("open ACP adapter stdin: %w", err)
+		return nil, errors.Join(fmt.Errorf("open ACP adapter stdin: %w", err), acpLaunch.Finished())
 	}
 	agentOutR, agentOutW := io.Pipe()
 	clientInR, clientInW := io.Pipe()
@@ -1018,14 +1017,13 @@ func listACPAgentSessions(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	clientConn := client.NewClientSideConnection(stdinToAgent, clientInR)
 	go adaptAgentStdout(agentOutR, clientInW, acpLaunch.AdaptAgent, log)
 
-	launchCtx.Command = cmd
 	if err := cmd.Start(); err != nil {
 		_ = stdinWriter.Close()
 		_ = agentOutR.Close()
 		_ = agentOutW.Close()
 		_ = clientInR.Close()
 		_ = clientInW.Close()
-		return nil, err
+		return nil, errors.Join(err, acpLaunch.Finished())
 	}
 	cleanup := func() {
 		if client.Terminals != nil {
@@ -1043,7 +1041,7 @@ func listACPAgentSessions(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		_ = clientInR.Close()
 	}
 	defer cleanup()
-	if err := harness.AfterLaunch(launchCtx); err != nil {
+	if err := acpLaunch.Finished(); err != nil {
 		return nil, err
 	}
 	initCtx, cancel := context.WithTimeout(ctx, 45*time.Second)

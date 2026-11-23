@@ -72,7 +72,7 @@ func TestGatewayAuthenticationHostAndOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("https://agentpack.example")
-	gateway := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: t.TempDir()}, stop: func() {}}
+	gateway := &Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: t.TempDir()}, stop: func() {}}
 	handler := gateway.Handler()
 	check := func(method, path, host, origin, token string, want int) {
 		t.Helper()
@@ -120,7 +120,7 @@ func TestGatewayRestrictsRemoteFolders(t *testing.T) {
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
 	called := false
-	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Start: func(context.Context, SessionInfo, string) (string, error) { called = true; return "session-test", nil }}}
+	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Start: func(context.Context, SessionInfo, string) (string, error) { called = true; return "session-test", nil }}}
 	r := httptest.NewRequest("POST", origin.String()+"/api/sessions", bytes.NewBufferString(`{"directory":"/unregistered","harness":"claude"}`))
 	r.Header.Set("Authorization", "Bearer "+g.local.Secret)
 	w := httptest.NewRecorder()
@@ -141,7 +141,7 @@ func TestGatewayPackageRestartChoice(t *testing.T) {
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
 	var restarts []bool
-	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{
+	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{
 		Home: home,
 		Install: func(_ context.Context, gotDirectory, spec string, restart bool) error {
 			if gotDirectory != directory || spec != "github.com/example/pack@abcdef" {
@@ -181,7 +181,7 @@ func TestGatewayInstallsMCPServerIntoRecentFolder(t *testing.T) {
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
 	var got []MCPServerInput
-	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{
+	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{
 		Home: home,
 		InstallMCP: func(_ context.Context, gotDirectory string, server MCPServerInput, restart bool) error {
 			if gotDirectory != directory || !restart {
@@ -217,7 +217,7 @@ func TestGatewayPeerProxyOnlyForAPIAndUnknownAPIIsJSON404(t *testing.T) {
 	}
 	origin, _ := url.Parse("https://agentpack.example")
 	local := nodeRecord{Secret: strings.Repeat("x", 64)}
-	gateway := &Gateway{auth: auth, origin: origin, local: local, options: GatewayOptions{Home: t.TempDir(), Assets: webAssets(testWebFiles())}, stop: func() {}}
+	gateway := &Gateway{store: auth.store, auth: auth, origin: origin, local: local, options: GatewayOptions{Home: t.TempDir(), Assets: webAssets(testWebFiles())}, stop: func() {}}
 	handler := gateway.Handler()
 	serve := func(path string, withSecret bool) *httptest.ResponseRecorder {
 		t.Helper()
@@ -302,20 +302,10 @@ func TestGatewayOwnsAndClosesStateStore(t *testing.T) {
 	if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"limits.json", "oauth.db"} {
-		if err := os.WriteFile(filepath.Join(home, "network", name), []byte("legacy disposable data; do not import"), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := ServeGateway(ctx, GatewayOptions{Home: home, Address: "127.0.0.1:0"}); err != nil {
 		t.Fatal(err)
-	}
-	for _, name := range []string{"limits.json", "oauth.db"} {
-		if _, err := os.Stat(filepath.Join(home, "network", name)); !os.IsNotExist(err) {
-			t.Fatalf("legacy %s was not removed: %v", name, err)
-		}
 	}
 	if _, err := os.Stat(filepath.Join(home, "state.db")); err != nil {
 		t.Fatal(err)

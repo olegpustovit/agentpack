@@ -23,6 +23,14 @@ type PackagedNames struct {
 	Agents   []string
 }
 
+// ProbeRequest is what `agentpack probe` asks of an agent: observe the current staging of a
+// definition and record what the native agent discovers.
+type ProbeRequest struct {
+	DefinitionRoot, WorkspaceRoot, Mode string
+	SourceIdentity, LockDigest          string
+	Packaged                            PackagedNames
+}
+
 // ProbePlan is a fixed, non-shell native diagnostic invocation.
 type ProbePlan struct {
 	Executable string
@@ -126,15 +134,6 @@ func (b *cappedProbeBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buffer.String()
-}
-
-// LookPathEnv returns an executable path from env override or PATH.
-func LookPathEnv(envName, binary string) (string, error) {
-	if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
-
-		return exec.LookPath(value)
-	}
-	return exec.LookPath(binary)
 }
 
 // SaveProbeEvidence retains bounded raw diagnostics privately; support exports must omit these references.

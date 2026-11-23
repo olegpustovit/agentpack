@@ -92,7 +92,8 @@ test.describe("kit styling", () => {
     await page.goto("/usage")
     const hero = page.locator('[data-slot="usage-hero"]')
     await expect(hero).toContainText("12K")
-    expect(await style(hero.getByText("12K"), "font-size")).toBe("28px")
+    // Exact: on the first day of a week the daily average reads 12K too.
+    expect(await style(hero.getByText("12K", { exact: true }), "font-size")).toBe("28px")
     expect(await style(page.locator('[data-slot="chart-average"]'), "stroke-dasharray")).not.toBe("none")
     // The legend swatch and the bar share the agent's token, so Claude reads the same colour everywhere.
     const swatch = page.getByRole("list", { name: "Legend" }).getByRole("listitem").first().locator("span[aria-hidden]")

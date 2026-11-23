@@ -22,6 +22,16 @@ func TestPatchWorkerConversationState(t *testing.T) {
 			t.Fatalf("state=%q err=%v", got.ConversationState, err)
 		}
 	}
+	if _, err := store.DB.Exec("UPDATE sessions SET ended_at=1 WHERE id=?", info.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := patchWorkerConversationState(ctx, store.DB, info.ID, "working"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := storedSession(ctx, store.Reader, info.ID)
+	if err != nil || got.ConversationState != "needs_you" {
+		t.Fatalf("ended state=%q err=%v", got.ConversationState, err)
+	}
 	if _, err := store.DB.Exec("UPDATE sessions SET archived_at=1 WHERE id=?", info.ID); err != nil {
 		t.Fatal(err)
 	}

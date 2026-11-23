@@ -3,30 +3,9 @@ package agy
 import (
 	"encoding/json"
 	"fmt"
-	"log"
-	"os"
 
 	"github.com/olegpustovit/agentpack/internal/mcp"
 )
-
-// WriteMCP writes the servers as Antigravity's mcp_config.json. A remote
-// server is named by serverUrl and keeps its headers and its OAuth client
-// (oauth.clientId, oauth.clientSecret); a stdio server keeps its cwd.
-// Antigravity's OAuth callback is fixed and it documents no scopes or
-// metadata URL, so those are left out with a warning.
-func WriteMCP(path string, entries mcp.Entries) error {
-	data, warnings, err := RenderMCP(entries)
-	if err != nil {
-		return err
-	}
-	for _, warning := range warnings {
-		log.Printf("warning: %s", warning)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return nil
-}
 
 func RenderMCP(entries mcp.Entries) ([]byte, []string, error) {
 	servers := make(map[string]map[string]any, len(entries))

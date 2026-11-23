@@ -70,11 +70,7 @@ func ValidContentHash(value string) bool {
 
 // contentHashKeys reports, per [[packages]] entry in file order, whether the
 // content_hash key is written at all, so an empty value is not read as absent.
-func contentHashKeys(path string) ([]bool, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read lockfile %s: %w", path, err)
-	}
+func contentHashKeys(data []byte) ([]bool, error) {
 	var raw struct {
 		Packages []map[string]any `toml:"packages"`
 	}
@@ -204,23 +200,24 @@ func Load(projectRoot string) (PackLock, error) {
 	return LoadFromPath(paths.LockPath(projectRoot))
 }
 
-// LoadUnguarded is LoadFromPath. Loading no longer takes a guard; the name
-// stays for callers on the core/wp-e branch.
-// shortcut: forwarding name kept only until core/wp-e merges; repoint its callers to LoadFromPath and delete it.
-func LoadUnguarded(path string) (PackLock, error) {
-	return LoadFromPath(path)
-}
-
 // LoadFromPath reads a lock. Save replaces it in one rename, so a reader sees
 // a whole file; writers are serialized by the project's mutation lock.
 func LoadFromPath(path string) (PackLock, error) {
-	file, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return PackLock{}, fmt.Errorf("read lockfile %s: %w", path, err)
 	}
-	defer file.Close()
+	return parse(data, path)
+}
+
+// Parse validates an in-memory lockfile.
+func Parse(data []byte) (PackLock, error) {
+	return parse(data, paths.LockPath(""))
+}
+
+func parse(data []byte, path string) (PackLock, error) {
 	var disk diskLock
-	decoder := toml.NewDecoder(file).DisallowUnknownFields()
+	decoder := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
 	if err := decoder.Decode(&disk); err != nil {
 		var unknown *toml.StrictMissingError
 		if errors.As(err, &unknown) {
@@ -240,7 +237,7 @@ func LoadFromPath(path string) (PackLock, error) {
 	if disk.LockfileVersion != baseVersion && disk.LockfileVersion != version3 && disk.LockfileVersion != Version {
 		return PackLock{}, fmt.Errorf("parse lockfile: unsupported lockfile_version %d (expected %d to %d); run `agentpack lock` to regenerate %s", disk.LockfileVersion, baseVersion, Version, path)
 	}
-	present, err := contentHashKeys(path)
+	present, err := contentHashKeys(data)
 	if err != nil {
 		return PackLock{}, err
 	}

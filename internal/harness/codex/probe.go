@@ -40,7 +40,7 @@ func ProbeHome(ctx context.Context, codexHome, workspace, sourceID, lockDigest, 
 	if len(packaged) > 0 {
 		plan = packaged[0]
 	}
-	exe, err := base.LookPathEnv(base.Codex.Binary())
+	exe, err := base.ResolveBinary(base.Codex.Binary())
 	if err != nil {
 		return environment.Receipt{}, err
 	}
@@ -136,4 +136,13 @@ func withCodexHome(env []string, codexHome string) []string {
 		filtered = append(filtered, entry)
 	}
 	return append(filtered, "CODEX_HOME="+codexHome)
+}
+
+// Probe observes the published Codex home.
+func Probe(ctx context.Context, request base.ProbeRequest) (environment.Receipt, error) {
+	home, err := CurrentHome(request.DefinitionRoot, request.Mode)
+	if err != nil {
+		return environment.Receipt{}, err
+	}
+	return ProbeHome(ctx, home, request.WorkspaceRoot, request.SourceIdentity, request.LockDigest, request.Mode, request.Packaged)
 }

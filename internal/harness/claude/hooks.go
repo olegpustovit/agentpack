@@ -11,6 +11,11 @@ type HookRenderer struct{}
 
 func (HookRenderer) Target() harness.Target { return harness.Claude }
 
+// Output answers a hook in the format the agent reads.
+func (HookRenderer) Output(_ hooks.Event, result hooks.Result) any {
+	return hooks.DefaultOutput(result)
+}
+
 func (HookRenderer) Render(bundle hooks.Bundle, context hooks.RenderContext) (hooks.RenderOutput, error) {
 	var output hooks.RenderOutput
 	if len(bundle.Hooks) == 0 {

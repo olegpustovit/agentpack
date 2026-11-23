@@ -35,7 +35,7 @@ func TestChatStartAnswersBeforeTheAgentIsUp(t *testing.T) {
 	if !strings.HasPrefix(info.ID, "session-") || info.ConversationState != "starting" {
 		t.Fatalf("start returned %+v", info)
 	}
-	stored, err := storedSession(context.Background(), g.auth.store.Reader, info.ID)
+	stored, err := storedSession(context.Background(), g.store.Reader, info.ID)
 	if err != nil || stored.ConversationState != "starting" {
 		t.Fatalf("starting row: %+v, %v", stored, err)
 	}
@@ -60,7 +60,7 @@ func TestFailedChatStartKeepsTheErrorAndTheRow(t *testing.T) {
 	var g *Gateway
 	g, _ = identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
 		// The worker failed after registering: it ended (and hid) its prompt-less row first.
-		if err := endSession(context.Background(), g.auth.store.DB, info.ID, TerminalState{ExitCode: 1}); err != nil {
+		if err := endSession(context.Background(), g.store.DB, info.ID, TerminalState{ExitCode: 1}); err != nil {
 			t.Error(err)
 		}
 		return "", errors.New("pack sync failed")
@@ -70,16 +70,16 @@ func TestFailedChatStartKeepsTheErrorAndTheRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.starting.Wait()
-	stored, err := storedSession(context.Background(), g.auth.store.Reader, info.ID)
+	stored, err := storedSession(context.Background(), g.store.Reader, info.ID)
 	if err != nil || stored.EndedAt.IsZero() || stored.ConversationState != "idle" {
 		t.Fatalf("failed start not ended: %+v", stored)
 	}
 	var hidden bool
 	var body string
-	if err := g.auth.store.Reader.QueryRow("SELECT hidden FROM sessions WHERE id=?", info.ID).Scan(&hidden); err != nil || hidden {
+	if err := g.store.Reader.QueryRow("SELECT hidden FROM sessions WHERE id=?", info.ID).Scan(&hidden); err != nil || hidden {
 		t.Fatalf("failed start hidden=%v err=%v", hidden, err)
 	}
-	if err := g.auth.store.Reader.QueryRow("SELECT group_concat(body) FROM conversation_events WHERE session_id=?", info.ID).Scan(&body); err != nil || !strings.Contains(body, "pack sync failed") {
+	if err := g.store.Reader.QueryRow("SELECT group_concat(body) FROM conversation_events WHERE session_id=?", info.ID).Scan(&body); err != nil || !strings.Contains(body, "pack sync failed") {
 		t.Fatalf("transcript %q, %v", body, err)
 	}
 }
@@ -88,11 +88,11 @@ func TestGatewayStartEndsLeftoverStartingRows(t *testing.T) {
 	home := t.TempDir()
 	dir := seedFolder(t, home)
 	g, _ := identityGateway(t, home, nil)
-	if err := upsertSession(context.Background(), g.auth.store.DB, SessionInfo{ID: "session-leftover", Directory: dir, Harness: "claude", Transport: "acp", ConversationState: "starting"}); err != nil {
+	if err := upsertSession(context.Background(), g.store.DB, SessionInfo{ID: "session-leftover", Directory: dir, Harness: "claude", Transport: "acp", ConversationState: "starting"}); err != nil {
 		t.Fatal(err)
 	}
 	g.endLeftoverStarts(context.Background())
-	stored, err := storedSession(context.Background(), g.auth.store.Reader, "session-leftover")
+	stored, err := storedSession(context.Background(), g.store.Reader, "session-leftover")
 	if err != nil || stored.EndedAt.IsZero() || stored.ConversationState != "idle" {
 		t.Fatalf("leftover start: %+v, %v", stored, err)
 	}
@@ -102,13 +102,13 @@ func TestEndingAChatSettlesAStaleState(t *testing.T) {
 	home := t.TempDir()
 	dir := seedFolder(t, home)
 	g, _ := identityGateway(t, home, nil)
-	if err := upsertSession(context.Background(), g.auth.store.DB, SessionInfo{ID: "session-busy", Directory: dir, Harness: "claude", Transport: "acp", ConversationState: "needs_you"}); err != nil {
+	if err := upsertSession(context.Background(), g.store.DB, SessionInfo{ID: "session-busy", Directory: dir, Harness: "claude", Transport: "acp", ConversationState: "needs_you"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := endSession(context.Background(), g.auth.store.DB, "session-busy", TerminalState{}); err != nil {
+	if err := endSession(context.Background(), g.store.DB, "session-busy", TerminalState{}); err != nil {
 		t.Fatal(err)
 	}
-	stored, err := storedSession(context.Background(), g.auth.store.Reader, "session-busy")
+	stored, err := storedSession(context.Background(), g.store.Reader, "session-busy")
 	if err != nil || stored.ConversationState != "idle" {
 		t.Fatalf("ended chat: %+v, %v", stored, err)
 	}
@@ -135,10 +135,10 @@ func stuckChat(t *testing.T, g *Gateway, dir, id string) {
 	t.Helper()
 	ctx := context.Background()
 	info := SessionInfo{ID: id, Directory: dir, Harness: "claude", Mode: "default", Transport: "acp", AgentSessionID: "agent-1", ConversationState: "working", State: TerminalState{Running: true, ExitCode: -1}}
-	if err := upsertSession(ctx, g.auth.store.DB, info); err != nil {
+	if err := upsertSession(ctx, g.store.DB, info); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := g.auth.store.DB.Exec(`UPDATE sessions SET ended_at=1,subagents='[{"id":"a"}]' WHERE id=?`, id); err != nil {
+	if _, err := g.store.DB.Exec(`UPDATE sessions SET ended_at=1,subagents='[{"id":"a"}]' WHERE id=?`, id); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -150,7 +150,7 @@ func TestReaperSettlesAChatWhoseWorkerDiedAndResumesItOnce(t *testing.T) {
 	g, _ = identityGateway(t, home, func(_ context.Context, info SessionInfo, _ string) (string, error) {
 		launched <- info
 		// The resumed agent dies at once, like a machine that drops off again.
-		_, err := g.auth.store.DB.Exec(`UPDATE sessions SET ended_at=2,conversation_state='working' WHERE id=?`, info.ID)
+		_, err := g.store.DB.Exec(`UPDATE sessions SET ended_at=2,conversation_state='working' WHERE id=?`, info.ID)
 		return info.ID, err
 	})
 	stuckChat(t, g, seedFolder(t, home), "session-dead")
@@ -167,12 +167,12 @@ func TestReaperSettlesAChatWhoseWorkerDiedAndResumesItOnce(t *testing.T) {
 		t.Fatalf("resumed twice: %+v", got)
 	default:
 	}
-	stored, err := storedSession(context.Background(), g.auth.store.Reader, "session-dead")
+	stored, err := storedSession(context.Background(), g.store.Reader, "session-dead")
 	if err != nil || stored.ConversationState != "idle" || stored.State.Running || len(stored.Subagents) != 0 {
 		t.Fatalf("settled row: %+v, %v", stored, err)
 	}
 	var body string
-	if err := g.auth.store.Reader.QueryRow("SELECT group_concat(body) FROM conversation_events WHERE session_id=?", "session-dead").Scan(&body); err != nil || !strings.Contains(body, "resumes by itself") || !strings.Contains(body, "Send a message to resume") {
+	if err := g.store.Reader.QueryRow("SELECT group_concat(body) FROM conversation_events WHERE session_id=?", "session-dead").Scan(&body); err != nil || !strings.Contains(body, "resumes by itself") || !strings.Contains(body, "Send a message to resume") {
 		t.Fatalf("transcript %q, %v", body, err)
 	}
 }
@@ -252,7 +252,7 @@ func TestSignInFailureMarksTheNoticeAndTheChatStartsLater(t *testing.T) {
 	}
 	g.starting.Wait()
 	var body string
-	if err := g.auth.store.Reader.QueryRow("SELECT group_concat(body) FROM conversation_events WHERE session_id=?", info.ID).Scan(&body); err != nil || !strings.Contains(body, `"code":"auth_required"`) || !strings.Contains(body, `"harness":"agy"`) || !strings.Contains(body, `"id":"google"`) {
+	if err := g.store.Reader.QueryRow("SELECT group_concat(body) FROM conversation_events WHERE session_id=?", info.ID).Scan(&body); err != nil || !strings.Contains(body, `"code":"auth_required"`) || !strings.Contains(body, `"harness":"agy"`) || !strings.Contains(body, `"id":"google"`) {
 		t.Fatalf("transcript %q, %v", body, err)
 	}
 	if _, err := g.resumeSession(context.Background(), info.ID, "hello", "resume-prompt-0001"); err != nil {
@@ -300,10 +300,10 @@ func TestStartingChatPersistsThreePromptsBeforeTheWorkerExists(t *testing.T) {
 	submit("three", "request-000000003")
 	submit("two", "request-000000002")
 	var title string
-	if err := g.auth.store.Reader.QueryRowContext(t.Context(), "SELECT title FROM sessions WHERE id=?", input.ID).Scan(&title); err != nil || title != "one" {
+	if err := g.store.Reader.QueryRowContext(t.Context(), "SELECT title FROM sessions WHERE id=?", input.ID).Scan(&title); err != nil || title != "one" {
 		t.Fatalf("title = %q, err = %v", title, err)
 	}
-	entries, seq, _, err := storedConversationTail(t.Context(), g.auth.store.Reader, input.ID, 0)
+	entries, seq, _, err := storedConversationTail(t.Context(), g.store.Reader, input.ID, 0)
 	if err != nil || seq != 3 || len(entries) != 3 {
 		t.Fatalf("persisted queue = %+v seq=%d err=%v", entries, seq, err)
 	}
@@ -374,59 +374,18 @@ func TestReaperSettlesInterruptedChatStart(t *testing.T) {
 	ctx := t.Context()
 	old := time.Now().Add(-3 * time.Minute)
 	for _, id := range []string{"session-orphan", "session-in-flight"} {
-		if err := upsertSession(ctx, g.auth.store.DB, SessionInfo{ID: id, Harness: "codex", Transport: "acp", ConversationState: "starting", StartedAt: old, LastUsed: old}); err != nil {
+		if err := upsertSession(ctx, g.store.DB, SessionInfo{ID: id, Harness: "codex", Transport: "acp", ConversationState: "starting", StartedAt: old, LastUsed: old}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	g.startingChats.Store("session-in-flight", struct{}{})
 	g.reapStoppedChats(ctx)
-	orphan, err := storedSession(ctx, g.auth.store.Reader, "session-orphan")
+	orphan, err := storedSession(ctx, g.store.Reader, "session-orphan")
 	if err != nil || orphan.EndedAt.IsZero() {
 		t.Fatalf("interrupted start stayed active: %v", err)
 	}
-	active, err := storedSession(ctx, g.auth.store.Reader, "session-in-flight")
+	active, err := storedSession(ctx, g.store.Reader, "session-in-flight")
 	if err != nil || !active.EndedAt.IsZero() {
 		t.Fatalf("reaper settled an active start: %v", err)
-	}
-}
-
-func TestOwnerCanArchiveStoppedImportedRecent(t *testing.T) {
-	g, origin := identityGateway(t, t.TempDir(), nil)
-	ctx := t.Context()
-	id := "session-legacy-recent-example"
-	if err := upsertSession(ctx, g.auth.store.DB, SessionInfo{ID: id, Harness: "codex", Transport: "acp", StartedBy: &Actor{Kind: "peer", User: "old-owner"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := endSession(ctx, g.auth.store.DB, id, TerminalState{}); err != nil {
-		t.Fatal(err)
-	}
-	// The same recent replicated from a peer is archived on this gateway's copy of the row.
-	peerID := id + "-peer"
-	if _, err := g.auth.store.DB.ExecContext(ctx, `INSERT INTO sessions(id,harness,transport,started_by,node_id,ended_at)
-		SELECT ?,harness,transport,started_by,'peer-node',ended_at FROM sessions WHERE id=?`, peerID, id); err != nil {
-		t.Fatal(err)
-	}
-	for index, test := range []struct {
-		id   string
-		user string
-		body string
-		want int
-	}{
-		{id, "member@example.com", `{"hidden":true}`, http.StatusForbidden},
-		{id, testBrowserEmail, `{"name":"renamed"}`, http.StatusForbidden},
-		{id, testBrowserEmail, `{"hidden":true}`, http.StatusOK},
-		{peerID, testBrowserEmail, `{"hidden":true}`, http.StatusOK},
-	} {
-		id := test.id
-		token := test.user + string(rune('0'+index))
-		testBrowserSession(t, g.auth, test.user, token)
-		req := httptest.NewRequest(http.MethodPatch, origin.String()+"/api/sessions/"+id, strings.NewReader(test.body))
-		req.Header.Set("Origin", origin.String())
-		req.AddCookie(&http.Cookie{Name: "agentpack_session", Value: token})
-		res := httptest.NewRecorder()
-		g.Handler().ServeHTTP(res, req)
-		if res.Code != test.want {
-			t.Fatalf("%s %s: status %d, want %d (%s)", test.user, test.body, res.Code, test.want, res.Body.String())
-		}
 	}
 }

@@ -46,7 +46,7 @@ func TestACPAdapterExitRecordsCodeAndStderr(t *testing.T) {
 			directory := t.TempDir()
 			command := exec.Command(os.Args[0], "-test.run=^TestACPAdapterExitRecordsCodeAndStderr$")
 			launch := WorkerLaunch{Session: SessionInfo{Harness: "fixture"}, Environment: append(os.Environ(), "AGENTPACK_TEST_DIAGNOSTIC_ADAPTER=1")}
-			session, cleanup, err := startACPAgentProcess(ctx, launch, base.LaunchContext{WorkspaceRoot: directory}, base.Definition{}, base.ACPLaunch{Cmd: command}, directory, NewConversationSession(acp.NewEventLog(0), nil), nil)
+			session, cleanup, err := startACPAgentProcess(ctx, launch, base.LaunchContext{WorkspaceRoot: directory}, "", base.ACPLaunch{Cmd: command}, directory, NewConversationSession(acp.NewEventLog(0), nil), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -259,7 +259,7 @@ func TestACPProcessInitializesWhileStageIsPending(t *testing.T) {
 			return base.AgentAdaptResult{}
 		},
 	}
-	session, cleanup, err := startACPAgentProcess(ctx, launch, base.LaunchContext{WorkspaceRoot: directory}, base.Definition{}, adapter, directory, NewConversationSession(acp.NewEventLog(0), nil), stage)
+	session, cleanup, err := startACPAgentProcess(ctx, launch, base.LaunchContext{WorkspaceRoot: directory}, "", adapter, directory, NewConversationSession(acp.NewEventLog(0), nil), stage)
 	if err != nil {
 		t.Fatal(err)
 	}

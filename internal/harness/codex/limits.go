@@ -51,11 +51,8 @@ type rateLimitsResponse struct {
 // ReadLimits asks the authenticated Codex app-server for account rate limits. It uses the
 // user's existing login, including Agentpack's shared auth store, and sends no inference turns.
 func ReadLimits(ctx context.Context, codexHome string) base.LimitSnapshot {
-	snapshot := base.LimitSnapshot{Harness: "codex", State: base.LimitStateError, Source: limitsSource, ObservedAt: time.Now().UTC()}
-	exe, err := base.LookPathEnv(base.Codex.Binary())
-	if err != nil {
-		snapshot.State = base.LimitStateUnsupported
-		snapshot.Error = "codex CLI not found"
+	snapshot, exe := base.ProbeLimits(base.Codex, limitsSource)
+	if exe == "" {
 		return snapshot
 	}
 	if codexHome == "" && os.Getenv("CODEX_HOME") == "" {

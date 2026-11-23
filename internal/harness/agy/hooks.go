@@ -104,3 +104,44 @@ func Support(event hooks.Event) hooks.Support {
 	}
 	return hooks.Support{Kind: hooks.Emulated}
 }
+
+// Output answers in Antigravity's hook contract: a decision for
+// hooks.PreToolUse, an empty object for PostToolUse, injected steps for
+// hooks.SessionStart and PreInvocation, and "continue" to keep a hooks.Stop from ending
+// the loop.
+func (HookRenderer) Output(event hooks.Event, result hooks.Result) any {
+	value := make(map[string]any)
+	switch event {
+	case hooks.PreToolUse, hooks.PermissionRequest:
+		// Antigravity requires a decision and denies the call without one.
+		// "allow" passes the call on to the next hook or the default policy
+		// (it does not approve it: that is "auto_approve"), so a hook that did
+		// not object answers "allow".
+		value["decision"] = "allow"
+		if result.Decision == hooks.Deny || result.Decision == hooks.Ask {
+			value["decision"] = result.Decision
+			if result.Message != "" {
+				value["reason"] = result.Message
+			}
+		}
+		if overwrite, ok := result.UpdatedInput.(map[string]any); ok && len(overwrite) != 0 {
+			value["overwrite"] = overwrite
+		}
+	case hooks.SessionStart:
+		if result.AdditionalContext != "" {
+			value["injectSteps"] = []any{map[string]any{"systemMessage": map[string]any{"systemMessage": result.AdditionalContext}}}
+		}
+	case hooks.UserPromptSubmit:
+		if result.AdditionalContext != "" {
+			value["injectSteps"] = []any{map[string]any{"ephemeralMessage": result.AdditionalContext}}
+		}
+	case hooks.Stop:
+		if result.Decision == hooks.Deny {
+			value["decision"] = "continue"
+			if result.Message != "" {
+				value["reason"] = result.Message
+			}
+		}
+	}
+	return value
+}

@@ -4,7 +4,6 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "re
 import { ArrowLeft, ArrowUp, AtSign, Check, ChevronDown, CornerDownLeft, Ellipsis, PanelRight, Plus, Slash, Square, SquareTerminal } from "lucide-react"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
 import { Banner, Spinner } from "@/components/kit/feedback"
-import { PopupSelect } from "@/components/kit/forms"
 import { Button } from "@/components/ui/button"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { useIsPhone } from "@/features/shell/use-is-phone"
@@ -16,27 +15,28 @@ import { sessionLabel } from "@/features/sessions/group"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { openWaits, waitingDetail } from "@/features/sessions/session-status"
 import { agentIds } from "@/features/sessions/rules"
-import { useConversationEvents, useEventsConnected } from "@/features/events/use-events"
+import { useEventsConnected } from "@/features/events/use-events"
 import { identityQuery, useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName, relativeTime } from "@/lib/format"
 import { clock, goalElapsedMs, liveGoal } from "@/lib/goal"
 import { useNow } from "@/lib/use-now"
-import { cacheBuildID, restoreChatQuery, trackStreamingQuery } from "@/lib/persist"
+import { cacheBuildID, restoreChatQuery } from "@/lib/persist"
 import { useIntent } from "@/lib/intent"
 import { hud } from "@/lib/hud"
 import { api, ApiError, LOCAL } from "@/lib/api"
 import { configQuery } from "@/lib/config"
-import { ompSettingsQuery, quickRoles } from "@/features/settings/omp-model"
-import { agentSnapshotQuery, archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, mergeConversationPages, olderConversationPage, type ConversationPage } from "./queries"
-import { configRole, dangerousMode, parseConfigOptions } from "./config-options"
+import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, mergeConversationPages, type ConversationPage } from "./queries"
 import type { LogEntry, PromptFrom, ThreadItem, UserMessagePayload } from "./model"
 import { helperSubagents, isOpenRequest, reduceThread } from "./reducer"
-import { ElicitationCard, latestUserPrompt, PermissionCard, quoteMessage, ThreadView, userImageSrc } from "./thread-view"
+import { latestUserPrompt, quoteMessage, ThreadView, userImageSrc } from "./thread-view"
+import { ElicitationCard, PermissionCard } from "./request-cards"
 import { GoalPill, parseGoalCommand, useGoalActions } from "./goal-sheet"
 import { QueueChips } from "./queue-chips"
 import { subagentRunning } from "./subagent-card"
 import { ConversationInspector } from "./conversation-inspector"
+import { useConversationStream, useHistoryPaging } from "./conversation-log"
+import { ChatConfigControls, useChatConfig } from "./chat-config"
 import { GitInspectorSections, GitToolbarActions, branchLine, useSessionGit } from "./session-git"
 import { advertises, agentCommands, applyHint, commandSpans, filterAtHints, filterSlashHints, moveHint, slashQuery, type ComposerHint } from "./composer-hints"
 import { ComposerHintsMenu } from "./composer-hints-menu"
@@ -143,7 +143,6 @@ export default function ConversationPane({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const composerInputRef = useRef<HTMLTextAreaElement>(null)
   const threadScrollRef = useRef<HTMLDivElement>(null)
-  const [configValues, setConfigValues] = useState<Record<string, string | boolean>>({})
   const readOnly = unavailable || info?.reachable === false || Boolean(info?.archived_at)
   // A starting chat accepts text before the worker completes its handshake.
   const starting = !readOnly && info?.conversation_state === "starting" && !info.ended_at
@@ -164,16 +163,7 @@ export default function ConversationPane({
     const key = conversationEventsQuery(machine, sessionId).queryKey
     if (!queryClient.getQueryData(key)) void restoreChatQuery(queryClient, cacheBuildID || "dev", key)
   }, [machine, queryClient, sessionId])
-  // Earlier pages, loaded as the thread scrolls up. Keyed, so another session never shows them.
-  const historyKey = `${machine}\0${sessionId}`
-  const [history, setHistory] = useState<{ key: string; entries: LogEntry[]; more: boolean; loading: boolean; error?: unknown }>()
-  const older = history?.key === historyKey ? history : undefined
-  const tailEntries = tail?.entries ?? []
-  const entries = joinHistory(older?.entries ?? [], tailEntries)
-  const hasOlder = (older ? older.more : Boolean(tail?.truncated)) && (entries[0]?.seq ?? 1) > 1
-  // Scroll height and offset before older entries were prepended, so the reader stays on the same line.
-  const scrollAnchorRef = useRef<{ height: number; top: number } | null>(null)
-  const transcript = reduceThread(historyKey, entries)
+  const { historyKey, older, entries, hasOlder, transcript, loadOlder } = useHistoryPaging(machine, sessionId, tail, threadScrollRef, stickToBottomRef)
   const activity = info?.conversation_state
   // Idle with background work open: the agent will wake by itself (internal/acp WaitItem).
   const waitNow = useNow(true, 60_000)
@@ -191,31 +181,10 @@ export default function ConversationPane({
   const config = useQuery(configQuery).data
   const logConfig = config?.conversation_config_log === true
   const reportTimings = config?.debug_chat_timings === true
-  const { data: legacyConfig, error: configError } = useQuery({
-    queryKey: ["conversation-config", machine, sessionId],
-    // Only a running agent has options; a stopped chat has no worker, and its 404 is not a version gap.
-    enabled: live && !logConfig,
-    queryFn: () => api<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/config-options`, { machine }),
-    retry: false,
-  })
-  const needsUpdate = conversationNeedsUpdate(conversationError, live && !logConfig ? configError : undefined)
+  const chatConfig = useChatConfig({ machine, sessionId, info, parent, live, starting, logConfig })
+  const { snapshot } = chatConfig
+  const needsUpdate = conversationNeedsUpdate(conversationError, live && !logConfig ? chatConfig.configError : undefined)
   const archiveUnavailable = archiveUnavailableMessage(conversationError)
-  const snapshot = useQuery(agentSnapshotQuery(machine, info)).data
-  const configRaw = parent.agentConfig ?? legacyConfig ?? snapshot?.config
-  const configOptions = parseConfigOptions(configRaw).map((option) =>
-    option.type === "select" && configRole(option) === "permissions" && parent.agentMode && option.items.some((item) => item.value === parent.agentMode)
-      ? { ...option, value: parent.agentMode }
-      : option,
-  )
-  const provisionalConfig = starting && configOptions.length > 0
-  const selectOptions = configOptions.filter((option) => option.type === "select")
-  const permissionsOption = selectOptions.find((option) => configRole(option) === "permissions")
-  const modelOption = selectOptions.find((option) => configRole(option) === "model")
-  // An Oh My Pi chat can switch to a role's model (and thinking), as set on the machine running it.
-  const ompSettings = useQuery({ ...ompSettingsQuery(machine), enabled: live && info?.harness === "omp", retry: false }).data
-  const roles = ompSettings && modelOption ? quickRoles(ompSettings, modelOption.items.map((item) => item.value)) : []
-  const effortOption = selectOptions.find((option) => configRole(option) === "effort")
-  const extraOptions = configOptions.filter((option) => configRole(option) === "other")
   const tailLoaded = tail !== undefined
   useLayoutEffect(() => {
     if (!tailLoaded && !starting) return
@@ -227,82 +196,7 @@ export default function ConversationPane({
     })
     return () => cancelAnimationFrame(frame)
   }, [historyKey, reportTimings, starting, tailLoaded])
-  const streamReady = live || (starting && info?.provisionalStart !== "claim")
-  const subscribe = useConversationEvents()
-  const [legacyStream, setLegacyStream] = useState(false)
-  useEffect(() => {
-    if (!streamReady || needsUpdate || !tailLoaded) return
-    const key = ["conversation", machine, sessionId]
-    const onEntry = (data: string) => {
-      let entry: LogEntry
-      try {
-        entry = JSON.parse(data) as LogEntry
-      } catch {
-        return
-      }
-      queryClient.setQueryData<ConversationPage>(key, (current) => {
-        const rows = current?.entries ?? []
-        if (entry.seq <= (rows.at(-1)?.seq ?? 0)) return current
-        return { entries: [...rows, entry], truncated: current?.truncated ?? false }
-      })
-    }
-    const onTruncated = () => {
-      queryClient.setQueryData<ConversationPage>(key, (current) => current && !current.truncated ? { ...current, truncated: true } : current)
-    }
-    if (subscribe && !legacyStream) {
-      let untrack: (() => void) | undefined
-      const unsubscribe = subscribe({
-        machine, sessionId, onEntry, onTruncated,
-        onConnection: (connected) => {
-          if (connected) {
-            if (!untrack) untrack = trackStreamingQuery(key)
-          } else {
-            untrack?.()
-            untrack = undefined
-          }
-          setStreamConnected(connected)
-        },
-        onFallback: () => setLegacyStream(true),
-      })
-      return () => {
-        unsubscribe()
-        untrack?.()
-        untrack = undefined
-      }
-    }
-    let source: EventSource | undefined
-    let untrack: (() => void) | undefined
-    const close = () => {
-      source?.close()
-      source = undefined
-      untrack?.()
-      untrack = undefined
-      setStreamConnected(false)
-    }
-    const syncVisibility = () => {
-      if (document.visibilityState === "hidden") {
-        close()
-        return
-      }
-      if (source) return
-      const url = new URL(`/api/sessions/${encodeURIComponent(sessionId)}/conversation`, location.origin)
-      url.searchParams.set("stream", "1")
-      url.searchParams.set("since", String(queryClient.getQueryData<ConversationPage>(key)?.entries.at(-1)?.seq ?? 0))
-      if (machine && machine !== LOCAL) url.searchParams.set("node", machine)
-      source = new EventSource(url)
-      untrack = trackStreamingQuery(key)
-      source.onopen = () => setStreamConnected(true)
-      source.onerror = () => setStreamConnected(false)
-      source.onmessage = (event) => onEntry(event.data)
-      source.addEventListener("truncated", onTruncated)
-    }
-    document.addEventListener("visibilitychange", syncVisibility)
-    syncVisibility()
-    return () => {
-      document.removeEventListener("visibilitychange", syncVisibility)
-      close()
-    }
-  }, [legacyStream, machine, needsUpdate, queryClient, sessionId, streamReady, subscribe, tailLoaded])
+  useConversationStream(machine, sessionId, (live || (starting && info?.provisionalStart !== "claim")) && !needsUpdate && tailLoaded, setStreamConnected)
 
   const subagent = subagentId ? parent.subagents?.[subagentId] : undefined
   const thread = subagent?.thread ?? parent
@@ -318,56 +212,6 @@ export default function ConversationPane({
     id.startsWith("helper:")
       ? void navigate({ to: "/sessions/$machine/$sessionId", params: { machine, sessionId: id.slice("helper:".length) } })
       : void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, sub: id }) })
-  useLayoutEffect(() => {
-    const element = threadScrollRef.current
-    if (!element || tailEntries.length === 0 || element.querySelector("[data-thread-virtual]")) return
-    if (stickToBottomRef.current) element.scrollTop = element.scrollHeight
-  }, [tailEntries])
-  useLayoutEffect(() => {
-    const element = threadScrollRef.current
-    const anchor = scrollAnchorRef.current
-    if (!element || !anchor) return
-    scrollAnchorRef.current = null
-    if (element.querySelector("[data-thread-virtual]")) return
-    element.scrollTop = anchor.top + element.scrollHeight - anchor.height
-  }, [older?.entries])
-
-  // Scrolling never retries a failed page; the Retry button does.
-  async function loadOlder(retry = false, complete?: (loaded: LogEntry[]) => boolean) {
-    const first = entries[0]
-    if (!first || !hasOlder || older?.loading || (older?.error && !retry)) return
-    const previous = older?.entries ?? []
-    let kept = previous
-    let before = first.seq
-    setHistory({ key: historyKey, entries: kept, more: true, loading: true })
-    let more: boolean
-    let loaded: LogEntry[]
-    do {
-      let page: ConversationPage
-      try {
-        page = await olderConversationPage(machine, sessionId, before)
-      } catch (error) {
-        setHistory({ key: historyKey, entries: previous, more: true, loading: false, error })
-        return
-      }
-      kept = [...page.entries, ...kept]
-      loaded = joinHistory(kept, tailEntries)
-      const next = page.entries[0]?.seq
-      more = page.truncated && next !== undefined && next > 1 && next < before
-      before = next ?? before
-    } while (more && complete && !complete(loaded))
-    const element = threadScrollRef.current
-    if (element) scrollAnchorRef.current = { height: element.scrollHeight, top: element.scrollTop }
-    setHistory({ key: historyKey, entries: kept, more, loading: false })
-    return loaded
-  }
-  // A tool-heavy turn can outgrow the first page, which then starts mid-turn: no prompt, and
-  // subagents without the titles recorded when they started. Page back to the turn's prompt.
-  const hasUserMessage = (items: ThreadItem[]) => items.some((item) => item.kind === "user_message_chunk")
-  const turnStartMissing = hasOlder && !hasUserMessage(transcript.items)
-  useEffect(() => {
-    if (turnStartMissing) void loadOlder(false, (rows) => hasUserMessage(reduceThread(historyKey, rows).items))
-  }, [turnStartMissing])
   useEffect(() => {
     const save = draft && recalledPrompt.current?.text !== draft
     try {
@@ -419,37 +263,6 @@ export default function ConversationPane({
   const [goalEditorLoaded, setGoalEditorLoaded] = useState(false)
   if (goalSheet && !goalEditorLoaded) setGoalEditorLoaded(true)
   const goalActions = useGoalActions(machine, sessionId)
-  const setConfig = useMutation({
-    mutationFn: async ({ key, value }: { key: string; value: string | boolean }) => {
-      const claimed = await pendingChatClaim(sessionId)
-      return api(`/api/sessions/${encodeURIComponent(claimed?.id ?? sessionId)}/conversation/config`, {
-        machine,
-        method: "POST",
-        body: { key, value },
-      })
-    },
-    onSuccess: (_, { key }) => {
-      if (!starting && !logConfig) {
-        return queryClient.invalidateQueries({ queryKey: ["conversation-config", machine, sessionId] }).then(() =>
-          setConfigValues((values) => withoutKey(values, key)),
-        )
-      }
-    },
-    onError: (error, { key, value }) => {
-      setConfigValues((values) => withoutKey(values, key))
-      hud.error(
-        conversationErrorMessage(machine, `set ${key}`, error),
-        conversationNeedsUpdate(error) ? undefined : () => setConfigValue(key, value),
-      )
-    },
-  })
-  function setConfigValue(key: string, value: string | boolean) {
-    setConfigValues((current) => ({ ...current, [key]: value }))
-    setConfig.mutate({ key, value })
-  }
-  useEffect(() => {
-    if (live && configRaw !== undefined) setConfigValues((values) => Object.keys(values).length ? {} : values)
-  }, [configRaw, live, parent.agentMode])
 
   const fork = useStartSession()
   const forkChat = () => {
@@ -1129,150 +942,7 @@ export default function ConversationPane({
                     </MenuContent>
                   </Menu>
                 )}
-                {provisionalConfig && <span className="text-(length:--fs-xs) text-(--fg3)">Provisional</span>}
-                {permissionsOption && (
-                  <PopupSelect
-                    label="Permissions"
-                    value={typeof configValues[permissionsOption.id] === "string" ? configValues[permissionsOption.id] as string : permissionsOption.value}
-                    onValueChange={(value) => setConfigValue(permissionsOption.id, value)}
-                    // Stays usable while the agent waits on you: that is when switching to bypass helps.
-                    disabled={setConfig.isPending || needsUpdate}
-                    items={permissionsOption.items.map((item) => ({ ...item, danger: dangerousMode(item) }))}
-                  />
-                )}
-                {(modelOption || effortOption || extraOptions.length > 0) && (
-                  <Menu>
-                    <MenuTrigger
-                      render={
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          aria-label={effortOption ? "Model and effort" : modelOption?.name ?? "Options"}
-                          title="Choose model and effort"
-                          disabled={setConfig.isPending || (!starting && thread.needs_you) || needsUpdate}
-                          className="max-w-48 gap-(--s2)"
-                        >
-                          <span className="min-w-0 truncate">
-                            {modelOption
-                              ? modelOption.items.find((item) => item.value === (typeof configValues[modelOption.id] === "string" ? configValues[modelOption.id] : modelOption.value))?.label ?? modelOption.value
-                              : effortOption ? "Effort" : "Options"}
-                          </span>
-                          {effortOption && (
-                            <span className="shrink-0 text-(--fg3)">
-                              {effortOption.items.find((item) => item.value === (typeof configValues[effortOption.id] === "string" ? configValues[effortOption.id] : effortOption.value))?.label ?? effortOption.value}
-                            </span>
-                          )}
-                          <ChevronDown aria-hidden />
-                        </Button>
-                      }
-                    />
-                    <MenuContent align="end" className={roles.length > 0 ? "min-w-72" : undefined}>
-                      {roles.length > 0 && modelOption && (
-                        <>
-                          <p className="px-[11px] pt-(--s2) pb-(--s1) text-(length:--fs-xs) font-semibold text-(--fg3)">Roles</p>
-                          {roles.map((role) => (
-                            <MenuItem
-                              key={role.id}
-                              icon={<span aria-hidden className="size-[15px]" />}
-                              disabled={setConfig.isPending || (!starting && thread.needs_you) || needsUpdate}
-                              onClick={() => {
-                                setConfigValue(modelOption.id, role.selector)
-                                if (role.level && effortOption?.items.some((item) => item.value === role.level)) setConfigValue(effortOption.id, role.level)
-                              }}
-                            >
-                              {role.name}
-                              <span className="ms-auto ps-(--s4) text-(--fg3)">{[modelOption.items.find((item) => item.value === role.selector)?.label ?? role.selector, role.level].filter(Boolean).join(" · ")}</span>
-                            </MenuItem>
-                          ))}
-                          <div role="separator" className="mx-[11px] my-[5px] h-px bg-(--menu-sep)" />
-                        </>
-                      )}
-                      {modelOption && (
-                        <>
-                          <p className="px-[11px] pt-(--s2) pb-(--s1) text-(length:--fs-xs) font-semibold text-(--fg3)">Model</p>
-                          {modelOption.items.map((item) => {
-                            const selected = (typeof configValues[modelOption.id] === "string" ? configValues[modelOption.id] : modelOption.value) === item.value
-                            return (
-                              <MenuItem
-                                key={item.value}
-                                role="menuitemradio"
-                                aria-checked={selected}
-                                icon={selected ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
-                                disabled={setConfig.isPending || (!starting && thread.needs_you) || needsUpdate}
-                                onClick={() => setConfigValue(modelOption.id, item.value)}
-                              >
-                                {item.label}
-                              </MenuItem>
-                            )
-                          })}
-                        </>
-                      )}
-                      {effortOption && (
-                        <>
-                          {modelOption && <div role="separator" className="mx-[11px] my-[5px] h-px bg-(--menu-sep)" />}
-                          <p className="px-[11px] pt-(--s2) pb-(--s1) text-(length:--fs-xs) font-semibold text-(--fg3)">Effort</p>
-                          {effortOption.items.map((item) => {
-                            const selected = (typeof configValues[effortOption.id] === "string" ? configValues[effortOption.id] : effortOption.value) === item.value
-                            return (
-                              <MenuItem
-                                key={item.value}
-                                role="menuitemradio"
-                                aria-checked={selected}
-                                icon={selected ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
-                                disabled={setConfig.isPending || (!starting && thread.needs_you) || needsUpdate}
-                                onClick={() => setConfigValue(effortOption.id, item.value)}
-                              >
-                                {item.label}
-                              </MenuItem>
-                            )
-                          })}
-                        </>
-                      )}
-                      {extraOptions.map((option) => {
-                        const current = configValues[option.id] ?? option.value
-                        return (
-                          <div key={option.id}>
-                            <div role="separator" className="mx-[11px] my-[5px] h-px bg-(--menu-sep)" />
-                            {option.type === "boolean" ? (
-                              <MenuItem
-                                role="menuitemcheckbox"
-                                aria-checked={current === true}
-                                icon={current === true ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
-                                disabled={setConfig.isPending || (!starting && thread.needs_you) || needsUpdate}
-                                onClick={() => setConfigValue(option.id, current !== true)}
-                              >
-                                {option.name}
-                              </MenuItem>
-                            ) : (
-                              <>
-                                <p className="px-[11px] pt-(--s2) pb-(--s1) text-(length:--fs-xs) font-semibold text-(--fg3)">{option.name}</p>
-                                {option.items.map((item) => (
-                                  <MenuItem
-                                    key={item.value}
-                                    role="menuitemradio"
-                                    aria-checked={current === item.value}
-                                    icon={current === item.value ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
-                                    disabled={setConfig.isPending || (!starting && thread.needs_you) || needsUpdate}
-                                    onClick={() => setConfigValue(option.id, item.value)}
-                                  >
-                                    {item.label}
-                                  </MenuItem>
-                                ))}
-                              </>
-                            )}
-                          </div>
-                        )
-                      })}
-                      {info?.harness === "omp" && (
-                        <>
-                          <div role="separator" className="mx-[11px] my-[5px] h-px bg-(--menu-sep)" />
-                          <MenuItem onClick={() => void navigate({ to: "/settings/$pane", params: { pane: "omp" } })}>Oh My Pi settings…</MenuItem>
-                        </>
-                      )}
-                    </MenuContent>
-                  </Menu>
-                )}
+                <ChatConfigControls config={chatConfig} harness={info?.harness} starting={starting} needsYou={thread.needs_you} needsUpdate={needsUpdate} />
                 {contextPercent !== undefined && (
                   <button
                     type="button"
@@ -1361,12 +1031,6 @@ export default function ConversationPane({
       </div>
     </div>
   )
-}
-
-function withoutKey<T>(values: Record<string, T>, key: string): Record<string, T> {
-  const rest = { ...values }
-  delete rest[key]
-  return rest
 }
 
 function chatTiming(name: "chat-first-frame" | "prompt-confirmed", start: number, report: boolean) {

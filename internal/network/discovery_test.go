@@ -3,26 +3,27 @@ package network
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/state"
 
+	"tailscale.com/client/local"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/views"
-
-	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestPersonalTailnetPolicy(t *testing.T) {
@@ -170,95 +171,26 @@ func TestSharingConfigPersistsAndValidates(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	empty, err := ReadSharingConfig(store, home)
+	empty, err := ReadSharingConfig(store)
 	if err != nil || !empty.Enabled {
 		t.Fatalf("sharing should default on: %+v %v", empty, err)
 	}
 	if err := WriteSharingConfig(store, SharingConfig{}); err != nil {
 		t.Fatal(err)
 	}
-	if off, err := ReadSharingConfig(store, home); err != nil || off.Enabled {
+	if off, err := ReadSharingConfig(store); err != nil || off.Enabled {
 		t.Fatalf("explicit off must persist: %+v %v", off, err)
 	}
 	want := SharingConfig{Enabled: true, Allow: []string{"tag:server", "stable-node"}}
 	if err := WriteSharingConfig(store, want); err != nil {
 		t.Fatal(err)
 	}
-	actual, err := ReadSharingConfig(store, home)
+	actual, err := ReadSharingConfig(store)
 	if err != nil || !actual.Enabled || !slices.Equal(actual.Allow, want.Allow) {
 		t.Fatalf("loaded: %+v %v", actual, err)
 	}
 	if err := WriteSharingConfig(store, SharingConfig{Allow: []string{"http://arbitrary"}}); err == nil {
 		t.Fatal("accepted arbitrary URL")
-	}
-}
-
-func TestSharingConfigImportsLegacyOnlyAfterSuccessfulWrite(t *testing.T) {
-	for _, test := range []struct {
-		name, data string
-		broken     bool
-	}{
-		{"valid", `{"enabled":false,"allow":["tag:server"]}`, false},
-		{"invalid json", "broken", true},
-		{"invalid allowance", `{"enabled":true,"allow":["http://arbitrary"]}`, true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			home := t.TempDir()
-			store, err := state.Open(home)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer store.Close()
-			if err := paths.EnsurePrivateDirectory(filepath.Join(home, "network")); err != nil {
-				t.Fatal(err)
-			}
-			path := filepath.Join(home, "network", "sharing.json")
-			if err := os.WriteFile(path, []byte(test.data), 0600); err != nil {
-				t.Fatal(err)
-			}
-			if !test.broken {
-				if _, err := store.DB.Exec("CREATE TRIGGER reject_sharing BEFORE INSERT ON node_settings BEGIN SELECT RAISE(ABORT, 'write failed'); END"); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := ReadSharingConfig(store, home); err == nil {
-					t.Fatal("ignored failed import")
-				}
-				if _, err := os.Stat(path); err != nil {
-					t.Fatalf("failed import lost original: %v", err)
-				}
-				if _, err := store.DB.Exec("DROP TRIGGER reject_sharing"); err != nil {
-					t.Fatal(err)
-				}
-			}
-			got, err := ReadSharingConfig(store, home)
-			if test.broken {
-				if err == nil {
-					t.Fatal("ignored corrupt legacy settings")
-				}
-				if _, err := os.Stat(path); err != nil {
-					t.Fatalf("failed import lost original: %v", err)
-				}
-				return
-			}
-			if err != nil || got.Enabled || !slices.Equal(got.Allow, []string{"tag:server"}) {
-				t.Fatalf("imported %+v: %v", got, err)
-			}
-			if _, err := os.Stat(path); !os.IsNotExist(err) {
-				t.Fatalf("legacy file still exists: %v", err)
-			}
-			if err := store.Close(); err != nil {
-				t.Fatal(err)
-			}
-			reopened, err := state.Open(home)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer reopened.Close()
-			got, err = ReadSharingConfig(reopened, home)
-			if err != nil || got.Enabled || !slices.Equal(got.Allow, []string{"tag:server"}) {
-				t.Fatalf("reopened %+v: %v", got, err)
-			}
-		})
 	}
 }
 
@@ -382,31 +314,17 @@ func TestNameFromTailnetNamesOnlyUnnamedPeers(t *testing.T) {
 	}
 }
 
-// A session route the gateway registers is either reachable through a peer or
+// A session route is either reachable through a peer or
 // named here as local-only, so a new route cannot silently fail remotely.
 func TestPeerPatternsCoverSessionRoutes(t *testing.T) {
 	// show is only called by a chat's own agent, through the gateway of the machine the chat runs on.
 	localOnly := map[string]bool{"GET /api/sessions/{id}": true, "POST /api/sessions/{id}/conversation/show": true}
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	route := regexp.MustCompile(`"((?:GET|POST|PATCH|DELETE|PUT) /api/sessions/\{id\}[^"]*)"`)
-	for _, file := range files {
-		if strings.HasSuffix(file, "_test.go") {
-			continue
-		}
-		source, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, match := range route.FindAllStringSubmatch(string(source), -1) {
-			if !localOnly[match[1]] && !slices.Contains(peerPatterns, match[1]) {
-				t.Errorf("%s registers %q without a peer route; add it to peerPatterns or localOnly", file, match[1])
-			}
+	for _, row := range routeTable {
+		if strings.Contains(row.pattern, " /api/sessions/{id}") && !localOnly[row.pattern] && row.peer == peerNone {
+			t.Errorf("%q has no peer access; give it one or name it in localOnly", row.pattern)
 		}
 	}
-	for _, pattern := range peerPatterns {
+	for _, pattern := range peerPatterns() {
 		method, path, _ := strings.Cut(pattern, " ")
 		path = strings.NewReplacer("{cache_key}", strings.Repeat("a", 64), "{trace}", "0123456789abcdef0123456789abcdef", "{sha}", strings.Repeat("b", 64)).Replace(path)
 		path = regexp.MustCompile(`\{[^}]+\}`).ReplaceAllString(path, "x")
@@ -448,5 +366,58 @@ func TestSyncHTTPResponseKeepsPeerReachable(t *testing.T) {
 		if online, last := g.nodeContact("peer", "local"); online != reachable || !last.IsZero() {
 			t.Fatalf("online = %v, last sync = %v", online, last)
 		}
+	}
+}
+
+type statusRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f statusRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestConcurrentTailnetSnapshotsShareLocalAPI(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls atomic.Int32
+		release := make(chan struct{})
+		tailscaleLocal = local.Client{OmitAuth: true, Transport: statusRoundTripper(func(_ *http.Request) (*http.Response, error) {
+			calls.Add(1)
+			<-release
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(
+				`{"BackendState":"Running","Self":{"ID":"node"}}`,
+			))}, nil
+		})}
+		t.Cleanup(func() { tailscaleLocal = local.Client{} })
+		var wg sync.WaitGroup
+		for range 10 {
+			wg.Go(func() {
+				status, err := tailnetSnapshot(t.Context())
+				if err != nil || status.Self == nil || status.Self.ID != "node" {
+					t.Errorf("status = %+v, err = %v", status, err)
+				}
+			})
+		}
+		synctest.Wait()
+		close(release)
+		wg.Wait()
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("LocalAPI calls = %d, want 1", got)
+		}
+	})
+}
+
+func TestBindTailnetNodeOnlyWhileUsingSiteIdentity(t *testing.T) {
+	home := t.TempDir()
+	auth, err := testGatewayAuth(t, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &Gateway{auth: auth, store: auth.store}
+	if err := g.bindTailnetNode(t.Context(), "test-node"); err != nil {
+		t.Fatal(err)
+	}
+	g.store = nil // no store is involved once the stable ID is cached
+	if err := g.bindTailnetNode(t.Context(), "test-node"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.bindTailnetNode(t.Context(), "different-node"); err == nil {
+		t.Fatal("accepted a different stable identity")
 	}
 }

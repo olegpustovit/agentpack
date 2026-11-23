@@ -18,11 +18,3 @@ func planLSP(servers map[string]json.RawMessage, ctx base.StageContext) (base.LS
 	}
 	return base.LSPProjection{Files: []base.MCPProjectedFile{{Path: filepath.Join(root, ".lsp.json"), Contents: append(data, '\n'), Scope: "lsp"}}}, nil
 }
-
-func writeLSP(servers map[string]json.RawMessage, ctx base.StageContext) error {
-	projection, err := planLSP(servers, ctx)
-	if err != nil {
-		return err
-	}
-	return base.WriteLSPProjection(projection)
-}

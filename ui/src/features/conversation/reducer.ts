@@ -1,6 +1,7 @@
 import type { GoalState, SessionInfo } from "@/lib/api-types"
 import { harnessName } from "@/lib/format"
 import type { CompactionPayload, LogEntry, QueuedPrompt, Subagent, ThreadItem, ThreadState, ToolPayload, UserAttachmentPayload, UserMessagePayload } from "./model"
+import { onSignOut } from "@/lib/persist"
 
 // Entries from a subagent carry its session id (or "tool:<id>" for agents that only tag the parent tool call).
 function subagentOf(payload: unknown): string | undefined {
@@ -124,9 +125,8 @@ function updateCompaction(state: ThreadState, compactionId: string, patch: Compa
       "compactionId" in data && data.compactionId === compactionId
   })
   const current = index >= 0 ? state.items[index]!.data as CompactionPayload : undefined
-  if (!current && typeof patch.status !== "string") return
-  const status = typeof patch.status === "string" ? patch.status : current?.status
-  if (status === undefined) return
+  // A summary chunk can arrive before any status: the compaction is then still running.
+  const status = patch.status ?? current?.status ?? "in_progress"
   const summary =
     patch.appendSummary !== undefined
       ? `${current?.summary ?? ""}${patch.appendSummary}`
@@ -140,6 +140,8 @@ function updateCompaction(state: ThreadState, compactionId: string, patch: Compa
 
 // ThreadReducer folds log entries one at a time. Items are updated in place and replaced, never mutated, so a
 // snapshot's copy of the list stays valid while later entries arrive: each new entry costs O(1) plus one copy.
+const EMPTY_THREAD: ThreadState = { items: [], needs_you: false, working: false }
+
 class ThreadReducer {
   private state: ThreadState = { items: [], needs_you: false, working: false }
   private tools: Record<string, number> = {}
@@ -149,7 +151,11 @@ class ThreadReducer {
   private turn: { ts: number; tokens?: number; cost?: number } | undefined
   private compacting: string | undefined
   private goal: GoalState | undefined
+  private turnTask: string | undefined
   private afterPrompt = false
+  // The last snapshot while no entry has arrived since; a parent re-snapshots only the children an entry touched.
+  private last: ThreadState | undefined
+  private summaries = new Map<string, { thread: ThreadState; tools: number; lastTool?: string }>()
 
   constructor(private readonly nested = false) {}
 
@@ -166,6 +172,7 @@ class ThreadReducer {
   }
 
   apply(entry: LogEntry) {
+    this.last = undefined
     const { state, tools, meta, queue, nested } = this
     // Answers are logged by the gateway without a child stamp; each child resolves its own request by id.
     if (!nested && (entry.kind === "permission_result" || entry.kind === "elicitation_result")) for (const reducer of this.children.values()) reducer.apply(entry)
@@ -189,7 +196,7 @@ class ThreadReducer {
       case "user_message_chunk":
       case "agent_thought_chunk":
         appendChunk(state, entry)
-        if (entry.kind !== "user_message_chunk") state.working = !state.needs_you
+        if (entry.kind !== "user_message_chunk" && !state.needs_you) state.working = true
         break
       case "tool_call": {
         const id = toolID(entry.payload)
@@ -208,7 +215,9 @@ class ThreadReducer {
           const merged = { ...(prev.data as ToolPayload), ...update }
           state.items[idx] = { ...prev, data: update.content ? expandToolDiffs(merged) : merged, endTs: entry.ts }
         } else {
+          // The call lies before the loaded window: later updates merge into this row instead of adding bare ones.
           state.items.push({ kind: "tool", data: expandToolDiffs(entry.payload as ToolPayload) })
+          if (id) tools[id] = state.items.length - 1
         }
         break
       }
@@ -275,22 +284,28 @@ class ThreadReducer {
           used?: number
           size?: number
           cost?: { amount?: number; currency?: string }
+          contextTokens?: number
+          contextLimit?: number
+          costUsd?: number
           _meta?: { "_claude/origin"?: unknown }
         }
         // Claude's own follow-up cycles (after a background task) have no prompt or turn_end; their
         // origin-stamped usage is the end. Inside a user turn it must not clear "working".
         if (!this.turn && usage._meta?.["_claude/origin"]) state.working = false
-        state.context_tokens = usage.used
-        state.context_limit = usage.size
+        // An update carries only the fields that changed; ACP names win over the flat aliases.
+        const used = usage.used ?? usage.contextTokens
+        if (used !== undefined) state.context_tokens = used
+        state.context_limit = usage.size ?? usage.contextLimit ?? state.context_limit
+        if (usage.cost) state.cost_usd = usage.cost.currency === "USD" ? usage.cost.amount : undefined
+        else if (usage.costUsd !== undefined) state.cost_usd = usage.costUsd
         const compacting = this.compacting
-        if (compacting && usage.used !== undefined) {
+        if (compacting && used !== undefined) {
           const item = state.items.find((candidate) => candidate.kind === "compaction" && (candidate.data as CompactionPayload).compactionId === compacting)
           if (item && (item.data as CompactionPayload).status !== "in_progress") {
-            patchCompaction(state, compacting, { after: usage.used })
+            patchCompaction(state, compacting, { after: used })
             this.compacting = undefined
           }
         }
-        state.cost_usd = usage.cost?.currency === "USD" ? usage.cost?.amount : undefined
         break
       }
       case "subagent_update": {
@@ -370,14 +385,30 @@ class ThreadReducer {
         }
         // A failed or cancelled turn leaves its permissions and questions unanswerable; an MCP sign-in URL outlives it.
         if (!["error", "cancelled"].includes((entry.payload as { stopReason?: string }).stopReason ?? "")) break
-        deactivate(state, (item, data) => item.kind === "permission" ? !!data?.requestId : item.kind === "elicitation" && !!data?.elicitationId && !data.agentElicitationId)
+        this.deactivate((item, data) => item.kind === "permission" ? !!data?.requestId : item.kind === "elicitation" && !!data?.elicitationId && !data.agentElicitationId)
         break
       }
       case "agent_exit":
         state.working = false
         this.turn = undefined
-        deactivate(state, (item, data) => item.kind === "permission" ? !!data?.requestId : item.kind === "elicitation" && !!data?.elicitationId)
+        this.turnTask = undefined
+        this.deactivate((item, data) => item.kind === "permission" ? !!data?.requestId : item.kind === "elicitation" && !!data?.elicitationId)
         break
+      case "async_task_spawned": {
+        // The agent woke itself (a background task finished, a timer fired): that task is a turn of its own.
+        const task = entry.payload as { asyncTaskId?: string; taskType?: string }
+        if (task.taskType !== "turn" || !task.asyncTaskId) break
+        this.turnTask = task.asyncTaskId
+        state.working = !state.needs_you
+        break
+      }
+      case "async_task_state_update": {
+        const task = entry.payload as { asyncTaskId?: string; state?: string }
+        if (task.asyncTaskId !== this.turnTask || !["completed", "failed", "stopped"].includes(task.state ?? "")) break
+        this.turnTask = undefined
+        state.working = false
+        break
+      }
       case "prompt":
         queue.delete((entry.payload as { queueId?: string }).queueId ?? "")
         state.working = true
@@ -396,8 +427,21 @@ class ThreadReducer {
     }
   }
 
+  // The parent's turn ending also ends its subagents' open requests: nothing can answer them any more.
+  private deactivate(applies: (item: ThreadItem, data: { requestId?: string; elicitationId?: string; agentElicitationId?: string } | undefined) => boolean) {
+    const items = this.state.items
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]!
+      const data = item.data as { requestId?: string; elicitationId?: string; resolved?: boolean; inactive?: boolean } | undefined
+      if (applies(item, data) && !data?.resolved && !data?.inactive) items[i] = { ...item, data: { ...data, inactive: true } }
+    }
+    this.state.needs_you = hasOutstandingRequests(items)
+    for (const child of this.children.values()) child.deactivate(applies)
+  }
+
   // A new state object each call; the reducer's own list keeps changing afterwards.
   snapshot(): ThreadState {
+    if (this.last) return this.last
     const state: ThreadState = { ...this.state, items: this.state.items.slice() }
     if (this.queue.size > 0) state.queue = [...this.queue.values()]
     if (this.goal) state.goal = this.goal
@@ -405,33 +449,23 @@ class ThreadReducer {
     if (this.meta.size > 0) {
       state.subagents = {}
       for (const [id, info] of this.meta) {
-        const thread = this.children.get(id)?.snapshot() ?? new ThreadReducer(true).snapshot()
-        const tools = thread.items.filter((item) => item.kind === "tool")
-        const last = tools.at(-1)?.data as { title?: string } | undefined
-        state.subagents[id] = {
-          ...info,
-          thread,
-          tools: tools.length,
-          tokens: thread.context_tokens,
-          lastTool: last?.title,
+        const thread = this.children.get(id)?.snapshot() ?? EMPTY_THREAD
+        let summary = this.summaries.get(id)
+        if (summary?.thread !== thread) {
+          const tools = thread.items.filter((item) => item.kind === "tool")
+          summary = { thread, tools: tools.length, lastTool: (tools.at(-1)?.data as { title?: string } | undefined)?.title }
+          this.summaries.set(id, summary)
         }
+        state.subagents[id] = { ...info, ...summary, tokens: thread.context_tokens }
         // A child waiting on you makes the whole chat wait on you.
         if (thread.needs_you) state.needs_you = true
       }
     }
+    this.last = state
     return state
   }
 }
 
-function deactivate(state: ThreadState, applies: (item: ThreadItem, data: { requestId?: string; elicitationId?: string; agentElicitationId?: string } | undefined) => boolean) {
-  const items = state.items
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i]!
-    const data = item.data as { requestId?: string; elicitationId?: string; resolved?: boolean; inactive?: boolean } | undefined
-    if (applies(item, data) && !data?.resolved && !data?.inactive) items[i] = { ...item, data: { ...data, inactive: true } }
-  }
-  state.needs_you = hasOutstandingRequests(items)
-}
 
 export function reduceLog(entries: LogEntry[], nested = false): ThreadState {
   const reducer = new ThreadReducer(nested)
@@ -442,6 +476,7 @@ export function reduceLog(entries: LogEntry[], nested = false): ThreadState {
 // Per-chat reducers, so a streamed entry applies alone instead of replaying the log. A refetch hands over
 // new entry objects, which no longer match the last applied one, and rebuilds once.
 const threads = new Map<string, { reducer: ThreadReducer; count: number; last: LogEntry | undefined; first: LogEntry | undefined; state: ThreadState }>()
+onSignOut(() => threads.clear())
 const THREADS_KEPT = 16
 
 export function reduceThread(key: string, entries: LogEntry[]): ThreadState {
@@ -472,6 +507,9 @@ function patchCompaction(state: ThreadState, compactionId: string, patch: Partia
 // started them: the call whose result names the helper, else (agents such as Antigravity send no
 // MCP result) the first unclaimed helper started after a run_helper, start_session or fork_session
 // call. Open and Stop act on the helper chat itself, whose id follows "helper:".
+// Tool payloads are replaced, never mutated, so a render only serializes the calls that changed.
+const toolText = new WeakMap<ToolPayload, string>()
+
 export function helperSubagents(items: ThreadItem[], helpers: SessionInfo[]): Record<string, Subagent> {
   const out: Record<string, Subagent> = {}
   if (helpers.length === 0) return out
@@ -481,7 +519,8 @@ export function helperSubagents(items: ThreadItem[], helpers: SessionInfo[]): Re
     const tool = item.kind === "tool" ? (item.data as ToolPayload) : undefined
     if (!tool?.toolCallId) continue
     const free = byStart.filter((session) => !out[`helper:${session.id}`])
-    const result = JSON.stringify([tool.rawOutput, tool.content, tool.output])
+    let result = toolText.get(tool)
+    if (result === undefined) toolText.set(tool, (result = JSON.stringify([tool.rawOutput, tool.content, tool.output])))
     const helper =
       free.find((session) => result.includes(session.id)) ??
       // The worker and the helper share a clock; a second of slack covers the log's own timestamping.

@@ -175,7 +175,7 @@ func TestPushSubscriptionsAndTransitions(t *testing.T) {
 	}
 
 	// A locally started session (no owner email) belongs to the owner account.
-	db := g.auth.store.DB
+	db := g.store.DB
 	if _, err := db.Exec(`INSERT INTO sessions(id,name,directory,harness,transport,conversation_state,node_id)
  VALUES ('session-a','','/work/api','claude','acp','working',(SELECT node_id FROM local_node WHERE id=1))`); err != nil {
 		t.Fatal(err)
@@ -241,7 +241,7 @@ func TestPushSubscriptionsAndTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	var left int
-	if err := g.auth.store.Reader.QueryRow("SELECT count(*) FROM push_subscriptions WHERE email=?", testBrowserEmail).Scan(&left); err != nil || left != 0 {
+	if err := g.store.Reader.QueryRow("SELECT count(*) FROM push_subscriptions WHERE email=?", testBrowserEmail).Scan(&left); err != nil || left != 0 {
 		t.Fatal("gone subscription kept", left, err)
 	}
 	service.status = 0
@@ -268,8 +268,8 @@ func TestPushMainSendsForEveryNode(t *testing.T) {
 	defer server.Close()
 	g.push.client = server.Client()
 	testBrowserSession(t, g.auth, testBrowserEmail, "owner")
-	db := g.auth.store.DB
-	local, err := g.auth.store.NodeID(t.Context())
+	db := g.store.DB
+	local, err := g.store.NodeID(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

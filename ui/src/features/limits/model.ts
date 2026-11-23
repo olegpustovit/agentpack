@@ -1,4 +1,6 @@
+import { useMachines, useReplicatedQueries } from "@/features/machines/queries"
 import type { LimitSnapshot, LimitWindow } from "@/lib/api-types"
+import { limitsQuery } from "./queries"
 
 export type LimitReport = { id: string; name: string; snapshot: LimitSnapshot }
 
@@ -119,4 +121,14 @@ export function paceText(window: LimitWindow, now: number): { text: string; warn
   const end = runsOutAt(window, now)
   if (end !== undefined) return { text: `Runs out in about ${untilText(end - now)} at this pace`, warn: true }
   return { text: window.duration_seconds && window.reset_at ? "On pace" : "", warn: false }
+}
+
+// Every machine's replicated report, grouped per provider. `only` keeps one machine's reports.
+export function useLimitGroups(only?: string) {
+  const machines = useMachines()
+  const queries = useReplicatedQueries(limitsQuery)
+  const reports: LimitReport[] = machines.filter((machine) => !only || machine.id === only).flatMap((machine) =>
+    (queries.byMachine[machine.id]?.data ?? []).map((snapshot) => ({ id: machine.id, name: machine.name, snapshot })),
+  )
+  return { machines, queries, groups: providerGroups(reports) }
 }

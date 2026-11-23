@@ -96,7 +96,7 @@ func TestUsageWithoutReportedCostStaysUnknown(t *testing.T) {
 
 func TestFinishedTurnsRefreshTheirAgentsLimitsOncePerGate(t *testing.T) {
 	g, _ := identityGateway(t, t.TempDir(), nil)
-	store := g.auth.store
+	store := g.store
 	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: "chat", Transport: "acp", Harness: "claude"}); err != nil {
 		t.Fatal(err)
 	}

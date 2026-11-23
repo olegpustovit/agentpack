@@ -22,13 +22,9 @@ var deployScript string
 
 var deployStagePattern = regexp.MustCompile(`^/tmp/agentpack-deploy\.[A-Za-z0-9]{8}$`)
 
-func (runner Runner) runDeploy(ctx context.Context, arguments []string) (int, error) {
-	binary, arguments, supplied, err := takeFlag(arguments, "--binary")
-	if err != nil {
-		return 2, err
-	}
-	arguments, dryRun := takeBool(arguments, "--dry-run")
-	if err := noArgs(arguments); err != nil {
+func (runner Runner) runDeploy(ctx context.Context, invocation Invocation) (int, error) {
+	binary, supplied, dryRun := stringFlag(invocation, "binary"), invocation.Flags.Changed("binary"), boolFlag(invocation, "dry-run")
+	if err := noArgs(invocation.Args); err != nil {
 		return 2, err
 	}
 	if supplied && binary == "" {

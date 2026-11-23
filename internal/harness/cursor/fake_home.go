@@ -144,22 +144,7 @@ func linkMutableFile(source, destination string) error {
 	}
 	return os.Symlink(source, destination)
 }
-func readMCP(path string) (mcpFile, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return mcpFile{}, err
-	}
-	data, err = hujson.Standardize(append(data, '\n'))
-	if err != nil {
-		return mcpFile{}, err
-	}
-	var config mcpFile
-	err = json.Unmarshal(data, &config)
-	return config, err
-}
 
-// mcpFile is an mcp.json with each server kept as written, so that merging
-// the pack's servers with the user's loses no field of either.
 type mcpFile struct {
 	Servers map[string]json.RawMessage `json:"mcpServers"`
 }

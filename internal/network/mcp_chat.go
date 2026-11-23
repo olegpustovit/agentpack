@@ -149,7 +149,7 @@ func (g *Gateway) chatCaller(r *http.Request) (Actor, error) {
 	if !validSessionID(id) || err != nil || len(stored) == 0 || subtle.ConstantTimeCompare(stored, []byte(token)) != 1 {
 		return Actor{}, errChatCredential
 	}
-	info, err := storedSession(r.Context(), g.auth.store.Reader, id)
+	info, err := storedSession(r.Context(), g.store.Reader, id)
 	if errors.Is(err, errSessionNotFound) || err == nil && info.StartedBy == nil {
 		return Actor{}, errChatCredential
 	}
@@ -177,7 +177,7 @@ func (g *Gateway) serveChatTools(w http.ResponseWriter, r *http.Request, stream 
 // chatToolsOn reads the switch on every call, so turning it off takes effect without a reload.
 func (g *Gateway) chatToolsOn(ctx context.Context, id string) error {
 	var on bool
-	err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT tools FROM sessions WHERE id=?", id).Scan(&on)
+	err := g.store.Reader.QueryRowContext(ctx, "SELECT tools FROM sessions WHERE id=?", id).Scan(&on)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && !on {
 		return errChatToolsOff
 	}
@@ -192,7 +192,7 @@ func (g *Gateway) setChatTools(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &input) || !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
 		return
 	}
-	result, err := g.auth.store.DB.ExecContext(r.Context(), "UPDATE sessions SET tools=? WHERE id=? AND transport='acp' AND node_id="+state.LocalNodeSQL, input.Enabled, r.PathValue("id"))
+	result, err := g.store.DB.ExecContext(r.Context(), "UPDATE sessions SET tools=? WHERE id=? AND transport='acp' AND node_id="+state.LocalNodeSQL, input.Enabled, r.PathValue("id"))
 	var changed int64
 	if err == nil {
 		changed, err = result.RowsAffected()
@@ -216,7 +216,7 @@ func (g *Gateway) helperAllowed(ctx context.Context, parent string) error {
 			return fmt.Errorf("helpers can be at most %d levels deep", maxHelperDepth)
 		}
 		var next string
-		err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT parent_id FROM sessions WHERE id=?", id).Scan(&next)
+		err := g.store.Reader.QueryRowContext(ctx, "SELECT parent_id FROM sessions WHERE id=?", id).Scan(&next)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errors.New("parent session not found")
 		}
@@ -226,7 +226,7 @@ func (g *Gateway) helperAllowed(ctx context.Context, parent string) error {
 		root, id = id, next
 	}
 	var running int
-	err := g.auth.store.Reader.QueryRowContext(ctx, `WITH RECURSIVE tree(id) AS (
+	err := g.store.Reader.QueryRowContext(ctx, `WITH RECURSIVE tree(id) AS (
  SELECT id FROM sessions WHERE parent_id=? UNION SELECT sessions.id FROM sessions JOIN tree ON sessions.parent_id=tree.id)
  SELECT count(*) FROM sessions WHERE id IN (SELECT id FROM tree) AND ended_at=0 AND archived_at=0`, root).Scan(&running)
 	if err == nil && running >= maxHelpers {
@@ -263,7 +263,7 @@ func (m *GatewayMCP) agentMayChange(ctx context.Context, node, id string) error 
 		return errAgentScope
 	}
 	for depth := 0; depth <= maxHelperDepth && id != ""; depth++ {
-		info, err := storedSession(ctx, m.gateway.auth.store.Reader, id)
+		info, err := storedSession(ctx, m.gateway.store.Reader, id)
 		if err != nil {
 			return errAgentScope
 		}
@@ -318,7 +318,7 @@ func (m *GatewayMCP) guardToolCalls(next mcp.MethodHandler) mcp.MethodHandler {
 	}
 }
 
-// mcpWaitPoll is how often wait and send_prompt look again; tests shorten it.
+// mcpWaitPoll is the send_prompt retry interval; tests shorten it.
 var mcpWaitPoll = 500 * time.Millisecond
 
 // mcpWaitMax stays inside codemode's 60 s run limit.
@@ -379,7 +379,7 @@ func (m *GatewayMCP) postWhileStarting(ctx context.Context, node, id, path strin
 		if apiStatus(err) != http.StatusNotFound || strings.Contains(err.Error(), "404 page not found") || !time.Now().Before(deadline) {
 			return out, err
 		}
-		if info, storeErr := storedSession(ctx, m.gateway.auth.store.Reader, id); storeErr == nil && !info.EndedAt.IsZero() {
+		if info, storeErr := storedSession(ctx, m.gateway.store.Reader, id); storeErr == nil && !info.EndedAt.IsZero() {
 			return out, err
 		}
 		select {
@@ -797,7 +797,12 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		if in.TimeoutSeconds > 0 && time.Duration(in.TimeoutSeconds)*time.Second < timeout {
 			timeout = time.Duration(in.TimeoutSeconds) * time.Second
 		}
-		deadline := time.Now().Add(timeout)
+		events, unsubscribe := m.gateway.listen()
+		defer unsubscribe()
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		fallback := time.NewTicker(5 * time.Second)
+		defer fallback.Stop()
 		var first map[string]chatState
 		var firstTasks map[string]taskState
 		for {
@@ -827,13 +832,19 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 			for _, task := range tasks {
 				out.Reached = out.Reached || task.State != firstTasks[task.TaskID] || !task.State.open()
 			}
-			if out.Reached || !time.Now().Before(deadline) {
+			if out.Reached {
 				return nil, out, nil
 			}
 			select {
 			case <-ctx.Done():
 				return nil, out, ctx.Err()
-			case <-time.After(min(mcpWaitPoll, time.Until(deadline))):
+			case <-timer.C:
+				return nil, out, nil
+			case <-fallback.C:
+			case _, open := <-events:
+				if !open {
+					events = nil
+				}
 			}
 		}
 	})
@@ -967,7 +978,7 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		if strings.TrimSpace(in.Prompt) == "" {
 			return nil, out, errEmptyPrompt
 		}
-		self, err := storedSession(ctx, m.gateway.auth.store.Reader, actor.chat)
+		self, err := storedSession(ctx, m.gateway.store.Reader, actor.chat)
 		if err != nil {
 			return nil, out, err
 		}

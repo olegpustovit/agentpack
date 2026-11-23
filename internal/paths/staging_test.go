@@ -110,3 +110,42 @@ func TestReclaimKeepsLeasedRecordedAndUnfinishedGenerations(t *testing.T) {
 		}
 	}
 }
+
+func TestStagingGenerationRefusesSymlinkRoot(t *testing.T) {
+	project := t.TempDir()
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	root, err := stagingRootBase(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(root), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), root); err != nil {
+		t.Skip(err)
+	}
+	if _, err := BeginStagingGeneration(project, "default"); err == nil {
+		t.Fatal("accepted a symlink as the staging root")
+	}
+}
+
+func TestStagingGenerationRefusesPublicRoot(t *testing.T) {
+	if os.Geteuid() < 0 {
+		t.Skip("Unix mode check")
+	}
+	project := t.TempDir()
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	root, err := stagingRootBase(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BeginStagingGeneration(project, "default"); err == nil {
+		t.Fatal("accepted a staging root readable by other users")
+	}
+}

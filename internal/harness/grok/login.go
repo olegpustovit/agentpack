@@ -17,7 +17,7 @@ var LoginMethods = []base.LoginMethod{{ID: "grok.com", Label: "Grok account"}}
 // Account follows the order launches use: the shared login, else (before the first launch made
 // one) a login from running grok directly. A recorded logout outranks that direct login.
 func Account(context.Context) base.Account {
-	if _, err := base.LookPathEnv(base.Grok.Binary()); err != nil {
+	if _, err := base.ResolveBinary(base.Grok.Binary()); err != nil {
 		return base.Account{}
 	}
 	account := base.Account{Installed: true}
@@ -48,13 +48,11 @@ func nonEmpty(path string) bool {
 // Logout removes the shared login and marks the store as set up, so the next launch of any project
 // drops its copy instead of importing one back.
 func Logout(context.Context) error {
-	shared, err := paths.SharedGrokCredentialsDir()
+	shared, lock, err := lockSharedCredentials()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(shared, 0o700); err != nil {
-		return err
-	}
+	defer lock.Unlock()
 	auth := filepath.Join(shared, "auth.json")
 	if err := os.Remove(auth); err != nil && !os.IsNotExist(err) {
 		return err
@@ -65,7 +63,7 @@ func Logout(context.Context) error {
 // Login runs grok's device-code login in an isolated home; success becomes the shared login that
 // each project home picks up on its next launch.
 func Login(string) (base.LoginFlow, error) {
-	exe, err := base.LookPathEnv(base.Grok.Binary())
+	exe, err := base.ResolveBinary(base.Grok.Binary())
 	if err != nil {
 		return base.LoginFlow{}, err
 	}
@@ -89,6 +87,11 @@ func Login(string) (base.LoginFlow, error) {
 			if _, err := os.Stat(login); err != nil {
 				return errors.New("Grok finished without saving a login")
 			}
+			shared, lock, err := lockSharedCredentials()
+			if err != nil {
+				return err
+			}
+			defer lock.Unlock()
 			return copyCredential(login, filepath.Join(shared, "auth.json"))
 		},
 		Cleanup: func() { _ = os.RemoveAll(home) },

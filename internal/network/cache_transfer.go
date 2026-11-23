@@ -76,13 +76,13 @@ func (g *Gateway) serveCacheFrom(w http.ResponseWriter, r *http.Request, targetF
 		http.Error(w, "invalid content hash", http.StatusBadRequest)
 		return
 	}
-	local, err := g.auth.store.NodeID(r.Context())
+	local, err := g.store.NodeID(r.Context())
 	if err != nil {
 		meshReadError(w, r, err)
 		return
 	}
 	var ownHash string
-	err = g.auth.store.Reader.QueryRowContext(r.Context(), "SELECT content_hash FROM cache_locations WHERE cache_key=? AND node_id=?", key, local).Scan(&ownHash)
+	err = g.store.Reader.QueryRowContext(r.Context(), "SELECT content_hash FROM cache_locations WHERE cache_key=? AND node_id=?", key, local).Scan(&ownHash)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		meshReadError(w, r, err)
 		return
@@ -115,7 +115,7 @@ func (g *Gateway) serveCacheFrom(w http.ResponseWriter, r *http.Request, targetF
 		http.Error(w, "cache entry unavailable", http.StatusNotFound)
 		return
 	}
-	rows, err := g.auth.store.Reader.QueryContext(r.Context(), "SELECT node_id FROM cache_locations WHERE cache_key=? AND content_hash=? AND node_id<>? ORDER BY node_id", key, expected, local)
+	rows, err := g.store.Reader.QueryContext(r.Context(), "SELECT node_id FROM cache_locations WHERE cache_key=? AND content_hash=? AND node_id<>? ORDER BY node_id", key, expected, local)
 	if err != nil {
 		meshReadError(w, r, err)
 		return

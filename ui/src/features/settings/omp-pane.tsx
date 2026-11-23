@@ -9,9 +9,8 @@ import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
-import { errorText } from "@/features/library/mutations"
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
-import { api, LOCAL, routeMissing } from "@/lib/api"
+import { api, errorText, LOCAL, routeMissing } from "@/lib/api"
 import { hud } from "@/lib/hud"
 import {
   chatRoles,

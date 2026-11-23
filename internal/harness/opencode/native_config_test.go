@@ -154,3 +154,43 @@ func TestV2NativeServerNames(t *testing.T) {
 		t.Fatalf("legacy server named servers = %+v, %v", result, err)
 	}
 }
+
+func TestOpenCodeInheritedConfigPathsRespectOverrides(t *testing.T) {
+	t.Setenv("OPENCODE_PATH", os.Args[0])
+	home, xdg, custom := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	t.Setenv("OPENCODE_CONFIG_DIR", custom)
+	explicit := filepath.Join(t.TempDir(), "explicit.jsonc")
+	t.Setenv("OPENCODE_CONFIG", explicit)
+	paths := inheritedConfigPaths(t.TempDir())
+	for _, want := range []string{filepath.Join(xdg, "opencode", "opencode.jsonc"), filepath.Join(custom, "opencode.json"), explicit} {
+		found := false
+		for _, path := range paths {
+			if path == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing %s from %v", want, paths)
+		}
+	}
+	workspace := t.TempDir()
+	t.Setenv("OPENCODE_CONFIG", "nested/explicit.json")
+	paths = inheritedConfigPaths(workspace)
+	foundRelative := false
+	for _, path := range paths {
+		if path == filepath.Join(workspace, "nested", "explicit.json") {
+			foundRelative = true
+		}
+	}
+	if !foundRelative {
+		t.Fatalf("relative config missing from %v", paths)
+	}
+	seed, _ := inheritedConfigSeed()
+	if seed != filepath.Join(xdg, "opencode", "opencode.json") {
+		t.Fatalf("seed = %s", seed)
+	}
+}

@@ -66,7 +66,7 @@ func TestNativeYoloIsLaunchScoped(t *testing.T) {
 			}
 			for _, yolo := range []bool{true, false} {
 				ctx.Yolo = yolo
-				cmd, err := launch(ctx)
+				cmd, _, err := launch(ctx)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -142,7 +142,7 @@ func TestNativeAttributionWithCustomDirectory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			command, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: test.args})
+			command, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: test.args})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -250,7 +250,7 @@ func TestNativeV2LoadsGeneratedHookBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"serve", "--hostname", "127.0.0.1", "--port", port}})
+	command, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"serve", "--hostname", "127.0.0.1", "--port", port}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestNativeV1UserPluginRunsOnce(t *testing.T) {
 	if err := finalizeSources(nil, stage); err != nil {
 		t.Fatal(err)
 	}
-	command, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "agent", "build"}})
+	command, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "agent", "build"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,7 +500,11 @@ func TestNativeV1CustomDirectoryPluginKeepsItsOrigin(t *testing.T) {
 	}
 	stage.StagedRoots = map[base.Target]string{}
 	pack := "pack-server"
-	if err := writeMCP(mcp.Entries{"shared": {Server: mcp.Server{Command: &pack}}, "pack-only": {Server: mcp.Server{Command: &pack}}}, stage); err != nil {
+	projection, err := planMCP(mcp.Entries{"shared": {Server: mcp.Server{Command: &pack}}, "pack-only": {Server: mcp.Server{Command: &pack}}}, stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.WriteMCPProjection(projection); err != nil {
 		t.Fatal(err)
 	}
 	root, err := stagedRoot(stage)
@@ -559,7 +563,7 @@ func TestNativeV1CustomDirectoryPluginKeepsItsOrigin(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	command, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "agent", "build", "--print-logs", "--log-level", "DEBUG"}})
+	command, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "agent", "build", "--print-logs", "--log-level", "DEBUG"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -582,7 +586,7 @@ func TestNativeV1CustomDirectoryPluginKeepsItsOrigin(t *testing.T) {
 	if err != nil || string(data) != "v1-option\n" {
 		t.Fatalf("config-declared plugin initialization: %q, %v", data, err)
 	}
-	skillCommand, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "skill"}})
+	skillCommand, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "skill"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,7 +614,7 @@ func TestNativeV1CustomDirectoryPluginKeepsItsOrigin(t *testing.T) {
 	if !found || !foundPack {
 		t.Fatalf("custom and pack skills discovered: custom=%v pack=%v", found, foundPack)
 	}
-	packCommand, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "config"}})
+	packCommand, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "config"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -619,7 +623,7 @@ func TestNativeV1CustomDirectoryPluginKeepsItsOrigin(t *testing.T) {
 	if err != nil || !bytes.Contains(packOutput, []byte("pack-agent")) || !bytes.Contains(packOutput, []byte("Agent fixture.")) || !bytes.Contains(packOutput, []byte("pack-command")) || !bytes.Contains(packOutput, []byte("Command fixture.")) {
 		t.Fatalf("pack agent and command discovery: %v\n%s", err, packOutput)
 	}
-	configCommand, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "config", "--pure"}})
+	configCommand, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "config", "--pure"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -647,7 +651,7 @@ func TestNativeV1CustomDirectoryPluginKeepsItsOrigin(t *testing.T) {
 	}
 	t.Setenv("AGENTPACK_INLINE_AUTOUPDATE", "false")
 	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"model":"inline/model","autoupdate":{env:AGENTPACK_INLINE_AUTOUPDATE},"mcp":{"inline-only":{"type":"local","command":["inline-server"]}}}`)
-	inline, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "config", "--pure"}})
+	inline, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "config", "--pure"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -712,7 +716,7 @@ func TestNativeV1UserSkillRemainsAtItsOrigin(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "skills", "personal-fixture")); !os.IsNotExist(err) {
 		t.Fatalf("user skill copied to staging: %v", err)
 	}
-	command, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "skill", "--pure"}})
+	command, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "skill", "--pure"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -783,11 +787,19 @@ func TestNativeV1ProjectModelOverridesGlobalConfig(t *testing.T) {
 	stage.StagedRoots = map[base.Target]string{}
 	packCommand := "pack-server"
 	entries := mcp.Entries{"shared": {Server: mcp.Server{Command: &packCommand}}, "pack-only": {Server: mcp.Server{Command: &packCommand}}}
-	if err := writeMCP(entries, stage); err != nil {
+	projection, err := planMCP(entries, stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.WriteMCPProjection(projection); err != nil {
 		t.Fatal(err)
 	}
 	lsp := map[string]json.RawMessage{"gopls": json.RawMessage(`{"command":"pack-gopls","extensionToLanguage":{".go":"go"}}`), "pack-lsp": json.RawMessage(`{"command":"pack-lsp","extensionToLanguage":{".test":"test"}}`)}
-	if err := writeLSP(lsp, stage); err != nil {
+	lspProjection, err := planLSP(lsp, stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.WriteLSPProjection(lspProjection); err != nil {
 		t.Fatal(err)
 	}
 	staged, err := stagedRoot(stage)
@@ -798,7 +810,7 @@ func TestNativeV1ProjectModelOverridesGlobalConfig(t *testing.T) {
 	if err != nil || bytes.Contains(stagedConfig, []byte("fixture-secret")) || bytes.Contains(stagedConfig, []byte("user-server")) || bytes.Contains(stagedConfig, []byte("user-gopls")) {
 		t.Fatalf("user server copied into staging: %v", err)
 	}
-	command, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "config", "--pure"}})
+	command, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "config", "--pure"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -867,7 +879,7 @@ func TestNativeV1LoadsGeneratedHookBridge(t *testing.T) {
 	if err := hooks.WriteRenderedFiles(output); err != nil {
 		t.Fatal(err)
 	}
-	command, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "agent", "build"}})
+	command, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "agent", "build"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -945,7 +957,11 @@ func TestNativeV2PluginKeepsItsOrigin(t *testing.T) {
 	}
 	stage.StagedRoots = map[base.Target]string{}
 	pack := "pack-server"
-	if err := writeMCP(mcp.Entries{"shared": {Server: mcp.Server{Command: &pack}}, "pack-only": {Server: mcp.Server{Command: &pack}}}, stage); err != nil {
+	projection, err := planMCP(mcp.Entries{"shared": {Server: mcp.Server{Command: &pack}}, "pack-only": {Server: mcp.Server{Command: &pack}}}, stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.WriteMCPProjection(projection); err != nil {
 		t.Fatal(err)
 	}
 	stageRoot, err := stagedRoot(stage)
@@ -993,7 +1009,7 @@ func TestNativeV2PluginKeepsItsOrigin(t *testing.T) {
 	if err != nil || bytes.Contains(packConfig, []byte("fixture-secret")) || bytes.Contains(packConfig, []byte(`"shared"`)) || !bytes.Contains(packConfig, []byte("pack-only")) {
 		t.Fatalf("pack config: %v %s", err, packConfig)
 	}
-	command, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "agents", "--standalone"}})
+	command, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "agents", "--standalone"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1016,7 +1032,7 @@ func TestNativeV2PluginKeepsItsOrigin(t *testing.T) {
 	if err != nil || string(declaredData) != "v2-option\n" {
 		t.Fatalf("declared plugin initialization: %q, %v", declaredData, err)
 	}
-	configCommand, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "config", "--standalone"}})
+	configCommand, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "config", "--standalone"}})
 	if err != nil {
 		t.Fatal(err)
 	}

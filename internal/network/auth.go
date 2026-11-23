@@ -310,16 +310,23 @@ SELECT ?,email,max(?,sessions_valid_after),?,sessions_valid_after FROM users WHE
 	writeJSON(w, map[string]any{"authenticated": true, "email": user.Email})
 }
 
-func (a *gatewayAuth) logout(w http.ResponseWriter, r *http.Request) {
+func (g *Gateway) logout(w http.ResponseWriter, r *http.Request) {
+	if g.auth.logout(w, r) {
+		g.emitEvent(eventMessage{Topic: "auth"})
+	}
+}
+
+func (a *gatewayAuth) logout(w http.ResponseWriter, r *http.Request) bool {
 	if cookie, err := r.Cookie(cookieName(r)); err == nil {
 		hash := sha256.Sum256([]byte(cookie.Value))
 		if _, err := a.store.DB.ExecContext(r.Context(), "DELETE FROM auth_sessions WHERE token_hash=?", hash[:]); err != nil {
 			authFailure(w, r, "could not sign out", err)
-			return
+			return false
 		}
 	}
 	clearCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)
+	return true
 }
 
 func (a *gatewayAuth) logoutAll(w http.ResponseWriter, r *http.Request) {

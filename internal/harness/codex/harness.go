@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,7 +14,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/gofrs/flock"
 	base "github.com/olegpustovit/agentpack/internal/harness"
@@ -22,28 +22,30 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-var pendingLoginHomes sync.Map
-var pendingGenerationLeases sync.Map // *exec.Cmd -> *flock.Flock
-
 func New() base.Harness {
-	return base.Definition{
-		Target:         base.Codex,
-		Root:           stagedRoot,
-		Reset:          resetPaths,
-		BeforeReset:    preReset,
-		Begin:          beginGeneration,
-		Setup:          prepare,
-		ProjectMCP:     planMCP,
-		Guidance:       injectGuidance,
-		Check:          verify,
-		Launch:         launch,
-		ACPAdapter:     codexACPPackage,
-		LaunchACP:      acpLaunch,
-		LaunchFinished: afterLaunch,
+	return base.Harness{
+		Target:      base.Codex,
+		Root:        stagedRoot,
+		Reset:       resetPaths,
+		BeforeReset: preReset,
+		Begin:       beginGeneration,
+		Setup:       prepare,
+		ProjectMCP:  planMCP,
+		Guidance:    injectGuidance,
+		Check:       verify,
+		Launch:      launch,
+		ACPAdapter:  codexACPPackage,
+		LaunchACP:   acpLaunch,
+		Capability:  Capability,
+		Inheritance: base.Inheritance{
+			Note:  "Codex keeps native history/auth continuity under CODEX_HOME bridging",
+			Paths: func(string) []string { return base.HomeFiles(".codex/config.toml", ".codex/AGENTS.md") },
+			Seed:  func() (string, string) { return base.HomeFile(".codex/config.toml") },
+		},
 	}
 }
 
-func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
+func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	arguments := append([]string(nil), ctx.Arguments...)
 	if ctx.Yolo && !base.HasAny(arguments, "--dangerously-bypass-approvals-and-sandbox", "--yolo") {
 		flag := "--dangerously-bypass-approvals-and-sandbox"
@@ -55,11 +57,11 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	}
 	binary, err := base.ResolveBinary(base.Codex.Binary())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	home, lease, err := acquireGenerationLease(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	keepLease := false
 	defer func() {
@@ -74,34 +76,31 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 	}
 	if _, err := os.Lstat(filepath.Join(home, credentialsBaselineFile)); err == nil {
 		if err := reconcileMCPAuthMode(ctx.ProjectRoot, ctx.Mode.Name()); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	} else if !os.IsNotExist(err) {
-		return nil, err
+		return nil, nil, err
 	}
+	var loginHome string
 	if isCodexLogin(arguments) {
-		loginHome, err := prepareIsolatedLoginHome(home)
-		if err != nil {
-			return nil, err
+		if loginHome, err = prepareIsolatedLoginHome(home); err != nil {
+			return nil, nil, err
 		}
-		pendingLoginHomes.Store(loginHome, home)
-		home = loginHome
 	}
 	if ctx.SessionID != "" && !isCodexLogin(arguments) {
 		// Per launch, never staged: the session ID would otherwise enter the shared generation.
 		if executable, err := os.Executable(); err == nil {
 			notify, err := sessionNotify(home, executable, ctx.SessionID)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			arguments = append([]string{"-c", notify}, arguments...)
 		}
 	}
 	command := exec.Command(binary, arguments...)
-	command.Env = append(os.Environ(), "CODEX_HOME="+home)
-	pendingGenerationLeases.Store(command, lease)
+	command.Env = append(os.Environ(), "CODEX_HOME="+cmp.Or(loginHome, home))
 	keepLease = true
-	return command, nil
+	return command, func() error { return finishLaunch(ctx, home, loginHome, lease) }, nil
 }
 
 func isCodexLogin(arguments []string) bool {
@@ -153,49 +152,16 @@ func usesInteractiveCodex(arguments []string) bool {
 	return true
 }
 
-func afterLaunch(ctx base.LaunchContext) error {
-	var lease *flock.Flock
-	if ctx.Command != nil {
-		if value, ok := pendingGenerationLeases.LoadAndDelete(ctx.Command); ok {
-			lease = value.(*flock.Flock)
-			defer func() {
-				if lease != nil {
-					_ = lease.Unlock()
-				}
-			}()
-		}
-	}
-	var home string
-	if ctx.Command != nil {
-		for _, entry := range ctx.Command.Env {
-			if value, ok := strings.CutPrefix(entry, "CODEX_HOME="); ok {
-				home = value
-			}
-		}
-	}
-	if home == "" {
-		var err error
-		home, err = CurrentHome(ctx.ProjectRoot, ctx.Mode.Name())
-		if err != nil {
-			return err
-		}
-	}
+// finishLaunch runs after the agent exits: it installs a finished isolated login, shares
+// refreshed credentials, releases the generation lease and retires unused generations.
+func finishLaunch(ctx base.LaunchContext, home, loginHome string, lease *flock.Flock) error {
 	var loginErr error
-	if value, ok := pendingLoginHomes.LoadAndDelete(home); ok {
-		loginHome := home
-		home = value.(string)
+	if loginHome != "" {
 		loginErr = finishIsolatedLoginHome(loginHome, home)
 	}
-	result := errors.Join(loginErr, finishAuthLaunch(home, ctx.Arguments), reconcileMCPAuthHome(ctx.ProjectRoot, home))
-	if ctx.Command != nil {
-		if lease != nil {
-			result = errors.Join(result, lease.Unlock())
-			lease = nil
-		}
-		// Run after the child exits. Busy generations retain their leases and
-		// loaded threads, so retirement can make progress on later launches.
-		_ = retireGenerations(ctx.ProjectRoot, ctx.Mode.Name())
-	}
+	result := errors.Join(loginErr, finishAuthLaunch(home, ctx.Arguments), reconcileMCPAuthHome(ctx.ProjectRoot, home), lease.Unlock())
+	// Busy generations retain their leases and loaded threads, so retirement can make progress on later launches.
+	_ = retireGenerations(ctx.ProjectRoot, ctx.Mode.Name())
 	return result
 }
 
@@ -429,13 +395,6 @@ func ensureSymlink(target, link string) error {
 	return os.Symlink(target, link)
 }
 
-func writeMCP(entries mcp.Entries, ctx base.StageContext) error {
-	projection, err := planMCP(entries, ctx)
-	if err != nil {
-		return err
-	}
-	return base.WriteMCPProjection(projection)
-}
 func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
 	root, err := stagedRoot(ctx)
 	if err != nil {
@@ -540,7 +499,7 @@ func sessionNotify(home, executable, sessionID string) (string, error) {
 			}
 		}
 		if len(user) == len(list) {
-			command = append(append(command, "--then"), user...)
+			command = append(append(command, "--"), user...)
 		}
 	}
 	// A JSON string array is also a TOML inline array.

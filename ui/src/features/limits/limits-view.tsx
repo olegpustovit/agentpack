@@ -5,8 +5,8 @@ import { Check, Copy, RefreshCw } from "lucide-react"
 import { Meter, Section } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
-import { useReplicatedQueries, useMachines, type Machine } from "@/features/machines/queries"
-import { AgentTile } from "@/features/sessions/session-row"
+import type { Machine } from "@/features/machines/queries"
+import { AgentTile } from "@/components/kit/agent-tile"
 import { StatusSlot } from "@/features/status/status-bar"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { usageQuery } from "@/features/usage/queries"
@@ -16,19 +16,9 @@ import { harnessName, plural, relativeTime } from "@/lib/format"
 import { hud, useCopied } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { limitsQuery } from "./queries"
-import { loginCommands, needsLogin, observedAt, paceText, providerGroups, remainingPercent, resetText, runsOutAt, tightestWindow, windowsOf, type LimitReport, type ProviderGroup } from "./model"
+import { loginCommands, needsLogin, useLimitGroups, observedAt, paceText, remainingPercent, resetText, runsOutAt, tightestWindow, windowsOf, type LimitReport, type ProviderGroup } from "./model"
 
 const limitsRoute = getRouteApi("/_app/usage/limits")
-
-// Every machine's replicated report, grouped per provider. `only` keeps one machine's reports.
-export function useLimitGroups(only?: string) {
-  const machines = useMachines()
-  const queries = useReplicatedQueries(limitsQuery)
-  const reports: LimitReport[] = machines.filter((machine) => !only || machine.id === only).flatMap((machine) =>
-    (queries.byMachine[machine.id]?.data ?? []).map((snapshot) => ({ id: machine.id, name: machine.name, snapshot })),
-  )
-  return { machines, queries, groups: providerGroups(reports) }
-}
 
 // Per tab, when each peer was last asked: views showing limits share it, so moving between them asks nobody twice.
 const nudged = new Map<string, number>()

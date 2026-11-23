@@ -162,7 +162,7 @@ func TestBrowserStartsInNewFolder(t *testing.T) {
 		// The terminal worker registers its session before answering the gateway.
 		info.ID = "session-terminal"
 		info.LastUsed = time.Now().UTC()
-		return info.ID, upsertSession(ctx, g.auth.store.DB, info)
+		return info.ID, upsertSession(ctx, g.store.DB, info)
 	})
 	t.Cleanup(g.starting.Wait)
 	testBrowserSession(t, g.auth, "viewer@example.com", "browse-start")

@@ -39,7 +39,7 @@ func TestAgentSessionsGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
-	g := &Gateway{auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home}}
+	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: nodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home}}
 	t.Setenv("AGENTPACK_TEST_ACP", "3")
 	t.Cleanup(func() { t.Setenv("AGENTPACK_TEST_ACP", "") })
 

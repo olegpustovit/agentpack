@@ -56,12 +56,12 @@ func TestProbeRejectsNativeNonzeroAndEmptyVersion(t *testing.T) {
 
 func TestPromptSkillsParserRequiresNativeDeveloperInventory(t *testing.T) {
 	valid := `[{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>\n### Available skills\n- sentinel: benign (file: r0/sentinel/SKILL.md)\n</skills_instructions>"}]}]`
-	names, err := parsePromptSkills(valid)
-	if err != nil || len(names) != 1 || names[0] != "sentinel" {
-		t.Fatalf("names=%v err=%v", names, err)
+	entries, err := parsePromptEntries(valid)
+	if err != nil || len(entries) != 1 || entries[0].Name != "sentinel" {
+		t.Fatalf("entries=%v err=%v", entries, err)
 	}
 	for _, output := range []string{"null", "[]", `[{"type":"message","role":"user","content":[{"type":"input_text","text":"<skills_instructions>\n### Available skills\n- sentinel: benign (file: r0/sentinel/SKILL.md)\n</skills_instructions>"}]}]`, strings.Replace(valid, "</skills_instructions>", "", 1)} {
-		if _, err := parsePromptSkills(output); err == nil {
+		if _, err := parsePromptEntries(output); err == nil {
 			t.Fatalf("accepted incomplete output %s", output)
 		}
 	}
@@ -131,9 +131,5 @@ func TestPromptEntriesKeepDuplicateNamesAndRoots(t *testing.T) {
 	entries, err := parsePromptEntries(output)
 	if err != nil || len(entries) != 2 || entries[0].Root != "/checkout/.agents/skills" || entries[1].Root != "/home/skills" {
 		t.Fatalf("entries=%+v err=%v", entries, err)
-	}
-	names, err := parsePromptSkills(output)
-	if err != nil || len(names) != 1 || names[0] != "review" {
-		t.Fatalf("names=%v err=%v", names, err)
 	}
 }

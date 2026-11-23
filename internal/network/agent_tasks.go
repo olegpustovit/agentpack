@@ -156,6 +156,7 @@ func (g *Gateway) serveAgentMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, strings.TrimSpace(string(body)), status)
 		return
 	}
+	g.emitEvent(eventMessage{Topic: "agent-tasks"})
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(body)
 }
@@ -569,8 +570,7 @@ func (g *Gateway) deliverReplies(ctx context.Context, only string) error {
 	if g.mcp == nil {
 		return nil
 	}
-	db := g.auth.store.DB
-	rows, err := db.QueryContext(ctx, "SELECT id,context_id,from_session,from_node,to_session,state,result,updated_at FROM agent_tasks WHERE role='in' AND delivered=0 AND (?1='' OR id=?1)", only)
+	rows, err := g.auth.store.Reader.QueryContext(ctx, "SELECT id,context_id,from_session,from_node,to_session,state,result,updated_at FROM agent_tasks WHERE role='in' AND delivered=0 AND (?1='' OR id=?1)", only)
 	if err != nil {
 		return err
 	}
@@ -670,7 +670,7 @@ func (g *Gateway) agentTasksPass(ctx context.Context) error {
 		return nil
 	}
 	db := g.auth.store.DB
-	rows, err := db.QueryContext(ctx, `SELECT t.id,t.to_session,t.from_session,t.from_node,t.state,t.since_seq,coalesce(s.last_seq,-1),coalesce(s.ended_at,1) FROM agent_tasks t
+	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT t.id,t.to_session,t.from_session,t.from_node,t.state,t.since_seq,coalesce(s.last_seq,-1),coalesce(s.ended_at,1) FROM agent_tasks t
  LEFT JOIN sessions s ON s.id=t.to_session WHERE t.role='in' AND t.state IN ('submitted','working')`)
 	if err != nil {
 		return err
@@ -700,7 +700,7 @@ func (g *Gateway) agentTasksPass(ctx context.Context) error {
 		if previous, ok := g.agentTaskSeen[task.id]; ok && previous == task.last && task.end == 0 {
 			continue // nothing new in that chat
 		}
-		started, state, answer, err := turnAnswer(ctx, db, task.id, task.session, task.since)
+		started, state, answer, err := turnAnswer(ctx, g.auth.store.Reader, task.id, task.session, task.since)
 		if err != nil {
 			failures = append(failures, err)
 			continue

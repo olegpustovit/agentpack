@@ -34,18 +34,13 @@ func TestCodexStreamFunctionsMatchGolden(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertJSONHash(t, reduced, test.reduce)
-			accumulated, err := AccumulateCodex(input, "msg_golden", "gpt-5.4")
-			if err != nil {
-				t.Fatal(err)
-			}
-			assertJSONHash(t, accumulated, test.accumulate)
-			chunks, err := CodexToAnthropicSSE(input, "msg_golden", "gpt-5.4")
-			if err != nil {
-				t.Fatal(err)
-			}
+			assertJSONHash(t, AccumulateCodex(reduced, "msg_golden", "gpt-5.4"), test.accumulate)
+			stream := &anthropicStream{messageID: "msg_golden", model: "gpt-5.4"}
 			var joined []byte
-			for _, chunk := range chunks {
-				joined = append(joined, chunk...)
+			for _, step := range reduced {
+				for _, frame := range stream.frames(step) {
+					joined = append(joined, frame...)
+				}
 			}
 			assertHash(t, joined, test.sse)
 		})

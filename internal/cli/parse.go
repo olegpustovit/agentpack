@@ -2,8 +2,9 @@ package cli
 
 import (
 	"fmt"
-	"slices"
 	"strings"
+
+	"github.com/spf13/pflag"
 )
 
 type Global struct {
@@ -18,17 +19,24 @@ type Global struct {
 	Debug          bool
 	Proxy          bool
 	StrictExternal bool
+	Version        bool
 }
 
+// Invocation is one command: Command is the top-level name and Args the rest
+// of the command path plus positional arguments. Flags holds what Cobra parsed
+// for a non-launcher command and is nil for launchers.
 type Invocation struct {
 	Global  Global
 	Command string
 	Args    []string
+	Flags   *pflag.FlagSet
 }
 
-// Parse removes global options wherever they appear before --. Remaining
-// arguments are deliberately left untouched for command-specific parsing and
-// harness passthrough.
+// Parse reads agentpack's global options out of a launcher command line
+// wherever they appear before --, except --debug after the harness name,
+// which belongs to the harness (Claude has its own). --yolo stays agentpack's
+// anywhere: each harness gets its own bypass flag from it. Everything else is
+// left for the harness unchanged.
 func Parse(arguments []string) (Invocation, error) {
 	var invocation Invocation
 	var rest []string
@@ -46,7 +54,11 @@ func Parse(arguments []string) (Invocation, error) {
 		case "--yolo":
 			invocation.Global.Yolo = true
 		case "--debug":
-			invocation.Global.Debug = true
+			if len(rest) != 0 {
+				rest = append(rest, argument)
+			} else {
+				invocation.Global.Debug = true
+			}
 		case "--proxy":
 			invocation.Global.Proxy = true
 		case "--strict-external":
@@ -67,7 +79,7 @@ func Parse(arguments []string) (Invocation, error) {
 				invocation.Global.Mode = arguments[index]
 			}
 		case "--env":
-			// Environment selector. KEY=VALUE belongs to `mcp add --env` and must pass through.
+			// Environment selector. A KEY=VALUE value belongs to the harness and passes through.
 			if index+1 >= len(arguments) {
 				return Invocation{}, fmt.Errorf("%s requires a value", argument)
 			}
@@ -107,26 +119,18 @@ func Parse(arguments []string) (Invocation, error) {
 	return invocation, nil
 }
 
-func takeFlag(arguments []string, name string) (string, []string, bool, error) {
-	for index, argument := range arguments {
-		if argument == name {
-			if index+1 == len(arguments) {
-				return "", nil, false, fmt.Errorf("%s requires a value", name)
-			}
-			return arguments[index+1], slices.Concat(arguments[:index], arguments[index+2:]), true, nil
-		}
-		if value, found := strings.CutPrefix(argument, name+"="); found {
-			return value, slices.Concat(arguments[:index], arguments[index+1:]), true, nil
-		}
-	}
-	return "", arguments, false, nil
+// stringFlag, stringsFlag and boolFlag read a flag Cobra parsed for this command.
+func stringFlag(invocation Invocation, name string) string {
+	value, _ := invocation.Flags.GetString(name)
+	return value
 }
 
-func takeBool(arguments []string, name string) ([]string, bool) {
-	for index, argument := range arguments {
-		if argument == name {
-			return slices.Concat(arguments[:index], arguments[index+1:]), true
-		}
-	}
-	return arguments, false
+func stringsFlag(invocation Invocation, name string) []string {
+	values, _ := invocation.Flags.GetStringArray(name)
+	return values
+}
+
+func boolFlag(invocation Invocation, name string) bool {
+	value, _ := invocation.Flags.GetBool(name)
+	return value
 }

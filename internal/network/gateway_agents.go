@@ -8,48 +8,26 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/harness/agy"
-	"github.com/olegpustovit/agentpack/internal/harness/claude"
-	"github.com/olegpustovit/agentpack/internal/harness/codex"
-	"github.com/olegpustovit/agentpack/internal/harness/cursor"
-	"github.com/olegpustovit/agentpack/internal/harness/grok"
-	"github.com/olegpustovit/agentpack/internal/harness/omp"
-	"github.com/olegpustovit/agentpack/internal/harness/opencode"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"golang.org/x/sync/singleflight"
 )
 
-// agentLogin reads and signs in one agent on this machine. Names match session harnesses.
-type agentLogin struct {
-	harness string
-	methods []harness.LoginMethod
-	account func(context.Context) harness.Account
-	login   func(method string) (harness.LoginFlow, error)
-	logout  func(context.Context) error // nil when the agent has no way to sign out without a terminal
-	// credential is the file holding the agent's sign-in, shared with every node; nil when its
-	// sign-in is not a file another machine can use (Cursor's keychain, OMP's database).
-	credential func() string
-	// refresh renews a rotating sign-in ahead of the agent, returning nil when it is not due; only
-	// the machine that published the shared sign-in calls it.
-	refresh func(context.Context, []byte) ([]byte, error)
-}
+// agents are the registry entries the gateway reads, signs in and probes; tests replace them.
+var agents = registry.All()
 
-var agentLogins = []agentLogin{
-	{"claude", claude.LoginMethods, claude.Account, claude.Login, claude.Logout, claude.CredentialFile, claude.RefreshCredential},
-	{"codex", codex.LoginMethods, codex.Account, codex.Login, codex.Logout, codex.CredentialFile, codex.RefreshCredential},
-	{"omp", omp.LoginMethods, omp.Account, omp.Login, nil, nil, nil},
-	{"agy", agy.LoginMethods, agy.Account, agy.Login, nil, agy.CredentialFile, nil},
-	{"cursor", cursor.LoginMethods, cursor.Account, cursor.Login, cursor.Logout, nil, nil},
-	{"grok", grok.LoginMethods, grok.Account, grok.Login, grok.Logout, grok.CredentialFile, nil},
-	{"opencode", opencode.LoginMethods, opencode.Account, opencode.Login, nil, opencode.CredentialFile, nil},
+func agentEntry(name string) (registry.Entry, bool) {
+	index := slices.IndexFunc(agents, func(entry registry.Entry) bool { return string(entry.Target) == name && entry.Login != nil })
+	if index < 0 {
+		return registry.Entry{}, false
+	}
+	return agents[index], true
 }
 
 // loginMethods are an agent's ways to sign in, known without asking its CLI.
 func loginMethods(name string) []harness.LoginMethod {
-	for _, agent := range agentLogins {
-		if agent.harness == name {
-			return agent.methods
-		}
+	if agent, ok := agentEntry(name); ok {
+		return agent.Login.Methods
 	}
 	return nil
 }
@@ -86,19 +64,23 @@ func (c *agentAccounts) read(ctx context.Context, fresh bool) []agentAccount {
 		// One reader leaving must not cut the probes short for the others.
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 		defer cancel()
-		accounts := make([]agentAccount, len(agentLogins))
+		accounts := make([]agentAccount, len(agents))
 		var wg sync.WaitGroup
-		for i, agent := range agentLogins {
+		for i, agent := range agents {
+			if agent.Login == nil {
+				continue
+			}
 			wg.Go(func() {
-				account := agent.account(ctx)
+				account := agent.Login.Account(ctx)
 				if account.Installed {
-					account.Methods = agent.methods
-					account.SignOut = account.SignedIn && agent.logout != nil
+					account.Methods = agent.Login.Methods
+					account.SignOut = account.SignedIn && agent.Login.Logout != nil
 				}
-				accounts[i] = agentAccount{Account: account, Harness: agent.harness}
+				accounts[i] = agentAccount{Account: account, Harness: string(agent.Target)}
 			})
 		}
 		wg.Wait()
+		accounts = slices.DeleteFunc(accounts, func(account agentAccount) bool { return account.Harness == "" })
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if generation == c.generation {
@@ -126,14 +108,11 @@ func (c *agentAccounts) attempt(name, id string) *loginAttempt {
 	return nil
 }
 
-func (g *Gateway) registerAgents(mux *http.ServeMux) {
+func (g *Gateway) registerAgents(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/agents", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"agents": g.agents.read(r.Context(), r.URL.Query().Get("fresh") == "1")})
 	})
 	mux.HandleFunc("POST /api/agents/{harness}/login", func(w http.ResponseWriter, r *http.Request) {
-		if !g.ownerOnly(w, r) {
-			return
-		}
 		var input struct {
 			Method string `json:"method"`
 		}
@@ -141,13 +120,8 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 			return
 		}
 		name := r.PathValue("harness")
-		index := -1
-		for i, agent := range agentLogins {
-			if agent.harness == name {
-				index = i
-			}
-		}
-		if index < 0 {
+		agent, ok := agentEntry(name)
+		if !ok {
 			http.Error(w, "unknown agent", http.StatusBadRequest)
 			return
 		}
@@ -155,7 +129,7 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 		if event != nil {
 			event.Set("harness", name)
 		}
-		flow, err := agentLogins[index].login(input.Method)
+		flow, err := agent.Login.Login(input.Method)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -168,7 +142,7 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 		g.agents.mu.Unlock()
 		attempt, err := startLogin(flow)
 		if err != nil {
-			respond(w, nil, err)
+			fail(w, r, err)
 			return
 		}
 		g.agents.mu.Lock()
@@ -197,32 +171,34 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 			}
 		})
 		step, err := attempt.waitLink(r.Context())
-		respond(w, step, err)
-	})
-	mux.HandleFunc("POST /api/agents/{harness}/logout", func(w http.ResponseWriter, r *http.Request) {
-		if !g.ownerOnly(w, r) {
+		if err != nil {
+			fail(w, r, err)
 			return
 		}
+		writeJSON(w, step)
+	})
+	mux.HandleFunc("POST /api/agents/{harness}/logout", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("harness")
-		index := slices.IndexFunc(agentLogins, func(agent agentLogin) bool { return agent.harness == name && agent.logout != nil })
-		if index < 0 {
+		agent, ok := agentEntry(name)
+		if !ok || agent.Login.Logout == nil {
 			http.Error(w, "this agent can't be signed out from here", http.StatusBadRequest)
 			return
 		}
 		if event := obs.From(r.Context()); event != nil {
 			event.Set("harness", name)
 		}
-		err := agentLogins[index].logout(r.Context())
+		err := agent.Login.Logout(r.Context())
 		if err == nil {
-			err = g.stopSharingAgentCredential(r.Context(), agentLogins[index])
+			err = g.stopSharingAgentCredential(r.Context(), agent)
 		}
 		g.agents.forget()
-		respond(w, map[string]bool{"signed_out": err == nil}, err)
-	})
-	mux.HandleFunc("GET /api/agents/{harness}/login/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.ownerOnly(w, r) {
+		if err != nil {
+			fail(w, r, err)
 			return
 		}
+		writeJSON(w, map[string]bool{"signed_out": true})
+	})
+	mux.HandleFunc("GET /api/agents/{harness}/login/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if attempt := g.agents.attempt(r.PathValue("harness"), r.PathValue("id")); attempt != nil {
 			writeJSON(w, attempt.current())
 			return
@@ -230,9 +206,6 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 		http.Error(w, "sign-in not found", http.StatusGone)
 	})
 	mux.HandleFunc("POST /api/agents/{harness}/login/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.ownerOnly(w, r) {
-			return
-		}
 		var input struct {
 			Input string `json:"input"`
 		}
@@ -251,9 +224,6 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 		writeJSON(w, attempt.current())
 	})
 	mux.HandleFunc("DELETE /api/agents/{harness}/login/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.ownerOnly(w, r) {
-			return
-		}
 		if attempt := g.agents.attempt(r.PathValue("harness"), r.PathValue("id")); attempt != nil {
 			attempt.Cancel()
 		}
@@ -261,13 +231,16 @@ func (g *Gateway) registerAgents(mux *http.ServeMux) {
 	})
 }
 
-// ownerOnly admits the owner: their browser, the CLI bound to them, or their request forwarded
-// by an approved peer. Agent sign-ins and agent settings change what every chat runs as.
-func (g *Gateway) ownerOnly(w http.ResponseWriter, r *http.Request) bool {
+// requireOwner admits enabled owners through browser, CLI, MCP or a peer
+// forwarding an account. Bare peer identities and unknown actors are denied.
+// The local CLI retains setup and shutdown authority before the first account exists.
+func (g *Gateway) requireOwner(w http.ResponseWriter, r *http.Request) bool {
 	actor, ok := actorFrom(r.Context())
 	allowed := false
-	if ok && actor.User != "" && (actor.Kind == "browser" || actor.Kind == "local" || actor.Kind == "peer" && actor.Account) {
-		err := g.auth.store.Reader.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM users WHERE email=? AND role='owner' AND disabled=0)", actor.User).Scan(&allowed)
+	if ok && (actor.Kind == "browser" || actor.Kind == "local" || actor.Kind == "mcp" || actor.Kind == "peer" && actor.Account) {
+		err := g.store.Reader.QueryRowContext(r.Context(), `SELECT EXISTS(
+			SELECT 1 FROM users WHERE email=? AND role='owner' AND disabled=0
+		) OR (? AND NOT EXISTS(SELECT 1 FROM users))`, actor.User, actor.Kind == "local" && !actor.Account).Scan(&allowed)
 		if err != nil {
 			if event := obs.From(r.Context()); event != nil {
 				event.Fail(err)

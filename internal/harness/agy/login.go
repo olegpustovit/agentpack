@@ -16,7 +16,7 @@ var LoginMethods = []base.LoginMethod{{ID: "google", Label: "Google account"}}
 
 // Account asks agy for its usage report, which only a signed-in agy can give.
 func Account(ctx context.Context) base.Account {
-	exe, err := base.LookPathEnv(base.Agy.Binary())
+	exe, err := base.ResolveBinary(base.Agy.Binary())
 	if err != nil {
 		return base.Account{}
 	}
@@ -35,7 +35,7 @@ func Account(ctx context.Context) base.Account {
 // run without a local browser. The screen offers Google sign-in first, prints the link, and takes
 // the address the browser lands on (antigravity.google/oauth-callback?…) pasted back.
 func Login(string) (base.LoginFlow, error) {
-	exe, err := base.LookPathEnv(base.Agy.Binary())
+	exe, err := base.ResolveBinary(base.Agy.Binary())
 	if err != nil {
 		return base.LoginFlow{}, err
 	}

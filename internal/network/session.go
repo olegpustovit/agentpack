@@ -70,7 +70,10 @@ func (attachment *Attachment) ReadOutput() ([]byte, bool) {
 // Session owns a single child and PTY. Gateway handlers only attach to it;
 // closing an attachment never signals the child.
 type Session struct {
-	mu          sync.Mutex
+	mu sync.Mutex
+	// writeMu serializes input; it is never held with mu, so a child that stops reading input
+	// cannot stall its output, attachments or state.
+	writeMu     sync.Mutex
 	command     *exec.Cmd
 	terminal    *terminal
 	state       TerminalState
@@ -188,21 +191,27 @@ func (session *Session) AttachmentError(attachment *Attachment) error {
 
 func (session *Session) WriteInput(attachment *Attachment, data []byte) error {
 	session.mu.Lock()
-	defer session.mu.Unlock()
-	if err := session.attached(attachment); err != nil {
+	err := session.attached(attachment)
+	session.mu.Unlock()
+	if err != nil {
 		return err
 	}
-	return session.writeInputLocked(data)
+	return session.writeInput(data)
 }
 
-func (session *Session) writeInputLocked(data []byte) error {
+func (session *Session) writeInput(data []byte) error {
 	if len(data) > chunkSize {
 		return errors.New("terminal input exceeds 32 KiB")
 	}
-	if !session.state.Running {
+	session.mu.Lock()
+	running := session.state.Running
+	session.mu.Unlock()
+	if !running {
 		return ErrSessionEnded
 	}
-	// Keep a child that stops reading from holding the session mutex indefinitely.
+	session.writeMu.Lock()
+	defer session.writeMu.Unlock()
+	// Keep a child that stops reading from blocking other input indefinitely.
 	if err := session.terminal.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
 		return err
 	}
@@ -295,7 +304,7 @@ func (session *Session) readOutput() {
 			// Shells probe the terminal before any viewer attaches (fish waits 10 s), and a viewer never
 			// answers replayed queries, so the worker answers Primary Device Attributes as xterm.js does.
 			if !session.publish(data) && (bytes.Contains(data, []byte("\x1b[c")) || bytes.Contains(data, []byte("\x1b[0c"))) {
-				_, _ = session.terminal.Write([]byte("\x1b[?1;2c"))
+				_ = session.writeInput([]byte("\x1b[?1;2c"))
 			}
 			session.scanAgentState(data)
 		}

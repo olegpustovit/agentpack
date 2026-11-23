@@ -11,8 +11,10 @@ import (
 const MaxEventBytes = 32 << 10
 
 var (
-	credentialKey   = regexp.MustCompile(`(?i)(token|secret|password|passwd|(?:api|private|client)[_-]?key|authorization|credential|auth|signature|sig)`)
-	credentialValue = regexp.MustCompile(`(?i)(<local>|bearer\s+[^\s,;]+|basic\s+[^\s,;]+|(?:token|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|authorization)\s*[=:]\s*[^\s,;]+|://[^/@\s]+:[^/@\s]+@|\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,})\b)`)
+	credentialKey      = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(?:tokens?|secrets?|password|passwd|(?:api|private|client)[_-]?key|authorization|credentials?|auth|signature|sig)(?:$|[^a-z0-9])`)
+	acronymKeyBoundary = regexp.MustCompile(`([A-Z])([A-Z][a-z])`)
+	camelKeyBoundary   = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+	credentialValue    = regexp.MustCompile(`(?i)(<local>|bearer\s+[^\s,;]+|basic\s+[^\s,;]+|(?:token|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|authorization)\s*[=:]\s*[^\s,;]+|://[^/@\s]+:[^/@\s]+@|\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|xox[baprs]-[A-Za-z0-9-]{20,})\b)`)
 )
 
 func ascii(value string) bool {
@@ -25,17 +27,20 @@ func ascii(value string) bool {
 }
 
 func CredentialKey(key string) bool {
-	// Keep the regex's Unicode folding; hot-path metadata keys are ASCII.
-	if !ascii(key) {
-		return credentialKey.MatchString(key)
-	}
-	key = strings.ToLower(key)
-	for _, part := range []string{"token", "secret", "password", "passwd", "auth", "credential", "sig", "apikey", "api_key", "api-key", "privatekey", "private_key", "private-key", "clientkey", "client_key", "client-key"} {
-		if strings.Contains(key, part) {
-			return true
+	if ascii(key) {
+		lower := strings.ToLower(key)
+		if !strings.Contains(lower, "token") && !strings.Contains(lower, "secret") &&
+			!strings.Contains(lower, "pass") && !strings.Contains(lower, "key") &&
+			!strings.Contains(lower, "auth") && !strings.Contains(lower, "credential") &&
+			!strings.Contains(lower, "sig") {
+			return false
 		}
 	}
-	return false
+	if credentialKey.MatchString(key) {
+		return true
+	}
+	const split = "${1}_${2}"
+	return credentialKey.MatchString(camelKeyBoundary.ReplaceAllString(acronymKeyBoundary.ReplaceAllString(key, split), split))
 }
 
 // CredentialShaped is shared with Library capture; keep one credential policy.
@@ -44,7 +49,7 @@ func CredentialShaped(value string) bool {
 		return false
 	}
 	lower := strings.ToLower(value)
-	if (!ascii(value) || strings.ContainsAny(value, "<:= \t\r\n\f") || strings.Contains(lower, "gh") || strings.Contains(lower, "github") || strings.Contains(lower, "sk-") || strings.Contains(lower, "xox")) && credentialValue.MatchString(value) {
+	if (!ascii(value) || strings.ContainsAny(value, "<:= \t\r\n\f") || strings.Contains(lower, "gh") || strings.Contains(lower, "github") || strings.Contains(lower, "sk-") || strings.Contains(lower, "xox") || strings.Contains(lower, "eyj")) && credentialValue.MatchString(value) {
 		return true
 	}
 	if !strings.ContainsAny(value, "?@") {
@@ -119,7 +124,12 @@ func redactValue(value any, depth int, budget *int) any {
 				break
 			}
 			lower := strings.ToLower(key)
-			if CredentialKey(key) || CredentialShaped(key) || lower == "cookie" || lower == "set-cookie" || lower == "env" || lower == "environment" || lower == "prompt" || lower == "reply" || lower == "body" || lower == "request_body" || lower == "response_body" {
+			if CredentialKey(key) || CredentialShaped(key) {
+				continue
+			}
+			switch lower {
+			case "cookie", "set-cookie", "env", "environment", "prompt", "reply", "body",
+				"request_body", "response_body", "args", "arguments", "output", "result", "text", "content":
 				continue
 			}
 			key = boundedString(key, 128)

@@ -1,7 +1,10 @@
 package codex
 
 import (
+	"encoding/binary"
+	"fmt"
 	"syscall"
+	"unicode/utf16"
 
 	"github.com/danieljoos/wincred"
 	keyring "github.com/zalando/go-keyring"
@@ -31,4 +34,19 @@ func deleteCodexKeyring(service, account string) error {
 		return err
 	}
 	return nil
+}
+
+func codexKeyringTarget(service, account string) string {
+	return account + "." + service
+}
+
+func decodeCodexWindowsPassword(blob []byte) (string, error) {
+	if len(blob)%2 != 0 {
+		return "", fmt.Errorf("invalid Codex Windows keyring password length")
+	}
+	units := make([]uint16, len(blob)/2)
+	for index := range units {
+		units[index] = binary.LittleEndian.Uint16(blob[index*2:])
+	}
+	return string(utf16.Decode(units)), nil
 }

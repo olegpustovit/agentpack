@@ -12,7 +12,10 @@ import (
 )
 
 func New() base.Harness {
-	return base.Definition{Target: base.OMP, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, LSP: writeLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchACP: acpLaunch}
+	return base.Harness{Target: base.OMP, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchACP: acpLaunch, Inheritance: base.Inheritance{
+		Note:  "OMP uses an additive --plugin-dir and keeps native profile settings, credentials, sessions and project discovery",
+		Paths: ConfigInputs,
+	}}
 }
 
 func stagedRoot(ctx base.StageContext) (string, error) {
@@ -81,14 +84,14 @@ func verify(ctx base.StageContext) error {
 	return nil
 }
 
-func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
+func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	root, err := stagedRoot(base.StageContext{ProjectRoot: ctx.ProjectRoot, Mode: ctx.Mode})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	binary, err := base.ResolveBinary(base.OMP.Binary())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	args := []string{"--plugin-dir", root}
 	// Before the caller's arguments: --config is repeatable and later overlays win.
@@ -101,5 +104,5 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, error) {
 		args = append(args, "--yolo")
 	}
 	args = append(args, ctx.Arguments...)
-	return exec.Command(binary, args...), nil
+	return exec.Command(binary, args...), base.Done, nil
 }

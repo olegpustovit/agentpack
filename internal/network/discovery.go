@@ -2,13 +2,10 @@ package network
 
 import (
 	"context"
-	"crypto/subtle"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/olegpustovit/agentpack/internal/cache"
 	"io"
 	"log"
 	"net"
@@ -16,8 +13,6 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
-	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,6 +22,8 @@ import (
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/state"
 
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
 	"tailscale.com/client/local"
 	"tailscale.com/ipn/ipnstate"
 )
@@ -90,7 +87,7 @@ type tailnetIdentity struct {
 
 // ReadSharingConfig defaults to sharing on, like Agentnet's tailnet discovery:
 // peers still need your own untagged identity or an explicit allow entry.
-func ReadSharingConfig(store *state.Store, home string) (SharingConfig, error) {
+func ReadSharingConfig(store *state.Store) (SharingConfig, error) {
 	config := SharingConfig{Enabled: true}
 	if store == nil {
 		return config, errors.New("gateway state unavailable")
@@ -104,28 +101,7 @@ func ReadSharingConfig(store *state.Store, home string) (SharingConfig, error) {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return config, err
 	}
-	path := filepath.Join(home, "network", "sharing.json")
-	data, err = os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return config, nil
-	}
-	if err != nil {
-		return config, err
-	}
-	if err := json.Unmarshal(data, &config); err != nil {
-		return config, err
-	}
-	if err := validateSharingConfig(config); err != nil {
-		return config, err
-	}
-	// A concurrent settings write wins over a legacy import.
-	if _, err := store.DB.Exec("INSERT INTO node_settings(node_id, key, value) VALUES ("+state.LocalNodeSQL+", 'sharing', ?) ON CONFLICT DO NOTHING", string(data)); err != nil {
-		return config, err
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return config, err
-	}
-	return ReadSharingConfig(store, home)
+	return config, nil
 }
 
 func validateSharingConfig(config SharingConfig) error {
@@ -155,10 +131,23 @@ func WriteSharingConfig(store *state.Store, config SharingConfig) error {
 // tailscaleLocal finds the daemon itself on every install, including the macOS app builds that
 // put no `tailscale` command on PATH. Tests point it at a missing socket.
 var tailscaleLocal local.Client
+var tailnetStatusRequests singleflight.Group
 
 const tailscaleTimeout = 3 * time.Second
 
 func tailnetSnapshot(ctx context.Context) (tailnetStatus, error) {
+	result := tailnetStatusRequests.DoChan("status", func() (any, error) {
+		return readTailnetSnapshot(context.WithoutCancel(ctx))
+	})
+	select {
+	case <-ctx.Done():
+		return tailnetStatus{}, ctx.Err()
+	case answer := <-result:
+		return answer.Val.(tailnetStatus), answer.Err
+	}
+}
+
+func readTailnetSnapshot(ctx context.Context) (tailnetStatus, error) {
 	ctx, cancel := context.WithTimeout(ctx, tailscaleTimeout)
 	defer cancel()
 	raw, err := tailscaleLocal.Status(ctx)
@@ -352,28 +341,26 @@ func probeTailnetPeer(ctx context.Context, peer *tailnetPeer) (peerProbe, bool) 
 func probeTailnetPeers(ctx context.Context, peers []*tailnetPeer, probe probeFunc) (map[string]peerProbe, error) {
 	results := map[string]peerProbe{}
 	var mu sync.Mutex
-	var wait sync.WaitGroup
-	slots := make(chan struct{}, 8)
+	var group errgroup.Group
+	group.SetLimit(8)
 	for _, peer := range peers {
-		select {
-		case slots <- struct{}{}:
-		case <-ctx.Done():
-			wait.Wait()
-			return results, ctx.Err()
+		if ctx.Err() != nil {
+			break
 		}
-		wait.Add(1)
-		go func(peer *tailnetPeer) {
-			defer wait.Done()
-			defer func() { <-slots }()
+		group.Go(func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if result, ok := probe(ctx, peer); ok {
 				mu.Lock()
 				results[peer.ID] = result
 				mu.Unlock()
 			}
-		}(peer)
+			return nil
+		})
 	}
-	wait.Wait()
-	return results, nil
+	err := group.Wait()
+	return results, errors.Join(err, ctx.Err())
 }
 
 // tailnetNodesFrom returns the allowed, online peers that answer their gateway probe.
@@ -437,7 +424,7 @@ func (g *Gateway) autoEnroll(ctx context.Context, discovered []TailnetNode) {
 func (g *Gateway) tailnetNodes(ctx context.Context) ([]TailnetNode, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	config, err := ReadSharingConfig(g.auth.store, g.options.Home)
+	config, err := ReadSharingConfig(g.store)
 	if err != nil {
 		return nil, err
 	}
@@ -463,7 +450,7 @@ func (g *Gateway) tailnetNodes(ctx context.Context) ([]TailnetNode, error) {
 }
 
 func (g *Gateway) meshNodes(ctx context.Context, discovered []TailnetNode) ([]TailnetNode, error) {
-	local, err := g.auth.store.NodeID(ctx)
+	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -471,7 +458,7 @@ func (g *Gateway) meshNodes(ctx context.Context, discovered []TailnetNode) ([]Ta
 	for _, node := range discovered {
 		nodes[node.ID] = node
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, "SELECT node_id,name,app_version,schema_version FROM mesh_nodes WHERE node_id<>?", local)
+	rows, err := g.store.Reader.QueryContext(ctx, "SELECT node_id,name,app_version,schema_version FROM mesh_nodes WHERE node_id<>?", local)
 	if err != nil {
 		return nil, err
 	}
@@ -536,7 +523,7 @@ func (g *Gateway) meshNodes(ctx context.Context, discovered []TailnetNode) ([]Ta
 			break
 		}
 	}
-	roles, err := g.auth.store.Main(ctx)
+	roles, err := g.store.Main(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -551,139 +538,11 @@ func (g *Gateway) meshNodes(ctx context.Context, discovered []TailnetNode) ([]Ta
 	return result, nil
 }
 
-// peerPatterns lists every gateway route a peer may call, for itself or for a
-// browser that routes a request with ?node=. A route the web UI calls for a
-// remote machine must be listed here, or it fails with "route unavailable on
-// remote nodes"; TestPeerPatternsCoverSessionRoutes enforces that for sessions.
-var peerPatterns = []string{
-	"GET /api/cache/{cache_key}",
-	"POST /api/logs/ingest",
-	"GET /api/logs/trace/{trace}",
-	"GET /api/sync/changes",
-	"GET /api/sync/events",
-
-	"GET /api/library/packages",
-	"GET /api/library/agentpacks",
-	"POST /api/library/agentpacks",
-	"POST /api/library/latest",
-	"POST /api/library/draft-state",
-	"GET /api/library/agentpacks/{id}",
-	"PATCH /api/library/agentpacks/{id}",
-	"DELETE /api/library/agentpacks/{id}",
-	"GET /api/library/agentpacks/{id}/conflict",
-	"POST /api/library/agentpacks/{id}/resolve",
-	"GET /api/library/agentpacks/{id}/revisions/{revision}/restore-preview",
-	"POST /api/library/agentpacks/{id}/revisions/{revision}/restore",
-
-	"GET /api/identity",
-	"GET /api/machine",
-	"GET /api/events",
-	"GET /api/agent-sessions",
-	"GET /api/recent",
-	"DELETE /api/recent",
-	"GET /api/packages",
-	"POST /api/packages",
-	"POST /api/mcp/servers",
-	"GET /api/projects",
-	"GET /api/folders",
-	"GET /api/folders/found",
-	"GET /api/worktrees",
-	"POST /api/worktrees/remove",
-	"POST /api/worktrees/push",
-	"GET /api/limits",
-	"POST /api/limits/refresh",
-	"GET /api/agents",
-	"POST /api/agents/{harness}/login",
-	"GET /api/agents/{harness}/login/{id}",
-	"POST /api/agents/{harness}/login/{id}",
-	"DELETE /api/agents/{harness}/login/{id}",
-	"POST /api/agents/{harness}/logout",
-	"GET /api/omp/settings",
-	"GET /api/omp/models",
-	"GET /api/node/update",
-	"POST /api/node/update",
-	"POST /api/mcp/credentials/{id}/refresh",
-
-	"GET /api/sessions",
-	"POST /api/sessions",
-	"PATCH /api/sessions/{id}",
-	"GET /api/sessions/{id}",
-	"GET /api/sessions/{id}/shells",
-	"POST /api/sessions/{id}/detach-shell",
-	"GET /api/sessions/{id}/terminal",
-	"GET /api/sessions/{id}/output",
-	"GET /api/sessions/{id}/conversation",
-	"GET /api/sessions/{id}/blobs/{sha}",
-	"POST /api/sessions/{id}/restart",
-	"POST /api/sessions/{id}/resume",
-	"POST /api/sessions/{id}/stop",
-	"POST /api/sessions/{id}/input",
-	"POST /api/sessions/{id}/fork",
-	"POST /api/sessions/{id}/harness",
-	"POST /api/sessions/{id}/tools",
-	"GET /api/sessions/{id}/git",
-	"POST /api/sessions/{id}/git/commit",
-	"POST /api/sessions/{id}/git/pr",
-	"POST /api/sessions/{id}/git/merge",
-	"POST /api/sessions/{id}/conversation/prompt",
-	"POST /api/sessions/{id}/conversation/prompt/images",
-	"POST /api/sessions/{id}/conversation/message",
-	"POST /api/sessions/{id}/conversation/permission",
-	"POST /api/sessions/{id}/conversation/cancel",
-	"POST /api/sessions/{id}/conversation/elicitation",
-	"POST /api/sessions/{id}/conversation/config",
-	"POST /api/sessions/{id}/conversation/blobs",
-	"POST /api/sessions/{id}/conversation/revert",
-	"POST /api/sessions/{id}/conversation/goal",
-	"PATCH /api/sessions/{id}/conversation/goal",
-	"DELETE /api/sessions/{id}/conversation/goal",
-	"PATCH /api/sessions/{id}/conversation/queue/{queueId}",
-	"DELETE /api/sessions/{id}/conversation/queue/{queueId}",
-	"POST /api/sessions/{id}/conversation/queue/{queueId}/steer",
-}
-
-var peerMux = sync.OnceValue(func() *http.ServeMux {
-	mux := http.NewServeMux()
-	for _, pattern := range peerPatterns {
-		mux.HandleFunc(pattern, func(http.ResponseWriter, *http.Request) {})
-	}
-	return mux
-})
-
-// peerRoute reports whether a peer may call method and path: a clean path
-// matching one of peerPatterns, whose content-addressed segments are valid.
-func peerRoute(method, path string) bool {
-	if method == http.MethodHead || !strings.HasPrefix(path, "/api/") {
-		return false
-	}
-	parts := strings.Split(path[1:], "/")
-	for _, part := range parts {
-		if part == "" || part == "." || part == ".." || strings.Contains(part, `\`) {
-			return false
-		}
-	}
-	_, pattern := peerMux().Handler(&http.Request{Method: method, URL: &url.URL{Path: path}})
-	last := parts[len(parts)-1]
-	switch pattern {
-	case "":
-		return false
-	case "GET /api/cache/{cache_key}":
-		return cache.ValidKey(last)
-	case "GET /api/logs/trace/{trace}":
-		decoded, err := hex.DecodeString(last)
-		return err == nil && len(decoded) == 16 && strings.Trim(last, "0") != ""
-	case "GET /api/sessions/{id}/blobs/{sha}":
-		_, err := validateBlobSHA(last)
-		return err == nil
-	}
-	return true
-}
-
 func validPeerSessionID(id string) bool {
 	return id != "" && id != "." && id != ".." && !strings.ContainsAny(id, "/\\")
 }
 func (g *Gateway) tailnetTarget(ctx context.Context, id string) (*url.URL, error) {
-	config, err := ReadSharingConfig(g.store, g.options.Home)
+	config, err := ReadSharingConfig(g.store)
 	if err != nil || !config.Enabled {
 		return nil, errors.New("tailnet sharing is disabled")
 	}
@@ -775,28 +634,13 @@ func (g *Gateway) proxyTailnetTo(w http.ResponseWriter, r *http.Request, id stri
 			response.Header.Set("Cache-Control", "no-store")
 		}
 		if response.StatusCode == http.StatusSwitchingProtocols {
-			private := r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1
+			private := g.localRequest(r)
 			// The proxy clears response.Body once it owns the upgraded connection, so keep this reference.
 			go closeUpgradeOnEnd(r.Context(), g.done, response.Body, time.Second, func() bool { return private || g.auth.authenticated(r) })
 		}
 		return nil
 	}
 	proxy.ServeHTTP(w, r)
-}
-
-func slowTailnetRequest(method, path string) bool {
-	return path == "/api/agent-sessions" || path == "/api/limits" || strings.HasPrefix(path, "/api/library/") ||
-		method != http.MethodGet && method != http.MethodHead
-}
-
-func tailnetRequestTransport(method, path string) *http.Transport {
-	if path == "/api/agent-sessions" || path == "/api/folders/found" {
-		return tailnetProbeTransport
-	}
-	if slowTailnetRequest(method, path) {
-		return tailnetMutationTransport
-	}
-	return tailnetTransport
 }
 
 // closeUpgradeOnEnd holds an upgraded proxy connection open until its request ends, and closes it
@@ -841,6 +685,7 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			http.Error(w, "invalid peer request", 403)
 			return
 		}
+		row, _ := routeFor(r.Method, r.URL.Path)
 		if r.URL.Path != "/peer" && !peerRoute(r.Method, r.URL.Path) {
 			http.NotFound(w, r)
 			return
@@ -855,7 +700,7 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			http.Error(w, "peer identity required", 403)
 			return
 		}
-		config, err := ReadSharingConfig(g.store, g.options.Home)
+		config, err := ReadSharingConfig(g.store)
 		if err != nil || !config.Enabled {
 			http.Error(w, "sharing disabled", 403)
 			return
@@ -877,6 +722,21 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			writeJSON(w, TailnetNode{ID: self.ID, Name: self.HostName, Online: true, Version: g.options.Version, Schema: state.SchemaVersion()})
 			return
 		}
+		peer := identity.Node.StableID
+		if !g.enrolledPeer(peer) {
+			http.Error(w, "peer is not enrolled", http.StatusForbidden)
+			return
+		}
+		removed, err := g.options.Library.Store.PeerRemoved(peer)
+		if err != nil || removed {
+			if err != nil {
+				if event := obs.From(r.Context()); event != nil {
+					event.Fail(err)
+				}
+			}
+			http.Error(w, "peer is not enrolled", http.StatusForbidden)
+			return
+		}
 		actor := Actor{Kind: "peer", User: identity.UserProfile.LoginName, Node: identity.Node.ComputedName, StableNodeID: identity.Node.StableID}
 		actor, err = g.forwardedAccount(r.Context(), actor, r.Header.Get("X-Agentpack-User"))
 		if err != nil {
@@ -887,8 +747,13 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			return
 		}
 
+		// Read-only RPCs and machine-to-machine endpoints use the verified peer identity.
+		if row.peer == peerWrite && !actor.Account {
+			http.Error(w, "forwarded account required", http.StatusForbidden)
+			return
+		}
 		actor.forwardedBrowser = actor.Account && r.Header.Get("X-Agentpack-Browser") == "1"
-		request := r.Clone(withActor(context.WithValue(r.Context(), replicaPeerKey{}, identity.Node.StableID), actor))
+		request := r.Clone(withCaller(withActor(context.WithValue(r.Context(), replicaPeerKey{}, identity.Node.StableID), actor), callerPeer))
 		request.Header = r.Header.Clone()
 		request.Header.Del("X-Agentpack-User")
 		request.Header.Del("X-Agentpack-Browser")
@@ -973,14 +838,14 @@ func (g *Gateway) runTailnetSharing(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		config, err := ReadSharingConfig(g.store, g.options.Home)
+		config, err := ReadSharingConfig(g.store)
 		if err != nil || !config.Enabled {
 			closeServer()
 			report(err)
 		} else {
 			status, err := tailnetSnapshot(ctx)
 			if err == nil {
-				err = g.store.BindNode(ctx, status.Self.ID)
+				err = g.bindTailnetNode(ctx, status.Self.ID)
 			}
 			address := tailnetAddress(status.Self)
 			if err != nil || address == "" {

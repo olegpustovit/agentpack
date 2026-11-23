@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strings"
 
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/fang"
@@ -73,14 +74,14 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 		RunE:          rootHub,
 	}
 	ap := &cobra.Command{
-		Use:                "ap",
-		Short:              "Open the gateway web UI",
-		SilenceUsage:       true,
-		SilenceErrors:      true,
-		DisableFlagParsing: true,
-		RunE:               rootHub,
+		Use:           "ap",
+		Short:         "Open the gateway web UI",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE:          rootHub,
 	}
 	root.AddCommand(ap)
+	root.Version = Version
 	root.SetVersionTemplate("agentpack {{.Version}}\n")
 
 	var global Global
@@ -96,14 +97,26 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	flags.StringVar(&global.Mode, "mode", "", "project-local mode to stage")
 	flags.BoolVar(&global.Debug, "debug", false, "print launch diagnostics")
 	flags.BoolVar(&global.Proxy, "proxy", false, "route Claude through the agentpack proxy")
+	flags.BoolVarP(&global.Version, "version", "v", false, "print the agentpack version")
 
 	leaf := func(use, short string) *cobra.Command {
+		command := &cobra.Command{Use: use, Short: short}
+		command.RunE = func(command *cobra.Command, args []string) error {
+			code, err := runner.dispatch(command.Context(), leafInvocation(command, global, args))
+			*exitCode = code
+			return err
+		}
+		return command
+	}
+	// Launchers keep their arguments verbatim for the harness; only the
+	// product-owned extractor reads agentpack options out of them.
+	launcher := func(use, short string) *cobra.Command {
 		command := &cobra.Command{Use: use, Short: short, DisableFlagParsing: true}
 		command.RunE = func(command *cobra.Command, args []string) error {
 			if hasBeforeDoubleDash(args, "--help", "-h") {
 				return command.Help()
 			}
-			code, err := runner.Run(command.Context(), original)
+			code, err := runner.runLauncher(command.Context(), original)
 			*exitCode = code
 			return err
 		}
@@ -117,8 +130,10 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 		}
 	}
 	value := func(command *cobra.Command, name, placeholder, usage string) {
-		command.Flags().String(name, "", usage)
-		command.Flags().Lookup(name).Usage = usage + " (" + placeholder + ")"
+		command.Flags().String(name, "", usage+" ("+placeholder+")")
+	}
+	values := func(command *cobra.Command, name, placeholder, usage string) {
+		command.Flags().StringArray(name, nil, usage+" ("+placeholder+", repeatable)")
 	}
 
 	init := leaf("init", "Create agentpack.toml and pack.lock")
@@ -139,17 +154,18 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	flag(syncCommand, "repair", "", "re-fetch cache entries that fail content verification")
 	preflight := leaf("preflight", "Pure offline check of a locked environment (no mutation)")
 	flag(preflight, "json", "", "emit a JSON report")
-	flag(preflight, "strict-external", "", "treat workspace overlay targets as violations")
 	value(preflight, "agent", "TARGET", "harness target to check (claude, opencode, ...)")
+	value(preflight, "target", "TARGET", "alias for --agent")
+	preflight.Flags().MarkHidden("target")
 	value(preflight, "policy", "local|ci", "inheritance policy")
 	value(preflight, "contract", "PATH", "versioned contract.json (default: <definition>/contract.json)")
 	value(preflight, "receipt", "ID", "compare a prior probe receipt (freshness / observed coverage)")
 	probe := leaf("probe", "Run an explicit native observation probe (writes a receipt)")
 	flag(probe, "json", "", "emit the receipt JSON")
 	value(probe, "agent", "claude|codex", "native adapter to probe")
-	value(probe, "mode", "NAME", "staged mode whose generation to probe")
+	value(probe, "target", "claude|codex", "alias for --agent")
+	probe.Flags().MarkHidden("target")
 	value(probe, "policy", "local|ci", "policy to bind into receipt freshness")
-	flag(probe, "strict-external", "", "bind no-workspace-write requirements into receipt")
 
 	configCmd := &cobra.Command{Use: "config", Short: "Compare configuration observation receipts"}
 	configCompare := leaf("compare RECEIPT_A RECEIPT_B", "Diff two probe receipts")
@@ -217,31 +233,30 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	value(deploy, "binary", "PATH", "prebuilt Linux ARM64 agentpack binary")
 	flag(deploy, "dry-run", "", "validate and show deployment without changing the VM")
 	root.AddCommand(gateway, deploy, service)
-	agent := leaf("agent [ARGS...]", "Launch Cursor Agent with a staged HOME")
+	agent := launcher("agent [ARGS...]", "Launch Cursor Agent with a staged HOME")
 	agent.Aliases = []string{"cursor-agent"}
 	root.AddCommand(
-		leaf("claude [ARGS...]", "Launch Claude Code with staged plugins"),
-		leaf("opencode [ARGS...]", "Launch OpenCode with staged configuration"),
-		leaf("codex [ARGS...]", "Launch Codex with a staged CODEX_HOME"),
-		leaf("omp [ARGS...]", "Launch Oh My Pi with staged plugins"),
-		leaf("grok [ARGS...]", "Launch Grok with a staged GROK_HOME"),
-		leaf("agy [ARGS...]", "Launch Antigravity with the project workspace"),
+		launcher("claude [ARGS...]", "Launch Claude Code with staged plugins"),
+		launcher("opencode [ARGS...]", "Launch OpenCode with staged configuration"),
+		launcher("codex [ARGS...]", "Launch Codex with a staged CODEX_HOME"),
+		launcher("omp [ARGS...]", "Launch Oh My Pi with staged plugins"),
+		launcher("grok [ARGS...]", "Launch Grok with a staged GROK_HOME"),
+		launcher("agy [ARGS...]", "Launch Antigravity with the project workspace"),
 		agent,
 	)
 
 	mcp := &cobra.Command{Use: "mcp", Short: "Manage MCP servers"}
-	mcpAdd := leaf("add NAME", "Add or replace an MCP server")
+	mcpAdd := leaf("add NAME [-- ARGS...]", "Add or replace an MCP server; arguments after -- are passed to the server")
 	value(mcpAdd, "command", "COMMAND", "server executable (local server)")
 	value(mcpAdd, "url", "URL", "remote server URL (instead of --command)")
 	value(mcpAdd, "type", "TYPE", "remote transport, such as http or sse (default http)")
-	value(mcpAdd, "header", "KEY=VALUE...", "header sent to the remote server")
-	value(mcpAdd, "args", "ARGS...", "arguments passed to the server")
-	value(mcpAdd, "env", "KEY=VALUE...", "environment passed to the server")
+	values(mcpAdd, "header", "KEY=VALUE", "header sent to the remote server")
+	values(mcpAdd, "env", "KEY=VALUE", "environment passed to the server")
 	flag(mcpAdd, "allow-unpinned", "", "record the server as unpinned when its registry is unreachable")
 	mcpRemove := leaf("remove NAME", "Remove an MCP server")
 	mcpLogin := leaf("login SERVER|URL", "Connect a remote MCP server once for every agent and node")
 	value(mcpLogin, "header", "NAME", "store a header value (read hidden) instead of signing in with OAuth")
-	value(mcpLogin, "var", "NAME...", "store environment variables (read hidden) for local servers that name --label")
+	values(mcpLogin, "var", "NAME", "store environment variables (read hidden) for local servers that name --label")
 	value(mcpLogin, "label", "LABEL", "connection name, used by credential = \"LABEL\"")
 	value(mcpLogin, "client-id", "ID", "pre-registered OAuth client ID (default: register dynamically)")
 	mcp.AddCommand(mcpAdd, mcpRemove, leaf("list", "List configured MCP servers"), mcpLogin,
@@ -299,14 +314,21 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 	extra.AddCommand(syncClaude)
 	root.AddCommand(extra)
 
-	hook := leaf("hook-exec", "Internal hook execution bridge")
+	hook := leaf("hook-exec KIND [-- NOTIFY...]", "Internal hook execution bridge")
 	hook.Hidden = true
+	for _, name := range []string{"target", "event", "specs-dir", "file", "session", "state", "spec"} {
+		value(hook, name, "VALUE", name)
+	}
 	root.AddCommand(hook)
-	mcpExec := leaf("mcp-exec", "Internal: start an MCP server from its locked npm tree")
+	mcpExec := leaf("mcp-exec -- ARGS...", "Internal: start an MCP server from its locked npm tree")
 	mcpExec.Hidden = true
+	value(mcpExec, "spec", "FILE", "locked npm tree spec")
 	root.AddCommand(mcpExec)
-	mcpBridge := leaf("mcp-bridge", "Internal: serve an MCP server with a stored credential")
+	mcpBridge := leaf("mcp-bridge ID [-- COMMAND...]", "Internal: serve an MCP server with a stored credential")
 	mcpBridge.Hidden = true
+	value(mcpBridge, "url", "URL", "remote server URL")
+	values(mcpBridge, "header", "KEY=VALUE", "header sent to the remote server")
+	flag(mcpBridge, "sse", "", "use the SSE transport")
 	root.AddCommand(mcpBridge)
 	root.AddCommand(&cobra.Command{
 		Use:    "state-selfcheck",
@@ -315,6 +337,13 @@ func (runner Runner) rootCommand(original []string, exitCode *int) *cobra.Comman
 		RunE:   runStateSelfcheck,
 	})
 	return root
+}
+
+// leafInvocation names a parsed command by its top-level command, with the
+// rest of its path ahead of the positional arguments.
+func leafInvocation(command *cobra.Command, global Global, args []string) Invocation {
+	path := strings.Fields(command.CommandPath())[1:]
+	return Invocation{Global: global, Command: path[0], Args: append(path[1:], args...), Flags: command.Flags()}
 }
 
 func interactiveTerminal(in io.Reader, out io.Writer) bool {

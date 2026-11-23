@@ -1,5 +1,5 @@
 import { queryOptions } from "@tanstack/react-query"
-import { api, ApiError, LOCAL, responseError, routeMissing } from "@/lib/api"
+import { api, ApiError, LOCAL, request, routeMissing } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import type { AgentCommand } from "./composer-hints"
 import type { LogEntry } from "./model"
@@ -18,17 +18,16 @@ export function archiveUnavailableMessage(error: unknown): string | undefined {
 export type ConversationPage = { entries: LogEntry[]; truncated: boolean }
 
 async function conversationLog(machine: string, sessionId: string, before = 0): Promise<ConversationPage> {
-  const url = new URL(`/api/sessions/${encodeURIComponent(sessionId)}/conversation`, location.origin)
-  if (machine && machine !== LOCAL) url.searchParams.set("node", machine)
-  if (before > 0) url.searchParams.set("before", String(before))
-  const res = await fetch(url)
-  const text = await res.text()
-  if (!res.ok) {
-    if (res.status === 503 && text.trim() === "archive unavailable") {
-      throw new ArchiveUnavailableError(res.headers.get("X-Agentpack-Archive-Main") || "main gateway")
+  let page: { res: Response; text: string }
+  try {
+    page = await request(`/api/sessions/${encodeURIComponent(sessionId)}/conversation`, { machine, query: before > 0 ? { before: String(before) } : undefined })
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 503 && error.message === "archive unavailable") {
+      throw new ArchiveUnavailableError(error.headers?.get("X-Agentpack-Archive-Main") || "main gateway")
     }
-    throw responseError(res, text)
+    throw error
   }
+  const { res, text } = page
   const entries: LogEntry[] = []
   for (const line of text.split("\n")) {
     if (!line) continue

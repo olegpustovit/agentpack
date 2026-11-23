@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 
@@ -9,8 +10,8 @@ import (
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
-func (runner Runner) runPreflight(definitionRoot, workspaceRoot, mode string, arguments []string, quiet bool) (code int, resultErr error) {
-	args, jsonOut := takeBool(arguments, "--json")
+func (runner Runner) runPreflight(definitionRoot, workspaceRoot string, invocation Invocation) (code int, resultErr error) {
+	mode, quiet, jsonOut := invocation.Global.Mode, invocation.Global.Quiet, boolFlag(invocation, "json")
 	written := false
 	defer func() {
 		if jsonOut && !written && resultErr != nil {
@@ -21,30 +22,10 @@ func (runner Runner) runPreflight(definitionRoot, workspaceRoot, mode string, ar
 		}
 	}()
 
-	args, strict := takeBool(args, "--strict-external")
-	agent, args, _, err := takeFlag(args, "--agent")
-	if err != nil {
-		return 2, err
-	}
-	if agent == "" {
-		agent, args, _, err = takeFlag(args, "--target")
-		if err != nil {
-			return 2, err
-		}
-	}
-	policyName, args, _, err := takeFlag(args, "--policy")
-	if err != nil {
-		return 2, err
-	}
-	contractPath, args, _, err := takeFlag(args, "--contract")
-	if err != nil {
-		return 2, err
-	}
-	receiptID, args, _, err := takeFlag(args, "--receipt")
-	if err != nil {
-		return 2, err
-	}
-	if err := noArgs(args); err != nil {
+	strict := invocation.Global.StrictExternal
+	agent := cmp.Or(stringFlag(invocation, "agent"), stringFlag(invocation, "target"))
+	policyName, contractPath, receiptID := stringFlag(invocation, "policy"), stringFlag(invocation, "contract"), stringFlag(invocation, "receipt")
+	if err := noArgs(invocation.Args); err != nil {
 		return 2, err
 	}
 	policy, err := environment.ParsePolicy(policyName)

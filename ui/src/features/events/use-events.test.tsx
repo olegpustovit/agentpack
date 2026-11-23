@@ -4,10 +4,13 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createQueryClient } from "@/lib/query-client"
 import { LOCAL } from "@/lib/api"
-import { EventsProvider, stateFamilies, useEventsConnected } from "./use-events"
+import replicated from "@/generated/replicated-tables.json"
+import { EventsProvider, STATE_FAMILIES, stateFamilies, useEventsConnected } from "./use-events"
 
 class FakeEventSource {
   static instances: FakeEventSource[] = []
+  static CLOSED = 2
+  readyState = 0
   closed = false
   onopen: (() => void) | null = null
   onerror: (() => void) | null = null
@@ -40,8 +43,10 @@ function Probe() {
   useQuery(tracked(["m", "local", "sessions"]))
   useQuery(tracked(["m", "peer-1", "sessions"]))
   useQuery(tracked(["m", "local", "projects"]))
+  useQuery(tracked(["m", "local", "shells", "s1"]))
   useQuery(tracked(["nodes"]))
   useQuery(tracked(["topology"]))
+  useQuery(tracked(["diagnostics", "issues"]))
   return null
 }
 
@@ -84,13 +89,13 @@ afterEach(async () => {
 })
 
 describe("event stream", () => {
-  it("refetches only the local sessions key for a local sessions event", async () => {
+  it("refetches the local sessions key and its chat shells for a local sessions event", async () => {
     const source = FakeEventSource.instances[0]!
     await act(async () => {
       source.emit({ topic: "sessions", node: "" })
       await flush()
     })
-    expect(calls).toEqual(["m/local/sessions"])
+    expect(calls.sort()).toEqual(["m/local/sessions", "m/local/shells/s1"])
   })
 
   it("refetches unified sessions and the peer's key for a peer event", async () => {
@@ -107,7 +112,15 @@ describe("event stream", () => {
       FakeEventSource.instances[0]!.emit({ topic: "state", node: "peer-1" })
       await flush()
     })
-    expect(calls.sort()).toEqual(["m/local/sessions", "nodes", "topology"])
+    expect(calls.sort()).toEqual(["diagnostics/issues", "m/local/sessions", "nodes", "topology"])
+  })
+
+  it("refreshes the issue list for a diagnostics event", async () => {
+    await act(async () => {
+      FakeEventSource.instances[0]!.emit({ topic: "diagnostics" })
+      await flush()
+    })
+    expect(calls).toEqual(["diagnostics/issues"])
   })
 
   it("refreshes nodes and topology for a nodes event", async () => {
@@ -117,6 +130,40 @@ describe("event stream", () => {
       await flush()
     })
     expect(calls.sort()).toEqual(["nodes", "topology"])
+  })
+
+  it("catches up every live query after a reconnect, including per-machine ones", async () => {
+    const source = FakeEventSource.instances[0]!
+    await act(async () => source.onopen?.())
+    await act(async () => source.onerror?.())
+    calls = []
+    await act(async () => {
+      source.onopen?.()
+      await flush()
+    })
+    expect(calls.sort()).toEqual(["diagnostics/issues", "m/local/projects", "m/local/sessions", "m/local/shells/s1", "m/peer-1/sessions", "nodes", "topology"])
+  })
+
+  it("reopens a stream the browser closed, backing off", async () => {
+    vi.useFakeTimers()
+    try {
+      const first = FakeEventSource.instances[0]!
+      first.readyState = FakeEventSource.CLOSED
+      act(() => first.onerror?.())
+      expect(first.closed).toBe(true)
+      act(() => vi.advanceTimersByTime(999))
+      expect(FakeEventSource.instances).toHaveLength(1)
+      act(() => vi.advanceTimersByTime(1))
+      const second = FakeEventSource.instances[1]!
+      second.readyState = FakeEventSource.CLOSED
+      act(() => second.onerror?.())
+      act(() => vi.advanceTimersByTime(1999))
+      expect(FakeEventSource.instances).toHaveLength(2)
+      act(() => vi.advanceTimersByTime(1))
+      expect(FakeEventSource.instances).toHaveLength(3)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("reports connected after open and closes while the tab is hidden", async () => {
@@ -139,11 +186,19 @@ describe("stateFamilies", () => {
   it("refetches nothing for chat writes, only the readers of known tables, and everything otherwise", () => {
     expect(stateFamilies(["conversation_events"])).toEqual([])
     expect(stateFamilies(["sessions", "conversation_events"])).toEqual([["m", LOCAL, "sessions"], ["m", LOCAL, "session-row"]])
-    expect(stateFamilies(["mesh_nodes", "mesh_settings"])).toHaveLength(3)
+    expect(stateFamilies(["mesh_nodes", "mesh_settings"])).toHaveLength(4)
     expect(stateFamilies(["mcp_credentials", "mcp_credential_approvals"])).toEqual([["mcp-credentials"]])
     expect(stateFamilies(["agent_snapshots"])).toEqual([["agent-snapshot"]])
     expect(stateFamilies(["omp_settings"])).toEqual([["omp-settings"]])
-    expect(stateFamilies(undefined)).toHaveLength(12)
-    expect(stateFamilies(["a_future_table"])).toHaveLength(12)
+    expect(stateFamilies(["agent_credentials"])).toEqual([["agents"]])
+    expect(stateFamilies(["registry_heads"])).toEqual([["m", LOCAL, "library"], ["drafts"]])
+    expect(stateFamilies(["node_settings"])).toContainEqual(["settings"])
+    expect(stateFamilies(undefined)).toHaveLength(16)
+    expect(stateFamilies(["a_future_table"])).toHaveLength(16)
+  })
+
+  // internal/state TestReplicatedTablesMatchUIList keeps the JSON in step with the schema.
+  it("maps exactly the tables the gateway replicates", () => {
+    expect(Object.keys(STATE_FAMILIES).sort()).toEqual(replicated)
   })
 })

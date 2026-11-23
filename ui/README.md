@@ -6,9 +6,11 @@ OKLCH color and spacing tokens, with light/dark modes and responsive navigation.
 Terminal bytes are rendered by locally bundled MIT-licensed xterm.js; the terminal grid stays
 at the remote host dimensions while fit changes the font size. It never uses a CSS transform.
 The installable PWA manifest is `/manifest.webmanifest`; its SVG and PNG icons are
-served from `/icon.svg`, `/icon-192.png`, and `/icon-512.png`. There is
-no service worker, so API responses and registry data are never cached by the UI. No
-external script, CDN, font, analytics, localStorage credentials, or runtime Node server.
+served from `/icon.svg`, `/icon-192.png`, and `/icon-512.png`. The service worker
+(`public/sw.js`) caches only the shell and hashed assets, never `/api/`. The query cache
+persists to IndexedDB per UI build (`src/lib/persist.ts`); a restore evicts other builds and
+expired entries, and sign-out clears it with per-account memory and drafts. No external
+script, CDN, font, analytics, localStorage credentials, or runtime Node server.
 
 Build with `bun install --frozen-lockfile && bun run build`; `make ui-stage` publishes it.
 Install browsers with `bunx playwright install chromium webkit`, then run `make ui-e2e` from the repository root. This also prepares the Go test fixture that verifies browser errors reach SQLite. Direct `bun run e2e` skips that integration case unless `AGENTPACK_TELEMETRY_TEST_BINARY` points to the compiled fixture. The test budgets are in the repository `AGENTS.md`.
@@ -21,10 +23,14 @@ from self; xterm dynamically sets style attributes) and disable HTTP caching for
 
 | Bundle | Before | After | Budget |
 |---|---|---|---|
-| Initial JS (entry and preloaded chunks) | 97.7 KB, one `app.js` | 156,226 B | 170 KB |
-| Initial CSS | — | 12,094 B | 30 KB |
-| Terminal chunk (xterm, `terminal-pane-*.js`) | — | 98,642 B | 100 KB |
+| Initial JS (entry and preloaded chunks) | 97.7 KB, one `app.js` | 148,953 B | 170 KB |
+| Initial CSS | — | 17,787 B | 30 KB |
+| Chat chunk (`conversation-pane-*.js`) | 94,193 B `thread-view` + 29,561 B pane | 69,487 B | 100 KB |
+| Highlighting and diff, loaded beside the chat (`highlight-*.js`) | in the chat chunk | 23,489 B | 100 KB |
+| Terminal chunk (xterm, `terminal-screen-*.js`) | — | 97,729 B | 100 KB |
 | WebGL addon chunk (`addon-webgl-*.js`) | — | 30,984 B | 100 KB |
+
+`check-size.ts` also fails when a sessions route chunk statically reaches `thread-view` or the conversation pane: the Sessions list renders request cards from `request-cards.tsx`. The terminal chunk is 88 KB of xterm itself.
 
 Regression budgets are enforced by `tests/budgets.spec.ts` on the same fixture as the audit (3 machines, 4 projects, 3 harnesses per project). Measured values come from the T7.1 and CloseGaps reports on that fixture. The 24 px and 90,30 "before" values were not reproduced in the current app; the tests measure the stated after values directly.
 
@@ -50,7 +56,7 @@ are permanently read-only and fetch history through Main; an unavailable archive
 names that machine in a banner. Archived sessions expose no resume, fork,
 composer or permission-answer controls.
 
-All requests use same-origin session cookies. Mutations send JSON and require origin
+All requests go through one fetch core in `src/lib/api.ts` (node routing, trace, telemetry, the sign-in redirect, error text); `errorText` there reads a peer without the route as "Needs update". All requests use same-origin session cookies. Mutations send JSON and require origin
 validation. Non-2xx errors may be `{ "error": "message" }` or plain text. Credentials and
 private worker capabilities never appear in any response. An unauthenticated API returns
 401 once claimed; an unclaimed gateway refuses protected APIs with 403 `unclaimed`.
@@ -67,7 +73,7 @@ Logout invalidates the server session and active terminal access.
 - `GET /api/nodes`: array of `{id,name,online}` for allowed Tailscale peers.
 - `GET /api/topology`: `{self: {id,name,os,relay}, peers: [{id,name,os,state,connection,relay,rtt_ms?,last_seen?,sessions}]}`.
 - `GET /api/projects`: array of project rows `{directory,name,folder_id,available,unavailable_reason,last_used,launches,packages,mcp,error}`.
-- `GET /api/events`: Server-Sent Events. Each `message` carries one JSON event that the UI uses to refresh cached queries; the UI closes the stream while the page is hidden.
+- `GET /api/events`: Server-Sent Events. Each `message` carries one JSON event that the UI uses to refresh cached queries; the UI closes the stream while the page is hidden, reopens one the browser closed with a backoff capped at 30 s, and refetches every live query after a gap. A `state` event's `tables` map to readers in `src/features/events/use-events.tsx`; `internal/state` writes the replicated table list to `src/generated/replicated-tables.json` and a Vitest requires the map to cover it.
 - `GET /api/library/agentpacks?include=revisions`: array of `{agentpack, revisions}`, one call instead of one request per saved agentpack.
 - `GET /api/sessions`: array (or `{sessions: [...]}`) of
   `{id, name?, directory, harness, mode, transport?, conversation_state?, agent_session_id?, state: {running,shared_input,responder?,rows,columns,exit_code}}`.

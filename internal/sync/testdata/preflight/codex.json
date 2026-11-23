@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "phase": "preflight",
+  "definition_root": "$HOME/definition",
+  "workspace_root": "$HOME/workspace",
+  "mode": "default",
+  "target": "codex",
+  "policy": "ci",
+  "strict_external": false,
+  "workspace_digest": "sha256:3b7ea34e3ee57f8766d96a1e3071ae138695852d32e946030d4e2515ab1005bf",
+  "generation_id": "sha256:a5275beec64eb7c7084105d74a223f5459e1a2d15baecc0fd51c29ad6c7abd68",
+  "policy_digest": "sha256:409739949c42f6d34a4bb4e91d8e71802334fede50c3b630aeac7c6a6754d9fc",
+  "expected_target": {
+    "adapter": "codex",
+    "adapter_revision": "codex-observe-2026-10",
+    "capability_revision": "codex-probe-v4"
+  },
+  "source_identity": "sha256-source-v1:c94ce60398f670b9a1142fbc65b8f2d33463de61bb5619a1ff7444c2ee834e07",
+  "lock_digest": "sha256:f1fa539503947a3455d6a1d065d60f18eadf2c133202bcf83d3aa6a04bc3a8cc",
+  "skills": 0,
+  "plugins": 0,
+  "shadowed": 0,
+  "inheritance": [
+    "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+    "Codex keeps native history/auth continuity under CODEX_HOME bridging",
+    "CI policy treats undeclared inheritance as a violation"
+  ],
+  "capabilities": {
+    "agy": "workspace-write: writes .agents/plugins/agentpack-bundle",
+    "claude": "external: uses --plugin-dir and --settings; no workspace overlay",
+    "codex": "external-home: uses CODEX_HOME; native project instructions may still apply",
+    "cursor": "workspace-write: writes .cursor/agents when agent artifacts exist",
+    "grok": "external-home: uses GROK_HOME; also reads real ~/.claude and ~/.grok",
+    "omp": "external: uses --plugin-dir; native profile, settings and credentials remain in place",
+    "opencode": "external: uses OPENCODE_CONFIG_DIR; no workspace overlay"
+  },
+  "artifacts": [
+    {
+      "properties": {
+        "exists": true,
+        "merge_order": [
+          "native user seed retained",
+          "agentpack-owned sections overlaid"
+        ],
+        "ordered_values": {
+          "model": "\u003credacted:string\u003e"
+        },
+        "source": "~/.codex/config.toml",
+        "source_digest": "sha256:5676dc800ff66ac87669b7b7e6ebb78f94c7f523fae07a7a5545536a511b6613"
+      },
+      "id": "settings-seed:codex",
+      "kind": "settings_seed",
+      "name": "~/.codex/config.toml",
+      "winner": "user_seed",
+      "evidence": "generated"
+    }
+  ],
+  "coverage": [
+    {
+      "category": "skill",
+      "scope": "native_catalog",
+      "completeness": "none",
+      "reason": "pure preflight does not execute native CLI discovery"
+    }
+  ],
+  "findings": [
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "Codex keeps native history/auth continuity under CODEX_HOME bridging",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITANCE_BOUNDARY",
+      "severity": "info",
+      "message": "CI policy treats undeclared inheritance as a violation",
+      "evidence": "declared"
+    },
+    {
+      "code": "INHERITED_CONFIG",
+      "severity": "violation",
+      "source": "$HOME/.codex/config.toml",
+      "message": "native launch may read existing undeclared configuration",
+      "remedy": "use a controlled account/configuration home for CI, or use policy local",
+      "evidence": "generated"
+    },
+    {
+      "code": "BINARY_MISSING",
+      "severity": "error",
+      "target": "codex",
+      "message": "could not find \"$HOME/missing-binary\"",
+      "remedy": "install the native CLI or set the harness path env var"
+    },
+    {
+      "code": "STAGING_INPUTS_UNKNOWN",
+      "severity": "warning",
+      "message": "no materialization input identity is recorded",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing",
+      "evidence": "unknown"
+    },
+    {
+      "code": "STAGING_NOT_RECORDED",
+      "severity": "warning",
+      "message": "no staged record for mode \"default\"",
+      "remedy": "run `agentpack env restore` to publish the selected frozen environment before probing"
+    }
+  ],
+  "overall_status": "error",
+  "ok": false
+}

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"os"
 	"path/filepath"
 	"time"
@@ -42,25 +43,25 @@ func (g *Gateway) runAgentCredentials(ctx context.Context, interval time.Duratio
 func (g *Gateway) syncAgentCredentials(ctx context.Context) {
 	g.credentialsMu.Lock()
 	defer g.credentialsMu.Unlock()
-	node, err := g.auth.store.NodeID(ctx)
+	node, err := g.store.NodeID(ctx)
 	if err != nil {
 		_, event := obs.Start(ctx, "gateway", "agent_credentials")
 		event.Fail(err)
 		event.End()
 		return
 	}
-	for _, agent := range agentLogins {
-		if agent.credential == nil {
+	for _, agent := range agents {
+		if agent.Login == nil || agent.Login.Credential == nil {
 			continue
 		}
-		path := agent.credential()
+		path := agent.Login.Credential()
 		if path == "" {
 			continue
 		}
 		installed, err := g.syncAgentCredential(ctx, agent, path, node)
 		if err != nil && ctx.Err() == nil {
 			_, event := obs.Start(ctx, "gateway", "agent_credentials")
-			event.Set("harness", agent.harness)
+			event.Set("harness", string(agent.Target))
 			event.Fail(err)
 			event.End()
 		}
@@ -73,8 +74,8 @@ func (g *Gateway) syncAgentCredentials(ctx context.Context) {
 // syncAgentCredential publishes the local file when it is newer than the shared one, installs the
 // shared one when that is newer, and renews the shared one ahead of the agent when this machine
 // published it. It reports whether it replaced the local file.
-func (g *Gateway) syncAgentCredential(ctx context.Context, agent agentLogin, path, node string) (bool, error) {
-	key := agent.harness + "/" + filepath.Base(path)
+func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry, path, node string) (bool, error) {
+	key := string(agent.Target) + "/" + filepath.Base(path)
 	shared, err := g.sharedAgentCredential(ctx, key)
 	if err != nil {
 		return false, err
@@ -93,8 +94,8 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent agentLogin, pat
 		// any renewal is due, so the replicated choice settles on one machine first.
 		shared.Node = node
 		return false, g.publishAgentCredential(ctx, key, shared)
-	case agent.refresh != nil && shared.Node == node && local != nil && bytes.Equal(local, shared.Data):
-		renewed, err := agent.refresh(ctx, local)
+	case agent.Login.Refresh != nil && shared.Node == node && local != nil && bytes.Equal(local, shared.Data):
+		renewed, err := agent.Login.Refresh(ctx, local)
 		if renewed == nil || err != nil {
 			return false, err
 		}
@@ -109,7 +110,7 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent agentLogin, pat
 func (g *Gateway) sharedAgentCredential(ctx context.Context, key string) (sharedAgentCredential, error) {
 	var value string
 	var shared sharedAgentCredential
-	err := g.auth.store.Reader.QueryRowContext(ctx, "SELECT value FROM agent_credentials WHERE key=?", key).Scan(&value)
+	err := g.store.Reader.QueryRowContext(ctx, "SELECT value FROM agent_credentials WHERE key=?", key).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
 		return shared, nil
 	}
@@ -124,19 +125,19 @@ func (g *Gateway) publishAgentCredential(ctx context.Context, key string, creden
 	if err != nil {
 		return err
 	}
-	_, err = g.auth.store.DB.ExecContext(ctx, "INSERT INTO agent_credentials(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, string(value))
+	_, err = g.store.DB.ExecContext(ctx, "INSERT INTO agent_credentials(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, string(value))
 	return err
 }
 
 // stopSharingAgentCredential follows a sign-out with a newer empty row, so no machine republishes
 // the sign-in it still holds.
-func (g *Gateway) stopSharingAgentCredential(ctx context.Context, agent agentLogin) error {
-	if agent.credential == nil || agent.credential() == "" {
+func (g *Gateway) stopSharingAgentCredential(ctx context.Context, agent registry.Entry) error {
+	if agent.Login.Credential == nil || agent.Login.Credential() == "" {
 		return nil
 	}
 	g.credentialsMu.Lock()
 	defer g.credentialsMu.Unlock()
-	return g.publishAgentCredential(ctx, agent.harness+"/"+filepath.Base(agent.credential()), sharedAgentCredential{Modified: time.Now().UnixMilli()})
+	return g.publishAgentCredential(ctx, string(agent.Target)+"/"+filepath.Base(agent.Login.Credential()), sharedAgentCredential{Modified: time.Now().UnixMilli()})
 }
 
 // readAgentCredential returns nil for a missing file, and a negative time for a file to leave alone

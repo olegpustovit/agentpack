@@ -10,11 +10,11 @@ const sessionSteeringMethod = "_session/steering"
 
 func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	ctx.Arguments = []string{"acp"}
-	command, err := launch(ctx)
+	command, finish, err := launch(ctx)
 	if err != nil {
 		return base.ACPLaunch{}, err
 	}
-	return base.ACPLaunch{Cmd: command, Rewrite: rewriteClientLine}, nil
+	return base.ACPLaunch{Cmd: command, Finish: finish, Rewrite: rewriteClientLine}, nil
 }
 
 func rewriteClientLine(line []byte) []byte {

@@ -52,7 +52,7 @@ func TestChatShellUsesWorktreeAndStaysOutOfSessionList(t *testing.T) {
 		}
 	})
 	parent := SessionInfo{ID: "session-parent", Transport: "acp", Harness: "codex", Directory: worktree, WorktreeOf: main, FolderID: folderID, StartedBy: new(browserActor(testBrowserEmail))}
-	if err := upsertSession(ctx, g.auth.store.DB, parent); err != nil {
+	if err := upsertSession(ctx, g.store.DB, parent); err != nil {
 		t.Fatal(err)
 	}
 	testBrowserSession(t, g.auth, testBrowserEmail, "shell-owner")

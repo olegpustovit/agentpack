@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -33,111 +34,118 @@ func eventKey(ctx context.Context, tx *sql.Tx, pk []byte) (string, int64, error)
 	return id, seq, rows.Err()
 }
 
-// Preserve edits before a replicated tombstone can absorb them. Each backup is its own bounded source version.
-func (s *Store) preserveArchiveEdits(ctx context.Context, changes []Change, values []any) error {
-	var hasClocks bool
-	if err := s.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM archive_event_clocks)").Scan(&hasClocks); err != nil {
+// Preserve edits in one journal transaction before a replicated tombstone can absorb them.
+func (s *Store) preserveArchiveEdits(ctx context.Context, writer transactionStarter, changes []Change, values []any) error {
+	var eventKeys []string
+	clocks := map[string]string{}
+	for i, change := range changes {
+		switch {
+		case change.Table == "conversation_events" && (change.Column == "body" || change.Column == "-1" && change.CL%2 == 0):
+			eventKeys = append(eventKeys, hex.EncodeToString(change.PK))
+		case change.Table == "archive_event_clocks" && change.Column == "clock":
+			// The first prune can bring its proof in the same page.
+			var pk []byte
+			if err := s.Reader.QueryRowContext(ctx, "SELECT cell FROM crsql_unpack_columns(?)", change.PK).Scan(&pk); err != nil {
+				return err
+			}
+			clocks[string(pk)], _ = values[i].(string)
+		}
+	}
+	if len(eventKeys) == 0 {
+		return nil
+	}
+	keys, err := json.Marshal(eventKeys)
+	if err != nil {
 		return err
 	}
-	if !hasClocks {
-		for _, change := range changes {
-			if change.Table == "archive_event_clocks" {
-				hasClocks = true
-				break
-			}
-		}
-		if !hasClocks {
-			return nil
-		}
+	rows, err := s.Reader.QueryContext(ctx, `SELECT a.pk,a.clock FROM json_each(?) k
+ JOIN archive_event_clocks a ON a.pk=unhex(k.value)`, string(keys))
+	if err != nil {
+		return err
 	}
-	for i, change := range changes {
-		deleted := change.Column == "-1" && change.CL%2 == 0
-		if change.Table != "conversation_events" || change.Column != "body" && !deleted {
-			continue
+	for rows.Next() {
+		var pk []byte
+		var clock string
+		if err := rows.Scan(&pk, &clock); err != nil {
+			rows.Close()
+			return err
 		}
-		if err := Transaction(ctx, s.DB, func(tx *sql.Tx) error {
-			id, seq, err := eventKey(ctx, tx, change.PK)
-			if err != nil {
-				return err
+		clocks[string(pk)] = clock
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil || len(clocks) == 0 {
+		return err
+	}
+	return Transaction(ctx, writer, func(tx *sql.Tx) error {
+		for i, change := range changes {
+			deleted := change.Column == "-1" && change.CL%2 == 0
+			if change.Table != "conversation_events" || change.Column != "body" && !deleted {
+				continue
 			}
-			var previous archiveClock
-			var encoded string
-			err = tx.QueryRowContext(ctx, "SELECT clock FROM archive_event_clocks WHERE pk=?", change.PK).Scan(&encoded)
-			if errors.Is(err, sql.ErrNoRows) {
-				// The first prune can bring its proof and marker in the same page.
-				for j, incoming := range changes {
-					if incoming.Table != "archive_event_clocks" || incoming.Column != "clock" {
-						continue
-					}
-					var pk []byte
-					if err := tx.QueryRowContext(ctx, "SELECT cell FROM crsql_unpack_columns(?)", incoming.PK).Scan(&pk); err != nil {
-						return err
-					}
-					if bytes.Equal(pk, change.PK) {
-						encoded, _ = values[j].(string)
-						break
-					}
-				}
-				if encoded == "" {
-					return nil
-				}
-			} else if err != nil {
-				return err
+			encoded, ok := clocks[string(change.PK)]
+			if !ok {
+				continue
 			}
-			if err := json.Unmarshal([]byte(encoded), &previous); err != nil {
-				return err
-			}
-			if previous.CL <= 0 || previous.Version < 0 || len(previous.Site) != 16 {
-				return errors.New("invalid archived event clock")
-			}
-			body, _ := values[i].(string)
-			clock := archiveClock{CL: change.CL, Version: change.ColVersion, Site: change.SiteID}
-			if deleted && bytes.Equal(change.SiteID, previous.PrunedBy) {
-				err := tx.QueryRowContext(ctx, `SELECT cl,col_version,site_id,val FROM crsql_changes
- WHERE "table"='conversation_events' AND pk=? AND cid='body'`, change.PK).Scan(&clock.CL, &clock.Version, &clock.Site, &body)
-				if errors.Is(err, sql.ErrNoRows) {
-					return nil
-				}
+			if err := func() error {
+				id, seq, err := eventKey(ctx, tx, change.PK)
 				if err != nil {
 					return err
 				}
-				deleted = false
-			}
-			if deleted {
-				body = ""
-			}
-			if !archiveUpdatePending(clock, body, previous) {
-				return nil
-			}
-			if !deleted {
-				var entry struct {
-					Seq int64 `json:"seq"`
+				var previous archiveClock
+				if err := json.Unmarshal([]byte(encoded), &previous); err != nil {
+					return err
 				}
-				if json.Unmarshal([]byte(body), &entry) != nil || entry.Seq != seq {
-					return errors.New("invalid archived event body")
+				if previous.CL <= 0 || previous.Version < 0 || len(previous.Site) != 16 {
+					return errors.New("invalid archived event clock")
 				}
-			}
-			edit := archiveEdit{PK: change.PK, Session: id, CL: clock.CL, Version: clock.Version, Site: clock.Site, Deleted: deleted}
-			metadata, err := json.Marshal(edit)
-			if err != nil {
-				return err
-			}
-			key := archivedValueHash(string(metadata) + "\x00" + body)
-			var acknowledged bool
-			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM crsql_changes
+				body, _ := values[i].(string)
+				clock := archiveClock{CL: change.CL, Version: change.ColVersion, Site: change.SiteID}
+				if deleted && bytes.Equal(change.SiteID, previous.PrunedBy) {
+					err := tx.QueryRowContext(ctx, `SELECT cl,col_version,site_id,val FROM crsql_changes
+ WHERE "table"='conversation_events' AND pk=? AND cid='body'`, change.PK).Scan(&clock.CL, &clock.Version, &clock.Site, &body)
+					if errors.Is(err, sql.ErrNoRows) {
+						return nil
+					}
+					if err != nil {
+						return err
+					}
+					deleted = false
+				}
+				if deleted {
+					body = ""
+				}
+				if !archiveUpdatePending(clock, body, previous) {
+					return nil
+				}
+				if !deleted {
+					var entry struct {
+						Seq int64 `json:"seq"`
+					}
+					if json.Unmarshal([]byte(body), &entry) != nil || entry.Seq != seq {
+						return errors.New("invalid archived event body")
+					}
+				}
+				edit := archiveEdit{PK: change.PK, Session: id, CL: clock.CL, Version: clock.Version, Site: clock.Site, Deleted: deleted}
+				metadata, err := json.Marshal(edit)
+				if err != nil {
+					return err
+				}
+				key := archivedValueHash(string(metadata) + "\x00" + body)
+				var acknowledged bool
+				if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM crsql_changes
  WHERE "table"='archive_edits' AND pk=crsql_pack_columns(?) AND cid='-1' AND cl%2=0)`, key).Scan(&acknowledged); err != nil {
+					return err
+				}
+				if acknowledged {
+					return nil
+				}
+				_, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO archive_edits(id,edit,body) VALUES (?,?,?)", key, string(metadata), body)
+				return err
+			}(); err != nil {
 				return err
 			}
-			if acknowledged {
-				return nil
-			}
-			_, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO archive_edits(id,edit,body) VALUES (?,?,?)", key, string(metadata), body)
-			return err
-		}); err != nil {
-			return err
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // DrainArchiveEdits acknowledges a relayed edit only after archive.db has durably committed it.

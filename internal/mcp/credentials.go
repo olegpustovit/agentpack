@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"slices"
@@ -61,7 +62,7 @@ func CanonicalURL(raw string) (string, error) {
 	}
 	host := strings.ToLower(parsed.Hostname())
 	if port := parsed.Port(); port != "" && !(scheme == "http" && port == "80" || scheme == "https" && port == "443") {
-		host += ":" + port
+		host = net.JoinHostPort(host, port)
 	} else if strings.Contains(host, ":") {
 		host = "[" + host + "]"
 	}

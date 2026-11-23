@@ -36,190 +36,213 @@ type blockState struct {
 	Emitted, Buffered    bool
 }
 
+// codexReducer folds Codex Responses events, one at a time, into Anthropic-shaped steps.
+type codexReducer struct {
+	blocks                                     map[uint64]*blockState
+	items                                      map[uint64]any
+	itemIndices                                map[string]uint64
+	anthropicIndex, searches                   uint64
+	sawTool, sawTerminal, incomplete, eligible bool
+	terminalType, responseID                   string
+	usage                                      map[string]any
+}
+
+func newCodexReducer() *codexReducer {
+	return &codexReducer{blocks: map[uint64]*blockState{}, items: map[uint64]any{}, itemIndices: map[string]uint64{}}
+}
+
 func ReduceCodexSSE(input []byte) ([]map[string]any, error) {
 	events, err := ParseSSE(input)
 	if err != nil {
 		return nil, err
 	}
+	r := newCodexReducer()
 	var output []map[string]any
-	blocks := map[uint64]*blockState{}
-	items := map[uint64]any{}
-	itemIndices := map[string]uint64{}
-	var anthropicIndex uint64
-	sawTool, sawTerminal, incomplete, eligible := false, false, false, false
-	terminalType, responseID := "", ""
-	var usage map[string]any
-	var searches uint64
 	for _, event := range events {
-		if event.Data == "" {
-			continue
+		steps, err := r.event(event)
+		if err != nil {
+			return nil, err
 		}
-		var payload map[string]any
-		if json.Unmarshal([]byte(event.Data), &payload) != nil {
-			continue
-		}
-		kind := stringValue(payload["type"])
-		if kind == "" {
-			kind = event.Event
-		}
-		switch kind {
-		case "codex.rate_limits":
-			if boolean(pointer(payload, "rate_limits", "limit_reached")) {
-				return nil, fmt.Errorf("rate limit reached")
-			}
-			output = append(output, map[string]any{"kind": "progress"})
-		case "keepalive", "response.web_search_call.in_progress", "response.web_search_call.searching", "response.web_search_call.completed":
-			output = append(output, map[string]any{"kind": "progress"})
-		case "response.failed", "response.error", "error":
-			message := stringValue(pointer(payload, "response", "error", "message"))
-			if message == "" {
-				message = stringValue(pointer(payload, "error", "message"))
-			}
-			if message == "" {
-				message = "Upstream error"
-			}
-			return nil, errors.New(message)
-		case "response.output_item.added":
-			item := object(payload["item"])
-			index := uintValue(payload["output_index"])
-			switch stringValue(item["type"]) {
-			case "reasoning":
-			case "web_search_call":
-				output = append(output, map[string]any{"kind": "progress"})
-			case "message":
-				current := anthropicIndex
-				anthropicIndex++
-				if id := stringValue(item["id"]); id != "" {
-					itemIndices[id] = index
-				}
-				blocks[index] = &blockState{Kind: "text", Index: current}
-				output = append(output, map[string]any{"kind": "text-start", "index": current})
-			case "function_call":
-				sawTool = true
-				current := anthropicIndex
-				anthropicIndex++
-				state := &blockState{Kind: "tool", Index: current, ID: stringValue(item["call_id"]), Name: stringValue(item["name"])}
-				state.Buffered = state.Name == "Read"
-				blocks[index] = state
-				output = append(output, map[string]any{"kind": "tool-start", "index": current, "id": state.ID, "name": state.Name})
-			}
-		case "response.output_text.delta":
-			index, ok := number(payload["output_index"])
-			if !ok {
-				if mapped, found := itemIndices[stringValue(payload["item_id"])]; found {
-					index, ok = mapped, true
-				}
-			}
-			state := blocks[index]
-			if ok && state != nil && state.Kind == "text" {
-				delta := stringValue(payload["delta"])
-				if delta != "" {
-					state.Text += delta
-					output = append(output, map[string]any{"kind": "text-delta", "index": state.Index, "text": delta})
-				}
-			}
-		case "response.function_call_arguments.delta":
-			state := blocks[uintValue(payload["output_index"])]
-			if state != nil && state.Kind == "tool" {
-				delta := stringValue(payload["delta"])
-				if delta != "" {
-					state.Args += delta
-					if state.Buffered {
-						output = append(output, map[string]any{"kind": "tool-progress", "index": state.Index})
-					} else {
-						state.Emitted = true
-						output = append(output, map[string]any{"kind": "tool-delta", "index": state.Index, "partialJson": delta})
-					}
-				}
-			}
-		case "response.function_call_arguments.done":
-			state := blocks[uintValue(payload["output_index"])]
-			if state != nil && state.Args == "" {
-				state.Args = stringValue(payload["arguments"])
-			}
-		case "response.output_item.done":
-			item := object(payload["item"])
-			if stringValue(item["type"]) == "web_search_call" {
-				index := anthropicIndex
-				anthropicIndex += 2
-				searches++
-				output = append(output, map[string]any{"kind": "web-search", "index": index, "resultIndex": index + 1, "id": serverToolID(stringValue(item["id"])), "query": webSearchQuery(item)})
-				continue
-			}
-			index := uintValue(payload["output_index"])
-			state := blocks[index]
-			if state == nil {
-				continue
-			}
-			delete(blocks, index)
-			if state.Kind == "text" {
-				if state.Text != "" {
-					items[index] = map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": state.Text}}}
-				}
-				output = append(output, map[string]any{"kind": "text-stop", "index": state.Index})
-			} else {
-				final := stringValue(item["arguments"])
-				if final == "" {
-					final = state.Args
-				}
-				final = sanitizeToolArgs(state.Name, final)
-				state.Args = final
-				if final != "" && (state.Buffered || !state.Emitted) {
-					output = append(output, map[string]any{"kind": "tool-delta", "index": state.Index, "partialJson": final})
-				}
-				items[index] = map[string]any{"type": "function_call", "call_id": state.ID, "name": state.Name, "arguments": state.Args}
-				output = append(output, map[string]any{"kind": "tool-stop", "index": state.Index})
-			}
-		case "response.completed", "response.incomplete", "response.done":
-			sawTerminal = true
-			terminalType = kind
-			responseID = stringValue(pointer(payload, "response", "id"))
-			usage = object(pointer(payload, "response", "usage"))
-			if len(usage) == 0 {
-				usage = nil
-			}
-			if kind == "response.incomplete" || pointer(payload, "response", "incomplete_details", "reason") != nil || stringValue(pointer(payload, "response", "status")) == "incomplete" {
-				incomplete = true
-			}
-			eligible = (kind == "response.completed" || kind == "response.done") && !incomplete
-		}
+		output = append(output, steps...)
 	}
-	if !sawTerminal || len(blocks) != 0 {
-		if sawTerminal {
+	finish, err := r.finish()
+	if err != nil {
+		return nil, err
+	}
+	return append(output, finish), nil
+}
+
+func (r *codexReducer) event(event SSEEvent) ([]map[string]any, error) {
+	var output []map[string]any
+	if event.Data == "" {
+		return nil, nil
+	}
+	var payload map[string]any
+	if json.Unmarshal([]byte(event.Data), &payload) != nil {
+		return nil, nil
+	}
+	kind := stringValue(payload["type"])
+	if kind == "" {
+		kind = event.Event
+	}
+	switch kind {
+	case "codex.rate_limits":
+		if boolean(pointer(payload, "rate_limits", "limit_reached")) {
+			return nil, fmt.Errorf("rate limit reached")
+		}
+		output = append(output, map[string]any{"kind": "progress"})
+	case "keepalive", "response.web_search_call.in_progress", "response.web_search_call.searching", "response.web_search_call.completed":
+		output = append(output, map[string]any{"kind": "progress"})
+	case "response.failed", "response.error", "error":
+		message := stringValue(pointer(payload, "response", "error", "message"))
+		if message == "" {
+			message = stringValue(pointer(payload, "error", "message"))
+		}
+		if message == "" {
+			message = "Upstream error"
+		}
+		return nil, errors.New(message)
+	case "response.output_item.added":
+		item := object(payload["item"])
+		index := uintValue(payload["output_index"])
+		switch stringValue(item["type"]) {
+		case "reasoning":
+		case "web_search_call":
+			output = append(output, map[string]any{"kind": "progress"})
+		case "message":
+			current := r.anthropicIndex
+			r.anthropicIndex++
+			if id := stringValue(item["id"]); id != "" {
+				r.itemIndices[id] = index
+			}
+			r.blocks[index] = &blockState{Kind: "text", Index: current}
+			output = append(output, map[string]any{"kind": "text-start", "index": current})
+		case "function_call":
+			r.sawTool = true
+			current := r.anthropicIndex
+			r.anthropicIndex++
+			state := &blockState{Kind: "tool", Index: current, ID: stringValue(item["call_id"]), Name: stringValue(item["name"])}
+			state.Buffered = state.Name == "Read"
+			r.blocks[index] = state
+			output = append(output, map[string]any{"kind": "tool-start", "index": current, "id": state.ID, "name": state.Name})
+		}
+	case "response.output_text.delta":
+		index, ok := number(payload["output_index"])
+		if !ok {
+			if mapped, found := r.itemIndices[stringValue(payload["item_id"])]; found {
+				index, ok = mapped, true
+			}
+		}
+		state := r.blocks[index]
+		if ok && state != nil && state.Kind == "text" {
+			delta := stringValue(payload["delta"])
+			if delta != "" {
+				state.Text += delta
+				output = append(output, map[string]any{"kind": "text-delta", "index": state.Index, "text": delta})
+			}
+		}
+	case "response.function_call_arguments.delta":
+		state := r.blocks[uintValue(payload["output_index"])]
+		if state != nil && state.Kind == "tool" {
+			delta := stringValue(payload["delta"])
+			if delta != "" {
+				state.Args += delta
+				if state.Buffered {
+					output = append(output, map[string]any{"kind": "tool-progress", "index": state.Index})
+				} else {
+					state.Emitted = true
+					output = append(output, map[string]any{"kind": "tool-delta", "index": state.Index, "partialJson": delta})
+				}
+			}
+		}
+	case "response.function_call_arguments.done":
+		state := r.blocks[uintValue(payload["output_index"])]
+		if state != nil && state.Args == "" {
+			state.Args = stringValue(payload["arguments"])
+		}
+	case "response.output_item.done":
+		item := object(payload["item"])
+		if stringValue(item["type"]) == "web_search_call" {
+			index := r.anthropicIndex
+			r.anthropicIndex += 2
+			r.searches++
+			output = append(output, map[string]any{"kind": "web-search", "index": index, "resultIndex": index + 1, "id": serverToolID(stringValue(item["id"])), "query": webSearchQuery(item)})
+			return output, nil
+		}
+		index := uintValue(payload["output_index"])
+		state := r.blocks[index]
+		if state == nil {
+			return output, nil
+		}
+		delete(r.blocks, index)
+		if state.Kind == "text" {
+			if state.Text != "" {
+				r.items[index] = map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": state.Text}}}
+			}
+			output = append(output, map[string]any{"kind": "text-stop", "index": state.Index})
+		} else {
+			final := stringValue(item["arguments"])
+			if final == "" {
+				final = state.Args
+			}
+			final = sanitizeToolArgs(state.Name, final)
+			state.Args = final
+			if final != "" && (state.Buffered || !state.Emitted) {
+				output = append(output, map[string]any{"kind": "tool-delta", "index": state.Index, "partialJson": final})
+			}
+			r.items[index] = map[string]any{"type": "function_call", "call_id": state.ID, "name": state.Name, "arguments": state.Args}
+			output = append(output, map[string]any{"kind": "tool-stop", "index": state.Index})
+		}
+	case "response.completed", "response.incomplete", "response.done":
+		r.sawTerminal = true
+		r.terminalType = kind
+		r.responseID = stringValue(pointer(payload, "response", "id"))
+		r.usage = object(pointer(payload, "response", "usage"))
+		if len(r.usage) == 0 {
+			r.usage = nil
+		}
+		if kind == "response.incomplete" || pointer(payload, "response", "incomplete_details", "reason") != nil || stringValue(pointer(payload, "response", "status")) == "incomplete" {
+			r.incomplete = true
+		}
+		r.eligible = (kind == "response.completed" || kind == "response.done") && !r.incomplete
+	}
+	return output, nil
+}
+
+// finish checks the stream ended cleanly and returns its closing step.
+func (r *codexReducer) finish() (map[string]any, error) {
+	if !r.sawTerminal || len(r.blocks) != 0 {
+		if r.sawTerminal {
 			return nil, fmt.Errorf("upstream stream ended with open output blocks")
 		}
 		return nil, fmt.Errorf("upstream stream ended without a terminal response event")
 	}
 	reason := "end_turn"
-	if incomplete {
+	if r.incomplete {
 		reason = "max_tokens"
-	} else if sawTool {
+	} else if r.sawTool {
 		reason = "tool_use"
 	}
-	sorted := make([]int, 0, len(items))
-	for index := range items {
+	sorted := make([]int, 0, len(r.items))
+	for index := range r.items {
 		sorted = append(sorted, int(index))
 	}
 	sort.Ints(sorted)
 	outputItems := make([]any, 0, len(sorted))
 	for _, index := range sorted {
-		outputItems = append(outputItems, items[uint64(index)])
+		outputItems = append(outputItems, r.items[uint64(index)])
 	}
-	finish := map[string]any{"kind": "finish", "stopReason": reason, "terminalType": terminalType, "continuationEligible": eligible, "usage": usage, "webSearchRequests": searches, "outputItems": outputItems}
-	if responseID != "" {
-		finish["responseId"] = responseID
+	finish := map[string]any{"kind": "finish", "stopReason": reason, "terminalType": r.terminalType, "continuationEligible": r.eligible, "usage": r.usage, "webSearchRequests": r.searches, "outputItems": outputItems}
+	if r.responseID != "" {
+		finish["responseId"] = r.responseID
 	} else {
 		finish["responseId"] = nil
 	}
-	output = append(output, finish)
-	return output, nil
+	return finish, nil
 }
 
-func AccumulateCodex(input []byte, messageID, model string) (map[string]any, error) {
-	events, err := ReduceCodexSSE(input)
-	if err != nil {
-		return nil, err
-	}
+// AccumulateCodex builds a non-streaming Anthropic message from reduced steps.
+func AccumulateCodex(events []map[string]any, messageID, model string) map[string]any {
 	blocks := map[uint64]map[string]any{}
 	reason := ""
 	var usage map[string]any
@@ -264,47 +287,46 @@ func AccumulateCodex(input []byte, messageID, model string) (map[string]any, err
 			content = append(content, block)
 		}
 	}
-	return map[string]any{"id": messageID, "type": "message", "role": "assistant", "model": model, "content": content, "stop_reason": reason, "stop_sequence": nil, "usage": anthropicUsage(usage, searches)}, nil
+	return map[string]any{"id": messageID, "type": "message", "role": "assistant", "model": model, "content": content, "stop_reason": reason, "stop_sequence": nil, "usage": anthropicUsage(usage, searches)}
 }
 
-func CodexToAnthropicSSE(input []byte, messageID, model string) ([][]byte, error) {
-	events, err := ReduceCodexSSE(input)
-	if err != nil {
-		return nil, err
-	}
+// anthropicStream renders reduced steps as Anthropic SSE frames, one step at a time.
+type anthropicStream struct {
+	messageID, model string
+	started          bool
+}
+
+func (stream *anthropicStream) frames(event map[string]any) [][]byte {
 	var out [][]byte
-	started := false
 	ensure := func() {
-		if started {
+		if stream.started {
 			return
 		}
-		started = true
-		out = append(out, EncodeSSE("message_start", messageStart{Type: "message_start", Message: messageValue{ID: messageID, Type: "message", Role: "assistant", Model: model, Content: []any{}, Usage: usageValue{}}}), EncodeSSE("ping", typeOnly{Type: "ping"}))
+		stream.started = true
+		out = append(out, EncodeSSE("message_start", messageStart{Type: "message_start", Message: messageValue{ID: stream.messageID, Type: "message", Role: "assistant", Model: stream.model, Content: []any{}, Usage: usageValue{}}}), EncodeSSE("ping", typeOnly{Type: "ping"}))
 	}
-	for _, event := range events {
-		kind := stringValue(event["kind"])
-		index := uintValue(event["index"])
-		switch kind {
-		case "text-start":
-			ensure()
-			out = append(out, EncodeSSE("content_block_start", blockStart{Type: "content_block_start", Index: index, ContentBlock: orderedBlock{Type: "text", Text: stringPointer("")}}))
-		case "text-delta":
-			out = append(out, EncodeSSE("content_block_delta", blockDelta{Type: "content_block_delta", Index: index, Delta: orderedDelta{Type: "text_delta", Text: stringValue(event["text"])}}))
-		case "text-stop":
-			out = append(out, EncodeSSE("content_block_stop", blockStop{Type: "content_block_stop", Index: index}))
-		case "tool-start":
-			ensure()
-			out = append(out, EncodeSSE("content_block_start", blockStart{Type: "content_block_start", Index: index, ContentBlock: orderedBlock{Type: "tool_use", ID: stringValue(event["id"]), Name: stringValue(event["name"]), Input: map[string]any{}}}))
-		case "tool-delta":
-			out = append(out, EncodeSSE("content_block_delta", blockDelta{Type: "content_block_delta", Index: index, Delta: orderedDelta{Type: "input_json_delta", PartialJSON: stringValue(event["partialJson"])}}))
-		case "tool-stop":
-			out = append(out, EncodeSSE("content_block_stop", blockStop{Type: "content_block_stop", Index: index}))
-		case "finish":
-			ensure()
-			out = append(out, EncodeSSE("message_delta", messageDelta{Type: "message_delta", Delta: stopDelta{StopReason: stringValue(event["stopReason"]), StopSequence: nil}, Usage: orderedUsage(object(event["usage"]), uintValue(event["webSearchRequests"]))}), EncodeSSE("message_stop", typeOnly{Type: "message_stop"}))
-		}
+	kind := stringValue(event["kind"])
+	index := uintValue(event["index"])
+	switch kind {
+	case "text-start":
+		ensure()
+		out = append(out, EncodeSSE("content_block_start", blockStart{Type: "content_block_start", Index: index, ContentBlock: orderedBlock{Type: "text", Text: stringPointer("")}}))
+	case "text-delta":
+		out = append(out, EncodeSSE("content_block_delta", blockDelta{Type: "content_block_delta", Index: index, Delta: orderedDelta{Type: "text_delta", Text: stringValue(event["text"])}}))
+	case "text-stop":
+		out = append(out, EncodeSSE("content_block_stop", blockStop{Type: "content_block_stop", Index: index}))
+	case "tool-start":
+		ensure()
+		out = append(out, EncodeSSE("content_block_start", blockStart{Type: "content_block_start", Index: index, ContentBlock: orderedBlock{Type: "tool_use", ID: stringValue(event["id"]), Name: stringValue(event["name"]), Input: map[string]any{}}}))
+	case "tool-delta":
+		out = append(out, EncodeSSE("content_block_delta", blockDelta{Type: "content_block_delta", Index: index, Delta: orderedDelta{Type: "input_json_delta", PartialJSON: stringValue(event["partialJson"])}}))
+	case "tool-stop":
+		out = append(out, EncodeSSE("content_block_stop", blockStop{Type: "content_block_stop", Index: index}))
+	case "finish":
+		ensure()
+		out = append(out, EncodeSSE("message_delta", messageDelta{Type: "message_delta", Delta: stopDelta{StopReason: stringValue(event["stopReason"]), StopSequence: nil}, Usage: orderedUsage(object(event["usage"]), uintValue(event["webSearchRequests"]))}), EncodeSSE("message_stop", typeOnly{Type: "message_stop"}))
 	}
-	return out, nil
+	return out
 }
 
 type usageValue struct {

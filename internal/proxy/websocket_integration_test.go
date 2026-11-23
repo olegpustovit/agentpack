@@ -42,14 +42,18 @@ func TestWebSocketTransportSendsCreateAndCollectsFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer server.listener.Close()
-	body, err := server.callWebSocket(context.Background(), 1, AuthSnapshot{AccessToken: "token", EndpointURL: upstream.URL}, map[string]any{"model": "gpt-5.5", "stream": true}, "")
+	var body strings.Builder
+	err = server.callWebSocket(context.Background(), 1, AuthSnapshot{AccessToken: "token", EndpointURL: upstream.URL}, map[string]any{"model": "gpt-5.5", "stream": true}, "", func(event SSEEvent) error {
+		body.WriteString(event.Data)
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if received["type"] != "response.create" || received["stream"] != nil {
 		t.Fatalf("payload=%#v", received)
 	}
-	if !strings.Contains(string(body), `"type":"response.completed"`) {
-		t.Fatalf("body=%s", body)
+	if !strings.Contains(body.String(), `"type":"response.completed"`) {
+		t.Fatalf("body=%s", body.String())
 	}
 }

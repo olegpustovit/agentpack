@@ -3,30 +3,9 @@ package cursor
 import (
 	"encoding/json"
 	"fmt"
-	"log"
-	"os"
 
 	"github.com/olegpustovit/agentpack/internal/mcp"
 )
-
-// WriteMCP writes the servers as Cursor's mcp.json. A remote server keeps
-// its headers and its OAuth client, which Cursor spells auth.CLIENT_ID,
-// auth.CLIENT_SECRET and auth.scopes. Cursor documents no working directory
-// for a stdio server and a fixed OAuth callback, so a cwd and a callback port
-// are left out with a warning.
-func WriteMCP(path string, entries mcp.Entries) error {
-	data, warnings, err := RenderMCP(entries)
-	if err != nil {
-		return err
-	}
-	for _, warning := range warnings {
-		log.Printf("warning: %s", warning)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return nil
-}
 
 func RenderMCP(entries mcp.Entries) ([]byte, []string, error) {
 	servers := make(map[string]map[string]any, len(entries))

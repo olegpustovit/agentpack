@@ -35,7 +35,6 @@ type LaunchContext struct {
 	Mode           mode.Effective
 	Yolo           bool
 	StrictExternal bool
-	Command        *exec.Cmd
 	// SessionID is the agentpack terminal session this launch runs in (a worker launch only), so
 	// the agent's hooks can report its turns; empty for a plain terminal.
 	SessionID string
@@ -186,107 +185,97 @@ type RebuildTransaction interface {
 	Abort() error
 }
 
-type Harness interface {
-	ID() Target
-	// NativeUserRoots returns user artifact roots available outside the staged bundle.
-	NativeUserRoots(home string) []string
-	StagedRoot(StageContext) (string, error)
-	ResetPaths(StageContext) ([]string, error)
-	PreReset(StageContext) error
-	BeginRebuild(StageContext) (RebuildTransaction, error)
-	Prepare(StageContext) error
-	WriteMCP(mcp.Entries, StageContext) error
-	PlanMCP(mcp.Entries, StageContext) (MCPProjection, error)
-	PlanLSP(map[string]json.RawMessage, StageContext) (LSPProjection, error)
-	// WriteLSP writes language servers (Claude Code format, by name); it
-	// returns ErrNoLSP when the agent has no language server setting.
-	WriteLSP(map[string]json.RawMessage, StageContext) error
-	InjectGuidance(string, StageContext) error
-	Finalize(mcp.Entries, StageContext) error
-	FinalizeWorkspaceOverlay(StageContext) error
-	Verify(StageContext) error
-	LaunchCommand(LaunchContext) (*exec.Cmd, error)
-	PrepareACP(context.Context) error
-	ACPInitializeBeforeStage() bool
-	ACP(LaunchContext) (ACPLaunch, error)
-	AfterLaunch(LaunchContext) error
-}
-
-type Definition struct {
-	Target            Target
-	UserRoots         func(home string) []string
-	Root              func(StageContext) (string, error)
-	Reset             func(StageContext) ([]string, error)
-	BeforeReset       func(StageContext) error
-	Begin             func(StageContext) (RebuildTransaction, error)
-	Setup             func(StageContext) error
-	MCP               func(mcp.Entries, StageContext) error
-	ProjectMCP        func(mcp.Entries, StageContext) (MCPProjection, error)
-	ProjectLSP        func(map[string]json.RawMessage, StageContext) (LSPProjection, error)
-	LSP               func(map[string]json.RawMessage, StageContext) error
-	Guidance          func(string, StageContext) error
-	AfterStage        func(mcp.Entries, StageContext) error
-	WorkspaceOverlay  func(StageContext) error
-	Check             func(StageContext) error
-	Launch            func(LaunchContext) (*exec.Cmd, error)
+// Harness is one coding agent: how agentpack stages, launches and runs it. A nil function means
+// the agent has no such step; the methods below supply those defaults.
+type Harness struct {
+	Target           Target
+	UserRoots        func(home string) []string // user artifact roots available outside the staged bundle
+	Root             func(StageContext) (string, error)
+	Reset            func(StageContext) ([]string, error)
+	BeforeReset      func(StageContext) error
+	Begin            func(StageContext) (RebuildTransaction, error)
+	Setup            func(StageContext) error
+	ProjectMCP       func(mcp.Entries, StageContext) (MCPProjection, error)
+	ProjectLSP       func(map[string]json.RawMessage, StageContext) (LSPProjection, error)
+	Guidance         func(string, StageContext) error
+	AfterStage       func(mcp.Entries, StageContext) error
+	WorkspaceOverlay func(StageContext) error
+	Check            func(StageContext) error
+	// Launch builds the agent command. The caller runs finish once the command has exited or
+	// failed to start, on every path; it is never nil when err is nil.
+	Launch            func(LaunchContext) (cmd *exec.Cmd, finish func() error, err error)
 	ACPAdapter        string
 	ACPStageAtSession bool
 	LaunchACP         func(LaunchContext) (ACPLaunch, error)
-	LaunchFinished    func(LaunchContext) error
+	// Capability names the adapter and capability revisions a probe receipt must match; nil
+	// when the agent cannot be probed.
+	Capability  func() map[string]string
+	Inheritance Inheritance
 }
 
-func (definition Definition) ID() Target { return definition.Target }
-func (definition Definition) NativeUserRoots(home string) []string {
-	if home == "" || definition.UserRoots == nil {
+// Inheritance is what a native launch of the agent reads or writes outside agentpack's staging,
+// as preflight reports it.
+type Inheritance struct {
+	// Note says how the launch relates to the user's native configuration.
+	Note string
+	// Paths lists the user configuration files a native launch may read.
+	Paths func(workspace string) []string
+	// Seed is the user configuration file seeded into staging and the label preflight shows for it.
+	Seed func() (path, label string)
+	// Overlay lists the workspace-relative paths the launcher writes in the checkout.
+	Overlay []string
+}
+
+// HomeFile is a file under the user's home directory and the ~/ label preflight shows for it.
+func HomeFile(name string) (string, string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", ""
+	}
+	return filepath.Join(home, filepath.FromSlash(name)), "~/" + name
+}
+
+// HomeFiles lists files under the user's home directory.
+func HomeFiles(names ...string) []string {
+	home, _ := os.UserHomeDir()
+	result := make([]string, len(names))
+	for index, name := range names {
+		result[index] = filepath.Join(home, filepath.FromSlash(name))
+	}
+	return result
+}
+
+// Done is the finish function of a launch with nothing to do after the agent exits.
+func Done() error { return nil }
+
+func (harness Harness) NativeUserRoots(home string) []string {
+	if home == "" || harness.UserRoots == nil {
 		return nil
 	}
-	return definition.UserRoots(home)
+	return harness.UserRoots(home)
 }
-func (definition Definition) StagedRoot(ctx StageContext) (string, error) {
-	return definition.Root(ctx)
-}
-func (definition Definition) ResetPaths(ctx StageContext) ([]string, error) {
-	if definition.Reset != nil {
-		return definition.Reset(ctx)
+func (harness Harness) ResetPaths(ctx StageContext) ([]string, error) {
+	if harness.Reset != nil {
+		return harness.Reset(ctx)
 	}
-	root, err := definition.Root(ctx)
+	root, err := harness.Root(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return []string{root}, nil
 }
-func (definition Definition) PreReset(ctx StageContext) error {
-	if definition.BeforeReset != nil {
-		return definition.BeforeReset(ctx)
+func (harness Harness) PreReset(ctx StageContext) error {
+	if harness.BeforeReset != nil {
+		return harness.BeforeReset(ctx)
 	}
 	return nil
 }
-func (definition Definition) BeginRebuild(ctx StageContext) (RebuildTransaction, error) {
-	if definition.Begin != nil {
-		return definition.Begin(ctx)
+func (harness Harness) BeginRebuild(ctx StageContext) (RebuildTransaction, error) {
+	if harness.Begin != nil {
+		return harness.Begin(ctx)
 	}
 	return nil, nil
 }
-func (definition Definition) Prepare(ctx StageContext) error {
-	if definition.Setup == nil {
-		return fmt.Errorf("%s harness has no prepare function", definition.Target)
-	}
-	return definition.Setup(ctx)
-}
-func (definition Definition) WriteMCP(entries mcp.Entries, ctx StageContext) error {
-	if definition.ProjectMCP != nil {
-		projection, err := definition.ProjectMCP(entries, ctx)
-		if err != nil {
-			return err
-		}
-		return WriteMCPProjection(projection)
-	}
-	if definition.MCP != nil {
-		return definition.MCP(entries, ctx)
-	}
-	return nil
-}
-
 func WriteMCPProjection(projection MCPProjection) error {
 	for _, file := range projection.Files {
 		if err := os.MkdirAll(filepath.Dir(file.Path), 0o755); err != nil {
@@ -302,83 +291,48 @@ func WriteMCPProjection(projection MCPProjection) error {
 	return nil
 }
 
-func (definition Definition) PlanMCP(entries mcp.Entries, ctx StageContext) (MCPProjection, error) {
-	if definition.ProjectMCP == nil {
+func (harness Harness) PlanMCP(entries mcp.Entries, ctx StageContext) (MCPProjection, error) {
+	if harness.ProjectMCP == nil {
 		return MCPProjection{}, nil
 	}
-	return definition.ProjectMCP(entries, ctx)
+	return harness.ProjectMCP(entries, ctx)
 }
 
-func (definition Definition) PlanLSP(servers map[string]json.RawMessage, ctx StageContext) (LSPProjection, error) {
-	if definition.ProjectLSP == nil {
+func (harness Harness) PlanLSP(servers map[string]json.RawMessage, ctx StageContext) (LSPProjection, error) {
+	if harness.ProjectLSP == nil {
 		return LSPProjection{}, ErrNoLSP
 	}
-	return definition.ProjectLSP(servers, ctx)
+	return harness.ProjectLSP(servers, ctx)
 }
 
 // ErrNoLSP says an agent has no setting through which a language server can
 // be configured for it.
 var ErrNoLSP = errors.New("no language server setting")
 
-func (definition Definition) WriteLSP(servers map[string]json.RawMessage, ctx StageContext) error {
-	if definition.LSP == nil {
-		return ErrNoLSP
-	}
-	return definition.LSP(servers, ctx)
-}
-func (definition Definition) InjectGuidance(blob string, ctx StageContext) error {
-	if definition.Guidance != nil {
-		return definition.Guidance(blob, ctx)
+func (harness Harness) InjectGuidance(blob string, ctx StageContext) error {
+	if harness.Guidance != nil {
+		return harness.Guidance(blob, ctx)
 	}
 	return nil
 }
-func (definition Definition) Finalize(entries mcp.Entries, ctx StageContext) error {
-	if definition.AfterStage != nil {
-		return definition.AfterStage(entries, ctx)
+func (harness Harness) Finalize(entries mcp.Entries, ctx StageContext) error {
+	if harness.AfterStage != nil {
+		return harness.AfterStage(entries, ctx)
 	}
 	return nil
 }
-func (definition Definition) FinalizeWorkspaceOverlay(ctx StageContext) error {
-	if definition.WorkspaceOverlay != nil {
-		return definition.WorkspaceOverlay(ctx)
+func (harness Harness) FinalizeWorkspaceOverlay(ctx StageContext) error {
+	if harness.WorkspaceOverlay != nil {
+		return harness.WorkspaceOverlay(ctx)
 	}
 	return nil
-}
-func (definition Definition) Verify(ctx StageContext) error {
-	if definition.Check == nil {
-		return fmt.Errorf("%s harness has no verifier", definition.Target)
-	}
-	return definition.Check(ctx)
-}
-func (definition Definition) LaunchCommand(ctx LaunchContext) (*exec.Cmd, error) {
-	if definition.Launch == nil {
-		return nil, fmt.Errorf("%s harness has no launcher", definition.Target)
-	}
-	return definition.Launch(ctx)
 }
 
 // PrepareACP installs and verifies a pinned adapter without reading project staging.
-func (definition Definition) PrepareACP(ctx context.Context) error {
-	if definition.ACPAdapter == "" {
+func (harness Harness) PrepareACP(ctx context.Context) error {
+	if harness.ACPAdapter == "" {
 		return nil
 	}
-	_, err := EnsureACPAdapterExecutable(ctx, definition.ACPAdapter)
+	_, err := EnsureACPAdapterExecutable(ctx, harness.ACPAdapter)
 	return err
-}
-
-func (definition Definition) ACPInitializeBeforeStage() bool {
-	return definition.ACPStageAtSession
-}
-
-func (definition Definition) ACP(ctx LaunchContext) (ACPLaunch, error) {
-	if definition.LaunchACP == nil {
-		return ACPLaunch{}, fmt.Errorf("%s harness has no ACP launcher", definition.Target)
-	}
-	return definition.LaunchACP(ctx)
-}
-func (definition Definition) AfterLaunch(ctx LaunchContext) error {
-	if definition.LaunchFinished != nil {
-		return definition.LaunchFinished(ctx)
-	}
-	return nil
 }

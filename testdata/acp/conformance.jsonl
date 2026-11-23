@@ -1,0 +1,21 @@
+{"seq":1,"ts":1000,"kind":"compaction_summary_chunk","payload":{"compactionId":"c0","content":{"type":"text","text":"Summary before any status."}}}
+{"seq":2,"ts":1001,"kind":"prompt","payload":{"text":{"text":"Start a task."}}}
+{"seq":3,"ts":1002,"kind":"usage_update","payload":{"used":100,"size":1000,"cost":{"amount":0.5,"currency":"USD"}}}
+{"seq":4,"ts":1003,"kind":"usage_update","payload":{"contextTokens":150,"contextLimit":2000,"costUsd":0.75}}
+{"seq":5,"ts":1004,"kind":"usage_update","payload":{"used":160}}
+{"seq":6,"ts":1005,"kind":"permission_request","payload":{"requestId":"p1","toolCall":{"toolCallId":"t1","title":"Run tests"}}}
+{"seq":7,"ts":1006,"kind":"agent_message_chunk","payload":{"text":{"text":"Waiting for approval."}}}
+{"seq":8,"ts":1007,"kind":"permission_result","payload":{"requestId":"p1","optionId":"allow"}}
+{"seq":9,"ts":1008,"kind":"notice","payload":{"title":"Rate limited","description":"Retrying soon","severity":"warning"}}
+{"seq":10,"ts":1009,"kind":"turn_end","payload":{"stopReason":"end_turn"}}
+{"seq":11,"ts":1010,"kind":"async_task_spawned","payload":{"asyncTaskId":"turn-1","taskType":"turn"}}
+{"seq":12,"ts":1011,"kind":"agent_message_chunk","payload":{"text":{"text":"The background task finished."}}}
+{"seq":13,"ts":1012,"kind":"async_task_state_update","payload":{"asyncTaskId":"turn-1","state":"completed"}}
+{"seq":14,"ts":1013,"kind":"prompt","payload":{"text":{"text":"Ask a helper."}}}
+{"seq":15,"ts":1014,"kind":"tool_call","payload":{"toolCallId":"t2","title":"Agent","status":"pending"}}
+{"seq":16,"ts":1015,"kind":"permission_request","payload":{"requestId":"p2","_subagent":"tool:t2","toolCall":{"toolCallId":"t3","title":"Edit file"}}}
+{"seq":17,"ts":1016,"kind":"turn_end","payload":{"stopReason":"cancelled"}}
+{"seq":18,"ts":1017,"kind":"usage_update","payload":{"used":170,"cost":{"amount":3,"currency":"EUR"}}}
+{"seq":19,"ts":1018,"kind":"prompt","payload":{"text":{"text":"Again."}}}
+{"seq":20,"ts":1019,"kind":"elicitation","payload":{"elicitationId":"e1","_subagent":"sub-1","message":"Pick one"}}
+{"seq":21,"ts":1020,"kind":"agent_exit","payload":{"exitCode":1}}

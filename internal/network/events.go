@@ -3,7 +3,6 @@ package network
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -36,6 +35,7 @@ type eventMessage struct {
 type eventTopic struct {
 	name     string
 	interval time.Duration
+	tick     <-chan time.Time
 	digest   func(context.Context) (string, error)
 	// detail, when set, describes the change between two digests.
 	detail func(ctx context.Context, previous, current string) []string
@@ -155,16 +155,16 @@ func (g *Gateway) defaultEventTopics() []eventTopic {
 	home := g.options.Home
 	topics := []eventTopic{
 		{name: "state", interval: 2 * time.Second, digest: func(ctx context.Context) (string, error) {
-			version, err := g.auth.store.DBVersion(ctx)
+			version, err := g.store.DBVersion(ctx)
 			return strconv.FormatInt(version, 10), err
 		}, detail: g.changedTables},
-		// shortcut: polls local state every 2 s while a browser is connected, replace with worker push if this shows in profiles
-		{name: "sessions", interval: 2 * time.Second, digest: func(ctx context.Context) (string, error) {
-			value, err := sessionsIn(ctx, g.auth.store.Reader, home)
+		// The fallback catches terminal-only state that workers do not persist.
+		{name: "sessions", interval: 30 * time.Second, digest: func(ctx context.Context) (string, error) {
+			value, err := sessionsIn(ctx, g.store.Reader, home)
 			return digestOf(value, err)
 		}},
 		{name: "projects", interval: 10 * time.Second, digest: func(ctx context.Context) (string, error) {
-			recent, err := recentIn(ctx, g.auth.store.Reader)
+			recent, err := RecentIn(ctx, g.store.Reader)
 			if err != nil {
 				return "", err
 			}
@@ -200,7 +200,7 @@ func (g *Gateway) changedTables(ctx context.Context, previous, current string) [
 	if err1 != nil || err2 != nil || to <= from {
 		return nil
 	}
-	rows, err := g.auth.store.Reader.QueryContext(ctx, `SELECT DISTINCT "table",cid FROM crsql_changes WHERE db_version>? AND db_version<=?`, from, to)
+	rows, err := g.store.Reader.QueryContext(ctx, `SELECT DISTINCT "table",cid FROM crsql_changes WHERE db_version>? AND db_version<=?`, from, to)
 	if err != nil {
 		return nil
 	}
@@ -224,8 +224,12 @@ func (g *Gateway) changedTables(ctx context.Context, previous, current string) [
 }
 
 func (g *Gateway) pollTopic(ctx context.Context, topic eventTopic) {
-	ticker := time.NewTicker(topic.interval)
-	defer ticker.Stop()
+	tick := topic.tick
+	if tick == nil {
+		ticker := time.NewTicker(topic.interval)
+		defer ticker.Stop()
+		tick = ticker.C
+	}
 	last := ""
 	for {
 		if digest, err := topic.digest(ctx); err == nil && digest != last {
@@ -235,11 +239,14 @@ func (g *Gateway) pollTopic(ctx context.Context, topic eventTopic) {
 			}
 			last = digest
 			g.emitEvent(message)
+			if message.Topic == "state" && slices.Contains(message.Tables, "sessions") {
+				g.emitEvent(eventMessage{Topic: "sessions"})
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-tick:
 		}
 	}
 }
@@ -378,7 +385,7 @@ func digestOf(value any, err error) (string, error) {
 
 // serveEvents serves GET /api/events as a server-sent event stream.
 func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
-	private := r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1
+	private := g.localRequest(r)
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -395,9 +402,19 @@ func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
 	defer ping.Stop()
 	checkAuth := g.events.checkAuth
 	if checkAuth == nil {
-		auth := time.NewTicker(time.Second)
+		auth := time.NewTicker(30 * time.Second)
 		defer auth.Stop()
 		checkAuth = auth.C
+	}
+	allowed := func() bool {
+		peer, _ := r.Context().Value(replicaPeerKey{}).(string)
+		if peer != "" {
+			if r.URL.Path == "/api/sync/events" {
+				return g.meshPeer(r.Context(), peer)
+			}
+			return g.enrolledPeer(peer)
+		}
+		return private || g.auth.authenticated(r)
 	}
 	for {
 		var message sse.Message
@@ -407,18 +424,7 @@ func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
 		case <-g.done:
 			return
 		case <-checkAuth:
-			peer, _ := r.Context().Value(replicaPeerKey{}).(string)
-			allowed := private
-			if peer != "" {
-				if r.URL.Path == "/api/sync/events" {
-					allowed = g.meshPeer(r.Context(), peer)
-				} else {
-					allowed = g.enrolledPeer(peer)
-				}
-			} else if !allowed {
-				allowed = g.auth.authenticated(r)
-			}
-			if !allowed {
+			if !allowed() {
 				return
 			}
 			continue
@@ -442,6 +448,12 @@ func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
 			if !open {
 				return
 			}
+			if authChanged(msg) && !allowed() {
+				return
+			}
+			if msg.Topic == "auth" {
+				continue
+			}
 			data, _ := json.Marshal(msg)
 			message.AppendData(string(data))
 		}
@@ -450,4 +462,9 @@ func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		flusher.Flush()
 	}
+}
+
+func authChanged(event eventMessage) bool {
+	return event.Node == "" && (event.Topic == "auth" ||
+		event.Topic == "state" && (slices.Contains(event.Tables, "users") || slices.Contains(event.Tables, "auth_sessions")))
 }

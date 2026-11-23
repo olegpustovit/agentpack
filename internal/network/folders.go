@@ -137,7 +137,7 @@ func (g *Gateway) listFolders(ctx context.Context, path string) (folderListing, 
 	if err != nil {
 		return out, err
 	}
-	recent, err := recentIn(ctx, g.auth.store.Reader)
+	recent, err := RecentIn(ctx, g.store.Reader)
 	if err != nil {
 		return out, err
 	}
@@ -214,7 +214,7 @@ func (g *Gateway) foundFolders(ctx context.Context) ([]ProjectRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	recent, err := recentIn(ctx, g.auth.store.Reader)
+	recent, err := RecentIn(ctx, g.store.Reader)
 	if err != nil {
 		return nil, err
 	}
@@ -306,8 +306,8 @@ func discoverFolders(ctx context.Context, home, dataHome string) []RecentFolder 
 	return found
 }
 
-func (g *Gateway) startableDirectory(actor Actor, dir string) bool {
-	if g.knownDirectory(dir) {
+func (g *Gateway) startableDirectory(ctx context.Context, actor Actor, dir string) bool {
+	if g.knownDirectory(ctx, dir) {
 		return true
 	}
 	if !actor.CanStartNewFolder() || !filepath.IsAbs(dir) {

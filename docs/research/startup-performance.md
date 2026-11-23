@@ -29,6 +29,24 @@ setup shows no measurable change (a dedicated 9-sample cold run gave minima of
 does not meet the 1 ms budget on this host; it has not been re-measured on the
 ARM64 reference host.
 
+## Private staging and lock roots (2026-11-23)
+
+Linux amd64, Intel i9-12900K, Go 1.27.3, 32 MiB history fixture. Medians
+of five runs on a shared host.
+
+| Benchmark | Before (ms) | After (ms) |
+| --- | ---: | ---: |
+| MaterializationHome | 0.316 | 0.449 |
+| CodexSetup/warm | 0.123 | 0.181 |
+| CodexSetup/cold | 9.128 | 16.586 |
+
+```sh
+go test ./internal/sync -run '^$' -bench 'Benchmark(MaterializationHome|CodexSetup)$' -count=5
+```
+
+After the change, individual cold runs ranged from 14.8 to 46.7 ms. These
+shared-host measurements leave the Linux ARM64 release budget unverified.
+
 ## State migration release check — Linux ARM64
 
 Measured 2026-11-15 on the deployment host (`oracle-vm`, aarch64 Neoverse-N1,
