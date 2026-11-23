@@ -19,11 +19,20 @@ import (
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
-// ConversationSession is the worker-side ACP conversation view.
+// ConversationSession is the worker-side ACP conversation view. It is three parts:
+//   - the core here: the log and its fold, the agent process, its configuration and permissions;
+//   - turnRunner (conversation_queue.go): queue, goal, retry, steering and delivery, acting on the
+//     state the fold derived once the sink stored it;
+//   - conversationStore (conversation_store.go): the persistence adapter. The log's sink stores
+//     events with the fold; the adapter stores the rest on one writer goroutine.
+//
+// Lock order: writes (read side), promptMu (TryLock), the turn runner's queueMu, then mu. mu is a
+// leaf: never held while calling the log (its callback takes mu), the broker or the store.
 type ConversationSession struct {
 	mu                sync.Mutex
-	promptMu          sync.Mutex
-	writes            sync.RWMutex
+	promptMu          sync.Mutex   // one prompt or revert at a time
+	writes            sync.RWMutex // write side held while the agent is swapped out
+	configMu          sync.Mutex   // orders config requests with wiring a starting agent
 	Log               *acp.EventLog
 	broker            *acp.Broker
 	fold              *conversationFold // the log's fold; read only while the log notifies or at start
@@ -34,12 +43,10 @@ type ConversationSession struct {
 	modes             json.RawMessage
 	agentCommands     json.RawMessage
 	agentVersion      string
-	snapshotChanged   func()
 	agentCapabilities *session.AgentCapabilities
 	agentSessionID    string
-	permissionChange  func(string) // someone chose a permission mode; remembered for the agent
-	clientMode        string       // Agentpack permission override; "" when unsupported
-	afterIdle         func()       // one-shot, run when the conversation next settles idle
+	clientMode        string // Agentpack permission override; "" when unsupported
+	afterIdle         func() // one-shot, run when the conversation next settles idle
 	lastSeq           int64
 	toolCalls         uint64
 	permissions       uint64
@@ -47,49 +54,10 @@ type ConversationSession struct {
 	stderr            *diagnosticStderr
 	agentExitCode     *atomic.Int32
 	sessionID         string
-	workspace         string         // session working directory; set by the worker, bounds revert
-	imageStore        acp.ImageStore // the session's blob store, for images agents and tools send
+	workspace         string // session working directory; set by the worker, bounds revert
 
-	// Queue and goal state (conversation_queue.go, conversation_goal.go). queueMu orders queue
-	// changes with their log entries; it is taken before mu and never inside a log callback.
-	configMu      sync.Mutex
-	queueMu       sync.Mutex
-	Queue         []QueuedPrompt
-	SeenPrompts   map[string]struct{}
-	starting      bool
-	promptStored  func(context.Context, string) (bool, error)
-	running       bool // a turn loop owns the agent
-	queuesPrompts bool // the agent takes a prompt in while its turn runs (harness.ACPLaunch.QueuesPrompts)
-	delivering    int  // prompts the agent has not answered yet
-	// steer joins the running turn (harness.ACPLaunch.Steers); nil when steering must cancel.
-	steer                  func(context.Context, acp.PromptInput) (bool, error)
-	delivered              chan struct{}
-	userCancelled          bool // the user stopped the running turn
-	archived               bool
-	now                    func() time.Time
-	after                  func(time.Duration, func()) // schedules network retries; tests replace it
-	networkRetries         int                         // retries since the last turn that reached the agent's service
-	turnsEnded             int                         // a retry is dropped when another turn ended meanwhile
-	goal                   *session.Goal
-	goalCleared            *session.Goal // the last goal, kept to log its "cleared" state
-	goalPublished          string
-	goalDirty              bool // the agent reported a native goal snapshot
-	goalSettled            bool // the native goal was marked met because the agent went idle
-	goalPauseDue           bool // the user stopped unprompted native goal work; tell the agent to pause
-	goalPublishMu          sync.Mutex
-	nativeGoal             bool // the agent advertises a /goal command
-	turnText               []byte
-	turnTools              int
-	goalBlocked            int
-	goalIdle               int
-	usageUsed              int64
-	usageCost              float64
-	unpromptedUsageSettle  time.Duration // quiet delay after an unprompted usage_update before closing the cycle
-	inPromptTurn           bool
-	lastParentKind         string
-	unpromptedUsagePending bool
-	settleGen              uint64
-	settleTimer            *time.Timer
+	turnRunner
+	store conversationStore
 }
 
 func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *ConversationSession {
@@ -101,7 +69,7 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 		fold = &conversationFold{}
 		log.SetFold(fold, 0)
 	}
-	session := &ConversationSession{Log: log, broker: broker, fold: fold, initialized: make(chan struct{}), SeenPrompts: make(map[string]struct{})}
+	session := &ConversationSession{Log: log, broker: broker, fold: fold, initialized: make(chan struct{}), turnRunner: turnRunner{SeenPrompts: make(map[string]struct{})}}
 	// A checkpoint carries usage from before the replay tail; entries in the tail update it.
 	thread := fold.Thread.State()
 	session.usageUsed, session.usageCost = int64(thread.ContextTokens), thread.CostUSD
@@ -159,19 +127,30 @@ func (cs *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	}
 	goalDirty, pause := cs.goalDirty, cs.goalPauseDue
 	cs.goalDirty, cs.goalPauseDue = false, false
-	snapshotChanged := cs.snapshotChanged
 	var afterIdle func()
 	// Not while the queue or a goal is about to start the next turn: a restart would cut it off.
 	if changed && state == string(StateIdle) && len(cs.Queue) == 0 && !cs.goalWantsTurn() {
 		afterIdle, cs.afterIdle = cs.afterIdle, nil
 	}
-	cs.mu.Unlock()
-	if snapshotChanged != nil && parent {
+	if parent {
 		switch entry.Kind {
 		case "agent_configuration", "config_option_update", "current_mode_update", "available_commands_update":
-			snapshotChanged()
+			cs.later(cs.saveSnapshot)
 		}
 	}
+	if changed {
+		// The sink stores the new state with the events behind it before anything acts on it; a
+		// failed write stays pending in the log, which retries it. On the writer, so a slow store
+		// never holds up this append.
+		cs.later(func() {
+			_ = cs.Log.Flush()
+			if afterIdle != nil {
+				afterIdle()
+			}
+			cs.maybeDrain()
+		})
+	}
+	cs.mu.Unlock()
 	if settleDelay > 0 {
 		cs.scheduleUnpromptedSettle(settleDelay, settleGen, "end_turn", settleAfter)
 	}
@@ -181,15 +160,6 @@ func (cs *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	}
 	if pause {
 		obs.Go("acp.goal_pause", func() { _, _, _ = cs.Submit(context.Background(), acp.PromptInput{Text: "/goal pause"}, false) })
-	}
-	if changed {
-		// The sink stores the new state with the events behind it before anything acts on it;
-		// a failed write stays pending in the log, which retries it.
-		_ = cs.Log.Flush()
-		if afterIdle != nil {
-			afterIdle()
-		}
-		cs.maybeDrain()
 	}
 	if cycleEnd {
 		obs.Go("acp.deliver", func() { cs.deliverDuringTurn(true) })
@@ -262,8 +232,8 @@ func (cs *ConversationSession) BypassingPermissions() bool {
 
 // applyRememberedPermissions puts a starting agent in the permission mode last chosen for it.
 // An agent that does not offer that mode keeps its own.
-func (cs *ConversationSession) applyRememberedPermissions(ctx context.Context, store *state.Store, settingKey string) {
-	mode, err := store.Mesh().Setting(ctx, settingKey)
+func (cs *ConversationSession) applyRememberedPermissions(ctx context.Context, store *state.Store, harness string) {
+	mode, err := store.Mesh().Setting(ctx, permissionSettingKey(harness))
 	if err != nil || mode == "" {
 		return
 	}
@@ -633,15 +603,12 @@ func (cs *ConversationSession) SetConfigOption(ctx context.Context, key string, 
 	default:
 		return errors.New("config value must be a string or boolean")
 	}
-	cs.mu.Lock()
-	remember := cs.permissionChange
-	cs.mu.Unlock()
 	if err := cs.setConfigOption(ctx, key, configValue, value); err != nil {
 		return err
 	}
-	if mode, ok := configValue.(string); ok && remember != nil {
+	if mode, ok := configValue.(string); ok {
 		if permissions, _ := cs.permissionMode(); key == permissions {
-			remember(mode)
+			cs.rememberPermissions(mode)
 		}
 	}
 	return nil
@@ -746,17 +713,6 @@ func (cs *ConversationSession) AgentCapabilitiesView() *session.AgentCapabilitie
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	return cs.agentCapabilities
-}
-
-// storeImage keeps an image an agent or tool sent in the session's blob store.
-func (cs *ConversationSession) storeImage(data []byte) (string, error) {
-	cs.mu.Lock()
-	store := cs.imageStore
-	cs.mu.Unlock()
-	if store == nil {
-		return "", errors.New("image storage unavailable")
-	}
-	return store(data)
 }
 
 // ChatState is a chat's conversation_state as tools and the UI see it.

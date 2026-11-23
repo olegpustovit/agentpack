@@ -425,3 +425,54 @@ func TestConversationReaderBackfillsEvictedEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// storeSettled waits until the writer has run every job queued before this call.
+func (cs *ConversationSession) storeSettled() {
+	done := make(chan struct{})
+	cs.mu.Lock()
+	cs.later(func() { close(done) })
+	cs.mu.Unlock()
+	<-done
+}
+
+// A state change is stored on the adapter's writer: a store that hangs holds up neither the
+// agent's appends nor readers.
+func TestBlockingStoreDoesNotBlockAppendOrReads(t *testing.T) {
+	log := acp.NewEventLog(0)
+	conv := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
+	release, writing := make(chan struct{}), make(chan struct{}, 1)
+	if err := log.EnableSink(func(acp.LogChanges) error {
+		select {
+		case writing <- struct{}{}:
+		default:
+		}
+		<-release
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		log.Append("prompt", 1, json.RawMessage(`{}`))
+		<-writing // the transition's write is in the store now
+		log.Append("agent_message_chunk", 2, json.RawMessage(`{"text":{"text":"x"}}`))
+		log.Append("turn_end", 3, json.RawMessage(`{}`))
+		if entries, _, _ := log.ReadSince(0); len(entries) != 3 {
+			t.Errorf("read %d entries", len(entries))
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a blocked store held up an append or a read")
+	}
+	if got := conv.ConversationState(); got != "idle" {
+		t.Fatalf("state = %q", got)
+	}
+	close(release)
+	conv.storeSettled()
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

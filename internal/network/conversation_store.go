@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -404,4 +405,114 @@ func StoredPromptID(ctx context.Context, store *state.Store, session, id string)
 		AND kind IN ('queued_prompt', 'prompt', 'dequeued_prompt')
 	)`, session, id).Scan(&exists)
 	return exists, err
+}
+
+// conversationStore is a conversation's persistence adapter. The log's sink (NewConversationLog)
+// stores events with the fold; the adapter stores the rest: the agent snapshot, the remembered
+// permission mode, images, and stored prompt IDs. Work a log callback asks for runs on its one
+// writer goroutine, in order, so no database write runs while the log holds an append.
+//
+// Its fields are guarded by the core's mu; the writer runs jobs with no lock held.
+type conversationStore struct {
+	ctx       context.Context // the worker's, for diagnostics
+	db        *state.Store    // nil until wired: nothing is stored
+	info      session.SessionInfo
+	directory string // the session's directory, which holds its blobs
+	jobs      []func()
+	writing   bool
+}
+
+// wireStore connects the conversation to the state store and the session's directory.
+func (cs *ConversationSession) wireStore(ctx context.Context, db *state.Store, info session.SessionInfo, directory string) {
+	info.ID = filepath.Base(directory)
+	cs.mu.Lock()
+	cs.store.ctx, cs.store.db, cs.store.info, cs.store.directory = ctx, db, info, directory
+	cs.mu.Unlock()
+}
+
+// later queues job for the writer goroutine. The caller holds mu.
+func (cs *ConversationSession) later(job func()) {
+	cs.store.jobs = append(cs.store.jobs, job)
+	if !cs.store.writing {
+		cs.store.writing = true
+		obs.Go("acp.persist", cs.runStoreJobs)
+	}
+}
+
+func (cs *ConversationSession) runStoreJobs() {
+	for {
+		cs.mu.Lock()
+		if len(cs.store.jobs) == 0 {
+			cs.store.writing = false
+			cs.mu.Unlock()
+			return
+		}
+		job := cs.store.jobs[0]
+		cs.store.jobs = cs.store.jobs[1:]
+		cs.mu.Unlock()
+		job()
+	}
+}
+
+// wired is the adapter as wired now.
+func (cs *ConversationSession) wired() conversationStore {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return conversationStore{ctx: cs.store.ctx, db: cs.store.db, info: cs.store.info, directory: cs.store.directory}
+}
+
+// saveSnapshot stores the agent's options and commands for chats that have not started it yet.
+func (cs *ConversationSession) saveSnapshot() {
+	if store := cs.wired(); store.db != nil {
+		persistAgentSnapshot(store.ctx, store.db.DB, store.info, cs)
+	}
+}
+
+// rememberPermissions keeps the chosen permission mode for this agent on every chat and machine.
+func (cs *ConversationSession) rememberPermissions(mode string) {
+	store := cs.wired()
+	if store.db == nil {
+		return
+	}
+	if err := store.db.Mesh().SetSetting(context.Background(), permissionSettingKey(store.info.Harness), mode); err != nil {
+		_, event := obs.Start(store.ctx, "worker", "remember_permissions")
+		event.Fail(err)
+		event.End()
+	}
+}
+
+func permissionSettingKey(harness string) string { return "permission_mode." + harness }
+
+// promptStored reports whether a prompt with this queue ID is already in the stored log.
+func (cs *ConversationSession) promptStored(ctx context.Context, id string) (bool, error) {
+	store := cs.wired()
+	if store.db == nil {
+		return false, nil
+	}
+	return StoredPromptID(ctx, store.db, store.info.ID, id)
+}
+
+// storeImage keeps an image an agent or tool sent in the session's blob store.
+func (cs *ConversationSession) storeImage(data []byte) (string, error) {
+	store := cs.wired()
+	if store.db == nil {
+		return "", errors.New("image storage unavailable")
+	}
+	sha, err := StoreSessionBlob(store.directory, data)
+	switch {
+	case errors.Is(err, ErrSessionBlobQuota):
+		return "", err
+	case err != nil && SniffBlobMIME(data) == "":
+		return "", errors.New("unsupported image type")
+	case err != nil:
+		return "", errors.New("could not store it")
+	}
+	// The image shows on this machine either way; peers find it once its location is recorded.
+	if err := AdvertiseBlob(context.Background(), store.db, store.info.ID, sha, int64(len(data))); err != nil {
+		_, event := obs.Start(store.ctx, "worker", "advertise_blob")
+		event.Set("session_id", store.info.ID)
+		event.Fail(err)
+		event.End()
+	}
+	return sha, nil
 }

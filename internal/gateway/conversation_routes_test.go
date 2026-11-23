@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -74,7 +75,7 @@ func TestStoppedConversationMatchesLiveHistoryAndSince(t *testing.T) {
 		}
 	}
 	filtered := request("?since=1")
-	entries, err := network.ReadConversationNDJSON(filtered.Body)
+	entries, err := readNDJSON(filtered.Body)
 	if err != nil || len(entries) != 2 || entries[0].Seq != 2 || entries[1].Seq != 3 {
 		t.Fatalf("stopped since filter: %+v %v", entries, err)
 	}
@@ -123,7 +124,7 @@ func TestConversationPagesReachTheFirstEventWithoutTheWorker(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("page before %d: %d %s", before, w.Code, w.Body.String())
 		}
-		entries, err := network.ReadConversationNDJSON(w.Body)
+		entries, err := readNDJSON(w.Body)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -158,4 +159,17 @@ func TestConversationPagesReachTheFirstEventWithoutTheWorker(t *testing.T) {
 	if entries, more := page(1); len(entries) != 0 || more {
 		t.Fatalf("nothing is older than the first event: %d %t", len(entries), more)
 	}
+}
+
+// readNDJSON decodes a conversation NDJSON body.
+func readNDJSON(r io.Reader) ([]acp.LogEntry, error) {
+	var entries []acp.LogEntry
+	for decoder := json.NewDecoder(r); decoder.More(); {
+		var entry acp.LogEntry
+		if err := decoder.Decode(&entry); err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
 }

@@ -312,7 +312,7 @@ func TestCancelRemovesAPromptQueuedWhileTheChatStarts(t *testing.T) {
 		t.Fatal(text)
 	}
 	// The worker that starts replays the log: the prompt was queued, then removed, so it is never sent.
-	session := &network.ConversationSession{SeenPrompts: map[string]struct{}{}}
+	session := network.NewConversationSession(nil, nil)
 	rows, err := h.gateway.store.DB.Query("SELECT body FROM conversation_events WHERE session_id='session-new' ORDER BY seq")
 	if err != nil {
 		t.Fatal(err)

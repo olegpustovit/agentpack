@@ -235,7 +235,7 @@ func TestConversationSnapshotRespectsGatewayByteBoundary(t *testing.T) {
 			response := httptest.NewRecorder()
 			ProxyWorkerConversation(response, request, WorkerRecord{Address: strings.TrimPrefix(upstream.URL, "http://")}, "")
 
-			entries, err := ReadConversationNDJSON(bytes.NewReader(response.Body.Bytes()))
+			entries, err := readNDJSON(bytes.NewReader(response.Body.Bytes()))
 			if err != nil {
 				t.Fatalf("snapshot is not valid NDJSON: %v", err)
 			}
@@ -267,7 +267,7 @@ func TestConversationSnapshotRespectsGatewayByteBoundary(t *testing.T) {
 		request := httptest.NewRequest(http.MethodGet, "/api/sessions/session/conversation", nil)
 		response := httptest.NewRecorder()
 		ProxyWorkerConversation(response, request, WorkerRecord{Address: strings.TrimPrefix(upstream.URL, "http://")}, "")
-		entries, err := ReadConversationNDJSON(bytes.NewReader(response.Body.Bytes()))
+		entries, err := readNDJSON(bytes.NewReader(response.Body.Bytes()))
 		if err != nil || response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), first) ||
 			len(entries) != 1 || entries[0].Seq != 1 || response.Header().Get("X-Agentpack-Truncated") != "true" {
 			t.Fatalf("gateway snapshot = status %d, %d bytes, entries=%+v truncated=%q, err=%v", response.Code, response.Body.Len(), entries, response.Header().Get("X-Agentpack-Truncated"), err)
@@ -364,4 +364,17 @@ func TestPackageRestartWaitsForIdleChat(t *testing.T) {
 	if code := restart("restart-operation-0002"); code != http.StatusOK || len(restarted) != 1 {
 		t.Fatalf("idle chat: status %d, restarted %d", code, len(restarted))
 	}
+}
+
+// readNDJSON decodes a conversation NDJSON body.
+func readNDJSON(r io.Reader) ([]acp.LogEntry, error) {
+	var entries []acp.LogEntry
+	for decoder := json.NewDecoder(r); decoder.More(); {
+		var entry acp.LogEntry
+		if err := decoder.Decode(&entry); err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
 }
