@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"encoding/json"
 	"runtime"
 	"slices"
 	"strings"
@@ -129,7 +130,7 @@ func TestNativeGoalUsesAgentCommandAndSnapshots(t *testing.T) {
 	if goal := agent.goalUntil(t, goalIn("active")); goal.Engine != "native" {
 		t.Fatalf("goal = %+v", goal)
 	}
-	if prompt := agent.nextPrompt(t); prompt.Text != "/goal ship it. Done when: tests pass" {
+	if prompt := agent.nextPrompt(t); prompt.Text != "/goal ship it. Done when: tests pass."+nativeGoalDeferral {
 		t.Fatalf("native command = %q", prompt.Text)
 	}
 	snapshot := func(goal any) acp.LogEntry {
@@ -218,9 +219,7 @@ func TestNativeGoalFollowsUnpromptedWork(t *testing.T) {
 }
 
 func TestStopDuringUnpromptedNativeGoalPauses(t *testing.T) {
-	session, agent := newFakeAgentSession(t, entry("available_commands_update", map[string]any{
-		"sessionUpdate": "available_commands_update", "availableCommands": []map[string]string{{"name": "goal", "description": "goal"}},
-	}))
+	session, agent := newFakeAgentSession(t, codexGoalCommand)
 	if err := session.SetGoal(t.Context(), "ship it", "", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -264,9 +263,7 @@ func TestGoalBeyondTheReplayedTailIsRestoredAndClears(t *testing.T) {
 // A stop that lands while the turn loop is between turns pauses the native goal when the loop
 // lets the agent go; it has no turn left whose end would send the pause.
 func TestStopBetweenTurnsPausesNativeGoalOnRelease(t *testing.T) {
-	session, agent := newFakeAgentSession(t, entry("available_commands_update", map[string]any{
-		"sessionUpdate": "available_commands_update", "availableCommands": []map[string]string{{"name": "goal", "description": "goal"}},
-	}))
+	session, agent := newFakeAgentSession(t, codexGoalCommand)
 	if err := session.SetGoal(t.Context(), "ship it", "", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -294,4 +291,133 @@ func TestStopBetweenTurnsPausesNativeGoalOnRelease(t *testing.T) {
 		t.Fatalf("prompt = %q", prompt.Text)
 	}
 	agent.turns <- fakeTurn{}
+}
+
+// codexGoalCommand and claudeGoalCommand are the /goal each adapter advertises: Codex's takes
+// pause and resume, Claude's only an objective or clear.
+var (
+	codexGoalCommand = entry("available_commands_update", map[string]any{"sessionUpdate": "available_commands_update",
+		"availableCommands": []map[string]any{{"name": "goal", "input": map[string]string{"hint": "[<objective>|clear|pause|resume]"}}}})
+	claudeGoalCommand = entry("available_commands_update", map[string]any{"sessionUpdate": "available_commands_update",
+		"availableCommands": []map[string]any{{"name": "goal", "input": map[string]string{"hint": "[<condition> | clear]"}}}})
+)
+
+// claudeGoalCheck is the snapshot Claude's adapter sends each time its goal check blocks a stop.
+func claudeGoalCheck(goal any) []byte {
+	return MustRawJSON(map[string]any{"sessionUpdate": "session_info_update",
+		"_meta": map[string]any{"jetbrains": map[string]any{"air": map[string]any{"goal": goal}}}})
+}
+
+func goalNotices(log *acp.EventLog) (titles []string) {
+	for _, entry := range log.Snapshot() {
+		var notice struct {
+			Title string `json:"title"`
+		}
+		if entry.Kind == "notice" && json.Unmarshal(entry.Payload, &notice) == nil && strings.HasPrefix(notice.Title, "Goal") {
+			titles = append(titles, notice.Title)
+		}
+	}
+	return titles
+}
+
+func goalNow(conv *ConversationSession) session.Goal {
+	conv.mu.Lock()
+	defer conv.mu.Unlock()
+	return *conv.goal
+}
+
+// Stopping a Claude goal clears it in the agent, which has no /goal pause, and keeps it paused
+// here; resuming sets it again.
+func TestStopPausesClaudeGoalByClearing(t *testing.T) {
+	conv, agent := newFakeAgentSession(t, claudeGoalCommand)
+	if err := conv.SetGoal(t.Context(), "ship it", "tests pass", nil); err != nil {
+		t.Fatal(err)
+	}
+	command := agent.nextPrompt(t).Text
+	if err := conv.Cancel(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	<-agent.cancels
+	agent.turns <- fakeTurn{stop: "cancelled"}
+	agent.goalUntil(t, goalIn("paused"))
+	if prompt := agent.nextPrompt(t); prompt.Text != "/goal clear" {
+		t.Fatalf("pause sent %q", prompt.Text)
+	}
+	agent.log.Append("session_info_update", 1, claudeGoalCheck(nil)) // the agent's answer to the clear
+	agent.turns <- fakeTurn{}
+	if goal := goalNow(conv); goal.State != "paused" {
+		t.Fatalf("the agent's clear dropped the paused goal: %+v", goal)
+	}
+	if titles := goalNotices(agent.log); !slices.Equal(titles, []string{goalInterruptedNotice}) {
+		t.Fatalf("notices = %q", titles)
+	}
+	if err := conv.UpdateGoal(t.Context(), GoalChange{Action: "resume"}); err != nil {
+		t.Fatal(err)
+	}
+	if prompt := agent.nextPrompt(t); prompt.Text != command {
+		t.Fatalf("resume sent %q, want %q", prompt.Text, command)
+	}
+	agent.turns <- fakeTurn{}
+}
+
+// A message from the person during a native goal pauses it first, so the agent's goal check
+// cannot hold the agent against them.
+func TestUserMessagePausesNativeGoal(t *testing.T) {
+	conv, agent := newFakeAgentSession(t, claudeGoalCommand)
+	if err := conv.SetGoal(t.Context(), "ship it", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	agent.nextPrompt(t) // Claude's goal turn stays open
+	if _, err := startPrompt(t.Context(), conv, acp.PromptInput{Text: "I'm doing it"}, false); err != nil {
+		t.Fatal(err)
+	}
+	agent.goalUntil(t, goalIn("paused"))
+	agent.turns <- fakeTurn{}
+	for _, want := range []string{"/goal clear", "I'm doing it"} {
+		if prompt := agent.nextPrompt(t); prompt.Text != want {
+			t.Fatalf("sent %q, want %q", prompt.Text, want)
+		}
+		agent.turns <- fakeTurn{}
+	}
+	if titles := goalNotices(agent.log); !slices.Equal(titles, []string{goalInterruptedNotice}) {
+		t.Fatalf("notices = %q", titles)
+	}
+}
+
+// A goal check that blocks the stop with the same reason while the agent does nothing is stopped
+// after goalStopRuns blocks, once.
+func TestRepeatingNativeGoalCheckStops(t *testing.T) {
+	conv, agent := newFakeAgentSession(t, claudeGoalCommand)
+	if err := conv.SetGoal(t.Context(), "ship it", "tests pass", nil); err != nil {
+		t.Fatal(err)
+	}
+	agent.nextPrompt(t)
+	check := func(iteration int, reason string) {
+		agent.log.Append("session_info_update", 1, claudeGoalCheck(map[string]any{"objective": "ship it", "status": "active", "iterations": iteration, "lastReason": reason}))
+	}
+	check(1, "Tests have not run yet.")
+	agent.log.Append("tool_call", 1, MustRawJSON(map[string]string{"toolCallId": "t"}))
+	check(2, "Not satisfied: the user is doing it; tests still unverified.") // the agent worked
+	check(3, "Not satisfied: the user is doing it, tests still unverified")
+	check(4, "Not satisfied: the user is doing it; tests still unverified!")
+	if goal := goalNow(conv); goal.State != "active" {
+		t.Fatalf("stopped early: %+v", goal)
+	}
+	check(5, "Not satisfied: the user is doing it; tests are still unverified.") // the third idle cycle
+	if goal := agent.goalUntil(t, goalIn("blocked")); !strings.Contains(goal.LastReason, "user is doing it") {
+		t.Fatalf("goal = %+v", goal)
+	}
+	check(6, "Not satisfied: the user is doing it; tests still unverified.") // the agent catching up
+	agent.turns <- fakeTurn{}
+	if prompt := agent.nextPrompt(t); prompt.Text != "/goal clear" {
+		t.Fatalf("sent %q", prompt.Text)
+	}
+	agent.log.Append("session_info_update", 1, claudeGoalCheck(nil))
+	agent.turns <- fakeTurn{}
+	if goal := goalNow(conv); goal.State != "blocked" {
+		t.Fatalf("goal = %+v", goal)
+	}
+	if titles := goalNotices(agent.log); len(titles) != 1 || !strings.HasPrefix(titles[0], "Goal unmet") {
+		t.Fatalf("notices = %q", titles)
+	}
 }

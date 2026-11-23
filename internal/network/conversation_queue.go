@@ -44,29 +44,30 @@ type turnRunner struct {
 	queuesPrompts bool // the agent takes a prompt in while its turn runs (harness.ACPLaunch.QueuesPrompts)
 	delivering    int  // prompts the agent has not answered yet
 	// steer joins the running turn (harness.ACPLaunch.Steers); nil when steering must cancel.
-	steer          func(context.Context, acp.PromptInput) (bool, error)
-	delivered      chan struct{}
-	userCancelled  bool // the user stopped the running turn
-	archived       bool
-	now            func() time.Time
-	after          func(time.Duration, func()) // schedules network retries; tests replace it
-	networkRetries int                         // retries since the last turn that reached the agent's service
-	turnsEnded     int                         // a retry is dropped when another turn ended meanwhile
-	goal           *session.Goal
-	goalCleared    *session.Goal // the last goal, kept to log its "cleared" state
-	goalPublished  string
-	goalDirty      bool // the agent reported a native goal snapshot
-	goalSettled    bool // the native goal was marked met because the agent went idle
-	goalPauseDue   bool // the user stopped unprompted native goal work; tell the agent to pause
-	// goalPauseOnRelease is goalPauseDue for a turn loop that was between turns at the time.
-	goalPauseOnRelease bool
-	nativeGoal         bool // the agent advertises a /goal command
-	turnText           []byte
-	turnTools          int
-	goalBlocked        int
-	goalIdle           int
-	usageUsed          int64
-	usageCost          float64
+	steer           func(context.Context, acp.PromptInput) (bool, error)
+	delivered       chan struct{}
+	userCancelled   bool // the user stopped the running turn
+	archived        bool
+	now             func() time.Time
+	after           func(time.Duration, func()) // schedules network retries; tests replace it
+	networkRetries  int                         // retries since the last turn that reached the agent's service
+	turnsEnded      int                         // a retry is dropped when another turn ended meanwhile
+	goal            *session.Goal
+	goalCleared     *session.Goal // the last goal, kept to log its "cleared" state
+	goalPublished   string
+	goalDirty       bool   // the agent reported a native goal snapshot
+	goalSettled     bool   // the native goal was marked met because the agent went idle
+	goalPauseDue    bool   // the worker paused the native goal from a log entry; tell the agent
+	goalNoticeDue   string // the notice to post with it
+	goalIter        int    // the native goal's last reported iteration
+	nativeGoal      bool   // the agent advertises a /goal command
+	nativeGoalPause bool   // and its /goal takes pause
+	turnText        []byte
+	turnTools       int
+	goalBlocked     int
+	goalIdle        int
+	usageUsed       int64
+	usageCost       float64
 	// An unprompted cycle (a native goal, a Stop-hook continuation) is closed with a synthetic
 	// turn_end once its last usage_update stays quiet for unpromptedUsageSettle.
 	unpromptedUsageSettle  time.Duration
@@ -395,11 +396,8 @@ func (cs *ConversationSession) logDequeued(id, reason string) {
 func (cs *ConversationSession) runTurns(ctx context.Context, input *acp.PromptInput, first chan<- error) {
 	for {
 		if input == nil {
-			next, ok, pause := cs.nextPrompt()
+			next, ok := cs.nextPrompt()
 			if !ok {
-				if pause {
-					_, _, _ = cs.Submit(ctx, acp.PromptInput{Text: "/goal pause"}, false)
-				}
 				return
 			}
 			input = &next
@@ -430,28 +428,26 @@ func (cs *ConversationSession) runTurns(ctx context.Context, input *acp.PromptIn
 }
 
 // nextPrompt picks what to send after a turn, or releases the agent. It never sends while the
-// user must answer a request, after the agent exited, or once the chat is archived. pause asks
-// the caller to tell the agent to pause its native goal once released.
-func (cs *ConversationSession) nextPrompt() (_ acp.PromptInput, ok, pause bool) {
+// user must answer a request, after the agent exited, or once the chat is archived.
+func (cs *ConversationSession) nextPrompt() (_ acp.PromptInput, ok bool) {
 	cs.queueMu.Lock()
 	defer cs.queueMu.Unlock()
 	cs.mu.Lock()
-	pause, cs.goalPauseOnRelease = cs.goalPauseOnRelease, false
 	if cs.closedErr() != nil || cs.state == "needs_you" || len(cs.Queue) == 0 && !cs.goalWantsTurn() {
 		cs.running = false
 		cs.mu.Unlock()
-		return acp.PromptInput{}, false, pause && cs.closedErr() == nil
+		return acp.PromptInput{}, false
 	}
 	cs.userCancelled = false
 	if len(cs.Queue) == 0 {
 		prompt := goalContinuation(cs.goal)
 		cs.mu.Unlock()
-		return acp.PromptInput{Text: prompt}, true, false
+		return acp.PromptInput{Text: prompt}, true
 	}
 	item := cs.Queue[0]
 	cs.Queue = cs.Queue[1:]
 	cs.mu.Unlock()
-	return item.Input, true, false
+	return item.Input, true
 }
 
 // maybeDrain starts the turn loop when the agent is free and a queued prompt or goal turn is due.

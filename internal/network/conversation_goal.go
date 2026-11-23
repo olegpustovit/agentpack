@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -44,12 +44,76 @@ func (cs *ConversationSession) goalWantsTurn() bool {
 	return cs.goal != nil && cs.goal.State == "active" && cs.goal.Engine == "gateway" && !cs.userCancelled
 }
 
+// nativeGoalDeferral tells the agent's goal judge (Claude's Stop hook evaluates this text) that a
+// person taking over ends the goal for now, so it stops blocking the agent's turns.
+const nativeGoalDeferral = " If the user explicitly stops the work or puts it on hold, the goal is deferred: let the agent stop. Require no evidence beyond this literal condition."
+
 func nativeGoalCommand(objective, checks string) string {
 	command := "/goal " + objective
 	if checks != "" {
-		command += ". Done when: " + checks
+		command += ". Done when: " + checks + "." + nativeGoalDeferral
 	}
 	return command
+}
+
+// sameGoalReason reports whether two goal-check reasons say nearly the same thing: at least 80%
+// of their words in common.
+func sameGoalReason(a, b string) bool {
+	words := func(text string) map[string]bool {
+		set := map[string]bool{}
+		for _, word := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+			set[word] = true
+		}
+		return set
+	}
+	left, right := words(a), words(b)
+	common := 0
+	for word := range left {
+		if right[word] {
+			common++
+		}
+	}
+	union := len(left) + len(right) - common
+	return union > 0 && common*5 >= union*4
+}
+
+// pauseNativeGoal tells the agent to stop pursuing its goal: /goal pause where its /goal takes
+// that (Codex), else /goal clear (Claude's takes only an objective or clear). The goal stays
+// paused here either way, so the person can resume it. A steer reaches an agent mid-turn, which
+// a goal that blocks every stop never ends.
+func (cs *ConversationSession) pauseNativeGoal(ctx context.Context) {
+	cs.mu.Lock()
+	command, steer := "/goal clear", cs.steer != nil
+	if cs.nativeGoalPause {
+		command = "/goal pause"
+	}
+	cs.mu.Unlock()
+	_, _, _ = cs.Submit(ctx, acp.PromptInput{Text: command}, steer)
+}
+
+func (cs *ConversationSession) goalNotice(title string) {
+	cs.Log.Append("notice", cs.clock().UnixMilli(), MustRawJSON(map[string]string{
+		"sessionUpdate": "notice", "severity": "info", "title": title,
+		"description": "Type /goal resume to continue it, or /goal clear to drop it.",
+	}))
+}
+
+const goalInterruptedNotice = "Goal paused because you interrupted"
+
+// InterruptGoal pauses an active native goal when the person sends a message: the agent's own
+// goal would otherwise block every stop until its condition holds, overriding them.
+func (cs *ConversationSession) InterruptGoal(ctx context.Context) {
+	cs.mu.Lock()
+	goal := cs.goal
+	if goal == nil || goal.Engine != "native" || goal.State != "active" || cs.closedErr() != nil {
+		cs.mu.Unlock()
+		return
+	}
+	setGoalState(goal, "paused", "paused because you sent a message", cs.clock().UnixMilli())
+	cs.mu.Unlock()
+	cs.publishGoal()
+	cs.goalNotice(goalInterruptedNotice)
+	cs.pauseNativeGoal(ctx)
 }
 
 // goalContinuation is the gateway engine's turn prompt, modelled on Codex's goal continuation.
@@ -148,15 +212,19 @@ func (cs *ConversationSession) observeGoalEntry(entry acp.LogEntry) {
 	case "available_commands_update":
 		var update struct {
 			AvailableCommands []struct {
-				Name string `json:"name"`
+				Name  string `json:"name"`
+				Input struct {
+					Hint string `json:"hint"`
+				} `json:"input"`
 			} `json:"availableCommands"`
 		}
 		if json.Unmarshal(entry.Payload, &update) == nil {
-			cs.nativeGoal = slices.ContainsFunc(update.AvailableCommands, func(command struct {
-				Name string `json:"name"`
-			}) bool {
-				return strings.TrimPrefix(command.Name, "/") == "goal"
-			})
+			cs.nativeGoal, cs.nativeGoalPause = false, false
+			for _, command := range update.AvailableCommands {
+				if strings.TrimPrefix(command.Name, "/") == "goal" {
+					cs.nativeGoal, cs.nativeGoalPause = true, strings.Contains(command.Input.Hint, "pause")
+				}
+			}
 		}
 	case "session_info_update":
 		var update struct {
@@ -174,10 +242,13 @@ func (cs *ConversationSession) observeGoalEntry(entry acp.LogEntry) {
 	}
 }
 
-// applyNativeGoal follows the agent's own goal snapshot. The caller holds mu.
+// applyNativeGoal follows the agent's own goal snapshot. A goal this worker paused or blocked
+// stays so until the person resumes it: the agent's clear or a late active snapshot is only the
+// agent catching up. The caller holds mu.
 func (cs *ConversationSession) applyNativeGoal(raw json.RawMessage, now int64) {
+	held := cs.goal != nil && (cs.goal.State == "paused" || cs.goal.State == "blocked")
 	if string(raw) == "null" {
-		if cs.goal != nil {
+		if cs.goal != nil && !held {
 			cleared := *cs.goal
 			setGoalState(&cleared, "cleared", "", now)
 			cs.goal, cs.goalCleared, cs.goalDirty = nil, &cleared, true
@@ -195,7 +266,7 @@ func (cs *ConversationSession) applyNativeGoal(raw json.RawMessage, now int64) {
 		return
 	}
 	state := map[string]string{"active": "active", "paused": "paused", "blocked": "blocked", "limited": "limited", "complete": "met"}[snapshot.Status]
-	if state == "" {
+	if state == "" || held && state == "active" {
 		return
 	}
 	goal := cs.goal
@@ -210,9 +281,29 @@ func (cs *ConversationSession) applyNativeGoal(raw json.RawMessage, now int64) {
 		goal = &session.Goal{Engine: "native", State: "paused", StartedAt: started}
 		cs.goal = goal
 	}
-	if snapshot.Objective != "" {
+	// Claude reports the whole condition sent, done-when criteria included.
+	if snapshot.Objective != "" && (goal.Objective == "" || !strings.HasPrefix(snapshot.Objective, goal.Objective)) {
 		goal.Objective = snapshot.Objective
 	}
+	// Each new iteration is the goal check blocking the agent's stop. The same reason again after
+	// a cycle with no tool calls is a check the agent cannot satisfy (one that ignores the person
+	// taking over): stop it rather than loop.
+	if goal.State == "active" && state == "active" && snapshot.Iterations > cs.goalIter && snapshot.LastReason != "" {
+		switch {
+		case cs.turnTools > 0:
+			cs.goalIdle = 0
+		case sameGoalReason(goal.LastReason, snapshot.LastReason):
+			cs.goalIdle++
+		default:
+			cs.goalIdle = 1
+		}
+		cs.turnTools = 0
+		if cs.goalIdle >= goalStopRuns {
+			state = "blocked"
+			cs.goalPauseDue, cs.goalNoticeDue = true, "Goal unmet: the goal check kept repeating itself, so it was stopped"
+		}
+	}
+	cs.goalIter = max(cs.goalIter, snapshot.Iterations)
 	if snapshot.Iterations > goal.Turns {
 		goal.Turns = snapshot.Iterations
 	}
@@ -238,9 +329,7 @@ func (cs *ConversationSession) followNativeGoal(entry acp.LogEntry, state string
 	case state == string(StateIdle) && cs.state == string(StateWorking) && goal.State == "active" && cs.userCancelled:
 		// A prompted turn is paused by finishTurn; unprompted work has no turn to finish.
 		setGoalState(goal, "paused", "stopped by the user", entry.TS)
-		cs.goalDirty, cs.goalPauseDue = true, !cs.running
-		// A turn loop between turns has no turn left to finish: it pauses the agent as it lets go.
-		cs.goalPauseOnRelease = cs.running && cs.delivering == 0
+		cs.goalDirty, cs.goalPauseDue, cs.goalNoticeDue = true, true, goalInterruptedNotice
 	case state == string(StateIdle) && cs.state == string(StateWorking) && goal.State == "active" &&
 		cs.stopReason != "error" && cs.stopReason != "failed" && cs.stopReason != "cancelled":
 		setGoalState(goal, "met", "the agent finished", entry.TS)
@@ -276,11 +365,14 @@ func (cs *ConversationSession) finishTurn(ctx context.Context, err error) {
 	default:
 		cs.applyGatewayStopRules(goal, now)
 	}
-	paused := native && goal.State == "paused"
+	interrupted := cs.userCancelled
 	cs.mu.Unlock()
 	cs.publishGoal()
-	if paused {
-		_, _, _ = cs.Submit(ctx, acp.PromptInput{Text: "/goal pause"}, false)
+	if interrupted {
+		cs.goalNotice(goalInterruptedNotice)
+		if native {
+			cs.pauseNativeGoal(ctx)
+		}
 	}
 }
 
@@ -356,7 +448,7 @@ func (cs *ConversationSession) SetGoal(ctx context.Context, objective, checks st
 	}
 	cs.goal = &session.Goal{Objective: objective, Checks: checks, State: "active", Engine: engine,
 		StartedAt: now, ResumedAt: now, Limits: limits, UpdatedAt: now}
-	cs.goalBlocked, cs.goalIdle, cs.goalSettled = 0, 0, false
+	cs.goalBlocked, cs.goalIdle, cs.goalSettled, cs.goalIter = 0, 0, false, 0
 	cs.mu.Unlock()
 	cs.publishGoal()
 	if engine == "native" {
@@ -387,12 +479,12 @@ func (cs *ConversationSession) UpdateGoal(ctx context.Context, change GoalChange
 		return err
 	}
 	now := cs.clock().UnixMilli()
-	command := ""
+	command, pause := "", false
 	switch change.Action {
 	case "pause":
 		if goal.State == "active" {
 			setGoalState(goal, "paused", "paused by the user", now)
-			command = "/goal pause"
+			pause = true
 		}
 	case "resume":
 		if goal.State != "active" {
@@ -400,6 +492,10 @@ func (cs *ConversationSession) UpdateGoal(ctx context.Context, change GoalChange
 			goal.LastReason = ""
 			cs.goalBlocked, cs.goalIdle, cs.userCancelled = 0, 0, false
 			command = "/goal resume"
+			if !cs.nativeGoalPause {
+				// Pausing cleared it from an agent without /goal pause; set it again.
+				command = nativeGoalCommand(goal.Objective, goal.Checks)
+			}
 		}
 	case "":
 		if change.Objective != nil && *change.Objective != goal.Objective || change.Checks != nil && *change.Checks != goal.Checks {
@@ -422,6 +518,10 @@ func (cs *ConversationSession) UpdateGoal(ctx context.Context, change GoalChange
 	native := goal.Engine == "native"
 	cs.mu.Unlock()
 	cs.publishGoal()
+	if native && pause {
+		cs.pauseNativeGoal(ctx)
+		return nil
+	}
 	if native && command != "" {
 		_, _, err := cs.Submit(ctx, acp.PromptInput{Text: command}, false)
 		return err
