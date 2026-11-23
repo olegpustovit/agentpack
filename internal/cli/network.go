@@ -53,7 +53,8 @@ func (runner Runner) runSessionWorker(ctx context.Context, arguments []string) (
 	})
 }
 
-func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, error) {
+func (runner Runner) runGateway(ctx context.Context, invocation Invocation) (int, error) {
+	arguments := invocation.Args
 	if len(arguments) > 0 && arguments[0] == "sharing" {
 		return runner.runSharing(ctx, arguments[1:])
 	}
@@ -65,7 +66,7 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 		return 1, err
 	}
 	if arguments[0] == "main" {
-		return runner.runGatewayMain(ctx, home, arguments[1:])
+		return runner.runGatewayMain(ctx, home, arguments[1:], boolFlag(invocation, "empty"))
 	}
 	if arguments[0] == "join" {
 		return runner.runGatewayJoin(ctx, home, arguments[1:])
@@ -78,50 +79,16 @@ func (runner Runner) runGateway(ctx context.Context, arguments []string) (int, e
 		return 1, err
 	}
 	action, args := arguments[0], arguments[1:]
-	address, args, _, err := takeFlag(args, "--listen")
-	if err != nil {
-		return 2, err
+	address := ""
+	if action == "serve" {
+		address = stringFlag(invocation, "listen")
 	}
 	if err = noArgs(args); err != nil {
 		return 2, err
 	}
 	switch action {
 	case "serve":
-		ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-		options := network.GatewayOptions{Home: home, Address: address, PublicURL: os.Getenv("AGENTPACK_PUBLIC_URL"), Assets: network.WebAssets(), Version: Version}
-		options.Start = func(ctx context.Context, info network.SessionInfo, forkSessionID string) (string, error) {
-			return runner.startRemoteSession(ctx, home, executable, info, forkSessionID)
-		}
-		options.Update = runner.updateGateway
-		options.Packages = func(ctx context.Context, directory string) (network.ProjectContents, error) {
-			packContext, err := resolveInvocationContext(Invocation{Global: Global{WorkspaceRoot: directory}}, true)
-			if err != nil {
-				return network.ProjectContents{}, err
-			}
-			locked, err := lockfile.LoadUnguarded(paths.LockPath(packContext.DefinitionRoot))
-			if err != nil && !errors.Is(err, os.ErrNotExist) {
-				return network.ProjectContents{}, err
-			}
-			// A folder without agentpack.toml still has the implicit default mode.
-			project, _ := manifest.Load(packContext.DefinitionRoot)
-			contents := projectContents(locked, project)
-			// The Library matches a remote server to its shared login by URL and starts one from it.
-			if plan, err := staging.CollectMCPPlan(packContext.WorkspaceRoot, locked, project, nil); err == nil {
-				for i, server := range contents.MCP {
-					contents.MCP[i].URL = mcp.LoginURL(plan.Entries[server.Name].Server)
-				}
-			}
-			return contents, nil
-		}
-		options.Install = runner.installNetworkPackage
-		options.InstallMCP = runner.installNetworkMCP
-		options.Library, err = runner.networkLibrary(home)
-		if err != nil {
-			return 1, err
-		}
-		serveErr := network.ServeGateway(ctx, options)
-		return 0, errors.Join(serveErr, options.Library.Store.Close())
+		return runner.serveGateway(ctx, home, executable, address)
 	case "restart-after-update":
 		// The public deployment owns its fixed listener and service environment.
 		if runtime.GOOS == "linux" && os.Getenv("AGENTPACK_PUBLIC_URL") != "" {
@@ -360,4 +327,43 @@ func (runner Runner) runSessionSignal(arguments []string) (int, error) {
 		return 1, err
 	}
 	return 0, nil
+}
+
+func (runner Runner) serveGateway(ctx context.Context, home, executable, address string) (int, error) {
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	options := network.GatewayOptions{Home: home, Address: address, PublicURL: os.Getenv("AGENTPACK_PUBLIC_URL"), Assets: network.WebAssets(), Version: Version}
+	options.Start = func(ctx context.Context, info network.SessionInfo, forkSessionID string) (string, error) {
+		return runner.startRemoteSession(ctx, home, executable, info, forkSessionID)
+	}
+	options.Update = runner.updateGateway
+	options.Packages = func(ctx context.Context, directory string) (network.ProjectContents, error) {
+		packContext, err := resolveInvocationContext(Invocation{Global: Global{WorkspaceRoot: directory}}, true)
+		if err != nil {
+			return network.ProjectContents{}, err
+		}
+		locked, err := lockfile.LoadUnguarded(paths.LockPath(packContext.DefinitionRoot))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return network.ProjectContents{}, err
+		}
+		// A folder without agentpack.toml still has the implicit default mode.
+		project, _ := manifest.Load(packContext.DefinitionRoot)
+		contents := projectContents(locked, project)
+		// The Library matches a remote server to its shared login by URL and starts one from it.
+		if plan, err := staging.CollectMCPPlan(packContext.WorkspaceRoot, locked, project, nil); err == nil {
+			for i, server := range contents.MCP {
+				contents.MCP[i].URL = mcp.LoginURL(plan.Entries[server.Name].Server)
+			}
+		}
+		return contents, nil
+	}
+	options.Install = runner.installNetworkPackage
+	options.InstallMCP = runner.installNetworkMCP
+	var err error
+	options.Library, err = runner.networkLibrary(home)
+	if err != nil {
+		return 1, err
+	}
+	serveErr := network.ServeGateway(ctx, options)
+	return 0, errors.Join(serveErr, options.Library.Store.Close())
 }

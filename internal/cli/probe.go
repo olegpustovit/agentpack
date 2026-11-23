@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 
@@ -11,38 +12,17 @@ import (
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
-func (runner Runner) runProbe(ctx context.Context, definitionRoot, workspaceRoot, mode string, arguments []string, quiet bool) (int, error) {
-	args, jsonOut := takeBool(arguments, "--json")
-	args, strict := takeBool(args, "--strict-external")
-	policyName, args, _, err := takeFlag(args, "--policy")
+func (runner Runner) runProbe(ctx context.Context, definitionRoot, workspaceRoot string, invocation Invocation) (int, error) {
+	mode, quiet, strict, jsonOut := invocation.Global.Mode, invocation.Global.Quiet, invocation.Global.StrictExternal, boolFlag(invocation, "json")
+	policy, err := environment.ParsePolicy(stringFlag(invocation, "policy"))
 	if err != nil {
 		return 2, err
 	}
-	policy, err := environment.ParsePolicy(policyName)
-	if err != nil {
-		return 2, err
-	}
-	agent, args, _, err := takeFlag(args, "--agent")
-	if err != nil {
-		return 2, err
-	}
-	if agent == "" {
-		agent, args, _, err = takeFlag(args, "--target")
-		if err != nil {
-			return 2, err
-		}
-	}
+	agent := cmp.Or(stringFlag(invocation, "agent"), stringFlag(invocation, "target"))
 	if agent == "" {
 		return 2, fmt.Errorf("probe requires --agent claude|codex|opencode")
 	}
-	requestedMode, args, _, err := takeFlag(args, "--mode")
-	if err != nil {
-		return 2, err
-	}
-	if requestedMode != "" {
-		mode = requestedMode
-	}
-	if err := noArgs(args); err != nil {
+	if err := noArgs(invocation.Args); err != nil {
 		return 2, err
 	}
 	target, err := base.ParseTarget(agent)

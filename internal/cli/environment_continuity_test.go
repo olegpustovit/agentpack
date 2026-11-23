@@ -198,7 +198,7 @@ func TestRestoredExternalDefinitionsKeepNativeStateAndIsolateModes(t *testing.T)
 	t.Setenv("CODEX_PATH", os.Args[0])
 	var probeOutput bytes.Buffer
 	runner := Runner{Service: service, Stdout: &probeOutput}
-	code, err := runner.runProbe(context.Background(), first.definition, first.workspace, "default", []string{"--agent", "codex", "--strict-external", "--json"}, false)
+	code, err := probeLeaf(runner, first.definition, first.workspace, "default", "codex")
 	if code != 5 || err == nil || !strings.Contains(probeOutput.String(), "PROBE_FAILED") {
 		t.Fatalf("native probe failure was not reported: code=%d err=%v output=%s", code, err, probeOutput.String())
 	}

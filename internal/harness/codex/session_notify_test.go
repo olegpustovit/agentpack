@@ -26,7 +26,7 @@ func TestSessionNotifyChainsTheUsersNotify(t *testing.T) {
 		want         []string
 	}{
 		{"no config", "", report},
-		{"user notify", `notify = ["notify-send", "Codex \"done\""]` + "\n", append(append(append([]string(nil), report...), "--then"), "notify-send", `Codex "done"`)},
+		{"user notify", `notify = ["notify-send", "Codex \"done\""]` + "\n", append(append(append([]string(nil), report...), "--"), "notify-send", `Codex "done"`)},
 		{"notify Codex would reject", `notify = ["a", 1]` + "\n", report},
 	} {
 		t.Run(c.name, func(t *testing.T) {

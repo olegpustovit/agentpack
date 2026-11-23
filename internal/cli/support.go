@@ -6,24 +6,14 @@ import (
 	"github.com/olegpustovit/agentpack/internal/environment"
 )
 
-func (runner Runner) runSupport(workspace string, arguments []string, quiet bool) (int, error) {
-	if len(arguments) == 0 {
+func (runner Runner) runSupport(workspace string, invocation Invocation) (int, error) {
+	if first(invocation.Args) != "export" {
 		return 2, fmt.Errorf("support requires an action (export)")
 	}
-	switch arguments[0] {
-	case "export":
-		return runner.supportExport(workspace, arguments[1:], quiet)
-	default:
-		return 2, fmt.Errorf("unknown support action %q", arguments[0])
-	}
+	return runner.supportExport(workspace, invocation.Args[1:], stringFlag(invocation, "output"), boolFlag(invocation, "json"), invocation.Global.Quiet)
 }
 
-func (runner Runner) supportExport(workspace string, arguments []string, quiet bool) (int, error) {
-	output, args, _, err := takeFlag(arguments, "--output")
-	if err != nil {
-		return 2, err
-	}
-	args, jsonOut := takeBool(args, "--json")
+func (runner Runner) supportExport(workspace string, args []string, output string, jsonOut, quiet bool) (int, error) {
 	if len(args) != 1 {
 		return 2, fmt.Errorf("support export requires RECEIPT_ID")
 	}
