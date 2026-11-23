@@ -16,6 +16,8 @@ import (
 	sdkacp "github.com/coder/acp-go-sdk"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
@@ -303,13 +305,13 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 		return nil, issue, err
 	})
 	addTool(server, "list_nodes", "List computers explicitly available through this personal tailnet gateway.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, struct {
-		Nodes []TailnetNode `json:"nodes"`
+		Nodes []mesh.Node `json:"nodes"`
 	}, error) {
 		var out struct {
-			Nodes []TailnetNode `json:"nodes"`
+			Nodes []mesh.Node `json:"nodes"`
 		}
 		var err error
-		out.Nodes, err = callAPI[[]TailnetNode](ctx, m, "", "GET", "/api/nodes", nil)
+		out.Nodes, err = callAPI[[]mesh.Node](ctx, m, "", "GET", "/api/nodes", nil)
 		return nil, out, err
 	})
 	addTool(server, "list_sessions", "List agent sessions with their state, newest first. Helpers carry the parent_id of the chat that started them.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {

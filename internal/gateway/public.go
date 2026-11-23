@@ -18,10 +18,12 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/ipn"
+
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/state"
-	"tailscale.com/ipn"
 )
 
 // publicAccess is the Public access switch: an HTTPS origin served beside the loopback one.
@@ -280,7 +282,7 @@ func (g *Gateway) publicStatus(ctx context.Context) publicStatus {
 		candidate = forwarded[0]
 	} else {
 		if serve == nil {
-			serve = tailscaleLocal.GetServeConfig
+			serve = mesh.Tailscale.GetServeConfig
 		}
 		ctx, cancel := context.WithTimeout(ctx, time.Second)
 		defer cancel()

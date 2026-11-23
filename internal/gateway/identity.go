@@ -4,13 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"github.com/olegpustovit/agentpack/internal/network"
-	"github.com/olegpustovit/agentpack/internal/session"
 	"net/http"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
+	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 type tailnetSelf struct{ ID, User, Name string }
@@ -31,7 +33,7 @@ func (g *Gateway) selfIdentity(ctx context.Context) tailnetSelf {
 		return g.identitySelf
 	}
 	var self tailnetSelf
-	if status, err := tailnetSnapshot(ctx); err == nil {
+	if status, err := mesh.Snapshot(ctx); err == nil {
 		self.ID = status.Self.ID
 		self.Name = status.Self.HostName
 		self.User = status.User[strconv.FormatInt(status.Self.UserID, 10)].LoginName
@@ -140,8 +142,8 @@ func (g *Gateway) nodeID(ctx context.Context) (string, error) {
 	return g.store.NodeID(ctx)
 }
 
-// bindTailnetNode publishes the stable identity after the one-time store migration.
-func (g *Gateway) bindTailnetNode(ctx context.Context, stable string) error {
+// BindNode publishes the stable identity after the one-time store migration.
+func (g *Gateway) BindNode(ctx context.Context, stable string) error {
 	id, err := g.nodeID(ctx)
 	if err != nil || id == stable {
 		return err

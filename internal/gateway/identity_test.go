@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -56,11 +57,11 @@ func seedFolder(t *testing.T, home string) string {
 func TestIdentityWithoutTailscaleReportsSignedInEmail(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "unavailable", 503) }))
 	defer server.Close()
-	tailscaleLocal = local.Client{UseSocketOnly: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	mesh.Tailscale = local.Client{UseSocketOnly: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		var dialer net.Dialer
 		return dialer.DialContext(ctx, "tcp", server.Listener.Addr().String())
 	}}
-	t.Cleanup(func() { tailscaleLocal = local.Client{} })
+	t.Cleanup(func() { mesh.Tailscale = local.Client{} })
 	home := t.TempDir()
 	g, origin := identityGateway(t, home, nil)
 	r := httptest.NewRequest("GET", origin.String()+"/api/identity", nil)
@@ -653,7 +654,7 @@ func TestProxyUsesAuthenticatedAccountInsteadOfCallerHeader(t *testing.T) {
 		if account {
 			r = r.WithContext(session.WithActor(r.Context(), session.BrowserActor(testBrowserEmail)))
 		}
-		g.proxyTailnetTo(httptest.NewRecorder(), r, "remote", target)
+		mesh.ProxyTo(httptest.NewRecorder(), r, g, "remote", target)
 		email := <-got
 		server.Close()
 		want := ""
@@ -689,19 +690,19 @@ func TestTailnetWhoisIsCachedButFailuresAreNot(t *testing.T) {
 		_, _ = w.Write([]byte(`{"Node":{"StableID":"n1","ComputedName":"peer"},"UserProfile":{"LoginName":"owner@example.com"}}`))
 	}))
 	defer server.Close()
-	tailscaleLocal = local.Client{UseSocketOnly: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	mesh.Tailscale = local.Client{UseSocketOnly: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		var dialer net.Dialer
 		return dialer.DialContext(ctx, "tcp", server.Listener.Addr().String())
 	}}
-	t.Cleanup(func() { tailscaleLocal = local.Client{} })
+	t.Cleanup(func() { mesh.Tailscale = local.Client{} })
 	g := &Gateway{}
 	address := netip.MustParseAddr("100.64.0.1")
-	if _, err := g.cachedTailnetWhois(t.Context(), address); err == nil {
+	if _, err := g.tailnet.Whois(t.Context(), address); err == nil {
 		t.Fatal("failure was not reported")
 	}
 	failing.Store(false)
 	for range 3 {
-		identity, err := g.cachedTailnetWhois(t.Context(), address)
+		identity, err := g.tailnet.Whois(t.Context(), address)
 		if err != nil || identity.Node.StableID != "n1" {
 			t.Fatalf("identity %+v err %v", identity, err)
 		}

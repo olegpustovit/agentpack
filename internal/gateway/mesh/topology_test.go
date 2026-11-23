@@ -1,4 +1,4 @@
-package gateway
+package mesh
 
 import (
 	"context"
@@ -9,11 +9,11 @@ import (
 )
 
 // topologyFixture has one peer per state. Probes are only allowed for "reach" and "relayed".
-func topologyFixture() tailnetStatus {
+func topologyFixture() Status {
 	seen := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
-	return tailnetStatus{
-		Self: &tailnetPeer{ID: "self", HostName: "laptop", OS: "linux", Relay: "fra", UserID: 7},
-		Peer: map[string]*tailnetPeer{
+	return Status{
+		Self: &Peer{ID: "self", HostName: "laptop", OS: "linux", Relay: "fra", UserID: 7},
+		Peer: map[string]*Peer{
 			"reach":    {ID: "reach", HostName: "alpha", OS: "macOS", UserID: 7, Online: true, TailscaleIPs: []string{"100.100.1.2"}, CurAddr: "203.0.113.5:41641", Relay: "fra", LastSeen: seen},
 			"relayed":  {ID: "relayed", HostName: "bravo", OS: "linux", UserID: 7, Online: true, TailscaleIPs: []string{"100.100.1.3"}, Relay: "sin"},
 			"silent":   {ID: "silent", HostName: "charlie", UserID: 7, Online: true, TailscaleIPs: []string{"100.100.1.4"}},
@@ -24,16 +24,16 @@ func topologyFixture() tailnetStatus {
 }
 
 // fixtureProbe answers for reach and relayed, fails for silent, and fails the test if any other peer is probed.
-func fixtureProbe(t *testing.T) probeFunc {
-	return func(_ context.Context, peer *tailnetPeer) (peerProbe, bool) {
+func fixtureProbe(t *testing.T) ProbeFunc {
+	return func(_ context.Context, peer *Peer) (Probe, bool) {
 		switch peer.ID {
 		case "reach", "relayed":
-			return peerProbe{Node: TailnetNode{ID: peer.ID, Name: peer.HostName, Online: true, Version: "9.9.9"}, RTT: 12 * time.Millisecond}, true
+			return Probe{Node: Node{ID: peer.ID, Name: peer.HostName, Online: true, Version: "9.9.9"}, RTT: 12 * time.Millisecond}, true
 		case "silent":
-			return peerProbe{}, false
+			return Probe{}, false
 		}
 		t.Errorf("peer %q should not be probed", peer.ID)
-		return peerProbe{}, false
+		return Probe{}, false
 	}
 }
 
@@ -87,9 +87,9 @@ func TestTopologyJSONHasNoAddresses(t *testing.T) {
 }
 
 func TestTopologyDisabledSharingProbesNothing(t *testing.T) {
-	result, err := topologyFrom(context.Background(), topologyFixture(), SharingConfig{Enabled: false}, func(context.Context, *tailnetPeer) (peerProbe, bool) {
+	result, err := topologyFrom(context.Background(), topologyFixture(), SharingConfig{Enabled: false}, func(context.Context, *Peer) (Probe, bool) {
 		t.Error("disabled sharing must not probe")
-		return peerProbe{}, false
+		return Probe{}, false
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestTopologyDisabledSharingProbesNothing(t *testing.T) {
 }
 
 func TestTailnetNodesFromReturnsOnlyAnsweringPeers(t *testing.T) {
-	nodes, err := tailnetNodesFrom(context.Background(), topologyFixture(), SharingConfig{Enabled: true}, fixtureProbe(t))
+	nodes, err := nodesFrom(context.Background(), topologyFixture(), SharingConfig{Enabled: true}, fixtureProbe(t))
 	if err != nil {
 		t.Fatal(err)
 	}

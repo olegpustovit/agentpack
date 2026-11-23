@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mattn/go-sqlite3"
+
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -229,7 +230,7 @@ func TestArchivedConversationReadsThroughMainAndHandlesUnavailableArchive(t *tes
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/sessions/{id}/conversation", main.serveConversation)
+	mux.HandleFunc("GET /api/sessions/{id}/conversation", main.ServeConversation)
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	target, _ := url.Parse(server.URL)
@@ -269,7 +270,7 @@ func TestArchivedConversationReadsThroughMainAndHandlesUnavailableArchive(t *tes
 	}
 	w = httptest.NewRecorder()
 	r.SetPathValue("id", info.ID)
-	main.serveConversation(w, r)
+	main.ServeConversation(w, r)
 	if w.Code != 503 || strings.TrimSpace(w.Body.String()) != "archive unavailable" {
 		t.Fatalf("missing archive: %d %s", w.Code, w.Body.String())
 	}
@@ -386,7 +387,7 @@ func TestArchivePreservesFlushBeforeRemoteReceivesMarker(t *testing.T) {
 	r := httptest.NewRequest("GET", "/api/sessions/session-late-flush/conversation", nil)
 	r.SetPathValue("id", "session-late-flush")
 	w := httptest.NewRecorder()
-	main.serveConversation(w, r)
+	main.ServeConversation(w, r)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "late coalesced text") || !strings.Contains(w.Body.String(), "late final event") {
 		t.Fatalf("late events missing: %d %s", w.Code, w.Body.String())
 	}
@@ -441,7 +442,7 @@ func TestArchiveLateCoalescingStaleGossipAndMainHandover(t *testing.T) {
 		r := httptest.NewRequest("GET", "/api/sessions/session-late-merge/conversation", nil)
 		r.SetPathValue("id", "session-late-merge")
 		w := httptest.NewRecorder()
-		g.serveConversation(w, r)
+		g.ServeConversation(w, r)
 		if w.Code != 200 || !strings.Contains(w.Body.String(), want) || strings.Contains(w.Body.String(), `"seq":`+strconv.FormatInt(absent, 10)) {
 			t.Fatalf("archive contents: %d %s", w.Code, w.Body.String())
 		}
@@ -575,7 +576,7 @@ func TestArchivePendingHandoverRetainsUnacknowledgedWorkerEdit(t *testing.T) {
 		r := httptest.NewRequest("GET", "/api/sessions/session-pending-copy/conversation", nil)
 		r.SetPathValue("id", "session-pending-copy")
 		w := httptest.NewRecorder()
-		next.serveConversation(w, r)
+		next.ServeConversation(w, r)
 		if w.Code != 200 || !strings.Contains(w.Body.String(), "late while copying") || !strings.Contains(w.Body.String(), "new final event") {
 			t.Fatalf("handover dropped history: %d %s", w.Code, w.Body.String())
 		}
@@ -693,7 +694,7 @@ func TestNewMainCapturesItsOwnNewerBodyBeforeOldPruning(t *testing.T) {
 	r := httptest.NewRequest("GET", "/api/sessions/session-new-main-owned/conversation", nil)
 	r.SetPathValue("id", "session-new-main-owned")
 	w := httptest.NewRecorder()
-	owner.serveConversation(w, r)
+	owner.ServeConversation(w, r)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "new owner's coalesced text") || !strings.Contains(w.Body.String(), `"seq":2`) {
 		t.Fatalf("new Main lost its own body: %d %s", w.Code, w.Body.String())
 	}
@@ -754,7 +755,7 @@ func TestArchivedEditsRelayThroughIntermediatePeer(t *testing.T) {
 	r := httptest.NewRequest("GET", "/api/sessions/"+id+"/conversation", nil)
 	r.SetPathValue("id", id)
 	w := httptest.NewRecorder()
-	main.serveConversation(w, r)
+	main.ServeConversation(w, r)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "relayed coalesced edit") || !strings.Contains(w.Body.String(), `"seq":3`) || strings.Contains(w.Body.String(), `"seq":2`) {
 		t.Fatalf("relay lost edits: %d %s", w.Code, w.Body.String())
 	}

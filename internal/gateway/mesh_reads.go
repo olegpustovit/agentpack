@@ -215,7 +215,7 @@ func (g *Gateway) routeMeshRequest(w http.ResponseWriter, r *http.Request) (*htt
 		http.Error(w, "owning machine is offline", http.StatusServiceUnavailable)
 		return r, true, nil
 	}
-	g.proxyTailnet(w, r, info.NodeID)
+	g.tailnet.Proxy(w, r, g.store, g, info.NodeID)
 	return r, true, nil
 }
 

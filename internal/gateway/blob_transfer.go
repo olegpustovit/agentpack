@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 )
@@ -83,7 +84,7 @@ func (g *Gateway) fetchBlob(ctx context.Context, id, sha string, targetFor func(
 			continue
 		}
 		request.Header.Set("traceparent", obs.TraceParent(ctx))
-		client := &http.Client{Timeout: 10 * time.Second, Transport: tailnetTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		client := &http.Client{Timeout: 10 * time.Second, Transport: mesh.Transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		response, err := client.Do(request)
 		if err != nil {
 			lastErr = errors.New("blob peer unreachable")

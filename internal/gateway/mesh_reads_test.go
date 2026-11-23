@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/session"
 )
 
@@ -89,7 +90,7 @@ func TestMeshReadsSurviveOwnerShutdownAndRefuseWrites(t *testing.T) {
 		r := httptest.NewRequest("GET", origin.String()+"/api/sessions/session-remote/conversation", nil)
 		r.SetPathValue("id", info.ID)
 		w := httptest.NewRecorder()
-		target.proxyTailnetTo(w, r, "remote", fallbackURL)
+		mesh.ProxyTo(w, r, target, "remote", fallbackURL)
 		if w.Code != 200 || !strings.Contains(w.Body.String(), "persisted history") {
 			t.Fatalf("history proxy fallback: %d %s", w.Code, w.Body.String())
 		}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/tmaxmax/go-sse"
 
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -441,7 +442,7 @@ func TestStateEventStreamKeepsPeerAuthenticationAndRevokesRemoval(t *testing.T) 
 func TestStateManagerCancelsItsPeerWorkers(t *testing.T) {
 	g, _, _ := syncGateway(t, "manager")
 	g.events.topics = []eventTopic{}
-	g.events.nodes = func(context.Context) ([]TailnetNode, error) { return nil, nil }
+	g.events.nodes = func(context.Context) ([]mesh.Node, error) { return nil, nil }
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() { defer close(done); g.runStateSync(ctx) }()

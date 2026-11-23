@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/registry"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -31,7 +30,7 @@ func TestGatewaySettingsSharingDoesNotStopAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if err = WriteSharingConfig(store, SharingConfig{Enabled: true, Allow: []string{"tag:server"}}); err != nil {
+	if err = mesh.WriteSharingConfig(store, mesh.SharingConfig{Enabled: true, Allow: []string{"tag:server"}}); err != nil {
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("https://agentpack.example")
@@ -45,7 +44,7 @@ func TestGatewaySettingsSharingDoesNotStopAgents(t *testing.T) {
 	if response.Code != 200 || stopped {
 		t.Fatalf("sharing stop: %d stopped=%v", response.Code, stopped)
 	}
-	config, err := ReadSharingConfig(store)
+	config, err := mesh.ReadSharingConfig(store)
 	if err != nil || config.Enabled || len(config.Allow) != 1 {
 		t.Fatalf("config %+v %v", config, err)
 	}
@@ -71,7 +70,7 @@ func TestPeerHTTPRejectsBrowserAndAdministrativeRoutes(t *testing.T) {
 	}
 	origin, _ := url.Parse("https://agentpack.example")
 	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: network.NodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home}}
-	handler := g.peerHandler(&tailnetPeer{ID: "self", UserID: 7}, "100.100.1.2:7421")
+	handler := g.tailnet.PeerHandler(g.store, g, &mesh.Peer{ID: "self", UserID: 7}, "100.100.1.2:7421")
 	for _, test := range []struct {
 		host, path, origin string
 		want               int
@@ -253,14 +252,16 @@ func TestRemovedPeerCannotMutate(t *testing.T) {
 	if err := store.RemovePeer(peer); err != nil {
 		t.Fatal(err)
 	}
-	var identity tailnetIdentity
+	var identity mesh.Identity
 	identity.Node.StableID, identity.Node.User = peer, 7
 	identity.Node.Addresses = []string{address + "/32"}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
 	g := &Gateway{store: auth.store, auth: auth, origin: origin, options: GatewayOptions{Home: home, Library: LibraryOptions{Store: store}}}
-	g.tailnet.whois = map[netip.Addr]cachedWhois{netip.MustParseAddr(address): {at: time.Now(), identity: identity}}
 	host := "100.64.0.2:7421"
-	handler := g.peerHandler(&tailnetPeer{ID: "self", UserID: 7}, host)
+	// The tailnet layer has admitted this identity; the gateway must still refuse a removed peer.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g.ServePeer(w, r, &mesh.Peer{ID: "self", UserID: 7}, identity)
+	})
 	for _, pattern := range peerPatterns() {
 		method, path, _ := strings.Cut(pattern, " ")
 		if method == http.MethodGet {

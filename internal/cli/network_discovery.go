@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/olegpustovit/agentpack/internal/gateway"
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
@@ -26,7 +27,7 @@ func (runner Runner) runSharing(ctx context.Context, args []string) (int, error)
 		return 1, err
 	}
 	defer store.Close()
-	config, err := gateway.ReadSharingConfig(store)
+	config, err := mesh.ReadSharingConfig(store)
 	if err != nil {
 		return 1, err
 	}
@@ -42,7 +43,7 @@ func (runner Runner) runSharing(ctx context.Context, args []string) (int, error)
 		}
 		config.Enabled = args[0] == "on"
 		if config.Enabled {
-			if err = gateway.CheckTailnet(ctx); err != nil {
+			if err = mesh.CheckTailnet(ctx); err != nil {
 				return 1, err
 			}
 		}
@@ -59,7 +60,7 @@ func (runner Runner) runSharing(ctx context.Context, args []string) (int, error)
 	default:
 		return 2, fmt.Errorf("unknown sharing action %q", args[0])
 	}
-	if err = gateway.WriteSharingConfig(store, config); err != nil {
+	if err = mesh.WriteSharingConfig(store, config); err != nil {
 		return 1, err
 	}
 	if args[0] == "on" {

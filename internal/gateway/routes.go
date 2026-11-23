@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/cache"
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/session"
 )
@@ -300,14 +301,15 @@ func slowTailnetRequest(method, path string) bool {
 	return method != http.MethodGet && method != http.MethodHead || row.timeout == timeoutSlow || row.timeout == timeoutProbe
 }
 
-func tailnetRequestTransport(method, path string) *http.Transport {
+// RequestTransport is the tailnet transport whose timeouts suit method and path.
+func (g *Gateway) RequestTransport(method, path string) http.RoundTripper {
 	if row, _ := routeFor(method, path); row.timeout == timeoutProbe {
-		return tailnetProbeTransport
+		return mesh.ProbeTransport
 	}
 	if slowTailnetRequest(method, path) {
-		return tailnetMutationTransport
+		return mesh.MutationTransport
 	}
-	return tailnetTransport
+	return mesh.Transport
 }
 
 // callerKind is the entry point a request came through. Each entry point sets it once;
@@ -317,7 +319,7 @@ type callerKind uint8
 const (
 	callerUnknown callerKind = iota
 	callerCLI                // this machine's CLI, holding the private local secret
-	callerPeer               // an enrolled mesh peer, verified by peerHandler
+	callerPeer               // an enrolled mesh peer, verified by ServePeer
 	callerMCP                // an agentpack MCP tool call dispatched in-process
 	callerBrowser            // everything else: cookies and public origins
 )

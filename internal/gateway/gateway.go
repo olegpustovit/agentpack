@@ -27,6 +27,8 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/gorilla/websocket"
+
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/registry"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -87,7 +89,7 @@ type Gateway struct {
 	identitySelf   tailnetSelf
 	events         eventHub
 	agents         agentAccounts
-	tailnet        tailnetCache
+	tailnet        mesh.Cache
 	mcpBroker      mcpBroker
 	push           pushWatch
 	agentTasks     sync.Map         // task IDs whose answer is being delivered
@@ -145,7 +147,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 		return err
 	}
 	if strings.HasPrefix(nodeID, "site:") {
-		if snapshot, err := tailnetSnapshot(ctx); err == nil {
+		if snapshot, err := mesh.Snapshot(ctx); err == nil {
 			if err := store.BindNode(ctx, snapshot.Self.ID); err != nil {
 				return err
 			}
@@ -182,7 +184,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	for _, task := range []struct {
 		name string
 		run  func(context.Context)
-	}{{"gateway.tailnet_sharing", gateway.runTailnetSharing}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.replication_effects", gateway.runReplicationEffects}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}, {"gateway.push", func(ctx context.Context) { gateway.runPush(ctx, pushInterval) }}, {"gateway.agent_tasks", func(ctx context.Context) { gateway.runAgentTasks(ctx, agentTasksInterval) }}, {"gateway.omp_settings", func(ctx context.Context) { gateway.runOMPSettings(ctx, 30*time.Second) }}, {"gateway.agent_credentials", func(ctx context.Context) { gateway.runAgentCredentials(ctx, 30*time.Second) }}} {
+	}{{"gateway.tailnet_sharing", func(ctx context.Context) { gateway.tailnet.Serve(ctx, gateway.store, gateway) }}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.replication_effects", gateway.runReplicationEffects}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}, {"gateway.push", func(ctx context.Context) { gateway.runPush(ctx, pushInterval) }}, {"gateway.agent_tasks", func(ctx context.Context) { gateway.runAgentTasks(ctx, agentTasksInterval) }}, {"gateway.omp_settings", func(ctx context.Context) { gateway.runOMPSettings(ctx, 30*time.Second) }}, {"gateway.agent_credentials", func(ctx context.Context) { gateway.runAgentCredentials(ctx, 30*time.Second) }}} {
 		background.Add(1)
 		obs.Go(task.name, func() { defer background.Done(); task.run(ctx) })
 	}
@@ -248,7 +250,7 @@ func (g *Gateway) runLogSpool(ctx context.Context) {
 }
 
 // localRequest reports a caller holding the private local secret: this machine's CLI, an enrolled
-// peer (through peerHandler) or an in-process MCP call. Browsers never are.
+// peer (through ServePeer) or an in-process MCP call. Browsers never are.
 func (g *Gateway) localRequest(r *http.Request) bool {
 	kind := callerOf(r.Context())
 	return kind == callerCLI || kind == callerPeer || kind == callerMCP
@@ -280,7 +282,7 @@ func (g *Gateway) buildHandler() http.Handler {
 			return
 		}
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
-		// Only the private local secret makes a caller local; peerHandler and MCP dispatch name which kind.
+		// Only the private local secret makes a caller local; ServePeer and MCP dispatch name which kind.
 		kind := callerBrowser
 		if r.Header.Get("Origin") == "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.local.Secret)) == 1 {
 			if kind = callerOf(r.Context()); kind == callerUnknown || kind == callerBrowser {
@@ -483,7 +485,7 @@ func (g *Gateway) routes() routeMux {
 		network.WriteJSON(w, value)
 	})
 	mux.HandleFunc("GET /api/topology", func(w http.ResponseWriter, r *http.Request) {
-		value, err := g.tailnetTopology(r.Context())
+		value, err := mesh.ReadTopology(r.Context(), g.store)
 		if err != nil {
 			fail(w, r, err)
 			return
@@ -780,7 +782,7 @@ func (g *Gateway) routes() routeMux {
 		}
 		g.terminalData(w, r)
 	})
-	mux.HandleFunc("GET /api/sessions/{id}/conversation", g.serveConversation)
+	mux.HandleFunc("GET /api/sessions/{id}/conversation", g.ServeConversation)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", g.servePrompt)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", g.servePrompt)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/message", g.serveAgentMessage)
@@ -946,7 +948,7 @@ func (g *Gateway) serveRoute(row route, handler http.Handler) http.Handler {
 		if node := r.URL.Query().Get("node"); node != "" && strings.HasPrefix(r.URL.Path, "/api/") &&
 			!(r.Method == http.MethodGet && meshListRoute(r.URL.Path) && g.peer(node).Mesh) {
 			w.Header().Del("Cache-Control") // the peer's Cache-Control passes through unchanged
-			g.proxyTailnet(w, r, node)
+			g.tailnet.Proxy(w, r, g.store, g, node)
 			return
 		}
 		if row.policy == owner && !g.requireOwner(w, r) {

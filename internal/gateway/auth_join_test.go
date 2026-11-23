@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/olegpustovit/agentpack/internal/network"
-	"github.com/olegpustovit/agentpack/internal/session"
-	"github.com/olegpustovit/agentpack/internal/state"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +11,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
+	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
@@ -62,7 +64,7 @@ func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
 		t.Fatalf("joining browser could not load its UI configuration: %d", w.Code)
 	}
 	joining.events.topics = []eventTopic{}
-	joining.events.nodes = func(context.Context) ([]TailnetNode, error) { return nil, nil }
+	joining.events.nodes = func(context.Context) ([]mesh.Node, error) { return nil, nil }
 	events := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Host = origin.Host
 		r.Header.Set("Authorization", "Bearer "+joining.local.Secret)

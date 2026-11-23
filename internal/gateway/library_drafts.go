@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/registry"
@@ -104,7 +105,7 @@ func (g *Gateway) currentDraftState(ctx context.Context, draft registry.Draft) (
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("traceparent", obs.TraceParent(ctx))
-	response, err := tailnetHTTP.Do(request)
+	response, err := mesh.HTTP.Do(request)
 	if err != nil {
 		return state, errors.New("draft machine is unreachable")
 	}

@@ -12,7 +12,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/session"
 )
 
-func (g *Gateway) serveConversation(w http.ResponseWriter, r *http.Request) {
+func (g *Gateway) ServeConversation(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	info, err := session.StoredSession(r.Context(), g.store.Reader, id)
 	if err == nil {

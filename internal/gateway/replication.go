@@ -3,9 +3,11 @@ package gateway
 import (
 	"context"
 	"errors"
-	"github.com/olegpustovit/agentpack/internal/network"
 	"net/http"
 	"time"
+
+	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
+	"github.com/olegpustovit/agentpack/internal/network"
 )
 
 type replicaPeerKey struct{}
@@ -60,19 +62,19 @@ func (g *Gateway) registerRegistryReplication(mux routeRegistrar) {
 		if !network.ReadJSON(w, r, &input) {
 			return
 		}
-		config, err := ReadSharingConfig(g.store)
+		config, err := mesh.ReadSharingConfig(g.store)
 		if err != nil || !config.Enabled {
 			libraryResponse(w, nil, errors.New("tailnet sharing is disabled"))
 			return
 		}
-		status, err := tailnetSnapshot(r.Context())
+		status, err := mesh.Snapshot(r.Context())
 		if err != nil {
 			libraryResponse(w, nil, err)
 			return
 		}
 		allowed := false
 		for _, peer := range status.Peer {
-			if peer != nil && peer.ID == input.Peer && allowedTailnetPeer(status.Self, peer, config) {
+			if peer != nil && peer.ID == input.Peer && mesh.AllowedPeer(status.Self, peer, config) {
 				allowed = true
 				break
 			}
