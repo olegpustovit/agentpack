@@ -12,8 +12,19 @@ import (
 
 var ErrInvalidChange = errors.New("invalid registry change")
 
-// ValidateChanges checks public records before a peer page can enter the local database.
-func ValidateChanges(store *state.Store, changes []state.Change) error {
+// A peer's registry change that validateChanges refuses is quarantined.
+func init() {
+	state.RegisterValidation("registry_", func(store *state.Store, change state.Change) (string, error) {
+		err := validateChanges(store, []state.Change{change})
+		if errors.Is(err, ErrInvalidChange) {
+			return err.Error(), nil
+		}
+		return "", err
+	})
+}
+
+// validateChanges checks public records before a peer page can enter the local database.
+func validateChanges(store *state.Store, changes []state.Change) error {
 	for _, change := range changes {
 		if !strings.HasPrefix(change.Table, "registry_") || change.Column != "body" {
 			continue

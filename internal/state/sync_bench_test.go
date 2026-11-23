@@ -41,7 +41,7 @@ func BenchmarkChangesFirstSync(b *testing.B) {
 			for range b.N {
 				since, pages := int64(0), 0
 				for {
-					_, next, err := s.Changes(b.Context(), since, nil, 4<<20)
+					_, next, err := s.Replicator().Changes(b.Context(), since, nil, 4<<20)
 					if err != nil {
 						b.Fatal(err)
 					}

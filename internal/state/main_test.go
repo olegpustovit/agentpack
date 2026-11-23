@@ -35,15 +35,15 @@ func TestMainSwitchPausesArchiveUntilValidatedAndConverges(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		cursor, err := to.Cursor(ctx, site)
+		cursor, err := to.Replicator().Cursor(ctx, site)
 		if err != nil {
 			t.Fatal(err)
 		}
-		rows, next, err := from.Changes(ctx, cursor, nil, 4<<20)
+		rows, next, err := from.Replicator().Changes(ctx, cursor, nil, 4<<20)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := to.ApplyPage(ctx, rows, site, next); err != nil {
+		if _, err := to.Replicator().ApplyPage(ctx, rows, site, next); err != nil {
 			t.Fatal(err)
 		}
 	}

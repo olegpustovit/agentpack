@@ -80,7 +80,7 @@ func TestOversizedStateVersionTransfersAtomicallyInBoundedChunks(t *testing.T) {
 		}
 		if r.URL.Query().Has("transfer") && recorder.Code == http.StatusOK {
 			chunks.Add(1)
-			cursor, err := target.Cursor(r.Context(), sourceSite)
+			cursor, err := target.Replicator().Cursor(r.Context(), sourceSite)
 			if err != nil || cursor != expectedCursor.Load() {
 				t.Errorf("partial transfer advanced cursor: %d %v", cursor, err)
 			}
@@ -108,10 +108,10 @@ func TestOversizedStateVersionTransfersAtomicallyInBoundedChunks(t *testing.T) {
 	}))
 	defer server.Close()
 	endpoint, _ := url.Parse(server.URL)
-	if _, _, err := pullState(t.Context(), target, nil, server.Client(), endpoint, nil); err != nil {
+	if _, _, err := pullState(t.Context(), target, server.Client(), endpoint, nil); err != nil {
 		t.Fatal(err)
 	}
-	cursor, err := target.Cursor(t.Context(), sourceSite)
+	cursor, err := target.Replicator().Cursor(t.Context(), sourceSite)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,15 +131,15 @@ func TestOversizedStateVersionTransfersAtomicallyInBoundedChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 	corrupt.Store(true)
-	if _, _, err := pullState(t.Context(), target, nil, server.Client(), endpoint, nil); err == nil || !strings.Contains(err.Error(), "checksum") {
+	if _, _, err := pullState(t.Context(), target, server.Client(), endpoint, nil); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("corrupt transfer admitted: %v", err)
 	}
-	if got, _ := target.Cursor(t.Context(), sourceSite); got != cursor {
+	if got, _ := target.Replicator().Cursor(t.Context(), sourceSite); got != cursor {
 		t.Fatal("failed transfer changed cursor")
 	}
 	corrupt.Store(false)
 	chunks.Store(0)
-	if _, changed, err := pullState(t.Context(), target, nil, server.Client(), endpoint, nil); err != nil || !changed {
+	if _, changed, err := pullState(t.Context(), target, server.Client(), endpoint, nil); err != nil || !changed {
 		t.Fatalf("retry: changed=%v err=%v", changed, err)
 	}
 	if chunks.Load() < 2 {
@@ -153,7 +153,7 @@ func TestOversizedStateVersionTransfersAtomicallyInBoundedChunks(t *testing.T) {
 	if err := target.Reader.QueryRow("SELECT last_seq FROM sessions WHERE id='oversized'").Scan(&seq); err != nil || seq != 1 {
 		t.Fatalf("metadata lost: %d %v", seq, err)
 	}
-	if got, _ := target.Cursor(t.Context(), sourceSite); got <= cursor {
+	if got, _ := target.Replicator().Cursor(t.Context(), sourceSite); got <= cursor {
 		t.Fatal("complete transfer did not advance cursor")
 	}
 
@@ -250,7 +250,7 @@ func TestOversizedArchivedEditReachesMainThroughPeer(t *testing.T) {
 			mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), replicaPeerKey{}, "reader")))
 		}))
 		endpoint, _ := url.Parse(server.URL)
-		_, _, err := pullState(t.Context(), link.target.auth.store, nil, server.Client(), endpoint, nil)
+		_, _, err := pullState(t.Context(), link.target.auth.store, server.Client(), endpoint, nil)
 		server.Close()
 		if err != nil {
 			t.Fatal(err)

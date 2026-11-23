@@ -57,7 +57,7 @@ func TestCaptureRedactsAndRestoresLocalBindings(t *testing.T) {
 			t.Fatalf("snapshot retained %q", secret)
 		}
 	}
-	changes, _, err := store.sql.Changes(t.Context(), 0, nil, 4<<20)
+	changes, _, err := store.sql.Replicator().Changes(t.Context(), 0, nil, 4<<20)
 	if err != nil {
 		t.Fatal(err)
 	}

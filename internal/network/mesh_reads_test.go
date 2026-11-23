@@ -39,7 +39,7 @@ func TestMeshReadsSurviveOwnerShutdownAndRefuseWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint, _ := url.Parse(server.URL)
-	if _, _, err := pullState(t.Context(), target.auth.store, target.options.Library.Store, server.Client(), endpoint, nil); err != nil {
+	if _, _, err := pullState(t.Context(), target.auth.store, server.Client(), endpoint, nil); err != nil {
 		t.Fatal(err)
 	}
 	server.Close()

@@ -96,7 +96,7 @@ func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
 	}))
 	defer server.Close()
 	endpoint, _ := url.Parse(server.URL)
-	if _, _, err := pullState(t.Context(), auth.store, nil, server.Client(), endpoint, nil); err != nil {
+	if _, _, err := pullState(t.Context(), auth.store, server.Client(), endpoint, nil); err != nil {
 		t.Fatal(err)
 	}
 	w = request("/api/status", false)
@@ -243,7 +243,7 @@ func TestMeshOwnerResetCannotRevivePeerLoginsForRecreatedEmail(t *testing.T) {
 	if won, err := claimOwner(t.Context(), source.store, testBrowserEmail, []byte(dummyPasswordHash)); err != nil || !won {
 		t.Fatalf("reclaim: %v %v", won, err)
 	}
-	changes, next, err := source.store.Changes(t.Context(), 0, nil, 4<<20)
+	changes, next, err := source.store.Replicator().Changes(t.Context(), 0, nil, 4<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestMeshOwnerResetCannotRevivePeerLoginsForRecreatedEmail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := peer.store.ApplyPage(t.Context(), changes, site, next); err != nil {
+	if _, err := peer.store.Replicator().ApplyPage(t.Context(), changes, site, next); err != nil {
 		t.Fatal(err)
 	}
 	if peer.authenticated(request) {

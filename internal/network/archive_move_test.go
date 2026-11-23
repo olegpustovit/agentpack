@@ -52,16 +52,16 @@ func syncArchiveFixture(t *testing.T, from, to *state.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	since, err := to.Cursor(t.Context(), site)
+	since, err := to.Replicator().Cursor(t.Context(), site)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for {
-		changes, next, err := from.Changes(t.Context(), since, exclude, 4<<20)
+		changes, next, err := from.Replicator().Changes(t.Context(), since, exclude, 4<<20)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := to.ApplyPage(t.Context(), changes, site, next); err != nil {
+		if _, err := to.Replicator().ApplyPage(t.Context(), changes, site, next); err != nil {
 			t.Fatal(err)
 		}
 		if next == since {
@@ -528,15 +528,16 @@ func TestArchivePendingHandoverRetainsUnacknowledgedWorkerEdit(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		since, err := to.Cursor(t.Context(), site)
+		since, err := to.Replicator().Cursor(t.Context(), site)
 		if err != nil {
 			return err
 		}
-		rows, next, err := from.Changes(t.Context(), since, exclude, 4<<20)
+		rows, next, err := from.Replicator().Changes(t.Context(), since, exclude, 4<<20)
 		if err != nil {
 			return err
 		}
-		return to.ApplyPage(t.Context(), rows, site, next)
+		_, err = to.Replicator().ApplyPage(t.Context(), rows, site, next)
+		return err
 	}
 	if err := applyOne(worker.auth.store, next.auth.store); err != nil {
 		t.Fatalf("unready Main did not retain late edit: %v", err)
@@ -556,7 +557,7 @@ func TestArchivePendingHandoverRetainsUnacknowledgedWorkerEdit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cursor, err := next.auth.store.Cursor(t.Context(), workerSite); err != nil {
+	if cursor, err := next.auth.store.Replicator().Cursor(t.Context(), workerSite); err != nil {
 		t.Fatal(err)
 	} else {
 		if cursor != version {
@@ -608,11 +609,11 @@ func TestArchiveMarkerWaitsForActiveTurnAndCompleteFreshTail(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		changes, _, err := main.auth.store.Changes(t.Context(), 0, site, 4<<20)
+		changes, _, err := main.auth.store.Replicator().Changes(t.Context(), 0, site, 4<<20)
 		if err != nil {
 			return err
 		}
-		return worker.auth.store.Apply(t.Context(), changes)
+		return worker.auth.store.Replicator().Apply(t.Context(), changes)
 	}
 	if err := patchWorkerConversationState(t.Context(), worker.auth.store.DB, "session-fresh-tail", "working"); err != nil {
 		t.Fatal(err)
@@ -728,7 +729,7 @@ func TestArchivedEditsRelayThroughIntermediatePeer(t *testing.T) {
 	if err := relay.auth.store.Reader.QueryRow("SELECT count(*) FROM archive_edits").Scan(&edits); err != nil || edits != 2 {
 		t.Fatalf("relay did not preserve edit and delete: %d %v", edits, err)
 	}
-	late, _, err := worker.auth.store.Changes(t.Context(), 0, nil, 4<<20)
+	late, _, err := worker.auth.store.Replicator().Changes(t.Context(), 0, nil, 4<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -763,7 +764,7 @@ func TestArchivedEditsRelayThroughIntermediatePeer(t *testing.T) {
 		}
 	}
 	// Replaying an already acknowledged loser must not resurrect the journal.
-	if err := relay.auth.store.Apply(t.Context(), late); err != nil {
+	if err := relay.auth.store.Replicator().Apply(t.Context(), late); err != nil {
 		t.Fatal(err)
 	}
 	if err := relay.auth.store.Reader.QueryRow("SELECT count(*) FROM archive_edits").Scan(&edits); err != nil || edits != 0 {
