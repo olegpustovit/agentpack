@@ -124,9 +124,8 @@ function updateCompaction(state: ThreadState, compactionId: string, patch: Compa
       "compactionId" in data && data.compactionId === compactionId
   })
   const current = index >= 0 ? state.items[index]!.data as CompactionPayload : undefined
-  if (!current && typeof patch.status !== "string") return
-  const status = typeof patch.status === "string" ? patch.status : current?.status
-  if (status === undefined) return
+  // A summary chunk can arrive before any status: the compaction is then still running.
+  const status = patch.status ?? current?.status ?? "in_progress"
   const summary =
     patch.appendSummary !== undefined
       ? `${current?.summary ?? ""}${patch.appendSummary}`
@@ -149,6 +148,7 @@ class ThreadReducer {
   private turn: { ts: number; tokens?: number; cost?: number } | undefined
   private compacting: string | undefined
   private goal: GoalState | undefined
+  private turnTask: string | undefined
   private afterPrompt = false
 
   constructor(private readonly nested = false) {}
@@ -189,7 +189,7 @@ class ThreadReducer {
       case "user_message_chunk":
       case "agent_thought_chunk":
         appendChunk(state, entry)
-        if (entry.kind !== "user_message_chunk") state.working = !state.needs_you
+        if (entry.kind !== "user_message_chunk" && !state.needs_you) state.working = true
         break
       case "tool_call": {
         const id = toolID(entry.payload)
@@ -275,22 +275,28 @@ class ThreadReducer {
           used?: number
           size?: number
           cost?: { amount?: number; currency?: string }
+          contextTokens?: number
+          contextLimit?: number
+          costUsd?: number
           _meta?: { "_claude/origin"?: unknown }
         }
         // Claude's own follow-up cycles (after a background task) have no prompt or turn_end; their
         // origin-stamped usage is the end. Inside a user turn it must not clear "working".
         if (!this.turn && usage._meta?.["_claude/origin"]) state.working = false
-        state.context_tokens = usage.used
-        state.context_limit = usage.size
+        // An update carries only the fields that changed; ACP names win over the flat aliases.
+        const used = usage.used ?? usage.contextTokens
+        if (used !== undefined) state.context_tokens = used
+        state.context_limit = usage.size ?? usage.contextLimit ?? state.context_limit
+        if (usage.cost) state.cost_usd = usage.cost.currency === "USD" ? usage.cost.amount : undefined
+        else if (usage.costUsd !== undefined) state.cost_usd = usage.costUsd
         const compacting = this.compacting
-        if (compacting && usage.used !== undefined) {
+        if (compacting && used !== undefined) {
           const item = state.items.find((candidate) => candidate.kind === "compaction" && (candidate.data as CompactionPayload).compactionId === compacting)
           if (item && (item.data as CompactionPayload).status !== "in_progress") {
-            patchCompaction(state, compacting, { after: usage.used })
+            patchCompaction(state, compacting, { after: used })
             this.compacting = undefined
           }
         }
-        state.cost_usd = usage.cost?.currency === "USD" ? usage.cost?.amount : undefined
         break
       }
       case "subagent_update": {
@@ -370,14 +376,30 @@ class ThreadReducer {
         }
         // A failed or cancelled turn leaves its permissions and questions unanswerable; an MCP sign-in URL outlives it.
         if (!["error", "cancelled"].includes((entry.payload as { stopReason?: string }).stopReason ?? "")) break
-        deactivate(state, (item, data) => item.kind === "permission" ? !!data?.requestId : item.kind === "elicitation" && !!data?.elicitationId && !data.agentElicitationId)
+        this.deactivate((item, data) => item.kind === "permission" ? !!data?.requestId : item.kind === "elicitation" && !!data?.elicitationId && !data.agentElicitationId)
         break
       }
       case "agent_exit":
         state.working = false
         this.turn = undefined
-        deactivate(state, (item, data) => item.kind === "permission" ? !!data?.requestId : item.kind === "elicitation" && !!data?.elicitationId)
+        this.turnTask = undefined
+        this.deactivate((item, data) => item.kind === "permission" ? !!data?.requestId : item.kind === "elicitation" && !!data?.elicitationId)
         break
+      case "async_task_spawned": {
+        // The agent woke itself (a background task finished, a timer fired): that task is a turn of its own.
+        const task = entry.payload as { asyncTaskId?: string; taskType?: string }
+        if (task.taskType !== "turn" || !task.asyncTaskId) break
+        this.turnTask = task.asyncTaskId
+        state.working = !state.needs_you
+        break
+      }
+      case "async_task_state_update": {
+        const task = entry.payload as { asyncTaskId?: string; state?: string }
+        if (task.asyncTaskId !== this.turnTask || !["completed", "failed", "stopped"].includes(task.state ?? "")) break
+        this.turnTask = undefined
+        state.working = false
+        break
+      }
       case "prompt":
         queue.delete((entry.payload as { queueId?: string }).queueId ?? "")
         state.working = true
@@ -394,6 +416,18 @@ class ThreadReducer {
       const id = (entry.payload as { toolCallId?: string }).toolCallId
       if (linked && id) this.child(linked, entry).toolCallId = id
     }
+  }
+
+  // The parent's turn ending also ends its subagents' open requests: nothing can answer them any more.
+  private deactivate(applies: (item: ThreadItem, data: { requestId?: string; elicitationId?: string; agentElicitationId?: string } | undefined) => boolean) {
+    const items = this.state.items
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]!
+      const data = item.data as { requestId?: string; elicitationId?: string; resolved?: boolean; inactive?: boolean } | undefined
+      if (applies(item, data) && !data?.resolved && !data?.inactive) items[i] = { ...item, data: { ...data, inactive: true } }
+    }
+    this.state.needs_you = hasOutstandingRequests(items)
+    for (const child of this.children.values()) child.deactivate(applies)
   }
 
   // A new state object each call; the reducer's own list keeps changing afterwards.
@@ -423,15 +457,6 @@ class ThreadReducer {
   }
 }
 
-function deactivate(state: ThreadState, applies: (item: ThreadItem, data: { requestId?: string; elicitationId?: string; agentElicitationId?: string } | undefined) => boolean) {
-  const items = state.items
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i]!
-    const data = item.data as { requestId?: string; elicitationId?: string; resolved?: boolean; inactive?: boolean } | undefined
-    if (applies(item, data) && !data?.resolved && !data?.inactive) items[i] = { ...item, data: { ...data, inactive: true } }
-  }
-  state.needs_you = hasOutstandingRequests(items)
-}
 
 export function reduceLog(entries: LogEntry[], nested = false): ThreadState {
   const reducer = new ThreadReducer(nested)
