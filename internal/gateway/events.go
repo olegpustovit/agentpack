@@ -66,6 +66,7 @@ type eventHub struct {
 	target    func(context.Context, string) (*url.URL, error)
 	client    *http.Client
 	checkAuth <-chan time.Time
+	recheck   <-chan time.Time // replaces conversationRecheck in tests
 }
 
 // subscribe returns a stream of events and the function that ends it. The channel is closed

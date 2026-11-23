@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -48,8 +49,11 @@ func (g *Gateway) followConversation(r *http.Request) <-chan conversationStreamF
 	}
 	obs.Go("gateway.follow_conversation", func() {
 		defer close(frames)
+		// Subscribed before the first read, so a change made while reading still wakes the wait.
+		changes, stop := g.listen()
+		defer func() { stop() }()
 		for ctx.Err() == nil {
-			next, err := g.readConversationStream(ctx, id, node, since, send)
+			next, live, err := g.readConversationStream(ctx, id, node, since, send)
 			since = max(next, since)
 			if errors.Is(err, errConversationStreamUnsupported) {
 				send(conversationStreamFrame{event: "conversation_fallback"})
@@ -61,27 +65,69 @@ func (g *Gateway) followConversation(r *http.Request) <-chan conversationStreamF
 				event.Fail(err)
 				event.End()
 			}
-			select {
-			case <-ctx.Done():
+			if live {
+				// The worker's stream ended, so it is restarting or exiting: reconnect promptly.
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Second):
+				}
+				continue
+			}
+			// Nothing is streaming this chat: read it again only once state or the mesh changes.
+			if !g.awaitConversationChange(ctx, &changes, &stop) {
 				return
-			case <-time.After(time.Second):
 			}
 		}
 	})
 	return frames
 }
 
-func (g *Gateway) readConversationStream(ctx context.Context, id, node string, since int64, send func(conversationStreamFrame) bool) (int64, error) {
+// conversationRecheck bounds how long an offline chat tab goes without rereading the chat, in case
+// a change produced no event (a worker endpoint file written without a state change).
+const conversationRecheck = 30 * time.Second
+
+// awaitConversationChange waits for a state or mesh change, or the recheck interval. False when ctx ends.
+func (g *Gateway) awaitConversationChange(ctx context.Context, changes *<-chan eventMessage, stop *func()) bool {
+	recheck := g.events.recheck
+	if recheck == nil {
+		timer := time.NewTimer(conversationRecheck)
+		defer timer.Stop()
+		recheck = timer.C
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-recheck:
+			return true
+		case message, ok := <-*changes:
+			if !ok { // fell behind: listen again and reread, as a reconnecting browser would
+				(*stop)()
+				*changes, *stop = g.listen()
+				return true
+			}
+			if message.Topic == "nodes" || message.Topic == "state" &&
+				(message.Tables == nil || slices.Contains(message.Tables, "sessions") || slices.Contains(message.Tables, "conversation_events")) {
+				return true
+			}
+		}
+	}
+}
+
+// readConversationStream sends the chat's entries after since. live reports that an upstream stream was
+// open, as opposed to the stored log of a chat no worker serves.
+func (g *Gateway) readConversationStream(ctx context.Context, id, node string, since int64, send func(conversationStreamFrame) bool) (next int64, live bool, err error) {
 	info, err := session.StoredSession(ctx, g.store.Reader, id)
 	if err == nil && (info.Transport != "acp" || !info.ArchivedAt.IsZero()) {
-		return since, errConversationStreamUnsupported
+		return since, false, errConversationStreamUnsupported
 	}
 	if err != nil && !errors.Is(err, session.ErrSessionNotFound) {
-		return since, err
+		return since, false, err
 	}
 	local, err := g.store.NodeID(ctx)
 	if err != nil {
-		return since, err
+		return since, false, err
 	}
 	if node == "local" {
 		node = local
@@ -99,25 +145,25 @@ func (g *Gateway) readConversationStream(ctx context.Context, id, node string, s
 			// A starting session can already contain prompts accepted directly by the gateway.
 			entries, _, truncated, err := network.StoredConversationTail(ctx, g.store.Reader, id, since)
 			if err != nil {
-				return since, session.ErrSessionUnavailable
+				return since, false, session.ErrSessionUnavailable
 			}
 			if truncated && !send(conversationStreamFrame{event: "conversation_truncated"}) {
-				return since, ctx.Err()
+				return since, false, ctx.Err()
 			}
 			for _, entry := range entries {
 				if !send(conversationStreamFrame{event: "conversation", seq: entry.Seq, body: network.MustRawJSON(entry)}) {
-					return since, ctx.Err()
+					return since, false, ctx.Err()
 				}
 				since = entry.Seq
 			}
-			return since, nil
+			return since, false, nil
 		}
 		upstream = &url.URL{Scheme: "http", Host: record.Address}
 		authorization = "Bearer " + record.Secret
 	} else {
 		upstream, err = g.tailnetTarget(ctx, node)
 		if err != nil {
-			return since, session.ErrSessionUnavailable
+			return since, false, session.ErrSessionUnavailable
 		}
 		path = "/api/sessions/" + id + "/conversation"
 		transport = tailnetRequestTransport(http.MethodGet, path)
@@ -126,7 +172,7 @@ func (g *Gateway) readConversationStream(ctx context.Context, id, node string, s
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return since, err
+		return since, false, err
 	}
 	request.Header.Set("Accept", "text/event-stream")
 	if authorization != "" {
@@ -140,28 +186,28 @@ func (g *Gateway) readConversationStream(ctx context.Context, id, node string, s
 	client := http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(request)
 	if err != nil {
-		return since, err
+		return since, false, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusOK && !strings.Contains(response.Header.Get("Content-Type"), "text/event-stream") {
-		return since, errConversationStreamUnsupported
+		return since, false, errConversationStreamUnsupported
 	}
 	if response.StatusCode != http.StatusOK {
-		return since, fmt.Errorf("conversation stream: HTTP %d", response.StatusCode)
+		return since, false, fmt.Errorf("conversation stream: HTTP %d", response.StatusCode)
 	}
 	for entry, err := range sse.Read(response.Body, &sse.ReadConfig{MaxEventSize: network.MaxConversationSnapshotBytes + 1024}) {
 		if err != nil {
-			return since, err
+			return since, true, err
 		}
 		if entry.Type == "truncated" || entry.Type == "gap" {
 			if !send(conversationStreamFrame{event: "conversation_" + entry.Type}) {
-				return since, ctx.Err()
+				return since, true, ctx.Err()
 			}
 			continue
 		}
 		if entry.Type == "derived" {
 			if !send(conversationStreamFrame{event: "conversation_derived", body: json.RawMessage(entry.Data)}) {
-				return since, ctx.Err()
+				return since, true, ctx.Err()
 			}
 			continue
 		}
@@ -172,9 +218,9 @@ func (g *Gateway) readConversationStream(ctx context.Context, id, node string, s
 			continue
 		}
 		if !send(conversationStreamFrame{event: "conversation", seq: header.Seq, body: json.RawMessage(entry.Data)}) {
-			return since, ctx.Err()
+			return since, true, ctx.Err()
 		}
 		since = header.Seq
 	}
-	return since, nil
+	return since, true, nil
 }
