@@ -247,7 +247,7 @@ func TestStartACPReplayAgent(t *testing.T) {
 	if err := session.Prompt(ctx, acp.PromptInput{Text: "go"}); err != nil {
 		t.Fatal(err)
 	}
-	entries, _ := session.Attach(0)
+	entries, _, _ := session.Attach(0)
 	if len(entries) == 0 {
 		t.Fatal("expected replay log entries after prompt")
 	}
@@ -318,7 +318,7 @@ func TestACPAgentExitEndsWorkingState(t *testing.T) {
 		t.Fatalf("state before exit = %q", got)
 	}
 	appendACPAgentExit(log)
-	entries, _ := conversation.Attach(0)
+	entries, _, _ := conversation.Attach(0)
 	if entries[len(entries)-1].Kind != "agent_exit" || conversation.ConversationState() != "idle" {
 		t.Fatalf("agent exit did not end the turn: entries=%+v state=%q", entries, conversation.ConversationState())
 	}

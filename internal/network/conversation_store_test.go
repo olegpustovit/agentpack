@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -533,5 +534,38 @@ func TestBypassingPermissionsFollowsTheAgentMode(t *testing.T) {
 	log.Append("current_mode_update", 3, json.RawMessage(`{"currentModeId":"agent-full-access"}`))
 	if !session.BypassingPermissions() {
 		t.Fatal("Codex full access must bypass")
+	}
+}
+
+// A reader whose position the replay tail already evicted gets the missing entries from state.db.
+func TestConversationReaderBackfillsEvictedEntries(t *testing.T) {
+	store := testSessionStore(t, t.TempDir())
+	id := "session-gap"
+	if err := upsertSession(t.Context(), store.DB, SessionInfo{ID: id, Transport: "acp"}); err != nil {
+		t.Fatal(err)
+	}
+	log := acp.NewEventLog(512)
+	if err := log.EnableSink(func(changes acp.LogChanges) error {
+		return persistConversationChanges(t.Context(), store.DB, id, changes)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 20 {
+		log.Append("tool_call", int64(i), mustRawJSON(map[string]string{"toolCallId": strconv.Itoa(i), "title": strings.Repeat("x", 40)}))
+	}
+	conv := NewConversationSession(log, nil)
+	if _, _, gap := conv.Attach(2); !gap {
+		t.Fatal("memory still holds entry 3; make the entries larger")
+	}
+	if _, _, gap := (&WorkerHTTP{}).conversationSince(t.Context(), conv, 2); !gap {
+		t.Fatal("without a store the hole must be reported")
+	}
+	worker := &WorkerHTTP{stateStore: store, sessionDir: filepath.Join(t.TempDir(), id)}
+	entries, _, gap := worker.conversationSince(t.Context(), conv, 2)
+	if gap || len(entries) != 18 || entries[0].Seq != 3 || entries[len(entries)-1].Seq != 20 {
+		t.Fatalf("gap=%t, %d entries from %d", gap, len(entries), entries[0].Seq)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

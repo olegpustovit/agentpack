@@ -151,8 +151,8 @@ func (g *Gateway) readConversationStream(ctx context.Context, id, node string, s
 		if err != nil {
 			return since, err
 		}
-		if entry.Type == "truncated" {
-			if !send(conversationStreamFrame{event: "conversation_truncated"}) {
+		if entry.Type == "truncated" || entry.Type == "gap" {
+			if !send(conversationStreamFrame{event: "conversation_" + entry.Type}) {
 				return since, ctx.Err()
 			}
 			continue

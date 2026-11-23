@@ -455,11 +455,17 @@ func (log *EventLog) Restore(entries []LogEntry, lastSeq int64, truncated bool) 
 	return nil
 }
 
-func (log *EventLog) ReadSince(since int64) (out []LogEntry, truncated bool) {
+// ReadSince returns the retained entries after since. truncated reports that the log ever left
+// entries out; gap that some after since are no longer in memory, so this reader missed them.
+func (log *EventLog) ReadSince(since int64) (out []LogEntry, truncated, gap bool) {
 	log.mu.RLock()
 	defer log.mu.RUnlock()
 	start, _ := slices.BinarySearchFunc(log.entries, since+1, func(entry LogEntry, seq int64) int { return cmp.Compare(entry.Seq, seq) })
-	return slices.Clone(log.entries[start:]), log.truncated
+	first := log.seq + 1
+	if len(log.entries) > 0 {
+		first = log.entries[0].Seq
+	}
+	return slices.Clone(log.entries[start:]), log.truncated, since > 0 && since < first-1
 }
 
 func (log *EventLog) Snapshot() []LogEntry {

@@ -304,7 +304,7 @@ func TestWithdrawnElicitationStopsNeedingTheUser(t *testing.T) {
 	if err != nil || response.Cancel == nil {
 		t.Fatalf("response = %+v, %v", response, err)
 	}
-	entries, _ := client.Log.ReadSince(0)
+	entries, _, _ := client.Log.ReadSince(0)
 	if state := ReduceLog(entries); state.NeedsYou {
 		t.Fatalf("a withdrawn question still needs the user: %+v", entries)
 	}
@@ -384,7 +384,7 @@ func TestBypassModeAnswersPermissionWithoutAskingOrLogging(t *testing.T) {
 	if err != nil || response.Outcome.Selected == nil || response.Outcome.Selected.OptionId != "once" {
 		t.Fatalf("bypass must allow once without a card: %+v %v", response, err)
 	}
-	if entries, _ := log.ReadSince(0); len(entries) != 0 {
+	if entries, _, _ := log.ReadSince(0); len(entries) != 0 {
 		t.Fatalf("an automatic answer must not leave a card: %+v", entries)
 	}
 	// With no allow option it cannot answer for the user, so it still asks.

@@ -53,7 +53,7 @@ func TestEventLogCoalescesTinyChunks(t *testing.T) {
 	if log.bytes > log.limit {
 		t.Fatalf("log bytes %d exceeded limit %d", log.bytes, log.limit)
 	}
-	all, truncated := log.ReadSince(0)
+	all, truncated, _ := log.ReadSince(0)
 	if !truncated {
 		t.Fatal("expected truncated flag after bound pressure")
 	}
@@ -204,7 +204,7 @@ func TestEventLogKeepsEventsThroughAFailedWrite(t *testing.T) {
 	if got := strings.Join(seen, ","); !strings.HasPrefix(got, "prompt") || !strings.Contains(got, "turn_end") {
 		t.Fatalf("subscribers saw %q", got)
 	}
-	if entries, _ := log.ReadSince(0); len(entries) < 2 {
+	if entries, _, _ := log.ReadSince(0); len(entries) < 2 {
 		t.Fatalf("memory kept %d entries", len(entries))
 	}
 	failing = false
@@ -239,7 +239,7 @@ func TestEventLogSinkDoesNotBlockReaders(t *testing.T) {
 	flushed := make(chan error, 1)
 	go func() { flushed <- log.Flush() }()
 	<-writing
-	if entries, _ := log.ReadSince(0); len(entries) != 1 {
+	if entries, _, _ := log.ReadSince(0); len(entries) != 1 {
 		t.Fatalf("read during a write = %d entries", len(entries))
 	}
 	log.Append("turn_end", 2, chunk("done"))
@@ -306,7 +306,7 @@ func BenchmarkEventLogReadSinceTail(b *testing.B) {
 	since := log.seq - 1
 	b.ReportAllocs()
 	for b.Loop() {
-		if entries, _ := log.ReadSince(since); len(entries) != 1 {
+		if entries, _, _ := log.ReadSince(since); len(entries) != 1 {
 			b.Fatal(len(entries))
 		}
 	}

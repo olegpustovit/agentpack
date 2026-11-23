@@ -116,7 +116,7 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 	return session
 }
 
-func (session *ConversationSession) Attach(since int64) (entries []acp.LogEntry, truncated bool) {
+func (session *ConversationSession) Attach(since int64) (entries []acp.LogEntry, truncated, gap bool) {
 	return session.log.ReadSince(since)
 }
 
