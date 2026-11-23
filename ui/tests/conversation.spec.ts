@@ -754,7 +754,7 @@ test("a stopped chat shows why it stopped, not an update banner", async ({ page 
   await expect(page.getByText(/needs an update/)).toHaveCount(0)
 })
 
-test("expired Claude sign-in restarts the running chat after the code is submitted", async ({ page }) => {
+test("expired Claude sign-in on a running chat leaves the restart to the gateway", async ({ page }) => {
   await page.clock.install()
   const step = { id: "claude-login", url: "https://claude.ai/oauth/authorize", input: "code", state: "waiting" }
   const notice = {
@@ -789,7 +789,8 @@ test("expired Claude sign-in restarts the running chat after the code is submitt
   await card.getByRole("button", { name: "Continue" }).click()
   await expect.poll(() => pasted).toEqual({ input: "test-code" })
   await page.clock.runFor(2500)
-  await expect.poll(() => restarted).toEqual({ operation_id: expect.stringMatching(/^[a-f0-9]{32}$/) })
+  // The gateway restarts every chat that waited for this sign-in, on every machine; this tab must not too.
+  expect(restarted).toBeUndefined()
 })
 
 test("a chat whose agent isn't signed in signs it in and then starts", async ({ page }) => {

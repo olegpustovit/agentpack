@@ -203,12 +203,6 @@ export default function ConversationPane({
   const composer = useComposer({ machine, sessionId, info, entries, reportTimings })
   const { send, resume } = composer
   const submitPrompt = send.mutate
-  const restartAfterSignIn = useIntent({
-    request: (_input: void, id) => api(`/api/sessions/${encodeURIComponent(sessionId)}/restart`, {
-      machine, body: { operation_id: id },
-    }),
-    failed: (error, _input, retry) => hud.error(conversationErrorMessage(machine, "restart the agent after sign-in", error), retry),
-  })
   const retryInput = (() => {
     const prompt = latestUserPrompt(thread.items)
     return prompt
@@ -418,8 +412,9 @@ export default function ConversationPane({
                   onOpenChat={openChat}
                   onStopSubagent={readOnly ? undefined : (id) => stopSubagent.mutate(id)}
                   authHarness={info?.harness}
+                  // The gateway restarts a running chat once its agent is signed in; a stopped one resumes here.
                   onSignedIn={!subagent && !readOnly && (resumable || live)
-                    ? () => resumable ? resume.mutate(composer.draft.trim()) : restartAfterSignIn.mutate()
+                    ? () => { if (resumable) resume.mutate(composer.draft.trim()) }
                     : undefined}
                 />
               )}

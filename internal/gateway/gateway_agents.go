@@ -2,6 +2,10 @@ package gateway
 
 import (
 	"context"
+	"crypto/rand"
+	"database/sql"
+	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"sync"
@@ -150,6 +154,7 @@ func (g *Gateway) registerAgents(mux routeRegistrar) {
 			g.agents.forget()
 			if step.State == "done" {
 				g.syncAgentCredentials(context.Background()) // share the new sign-in now, not at the next tick
+				g.reloadSignedOutChats(context.Background(), name)
 			}
 		})
 		step, err := attempt.waitLink(r.Context())
@@ -233,4 +238,45 @@ func (g *Gateway) requireOwner(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, "only the owner can change this", http.StatusForbidden)
 	}
 	return allowed
+}
+
+// reloadSignedOutChats restarts this node's running chats of harness that stopped for a sign-in, now
+// that the agent is signed in, so they continue without anyone at the browser. Other chats keep
+// running; their agents refresh their own tokens.
+func (g *Gateway) reloadSignedOutChats(ctx context.Context, harness string) {
+	ctx, event := obs.Start(ctx, "gateway", "reload_signed_out_chats")
+	event.Set("harness", harness)
+	defer event.End()
+	target, err := network.HarnessTarget(harness)
+	if err != nil {
+		event.Fail(err)
+		return
+	}
+	sessions, err := network.SessionsIn(ctx, g.store.Reader, g.options.Home)
+	if err != nil {
+		event.Fail(err)
+		return
+	}
+	var failures []error
+	for _, info := range sessions {
+		if chat, err := network.HarnessTarget(info.Harness); info.Transport != "acp" || !info.State.Running || err != nil || chat != target {
+			continue
+		}
+		// The card retires once the agent answers, so only a notice after the last answer counts.
+		// Older adapters only said so in the description, which the chat's sign-in card also accepts.
+		var signIn bool
+		err := g.store.Reader.QueryRowContext(ctx, `SELECT IFNULL(kind='notice' AND (json_extract(body,'$.payload.code')='auth_required'
+			OR json_extract(body,'$.payload.title')='The agent could not run this prompt' AND json_extract(body,'$.payload.description') LIKE '%Authentication required%'), 0)
+			FROM conversation_events WHERE session_id=? AND kind IN ('notice','agent_message_chunk','tool_call') ORDER BY seq DESC LIMIT 1`, info.ID).Scan(&signIn)
+		if errors.Is(err, sql.ErrNoRows) || err == nil && !signIn {
+			continue
+		}
+		if err == nil {
+			_, err = network.RestartWorkerWhenIdle(ctx, g.options.Home, info.ID, rand.Text())
+		}
+		if err != nil {
+			failures = append(failures, fmt.Errorf("session %s: %w", info.ID, err))
+		}
+	}
+	event.Fail(errors.Join(failures...))
 }
