@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -241,7 +242,8 @@ func (session *ConversationSession) closedErr() error {
 func (session *ConversationSession) Submit(ctx context.Context, input acp.PromptInput, steer bool) (queueID string, first <-chan error, err error) {
 	session.queueMu.Lock()
 	defer session.queueMu.Unlock()
-	if input.QueueID != "" {
+	idempotent := input.QueueID != ""
+	if idempotent {
 		if _, seen := session.seenPrompts[input.QueueID]; seen {
 			return input.QueueID, nil, nil
 		}
@@ -257,7 +259,7 @@ func (session *ConversationSession) Submit(ctx context.Context, input acp.Prompt
 		session.mu.Unlock()
 		return "", nil, err
 	}
-	if input.QueueID == "" && !session.starting && !session.running && len(session.queue) == 0 {
+	if !idempotent && !session.starting && !session.running && len(session.queue) == 0 {
 		session.running, session.userCancelled = true, false
 		session.mu.Unlock()
 		result := make(chan error, 1)
@@ -268,13 +270,12 @@ func (session *ConversationSession) Submit(ctx context.Context, input acp.Prompt
 	item := queuedPrompt{ID: input.QueueID, Input: input, Steer: steer}
 	if item.ID == "" {
 		item.ID = rand.Text()
-		if session.starting {
-			item.Input.QueueID = item.ID
-		}
 	}
+	// The prompt entry that sends it carries the ID, which is what takes it off every viewer's queue.
+	item.Input.QueueID = item.ID
 	session.mu.Unlock()
 	session.log.Append("queued_prompt", session.clock().UnixMilli(), queuedPromptPayload(item))
-	if item.Input.QueueID != "" {
+	if idempotent {
 		if err := session.log.Flush(); err != nil {
 			return "", nil, err
 		}
@@ -288,13 +289,15 @@ func (session *ConversationSession) Submit(ctx context.Context, input acp.Prompt
 	return item.ID, nil, nil
 }
 
-// afterQueued starts the queue or interrupts the current turn for a steer. The caller holds queueMu.
+// afterQueued starts the queue, hands an agent message to a running turn, or interrupts the
+// current turn for a steer. The caller holds queueMu.
 func (session *ConversationSession) afterQueued(ctx context.Context, steer, running bool) {
 	if !running {
 		session.maybeDrain()
 		return
 	}
 	if !steer {
+		session.deliverDuringTurnLocked(false)
 		return
 	}
 	session.log.Append("notice", session.clock().UnixMilli(), mustRawJSON(map[string]string{
@@ -385,6 +388,67 @@ func (session *ConversationSession) SteerQueued(ctx context.Context, id string) 
 	return nil
 }
 
+// deliverDuringTurn hands queued prompts to an agent that takes them in while its turn runs
+// (QueuesPrompts): agent messages at once, and the next user prompt when a model cycle ends, so
+// neither waits for a long turn such as a native /goal. User prompts stay editable until then.
+// Other agents get both from runTurns when the turn ends.
+func (session *ConversationSession) deliverDuringTurn(cycleEnd bool) {
+	session.queueMu.Lock()
+	defer session.queueMu.Unlock()
+	session.deliverDuringTurnLocked(cycleEnd)
+}
+
+// deliverDuringTurnLocked is deliverDuringTurn with queueMu held.
+func (session *ConversationSession) deliverDuringTurnLocked(cycleEnd bool) {
+	session.mu.Lock()
+	// An open permission request does not hold them: the agent queues them behind its answer.
+	if !session.queuesPrompts || session.delivering == 0 || session.closedErr() != nil {
+		session.mu.Unlock()
+		return
+	}
+	var send []queuedPrompt
+	session.queue = slices.DeleteFunc(session.queue, func(item queuedPrompt) bool {
+		take := !item.Steer && (item.Input.From != nil || cycleEnd)
+		if take {
+			cycleEnd = cycleEnd && item.Input.From != nil // one user prompt per cycle
+			send = append(send, item)
+		}
+		return take
+	})
+	broker := session.broker
+	session.delivering += len(send)
+	session.mu.Unlock()
+	for _, item := range send {
+		sent, answered := make(chan struct{}), make(chan struct{})
+		ctx := acp.WithAccepted(context.Background(), sync.OnceFunc(func() { close(sent) }))
+		obs.Go("acp.deliver", func() {
+			defer close(answered)
+			session.writes.RLock()
+			defer session.writes.RUnlock()
+			if err := session.deliver(ctx, broker, item.Input); err != nil {
+				select {
+				case <-sent:
+				default:
+					session.dropUnsent(item.ID, err)
+				}
+			}
+		})
+		// The next one waits until this one is logged and on its way, so the agent gets them in order.
+		select {
+		case <-sent:
+		case <-answered:
+		}
+	}
+}
+
+// dropUnsent records a queued prompt the agent never received, so it does not vanish unexplained.
+func (session *ConversationSession) dropUnsent(id string, err error) {
+	session.log.Append("notice", session.clock().UnixMilli(), mustRawJSON(map[string]string{
+		"sessionUpdate": "notice", "severity": "error", "title": "The agent could not run this prompt", "description": err.Error(),
+	}))
+	session.logDequeued(id, "failed")
+}
+
 func (session *ConversationSession) logDequeued(id, reason string) {
 	session.log.Append("dequeued_prompt", session.clock().UnixMilli(), mustRawJSON(map[string]string{"queueId": id, "reason": reason}))
 }
@@ -399,20 +463,18 @@ func (session *ConversationSession) runTurns(ctx context.Context, input *acp.Pro
 			}
 			input = &next
 		}
-		turnCtx, accepted := ctx, false
-		if first != nil {
-			// The HTTP request waits only until the prompt is logged; later failures land in the event log.
-			report := first
-			turnCtx = acp.WithAccepted(ctx, func() {
-				if !accepted {
-					accepted = true
-					report <- nil
-				}
-			})
-		}
+		accepted, report := false, first
+		// The HTTP request waits only until the prompt is logged; later failures land in the event log.
+		turnCtx := acp.WithAccepted(ctx, func() {
+			if !accepted && report != nil {
+				report <- nil
+			}
+			accepted = true
+		})
 		err := session.Prompt(turnCtx, *input)
-		if err != nil && input.QueueID != "" {
-			session.logDequeued(input.QueueID, "failed")
+		session.awaitDelivered()
+		if err != nil && !accepted && input.QueueID != "" {
+			session.dropUnsent(input.QueueID, err)
 		}
 		if first != nil {
 			if !accepted {
@@ -446,9 +508,6 @@ func (session *ConversationSession) nextPrompt() (acp.PromptInput, bool) {
 	item := session.queue[0]
 	session.queue = session.queue[1:]
 	session.mu.Unlock()
-	if item.Input.QueueID == "" {
-		session.logDequeued(item.ID, "sent")
-	}
 	return item.Input, true
 }
 

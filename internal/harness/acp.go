@@ -21,6 +21,10 @@ type ACPLaunch struct {
 	// parent usage_update stays quiet for this long (Antigravity's background-task wakeups
 	// stream session/update notifications with no session/prompt RPC or idle signal).
 	UnpromptedUsageSettle time.Duration
+	// QueuesPrompts: the adapter accepts a session/prompt while a turn runs and the agent takes
+	// it in at its next model-cycle boundary, answering each prompt separately. Agentpack then
+	// sends agent messages at once and queued prompts at each cycle end instead of at turn_end.
+	QueuesPrompts bool
 }
 
 // LogKind is one synthetic event-log row produced by AdaptAgent.

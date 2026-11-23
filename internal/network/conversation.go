@@ -1,6 +1,7 @@
 package network
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -58,6 +59,9 @@ type ConversationSession struct {
 	starting               bool
 	promptStored           func(context.Context, string) (bool, error)
 	running                bool // a turn loop owns the agent
+	queuesPrompts          bool // the agent takes a prompt in while its turn runs (harness.ACPLaunch.QueuesPrompts)
+	delivering             int  // prompts the agent has not answered yet
+	delivered              chan struct{}
 	userCancelled          bool // the user stopped the running turn
 	archived               bool
 	now                    func() time.Time
@@ -146,8 +150,12 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	var settleDelay time.Duration
 	var settleGen uint64
 	var settleAfter func(time.Duration, func())
+	// Claude's adapter reports a model cycle's result as a usage_update with its cost: inside a
+	// long turn (a native /goal, a Stop-hook continuation) that is when the next prompt goes in.
+	cycleEnd := false
 	if entry.Kind == "usage_update" && entrySubagent(entry.Payload) == "" {
 		settleDelay, settleGen, settleAfter = session.unpromptedSettlePlan()
+		cycleEnd = session.queuesPrompts && session.delivering > 0 && bytes.Contains(entry.Payload, []byte(`"cost"`))
 	}
 	titleChange, title := session.titleChange, agentTitle(entry)
 	goalDirty, pause := session.goalDirty, session.goalPauseDue
@@ -184,6 +192,9 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	if changed {
 		session.publishState()
 		session.maybeDrain()
+	}
+	if cycleEnd {
+		obs.Go("acp.deliver", func() { session.deliverDuringTurn(true) })
 	}
 }
 
@@ -418,7 +429,38 @@ func (session *ConversationSession) Prompt(ctx context.Context, input acp.Prompt
 	if exited {
 		return errors.New("ACP adapter has exited")
 	}
-	return broker.Prompt(ctx, input)
+	session.mu.Lock()
+	session.delivering++
+	session.mu.Unlock()
+	return session.deliver(ctx, broker, input)
+}
+
+// deliver sends input to the agent, counted by the caller in delivering until the agent answers.
+func (session *ConversationSession) deliver(ctx context.Context, broker *acp.Broker, input acp.PromptInput) error {
+	err := broker.Prompt(ctx, input)
+	session.mu.Lock()
+	session.delivering--
+	if session.delivering == 0 && session.delivered != nil {
+		close(session.delivered)
+		session.delivered = nil
+	}
+	session.mu.Unlock()
+	return err
+}
+
+// awaitDelivered waits until the agent answered every prompt sent to it.
+func (session *ConversationSession) awaitDelivered() {
+	session.mu.Lock()
+	if session.delivering == 0 {
+		session.mu.Unlock()
+		return
+	}
+	if session.delivered == nil {
+		session.delivered = make(chan struct{})
+	}
+	done := session.delivered
+	session.mu.Unlock()
+	<-done
 }
 
 // observeEntry counts events as they arrive, even when the replay tail evicts them.

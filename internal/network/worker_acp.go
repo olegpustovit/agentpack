@@ -124,53 +124,8 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 		workspace = launch.Directory
 	}
 
-	var (
-		connMu          sync.Mutex
-		conn            *sdkacp.ClientSideConnection
-		sessID          sdkacp.SessionId
-		imageCapability bool
-	)
-	broker := acp.NewBroker(
-		func(ctx context.Context, input acp.PromptInput) (result error) {
-			defer func() { result = errors.Join(result, log.Flush()) }()
-			connMu.Lock()
-			c, sid, images := conn, sessID, imageCapability
-			connMu.Unlock()
-			if c == nil {
-				return errors.New("acp session not ready")
-			}
-			blocks, loggedInput, err := promptContentBlocks(sessionDir, input, images)
-			if err != nil {
-				return err
-			}
-			log.Append("prompt", time.Now().UnixMilli(), promptLogPayload(loggedInput))
-			if err := log.Flush(); err != nil {
-				return err
-			}
-			acp.Accepted(ctx)
-			response, err := c.Prompt(ctx, sdkacp.PromptRequest{
-				SessionId: sid,
-				Prompt:    blocks,
-			})
-			if err == nil {
-				log.Append("turn_end", time.Now().UnixMilli(), mustRawJSON(response))
-			} else {
-				logFailedTurn(log, launch.Session.Harness, err)
-			}
-			return err
-		},
-		func(ctx context.Context) error {
-			connMu.Lock()
-			c, sid := conn, sessID
-			connMu.Unlock()
-			if c == nil {
-				return nil
-			}
-			return c.Cancel(ctx, sdkacp.CancelNotification{SessionId: sid})
-		},
-		nil,
-		brokerSetConfigOption(&connMu, &conn, &sessID, log),
-	)
+	prompter := &acpPrompter{log: log, sessionDir: sessionDir, harness: launch.Session.Harness}
+	broker := prompter.broker()
 	conv.mu.Lock()
 	conv.broker = broker
 	conv.workspace = workspace
@@ -188,9 +143,9 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 	clientConn := client.NewClientSideConnection(c2aW, a2cR)
 	agentConn := sdkacp.NewAgentSideConnection(agent, a2cW, c2aR)
 	agent.SetConnection(agentConn)
-	connMu.Lock()
-	conn = clientConn
-	connMu.Unlock()
+	prompter.mu.Lock()
+	prompter.conn = clientConn
+	prompter.mu.Unlock()
 	ctx, cancel := context.WithCancel(ctx)
 	cleanup := func() {
 		cancel()
@@ -209,12 +164,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 		cleanup()
 		return nil, nil, err
 	}
-	connMu.Lock()
-	sessID = sdkacp.SessionId(setup.AgentSessionID)
-	imageCapability = setup.AgentCapabilities != nil &&
-		setup.AgentCapabilities.PromptCapabilities != nil &&
-		setup.AgentCapabilities.PromptCapabilities.Image
-	connMu.Unlock()
+	prompter.ready(setup)
 	launch.Session.AgentSessionID = setup.AgentSessionID
 	conv.agentVersion = setup.AgentVersion
 	conv.agentSessionID = setup.AgentSessionID
@@ -250,73 +200,16 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		closeACPEventLog(log)
 		return nil, nil, fmt.Errorf("open ACP adapter stdin: %w", err)
 	}
-	var (
-		connMu          sync.Mutex
-		conn            *sdkacp.ClientSideConnection
-		sessID          sdkacp.SessionId
-		imageCapability bool
-		handoff         string
-	)
+	prompter := &acpPrompter{log: log, sessionDir: sessionDir, harness: launch.Session.Harness}
 	// A fresh agent on a chat with history took it over from another agent: it gets that history once.
 	if launch.Session.AgentSessionID == "" && launch.ForkSessionID == "" {
 		reader := ""
 		if launch.Session.Tools && launch.tools.token != "" {
 			reader = launch.Session.ID
 		}
-		handoff = handoffContext(log.Snapshot(), reader)
+		prompter.handoff = handoffContext(log.Snapshot(), reader)
 	}
-	broker := acp.NewBroker(
-		func(ctx context.Context, input acp.PromptInput) (result error) {
-			defer func() { result = errors.Join(result, log.Flush()) }()
-			connMu.Lock()
-			c, sid, images, earlier := conn, sessID, imageCapability, handoff
-			handoff = ""
-			connMu.Unlock()
-			defer func() {
-				if result != nil && earlier != "" {
-					connMu.Lock()
-					handoff = earlier
-					connMu.Unlock()
-				}
-			}()
-			if c == nil {
-				return errors.New("acp session not ready")
-			}
-			blocks, loggedInput, err := promptContentBlocks(sessionDir, input, images)
-			if err != nil {
-				return err
-			}
-			if earlier != "" {
-				blocks = append([]sdkacp.ContentBlock{sdkacp.TextBlock(earlier)}, blocks...)
-			}
-			log.Append("prompt", time.Now().UnixMilli(), promptLogPayload(loggedInput))
-			if err := log.Flush(); err != nil {
-				return err
-			}
-			acp.Accepted(ctx)
-			response, err := c.Prompt(ctx, sdkacp.PromptRequest{
-				SessionId: sid,
-				Prompt:    blocks,
-			})
-			if err == nil {
-				log.Append("turn_end", time.Now().UnixMilli(), mustRawJSON(response))
-			} else {
-				logFailedTurn(log, launch.Session.Harness, err)
-			}
-			return err
-		},
-		func(ctx context.Context) error {
-			connMu.Lock()
-			c, sid := conn, sessID
-			connMu.Unlock()
-			if c == nil {
-				return nil
-			}
-			return c.Cancel(ctx, sdkacp.CancelNotification{SessionId: sid})
-		},
-		nil,
-		brokerSetConfigOption(&connMu, &conn, &sessID, log),
-	)
+	broker := prompter.broker()
 	conv.mu.Lock()
 	conv.broker = broker
 	conv.workspace = workspace
@@ -337,9 +230,9 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	}}
 	stdinToAgent := io.Writer(rewriter)
 	clientConn := client.NewClientSideConnection(stdinToAgent, clientInR)
-	connMu.Lock()
-	conn = clientConn
-	connMu.Unlock()
+	prompter.mu.Lock()
+	prompter.conn = clientConn
+	prompter.mu.Unlock()
 	adaptDone := make(chan struct{})
 	go func() {
 		defer close(adaptDone)
@@ -447,12 +340,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		cleanup()
 		return nil, nil, explainACPAuthRequired(err, harness.ID())
 	}
-	connMu.Lock()
-	sessID = sdkacp.SessionId(setup.AgentSessionID)
-	imageCapability = setup.AgentCapabilities != nil &&
-		setup.AgentCapabilities.PromptCapabilities != nil &&
-		setup.AgentCapabilities.PromptCapabilities.Image
-	connMu.Unlock()
+	prompter.ready(setup)
 	launch.Session.AgentSessionID = setup.AgentSessionID
 	conv.stderr = stderr
 	conv.agentExitCode = exitCode
@@ -466,6 +354,9 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		conv.clientMode = "default"
 		conv.mu.Unlock()
 	}
+	conv.mu.Lock()
+	conv.queuesPrompts = acpLaunch.QueuesPrompts
+	conv.mu.Unlock()
 	if acpLaunch.UnpromptedUsageSettle > 0 {
 		conv.SetUnpromptedUsageSettle(acpLaunch.UnpromptedUsageSettle)
 	}
@@ -1071,6 +962,89 @@ func listACPAgentSessions(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	return out, nil
 }
 
+// acpPrompter sends prompts over one ACP connection. An agent with QueuesPrompts answers each
+// prompt sent during another's turn separately, so the chat's turn ends with the last answer.
+type acpPrompter struct {
+	log        *acp.EventLog
+	sessionDir string
+	harness    string
+
+	mu       sync.Mutex
+	conn     *sdkacp.ClientSideConnection
+	sessID   sdkacp.SessionId
+	images   bool
+	handoff  string // earlier transcript for an agent taking the chat over, sent once
+	inFlight int
+}
+
+func (p *acpPrompter) broker() *acp.Broker {
+	return acp.NewBroker(p.prompt, p.cancel, nil, brokerSetConfigOption(&p.mu, &p.conn, &p.sessID, p.log))
+}
+
+func (p *acpPrompter) ready(setup acpSessionSetup) {
+	p.mu.Lock()
+	p.sessID = sdkacp.SessionId(setup.AgentSessionID)
+	p.images = setup.AgentCapabilities != nil && setup.AgentCapabilities.PromptCapabilities != nil &&
+		setup.AgentCapabilities.PromptCapabilities.Image
+	p.mu.Unlock()
+}
+
+func (p *acpPrompter) prompt(ctx context.Context, input acp.PromptInput) (result error) {
+	log := p.log
+	defer func() { result = errors.Join(result, log.Flush()) }()
+	p.mu.Lock()
+	c, sid, images, earlier := p.conn, p.sessID, p.images, p.handoff
+	p.handoff = ""
+	p.mu.Unlock()
+	defer func() {
+		if result != nil && earlier != "" {
+			p.mu.Lock()
+			p.handoff = earlier
+			p.mu.Unlock()
+		}
+	}()
+	if c == nil {
+		return errors.New("acp session not ready")
+	}
+	blocks, loggedInput, err := promptContentBlocks(p.sessionDir, input, images)
+	if err != nil {
+		return err
+	}
+	if earlier != "" {
+		blocks = append([]sdkacp.ContentBlock{sdkacp.TextBlock(earlier)}, blocks...)
+	}
+	log.Append("prompt", time.Now().UnixMilli(), promptLogPayload(loggedInput))
+	if err := log.Flush(); err != nil {
+		return err
+	}
+	acp.Accepted(ctx)
+	p.mu.Lock()
+	p.inFlight++
+	p.mu.Unlock()
+	response, err := c.Prompt(ctx, sdkacp.PromptRequest{SessionId: sid, Prompt: blocks})
+	p.mu.Lock()
+	p.inFlight--
+	last := p.inFlight == 0
+	p.mu.Unlock()
+	switch {
+	case err != nil:
+		logFailedTurn(log, p.harness, err, last)
+	case last:
+		log.Append("turn_end", time.Now().UnixMilli(), mustRawJSON(response))
+	}
+	return err
+}
+
+func (p *acpPrompter) cancel(ctx context.Context) error {
+	p.mu.Lock()
+	c, sid := p.conn, p.sessID
+	p.mu.Unlock()
+	if c == nil {
+		return nil
+	}
+	return c.Cancel(ctx, sdkacp.CancelNotification{SessionId: sid})
+}
+
 // A successful change records the agent's full option set, which is how the session's cached options follow it.
 func brokerSetConfigOption(connMu *sync.Mutex, conn **sdkacp.ClientSideConnection, sessID *sdkacp.SessionId, log *acp.EventLog) func(context.Context, string, string) error {
 	return func(ctx context.Context, key, value string) error {
@@ -1120,9 +1094,9 @@ func mustRawJSON(v any) json.RawMessage {
 	return b
 }
 
-// logFailedTurn ends a turn the agent refused, such as one that needs a
-// sign-in, so viewers see why instead of a turn that never ends.
-func logFailedTurn(log *acp.EventLog, harness string, err error) {
+// logFailedTurn explains a prompt the agent refused, such as one that needs a sign-in, and ends
+// the turn unless another prompt still runs, so viewers see why instead of a turn that never ends.
+func logFailedTurn(log *acp.EventLog, harness string, err error, end bool) {
 	now := time.Now().UnixMilli()
 	description := err.Error()
 	if errors.Is(err, context.Canceled) || strings.Contains(description, "context canceled") || strings.Contains(description, "Request cancelled") {
@@ -1138,5 +1112,7 @@ func logFailedTurn(log *acp.EventLog, harness string, err error) {
 		}
 	}
 	log.Append("notice", now, mustRawJSON(notice))
-	log.Append("turn_end", now, mustRawJSON(map[string]any{"stopReason": "error"}))
+	if end {
+		log.Append("turn_end", now, mustRawJSON(map[string]any{"stopReason": "error"}))
+	}
 }

@@ -641,7 +641,7 @@ func TestRunWorkerACPRestartAndStop(t *testing.T) {
 func TestFailedPromptEndsTheTurnWithANotice(t *testing.T) {
 	log := acp.NewEventLog(0)
 	log.Append("prompt", 1, json.RawMessage(`{"text":"hi"}`))
-	logFailedTurn(log, "claude", sdkacp.NewAuthRequired(nil))
+	logFailedTurn(log, "claude", sdkacp.NewAuthRequired(nil), true)
 	entries := log.Snapshot()
 	state := acp.ReduceLog(entries)
 	if state.Working || len(entries) != 3 || entries[1].Kind != "notice" || !strings.Contains(string(entries[1].Payload), `"code":"auth_required"`) || !strings.Contains(string(entries[1].Payload), `"id":"claudeai"`) {
@@ -748,5 +748,51 @@ func TestACPAuthRequiredNamesAgentAndMachine(t *testing.T) {
 	other := errors.New("acp session/new: boom")
 	if explainACPAuthRequired(other, base.Agy) != other {
 		t.Fatal("unrelated error rewritten")
+	}
+}
+
+// heldAgent answers every prompt only when the test releases it.
+type heldAgent struct {
+	*acptest.ReplayAgent
+	received chan struct{}
+	release  chan struct{}
+}
+
+func (agent *heldAgent) Prompt(context.Context, sdkacp.PromptRequest) (sdkacp.PromptResponse, error) {
+	agent.received <- struct{}{}
+	<-agent.release
+	return sdkacp.PromptResponse{StopReason: sdkacp.StopReasonEndTurn}, nil
+}
+
+func TestPromptSentDuringATurnEndsTheTurnOnce(t *testing.T) {
+	agent := &heldAgent{ReplayAgent: acptest.NewReplayAgent(nil), received: make(chan struct{}, 2), release: make(chan struct{})}
+	clientToAgentReader, clientToAgentWriter := io.Pipe()
+	agentToClientReader, agentToClientWriter := io.Pipe()
+	log := acp.NewEventLog(0)
+	clientConn := acp.NewHarnessClient("", nil, log, nil).NewClientSideConnection(clientToAgentWriter, agentToClientReader)
+	agent.SetConnection(sdkacp.NewAgentSideConnection(agent, agentToClientWriter, clientToAgentReader))
+	defer func() {
+		for _, pipe := range []io.Closer{clientToAgentWriter, agentToClientWriter, clientToAgentReader, agentToClientReader} {
+			_ = pipe.Close()
+		}
+	}()
+	prompter := &acpPrompter{log: log, conn: clientConn, sessID: "s"}
+	errs := make(chan error, 2)
+	for _, text := range []string{"goal", "message"} {
+		go func() { errs <- prompter.prompt(context.Background(), acp.PromptInput{Text: text}) }()
+		<-agent.received
+	}
+	close(agent.release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	var kinds []string
+	for _, entry := range log.Snapshot() {
+		kinds = append(kinds, entry.Kind)
+	}
+	if strings.Join(kinds, ",") != "prompt,prompt,turn_end" {
+		t.Fatalf("log = %v, want both prompts and one turn_end", kinds)
 	}
 }
