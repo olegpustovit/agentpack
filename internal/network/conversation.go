@@ -82,6 +82,8 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 			session.agentExited = true
 		}
 	}
+	// Replayed history already acted on its goal checks.
+	session.goalPauseDue, session.goalNoticeDue = false, ""
 	thread = fold.Thread.State()
 	session.state, session.waiting = conversationState(thread), len(thread.Waiting)
 	close(session.initialized)
@@ -129,8 +131,8 @@ func (cs *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 		settleDelay, settleGen, settleAfter = cs.unpromptedSettlePlan()
 		cycleEnd = cs.queuesPrompts && cs.delivering > 0 && bytes.Contains(entry.Payload, []byte(`"cost"`))
 	}
-	goalDirty, pause := cs.goalDirty, cs.goalPauseDue
-	cs.goalDirty, cs.goalPauseDue = false, false
+	goalDirty, pause, notice := cs.goalDirty, cs.goalPauseDue, cs.goalNoticeDue
+	cs.goalDirty, cs.goalPauseDue, cs.goalNoticeDue = false, false, ""
 	var afterIdle func()
 	if cs.afterIdle != nil && cs.idleLocked() {
 		afterIdle, cs.afterIdle = cs.afterIdle, nil
@@ -162,7 +164,12 @@ func (cs *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 		obs.Go("acp.goal_publish", cs.publishGoal)
 	}
 	if pause {
-		obs.Go("acp.goal_pause", func() { _, _, _ = cs.Submit(context.Background(), acp.PromptInput{Text: "/goal pause"}, false) })
+		obs.Go("acp.goal_pause", func() {
+			if notice != "" {
+				cs.goalNotice(notice)
+			}
+			cs.pauseNativeGoal(context.Background())
+		})
 	}
 	if cycleEnd {
 		obs.Go("acp.deliver", func() { cs.deliverDuringTurn(true) })
