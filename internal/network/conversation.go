@@ -106,7 +106,6 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 	entries := log.SetOnAppend(session.applyLogEntry)
 	for _, entry := range entries {
 		session.observeEntry(entry)
-		session.applyConfigUpdate(entry)
 		session.replayEntry(entry)
 		if entry.Kind == "agent_exit" {
 			session.agentExited = true
@@ -135,8 +134,7 @@ func conversationState(thread acp.ThreadState) string {
 func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	<-session.initialized
 	session.mu.Lock()
-	session.observeEntry(entry)
-	session.applyConfigUpdate(entry)
+	parent := session.observeEntry(entry)
 	if entry.Kind == "agent_exit" {
 		session.agentExited = true
 	}
@@ -155,7 +153,7 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	// Claude's adapter reports a model cycle's result as a usage_update with its cost: inside a
 	// long turn (a native /goal, a Stop-hook continuation) that is when the next prompt goes in.
 	cycleEnd := false
-	if entry.Kind == "usage_update" && entrySubagent(entry.Payload) == "" {
+	if entry.Kind == "usage_update" && parent {
 		settleDelay, settleGen, settleAfter = session.unpromptedSettlePlan()
 		cycleEnd = session.queuesPrompts && session.delivering > 0 && bytes.Contains(entry.Payload, []byte(`"cost"`))
 	}
@@ -166,7 +164,7 @@ func (session *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	subagentsChange := session.subagentsChange
 	snapshotChanged := session.snapshotChanged
 	session.mu.Unlock()
-	if snapshotChanged != nil && entrySubagent(entry.Payload) == "" {
+	if snapshotChanged != nil && parent {
 		switch entry.Kind {
 		case "agent_configuration", "config_option_update", "current_mode_update", "available_commands_update":
 			snapshotChanged()
@@ -219,10 +217,6 @@ func agentTitle(entry acp.LogEntry) string {
 
 // applyConfigUpdate keeps the cached options in step with the agent. The caller holds mu.
 func (session *ConversationSession) applyConfigUpdate(entry acp.LogEntry) {
-	// A helper's options (one model, its own mode) describe the helper, not the chat.
-	if entrySubagent(entry.Payload) != "" {
-		return
-	}
 	switch entry.Kind {
 	case "available_commands_update":
 		session.agentCommands = entry.Payload
@@ -465,40 +459,45 @@ func (session *ConversationSession) awaitDelivered() {
 	<-done
 }
 
-// observeEntry counts events as they arrive, even when the replay tail evicts them.
+// observeEntry counts events as they arrive, even when the replay tail evicts them, and reports
+// whether the entry is the chat's own. A subagent's entries (its options, usage, replies and turn
+// ends) never drive the chat's goal, usage, retry or stop reason.
 // The caller holds mu, or is initializing the session before publication.
-func (session *ConversationSession) observeEntry(entry acp.LogEntry) {
+func (session *ConversationSession) observeEntry(entry acp.LogEntry) bool {
 	session.lastSeq = entry.Seq
-	session.observeGoalEntry(entry)
-	if entrySubagent(entry.Payload) == "" {
-		switch entry.Kind {
-		case "prompt":
-			session.inPromptTurn = true
-			session.lastParentKind = "prompt"
-			session.unpromptedUsagePending = false
-			session.advanceSettle()
-		case "turn_end", "agent_exit":
-			session.inPromptTurn = false
-			session.lastParentKind = entry.Kind
-			session.unpromptedUsagePending = false
-			session.advanceSettle()
-		case "agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update",
-			"permission_request", "permission_result", "elicitation", "elicitation_result":
-			session.lastParentKind = entry.Kind
-			session.unpromptedUsagePending = false
-			session.advanceSettle()
-		case "usage_update":
-			session.advanceSettle()
-			session.unpromptedUsagePending = !session.inPromptTurn &&
-				(session.lastParentKind == "agent_message_chunk" || session.lastParentKind == "agent_thought_chunk")
-		}
-	}
 	switch entry.Kind {
 	case "tool_call":
 		session.toolCalls++
 	case "permission_request":
 		session.permissions++
-	case "turn_end":
+	}
+	if entrySubagent(entry.Payload) != "" {
+		return false
+	}
+	session.observeGoalEntry(entry)
+	session.applyConfigUpdate(entry)
+	switch entry.Kind {
+	case "prompt":
+		session.inPromptTurn = true
+		session.lastParentKind = "prompt"
+		session.unpromptedUsagePending = false
+		session.advanceSettle()
+	case "turn_end", "agent_exit":
+		session.inPromptTurn = false
+		session.lastParentKind = entry.Kind
+		session.unpromptedUsagePending = false
+		session.advanceSettle()
+	case "agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update",
+		"permission_request", "permission_result", "elicitation", "elicitation_result":
+		session.lastParentKind = entry.Kind
+		session.unpromptedUsagePending = false
+		session.advanceSettle()
+	case "usage_update":
+		session.advanceSettle()
+		session.unpromptedUsagePending = !session.inPromptTurn &&
+			(session.lastParentKind == "agent_message_chunk" || session.lastParentKind == "agent_thought_chunk")
+	}
+	if entry.Kind == "turn_end" {
 		var end struct {
 			StopReason string `json:"stopReason"`
 			Status     string `json:"status"`
@@ -508,11 +507,12 @@ func (session *ConversationSession) observeEntry(entry acp.LogEntry) {
 				switch reason {
 				case "end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled", "completed", "error", "failed":
 					session.stopReason = reason
-					return
+					return true
 				}
 			}
 		}
 	}
+	return true
 }
 
 // Cancel is the user's Stop: it ends the running turn and pauses an active goal.
