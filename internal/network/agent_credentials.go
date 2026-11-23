@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
@@ -140,30 +139,24 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 
 func (g *Gateway) installedAgentCredential(ctx context.Context, key string) (installedCredential, bool, error) {
 	var record installedCredential
-	err := g.store.Reader.QueryRowContext(ctx, "SELECT hash,rev FROM agent_credential_installs WHERE key=?", key).Scan(&record.Hash, &record.Rev)
-	if errors.Is(err, sql.ErrNoRows) {
-		return record, false, nil
-	}
-	return record, err == nil, err
+	var ok bool
+	var err error
+	record.Hash, record.Rev, ok, err = g.store.Credentials().AgentInstall(ctx, key)
+	return record, ok, err
 }
 
 func (g *Gateway) recordAgentCredential(ctx context.Context, key string, credential sharedAgentCredential) error {
 	digest := sha256.Sum256(credential.Data)
-	_, err := g.store.DB.ExecContext(ctx, "INSERT INTO agent_credential_installs(key,hash,rev) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET hash=excluded.hash,rev=excluded.rev", key, digest[:], credential.Rev)
-	return err
+	return g.store.Credentials().RecordAgentInstall(ctx, key, digest[:], credential.Rev)
 }
 
 func (g *Gateway) sharedAgentCredential(ctx context.Context, key string) (sharedAgentCredential, error) {
-	var value string
 	var shared sharedAgentCredential
-	err := g.store.Reader.QueryRowContext(ctx, "SELECT value FROM agent_credentials WHERE key=?", key).Scan(&value)
-	if errors.Is(err, sql.ErrNoRows) {
-		return shared, nil
-	}
-	if err != nil {
+	value, err := g.store.Credentials().Agent(ctx, key)
+	if err != nil || value == nil {
 		return shared, err
 	}
-	return shared, json.Unmarshal([]byte(value), &shared)
+	return shared, json.Unmarshal(value, &shared)
 }
 
 func (g *Gateway) publishAgentCredential(ctx context.Context, key string, credential sharedAgentCredential) error {
@@ -171,7 +164,7 @@ func (g *Gateway) publishAgentCredential(ctx context.Context, key string, creden
 	if err != nil {
 		return err
 	}
-	if _, err = g.store.DB.ExecContext(ctx, "INSERT INTO agent_credentials(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, string(value)); err != nil || credential.Data == nil {
+	if err = g.store.Credentials().PublishAgent(ctx, key, value); err != nil || credential.Data == nil {
 		// A sign-out keeps the record of the file this machine holds, so that file is not republished.
 		return err
 	}
