@@ -103,10 +103,14 @@ func TestRunningAppliesClaudeEnvironmentWithoutAPIKey(t *testing.T) {
 	defer server.listener.Close()
 	running := &Running{Server: server, Token: "proxy-token"}
 	command := exec.Command("claude")
-	command.Env = []string{"ANTHROPIC_API_KEY=old"}
+	command.Env = []string{"ANTHROPIC_API_KEY=old", "ANTHROPIC_DEFAULT_OPUS_MODEL=gpt-5.4"}
 	running.Apply(command)
 	joined := strings.Join(command.Env, "\n")
 	if strings.Contains(joined, "ANTHROPIC_API_KEY=") || !strings.Contains(joined, "ANTHROPIC_AUTH_TOKEN=proxy-token") {
+		t.Fatalf("env=%v", command.Env)
+	}
+	// A model the user chose wins over the proxy's family default.
+	if strings.Count(joined, "ANTHROPIC_DEFAULT_OPUS_MODEL=") != 1 || !strings.Contains(joined, "ANTHROPIC_DEFAULT_OPUS_MODEL=gpt-5.4") || !strings.Contains(joined, "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6") {
 		t.Fatalf("env=%v", command.Env)
 	}
 }
