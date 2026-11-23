@@ -208,7 +208,8 @@ func (g *Gateway) setChatTools(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// helperAllowed enforces the helper limits below the root of parent's tree.
+// helperAllowed enforces the helper limits below the root of parent's tree. Only helpers that are
+// still working hold a slot: an idle one has finished its task, a stopped one has ended.
 func (g *Gateway) helperAllowed(ctx context.Context, parent string) error {
 	root := parent
 	for depth, id := 0, parent; id != ""; depth++ {
@@ -228,7 +229,7 @@ func (g *Gateway) helperAllowed(ctx context.Context, parent string) error {
 	var running int
 	err := g.store.Reader.QueryRowContext(ctx, `WITH RECURSIVE tree(id) AS (
  SELECT id FROM sessions WHERE parent_id=? UNION SELECT sessions.id FROM sessions JOIN tree ON sessions.parent_id=tree.id)
- SELECT count(*) FROM sessions WHERE id IN (SELECT id FROM tree) AND ended_at=0 AND archived_at=0`, root).Scan(&running)
+ SELECT count(*) FROM sessions WHERE id IN (SELECT id FROM tree) AND ended_at=0 AND archived_at=0 AND conversation_state<>'idle'`, root).Scan(&running)
 	if err == nil && running >= maxHelpers {
 		err = fmt.Errorf("this chat already runs %d helpers; stop one first", maxHelpers)
 	}

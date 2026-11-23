@@ -373,6 +373,9 @@ func TestHelperDepthAndFanOutCaps(t *testing.T) {
 	for _, id := range []string{"session-a", "session-b", "session-c", "session-d"} {
 		chatFixture(t, h, id, "session-root")
 	}
+	if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET conversation_state='working'"); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.gateway.helperAllowed(t.Context(), "session-one"); err == nil || !strings.Contains(err.Error(), "6 helpers") {
 		t.Fatal("seventh helper allowed:", err)
 	}
@@ -381,6 +384,20 @@ func TestHelperDepthAndFanOutCaps(t *testing.T) {
 	}
 	if err := h.gateway.helperAllowed(t.Context(), "session-root"); err != nil {
 		t.Fatal("a finished helper still counts:", err)
+	}
+	chatFixture(t, h, "session-e", "session-root")
+	if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET conversation_state='working'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.gateway.helperAllowed(t.Context(), "session-root"); err == nil {
+		t.Fatal("seventh working helper allowed")
+	}
+	// A helper whose task is done waits idle; it does not hold a slot.
+	if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET conversation_state='idle' WHERE id='session-b'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.gateway.helperAllowed(t.Context(), "session-root"); err != nil {
+		t.Fatal("an idle helper still counts:", err)
 	}
 	if err := h.gateway.helperAllowed(t.Context(), "session-missing"); err == nil {
 		t.Fatal("unknown parent allowed")
