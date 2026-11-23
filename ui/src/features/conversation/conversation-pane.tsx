@@ -621,7 +621,7 @@ export default function ConversationPane({
   // Images upload to the running agent, so a starting chat accepts text.
   const canSend = !readOnly && (draft.trim().length > 0 || attachments.length > 0) && !upload.isPending && !needsUpdate && !((starting || resumable) && attachments.length > 0) && !(resumable && resume.isPending)
 
-  const nextQueued = parent.queue?.find((item) => !item.steer)
+  const nextQueued = parent.queue?.find((item) => !item.steer && !item.delivered)
 
   function submit(steer = false) {
     // Enter on an empty composer sends the waiting message now.
@@ -948,6 +948,7 @@ export default function ConversationPane({
               sessionId={sessionId}
               readOnly={readOnly || needsUpdate}
               steering={steerQueued.isPending ? steerQueued.input : undefined}
+              steerJoins={info?.agent_capabilities?.steering === true}
               onSteer={steerQueued.mutate}
             />
             <GoalPill
@@ -996,7 +997,7 @@ export default function ConversationPane({
                   id="conversation-message"
                   aria-label="Message"
                   rows={1}
-                  placeholder={needsUpdate ? "Update this peer to open the conversation…" : starting ? `Starting ${agentName}…` : nextQueued ? "Queue another message, or press ↵ to steer with the queued one" : parent.working ? `Queue a message for ${agentName} (⌘↵ steers)` : `Message ${agentName}`}
+                  placeholder={needsUpdate ? "Update this peer to open the conversation…" : starting ? `Starting ${agentName}…` : nextQueued ? "Queue another message, or press ↵ to steer with the queued one" : parent.working ? `Queue a message for ${agentName} (⌘↵ ${info?.agent_capabilities?.steering ? "steers" : "interrupts to steer"})` : `Message ${agentName}`}
                   value={draft}
                   disabled={needsUpdate}
                   aria-controls={composerHints.length > 0 ? "composer-hints-list" : undefined}
@@ -1305,7 +1306,7 @@ export default function ConversationPane({
                   </Button>
                 )}
                 {parent.working && canSend && (
-                  <Button type="button" size="sm" variant="ghost" title="Interrupt the agent and send this now (⌘↵)" onClick={() => submit(true)}>
+                  <Button type="button" size="sm" variant="ghost" title={info?.agent_capabilities?.steering ? "Send this into the agent's current turn now (⌘↵)" : "Interrupt the agent and send this now (⌘↵)"} onClick={() => submit(true)}>
                     <CornerDownLeft aria-hidden /> Steer
                   </Button>
                 )}

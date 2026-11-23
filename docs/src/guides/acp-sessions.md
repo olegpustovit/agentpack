@@ -27,8 +27,10 @@ metadata. Conversation entries also persist in state.db. Memory eviction does no
 remove saved history; adjacent text chunks may be stored as one merged entry.
 Restart loads the saved replay tail and continues its sequence numbers. Writes
 batch every 50 ms, flushing sooner under byte pressure and once more after
-queued updates and active prompts drain during shutdown. Storage failures stop
-the worker and report a diagnostic without copying chat into diagnostics.
+queued updates and active prompts drain during shutdown. A storage failure keeps
+the chat running from memory, retries with backoff, leaves one notice in the chat
+and reports one diagnostic without copying chat into it; an archived chat stops
+the worker.
 A private `network/sessions/<id>/worker.json` retains only the running
 process's ID, PID, loopback address and secret. Forgetting a recent folder hides
 its launch rows; it does not remove files from the folder or erase session data.
@@ -74,7 +76,7 @@ The script does not launch agents. It reports missing `testdata/acp/<harness>.js
 
 The agent button in the composer continues a chat with another agent (`POST /api/sessions/{id}/harness`). The old agent stops; the chat keeps its ID and transcript, and the new agent starts a fresh session whose first prompt carries that transcript (messages and tool titles, no thoughts or subagent output). With agentpack tools on, only the newest 32 KiB is inlined and the prompt names the `read_conversation` tool and session ID for the rest, which stays in `state.db`; without tools the newest 96 KiB is inlined. Enter on an empty composer sends the first queued message now.
 
-A message sent while the agent works waits in the queue, where it can be edited, steered or removed. Claude takes prompts in during a running turn, so a message from another chat's agent (`ask`, `reply`) goes to it at once, and the next queued message goes in when the current model cycle ends (its result's usage report), even inside a native `/goal` that keeps one turn open. Other agents receive both when the turn ends. A message leaves the queue when it is sent to the agent.
+A message sent while the agent works waits in the queue, where it can be edited, steered or removed. Claude takes prompts in during a running turn, so a message from another chat's agent (`ask`, `reply`) goes to it at once, and the next queued message goes in when the current model cycle ends (its result's usage report), even inside a native `/goal` that keeps one turn open. Other agents receive both when the turn ends. A message the agent has received but not yet taken in shows as Delivered and can no longer be changed; it leaves the queue when the agent takes it in. Steer hands the message to the running turn through `_session/steering` (Claude and Codex) and never sends `session/cancel`, so background subagents keep running; only Stop cancels. Agents without steering are interrupted first, and the composer says so.
 
 The permission mode last chosen for an agent is stored network-wide in `mesh_settings` (`permission_mode.<harness>`) and applied to every chat of that agent when it starts or resumes. Antigravity's ACP server offers no permission modes, so agentpack offers Ask and Bypass Permissions for it and answers its permission requests itself in Bypass. Claude's Bypass Permissions and Codex's Full access still send some permission requests (Codex asks before ChatGPT app tools); agentpack allows those itself. A sign-in an MCP server or ChatGPT app asks for (a URL request) is never answered automatically: the chat shows an **Open** link with **Done** and **Decline**, and the agent continues once you answer.
 

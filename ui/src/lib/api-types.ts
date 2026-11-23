@@ -32,6 +32,8 @@ export type AgentCapabilities = {
     resume?: Record<string, unknown>
     fork?: Record<string, unknown>
   }
+  // A steer joins the running turn instead of interrupting it.
+  steering?: boolean
 }
 
 export type SessionInfo = {

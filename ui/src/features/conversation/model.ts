@@ -38,7 +38,8 @@ export type ThreadState = {
   subagents?: Record<string, Subagent>
 }
 
-export type QueuedPrompt = UserMessagePayload & { queueId: string; steer?: boolean }
+// delivered: the agent has it but has not taken it in yet, so it can no longer be changed.
+export type QueuedPrompt = UserMessagePayload & { queueId: string; steer?: boolean; delivered?: boolean }
 
 export type Subagent = {
   id: string

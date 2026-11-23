@@ -158,3 +158,41 @@ func TestPromptsWaitForTheTurnEndWhenTheAgentCannotQueue(t *testing.T) {
 		t.Fatalf("then = %q", got)
 	}
 }
+
+func TestSteerHandsThePromptToTheRunningTurn(t *testing.T) {
+	log := acp.NewEventLog(0)
+	release, cancels := make(chan struct{}), 0
+	broker := acp.NewBroker(func(ctx context.Context, input acp.PromptInput) error {
+		log.Append("prompt", 1, promptLogPayload(input))
+		acp.Accepted(ctx)
+		<-release
+		log.Append("turn_end", 1, mustRawJSON(map[string]string{"stopReason": "end_turn"}))
+		return nil
+	}, func(context.Context) error { cancels++; return nil }, nil, nil)
+	session := NewConversationSession(log, broker)
+	var steered []string
+	session.steer = func(_ context.Context, input acp.PromptInput) (bool, error) {
+		steered = append(steered, input.Text)
+		log.Append("prompt", 1, promptLogPayload(input))
+		return true, nil
+	}
+	ctx := context.Background()
+	if _, _, err := session.Submit(ctx, acp.PromptInput{Text: "/goal ship it"}, false); err != nil {
+		t.Fatal(err)
+	}
+	waitConversationState(t, session, "working")
+	if _, _, err := session.Submit(ctx, acp.PromptInput{QueueID: "s1", Text: "look here"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := session.Submit(ctx, acp.PromptInput{QueueID: "q1", Text: "queued"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SteerQueued(ctx, "q1"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(steered, []string{"look here", "queued"}) || cancels != 0 || len(queuedIDs(session)) != 0 {
+		t.Fatalf("steered %v with %d cancels, queue %v", steered, cancels, queuedIDs(session))
+	}
+	close(release)
+	waitConversationState(t, session, "idle")
+}

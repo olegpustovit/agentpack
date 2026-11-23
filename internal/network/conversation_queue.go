@@ -289,8 +289,9 @@ func (session *ConversationSession) Submit(ctx context.Context, input acp.Prompt
 	return item.ID, nil, nil
 }
 
-// afterQueued starts the queue, hands an agent message to a running turn, or interrupts the
-// current turn for a steer. The caller holds queueMu.
+// afterQueued starts the queue, hands an agent message to a running turn, or steers the current
+// turn. An agent that serves _session/steering takes a steer into its turn; any other is
+// interrupted with session/cancel first, which the UI warns about. The caller holds queueMu.
 func (session *ConversationSession) afterQueued(ctx context.Context, steer, running bool) {
 	if !running {
 		session.maybeDrain()
@@ -300,19 +301,50 @@ func (session *ConversationSession) afterQueued(ctx context.Context, steer, runn
 		session.deliverDuringTurnLocked(false)
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	session.mu.Lock()
+	broker, steerTurn := session.broker, session.steer
+	var item queuedPrompt
+	if len(session.queue) > 0 {
+		item = session.queue[0]
+	}
+	session.mu.Unlock()
+	if steerTurn != nil && item.Steer {
+		session.steerInto(ctx, steerTurn, item)
+		return
+	}
 	session.log.Append("notice", session.clock().UnixMilli(), mustRawJSON(map[string]string{
 		"sessionUpdate": "notice", "severity": "info", "title": "Interrupted to steer",
 	}))
-	session.mu.Lock()
-	broker := session.broker
-	session.mu.Unlock()
-	cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-	if err := broker.Cancel(cancelCtx); err != nil {
+	if err := broker.Cancel(ctx); err != nil {
 		_, event := obs.Start(ctx, "acp.turn", "steer_cancel")
 		event.Set("session_id", session.sessionID)
 		event.Fail(err)
 		event.End()
+	}
+}
+
+// steerInto hands a steered prompt to the running turn. While queueMu is held no turn loop can
+// send it too; when no turn takes it, it stays first in the queue for the next turn.
+func (session *ConversationSession) steerInto(ctx context.Context, steerTurn func(context.Context, acp.PromptInput) (bool, error), item queuedPrompt) {
+	session.writes.RLock()
+	injected, err := steerTurn(ctx, item.Input)
+	session.writes.RUnlock()
+	if err != nil {
+		_, event := obs.Start(ctx, "acp.turn", "steer")
+		event.Set("session_id", session.sessionID)
+		event.Fail(err)
+		event.End()
+		session.log.Append("notice", session.clock().UnixMilli(), mustRawJSON(map[string]string{
+			"sessionUpdate": "notice", "severity": "warning", "title": "The message goes in when this turn ends", "description": err.Error(),
+		}))
+		return
+	}
+	if injected {
+		session.mu.Lock()
+		session.queue = slices.DeleteFunc(session.queue, func(queued queuedPrompt) bool { return queued.ID == item.ID })
+		session.mu.Unlock()
 	}
 }
 

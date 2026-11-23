@@ -33,5 +33,6 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	command.Env = append(os.Environ(), "CODEX_HOME="+home)
 	pendingGenerationLeases.Store(command, lease)
 	keepLease = true
-	return base.ACPLaunch{Cmd: command, Rewrite: repairOnLoad(home)}, nil
+	// codex-acp serializes session/prompt behind the turn, but its _session/steering joins it.
+	return base.ACPLaunch{Cmd: command, Rewrite: repairOnLoad(home), Steers: true}, nil
 }

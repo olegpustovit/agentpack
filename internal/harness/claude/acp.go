@@ -26,8 +26,9 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	}
 	command.Env = append(os.Environ(), "CLAUDE_CODE_EXECUTABLE="+claudeBinary)
 	// claude-agent-acp advertises promptQueueing: startTurn pushes a prompt sent during a turn
-	// onto Claude Code's input, which takes it in when the current model cycle ends.
-	return base.ACPLaunch{Cmd: command, QueuesPrompts: true, PrepareSession: func() (func([]byte) []byte, error) {
+	// onto Claude Code's input, which takes it in when the current model cycle ends. Its
+	// _session/steering injects into the running turn; session/cancel would stop background agents.
+	return base.ACPLaunch{Cmd: command, QueuesPrompts: true, Steers: true, PrepareSession: func() (func([]byte) []byte, error) {
 		return prepareSessionPlugins(ctx)
 	}}, nil
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -356,6 +357,13 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	}
 	conv.mu.Lock()
 	conv.queuesPrompts = acpLaunch.QueuesPrompts
+	if acpLaunch.Steers {
+		conv.steer = prompter.steer
+		if conv.agentCapabilities == nil {
+			conv.agentCapabilities = &AgentCapabilities{}
+		}
+		conv.agentCapabilities.Steering = true
+	}
 	conv.mu.Unlock()
 	if acpLaunch.UnpromptedUsageSettle > 0 {
 		conv.SetUnpromptedUsageSettle(acpLaunch.UnpromptedUsageSettle)
@@ -969,12 +977,21 @@ type acpPrompter struct {
 	sessionDir string
 	harness    string
 
-	mu       sync.Mutex
-	conn     *sdkacp.ClientSideConnection
-	sessID   sdkacp.SessionId
-	images   bool
-	handoff  string // earlier transcript for an agent taking the chat over, sent once
-	inFlight int
+	mu      sync.Mutex
+	conn    *sdkacp.ClientSideConnection
+	sessID  sdkacp.SessionId
+	images  bool
+	handoff string        // earlier transcript for an agent taking the chat over, sent once
+	sent    []*sentPrompt // prompts the agent has not answered, oldest first
+}
+
+// sentPrompt is a prompt on its way to the agent. One sent behind another stays a delivered
+// queued_prompt until the agent takes it in, which ACP v1 shows only as the answer to the one
+// before it (claude-agent-acp hands the turn over when the next prompt's echo arrives).
+type sentPrompt struct {
+	payload  json.RawMessage
+	queueID  string
+	inserted bool
 }
 
 func (p *acpPrompter) broker() *acp.Broker {
@@ -991,7 +1008,8 @@ func (p *acpPrompter) ready(setup acpSessionSetup) {
 
 func (p *acpPrompter) prompt(ctx context.Context, input acp.PromptInput) (result error) {
 	log := p.log
-	defer func() { result = errors.Join(result, log.Flush()) }()
+	// A store that fails is retried by the log, which tells the chat; it does not stop the prompt.
+	defer func() { _ = log.Flush() }()
 	p.mu.Lock()
 	c, sid, images, earlier := p.conn, p.sessID, p.images, p.handoff
 	p.handoff = ""
@@ -1013,26 +1031,93 @@ func (p *acpPrompter) prompt(ctx context.Context, input acp.PromptInput) (result
 	if earlier != "" {
 		blocks = append([]sdkacp.ContentBlock{sdkacp.TextBlock(earlier)}, blocks...)
 	}
-	log.Append("prompt", time.Now().UnixMilli(), promptLogPayload(loggedInput))
-	if err := log.Flush(); err != nil {
-		return err
+	own := &sentPrompt{payload: promptLogPayload(loggedInput), queueID: input.QueueID}
+	p.mu.Lock()
+	own.inserted = len(p.sent) == 0 || own.queueID == ""
+	p.sent = append(p.sent, own)
+	if own.inserted {
+		log.Append("prompt", time.Now().UnixMilli(), own.payload)
+	} else {
+		log.Append("queued_prompt", time.Now().UnixMilli(), delivered(own.payload))
 	}
+	p.mu.Unlock()
+	_ = log.Flush()
 	acp.Accepted(ctx)
-	p.mu.Lock()
-	p.inFlight++
-	p.mu.Unlock()
 	response, err := c.Prompt(ctx, sdkacp.PromptRequest{SessionId: sid, Prompt: blocks})
+	p.answered(own, err, response)
+	return err
+}
+
+// answered retires own: the next prompt is now taken in, and the last answer ends the turn.
+// A prompt answered before it was taken in never reached the agent's conversation.
+func (p *acpPrompter) answered(own *sentPrompt, err error, response sdkacp.PromptResponse) {
+	log := p.log
 	p.mu.Lock()
-	p.inFlight--
-	last := p.inFlight == 0
-	p.mu.Unlock()
+	defer p.mu.Unlock()
+	p.sent = slices.DeleteFunc(p.sent, func(sent *sentPrompt) bool { return sent == own })
+	last := len(p.sent) == 0
+	now := time.Now().UnixMilli()
 	switch {
+	case !own.inserted:
+		reason := "cancelled"
+		if err != nil {
+			reason = "failed"
+			logFailedTurn(log, p.harness, err, false)
+		}
+		log.Append("dequeued_prompt", now, mustRawJSON(map[string]string{"queueId": own.queueID, "reason": reason}))
 	case err != nil:
 		logFailedTurn(log, p.harness, err, last)
-	case last:
-		log.Append("turn_end", time.Now().UnixMilli(), mustRawJSON(response))
 	}
-	return err
+	if !last && !p.sent[0].inserted {
+		p.sent[0].inserted = true
+		log.Append("prompt", now, p.sent[0].payload)
+	}
+	if last && err == nil {
+		log.Append("turn_end", now, mustRawJSON(response))
+	}
+}
+
+// delivered marks a prompt the agent has but has not taken in yet; viewers show it in the queue.
+func delivered(payload json.RawMessage) json.RawMessage {
+	var body map[string]any
+	_ = json.Unmarshal(payload, &body)
+	body["delivered"] = true
+	return mustRawJSON(body)
+}
+
+// steer hands input to the agent's running turn with _session/steering, without session/cancel.
+// It reports false when no turn can take it, and the caller sends it as a normal prompt.
+func (p *acpPrompter) steer(ctx context.Context, input acp.PromptInput) (bool, error) {
+	p.mu.Lock()
+	c, sid, images := p.conn, p.sessID, p.images
+	p.mu.Unlock()
+	if c == nil {
+		return false, errors.New("acp session not ready")
+	}
+	blocks, loggedInput, err := promptContentBlocks(p.sessionDir, input, images)
+	if err != nil {
+		return false, err
+	}
+	raw, err := c.CallExtension(ctx, "_session/steering", map[string]any{
+		"sessionId": sid, "prompt": blocks, "_meta": map[string]any{"steering": map[string]string{"idleBehavior": "promptRequired"}},
+	})
+	if err != nil {
+		return false, err
+	}
+	var result struct {
+		Outcome string `json:"outcome"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return false, err
+	}
+	switch result.Outcome {
+	case "injected":
+		p.log.Append("prompt", time.Now().UnixMilli(), promptLogPayload(loggedInput))
+		return true, nil
+	case "promptRequired":
+		return false, nil
+	}
+	return false, fmt.Errorf("the agent could not take the message in (%s)", cmpOr(result.Outcome, "no outcome"))
 }
 
 func (p *acpPrompter) cancel(ctx context.Context) error {

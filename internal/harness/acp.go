@@ -25,6 +25,9 @@ type ACPLaunch struct {
 	// it in at its next model-cycle boundary, answering each prompt separately. Agentpack then
 	// sends agent messages at once and queued prompts at each cycle end instead of at turn_end.
 	QueuesPrompts bool
+	// Steers: the adapter serves _session/steering, which hands a prompt to the running turn
+	// without session/cancel, so a steer keeps the agent's background work alive.
+	Steers bool
 }
 
 // LogKind is one synthetic event-log row produced by AdaptAgent.

@@ -52,15 +52,17 @@ type ConversationSession struct {
 
 	// Queue and goal state (conversation_queue.go, conversation_goal.go). queueMu orders queue
 	// changes with their log entries; it is taken before mu and never inside a log callback.
-	configMu               sync.Mutex
-	queueMu                sync.Mutex
-	queue                  []queuedPrompt
-	seenPrompts            map[string]struct{}
-	starting               bool
-	promptStored           func(context.Context, string) (bool, error)
-	running                bool // a turn loop owns the agent
-	queuesPrompts          bool // the agent takes a prompt in while its turn runs (harness.ACPLaunch.QueuesPrompts)
-	delivering             int  // prompts the agent has not answered yet
+	configMu      sync.Mutex
+	queueMu       sync.Mutex
+	queue         []queuedPrompt
+	seenPrompts   map[string]struct{}
+	starting      bool
+	promptStored  func(context.Context, string) (bool, error)
+	running       bool // a turn loop owns the agent
+	queuesPrompts bool // the agent takes a prompt in while its turn runs (harness.ACPLaunch.QueuesPrompts)
+	delivering    int  // prompts the agent has not answered yet
+	// steer joins the running turn (harness.ACPLaunch.Steers); nil when steering must cancel.
+	steer                  func(context.Context, acp.PromptInput) (bool, error)
 	delivered              chan struct{}
 	userCancelled          bool // the user stopped the running turn
 	archived               bool

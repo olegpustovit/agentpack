@@ -751,48 +751,110 @@ func TestACPAuthRequiredNamesAgentAndMachine(t *testing.T) {
 	}
 }
 
-// heldAgent answers every prompt only when the test releases it.
+// heldAgent answers each prompt only when the test releases one, and records what it was sent.
 type heldAgent struct {
 	*acptest.ReplayAgent
 	received chan struct{}
 	release  chan struct{}
+	mu       sync.Mutex
+	methods  []string
+	steering string // the _session/steering outcome
 }
 
 func (agent *heldAgent) Prompt(context.Context, sdkacp.PromptRequest) (sdkacp.PromptResponse, error) {
+	agent.record("session/prompt")
 	agent.received <- struct{}{}
 	<-agent.release
 	return sdkacp.PromptResponse{StopReason: sdkacp.StopReasonEndTurn}, nil
 }
 
-func TestPromptSentDuringATurnEndsTheTurnOnce(t *testing.T) {
-	agent := &heldAgent{ReplayAgent: acptest.NewReplayAgent(nil), received: make(chan struct{}, 2), release: make(chan struct{})}
+func (agent *heldAgent) Cancel(context.Context, sdkacp.CancelNotification) error {
+	agent.record("session/cancel")
+	return nil
+}
+
+func (agent *heldAgent) HandleExtensionMethod(_ context.Context, method string, _ json.RawMessage) (any, error) {
+	agent.record(method)
+	return map[string]string{"outcome": agent.steering}, nil
+}
+
+func (agent *heldAgent) record(method string) {
+	agent.mu.Lock()
+	agent.methods = append(agent.methods, method)
+	agent.mu.Unlock()
+}
+
+func newHeldPrompter(t *testing.T) (*acpPrompter, *heldAgent) {
+	t.Helper()
+	agent := &heldAgent{ReplayAgent: acptest.NewReplayAgent(nil), received: make(chan struct{}, 4), release: make(chan struct{}), steering: "injected"}
 	clientToAgentReader, clientToAgentWriter := io.Pipe()
 	agentToClientReader, agentToClientWriter := io.Pipe()
 	log := acp.NewEventLog(0)
 	clientConn := acp.NewHarnessClient("", nil, log, nil).NewClientSideConnection(clientToAgentWriter, agentToClientReader)
 	agent.SetConnection(sdkacp.NewAgentSideConnection(agent, agentToClientWriter, clientToAgentReader))
-	defer func() {
+	t.Cleanup(func() {
 		for _, pipe := range []io.Closer{clientToAgentWriter, agentToClientWriter, clientToAgentReader, agentToClientReader} {
 			_ = pipe.Close()
 		}
-	}()
-	prompter := &acpPrompter{log: log, conn: clientConn, sessID: "s"}
-	errs := make(chan error, 2)
-	for _, text := range []string{"goal", "message"} {
-		go func() { errs <- prompter.prompt(context.Background(), acp.PromptInput{Text: text}) }()
-		<-agent.received
-	}
-	close(agent.release)
-	for range 2 {
-		if err := <-errs; err != nil {
-			t.Fatal(err)
-		}
-	}
+	})
+	return &acpPrompter{log: log, conn: clientConn, sessID: "s"}, agent
+}
+
+func logEntryKinds(log *acp.EventLog) string {
 	var kinds []string
 	for _, entry := range log.Snapshot() {
 		kinds = append(kinds, entry.Kind)
 	}
-	if strings.Join(kinds, ",") != "prompt,prompt,turn_end" {
-		t.Fatalf("log = %v, want both prompts and one turn_end", kinds)
+	return strings.Join(kinds, ",")
+}
+
+func TestPromptSentDuringATurnIsDeliveredUntilTheAgentTakesItIn(t *testing.T) {
+	prompter, agent := newHeldPrompter(t)
+	errs := make(chan error, 2)
+	for _, input := range []acp.PromptInput{{Text: "goal"}, {Text: "message", QueueID: "q1"}} {
+		go func() { errs <- prompter.prompt(context.Background(), input) }()
+		<-agent.received
+	}
+	entries := prompter.log.Snapshot()
+	if got := logEntryKinds(prompter.log); got != "prompt,queued_prompt" || !strings.Contains(string(entries[1].Payload), `"delivered":true`) {
+		t.Fatalf("while the first turn runs: %s %s", got, entries[len(entries)-1].Payload)
+	}
+	// claude-agent-acp answers the running prompt when the next one's echo takes the turn over.
+	agent.release <- struct{}{}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	if got := logEntryKinds(prompter.log); got != "prompt,queued_prompt,prompt" {
+		t.Fatalf("after the hand-off: %s", got)
+	}
+	agent.release <- struct{}{}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	entries = prompter.log.Snapshot()
+	if got := logEntryKinds(prompter.log); got != "prompt,queued_prompt,prompt,turn_end" || !strings.Contains(string(entries[2].Payload), `"queueId":"q1"`) {
+		t.Fatalf("log = %s; the inserted prompt must carry its queue ID", got)
+	}
+}
+
+func TestSteerJoinsTheTurnWithoutCancel(t *testing.T) {
+	prompter, agent := newHeldPrompter(t)
+	injected, err := prompter.steer(context.Background(), acp.PromptInput{Text: "look here", QueueID: "q1"})
+	if err != nil || !injected {
+		t.Fatalf("steer = %t, %v", injected, err)
+	}
+	agent.steering = "promptRequired"
+	if injected, err := prompter.steer(context.Background(), acp.PromptInput{Text: "later", QueueID: "q2"}); err != nil || injected {
+		t.Fatalf("steer with no running turn = %t, %v", injected, err)
+	}
+	agent.mu.Lock()
+	methods := strings.Join(agent.methods, ",")
+	agent.mu.Unlock()
+	if methods != "_session/steering,_session/steering" {
+		t.Fatalf("agent received %s; a steer must never send session/cancel", methods)
+	}
+	entries := prompter.log.Snapshot()
+	if len(entries) != 1 || entries[0].Kind != "prompt" || !strings.Contains(string(entries[0].Payload), `"queueId":"q1"`) {
+		t.Fatalf("only the injected steer is a prompt entry: %s", logEntryKinds(prompter.log))
 	}
 }
