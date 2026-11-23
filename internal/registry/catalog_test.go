@@ -1,4 +1,4 @@
-package gateway
+package registry
 
 import (
 	"context"
@@ -43,7 +43,7 @@ func TestLibraryCatalogCombinesSourcesAndCaches(t *testing.T) {
 	get := func() Catalog {
 		t.Helper()
 		recorder := httptest.NewRecorder()
-		c.serve(recorder, httptest.NewRequest("GET", "/api/library/catalog", nil))
+		c.ServeHTTP(recorder, httptest.NewRequest("GET", "/api/library/catalog", nil))
 		var result Catalog
 		if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
 			t.Fatal(err)
@@ -96,7 +96,7 @@ func TestLibraryCatalogReportsAFailingSource(t *testing.T) {
 		now:         time.Now,
 	}
 	recorder := httptest.NewRecorder()
-	c.serve(recorder, httptest.NewRequest("GET", "/api/library/catalog", nil))
+	c.ServeHTTP(recorder, httptest.NewRequest("GET", "/api/library/catalog", nil))
 	var result Catalog
 	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil || recorder.Code != http.StatusOK {
 		t.Fatalf("status %d, %v", recorder.Code, err)

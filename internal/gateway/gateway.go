@@ -28,6 +28,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/gorilla/websocket"
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/registry"
 	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 
@@ -40,21 +41,12 @@ type GatewayOptions struct {
 	Start                    func(context.Context, session.SessionInfo, string) (string, error)
 	Packages                 func(context.Context, string) (ProjectContents, error)
 	Install                  func(context.Context, string, string, bool) error
-	InstallMCP               func(context.Context, string, MCPServerInput, bool) error
+	InstallMCP               func(context.Context, string, registry.MCPServerInput, bool) error
 	Update                   func(ctx context.Context, version string) error
 	Library                  LibraryOptions
 	Assets                   http.Handler
 	Version                  string
 	UIBuildID                string
-}
-
-// MCPServerInput is what `agentpack mcp add` takes: a Command with Args, or a URL with a Type.
-type MCPServerInput struct {
-	Name    string   `json:"name"`
-	Command string   `json:"command,omitempty"`
-	Args    []string `json:"args,omitempty"`
-	URL     string   `json:"url,omitempty"`
-	Type    string   `json:"type,omitempty"`
 }
 
 type Gateway struct {
@@ -839,7 +831,7 @@ func (g *Gateway) routes() routeMux {
 	})
 	mux.HandleFunc("POST /api/mcp/servers", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
-			MCPServerInput
+			registry.MCPServerInput
 			Directory string `json:"directory"`
 			Restart   *bool  `json:"restart"`
 		}

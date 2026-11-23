@@ -14,6 +14,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/registry"
 	"github.com/olegpustovit/agentpack/internal/session"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
@@ -127,7 +128,7 @@ func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec 
 }
 
 // installNetworkMCP is `agentpack mcp add` for a recent folder, from POST /api/mcp/servers.
-func (runner Runner) installNetworkMCP(ctx context.Context, directory string, input gateway.MCPServerInput, restart bool) error {
+func (runner Runner) installNetworkMCP(ctx context.Context, directory string, input registry.MCPServerInput, restart bool) error {
 	server, err := mcpServerFrom(input)
 	if err != nil {
 		return err

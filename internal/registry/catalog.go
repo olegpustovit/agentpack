@@ -1,4 +1,4 @@
-package gateway
+package registry
 
 import (
 	"context"
@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/github"
-	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
@@ -71,7 +70,8 @@ type catalogPage struct {
 	fetched time.Time
 }
 
-var libraryCatalog = &catalog{
+// LibraryCatalog serves GET /api/library/catalog.
+var LibraryCatalog = &catalog{
 	marketplace: func(ctx context.Context) ([]byte, error) {
 		return github.RepoFile(ctx, nil, marketplaceOwner, marketplaceRepo, marketplacePath, catalogTTL)
 	},
@@ -80,7 +80,7 @@ var libraryCatalog = &catalog{
 	now:      time.Now,
 }
 
-func (c *catalog) serve(w http.ResponseWriter, r *http.Request) {
+func (c *catalog) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	var result Catalog
@@ -92,7 +92,8 @@ func (c *catalog) serve(w http.ResponseWriter, r *http.Request) {
 	obs.From(r.Context()).Fail(err)
 	obs.From(r.Context()).Fail(serverErr)
 	result.Items = append(append(make([]CatalogItem, 0, len(plugins)+len(servers)), plugins...), servers...)
-	network.WriteJSON(w, result)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 func catalogSource(name string, count int, err error) CatalogSource {
@@ -341,4 +342,13 @@ func shellWord(value string) string {
 		return value
 	}
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+// MCPServerInput is what `agentpack mcp add` takes: a Command with Args, or a URL with a Type.
+type MCPServerInput struct {
+	Name    string   `json:"name"`
+	Command string   `json:"command,omitempty"`
+	Args    []string `json:"args,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	Type    string   `json:"type,omitempty"`
 }

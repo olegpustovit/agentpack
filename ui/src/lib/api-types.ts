@@ -231,7 +231,7 @@ export type Package = {
 
 export type Agentpack = { id: string; name: string; revisions: string[]; heads: string[] }
 
-// internal/gateway/library_catalog.go. Plugins carry an add `spec`, MCP servers an `agentpack mcp add` command.
+// internal/registry/catalog.go. Plugins carry an add `spec`, MCP servers an `agentpack mcp add` command.
 export type CatalogItem = {
   kind: "plugin" | "mcp"
   name: string

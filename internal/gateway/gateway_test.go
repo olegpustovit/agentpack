@@ -16,6 +16,7 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/registry"
 	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 
@@ -185,10 +186,10 @@ func TestGatewayInstallsMCPServerIntoRecentFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	origin, _ := url.Parse("http://127.0.0.1:7420")
-	var got []MCPServerInput
+	var got []registry.MCPServerInput
 	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: network.NodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{
 		Home: home,
-		InstallMCP: func(_ context.Context, gotDirectory string, server MCPServerInput, restart bool) error {
+		InstallMCP: func(_ context.Context, gotDirectory string, server registry.MCPServerInput, restart bool) error {
 			if gotDirectory != directory || !restart {
 				t.Fatalf("unexpected install into %s restart=%v", gotDirectory, restart)
 			}
