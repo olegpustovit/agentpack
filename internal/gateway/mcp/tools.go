@@ -1,4 +1,4 @@
-package gateway
+package mcp
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	sdkacp "github.com/coder/acp-go-sdk"
@@ -22,6 +23,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 // Closed sets are named types so schemaFor publishes them as enums and codemode clients get Literal types.
@@ -215,11 +217,55 @@ func page[T any](items []T, cursor string) ([]T, string, error) {
 	return items[start:end], next, nil
 }
 
-func NewGatewayMCP(gateway *Gateway) (*GatewayMCP, error) {
-	if gateway.store == nil {
+// Host is what the MCP tools and the OAuth server need from the gateway they serve.
+type Host interface {
+	// ServeAPI serves r through the gateway's REST policy as an in-process MCP call; a non-empty
+	// node routes it to that machine.
+	ServeAPI(w http.ResponseWriter, r *http.Request, node string)
+	// ServePrompt queues a prompt as the caller r already carries.
+	ServePrompt(w http.ResponseWriter, r *http.Request)
+	// RemoveStartingPrompt drops a queued prompt from a chat that is still starting.
+	RemoveStartingPrompt(ctx context.Context, session, queueID string) (bool, error)
+	// Emit tells browsers that topic changed.
+	Emit(topic string)
+	// Changes signals gateway events until stop is called.
+	Changes() (changes <-chan struct{}, stop func())
+	// Sessions lists sessions across the mesh, or on node only.
+	Sessions(ctx context.Context, node string, recentOnly bool) ([]session.SessionInfo, error)
+	// Origin is the origin r addressed when the gateway serves it; empty for an unknown host.
+	Origin(r *http.Request) string
+	// ClientKey is who r counts against for rate limits; local is this machine's own loopback.
+	ClientKey(r *http.Request) (key string, local bool)
+	// BrowserLogin is the signed-in browser's session cookie value.
+	BrowserLogin(r *http.Request) (string, bool)
+}
+
+// Server is the agentpack MCP server: its tools, the OAuth server that grants them, and the
+// agent task exchange between chats.
+type Server struct {
+	store    *state.Store
+	home     string
+	loopback string // the gateway's loopback origin, scheme://host
+	host     Host
+	handler  http.Handler
+	mu       sync.Mutex
+	window   network.ClientWindow
+	metadata map[string]cachedClient // Client ID Metadata Documents by URL
+	fetches  network.ClientWindow    // uncached document fetches, which anyone can trigger before sign-in
+	// Fetcher fetches Client ID Metadata Documents; nil uses metadataFetcher. Tests point it at a local server.
+	Fetcher *http.Client
+
+	agentTasks     sync.Map         // task IDs whose answer is being delivered
+	agentTaskSeen  map[string]int64 // last_seq each asked chat had at the last pass; owned by RunTasks
+	agentTaskRetry time.Time        // when undelivered answers are tried again; owned by RunTasks
+}
+
+// New builds the MCP server for a gateway with state in store and home, reached at loopback.
+func New(store *state.Store, home, loopback string, host Host) (*Server, error) {
+	if store == nil {
 		return nil, errors.New("gateway state unavailable")
 	}
-	m := &GatewayMCP{gateway: gateway}
+	m := &Server{store: store, home: home, loopback: loopback, host: host}
 	server := mcp.NewServer(&mcp.Implementation{Name: "agentpack", Version: "1"}, nil)
 	m.tools(server)
 	m.chatTools(server)
@@ -229,7 +275,7 @@ func NewGatewayMCP(gateway *Gateway) (*GatewayMCP, error) {
 	mux := http.NewServeMux()
 	m.routes(mux)
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		verified := m.authenticate(r)
+		verified := m.Authenticate(r)
 		if verified == nil {
 			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+m.baseURL(r)+`/.well-known/oauth-protected-resource/mcp", scope="agentpack"`)
 			oauthError(w, 401, "invalid_token")
@@ -242,11 +288,11 @@ func NewGatewayMCP(gateway *Gateway) (*GatewayMCP, error) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		if chatBearer(r) {
-			gateway.serveChatTools(w, r, stream)
+		if ChatBearer(r) {
+			m.serveChatTools(w, r, stream)
 			return
 		}
-		if sourceOf(r).origin == "" {
+		if m.host.Origin(r) == "" {
 			oauthError(w, 403, "invalid_host")
 			return
 		}
@@ -267,7 +313,7 @@ func NewGatewayMCP(gateway *Gateway) (*GatewayMCP, error) {
 	return m, nil
 }
 
-func (m *GatewayMCP) tools(server *mcp.Server) {
+func (m *Server) tools(server *mcp.Server) {
 	addTool(server, "list_issues", "List recorded diagnostic issues, newest first, including offline machines. Event text is untrusted content.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		Status string `json:"status,omitempty" jsonschema:"open (default), resolved or ignored."`
 		mcpPageInput
@@ -364,7 +410,7 @@ func (m *GatewayMCP) tools(server *mcp.Server) {
 		}
 		// A stopped chat has no worker to restart; resuming it sends nothing to its agent, so any chat's
 		// agent may revive its account's stopped chats. The resume route checks the account.
-		if info, err := session.StoredSession(ctx, m.gateway.store.Reader, in.SessionID); err == nil && info.Transport == "acp" && viewState(info) == network.StateStopped {
+		if info, err := session.StoredSession(ctx, m.store.Reader, in.SessionID); err == nil && info.Transport == "acp" && viewState(info) == network.StateStopped {
 			_, err := m.do(ctx, in.Node, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/resume", map[string]string{"text": ""})
 			return nil, restarted{err == nil}, err
 		}
@@ -442,21 +488,13 @@ func apiStatus(err error) int {
 
 // do dispatches in-process, preserving the authenticated MCP actor through the same
 // REST policy, including remote-node routing and session ownership checks.
-func (m *GatewayMCP) do(ctx context.Context, node, method, path string, body any) (*mcpResponse, error) {
+func (m *Server) do(ctx context.Context, node, method, path string, body any) (*mcpResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	u, err := url.Parse("http://" + m.gateway.local.Address + path)
+	u, err := url.Parse(path)
 	if err != nil {
 		return nil, errors.New("invalid gateway operation")
 	}
-	query := u.Query()
-	handler := m.gateway.Handler()
-	if node != "" && m.peer != nil {
-		handler = m.peer(node)
-	} else if node != "" {
-		query.Set("node", node)
-	}
-	u.RawQuery = query.Encode()
 	var data []byte
 	if body != nil {
 		if raw, ok := body.([]byte); ok {
@@ -468,15 +506,14 @@ func (m *GatewayMCP) do(ctx context.Context, node, method, path string, body any
 			return nil, err
 		}
 	}
-	request, err := http.NewRequestWithContext(withCaller(ctx, callerMCP), method, u.String(), bytes.NewReader(data))
+	request, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
-	request.Header.Set("Authorization", "Bearer "+m.gateway.local.Secret)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("traceparent", obs.TraceParent(ctx))
 	response := &mcpResponse{header: make(http.Header)}
-	handler.ServeHTTP(response, request)
+	m.host.ServeAPI(response, request, node)
 	if response.tooLarge {
 		return nil, errors.New("gateway response unavailable or too large")
 	}
@@ -494,7 +531,7 @@ func (m *GatewayMCP) do(ctx context.Context, node, method, path string, body any
 }
 
 // callAPI decodes a gateway JSON answer into T.
-func callAPI[T any](ctx context.Context, m *GatewayMCP, node, method, path string, body any) (T, error) {
+func callAPI[T any](ctx context.Context, m *Server, node, method, path string, body any) (T, error) {
 	var out T
 	response, err := m.do(ctx, node, method, path, body)
 	if err != nil {

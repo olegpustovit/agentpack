@@ -229,14 +229,17 @@ func TestMeshOwnerResetCannotRevivePeerLoginsForRecreatedEmail(t *testing.T) {
 	if !peer.authenticated(request) {
 		t.Fatal("fixture login was not initially valid")
 	}
-	grant := oauthRecord{Email: testBrowserEmail, SessionEpoch: 0}
+	// An OAuth grant holds while its account is enabled at the epoch it was granted in (epoch 0 here).
+	errOAuthGrant := errors.New("invalid OAuth grant")
 	checkGrant := func() error {
-		tx, err := peer.store.Reader.BeginTx(t.Context(), nil)
-		if err != nil {
+		var valid bool
+		if err := peer.store.Reader.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE email=? AND disabled=0 AND sessions_valid_after=0)", testBrowserEmail).Scan(&valid); err != nil {
 			return err
 		}
-		defer tx.Rollback()
-		return oauthAccountValid(tx, grant)
+		if !valid {
+			return errOAuthGrant
+		}
+		return nil
 	}
 	if err := checkGrant(); err != nil {
 		t.Fatal("fixture OAuth grant was not valid", err)

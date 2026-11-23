@@ -1,4 +1,4 @@
-package gateway
+package mcp
 
 import (
 	"bytes"
@@ -25,7 +25,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
-	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 var (
@@ -44,24 +43,25 @@ const (
 // helperStarts serializes the cap check with the start, so concurrent calls cannot pass it together.
 var helperStarts sync.Mutex
 
-func chatBearer(r *http.Request) bool {
+// ChatBearer reports whether r carries a chat's own agentpack tools credential.
+func ChatBearer(r *http.Request) bool {
 	return strings.HasPrefix(r.Header.Get("Authorization"), "Bearer session-")
 }
 
 // chatCaller authenticates a chat's agent. The agent runs on this machine, so the credential is
 // accepted from loopback only and never through a proxy. The agent acts as the chat's owner.
-func (g *Gateway) chatCaller(r *http.Request) (session.Actor, error) {
+func (m *Server) chatCaller(r *http.Request) (session.Actor, error) {
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if ip := net.ParseIP(host); r.URL.Path != "/mcp" || ip == nil || !ip.IsLoopback() || r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("Forwarded") != "" {
 		return session.Actor{}, errChatCredential
 	}
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	id, _, _ := strings.Cut(token, ".")
-	stored, err := os.ReadFile(network.ChatToolsTokenPath(g.options.Home, id))
+	stored, err := os.ReadFile(network.ChatToolsTokenPath(m.home, id))
 	if !network.ValidSessionID(id) || err != nil || len(stored) == 0 || subtle.ConstantTimeCompare(stored, []byte(token)) != 1 {
 		return session.Actor{}, errChatCredential
 	}
-	info, err := session.StoredSession(r.Context(), g.store.Reader, id)
+	info, err := session.StoredSession(r.Context(), m.store.Reader, id)
 	if errors.Is(err, session.ErrSessionNotFound) || err == nil && info.StartedBy == nil {
 		return session.Actor{}, errChatCredential
 	}
@@ -73,8 +73,8 @@ func (g *Gateway) chatCaller(r *http.Request) (session.Actor, error) {
 	return actor, nil
 }
 
-func (g *Gateway) serveChatTools(w http.ResponseWriter, r *http.Request, stream http.Handler) {
-	actor, err := g.chatCaller(r)
+func (m *Server) serveChatTools(w http.ResponseWriter, r *http.Request, stream http.Handler) {
+	actor, err := m.chatCaller(r)
 	if err != nil {
 		if !errors.Is(err, errChatCredential) {
 			obs.From(r.Context()).Fail(err)
@@ -87,49 +87,25 @@ func (g *Gateway) serveChatTools(w http.ResponseWriter, r *http.Request, stream 
 }
 
 // chatToolsOn reads the switch on every call, so turning it off takes effect without a reload.
-func (g *Gateway) chatToolsOn(ctx context.Context, id string) error {
+func (m *Server) chatToolsOn(ctx context.Context, id string) error {
 	var on bool
-	err := g.store.Reader.QueryRowContext(ctx, "SELECT tools FROM sessions WHERE id=?", id).Scan(&on)
+	err := m.store.Reader.QueryRowContext(ctx, "SELECT tools FROM sessions WHERE id=?", id).Scan(&on)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && !on {
 		return errChatToolsOff
 	}
 	return err
 }
 
-// setChatTools serves POST /api/sessions/{id}/tools on the machine that runs the chat.
-func (g *Gateway) setChatTools(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Enabled bool `json:"enabled"`
-	}
-	if !network.ReadJSON(w, r, &input) || !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
-		return
-	}
-	result, err := g.store.DB.ExecContext(r.Context(), "UPDATE sessions SET tools=? WHERE id=? AND transport='acp' AND node_id="+state.LocalNodeSQL, input.Enabled, r.PathValue("id"))
-	var changed int64
-	if err == nil {
-		changed, err = result.RowsAffected()
-	}
-	switch {
-	case err != nil:
-		obs.From(r.Context()).Fail(err)
-		http.Error(w, "Couldn't change agentpack tools.", http.StatusInternalServerError)
-	case changed == 0:
-		http.Error(w, "chat not found on this machine", http.StatusNotFound)
-	default:
-		network.WriteJSON(w, map[string]bool{"tools": input.Enabled})
-	}
-}
-
 // helperAllowed enforces the helper limits below the root of parent's tree. Only helpers that are
 // still working hold a slot: an idle one has finished its task, a stopped one has ended.
-func (g *Gateway) helperAllowed(ctx context.Context, parent string) error {
+func (m *Server) helperAllowed(ctx context.Context, parent string) error {
 	root := parent
 	for depth, id := 0, parent; id != ""; depth++ {
 		if depth == maxHelperDepth {
 			return fmt.Errorf("helpers can be at most %d levels deep", maxHelperDepth)
 		}
 		var next string
-		err := g.store.Reader.QueryRowContext(ctx, "SELECT parent_id FROM sessions WHERE id=?", id).Scan(&next)
+		err := m.store.Reader.QueryRowContext(ctx, "SELECT parent_id FROM sessions WHERE id=?", id).Scan(&next)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errors.New("parent session not found")
 		}
@@ -139,7 +115,7 @@ func (g *Gateway) helperAllowed(ctx context.Context, parent string) error {
 		root, id = id, next
 	}
 	var running int
-	err := g.store.Reader.QueryRowContext(ctx, `WITH RECURSIVE tree(id) AS (
+	err := m.store.Reader.QueryRowContext(ctx, `WITH RECURSIVE tree(id) AS (
  SELECT id FROM sessions WHERE parent_id=? UNION SELECT sessions.id FROM sessions JOIN tree ON sessions.parent_id=tree.id)
  SELECT count(*) FROM sessions WHERE id IN (SELECT id FROM tree) AND ended_at=0 AND archived_at=0 AND conversation_state<>'idle'`, root).Scan(&running)
 	if err == nil && running >= maxHelpers {
@@ -149,7 +125,7 @@ func (g *Gateway) helperAllowed(ctx context.Context, parent string) error {
 }
 
 // startHelper starts a session; an agent always starts helpers of its own chat, within the limits.
-func (m *GatewayMCP) startHelper(ctx context.Context, parent *string, start func() (session.SessionInfo, error)) (session.SessionInfo, error) {
+func (m *Server) startHelper(ctx context.Context, parent *string, start func() (session.SessionInfo, error)) (session.SessionInfo, error) {
 	if actor, _ := session.ActorFrom(ctx); actor.Chat != "" {
 		*parent = actor.Chat
 	}
@@ -158,7 +134,7 @@ func (m *GatewayMCP) startHelper(ctx context.Context, parent *string, start func
 	}
 	helperStarts.Lock()
 	defer helperStarts.Unlock()
-	if err := m.gateway.helperAllowed(ctx, *parent); err != nil {
+	if err := m.helperAllowed(ctx, *parent); err != nil {
 		return session.SessionInfo{}, err
 	}
 	return start()
@@ -167,7 +143,7 @@ func (m *GatewayMCP) startHelper(ctx context.Context, parent *string, start func
 // agentMayChange keeps an in-chat agent to its own tree: it may read every session, but it stops,
 // restarts and cancels only itself and its helpers on this machine. It messages other chats only with ask.
 // restart_session's revival of a stopped chat is the one exception.
-func (m *GatewayMCP) agentMayChange(ctx context.Context, node, id string) error {
+func (m *Server) agentMayChange(ctx context.Context, node, id string) error {
 	actor, _ := session.ActorFrom(ctx)
 	if actor.Chat == "" || id == actor.Chat && node == "" {
 		return nil
@@ -176,7 +152,7 @@ func (m *GatewayMCP) agentMayChange(ctx context.Context, node, id string) error 
 		return errAgentScope
 	}
 	for depth := 0; depth <= maxHelperDepth && id != ""; depth++ {
-		info, err := session.StoredSession(ctx, m.gateway.store.Reader, id)
+		info, err := session.StoredSession(ctx, m.store.Reader, id)
 		if err != nil {
 			return errAgentScope
 		}
@@ -211,13 +187,13 @@ func toolError(err error) *mcp.CallToolResult {
 }
 
 // guardToolCalls applies a chat's tools switch to each call and bounds every result.
-func (m *GatewayMCP) guardToolCalls(next mcp.MethodHandler) mcp.MethodHandler {
+func (m *Server) guardToolCalls(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
 		if method != "tools/call" {
 			return next(ctx, method, request)
 		}
 		if actor, _ := session.ActorFrom(ctx); actor.Chat != "" {
-			if err := m.gateway.chatToolsOn(ctx, actor.Chat); err != nil {
+			if err := m.chatToolsOn(ctx, actor.Chat); err != nil {
 				return toolError(err), nil
 			}
 		}
@@ -231,8 +207,8 @@ func (m *GatewayMCP) guardToolCalls(next mcp.MethodHandler) mcp.MethodHandler {
 	}
 }
 
-// mcpWaitPoll is the send_prompt retry interval; tests shorten it.
-var mcpWaitPoll = 500 * time.Millisecond
+// WaitPoll is the send_prompt retry interval; tests shorten it.
+var WaitPoll = 500 * time.Millisecond
 
 // mcpWaitMax stays inside codemode's 60 s run limit.
 const mcpWaitMax = 25 * time.Second
@@ -280,11 +256,11 @@ type mcpPromptResult struct {
 }
 
 // sendPrompt queues behind a running turn (the worker's queue) and waits out a chat still starting.
-func (m *GatewayMCP) sendPrompt(ctx context.Context, node, id, text string, steer bool, wait time.Duration) (mcpPromptResult, error) {
+func (m *Server) sendPrompt(ctx context.Context, node, id, text string, steer bool, wait time.Duration) (mcpPromptResult, error) {
 	return m.postWhileStarting(ctx, node, id, "/conversation/prompt", map[string]any{"text": text, "steer": steer}, wait)
 }
 
-func (m *GatewayMCP) postWhileStarting(ctx context.Context, node, id, path string, body any, wait time.Duration) (mcpPromptResult, error) {
+func (m *Server) postWhileStarting(ctx context.Context, node, id, path string, body any, wait time.Duration) (mcpPromptResult, error) {
 	deadline := time.Now().Add(wait)
 	for {
 		out, err := callAPI[mcpPromptResult](ctx, m, node, "POST", "/api/sessions/"+url.PathEscape(id)+path, body)
@@ -292,18 +268,18 @@ func (m *GatewayMCP) postWhileStarting(ctx context.Context, node, id, path strin
 		if apiStatus(err) != http.StatusNotFound || strings.Contains(err.Error(), "404 page not found") || !time.Now().Before(deadline) {
 			return out, err
 		}
-		if info, storeErr := session.StoredSession(ctx, m.gateway.store.Reader, id); storeErr == nil && !info.EndedAt.IsZero() {
+		if info, storeErr := session.StoredSession(ctx, m.store.Reader, id); storeErr == nil && !info.EndedAt.IsZero() {
 			return out, err
 		}
 		select {
 		case <-ctx.Done():
 			return out, ctx.Err()
-		case <-time.After(mcpWaitPoll):
+		case <-time.After(WaitPoll):
 		}
 	}
 }
 
-func (m *GatewayMCP) startSession(ctx context.Context, _ *mcp.CallToolRequest, in mcpStartInput) (*mcp.CallToolResult, mcpSession, error) {
+func (m *Server) startSession(ctx context.Context, _ *mcp.CallToolRequest, in mcpStartInput) (*mcp.CallToolResult, mcpSession, error) {
 	if actor, _ := session.ActorFrom(ctx); actor.Chat != "" && (in.Terminal || in.Node != "") {
 		return nil, mcpSession{}, errAgentScope
 	}
@@ -346,7 +322,7 @@ func (m *GatewayMCP) startSession(ctx context.Context, _ *mcp.CallToolRequest, i
 
 // Bounds of one read_conversation page.
 // conversation reads a chat's retained log after seq: the running worker's tail, or saved history.
-func (m *GatewayMCP) conversation(ctx context.Context, node, id string, since int64) ([]acp.LogEntry, bool, error) {
+func (m *Server) conversation(ctx context.Context, node, id string, since int64) ([]acp.LogEntry, bool, error) {
 	response, err := m.do(ctx, node, "GET", fmt.Sprintf("/api/sessions/%s/conversation?since=%d", url.PathEscape(id), since), nil)
 	if err != nil {
 		return nil, false, err
@@ -364,7 +340,7 @@ func (m *GatewayMCP) conversation(ctx context.Context, node, id string, since in
 }
 
 // waiting lists the permission requests and questions a chat waits on.
-func (m *GatewayMCP) waiting(ctx context.Context, id string) []network.McpTranscriptItem {
+func (m *Server) waiting(ctx context.Context, id string) []network.McpTranscriptItem {
 	entries, _, err := m.conversation(ctx, "", id, 0)
 	if err != nil {
 		return nil // the session item still says it needs you
@@ -441,8 +417,8 @@ func attentionLine(session mcpAttention) string {
 	return who + " asks permission: " + clip(request.Text, 120) + "."
 }
 
-func (m *GatewayMCP) watched(ctx context.Context, ids []string) ([]mcpSession, error) {
-	sessions, err := m.gateway.meshSessions(ctx, "", false)
+func (m *Server) watched(ctx context.Context, ids []string) ([]mcpSession, error) {
+	sessions, err := m.host.Sessions(ctx, "", false)
 	if err != nil {
 		return nil, err
 	}
@@ -477,7 +453,7 @@ type mcpAnswer struct {
 }
 
 // findRequest returns a request item and the answer it already has, if any.
-func (m *GatewayMCP) findRequest(ctx context.Context, node, session, kind, result, id string) (*network.McpTranscriptItem, string, error) {
+func (m *Server) findRequest(ctx context.Context, node, session, kind, result, id string) (*network.McpTranscriptItem, string, error) {
 	entries, _, err := m.conversation(ctx, node, session, 0)
 	if err != nil {
 		return nil, "", err
@@ -501,7 +477,7 @@ func (m *GatewayMCP) findRequest(ctx context.Context, node, session, kind, resul
 }
 
 // answerOnce makes answers idempotent: repeating an applied answer succeeds without a change.
-func (m *GatewayMCP) answerOnce(ctx context.Context, node, session, kind, result, id, value string, send func() error) (mcpAnswer, error) {
+func (m *Server) answerOnce(ctx context.Context, node, session, kind, result, id, value string, send func() error) (mcpAnswer, error) {
 	_, answered, err := m.findRequest(ctx, node, session, kind, result, id)
 	if err == nil && answered == "" {
 		err = send()
@@ -520,10 +496,10 @@ func (m *GatewayMCP) answerOnce(ctx context.Context, node, session, kind, result
 	return mcpAnswer{Answered: true, OptionID: value}, nil
 }
 
-func (m *GatewayMCP) chatTools(server *mcp.Server) {
+func (m *Server) chatTools(server *mcp.Server) {
 	m.showTool(server)
 	addTool(server, "get_attention", "Sessions that need you, as one short paragraph to read aloud plus the items with their pending permission requests and questions.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, mcpAttentionResult, error) {
-		sessions, err := m.gateway.meshSessions(ctx, "", false)
+		sessions, err := m.host.Sessions(ctx, "", false)
 		if err != nil {
 			return nil, mcpAttentionResult{}, err
 		}
@@ -565,7 +541,7 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		if in.TimeoutSeconds > 0 && time.Duration(in.TimeoutSeconds)*time.Second < timeout {
 			timeout = time.Duration(in.TimeoutSeconds) * time.Second
 		}
-		events, unsubscribe := m.gateway.listen()
+		events, unsubscribe := m.host.Changes()
 		defer unsubscribe()
 		timer := time.NewTimer(timeout)
 		defer timer.Stop()
@@ -746,7 +722,7 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		if strings.TrimSpace(in.Prompt) == "" {
 			return nil, out, network.ErrEmptyPrompt
 		}
-		self, err := session.StoredSession(ctx, m.gateway.store.Reader, actor.Chat)
+		self, err := session.StoredSession(ctx, m.store.Reader, actor.Chat)
 		if err != nil {
 			return nil, out, err
 		}

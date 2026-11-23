@@ -10,6 +10,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func (g *Gateway) ServeConversation(w http.ResponseWriter, r *http.Request) {
@@ -101,4 +102,40 @@ func (g *Gateway) terminalData(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", response.Header.Get("Content-Type"))
 	w.WriteHeader(response.StatusCode)
 	_, _ = io.Copy(w, io.LimitReader(response.Body, 256<<10))
+}
+
+func (g *Gateway) serveShow(w http.ResponseWriter, r *http.Request) {
+	record, err := g.workerRecord(r.Context(), r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "session unavailable", http.StatusNotFound)
+		return
+	}
+	if !session.AuthorizeWrite(w, r, record.Session) {
+		return
+	}
+	network.ProxyWorkerConversation(w, r, record, "/show")
+}
+
+// setChatTools serves POST /api/sessions/{id}/tools on the machine that runs the chat.
+func (g *Gateway) setChatTools(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Enabled bool `json:"enabled"`
+	}
+	if !network.ReadJSON(w, r, &input) || !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
+		return
+	}
+	result, err := g.store.DB.ExecContext(r.Context(), "UPDATE sessions SET tools=? WHERE id=? AND transport='acp' AND node_id="+state.LocalNodeSQL, input.Enabled, r.PathValue("id"))
+	var changed int64
+	if err == nil {
+		changed, err = result.RowsAffected()
+	}
+	switch {
+	case err != nil:
+		obs.From(r.Context()).Fail(err)
+		http.Error(w, "Couldn't change agentpack tools.", http.StatusInternalServerError)
+	case changed == 0:
+		http.Error(w, "chat not found on this machine", http.StatusNotFound)
+	default:
+		network.WriteJSON(w, map[string]bool{"tools": input.Enabled})
+	}
 }

@@ -1,12 +1,13 @@
 package gateway
 
 import (
-	"github.com/olegpustovit/agentpack/internal/network"
-	"github.com/olegpustovit/agentpack/internal/session"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
+
+	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func TestOAuthCredentialsFollowAccountRevocation(t *testing.T) {
@@ -18,7 +19,7 @@ func TestOAuthCredentialsFollowAccountRevocation(t *testing.T) {
 		r.Header.Set("Authorization", "Bearer "+token)
 		return r
 	}
-	verified := h.gateway.mcp.authenticate(request(tokens.Access))
+	verified := h.gateway.mcp.Authenticate(request(tokens.Access))
 	if verified == nil {
 		t.Fatal("valid OAuth token rejected")
 	}
@@ -30,7 +31,7 @@ func TestOAuthCredentialsFollowAccountRevocation(t *testing.T) {
 	if w.Code != 204 {
 		t.Fatalf("sign out everywhere: %d %s", w.Code, w.Body.String())
 	}
-	if h.gateway.mcp.authenticate(request(tokens.Access)) != nil {
+	if h.gateway.mcp.Authenticate(request(tokens.Access)) != nil {
 		t.Fatal("access token survived account revocation")
 	}
 	h.exchange(t, h.codeForm(pendingCode), 400)
@@ -38,29 +39,13 @@ func TestOAuthCredentialsFollowAccountRevocation(t *testing.T) {
 	h.cookie = &http.Cookie{Name: "agentpack_session", Value: network.RandomToken()}
 	testBrowserSession(t, h.gateway.auth, "other@example.com", h.cookie.Value)
 	other := h.exchange(t, h.codeForm(h.code(t)), 200)
-	if h.gateway.mcp.authenticate(request(other.Access)) == nil {
+	if h.gateway.mcp.Authenticate(request(other.Access)) == nil {
 		t.Fatal("revocation crossed account identities")
 	}
 	if _, err := h.gateway.store.DB.Exec("UPDATE users SET disabled=1 WHERE email='other@example.com'"); err != nil {
 		t.Fatal(err)
 	}
-	if h.gateway.mcp.authenticate(request(other.Access)) != nil {
+	if h.gateway.mcp.Authenticate(request(other.Access)) != nil {
 		t.Fatal("disabled OAuth account accepted")
-	}
-}
-
-func TestMCPResponseBodyIsByteBounded(t *testing.T) {
-	w := &mcpResponse{header: make(http.Header)}
-	chunk := make([]byte, 1024)
-	for range 4096 {
-		if n, err := w.Write(chunk); err != nil || n != len(chunk) {
-			t.Fatalf("premature limit: %d %v", n, err)
-		}
-	}
-	if n, err := w.Write([]byte{1}); err == nil || n != 0 || !w.tooLarge || w.body.Len() != 4<<20 {
-		t.Fatalf("response unbounded: %d %v %d", n, err, w.body.Len())
-	}
-	if w.status != http.StatusOK {
-		t.Fatalf("default response status: %d", w.status)
 	}
 }

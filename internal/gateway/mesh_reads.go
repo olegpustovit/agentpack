@@ -31,7 +31,7 @@ func (g *Gateway) nodeContact(node, local string) (bool, time.Time) {
 	return contact.Reachable && time.Since(contact.At) < 90*time.Second, lastSync
 }
 
-func (g *Gateway) meshSessions(ctx context.Context, node string, recentOnly bool) ([]session.SessionInfo, error) {
+func (g *Gateway) Sessions(ctx context.Context, node string, recentOnly bool) ([]session.SessionInfo, error) {
 	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return nil, err
@@ -220,7 +220,7 @@ func (g *Gateway) routeMeshRequest(w http.ResponseWriter, r *http.Request) (*htt
 }
 
 func (g *Gateway) meshAgentSessions(ctx context.Context, node, directory, harness string) ([]network.AgentSession, error) {
-	entries, err := g.meshSessions(ctx, node, false)
+	entries, err := g.Sessions(ctx, node, false)
 	if err != nil {
 		return nil, err
 	}

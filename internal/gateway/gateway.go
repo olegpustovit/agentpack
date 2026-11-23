@@ -28,6 +28,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/gorilla/websocket"
 
+	"github.com/olegpustovit/agentpack/internal/gateway/mcp"
 	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/registry"
@@ -67,7 +68,8 @@ type Gateway struct {
 	store          *state.Store
 	logs           *obs.Store
 	auth           *gatewayAuth
-	mcp            *GatewayMCP
+	mcp            *mcp.Server
+	mcpNodes       func(node string) http.Handler // nil: MCP calls for a node take the mesh; tests stand another gateway in
 	local          network.NodeRecord
 	origin         *url.URL // loopback origin; public access adds another
 	public         publicAccess
@@ -92,9 +94,6 @@ type Gateway struct {
 	tailnet        mesh.Cache
 	mcpBroker      mcpBroker
 	push           pushWatch
-	agentTasks     sync.Map         // task IDs whose answer is being delivered
-	agentTaskSeen  map[string]int64 // last_seq each asked chat had at the last pass; owned by runAgentTasks
-	agentTaskRetry time.Time        // when undelivered answers are tried again; owned by runAgentTasks
 	omp            ompSettings
 	found          folderDiscovery
 	credentialsMu  sync.Mutex // one agent credential sync at a time
@@ -175,7 +174,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	}
 	gateway.reapStoppedChats(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
 	gateway.endLeftoverStarts(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
-	gateway.mcp, err = NewGatewayMCP(gateway)
+	gateway.mcp, err = mcp.New(store, options.Home, origin.String(), gateway)
 	if err != nil {
 		return err
 	}
@@ -184,7 +183,9 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	for _, task := range []struct {
 		name string
 		run  func(context.Context)
-	}{{"gateway.tailnet_sharing", func(ctx context.Context) { gateway.tailnet.Serve(ctx, gateway.store, gateway) }}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.replication_effects", gateway.runReplicationEffects}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}, {"gateway.push", func(ctx context.Context) { gateway.runPush(ctx, pushInterval) }}, {"gateway.agent_tasks", func(ctx context.Context) { gateway.runAgentTasks(ctx, agentTasksInterval) }}, {"gateway.omp_settings", func(ctx context.Context) { gateway.runOMPSettings(ctx, 30*time.Second) }}, {"gateway.agent_credentials", func(ctx context.Context) { gateway.runAgentCredentials(ctx, 30*time.Second) }}} {
+	}{{"gateway.tailnet_sharing", func(ctx context.Context) { gateway.tailnet.Serve(ctx, gateway.store, gateway) }}, {"gateway.log_spool", gateway.runLogSpool}, {"gateway.state_sync", gateway.runStateSync}, {"gateway.replication_effects", gateway.runReplicationEffects}, {"gateway.log_forwarding", gateway.runLogForwarding}, {"gateway.archive", func(ctx context.Context) { gateway.runArchive(ctx, time.Hour, time.Now) }}, {"gateway.content_locations", func(ctx context.Context) { gateway.runContentLocations(ctx, 5*time.Minute) }}, {"gateway.mcp_credentials", func(ctx context.Context) { gateway.runMCPCredentials(ctx, 30*time.Second) }}, {"gateway.limits_after_turn", func(ctx context.Context) { gateway.runLimitsAfterTurns(ctx, time.Minute) }}, {"gateway.reaper", func(ctx context.Context) { gateway.runReaper(ctx, 15*time.Second) }}, {"gateway.push", func(ctx context.Context) { gateway.runPush(ctx, pushInterval) }}, {"gateway.agent_tasks", func(ctx context.Context) {
+		gateway.mcp.RunTasks(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")), mcp.TasksInterval)
+	}}, {"gateway.omp_settings", func(ctx context.Context) { gateway.runOMPSettings(ctx, 30*time.Second) }}, {"gateway.agent_credentials", func(ctx context.Context) { gateway.runAgentCredentials(ctx, 30*time.Second) }}} {
 		background.Add(1)
 		obs.Go(task.name, func() { defer background.Done(); task.run(ctx) })
 	}
@@ -272,13 +273,13 @@ func (g *Gateway) buildHandler() http.Handler {
 	mux := g.routes()
 	secured := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(WithPeerCache(r.Context(), g.options.Home))
-		if p := r.URL.Path; strings.HasPrefix(p, "/api/") || isMCPPath(p) {
+		if p := r.URL.Path; strings.HasPrefix(p, "/api/") || mcp.IsPath(p) {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		if g.mcp != nil && chatBearer(r) {
-			g.mcp.ServeHTTP(w, r) // a chat's own agentpack tools credential; see mcp_chat.go
+		if g.mcp != nil && mcp.ChatBearer(r) {
+			g.mcp.ServeHTTP(w, r) // a chat's own agentpack tools credential; see mcp/chat.go
 			return
 		}
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
@@ -328,13 +329,13 @@ func (g *Gateway) buildHandler() http.Handler {
 			}
 		}
 		if !claimed && !local {
-			allowed := (r.Method == "GET" || r.Method == "HEAD") && (r.URL.Path == "/healthz" || r.URL.Path == "/api/status" || !strings.HasPrefix(r.URL.Path, "/api/") && !isMCPPath(r.URL.Path)) || r.Method == "POST" && r.URL.Path == "/api/claim"
+			allowed := (r.Method == "GET" || r.Method == "HEAD") && (r.URL.Path == "/healthz" || r.URL.Path == "/api/status" || !strings.HasPrefix(r.URL.Path, "/api/") && !mcp.IsPath(r.URL.Path)) || r.Method == "POST" && r.URL.Path == "/api/claim"
 			if !allowed {
 				http.Error(w, "unclaimed", http.StatusForbidden)
 				return
 			}
 		}
-		if g.mcp != nil && isMCPPath(r.URL.Path) {
+		if g.mcp != nil && mcp.IsPath(r.URL.Path) {
 			g.mcp.ServeHTTP(w, r)
 			return
 		}
@@ -496,7 +497,7 @@ func (g *Gateway) routes() routeMux {
 	mux.HandleFunc("DELETE /api/local/sessions/{id}/presence", g.servePresence)
 
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
-		value, err := g.meshSessions(r.Context(), r.URL.Query().Get("node"), true)
+		value, err := g.Sessions(r.Context(), r.URL.Query().Get("node"), true)
 		if err != nil {
 			meshReadError(w, r, err)
 			return
@@ -783,9 +784,9 @@ func (g *Gateway) routes() routeMux {
 		g.terminalData(w, r)
 	})
 	mux.HandleFunc("GET /api/sessions/{id}/conversation", g.ServeConversation)
-	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", g.servePrompt)
-	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", g.servePrompt)
-	mux.HandleFunc("POST /api/sessions/{id}/conversation/message", g.serveAgentMessage)
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt", g.ServePrompt)
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/prompt/images", g.ServePrompt)
+	mux.HandleFunc("POST /api/sessions/{id}/conversation/message", g.mcp.ServeAgentMessage)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/show", g.serveShow)
 	mux.HandleFunc("POST /api/sessions/{id}/conversation/config", g.serveWantedConfig)
 	mux.HandleFunc("DELETE /api/sessions/{id}/conversation/goal", g.clearGoal)

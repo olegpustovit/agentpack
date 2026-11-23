@@ -20,6 +20,7 @@ import (
 
 	"tailscale.com/ipn"
 
+	"github.com/olegpustovit/agentpack/internal/gateway/mcp"
 	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
@@ -224,7 +225,7 @@ func (g *Gateway) serveProbe(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	w.Header().Set("X-Agentpack-Probe", answer)
-	network.WriteJSON(w, protectedResourceMetadata(g.resolveSource(r, probe).origin))
+	network.WriteJSON(w, mcp.ProtectedResourceMetadata(g.resolveSource(r, probe).origin))
 	return true
 }
 

@@ -1,4 +1,4 @@
-package gateway
+package mcp
 
 import (
 	"crypto/sha256"
