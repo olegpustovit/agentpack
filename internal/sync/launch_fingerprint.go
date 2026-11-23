@@ -299,6 +299,7 @@ func selectLaunchGeneration(projectRoot, modeName string, target base.Target) er
 	}
 	return paths.SelectStagingGeneration(projectRoot, modeName, state.Root)
 }
+
 // materializationStatePath is per target: a launch rebuilds one harness and
 // must not claim that every other harness was built from current inputs.
 func materializationStatePath(projectRoot, modeName string, target *base.Target) (string, error) {

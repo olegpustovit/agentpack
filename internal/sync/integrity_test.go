@@ -51,6 +51,26 @@ func TestLockRecordsContentHashAndSyncVerifiesIt(t *testing.T) {
 	}
 }
 
+// The index records what was fetched; a sync that fetches nothing writes nothing.
+func TestSyncUpdatesTheIndexOnlyForFetchedEntries(t *testing.T) {
+	fixture := newIntegrityFixture(t)
+	fixture.manifest(demoKey, commitOne)
+	lock := fixture.lock()
+	key := lock.Packages[0].CacheKey
+	if err := cache.UpsertEntry(key, cache.EntryRecord{Kind: lockfile.PackageSkill, Owner: "sentinel"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	fixture.sync(SyncOptions{})
+	if record, _, err := cache.GetEntry(key); err != nil || record.Owner != "sentinel" {
+		t.Fatalf("sync of a cached entry rewrote its index record: %+v, %v", record, err)
+	}
+	fixture.wipeCache()
+	fixture.sync(SyncOptions{})
+	if record, found, err := cache.GetEntry(key); err != nil || !found || record.Owner != "acme" {
+		t.Fatalf("sync of a fetched entry did not record it: %+v, %v, %v", record, found, err)
+	}
+}
+
 func TestLockWithoutContentHashesStagesWithNoticeUntilRelocked(t *testing.T) {
 	fixture := newIntegrityFixture(t)
 	fixture.manifest(demoKey, commitOne)

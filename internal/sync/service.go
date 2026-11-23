@@ -383,6 +383,15 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		options.Progress = service.Step
 	}
 	verify := options.verifier()
+	// Entries installed before this sync are already in the index; only the
+	// ones it fetches (here or while resolving) are recorded.
+	cached := map[string]bool{}
+	if root, err := paths.CacheDir(); err == nil {
+		entries, _ := os.ReadDir(root)
+		for _, entry := range entries {
+			cached[entry.Name()] = true
+		}
+	}
 	if !options.DryRun && !options.Frozen && project != nil && len(project.Dependencies) != 0 {
 		// sync verifies what the lock already pins. It records a content hash
 		// only for content it has to download, and adds no MCP records.
@@ -429,9 +438,11 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		}
 		options.step("verifying " + pkg.Module)
 		restore := cache.GitHubRestore(ctx, service.client())
+		fetched := !cached[pkg.CacheKey]
 		ready, err := cache.EnsureLockCachedVerifying(pkg, restore, verify)
 		var mismatch *cache.IntegrityError
 		if !options.Frozen && options.Repair && errors.As(err, &mismatch) && !mismatch.Fetched {
+			fetched = true
 			if _, _, err = cache.RefetchPackage(pkg, restore); err == nil {
 				service.notify("%s", mismatch.Repaired())
 				ready, err = cache.EnsureLockCached(pkg, restore)
@@ -445,6 +456,9 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 				return result, fmt.Errorf("cache missing and source unavailable for %s", pkg.Module)
 			}
 			result.Warnings = append(result.Warnings, fmt.Sprintf("%s %s: cache missing and source unavailable", pkg.Kind, pkg.CacheKey))
+		}
+		if !fetched || !ready {
+			continue
 		}
 		record := cache.EntryRecord{Kind: pkg.Kind, SourceURL: pkg.URL, Owner: pkg.Owner, Repo: pkg.Repo, Path: pkg.Path, Commit: pkg.Commit, FetchedAtUnix: time.Now().Unix()}
 		if err := cache.UpsertEntry(pkg.CacheKey, record, nil); err != nil {
@@ -625,6 +639,7 @@ func (service Service) SyncForLaunchOptions(ctx context.Context, projectRoot str
 	}
 	return effective, false, nil
 }
+
 // resolveMode validates the selected mode against what staging will read: the
 // lock, the manifest and the workspace's .agents directory.
 func resolveMode(workspace string, project *manifest.Manifest, lock *lockfile.PackLock, name string) (mode.Effective, error) {

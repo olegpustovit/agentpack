@@ -18,9 +18,6 @@ func OpenCache(readOnly bool) (_ *sql.DB, result error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Remove(filepath.Join(filepath.Dir(path), "db.reddb")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("remove obsolete cache index: %w", err)
-	}
 	if info, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 		if readOnly {
 			return nil, nil
