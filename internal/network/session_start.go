@@ -43,15 +43,19 @@ type chatStartRequest struct {
 	definitionRoot string
 }
 
-var errChatStartClaim = errors.New("session ID already claimed")
+var (
+	errChatStartClaim  = errors.New("session ID already claimed")
+	errInvalidChatID   = errors.New("invalid chat ID")
+	errResumeOwnFolder = errors.New("a resumed conversation keeps its own folder")
+)
 
 func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatStartRequest) (SessionInfo, error) {
 	token := strings.TrimPrefix(input.ID, "session-")
 	if input.Transport != "acp" || !validSessionID(input.ID) || len(token) != 32 || token != strings.ToLower(token) {
-		return SessionInfo{}, errors.New("invalid chat ID")
+		return SessionInfo{}, errInvalidChatID
 	}
 	if _, err := hex.DecodeString(token); err != nil {
-		return SessionInfo{}, errors.New("invalid chat ID")
+		return SessionInfo{}, errInvalidChatID
 	}
 	fingerprint := sha256.Sum256(mustRawJSON(struct {
 		Actor Actor
@@ -68,7 +72,7 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatSta
 		ConversationState: "starting", Reachable: true,
 	}
 	if input.Worktree != "" && info.AgentSessionID != "" {
-		return SessionInfo{}, errors.New("a resumed conversation keeps its own folder")
+		return SessionInfo{}, errResumeOwnFolder
 	}
 	source := info
 	if input.forkSessionID != "" {
@@ -77,19 +81,19 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor Actor, input chatSta
 	if err := authorizeACPResume(ctx, g.auth.store, actor, source); err != nil {
 		return SessionInfo{}, err
 	}
-	if main, _, err := worktreeMain(ctx, g.options.Home, info.Directory); input.Worktree == "" && err == nil && g.startableDirectory(actor, main) {
+	if main, _, err := worktreeMain(ctx, g.options.Home, info.Directory); input.Worktree == "" && err == nil && g.startableDirectory(ctx, actor, main) {
 		info.WorktreeOf = main
 		if info.DefinitionRoot == "" {
 			info.DefinitionRoot = g.definitionRootFor(ctx, main)
 		}
-	} else if !g.startableDirectory(actor, info.Directory) {
+	} else if !g.startableDirectory(ctx, actor, info.Directory) {
 		return SessionInfo{}, errUnknownFolder
 	}
 	var err error
 	if info.FolderID, err = FolderIdentity(info.Directory); err != nil {
 		return SessionInfo{}, err
 	}
-	if info.NodeID, err = g.auth.store.NodeID(ctx); err != nil {
+	if info.NodeID, err = g.nodeID(ctx); err != nil {
 		return SessionInfo{}, err
 	}
 	info.StartedAt = time.Now().UTC()
@@ -169,9 +173,11 @@ const chatStartTimeout = 7 * time.Minute
 const interruptedStartGrace = 2 * time.Minute
 
 func (g *Gateway) startInBackground(ctx context.Context, info SessionInfo, forkSessionID string, request *chatStartRequest) {
+	if !g.beginBackground(&g.starting) {
+		return
+	}
 	background := context.WithoutCancel(ctx)
 	g.startingChats.Store(info.ID, struct{}{})
-	g.starting.Add(1)
 	obs.Go("gateway.start_session", func() {
 		defer g.starting.Done()
 		defer g.startingChats.Delete(info.ID)
@@ -252,7 +258,7 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (
 	if err != nil {
 		return SessionInfo{}, err
 	}
-	local, err := g.auth.store.NodeID(ctx)
+	local, err := g.nodeID(ctx)
 	if err != nil {
 		return SessionInfo{}, err
 	}
@@ -269,7 +275,7 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (
 	if info.EndedAt.IsZero() {
 		return SessionInfo{}, errResumeConflict
 	}
-	if !g.knownDirectory(info.Directory) && !g.knownWorktree(ctx, info.Directory) {
+	if !g.knownDirectory(ctx, info.Directory) && !g.knownWorktree(ctx, info.Directory) {
 		return SessionInfo{}, errUnknownFolder
 	}
 	// The claim is atomic, so two resumes cannot start two workers for one chat.
@@ -304,6 +310,8 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (
 // switchHarness hands a chat to another agent. The old agent stops; a fresh session of the new one
 // continues the same transcript, and its first prompt carries what came before (handoffContext).
 func (g *Gateway) switchHarness(ctx context.Context, id, harness string) (SessionInfo, error) {
+	g.chatLifecycle.Lock()
+	defer g.chatLifecycle.Unlock()
 	info, err := storedSession(ctx, g.auth.store.Reader, id)
 	if err != nil {
 		return SessionInfo{}, err
@@ -334,7 +342,8 @@ func (g *Gateway) switchHarness(ctx context.Context, id, harness string) (Sessio
 	if switched, err := result.RowsAffected(); err != nil || switched != 1 {
 		return SessionInfo{}, errors.Join(errResumeConflict, err)
 	}
-	return g.resumeSession(ctx, id, "", "")
+	g.autoResume(id)
+	return g.claimResume(ctx, id, "", "")
 }
 
 // failStart leaves the error in the chat's transcript and ends the row. The notice also keeps the

@@ -318,7 +318,7 @@ func (m *GatewayMCP) guardToolCalls(next mcp.MethodHandler) mcp.MethodHandler {
 	}
 }
 
-// mcpWaitPoll is how often wait and send_prompt look again; tests shorten it.
+// mcpWaitPoll is the send_prompt retry interval; tests shorten it.
 var mcpWaitPoll = 500 * time.Millisecond
 
 // mcpWaitMax stays inside codemode's 60 s run limit.
@@ -797,7 +797,12 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 		if in.TimeoutSeconds > 0 && time.Duration(in.TimeoutSeconds)*time.Second < timeout {
 			timeout = time.Duration(in.TimeoutSeconds) * time.Second
 		}
-		deadline := time.Now().Add(timeout)
+		events, unsubscribe := m.gateway.listen()
+		defer unsubscribe()
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		fallback := time.NewTicker(5 * time.Second)
+		defer fallback.Stop()
 		var first map[string]chatState
 		var firstTasks map[string]taskState
 		for {
@@ -827,13 +832,19 @@ func (m *GatewayMCP) chatTools(server *mcp.Server) {
 			for _, task := range tasks {
 				out.Reached = out.Reached || task.State != firstTasks[task.TaskID] || !task.State.open()
 			}
-			if out.Reached || !time.Now().Before(deadline) {
+			if out.Reached {
 				return nil, out, nil
 			}
 			select {
 			case <-ctx.Done():
 				return nil, out, ctx.Err()
-			case <-time.After(min(mcpWaitPoll, time.Until(deadline))):
+			case <-timer.C:
+				return nil, out, nil
+			case <-fallback.C:
+			case _, open := <-events:
+				if !open {
+					events = nil
+				}
 			}
 		}
 	})

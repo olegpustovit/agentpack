@@ -306,8 +306,8 @@ func discoverFolders(ctx context.Context, home, dataHome string) []RecentFolder 
 	return found
 }
 
-func (g *Gateway) startableDirectory(actor Actor, dir string) bool {
-	if g.knownDirectory(dir) {
+func (g *Gateway) startableDirectory(ctx context.Context, actor Actor, dir string) bool {
+	if g.knownDirectory(ctx, dir) {
 		return true
 	}
 	if !actor.CanStartNewFolder() || !filepath.IsAbs(dir) {

@@ -3,7 +3,6 @@ package network
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -59,26 +58,6 @@ func (g *Gateway) meshPeer(ctx context.Context, id string) bool {
 		}
 	}
 	return false
-}
-
-func (g *Gateway) meshOwner(w http.ResponseWriter, r *http.Request) bool {
-	actor, ok := actorFrom(r.Context())
-	if ok && actor.Kind == "local" {
-		return true
-	}
-	var owner bool
-	if ok && (actor.Kind == "browser" || actor.Kind == "mcp") {
-		err := g.auth.store.Reader.QueryRowContext(r.Context(), "SELECT role='owner' AND disabled=0 FROM users WHERE email=?", actor.User).Scan(&owner)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			if event := obs.From(r.Context()); event != nil {
-				event.Fail(err)
-			}
-		}
-	}
-	if !owner {
-		http.Error(w, "mesh enrollment requires an owner", http.StatusForbidden)
-	}
-	return owner
 }
 
 func (g *Gateway) registerStateSync(mux *http.ServeMux) {

@@ -59,7 +59,7 @@ func (g *Gateway) registerLibraryDrafts(mux *http.ServeMux) {
 
 func (g *Gateway) localDraftState(ctx context.Context, draft registry.Draft) (registry.DraftState, error) {
 	state := registry.DraftState{Reachable: true}
-	if !g.knownDirectory(draft.Directory) {
+	if !g.knownDirectory(ctx, draft.Directory) {
 		return state, nil
 	}
 	identity, err := FolderIdentity(draft.Directory)

@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -12,11 +13,15 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/state"
 
+	"tailscale.com/client/local"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -448,5 +453,58 @@ func TestSyncHTTPResponseKeepsPeerReachable(t *testing.T) {
 		if online, last := g.nodeContact("peer", "local"); online != reachable || !last.IsZero() {
 			t.Fatalf("online = %v, last sync = %v", online, last)
 		}
+	}
+}
+
+type statusRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f statusRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestConcurrentTailnetSnapshotsShareLocalAPI(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls atomic.Int32
+		release := make(chan struct{})
+		tailscaleLocal = local.Client{OmitAuth: true, Transport: statusRoundTripper(func(_ *http.Request) (*http.Response, error) {
+			calls.Add(1)
+			<-release
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(
+				`{"BackendState":"Running","Self":{"ID":"node"}}`,
+			))}, nil
+		})}
+		t.Cleanup(func() { tailscaleLocal = local.Client{} })
+		var wg sync.WaitGroup
+		for range 10 {
+			wg.Go(func() {
+				status, err := tailnetSnapshot(t.Context())
+				if err != nil || status.Self == nil || status.Self.ID != "node" {
+					t.Errorf("status = %+v, err = %v", status, err)
+				}
+			})
+		}
+		synctest.Wait()
+		close(release)
+		wg.Wait()
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("LocalAPI calls = %d, want 1", got)
+		}
+	})
+}
+
+func TestBindTailnetNodeOnlyWhileUsingSiteIdentity(t *testing.T) {
+	home := t.TempDir()
+	auth, err := testGatewayAuth(t, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &Gateway{auth: auth, store: auth.store}
+	if err := g.bindTailnetNode(t.Context(), "test-node"); err != nil {
+		t.Fatal(err)
+	}
+	g.store = nil // no store is involved once the stable ID is cached
+	if err := g.bindTailnetNode(t.Context(), "test-node"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.bindTailnetNode(t.Context(), "different-node"); err == nil {
+		t.Fatal("accepted a different stable identity")
 	}
 }

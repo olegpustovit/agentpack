@@ -69,7 +69,7 @@ func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
 		}{peers, contacts}, err)
 	})
 	mux.HandleFunc("POST "+replicationPrefix+"peers", func(w http.ResponseWriter, r *http.Request) {
-		if !g.meshOwner(w, r) {
+		if !g.requireOwner(w, r) {
 			return
 		}
 		var input struct {
@@ -103,7 +103,7 @@ func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
 		libraryResponse(w, map[string]bool{"enrolled": err == nil}, err)
 	})
 	mux.HandleFunc("DELETE "+replicationPrefix+"peers/{peer}", func(w http.ResponseWriter, r *http.Request) {
-		if !g.meshOwner(w, r) {
+		if !g.requireOwner(w, r) {
 			return
 		}
 		err := store.RemovePeer(r.PathValue("peer"))
@@ -114,30 +114,20 @@ func (g *Gateway) registerRegistryReplication(mux *http.ServeMux) {
 		libraryResponse(w, map[string]bool{"removed": err == nil}, err)
 	})
 	mux.HandleFunc("POST "+replicationPrefix+"sync", func(w http.ResponseWriter, r *http.Request) {
+		if !g.requireOwner(w, r) {
+			return
+		}
 		var input struct {
 			Peer string `json:"peer"`
 		}
 		if !readJSON(w, r, &input) {
 			return
 		}
+		if !g.meshPeer(r.Context(), input.Peer) {
+			http.Error(w, "state peer is not enrolled for mesh sync", http.StatusBadRequest)
+			return
+		}
 		g.wakeStatePeer(input.Peer)
-		g.emitEvent(eventMessage{Topic: "replication"})
-		err := g.syncStatePeer(r.Context(), input.Peer)
-		libraryResponse(w, map[string]bool{"synced": err == nil}, err)
+		writeJSON(w, map[string]bool{"synced": true})
 	})
-}
-
-func (g *Gateway) syncStatePeer(ctx context.Context, peer string) error {
-	if !g.meshPeer(ctx, peer) {
-		return errors.New("state peer is not enrolled for mesh sync")
-	}
-	target, err := g.tailnetTarget(ctx, peer)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	client := &http.Client{Transport: tailnetTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	_, _, err = pullState(ctx, g.auth.store, g.options.Library.Store, client, target)
-	return err
 }

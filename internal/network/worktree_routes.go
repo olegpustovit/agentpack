@@ -17,6 +17,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/state"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -46,7 +47,7 @@ func gitFailure(w http.ResponseWriter, r *http.Request, status int, err error, e
 // newSessionWorktree resolves POST /api/sessions' worktree request for a startable main folder:
 // "new" creates one, anything else must be an existing worktree git lists for that folder.
 func (g *Gateway) newSessionWorktree(ctx context.Context, actor Actor, main, worktree, name string, carry bool) (string, error) {
-	if !g.startableDirectory(actor, main) {
+	if !g.startableDirectory(ctx, actor, main) {
 		return "", errors.New("choose a recent folder from this node")
 	}
 	if !gitAvailable() {
@@ -102,7 +103,7 @@ func (g *Gateway) definitionRootFor(ctx context.Context, main string) string {
 // knownWorktree accepts a session directory inside a worktree whose main folder is known here.
 func (g *Gateway) knownWorktree(ctx context.Context, dir string) bool {
 	main, _, err := worktreeMain(ctx, g.options.Home, dir)
-	return err == nil && g.knownDirectory(main)
+	return err == nil && g.knownDirectory(ctx, main)
 }
 
 type worktreeRow struct {
@@ -141,16 +142,26 @@ func (g *Gateway) serveWorktrees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projects, _ := os.ReadDir(worktreesRoot(g.options.Home))
+	var paths []string
 	for _, project := range projects {
 		entries, _ := os.ReadDir(filepath.Join(worktreesRoot(g.options.Home), project.Name()))
 		for _, entry := range entries {
 			if !entry.IsDir() {
 				continue
 			}
-			row := g.worktreeRow(r.Context(), filepath.Join(worktreesRoot(g.options.Home), project.Name(), entry.Name()), sessions)
-			rows = append(rows, row)
+			paths = append(paths, filepath.Join(worktreesRoot(g.options.Home), project.Name(), entry.Name()))
 		}
 	}
+	rows = make([]worktreeRow, len(paths))
+	var group errgroup.Group
+	group.SetLimit(8)
+	for i, path := range paths {
+		group.Go(func() error {
+			rows[i] = g.worktreeRow(r.Context(), path, sessions)
+			return nil
+		})
+	}
+	_ = group.Wait()
 	writeJSON(w, map[string]any{"git": true, "worktrees": rows})
 }
 
@@ -176,14 +187,41 @@ func (g *Gateway) worktreeRow(ctx context.Context, path string, sessions []Sessi
 	}
 	row.Base, _ = gitLine(ctx, main, "symbolic-ref", "--short", "-q", "HEAD")
 	if mainHead, err := gitLine(ctx, main, "rev-parse", "HEAD"); err == nil && row.Head != "" {
-		row.Merged = merged(ctx, path, mainHead, row.Head) || pullRequestMerged(ctx, path, row.worktreeStatus)
-		if row.Upstream != "" {
-			row.Unpushed = row.Ahead
-		} else {
-			row.Unpushed, _, _ = aheadBehind(ctx, path, mainHead, "HEAD")
-		}
+		row.Merged, row.Unpushed = g.worktreeAncestry(ctx, path, mainHead, row.worktreeStatus)
+		row.Merged = row.Merged || pullRequestMerged(ctx, path, row.worktreeStatus)
 	}
 	return row
+}
+
+// worktreeDivergence caches commit history for a pair of immutable tips; the
+// working tree and upstream counts still come from the current git status.
+type worktreeDivergence struct {
+	base, head string
+	at         time.Time
+	ahead      int
+}
+
+func (g *Gateway) worktreeAncestry(ctx context.Context, path, base string, status worktreeStatus) (bool, int) {
+	if status.Upstream != "" {
+		return merged(ctx, path, base, status.Head), status.Ahead
+	}
+	g.worktreeHistoryMu.Lock()
+	cached := g.worktreeHistory[path]
+	g.worktreeHistoryMu.Unlock()
+	if cached.base == base && cached.head == status.Head && time.Since(cached.at) < 30*time.Second {
+		return cached.ahead == 0, cached.ahead
+	}
+	ahead, _, err := aheadBehind(ctx, path, base, status.Head)
+	if err != nil {
+		return false, 0
+	}
+	g.worktreeHistoryMu.Lock()
+	if g.worktreeHistory == nil || len(g.worktreeHistory) >= 128 {
+		g.worktreeHistory = make(map[string]worktreeDivergence)
+	}
+	g.worktreeHistory[path] = worktreeDivergence{base: base, head: status.Head, at: time.Now(), ahead: ahead}
+	g.worktreeHistoryMu.Unlock()
+	return ahead == 0, ahead
 }
 
 // worktreeRoot validates a client-named worktree: a folder directly under home/worktrees/<hash>.
@@ -193,6 +231,9 @@ func (g *Gateway) worktreeRoot(path string) (string, bool) {
 }
 
 func (g *Gateway) serveWorktreeRemove(w http.ResponseWriter, r *http.Request) {
+	if !g.requireOwner(w, r) {
+		return
+	}
 	var input struct {
 		Path    string `json:"path"`
 		Discard bool   `json:"discard"`
@@ -224,6 +265,9 @@ func (g *Gateway) serveWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) serveWorktreePush(w http.ResponseWriter, r *http.Request) {
+	if !g.requireOwner(w, r) {
+		return
+	}
 	var input struct {
 		Path string `json:"path"`
 	}

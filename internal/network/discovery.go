@@ -27,6 +27,8 @@ import (
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/state"
 
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
 	"tailscale.com/client/local"
 	"tailscale.com/ipn/ipnstate"
 )
@@ -155,10 +157,23 @@ func WriteSharingConfig(store *state.Store, config SharingConfig) error {
 // tailscaleLocal finds the daemon itself on every install, including the macOS app builds that
 // put no `tailscale` command on PATH. Tests point it at a missing socket.
 var tailscaleLocal local.Client
+var tailnetStatusRequests singleflight.Group
 
 const tailscaleTimeout = 3 * time.Second
 
 func tailnetSnapshot(ctx context.Context) (tailnetStatus, error) {
+	result := tailnetStatusRequests.DoChan("status", func() (any, error) {
+		return readTailnetSnapshot(context.WithoutCancel(ctx))
+	})
+	select {
+	case <-ctx.Done():
+		return tailnetStatus{}, ctx.Err()
+	case answer := <-result:
+		return answer.Val.(tailnetStatus), answer.Err
+	}
+}
+
+func readTailnetSnapshot(ctx context.Context) (tailnetStatus, error) {
 	ctx, cancel := context.WithTimeout(ctx, tailscaleTimeout)
 	defer cancel()
 	raw, err := tailscaleLocal.Status(ctx)
@@ -352,28 +367,26 @@ func probeTailnetPeer(ctx context.Context, peer *tailnetPeer) (peerProbe, bool) 
 func probeTailnetPeers(ctx context.Context, peers []*tailnetPeer, probe probeFunc) (map[string]peerProbe, error) {
 	results := map[string]peerProbe{}
 	var mu sync.Mutex
-	var wait sync.WaitGroup
-	slots := make(chan struct{}, 8)
+	var group errgroup.Group
+	group.SetLimit(8)
 	for _, peer := range peers {
-		select {
-		case slots <- struct{}{}:
-		case <-ctx.Done():
-			wait.Wait()
-			return results, ctx.Err()
+		if ctx.Err() != nil {
+			break
 		}
-		wait.Add(1)
-		go func(peer *tailnetPeer) {
-			defer wait.Done()
-			defer func() { <-slots }()
+		group.Go(func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if result, ok := probe(ctx, peer); ok {
 				mu.Lock()
 				results[peer.ID] = result
 				mu.Unlock()
 			}
-		}(peer)
+			return nil
+		})
 	}
-	wait.Wait()
-	return results, nil
+	err := group.Wait()
+	return results, errors.Join(err, ctx.Err())
 }
 
 // tailnetNodesFrom returns the allowed, online peers that answer their gateway probe.
@@ -841,6 +854,7 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			http.Error(w, "invalid peer request", 403)
 			return
 		}
+		_, pattern := peerMux().Handler(r)
 		if r.URL.Path != "/peer" && !peerRoute(r.Method, r.URL.Path) {
 			http.NotFound(w, r)
 			return
@@ -877,6 +891,21 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			writeJSON(w, TailnetNode{ID: self.ID, Name: self.HostName, Online: true, Version: g.options.Version, Schema: state.SchemaVersion()})
 			return
 		}
+		peer := identity.Node.StableID
+		if !g.enrolledPeer(peer) {
+			http.Error(w, "peer is not enrolled", http.StatusForbidden)
+			return
+		}
+		removed, err := g.options.Library.Store.PeerRemoved(peer)
+		if err != nil || removed {
+			if err != nil {
+				if event := obs.From(r.Context()); event != nil {
+					event.Fail(err)
+				}
+			}
+			http.Error(w, "peer is not enrolled", http.StatusForbidden)
+			return
+		}
 		actor := Actor{Kind: "peer", User: identity.UserProfile.LoginName, Node: identity.Node.ComputedName, StableNodeID: identity.Node.StableID}
 		actor, err = g.forwardedAccount(r.Context(), actor, r.Header.Get("X-Agentpack-User"))
 		if err != nil {
@@ -887,6 +916,15 @@ func (g *Gateway) peerHandler(self *tailnetPeer, address string) http.Handler {
 			return
 		}
 
+		// Read-only RPCs and machine-to-machine endpoints use the verified peer identity.
+		switch pattern {
+		case "POST /api/library/latest", "POST /api/library/draft-state", "POST /api/logs/ingest", "POST /api/mcp/credentials/{id}/refresh":
+		default:
+			if (r.Method != http.MethodGet || pattern == "GET /api/sessions/{id}/terminal") && !actor.Account {
+				http.Error(w, "forwarded account required", http.StatusForbidden)
+				return
+			}
+		}
 		actor.forwardedBrowser = actor.Account && r.Header.Get("X-Agentpack-Browser") == "1"
 		request := r.Clone(withActor(context.WithValue(r.Context(), replicaPeerKey{}, identity.Node.StableID), actor))
 		request.Header = r.Header.Clone()
@@ -980,7 +1018,7 @@ func (g *Gateway) runTailnetSharing(ctx context.Context) {
 		} else {
 			status, err := tailnetSnapshot(ctx)
 			if err == nil {
-				err = g.store.BindNode(ctx, status.Self.ID)
+				err = g.bindTailnetNode(ctx, status.Self.ID)
 			}
 			address := tailnetAddress(status.Self)
 			if err != nil || address == "" {
