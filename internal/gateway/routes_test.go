@@ -65,7 +65,7 @@ func TestRouteTableCoversMux(t *testing.T) {
 func TestRoutePoliciesArePinned(t *testing.T) {
 	publicRoutes := []string{"/", "GET /healthz", "GET /mcp-oauth/callback", "GET /api/config", "GET /api/status", "POST /api/claim", "POST /api/login"}
 	ownerRoutes := []string{
-		"POST /api/node/update", "POST /api/node/stop", "POST /api/packages", "POST /api/mcp/servers", "PUT /api/projects/settings", "POST /api/settings/sharing",
+		"POST /api/node/update", "POST /api/node/stop", "POST /api/mcp/servers", "PUT /api/projects/settings", "POST /api/settings/sharing",
 		"POST " + replicationPrefix + "peers", "DELETE " + replicationPrefix + "peers/{peer}", "POST " + replicationPrefix + "sync",
 		"POST /api/agents/{harness}/login", "GET /api/agents/{harness}/login/{id}", "POST /api/agents/{harness}/login/{id}",
 		"DELETE /api/agents/{harness}/login/{id}", "POST /api/agents/{harness}/logout",

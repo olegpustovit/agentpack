@@ -318,7 +318,7 @@ func TestReplicationSyncOnlyWakesEnrolledWorker(t *testing.T) {
 func TestAdministrativeRoutesRejectMembers(t *testing.T) {
 	g, origin := identityGateway(t, t.TempDir(), nil)
 	testBrowserSession(t, g.auth, "member@example.com", "member")
-	for _, path := range []string{"/api/node/stop", "/api/node/update", "/api/packages", "/api/mcp/servers",
+	for _, path := range []string{"/api/node/stop", "/api/node/update", "/api/mcp/servers",
 		"/api/settings/sharing", "/api/worktrees/remove", "/api/worktrees/push"} {
 		r := httptest.NewRequest("POST", origin.String()+path, strings.NewReader("{}"))
 		r.Header.Set("Origin", origin.String())

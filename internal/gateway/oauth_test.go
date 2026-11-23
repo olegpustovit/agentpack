@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -32,6 +33,7 @@ import (
 type oauthHarness struct {
 	gateway  *Gateway
 	server   *httptest.Server
+	issuer   string
 	cookie   *http.Cookie
 	clientID string
 	verifier string
@@ -60,7 +62,7 @@ func newOAuthHarness(t *testing.T) *oauthHarness {
 	server.Config.Handler = g.Handler()
 	server.Start()
 	t.Cleanup(func() { server.Close(); _ = g.store.Close() })
-	h := &oauthHarness{gateway: g, server: server, cookie: cookie, verifier: strings.Repeat("a", 43)}
+	h := &oauthHarness{gateway: g, server: server, issuer: server.URL, cookie: cookie, verifier: strings.Repeat("a", 43)}
 	response, data := h.request(t, "POST", "/oauth/register", `{"client_name":"Test assistant","redirect_uris":["https://assistant.example/callback"],"token_endpoint_auth_method":"none"}`, "application/json", nil, false)
 	if response.StatusCode != 201 {
 		t.Fatalf("register: %d %s", response.StatusCode, data)
@@ -88,7 +90,7 @@ func (h *oauthHarness) request(t *testing.T, method, path, body, contentType str
 		r.AddCookie(cookie)
 	}
 	if origin {
-		r.Header.Set("Origin", h.server.URL)
+		r.Header.Set("Origin", h.issuer)
 	}
 	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(r)
@@ -105,7 +107,7 @@ func (h *oauthHarness) request(t *testing.T, method, path, body, contentType str
 
 func (h *oauthHarness) authorizePath() string {
 	hash := sha256.Sum256([]byte(h.verifier))
-	query := url.Values{"client_id": {h.clientID}, "redirect_uri": {"https://assistant.example/callback"}, "response_type": {"code"}, "scope": {"agentpack"}, "state": {"state-value"}, "resource": {h.server.URL + "/mcp"}, "code_challenge_method": {"S256"}, "code_challenge": {base64.RawURLEncoding.EncodeToString(hash[:])}}
+	query := url.Values{"client_id": {h.clientID}, "redirect_uri": {"https://assistant.example/callback"}, "response_type": {"code"}, "scope": {"agentpack"}, "state": {"state-value"}, "resource": {h.issuer + "/mcp"}, "code_challenge_method": {"S256"}, "code_challenge": {base64.RawURLEncoding.EncodeToString(hash[:])}}
 	return "/oauth/authorize?" + query.Encode()
 }
 
@@ -166,7 +168,7 @@ func (h *oauthHarness) exchange(t *testing.T, form url.Values, status int) oauth
 }
 
 func (h *oauthHarness) codeForm(code string) url.Values {
-	return url.Values{"grant_type": {"authorization_code"}, "client_id": {h.clientID}, "redirect_uri": {"https://assistant.example/callback"}, "code": {code}, "code_verifier": {h.verifier}, "resource": {h.server.URL + "/mcp"}}
+	return url.Values{"grant_type": {"authorization_code"}, "client_id": {h.clientID}, "redirect_uri": {"https://assistant.example/callback"}, "code": {code}, "code_verifier": {h.verifier}, "resource": {h.issuer + "/mcp"}}
 }
 
 func TestOAuthConsentPKCEBindingAndRefreshReplay(t *testing.T) {
@@ -260,7 +262,39 @@ func (transport mcpBearerTransport) RoundTrip(request *http.Request) (*http.Resp
 
 func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 	h := newOAuthHarness(t)
+	backend, _ := url.Parse(h.server.URL)
+	public, err := parsePublicOrigin(testPublicOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.gateway.public.mu.Lock()
+	h.gateway.public.origin = public
+	h.gateway.public.mu.Unlock()
+	// Simulate HTTPS terminating at a loopback proxy that preserves the public Host.
+	h.server = httptest.NewServer(&httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+		r.SetURL(backend)
+		r.Out.Host = public.Host
+		r.Out.Header.Set("X-Forwarded-Host", public.Host)
+		r.Out.Header.Set("X-Forwarded-Proto", "https")
+	}})
+	t.Cleanup(h.server.Close)
+	h.issuer = testPublicOrigin
+	h.cookie.Name = "__Host-agentpack_session"
+	h.cookie.Value = network.RandomToken()
+	const member = "member@example.com"
+	testBrowserSession(t, h.gateway.auth, member, h.cookie.Value)
+
 	tokens := h.exchange(t, h.codeForm(h.code(t)), 200)
+	if response, _ := h.request(t, "POST", "/mcp", "{}", "application/json", nil, false); response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("public MCP without a token: %d", response.StatusCode)
+	}
+	bearer := "Bearer " + tokens.Access
+	if w := serve(h.gateway.Handler(), "POST", "https://invalid.example/mcp", "127.0.0.1:5000", map[string]string{"Authorization": bearer}); w.Code != http.StatusForbidden {
+		t.Fatalf("unknown host reached public MCP: %d", w.Code)
+	}
+	if w := serve(h.gateway.Handler(), "POST", h.issuer+"/mcp", "127.0.0.1:5000", map[string]string{"Authorization": bearer, "Origin": "https://assistant.example"}); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "invalid_origin") {
+		t.Fatalf("cross-origin request reached public MCP: %d %s", w.Code, w.Body.String())
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
@@ -288,7 +322,7 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 	}
 	var started atomic.Int32
 	h.gateway.options.Start = func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
-		if info.StartedBy == nil || info.StartedBy.Kind != "mcp" || info.StartedBy.User != testBrowserEmail {
+		if info.StartedBy == nil || info.StartedBy.Kind != "mcp" || info.StartedBy.User != member {
 			t.Errorf("MCP identity lost: %+v", info.StartedBy)
 		}
 		started.Add(1)
@@ -308,6 +342,19 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 	result, err = clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "start_session", Arguments: map[string]any{"directory": directory, "agent": "codex", "terminal": true}})
 	if err != nil || result.IsError || started.Load() != 1 {
 		t.Fatalf("known folder failed: %v %+v", err, result)
+	}
+	const spec = "owner/repo"
+	var installed atomic.Bool
+	h.gateway.options.Install = func(_ context.Context, dir, pkg string, restart bool) error {
+		if dir != directory || pkg != spec || !restart {
+			return fmt.Errorf("unexpected package install: %q %q %t", dir, pkg, restart)
+		}
+		installed.Store(true)
+		return nil
+	}
+	result, err = clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "install_package", Arguments: map[string]any{"directory": directory, "spec": spec}})
+	if err != nil || result.IsError || !installed.Load() {
+		t.Fatalf("package install as a member: %v %+v", err, result)
 	}
 	restartIDs := make(chan string, 2)
 	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

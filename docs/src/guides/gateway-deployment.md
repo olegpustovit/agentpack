@@ -129,8 +129,9 @@ is accepted as a public client (`none`). Scopes may be any set of `agentpack` an
 Each client address may make 120 OAuth requests a minute. Sign in with the gateway
 account and approve the connection. Authorization uses PKCE;
 there is no shared client secret to paste into ChatGPT, Grok, or another
-MCP client. Consent grants control over all machines accessible to this gateway
-identity, including terminal input and package installation.
+MCP client. Any enabled gateway account can authorize a client. Consent grants
+control over the machines accessible to that account, including terminal input
+and package installation in previously used folders.
 
 Tools list machines, sessions, recent folders and packages; start, stop and restart
 sessions; read and write terminal output/input; read chats (`read_conversation`),

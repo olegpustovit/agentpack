@@ -271,7 +271,12 @@ func New(store *state.Store, home, loopback string, host Host) (*Server, error) 
 	m.chatTools(server)
 	m.taskTools(server)
 	server.AddReceivingMiddleware(m.guardToolCalls)
-	stream := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+	getServer := func(*http.Request) *mcp.Server { return server }
+	chatStream := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+	// The OAuth path validates Host and Origin before the SDK sees the public Host via a loopback proxy.
+	oauthStream := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{
+		Stateless: true, JSONResponse: true, DisableLocalhostProtection: true,
+	})
 	mux := http.NewServeMux()
 	m.routes(mux)
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -282,14 +287,14 @@ func New(store *state.Store, home, loopback string, host Host) (*Server, error) 
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-		stream.ServeHTTP(w, verified)
+		oauthStream.ServeHTTP(w, verified)
 	}))
 	m.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		if ChatBearer(r) {
-			m.serveChatTools(w, r, stream)
+			m.serveChatTools(w, r, chatStream)
 			return
 		}
 		if m.host.Origin(r) == "" {
