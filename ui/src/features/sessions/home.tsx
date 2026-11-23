@@ -7,7 +7,7 @@ import { GroupHeader } from "@/components/kit/list"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { conversationEventsQuery } from "@/features/conversation/queries"
-import { reduceLog } from "@/features/conversation/reducer"
+import { isOpenRequest, reduceThread } from "@/features/conversation/reducer"
 import { ElicitationCard, PermissionCard } from "@/features/conversation/request-cards"
 import { useMachineQueries } from "@/features/machines/queries"
 import type { ProjectRow } from "@/lib/api-types"
@@ -133,12 +133,9 @@ function WaitingItem({ session, now }: { session: ListedSession; now: number }) 
     fetchedFor.current = activity
     void refetch()
   }, [activity, refetch])
-  const items = reduceLog(data?.entries ?? []).items
-  const pending = items.findLast((item) => {
-    const ask = item.data as { requestId?: string; elicitationId?: string; resolved?: boolean; inactive?: boolean } | undefined
-    if (ask?.resolved || ask?.inactive) return false
-    return item.kind === "permission" ? Boolean(ask?.requestId) : item.kind === "elicitation" && Boolean(ask?.elicitationId)
-  })
+  // Its own key: the open chat's pane folds a longer log for the same session.
+  const items = reduceThread(`waiting\0${session.machine}\0${session.id}`, data?.entries ?? []).items
+  const pending = items.findLast(isOpenRequest)
   return (
     <>
       <HomeRow session={session} now={now} />
