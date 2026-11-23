@@ -1,7 +1,10 @@
 package harness
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,6 +73,91 @@ func copyTree(source, destination string) error {
 		}
 	}
 	return nil
+}
+
+// FingerprintFiles digests configuration inputs: absence, mode, size, link
+// targets and file bytes, following links and walking directories. A socket,
+// pipe or device is refused. Absolute paths stay out of the digest.
+func FingerprintFiles(inputs []string) (string, error) {
+	hash := sha256.New()
+	active := map[string]bool{}
+	var visit func(string, string) error
+	visit = func(path, relative string) error {
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			fmt.Fprintf(hash, "%q absent\n", relative)
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(hash, "%q mode=%s size=%d\n", relative, info.Mode(), info.Size())
+		if info.Mode()&os.ModeSymlink != 0 {
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(hash, "link=%q\n", link)
+			resolved, err := filepath.EvalSymlinks(path)
+			if os.IsNotExist(err) {
+				fmt.Fprintln(hash, "target absent")
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			return visit(resolved, relative+"/resolved")
+		}
+		if info.IsDir() {
+			absolute, err := filepath.Abs(path)
+			if err != nil {
+				return err
+			}
+			if active[absolute] {
+				return fmt.Errorf("cyclic configuration symlink")
+			}
+			active[absolute] = true
+			defer delete(active, absolute)
+			entries, err := os.ReadDir(path)
+			if err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				if err := visit(filepath.Join(path, entry.Name()), relative+"/"+entry.Name()); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("nonregular configuration input %s", relative)
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		_, err = io.Copy(hash, file)
+		hash.Write([]byte{0})
+		return err
+	}
+	for index, root := range inputs {
+		if err := visit(root, fmt.Sprintf("input-%d", index)); err != nil {
+			return "", err
+		}
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// DigestFile writes label and the bytes of path, or a missing marker, to hash.
+func DigestFile(hash io.Writer, label, path string) {
+	io.WriteString(hash, label+"\x00")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		io.WriteString(hash, "__missing__")
+		return
+	}
+	hash.Write(data)
 }
 
 const guidanceBegin = "<!-- agentpack:guidance:begin -->"

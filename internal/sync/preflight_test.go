@@ -1573,14 +1573,14 @@ func TestFingerprintInputsDanglingSymlink(t *testing.T) {
 	if err := os.Symlink(".agents/skills", link); err != nil {
 		t.Skip(err)
 	}
-	before, err := fingerprintInputs([]string{root})
+	before, err := base.FingerprintFiles([]string{root})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(root, ".agents", "skills"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	after, err := fingerprintInputs([]string{root})
+	after, err := base.FingerprintFiles([]string{root})
 	if err != nil {
 		t.Fatal(err)
 	}

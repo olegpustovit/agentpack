@@ -93,19 +93,19 @@ func TestNativeServerNamesExpandVariablesAndTrackInputs(t *testing.T) {
 	if err != nil || !names.mcp["first"] {
 		t.Fatalf("expanded names = %+v, %v", names.mcp, err)
 	}
-	first, err := NativeConfigFingerprint(workspace, workspace)
+	first, err := nativeConfigFingerprint(workspace, workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AGENTPACK_TEST_SERVER_NAME", "second")
-	second, err := NativeConfigFingerprint(workspace, workspace)
+	second, err := nativeConfigFingerprint(workspace, workspace)
 	if err != nil || first == second {
 		t.Fatalf("environment change ignored: %v", err)
 	}
 	if err := os.WriteFile(file, []byte("changed-command"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	third, err := NativeConfigFingerprint(workspace, workspace)
+	third, err := nativeConfigFingerprint(workspace, workspace)
 	if err != nil || second == third {
 		t.Fatalf("file reference change ignored: %v", err)
 	}

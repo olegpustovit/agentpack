@@ -1,13 +1,97 @@
 package sync
 
 import (
-	base "github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/mode"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
+
+	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/mode"
 )
+
+func stagedDigest(definition, workspace string, effective mode.Effective, target *base.Target) (string, error) {
+	in, err := readInputs(definition, workspace, effective, target)
+	return in.staged(), err
+}
+
+// Every identity derives from one Inputs, so each input moves exactly the
+// identities that read it: a launch ignores configuration it does not stage
+// from, and the materialized record ignores the binary.
+func TestEachInputFlipsExactlyItsIdentities(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	for _, name := range []string{"PI_CONFIG_DIR", "OMP_PROFILE", "PI_PROFILE", "PI_CODING_AGENT_DIR", "PI_CONFIG_FILES", "OPENCODE_PATH", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT"} {
+		t.Setenv(name, "")
+	}
+	binary := filepath.Join(t.TempDir(), "agentpack")
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(binary, "v1")
+	previous := executable
+	executable = func() (string, error) { return binary, nil }
+	t.Cleanup(func() { executable = previous })
+	effective := mode.ImplicitEffective()
+	identities := func() map[string]string {
+		t.Helper()
+		result := map[string]string{}
+		for _, target := range []base.Target{base.Claude, base.OMP} {
+			value, err := launchDigest(project, project, effective, target, lockfile.PackLock{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result["launch "+string(target)] = value
+		}
+		in, err := readInputs(project, project, effective, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		materialized, err := in.materialized(project, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result["materialized"], result["synced"] = materialized, in.synced(materialized)
+		return result
+	}
+	all := []string{"launch claude", "launch omp", "materialized", "synced"}
+	for _, step := range []struct {
+		name   string
+		change func()
+		flips  []string
+	}{
+		{"lock", func() { write(filepath.Join(project, "pack.lock"), "lockfile_version = 2") }, all},
+		{"manifest", func() { write(filepath.Join(project, "agentpack.toml"), "name = 'x'") }, all},
+		{".agents", func() { write(filepath.Join(project, ".agents", "skills", "a", "SKILL.md"), "# A") }, all},
+		{"OMP config", func() { write(filepath.Join(home, ".omp", "agent", "config.yml"), "a: 1") }, []string{"launch omp", "materialized", "synced"}},
+		{"binary", func() { write(binary, "v2 longer") }, []string{"launch claude", "launch omp", "synced"}},
+		{"workspace CLAUDE.md", func() { write(filepath.Join(project, "CLAUDE.md"), "# Rules") }, []string{"materialized", "synced"}},
+	} {
+		before := identities()
+		step.change()
+		after := identities()
+		for _, name := range all {
+			want := false
+			for _, flip := range step.flips {
+				want = want || flip == name
+			}
+			if changed := before[name] != after[name]; changed != want {
+				t.Errorf("%s: %s changed = %v, want %v", step.name, name, changed, want)
+			}
+		}
+	}
+}
 
 func TestLaunchDigestTracksInputsModeAndTarget(t *testing.T) {
 	root := t.TempDir()
@@ -16,22 +100,22 @@ func TestLaunchDigestTracksInputsModeAndTarget(t *testing.T) {
 	}
 	effective := mode.ImplicitEffective()
 	claude, cursor := base.Claude, base.Cursor
-	first, err := ComputeLaunchDigest(root, root, effective, &claude)
+	first, err := stagedDigest(root, root, effective, &claude)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, _ := ComputeLaunchDigest(root, root, effective, &claude)
+	second, _ := stagedDigest(root, root, effective, &claude)
 	if first != second {
 		t.Fatal("digest unstable")
 	}
 	if err := os.WriteFile(filepath.Join(root, "agentpack.toml"), []byte("b"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	changed, _ := ComputeLaunchDigest(root, root, effective, &claude)
+	changed, _ := stagedDigest(root, root, effective, &claude)
 	if changed == first {
 		t.Fatal("manifest change ignored")
 	}
-	other, _ := ComputeLaunchDigest(root, root, effective, &cursor)
+	other, _ := stagedDigest(root, root, effective, &cursor)
 	if other == changed {
 		t.Fatal("target ignored")
 	}
@@ -59,12 +143,12 @@ func TestOpenCodeLaunchDigestTracksSelectedBinary(t *testing.T) {
 	target := base.OpenCode
 	effective := mode.ImplicitEffective()
 	t.Setenv("OPENCODE_PATH", first)
-	before, err := ComputeLaunchDigest(root, root, effective, &target)
+	before, err := stagedDigest(root, root, effective, &target)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("OPENCODE_PATH", second)
-	after, err := ComputeLaunchDigest(root, root, effective, &target)
+	after, err := stagedDigest(root, root, effective, &target)
 	if err != nil || before == after {
 		t.Fatalf("selected executable change ignored: %v", err)
 	}
@@ -75,35 +159,35 @@ func TestOpenCodeLaunchDigestTracksPluginDirectoryCreation(t *testing.T) {
 	t.Setenv("OPENCODE_CONFIG_DIR", config)
 	target := base.OpenCode
 	effective := mode.ImplicitEffective()
-	before, err := ComputeLaunchDigest(root, root, effective, &target)
+	before, err := stagedDigest(root, root, effective, &target)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(config, "plugins"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	after, err := ComputeLaunchDigest(root, root, effective, &target)
+	after, err := stagedDigest(root, root, effective, &target)
 	if err != nil || before == after {
 		t.Fatalf("plugin directory creation ignored: %v", err)
 	}
 	if err := os.Mkdir(filepath.Join(config, "commands"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	withCommands, err := ComputeLaunchDigest(root, root, effective, &target)
+	withCommands, err := stagedDigest(root, root, effective, &target)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(config, "commands", "new.md"), []byte("fixture"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	withCommand, err := ComputeLaunchDigest(root, root, effective, &target)
+	withCommand, err := stagedDigest(root, root, effective, &target)
 	if err != nil || withCommands == withCommand {
 		t.Fatalf("custom command creation ignored: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(config, "commands", "new.md"), []byte("updated fixture"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	updated, err := ComputeLaunchDigest(root, root, effective, &target)
+	updated, err := stagedDigest(root, root, effective, &target)
 	if err != nil || updated == withCommand {
 		t.Fatalf("custom command edit ignored: %v", err)
 	}
@@ -121,7 +205,7 @@ func TestOpenCodeLaunchDigestTracksNativeConfiguration(t *testing.T) {
 	effective := mode.ImplicitEffective()
 	digest := func() string {
 		t.Helper()
-		value, err := ComputeLaunchDigest(root, root, effective, &target)
+		value, err := stagedDigest(root, root, effective, &target)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -166,11 +250,11 @@ func TestLaunchDigestTracksExternalWorkspace(t *testing.T) {
 	definition, first, second := t.TempDir(), t.TempDir(), t.TempDir()
 	target := base.Claude
 	effective := mode.ImplicitEffective()
-	a, err := ComputeLaunchDigest(definition, first, effective, &target)
+	a, err := stagedDigest(definition, first, effective, &target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := ComputeLaunchDigest(definition, second, effective, &target)
+	b, err := stagedDigest(definition, second, effective, &target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +268,7 @@ func TestLaunchDigestTracksExternalWorkspace(t *testing.T) {
 	if err := os.WriteFile(skill, []byte("workspace skill"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	changed, err := ComputeLaunchDigest(definition, first, effective, &target)
+	changed, err := stagedDigest(definition, first, effective, &target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +319,7 @@ func TestHomeWorkspaceIgnoresRuntimeState(t *testing.T) {
 	if digest() == before {
 		t.Fatal("configuration change ignored")
 	}
-	if _, err := fingerprintInputs([]string{filepath.Join(runtimeDir, "worker.sock")}); err == nil {
+	if _, err := base.FingerprintFiles([]string{filepath.Join(runtimeDir, "worker.sock")}); err == nil {
 		t.Fatal("nonregular configuration input accepted")
 	}
 }

@@ -12,7 +12,7 @@ import (
 )
 
 func New() base.Harness {
-	return base.Harness{Target: base.OMP, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchACP: acpLaunch, Inheritance: base.Inheritance{
+	return base.Harness{Target: base.OMP, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchACP: acpLaunch, LaunchInputs: launchInputs, Inheritance: base.Inheritance{
 		Note:  "OMP uses an additive --plugin-dir and keeps native profile settings, credentials, sessions and project discovery",
 		Paths: ConfigInputs,
 	}}
@@ -105,4 +105,8 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	}
 	args = append(args, ctx.Arguments...)
 	return exec.Command(binary, args...), base.Done, nil
+}
+
+func launchInputs(_, workspace string) (string, error) {
+	return base.FingerprintFiles(ConfigInputs(workspace))
 }
