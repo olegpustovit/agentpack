@@ -67,7 +67,14 @@ func writeBenchPackages(b *testing.B, project string) {
 }
 
 // A home workspace must not scan chat history to fingerprint configuration.
-func BenchmarkMaterializationHome(b *testing.B) {
+// This is the budget fixture; see BenchmarkMaterializationHomePackages.
+func BenchmarkMaterializationHome(b *testing.B) { benchmarkMaterializationHome(b, false) }
+
+// BenchmarkMaterializationHomePackages adds the 2,000-file package set. It has
+// no budget: its cost is the cache metadata walk.
+func BenchmarkMaterializationHomePackages(b *testing.B) { benchmarkMaterializationHome(b, true) }
+
+func benchmarkMaterializationHome(b *testing.B, packages bool) {
 	home := b.TempDir()
 	b.Setenv("HOME", home)
 	b.Setenv("USERPROFILE", home)
@@ -87,7 +94,9 @@ func BenchmarkMaterializationHome(b *testing.B) {
 	if err := manifest.WriteStub(home, "demo", "0.0.1"); err != nil {
 		b.Fatal(err)
 	}
-	writeBenchPackages(b, home)
+	if packages {
+		writeBenchPackages(b, home)
+	}
 	b.ResetTimer()
 	for range b.N {
 		if _, err := computeMaterializationDigest(home, home, mode.ImplicitEffective(), nil); err != nil {
@@ -97,12 +106,14 @@ func BenchmarkMaterializationHome(b *testing.B) {
 }
 
 func BenchmarkCodexSetup(b *testing.B) {
-	for _, cold := range []bool{false, true} {
-		name := "warm"
-		if cold {
-			name = "cold"
-		}
-		b.Run(name, func(b *testing.B) {
+	// cold and warm are the budget fixture; warm-packages adds the 2,000-file
+	// package set and has no budget.
+	for _, run := range []struct {
+		name           string
+		cold, packages bool
+	}{{"warm", false, false}, {"cold", true, false}, {"warm-packages", false, true}} {
+		cold := run.cold
+		b.Run(run.name, func(b *testing.B) {
 			home := b.TempDir()
 			b.Setenv("HOME", home)
 			b.Setenv("USERPROFILE", home)
@@ -116,9 +127,7 @@ func BenchmarkCodexSetup(b *testing.B) {
 			if err := lockfile.Init(home, "demo", "0.0.1"); err != nil {
 				b.Fatal(err)
 			}
-			// Warm launches carry the package set; cold keeps the empty project
-			// its budget was set for.
-			if !cold {
+			if run.packages {
 				writeBenchPackages(b, home)
 			}
 			history := filepath.Join(home, ".claude", "projects", "history.jsonl")

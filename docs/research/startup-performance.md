@@ -2,32 +2,33 @@
 
 ## Core repair WP-D (2026-11-23)
 
-`BenchmarkCodexSetup/warm` and `BenchmarkMaterializationHome` now carry four
-cached, content-hashed plugins of 2,000 files each (commit 958857d); cold setup
-keeps the empty project. Measured on Linux amd64 (i9-12900K) at the fixture
-commit and at the end of WP-D, interleaved, four rounds of
-`-test.count=5` each (20 samples per side):
+The budget benchmarks (`BenchmarkMaterializationHome`, `BenchmarkCodexSetup/cold`
+and `/warm`) keep the 32 MiB history fixture and no packages. Separate,
+unbudgeted variants add four cached, content-hashed plugins of 2,000 files
+each: `BenchmarkMaterializationHomePackages` and `BenchmarkCodexSetup/warm-packages`.
 
 ```sh
-go test ./internal/sync -run '^$' -bench 'BenchmarkCodexSetup|BenchmarkMaterializationHome' -count 5
+go test ./internal/sync -run '^$' -bench 'Benchmark(MaterializationHome|MaterializationHomePackages|CodexSetup)$' -count 5
 ```
 
-| Benchmark | Fixture commit median / min (ms) | WP-D median / min (ms) |
-| --- | ---: | ---: |
-| MaterializationHome | 0.409 / 0.320 | 0.382 / 0.316 |
-| CodexSetup/warm | 16.08 / 11.65 | 18.66 / 6.69 |
-| CodexSetup/cold | 19.55 / 12.06 | 31.22 / 12.49 |
+After merging core/integrate, Linux amd64 (i9-12900K), medians of five runs on a
+host running other workers (load average 22 to 24 on 20 threads):
 
-The host ran other workers throughout (load average 25 to 58 on 20 threads), so
-single runs swung by 2 to 4 times and the medians are not comparable; the
-minima are the usable signal. Warm setup lost the capability catalog's walk of
-every cached file (selectors now `Lstat` one path) and `DependencyTrees`,
-roughly halving it; a profile shows the remaining time in
-`cache.StatFingerprint`, the documented metadata walk of every cache file. Cold
-setup shows no measurable change (a dedicated 9-sample cold run gave minima of
-38.3 ms before and 35.0 ms after at load 58). With 8,000 cached files warm setup
-does not meet the 1 ms budget on this host; it has not been re-measured on the
-ARM64 reference host.
+| Benchmark | Median (ms) | Range (ms) | Budget (ms) |
+| --- | ---: | ---: | ---: |
+| MaterializationHome | 0.721 | 0.338 to 1.258 | <1 |
+| CodexSetup/warm | 0.135 | 0.113 to 0.156 | <1 |
+| CodexSetup/cold | 25.434 | 12.422 to 27.778 | <20 |
+| MaterializationHomePackages | 0.820 | 0.318 to 0.844 | none |
+| CodexSetup/warm-packages | 21.244 | 10.496 to 22.771 | none |
+
+Cold runs swung by 2 times with the host load, so the cold median does not
+verify the budget; it still needs a run on the ARM64 reference host. With the
+package set, the warm launch's remaining cost is `cache.StatFingerprint`, the
+documented metadata walk of every cached file (8,000 here). WP-D removed the
+capability catalog's walk of every cached file (selectors now `Lstat` one path)
+and the unread `DependencyTrees`; on the same host, the fastest package-set
+warm run went from 11.6 ms to 6.7 ms before the merge.
 
 ## Private staging and lock roots (2026-11-23)
 
