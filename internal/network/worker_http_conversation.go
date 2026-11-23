@@ -235,7 +235,15 @@ func (worker *WorkerHTTP) receivePrompt(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	prompt.From = PromptFromHeader(r)
+	// A reload that failed leaves its notice; the prompt still goes to the agent if one runs.
+	if reloaded, err := worker.reloadBeforePrompt(r.Context()); reloaded || err != nil {
+		conv = worker.conversationSession()
+	}
 	queued, err := startPrompt(r.Context(), conv, prompt, steer)
+	// A reload that swapped the agent while this prompt waited sends it to the new one.
+	if next := worker.conversationSession(); errors.Is(err, ErrSessionEnded) && next != conv {
+		queued, err = startPrompt(r.Context(), next, prompt, steer)
+	}
 	if err != nil {
 		message := "could not send prompt"
 		if errors.Is(err, session.ErrSessionArchived) {

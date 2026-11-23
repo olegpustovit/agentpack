@@ -88,12 +88,16 @@ func LocalRequest(ctx context.Context, record WorkerRecord, method, path, operat
 
 // ReportAgentState sends a terminal agent's turn state (working, idle or needs_you) to the worker
 // running the session, from the agent's own hooks.
-func ReportAgentState(ctx context.Context, home, id, state string) error {
+func ReportAgentState(ctx context.Context, home, id, state, agentSessionID string) error {
 	record, err := ReadWorkerRecord(home, id)
 	if err != nil {
 		return err
 	}
-	response, err := WorkerRequest(ctx, record, http.MethodPost, "/agent-state", "", strings.NewReader(string(MustRawJSON(map[string]string{"state": state}))))
+	body := map[string]string{"state": state}
+	if agentSessionID != "" {
+		body["agent_session_id"] = agentSessionID
+	}
+	response, err := WorkerRequest(ctx, record, http.MethodPost, "/agent-state", "", strings.NewReader(string(MustRawJSON(body))))
 	if err != nil {
 		return err
 	}
@@ -289,12 +293,29 @@ func RestartWorker(ctx context.Context, home, id, operationID string) error {
 	return controlWorker(ctx, home, id, "restart", operationID)
 }
 
-// RestartWorkerWhenIdle restarts a chat once its current turn and approvals settle; other sessions restart now.
-func RestartWorkerWhenIdle(ctx context.Context, home, id, operationID string) error {
+// RestartWorkerWhenIdle reloads a chat once nothing would be cut off and a terminal once its agent
+// is idle; deferred reports that the session will reload later rather than now.
+func RestartWorkerWhenIdle(ctx context.Context, home, id, operationID string) (deferred bool, err error) {
 	if !ValidOperationID(operationID) {
-		return errors.New("restart requires a valid operation_id")
+		return false, errors.New("restart requires a valid operation_id")
 	}
-	return controlWorker(ctx, home, id, "restart?when=idle", operationID)
+	record, err := ReadWorkerRecord(home, id)
+	if err != nil {
+		return false, err
+	}
+	response, err := WorkerRequest(ctx, record, "POST", "/restart?when=idle", operationID)
+	if err != nil {
+		return false, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != 200 {
+		return false, fmt.Errorf("%w: worker restart returned %s", ErrWorkerControlRejected, response.Status)
+	}
+	var result struct {
+		Deferred bool `json:"deferred"`
+	}
+	_ = json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&result)
+	return result.Deferred, nil
 }
 
 var ErrWorkerControlRejected = errors.New("worker operation rejected")

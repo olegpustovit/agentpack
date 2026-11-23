@@ -1,9 +1,8 @@
-package cli
+package network
 
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,15 +12,17 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/mode"
-	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
+	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
+// Only sessions whose recorded environment moved reload; one without a record is left alone.
 func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
 	t.Setenv("AGENTPACK_HOME", home)
@@ -62,13 +63,13 @@ func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 				if _, reused := operations.LoadOrStore(operationID, true); !reused {
 					count.Add(1)
 				}
-				w.WriteHeader(200)
+				WriteJSON(w, map[string]bool{"deferred": id == "session-chat"})
 			default:
 				w.WriteHeader(404)
 			}
 		}))
 		t.Cleanup(server.Close)
-		record := network.WorkerRecord{ID: id, Secret: secret, Address: strings.TrimPrefix(server.URL, "http://"), Session: session.SessionInfo{Directory: directory, DefinitionRoot: directory, Harness: "claude", Mode: selected}}
+		record := WorkerRecord{ID: id, Secret: secret, Address: strings.TrimPrefix(server.URL, "http://"), Session: session.SessionInfo{Directory: directory, DefinitionRoot: directory, Harness: "claude", Mode: selected}}
 		data, err := json.Marshal(record)
 		if err != nil {
 			t.Fatal(err)
@@ -92,6 +93,14 @@ func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 		if closeErr != nil {
 			t.Fatal(closeErr)
 		}
+		if selected == "" {
+			selected = "default"
+		}
+		if id != "session-unrecorded" {
+			if err := RecordLaunchEnvironment(home, id, directory, directory, selected, harness.Claude); err != nil {
+				t.Fatal(err)
+			}
+		}
 		return count
 	}
 	defaultRestarts := worker("session-default", root, "")
@@ -99,35 +108,44 @@ func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 	otherRestarts := worker("session-other", t.TempDir(), "")
 	headlessRestarts := worker("session-headless", root, "")
 	chatRestarts := worker("session-chat", root, "")
+	unrecordedRestarts := worker("session-unrecorded", root, "")
 	ctx := context.Background()
-	before, err := snapshotRunningEnvironments(ctx, root)
-	if err != nil || len(before) != 3 {
-		t.Fatalf("snapshot: %d %v", len(before), err)
+	service := packSync.NewService()
+	restart := func() ([]Reload, error) {
+		sessions, err := Sessions(ctx, home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return RestartStaleSessions(ctx, home, service, root, sessions)
 	}
-	runner := Runner{Stdout: io.Discard, Stderr: io.Discard}
-	if err := runner.restartChangedEnvironments(ctx, before); err != nil {
-		t.Fatal(err)
-	}
-	if defaultRestarts.Load() != 0 {
-		t.Fatal("unchanged environment restarted")
+	reloads, err := restart()
+	if err != nil || len(reloads) != 0 || defaultRestarts.Load() != 0 {
+		t.Fatalf("unchanged environment restarted: %+v %v", reloads, err)
 	}
 	url := "https://mcp.example/endpoint"
 	if err := manifest.AddMCPServer(root, "test", mcp.Server{URL: &url}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.restartChangedEnvironments(ctx, before); err != nil {
+	reloads, err = restart()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if defaultRestarts.Load() != 1 || emptyRestarts.Load() != 0 || otherRestarts.Load() != 0 || headlessRestarts.Load() != 0 || chatRestarts.Load() != 1 {
-		t.Fatalf("wrong restarts: default=%d empty=%d other=%d chat=%d", defaultRestarts.Load(), emptyRestarts.Load(), otherRestarts.Load(), chatRestarts.Load())
+	if defaultRestarts.Load() != 1 || emptyRestarts.Load() != 0 || otherRestarts.Load() != 0 || headlessRestarts.Load() != 0 || chatRestarts.Load() != 1 || unrecordedRestarts.Load() != 0 {
+		t.Fatalf("wrong restarts: default=%d empty=%d other=%d chat=%d unrecorded=%d", defaultRestarts.Load(), emptyRestarts.Load(), otherRestarts.Load(), chatRestarts.Load(), unrecordedRestarts.Load())
 	}
-	if err := runner.restartChangedEnvironments(ctx, before); err != nil || defaultRestarts.Load() != 1 {
-		t.Fatalf("retry repeated package restart: count=%d error=%v", defaultRestarts.Load(), err)
+	deferred := 0
+	for _, reload := range reloads {
+		if reload.Deferred {
+			deferred++
+		}
+	}
+	if len(reloads) != 2 || deferred != 1 {
+		t.Fatalf("reloads = %+v", reloads)
 	}
 	if err := os.WriteFile(filepath.Join(root, "agentpack.toml"), []byte("invalid = ["), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.restartChangedEnvironments(ctx, before); err == nil {
+	if _, err := restart(); err == nil {
 		t.Fatal("invalid environment restarted silently")
 	}
 	if defaultRestarts.Load() != 1 {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -123,14 +124,20 @@ func (runner Runner) runHook(ctx context.Context, invocation Invocation) (int, e
 			return 2, err
 		}
 		var notification struct {
-			Type string `json:"type"`
+			Type   string `json:"type"`
+			Thread string `json:"thread-id"`
 		}
+		// Claude's hook input names its session; Codex's notify names its thread. Either lets a restart resume it.
+		var hookInput struct {
+			SessionID string `json:"session_id"`
+		}
+		_ = json.Unmarshal(stdin, &hookInput)
 		if payload == "" || json.Unmarshal([]byte(payload), &notification) != nil || notification.Type == "agent-turn-complete" {
 			// Reporting is best effort: a hook that fails must never stop the agent's turn.
 			home, err := paths.UserAgentpackHome()
 			if err == nil {
 				reportCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-				err = network.ReportAgentState(reportCtx, home, id, state)
+				err = network.ReportAgentState(reportCtx, home, id, state, cmp.Or(hookInput.SessionID, notification.Thread))
 				cancel()
 			}
 			if err != nil {

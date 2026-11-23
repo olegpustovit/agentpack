@@ -13,7 +13,7 @@ import (
 )
 
 func New() base.Harness {
-	return base.Harness{Target: base.Claude, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, AfterStage: finalize, Check: verify, Launch: launch, ACPAdapter: claudeACPPackage, ACPStageAtSession: true, LaunchACP: acpLaunch, Capability: Capability, Inheritance: base.Inheritance{
+	return base.Harness{Target: base.Claude, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, AfterStage: finalize, Check: verify, Launch: launch, ACPAdapter: claudeACPPackage, ACPStageAtSession: true, LaunchACP: acpLaunch, Capability: Capability, ResumeArgs: resumeArgs, Inheritance: base.Inheritance{
 		Note:  "Claude still reads real ~/.claude.json and ~/.claude/settings.json; agentpack only adds --plugin-dir/--settings",
 		Paths: func(string) []string { return base.HomeFiles(".claude.json", ".claude/settings.json") },
 	}}
@@ -70,6 +70,9 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	command.Args = append(command.Args, arguments...)
 	return command, base.Done, nil
 }
+
+// resumeArgs relaunch a terminal Claude on the conversation it had.
+func resumeArgs(id string) []string { return []string{"--resume", id} }
 
 // addSessionStateHooks makes a terminal Claude report its turns to the agentpack worker running it:
 // a prompt or a finished tool means working, a permission prompt means it needs you, Stop means idle.
