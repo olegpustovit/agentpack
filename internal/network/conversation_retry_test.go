@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ func TestNetworkDropRetriesTheTurn(t *testing.T) {
 	agent.nextPrompt(t)
 	agent.turns <- replyTurn("Working on it.\nAPI Error: Connection error.")
 	retry := <-scheduled
+	waitReleased(session) // the real retry fires 30 s later, long after the turn loop lets go
 	retry()
 	if input := agent.nextPrompt(t); input.Text != networkRetryPrompt {
 		t.Fatalf("retried with %q", input.Text)
@@ -95,4 +97,14 @@ func TestSubagentOutputDoesNotDriveTheChat(t *testing.T) {
 	if used != 0 || cost != 0 || text != "Done." {
 		t.Fatalf("chat usage %d/%v and reply %q took the subagent's", used, cost, text)
 	}
+}
+
+func waitReleased(session *ConversationSession) {
+	session.mu.Lock()
+	for session.running {
+		session.mu.Unlock()
+		runtime.Gosched()
+		session.mu.Lock()
+	}
+	session.mu.Unlock()
 }
