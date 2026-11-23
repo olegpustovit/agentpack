@@ -34,6 +34,24 @@ func TestExtractTarballWithPrefixAndCollectPaths(t *testing.T) {
 	}
 }
 
+// Hook and MCP scripts are run by path, so Git's execute bit must survive.
+func TestExtractTarballKeepsTheExecuteBit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes")
+	}
+	t.Parallel()
+	archive := githubTarball(t, map[string]string{"repo-sha/hooks/run.sh": "#!/bin/sh\n", "repo-sha/SKILL.md": "# Demo"})
+	destination := t.TempDir()
+	if _, err := ExtractTarballWithPrefix(bytes.NewReader(archive), "", destination); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]os.FileMode{"hooks/run.sh": 0o755, "SKILL.md": 0o644} {
+		if info, err := os.Stat(filepath.Join(destination, name)); err != nil || info.Mode().Perm() != want {
+			t.Fatalf("%s mode = %v, %v; want %v", name, info.Mode(), err, want)
+		}
+	}
+}
+
 func TestExtractTarballSkipsDirectoryEntryAtSelectedPrefix(t *testing.T) {
 	t.Parallel()
 	var compressed bytes.Buffer
@@ -91,6 +109,9 @@ func githubTarball(t *testing.T, files map[string]string) []byte {
 	tarWriter := tar.NewWriter(gzipWriter)
 	for name, body := range files {
 		header := &tar.Header{Name: name, Mode: 0o644, Size: int64(len(body))}
+		if filepath.Ext(name) == ".sh" {
+			header.Mode = 0o755
+		}
 		if err := tarWriter.WriteHeader(header); err != nil {
 			t.Fatal(err)
 		}

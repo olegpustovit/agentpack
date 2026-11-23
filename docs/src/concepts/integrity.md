@@ -4,19 +4,21 @@
 
 ## The content hash
 
-`content_hash` looks like `sha256-tree-v1:<64 hex>`. The prefix names the algorithm, so another tool can recompute the value and a future algorithm can sit next to this one.
+`content_hash` looks like `sha256-tree-v2:<64 hex>`. The prefix names the algorithm, so another tool can recompute the value and a future algorithm can sit next to this one.
+
+A `sha256-tree-v1` hash was computed over a tree extracted without execute bits, so it cannot verify the current tree. In a project `pack.lock` it counts as no content hash: `sync` and launches stage the package with a one-line warning to run `agentpack lock` to record v2, and leave the lock as it is, and `AGENTPACK_REQUIRE_VERIFIED=1` refuses it (see below). `agentpack lock` keeps every pin, fetches each package again and records `sha256-tree-v2`. Library snapshots and older mesh peers may still carry v1 hashes and are read as they are.
 
 "No content hash" means exactly one thing: the `content_hash` key is absent from the entry. A key that is present must be the prefix followed by 64 lowercase hex digits. Anything else (an unknown or missing prefix, a short or uppercase digest, an empty string) makes every command refuse the lock before it fetches or stages anything, and no command rewrites it, `lock` included:
 
 ```text
 invalid content_hash in pack.lock: github.com/acme/skills/demo
   found     "sha256-0000000000000000000000000000000000000000000000000000000000000000"
-  expected  sha256-tree-v1:<64 lowercase hex digits>
+  expected  sha256-tree-v2:<64 lowercase hex digits>
   lockfile  /work/project/pack.lock
   fix       restore pack.lock from version control, or upgrade agentpack if a newer version wrote it
 ```
 
-`sha256-tree-v1` covers the package directory as it sits in `$AGENTPACK_HOME/cache/<cache_key>/`:
+`sha256-tree-v2` covers the package directory as it sits in `$AGENTPACK_HOME/cache/<cache_key>/`:
 
 1. Collect every **regular file** and **symbolic link** below the directory. Directories are not records, so empty directories do not count. Any other file type (device, socket, pipe) is an error.
 2. Name each record by its path relative to the directory, with `/` separators.
@@ -43,7 +45,7 @@ The same computation in Python:
 ```python
 import hashlib, os, stat
 
-def sha256_tree_v1(root):
+def sha256_tree_v2(root):
     records = []
     for directory, _, names in os.walk(root):
         for name in names:
@@ -60,7 +62,7 @@ def sha256_tree_v1(root):
         else:
             raise ValueError(f"unsupported file type: {path}")
         digest.update(kind + b"\0" + relative + b"\0" + str(len(payload)).encode() + b"\0" + payload)
-    return "sha256-tree-v1:" + digest.hexdigest()
+    return "sha256-tree-v2:" + digest.hexdigest()
 ```
 
 (`os.walk` lists a link to a directory under directory names; a complete implementation records those links too.)
@@ -69,13 +71,12 @@ def sha256_tree_v1(root):
 
 The hash is over the tree agentpack **materializes**, which is the upstream tree at the pinned commit and path after two fixed steps:
 
-- **Extraction** writes every regular archive entry with mode `0644`; execute bits are dropped. A symbolic link is kept as a link (`l` record) when its target is a clean relative path that stays inside the extracted package, which is how a package points one directory at another (`.codex/skills/x -> ../../engineering/skills/x`). Any other link (absolute, or reaching outside the package) becomes an empty regular file, and no entry is written through a link. A cache entry that agentpack wrote therefore contains only `f` records and in-package `l` records; an `x` record or a link that leaves the package means something changed it afterwards.
-- **Locks written by 0.4.8 and earlier** recorded every link as an empty file. Such a `content_hash` still verifies: when the digest above does not match, agentpack also computes it with each in-package link counted as an empty `f` record and accepts the lock entry if that equals it. An existing lock entry keeps its hash; an entry locked from now on records the links themselves. A cache entry extracted by those versions keeps its empty files until it is fetched again; remove `$AGENTPACK_HOME/cache/<cache_key>/` and run `agentpack sync` to get the links.
+- **Extraction** writes every regular archive entry with mode `0644`, or `0755` when the archive entry has any execute bit (Git records only that bit), so hook and MCP scripts stay runnable. A symbolic link is kept as a link (`l` record) when its target is a clean relative path that stays inside the extracted package, which is how a package points one directory at another (`.codex/skills/x -> ../../engineering/skills/x`). Any other link (absolute, or reaching outside the package) becomes an empty regular file, and no entry is written through a link. A cache entry that agentpack wrote therefore contains `f`, `x` and in-package `l` records; a link that leaves the package means something changed it afterwards.
 - **Layout normalization** adds files agentpack derives from the package: plugin manifest stubs for the harnesses the package did not ship one for (`.claude-plugin/`, `.cursor-plugin/`, `.codex-plugin/`), `mcp.json` copied from a legacy `.mcp.json`, and for a single-plugin marketplace repository the merged plugin directory.
 
 To recompute a hash from a Git checkout you have to apply the same two steps. A change to either step changes what is hashed, so it must come with a new algorithm prefix; a test pins the digest of a normalized fixture to enforce that.
 
-For a **path dependency** the hashed tree is the copy agentpack makes of your directory (regular files only, Git-ignored files left out).
+For a **path dependency** the hashed tree is the copy agentpack makes of your directory (regular files only, Git-ignored files left out, execute bits kept).
 
 ## When the hash is recorded
 
@@ -126,8 +127,8 @@ On a mismatch the command stops with a non-zero exit before anything is staged, 
 
 ```text
 content hash mismatch: github.com/acme/skills/demo
-  expected  sha256-tree-v1:9041ba90…
-  actual    sha256-tree-v1:e2917cc0…
+  expected  sha256-tree-v2:9041ba90…
+  actual    sha256-tree-v2:e2917cc0…
   cache     /home/you/.local/share/agentpack/cache/e024077a…
   commit    1111111111111111111111111111111111111111
   repair    agentpack sync --repair   (re-fetches the commit and verifies it again)
@@ -173,9 +174,9 @@ Limits of this check:
 
 ### Launches that skip the sync
 
-When the manifest, the lock, `./.agents/`, the mode and the target are unchanged since the last launch, a launcher skips the sync and stages nothing: the harness starts with the tree the last sync built from a verified cache. On that path agentpack does not hash file contents. It compares a fingerprint of the cache entries' metadata (each file's path, type, permission bits, size and modification time) with the one taken after the last full verification. Any visible change ends the fast path and sends the launch through a full sync, which hashes everything and stops on a mismatch.
+When the manifest, the lock, `./.agents/`, the mode and the target are unchanged since the last launch, a launcher skips the sync and stages nothing: the harness starts with the tree the last sync built from a verified cache. On that path agentpack does not hash file contents. It compares a fingerprint of the cache entries' metadata (each file's path, type, permission bits, size and modification time, and on Unix its inode and status-change time, as Git's index does) with the one taken after the last full verification. Any visible change ends the fast path and sends the launch through a full sync, which hashes everything and stops on a mismatch.
 
-An edit that keeps a file's size and restores its modification time is invisible to the fingerprint. A launch that does rebuild staging reuses the same kind of proof: a package hashed successfully by an earlier check is not read again while its metadata matches the stamp under `$AGENTPACK_HOME/verified/`, so such an edit can reach a harness through a launch. `agentpack sync` always hashes every package and stops on it. Set `AGENTPACK_FULL_VERIFY=1` to hash on every launch, including launches that rebuild.
+On Unix any rewrite moves the status-change time, which a user cannot set back; on Windows an edit that keeps a file's size and restores its modification time is invisible to the fingerprint. A launch that does rebuild staging reuses the same kind of proof: a package hashed successfully by an earlier check is not read again while its metadata matches the stamp under `$AGENTPACK_HOME/verified/`, so such an edit can reach a harness through a launch. `agentpack sync` always hashes every package and stops on it. Set `AGENTPACK_FULL_VERIFY=1` to hash on every launch, including launches that rebuild.
 
 A launch that skips the sync does not check the staged files against the record; use `sync --verify-only` for that.
 

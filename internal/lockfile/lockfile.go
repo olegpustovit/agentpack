@@ -25,7 +25,11 @@ const (
 )
 
 // ContentHashPrefix names the tree digest algorithm stored in content_hash.
-const ContentHashPrefix = "sha256-tree-v1:"
+const ContentHashPrefix = "sha256-tree-v2:"
+
+// legacyContentHashPrefix digested trees extracted without execute bits. In a
+// project lock it counts as no content hash until `agentpack lock` records v2.
+const legacyContentHashPrefix = "sha256-tree-v1:"
 
 // ErrContentHash marks a lock whose content_hash key is present but is not a
 // digest this build can check. Such a lock is never regenerated automatically.
@@ -54,9 +58,14 @@ func (err *ContentHashError) Summary() string {
 	return fmt.Sprintf("invalid content_hash for %s in pack.lock: nothing was fetched or staged", err.Module)
 }
 
-// ValidContentHash reports whether value is a complete sha256-tree-v1 digest.
+// ValidContentHash reports whether value is a complete tree digest of a known
+// algorithm. Library records and older mesh peers still carry sha256-tree-v1;
+// a lock is held to the current one by parse.
 func ValidContentHash(value string) bool {
 	digest, found := strings.CutPrefix(value, ContentHashPrefix)
+	if !found {
+		digest, found = strings.CutPrefix(value, legacyContentHashPrefix)
+	}
 	if !found || len(digest) != 64 {
 		return false
 	}
@@ -175,6 +184,8 @@ type PackLock struct {
 	Config          Config      `toml:"config,omitempty"`
 	Packages        []Package   `toml:"packages,omitempty"`
 	MCPServers      []MCPServer `toml:"mcp_servers,omitempty"`
+	// LegacyContentHashes counts sha256-tree-v1 hashes Load treated as absent.
+	LegacyContentHashes int `toml:"-"`
 }
 
 // diskLock uses a pointer so the empty config table is omitted exactly as it
@@ -207,15 +218,17 @@ func LoadFromPath(path string) (PackLock, error) {
 	if err != nil {
 		return PackLock{}, fmt.Errorf("read lockfile %s: %w", path, err)
 	}
-	return parse(data, path)
+	return parse(data, path, true)
 }
 
-// Parse validates an in-memory lockfile.
+// Parse validates an in-memory lockfile, such as a Library snapshot. Those
+// keep the sha256-tree-v1 hashes they were recorded with; only a project's
+// pack.lock treats them as absent.
 func Parse(data []byte) (PackLock, error) {
-	return parse(data, paths.LockPath(""))
+	return parse(data, paths.LockPath(""), false)
 }
 
-func parse(data []byte, path string) (PackLock, error) {
+func parse(data []byte, path string, dropLegacy bool) (PackLock, error) {
 	var disk diskLock
 	decoder := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
 	if err := decoder.Decode(&disk); err != nil {
@@ -241,6 +254,7 @@ func parse(data []byte, path string) (PackLock, error) {
 	if err != nil {
 		return PackLock{}, err
 	}
+	legacy := 0
 	for index, pkg := range disk.Packages {
 		// go-toml assigns string kinds directly and does not call UnmarshalText, so validate here.
 		if pkg.Kind != "" {
@@ -256,8 +270,14 @@ func parse(data []byte, path string) (PackLock, error) {
 		if !ValidContentHash(pkg.ContentHash) {
 			return PackLock{}, &ContentHashError{Module: pkg.Module, Value: pkg.ContentHash, Path: path}
 		}
+		// A v1 hash cannot verify a tree that keeps execute bits, so it stages
+		// like an absent one; `agentpack lock` records v2 under the same pins.
+		if dropLegacy && strings.HasPrefix(pkg.ContentHash, legacyContentHashPrefix) {
+			disk.Packages[index].ContentHash = ""
+			legacy++
+		}
 	}
-	lock := PackLock{LockfileVersion: disk.LockfileVersion, Meta: disk.Meta, Packages: disk.Packages, MCPServers: disk.MCPServers}
+	lock := PackLock{LockfileVersion: disk.LockfileVersion, Meta: disk.Meta, Packages: disk.Packages, MCPServers: disk.MCPServers, LegacyContentHashes: legacy}
 	if disk.Config != nil {
 		lock.Config = *disk.Config
 	}

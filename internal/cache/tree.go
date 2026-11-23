@@ -55,7 +55,7 @@ func copyInside(root *os.Root, source, destination string, open []os.FileInfo) e
 			return fmt.Errorf("open copy source %s: %w", source, err)
 		}
 		defer input.Close()
-		return copyReader(input, destination)
+		return copyReader(input, destination, info.Mode())
 	}
 	for _, ancestor := range open {
 		if os.SameFile(ancestor, info) {
@@ -83,19 +83,25 @@ func copyFile(source, destination string) error {
 		return fmt.Errorf("open copy source %s: %w", source, err)
 	}
 	defer input.Close()
-	return copyReader(input, destination)
+	info, err := input.Stat()
+	if err != nil {
+		return fmt.Errorf("inspect copy source %s: %w", source, err)
+	}
+	return copyReader(input, destination, info.Mode())
 }
 
-func copyReader(input io.Reader, destination string) error {
+// copyReader writes destination 0644, keeping the execute bits of mode.
+func copyReader(input io.Reader, destination string, mode fs.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return fmt.Errorf("create copy parent %s: %w", filepath.Dir(destination), err)
 	}
-	output, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	permissions := 0o644 | mode.Perm()&0o111
+	output, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, permissions)
 	if err != nil {
 		return fmt.Errorf("create copy destination %s: %w", destination, err)
 	}
 	_, copyErr := io.Copy(output, input)
-	if err := errors.Join(copyErr, output.Close()); err != nil {
+	if err := errors.Join(copyErr, output.Close(), os.Chmod(destination, permissions)); err != nil {
 		return fmt.Errorf("copy to %s: %w", destination, err)
 	}
 	return nil

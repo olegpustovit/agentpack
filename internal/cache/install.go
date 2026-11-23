@@ -103,7 +103,7 @@ func stage(pkg lockfile.Package, fill func(string) error) (temporary, digest str
 	if digest, err = TreeDigest(directory); err != nil {
 		return "", "", err
 	}
-	if pkg.ContentHash != "" && !MatchesContentHash(directory, pkg.ContentHash, digest) {
+	if pkg.ContentHash != "" && digest != pkg.ContentHash {
 		return "", "", &IntegrityError{Package: pkg, Expected: pkg.ContentHash, Actual: digest, Fetched: true}
 	}
 	return directory, digest, nil

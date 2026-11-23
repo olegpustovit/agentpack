@@ -31,7 +31,7 @@ repo         = "skills"
 path         = "skills/canvas-design"
 commit       = "<40-hex commit SHA>"
 cache_key    = "<64-hex cache slot name>"
-content_hash = "sha256-tree-v1:<64-hex digest of the file tree>"
+content_hash = "sha256-tree-v2:<64-hex digest of the file tree>"
 
 [[mcp_servers]]
 name       = "playwright"

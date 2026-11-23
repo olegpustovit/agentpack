@@ -29,7 +29,7 @@ description = "ghp_123456789012345678901234567890"
 `
 
 func lockWithCommit(commit string) []byte {
-	return []byte("lockfile_version = 3\n[meta]\nname = \"demo\"\nversion = \"0.0.1\"\n[[packages]]\nmodule = \"github.com/acme/tool\"\nkind = \"skill\"\ncommit = \"" + commit + "\"\ncache_key = \"old\"\ncontent_hash = \"sha256-tree-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n")
+	return []byte("lockfile_version = 3\n[meta]\nname = \"demo\"\nversion = \"0.0.1\"\n[[packages]]\nmodule = \"github.com/acme/tool\"\nkind = \"skill\"\ncommit = \"" + commit + "\"\ncache_key = \"old\"\ncontent_hash = \"sha256-tree-v2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n")
 }
 
 func TestCaptureRedactsAndRestoresLocalBindings(t *testing.T) {

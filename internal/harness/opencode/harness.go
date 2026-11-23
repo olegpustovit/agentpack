@@ -23,7 +23,7 @@ import (
 const instructionsFile = "agentpack-no-attribution.md"
 
 func New() base.Harness {
-	return base.Harness{Target: base.OpenCode, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, AfterStage: finalizeSources, Check: verify, Launch: launch, LaunchACP: acpLaunch, Capability: Capability, Inheritance: base.Inheritance{
+	return base.Harness{Target: base.OpenCode, Root: stagedRoot, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, AfterStage: finalizeSources, Check: verify, Launch: launch, LaunchACP: acpLaunch, Capability: Capability, LaunchInputs: launchInputs, Inheritance: base.Inheritance{
 		Note:  "OpenCode keeps its native config root; agentpack composes pack assets with native config and plugins",
 		Paths: inheritedConfigPaths,
 		Seed:  inheritedConfigSeed,

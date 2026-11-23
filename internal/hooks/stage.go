@@ -14,10 +14,11 @@ import (
 )
 
 type PlannedFile struct {
-	Path     string
-	Contents []byte
-	Source   string
-	Module   string
+	Path        string
+	Contents    []byte
+	Source      string
+	Module      string
+	ExecuteBits os.FileMode
 }
 
 type TargetPlan struct {
@@ -101,7 +102,10 @@ func ApplyTargetPlan(plan TargetPlan) error {
 			return err
 		}
 		_ = os.Remove(file.Path) // never write through a link shared with another harness root
-		if err := os.WriteFile(file.Path, file.Contents, 0o644); err != nil {
+		if err := os.WriteFile(file.Path, file.Contents, 0o644|file.ExecuteBits); err != nil {
+			return err
+		}
+		if err := os.Chmod(file.Path, 0o644|file.ExecuteBits); err != nil {
 			return err
 		}
 	}
@@ -228,11 +232,15 @@ func planFilteredTree(source, destination string, origin Origin, effective mode.
 		if !entry.Type().IsRegular() {
 			return nil
 		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		files = append(files, PlannedFile{Path: output, Contents: data})
+		files = append(files, PlannedFile{Path: output, Contents: data, ExecuteBits: info.Mode().Perm() & 0o111})
 		return nil
 	})
 	return files, err

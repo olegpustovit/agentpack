@@ -598,12 +598,12 @@ func TestSourceIdentityIncludesLockedPackageContentHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lock.Packages = []lockfile.Package{{Module: "github.com/team/skills", Kind: lockfile.PackageSkill, Direct: true, Commit: "abc123", ContentHash: "sha256-tree-v1:first"}}
+	lock.Packages = []lockfile.Package{{Module: "github.com/team/skills", Kind: lockfile.PackageSkill, Direct: true, Commit: "abc123", ContentHash: "sha256-tree-v2:first"}}
 	one, err := sourceIdentity(root, lock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lock.Packages[0].ContentHash = "sha256-tree-v1:second"
+	lock.Packages[0].ContentHash = "sha256-tree-v2:second"
 	two, err := sourceIdentity(root, lock)
 	if err != nil {
 		t.Fatal(err)
@@ -1573,14 +1573,14 @@ func TestFingerprintInputsDanglingSymlink(t *testing.T) {
 	if err := os.Symlink(".agents/skills", link); err != nil {
 		t.Skip(err)
 	}
-	before, err := fingerprintInputs([]string{root})
+	before, err := base.FingerprintFiles([]string{root})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(root, ".agents", "skills"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	after, err := fingerprintInputs([]string{root})
+	after, err := base.FingerprintFiles([]string{root})
 	if err != nil {
 		t.Fatal(err)
 	}

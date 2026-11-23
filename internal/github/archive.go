@@ -87,7 +87,12 @@ func ExtractTarballWithPrefix(archive io.Reader, prefix, destination string) (in
 		if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
 			return 0, fmt.Errorf("create archive parent %s: %w", filepath.Dir(output), err)
 		}
-		file, err := os.OpenFile(output, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		// Git records only the execute bit; keep it so hook and MCP scripts run.
+		permissions := os.FileMode(0o644)
+		if header.Mode&0o111 != 0 {
+			permissions = 0o755
+		}
+		file, err := os.OpenFile(output, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, permissions)
 		if err != nil {
 			return 0, fmt.Errorf("create archive file %s: %w", output, err)
 		}
@@ -95,6 +100,9 @@ func ExtractTarballWithPrefix(archive io.Reader, prefix, destination string) (in
 		closeErr := file.Close()
 		if copyErr != nil || closeErr != nil {
 			return 0, fmt.Errorf("write archive file %s: %v", output, firstError(copyErr, closeErr))
+		}
+		if err := os.Chmod(output, permissions); err != nil {
+			return 0, fmt.Errorf("set archive file mode %s: %w", output, err)
 		}
 		files++
 	}

@@ -211,6 +211,11 @@ type Harness struct {
 	// when the agent cannot be probed.
 	Capability  func() map[string]string
 	Inheritance Inheritance
+	// LaunchInputs digests the native configuration that changes what a rebuild
+	// stages for this agent, so a change ends the launch fast path; nil when
+	// staging reads none. Unlike Inheritance.Paths it leaves out files the
+	// agent rewrites on every run.
+	LaunchInputs func(projectRoot, workspace string) (string, error)
 }
 
 // Inheritance is what a native launch of the agent reads or writes outside agentpack's staging,

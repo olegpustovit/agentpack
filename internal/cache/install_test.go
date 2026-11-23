@@ -112,6 +112,33 @@ func TestUnchangedPathDependencyKeepsItsEntry(t *testing.T) {
 	}
 }
 
+// A path dependency keeps its scripts executable, and making one executable
+// changes the entry's content hash.
+func TestPathDependencyKeepsTheExecuteBit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes")
+	}
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	source := t.TempDir()
+	writeTestFile(t, filepath.Join(source, "SKILL.md"), "# Demo")
+	script := filepath.Join(source, "hooks", "run.sh")
+	writeTestFile(t, script, "#!/bin/sh\n")
+	_, _, _, plain, err := CopyPackageDirToCache(source, "path:"+source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, _, out, executable, err := CopyPackageDirToCache(source, "path:"+source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(out, "hooks", "run.sh")); err != nil || info.Mode().Perm() != 0o755 || plain == executable {
+		t.Fatalf("cached script mode = %v, %v; digests %s %s", info.Mode(), err, plain, executable)
+	}
+}
+
 // A path dependency restored from its source is the same tree its lock entry
 // hashed: no file reached through a link, nothing the source ignores.
 func TestPathDependencyRestoreUsesSourceFiles(t *testing.T) {

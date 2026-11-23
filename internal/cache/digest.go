@@ -128,7 +128,7 @@ const (
 	// Wider than the coarsest file timestamps, FAT's two seconds.
 )
 
-// TreeDigest computes the sha256-tree-v1 digest of a package directory.
+// TreeDigest computes the sha256-tree-v2 digest of a package directory.
 //
 // Every regular file and symbolic link below root is one record; directories
 // and their modes are not recorded, so empty directories do not count. Records
@@ -138,32 +138,12 @@ const (
 //	kind 0x00 path 0x00 decimal-length 0x00 payload
 //
 // where kind is "f" for a regular file, "x" for a regular file with any
-// execute permission bit, and "l" for a symbolic link. The payload is the file
+// execute permission bit, and "l" for a symbolic link. Extraction and copies
+// keep execute bits, which v1 entries never had. The payload is the file
 // bytes, or the link target for a link, which is never followed. Other
 // permission bits, ownership, and timestamps are ignored. Any other file type
 // is an error. The result is the algorithm prefix followed by lowercase hex.
 func TreeDigest(root string) (string, error) {
-	return treeDigest(root, false)
-}
-
-// MatchesContentHash reports whether the tree at root, whose digest is
-// actual, is the tree a lock entry pins with expected.
-//
-// agentpack 0.4.8 and earlier wrote every symbolic link of a GitHub archive
-// as an empty file, and recorded the digest of that tree. The same package is
-// now extracted with its in-package links kept, so a hash locked by those
-// versions is also accepted when it equals the digest of this tree with each
-// link counted as an empty file. Every file's bytes and every path are still
-// covered; a new lock records the links themselves.
-func MatchesContentHash(root, expected, actual string) bool {
-	if actual == expected {
-		return true
-	}
-	legacy, err := treeDigest(root, true)
-	return err == nil && legacy != actual && legacy == expected
-}
-
-func treeDigest(root string, linksAsEmptyFiles bool) (string, error) {
 	info, err := os.Lstat(root)
 	if err != nil {
 		return "", fmt.Errorf("inspect package tree %s: %w", root, err)
@@ -246,15 +226,6 @@ func treeDigest(root string, linksAsEmptyFiles bool) (string, error) {
 		path := filepath.Join(root, filepath.FromSlash(item.relative))
 		if item.mode&fs.ModeSymlink != 0 {
 			target, err := os.Readlink(path)
-			if err == nil && linksAsEmptyFiles {
-				// Only a link the extractor itself would have created can
-				// stand for the empty file an older version wrote.
-				if !githubsource.LinkStaysInside(item.relative, target) {
-					return "", fmt.Errorf("link %s leaves the package", item.relative)
-				}
-				header("f", item.relative, 0)
-				continue
-			}
 			if err != nil {
 				return "", fmt.Errorf("read link %s: %w", path, err)
 			}
@@ -371,7 +342,7 @@ func VerifyPackage(pkg lockfile.Package) error {
 	if err != nil {
 		return fmt.Errorf("verify %s: %w", pkg.Module, err)
 	}
-	if !MatchesContentHash(out, pkg.ContentHash, actual) {
+	if actual != pkg.ContentHash {
 		return &IntegrityError{Package: pkg, Path: out, Expected: pkg.ContentHash, Actual: actual}
 	}
 	recordVerified(pkg, out, checkedAt)

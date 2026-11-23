@@ -10,7 +10,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/artifacts"
 	"github.com/olegpustovit/agentpack/internal/harness/claude"
 	"github.com/olegpustovit/agentpack/internal/harness/grok"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -128,7 +127,7 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 		return report, fmt.Errorf("identify source: %w", inputError(err))
 	}
 	report.SourceIdentity = identity
-	if digest, err := lockDigest(definitionRoot); err == nil {
+	if digest, err := fileDigest(paths.LockPath(definitionRoot)); err == nil {
 		report.LockDigest = digest
 	}
 	if binding, found, _ := environment.LoadBinding(workspace); found {
@@ -662,15 +661,6 @@ func canonicalStrings(values []string) []string {
 	result := slices.Clone(values)
 	slices.Sort(result)
 	return result
-}
-
-func lockDigest(definitionRoot string) (string, error) {
-	data, err := os.ReadFile(paths.LockPath(definitionRoot))
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(data)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 func plannedArtifacts(lock lockfile.PackLock, effective mode.Effective, definitionRoot, workspace string, target *base.Target, cacheReady bool) ([]environment.ArtifactRecord, error) {
@@ -1685,7 +1675,7 @@ func populateFreshness(report *environment.Report, options PreflightOptions, eff
 	// changes what the agent lists, so it must retire earlier observations.
 	inputs = append(inputs, filepath.Join(report.WorkspaceRoot, ".codex", "skills"), filepath.Join(report.WorkspaceRoot, ".opencode", "skills"))
 	inputs = append(inputs, inheritedConfigPaths(options.Target, report.WorkspaceRoot)...)
-	report.WorkspaceDigest, err = fingerprintInputs(inputs)
+	report.WorkspaceDigest, err = base.FingerprintFiles(inputs)
 	if err != nil {
 		return err
 	}
@@ -1719,7 +1709,7 @@ func populateFreshness(report *environment.Report, options PreflightOptions, eff
 			stagedConfigs = append(stagedConfigs, path)
 		}
 	}
-	stagedConfigDigest, err := fingerprintInputs(stagedConfigs)
+	stagedConfigDigest, err := base.FingerprintFiles(stagedConfigs)
 	if err != nil {
 		return err
 	}
@@ -1760,78 +1750,6 @@ func workspaceConfigInputs(workspace, home string) []string {
 		}
 	}
 	return inputs
-}
-
-// Fingerprints include absence and file bytes; absolute paths stay local to this identity.
-func fingerprintInputs(inputs []string) (string, error) {
-	hash := sha256.New()
-	active := map[string]bool{}
-	var visit func(string, string) error
-	visit = func(path, relative string) error {
-		info, err := os.Lstat(path)
-		if os.IsNotExist(err) {
-			fmt.Fprintf(hash, "%q absent\n", relative)
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(hash, "%q mode=%s size=%d\n", relative, info.Mode(), info.Size())
-		if info.Mode()&os.ModeSymlink != 0 {
-			link, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(hash, "link=%q\n", link)
-			resolved, err := filepath.EvalSymlinks(path)
-			if os.IsNotExist(err) {
-				fmt.Fprintln(hash, "target absent")
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			return visit(resolved, relative+"/resolved")
-		}
-		if info.IsDir() {
-			absolute, err := filepath.Abs(path)
-			if err != nil {
-				return err
-			}
-			if active[absolute] {
-				return fmt.Errorf("cyclic configuration symlink")
-			}
-			active[absolute] = true
-			defer delete(active, absolute)
-			entries, err := os.ReadDir(path)
-			if err != nil {
-				return err
-			}
-			for _, entry := range entries {
-				if err := visit(filepath.Join(path, entry.Name()), relative+"/"+entry.Name()); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("nonregular configuration input %s", relative)
-		}
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		_, err = io.Copy(hash, file)
-		hash.Write([]byte{0})
-		return err
-	}
-	for index, root := range inputs {
-		if err := visit(root, fmt.Sprintf("input-%d", index)); err != nil {
-			return "", err
-		}
-	}
-	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func inheritedConfigSeed(harness base.Harness) (string, string) {

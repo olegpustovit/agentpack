@@ -509,13 +509,16 @@ func (service Service) Sync(ctx context.Context, projectRoot string, options Syn
 		// Rebuild verifies what it staged before returning.
 		_, err = pipeline.Rebuild()
 		if err == nil {
+			var in Inputs
 			var digest string
-			digest, err = computeMaterializationDigest(projectRoot, workspace, effective, options.Target)
+			if in, err = readInputs(projectRoot, workspace, effective, options.Target); err == nil {
+				digest, err = in.materialized(workspace, options.Target)
+			}
 			if err == nil {
 				err = writeMaterializationDigest(projectRoot, effective.Name(), options.Target, digest)
 			}
 			if err == nil && options.Target == nil {
-				err = writeSyncedDigest(projectRoot, effective.Name(), digest)
+				err = writeSyncedDigest(projectRoot, effective.Name(), in.synced(digest))
 			}
 		}
 		if err == nil {
@@ -574,7 +577,7 @@ func (service Service) SyncForLaunchOptions(ctx context.Context, projectRoot str
 	if err := selectLaunchGeneration(projectRoot, effective.Name(), target); err != nil {
 		return mode.Effective{}, false, err
 	}
-	current, err := launchDigest(projectRoot, workspace, effective, &target, lock)
+	current, err := launchDigest(projectRoot, workspace, effective, target, lock)
 	if err != nil {
 		return mode.Effective{}, false, err
 	}
@@ -612,7 +615,7 @@ func (service Service) SyncForLaunchOptions(ctx context.Context, projectRoot str
 	} else if err != nil {
 		return mode.Effective{}, false, err
 	}
-	digest, err := launchDigest(projectRoot, workspace, effective, &target, lock)
+	digest, err := launchDigest(projectRoot, workspace, effective, target, lock)
 	if err != nil {
 		return mode.Effective{}, false, err
 	}
@@ -716,8 +719,12 @@ func (service Service) stagingIsCurrent(pipeline staging.Pipeline, options SyncO
 	if workspace == "" {
 		workspace = pipeline.ProjectRoot
 	}
-	current, err := computeMaterializationDigest(pipeline.ProjectRoot, workspace, pipeline.Mode, nil)
-	if err != nil || stored != current+"\x00"+executableStamp() {
+	in, err := readInputs(pipeline.ProjectRoot, workspace, pipeline.Mode, nil)
+	if err != nil {
+		return false, err
+	}
+	current, err := in.materialized(workspace, nil)
+	if err != nil || stored != in.synced(current) {
 		return false, err
 	}
 	// A user install that now hides a staged item makes staging stale.

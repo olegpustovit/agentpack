@@ -2,8 +2,6 @@ package sync
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"maps"
 	"os"
@@ -49,21 +47,13 @@ func envEnabled(name string) bool {
 	return false
 }
 
-// launchDigest extends the launch input digest with the cache metadata
-// fingerprint, so a visible change to a verified cache entry ends the fast
-// path and sends the launch through a full sync, which hashes the content.
-func launchDigest(projectRoot, workspace string, effective mode.Effective, target *base.Target, lock lockfile.PackLock) (string, error) {
-	inputs, err := ComputeLaunchDigest(projectRoot, workspace, effective, target)
+// launchDigest is the launch identity of target's harness.
+func launchDigest(projectRoot, workspace string, effective mode.Effective, target base.Target, lock lockfile.PackLock) (string, error) {
+	in, err := readInputs(projectRoot, workspace, effective, &target)
 	if err != nil {
 		return "", err
 	}
-	fingerprint, err := cache.StatFingerprint(lock)
-	if err != nil {
-		return "", err
-	}
-	// A new agentpack binary may stage differently, so it invalidates the launch too.
-	sum := sha256.Sum256([]byte(inputs + "\x00cache\x00" + fingerprint + "\x00binary\x00" + executableStamp()))
-	return hex.EncodeToString(sum[:]), nil
+	return in.launch(lock)
 }
 
 // LoadLock reads a project lock and checks that its pins agree with their cache keys.
@@ -148,7 +138,11 @@ func (service Service) checkLockRecords(projectRoot string, project *manifest.Ma
 		if envEnabled(RequireVerifiedEnv) {
 			return fmt.Errorf("%s has %d package(s) without a content hash (%s) and %s is set; run `agentpack lock` to record them", paths.LockPath(projectRoot), len(unverified), strings.Join(unverified, ", "), RequireVerifiedEnv)
 		}
-		service.notify("%d package(s) in pack.lock have no content hash and are not verified; run `agentpack lock` to record them", len(unverified))
+		if lock.LegacyContentHashes != 0 {
+			service.notify("pack.lock has v1 content hashes; run `agentpack lock` to record v2 (%d package(s) are not verified)", len(unverified))
+		} else {
+			service.notify("%d package(s) in pack.lock have no content hash and are not verified; run `agentpack lock` to record them", len(unverified))
+		}
 	}
 	entries, err := staging.CollectMCP(projectRoot, lock, project, nil)
 	if err != nil {

@@ -10,9 +10,10 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/olegpustovit/agentpack/internal/cache"
 	base "github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/harness/omp"
-	"github.com/olegpustovit/agentpack/internal/harness/opencode"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
+	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
@@ -25,168 +26,145 @@ type launchState struct {
 	Root string `json:"root,omitempty"`
 }
 
-func ComputeLaunchDigest(projectRoot, workspace string, effective mode.Effective, target *base.Target) (string, error) {
-	hash := sha256.New()
-	hash.Write([]byte("staging_layout_version\x00" + stagingLayoutVersion))
-	writeDigestFile(hash, "manifest", paths.ManifestPath(projectRoot))
-	writeDigestFile(hash, "lock", paths.LockPath(projectRoot))
-	hash.Write([]byte("dot_agents\x00"))
+// Inputs is what staging reads besides the package cache, gathered once per
+// check. Every "did the inputs change?" identity is a digest of part of it:
+//
+//	launch        Lock, Manifest, DotAgents, Context, PerTarget[target], cache metadata, Binary
+//	materialized  Lock, Manifest, DotAgents, Context, PerTarget[each target], ambient configuration
+//	synced        materialized and Binary
+//
+// preflight reports Lock as its lock digest. EnvironmentDigest and the
+// preflight source identity hash parsed package content and stay independent
+// of host paths, so they are not built from these file digests.
+type Inputs struct {
+	Lock, Manifest string // sha256 of the file bytes, or __missing__
+	DotAgents      string
+	// Context is the workspace, mode, staging generation, selected target and MCP credential index.
+	Context string
+	// PerTarget holds Harness.LaunchInputs for the selected harness, or every harness when none is.
+	PerTarget map[base.Target]string
+	Binary    string
+}
+
+func readInputs(projectRoot, workspace string, effective mode.Effective, target *base.Target) (Inputs, error) {
+	in := Inputs{Lock: fileDigestOrMissing(paths.LockPath(projectRoot)), Manifest: fileDigestOrMissing(paths.ManifestPath(projectRoot)), PerTarget: map[base.Target]string{}, Binary: executableStamp()}
 	dot, err := hashDotAgents(paths.ProjectDotAgentsDir(workspace))
 	if err != nil {
-		return "", err
+		return Inputs{}, err
 	}
-	hash.Write(dot)
-	if index, err := paths.MCPCredentialIndexPath(); err == nil {
-		writeDigestFile(hash, "mcp_credentials", index)
-	}
-	hash.Write([]byte("staging_root\x00" + os.Getenv("AGENTPACK_STAGING_ROOT")))
+	in.DotAgents = hex.EncodeToString(dot)
 	stagingRoot, err := paths.StagingRootForMode(projectRoot, effective.Name())
 	if err != nil {
-		return "", err
+		return Inputs{}, err
 	}
-	hash.Write([]byte("staging_generation\x00" + stagingRoot))
-	hash.Write([]byte("mode\x00" + effective.FingerprintMaterial()))
+	context := sha256.New()
+	context.Write([]byte("staging_layout_version\x00" + stagingLayoutVersion))
+	if index, err := paths.MCPCredentialIndexPath(); err == nil {
+		base.DigestFile(context, "mcp_credentials", index)
+	}
 	name := "__none__"
 	if target != nil {
 		name = string(*target)
 	}
-	hash.Write([]byte("target\x00" + name))
-	if target == nil || *target == base.OMP {
-		inputs, err := fingerprintInputs(omp.ConfigInputs(workspace))
-		if err != nil {
-			return "", err
-		}
-		hash.Write([]byte("omp_native_inputs\x00" + inputs))
+	fmt.Fprintf(context, "staging_root\x00%s\x00staging_generation\x00%s\x00mode\x00%s\x00target\x00%s\x00workspace\x00%s",
+		os.Getenv("AGENTPACK_STAGING_ROOT"), stagingRoot, effective.FingerprintMaterial(), name, workspace)
+	in.Context = hex.EncodeToString(context.Sum(nil))
+	targets := base.AllTargets()
+	if target != nil {
+		targets = []base.Target{*target}
 	}
-
-	if target != nil && *target == base.Cursor {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
+	for _, each := range targets {
+		entry, _ := registry.ByTarget(each)
+		if entry.Harness.LaunchInputs == nil {
+			continue
 		}
-		skills, err := fingerprintInputs([]string{filepath.Join(home, ".cursor", "skills")})
-		if err != nil {
-			return "", err
-		}
-		hash.Write([]byte("cursor_user_skills\x00" + skills))
-	}
-	if target == nil || *target == base.OpenCode {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		globalConfig := os.Getenv("XDG_CONFIG_HOME")
-		if globalConfig == "" {
-			globalConfig = filepath.Join(home, ".config")
-		}
-		globalConfig = filepath.Join(globalConfig, "opencode")
-		configDir := os.Getenv("OPENCODE_CONFIG_DIR")
-		if configDir == "" {
-			configDir = globalConfig
-		}
-		configDir, err = filepath.Abs(configDir)
-		if err != nil {
-			return "", err
-		}
-		fmt.Fprintf(hash, "opencode_config_dir\x00%s", configDir)
-		entries, readErr := os.ReadDir(configDir)
-		if readErr != nil && !os.IsNotExist(readErr) {
-			return "", readErr
-		}
-		for _, entry := range entries {
-			fmt.Fprintf(hash, "\x00custom_entry\x00%s\x00%s", entry.Name(), entry.Type())
-		}
-		for _, name := range []string{"config.json", "opencode.json", "opencode.jsonc"} {
-			writeDigestFile(hash, "opencode_user_"+name, filepath.Join(configDir, name))
-			writeDigestFile(hash, "opencode_global_"+name, filepath.Join(globalConfig, name))
-			writeDigestFile(hash, "opencode_seed_"+name, filepath.Join(home, ".config", "opencode", name))
-		}
-		writeDigestFile(hash, "opencode_cli_config", filepath.Join(configDir, "cli.json"))
-		for _, name := range []string{"opencode.json", "opencode.jsonc"} {
-			writeDigestFile(hash, "opencode_home_"+name, filepath.Join(home, ".opencode", name))
-		}
-		if explicit := os.Getenv("OPENCODE_CONFIG"); explicit != "" {
-			if !filepath.IsAbs(explicit) {
-				explicit = filepath.Join(workspace, explicit)
-			}
-			writeDigestFile(hash, "opencode_explicit_config\x00"+explicit, explicit)
-		}
-		hash.Write([]byte("opencode_inline_config\x00" + os.Getenv("OPENCODE_CONFIG_CONTENT")))
-		hash.Write([]byte("opencode_disable_project_config\x00" + os.Getenv("OPENCODE_DISABLE_PROJECT_CONFIG")))
-		for directory := workspace; ; directory = filepath.Dir(directory) {
-			for _, name := range []string{"opencode.json", "opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc"} {
-				writeDigestFile(hash, "opencode_project\x00"+directory+"\x00"+name, filepath.Join(directory, filepath.FromSlash(name)))
-			}
-			if _, statErr := os.Stat(filepath.Join(directory, ".git")); statErr == nil || filepath.Dir(directory) == directory {
-				break
-			}
-		}
-		for _, name := range []string{"plugin", "plugins"} {
-			info, statErr := os.Stat(filepath.Join(configDir, name))
-			fmt.Fprintf(hash, "\x00%s\x00%t", name, statErr == nil && info.IsDir())
-		}
-		for _, name := range []string{"skill", "skills", "agent", "agents", "command", "commands", "mode", "modes"} {
-			if err := writeAssetNames(hash, filepath.Join(configDir, name)); err != nil {
-				return "", err
-			}
-		}
-		if target != nil {
-			nativeInputs, err := opencode.NativeConfigFingerprint(projectRoot, workspace)
-			if err != nil {
-				return "", err
-			}
-			hash.Write([]byte("opencode_native_inputs\x00" + nativeInputs))
-		}
-		binary, err := base.ResolveBinary(base.OpenCode.Binary())
-		if err == nil {
-			if resolved, resolveErr := filepath.EvalSymlinks(binary); resolveErr == nil {
-				binary = resolved
-			}
-			if info, statErr := os.Stat(binary); statErr == nil {
-				fmt.Fprintf(hash, "opencode_binary\x00%s\x00%d\x00%d", binary, info.Size(), info.ModTime().UnixNano())
-			}
+		if in.PerTarget[each], err = entry.Harness.LaunchInputs(projectRoot, workspace); err != nil {
+			return Inputs{}, err
 		}
 	}
-	hash.Write([]byte("workspace\x00"))
-	hash.Write([]byte(workspace))
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	return in, nil
 }
 
-func writeAssetNames(hash interface{ Write([]byte) (int, error) }, root string) error {
-	resolved, err := filepath.EvalSymlinks(root)
-	if os.IsNotExist(err) {
-		fmt.Fprintf(hash, "custom_assets\x00%s\x00absent", root)
-		return nil
+// staged digests what a rebuild stages from.
+func (in Inputs) staged() string {
+	hash := sha256.New()
+	fmt.Fprintf(hash, "lock\x00%s\x00manifest\x00%s\x00dot_agents\x00%s\x00context\x00%s", in.Lock, in.Manifest, in.DotAgents, in.Context)
+	targets := make([]string, 0, len(in.PerTarget))
+	for target := range in.PerTarget {
+		targets = append(targets, string(target))
 	}
+	sort.Strings(targets)
+	for _, target := range targets {
+		fmt.Fprintf(hash, "\x00%s\x00%s", target, in.PerTarget[base.Target(target)])
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// launch extends the staged inputs with the cache metadata fingerprint, so a
+// visible change to a verified cache entry ends the fast path and sends the
+// launch through a full sync, which hashes the content, and with the binary,
+// since a new agentpack may stage differently.
+func (in Inputs) launch(lock lockfile.PackLock) (string, error) {
+	fingerprint, err := cache.StatFingerprint(lock)
 	if err != nil {
-		return err
+		return "", err
 	}
-	fmt.Fprintf(hash, "custom_assets\x00%s\x00%s", root, resolved)
-	return filepath.WalkDir(resolved, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		relative, err := filepath.Rel(resolved, path)
-		if err != nil {
-			return err
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(hash, "\x00%s\x00%s\x00%d\x00%d", relative, info.Mode(), info.Size(), info.ModTime().UnixNano())
-		return nil
-	})
+	sum := sha256.Sum256([]byte(in.staged() + "\x00cache\x00" + fingerprint + "\x00binary\x00" + in.Binary))
+	return hex.EncodeToString(sum[:]), nil
 }
-func writeDigestFile(hash interface{ Write([]byte) (int, error) }, label, path string) {
-	hash.Write([]byte(label + "\x00"))
+
+// materialized extends the staged inputs with the user and workspace
+// configuration the staged harnesses inherit.
+func (in Inputs) materialized(workspace string, target *base.Target) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	roots := workspaceConfigInputs(workspace, home)
+	targets := base.AllTargets()
+	if target != nil {
+		targets = []base.Target{*target}
+	}
+	for _, each := range targets {
+		roots = append(roots, inheritedConfigPaths(&each, workspace)...)
+	}
+	ambient, err := base.FingerprintFiles(roots)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(in.staged() + "\x00ambient\x00" + ambient + "\x00attribution\x00" + os.Getenv("AGENTPACK_KEEP_ATTRIBUTION")))
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+func computeMaterializationDigest(definition, workspace string, effective mode.Effective, target *base.Target) (string, error) {
+	in, err := readInputs(definition, workspace, effective, target)
+	if err != nil {
+		return "", err
+	}
+	return in.materialized(workspace, target)
+}
+
+// synced is the materialized digest of a full sync with the binary that built it.
+func (in Inputs) synced(materialized string) string {
+	return materialized + "\x00" + in.Binary
+}
+
+func fileDigest(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		hash.Write([]byte("__missing__"))
-		return
+		return "", err
 	}
-	hash.Write(data)
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
+
+func fileDigestOrMissing(path string) string {
+	if digest, err := fileDigest(path); err == nil {
+		return digest
+	}
+	return "__missing__"
+}
+
 func hashDotAgents(root string) ([]byte, error) {
 	info, err := os.Stat(root)
 	if os.IsNotExist(err) || err == nil && !info.IsDir() {
@@ -346,30 +324,6 @@ func writeMaterializationDigest(projectRoot, modeName string, target *base.Targe
 	}
 	return writeDigestState(path, digest, "")
 }
-func computeMaterializationDigest(definition, workspace string, effective mode.Effective, target *base.Target) (string, error) {
-	inputs, err := ComputeLaunchDigest(definition, workspace, effective, target)
-	if err != nil {
-		return "", err
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	roots := workspaceConfigInputs(workspace, home)
-	targets := base.AllTargets()
-	if target != nil {
-		targets = []base.Target{*target}
-	}
-	for _, each := range targets {
-		roots = append(roots, inheritedConfigPaths(&each, workspace)...)
-	}
-	ambient, err := fingerprintInputs(roots)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256([]byte(inputs + "\x00ambient\x00" + ambient + "\x00attribution\x00" + os.Getenv("AGENTPACK_KEEP_ATTRIBUTION")))
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
-}
 func readDigestState(path string) (string, bool, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -412,7 +366,7 @@ func writeSyncedDigest(projectRoot, modeName, digest string) error {
 	if err != nil {
 		return err
 	}
-	return writeDigestState(path, digest+"\x00"+executableStamp(), root)
+	return writeDigestState(path, digest, root)
 }
 
 // readSyncedDigest returns the last full sync's digest and the generation it built.

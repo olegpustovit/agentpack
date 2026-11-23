@@ -242,3 +242,27 @@ materialization, 7.448 → 8.455 ms for cold Codex setup, and 0.139 → 0.134 ms
 warm setup on Linux amd64 (Intel i9-12900K). These benchmarks end before
 `ValidateLaunchInputs`. A separate smoke launch with `CLAUDE_CODE_PATH=/bin/true`
 exited successfully from an empty folder and left both project files absent.
+
+## One `Inputs` model and digest v2 (2026-11-23)
+
+Launch, materialized, synced and preflight lock identities are now digests of
+one `sync.Inputs`; per-harness launch inputs moved to `Harness.LaunchInputs`;
+the cache metadata fingerprint adds inode and status-change time on Unix; and
+package trees keep execute bits under `sha256-tree-v2`. Measured on Linux
+amd64 (WSL2, 20 threads), `-count 5`, default benchtime. Before is `core/wp-n`
+with only the digest v2 commit; values are median milliseconds per operation.
+
+| Benchmark | Before | After |
+| --- | ---: | ---: |
+| Materialization home | 0.372 | 0.324 |
+| Materialization home, packages | 0.322 | 0.328 |
+| Codex setup, cold | 10.289 | 7.934 |
+| Codex setup, warm | 0.138 | 0.112 |
+| Codex setup, warm with packages | 6.213 | 6.052 |
+
+The cold run is noisy on this host (one After run at 10.0 ms); no benchmark
+moved beyond run-to-run spread. Not measured on the ARM64 reference host.
+
+```sh
+go test ./internal/sync -run '^$' -bench 'BenchmarkCodexSetup|BenchmarkMaterializationHome' -count 5
+```
