@@ -102,6 +102,13 @@ func TestEachInputFlipsExactlyItsIdentities(t *testing.T) {
 		{"OMP config", func() { write(filepath.Join(home, ".omp", "agent", "config.yml"), "a: 1") }, []string{"launch omp", "materialized", "synced"}},
 		{"binary", func() { write(binary, "v2 longer") }, []string{"launch claude", "launch omp", "synced"}},
 		{"workspace CLAUDE.md", func() { write(filepath.Join(project, "CLAUDE.md"), "# Rules") }, []string{"materialized", "synced", "generation"}},
+		{"MCP logins", func() {
+			path, err := paths.ProjectMCPLoginsPath(project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			write(path, `{"https://mcp.linear.app/mcp":"c-2"}`)
+		}, files},
 		{"host path", func() {
 			moved := filepath.Join(t.TempDir(), "elsewhere")
 			if err := os.Rename(project, moved); err != nil {

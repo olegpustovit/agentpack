@@ -332,6 +332,11 @@ const MCPCredentialIndexName = "mcp-credentials.json"
 
 func MCPCredentialIndexPath() (string, error) { return underHome(MCPCredentialIndexName) }
 
+// ProjectMCPLoginsPath holds the login each remote MCP server uses in this project.
+func ProjectMCPLoginsPath(projectRoot string) (string, error) {
+	return projectStateFile(projectRoot, "mcp-logins.json")
+}
+
 func canonical(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
