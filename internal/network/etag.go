@@ -10,11 +10,11 @@ import (
 	"sync"
 )
 
-// etagMaxBody bounds buffering; a larger response streams through without an ETag.
-const etagMaxBody = 8 << 20
+// EtagMaxBody bounds buffering; a larger response streams through without an ETag.
+const EtagMaxBody = 8 << 20
 
-// conditionalAPI gives GET and HEAD responses of a routeTable row with ETags a content ETag so repeat reads can answer 304.
-func conditionalAPI(next http.Handler) http.Handler {
+// ConditionalAPI gives GET and HEAD responses of a routeTable row with ETags a content ETag so repeat reads can answer 304.
+func ConditionalAPI(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// A stream (the hub's live conversation) must flush as it goes, never buffer.
 		streaming := r.URL.Query().Get("stream") == "1" || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
@@ -46,7 +46,7 @@ func (rec *etagRecorder) Write(p []byte) (int, error) {
 		return rec.ResponseWriter.Write(p)
 	}
 	rec.body.Write(p)
-	if rec.body.Len() > etagMaxBody {
+	if rec.body.Len() > EtagMaxBody {
 		rec.streamed = true
 		if rec.status == 0 {
 			rec.status = http.StatusOK

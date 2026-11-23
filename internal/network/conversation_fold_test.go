@@ -8,11 +8,12 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state/statetest"
 )
 
 func foldScript() []acp.LogEntry {
 	raw := func(kind string, payload any) acp.LogEntry {
-		return acp.LogEntry{Kind: kind, TS: 1000, Payload: mustRawJSON(payload)}
+		return acp.LogEntry{Kind: kind, TS: 1000, Payload: MustRawJSON(payload)}
 	}
 	return []acp.LogEntry{
 		raw("prompt", map[string]any{"text": map[string]string{"text": "ship it"}}),
@@ -39,12 +40,12 @@ type derivedRow struct {
 
 // P3.1: at every commit the session row is the fold of the stored rows up to last_seq.
 func TestSessionRowIsTheFoldOfStoredEventsAtEveryCommit(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
+	store := statetest.Open(t, t.TempDir())
 	id := "session-fold"
 	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
-	log, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
+	log, err := NewConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +64,7 @@ func TestSessionRowIsTheFoldOfStoredEventsAtEveryCommit(t *testing.T) {
 			Scan(&row.State, &row.Waiting, &row.Subagents, &row.Goal, &row.Title, &row.LastSeq, &row.CheckpointSeq); err != nil {
 			t.Fatal(err)
 		}
-		stored, lastSeq, _, err := storedConversationTail(t.Context(), store.Reader, id, 0)
+		stored, lastSeq, _, err := StoredConversationTail(t.Context(), store.Reader, id, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -82,12 +83,12 @@ func TestSessionRowIsTheFoldOfStoredEventsAtEveryCommit(t *testing.T) {
 
 // P3.3: a restarted worker resumes the fold from its checkpoint, not from the rows it can still read.
 func TestConversationFoldRestoresFromCheckpoint(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
+	store := statetest.Open(t, t.TempDir())
 	id := "session-restore"
 	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
-	log, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
+	log, err := NewConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ func TestConversationFoldRestoresFromCheckpoint(t *testing.T) {
 	if _, err := store.DB.Exec("DELETE FROM conversation_events WHERE session_id=? AND seq<?", id, len(script)); err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
+	resumed, err := NewConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +113,7 @@ func TestConversationFoldRestoresFromCheckpoint(t *testing.T) {
 		t.Fatalf("restored fold\n%s\nwant\n%s", got, saved)
 	}
 	session := NewConversationSession(resumed, nil)
-	if session.ConversationState() != string(stateNeedsYou) {
+	if session.ConversationState() != string(StateNeedsYou) {
 		t.Fatalf("state = %s, want the open request from before the tail", session.ConversationState())
 	}
 	thread := session.fold.Thread.State()
@@ -120,26 +121,26 @@ func TestConversationFoldRestoresFromCheckpoint(t *testing.T) {
 		t.Fatalf("restored thread = %+v", thread)
 	}
 	// The restored reducer keeps working: answering the request clears it.
-	resumed.Append("permission_result", 2000, mustRawJSON(map[string]string{"requestId": "r2", "optionId": "allow"}))
-	if session.ConversationState() != string(stateIdle) {
+	resumed.Append("permission_result", 2000, MustRawJSON(map[string]string{"requestId": "r2", "optionId": "allow"}))
+	if session.ConversationState() != string(StateIdle) {
 		t.Fatalf("state after answer = %s", session.ConversationState())
 	}
 	var reducer acp.ThreadReducer
-	if err := json.Unmarshal(mustRawJSON(&session.fold.Thread), &reducer); err != nil || !reflect.DeepEqual(reducer.State(), session.fold.Thread.State()) {
+	if err := json.Unmarshal(MustRawJSON(&session.fold.Thread), &reducer); err != nil || !reflect.DeepEqual(reducer.State(), session.fold.Thread.State()) {
 		t.Fatalf("reducer checkpoint does not round-trip: %v", err)
 	}
 }
 
 // An instant start's row stays "starting" while its worker holds it, then shows the fold.
 func TestStartingRowHoldsUntilRepublished(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
+	store := statetest.Open(t, t.TempDir())
 	id := "session-instant"
 	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp", ConversationState: "starting"}); err != nil {
 		t.Fatal(err)
 	}
 	var starting atomic.Bool
 	starting.Store(true)
-	log, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, &starting)
+	log, err := NewConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, &starting)
 	if err != nil {
 		t.Fatal(err)
 	}

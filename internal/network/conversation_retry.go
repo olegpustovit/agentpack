@@ -62,5 +62,5 @@ func (cs *ConversationSession) retryAfterNetworkDrop(err error) {
 }
 
 func (cs *ConversationSession) logNotice(title, description string) {
-	cs.log.Append("notice", cs.clock().UnixMilli(), mustRawJSON(map[string]string{"sessionUpdate": "notice", "severity": "warning", "title": title, "description": description}))
+	cs.Log.Append("notice", cs.clock().UnixMilli(), MustRawJSON(map[string]string{"sessionUpdate": "notice", "severity": "warning", "title": title, "description": description}))
 }

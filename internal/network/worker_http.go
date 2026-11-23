@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,31 +35,31 @@ type WorkerHTTP struct {
 	connections  map[*websocket.Conn]struct{}
 	drained      chan struct{}
 	session      *Session
-	conversation *ConversationSession
-	sessionDir   string
-	stateStore   *state.Store
+	Conversation *ConversationSession
+	SessionDir   string
+	StateStore   *state.Store
 	// agentState is the last turn state a terminal agent reported (hooks, notify or its own output).
 	agentState  atomic.Value
-	start       func(uint16, uint16) (*Session, error)
+	Start       func(uint16, uint16) (*Session, error)
 	restartACP  func(context.Context) error
 	stopACP     func(context.Context) error
 	validate    func() error
 	lifecycle   sync.Mutex
 	done        chan struct{}
-	finished    bool
+	Finished    bool
 	stopping    bool
-	diagnostics context.Context
+	Diagnostics context.Context
 	err         error
 	attached    chan struct{}
-	restarts    map[string]error
-	restartIDs  []string
+	Restarts    map[string]error
+	RestartIDs  []string
 }
 
-type restartOperation struct {
+type RestartOperation struct {
 	OperationID string `json:"operation_id" jsonschema:"Unique restart operation ID (16 to 128 letters, digits, hyphens or underscores). Reuse it when retrying the same restart; use a new ID for a new restart."`
 }
 
-func validOperationID(id string) bool {
+func ValidOperationID(id string) bool {
 	return len(id) >= 16 && len(id) <= 128 && strings.IndexFunc(id, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_')
 	}) == -1
@@ -73,7 +74,7 @@ func (worker *WorkerHTTP) current() *Session {
 func (worker *WorkerHTTP) conversationSession() *ConversationSession {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
-	return worker.conversation
+	return worker.Conversation
 }
 
 func (worker *WorkerHTTP) firstAttachment() <-chan struct{} {
@@ -83,9 +84,9 @@ func (worker *WorkerHTTP) firstAttachment() <-chan struct{} {
 }
 
 func (worker *WorkerHTTP) observe(ctx context.Context, name string) *obs.Event {
-	_, event := obs.Start(obs.WithRecording(ctx, worker.diagnostics), "worker", name)
-	if worker.sessionDir != "" {
-		event.Set("session_id", filepath.Base(worker.sessionDir))
+	_, event := obs.Start(obs.WithRecording(ctx, worker.Diagnostics), "worker", name)
+	if worker.SessionDir != "" {
+		event.Set("session_id", filepath.Base(worker.SessionDir))
 	}
 	if worker.current() != nil {
 		// shortcut: PTYs merge chat and stderr, capture only when a backend exposes a separate diagnostic stream.
@@ -104,10 +105,10 @@ func (worker *WorkerHTTP) observeStderr(event *obs.Event) {
 }
 
 func (worker *WorkerHTTP) watch(session *Session) {
-	<-session.done
+	<-session.Done
 	worker.lifecycle.Lock()
 	defer worker.lifecycle.Unlock()
-	if worker.current() == session && !worker.finished {
+	if worker.current() == session && !worker.Finished {
 		if !worker.stopping {
 			code, err := session.Wait(context.Background())
 			name := "exit"
@@ -117,12 +118,12 @@ func (worker *WorkerHTTP) watch(session *Session) {
 					err = fmt.Errorf("agent exited with status %d", code)
 				}
 			}
-			event := worker.observe(worker.diagnostics, name)
+			event := worker.observe(worker.Diagnostics, name)
 			event.Status = code
 			event.Fail(err)
 			event.End()
 		}
-		worker.finished = true
+		worker.Finished = true
 		close(worker.done)
 	}
 }
@@ -130,12 +131,12 @@ func (worker *WorkerHTTP) watch(session *Session) {
 // Restart keeps the private endpoint stable while replacing the agent process.
 // Terminal attachments reconnect to the new PTY; ACP clients retain the worker endpoint.
 func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (result error) {
-	if !validOperationID(operationID) {
+	if !ValidOperationID(operationID) {
 		return errors.New("restart requires a valid operation_id")
 	}
 	worker.lifecycle.Lock()
 	defer worker.lifecycle.Unlock()
-	if result, found := worker.restarts[operationID]; found {
+	if result, found := worker.Restarts[operationID]; found {
 		return result
 	}
 	if err := ctx.Err(); err != nil {
@@ -151,19 +152,19 @@ func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (resu
 		event.End()
 	}()
 	defer func() {
-		if worker.restarts == nil {
-			worker.restarts = make(map[string]error)
+		if worker.Restarts == nil {
+			worker.Restarts = make(map[string]error)
 		}
 		// shortcut: retain the last 128 operations per live worker; durable retry
 		// history is needed only if workers gain recovery across process restarts.
-		if len(worker.restartIDs) == 128 {
-			delete(worker.restarts, worker.restartIDs[0])
-			worker.restartIDs = worker.restartIDs[1:]
+		if len(worker.RestartIDs) == 128 {
+			delete(worker.Restarts, worker.RestartIDs[0])
+			worker.RestartIDs = worker.RestartIDs[1:]
 		}
-		worker.restartIDs = append(worker.restartIDs, operationID)
-		worker.restarts[operationID] = result
+		worker.RestartIDs = append(worker.RestartIDs, operationID)
+		worker.Restarts[operationID] = result
 	}()
-	if worker.finished || worker.stopping {
+	if worker.Finished || worker.stopping {
 		return errors.New("session cannot restart")
 	}
 	if worker.validate != nil {
@@ -177,13 +178,13 @@ func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (resu
 		}
 		if err := worker.restartACP(ctx); err != nil {
 			worker.err = err
-			worker.finished = true
+			worker.Finished = true
 			close(worker.done)
 			return err
 		}
 		return nil
 	}
-	if worker.start == nil {
+	if worker.Start == nil {
 		return errors.New("session cannot restart")
 	}
 	session := worker.current()
@@ -202,7 +203,7 @@ func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (resu
 	}
 	if err == nil {
 		var replacement *Session
-		replacement, err = worker.start(state.Rows, state.Columns)
+		replacement, err = worker.Start(state.Rows, state.Columns)
 		if err == nil {
 			replacement.OnAgentState(worker.recordAgentState)
 			worker.mu.Lock()
@@ -214,11 +215,11 @@ func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (resu
 		}
 	}
 	session.mu.Lock()
-	session.state.Restarting = false
+	session.Status.Restarting = false
 	session.mu.Unlock()
 	worker.err = err
 	if !session.State().Running {
-		worker.finished = true
+		worker.Finished = true
 		close(worker.done)
 	}
 	return err
@@ -227,7 +228,7 @@ func (worker *WorkerHTTP) Restart(ctx context.Context, operationID string) (resu
 func (worker *WorkerHTTP) Stop(ctx context.Context) (result error) {
 	worker.lifecycle.Lock()
 	defer worker.lifecycle.Unlock()
-	if worker.finished {
+	if worker.Finished {
 		return nil
 	}
 	var event *obs.Event
@@ -257,7 +258,7 @@ func (worker *WorkerHTTP) Stop(ctx context.Context) (result error) {
 		if err := worker.stopACP(ctx); err != nil {
 			return err
 		}
-		worker.finished = true
+		worker.Finished = true
 		close(worker.done)
 		return nil
 	}
@@ -303,7 +304,7 @@ func WorkerHandler(ctx context.Context, pty *Session, conversation *Conversation
 	if len(secret) < 32 {
 		return nil, errors.New("worker requires a secret of at least 32 bytes")
 	}
-	worker := &WorkerHTTP{diagnostics: ctx, session: pty, conversation: conversation, sessionDir: sessionDir, connections: make(map[*websocket.Conn]struct{}), drained: make(chan struct{}), done: make(chan struct{}), attached: make(chan struct{})}
+	worker := &WorkerHTTP{Diagnostics: ctx, session: pty, Conversation: conversation, SessionDir: sessionDir, connections: make(map[*websocket.Conn]struct{}), drained: make(chan struct{}), done: make(chan struct{}), attached: make(chan struct{})}
 	if pty != nil {
 		pty.OnAgentState(worker.recordAgentState)
 	}
@@ -315,11 +316,11 @@ func WorkerHandler(ctx context.Context, pty *Session, conversation *Conversation
 		worker.registerMCP(mux)
 	}
 	if conversation != nil {
-		worker.registerConversation(mux)
+		worker.RegisterConversation(mux)
 	}
 	mux.HandleFunc("POST /restart", func(w http.ResponseWriter, r *http.Request) {
 		operationID := r.Header.Get("Idempotency-Key")
-		if !validOperationID(operationID) {
+		if !ValidOperationID(operationID) {
 			http.Error(w, "restart requires a valid Idempotency-Key", http.StatusBadRequest)
 			return
 		}
@@ -332,7 +333,7 @@ func WorkerHandler(ctx context.Context, pty *Session, conversation *Conversation
 					_ = worker.Restart(ctx, rand.Text()) // Restart records its own failure
 				})
 			}) {
-			writeJSON(w, map[string]bool{"deferred": true})
+			WriteJSON(w, map[string]bool{"deferred": true})
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 90*time.Second)
@@ -341,7 +342,7 @@ func WorkerHandler(ctx context.Context, pty *Session, conversation *Conversation
 			http.Error(w, "could not restart session", http.StatusConflict)
 			return
 		}
-		writeJSON(w, map[string]bool{"restarted": true})
+		WriteJSON(w, map[string]bool{"restarted": true})
 	})
 	mux.HandleFunc("POST /stop", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 90*time.Second)
@@ -350,20 +351,20 @@ func WorkerHandler(ctx context.Context, pty *Session, conversation *Conversation
 			http.Error(w, "could not stop session", 500)
 			return
 		}
-		writeJSON(w, map[string]bool{"stopped": true})
+		WriteJSON(w, map[string]bool{"stopped": true})
 	})
 	// A terminal agent's hooks report its turns here (ReportAgentState); chats have their own state.
 	mux.HandleFunc("POST /agent-state", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			State string `json:"state"`
 		}
-		if pty == nil || worker.stateStore == nil || json.NewDecoder(http.MaxBytesReader(w, r.Body, 256)).Decode(&body) != nil ||
-			(body.State != string(stateWorking) && body.State != string(stateIdle) && body.State != string(stateNeedsYou)) {
+		if pty == nil || worker.StateStore == nil || json.NewDecoder(http.MaxBytesReader(w, r.Body, 256)).Decode(&body) != nil ||
+			(body.State != string(StateWorking) && body.State != string(StateIdle) && body.State != string(StateNeedsYou)) {
 			http.Error(w, "invalid agent state", http.StatusBadRequest)
 			return
 		}
 		worker.agentState.Store(body.State)
-		if err := patchWorkerConversationState(r.Context(), worker.stateStore.DB, filepath.Base(worker.sessionDir), body.State); err != nil && !errors.Is(err, session.ErrSessionArchived) {
+		if err := PatchWorkerConversationState(r.Context(), worker.StateStore.DB, filepath.Base(worker.SessionDir), body.State); err != nil && !errors.Is(err, session.ErrSessionArchived) {
 			_, event := obs.Start(r.Context(), "worker", "agent_state")
 			event.Fail(err)
 			event.End()
@@ -398,20 +399,20 @@ func WorkerHandler(ctx context.Context, pty *Session, conversation *Conversation
 			http.Error(w, "worker authentication required", http.StatusUnauthorized)
 			return
 		}
-		ctx := obs.WithRecording(r.Context(), worker.diagnostics)
+		ctx := obs.WithRecording(r.Context(), worker.Diagnostics)
 		ctx = obs.WithTrace(ctx, r.Header.Get("traceparent"))
 		mux.ServeHTTP(w, r.WithContext(ctx))
 	})
 	return worker, nil
 }
 
-type terminalControl struct {
+type TerminalControl struct {
 	Action  string `json:"action"`
 	Rows    uint16 `json:"rows,omitempty"`
 	Columns uint16 `json:"columns,omitempty"`
 }
 
-type terminalNotice struct {
+type TerminalNotice struct {
 	Type       string                `json:"type"`
 	Attachment uint64                `json:"attachment,omitempty"`
 	State      session.TerminalState `json:"state"`
@@ -456,7 +457,7 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 			close(worker.drained)
 		}
 	}()
-	connection.SetReadLimit(chunkSize)
+	connection.SetReadLimit(ChunkSize)
 	_ = connection.SetReadDeadline(time.Now().Add(45 * time.Second))
 	connection.SetPongHandler(func(string) error { return connection.SetReadDeadline(time.Now().Add(45 * time.Second)) })
 	write := func(kind int, payload []byte) error {
@@ -465,7 +466,7 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 		}
 		return connection.WriteMessage(kind, payload)
 	}
-	notice := func(value terminalNotice) error {
+	notice := func(value TerminalNotice) error {
 		data, err := json.Marshal(value)
 		if err != nil {
 			return err
@@ -473,16 +474,16 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 		return write(websocket.TextMessage, data)
 	}
 	state := session.State()
-	if notice(terminalNotice{Type: "attached", Attachment: attachment.ID, State: state, Offset: replay.Offset}) != nil {
+	if notice(TerminalNotice{Type: "attached", Attachment: attachment.ID, State: state, Offset: replay.Offset}) != nil {
 		return
 	}
 	if len(replay.Data) > 0 && write(websocket.BinaryMessage, replay.Data) != nil {
 		return
 	}
-	if notice(terminalNotice{Type: "replay_complete", Attachment: attachment.ID, State: state, Offset: replay.Offset + uint64(len(replay.Data))}) != nil {
+	if notice(TerminalNotice{Type: "replay_complete", Attachment: attachment.ID, State: state, Offset: replay.Offset + uint64(len(replay.Data))}) != nil {
 		return
 	}
-	notices := make(chan terminalNotice, 8)
+	notices := make(chan TerminalNotice, 8)
 	closed := make(chan struct{})
 	go func() {
 		defer close(closed)
@@ -495,7 +496,7 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 			case websocket.BinaryMessage:
 				err = session.WriteInput(attachment, data)
 			case websocket.TextMessage:
-				var control terminalControl
+				var control TerminalControl
 				decoder := json.NewDecoder(bytes.NewReader(data))
 				decoder.DisallowUnknownFields()
 				if err = decoder.Decode(&control); err != nil {
@@ -522,13 +523,13 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 					}
 				}
 				select {
-				case notices <- terminalNotice{Type: "error", Error: message}:
+				case notices <- TerminalNotice{Type: "error", Error: message}:
 				default:
 					return
 				}
 			} else if kind == websocket.TextMessage {
 				select {
-				case notices <- terminalNotice{Type: "state"}:
+				case notices <- TerminalNotice{Type: "state"}:
 				default:
 					return
 				}
@@ -548,7 +549,7 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 				if err := session.AttachmentError(attachment); err != nil {
 					message = err.Error()
 				}
-				_ = notice(terminalNotice{Type: "ended", State: session.State(), Error: message})
+				_ = notice(TerminalNotice{Type: "ended", State: session.State(), Error: message})
 				return
 			}
 			if len(data) > 0 && write(websocket.BinaryMessage, data) != nil {
@@ -564,7 +565,7 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 			current := session.State()
 			if current != state {
 				state = current
-				if notice(terminalNotice{Type: "state", State: state}) != nil {
+				if notice(TerminalNotice{Type: "state", State: state}) != nil {
 					return
 				}
 			}
@@ -583,14 +584,43 @@ func (worker *WorkerHTTP) attach(session *Session, w http.ResponseWriter, r *htt
 // recordAgentState writes a turn state a terminal agent announced in its own output. Repeats never
 // touch the database.
 func (worker *WorkerHTTP) recordAgentState(state string) {
-	if worker.stateStore == nil || worker.agentState.Swap(state) == state {
+	if worker.StateStore == nil || worker.agentState.Swap(state) == state {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := patchWorkerConversationState(ctx, worker.stateStore.DB, filepath.Base(worker.sessionDir), state); err != nil && !errors.Is(err, session.ErrSessionArchived) {
-		_, event := obs.Start(obs.WithRecording(ctx, worker.diagnostics), "worker", "agent_state")
+	if err := PatchWorkerConversationState(ctx, worker.StateStore.DB, filepath.Base(worker.SessionDir), state); err != nil && !errors.Is(err, session.ErrSessionArchived) {
+		_, event := obs.Start(obs.WithRecording(ctx, worker.Diagnostics), "worker", "agent_state")
 		event.Fail(err)
 		event.End()
 	}
+}
+
+func RandomToken() string {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b[:])
+}
+
+func ReadJSON(w http.ResponseWriter, r *http.Request, value any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		http.Error(w, "invalid request", 400)
+		return false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		http.Error(w, "expected one JSON object", 400)
+		return false
+	}
+	return true
+}
+
+func WriteJSON(w http.ResponseWriter, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(value)
 }

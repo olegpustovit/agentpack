@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
@@ -21,7 +24,7 @@ type ConversationSession struct {
 	mu                sync.Mutex
 	promptMu          sync.Mutex
 	writes            sync.RWMutex
-	log               *acp.EventLog
+	Log               *acp.EventLog
 	broker            *acp.Broker
 	fold              *conversationFold // the log's fold; read only while the log notifies or at start
 	state             string
@@ -51,8 +54,8 @@ type ConversationSession struct {
 	// changes with their log entries; it is taken before mu and never inside a log callback.
 	configMu      sync.Mutex
 	queueMu       sync.Mutex
-	queue         []queuedPrompt
-	seenPrompts   map[string]struct{}
+	Queue         []QueuedPrompt
+	SeenPrompts   map[string]struct{}
 	starting      bool
 	promptStored  func(context.Context, string) (bool, error)
 	running       bool // a turn loop owns the agent
@@ -98,14 +101,14 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 		fold = &conversationFold{}
 		log.SetFold(fold, 0)
 	}
-	session := &ConversationSession{log: log, broker: broker, fold: fold, initialized: make(chan struct{}), seenPrompts: make(map[string]struct{})}
+	session := &ConversationSession{Log: log, broker: broker, fold: fold, initialized: make(chan struct{}), SeenPrompts: make(map[string]struct{})}
 	// A checkpoint carries usage from before the replay tail; entries in the tail update it.
 	thread := fold.Thread.State()
 	session.usageUsed, session.usageCost = int64(thread.ContextTokens), thread.CostUSD
 	entries := log.SetOnAppend(session.applyLogEntry)
 	for _, entry := range entries {
 		session.observeEntry(entry)
-		session.replayEntry(entry)
+		session.ReplayEntry(entry)
 		if entry.Kind == "agent_exit" {
 			session.agentExited = true
 		}
@@ -116,17 +119,17 @@ func NewConversationSession(log *acp.EventLog, broker *acp.Broker) *Conversation
 }
 
 func (cs *ConversationSession) Attach(since int64) (entries []acp.LogEntry, truncated, gap bool) {
-	return cs.log.ReadSince(since)
+	return cs.Log.ReadSince(since)
 }
 
 func conversationState(thread acp.ThreadState) string {
 	switch {
 	case thread.NeedsYou:
-		return string(stateNeedsYou)
+		return string(StateNeedsYou)
 	case thread.Working:
-		return string(stateWorking)
+		return string(StateWorking)
 	default:
-		return string(stateIdle)
+		return string(StateIdle)
 	}
 }
 
@@ -159,7 +162,7 @@ func (cs *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	snapshotChanged := cs.snapshotChanged
 	var afterIdle func()
 	// Not while the queue or a goal is about to start the next turn: a restart would cut it off.
-	if changed && state == string(stateIdle) && len(cs.queue) == 0 && !cs.goalWantsTurn() {
+	if changed && state == string(StateIdle) && len(cs.Queue) == 0 && !cs.goalWantsTurn() {
 		afterIdle, cs.afterIdle = cs.afterIdle, nil
 	}
 	cs.mu.Unlock()
@@ -182,7 +185,7 @@ func (cs *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	if changed {
 		// The sink stores the new state with the events behind it before anything acts on it;
 		// a failed write stays pending in the log, which retries it.
-		_ = cs.log.Flush()
+		_ = cs.Log.Flush()
 		if afterIdle != nil {
 			afterIdle()
 		}
@@ -203,7 +206,7 @@ func agentTitle(entry acp.LogEntry) string {
 	if json.Unmarshal(entry.Payload, &update) != nil || update.Title == nil {
 		return ""
 	}
-	title, err := normalizeSessionName(*update.Title)
+	title, err := NormalizeSessionName(*update.Title)
 	if err != nil {
 		return ""
 	}
@@ -268,7 +271,7 @@ func (cs *ConversationSession) applyRememberedPermissions(ctx context.Context, s
 	if key == "" || current == mode {
 		return
 	}
-	if err := cs.setConfigOption(ctx, key, mode, mustRawJSON(mode)); err != nil {
+	if err := cs.setConfigOption(ctx, key, mode, MustRawJSON(mode)); err != nil {
 		_, event := obs.Start(ctx, "worker", "apply_permissions")
 		event.Set("mode", mode)
 		event.Fail(err)
@@ -347,7 +350,7 @@ func (cs *ConversationSession) AgentExited() bool {
 func (cs *ConversationSession) whenIdle(run func()) bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	if cs.state == string(stateIdle) {
+	if cs.state == string(StateIdle) {
 		return false
 	}
 	cs.afterIdle = run
@@ -492,7 +495,7 @@ func (cs *ConversationSession) Cancel(ctx context.Context) error {
 	var settleGen uint64
 	var settleAfter func(time.Duration, func())
 	if cs.unpromptedUsageSettle > 0 && !cs.running && !cs.inPromptTurn &&
-		cs.state == string(stateWorking) && cs.closedErr() == nil {
+		cs.state == string(StateWorking) && cs.closedErr() == nil {
 		cs.advanceSettle()
 		settleDelay, settleGen, settleAfter = cs.unpromptedUsageSettle, cs.settleGen, cs.after
 	}
@@ -520,7 +523,7 @@ func (cs *ConversationSession) SetUnpromptedUsageSettle(delay time.Duration) {
 // reached a quiet usage_update. The caller holds mu.
 func (cs *ConversationSession) unpromptedSettlePlan() (time.Duration, uint64, func(time.Duration, func())) {
 	if cs.unpromptedUsageSettle <= 0 || !cs.unpromptedUsagePending ||
-		cs.running || cs.inPromptTurn || cs.state != string(stateWorking) || cs.closedErr() != nil {
+		cs.running || cs.inPromptTurn || cs.state != string(StateWorking) || cs.closedErr() != nil {
 		return 0, 0, nil
 	}
 	delay := cs.unpromptedUsageSettle
@@ -545,15 +548,15 @@ func (cs *ConversationSession) scheduleUnpromptedSettle(delay time.Duration, gen
 		defer cs.writes.RUnlock()
 		cs.mu.Lock()
 		if cs.settleGen != gen || cs.running || cs.inPromptTurn ||
-			cs.state != string(stateWorking) || cs.closedErr() != nil {
+			cs.state != string(StateWorking) || cs.closedErr() != nil {
 			cs.mu.Unlock()
 			return
 		}
 		cs.advanceSettle()
 		cs.unpromptedUsagePending = false
-		log, now := cs.log, cs.clock().UnixMilli()
+		log, now := cs.Log, cs.clock().UnixMilli()
 		cs.mu.Unlock()
-		log.Append("turn_end", now, mustRawJSON(map[string]string{"stopReason": stopReason}))
+		log.Append("turn_end", now, MustRawJSON(map[string]string{"stopReason": stopReason}))
 	}
 	if after != nil {
 		after(delay, run)
@@ -582,7 +585,7 @@ func (cs *ConversationSession) AnswerPermission(ctx context.Context, requestID, 
 	defer cs.writes.RUnlock()
 	cs.mu.Lock()
 	broker := cs.broker
-	log := cs.log
+	log := cs.Log
 	exited := cs.agentExited
 	cs.mu.Unlock()
 	if exited {
@@ -601,7 +604,7 @@ func (cs *ConversationSession) AnswerElicitation(ctx context.Context, elicitatio
 	defer cs.writes.RUnlock()
 	cs.mu.Lock()
 	broker := cs.broker
-	log := cs.log
+	log := cs.Log
 	exited := cs.agentExited
 	cs.mu.Unlock()
 	if exited {
@@ -613,7 +616,7 @@ func (cs *ConversationSession) AnswerElicitation(ctx context.Context, elicitatio
 	if !broker.Answer(elicitationID, value) {
 		return errors.New("elicitation already answered")
 	}
-	log.Append("elicitation_result", time.Now().UnixMilli(), mustRawJSON(map[string]string{
+	log.Append("elicitation_result", time.Now().UnixMilli(), MustRawJSON(map[string]string{
 		"elicitationId": elicitationID,
 		"value":         value,
 	}))
@@ -717,7 +720,7 @@ func (cs *ConversationSession) configWithClientBypass() json.RawMessage {
 		if bypassModes[cs.clientMode] {
 			option["currentValue"] = cs.clientMode
 		}
-		return mustRawJSON(options)
+		return MustRawJSON(options)
 	}
 
 	var modes struct {
@@ -736,7 +739,7 @@ func (cs *ConversationSession) configWithClientBypass() json.RawMessage {
 		"id": "mode", "name": "Permissions", "category": "mode", "type": "select",
 		"currentValue": current, "options": choices,
 	})
-	return mustRawJSON(options)
+	return MustRawJSON(options)
 }
 
 func (cs *ConversationSession) AgentCapabilitiesView() *session.AgentCapabilities {
@@ -754,4 +757,28 @@ func (cs *ConversationSession) storeImage(data []byte) (string, error) {
 		return "", errors.New("image storage unavailable")
 	}
 	return store(data)
+}
+
+// ChatState is a chat's conversation_state as tools and the UI see it.
+type ChatState string
+
+const (
+	StateStarting ChatState = "starting"
+	StateWorking  ChatState = "working"
+	StateNeedsYou ChatState = "needs_you"
+	StateIdle     ChatState = "idle"
+	StateStopped  ChatState = "stopped"
+)
+
+func NormalizeSessionName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if !utf8.ValidString(name) || utf8.RuneCountInString(name) > 80 {
+		return "", errors.New("session name must be at most 80 characters")
+	}
+	for _, char := range name {
+		if unicode.IsControl(char) {
+			return "", errors.New("session name cannot contain control characters")
+		}
+	}
+	return name, nil
 }

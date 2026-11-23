@@ -1,7 +1,7 @@
 import { api } from "@/lib/api"
 import type { Agentpack, Draft, MCPServerInput, PackagePin, Revision } from "@/lib/api-types"
 
-// Shapes from internal/network/library*.go and internal/registry/drafts.go.
+// Shapes from internal/gateway/library*.go and internal/registry/drafts.go.
 export type PackageDiff = { add: string[]; update: string[]; remove: string[]; mode?: string }
 
 export type DraftReview = {

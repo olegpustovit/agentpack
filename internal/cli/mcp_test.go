@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/gateway"
 )
 
 func TestParseMCPAdd(t *testing.T) {
@@ -88,12 +88,12 @@ func TestGatewayMCPInstallMatchesMCPAdd(t *testing.T) {
 	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "init"}); err != nil || code != 0 {
 		t.Fatalf("init code=%d err=%v", code, err)
 	}
-	for _, bad := range []network.MCPServerInput{{Name: "x"}, {Name: "x", Command: "npx", URL: "https://e.com"}, {Name: "x", Command: "npx", Type: "sse"}, {Name: "x", URL: "https://e.com", Args: []string{"a"}}} {
+	for _, bad := range []gateway.MCPServerInput{{Name: "x"}, {Name: "x", Command: "npx", URL: "https://e.com"}, {Name: "x", Command: "npx", Type: "sse"}, {Name: "x", URL: "https://e.com", Args: []string{"a"}}} {
 		if err := runner.installNetworkMCP(context.Background(), root, bad, false); err == nil {
 			t.Fatalf("accepted %+v", bad)
 		}
 	}
-	if err := runner.installNetworkMCP(context.Background(), root, network.MCPServerInput{Name: "rf", URL: "https://e.com/mcp"}, false); err != nil {
+	if err := runner.installNetworkMCP(context.Background(), root, gateway.MCPServerInput{Name: "rf", URL: "https://e.com/mcp"}, false); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(root, "agentpack.toml"))

@@ -26,12 +26,12 @@ func revertFixture(t *testing.T, dir, path string, oldText string, created bool)
 	log.Append("turn_end", 4, []byte(`{}`))
 	conv := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
 	conv.workspace = dir
-	return &WorkerHTTP{conversation: conv}
+	return &WorkerHTTP{Conversation: conv}
 }
 
 func postRevert(worker *WorkerHTTP) *httptest.ResponseRecorder {
 	mux := http.NewServeMux()
-	worker.registerConversation(mux)
+	worker.RegisterConversation(mux)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/conversation/revert", strings.NewReader(`{"turn":1}`)))
 	return w
@@ -107,7 +107,7 @@ func TestRevertTurnRestoresCompactToolDiffsOnlyWithTheirSource(t *testing.T) {
 		}
 		conv := NewConversationSession(log, acp.NewBroker(nil, nil, nil, nil))
 		conv.workspace = dir
-		if response := postRevert(&WorkerHTTP{conversation: conv}); response.Code != wantStatus {
+		if response := postRevert(&WorkerHTTP{Conversation: conv}); response.Code != wantStatus {
 			t.Fatalf("source available=%v, status=%d: %s", includeSource, response.Code, response.Body.String())
 		}
 		if got, err := os.ReadFile(path); err != nil || string(got) != want {

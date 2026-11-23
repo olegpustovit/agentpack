@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/cache"
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
@@ -48,7 +49,7 @@ func TestGatewayLibrarySaveCaptureRestore(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	saved, err := library.Save(ctx, network.SaveAgentpackInput{Directory: workspace, Name: "Team review", AutoCapture: true})
+	saved, err := library.Save(ctx, gateway.SaveAgentpackInput{Directory: workspace, Name: "Team review", AutoCapture: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +174,7 @@ func TestGatewayLibraryBootstrapsRecentProjectsAndCachedPackages(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	saved, err := library.Save(context.Background(), network.SaveAgentpackInput{Directory: manualWorkspace, Name: "Existing manual pack"})
+	saved, err := library.Save(context.Background(), gateway.SaveAgentpackInput{Directory: manualWorkspace, Name: "Existing manual pack"})
 	if err != nil {
 		t.Fatal(err)
 	}

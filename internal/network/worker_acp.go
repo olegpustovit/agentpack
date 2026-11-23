@@ -20,6 +20,7 @@ import (
 	sdkacp "github.com/coder/acp-go-sdk"
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/acp/acptest"
+	"github.com/olegpustovit/agentpack/internal/harness"
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/manifest"
@@ -32,7 +33,7 @@ import (
 )
 
 func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir string, conv *ConversationSession) (conversation *ConversationSession, cleanup func(), result error) {
-	log := conv.log
+	log := conv.Log
 	defer func() {
 		if result != nil {
 			closeACPEventLog(log)
@@ -76,7 +77,7 @@ func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir s
 		return startACPReplayAgent(ctx, launch, sessionDir, entries, conv)
 	}
 
-	target, err := harnessTarget(launch.Session.Harness)
+	target, err := HarnessTarget(launch.Session.Harness)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -95,7 +96,7 @@ func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir s
 		if !harness.ACPStageAtSession {
 			return nil, nil, errors.New("ACP adapter requires staging before startup")
 		}
-		stageCtx, cancelStage := context.WithCancel(WithPeerCache(ctx, ""))
+		stageCtx, cancelStage := context.WithCancel(ctx)
 		staged := make(chan error, 1)
 		stageDone = staged
 		go func() {
@@ -121,7 +122,7 @@ func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir s
 }
 
 func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir string, entries []acp.LogEntry, conv *ConversationSession) (*ConversationSession, func(), error) {
-	log := conv.log
+	log := conv.Log
 	workspace := launch.Session.Directory
 	if workspace == "" {
 		workspace = launch.Directory
@@ -178,7 +179,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 }
 
 func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx base.LaunchContext, target base.Target, acpLaunch base.ACPLaunch, sessionDir string, conv *ConversationSession, stageDone <-chan error) (*ConversationSession, func(), error) {
-	log := conv.log
+	log := conv.Log
 	cmd := acpLaunch.Cmd
 	if cmd == nil {
 		return nil, nil, errors.New("harness ACP launch returned nil command")
@@ -547,11 +548,11 @@ func explainACPAuthRequired(err error, target base.Target) error {
 	}
 	// The gateway reads this sentence from the worker's last line to offer a sign-in; see failStart.
 	// No final period: the CLI's error renderer ends the sentence.
-	return errors.New(base.DisplayName(target) + notSignedIn + host)
+	return errors.New(base.DisplayName(target) + NotSignedIn + host)
 }
 
-// notSignedIn joins an agent's name and a machine's in the start failure of an agent that needs a sign-in.
-const notSignedIn = " is not signed in on "
+// NotSignedIn joins an agent's name and a machine's in the start failure of an agent that needs a sign-in.
+const NotSignedIn = " is not signed in on "
 
 func marshalConfigOptions(opts []sdkacp.SessionConfigOption) json.RawMessage {
 	if opts == nil {
@@ -579,10 +580,10 @@ func marshalSessionModes(modes *sdkacp.SessionModeState) json.RawMessage {
 	if modes == nil {
 		return nil
 	}
-	return mustRawJSON(modes)
+	return MustRawJSON(modes)
 }
 
-func harnessTarget(name string) (base.Target, error) {
+func HarnessTarget(name string) (base.Target, error) {
 	if name == "" {
 		return "", errors.New("ACP transport requires session harness")
 	}
@@ -725,7 +726,7 @@ func finishACPConversation(ctx context.Context, conversation *ConversationSessio
 	drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := client.DrainSessionUpdates(drain); err != nil {
-		conversation.log.MarkTruncated()
+		conversation.Log.MarkTruncated()
 		_, event := obs.Start(ctx, "worker", "drain_conversation")
 		event.Set("session_id", conversation.sessionID)
 		event.Fail(err)
@@ -733,7 +734,7 @@ func finishACPConversation(ctx context.Context, conversation *ConversationSessio
 	}
 	conversation.writes.Lock()
 	defer conversation.writes.Unlock()
-	closeACPEventLog(conversation.log)
+	closeACPEventLog(conversation.Log)
 }
 
 func closeACPEventLog(log *acp.EventLog) {
@@ -876,8 +877,7 @@ func loadEventLogFixtureEntries(path string) ([]acp.LogEntry, error) {
 }
 
 func probeHarnessAgentSessions(ctx context.Context, launch WorkerLaunch) ([]AgentSession, error) {
-	ctx = WithPeerCache(ctx, "")
-	target, err := harnessTarget(launch.Session.Harness)
+	target, err := HarnessTarget(launch.Session.Harness)
 	if err != nil {
 		return nil, err
 	}
@@ -1022,7 +1022,7 @@ func (p *acpPrompter) prompt(ctx context.Context, input acp.PromptInput) (result
 	if earlier != "" {
 		blocks = append([]sdkacp.ContentBlock{sdkacp.TextBlock(earlier)}, blocks...)
 	}
-	own := &sentPrompt{payload: promptLogPayload(loggedInput), queueID: input.QueueID}
+	own := &sentPrompt{payload: PromptLogPayload(loggedInput), queueID: input.QueueID}
 	p.mu.Lock()
 	own.inserted = len(p.sent) == 0 || own.queueID == ""
 	p.sent = append(p.sent, own)
@@ -1055,7 +1055,7 @@ func (p *acpPrompter) answered(own *sentPrompt, err error, response sdkacp.Promp
 			reason = "failed"
 			logFailedTurn(log, p.harness, err, false)
 		}
-		log.Append("dequeued_prompt", now, mustRawJSON(map[string]string{"queueId": own.queueID, "reason": reason}))
+		log.Append("dequeued_prompt", now, MustRawJSON(map[string]string{"queueId": own.queueID, "reason": reason}))
 	case err != nil:
 		logFailedTurn(log, p.harness, err, last)
 	}
@@ -1064,7 +1064,7 @@ func (p *acpPrompter) answered(own *sentPrompt, err error, response sdkacp.Promp
 		log.Append("prompt", now, p.sent[0].payload)
 	}
 	if last && err == nil {
-		log.Append("turn_end", now, mustRawJSON(response))
+		log.Append("turn_end", now, MustRawJSON(response))
 	}
 }
 
@@ -1073,7 +1073,7 @@ func delivered(payload json.RawMessage) json.RawMessage {
 	var body map[string]any
 	_ = json.Unmarshal(payload, &body)
 	body["delivered"] = true
-	return mustRawJSON(body)
+	return MustRawJSON(body)
 }
 
 // steer hands input to the agent's running turn with _session/steering, without session/cancel.
@@ -1103,12 +1103,12 @@ func (p *acpPrompter) steer(ctx context.Context, input acp.PromptInput) (bool, e
 	}
 	switch result.Outcome {
 	case "injected":
-		p.log.Append("prompt", time.Now().UnixMilli(), promptLogPayload(loggedInput))
+		p.log.Append("prompt", time.Now().UnixMilli(), PromptLogPayload(loggedInput))
 		return true, nil
 	case "promptRequired":
 		return false, nil
 	}
-	return false, fmt.Errorf("the agent could not take the message in (%s)", cmpOr(result.Outcome, "no outcome"))
+	return false, fmt.Errorf("the agent could not take the message in (%s)", CmpOr(result.Outcome, "no outcome"))
 }
 
 func (p *acpPrompter) cancel(ctx context.Context) error {
@@ -1154,7 +1154,7 @@ func brokerSetConfigOption(connMu *sync.Mutex, conn **sdkacp.ClientSideConnectio
 		}
 		response, err := c.SetSessionConfigOption(ctx, request)
 		if err == nil && log != nil && response.ConfigOptions != nil {
-			log.Append("config_option_update", time.Now().UnixMilli(), mustRawJSON(map[string]any{
+			log.Append("config_option_update", time.Now().UnixMilli(), MustRawJSON(map[string]any{
 				"sessionUpdate": "config_option_update", "configOptions": response.ConfigOptions,
 			}))
 		}
@@ -1162,7 +1162,7 @@ func brokerSetConfigOption(connMu *sync.Mutex, conn **sdkacp.ClientSideConnectio
 	}
 }
 
-func mustRawJSON(v any) json.RawMessage {
+func MustRawJSON(v any) json.RawMessage {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return json.RawMessage("{}")
@@ -1181,14 +1181,33 @@ func logFailedTurn(log *acp.EventLog, harness string, err error, end bool) {
 	notice := map[string]any{"sessionUpdate": "notice", "severity": "error", "title": "The agent could not run this prompt", "description": description}
 	var request *sdkacp.RequestError
 	if errors.As(err, &request) && request.Code == sdkacp.NewAuthRequired(nil).Code {
-		notice["code"], notice["harness"], notice["methods"] = "auth_required", harness, loginMethods(harness)
+		notice["code"], notice["harness"], notice["methods"] = "auth_required", harness, LoginMethods(harness)
 		notice["description"] = base.DisplayName(base.Target(harness)) + " needs you to sign in again."
 		if harness == "opencode" {
 			notice["description"] = "Sign in again or choose a model you are already signed in to."
 		}
 	}
-	log.Append("notice", now, mustRawJSON(notice))
+	log.Append("notice", now, MustRawJSON(notice))
 	if end {
-		log.Append("turn_end", now, mustRawJSON(map[string]any{"stopReason": "error"}))
+		log.Append("turn_end", now, MustRawJSON(map[string]any{"stopReason": "error"}))
 	}
 }
+
+// LoginMethods are an agent's ways to sign in, known without asking its CLI.
+func LoginMethods(name string) []harness.LoginMethod {
+	if agent, ok := AgentEntry(name); ok {
+		return agent.Login.Methods
+	}
+	return nil
+}
+
+func AgentEntry(name string) (registry.Entry, bool) {
+	index := slices.IndexFunc(Agents, func(entry registry.Entry) bool { return string(entry.Target) == name && entry.Login != nil })
+	if index < 0 {
+		return registry.Entry{}, false
+	}
+	return Agents[index], true
+}
+
+// Agents are the registry entries the gateway reads, signs in and probes; tests replace them.
+var Agents = registry.All()

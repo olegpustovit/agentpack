@@ -11,7 +11,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/session"
 )
 
-var errNoGoal = errors.New("no goal is set")
+var ErrNoGoal = errors.New("no goal is set")
 
 // goalStopRuns is how many consecutive blocked or tool-free turns stop a gateway goal.
 const goalStopRuns = 3
@@ -235,15 +235,15 @@ func (cs *ConversationSession) followNativeGoal(entry acp.LogEntry, state string
 		return
 	}
 	switch {
-	case state == string(stateIdle) && cs.state == string(stateWorking) && goal.State == "active" && cs.userCancelled:
+	case state == string(StateIdle) && cs.state == string(StateWorking) && goal.State == "active" && cs.userCancelled:
 		// A prompted turn is paused by finishTurn; unprompted work has no turn to finish.
 		setGoalState(goal, "paused", "stopped by the user", entry.TS)
 		cs.goalDirty, cs.goalPauseDue = true, !cs.running
-	case state == string(stateIdle) && cs.state == string(stateWorking) && goal.State == "active" &&
+	case state == string(StateIdle) && cs.state == string(StateWorking) && goal.State == "active" &&
 		cs.stopReason != "error" && cs.stopReason != "failed" && cs.stopReason != "cancelled":
 		setGoalState(goal, "met", "the agent finished", entry.TS)
 		cs.goalSettled, cs.goalDirty = true, true
-	case state == string(stateWorking) && entry.Kind != "prompt" && goal.State == "met" && cs.goalSettled:
+	case state == string(StateWorking) && entry.Kind != "prompt" && goal.State == "met" && cs.goalSettled:
 		setGoalState(goal, "active", "", entry.TS)
 		goal.LastReason = ""
 		cs.goalSettled, cs.goalDirty = false, true
@@ -329,7 +329,7 @@ func (cs *ConversationSession) publishGoal() {
 		cs.mu.Unlock()
 		return
 	}
-	payload := mustRawJSON(goal)
+	payload := MustRawJSON(goal)
 	if string(payload) == cs.goalPublished {
 		cs.mu.Unlock()
 		return
@@ -337,7 +337,7 @@ func (cs *ConversationSession) publishGoal() {
 	cs.goalPublished = string(payload)
 	cs.mu.Unlock()
 	// The sink saves it on the session row with the entry (conversationFold).
-	cs.log.Append("goal_update", cs.clock().UnixMilli(), payload)
+	cs.Log.Append("goal_update", cs.clock().UnixMilli(), payload)
 }
 
 // SetGoal replaces the goal and starts working on it.
@@ -378,7 +378,7 @@ func (cs *ConversationSession) UpdateGoal(ctx context.Context, change GoalChange
 	goal := cs.goal
 	if goal == nil {
 		cs.mu.Unlock()
-		return errNoGoal
+		return ErrNoGoal
 	}
 	if err := cs.closedErr(); err != nil {
 		cs.mu.Unlock()
@@ -438,7 +438,7 @@ func (cs *ConversationSession) restoreGoal(saved *session.Goal) {
 	}
 	goal := *saved
 	cs.goal = &goal
-	cs.goalPublished = string(mustRawJSON(&goal))
+	cs.goalPublished = string(MustRawJSON(&goal))
 }
 
 func (cs *ConversationSession) ClearGoal(ctx context.Context) error {
@@ -446,7 +446,7 @@ func (cs *ConversationSession) ClearGoal(ctx context.Context) error {
 	goal := cs.goal
 	if goal == nil {
 		cs.mu.Unlock()
-		return errNoGoal
+		return ErrNoGoal
 	}
 	cleared := *goal
 	setGoalState(&cleared, "cleared", "", cs.clock().UnixMilli())

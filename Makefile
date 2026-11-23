@@ -38,7 +38,7 @@ help:
 	@echo "  hooks           install tracked git hooks"
 	@echo ""
 	@echo "Gateway UI (Bun; not part of build, test or ci):"
-	@echo "  ui-stage        build ui/ and publish it to internal/network/webdist"
+	@echo "  ui-stage        build ui/ and publish it to internal/gateway/webdist"
 	@echo "  artifact        ui-stage, build, then smoke-test the gateway"
 	@echo ""
 	@echo "Release — GoReleaser publishes archives, checksums, GitHub release, and Homebrew cask:"
@@ -51,7 +51,7 @@ help:
 all: release
 
 build: crsqlite
-	@if [ ! -f internal/network/webdist/index.html ]; then echo "warning: gateway UI is the placeholder; run make ui-stage first" >&2; fi
+	@if [ ! -f internal/gateway/webdist/index.html ]; then echo "warning: gateway UI is the placeholder; run make ui-stage first" >&2; fi
 	$(GO) build -o "$(RELEASE_BIN)" ./cmd/agentpack
 
 release: crsqlite
@@ -79,7 +79,7 @@ race: crsqlite
 	$(GO) test -race ./...
 
 deadcode: crsqlite
-	@findings=$$($(GO) run golang.org/x/tools/cmd/deadcode@v0.53.0 -filter '/internal/(harness(/.*)?|network|cache)$$' ./cmd/...) || exit $$?; \
+	@findings=$$($(GO) run golang.org/x/tools/cmd/deadcode@v0.53.0 -filter '/internal/(harness(/.*)?|network|gateway(/.*)?|session|cache)$$' ./cmd/...) || exit $$?; \
 	printf '%s\n' "$$findings"; \
 	case "$$findings" in *internal/harness/*) exit 1;; esac
 
@@ -113,7 +113,7 @@ ui-stage: ui-build
 	cd ui && bun scripts/stage.ts
 
 ui-e2e: ui-build crsqlite
-	$(GO) test -c -o .build/telemetry-e2e ./internal/network
+	$(GO) test -c -o .build/telemetry-e2e ./internal/gateway
 	cd ui && AGENTPACK_TELEMETRY_TEST_BINARY="$(CURDIR)/.build/telemetry-e2e" bun run e2e
 
 artifact: ui-stage build

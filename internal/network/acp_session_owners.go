@@ -13,8 +13,8 @@ import (
 )
 
 var (
-	errACPResumeDenied       = errors.New("read-only actor cannot use this ACP conversation")
-	errACPResumeOwnerStorage = errors.New("ACP session owner record is unavailable")
+	ErrACPResumeDenied       = errors.New("read-only actor cannot use this ACP conversation")
+	ErrACPResumeOwnerStorage = errors.New("ACP session owner record is unavailable")
 )
 
 type acpConversationOwnerRecord struct {
@@ -27,7 +27,7 @@ func acpOwnerKey(folderID, harness, sessionID string) (key, canonical string, er
 	if folderID == "" || sessionID == "" {
 		return "", "", errors.New("ACP owner key is incomplete")
 	}
-	target, err := harnessTarget(harness)
+	target, err := HarnessTarget(harness)
 	if err != nil {
 		return "", "", err
 	}
@@ -39,15 +39,15 @@ func acpOwnerKey(folderID, harness, sessionID string) (key, canonical string, er
 func decodeACPAccountOwner(body, email string) (session.Actor, error) {
 	var owner session.Actor
 	if err := json.Unmarshal([]byte(body), &owner); err != nil {
-		return owner, errors.Join(errACPResumeOwnerStorage, err)
+		return owner, errors.Join(ErrACPResumeOwnerStorage, err)
 	}
 	if owner.User == "" || owner.Node == "" && owner.StableNodeID == "" {
-		return owner, errACPResumeOwnerStorage
+		return owner, ErrACPResumeOwnerStorage
 	}
 	if email != "" {
 		normalized, err := session.NormalizeEmail(owner.User)
 		if err != nil || normalized != email {
-			return owner, errACPResumeOwnerStorage
+			return owner, ErrACPResumeOwnerStorage
 		}
 	}
 	return owner, nil
@@ -64,7 +64,7 @@ func loadACPConversationOwner(ctx context.Context, tx *sql.Tx, folderID, harness
 	err = tx.QueryRowContext(ctx, "SELECT started_by,owner_email,folder_id,harness FROM acp_session_owners WHERE key=? AND node_id="+state.LocalNodeSQL, key).Scan(&body, &email, &storedFolder, &storedHarness)
 	if err == nil {
 		if storedFolder != folderID || storedHarness != canonical {
-			return session.Actor{}, false, errACPResumeOwnerStorage
+			return session.Actor{}, false, ErrACPResumeOwnerStorage
 		}
 		owner, err = decodeACPAccountOwner(body, email)
 		if err != nil {
@@ -86,7 +86,7 @@ func loadACPConversationOwner(ctx context.Context, tx *sql.Tx, folderID, harness
 		if err := rows.Scan(&name, &body, &email, &archivedAt); err != nil {
 			return session.Actor{}, false, err
 		}
-		target, err := harnessTarget(name)
+		target, err := HarnessTarget(name)
 		if err != nil || string(target) != canonical {
 			continue
 		}
@@ -101,7 +101,7 @@ func loadACPConversationOwner(ctx context.Context, tx *sql.Tx, folderID, harness
 			return session.Actor{}, false, err
 		}
 		if found && !candidate.CanWriteSession(session.SessionInfo{StartedBy: &owner}) {
-			return session.Actor{}, false, errACPResumeOwnerStorage
+			return session.Actor{}, false, ErrACPResumeOwnerStorage
 		}
 		if !found {
 			owner, found = candidate, true
@@ -110,10 +110,10 @@ func loadACPConversationOwner(ctx context.Context, tx *sql.Tx, folderID, harness
 	return owner, found, rows.Err()
 }
 
-func readACPConversationOwner(ctx context.Context, store *state.Store, folderID, harness, sessionID string) (session.Actor, bool, error) {
+func ReadACPConversationOwner(ctx context.Context, store *state.Store, folderID, harness, sessionID string) (session.Actor, bool, error) {
 	tx, err := store.Reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return session.Actor{}, false, errors.Join(errACPResumeOwnerStorage, err)
+		return session.Actor{}, false, errors.Join(ErrACPResumeOwnerStorage, err)
 	}
 	defer tx.Rollback()
 	owner, found, err := loadACPConversationOwner(ctx, tx, folderID, harness, sessionID)
@@ -121,16 +121,16 @@ func readACPConversationOwner(ctx context.Context, store *state.Store, folderID,
 		err = tx.Commit()
 	}
 	if err != nil {
-		err = errors.Join(errACPResumeOwnerStorage, err)
+		err = errors.Join(ErrACPResumeOwnerStorage, err)
 	}
 	return owner, found, err
 }
 
-func authorizeACPResume(ctx context.Context, store *state.Store, actor session.Actor, info session.SessionInfo) error {
+func AuthorizeACPResume(ctx context.Context, store *state.Store, actor session.Actor, info session.SessionInfo) error {
 	if info.AgentSessionID == "" {
 		return nil
 	}
-	target, err := harnessTarget(info.Harness)
+	target, err := HarnessTarget(info.Harness)
 	if err != nil {
 		return err
 	}
@@ -144,7 +144,7 @@ func authorizeACPResume(ctx context.Context, store *state.Store, actor session.A
 			rows.Close()
 			return err
 		}
-		canonical, err := harnessTarget(name)
+		canonical, err := HarnessTarget(name)
 		if err == nil && canonical == target {
 			rows.Close()
 			return session.ErrSessionArchived
@@ -158,18 +158,18 @@ func authorizeACPResume(ctx context.Context, store *state.Store, actor session.A
 	if err != nil {
 		return err
 	}
-	owner, found, err := readACPConversationOwner(ctx, store, folderID, info.Harness, info.AgentSessionID)
+	owner, found, err := ReadACPConversationOwner(ctx, store, folderID, info.Harness, info.AgentSessionID)
 	if err != nil {
 		return err
 	}
 	if !found {
 		if actor.Kind == "peer" {
-			return errACPResumeDenied
+			return ErrACPResumeDenied
 		}
 		return nil
 	}
 	if !actor.CanWriteSession(session.SessionInfo{StartedBy: &owner}) {
-		return errACPResumeDenied
+		return ErrACPResumeDenied
 	}
 	return nil
 }
@@ -197,12 +197,12 @@ func insertOwnerBinding(ctx context.Context, tx *sql.Tx, key string, record acpC
 		return err
 	}
 	if !record.Owner.CanWriteSession(session.SessionInfo{StartedBy: &owner}) {
-		return errACPResumeDenied
+		return ErrACPResumeDenied
 	}
 	return nil
 }
 
-func rememberACPConversationOwner(ctx context.Context, store *state.Store, info session.SessionInfo, fallbackDirectory string) error {
+func RememberACPConversationOwner(ctx context.Context, store *state.Store, info session.SessionInfo, fallbackDirectory string) error {
 	if info.Transport != "acp" || info.AgentSessionID == "" || info.StartedBy == nil {
 		return nil
 	}
@@ -232,7 +232,7 @@ func rememberACPConversationOwner(ctx context.Context, store *state.Store, info 
 			return err
 		}
 		if found && !info.StartedBy.CanWriteSession(session.SessionInfo{StartedBy: &owner}) {
-			return errACPResumeDenied
+			return ErrACPResumeDenied
 		}
 		if !found {
 			owner = *info.StartedBy
@@ -252,8 +252,8 @@ func rememberACPConversationOwner(ctx context.Context, store *state.Store, info 
 	})
 }
 
-func archivedNativeIDs(ctx context.Context, store *state.Store, folderID, name string) (map[string]bool, error) {
-	target, err := harnessTarget(name)
+func ArchivedNativeIDs(ctx context.Context, store *state.Store, folderID, name string) (map[string]bool, error) {
+	target, err := HarnessTarget(name)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +268,7 @@ func archivedNativeIDs(ctx context.Context, store *state.Store, folderID, name s
 		if err := rows.Scan(&harness, &id); err != nil {
 			return nil, err
 		}
-		canonical, err := harnessTarget(harness)
+		canonical, err := HarnessTarget(harness)
 		if err != nil {
 			return nil, err
 		}

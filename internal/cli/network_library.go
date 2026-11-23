@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/registry"
@@ -13,14 +14,14 @@ import (
 )
 
 // networkLibrary wires the Library's operations to the gateway; the logic lives in registry.
-func (runner Runner) networkLibrary(home string) (network.LibraryOptions, error) {
+func (runner Runner) networkLibrary(home string) (gateway.LibraryOptions, error) {
 	store, err := registry.New(home)
 	if err != nil {
-		return network.LibraryOptions{}, err
+		return gateway.LibraryOptions{}, err
 	}
 	node, err := os.Hostname()
 	if err != nil {
-		return network.LibraryOptions{}, errors.Join(err, store.Close())
+		return gateway.LibraryOptions{}, errors.Join(err, store.Close())
 	}
 	bootstrap := &registry.Bootstrapper{
 		Store: store, Home: home, Node: node,
@@ -40,7 +41,7 @@ func (runner Runner) networkLibrary(home string) (network.LibraryOptions, error)
 	definitionOf := func(directory string) (string, error) {
 		return bootstrap.Definition(directory, "")
 	}
-	return network.LibraryOptions{
+	return gateway.LibraryOptions{
 		Store:     store,
 		Bootstrap: bootstrap.Run,
 		DraftState: func(ctx context.Context, draft registry.Draft) (registry.DraftState, error) {
@@ -50,26 +51,26 @@ func (runner Runner) networkLibrary(home string) (network.LibraryOptions, error)
 			}
 			return store.DraftStateOf(draft, definition)
 		},
-		Save: func(ctx context.Context, input network.SaveAgentpackInput) (network.SavedAgentpack, error) {
+		Save: func(ctx context.Context, input gateway.SaveAgentpackInput) (gateway.SavedAgentpack, error) {
 			definition, err := definitionOf(input.Directory)
 			if err != nil {
-				return network.SavedAgentpack{}, err
+				return gateway.SavedAgentpack{}, err
 			}
 			mutation, err := acquireDefinitionMutation(ctx, definition)
 			if err != nil {
-				return network.SavedAgentpack{}, err
+				return gateway.SavedAgentpack{}, err
 			}
 			defer mutation.Unlock()
 			capture, err := registry.ProjectCapture(definition, input.Directory, node, input.Mode)
 			if err != nil {
-				return network.SavedAgentpack{}, err
+				return gateway.SavedAgentpack{}, err
 			}
 			capture.ID, capture.Name, capture.Label = input.AgentpackID, input.Name, input.Label
 			pack, revision, err := store.Capture(capture)
 			if err == nil {
 				err = store.SetCapture(definition, pack.ID, input.AutoCapture)
 			}
-			return network.SavedAgentpack{Agentpack: pack, Revision: revision}, err
+			return gateway.SavedAgentpack{Agentpack: pack, Revision: revision}, err
 		},
 		Preview: func(ctx context.Context, id, revision, directory string) (registry.DiffResult, error) {
 			definition, err := definitionOf(directory)

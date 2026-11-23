@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/registry"
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -46,12 +46,12 @@ func (runner Runner) runGatewayAccounts(ctx context.Context, home string, args [
 	defer store.Close()
 	switch action {
 	case "whoami":
-		if err := network.BindLocalAccount(ctx, store, args[1]); err != nil {
+		if err := gateway.BindLocalAccount(ctx, store, args[1]); err != nil {
 			return 1, err
 		}
 		_, err = fmt.Fprintln(runner.Stdout, "Local gateway actions now use "+args[1])
 	case "list":
-		users, err := network.ListUsers(ctx, store)
+		users, err := gateway.ListUsers(ctx, store)
 		if err != nil {
 			return 1, err
 		}
@@ -61,7 +61,7 @@ func (runner Runner) runGatewayAccounts(ctx context.Context, home string, args [
 			}
 		}
 	case "disable":
-		if err := network.DisableUser(ctx, store, args[1]); err != nil {
+		if err := gateway.DisableUser(ctx, store, args[1]); err != nil {
 			return 1, err
 		}
 		_, err = fmt.Fprintln(runner.Stdout, "Disabled "+args[1])
@@ -71,9 +71,9 @@ func (runner Runner) runGatewayAccounts(ctx context.Context, home string, args [
 			return 1, err
 		}
 		if action == "add" {
-			err = network.AddUser(ctx, store, args[1], password)
+			err = gateway.AddUser(ctx, store, args[1], password)
 		} else {
-			err = network.SetPassword(ctx, store, args[1], password)
+			err = gateway.SetPassword(ctx, store, args[1], password)
 		}
 		if err != nil {
 			return 1, err
@@ -90,7 +90,7 @@ func (runner Runner) runGatewayAccounts(ctx context.Context, home string, args [
 		if strings.TrimSpace(answer) != "reset" {
 			return 1, errors.New("owner reset cancelled")
 		}
-		if err := network.ResetOwner(ctx, store, home); err != nil {
+		if err := gateway.ResetOwner(ctx, store, home); err != nil {
 			return 1, err
 		}
 		_, err = fmt.Fprintln(runner.Stdout, "Owner reset. Open the gateway to claim it again.")
@@ -143,7 +143,7 @@ func (runner Runner) openGateway(ctx context.Context) error {
 	}
 	address := strings.TrimSpace(os.Getenv("AGENTPACK_PUBLIC_URL"))
 	if address == "" {
-		if address, err = network.GatewayURL(home); err != nil {
+		if address, err = gateway.GatewayURL(home); err != nil {
 			return err
 		}
 	}
@@ -174,7 +174,7 @@ func openInBrowser(address string) {
 }
 
 func (runner Runner) printGatewayClaim(ctx context.Context, home string) error {
-	status, err := network.GatewayAccountStatus(ctx, home)
+	status, err := gateway.GatewayAccountStatus(ctx, home)
 	if err != nil {
 		return err
 	}
@@ -187,7 +187,7 @@ func (runner Runner) printGatewayClaim(ctx context.Context, home string) error {
 	}
 	address := strings.TrimSpace(os.Getenv("AGENTPACK_PUBLIC_URL"))
 	if address == "" {
-		address, err = network.GatewayURL(home)
+		address, err = gateway.GatewayURL(home)
 		if err != nil {
 			return err
 		}
@@ -219,7 +219,7 @@ func (runner Runner) runGatewayJoin(ctx context.Context, home string, args []str
 		return 1, err
 	}
 	defer store.Close()
-	if err := network.PrepareMeshJoin(ctx, store, peer); err != nil {
+	if err := gateway.PrepareMeshJoin(ctx, store, peer); err != nil {
 		return 1, err
 	}
 	library, err := registry.NewWithStore(store, filepath.Join(home, "registry"))

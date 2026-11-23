@@ -26,7 +26,7 @@ func newCyclingSession(t *testing.T, queuesPrompts bool) (*ConversationSession, 
 	log := acp.NewEventLog(0)
 	agent := &cyclingAgent{log: log, prompts: make(chan string, 16), release: make(chan struct{})}
 	broker := acp.NewBroker(func(ctx context.Context, input acp.PromptInput) error {
-		log.Append("prompt", 1, promptLogPayload(input))
+		log.Append("prompt", 1, PromptLogPayload(input))
 		acp.Accepted(ctx)
 		agent.mu.Lock()
 		agent.inFlight++
@@ -38,7 +38,7 @@ func newCyclingSession(t *testing.T, queuesPrompts bool) (*ConversationSession, 
 		last := agent.inFlight == 0
 		agent.mu.Unlock()
 		if last {
-			log.Append("turn_end", 1, mustRawJSON(map[string]string{"stopReason": "end_turn"}))
+			log.Append("turn_end", 1, MustRawJSON(map[string]string{"stopReason": "end_turn"}))
 		}
 		return nil
 	}, func(context.Context) error { return nil }, nil, nil)
@@ -59,14 +59,14 @@ func (agent *cyclingAgent) next(t *testing.T) string {
 }
 
 func (agent *cyclingAgent) cycleEnds() {
-	agent.log.Append("usage_update", 1, mustRawJSON(map[string]any{"used": 10, "cost": map[string]any{"amount": 0.1, "currency": "USD"}}))
+	agent.log.Append("usage_update", 1, MustRawJSON(map[string]any{"used": 10, "cost": map[string]any{"amount": 0.1, "currency": "USD"}}))
 }
 
 func queuedIDs(session *ConversationSession) []string {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	var ids []string
-	for _, item := range session.queue {
+	for _, item := range session.Queue {
 		ids = append(ids, item.ID)
 	}
 	return ids
@@ -163,17 +163,17 @@ func TestSteerHandsThePromptToTheRunningTurn(t *testing.T) {
 	log := acp.NewEventLog(0)
 	release, cancels := make(chan struct{}), 0
 	broker := acp.NewBroker(func(ctx context.Context, input acp.PromptInput) error {
-		log.Append("prompt", 1, promptLogPayload(input))
+		log.Append("prompt", 1, PromptLogPayload(input))
 		acp.Accepted(ctx)
 		<-release
-		log.Append("turn_end", 1, mustRawJSON(map[string]string{"stopReason": "end_turn"}))
+		log.Append("turn_end", 1, MustRawJSON(map[string]string{"stopReason": "end_turn"}))
 		return nil
 	}, func(context.Context) error { cancels++; return nil }, nil, nil)
 	session := NewConversationSession(log, broker)
 	var steered []string
 	session.steer = func(_ context.Context, input acp.PromptInput) (bool, error) {
 		steered = append(steered, input.Text)
-		log.Append("prompt", 1, promptLogPayload(input))
+		log.Append("prompt", 1, PromptLogPayload(input))
 		return true, nil
 	}
 	ctx := context.Background()

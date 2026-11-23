@@ -8,7 +8,7 @@ test.beforeAll(async () => {
   const binary = process.env.AGENTPACK_TELEMETRY_TEST_BINARY
   if (!binary) return
   const child = spawn(binary, ["-test.run=^TestTelemetryBrowserFixture$"], {
-    cwd: path.resolve(import.meta.dirname, "../../internal/network"),
+    cwd: path.resolve(import.meta.dirname, "../../internal/gateway"),
     env: { ...process.env, AGENTPACK_TELEMETRY_FIXTURE: "1" },
   })
   origin = await new Promise<string>((resolve, reject) => {

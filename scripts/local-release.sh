@@ -39,7 +39,7 @@ done
 
 # macOS: the tracked source, the staged UI and the verified crsqlite library, built natively on the Mac.
 ./scripts/fetch-crsqlite.sh darwin arm64 >/dev/null
-{ git ls-files; find internal/network/webdist -type f; find .build/crsqlite -path '*darwin_arm64*' -type f; } |
+{ git ls-files; find internal/gateway/webdist -type f; find .build/crsqlite -path '*darwin_arm64*' -type f; } |
     sort -u | tar czf "$out/source.tgz" -T -
 scp -q "$out/source.tgz" "$mac:/tmp/agentpack-source.tgz"
 # Arguments travel on stdin: the Mac's login shell would re-split them on the command line.

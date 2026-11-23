@@ -49,12 +49,12 @@ type WorkerRecord struct {
 	Secret  string              `json:"secret"`
 }
 
-// createSessionDirectory claims id (chosen by the gateway for an instant start) or a fresh one.
-func createSessionDirectory(root, id string) (string, error) {
+// CreateSessionDirectory claims id (chosen by the gateway for an instant start) or a fresh one.
+func CreateSessionDirectory(root, id string) (string, error) {
 	claimed := id != ""
 	if id == "" {
-		id = newSessionID()
-	} else if !validSessionID(id) {
+		id = NewSessionID()
+	} else if !ValidSessionID(id) {
 		return "", errors.New("invalid session ID")
 	}
 	directory := filepath.Join(root, id)
@@ -69,9 +69,9 @@ func createSessionDirectory(root, id string) (string, error) {
 	return directory, err
 }
 
-func newSessionID() string { return "session-" + rand.Text() }
+func NewSessionID() string { return "session-" + rand.Text() }
 
-func validSessionID(id string) bool {
+func ValidSessionID(id string) bool {
 	return strings.HasPrefix(id, "session-") && filepath.Base(id) == id && !strings.ContainsAny(id, "/\\")
 }
 
@@ -85,7 +85,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		return 1, err
 	}
 	defer func() { result = errors.Join(result, spool.Close()) }()
-	metadata := obs.BuildMetadata(version, localStateNode, "worker")
+	metadata := obs.BuildMetadata(version, LocalStateNode, "worker")
 	ctx = obs.WithSink(obs.ProcessTrace(ctx), spool, metadata)
 	restore := obs.SetDefault(spool, metadata)
 	defer restore()
@@ -113,7 +113,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if launch.Session.ConversationState == "starting" {
 		claimed = launch.Session.ID
 	}
-	directory, err := createSessionDirectory(root, claimed)
+	directory, err := CreateSessionDirectory(root, claimed)
 	if err != nil {
 		return 1, fmt.Errorf("create worker directory: %w", err)
 	}
@@ -231,7 +231,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	}
 	record := WorkerRecord{Session: launch.Session, ID: filepath.Base(directory), PID: os.Getpid(), Address: listener.Addr().String(), Secret: hex.EncodeToString(secret[:])}
 	lookupPrompt := func(ctx context.Context, id string) (bool, error) {
-		return storedPromptID(ctx, store, record.ID, id)
+		return StoredPromptID(ctx, store, record.ID, id)
 	}
 	var readyHTTP atomic.Pointer[WorkerHTTP]
 	serveDone := make(chan error, 1)
@@ -247,9 +247,9 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		if err != nil {
 			return 1, err
 		}
-		launch.tools = newChatTools(home, filepath.Base(directory))
-		if launch.tools.close != nil {
-			defer launch.tools.close()
+		launch.tools = NewChatTools(home, filepath.Base(directory))
+		if launch.tools.Close != nil {
+			defer launch.tools.Close()
 		}
 		conversation, acpCleanup, err = startACPConversation(startCtx, launch, directory, prepared)
 		if err != nil {
@@ -276,7 +276,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		launch.Session.AgentCapabilities = conversation.AgentCapabilitiesView()
 		// Other gateways read this replicated row to decide whether the chat is live.
 		launch.Session.State = session.TerminalState{Running: !conversation.AgentExited(), ExitCode: -1}
-		if err := rememberACPConversationOwner(ctx, store, launch.Session, launch.Directory); err != nil {
+		if err := RememberACPConversationOwner(ctx, store, launch.Session, launch.Directory); err != nil {
 			return 1, fmt.Errorf("persist ACP session owner: %w", err)
 		}
 	} else {
@@ -298,7 +298,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		return 1, fmt.Errorf("register session: %w", err)
 	}
 	if server == nil {
-		if err := publishWorkerEndpoint(directory, record); err != nil {
+		if err := PublishWorkerEndpoint(directory, record); err != nil {
 			return 1, err
 		}
 	}
@@ -315,9 +315,9 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if err != nil {
 		return 1, err
 	}
-	handler.stateStore = store
+	handler.StateStore = store
 	if pty != nil {
-		handler.start = start
+		handler.Start = start
 		handler.validate = validate
 	} else if conversation != nil {
 		handler.validate = validate
@@ -339,7 +339,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 				acpCleanup()
 				acpCleanup = nil
 			}
-			log, err := newConversationLog(ctx, store, launch.Session.ID, cancelWorker, nil)
+			log, err := NewConversationLog(ctx, store, launch.Session.ID, cancelWorker, nil)
 			if err != nil {
 				return err
 			}
@@ -347,7 +347,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			if err := restorePendingQueue(ctx, store.Reader, record.ID, prepared); err != nil {
 				return errors.Join(err, log.Close())
 			}
-			next, cleanup, err := startACPConversation(obs.WithRecording(ctx, handler.diagnostics), launch, directory, prepared)
+			next, cleanup, err := startACPConversation(obs.WithRecording(ctx, handler.Diagnostics), launch, directory, prepared)
 			if err != nil {
 				return err
 			}
@@ -371,10 +371,10 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			acpCleanup = cleanup
 			wireConversation(next)
 			handler.mu.Lock()
-			handler.conversation = next
+			handler.Conversation = next
 			handler.mu.Unlock()
 			next.ResumeTurns()
-			return next.log.Republish()
+			return next.Log.Republish()
 		}
 	}
 	if server == nil {
@@ -388,7 +388,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	starting.Store(false)
 	if conversation != nil {
 		// Through the log's writer, so the state follows every batch already stored and none overwrites a newer one.
-		if err := conversation.log.Republish(); err != nil {
+		if err := conversation.Log.Republish(); err != nil {
 			_, event := obs.Start(ctx, "worker", "persist_state")
 			event.Set("session_id", record.ID)
 			event.Fail(err)
@@ -423,7 +423,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	}
 }
 
-func publishWorkerEndpoint(directory string, record WorkerRecord) error {
+func PublishWorkerEndpoint(directory string, record WorkerRecord) error {
 	endpoint := record
 	endpoint.Session = session.SessionInfo{}
 	data, err := json.Marshal(endpoint)
@@ -452,17 +452,17 @@ func wireWorkerConversation(ctx context.Context, store *state.Store, record Work
 	current.restoreGoal(goal)
 	current.mu.Lock()
 	current.imageStore = func(data []byte) (string, error) {
-		sha, err := storeSessionBlob(directory, data)
+		sha, err := StoreSessionBlob(directory, data)
 		switch {
-		case errors.Is(err, errSessionBlobQuota):
+		case errors.Is(err, ErrSessionBlobQuota):
 			return "", err
-		case err != nil && sniffBlobMIME(data) == "":
+		case err != nil && SniffBlobMIME(data) == "":
 			return "", errors.New("unsupported image type")
 		case err != nil:
 			return "", errors.New("could not store it")
 		}
 		// The image shows on this machine either way; peers find it once its location is recorded.
-		if err := advertiseBlob(context.Background(), store, record.ID, sha, int64(len(data))); err != nil {
+		if err := AdvertiseBlob(context.Background(), store, record.ID, sha, int64(len(data))); err != nil {
 			_, event := obs.Start(ctx, "worker", "advertise_blob")
 			event.Set("session_id", record.ID)
 			event.Fail(err)
@@ -497,12 +497,12 @@ func wireWorkerConversation(ctx context.Context, store *state.Store, record Work
 // Once ready holds the full handler, it serves everything.
 func prepareACPWorker(ctx context.Context, store *state.Store, record WorkerRecord, directory string, starting *atomic.Bool, fail func(error),
 	lookupPrompt func(context.Context, string) (bool, error), serve func(http.Handler), ready *atomic.Pointer[WorkerHTTP]) (*ConversationSession, error) {
-	lock, err := lockPromptHandoff(ctx, directory)
+	lock, err := LockPromptHandoff(ctx, directory)
 	if err != nil {
 		return nil, err
 	}
 	defer lock.Close()
-	log, err := newConversationLog(ctx, store, record.ID, fail, starting)
+	log, err := NewConversationLog(ctx, store, record.ID, fail, starting)
 	if err != nil {
 		return nil, err
 	}
@@ -515,8 +515,8 @@ func prepareACPWorker(ctx context.Context, store *state.Store, record WorkerReco
 	if err != nil {
 		return nil, errors.Join(err, log.Close())
 	}
-	bootstrap.stateStore = store
-	if err := publishWorkerEndpoint(directory, record); err != nil {
+	bootstrap.StateStore = store
+	if err := PublishWorkerEndpoint(directory, record); err != nil {
 		return nil, errors.Join(err, log.Close())
 	}
 	serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -565,3 +565,6 @@ func guardWorkerFolders(launch *WorkerLaunch) (func() error, error) {
 		return nil
 	}, nil
 }
+
+// Error spools written before opening state are attributed by the local gateway.
+const LocalStateNode = "local"

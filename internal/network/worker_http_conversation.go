@@ -40,35 +40,35 @@ func startPrompt(ctx context.Context, session *ConversationSession, prompt acp.P
 	}
 }
 
-func writePromptAccepted(w http.ResponseWriter, queued string) {
+func WritePromptAccepted(w http.ResponseWriter, queued string) {
 	body := map[string]any{"accepted": true}
 	if queued != "" {
 		body["queued"] = queued
 	}
-	writeJSON(w, body)
+	WriteJSON(w, body)
 }
 
-func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
+func (worker *WorkerHTTP) RegisterConversation(mux *http.ServeMux) {
 	mux.HandleFunc("GET /conversation", func(w http.ResponseWriter, r *http.Request) {
 		conv := worker.conversationSession()
 		if conv == nil {
 			http.Error(w, "conversation unavailable", http.StatusNotFound)
 			return
 		}
-		if isConversationStream(r) {
+		if IsConversationStream(r) {
 			worker.serveConversationSSE(w, r, conv)
 			return
 		}
 		since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
 		// Every append moves the sequence, so it names the snapshot without encoding or hashing it.
-		tag := fmt.Sprintf(`"c%d-%t"`, conv.log.Seq(), conv.log.Truncated())
+		tag := fmt.Sprintf(`"c%d-%t"`, conv.Log.Seq(), conv.Log.Truncated())
 		w.Header().Set("ETag", tag)
 		if etagMatches(r.Header.Get("If-None-Match"), tag) {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
 		entries, truncated, gap := worker.conversationSince(r.Context(), conv, since)
-		writeConversationEntries(w, r, entries, truncated || gap)
+		WriteConversationEntries(w, r, entries, truncated || gap)
 	})
 	mux.HandleFunc("POST /conversation/prompt", worker.receivePrompt)
 	mux.HandleFunc("POST /conversation/prompt/images", worker.receivePrompt)
@@ -78,7 +78,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			RequestID string `json:"request_id"`
 			OptionID  string `json:"option_id"`
 		}
-		if !readJSON(w, r, &input) || input.RequestID == "" || input.OptionID == "" {
+		if !ReadJSON(w, r, &input) || input.RequestID == "" || input.OptionID == "" {
 			if input.RequestID == "" || input.OptionID == "" {
 				http.Error(w, "request_id and option_id are required", http.StatusBadRequest)
 			}
@@ -88,7 +88,7 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			http.Error(w, "This request is no longer waiting for an answer.", http.StatusConflict)
 			return
 		}
-		writeJSON(w, map[string]bool{"accepted": true})
+		WriteJSON(w, map[string]bool{"accepted": true})
 	})
 	mux.HandleFunc("POST /conversation/revert", worker.handleRevert)
 	mux.HandleFunc("POST /conversation/cancel", func(w http.ResponseWriter, r *http.Request) {
@@ -118,21 +118,21 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 				http.Error(w, "could not cancel subagent", http.StatusConflict)
 				return
 			}
-			writeJSON(w, map[string]bool{"cancelled": true})
+			WriteJSON(w, map[string]bool{"cancelled": true})
 			return
 		}
 		if err := worker.conversationSession().Cancel(ctx); err != nil {
 			http.Error(w, "could not cancel turn", http.StatusConflict)
 			return
 		}
-		writeJSON(w, map[string]bool{"cancelled": true})
+		WriteJSON(w, map[string]bool{"cancelled": true})
 	})
 	mux.HandleFunc("POST /conversation/elicitation", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			ElicitationID string `json:"elicitation_id"`
 			Value         string `json:"value"`
 		}
-		if !readJSON(w, r, &input) || input.ElicitationID == "" {
+		if !ReadJSON(w, r, &input) || input.ElicitationID == "" {
 			if input.ElicitationID == "" {
 				http.Error(w, "elicitation_id is required", http.StatusBadRequest)
 			}
@@ -142,15 +142,15 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			http.Error(w, "could not answer elicitation", http.StatusConflict)
 			return
 		}
-		writeJSON(w, map[string]bool{"accepted": true})
+		WriteJSON(w, map[string]bool{"accepted": true})
 	})
 	mux.HandleFunc("POST /conversation/config", worker.receiveConfig)
 	mux.HandleFunc("POST /conversation/show", worker.receiveShow)
 	mux.HandleFunc("GET /blobs/{sha}", func(w http.ResponseWriter, r *http.Request) {
-		serveSessionBlob(w, r, worker.sessionDir, r.PathValue("sha"))
+		serveSessionBlob(w, r, worker.SessionDir, r.PathValue("sha"))
 	})
 	mux.HandleFunc("POST /conversation/blobs", func(w http.ResponseWriter, r *http.Request) {
-		if worker.sessionDir == "" {
+		if worker.SessionDir == "" {
 			http.Error(w, "blob store unavailable", http.StatusConflict)
 			return
 		}
@@ -162,13 +162,13 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 		defer func() { _ = controller.SetReadDeadline(time.Time{}) }()
 		worker.blobMu.Lock()
 		defer worker.blobMu.Unlock()
-		data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBlobBytes+1))
+		data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBlobBytes+1))
 		if err != nil {
 			http.Error(w, "invalid blob", http.StatusBadRequest)
 			return
 		}
-		sha, err := storeSessionBlob(worker.sessionDir, data)
-		if errors.Is(err, errSessionBlobQuota) {
+		sha, err := StoreSessionBlob(worker.SessionDir, data)
+		if errors.Is(err, ErrSessionBlobQuota) {
 			http.Error(w, err.Error(), http.StatusInsufficientStorage)
 			return
 		}
@@ -176,23 +176,23 @@ func (worker *WorkerHTTP) registerConversation(mux *http.ServeMux) {
 			http.Error(w, "could not store blob", http.StatusBadRequest)
 			return
 		}
-		if err := advertiseBlob(r.Context(), worker.stateStore, filepath.Base(worker.sessionDir), sha, int64(len(data))); err != nil {
+		if err := AdvertiseBlob(r.Context(), worker.StateStore, filepath.Base(worker.SessionDir), sha, int64(len(data))); err != nil {
 			if event := obs.From(r.Context()); event != nil {
 				event.Fail(err)
 			}
 			http.Error(w, "could not record blob location", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, map[string]string{"sha": sha})
+		WriteJSON(w, map[string]string{"sha": sha})
 	})
 }
 
 func (worker *WorkerHTTP) receiveConfig(w http.ResponseWriter, r *http.Request) {
-	var input configSelection
-	if !readJSON(w, r, &input) {
+	var input ConfigSelection
+	if !ReadJSON(w, r, &input) {
 		return
 	}
-	if !input.valid() {
+	if !input.Valid() {
 		http.Error(w, "valid key and value are required", http.StatusBadRequest)
 		return
 	}
@@ -212,16 +212,16 @@ func (worker *WorkerHTTP) receiveConfig(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	if worker.stateStore != nil {
-		if err := saveWantedConfig(r.Context(), worker.stateStore.DB, filepath.Base(worker.sessionDir), input, starting); err != nil {
-			configWriteError(w, r, err)
+	if worker.StateStore != nil {
+		if err := SaveWantedConfig(r.Context(), worker.StateStore.DB, filepath.Base(worker.SessionDir), input, starting); err != nil {
+			ConfigWriteError(w, r, err)
 			return
 		}
 	}
 	if !starting {
 		conv.logConfiguration()
 	}
-	writeJSON(w, map[string]bool{"accepted": true})
+	WriteJSON(w, map[string]bool{"accepted": true})
 }
 
 func (worker *WorkerHTTP) receivePrompt(w http.ResponseWriter, r *http.Request) {
@@ -230,11 +230,11 @@ func (worker *WorkerHTTP) receivePrompt(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "conversation unavailable", http.StatusNotFound)
 		return
 	}
-	prompt, steer, ok := readPromptRequest(w, r)
+	prompt, steer, ok := ReadPromptRequest(w, r)
 	if !ok {
 		return
 	}
-	prompt.From = promptFromHeader(r)
+	prompt.From = PromptFromHeader(r)
 	queued, err := startPrompt(r.Context(), conv, prompt, steer)
 	if err != nil {
 		message := "could not send prompt"
@@ -245,10 +245,10 @@ func (worker *WorkerHTTP) receivePrompt(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	worker.setTitle(r.Context(), prompt.Text)
-	writePromptAccepted(w, queued)
+	WritePromptAccepted(w, queued)
 }
 
-func readPromptRequest(w http.ResponseWriter, r *http.Request) (acp.PromptInput, bool, bool) {
+func ReadPromptRequest(w http.ResponseWriter, r *http.Request) (acp.PromptInput, bool, bool) {
 	if strings.HasSuffix(r.URL.Path, "/images") {
 		return readPromptImages(w, r)
 	}
@@ -266,7 +266,7 @@ func readPromptRequest(w http.ResponseWriter, r *http.Request) (acp.PromptInput,
 		} `json:"resource_link"`
 		Steer bool `json:"steer"`
 	}
-	if !readJSON(w, r, &input) {
+	if !ReadJSON(w, r, &input) {
 		return acp.PromptInput{}, false, false
 	}
 	if input.Image != nil && input.ResourceLink != nil {
@@ -275,7 +275,7 @@ func readPromptRequest(w http.ResponseWriter, r *http.Request) (acp.PromptInput,
 	}
 	prompt := acp.PromptInput{Text: strings.TrimSpace(input.Text), QueueID: r.Header.Get("Idempotency-Key")}
 	if input.Image != nil && input.Image.Sha != "" {
-		sha, err := validateBlobSHA(input.Image.Sha)
+		sha, err := ValidateBlobSHA(input.Image.Sha)
 		if err != nil {
 			http.Error(w, "invalid image sha", http.StatusBadRequest)
 			return acp.PromptInput{}, false, false
@@ -286,7 +286,7 @@ func readPromptRequest(w http.ResponseWriter, r *http.Request) (acp.PromptInput,
 		}
 	}
 	if input.ResourceLink != nil {
-		sha, err := validateBlobSHA(input.ResourceLink.Sha)
+		sha, err := ValidateBlobSHA(input.ResourceLink.Sha)
 		if err != nil {
 			http.Error(w, "invalid resource link sha", http.StatusBadRequest)
 			return acp.PromptInput{}, false, false
@@ -297,7 +297,7 @@ func readPromptRequest(w http.ResponseWriter, r *http.Request) (acp.PromptInput,
 		http.Error(w, "text or image is required", http.StatusBadRequest)
 		return acp.PromptInput{}, false, false
 	}
-	if prompt.QueueID != "" && !validOperationID(prompt.QueueID) {
+	if prompt.QueueID != "" && !ValidOperationID(prompt.QueueID) {
 		http.Error(w, "invalid Idempotency-Key", http.StatusBadRequest)
 		return acp.PromptInput{}, false, false
 	}
@@ -315,7 +315,7 @@ func readPromptImages(w http.ResponseWriter, r *http.Request) (acp.PromptInput, 
 		} `json:"images"`
 		Steer bool `json:"steer"`
 	}
-	if !readJSON(w, r, &input) {
+	if !ReadJSON(w, r, &input) {
 		return acp.PromptInput{}, false, false
 	}
 	if input.Images == nil {
@@ -328,7 +328,7 @@ func readPromptImages(w http.ResponseWriter, r *http.Request) (acp.PromptInput, 
 	}
 	prompt := acp.PromptInput{Text: strings.TrimSpace(input.Text), QueueID: r.Header.Get("Idempotency-Key"), Images: make([]acp.PromptImage, 0, len(input.Images))}
 	for _, image := range input.Images {
-		sha, err := validateBlobSHA(image.Sha)
+		sha, err := ValidateBlobSHA(image.Sha)
 		if err != nil || image.Width < 0 || image.Height < 0 {
 			http.Error(w, "invalid image", http.StatusBadRequest)
 			return acp.PromptInput{}, false, false
@@ -341,7 +341,7 @@ func readPromptImages(w http.ResponseWriter, r *http.Request) (acp.PromptInput, 
 		http.Error(w, "text or image is required", http.StatusBadRequest)
 		return acp.PromptInput{}, false, false
 	}
-	if prompt.QueueID != "" && !validOperationID(prompt.QueueID) {
+	if prompt.QueueID != "" && !ValidOperationID(prompt.QueueID) {
 		http.Error(w, "invalid Idempotency-Key", http.StatusBadRequest)
 		return acp.PromptInput{}, false, false
 	}
@@ -354,10 +354,10 @@ func (worker *WorkerHTTP) serveConversationSSE(w http.ResponseWriter, r *http.Re
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
-	since := conversationPage(r).since
+	since := ConversationPage(r).since
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
-	if conv.log.Truncated() {
+	if conv.Log.Truncated() {
 		w.Header().Set("X-Agentpack-Truncated", "true")
 	}
 	w.WriteHeader(http.StatusOK)
@@ -370,7 +370,7 @@ func (worker *WorkerHTTP) serveConversationSSE(w http.ResponseWriter, r *http.Re
 	defer heartbeat.Stop()
 	for {
 		// Take the wake channel before reading so an append between the two is never missed.
-		changed := conv.log.Changed()
+		changed := conv.Log.Changed()
 		entries, truncated, gap := worker.conversationSince(r.Context(), conv, since)
 		if gap {
 			// The reader refetches the tail rather than show a conversation with a hole in it.
@@ -431,17 +431,17 @@ func (worker *WorkerHTTP) serveConversationSSE(w http.ResponseWriter, r *http.Re
 // back from state.db; gap reports that some are still missing.
 func (worker *WorkerHTTP) conversationSince(ctx context.Context, conv *ConversationSession, since int64) (entries []acp.LogEntry, truncated, gap bool) {
 	entries, truncated, gap = conv.Attach(since)
-	if !gap || worker.stateStore == nil {
+	if !gap || worker.StateStore == nil {
 		return entries, truncated, gap
 	}
 	// What memory evicted may still be waiting for its write.
-	_ = conv.log.Flush()
-	before := conv.log.Seq() + 1
+	_ = conv.Log.Flush()
+	before := conv.Log.Seq() + 1
 	if len(entries) > 0 {
 		before = entries[0].Seq
 	}
 	// A page cut by its byte budget leaves the older part of the hole.
-	stored, _, cut, err := storedConversationRange(ctx, worker.stateStore.Reader, filepath.Base(worker.sessionDir), conversationRange{since: since, before: before})
+	stored, _, cut, err := StoredConversationRange(ctx, worker.StateStore.Reader, filepath.Base(worker.SessionDir), conversationRange{since: since, Before: before})
 	if err != nil || len(stored) == 0 {
 		return entries, truncated, true
 	}
@@ -465,7 +465,7 @@ func writeTruncatedSSE(w io.Writer, truncated bool, sent *bool) error {
 	return nil
 }
 
-var conversationWorkerTransport = &http.Transport{
+var ConversationWorkerTransport = &http.Transport{
 	MaxIdleConns:          32,
 	MaxIdleConnsPerHost:   2,
 	IdleConnTimeout:       30 * time.Second,
@@ -473,14 +473,14 @@ var conversationWorkerTransport = &http.Transport{
 }
 
 // A false result leaves the response untouched so a history read can fall back to SQL.
-func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record WorkerRecord, suffix string) bool {
+func ProxyWorkerConversation(w http.ResponseWriter, r *http.Request, record WorkerRecord, suffix string) bool {
 	path := "/conversation" + suffix
 	var body io.Reader
 	sendsBody := r.Method == http.MethodPost || r.Method == http.MethodPatch
 	if sendsBody {
 		limit := int64(1 << 20)
 		if suffix == "/blobs" {
-			limit = maxBlobBytes + 1
+			limit = MaxBlobBytes + 1
 		}
 		body = http.MaxBytesReader(w, r.Body, limit)
 	}
@@ -500,8 +500,8 @@ func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record Work
 		if key := r.Header.Get("Idempotency-Key"); key != "" {
 			request.Header.Set("Idempotency-Key", key)
 		}
-		if from := promptFromContext(r.Context()); from != nil {
-			request.Header.Set(promptFromHeaderName, string(mustRawJSON(from)))
+		if from := PromptFromContext(r.Context()); from != nil {
+			request.Header.Set(promptFromHeaderName, string(MustRawJSON(from)))
 		}
 		contentType := "application/json"
 		if suffix == "/blobs" {
@@ -511,12 +511,12 @@ func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record Work
 			request.Header.Set("Content-Type", contentType)
 		}
 	}
-	stream := r.Method == http.MethodGet && isConversationStream(r)
+	stream := r.Method == http.MethodGet && IsConversationStream(r)
 	if stream {
 		request.Header.Set("Accept", "text/event-stream")
 		request.Header.Set("Last-Event-ID", r.Header.Get("Last-Event-ID"))
 	}
-	client := http.Client{Transport: conversationWorkerTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := http.Client{Transport: ConversationWorkerTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	if !stream {
 		client.Timeout = 30 * time.Second
 	}
@@ -548,13 +548,13 @@ func proxyWorkerConversation(w http.ResponseWriter, r *http.Request, record Work
 		return true
 	}
 	if r.Method == http.MethodGet && suffix == "" && response.StatusCode == http.StatusOK {
-		data, err := io.ReadAll(io.LimitReader(response.Body, maxConversationSnapshotBytes+1))
+		data, err := io.ReadAll(io.LimitReader(response.Body, MaxConversationSnapshotBytes+1))
 		if err != nil {
 			http.Error(w, "conversation snapshot unavailable", http.StatusBadGateway)
 			return true
 		}
-		if len(data) > maxConversationSnapshotBytes {
-			data = data[:maxConversationSnapshotBytes]
+		if len(data) > MaxConversationSnapshotBytes {
+			data = data[:MaxConversationSnapshotBytes]
 			data = data[:bytes.LastIndexByte(data, '\n')+1]
 			w.Header().Set("X-Agentpack-Truncated", "true")
 		}

@@ -23,6 +23,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/acp/acptest"
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state/statetest"
 )
 
 type closeableBuffer struct {
@@ -262,13 +263,13 @@ func TestStartACPReplayAgent(t *testing.T) {
 }
 
 func TestACPNeedsYouPersistsWithoutConversationReader(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
+	store := statetest.Open(t, t.TempDir())
 	ctx := context.Background()
 	info := session.SessionInfo{ID: "session-test", Transport: "acp", ConversationState: "idle"}
 	if err := session.UpsertSession(ctx, store.DB, info); err != nil {
 		t.Fatal(err)
 	}
-	log, err := newConversationLog(ctx, store, info.ID, func(err error) { t.Error(err) }, nil)
+	log, err := NewConversationLog(ctx, store, info.ID, func(err error) { t.Error(err) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -787,7 +788,7 @@ func TestConversationStreamPushesAppendsWithoutPolling(t *testing.T) {
 func TestACPAuthRequiredNamesAgentAndMachine(t *testing.T) {
 	cause := fmt.Errorf("acp session/new: %w", sdkacp.NewAuthRequired(nil))
 	err := explainACPAuthRequired(cause, base.Agy)
-	if !strings.HasPrefix(err.Error(), "Antigravity"+notSignedIn) || strings.Contains(err.Error(), "acp") {
+	if !strings.HasPrefix(err.Error(), "Antigravity"+NotSignedIn) || strings.Contains(err.Error(), "acp") {
 		t.Fatalf("auth-required error not explained: %v", err)
 	}
 	other := errors.New("acp session/new: boom")

@@ -19,7 +19,7 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
@@ -70,15 +70,15 @@ func (runner Runner) startGateway(ctx context.Context, home, executable string) 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := network.SetGatewayEnabled(home, true); err != nil {
+		if err := gateway.SetGatewayEnabled(home, true); err != nil {
 			return err
 		}
-		return network.EnsureNode(ctx, home, executable)
+		return gateway.EnsureNode(ctx, home, executable)
 	}
 	if _, err := runner.runNetworkService(ctx, []string{"start"}); err != nil {
 		return err
 	}
-	if err := network.WaitForGateway(ctx, home); err != nil {
+	if err := gateway.WaitForGateway(ctx, home); err != nil {
 		return err
 	}
 	if runtime.GOOS == "linux" {
@@ -105,7 +105,7 @@ func (runner Runner) runNetworkService(ctx context.Context, args []string) (int,
 		return 1, err
 	}
 	if action == "run" {
-		enabled, err := network.GatewayEnabled(home)
+		enabled, err := gateway.GatewayEnabled(home)
 		if err != nil {
 			return 1, err
 		}
@@ -140,20 +140,20 @@ func (runner Runner) runNetworkService(ctx context.Context, args []string) (int,
 		return 2, err
 	}
 	if action == "stop" || action == "uninstall" {
-		if err = network.SetGatewayEnabled(home, false); err != nil {
+		if err = gateway.SetGatewayEnabled(home, false); err != nil {
 			return 1, err
 		}
 	}
 	if action != "status" {
 		// Graceful IPC leaves independent session workers alive on every platform.
-		if _, err := network.NodeRequest(ctx, home, "GET", "/healthz"); err == nil {
-			if err = network.StopGateway(ctx, home); err != nil {
+		if _, err := gateway.NodeRequest(ctx, home, "GET", "/healthz"); err == nil {
+			if err = gateway.StopGateway(ctx, home); err != nil {
 				return 1, err
 			}
 		}
 	}
 	if action == "start" {
-		if err = network.SetGatewayEnabled(home, true); err != nil {
+		if err = gateway.SetGatewayEnabled(home, true); err != nil {
 			return 1, err
 		}
 	}
@@ -196,7 +196,7 @@ func (runner Runner) runNetworkService(ctx context.Context, args []string) (int,
 		}
 	}
 	if action == "status" && runtime.GOOS == "windows" {
-		data, err := network.NodeRequest(ctx, home, "GET", "/api/sessions")
+		data, err := gateway.NodeRequest(ctx, home, "GET", "/api/sessions")
 		if err != nil {
 			return 1, fmt.Errorf("gateway is stopped or unavailable: %w", err)
 		}

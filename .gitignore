@@ -13,7 +13,7 @@
 .codex
 .envrc
 
-internal/network/webdist/*
-!internal/network/webdist/placeholder.html
+internal/gateway/webdist/*
+!internal/gateway/webdist/placeholder.html
 
 /.build/

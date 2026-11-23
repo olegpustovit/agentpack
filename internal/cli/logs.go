@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -94,7 +94,7 @@ func (runner Runner) logsCommand() *cobra.Command {
 			case "query", "trace":
 				var events []obs.Event
 				if action == "trace" {
-					events, err = network.TraceEvents(ctx, home, args[0], allNodes)
+					events, err = gateway.TraceEvents(ctx, home, args[0], allNodes)
 				} else {
 					if filter.Limit == 0 {
 						return errors.New("limit must be between 1 and 10000")

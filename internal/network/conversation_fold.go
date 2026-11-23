@@ -53,14 +53,14 @@ func (fold *conversationFold) Apply(entry acp.LogEntry) {
 	}
 }
 
-func (fold *conversationFold) Checkpoint() json.RawMessage { return mustRawJSON(fold) }
+func (fold *conversationFold) Checkpoint() json.RawMessage { return MustRawJSON(fold) }
 
 // liveDerived is the session's state now, from its log's fold.
 func (cs *ConversationSession) liveDerived() json.RawMessage {
 	var derived json.RawMessage
-	cs.log.ReadFold(func(fold acp.Fold) {
+	cs.Log.ReadFold(func(fold acp.Fold) {
 		if fold, ok := fold.(*conversationFold); ok {
-			derived = mustRawJSON(fold.derived())
+			derived = MustRawJSON(fold.derived())
 		}
 	})
 	return derived
@@ -77,5 +77,5 @@ func sessionJSON[T any](items []T) string {
 	if len(items) == 0 {
 		return ""
 	}
-	return string(mustRawJSON(items))
+	return string(MustRawJSON(items))
 }

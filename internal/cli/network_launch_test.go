@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
@@ -81,7 +82,7 @@ func TestNativePresenceEndsWithLaunchProcess(t *testing.T) {
 	command := exec.Command(os.Args[0], "-test.run=^TestNativePresenceCLIChild$")
 	command.Env = append(os.Environ(), "AGENTPACK_TEST_NATIVE_EXIT=1")
 	runner := Runner{Launch: func(process *os.Process) (func(), error) {
-		return network.RegisterPresence(home, "test", session.SessionInfo{Directory: directory, Harness: "codex"}, process)
+		return gateway.RegisterPresence(home, "test", session.SessionInfo{Directory: directory, Harness: "codex"}, process)
 	}}
 	code, err := runner.runProcess(command)
 	if code != 23 || err != nil {
@@ -109,7 +110,7 @@ func startNativePresenceGateway(t *testing.T, home string) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- network.ServeGateway(ctx, network.GatewayOptions{Home: home, Address: "127.0.0.1:0"}) }()
+	go func() { done <- gateway.ServeGateway(ctx, gateway.GatewayOptions{Home: home, Address: "127.0.0.1:0"}) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -126,7 +127,7 @@ func startNativePresenceGateway(t *testing.T, home string) {
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if _, err := network.NodeRequest(ready, home, "GET", "/healthz"); err == nil {
+		if _, err := gateway.NodeRequest(ready, home, "GET", "/healthz"); err == nil {
 			return
 		}
 		select {

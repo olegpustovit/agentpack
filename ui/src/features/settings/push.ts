@@ -1,4 +1,4 @@
-// Web Push for this device. The gateway (internal/network/push.go) stores one subscription per
+// Web Push for this device. The gateway (internal/gateway/push.go) stores one subscription per
 // browser, bound to the signed-in account, and notifies it when a session needs you or finishes,
 // even with every tab closed. public/sw.js renders the notification and answers permissions.
 import { api } from "@/lib/api"

@@ -78,7 +78,7 @@ func (cs *ConversationSession) RevertTurn(turn int) (int, int, error) {
 	if cs.ConversationState() != "idle" {
 		return 0, http.StatusConflict, errors.New("a turn is running")
 	}
-	files, n, err := revertPlan(cs.log.Snapshot(), turn)
+	files, n, err := revertPlan(cs.Log.Snapshot(), turn)
 	if err != nil {
 		return 0, http.StatusConflict, err
 	}
@@ -146,7 +146,7 @@ func (worker *WorkerHTTP) handleRevert(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Turn int `json:"turn"`
 	}
-	if !readJSON(w, r, &input) {
+	if !ReadJSON(w, r, &input) {
 		return
 	}
 	count, status, err := worker.conversationSession().RevertTurn(input.Turn)
@@ -157,5 +157,5 @@ func (worker *WorkerHTTP) handleRevert(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), status)
 		return
 	}
-	writeJSON(w, map[string]int{"reverted": count})
+	WriteJSON(w, map[string]int{"reverted": count})
 }

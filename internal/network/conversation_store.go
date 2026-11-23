@@ -22,11 +22,11 @@ import (
 	"github.com/tmaxmax/go-sse"
 )
 
-// persistConversationChangesSince is for a live log restored at restoredSeq: its agent process is new,
+// PersistConversationChangesSince is for a live log restored at restoredSeq: its agent process is new,
 // so a running cost total logged before then belongs to the previous process. The batch, the row's
 // derived columns and the fold's checkpoint commit together, so the row is always the fold of the
 // stored events. holdStarting keeps an instant start's row "starting" until its worker serves.
-func persistConversationChangesSince(ctx context.Context, db *sql.DB, id string, changes acp.LogChanges, restoredSeq int64, holdStarting bool) error {
+func PersistConversationChangesSince(ctx context.Context, db *sql.DB, id string, changes acp.LogChanges, restoredSeq int64, holdStarting bool) error {
 	return state.Transaction(ctx, db, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `UPDATE sessions SET last_seq=max(last_seq,?),last_event_at=?,
 			conversation_truncated=max(conversation_truncated,?) WHERE id=? AND archived_at=0 AND node_id=`+state.LocalNodeSQL,
@@ -203,38 +203,38 @@ func recordUsage(ctx context.Context, tx *sql.Tx, id string, entry acp.LogEntry,
 	return err
 }
 
-func storedConversationTail(ctx context.Context, db *sql.DB, id string, since int64) ([]acp.LogEntry, int64, bool, error) {
-	return storedConversationRange(ctx, db, id, conversationRange{since: since})
+func StoredConversationTail(ctx context.Context, db *sql.DB, id string, since int64) ([]acp.LogEntry, int64, bool, error) {
+	return StoredConversationRange(ctx, db, id, conversationRange{since: since})
 }
 
-// maxConversationSnapshotBytes caps one conversation read, matching the worker log budget.
-const maxConversationSnapshotBytes = 4 << 20
+// MaxConversationSnapshotBytes caps one conversation read, matching the worker log budget.
+const MaxConversationSnapshotBytes = 4 << 20
 
 // Older history arrives in pages this size, so scrolling up stays quick on long conversations.
 const conversationPageBytes = 1 << 20
 
 // conversationRange selects seq in (since, before); before 0 means the newest tail.
 type conversationRange struct {
-	since, before int64
+	since, Before int64
 	snapshot      bool
 }
 
-// conversationPage reads ?before= from a request: 0 when absent or invalid.
-func conversationPage(r *http.Request) conversationRange {
+// ConversationPage reads ?before= from a request: 0 when absent or invalid.
+func ConversationPage(r *http.Request) conversationRange {
 	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
-	if isConversationStream(r) {
+	if IsConversationStream(r) {
 		lastID, _ := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)
 		since = min(max(since, lastID), math.MaxInt64-1)
 	}
 	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
-	return conversationRange{since: max(since, 0), before: max(before, 0), snapshot: !isConversationStream(r)}
+	return conversationRange{since: max(since, 0), Before: max(before, 0), snapshot: !IsConversationStream(r)}
 }
 
 // readConversationEntries returns the newest entries in the range that fit the byte budget, oldest first.
 // truncated reports that older entries exist that were not returned. For the tail it also carries the
 // session's recorded loss; a page reports only its own budget, since the rest is still stored.
 // storedConversationRange reads one range of a session's stored conversation and its last sequence.
-func storedConversationRange(ctx context.Context, db *sql.DB, id string, span conversationRange) ([]acp.LogEntry, int64, bool, error) {
+func StoredConversationRange(ctx context.Context, db *sql.DB, id string, span conversationRange) ([]acp.LogEntry, int64, bool, error) {
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, 0, false, err
@@ -249,7 +249,7 @@ func storedConversationRange(ctx context.Context, db *sql.DB, id string, span co
 	if err != nil {
 		return nil, 0, false, err
 	}
-	entries, truncated, err := readConversationEntries(ctx, tx, id, span, lastSeq, truncated)
+	entries, truncated, err := ReadConversationEntries(ctx, tx, id, span, lastSeq, truncated)
 	if err != nil {
 		return nil, 0, false, err
 	}
@@ -259,24 +259,24 @@ func storedConversationRange(ctx context.Context, db *sql.DB, id string, span co
 	return entries, lastSeq, truncated, nil
 }
 
-func readConversationEntries(ctx context.Context, tx *sql.Tx, id string, span conversationRange, lastSeq int64, truncated bool) ([]acp.LogEntry, bool, error) {
+func ReadConversationEntries(ctx context.Context, tx *sql.Tx, id string, span conversationRange, lastSeq int64, truncated bool) ([]acp.LogEntry, bool, error) {
 	if lastSeq < 0 {
 		return nil, false, errors.New("invalid stored conversation sequence")
 	}
-	budget := maxConversationSnapshotBytes
+	budget := MaxConversationSnapshotBytes
 	if span.snapshot && span.since == 0 {
 		budget = 256 << 10
 	}
-	if span.before > 0 {
+	if span.Before > 0 {
 		budget, truncated = conversationPageBytes, false
 	}
-	upper := span.before
+	upper := span.Before
 	if upper == 0 {
 		upper = lastSeq + 1
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT seq,length(CAST(body AS BLOB)),
 		CASE WHEN length(CAST(body AS BLOB))<=? THEN body ELSE '' END
-		FROM conversation_events WHERE session_id=? AND seq>? AND seq<? ORDER BY seq DESC`, maxConversationSnapshotBytes, id, span.since, upper)
+		FROM conversation_events WHERE session_id=? AND seq>? AND seq<? ORDER BY seq DESC`, MaxConversationSnapshotBytes, id, span.since, upper)
 	if err != nil {
 		return nil, false, err
 	}
@@ -291,7 +291,7 @@ func readConversationEntries(ctx context.Context, tx *sql.Tx, id string, span co
 			return nil, false, err
 		}
 		// Keep a single large event readable so its sequence remains a usable paging cursor.
-		if size+1 > budget-total && !(span.snapshot && len(entries) == 0 && size+1 <= maxConversationSnapshotBytes) {
+		if size+1 > budget-total && !(span.snapshot && len(entries) == 0 && size+1 <= MaxConversationSnapshotBytes) {
 			truncated = true
 			break
 		}
@@ -315,14 +315,14 @@ func readConversationEntries(ctx context.Context, tx *sql.Tx, id string, span co
 	return entries, truncated, nil
 }
 
-// newConversationLog restores a session's log and its fold, and stores what is appended to it.
+// NewConversationLog restores a session's log and its fold, and stores what is appended to it.
 // starting, when set, holds an instant start's row "starting" until it is cleared and Republish runs.
-func newConversationLog(ctx context.Context, store *state.Store, id string, fail func(error), starting *atomic.Bool) (*acp.EventLog, error) {
-	entries, lastSeq, truncated, err := storedConversationTail(ctx, store.Reader, id, 0)
+func NewConversationLog(ctx context.Context, store *state.Store, id string, fail func(error), starting *atomic.Bool) (*acp.EventLog, error) {
+	entries, lastSeq, truncated, err := StoredConversationTail(ctx, store.Reader, id, 0)
 	if err != nil {
 		return nil, err
 	}
-	log := acp.NewEventLog(maxConversationSnapshotBytes)
+	log := acp.NewEventLog(MaxConversationSnapshotBytes)
 	if err := log.Restore(entries, lastSeq, truncated); err != nil {
 		return nil, err
 	}
@@ -340,7 +340,7 @@ func newConversationLog(ctx context.Context, store *state.Store, id string, fail
 	err = log.EnableSink(func(changes acp.LogChanges) error {
 		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		err := persistConversationChangesSince(writeCtx, store.DB, id, changes, lastSeq, starting != nil && starting.Load())
+		err := PersistConversationChangesSince(writeCtx, store.DB, id, changes, lastSeq, starting != nil && starting.Load())
 		switch {
 		case err == session.ErrSessionArchived:
 			fail(err)
@@ -357,70 +357,11 @@ func newConversationLog(ctx context.Context, store *state.Store, id string, fail
 	return log, err
 }
 
-func (g *Gateway) serveConversation(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	info, err := session.StoredSession(r.Context(), g.store.Reader, id)
-	if err == nil {
-		local, _ := g.store.NodeID(r.Context())
-		g.serveStoredSessionConversation(w, r, info, local != "" && info.NodeID == local)
-		return
-	}
-	if errors.Is(err, session.ErrSessionNotFound) && conversationPage(r).before == 0 {
-		if record, recordErr := g.workerRecord(r.Context(), id); recordErr == nil && proxyWorkerConversation(w, r, record, "") {
-			return
-		}
-	}
-	g.writeStoredConversation(w, r, id, err)
-}
-
-func (g *Gateway) serveStoredSessionConversation(w http.ResponseWriter, r *http.Request, info session.SessionInfo, localOwner bool) {
-	if !info.ArchivedAt.IsZero() {
-		g.serveArchivedConversation(w, r, info, g.tailnetTarget)
-		return
-	}
-	if info.Transport != "acp" {
-		http.Error(w, "conversation unavailable", http.StatusNotFound)
-		return
-	}
-	if localOwner && info.EndedAt.IsZero() && isConversationStream(r) && conversationPage(r).before == 0 {
-		if record, err := workerRecord(g.options.Home, info.ID); err == nil && proxyWorkerConversation(w, r, record, "") {
-			return
-		}
-	}
-	g.writeStoredConversation(w, r, info.ID, nil)
-}
-
-func (g *Gateway) writeStoredConversation(w http.ResponseWriter, r *http.Request, id string, err error) {
-	if r.Context().Err() != nil {
-		return
-	}
-	if errors.Is(err, session.ErrSessionNotFound) {
-		http.Error(w, "conversation unavailable", http.StatusNotFound)
-		return
-	}
-	var entries []acp.LogEntry
-	var truncated bool
-	if err == nil {
-		entries, _, truncated, err = storedConversationRange(r.Context(), g.store.Reader, id, conversationPage(r))
-	}
-	if err != nil {
-		if r.Context().Err() != nil {
-			return
-		}
-		if event := obs.From(r.Context()); event != nil {
-			event.Fail(err)
-		}
-		http.Error(w, "conversation history unavailable", http.StatusInternalServerError)
-		return
-	}
-	writeConversationEntries(w, r, entries, truncated)
-}
-
-func writeConversationEntries(w http.ResponseWriter, r *http.Request, entries []acp.LogEntry, truncated bool) {
+func WriteConversationEntries(w http.ResponseWriter, r *http.Request, entries []acp.LogEntry, truncated bool) {
 	if truncated {
 		w.Header().Set("X-Agentpack-Truncated", "true")
 	}
-	if isConversationStream(r) {
+	if IsConversationStream(r) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-store")
 		for _, entry := range entries {
@@ -441,7 +382,7 @@ func writeConversationEntries(w http.ResponseWriter, r *http.Request, entries []
 	}
 }
 
-func isConversationStream(r *http.Request) bool {
+func IsConversationStream(r *http.Request) bool {
 	return r.URL.Query().Get("stream") == "1" || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
 }
 
@@ -456,7 +397,7 @@ func writeConversationSSE(w io.Writer, entry acp.LogEntry) error {
 	return err
 }
 
-func storedPromptID(ctx context.Context, store *state.Store, session, id string) (bool, error) {
+func StoredPromptID(ctx context.Context, store *state.Store, session, id string) (bool, error) {
 	var exists bool
 	err := store.Reader.QueryRowContext(ctx, `SELECT EXISTS(
 		SELECT 1 FROM conversation_events WHERE session_id=? AND json_extract(body, '$.payload.queueId')=?

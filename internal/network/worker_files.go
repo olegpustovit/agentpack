@@ -8,7 +8,7 @@ import (
 
 func removeWorkerEndpoint(directory string) error {
 	var result error
-	for _, name := range []string{"worker.json", "worker.tmp", chatToolsTokenFile} {
+	for _, name := range []string{"worker.json", "worker.tmp", ChatToolsTokenFile} {
 		if err := os.Remove(filepath.Join(directory, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			result = errors.Join(result, err)
 		}

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/gateway"
 )
 
 func TestServiceInstallStopAndUninstallWithNativeCommand(t *testing.T) {
@@ -32,7 +32,7 @@ func TestServiceInstallStopAndUninstallWithNativeCommand(t *testing.T) {
 		if err != nil || code != 0 {
 			t.Fatalf("%s: %d %v %s", action, code, err, output.String())
 		}
-		enabled, err := network.GatewayEnabled(home)
+		enabled, err := gateway.GatewayEnabled(home)
 		if err != nil {
 			t.Fatal(err)
 		}

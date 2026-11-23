@@ -144,9 +144,9 @@ func TestConversationTurnSummarySurvivesReplayEvictionWithoutChat(t *testing.T) 
 	log := acp.NewEventLog(512)
 	var fail bool
 	broker := acp.NewBroker(func(ctx context.Context, input acp.PromptInput) error {
-		log.Append("prompt", 1, mustRawJSON(map[string]string{"text": input.Text}))
+		log.Append("prompt", 1, MustRawJSON(map[string]string{"text": input.Text}))
 		for range 50 {
-			log.Append("agent_message_chunk", 2, mustRawJSON(map[string]string{"text": "private reply text"}))
+			log.Append("agent_message_chunk", 2, MustRawJSON(map[string]string{"text": "private reply text"}))
 		}
 		log.Append("tool_call", 3, json.RawMessage(`{"toolCallId":"a","title":"private tool arguments"}`))
 		log.Append("tool_call_update", 4, json.RawMessage(`{"toolCallId":"a"}`))

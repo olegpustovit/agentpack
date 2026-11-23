@@ -151,7 +151,7 @@ func TestSubagentSummaryTracksBackgroundAgents(t *testing.T) {
 	summary := func() []session.SubagentSummary { return conv.fold.subagentSummaries() }
 	air := func(update string) {
 		line := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"parent","update":` + update + `}}`
-		if !acp.AppendRawSessionUpdate(conv.log, []byte(line)) {
+		if !acp.AppendRawSessionUpdate(conv.Log, []byte(line)) {
 			t.Fatalf("not consumed: %s", update)
 		}
 	}
@@ -175,7 +175,7 @@ func TestSubagentSummaryTracksBackgroundAgents(t *testing.T) {
 	if len(list) != finishedSubagentsShown+1 || list[len(list)-1].ID != "h" || slices.ContainsFunc(list, func(s session.SubagentSummary) bool { return s.ID == "a" }) {
 		t.Fatalf("tree = %+v; want the running one and the %d most recent finished", list, finishedSubagentsShown)
 	}
-	conv.log.Append("agent_exit", 6, []byte(`{}`))
+	conv.Log.Append("agent_exit", 6, []byte(`{}`))
 	if list := summary(); list != nil {
 		t.Fatalf("exit kept %+v", list)
 	}
@@ -188,7 +188,7 @@ func TestNativeGoalFollowsUnpromptedWork(t *testing.T) {
 		"sessionUpdate": "available_commands_update", "availableCommands": []map[string]string{{"name": "goal", "description": "goal"}},
 	}))
 	thread := func(status string) {
-		agent.log.Append("session_info_update", 2, mustRawJSON(map[string]any{"sessionUpdate": "session_info_update",
+		agent.log.Append("session_info_update", 2, MustRawJSON(map[string]any{"sessionUpdate": "session_info_update",
 			"_meta": map[string]any{"codex": map[string]any{"threadStatus": map[string]string{"type": status}}}}))
 	}
 	if err := session.SetGoal(t.Context(), "ship it", "", nil); err != nil {
@@ -207,7 +207,7 @@ func TestNativeGoalFollowsUnpromptedWork(t *testing.T) {
 	if state != "idle" || goal.LastReason != "the agent finished" {
 		t.Fatalf("state %q goal %+v", state, goal)
 	}
-	agent.log.Append("prompt", 3, mustRawJSON(map[string]any{"text": map[string]string{"text": "thanks"}}))
+	agent.log.Append("prompt", 3, MustRawJSON(map[string]any{"text": map[string]string{"text": "thanks"}}))
 	session.mu.Lock()
 	revived := session.goal.State != "met"
 	session.mu.Unlock()
@@ -226,12 +226,12 @@ func TestStopDuringUnpromptedNativeGoalPauses(t *testing.T) {
 	agent.nextPrompt(t)
 	agent.turns <- fakeTurn{}
 	agent.goalUntil(t, goalIn("met"))
-	agent.log.Append("agent_message_chunk", 2, mustRawJSON(map[string]any{"text": map[string]string{"text": "still going"}}))
+	agent.log.Append("agent_message_chunk", 2, MustRawJSON(map[string]any{"text": map[string]string{"text": "still going"}}))
 	agent.goalUntil(t, goalIn("active"))
 	if err := session.Cancel(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	agent.log.Append("session_info_update", 3, mustRawJSON(map[string]any{"sessionUpdate": "session_info_update",
+	agent.log.Append("session_info_update", 3, MustRawJSON(map[string]any{"sessionUpdate": "session_info_update",
 		"_meta": map[string]any{"codex": map[string]any{"threadStatus": map[string]string{"type": "idle"}}}}))
 	agent.goalUntil(t, goalIn("paused"))
 	if prompt := agent.nextPrompt(t); prompt.Text != "/goal pause" {

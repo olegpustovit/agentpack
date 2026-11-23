@@ -9,7 +9,7 @@ import (
 )
 
 func TestPromptLogPayloadIncludesImage(t *testing.T) {
-	raw := promptLogPayload(acp.PromptInput{
+	raw := PromptLogPayload(acp.PromptInput{
 		Text:  "hi",
 		Image: &acp.PromptImage{Sha: "abc", Mime: "image/png", Width: 10, Height: 20},
 	})
@@ -23,7 +23,7 @@ func TestPromptLogPayloadIncludesImage(t *testing.T) {
 func TestPromptImageMIMEUsesStoredBytes(t *testing.T) {
 	sessionDir := t.TempDir()
 	data := []byte("\x89PNG\r\n\x1a\nvalid-prefix")
-	sha, err := storeSessionBlob(sessionDir, data)
+	sha, err := StoreSessionBlob(sessionDir, data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestPromptImageMIMEUsesStoredBytes(t *testing.T) {
 	if normalized.Image == nil || normalized.Image.Mime != "image/png" {
 		t.Fatalf("normalized prompt = %+v", normalized.Image)
 	}
-	if strings.Contains(string(promptLogPayload(normalized)), "mime") {
+	if strings.Contains(string(PromptLogPayload(normalized)), "mime") {
 		t.Fatal("client MIME must not be written to the conversation log")
 	}
 }
@@ -47,7 +47,7 @@ func TestPromptImageMIMEUsesStoredBytes(t *testing.T) {
 func TestPromptResourceLinkUsesStoredBlobURIWithoutLoggingLocalPath(t *testing.T) {
 	sessionDir := t.TempDir()
 	data := []byte("\x89PNG\r\n\x1a\nresource-link-test")
-	sha, err := storeSessionBlob(sessionDir, data)
+	sha, err := StoreSessionBlob(sessionDir, data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestPromptResourceLinkUsesStoredBlobURIWithoutLoggingLocalPath(t *testing.T
 	if normalized.ResourceLink == nil || normalized.ResourceLink.Sha != sha || normalized.ResourceLink.Name != "photo.png" {
 		t.Fatalf("normalized link = %+v", normalized.ResourceLink)
 	}
-	log := string(promptLogPayload(normalized))
+	log := string(PromptLogPayload(normalized))
 	if !strings.Contains(log, "sha256:"+sha) || strings.Contains(log, sessionDir) || strings.Contains(log, "\x1b") {
 		t.Fatalf("resource log payload = %q", log)
 	}
@@ -86,11 +86,11 @@ func TestPromptMultipleImagesFollowAgentCapability(t *testing.T) {
 	sessionDir := t.TempDir()
 	png := []byte("\x89PNG\r\n\x1a\nfirst")
 	jpeg := []byte("\xff\xd8\xffsecond")
-	pngSHA, err := storeSessionBlob(sessionDir, png)
+	pngSHA, err := StoreSessionBlob(sessionDir, png)
 	if err != nil {
 		t.Fatal(err)
 	}
-	jpegSHA, err := storeSessionBlob(sessionDir, jpeg)
+	jpegSHA, err := StoreSessionBlob(sessionDir, jpeg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestPromptMultipleImagesFollowAgentCapability(t *testing.T) {
 		t.Fatalf("normalized images = %+v", normalized.Images)
 	}
 
-	imageLog := string(promptLogPayload(normalized))
+	imageLog := string(PromptLogPayload(normalized))
 	if !strings.Contains(imageLog, `"kind":"image"`) ||
 		!strings.Contains(imageLog, "sha256:"+pngSHA) || !strings.Contains(imageLog, "sha256:"+jpegSHA) ||
 		!strings.Contains(imageLog, `"width":10`) || !strings.Contains(imageLog, `"height":20`) {
@@ -137,7 +137,7 @@ func TestPromptMultipleImagesFollowAgentCapability(t *testing.T) {
 		!strings.HasSuffix(blocks[2].ResourceLink.Uri, jpegSHA) {
 		t.Fatalf("resource-link blocks = %+v", blocks)
 	}
-	log := string(promptLogPayload(normalized))
+	log := string(PromptLogPayload(normalized))
 	if !strings.Contains(log, `"images"`) || !strings.Contains(log, `"kind":"resource_link"`) ||
 		!strings.Contains(log, "first.png") || !strings.Contains(log, "second.jpg") ||
 		strings.Contains(log, sessionDir) || strings.Contains(log, `C:\private`) {

@@ -4,8 +4,9 @@ package network
 
 import (
 	"fmt"
-	"golang.org/x/sys/windows"
 	"os"
+
+	"golang.org/x/sys/windows"
 )
 
 func FolderIdentity(directory string) (string, error) {
@@ -30,17 +31,4 @@ func FolderIdentity(directory string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x:%x:%x", identity.VolumeSerialNumber, identity.FileIndexHigh, identity.FileIndexLow), nil
-}
-
-func listFolderDrives(out *folderListing) error {
-	drives, err := windows.GetLogicalDrives()
-	if err != nil {
-		return err
-	}
-	for drive := range 26 {
-		if drives&(1<<drive) != 0 {
-			out.Entries = append(out.Entries, folderEntry{Name: string(rune('A'+drive)) + `:\`})
-		}
-	}
-	return nil
 }

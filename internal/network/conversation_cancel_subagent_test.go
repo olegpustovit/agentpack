@@ -21,7 +21,7 @@ func TestConversationCancelRouteCancelsOneSubagent(t *testing.T) {
 	acp.NewHarnessClient("", log, broker).NewClientSideConnection(fromClient, fromAgent)
 	acp.AppendRawSessionUpdate(log, []byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"parent","update":{"sessionUpdate":"subagent_update","sessionId":"child-1","capabilities":{"cancel":{}}}}}`))
 	mux := http.NewServeMux()
-	(&WorkerHTTP{conversation: NewConversationSession(log, broker)}).registerConversation(mux)
+	(&WorkerHTTP{Conversation: NewConversationSession(log, broker)}).RegisterConversation(mux)
 	post := func(body string) int {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/conversation/cancel", strings.NewReader(body)))

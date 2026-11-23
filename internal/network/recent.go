@@ -37,7 +37,7 @@ type RecentFolder struct {
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
 }
 
-func recentFolders(recent []session.SessionInfo) []RecentFolder {
+func RecentFolders(recent []session.SessionInfo) []RecentFolder {
 	folders := make([]RecentFolder, 0, len(recent))
 	for _, entry := range recent {
 		folder := RecentFolder{SessionInfo: entry}
@@ -60,4 +60,9 @@ func ForgetRecent(ctx context.Context, store *state.Store, info session.SessionI
         AND (?='' OR harness=?) AND (?='' OR mode=?)`,
 		filepath.Clean(info.Directory), info.Harness, info.Harness, info.Mode, info.Mode)
 	return err
+}
+
+// SameFolder reports whether a recorded folder identity is the folder's current one.
+func SameFolder(stored, current string) bool {
+	return current != "" && stored == current
 }

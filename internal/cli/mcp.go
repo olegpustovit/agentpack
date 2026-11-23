@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mcp"
-	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/staging"
 )
 
@@ -94,7 +94,7 @@ func (runner Runner) addMCPServer(ctx context.Context, root, name string, server
 }
 
 // mcpServerFrom applies parseMCPAdd's rules to the gateway's structured input.
-func mcpServerFrom(input network.MCPServerInput) (mcp.Server, error) {
+func mcpServerFrom(input gateway.MCPServerInput) (mcp.Server, error) {
 	switch {
 	case (input.Command == "") == (input.URL == ""):
 		return mcp.Server{}, fmt.Errorf("an MCP server needs exactly one of a command or a URL")

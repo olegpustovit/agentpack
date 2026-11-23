@@ -36,7 +36,7 @@ func TestLiveACPProbe(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		sha, err := storeSessionBlob(dir, data)
+		sha, err := StoreSessionBlob(dir, data)
 		if err != nil {
 			t.Fatal(err)
 		}

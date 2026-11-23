@@ -3,11 +3,9 @@ package network
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -22,10 +20,11 @@ import (
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
+	"github.com/olegpustovit/agentpack/internal/state/statetest"
 )
 
 func TestConversationStoreFixtureRoundTripAndProgress(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
+	store := statetest.Open(t, t.TempDir())
 	id := "session-fixture"
 	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
@@ -34,7 +33,7 @@ func TestConversationStoreFixtureRoundTripAndProgress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	log, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
+	log, err := NewConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +43,7 @@ func TestConversationStoreFixtureRoundTripAndProgress(t *testing.T) {
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
 	}
-	stored, lastSeq, truncated, err := storedConversationTail(t.Context(), store.Reader, id, 0)
+	stored, lastSeq, truncated, err := StoredConversationTail(t.Context(), store.Reader, id, 0)
 	if err != nil || truncated || lastSeq != int64(len(entries)) || !reflect.DeepEqual(acp.ReduceLog(stored), acp.ReduceLog(entries)) {
 		t.Fatalf("fixture changed: events=%d seq=%d truncated=%t err=%v", len(stored), lastSeq, truncated, err)
 	}
@@ -52,14 +51,14 @@ func TestConversationStoreFixtureRoundTripAndProgress(t *testing.T) {
 	if err := store.Reader.QueryRow("SELECT last_event_at FROM sessions WHERE id=?", id).Scan(&lastEvent); err != nil || lastEvent == 0 {
 		t.Fatalf("progress missing: timestamp=%d err=%v", lastEvent, err)
 	}
-	filtered, _, _, err := storedConversationTail(t.Context(), store.Reader, id, 30)
+	filtered, _, _, err := StoredConversationTail(t.Context(), store.Reader, id, 30)
 	if err != nil || len(filtered) != 2 || filtered[0].Seq != 31 || filtered[1].Seq != 32 {
 		t.Fatalf("since filter changed: %+v %v", filtered, err)
 	}
 }
 
 func TestConversationStoreMergeAndResumeDoNotReuseSequence(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
+	store := statetest.Open(t, t.TempDir())
 	id := "session-merged"
 	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
@@ -69,7 +68,7 @@ func TestConversationStoreMergeAndResumeDoNotReuseSequence(t *testing.T) {
 	log.Append("agent_message_chunk", 1, payload)
 	log.Append("agent_message_chunk", 2, payload)
 	if err := log.EnableSink(func(changes acp.LogChanges) error {
-		return persistConversationChangesSince(t.Context(), store.DB, id, changes, 0, false)
+		return PersistConversationChangesSince(t.Context(), store.DB, id, changes, 0, false)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -77,11 +76,11 @@ func TestConversationStoreMergeAndResumeDoNotReuseSequence(t *testing.T) {
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
 	}
-	entries, lastSeq, truncated, err := storedConversationTail(t.Context(), store.Reader, id, 0)
+	entries, lastSeq, truncated, err := StoredConversationTail(t.Context(), store.Reader, id, 0)
 	if err != nil || len(entries) != 1 || lastSeq != 3 || !truncated || !strings.Contains(string(entries[0].Payload), strings.Repeat("x", 150)) {
 		t.Fatalf("merged row duplicated or incomplete: %+v seq=%d truncated=%t err=%v", entries, lastSeq, truncated, err)
 	}
-	resumed, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
+	resumed, err := NewConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,14 +90,14 @@ func TestConversationStoreMergeAndResumeDoNotReuseSequence(t *testing.T) {
 	if err := resumed.Close(); err != nil {
 		t.Fatal(err)
 	}
-	entries, lastSeq, _, err = storedConversationTail(t.Context(), store.Reader, id, 1)
+	entries, lastSeq, _, err = StoredConversationTail(t.Context(), store.Reader, id, 1)
 	if err != nil || len(entries) != 1 || entries[0].Seq != 4 || lastSeq != 4 {
 		t.Fatalf("resumed tail: %+v seq=%d err=%v", entries, lastSeq, err)
 	}
 }
 
 func TestConversationStoreFailureKeepsWorkerAndRedactsDiagnostics(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
+	store := statetest.Open(t, t.TempDir())
 	id := "session-failed"
 	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
@@ -106,8 +105,8 @@ func TestConversationStoreFailureKeepsWorkerAndRedactsDiagnostics(t *testing.T) 
 	ctx, cancel := context.WithCancelCause(t.Context())
 	defer cancel(nil)
 	queue := obs.NewQueue()
-	ctx = obs.WithSink(ctx, queue, obs.BuildMetadata("test", localStateNode, "worker"))
-	log, err := newConversationLog(ctx, store, id, cancel, nil)
+	ctx = obs.WithSink(ctx, queue, obs.BuildMetadata("test", LocalStateNode, "worker"))
+	log, err := NewConversationLog(ctx, store, id, cancel, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,77 +124,8 @@ func TestConversationStoreFailureKeepsWorkerAndRedactsDiagnostics(t *testing.T) 
 	}
 }
 
-func TestStoppedConversationMatchesLiveHistoryAndSince(t *testing.T) {
-	home := t.TempDir()
-	g, origin := identityGateway(t, home, nil)
-	id := "session-history"
-	if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
-		t.Fatal(err)
-	}
-	log, err := newConversationLog(t.Context(), g.store, id, func(err error) { t.Error(err) }, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	log.Append("prompt", 1, json.RawMessage(`{"text":"hello"}`))
-	log.Append("agent_message_chunk", 2, json.RawMessage(`{"text":{"text":"reply"}}`))
-	log.Append("turn_end", 3, json.RawMessage(`{}`))
-	log.MarkTruncated()
-	if err := log.Close(); err != nil {
-		t.Fatal(err)
-	}
-	worker := &WorkerHTTP{conversation: NewConversationSession(log, nil)}
-	mux := http.NewServeMux()
-	worker.registerConversation(mux)
-	server := httptest.NewServer(mux)
-	defer server.Close()
-	directory := filepath.Join(home, "network", "sessions", id)
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.Marshal(WorkerRecord{ID: id, Address: strings.TrimPrefix(server.URL, "http://"), Secret: strings.Repeat("s", 64)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(directory, "worker.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	request := func(query string) *httptest.ResponseRecorder {
-		t.Helper()
-		r := httptest.NewRequest(http.MethodGet, origin.String()+"/api/sessions/"+id+"/conversation"+query, nil)
-		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
-		w := httptest.NewRecorder()
-		g.Handler().ServeHTTP(w, r)
-		return w
-	}
-	live := request("")
-	if live.Code != http.StatusOK {
-		t.Fatal(live.Code, live.Body.String())
-	}
-	server.Close()
-	for _, removeRecord := range []bool{false, true} {
-		if removeRecord {
-			if err := os.RemoveAll(directory); err != nil {
-				t.Fatal(err)
-			}
-		}
-		stopped := request("")
-		if stopped.Code != http.StatusOK || stopped.Body.String() != live.Body.String() || stopped.Header().Get("Content-Type") != live.Header().Get("Content-Type") || stopped.Header().Get("X-Agentpack-Truncated") != "true" {
-			t.Fatalf("stopped history differs: status=%d body=%q", stopped.Code, stopped.Body.String())
-		}
-	}
-	filtered := request("?since=1")
-	entries, err := readConversationNDJSON(filtered.Body)
-	if err != nil || len(entries) != 2 || entries[0].Seq != 2 || entries[1].Seq != 3 {
-		t.Fatalf("stopped since filter: %+v %v", entries, err)
-	}
-	stream := request("?since=1&stream=1")
-	if stream.Code != http.StatusOK || stream.Header().Get("Content-Type") != "text/event-stream" || !strings.Contains(stream.Body.String(), `"seq":2`) || !strings.Contains(stream.Body.String(), "event: truncated") {
-		t.Fatalf("stopped stream shape: %d %s", stream.Code, stream.Body.String())
-	}
-}
-
 func TestConversationStoreTailIsBoundedByUTF8Bytes(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
+	store := statetest.Open(t, t.TempDir())
 	id := "session-bounded"
 	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
@@ -208,39 +138,39 @@ func TestConversationStoreTailIsBoundedByUTF8Bytes(t *testing.T) {
 	for seq := int64(1); seq <= 8; seq++ {
 		changes.Entries = append(changes.Entries, acp.LogEntry{Seq: seq, Kind: "tool_call_update", Payload: payload})
 	}
-	if err := persistConversationChangesSince(t.Context(), store.DB, id, changes, 0, false); err != nil {
+	if err := PersistConversationChangesSince(t.Context(), store.DB, id, changes, 0, false); err != nil {
 		t.Fatal(err)
 	}
-	entries, lastSeq, truncated, err := storedConversationTail(t.Context(), store.Reader, id, 0)
+	entries, lastSeq, truncated, err := StoredConversationTail(t.Context(), store.Reader, id, 0)
 	if err != nil || len(entries) != 7 || entries[0].Seq != 2 || lastSeq != 8 || !truncated {
 		t.Fatalf("byte-bounded tail: entries=%d seq=%d truncated=%t err=%v", len(entries), lastSeq, truncated, err)
 	}
 	request := httptest.NewRequest(http.MethodGet, "/conversation", nil)
-	page, _, more, err := storedConversationRange(t.Context(), store.Reader, id, conversationPage(request))
+	page, _, more, err := StoredConversationRange(t.Context(), store.Reader, id, ConversationPage(request))
 	if err != nil || len(page) != 1 || page[0].Seq != 8 || !more {
 		t.Fatalf("first page lost the cursor for a large event: entries=%d more=%t err=%v", len(page), more, err)
 	}
-	log := acp.NewEventLog(maxConversationSnapshotBytes)
+	log := acp.NewEventLog(MaxConversationSnapshotBytes)
 	if err := log.Restore(entries, lastSeq, truncated); err != nil {
 		t.Fatalf("stored tail cannot fit in memory: %v", err)
 	}
 }
 
 func TestConversationStoreRejectedBatchRollsBackRowsAndProgress(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
+	store := statetest.Open(t, t.TempDir())
 	id := "session-atomic"
 	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	first := acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "prompt", Payload: json.RawMessage(`{}`)}}}
-	if err := persistConversationChangesSince(t.Context(), store.DB, id, first, 0, false); err != nil {
+	if err := PersistConversationChangesSince(t.Context(), store.DB, id, first, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	bad := acp.LogChanges{LastSeq: 2, Removed: []int64{1}, Entries: []acp.LogEntry{{Seq: 2, Kind: "prompt", Payload: json.RawMessage(`invalid`)}}}
-	if err := persistConversationChangesSince(t.Context(), store.DB, id, bad, 0, false); err == nil {
+	if err := PersistConversationChangesSince(t.Context(), store.DB, id, bad, 0, false); err == nil {
 		t.Fatal("invalid batch accepted")
 	}
-	entries, lastSeq, _, err := storedConversationTail(t.Context(), store.Reader, id, 0)
+	entries, lastSeq, _, err := StoredConversationTail(t.Context(), store.Reader, id, 0)
 	if err != nil || lastSeq != 1 || len(entries) != 1 || entries[0].Seq != 1 {
 		t.Fatalf("failed batch changed history: %+v seq=%d err=%v", entries, lastSeq, err)
 	}
@@ -248,8 +178,8 @@ func TestConversationStoreRejectedBatchRollsBackRowsAndProgress(t *testing.T) {
 
 func TestConversationStoreTwoWritersAndSessionReader(t *testing.T) {
 	home := t.TempDir()
-	first := testSessionStore(t, home)
-	second := testSessionStore(t, home)
+	first := statetest.Open(t, home)
+	second := statetest.Open(t, home)
 	stores := []*state.Store{first, second}
 	for i, id := range []string{"session-first", "session-second"} {
 		if err := session.UpsertSession(t.Context(), stores[i].DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
@@ -273,7 +203,7 @@ func TestConversationStoreTwoWritersAndSessionReader(t *testing.T) {
 	var writers sync.WaitGroup
 	for i, id := range []string{"session-first", "session-second"} {
 		writers.Go(func() {
-			log, err := newConversationLog(t.Context(), stores[i], id, func(err error) { t.Error(err) }, nil)
+			log, err := NewConversationLog(t.Context(), stores[i], id, func(err error) { t.Error(err) }, nil)
 			if err != nil {
 				t.Error(err)
 				return
@@ -313,12 +243,12 @@ func (agent *historyLoadAgent) LoadSession(ctx context.Context, request sdkacp.L
 }
 
 func TestConversationStoreNativeLoadDoesNotDuplicateHistory(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
+	store := statetest.Open(t, t.TempDir())
 	id := "session-load"
 	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
-	log, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
+	log, err := NewConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +256,7 @@ func TestConversationStoreNativeLoadDoesNotDuplicateHistory(t *testing.T) {
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
 	}
-	log, err = newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
+	log, err = NewConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,18 +294,18 @@ func TestConversationStoreNativeLoadDoesNotDuplicateHistory(t *testing.T) {
 }
 
 func TestConversationStoreRestartAcceptsPromptAfterOldExit(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
+	store := statetest.Open(t, t.TempDir())
 	id := "session-restart"
 	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp", State: session.TerminalState{Running: true, ExitCode: -1}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := persistConversationChangesSince(t.Context(), store.DB, id, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "agent_exit", Payload: json.RawMessage(`{}`)}}}, 0, false); err != nil {
+	if err := PersistConversationChangesSince(t.Context(), store.DB, id, acp.LogChanges{LastSeq: 1, Entries: []acp.LogEntry{{Seq: 1, Kind: "agent_exit", Payload: json.RawMessage(`{}`)}}}, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	if info, err := session.StoredSession(t.Context(), store.Reader, id); err != nil || info.State.Running {
 		t.Fatalf("stored state after exit = %+v, err = %v", info.State, err)
 	}
-	log, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
+	log, err := NewConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,12 +329,12 @@ func TestConversationStoreRestartAcceptsPromptAfterOldExit(t *testing.T) {
 }
 
 func TestConversationStoreStopKeepsFinalTurnEvents(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
+	store := statetest.Open(t, t.TempDir())
 	id := "session-stop-turn"
 	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
-	log, err := newConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
+	log, err := NewConversationLog(t.Context(), store, id, func(err error) { t.Error(err) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,85 +367,9 @@ func TestConversationStoreStopKeepsFinalTurnEvents(t *testing.T) {
 	if err := <-done; err == nil {
 		t.Fatal("stopped prompt succeeded")
 	}
-	stored, _, _, err := storedConversationTail(t.Context(), store.Reader, id, 0)
+	stored, _, _, err := StoredConversationTail(t.Context(), store.Reader, id, 0)
 	if err != nil || !reflect.DeepEqual(stored, log.Snapshot()) {
 		t.Fatalf("stop lost final turn events: stored=%d live=%d err=%v", len(stored), len(log.Snapshot()), err)
-	}
-}
-
-func TestConversationPagesReachTheFirstEventWithoutTheWorker(t *testing.T) {
-	home := t.TempDir()
-	g, origin := identityGateway(t, home, nil)
-	id := "session-long"
-	if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
-		t.Fatal(err)
-	}
-	payload, err := json.Marshal(map[string]string{"text": strings.Repeat("x", 200<<10)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	const total = 60 // about 12 MiB: three times the tail
-	changes := acp.LogChanges{LastSeq: total}
-	for seq := int64(1); seq <= total; seq++ {
-		changes.Entries = append(changes.Entries, acp.LogEntry{Seq: seq, Kind: "agent_message_chunk", Payload: payload})
-	}
-	if err := persistConversationChangesSince(t.Context(), g.store.DB, id, changes, 0, false); err != nil {
-		t.Fatal(err)
-	}
-	// A running worker that cannot serve history proves older pages come from the store.
-	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "tail only", http.StatusTeapot) }))
-	defer worker.Close()
-	directory := filepath.Join(home, "network", "sessions", id)
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		t.Fatal(err)
-	}
-	record, _ := json.Marshal(WorkerRecord{ID: id, Address: strings.TrimPrefix(worker.URL, "http://"), Secret: strings.Repeat("s", 64)})
-	if err := os.WriteFile(filepath.Join(directory, "worker.json"), record, 0600); err != nil {
-		t.Fatal(err)
-	}
-	page := func(before int64) ([]acp.LogEntry, bool) {
-		t.Helper()
-		r := httptest.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/sessions/%s/conversation?before=%d", origin, id, before), nil)
-		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
-		w := httptest.NewRecorder()
-		g.Handler().ServeHTTP(w, r)
-		if w.Code != http.StatusOK {
-			t.Fatalf("page before %d: %d %s", before, w.Code, w.Body.String())
-		}
-		entries, err := readConversationNDJSON(w.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return entries, w.Header().Get("X-Agentpack-Truncated") == "true"
-	}
-	tail, _, truncated, err := storedConversationTail(t.Context(), g.store.Reader, id, 0)
-	if err != nil || !truncated || tail[0].Seq == 1 {
-		t.Fatalf("tail should stop short of the first event: first=%d truncated=%t err=%v", tail[0].Seq, truncated, err)
-	}
-	seen := map[int64]bool{}
-	for _, entry := range tail {
-		seen[entry.Seq] = true
-	}
-	before, pages := tail[0].Seq, 0
-	for more := true; more; pages++ {
-		var entries []acp.LogEntry
-		entries, more = page(before)
-		if len(entries) == 0 || entries[len(entries)-1].Seq != before-1 {
-			t.Fatalf("page before %d must end right below it: %+v", before, len(entries))
-		}
-		for i, entry := range entries {
-			if seen[entry.Seq] || i > 0 && entry.Seq != entries[i-1].Seq+1 {
-				t.Fatalf("page before %d is not a gapless ascending run: seq %d", before, entry.Seq)
-			}
-			seen[entry.Seq] = true
-		}
-		before = entries[0].Seq
-	}
-	if len(seen) != total || before != 1 || pages < 2 {
-		t.Fatalf("paging reached %d of %d events in %d pages, ending at %d", len(seen), total, pages, before)
-	}
-	if entries, more := page(1); len(entries) != 0 || more {
-		t.Fatalf("nothing is older than the first event: %d %t", len(entries), more)
 	}
 }
 
@@ -541,19 +395,19 @@ func TestBypassingPermissionsFollowsTheAgentMode(t *testing.T) {
 
 // A reader whose position the replay tail already evicted gets the missing entries from state.db.
 func TestConversationReaderBackfillsEvictedEntries(t *testing.T) {
-	store := testSessionStore(t, t.TempDir())
+	store := statetest.Open(t, t.TempDir())
 	id := "session-gap"
 	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
 	log := acp.NewEventLog(512)
 	if err := log.EnableSink(func(changes acp.LogChanges) error {
-		return persistConversationChangesSince(t.Context(), store.DB, id, changes, 0, false)
+		return PersistConversationChangesSince(t.Context(), store.DB, id, changes, 0, false)
 	}); err != nil {
 		t.Fatal(err)
 	}
 	for i := range 20 {
-		log.Append("tool_call", int64(i), mustRawJSON(map[string]string{"toolCallId": strconv.Itoa(i), "title": strings.Repeat("x", 40)}))
+		log.Append("tool_call", int64(i), MustRawJSON(map[string]string{"toolCallId": strconv.Itoa(i), "title": strings.Repeat("x", 40)}))
 	}
 	conv := NewConversationSession(log, nil)
 	if _, _, gap := conv.Attach(2); !gap {
@@ -562,7 +416,7 @@ func TestConversationReaderBackfillsEvictedEntries(t *testing.T) {
 	if _, _, gap := (&WorkerHTTP{}).conversationSince(t.Context(), conv, 2); !gap {
 		t.Fatal("without a store the hole must be reported")
 	}
-	worker := &WorkerHTTP{stateStore: store, sessionDir: filepath.Join(t.TempDir(), id)}
+	worker := &WorkerHTTP{StateStore: store, SessionDir: filepath.Join(t.TempDir(), id)}
 	entries, _, gap := worker.conversationSince(t.Context(), conv, 2)
 	if gap || len(entries) != 18 || entries[0].Seq != 3 || entries[len(entries)-1].Seq != 20 {
 		t.Fatalf("gap=%t, %d entries from %d", gap, len(entries), entries[0].Seq)

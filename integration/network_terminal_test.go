@@ -16,6 +16,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"golang.org/x/sys/unix"
 )
@@ -161,7 +162,7 @@ func TestCompiledCLISharedTerminalSurvivesGatewayAndRestart(t *testing.T) {
 	if !sessions[0].State.Interactive || sessions[0].Directory != workspace || sessions[0].DefinitionRoot != root {
 		t.Fatalf("session metadata: %+v", sessions[0])
 	}
-	if _, err := network.NodeRequest(ctx, home, "POST", "/api/node/stop"); err != nil {
+	if _, err := gateway.NodeRequest(ctx, home, "POST", "/api/node/stop"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := terminal.Write([]byte("after gateway stop\n")); err != nil {

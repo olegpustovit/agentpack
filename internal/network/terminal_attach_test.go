@@ -34,9 +34,9 @@ func TestTryReattachResumesFromLastSeenOffset(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		_ = conn.WriteJSON(terminalNotice{Type: "attached", State: session.TerminalState{Running: true}, Offset: 103})
+		_ = conn.WriteJSON(TerminalNotice{Type: "attached", State: session.TerminalState{Running: true}, Offset: 103})
 		_ = conn.WriteMessage(websocket.BinaryMessage, []byte("def"))
-		_ = conn.WriteJSON(terminalNotice{Type: "replay_complete", State: session.TerminalState{Running: true}, Offset: 106})
+		_ = conn.WriteJSON(TerminalNotice{Type: "replay_complete", State: session.TerminalState{Running: true}, Offset: 106})
 	}))
 	defer server.Close()
 

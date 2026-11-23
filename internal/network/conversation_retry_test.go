@@ -54,7 +54,7 @@ func TestNetworkDropRetriesTheTurn(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 	var notices int
-	for _, logged := range session.log.Snapshot() {
+	for _, logged := range session.Log.Snapshot() {
 		if logged.Kind == "notice" && strings.Contains(string(logged.Payload), "Lost the connection") {
 			notices++
 		}
