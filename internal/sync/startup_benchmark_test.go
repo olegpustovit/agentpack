@@ -15,6 +15,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 // writeBenchPackages locks a realistic package set into project: four GitHub
@@ -99,7 +100,7 @@ func benchmarkMaterializationHome(b *testing.B, packages bool) {
 	}
 	b.ResetTimer()
 	for range b.N {
-		if _, err := computeMaterializationDigest(home, home, mode.ImplicitEffective(), nil); err != nil {
+		if _, err := computeMaterializationDigest(home, home, mode.ImplicitEffective(), nil, fileDigestOrMissing(paths.LockPath(home))); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -171,7 +172,7 @@ func BenchmarkMaterializationRealHome(b *testing.B) {
 	b.Setenv("AGENTPACK_STAGING_ROOT", b.TempDir())
 	b.ResetTimer()
 	for range b.N {
-		if _, err := computeMaterializationDigest(home, home, mode.ImplicitEffective(), nil); err != nil {
+		if _, err := computeMaterializationDigest(home, home, mode.ImplicitEffective(), nil, fileDigestOrMissing(paths.LockPath(home))); err != nil {
 			b.Fatal(err)
 		}
 	}

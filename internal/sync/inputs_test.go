@@ -7,12 +7,12 @@ import (
 	"testing"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/mode"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func stagedDigest(definition, workspace string, effective mode.Effective, target *base.Target) (string, error) {
-	in, err := readInputs(definition, workspace, effective, target)
+	in, err := readInputs(definition, workspace, effective, target, fileDigestOrMissing(paths.LockPath(definition)))
 	return in.staged(), err
 }
 
@@ -48,13 +48,13 @@ func TestEachInputFlipsExactlyItsIdentities(t *testing.T) {
 		t.Helper()
 		result := map[string]string{}
 		for _, target := range []base.Target{base.Claude, base.OMP} {
-			value, err := launchDigest(project, project, effective, target, lockfile.PackLock{})
+			value, err := launchDigest(project, project, effective, target, lockFile{digest: fileDigestOrMissing(paths.LockPath(project))})
 			if err != nil {
 				t.Fatal(err)
 			}
 			result["launch "+string(target)] = value
 		}
-		in, err := readInputs(project, project, effective, nil)
+		in, err := readInputs(project, project, effective, nil, fileDigestOrMissing(paths.LockPath(project)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -286,7 +286,7 @@ func TestHomeWorkspaceIgnoresRuntimeState(t *testing.T) {
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
 	digest := func() string {
 		t.Helper()
-		value, err := computeMaterializationDigest(home, home, mode.ImplicitEffective(), nil)
+		value, err := computeMaterializationDigest(home, home, mode.ImplicitEffective(), nil, fileDigestOrMissing(paths.LockPath(home)))
 		if err != nil {
 			t.Fatal(err)
 		}
