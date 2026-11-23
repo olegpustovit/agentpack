@@ -1,10 +1,10 @@
 package cache
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path"
@@ -34,7 +34,8 @@ func MaterializeGitHubTree(ctx context.Context, client *http.Client, source gith
 		return lockfile.Package{}, err
 	}
 	effective := source
-	var prefetched []byte
+	archive, release := "", func() {}
+	defer func() { release() }()
 	if strings.Contains(displayURL, "/blob/") && githubsource.PathLooksLikeFile(source.Path) {
 		for _, prefix := range BlobParentPrefixes(source.Path) {
 			candidate := source
@@ -47,12 +48,14 @@ func MaterializeGitHubTree(ctx context.Context, client *http.Client, source gith
 			}
 		}
 		if effective.Path == source.Path {
-			prefetched, err = githubsource.DownloadTarball(ctx, client, source.Owner, source.Repo, commit)
-			if err != nil {
+			if archive, release, err = githubsource.DownloadTarball(ctx, client, source.Owner, source.Repo, commit); err != nil {
 				return lockfile.Package{}, err
 			}
-			index, err := githubsource.CollectRepoRelativePaths(bytes.NewReader(prefetched))
-			if err != nil {
+			var index map[string]struct{}
+			if err := readArchive(archive, func(reader io.Reader) (err error) {
+				index, err = githubsource.CollectRepoRelativePaths(reader)
+				return err
+			}); err != nil {
 				return lockfile.Package{}, err
 			}
 			if prefix, ok := githubsource.ChoosePackagePrefix(index, source.Path, RepoDirIsPackageRoot); ok {
@@ -73,23 +76,22 @@ func MaterializeGitHubTree(ctx context.Context, client *http.Client, source gith
 	digest := ""
 	if !IsPackageRoot(out) {
 		fill := func(directory string) error {
-			if len(prefetched) == 0 {
-				if prefetched, err = githubsource.DownloadTarball(ctx, client, source.Owner, source.Repo, commit); err != nil {
+			if archive == "" {
+				if archive, release, err = githubsource.DownloadTarball(ctx, client, source.Owner, source.Repo, commit); err != nil {
 					return err
 				}
 			}
-			written, err := githubsource.ExtractTarballWithPrefix(bytes.NewReader(prefetched), effective.Path, directory)
-			if err != nil {
-				return err
-			}
-			if written == 0 && effective.Path != "" {
-				return fmt.Errorf("no files matched repository path %q in %s/%s archive at %.8s", effective.Path, effective.Owner, effective.Repo, commit)
+			if err := extractArchive(archive, effective.Path, directory); err != nil {
+				return fmt.Errorf("%w in %s/%s archive at %.8s", err, effective.Owner, effective.Repo, commit)
 			}
 			if !IsPackageRoot(directory) {
 				// Not a package by itself: the repository's catalog entry may define it.
-				_, err = writeCatalogManifest(prefetched, effective, directory)
+				return readArchive(archive, func(reader io.Reader) error {
+					_, err := writeCatalogManifest(reader, effective, directory)
+					return err
+				})
 			}
-			return err
+			return nil
 		}
 		if digest, _, err = Install(lockfile.Package{URL: displayURL, CacheKey: cacheKey}, fill); err != nil {
 			return lockfile.Package{}, err
@@ -111,27 +113,46 @@ func GitHubRestore(ctx context.Context, client *http.Client) RemoteRestoreFunc {
 				}
 			}
 		}
-		data, err := githubsource.DownloadTarball(ctx, client, pkg.Owner, pkg.Repo, pkg.Commit)
+		archive, release, err := githubsource.DownloadTarball(ctx, client, pkg.Owner, pkg.Repo, pkg.Commit)
 		if err != nil {
 			return err
 		}
+		defer release()
 		// Whatever a peer left is not part of the archive.
 		if err := errors.Join(os.RemoveAll(destination), os.Mkdir(destination, 0o755)); err != nil {
 			return err
 		}
-		written, err := githubsource.ExtractTarballWithPrefix(bytes.NewReader(data), pkg.Path, destination)
-		if err != nil {
+		if err := extractArchive(archive, pkg.Path, destination); err != nil {
 			return err
-		}
-		if written == 0 && pkg.Path != "" {
-			return fmt.Errorf("no files matched repository path %q", pkg.Path)
 		}
 		if !IsPackageRoot(destination) {
 			source := githubsource.Source{Owner: pkg.Owner, Repo: pkg.Repo, GitRef: pkg.Commit, Path: pkg.Path}
-			if _, err := writeCatalogManifest(data, source, destination); err != nil {
+			return readArchive(archive, func(reader io.Reader) error {
+				_, err := writeCatalogManifest(reader, source, destination)
 				return err
-			}
+			})
 		}
 		return nil
 	}
+}
+
+// readArchive hands a spooled archive to read, which consumes it once.
+func readArchive(archive string, read func(io.Reader) error) error {
+	file, err := os.Open(archive)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return read(file)
+}
+
+// extractArchive unpacks the repository path of a spooled archive into destination.
+func extractArchive(archive, path, destination string) error {
+	return readArchive(archive, func(reader io.Reader) error {
+		written, err := githubsource.ExtractTarballWithPrefix(reader, path, destination)
+		if err == nil && written == 0 && path != "" {
+			err = fmt.Errorf("no files matched repository path %q", path)
+		}
+		return err
+	})
 }

@@ -1,7 +1,6 @@
 package github
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -127,11 +126,17 @@ func TestEmbeddedGitProtocolFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	archive, err := fetchTarballWithGit(ctx, "olegpustovit", "agentpack", sha)
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	path, err := fetchTarballWithGit(ctx, "olegpustovit", "agentpack", sha)
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths, err := CollectRepoRelativePaths(bytes.NewReader(archive))
+	archive, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	paths, err := CollectRepoRelativePaths(archive)
 	if err != nil {
 		t.Fatal(err)
 	}
