@@ -264,6 +264,24 @@ test("New session saves the project's pick among several logins", async ({ page 
   await expect(page.getByRole("region", { name: "Loaded in this session" }).getByRole("combobox", { name: "linear login for agentpack" })).toContainText("Client")
 })
 
+test("Project settings loads details for a protected folder when opened", async ({ page }) => {
+  const directory = "/Users/viewer/Documents/private-project"
+  reply = [{ ...sessions[0], directory }]
+  let selected: string | null = null
+  await page.route((url) => url.pathname === "/api/projects", (route) => {
+    const requested = new URL(route.request().url()).searchParams.get("directory")
+    if (requested) selected = requested
+    return route.fulfill({ json: [projectRow(directory, [], { details_deferred: !requested })] })
+  })
+  await page.goto("/sessions")
+  const row = page.getByRole("navigation", { name: "Sessions" }).getByRole("link", { name: /build/ })
+  await row.click({ button: "right" })
+  expect(selected).toBeNull()
+  await page.getByRole("menuitem", { name: "Project settings…" }).click()
+  await expect(page.getByLabel("Package source")).toBeVisible()
+  expect(selected).toBe(directory)
+})
+
 test("a session opens project settings and saves packages, MCP and the login together", async ({ page }) => {
   const directory = sessions[0]!.directory
   const linear = "https://mcp.linear.app/mcp"
