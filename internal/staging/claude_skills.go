@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/harness/claude"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
@@ -169,7 +170,7 @@ type ClaudeSkillsReport struct {
 // touching the filesystem.
 func ReconcileClaudeSkills(projectRoot string, dryRun bool) (ClaudeSkillsReport, error) {
 	agentsRoot := filepath.Join(paths.ProjectDotAgentsDir(projectRoot), "skills")
-	claudeRoot := filepath.Join(paths.ProjectDotClaudeDir(projectRoot), "skills")
+	claudeRoot := filepath.Join(claude.ProjectDir(projectRoot), "skills")
 
 	agentsNames, err := localSkillNames(agentsRoot)
 	if err != nil {

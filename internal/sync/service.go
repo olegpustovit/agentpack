@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/cache"
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/grok"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
@@ -553,7 +555,7 @@ func (service Service) sync(ctx context.Context, projectRoot string, options Syn
 			}
 		}
 		if err == nil {
-			err = generation.Publish()
+			err = generation.Commit()
 		}
 		if err == nil {
 			tidyTempDirectories(projectRoot, options.Target != nil, effective.Name())
@@ -767,7 +769,9 @@ func tidyTempDirectories(projectRoot string, launch bool, modeName string) {
 	tidied := make(chan struct{})
 	go func() {
 		if modeName != "" {
-			paths.ReclaimStagingGenerations(projectRoot, modeName, recordedGenerations(projectRoot, modeName))
+			paths.ReclaimStagingGenerations(projectRoot, modeName, func(root string) bool {
+				return !slices.Contains(recordedGenerations(projectRoot, modeName), root) && grok.RetireStagingHome(projectRoot, modeName, root)
+			})
 		}
 		removeOrphans(projectRoot)
 		close(tidied)

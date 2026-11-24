@@ -6,15 +6,13 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
-
-	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestMCPAuthLastLogoutDoesNotRestoreCredential(t *testing.T) {
 	project := t.TempDir()
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
-	staged, err := paths.StagingCodexHomeDirForMode(project, "default")
+	staged, err := legacyHome(project, "default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,13 +26,13 @@ func TestMCPAuthLastLogoutDoesNotRestoreCredential(t *testing.T) {
 	if err := writeCredentialStore(staged+string(os.PathSeparator)+credentialsFile, map[string]any{"server": map[string]any{"token": "old"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := reconcileMCPAuthMode(project, "default"); err != nil {
+	if err := reconcileMCPAuthHome(project, staged); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(staged, credentialsFile)); err != nil {
 		t.Fatal(err)
 	}
-	if err := reconcileMCPAuthMode(project, "default"); err != nil {
+	if err := reconcileMCPAuthHome(project, staged); err != nil {
 		t.Fatal(err)
 	}
 	store, err := readCredentialStore(durable)
@@ -126,7 +124,7 @@ func TestMCPAuthRecoveryAppliesUnfinishedLogout(t *testing.T) {
 	project := t.TempDir()
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
-	staged, err := paths.StagingCodexHomeDirForMode(project, "default")
+	staged, err := legacyHome(project, "default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +135,7 @@ func TestMCPAuthRecoveryAppliesUnfinishedLogout(t *testing.T) {
 	if err := writeCredentialStore(stagedFile, map[string]any{"server": map[string]any{"token": "old"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := reconcileMCPAuthMode(project, "default"); err != nil {
+	if err := reconcileMCPAuthHome(project, staged); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(stagedFile); err != nil {

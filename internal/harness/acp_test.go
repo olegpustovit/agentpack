@@ -12,11 +12,12 @@ import (
 	"testing"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/grok"
+	"github.com/olegpustovit/agentpack/internal/harness/opencode"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/mode"
-	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestHarnessACPLaunchCommands(t *testing.T) {
@@ -44,14 +45,11 @@ func TestHarnessACPLaunchCommands(t *testing.T) {
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	t.Setenv("AGENTPACK_STAGING_ROOT", stage)
 	preloadACPAdapters(t)
-	shared, err := paths.SharedGrokCredentialsDir()
-	if err != nil {
+	grokAuth := grok.CredentialFile()
+	if err := os.MkdirAll(filepath.Dir(grokAuth), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(shared, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(shared, "auth.json"), []byte(`{}`), 0o600); err != nil {
+	if err := os.WriteFile(grokAuth, []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, key := range []string{"CLAUDE_CODE_PATH", "OPENCODE_PATH", "CODEX_PATH", "GROK_PATH", "AGY_PATH", "CURSOR_AGENT_PATH", "OMP_PATH"} {
@@ -59,7 +57,7 @@ func TestHarnessACPLaunchCommands(t *testing.T) {
 	}
 	effective := mode.ImplicitEffective()
 	ctx := base.LaunchContext{ProjectRoot: project, WorkspaceRoot: project, Mode: effective, Yolo: true}
-	root, err := paths.StagingOpenCodeDirForMode(project, effective.Name())
+	root, err := opencode.StagingDir(project, effective.Name())
 	if err != nil {
 		t.Fatal(err)
 	}

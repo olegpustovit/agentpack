@@ -155,10 +155,11 @@ func Eject(opts Options) (Result, error) {
 	wantCodex := slices.Contains(opts.Targets, base.Codex)
 	codexCopy := filepath.Join(root, "codex")
 	if wantCodex {
-		home, err := codex.CurrentHome(opts.ProjectRoot, opts.Mode)
+		home, release, err := codex.LeaseHome(opts.ProjectRoot, opts.Mode)
 		if err != nil {
 			return result, err
 		}
+		defer release()
 		for _, name := range []string{"skills", "agents", "hooks", "hooks.json", "AGENTS.md", "config.toml"} {
 			source := filepath.Join(home, name)
 			if _, err := os.Stat(source); err != nil {

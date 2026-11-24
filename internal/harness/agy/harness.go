@@ -43,10 +43,10 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	return exec.Command(binary, arguments...), base.Done, nil
 }
 func stagedRoot(ctx base.StageContext) (string, error) {
-	return paths.StagingAgyBundleDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	return paths.StagingBundleDir(ctx.ProjectRoot, ctx.Mode.Name(), "agy")
 }
 func resetPaths(ctx base.StageContext) ([]string, error) {
-	root, err := paths.StagingAgyDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	root, err := paths.StagingSubdir(ctx.ProjectRoot, ctx.Mode.Name(), "agy")
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +177,7 @@ func keepAttribution() bool {
 }
 
 func readOverlayManifest(projectRoot string) ([]string, error) {
-	path, err := paths.AgyOverlayManifestPath(projectRoot)
+	path, err := OverlayManifestPath(projectRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +197,7 @@ func readOverlayManifest(projectRoot string) ([]string, error) {
 	return result, nil
 }
 func writeOverlayManifest(projectRoot string, entries []string) error {
-	path, err := paths.AgyOverlayManifestPath(projectRoot)
+	path, err := OverlayManifestPath(projectRoot)
 	if err != nil {
 		return err
 	}
@@ -233,4 +233,8 @@ func cleanupOverlay(projectRoot string) error {
 		}
 	}
 	return writeOverlayManifest(projectRoot, nil)
+}
+
+func OverlayManifestPath(projectRoot string) (string, error) {
+	return paths.ProjectStateFile(projectRoot, "agy-overlay.manifest")
 }

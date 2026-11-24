@@ -44,7 +44,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	home, err := paths.StagingCursorHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	home, err := StagingHome(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -82,14 +82,14 @@ func allowsTrust(arguments []string) bool {
 	return false
 }
 func stagedRoot(ctx base.StageContext) (string, error) {
-	return paths.StagingCursorPackPluginDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	return paths.StagingBundleDir(ctx.ProjectRoot, ctx.Mode.Name(), "cursor")
 }
 func resetPaths(ctx base.StageContext) ([]string, error) {
-	bundle, err := paths.StagingCursorBundleDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	bundle, err := stagingDir(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return nil, err
 	}
-	home, err := paths.StagingCursorHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	home, err := StagingHome(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func preReset(ctx base.StageContext) error {
 }
 
 func prepare(ctx base.StageContext) error {
-	bundle, err := paths.StagingCursorBundleDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	bundle, err := stagingDir(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return err
 	}
@@ -180,7 +180,7 @@ func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, er
 		return base.MCPProjection{}, err
 	}
 	if merged != nil {
-		fakeHome, err := paths.StagingCursorHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+		fakeHome, err := StagingHome(ctx.ProjectRoot, ctx.Mode.Name())
 		if err != nil {
 			return base.MCPProjection{}, err
 		}
@@ -204,7 +204,7 @@ func finalize(_ mcp.Entries, ctx base.StageContext) error {
 	return materializeFakeHome(ctx)
 }
 func verify(ctx base.StageContext) error {
-	bundle, err := paths.StagingCursorBundleDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	bundle, err := stagingDir(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return err
 	}
@@ -212,7 +212,7 @@ func verify(ctx base.StageContext) error {
 	if err != nil {
 		return err
 	}
-	home, err := paths.StagingCursorHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	home, err := StagingHome(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return err
 	}
@@ -246,4 +246,8 @@ func keepAttribution() bool {
 // launchInputs covers the user skills staging seeds into the fake HOME.
 func launchInputs(string, string) (string, error) {
 	return base.FingerprintFiles(base.HomeFiles(".cursor/skills"))
+}
+
+func stagingDir(projectRoot, modeName string) (string, error) {
+	return paths.StagingSubdir(projectRoot, modeName, "cursor")
 }

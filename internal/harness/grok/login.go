@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 // LoginMethods are the ways the web UI signs Grok in.
@@ -21,7 +20,7 @@ func Account(context.Context) base.Account {
 	if !account.Installed {
 		return account
 	}
-	shared, err := paths.SharedGrokCredentialsDir()
+	shared, err := sharedCredentialsDir()
 	if err != nil {
 		account.Error = err.Error()
 		return account
@@ -67,7 +66,7 @@ func Login(string) (base.LoginFlow, error) {
 	if err != nil {
 		return base.LoginFlow{}, err
 	}
-	shared, err := paths.SharedGrokCredentialsDir()
+	shared, err := sharedCredentialsDir()
 	if err != nil {
 		return base.LoginFlow{}, err
 	}
@@ -100,7 +99,7 @@ func Login(string) (base.LoginFlow, error) {
 
 // CredentialFile is the shared Grok sign-in every project home loads before a launch.
 func CredentialFile() string {
-	shared, err := paths.SharedGrokCredentialsDir()
+	shared, err := sharedCredentialsDir()
 	if err != nil {
 		return ""
 	}

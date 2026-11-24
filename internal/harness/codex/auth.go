@@ -116,7 +116,7 @@ func SharedAuthFile() (string, error) {
 func sharedAuthSource(userHome string) (string, error) {
 	user := filepath.Join(userHome, "auth.json")
 	if info, err := os.Stat(user); err == nil && info.Mode().IsRegular() {
-		shared, err := paths.SharedCodexAuthPath()
+		shared, err := sharedAuthPath()
 		if err != nil {
 			return "", err
 		}
@@ -125,7 +125,7 @@ func sharedAuthSource(userHome string) (string, error) {
 		}
 		return user, nil
 	}
-	shared, err := paths.SharedCodexAuthPath()
+	shared, err := sharedAuthPath()
 	if err != nil {
 		return "", err
 	}
@@ -237,7 +237,7 @@ func persistLogin(data []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	shared, err := paths.SharedCodexAuthPath()
+	shared, err := sharedAuthPath()
 	if err != nil {
 		return "", err
 	}
@@ -259,7 +259,7 @@ func installAuthData(destination, shared string, data []byte) error {
 }
 
 func preserveAuth(staged string) error {
-	shared, err := paths.SharedCodexAuthPath()
+	shared, err := sharedAuthPath()
 	if err != nil {
 		return err
 	}
@@ -317,7 +317,7 @@ func verifyAuth(staged string) error {
 	if err != nil {
 		return fmt.Errorf("codex staged auth link is missing: %w", err)
 	}
-	shared, err := paths.SharedCodexAuthPath()
+	shared, err := sharedAuthPath()
 	if err != nil {
 		return err
 	}
@@ -404,7 +404,7 @@ func logoutShared() error {
 			return err
 		}
 	}
-	shared, err := paths.SharedCodexAuthPath()
+	shared, err := sharedAuthPath()
 	if err != nil {
 		return err
 	}
@@ -493,4 +493,8 @@ func RefreshAuth(ctx context.Context, data []byte) ([]byte, error) {
 	}
 	file["last_refresh"] = time.Now().UTC().Format(time.RFC3339Nano)
 	return json.MarshalIndent(file, "", "  ")
+}
+
+func sharedAuthPath() (string, error) {
+	return paths.AgentpackHomePath("shared", "codex", "auth.json")
 }

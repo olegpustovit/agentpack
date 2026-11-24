@@ -13,7 +13,6 @@ import (
 	"time"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 var deviceCode = regexp.MustCompile(`\b[A-Z0-9]{4,5}-[A-Z0-9]{4,6}\b`)
@@ -32,7 +31,7 @@ func Account(ctx context.Context) base.Account {
 	if native, ok := nativeHome(); ok {
 		sources = append(sources, filepath.Join(native, "auth.json"))
 	}
-	if shared, err := paths.SharedCodexAuthPath(); err == nil {
+	if shared, err := sharedAuthPath(); err == nil {
 		sources = append(sources, shared)
 	}
 	for _, path := range sources {
@@ -85,7 +84,7 @@ func Login(string) (base.LoginFlow, error) {
 	if err != nil {
 		return base.LoginFlow{}, err
 	}
-	shared, err := paths.SharedCodexAuthPath()
+	shared, err := sharedAuthPath()
 	if err != nil {
 		return base.LoginFlow{}, err
 	}
@@ -125,7 +124,7 @@ func CredentialFile() string {
 			return filepath.Join(native, "auth.json")
 		}
 	}
-	shared, err := paths.SharedCodexAuthPath()
+	shared, err := sharedAuthPath()
 	if err != nil {
 		return ""
 	}

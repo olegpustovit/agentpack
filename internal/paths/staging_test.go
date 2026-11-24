@@ -1,10 +1,11 @@
 package paths
 
 import (
-	"github.com/gofrs/flock"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/gofrs/flock"
 )
 
 func TestStagingGenerationPublishesOnlyOnSuccessAndPinsReaders(t *testing.T) {
@@ -19,17 +20,17 @@ func TestStagingGenerationPublishesOnlyOnSuccessAndPinsReaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer first.Abort()
-	if published, err := readStagingSelection(legacy); err != nil || published != legacy {
+	if published, err := stagingGenerations(legacy).Current(); err != nil || published != "" {
 		t.Fatalf("unverified generation was published: %s, %v", published, err)
 	}
-	marker := filepath.Join(first.Root, "session")
+	marker := filepath.Join(first.Root(), "session")
 	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := first.Publish(); err != nil {
+	if err := first.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if published, err := readStagingSelection(legacy); err != nil || published != first.Root {
+	if published, err := stagingGenerations(legacy).Current(); err != nil || published != first.Root() {
 		t.Fatalf("published generation: %s, %v", published, err)
 	}
 	second, err := BeginStagingGeneration(project, "default")
@@ -37,17 +38,17 @@ func TestStagingGenerationPublishesOnlyOnSuccessAndPinsReaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	second.Abort()
-	if selected, err := StagingRootForMode(project, "default"); err != nil || selected != first.Root {
+	if selected, err := StagingRootForMode(project, "default"); err != nil || selected != first.Root() {
 		t.Fatalf("failed rebuild changed selected root: %s, %v", selected, err)
 	}
 	if data, err := os.ReadFile(marker); err != nil || string(data) != "keep" {
 		t.Fatalf("session data changed: %q, %v", data, err)
 	}
 	// An external publisher does not change paths retained by this process.
-	if err := os.WriteFile(legacy+".current", []byte(filepath.Base(second.Root)), 0o600); err != nil {
+	if err := os.WriteFile(legacy+".current", []byte(filepath.Base(second.Root())), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if selected, _ := StagingRootForMode(project, "default"); selected != first.Root {
+	if selected, _ := StagingRootForMode(project, "default"); selected != first.Root() {
 		t.Fatalf("reader switched under a running session: %s", selected)
 	}
 }
@@ -55,7 +56,7 @@ func TestStagingGenerationPublishesOnlyOnSuccessAndPinsReaders(t *testing.T) {
 func TestStagingGenerationRefusesEscapingPointer(t *testing.T) {
 	project := t.TempDir()
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
-	legacy, err := stagingModePath(project, "default")
+	legacy, err := stagingModePath(project, "default", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +71,56 @@ func TestStagingGenerationRefusesEscapingPointer(t *testing.T) {
 	}
 }
 
+func TestStagingSelectionSurvivesPublishAndReclaimBeforeLease(t *testing.T) {
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	project := t.TempDir()
+	legacy, err := stagingModePath(project, "default", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, second := legacy+"-g-first", legacy+"-g-second"
+	for _, root := range []string{first, second} {
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".staged.json"), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := WriteAtomic(legacy+".current", []byte(filepath.Base(first)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	set := stagingGenerations(legacy)
+	selected, lease, err := set.lease(func() (string, error) {
+		root, err := set.Current()
+		if err != nil {
+			return "", err
+		}
+		// Simulate a publisher and reclaimer running after the pointer read but
+		// before the selecting process has acquired its generation lease.
+		if err := WriteAtomic(legacy+".current", []byte(filepath.Base(second)), 0o600); err != nil {
+			return "", err
+		}
+		ReclaimStagingGenerations(project, "default", nil)
+		return root, nil
+	})
+	if err != nil || lease == nil || selected != first {
+		t.Fatalf("select first generation: %q, %v", selected, err)
+	}
+	defer lease.Unlock()
+	ReclaimStagingGenerations(project, "default", nil)
+	if _, err := os.Stat(filepath.Join(selected, ".staged.json")); err != nil {
+		t.Fatalf("selected generation was reclaimed: %v", err)
+	}
+	if err := lease.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	ReclaimStagingGenerations(project, "default", nil)
+	if _, err := os.Stat(first); !os.IsNotExist(err) {
+		t.Fatalf("released generation was not reclaimed: %v", err)
+	}
+}
+
 func TestReclaimKeepsLeasedRecordedAndUnfinishedGenerations(t *testing.T) {
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
 	project := t.TempDir()
@@ -77,10 +128,10 @@ func TestReclaimKeepsLeasedRecordedAndUnfinishedGenerations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := published.Publish(); err != nil {
+	if err := published.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := stagingModePath(project, "default")
+	legacy, err := stagingModePath(project, "default", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,14 +148,44 @@ func TestReclaimKeepsLeasedRecordedAndUnfinishedGenerations(t *testing.T) {
 		return root
 	}
 	dead, held, recorded, unfinished := generation("dead", true), generation("held", true), generation("recorded", true), generation("unfinished", false)
+	// Another mode can share this mode's generation prefix.
+	otherLegacy, err := stagingModePath(project, "default-g-other", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherMode, err := stagingGenerations(otherLegacy).Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer otherMode.Abort()
+	if err := os.WriteFile(filepath.Join(otherMode.Root(), ".staged.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := otherMode.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := otherMode.Abort(); err != nil {
+		t.Fatal(err)
+	}
 	// Another process's lease: a separate lock on the same file.
 	lease := flock.New(held + ".lease")
 	if err := lease.RLock(); err != nil {
 		t.Fatal(err)
 	}
 	defer lease.Unlock()
-	ReclaimStagingGenerations(project, "default", []string{recorded})
-	for root, want := range map[string]bool{dead: false, held: true, recorded: true, unfinished: true, published.Root: true} {
+	ReclaimStagingGenerations(project, "default", func(root string) bool {
+		if root == dead {
+			set := stagingGenerations(legacy)
+			if lease, err := set.Lease(root); err != nil || lease != nil {
+				t.Errorf("reclaimer did not exclude a remembered selection: %v, %v", lease, err)
+				if lease != nil {
+					_ = lease.Unlock()
+				}
+			}
+		}
+		return root != recorded
+	})
+	for root, want := range map[string]bool{dead: false, held: true, recorded: true, unfinished: true, published.Root(): true, otherMode.Root(): true} {
 		if _, err := os.Stat(root); (err == nil) != want {
 			t.Errorf("%s: kept=%v, want %v", filepath.Base(root), err == nil, want)
 		}

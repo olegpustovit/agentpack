@@ -10,7 +10,6 @@ import (
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/mode"
-	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestPrepareFinalizeBuildsFakeHomeAndMergesUserMCP(t *testing.T) {
@@ -45,7 +44,7 @@ func TestPrepareFinalizeBuildsFakeHomeAndMergesUserMCP(t *testing.T) {
 	if err := h.Check(ctx); err != nil {
 		t.Fatal(err)
 	}
-	fake, _ := paths.StagingCursorHomeDirForMode(project, "default")
+	fake, _ := StagingHome(project, "default")
 	data, err := os.ReadFile(filepath.Join(fake, ".cursor", "mcp.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +80,7 @@ func TestFakeHomeSharesArtLoginAcrossRebuilds(t *testing.T) {
 	if err := h.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	fake, err := paths.StagingCursorHomeDirForMode(project, "default")
+	fake, err := StagingHome(project, "default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +180,7 @@ func TestUserSkillsSeedFakeHomeBeforePackOverlay(t *testing.T) {
 	if err := h.Finalize(nil, ctx); err != nil {
 		t.Fatal(err)
 	}
-	fake, err := paths.StagingCursorHomeDirForMode(project, "default")
+	fake, err := StagingHome(project, "default")
 	if err != nil {
 		t.Fatal(err)
 	}

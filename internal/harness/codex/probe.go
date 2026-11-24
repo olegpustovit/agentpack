@@ -140,9 +140,10 @@ func withCodexHome(env []string, codexHome string) []string {
 
 // Probe observes the published Codex home.
 func Probe(ctx context.Context, request base.ProbeRequest) (environment.Receipt, error) {
-	home, err := CurrentHome(request.DefinitionRoot, request.Mode)
+	home, release, err := LeaseHome(request.DefinitionRoot, request.Mode)
 	if err != nil {
 		return environment.Receipt{}, err
 	}
+	defer release()
 	return ProbeHome(ctx, home, request.WorkspaceRoot, request.SourceIdentity, request.LockDigest, request.Mode, request.Packaged)
 }

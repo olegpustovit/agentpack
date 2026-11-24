@@ -14,7 +14,6 @@ import (
 	"filippo.io/age"
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mode"
-	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/pelletier/go-toml/v2"
 	keyring "github.com/zalando/go-keyring"
 )
@@ -105,7 +104,7 @@ func TestPreserveLegacyRegularAuth(t *testing.T) {
 	if err := preserveAuth(staged); err != nil {
 		t.Fatal(err)
 	}
-	shared, _ := paths.SharedCodexAuthPath()
+	shared, _ := sharedAuthPath()
 	data, err := os.ReadFile(shared)
 	if err != nil || !json.Valid(data) {
 		t.Fatalf("shared=%q err=%v", data, err)
@@ -117,7 +116,7 @@ func TestPreserveReloginOverExistingSharedAuth(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
-	shared, err := paths.SharedCodexAuthPath()
+	shared, err := sharedAuthPath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +162,7 @@ func TestLogoutRemovesNativeAndSharedAuth(t *testing.T) {
 	if err := os.WriteFile(native, []byte(`{"token":"old"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	shared, err := paths.SharedCodexAuthPath()
+	shared, err := sharedAuthPath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +312,7 @@ func TestIsolatedLoginKeepsOldAuthOnFailureAndInstallsSuccess(t *testing.T) {
 	if err := verifyAuth(staged); err != nil {
 		t.Fatal(err)
 	}
-	shared, err := paths.SharedCodexAuthPath()
+	shared, err := sharedAuthPath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +344,7 @@ func TestLoginCommandUsesIsolatedHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	staged, err := paths.StagingCodexHomeDirForMode(project, ctx.Mode.Name())
+	staged, err := legacyHome(project, ctx.Mode.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -761,7 +760,7 @@ func TestLaunchFinishesAgainstOriginalGenerationAfterSwitch(t *testing.T) {
 	if err := finish(); err != nil {
 		t.Fatal(err)
 	}
-	shared, err := paths.SharedCodexAuthPath()
+	shared, err := sharedAuthPath()
 	if err != nil {
 		t.Fatal(err)
 	}

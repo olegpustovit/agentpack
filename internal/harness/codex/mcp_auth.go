@@ -161,14 +161,6 @@ func verifyMCPAuth(projectRoot, staged string) error {
 }
 func jsonOrToml(data []byte, target *map[string]any) error { return toml.Unmarshal(data, target) }
 
-func reconcileMCPAuthMode(projectRoot, modeName string) error {
-	staged, err := CurrentHome(projectRoot, modeName)
-	if err != nil {
-		return err
-	}
-	return reconcileMCPAuthHome(projectRoot, staged)
-}
-
 func reconcileMCPAuthHome(projectRoot, staged string) error {
 	return withMCPOAuthLock(projectRoot, func() error {
 		durable, err := oauthCredentials(projectRoot)

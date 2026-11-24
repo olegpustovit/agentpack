@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/cursor"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
@@ -307,7 +308,7 @@ func TestCursorUserSkillsRefreshOnLaunch(t *testing.T) {
 		if _, skipped, err := service.SyncForLaunchOptions(context.Background(), project, SyncOptions{Target: new(base.Cursor)}); err != nil || skipped {
 			t.Fatalf("changed user skill %q: skipped=%v err=%v", body, skipped, err)
 		}
-		fake, err := paths.StagingCursorHomeDirForMode(project, "default")
+		fake, err := cursor.StagingHome(project, "default")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -375,7 +376,7 @@ func TestSwitchingAgentsKeepsEachGeneration(t *testing.T) {
 	for index, step := range []struct {
 		target  base.Target
 		skipped bool
-	}{{base.Claude, false}, {base.OMP, false}, {base.Claude, true}, {base.OMP, true}} {
+	}{{base.Claude, false}, {base.OMP, false}, {base.Grok, false}, {base.Claude, true}, {base.OMP, true}, {base.Grok, true}} {
 		if _, skipped, err := NewService().SyncForLaunchOptions(context.Background(), project, SyncOptions{Target: &step.target}); err != nil || skipped != step.skipped {
 			t.Fatalf("launch %d of %s: skipped=%v, want %v: %v", index, step.target, skipped, step.skipped, err)
 		}

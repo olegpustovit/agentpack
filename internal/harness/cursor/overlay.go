@@ -12,7 +12,7 @@ import (
 )
 
 func readOverlayManifest(project string) ([]string, error) {
-	path, err := paths.CursorOverlayManifestPath(project)
+	path, err := OverlayManifestPath(project)
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +32,7 @@ func readOverlayManifest(project string) ([]string, error) {
 	return values, nil
 }
 func writeOverlayManifest(project string, values []string) error {
-	path, err := paths.CursorOverlayManifestPath(project)
+	path, err := OverlayManifestPath(project)
 	if err != nil {
 		return err
 	}
@@ -143,4 +143,8 @@ func overlayFolder(source, destination string) (string, error) {
 		}
 	}
 	return destination, nil
+}
+
+func OverlayManifestPath(projectRoot string) (string, error) {
+	return paths.ProjectStateFile(projectRoot, "cursor-overlay.manifest")
 }

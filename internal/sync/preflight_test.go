@@ -14,6 +14,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/environment"
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/harness/claude"
+	"github.com/olegpustovit/agentpack/internal/harness/grok"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
@@ -1202,7 +1203,7 @@ func TestPreflightMCPUsesHarnessProjectionWithoutExposingValues(t *testing.T) {
 			}
 		}
 		if target == base.Grok {
-			grokHome, err := paths.StagingGrokHomeDirForMode(definition, effective.Name())
+			grokHome, err := grok.StagingHome(definition, effective.Name())
 			if err != nil {
 				t.Fatal(err)
 			}

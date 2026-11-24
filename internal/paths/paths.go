@@ -16,13 +16,11 @@ const (
 	ManifestName              = "agentpack.toml"
 	StagedAgentpackBundleName = "agentpack-bundle"
 	DotAgentsDir              = ".agents"
-	DotClaudeDir              = ".claude"
 )
 
 var ErrProjectNotFound = errors.New("no agentpack.toml or pack.lock found")
 
 func ProjectDotAgentsDir(projectRoot string) string { return filepath.Join(projectRoot, DotAgentsDir) }
-func ProjectDotClaudeDir(projectRoot string) string { return filepath.Join(projectRoot, DotClaudeDir) }
 func ManifestPath(projectRoot string) string        { return filepath.Join(projectRoot, ManifestName) }
 func LockPath(projectRoot string) string            { return filepath.Join(projectRoot, LockfileName) }
 
@@ -70,9 +68,10 @@ func EnsureUserAgentpackLayout() (string, error) {
 }
 
 // EnvironmentsRoot holds portable external definition directories.
-func EnvironmentsRoot() (string, error) { return underHome("environments") }
+func EnvironmentsRoot() (string, error) { return AgentpackHomePath("environments") }
 
-func underHome(parts ...string) (string, error) {
+// AgentpackHomePath resolves path components under the user's agentpack home.
+func AgentpackHomePath(parts ...string) (string, error) {
 	root, err := UserAgentpackHome()
 	if err != nil {
 		return "", err
@@ -80,12 +79,12 @@ func underHome(parts ...string) (string, error) {
 	return filepath.Join(append([]string{root}, parts...)...), nil
 }
 
-func CacheDir() (string, error)          { return underHome("cache") }
-func CacheDBPath() (string, error)       { return underHome("cache", "index.db") }
-func LocalRegistryRoot() (string, error) { return underHome("local") }
+func CacheDir() (string, error)          { return AgentpackHomePath("cache") }
+func CacheDBPath() (string, error)       { return AgentpackHomePath("cache", "index.db") }
+func LocalRegistryRoot() (string, error) { return AgentpackHomePath("local") }
 
 func LocalMirrorPathFromShorthand(spec string) (string, error) {
-	return underHome("local", filepath.FromSlash(spec))
+	return AgentpackHomePath("local", filepath.FromSlash(spec))
 }
 
 func ProjectStateDir(projectRoot string) (string, error) {
@@ -93,35 +92,23 @@ func ProjectStateDir(projectRoot string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return underHome("projects", hash)
+	return AgentpackHomePath("projects", hash)
 }
 
-func projectStateFile(projectRoot, name string) (string, error) {
+// ProjectStateFile resolves a path under the project's durable state directory.
+func ProjectStateFile(projectRoot string, parts ...string) (string, error) {
 	root, err := ProjectStateDir(projectRoot)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, name), nil
-}
-
-// ProjectStateFile is the public form of the per-project state path helper.
-func ProjectStateFile(projectRoot, name string) (string, error) {
-	return projectStateFile(projectRoot, name)
-}
-
-func CursorOverlayManifestPath(projectRoot string) (string, error) {
-	return projectStateFile(projectRoot, "cursor-overlay.manifest")
-}
-
-func AgyOverlayManifestPath(projectRoot string) (string, error) {
-	return projectStateFile(projectRoot, "agy-overlay.manifest")
+	return filepath.Join(append([]string{root}, parts...)...), nil
 }
 
 func ProxyLogDir(projectRoot string) (string, error) {
 	if value := strings.TrimSpace(os.Getenv("AGENTPACK_PROXY_LOG_DIR")); value != "" {
 		return value, nil
 	}
-	return projectStateFile(projectRoot, "proxy-logs")
+	return ProjectStateFile(projectRoot, "proxy-logs")
 }
 
 func FindProjectRoot(start string) (string, error) {
@@ -201,22 +188,22 @@ func ModePathComponent(modeName string) string {
 // StagedManifestPath records staged content per generation, with the legacy
 // project-state location used only for staging built by older releases.
 func StagedManifestPath(projectRoot, modeName string) (string, error) {
-	root, err := StagingRootForMode(projectRoot, modeName)
+	legacy, err := stagingModePath(projectRoot, modeName, true)
 	if err != nil {
 		return "", err
 	}
-	legacy, err := stagingModePath(projectRoot, modeName)
+	root, err := selectStagingRoot(legacy)
 	if err != nil {
 		return "", err
 	}
 	if root != legacy {
 		return filepath.Join(root, ".staged.json"), nil
 	}
-	return projectStateFile(projectRoot, "staged-"+ModePathComponent(modeName)+".json")
+	return ProjectStateFile(projectRoot, "staged-"+ModePathComponent(modeName)+".json")
 }
 
 func LaunchSyncStatePath(projectRoot, modeName, key string) (string, error) {
-	return projectStateFile(projectRoot, "launch-sync-"+ModePathComponent(modeName)+"."+ModePathComponent(key)+".state")
+	return ProjectStateFile(projectRoot, "launch-sync-"+ModePathComponent(modeName)+"."+ModePathComponent(key)+".state")
 }
 
 func stagingRootBase(projectRoot string) (string, error) {
@@ -234,11 +221,7 @@ func stagingRootBase(projectRoot string) (string, error) {
 	return filepath.Join(os.TempDir(), "agentpack-"+hash), nil
 }
 
-func StagingRootForMode(projectRoot, modeName string) (string, error) {
-	return selectedStagingRoot(projectRoot, modeName)
-}
-
-func stagingSubdir(projectRoot, modeName, segment string) (string, error) {
+func StagingSubdir(projectRoot, modeName, segment string) (string, error) {
 	root, err := StagingRootForMode(projectRoot, modeName)
 	if err != nil {
 		return "", err
@@ -247,51 +230,14 @@ func stagingSubdir(projectRoot, modeName, segment string) (string, error) {
 }
 
 func StagingPluginsDirForMode(root, mode string) (string, error) {
-	return stagingSubdir(root, mode, "plugins")
-}
-func StagingOpenCodeDirForMode(root, mode string) (string, error) {
-	return stagingSubdir(root, mode, "opencode")
-}
-func StagingCodexHomeDirForMode(root, mode string) (string, error) {
-	return stagingSubdir(root, mode, "codex-home")
-}
-func StagingGrokHomeDirForMode(root, mode string) (string, error) {
-	state, err := ProjectStateDir(root)
-	if err != nil {
-		return "", err
-	}
-	home := filepath.Join(state, "grok-homes", ModePathComponent(mode))
-	selected, err := StagingRootForMode(root, mode)
-	if err != nil {
-		return "", err
-	}
-	legacy, err := stagingModePath(root, mode)
-	if err != nil {
-		return "", err
-	}
-	if selected != legacy {
-		home = filepath.Join(home, filepath.Base(selected))
-	}
-	return home, nil
-}
-func StagingGrokDirForMode(root, mode string) (string, error) {
-	return stagingSubdir(root, mode, "grok")
-}
-func StagingAgyDirForMode(root, mode string) (string, error) {
-	return stagingSubdir(root, mode, "agy")
-}
-func StagingCursorBundleDirForMode(root, mode string) (string, error) {
-	return stagingSubdir(root, mode, "cursor")
-}
-func StagingCursorHomeDirForMode(root, mode string) (string, error) {
-	return stagingSubdir(root, mode, "cursor-home")
+	return StagingSubdir(root, mode, "plugins")
 }
 
 // StagingPluginRootsDirForMode holds whole copies of the plugins whose MCP
 // servers run from their own directory, one per package, shared by every
 // harness of the mode.
 func StagingPluginRootsDirForMode(root, mode string) (string, error) {
-	return stagingSubdir(root, mode, "plugin-roots")
+	return StagingSubdir(root, mode, "plugin-roots")
 }
 
 // PluginDataDir is the durable directory a plugin's ${CLAUDE_PLUGIN_DATA}
@@ -304,40 +250,27 @@ func PluginDataDir(projectRoot, module string) (string, error) {
 	return filepath.Join(state, "plugin-data", module), nil
 }
 
-func bundleDirForMode(projectRoot, modeName, segment string) (string, error) {
-	root, err := stagingSubdir(projectRoot, modeName, segment)
+func StagingBundleDir(projectRoot, modeName, segment string) (string, error) {
+	root, err := StagingSubdir(projectRoot, modeName, segment)
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(root, StagedAgentpackBundleName), nil
 }
 
-func StagingGrokBundleDirForMode(root, mode string) (string, error) {
-	return bundleDirForMode(root, mode, "grok")
-}
-func StagingAgyBundleDirForMode(root, mode string) (string, error) {
-	return bundleDirForMode(root, mode, "agy")
-}
-func StagingCursorPackPluginDirForMode(root, mode string) (string, error) {
-	return bundleDirForMode(root, mode, "cursor")
-}
-
-func SharedCodexAuthPath() (string, error)      { return underHome("shared", "codex", "auth.json") }
-func SharedGrokCredentialsDir() (string, error) { return underHome("shared", "grok") }
-
 // MCPCredentialIndexName lists the gateway's stored MCP credentials (no secrets) for staging.
 const MCPCredentialIndexName = "mcp-credentials.json"
 
-func MCPCredentialIndexPath() (string, error) { return underHome(MCPCredentialIndexName) }
+func MCPCredentialIndexPath() (string, error) { return AgentpackHomePath(MCPCredentialIndexName) }
 
 // ProjectMCPLoginsPath holds the login each remote MCP server uses in this project.
 func ProjectMCPLoginsPath(projectRoot string) (string, error) {
-	return projectStateFile(projectRoot, "mcp-logins.json")
+	return ProjectStateFile(projectRoot, "mcp-logins.json")
 }
 
 // ProjectMCPPluginLoginsPath holds this project's permissions for plugin MCP logins.
 func ProjectMCPPluginLoginsPath(projectRoot string) (string, error) {
-	return projectStateFile(projectRoot, "mcp-plugin-logins.json")
+	return ProjectStateFile(projectRoot, "mcp-plugin-logins.json")
 }
 
 func canonical(path string) (string, error) {

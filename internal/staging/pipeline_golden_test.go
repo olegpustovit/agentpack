@@ -3,6 +3,7 @@ package staging
 import (
 	"encoding/json"
 	"flag"
+	"github.com/olegpustovit/agentpack/internal/harness/grok"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -106,7 +107,7 @@ func TestPipelineStagedTreePerHarnessGolden(t *testing.T) {
 			case base.Codex:
 				trees["codex-home"] = snapshotGoldenTree(t, root, normalize)
 			case base.Grok:
-				grokHome, err := paths.StagingGrokHomeDirForMode(project, "default")
+				grokHome, err := grok.StagingHome(project, "default")
 				if err != nil {
 					t.Fatal(err)
 				}

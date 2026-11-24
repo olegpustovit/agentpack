@@ -33,7 +33,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	if nativeMajor() < 0 {
 		return nil, nil, fmt.Errorf("unsupported OpenCode major version; use a tested OpenCode 1 or 2 release")
 	}
-	root, err := paths.StagingOpenCodeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	root, err := StagingDir(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -131,7 +131,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 }
 
 func stagedRoot(ctx base.StageContext) (string, error) {
-	return paths.StagingOpenCodeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	return StagingDir(ctx.ProjectRoot, ctx.Mode.Name())
 }
 
 func prepare(ctx base.StageContext) error {
@@ -528,4 +528,8 @@ func protectInlineVariables(input, reserved string) (string, map[string]string) 
 		i++
 	}
 	return out.String(), replacements
+}
+
+func StagingDir(projectRoot, modeName string) (string, error) {
+	return paths.StagingSubdir(projectRoot, modeName, "opencode")
 }
