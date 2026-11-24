@@ -116,17 +116,12 @@ func Login(string) (base.LoginFlow, error) {
 	}, nil
 }
 
-// CredentialFile is the auth.json every staged Codex home links to: ~/.codex's when present, else
-// agentpack's shared one (sharedAuthSource picks the same, without touching the keychain here).
+// CredentialFile is ~/.codex/auth.json, which every staged Codex home links to once it exists. Shared
+// sign-ins land there, so a plain `codex` started outside agentpack is signed in too.
 func CredentialFile() string {
-	if native, ok := nativeHome(); ok {
-		if info, err := os.Stat(filepath.Join(native, "auth.json")); err == nil && info.Mode().IsRegular() {
-			return filepath.Join(native, "auth.json")
-		}
-	}
-	shared, err := sharedAuthPath()
-	if err != nil {
+	native, ok := nativeHome()
+	if !ok {
 		return ""
 	}
-	return shared
+	return filepath.Join(native, "auth.json")
 }

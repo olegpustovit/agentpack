@@ -35,6 +35,8 @@ Codex stores OAuth/API material in `auth.json` or in the OS keychain, keyed by t
 
 The staged `config.toml` is forced to `cli_auth_credentials_store = "file"`, so every project shares refresh-token updates through that one file.
 
+A web UI sign-in and a sign-in shared from another machine are both written to `~/.codex/auth.json`, so a plain `codex` started outside agentpack uses them too.
+
 MCP server OAuth is separate from the main Codex login. agentpack stores those tokens per project under `$AGENTPACK_HOME/projects/<hash>/codex-mcp-oauth/.credentials.json`, links every mode's staged home to that file, and forces `mcp_oauth_credentials_store = "file"`. The accompanying `mcp-oauth-locks/` directory is shared too, so concurrent modes serialize token refreshes correctly. MCP login therefore survives `add`, `sync`, staging rebuilds, and temp-directory cleanup without leaking credentials into another project.
 
 After upgrading to this layout, an MCP credential that existed only in the OS keyring or Codex's encrypted secrets backend requires one final login. Legacy staged `.credentials.json` files are recovered automatically.

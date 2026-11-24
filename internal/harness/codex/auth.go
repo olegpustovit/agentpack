@@ -233,15 +233,16 @@ func persistLogin(data []byte) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("cannot find the native Codex home")
 	}
-	destination, err := sharedAuthSource(native)
-	if err != nil {
-		return "", err
-	}
 	shared, err := sharedAuthPath()
 	if err != nil {
 		return "", err
 	}
-	return native, installAuthData(destination, shared, data)
+	// The native file, never agentpack's copy: plain `codex` reads only ~/.codex, and so does the mesh sync.
+	if err := installAuthData(filepath.Join(native, "auth.json"), shared, data); err != nil {
+		return "", err
+	}
+	_, err = sharedAuthSource(native) // clears a sign-out marker
+	return native, err
 }
 
 func installAuthData(destination, shared string, data []byte) error {

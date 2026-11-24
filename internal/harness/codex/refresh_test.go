@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -41,5 +42,15 @@ func TestRefreshCredentialRenewsADayBeforeCodex(t *testing.T) {
 	// Codex reads id_token as the raw JWT string.
 	if got.AuthMode != "chatgpt" || got.Tokens["id_token"] != "new.id.token" || got.Tokens["access_token"] != "new-access" || got.Tokens["refresh_token"] != "new-refresh" || got.Tokens["account_id"] != "account" || time.Since(got.LastRefresh) > time.Minute {
 		t.Fatalf("renewed file: %s", renewed)
+	}
+}
+
+// Shared sign-ins must land where a plain `codex` reads them, even on a machine that never ran it.
+func TestCredentialFileIsNativeAuthWithoutOne(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	if got, want := CredentialFile(), filepath.Join(home, ".codex", "auth.json"); got != want {
+		t.Fatalf("CredentialFile() = %q, want %q", got, want)
 	}
 }
