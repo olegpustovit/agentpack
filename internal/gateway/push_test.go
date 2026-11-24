@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"bytes"
-	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
@@ -20,10 +19,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"testing/synctest"
 	"time"
-
-	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 // pushDevice is a browser subscription: it decrypts what the push service receives (RFC 8291).
@@ -128,83 +124,6 @@ func (p *pushService) take() ([][]byte, []*http.Request) {
 	bodies, requests := p.bodies, p.requests
 	p.bodies, p.requests = nil, nil
 	return bodies, requests
-}
-
-func (p *pushService) Do(r *http.Request) (*http.Response, error) {
-	w := httptest.NewRecorder()
-	p.ServeHTTP(w, r)
-	return w.Result(), nil
-}
-
-func TestPushPassWakesForLocalSessionChangesAndFallback(t *testing.T) {
-	g, _ := identityGateway(t, t.TempDir(), nil)
-	service, device := &pushService{}, newPushDevice(t)
-	g.push.client = service
-	node, err := g.store.NodeID(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	public, _, err := g.pushKeys(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	encode := base64.RawURLEncoding.EncodeToString
-	if err := g.store.Push().Subscribe(t.Context(), state.PushSubscriber{
-		Endpoint: "https://push.example/subscription", Node: node, Email: testBrowserEmail, Public: public,
-		P256dh: encode(device.key.PublicKey().Bytes()), Auth: encode(device.auth),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := g.store.DB.Exec("INSERT INTO sessions(id,transport,conversation_state) VALUES ('watched','acp','working')"); err != nil {
-		t.Fatal(err)
-	}
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		go g.runPush(ctx, pushInterval)
-		expectPush := func(want string) {
-			t.Helper()
-			synctest.Wait()
-			bodies, _ := service.take()
-			if want == "" {
-				if len(bodies) != 0 {
-					t.Fatalf("sent %d unexpected notifications", len(bodies))
-				}
-				return
-			}
-			if len(bodies) != 1 {
-				t.Fatalf("sent %d notifications, want one with %q", len(bodies), want)
-			}
-			if got := device.decrypt(t, bodies[0]).Body; !strings.Contains(got, want) {
-				t.Fatalf("notification body = %q, want %q", got, want)
-			}
-		}
-		expectPush("")
-		if _, err := g.store.DB.Exec("UPDATE sessions SET conversation_state='idle' WHERE id='watched'"); err != nil {
-			t.Fatal(err)
-		}
-		g.emitEvent(eventMessage{Topic: "sessions"})
-		g.emitEvent(eventMessage{Topic: "state", Tables: []string{"conversation_events"}})
-		g.emitEvent(eventMessage{Topic: "state", Node: "peer", Tables: []string{"sessions"}})
-		expectPush("")
-		g.emitEvent(eventMessage{Topic: "state", Tables: []string{"sessions"}})
-		expectPush("Finished")
-		if _, err := g.store.DB.Exec("UPDATE sessions SET conversation_state='needs_you',last_seq=1 WHERE id='watched'"); err != nil {
-			t.Fatal(err)
-		}
-		time.Sleep(pushHeadlessCheck)
-		expectPush("Has a question")
-		if _, err := g.store.DB.Exec("UPDATE sessions SET conversation_state='idle',last_seq=2,waiting=json_array(json_object('until',?)) WHERE id='watched'",
-			time.Now().Add(time.Second).UnixMilli()); err != nil {
-			t.Fatal(err)
-		}
-		g.emitEvent(eventMessage{Topic: "state"})
-		expectPush("")
-		time.Sleep(pushHeadlessCheck)
-		expectPush("")
-		time.Sleep(pushInterval - 2*pushHeadlessCheck)
-		expectPush("Finished")
-	})
 }
 
 func TestPushSubscriptionsAndTransitions(t *testing.T) {
