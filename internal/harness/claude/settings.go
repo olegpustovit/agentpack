@@ -8,7 +8,10 @@ import (
 	"strings"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/mcp"
 )
+
+const settingsFilename = "agentpack-settings.json"
 
 func KeepAttribution() bool {
 	switch strings.ToLower(os.Getenv("AGENTPACK_KEEP_ATTRIBUTION")) {
@@ -25,7 +28,7 @@ func SettingsPath(ctx base.StageContext) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, "agentpack-settings.json"), nil
+	return filepath.Join(root, settingsFilename), nil
 }
 
 func MaterializeSettings(ctx base.StageContext) error {
@@ -47,6 +50,26 @@ func SettingsContents(names []string, keepAttribution bool) ([]byte, error) {
 		settings["enabledMcpjsonServers"] = names
 	}
 	return json.MarshalIndent(settings, "", "  ")
+}
+
+func mergedSettings(entries mcp.Entries) ([]byte, error) {
+	names := make([]string, 0, len(entries))
+	for _, name := range entries.Names() {
+		disabled := entries[name].Server.Disabled
+		if disabled == nil || !*disabled {
+			names = append(names, name)
+		}
+	}
+	return SettingsContents(names, KeepAttribution())
+}
+
+func planSettings(entries mcp.Entries) (base.SettingsProjection, error) {
+	data, err := mergedSettings(entries)
+	return base.SettingsProjection{
+		RelativePath: settingsFilename,
+		Contents:     data,
+		MergeOrder:   []string{"agentpack_attribution_policy", "merged_mcp_allowlist"},
+	}, err
 }
 
 func WriteSettingsContents(ctx base.StageContext, data []byte) error {

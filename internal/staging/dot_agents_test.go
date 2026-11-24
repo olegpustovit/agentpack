@@ -32,7 +32,7 @@ func TestStageDotAgentsLeavesNativeCodexSkillsInProject(t *testing.T) {
 	}
 	plugins, _ := paths.StagingPluginsDirForMode(project, "default")
 	bundle := filepath.Join(plugins, paths.StagedAgentpackBundleName)
-	if err := ApplyDotAgentsPlan(plan, bundle, codex); err != nil {
+	if err := ApplyDotAgentsPlan(plan, []HarnessRoot{{harness.Claude, bundle}, {harness.Codex, codex}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{filepath.Join(bundle, "settings.json"), filepath.Join(bundle, "commands/review.md"), filepath.Join(bundle, "skills/local/SKILL.md"), filepath.Join(bundle, "rules/dot-agents--team.mdc"), filepath.Join(bundle, "CLAUDE.md"), filepath.Join(codex, "theme.toml"), filepath.Join(codex, "skills/review/SKILL.md"), filepath.Join(codex, "AGENTS.md")} {
@@ -112,7 +112,7 @@ func TestDotAgentsPlanMatchesMaterializedWritesAndNativeCodexSkills(t *testing.T
 	if !native || !omitted {
 		t.Fatalf("native/omission plan mismatch: %#v", plan.Artifacts)
 	}
-	if err := ApplyDotAgentsPlan(plan, claude, codex); err != nil {
+	if err := ApplyDotAgentsPlan(plan, []HarnessRoot{{harness.Claude, claude}, {harness.Codex, codex}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, root := range []struct {

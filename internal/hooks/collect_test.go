@@ -25,7 +25,7 @@ func TestCollectOrdersLayersAndShadowsSkills(t *testing.T) {
 	skillRoot, _ := cache.EntryDir(skill.CacheKey)
 	writeHookFile(t, filepath.Join(skillRoot, "hooks", "hooks.json"), nestedCommand("shadowed"))
 	writeHookFile(t, filepath.Join(project, ".agents", "hooks", "hooks.json"), nestedCommand("dot"))
-	bundle, err := Collect(project, lockfile.PackLock{Packages: []lockfile.Package{skill, plugin}}, seed, mode.ImplicitEffective())
+	bundle, err := Collect(project, lockfile.PackLock{Packages: []lockfile.Package{skill, plugin}}, []Seed{{harness.Codex, seed}}, mode.ImplicitEffective())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,6 +37,9 @@ func TestCollectOrdersLayersAndShadowsSkills(t *testing.T) {
 		if bundle.Hooks[index].Origin.Layer != layer {
 			t.Fatalf("layers = %#v", bundle.Hooks)
 		}
+	}
+	if owned, other := bundle.ForTarget(harness.Codex), bundle.ForTarget(harness.Claude); len(owned.Hooks) != 3 || len(other.Hooks) != 2 {
+		t.Fatalf("seeded hooks must stay with their owning target: codex=%d claude=%d", len(owned.Hooks), len(other.Hooks))
 	}
 }
 
@@ -50,7 +53,7 @@ func TestCollectHonorsSpecificModeSelectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundle, err := Collect(project, lockfile.PackLock{Packages: []lockfile.Package{pkg}}, "", effective)
+	bundle, err := Collect(project, lockfile.PackLock{Packages: []lockfile.Package{pkg}}, nil, effective)
 	if err != nil || len(bundle.Hooks) != 1 {
 		t.Fatalf("bundle = %#v, %v", bundle, err)
 	}
@@ -117,7 +120,7 @@ func TestCollectReadsEveryHookLocationAndSurvivesABrokenOne(t *testing.T) {
 	brokenRoot, _ := cache.EntryDir(broken.CacheKey)
 	writeHookFile(t, filepath.Join(brokenRoot, "hooks", "hooks.json"), `{"hooks":{"Stop":"not a list"}}`)
 
-	bundle, err := Collect(t.TempDir(), lockfile.PackLock{Packages: []lockfile.Package{pkg, broken}}, "", mode.ImplicitEffective())
+	bundle, err := Collect(t.TempDir(), lockfile.PackLock{Packages: []lockfile.Package{pkg, broken}}, nil, mode.ImplicitEffective())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +167,7 @@ func TestCollectReadsACodexPluginsRootHooksFile(t *testing.T) {
 	root, _ := cache.EntryDir(pkg.CacheKey)
 	writeHookFile(t, filepath.Join(root, ".codex-plugin", "plugin.json"), `{"name":"figma","skills":"./skills/"}`)
 	writeHookFile(t, filepath.Join(root, "hooks.json"), nestedCommand("figma"))
-	bundle, err := Collect(t.TempDir(), lockfile.PackLock{Packages: []lockfile.Package{pkg}}, "", mode.ImplicitEffective())
+	bundle, err := Collect(t.TempDir(), lockfile.PackLock{Packages: []lockfile.Package{pkg}}, nil, mode.ImplicitEffective())
 	if err != nil {
 		t.Fatal(err)
 	}

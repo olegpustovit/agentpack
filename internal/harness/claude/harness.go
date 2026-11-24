@@ -7,13 +7,28 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/olegpustovit/agentpack/internal/artifacts"
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
+var artifactLayout = artifacts.Layout{
+	NativeKinds:   []artifacts.Kind{artifacts.Skill, artifacts.Command, artifacts.Agent},
+	CommandFields: []string{"description", "name"},
+	CommandKeys:   []string{"agent", "allowed-tools", "argument-hint", "arguments", "context", "disable-model-invocation", "model", "subtask"},
+	SkillKeys:     artifacts.SkillExtraKeys, AgentKeys: artifacts.AgentExtraKeys,
+}
+
+var dotAgents = base.DotAgents{
+	NativeDirectory: "claude",
+	RawTrees:        []string{"skills", "agents", "commands"},
+	FlattenRules:    true,
+	Guidance:        "CLAUDE.md",
+}
+
 func New() base.Harness {
-	return base.Harness{Target: base.Claude, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, AfterStage: finalize, Check: verify, Launch: launch, ACPAdapter: claudeACPPackage, ACPStageAtSession: true, LaunchACP: acpLaunch, Capability: Capability, ResumeArgs: resumeArgs, Inheritance: base.Inheritance{
+	return base.Harness{Target: base.Claude, Artifacts: &artifactLayout, DotAgents: &dotAgents, ProjectSkillRoot: ".claude/skills", ProjectSkillsShadow: true, PlannedSettings: planSettings, StagedConfigFiles: []string{settingsFilename}, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, AfterStage: finalize, Check: verify, Launch: launch, ACPAdapter: claudeACPPackage, ACPStageAtSession: true, LaunchACP: acpLaunch, Capability: Capability, ResumeArgs: resumeArgs, Inheritance: base.Inheritance{
 		Note:  "Claude still reads real ~/.claude.json and ~/.claude/settings.json; agentpack only adds --plugin-dir/--settings",
 		Paths: func(string) []string { return base.HomeFiles(".claude.json", ".claude/settings.json") },
 	}}
@@ -154,14 +169,7 @@ func injectGuidance(blob string, ctx base.StageContext) error {
 	return InjectGuidance(root, blob)
 }
 func finalize(entries mcp.Entries, ctx base.StageContext) error {
-	names := make([]string, 0, len(entries))
-	for _, name := range entries.Names() {
-		disabled := entries[name].Server.Disabled
-		if disabled == nil || !*disabled {
-			names = append(names, name)
-		}
-	}
-	data, err := SettingsContents(names, KeepAttribution())
+	data, err := mergedSettings(entries)
 	if err != nil {
 		return err
 	}
@@ -183,6 +191,21 @@ func verify(ctx base.StageContext) error {
 		if _, err := os.Stat(overlay); err != nil {
 			return fmt.Errorf("claude settings overlay missing %s: %w", overlay, err)
 		}
+	}
+	plugins, err := os.ReadDir(filepath.Dir(bundle))
+	if err != nil {
+		return err
+	}
+	count := 0
+	for _, plugin := range plugins {
+		if plugin.IsDir() {
+			if _, err := os.Stat(filepath.Join(filepath.Dir(bundle), plugin.Name(), ".claude-plugin", "plugin.json")); err == nil {
+				count++
+			}
+		}
+	}
+	if count != 1 {
+		return fmt.Errorf("expected exactly one merged plugin dir (agentpack-bundle), got %d", count)
 	}
 	return nil
 }

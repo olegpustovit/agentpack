@@ -46,6 +46,34 @@ x86_64 host. ARM64 package-set measurements are pending.
 go test ./internal/sync -run '^$' -bench '^BenchmarkCodexSetup$/^(warm|warm-packages)$' -count=5
 ```
 
+## Harness staging descriptions (2026-11-24)
+
+Linux amd64, Intel i9-12900K, Go 1.27.3, with the existing 32 MiB history
+fixture. Each value is the median of five runs, alternating baseline
+`7bec31b` and the refactor on the same two logical CPUs.
+
+| Benchmark | Disk before (ms) | Disk after (ms) | tmpfs fixture before (ms) | tmpfs fixture after (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| MaterializationHome | 0.464 | 0.458 | 0.670 | 0.769 |
+| CodexSetup/warm | 0.185 | 0.173 | 0.271 | 0.251 |
+| CodexSetup/cold | 43.349 | 57.381 | 5.227 | 4.681 |
+| CodexSetup/warm-packages | 7.484 | 7.815 | 8.464 | 7.913 |
+
+Other jobs were active on the host. The cold disk measurements ranged from
+32 to 94 ms before and 18 to 131 ms after. One refactor run with the tmpfs
+fixture averaged 504 ms per operation. The shared-host measurements leave the Linux ARM64
+release budget unverified.
+
+Build each revision with `go test -c -o /tmp/agentpack-sync.test ./internal/sync`.
+Alternate the binaries five times with the command below. For the tmpfs
+fixture, set `TMPDIR=/dev/shm` and use `-test.benchtime=25x`.
+
+```sh
+taskset -c 2,4 /tmp/agentpack-sync.test -test.run '^$' \
+  -test.bench '^(BenchmarkMaterializationHome|BenchmarkCodexSetup)$' \
+  -test.benchtime=10x -test.cpu=2
+```
+
 ## Private staging and lock roots (2026-11-23)
 
 Linux amd64, Intel i9-12900K, Go 1.27.3, 32 MiB history fixture. Medians

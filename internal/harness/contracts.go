@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/olegpustovit/agentpack/internal/artifacts"
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/pelletier/go-toml/v2"
@@ -81,6 +82,15 @@ type MCPProjection struct {
 	Servers  []MCPProjectedServer
 	Warnings []string
 	Inputs   []MCPProjectedInput
+}
+
+// SettingsProjection describes a generated file or a section of a native config.
+type SettingsProjection struct {
+	RelativePath  string
+	Contents      []byte
+	Section       string
+	SectionDigest string
+	MergeOrder    []string
 }
 
 type LSPProjection struct {
@@ -188,19 +198,26 @@ type RebuildTransaction interface {
 // Harness is one coding agent: how agentpack stages, launches and runs it. A nil function means
 // the agent has no such step; the methods below supply those defaults.
 type Harness struct {
-	Target           Target
-	UserRoots        func(home string) []string // user artifact roots available outside the staged bundle
-	Root             func(StageContext) (string, error)
-	Reset            func(StageContext) ([]string, error)
-	BeforeReset      func(StageContext) error
-	Begin            func(StageContext) (RebuildTransaction, error)
-	Setup            func(StageContext) error
-	ProjectMCP       func(mcp.Entries, StageContext) (MCPProjection, error)
-	ProjectLSP       func(map[string]json.RawMessage, StageContext) (LSPProjection, error)
-	Guidance         func(string, StageContext) error
-	AfterStage       func(mcp.Entries, StageContext) error
-	WorkspaceOverlay func(StageContext) error
-	Check            func(StageContext) error
+	Target              Target
+	Artifacts           *artifacts.Layout
+	DotAgents           *DotAgents
+	ProjectSkillRoot    string                     // workspace-relative skills the harness reads directly
+	ProjectSkillsShadow bool                       // native project skills take precedence over staged skills
+	UserRoots           func(home string) []string // user artifact roots available outside the staged bundle
+	Root                func(StageContext) (string, error)
+	Reset               func(StageContext) ([]string, error)
+	BeforeReset         func(StageContext) error
+	Begin               func(StageContext) (RebuildTransaction, error)
+	SeededHooks         string // home-relative native hook file staged for this harness
+	PlannedSettings     func(mcp.Entries) (SettingsProjection, error)
+	StagedConfigFiles   []string // extra staged files that preflight fingerprints
+	Setup               func(StageContext) error
+	ProjectMCP          func(mcp.Entries, StageContext) (MCPProjection, error)
+	ProjectLSP          func(map[string]json.RawMessage, StageContext) (LSPProjection, error)
+	Guidance            func(string, StageContext) error
+	AfterStage          func(mcp.Entries, StageContext) error
+	WorkspaceOverlay    func(StageContext) error
+	Check               func(StageContext) error
 	// Launch builds the agent command. The caller runs finish once the command has exited or
 	// failed to start, on every path; it is never nil when err is nil.
 	Launch            func(LaunchContext) (cmd *exec.Cmd, finish func() error, err error)
@@ -219,6 +236,15 @@ type Harness struct {
 	// ResumeArgs are the arguments that relaunch the agent on its own session agentSessionID, for
 	// a terminal restart; nil when the agent cannot resume one by ID.
 	ResumeArgs func(agentSessionID string) []string
+}
+
+// DotAgents describes the workspace artifact sources this harness stages.
+type DotAgents struct {
+	NativeDirectory string
+	RawTrees        []string
+	ConvertedTrees  []string // skill files in these trees remain native discoveries
+	FlattenRules    bool
+	Guidance        string
 }
 
 // Inheritance is what a native launch of the agent reads or writes outside agentpack's staging,

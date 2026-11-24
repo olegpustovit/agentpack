@@ -10,6 +10,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/artifacts"
 	"github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
@@ -127,7 +128,13 @@ func PlanPackageTree(sourceRoot, module, bareSkillName string, effective mode.Ef
 			skillSources[artifact.StorageName] = file.Real
 		}
 	}
-	converted := NewConvertedNames(skillSources)
+	layouts := make(map[harness.Target]*artifacts.Layout, len(roots))
+	if len(roots) > 0 {
+		for _, candidate := range registry.All() {
+			layouts[candidate.Target] = candidate.Artifacts
+		}
+	}
+	converted := newConvertedNames(skillSources)
 	flattened := make(map[harness.Target]map[string]string)
 	for _, source := range parsed {
 		if len(roots) == 0 {
@@ -145,11 +152,15 @@ func PlanPackageTree(sourceRoot, module, bareSkillName string, effective mode.Ef
 				plan.Artifacts = append(plan.Artifacts, item)
 				continue
 			}
-			staged := converted.For(source.parsed, root.Target)
+			layout := layouts[root.Target]
+			if layout == nil {
+				return PackageTreePlan{}, fmt.Errorf("unknown artifact layout for %s", root.Target)
+			}
+			staged := converted.forTarget(source.parsed, root.Target, layout)
 			if staged.StorageName != source.parsed.StorageName {
 				plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: %s stages %ss as skills and the skill name %s is taken; %s %s is staged as skill %s", module, root.Target, source.parsed.Kind.Word(), source.parsed.StorageName, source.parsed.Kind.Word(), source.parsed.StorageName, staged.StorageName))
 			}
-			rendered := staged.Render(root.Target)
+			rendered := staged.Render(layout)
 			if nested := staged.NestedPath(); staged.Kind == artifacts.Agent && rendered.RelativePath != nested {
 				if flattened[root.Target] == nil {
 					flattened[root.Target] = make(map[string]string)
@@ -169,9 +180,12 @@ func PlanPackageTree(sourceRoot, module, bareSkillName string, effective mode.Ef
 				plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: %s", module, warning))
 			}
 			plan.Files = append(plan.Files, PlannedPackageFile{Target: root.Target, SourceRelative: source.file.Real, RelativePath: rendered.RelativePath, Contents: item.Output})
-			if native, ok := source.parsed.CodexAgent(); ok && root.Target == harness.Codex {
-				plan.Files = append(plan.Files, PlannedPackageFile{Target: root.Target, SourceRelative: source.file.Real, RelativePath: native.RelativePath, Contents: []byte(native.Contents)})
-				item.AdditionalOutputs = append(item.AdditionalOutputs, native.RelativePath)
+			if source.parsed.Kind == artifacts.Agent && layout.AdditionalAgent != nil {
+				native := layout.AdditionalAgent(*source.parsed)
+				if native.RelativePath != "" {
+					plan.Files = append(plan.Files, PlannedPackageFile{Target: root.Target, SourceRelative: source.file.Real, RelativePath: native.RelativePath, Contents: []byte(native.Contents)})
+					item.AdditionalOutputs = append(item.AdditionalOutputs, native.RelativePath)
+				}
 			}
 			plan.Artifacts = append(plan.Artifacts, item)
 		}

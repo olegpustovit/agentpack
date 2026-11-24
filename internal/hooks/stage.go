@@ -23,6 +23,7 @@ type PlannedFile struct {
 
 type TargetPlan struct {
 	Target      harness.Target
+	TargetRoot  string
 	Files       []PlannedFile
 	Diagnostics []Diagnostic
 	Summary     RenderSummary
@@ -36,14 +37,11 @@ type OriginInput struct{ Path, Digest string }
 // PlanTarget computes the exact support and rendered hook files for a target.
 // The caller supplies the same renderer/context that staging will use.
 func PlanTarget(bundle Bundle, target harness.Target, renderer Renderer, context RenderContext, effective mode.Effective) (TargetPlan, error) {
-	plan := TargetPlan{Target: target, Skipped: slices.Clone(bundle.Skipped)}
+	plan := TargetPlan{Target: target, TargetRoot: context.TargetRoot, Skipped: slices.Clone(bundle.Skipped)}
 	if renderer == nil {
 		return plan, nil
 	}
 	selected := bundle.ForTarget(target)
-	if target != harness.Codex {
-		selected.Hooks = slices.DeleteFunc(slices.Clone(selected.Hooks), func(hook Hook) bool { return hook.Origin.Layer == SeededNative })
-	}
 	plan.Hooks = slices.Clone(selected.Hooks)
 	seenInputs := make(map[string]bool)
 	for _, hook := range selected.Hooks {

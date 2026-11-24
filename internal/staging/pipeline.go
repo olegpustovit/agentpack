@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -127,14 +128,6 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 		return nil, err
 	}
 	var mcpPluginPlan MCPPluginPlan
-	codexHarness, err := registry.ByTarget(base.Codex)
-	if err != nil {
-		return nil, err
-	}
-	codexRoot, err := codexHarness.Root(ctx)
-	if err != nil {
-		return nil, err
-	}
 	dotPlan, err := PlanDotAgents(paths.ProjectDotAgentsDir(pipeline.workspace()), pipeline.Mode, pipeline.Target)
 	if err != nil {
 		return nil, err
@@ -143,13 +136,16 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := ApplyDotAgentsPlan(dotPlan, filepath.Join(plugins, paths.StagedAgentpackBundleName), codexRoot); err != nil {
+	if err := ApplyDotAgentsPlan(dotPlan, roots); err != nil {
 		return nil, err
 	}
 	bundle := filepath.Join(plugins, paths.StagedAgentpackBundleName)
-	if pipeline.includes(base.Claude) {
-		if err := OmitProjectClaudeSkillDuplicates(pipeline.workspace(), bundle); err != nil {
-			return nil, err
+	for i, candidate := range harnesses {
+		if candidate.ProjectSkillsShadow {
+			projectSkills := filepath.Join(pipeline.workspace(), filepath.FromSlash(candidate.ProjectSkillRoot))
+			if err := omitProjectSkillDuplicates(projectSkills, roots[i].Path, base.DisplayName(candidate.Target)); err != nil {
+				return nil, err
+			}
 		}
 	}
 	mcpPlan, err := CollectMCPPlan(pipeline.workspace(), pipeline.Lock, pipeline.Manifest, &pipeline.Mode)
@@ -235,6 +231,7 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 			return nil, fmt.Errorf("finalize %s: %w", candidate.Target, err)
 		}
 	}
+	overlayChangesDotAgents := false
 	if pipeline.Target != nil {
 		if pipeline.StrictExternal && pipeline.Target.UsesWorkspaceOverlay() {
 			return nil, fmt.Errorf("%s requires a workspace overlay write; refuse under --strict-external (use claude/opencode, or omit --strict-external)", *pipeline.Target)
@@ -246,6 +243,9 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 		if err := dotPlan.Validate(); err != nil {
 			return nil, err
 		}
+		overlayChangesDotAgents = slices.ContainsFunc(candidate.Inheritance.Overlay, func(path string) bool {
+			return strings.HasPrefix(path, ".agents/")
+		})
 		if err := candidate.FinalizeWorkspaceOverlay(ctx); err != nil {
 			return nil, err
 		}
@@ -271,9 +271,9 @@ func (pipeline Pipeline) Rebuild() (_ []string, rebuildErr error) {
 			return nil, err
 		}
 	}
-	// Antigravity's final workspace overlay adds its own symlink under
-	// .agents/plugins; validate its source plan immediately before that write.
-	if pipeline.Target == nil || *pipeline.Target != base.Agy {
+	// Overlays written under .agents have already had their inputs checked
+	// immediately before they changed that tree.
+	if !overlayChangesDotAgents {
 		if err := dotPlan.Validate(); err != nil {
 			return nil, err
 		}
@@ -317,20 +317,8 @@ func (pipeline Pipeline) verify(ctx base.StageContext) error {
 	if err != nil {
 		return err
 	}
-	entries, err := os.ReadDir(plugins)
-	if err != nil && (pipeline.includes(base.Claude) || !os.IsNotExist(err)) {
+	if _, err := os.ReadDir(plugins); err != nil && !os.IsNotExist(err) {
 		return err
-	}
-	count := 0
-	for _, entry := range entries {
-		if entry.IsDir() {
-			if _, err := os.Stat(filepath.Join(plugins, entry.Name(), ".claude-plugin", "plugin.json")); err == nil {
-				count++
-			}
-		}
-	}
-	if pipeline.includes(base.Claude) && count != 1 {
-		return fmt.Errorf("expected exactly one merged plugin dir (agentpack-bundle), got %d", count)
 	}
 	var skillRoots []string
 	nativeSkills := make(map[base.Target]map[string]struct{})
@@ -345,11 +333,14 @@ func (pipeline Pipeline) verify(ctx base.StageContext) error {
 		if err != nil {
 			return err
 		}
+		if candidate.ProjectSkillsShadow {
+			projectNames, err := ShadowingProjectSkillNames(pipeline.workspace(), candidate.ProjectSkillRoot)
+			if err != nil {
+				return err
+			}
+			maps.Copy(names, projectNames)
+		}
 		nativeSkills[candidate.Target] = names
-	}
-	projectClaudeSkills, err := ProjectClaudeSkillNames(pipeline.workspace())
-	if err != nil {
-		return err
 	}
 	pluginPackages := pipeline.Lock.Plugins()
 	for _, skill := range pipeline.Lock.Skills() {
@@ -375,11 +366,6 @@ func (pipeline Pipeline) verify(ctx base.StageContext) error {
 			if _, native := nativeSkills[harnesses[index].Target][strings.ToLower(name)]; native {
 				continue
 			}
-			if harnesses[index].Target == base.Claude {
-				if _, omitted := projectClaudeSkills[strings.ToLower(name)]; omitted {
-					continue
-				}
-			}
 			path := filepath.Join(root, "skills", name, "SKILL.md")
 			if _, err := os.Stat(path); err != nil {
 				return fmt.Errorf("%s staging missing skill SKILL.md %s", harnesses[index].Target, path)
@@ -399,16 +385,52 @@ func (pipeline Pipeline) context() base.StageContext {
 	}
 }
 
-func (pipeline Pipeline) stageHooks(ctx base.StageContext, harnesses []registry.Entry) ([]hooks.TargetPlan, error) {
-	seeded := ""
-	if pipeline.includes(base.Codex) {
+// PlanHooks computes the hook files each selected harness would receive.
+func (pipeline Pipeline) PlanHooks() ([]hooks.TargetPlan, error) {
+	harnesses := pipeline.harnesses()
+	bundle, err := pipeline.collectHooks(harnesses)
+	if err != nil {
+		return nil, err
+	}
+	return planHookTargets(bundle, pipeline.context(), harnesses)
+}
+
+func (pipeline Pipeline) collectHooks(harnesses []registry.Entry) (hooks.Bundle, error) {
+	var seeds []hooks.Seed
+	for _, candidate := range harnesses {
+		if candidate.SeededHooks == "" {
+			continue
+		}
 		home, err := os.UserHomeDir()
+		if err != nil {
+			return hooks.Bundle{}, err
+		}
+		seeds = append(seeds, hooks.Seed{Target: candidate.Target, Path: filepath.Join(home, filepath.FromSlash(candidate.SeededHooks))})
+	}
+	return hooks.Collect(pipeline.workspace(), pipeline.Lock, seeds, pipeline.Mode)
+}
+
+func planHookTargets(bundle hooks.Bundle, ctx base.StageContext, harnesses []registry.Entry) ([]hooks.TargetPlan, error) {
+	var plans []hooks.TargetPlan
+	for _, candidate := range harnesses {
+		if candidate.Hooks == nil {
+			continue
+		}
+		root, err := candidate.Root(ctx)
 		if err != nil {
 			return nil, err
 		}
-		seeded = filepath.Join(home, ".codex", "hooks.json")
+		plan, err := hooks.PlanTarget(bundle, candidate.Target, candidate.Hooks, hooks.RenderContext{ProjectRoot: ctx.ProjectRoot, TargetRoot: root}, ctx.Mode)
+		if err != nil {
+			return nil, err
+		}
+		plans = append(plans, plan)
 	}
-	bundle, err := hooks.Collect(pipeline.workspace(), pipeline.Lock, seeded, pipeline.Mode)
+	return plans, nil
+}
+
+func (pipeline Pipeline) stageHooks(ctx base.StageContext, harnesses []registry.Entry) ([]hooks.TargetPlan, error) {
+	bundle, err := pipeline.collectHooks(harnesses)
 	if err != nil {
 		return nil, err
 	}
@@ -418,27 +440,17 @@ func (pipeline Pipeline) stageHooks(ctx base.StageContext, harnesses []registry.
 	if len(bundle.Hooks) == 0 {
 		return nil, nil
 	}
-	var plans []hooks.TargetPlan
-	for _, candidate := range harnesses {
-		renderer := candidate.Hooks
-		if renderer == nil {
-			continue
-		}
-		root, err := candidate.Root(ctx)
-		if err != nil {
-			return nil, err
-		}
-		plan, err := hooks.PlanTarget(bundle, candidate.Target, renderer, hooks.RenderContext{ProjectRoot: pipeline.ProjectRoot, TargetRoot: root}, pipeline.Mode)
-		if err != nil {
-			return nil, err
-		}
-		plans = append(plans, plan)
+	plans, err := planHookTargets(bundle, ctx, harnesses)
+	if err != nil {
+		return nil, err
+	}
+	for _, plan := range plans {
 		for _, diagnostic := range plan.Diagnostics {
 			// A hook rendered as intended is information; one that was
 			// left out or lost something is a warning.
 			if diagnostic.Level == "native" || diagnostic.Level == "emulated" {
 				if pipeline.Info != nil {
-					pipeline.Info(fmt.Sprintf("hook for %s: %s: %s", candidate.Target, diagnostic.Source, diagnostic.Message))
+					pipeline.Info(fmt.Sprintf("hook for %s: %s: %s", plan.Target, diagnostic.Source, diagnostic.Message))
 				}
 				continue
 			}
@@ -488,7 +500,8 @@ func (pipeline Pipeline) RebuildPending() (bool, error) {
 func (pipeline Pipeline) managedRebuildPaths(ctx base.StageContext, harnesses []registry.Entry) ([]string, error) {
 	var managed []string
 	for _, candidate := range harnesses {
-		if candidate.Target == base.Codex {
+		// A private rebuild transaction leaves the published root in place.
+		if candidate.Begin != nil {
 			continue
 		}
 		reset, err := candidate.ResetPaths(ctx)

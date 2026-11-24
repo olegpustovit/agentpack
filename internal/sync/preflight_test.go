@@ -961,7 +961,7 @@ func TestEffectivePlanFiltersModesAndUsesNativeRenderedProperties(t *testing.T) 
 		t.Fatal(err)
 	}
 	target := base.Codex
-	records, err := plannedArtifacts(lock, selected, t.TempDir(), t.TempDir(), &target, true)
+	records, _, err := plannedArtifacts(lock, selected, t.TempDir(), t.TempDir(), &target, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1009,7 +1009,7 @@ func TestPreflightDotAgentsUsesStagingPlanAndMarksNativeCodexSkill(t *testing.T)
 		t.Fatal(err)
 	}
 	target := base.Codex
-	records, err := plannedArtifacts(lockfile.PackLock{}, effective, t.TempDir(), workspace, &target, true)
+	records, _, err := plannedArtifacts(lockfile.PackLock{}, effective, t.TempDir(), workspace, &target, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1028,7 +1028,7 @@ func TestPreflightDotAgentsUsesStagingPlanAndMarksNativeCodexSkill(t *testing.T)
 		t.Fatalf("dot-agent plan mismatch: %#v", records)
 	}
 	t.Setenv("AGENTPACK_DOT_AGENTS", "0")
-	records, err = plannedArtifacts(lockfile.PackLock{}, effective, t.TempDir(), workspace, &target, true)
+	records, _, err = plannedArtifacts(lockfile.PackLock{}, effective, t.TempDir(), workspace, &target, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1538,7 +1538,7 @@ func TestEffectivePlanFollowsDeclaredPathsAndConvertedNames(t *testing.T) {
 	}
 	lock := lockfile.PackLock{Packages: []lockfile.Package{{Module: "github.com/team/pack", Kind: lockfile.PackagePlugin, CacheKey: key, Name: "pack"}}}
 	outputs := func(target base.Target) map[string]string {
-		records, err := plannedArtifacts(lock, mode.ImplicitEffective(), t.TempDir(), t.TempDir(), &target, true)
+		records, _, err := plannedArtifacts(lock, mode.ImplicitEffective(), t.TempDir(), t.TempDir(), &target, true)
 		if err != nil {
 			t.Fatal(err)
 		}

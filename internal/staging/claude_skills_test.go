@@ -136,7 +136,7 @@ func TestOmitProjectClaudeSkillDuplicatesByNameAndHashWholeTree(t *testing.T) {
 		}
 	}
 
-	if err := OmitProjectClaudeSkillDuplicates(project, bundle); err != nil {
+	if err := omitProjectSkillDuplicates(filepath.Join(project, ".claude", "skills"), bundle, "Claude Code"); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"mirror", "override"} {

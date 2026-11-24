@@ -1,28 +1,38 @@
-package artifacts
+package artifacts_test
 
 import (
 	"strings"
 	"testing"
 
+	"github.com/olegpustovit/agentpack/internal/artifacts"
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/harness/omp"
-	"github.com/pelletier/go-toml/v2"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 )
 
-func TestCursorCommandRendersForOpenCodeAndCursor(t *testing.T) {
-	t.Parallel()
-	artifact, err := Parse(".cursor/commands/review-code.md", "# Review code\n\nCheck the diff carefully.", "")
+func layoutFor(t *testing.T, target harness.Target) *artifacts.Layout {
+	t.Helper()
+	entry, err := registry.ByTarget(target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if artifact.Kind != Command || artifact.SourceVariant != CursorPlainCommand {
+	return entry.Artifacts
+}
+
+func TestCursorCommandRendersForOpenCodeAndCursor(t *testing.T) {
+	t.Parallel()
+	artifact, err := artifacts.Parse(".cursor/commands/review-code.md", "# Review code\n\nCheck the diff carefully.", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Kind != artifacts.Command || artifact.SourceVariant != artifacts.CursorPlainCommand {
 		t.Fatalf("artifact = %#v", artifact)
 	}
-	openCode := artifact.Render(harness.OpenCode)
+	openCode := artifact.Render(layoutFor(t, harness.OpenCode))
 	if openCode.RelativePath != "commands/review-code.md" || !strings.Contains(openCode.Contents, "description: Review code") {
 		t.Fatalf("rendered = %#v", openCode)
 	}
-	cursor := artifact.Render(harness.Cursor)
+	cursor := artifact.Render(layoutFor(t, harness.Cursor))
 	if !strings.Contains(cursor.Contents, "name: review-code") {
 		t.Fatalf("cursor = %s", cursor.Contents)
 	}
@@ -30,22 +40,22 @@ func TestCursorCommandRendersForOpenCodeAndCursor(t *testing.T) {
 
 func TestRuleFallsBackToScopedSkillExceptNativeTargets(t *testing.T) {
 	t.Parallel()
-	artifact, err := Parse(".cursor/rules/typescript.mdc", "---\ndescription: TypeScript standards\nglobs: **/*.ts\nalwaysApply: true\n---\n\nUse strict types.\n", "")
+	artifact, err := artifacts.Parse(".cursor/rules/typescript.mdc", "---\ndescription: TypeScript standards\nglobs: **/*.ts\nalwaysApply: true\n---\n\nUse strict types.\n", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	codex := artifact.Render(harness.Codex)
+	codex := artifact.Render(layoutFor(t, harness.Codex))
 	if codex.RelativePath != "skills/typescript/SKILL.md" || !strings.Contains(codex.Contents, "Original Cursor globs") || !strings.Contains(codex.Contents, "Applies in every session") {
 		t.Fatalf("codex = %#v", codex)
 	}
-	if cursor := artifact.Render(harness.Cursor); cursor.RelativePath != "rules/typescript.mdc" || !strings.Contains(cursor.Contents, "alwaysApply: true") {
+	if cursor := artifact.Render(layoutFor(t, harness.Cursor)); cursor.RelativePath != "rules/typescript.mdc" || !strings.Contains(cursor.Contents, "alwaysApply: true") {
 		t.Fatalf("cursor = %#v", cursor)
 	}
-	if omp := artifact.Render(harness.OMP); omp.RelativePath != "rules/typescript.mdc" || !strings.Contains(omp.Contents, "alwaysApply: true") {
+	if omp := artifact.Render(layoutFor(t, harness.OMP)); omp.RelativePath != "rules/typescript.mdc" || !strings.Contains(omp.Contents, "alwaysApply: true") {
 		t.Fatalf("omp = %#v", omp)
 	}
 	// Antigravity discards a rule file without a trigger, and reads .md files
-	if agy := artifact.Render(harness.Agy); agy.RelativePath != "rules/typescript.md" || !strings.Contains(agy.Contents, "trigger: always_on") || strings.Contains(agy.Contents, "alwaysApply") {
+	if agy := artifact.Render(layoutFor(t, harness.Agy)); agy.RelativePath != "rules/typescript.md" || !strings.Contains(agy.Contents, "trigger: always_on") || strings.Contains(agy.Contents, "alwaysApply") {
 		t.Fatalf("agy = %#v", agy)
 	}
 }
@@ -59,11 +69,11 @@ func TestAgyRuleTriggerFollowsTheRuleScope(t *testing.T) {
 		"Body only\n": "trigger: model_decision",
 	}
 	for source, want := range cases {
-		artifact, err := Parse(".cursor/rules/r.mdc", source, "")
+		artifact, err := artifacts.Parse(".cursor/rules/r.mdc", source, "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := artifact.Render(harness.Agy).Contents; !strings.Contains(got, want) {
+		if got := artifact.Render(layoutFor(t, harness.Agy)).Contents; !strings.Contains(got, want) {
 			t.Errorf("%q: %s", source, got)
 		}
 	}
@@ -71,11 +81,11 @@ func TestAgyRuleTriggerFollowsTheRuleScope(t *testing.T) {
 
 func TestSkillStorageNameAndAllowedExtraFrontmatter(t *testing.T) {
 	t.Parallel()
-	artifact, err := Parse("skills/react-best-practices/SKILL.md", "---\nname: vercel-react-best-practices\ndescription: React guidance\nlicense: MIT\nunknown: drop\n---\n\n# React\n", "")
+	artifact, err := artifacts.Parse("skills/react-best-practices/SKILL.md", "---\nname: vercel-react-best-practices\ndescription: React guidance\nlicense: MIT\nunknown: drop\n---\n\n# React\n", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rendered := artifact.Render(harness.Claude)
+	rendered := artifact.Render(layoutFor(t, harness.Claude))
 	if rendered.RelativePath != "skills/react-best-practices/SKILL.md" || !strings.Contains(rendered.Contents, "name: vercel-react-best-practices") || !strings.Contains(rendered.Contents, "license: MIT") || strings.Contains(rendered.Contents, "unknown:") {
 		t.Fatalf("rendered = %#v", rendered)
 	}
@@ -83,11 +93,11 @@ func TestSkillStorageNameAndAllowedExtraFrontmatter(t *testing.T) {
 
 func TestAgyDropsClaudeOnlyFrontmatter(t *testing.T) {
 	t.Parallel()
-	artifact, err := Parse("agents/review.md", "---\ndescription: Review code\nmodel: opus\ncolor: blue\n---\n\nReview carefully.\n", "")
+	artifact, err := artifacts.Parse("agents/review.md", "---\ndescription: Review code\nmodel: opus\ncolor: blue\n---\n\nReview carefully.\n", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rendered := artifact.Render(harness.Agy)
+	rendered := artifact.Render(layoutFor(t, harness.Agy))
 	if strings.Contains(rendered.Contents, "model:") || strings.Contains(rendered.Contents, "color:") || !strings.Contains(rendered.Contents, "description: Review code") {
 		t.Fatalf("rendered = %s", rendered.Contents)
 	}
@@ -95,17 +105,17 @@ func TestAgyDropsClaudeOnlyFrontmatter(t *testing.T) {
 
 func TestFrontmatterBOMCRLFGlobsAndSupportPaths(t *testing.T) {
 	t.Parallel()
-	artifact, err := Parse(".claude/rules/notes.md", "\ufeff---\r\ndescription: Notes\r\nglobs:\r\n  - '**/*.go'\r\n  - '**/*.mod'\r\n---\r\n\r\n# Notes", "")
+	artifact, err := artifacts.Parse(".claude/rules/notes.md", "\ufeff---\r\ndescription: Notes\r\nglobs:\r\n  - '**/*.go'\r\n  - '**/*.mod'\r\n---\r\n\r\n# Notes", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(artifact.Globs) != 2 || artifact.Body != "\r\n# Notes\n" {
 		t.Fatalf("artifact = %#v", artifact)
 	}
-	if got, ok := StagedSkillSupportPath("skills/demo/references/info.md", ""); !ok || got != "skills/demo/references/info.md" {
+	if got, ok := artifacts.StagedSkillSupportPath("skills/demo/references/info.md", ""); !ok || got != "skills/demo/references/info.md" {
 		t.Fatalf("support path = %q, %v", got, ok)
 	}
-	if _, ok := StagedSkillSupportPath("skills/demo/SKILL.md", ""); ok {
+	if _, ok := artifacts.StagedSkillSupportPath("skills/demo/SKILL.md", ""); ok {
 		t.Fatal("SKILL.md must not be support content")
 	}
 }
@@ -113,11 +123,11 @@ func TestFrontmatterBOMCRLFGlobsAndSupportPaths(t *testing.T) {
 func TestCodexFoldsCommandsAndAgentsIntoSkills(t *testing.T) {
 	t.Parallel()
 	for _, relative := range []string{"commands/test.mdc", "agents/review.md"} {
-		artifact, err := Parse(relative, "---\ndescription: Demo\n---\n\nDo it.\n", "")
+		artifact, err := artifacts.Parse(relative, "---\ndescription: Demo\n---\n\nDo it.\n", "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if rendered := artifact.Render(harness.Codex); !strings.HasPrefix(rendered.RelativePath, "skills/") {
+		if rendered := artifact.Render(layoutFor(t, harness.Codex)); !strings.HasPrefix(rendered.RelativePath, "skills/") {
 			t.Fatalf("%s rendered to %s", relative, rendered.RelativePath)
 		}
 	}
@@ -127,7 +137,7 @@ func TestFrontmatterIsReadKeyByKeyWhenItIsNotValidYAML(t *testing.T) {
 	t.Parallel()
 	// commands/modernize.md of the official code-modernization plugin.
 	source := "---\ndescription: Start here — say what you want done\nargument-hint: [system] [--source <path>]\narguments: system\nallowed-tools:\n  - Read\n  - Bash\ndisable-model-invocation: true\n---\n\nYou are the front door.\n"
-	artifact, err := Parse("commands/modernize.md", source, "")
+	artifact, err := artifacts.Parse("commands/modernize.md", source, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,17 +147,17 @@ func TestFrontmatterIsReadKeyByKeyWhenItIsNotValidYAML(t *testing.T) {
 	if tools, ok := artifact.ExtraFrontmatter["allowed-tools"].([]any); !ok || len(tools) != 2 {
 		t.Fatalf("allowed-tools = %#v", artifact.ExtraFrontmatter["allowed-tools"])
 	}
-	claude := artifact.Render(harness.Claude).Contents
+	claude := artifact.Render(layoutFor(t, harness.Claude)).Contents
 	if !strings.Contains(claude, `argument-hint: '[system] [--source <path>]'`) && !strings.Contains(claude, `argument-hint: "[system] [--source <path>]"`) {
 		t.Fatalf("claude = %s", claude)
 	}
-	if reparsed, err := Parse("commands/modernize.md", claude, ""); err != nil || reparsed.ExtraFrontmatter["argument-hint"] != "[system] [--source <path>]" {
+	if reparsed, err := artifacts.Parse("commands/modernize.md", claude, ""); err != nil || reparsed.ExtraFrontmatter["argument-hint"] != "[system] [--source <path>]" {
 		t.Fatalf("rendered command does not parse back: %v\n%s", err, claude)
 	}
-	if openCode := artifact.Render(harness.OpenCode).Contents; strings.Contains(openCode, "argument-hint") || !strings.Contains(openCode, "You are the front door.") {
+	if openCode := artifact.Render(layoutFor(t, harness.OpenCode)).Contents; strings.Contains(openCode, "argument-hint") || !strings.Contains(openCode, "You are the front door.") {
 		t.Fatalf("opencode = %s", openCode)
 	}
-	broken, err := Parse("commands/broken.md", "---\n[not a mapping\n---\n\nBody text\n", "")
+	broken, err := artifacts.Parse("commands/broken.md", "---\n[not a mapping\n---\n\nBody text\n", "")
 	if err != nil || broken.Description != "Body text" || len(broken.ExtraFrontmatter) != 0 {
 		t.Fatalf("unreadable frontmatter: %#v, %v", broken, err)
 	}
@@ -159,12 +169,12 @@ func TestOpenCodeAgentToolsBecomeTheDocumentedObject(t *testing.T) {
 		"list":   "tools: [\"Read\", \"Write\", \"Edit\", \"Bash\", \"Grep\", \"Glob\"]\n",
 		"string": "tools: Read, Write, Edit, Bash(git:*, npm:*), Grep, Glob\n",
 	} {
-		artifact, err := Parse("agents/reviewer.md", "---\nname: reviewer\ndescription: Review code\n"+tools+"model: sonnet\n---\n\nReview carefully.\n", "")
+		artifact, err := artifacts.Parse("agents/reviewer.md", "---\nname: reviewer\ndescription: Review code\n"+tools+"model: sonnet\n---\n\nReview carefully.\n", "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		rendered := artifact.Render(harness.OpenCode)
-		reparsed, err := Parse("agents/reviewer.md", rendered.Contents, "")
+		rendered := artifact.Render(layoutFor(t, harness.OpenCode))
+		reparsed, err := artifacts.Parse("agents/reviewer.md", rendered.Contents, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -181,15 +191,15 @@ func TestOpenCodeAgentToolsBecomeTheDocumentedObject(t *testing.T) {
 			t.Fatalf("%s: warnings = %v\n%s", name, rendered.Warnings, rendered.Contents)
 		}
 		// Claude Code keeps what the package wrote.
-		if claude := artifact.Render(harness.Claude).Contents; !strings.Contains(claude, "Read") || strings.Contains(claude, "webfetch") {
+		if claude := artifact.Render(layoutFor(t, harness.Claude)).Contents; !strings.Contains(claude, "Read") || strings.Contains(claude, "webfetch") {
 			t.Fatalf("%s: claude = %s", name, claude)
 		}
 	}
-	artifact, err := Parse("agents/browser.md", "---\ndescription: Browse\ntools: Read, mcp__playwright__navigate\ndisallowedTools: [Bash]\ncolor: blue\nmode: plan\nmodel: anthropic/claude-sonnet-4-5\n---\n\nBrowse.\n", "")
+	artifact, err := artifacts.Parse("agents/browser.md", "---\ndescription: Browse\ntools: Read, mcp__playwright__navigate\ndisallowedTools: [Bash]\ncolor: blue\nmode: plan\nmodel: anthropic/claude-sonnet-4-5\n---\n\nBrowse.\n", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rendered := artifact.Render(harness.OpenCode)
+	rendered := artifact.Render(layoutFor(t, harness.OpenCode))
 	if len(rendered.Warnings) != 2 || !strings.Contains(strings.Join(rendered.Warnings, "\n"), "mcp__playwright__navigate") || !strings.Contains(strings.Join(rendered.Warnings, "\n"), "mode plan") {
 		t.Fatalf("warnings = %v", rendered.Warnings)
 	}
@@ -205,42 +215,16 @@ func TestOpenCodeAgentToolsBecomeTheDocumentedObject(t *testing.T) {
 
 func TestOpenCodeCommandDropsAClaudeModelAlias(t *testing.T) {
 	t.Parallel()
-	artifact, err := Parse("commands/plan.md", "---\ndescription: Plan\nmodel: opus\n---\n\nPlan.\n", "")
+	artifact, err := artifacts.Parse("commands/plan.md", "---\ndescription: Plan\nmodel: opus\n---\n\nPlan.\n", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	openCode := artifact.Render(harness.OpenCode)
+	openCode := artifact.Render(layoutFor(t, harness.OpenCode))
 	if strings.Contains(openCode.Contents, "model:") || len(openCode.Warnings) != 1 || !strings.Contains(openCode.Warnings[0], "model opus") {
 		t.Fatalf("opencode = %#v", openCode)
 	}
-	if claude := artifact.Render(harness.Claude); !strings.Contains(claude.Contents, "model: opus") || len(claude.Warnings) != 0 {
+	if claude := artifact.Render(layoutFor(t, harness.Claude)); !strings.Contains(claude.Contents, "model: opus") || len(claude.Warnings) != 0 {
 		t.Fatalf("claude = %#v", claude)
-	}
-}
-
-func TestSubagentIsAlsoACodexCustomAgentFile(t *testing.T) {
-	t.Parallel()
-	artifact, err := Parse("agents/research/company-researcher.md", "---\nname: Company Researcher\ndescription: Research a company\nallowed-tools:\n  - Read\n---\n\n# Company Researcher Agent\n\nResearch \"it\".\n", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rendered, ok := artifact.CodexAgent()
-	if !ok || rendered.RelativePath != "agents/company-researcher.toml" {
-		t.Fatalf("rendered = %#v, %v", rendered, ok)
-	}
-	var decoded map[string]string
-	if err := toml.Unmarshal([]byte(rendered.Contents), &decoded); err != nil {
-		t.Fatalf("%v\n%s", err, rendered.Contents)
-	}
-	if decoded["name"] != "company-researcher" || decoded["description"] != "Research a company" || !strings.Contains(decoded["developer_instructions"], "Research \"it\".") || len(decoded) != 3 {
-		t.Fatalf("decoded = %#v", decoded)
-	}
-	command, err := Parse("commands/plan.md", "Plan.\n", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := command.CodexAgent(); ok {
-		t.Fatal("a command became a Codex agent")
 	}
 }
 
@@ -249,13 +233,13 @@ func TestSubagentIsAlsoACodexCustomAgentFile(t *testing.T) {
 func TestDocumentationInAComponentDirectoryIsNotAnArtifact(t *testing.T) {
 	t.Parallel()
 	for _, relative := range []string{"agents/README.md", "commands/CHANGELOG.md", "agents/personas/README.md", "rules/LICENSE.md", ".claude/commands/CONTRIBUTING.md"} {
-		artifact, err := Parse(relative, "# About this directory\n\nNotes.\n", "")
+		artifact, err := artifacts.Parse(relative, "# About this directory\n\nNotes.\n", "")
 		if err != nil || artifact != nil {
 			t.Fatalf("%s became %#v, %v", relative, artifact, err)
 		}
 	}
 	for _, relative := range []string{"commands/readme.md", "agents/reviewer.md", "skills/README/SKILL.md"} {
-		artifact, err := Parse(relative, "---\ndescription: Real\n---\nBody.\n", "")
+		artifact, err := artifacts.Parse(relative, "---\ndescription: Real\n---\nBody.\n", "")
 		if err != nil || artifact == nil {
 			t.Fatalf("%s was not staged: %v", relative, err)
 		}
@@ -266,7 +250,7 @@ func TestDocumentationInAComponentDirectoryIsNotAnArtifact(t *testing.T) {
 // Grok and Antigravity listed none of them while they were staged there.
 func TestAgentInASubdirectoryIsStagedWhereTheTargetReadsIt(t *testing.T) {
 	t.Parallel()
-	artifact, err := Parse("agents/engineering/cs-backend-engineer.md", "---\nname: cs-backend-engineer\ndescription: Backend work\n---\n\nBuild it.\n", "")
+	artifact, err := artifacts.Parse("agents/engineering/cs-backend-engineer.md", "---\nname: cs-backend-engineer\ndescription: Backend work\n---\n\nBuild it.\n", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +261,7 @@ func TestAgentInASubdirectoryIsStagedWhereTheTargetReadsIt(t *testing.T) {
 		harness.Cursor:   "agents/cs-backend-engineer.md",
 		harness.OpenCode: "agents/engineering/cs-backend-engineer.md",
 	} {
-		if got := artifact.Render(target).RelativePath; got != want {
+		if got := artifact.Render(layoutFor(t, target)).RelativePath; got != want {
 			t.Errorf("%s: %s, want %s", target, got, want)
 		}
 	}
@@ -293,22 +277,22 @@ func TestCursorSubagentWithoutWriteToolsIsReadonly(t *testing.T) {
 		"---\nname: fixer\ndescription: Fixes\ntools: Read, Edit\n---\n\nFixes.\n":                false,
 		"---\nname: any\ndescription: Anything\n---\n\nAll tools.\n":                              false,
 	} {
-		artifact, err := Parse("agents/a.md", source, "")
+		artifact, err := artifacts.Parse("agents/a.md", source, "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := strings.Contains(artifact.Render(harness.Cursor).Contents, "readonly: true"); got != want {
+		if got := strings.Contains(artifact.Render(layoutFor(t, harness.Cursor)).Contents, "readonly: true"); got != want {
 			t.Errorf("%q: readonly %v", source, got)
 		}
 	}
 }
 
 func TestOMPAgentPreservesModelsAndToolRestrictions(t *testing.T) {
-	parsed, err := Parse("agents/reviewer.md", "---\nname: reviewer\ndescription: Review changes\nmodel: openai/gpt-5.2\ntools: Read, Bash, WebSearch\ndisallowedTools: Bash\nthinkingLevel: high\nblocking: true\n---\nReview.\n", "")
+	parsed, err := artifacts.Parse("agents/reviewer.md", "---\nname: reviewer\ndescription: Review changes\nmodel: openai/gpt-5.2\ntools: Read, Bash, WebSearch\ndisallowedTools: Bash\nthinkingLevel: high\nblocking: true\n---\nReview.\n", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := parsed.Render(harness.OMP)
+	output := parsed.Render(layoutFor(t, harness.OMP))
 	for _, wanted := range []string{"model: openai/gpt-5.2", "thinkingLevel: high", "blocking: true", "read", "web_search"} {
 		if !strings.Contains(output.Contents, wanted) {
 			t.Fatalf("missing %s: %s", wanted, output.Contents)

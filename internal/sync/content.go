@@ -191,7 +191,7 @@ func selectedContent(definitionRoot, workspace string, project *manifest.Manifes
 	if err != nil {
 		return "", nil, err
 	}
-	bundle, err := hooks.Collect(workspace, lock, "", effective)
+	bundle, err := hooks.Collect(workspace, lock, nil, effective)
 	if err != nil {
 		return "", nil, err
 	}

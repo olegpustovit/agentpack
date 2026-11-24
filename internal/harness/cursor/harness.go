@@ -15,7 +15,7 @@ import (
 )
 
 func New() base.Harness {
-	return base.Harness{Target: base.Cursor, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, AfterStage: finalize, WorkspaceOverlay: materializeAgentsOverlay, Check: verify, Launch: launch, LaunchACP: acpLaunch, LaunchInputs: launchInputs, Inheritance: base.Inheritance{
+	return base.Harness{Target: base.Cursor, Artifacts: &artifactLayout, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, AfterStage: finalize, WorkspaceOverlay: materializeAgentsOverlay, Check: verify, Launch: launch, LaunchACP: acpLaunch, LaunchInputs: launchInputs, Inheritance: base.Inheritance{
 		Note: "Cursor fake HOME bridges user cli-config/mcp, seeds ~/.cursor/skills, and may write .cursor/agents in the workspace",
 		Paths: func(string) []string {
 			return base.HomeFiles(".cursor/cli-config.json", ".cursor/mcp.json", ".cursor/skills")

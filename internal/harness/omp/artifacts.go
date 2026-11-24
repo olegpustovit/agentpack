@@ -5,8 +5,17 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/olegpustovit/agentpack/internal/artifacts"
 	base "github.com/olegpustovit/agentpack/internal/harness"
 )
+
+var artifactLayout = artifacts.Layout{
+	NativeKinds:   []artifacts.Kind{artifacts.Skill, artifacts.Command, artifacts.Agent, artifacts.Rule},
+	CommandFields: []string{"description"}, CommandKeys: artifacts.CommandExtraKeys,
+	SkillKeys:   artifacts.SkillExtraKeys,
+	AgentKeys:   []string{"tools", "model", "spawns", "output", "thinkingLevel", "autoloadSkills", "readSummarize", "blocking", "structured", "prewalk", "advisor"},
+	AgentExtras: AgentExtras, WarningName: "OMP",
+}
 
 // OMP accepts explicit tool allowlists, so deny-only agents need a bounded list.
 // shortcut: built-ins match OMP 18.14, refresh this list when OMP adds tools.

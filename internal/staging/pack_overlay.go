@@ -71,23 +71,23 @@ func StagePackOverlay(lock lockfile.PackLock, roots []HarnessRoot, effective mod
 	return plans, nil
 }
 
-// ConvertedNames names the skills that a package's commands, agents and rules
+// convertedNames names the skills that a package's commands, agents and rules
 // become on a target without those kinds. An item keeps its own name when it
 // is free; otherwise it gets the name followed by its kind (review-command),
 // then by a number. Items must be offered in staging order.
-type ConvertedNames struct {
+type convertedNames struct {
 	skills map[string]string
 	taken  map[harness.Target]map[string]bool
 }
 
-// NewConvertedNames takes the package's own skills, by storage name.
-func NewConvertedNames(skills map[string]string) *ConvertedNames {
-	return &ConvertedNames{skills: skills, taken: make(map[harness.Target]map[string]bool)}
+// newConvertedNames takes the package's own skills, by storage name.
+func newConvertedNames(skills map[string]string) *convertedNames {
+	return &convertedNames{skills: skills, taken: make(map[harness.Target]map[string]bool)}
 }
 
-// For returns the artifact as it is staged for target.
-func (names *ConvertedNames) For(artifact *artifacts.Markdown, target harness.Target) artifacts.Markdown {
-	if artifact.Kind == artifacts.Skill || artifacts.RenderedKind(target, artifact.Kind) != artifacts.Skill {
+// forTarget returns the artifact as it is staged for target.
+func (names *convertedNames) forTarget(artifact *artifacts.Markdown, target harness.Target, layout *artifacts.Layout) artifacts.Markdown {
+	if artifact.Kind == artifacts.Skill || layout.Kind(artifact.Kind) != artifacts.Skill {
 		return *artifact
 	}
 	if names.taken[target] == nil {

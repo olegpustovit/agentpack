@@ -1,0 +1,34 @@
+{
+  "grok-home": {
+    "AGENTS.md": "# AGENTS.md\n\n\u003c!-- agentpack:no-attribution:begin --\u003e\n# Attribution policy\n\nDo not add any AI-attribution lines to git commits, pull requests, or other artifacts you author.\nSpecifically, do not include:\n\n- `Co-Authored-By: \u003cmodel\u003e \u003cnoreply@...\u003e` trailers.\n- `Generated with [agent name]` footers, banners, or similar credit lines.\n- Tool/agent name signatures in commit messages or PR descriptions.\n\nWrite commit messages and PR descriptions as if a human author wrote them.\n\u003c!-- agentpack:no-attribution:end --\u003e\n\n\u003c!-- agentpack:guidance:begin --\u003e\n# Agentpack-injected guidance\n\n_The following rules were declared with `alwaysApply: true` in one or more pinned plugins. They are injected into every supported harness for consistency._\n\n---\n\n## always\n\n_Always check_\n\nAlways check.\n\n---\n\n## local\n\n_Local rule._\n\nLocal rule.\n\u003c!-- agentpack:guidance:end --\u003e\n",
+    "config.toml": "[plugins]\nenabled = ['another-plugin', 'agentpack-bundle']\n",
+    "plugins/": "",
+    "plugins/agentpack-bundle -\u003e": "$ROOT",
+    "sessions -\u003e": "$HOME/.grok/sessions"
+  },
+  "stage": {
+    "grok/": "",
+    "grok/agentpack-bundle/": "",
+    "grok/agentpack-bundle/agents/": "",
+    "grok/agentpack-bundle/agents/check.md": "---\nname: check\ndescription: Check work\ncolor: blue\ndisallowedTools: Write\nmodel: sonnet\ntools: Read, Grep\n---\n\nCheck it.\n",
+    "grok/agentpack-bundle/agents/team/": "",
+    "grok/agentpack-bundle/agents/team/check.md": "---\ndescription: Check work\ncolor: blue\nmodel: sonnet\ntools: Read, Grep\ndisallowedTools: Write\nthinkingLevel: high\n---\nCheck it.\n",
+    "grok/agentpack-bundle/commands/": "",
+    "grok/agentpack-bundle/commands/review.md": "---\ndescription: Review a change\nname: Review\nargument-hint: file\nmodel: sonnet\n---\n\nReview it.\n",
+    "grok/agentpack-bundle/hooks/": "",
+    "grok/agentpack-bundle/hooks/hooks.json": "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"echo pack\"}]}]}}",
+    "grok/agentpack-bundle/plugin.json": "{\"name\":\"agentpack-bundle\"}",
+    "grok/agentpack-bundle/rules/": "",
+    "grok/agentpack-bundle/rules/always.mdc": "---\ndescription: Always check\nalwaysApply: true\n---\nAlways check.\n",
+    "grok/agentpack-bundle/rules/team/": "",
+    "grok/agentpack-bundle/rules/team/check.mdc": "---\ndescription: Check sources\nglobs: ['**/*.go', '**/*.md']\n---\nCheck sources.\n",
+    "grok/agentpack-bundle/skills/": "",
+    "grok/agentpack-bundle/skills/always/": "",
+    "grok/agentpack-bundle/skills/always/SKILL.md": "---\nname: always\ndescription: Always check\n---\n\n## Original rule scope\n- Applies in every session.\n\nAlways check.\n",
+    "grok/agentpack-bundle/skills/check/": "",
+    "grok/agentpack-bundle/skills/check/SKILL.md": "---\nname: check\ndescription: Check sources\n---\n\n## Original rule scope\n- Original Cursor globs: `**/*.go`, `**/*.md`\n\nCheck sources.\n",
+    "grok/agentpack-bundle/skills/review/": "",
+    "grok/agentpack-bundle/skills/review/SKILL.md": "---\nname: review\ndescription: Read a change\nlicense: MIT\n---\n\nRead it.\n",
+    "grok/agentpack-bundle/skills/review/example.txt": "Supporting file\n"
+  }
+}

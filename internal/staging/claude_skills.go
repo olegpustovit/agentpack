@@ -13,11 +13,11 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
-// ProjectClaudeSkillNames returns the case-insensitive names of skills Claude
-// Code discovers directly from the project.
-func ProjectClaudeSkillNames(projectRoot string) (map[string]struct{}, error) {
+// ShadowingProjectSkillNames returns case-insensitive names in a native project
+// skill root, propagating errors when a skill cannot be inspected.
+func ShadowingProjectSkillNames(projectRoot, root string) (map[string]struct{}, error) {
 	names := make(map[string]struct{})
-	dirs, err := projectClaudeSkillDirs(projectRoot)
+	dirs, err := shadowingProjectSkillDirs(filepath.Join(projectRoot, filepath.FromSlash(root)))
 	if err != nil {
 		return nil, err
 	}
@@ -41,14 +41,10 @@ func ProjectSkillNames(projectRoot, root string) (map[string]struct{}, error) {
 	return names, nil
 }
 
-// OmitProjectClaudeSkillDuplicates removes staged plugin skills whose names
-// are already provided by project .claude/skills. Claude Code discovers both
-// locations, and the project definition wins on a name collision. Full-tree
-// hashes distinguish exact mirrored copies from same-name overrides while
-// preserving different skill names even when their contents match.
-func OmitProjectClaudeSkillDuplicates(projectRoot, bundle string) error {
-	localRoot := filepath.Join(paths.ProjectDotClaudeDir(projectRoot), "skills")
-	localNames, err := projectClaudeSkillDirs(projectRoot)
+// omitProjectSkillDuplicates removes staged skills already provided by a
+// native project skill root. Hashes distinguish identical copies from overrides.
+func omitProjectSkillDuplicates(localRoot, bundle, displayName string) error {
+	localNames, err := shadowingProjectSkillDirs(localRoot)
 	if err != nil {
 		return err
 	}
@@ -85,14 +81,13 @@ func OmitProjectClaudeSkillDuplicates(projectRoot, bundle string) error {
 		if localErr == nil && localHash == bundleHash {
 			kind = "identical project skill"
 		}
-		fmt.Fprintf(os.Stderr, "using %s `%s`; omitted plugin duplicate from Claude bundle\n", kind, entry.Name())
+		fmt.Fprintf(os.Stderr, "using %s `%s`; omitted plugin duplicate from %s bundle\n", kind, entry.Name(), displayName)
 	}
 	return nil
 }
 
-func projectClaudeSkillDirs(projectRoot string) (map[string]string, error) {
+func shadowingProjectSkillDirs(root string) (map[string]string, error) {
 	dirs := make(map[string]string)
-	root := filepath.Join(paths.ProjectDotClaudeDir(projectRoot), "skills")
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return dirs, nil

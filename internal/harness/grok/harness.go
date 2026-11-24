@@ -8,14 +8,22 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/olegpustovit/agentpack/internal/artifacts"
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/pelletier/go-toml/v2"
 )
 
+var artifactLayout = artifacts.Layout{
+	NativeKinds:   []artifacts.Kind{artifacts.Skill, artifacts.Command, artifacts.Agent},
+	CommandFields: []string{"description", "name"},
+	CommandKeys:   []string{"agent", "allowed-tools", "argument-hint", "arguments", "context", "disable-model-invocation", "model", "subtask"},
+	SkillKeys:     artifacts.SkillExtraKeys, AgentKeys: artifacts.AgentExtraKeys,
+}
+
 func New() base.Harness {
-	return base.Harness{Target: base.Grok, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchACP: acpLaunch, Inheritance: base.Inheritance{
+	return base.Harness{Target: base.Grok, Artifacts: &artifactLayout, PlannedSettings: planSettings, UserRoots: nativeUserRoots, Root: stagedRoot, Reset: resetPaths, Setup: prepare, ProjectMCP: planMCP, ProjectLSP: planLSP, Guidance: injectGuidance, Check: verify, Launch: launch, LaunchACP: acpLaunch, Inheritance: base.Inheritance{
 		Note: "Grok reads real ~/.grok and ~/.claude in addition to GROK_HOME",
 		Paths: func(string) []string {
 			return base.HomeFiles(".grok/config.toml", ".grok/hooks", ".claude/settings.json")
@@ -142,6 +150,28 @@ func enableBundle(path string) error {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+func planSettings(_ mcp.Entries) (base.SettingsProjection, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return base.SettingsProjection{}, err
+	}
+	seed, err := base.ReadMCPSeed(filepath.Join(home, ".grok", "config.toml"))
+	if err != nil {
+		return base.SettingsProjection{}, err
+	}
+	data, err := EnableBundleData(seed)
+	if err != nil {
+		return base.SettingsProjection{}, fmt.Errorf("plan Grok plugin settings: %w", err)
+	}
+	digest, err := base.MCPTOMLScopeDigest(data, "plugins")
+	return base.SettingsProjection{
+		RelativePath:  "config.toml",
+		Section:       "plugins",
+		SectionDigest: digest,
+		MergeOrder:    []string{"user ~/.grok/config.toml", "enable agentpack-bundle while retaining enabled plugins"},
+	}, err
 }
 
 func EnableBundleData(seed []byte) ([]byte, error) {
