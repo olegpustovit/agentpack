@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func sessionBlobDir(home, id string) (string, error) {
@@ -65,6 +67,13 @@ func (g *Gateway) fetchBlob(ctx context.Context, id, sha string, targetFor func(
 	locations, err := g.store.Archive().BlobHolders(ctx, sha, id)
 	if err != nil {
 		return nil, err
+	}
+	// Live conversation updates can reach the browser before their blob locations replicate.
+	if info, ok := sessionRow(ctx, id); ok {
+		owner := state.BlobHolder{Node: info.NodeID, Session: id}
+		if !slices.Contains(locations, owner) {
+			locations = append(locations, owner)
+		}
 	}
 	lastErr := error(os.ErrNotExist)
 	for _, item := range locations {

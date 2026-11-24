@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -50,8 +49,8 @@ func archiveCleanupScenario(t *testing.T, held bool) {
 	if err := network.AdvertiseBlob(t.Context(), worker.auth.store, id, sha, int64(len(png))); err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(map[string]any{"seq": 1, "kind": "prompt", "payload": map[string]any{"images": []map[string]string{{"blob": "sha256:" + sha}}}})
-	if _, err := worker.auth.store.DB.Exec("UPDATE conversation_events SET body=? WHERE session_id=?", string(body), id); err != nil {
+	body := `{"seq":1,"kind":"tool_call_update","payload":{"toolCallId":"read","content":[{"type":"content","content":{"type":"image","blob":"sha256:` + sha + `"}}]}}`
+	if _, err := worker.auth.store.DB.Exec("UPDATE conversation_events SET body=? WHERE session_id=?", body, id); err != nil {
 		t.Fatal(err)
 	}
 	syncArchiveFixture(t, worker.auth.store, main.auth.store)
@@ -159,15 +158,23 @@ func archiveCleanupScenario(t *testing.T, held bool) {
 	}
 }
 
-func TestArchiveBlobRefsUsesPromptAttachments(t *testing.T) {
+func TestArchiveBlobRefsUsesShownAttachments(t *testing.T) {
 	sha := strings.Repeat("a", 64)
-	refs, err := archiveBlobRefs(`{"kind":"tool_call_update","payload":{"blob":"bogus","image":"irrelevant"}}`)
+	refs, err := archiveBlobRefs(`{"kind":"tool_call_update","payload":{"rawInput":{"blob":"sha256:` + sha + `"},"image":"irrelevant"}}`)
 	if err != nil || len(refs) != 0 {
 		t.Fatalf("tool argument mistaken for a file: %v %v", refs, err)
 	}
 	refs, err = archiveBlobRefs(`{"kind":"prompt","payload":{"image":{"blob":"sha256:` + sha + `"},"resource_link":{"blob":"sha256:` + sha + `"}}}`)
 	if err != nil || len(refs) != 1 || refs[0] != sha {
 		t.Fatalf("prompt attachments: %v %v", refs, err)
+	}
+	refs, err = archiveBlobRefs(`{"kind":"agent_message_chunk","payload":{"image":{"blob":"sha256:` + sha + `"},"resource_link":{"uri":"https://example.com"}}}`)
+	if err != nil || len(refs) != 1 || refs[0] != sha {
+		t.Fatalf("agent attachments: %v %v", refs, err)
+	}
+	refs, err = archiveBlobRefs(`{"kind":"rich_block","payload":{"image":{"blob":"sha256:` + sha + `"}}}`)
+	if err != nil || len(refs) != 1 || refs[0] != sha {
+		t.Fatalf("card attachments: %v %v", refs, err)
 	}
 	if _, err := archiveBlobRefs(`{"kind":"prompt","payload":{"images":[{"blob":"sha256:bad"}]}}`); err == nil {
 		t.Fatal("invalid attachment accepted")

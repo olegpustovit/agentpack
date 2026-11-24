@@ -26,41 +26,58 @@ import (
 )
 
 func archiveBlobRefs(body string) ([]string, error) {
-	var entry struct {
-		Kind    string `json:"kind"`
-		Payload struct {
-			Image *struct {
-				Blob string `json:"blob"`
-			} `json:"image"`
-			Images []struct {
-				Blob string `json:"blob"`
-			} `json:"images"`
-			Resource *struct {
-				Blob string `json:"blob"`
-			} `json:"resource_link"`
-		} `json:"payload"`
-	}
 	var kind struct {
 		Kind string `json:"kind"`
 	}
-	if err := json.Unmarshal([]byte(body), &kind); err != nil {
-		return nil, err
-	}
-	if kind.Kind != "prompt" && kind.Kind != "user_prompt" {
-		return nil, nil
-	}
-	if err := json.Unmarshal([]byte(body), &entry); err != nil {
+	data := []byte(body)
+	if err := json.Unmarshal(data, &kind); err != nil {
 		return nil, err
 	}
 	var blobs []string
-	if entry.Payload.Image != nil {
-		blobs = append(blobs, entry.Payload.Image.Blob)
-	}
-	for _, image := range entry.Payload.Images {
-		blobs = append(blobs, image.Blob)
-	}
-	if entry.Payload.Resource != nil {
-		blobs = append(blobs, entry.Payload.Resource.Blob)
+	switch kind.Kind {
+	case "prompt", "user_prompt", "user_message_chunk", "agent_message_chunk", "rich_block":
+		type attachment struct {
+			Blob string `json:"blob"`
+		}
+		var entry struct {
+			Payload struct {
+				Image    *attachment  `json:"image"`
+				Images   []attachment `json:"images"`
+				Resource *attachment  `json:"resource_link"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(data, &entry); err != nil {
+			return nil, err
+		}
+		if entry.Payload.Image != nil {
+			blobs = append(blobs, entry.Payload.Image.Blob)
+		}
+		for _, image := range entry.Payload.Images {
+			blobs = append(blobs, image.Blob)
+		}
+		if resource := entry.Payload.Resource; resource != nil && (resource.Blob != "" || kind.Kind == "prompt" || kind.Kind == "user_prompt") {
+			blobs = append(blobs, resource.Blob)
+		}
+	case "tool_call", "tool_call_update":
+		var entry struct {
+			Payload struct {
+				Content []struct {
+					Type    string `json:"type"`
+					Content struct {
+						Type string `json:"type"`
+						Blob string `json:"blob"`
+					} `json:"content"`
+				} `json:"content"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(data, &entry); err != nil {
+			return nil, err
+		}
+		for _, block := range entry.Payload.Content {
+			if block.Type == "content" && block.Content.Type == "image" && block.Content.Blob != "" {
+				blobs = append(blobs, block.Content.Blob)
+			}
+		}
 	}
 	for i, blob := range blobs {
 		if !strings.HasPrefix(blob, "sha256:") {
@@ -153,7 +170,7 @@ func PrepareArchive(ctx context.Context, store *state.Store, home string) (resul
 	}
 	defer func() { result = errors.Join(result, archive.Close()) }()
 	rows, err := archive.QueryContext(ctx, `SELECT session_id,body FROM conversation_events
- WHERE json_extract(body,'$.kind') IN ('prompt','user_prompt')`)
+ WHERE json_extract(body,'$.kind') IN ('prompt','user_prompt','user_message_chunk','agent_message_chunk','rich_block','tool_call','tool_call_update')`)
 	if err != nil {
 		return err
 	}

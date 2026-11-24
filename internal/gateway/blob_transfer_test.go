@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"github.com/olegpustovit/agentpack/internal/network"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +14,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 func TestPeerBlobFetchChecksHashCachesAndEnforcesQuota(t *testing.T) {
@@ -128,5 +130,37 @@ func TestWorkerBlobUploadRecordsLocation(t *testing.T) {
 	var count, size int
 	if err := g.store.Reader.QueryRow("SELECT count(*),sum(size) FROM blob_locations WHERE session_id='session-upload'").Scan(&count, &size); err != nil || count != 1 || size != len(png) {
 		t.Fatalf("upload location: %d %d %v", count, size, err)
+	}
+}
+
+func TestFetchBlobBeforeLocationReplicates(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	g.options.Library.Store = replicaStore(t)
+	const owner, id = "source", "session-live"
+	if err := g.options.Library.Store.EnrollPeer(owner); err != nil {
+		t.Fatal(err)
+	}
+	png := []byte{0x89, 'P', 'N', 'G', 13, 10, 26, 10}
+	sum := sha256.Sum256(png)
+	sha := hex.EncodeToString(sum[:])
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/sessions/"+id+"/blobs/"+sha, func(w http.ResponseWriter, r *http.Request) {
+		network.WriteSessionBlob(w, png)
+	})
+	source := httptest.NewServer(mux)
+	defer source.Close()
+	target, err := url.Parse(source.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(t.Context(), sessionRowKey{}, session.SessionInfo{ID: id, NodeID: owner})
+	got, err := g.fetchBlob(ctx, id, sha, func(_ context.Context, node string) (*url.URL, error) {
+		if node != owner {
+			t.Fatalf("requested blob from %q, want session owner %q", node, owner)
+		}
+		return target, nil
+	})
+	if err != nil || !bytes.Equal(got, png) {
+		t.Fatalf("fetch unadvertised image: %x, %v", got, err)
 	}
 }
