@@ -162,7 +162,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 		_ = a2cR.Close()
 		finishACPConversation(ctx, conv, client, clientConn)
 	}
-	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, "", launch.tools, nil)
+	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, "", launch.tools, false, nil)
 	log.SetReplaying(false)
 	if err != nil {
 		cleanup()
@@ -205,7 +205,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	conv.broker = broker
 	conv.workspace = workspace
 	conv.agentExited = false
-	replaying := launch.Session.AgentSessionID != "" && conv.lastSeq > 0
+	replaying := launch.Session.AgentSessionID != "" && conv.lastSeq > 0 && !launch.replaceMissingACP
 	conv.mu.Unlock()
 	log.SetReplaying(replaying)
 	defer log.SetReplaying(false)
@@ -309,7 +309,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		return nil
 	}
 	done := startStep(ctx, "acp_handshake")
-	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, acpLaunch.AuthenticateMethodID, launch.tools, beforeSession)
+	setup, err := initializeACPSession(ctx, clientConn, workspace, launch.Session.AgentSessionID, launch.ForkSessionID, acpLaunch.AuthenticateMethodID, launch.tools, launch.replaceMissingACP, beforeSession)
 	done(err)
 	log.SetReplaying(false)
 	if err != nil {
@@ -468,7 +468,7 @@ func initializeACPClient(ctx context.Context, conn *sdkacp.ClientSideConnection,
 	return initialize, nil
 }
 
-func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection, workspace, loadID, forkSessionID, authenticateMethodID string, tools chatTools, beforeSession func(context.Context) error) (acpSessionSetup, error) {
+func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection, workspace, loadID, forkSessionID, authenticateMethodID string, tools chatTools, replaceMissing bool, beforeSession func(context.Context) error) (acpSessionSetup, error) {
 	initCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if loadID != "" && forkSessionID != "" {
@@ -514,13 +514,17 @@ func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection
 			Cwd:        workspace,
 			McpServers: servers,
 		})
-		if err != nil {
+		if err == nil {
+			setup.AgentSessionID = loadID
+			setup.ConfigOptions = marshalConfigOptions(resp.ConfigOptions)
+			setup.Modes = marshalSessionModes(resp.Modes)
+			return setup, nil
+		}
+		var requestErr *sdkacp.RequestError
+		const resourceNotFound = -32002
+		if !replaceMissing || !errors.As(err, &requestErr) || requestErr.Code != resourceNotFound {
 			return acpSessionSetup{}, fmt.Errorf("acp session/load: %w", err)
 		}
-		setup.AgentSessionID = loadID
-		setup.ConfigOptions = marshalConfigOptions(resp.ConfigOptions)
-		setup.Modes = marshalSessionModes(resp.Modes)
-		return setup, nil
 	}
 	resp, err := conn.NewSession(initCtx, sdkacp.NewSessionRequest{
 		Cwd:        workspace,

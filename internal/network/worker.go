@@ -40,7 +40,9 @@ type WorkerLaunch struct {
 	Environment   []string            `json:"environment"`
 	Rows          uint16              `json:"rows"`
 	Columns       uint16              `json:"columns"`
-	tools         chatTools
+
+	tools             chatTools
+	replaceMissingACP bool
 }
 
 // WorkerRecord is private connection material, readable only by the local OS
@@ -206,7 +208,8 @@ func (worker *workerRuntime) run(ctx, startCtx context.Context, started *obs.Eve
 	var starting atomic.Bool
 	starting.Store(launch.Session.ConversationState == "starting")
 	if launch.Transport == "acp" {
-		agent = &acpAgent{home: worker.home, store: store, launch: launch, record: record, directory: directory, cancel: worker.cancel}
+		agent = &acpAgent{home: worker.home, store: store, launch: launch, record: record, directory: directory, cancel: worker.cancel,
+			createdNativeSession: launch.Session.AgentSessionID == "" && launch.ForkSessionID == ""}
 		prepared, err := prepareACPWorker(ctx, store, record, directory, &starting, worker.cancel, serve, &readyHTTP)
 		if err != nil {
 			return 1, err
@@ -550,6 +553,8 @@ type acpAgent struct {
 	handler   *WorkerHTTP
 	wire      func(*ConversationSession)
 	cleanup   func()
+
+	createdNativeSession bool
 }
 
 func (agent *acpAgent) recordInitialEnvironment(ctx context.Context) {
@@ -643,6 +648,18 @@ func (agent *acpAgent) restart(ctx context.Context) (result error) {
 			agent.hold(ctx, result)
 		}
 	}()
+	reload := *launch
+	if agent.createdNativeSession && launch.Session.AgentSessionID != "" {
+		// An adapter may not save its session until the first prompt. Only replace a missing ID
+		// when this worker created it and the durable chat has no messages to resume.
+		err := store.Reader.QueryRowContext(ctx, `SELECT conversation_truncated=0 AND NOT EXISTS (
+			SELECT 1 FROM conversation_events WHERE session_id=sessions.id
+			AND kind IN ('prompt','user_prompt','user_message_chunk','agent_message_chunk')
+		) FROM sessions WHERE id=?`, launch.Session.ID).Scan(&reload.replaceMissingACP)
+		if err != nil {
+			return fmt.Errorf("check chat history before reload: %w", err)
+		}
+	}
 	log, err := NewConversationLog(ctx, store, launch.Session.ID, agent.cancel, nil)
 	if err != nil {
 		return err
@@ -651,7 +668,7 @@ func (agent *acpAgent) restart(ctx context.Context) (result error) {
 	if err := restorePendingQueue(ctx, store.Reader, agent.record.ID, prepared); err != nil {
 		return errors.Join(err, log.Close())
 	}
-	next, cleanup, err := startACPConversation(obs.WithRecording(ctx, agent.handler.Diagnostics), *launch, agent.directory, prepared)
+	next, cleanup, err := startACPConversation(obs.WithRecording(ctx, agent.handler.Diagnostics), reload, agent.directory, prepared)
 	if err != nil {
 		return err
 	}
@@ -661,16 +678,26 @@ func (agent *acpAgent) restart(ctx context.Context) (result error) {
 		}
 		return err
 	}
-	launch.Session.AgentSessionID = next.agentSessionID
-	launch.Session.AgentCapabilities = next.AgentCapabilitiesView()
-	launch.Session.ConversationState = next.ConversationState()
-	launch.Session.State.Running = !next.AgentExited()
-	if err := session.UpsertSession(ctx, store.DB, launch.Session); err != nil {
+	info := launch.Session
+	info.AgentSessionID = next.agentSessionID
+	info.AgentCapabilities = next.AgentCapabilitiesView()
+	info.ConversationState = next.ConversationState()
+	info.State.Running = !next.AgentExited()
+	if info.AgentSessionID != launch.Session.AgentSessionID {
+		if err := RememberACPConversationOwner(ctx, store, info, launch.Directory); err != nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			return fmt.Errorf("persist replacement ACP session owner: %w", err)
+		}
+	}
+	if err := session.UpsertSession(ctx, store.DB, info); err != nil {
 		if cleanup != nil {
 			cleanup()
 		}
 		return err
 	}
+	launch.Session = info
 	agent.cleanup = cleanup
 	agent.wire(next)
 	agent.handler.mu.Lock()

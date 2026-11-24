@@ -43,6 +43,12 @@ type authReplayAgent struct {
 	forkRequest       *sdkacp.UnstableForkSessionRequest
 	forkResponse      sdkacp.UnstableForkSessionResponse
 	newRequest        sdkacp.NewSessionRequest
+	loadError         error
+}
+
+func (agent *authReplayAgent) LoadSession(context.Context, sdkacp.LoadSessionRequest) (sdkacp.LoadSessionResponse, error) {
+	agent.calls = append(agent.calls, "load_session")
+	return sdkacp.LoadSessionResponse{}, agent.loadError
 }
 
 func (agent *authReplayAgent) Initialize(context.Context, sdkacp.InitializeRequest) (sdkacp.InitializeResponse, error) {
@@ -505,7 +511,7 @@ func TestInitializeACPWaitsForStagingBeforeCreatingSession(t *testing.T) {
 	conn, cleanup := authReplayConnection(agent)
 	defer cleanup()
 	stageErr := errors.New("staging rejected")
-	_, err := initializeACPSession(t.Context(), conn, t.TempDir(), "", "", "", chatTools{}, func(context.Context) error {
+	_, err := initializeACPSession(t.Context(), conn, t.TempDir(), "", "", "", chatTools{}, false, func(context.Context) error {
 		if strings.Join(agent.calls, ",") != "initialize" {
 			t.Fatalf("ACP calls before verified staging = %v", agent.calls)
 		}
@@ -513,6 +519,35 @@ func TestInitializeACPWaitsForStagingBeforeCreatingSession(t *testing.T) {
 	})
 	if !errors.Is(err, stageErr) || strings.Join(agent.calls, ",") != "initialize" {
 		t.Fatalf("failed staging allowed a session request: %v, %v", agent.calls, err)
+	}
+}
+
+func TestReloadReplacesOnlyAnUnsavedNativeSession(t *testing.T) {
+	missing := &sdkacp.RequestError{Code: -32002, Message: "Resource not found"}
+	for _, tc := range []struct {
+		name        string
+		loadError   error
+		replace     bool
+		wantSession string
+		wantCalls   string
+	}{
+		{"pristine chat", missing, true, "test-session", "initialize,load_session,new_session"},
+		{"existing history", missing, false, "", "initialize,load_session"},
+		{"other load error", sdkacp.NewAuthRequired(nil), true, "", "initialize,load_session"},
+		{"existing native session", nil, true, "native", "initialize,load_session"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &authReplayAgent{ReplayAgent: acptest.NewReplayAgent(nil), loadError: tc.loadError}
+			conn, cleanup := authReplayConnection(agent)
+			defer cleanup()
+			setup, err := initializeACPSession(t.Context(), conn, t.TempDir(), "native", "", "", chatTools{}, tc.replace, nil)
+			if setup.AgentSessionID != tc.wantSession || (err != nil) != (tc.wantSession == "") {
+				t.Fatalf("session = %q, error = %v", setup.AgentSessionID, err)
+			}
+			if calls := strings.Join(agent.calls, ","); calls != tc.wantCalls {
+				t.Fatalf("ACP calls = %s, want %s", calls, tc.wantCalls)
+			}
+		})
 	}
 }
 
@@ -538,7 +573,7 @@ func TestInitializeACPSessionAuthenticatesBeforeNewSession(t *testing.T) {
 	}
 	clientConn, cleanup := authReplayConnection(agent)
 	defer cleanup()
-	setup, err := initializeACPSession(context.Background(), clientConn, t.TempDir(), "", "", "grok.com", chatTools{}, nil)
+	setup, err := initializeACPSession(context.Background(), clientConn, t.TempDir(), "", "", "grok.com", chatTools{}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,7 +625,7 @@ func TestInitializeACPSessionForksWhenAdvertised(t *testing.T) {
 	}
 	clientConn, cleanup := authReplayConnection(agent)
 	defer cleanup()
-	setup, err := initializeACPSession(context.Background(), clientConn, t.TempDir(), "", "source-session", "", chatTools{}, nil)
+	setup, err := initializeACPSession(context.Background(), clientConn, t.TempDir(), "", "source-session", "", chatTools{}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,7 +646,7 @@ func TestInitializeACPSessionRejectsForkWithoutCapability(t *testing.T) {
 	agent := &authReplayAgent{ReplayAgent: acptest.NewReplayAgent(nil)}
 	clientConn, cleanup := authReplayConnection(agent)
 	defer cleanup()
-	_, err := initializeACPSession(context.Background(), clientConn, t.TempDir(), "", "source-session", "", chatTools{}, nil)
+	_, err := initializeACPSession(context.Background(), clientConn, t.TempDir(), "", "source-session", "", chatTools{}, false, nil)
 	if err == nil || !strings.Contains(err.Error(), "does not advertise session.fork") {
 		t.Fatalf("unadvertised fork error = %v", err)
 	}
@@ -633,7 +668,7 @@ func TestInitializeACPSessionRejectsUnadvertisedAuthMethod(t *testing.T) {
 	agent := &authReplayAgent{ReplayAgent: acptest.NewReplayAgent(nil)}
 	clientConn, cleanup := authReplayConnection(agent)
 	defer cleanup()
-	_, err := initializeACPSession(context.Background(), clientConn, t.TempDir(), "", "", "grok.com", chatTools{}, nil)
+	_, err := initializeACPSession(context.Background(), clientConn, t.TempDir(), "", "", "grok.com", chatTools{}, false, nil)
 	if err == nil || !strings.Contains(err.Error(), "was not advertised") {
 		t.Fatalf("unadvertised auth method error = %v", err)
 	}
