@@ -65,42 +65,43 @@ type Gateway struct {
 	operationMu sync.Mutex
 	closing     bool
 
-	options        GatewayOptions
-	startingChats  sync.Map
-	starting       sync.WaitGroup // chats launching in the background; tests wait on it
-	chatLifecycle  sync.Mutex     // serializes resume claims with settling dead chats
-	store          *state.Store
-	logs           *obs.Store
-	auth           *gatewayAuth
-	mcp            *mcp.Server
-	mcpNodes       func(node string) http.Handler // nil: MCP calls for a node take the mesh; tests stand another gateway in
-	local          network.NodeRecord
-	origin         *url.URL // loopback origin; public access adds another
-	public         publicAccess
-	stop           context.CancelFunc
-	done           <-chan struct{}
-	chatTimings    sync.Map // latest browser duration per measurement
-	replicaStatus  sync.Map
-	statePulls     sync.Map   // peer → coalesced pull notification
-	archiveMu      sync.Mutex // serializes archive copies with edits to archive.db
-	heldBlobs      sync.Map   // blobHeldKey -> true once the file's bytes matched its SHA
-	archiveWake    chan struct{}
-	syncTransferMu sync.Mutex
-	syncTransfers  map[string]*stateTransferFile
-	identityMu     sync.Mutex
-	updateMu       sync.Mutex
-	updating       bool
-	updateError    string
-	identityAt     time.Time
-	identitySelf   tailnetSelf
-	events         eventHub
-	agents         agentAccounts
-	tailnet        mesh.Cache
-	mcpBroker      mcpBroker
-	push           pushWatch
-	omp            ompSettings
-	found          folderDiscovery
-	credentialsMu  sync.Mutex // one agent credential sync at a time
+	options           GatewayOptions
+	startingChats     sync.Map
+	starting          sync.WaitGroup // chats launching in the background; tests wait on it
+	chatLifecycle     sync.Mutex     // serializes resume claims with settling dead chats
+	verifiedEndpoints sync.Map       // worker.json path → mod time of an endpoint whose worker answered
+	store             *state.Store
+	logs              *obs.Store
+	auth              *gatewayAuth
+	mcp               *mcp.Server
+	mcpNodes          func(node string) http.Handler // nil: MCP calls for a node take the mesh; tests stand another gateway in
+	local             network.NodeRecord
+	origin            *url.URL // loopback origin; public access adds another
+	public            publicAccess
+	stop              context.CancelFunc
+	done              <-chan struct{}
+	chatTimings       sync.Map // latest browser duration per measurement
+	replicaStatus     sync.Map
+	statePulls        sync.Map   // peer → coalesced pull notification
+	archiveMu         sync.Mutex // serializes archive copies with edits to archive.db
+	heldBlobs         sync.Map   // blobHeldKey -> true once the file's bytes matched its SHA
+	archiveWake       chan struct{}
+	syncTransferMu    sync.Mutex
+	syncTransfers     map[string]*stateTransferFile
+	identityMu        sync.Mutex
+	updateMu          sync.Mutex
+	updating          bool
+	updateError       string
+	identityAt        time.Time
+	identitySelf      tailnetSelf
+	events            eventHub
+	agents            agentAccounts
+	tailnet           mesh.Cache
+	mcpBroker         mcpBroker
+	push              pushWatch
+	omp               ompSettings
+	found             folderDiscovery
+	credentialsMu     sync.Mutex // one agent credential sync at a time
 
 	worktreeHistoryMu sync.Mutex
 	worktreeHistory   map[string]worktreeDivergence

@@ -133,8 +133,15 @@ func (g *Gateway) reapWorkerEndpoints(ctx context.Context) {
 			continue
 		}
 		if possiblyAlive {
-			// A PID can belong to another process, and a new endpoint can precede its server.
+			// A PID can belong to another process (reused after a reboot), and a new endpoint can
+			// precede its server. An endpoint that answered once is its own worker until it changes.
+			if verified, ok := g.verifiedEndpoints.Load(path); ok && verified == file.info.ModTime() {
+				continue
+			}
 			_, probeErr := network.SessionState(ctx, record)
+			if probeErr == nil {
+				g.verifiedEndpoints.Store(path, file.info.ModTime())
+			}
 			// A slow answer is a busy worker, not a dead one: only a refusal or a wrong answer settles it.
 			var netErr net.Error
 			if probeErr == nil || ctx.Err() != nil || errors.As(probeErr, &netErr) && netErr.Timeout() ||
@@ -155,6 +162,7 @@ func (g *Gateway) settleDeadWorker(ctx context.Context, file *workerEndpointFile
 	}
 	_, err := g.store.DB.ExecContext(ctx, "UPDATE sessions SET ended_at=? WHERE id=? AND ended_at=0 AND node_id="+state.LocalNodeSQL, time.Now().UnixNano(), id)
 	if err == nil {
+		g.verifiedEndpoints.Delete(file.path)
 		g.removeDeadEndpoints(ctx, file)
 	}
 	return err

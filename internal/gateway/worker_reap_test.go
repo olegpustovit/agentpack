@@ -81,7 +81,9 @@ func TestReaperAuthenticatesEndpointBehindLivePID(t *testing.T) {
 				t.Fatal(err)
 			}
 			secret := strings.Repeat("s", 64)
+			probes := 0
 			worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				probes++
 				if r.Method != http.MethodGet || r.URL.Path != "/state" || r.Header.Get("Authorization") != "Bearer "+secret {
 					t.Error("expected an authenticated state probe")
 				}
@@ -110,6 +112,13 @@ func TestReaperAuthenticatesEndpointBehindLivePID(t *testing.T) {
 			}
 			g := &Gateway{store: store, options: GatewayOptions{Home: home}}
 			g.reapWorkerEndpoints(t.Context())
+			if tc.healthy {
+				// An endpoint that answered is not probed again every round.
+				g.reapWorkerEndpoints(t.Context())
+				if probes != 1 {
+					t.Fatalf("probed a verified endpoint %d times", probes)
+				}
+			}
 			got, err := session.StoredSession(t.Context(), store.Reader, id)
 			if err != nil || !got.EndedAt.IsZero() != tc.ended {
 				t.Fatalf("ended at %v, want ended=%v: %v", got.EndedAt, tc.ended, err)
