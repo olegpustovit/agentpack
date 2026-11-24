@@ -469,7 +469,7 @@ function ExploreRow({ tools, fresh }: { tools: ThreadItem[]; fresh: (item: Threa
 
 // One row for everything the agent did between two messages: its latest thought as the title,
 // what it ran as the detail. Opened, it reads top to bottom as thoughts and steps in order.
-function ActivityGroup({ items, live, end, fresh, machine, sessionId }: { items: ThreadItem[]; live?: boolean; end?: number; fresh: (item: ThreadItem) => boolean; machine: string; sessionId: string }) {
+function ActivityGroup({ items, end, fresh, machine, sessionId }: { items: ThreadItem[]; end?: number; fresh: (item: ThreadItem) => boolean; machine: string; sessionId: string }) {
   const tools = items.filter((item) => item.kind === "tool")
   const thoughts = items.filter((item) => item.kind === "agent_thought_chunk")
   const failed = tools.filter((item) => (item.data as ToolPayload).status === "failed").length
@@ -497,7 +497,7 @@ function ActivityGroup({ items, live, end, fresh, machine, sessionId }: { items:
       <details data-slot="tool-group" open={open} onToggle={onToggle} className="text-(length:--fs-sm)">
         <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
           <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
-          <span className={cn("min-w-0 shrink truncate", live ? "shimmer" : "text-(--fg)")}>{title}</span>
+          <span className="min-w-0 shrink truncate text-(--fg)">{title}</span>
           {detail && <span className="min-w-0 flex-1 truncate tabular-nums text-(--fg3)"><span className="sr-only"> · </span>{detail}</span>}
           {!detail && <span className="flex-1" />}
           {failed > 0 && <span className="shrink-0 text-(--danger-word)"><span className="sr-only"> · </span>{failed} failed</span>}
@@ -974,7 +974,7 @@ export function ThreadView({
     if (Array.isArray(entry)) {
       return (
         <div key={entry[0]!.seq ?? index} className={cn("thread-item", fresh(entry.at(-1)!) && "tool-enter")}>
-          <ActivityGroup items={entry} live={working && index === entries.length - 1} end={nextReplyTs.get(entry.at(-1)!)} fresh={fresh} machine={machine} sessionId={sessionId} />
+          <ActivityGroup items={entry} end={nextReplyTs.get(entry.at(-1)!)} fresh={fresh} machine={machine} sessionId={sessionId} />
         </div>
       )
     }

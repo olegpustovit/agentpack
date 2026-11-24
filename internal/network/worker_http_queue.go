@@ -2,9 +2,11 @@ package network
 
 import (
 	"errors"
-	"github.com/olegpustovit/agentpack/internal/session"
 	"net/http"
 	"strings"
+
+	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // registerQueueAndGoal serves the prompt queue and goal routes; the gateway proxies them with prompt auth.
@@ -19,7 +21,11 @@ func (worker *WorkerHTTP) registerQueueAndGoal(mux *http.ServeMux) {
 		writeQueueResult(w, worker.conversationSession().EditQueued(r.PathValue("queueId"), strings.TrimSpace(input.Text)))
 	})
 	mux.HandleFunc("DELETE /conversation/queue/{queueId}", func(w http.ResponseWriter, r *http.Request) {
-		writeQueueResult(w, worker.conversationSession().RemoveQueued(r.PathValue("queueId")))
+		err := worker.conversationSession().RemoveQueued(r.Context(), r.PathValue("queueId"))
+		if err != nil && !errors.Is(err, errNotQueued) {
+			obs.From(r.Context()).Fail(err)
+		}
+		writeQueueResult(w, err)
 	})
 	mux.HandleFunc("POST /conversation/queue/{queueId}/steer", func(w http.ResponseWriter, r *http.Request) {
 		writeQueueResult(w, worker.conversationSession().SteerQueued(r.Context(), r.PathValue("queueId")))

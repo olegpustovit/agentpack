@@ -291,6 +291,26 @@ test("resolved permission and elicitation cards show their result without answer
   await expect(elicitation.getByRole("button")).toHaveCount(0)
 })
 
+test("a working activity row keeps its title and counts readable", async ({ page }) => {
+  const now = Date.now()
+  const entries = [
+    { seq: 1, ts: now, kind: "prompt", payload: { text: { text: "Check the queue" } } },
+    { seq: 2, ts: now, kind: "tool_call", payload: { toolCallId: "one", title: "Read worker.go", kind: "read", status: "completed" } },
+    { seq: 3, ts: now, kind: "tool_call", payload: { toolCallId: "two", title: "Search queue", kind: "search", status: "completed" } },
+  ]
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({
+    body: entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+    contentType: "application/x-ndjson",
+  }))
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.locator('[data-slot="thread-working"]')).toBeVisible()
+  const summary = page.locator('[data-slot="tool-group"] > summary')
+  const title = summary.getByText("Worked", { exact: true })
+  await expect(title).toBeVisible()
+  await expect(title).not.toHaveCSS("color", "rgba(0, 0, 0, 0)")
+  await expect(summary).toContainText("1 read · 1 search")
+})
+
 test("history keeps diff and terminal output collapsed until opened", async ({ page }) => {
   await page.goto("/sessions/local/chat-one")
   const group = page.locator('[data-slot="tool-group"]')

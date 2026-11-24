@@ -184,15 +184,14 @@ describe("MCP calls", () => {
 })
 
 describe("activity rendering", () => {
-  test("a single thought stays an ActivityGroup with live shimmer when working", () => {
+  test("a single thought stays a readable activity group when working", () => {
     const thought: ThreadItem = { kind: "agent_thought_chunk", seq: 1, ts: 1000, data: { text: { text: "Checking state.db." } } }
     render(createElement(ThreadView, { items: [thought], machine: "local", sessionId: "s", working: true }), (container) => {
       const group = container.querySelector('[data-slot="tool-group"]')!
       expect(group).not.toBeNull()
       const title = group.querySelector("summary span")!
       expect(title.textContent).toBe("Checking state.db.")
-      expect(title.classList.contains("shimmer")).toBe(true)
-      expect(title.classList.contains("text-(--fg)")).toBe(false)
+      expect(title.classList.contains("text-(--fg)")).toBe(true)
     })
   })
 

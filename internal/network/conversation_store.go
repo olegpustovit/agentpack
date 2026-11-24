@@ -492,6 +492,53 @@ func (cs *ConversationSession) promptStored(ctx context.Context, id string) (boo
 	return StoredPromptID(ctx, store.db, store.info.ID, id)
 }
 
+// checkStrandedPrompt recognizes a queue entry published by a worker that never admitted it.
+func (cs *ConversationSession) checkStrandedPrompt(ctx context.Context, id string) error {
+	pending := func(entry acp.LogEntry) (match, queued bool) {
+		switch entry.Kind {
+		case "queued_prompt", "prompt", "dequeued_prompt":
+			var payload struct {
+				ID        string `json:"queueId"`
+				Delivered bool   `json:"delivered"`
+			}
+			if json.Unmarshal(entry.Payload, &payload) == nil && payload.ID == id {
+				return true, entry.Kind == "queued_prompt" && !payload.Delivered
+			}
+		}
+		return false, false
+	}
+	for _, entry := range slices.Backward(cs.Log.Snapshot()) {
+		if match, queued := pending(entry); match {
+			if queued {
+				return nil
+			}
+			return errNotQueued
+		}
+	}
+	store := cs.wired()
+	if store.db == nil || !cs.Log.Truncated() {
+		return errNotQueued
+	}
+	var raw string
+	err := store.db.Reader.QueryRowContext(ctx, `SELECT body FROM conversation_events
+		WHERE session_id=? AND kind IN ('queued_prompt','prompt','dequeued_prompt')
+		AND json_extract(body,'$.payload.queueId')=? ORDER BY seq DESC LIMIT 1`, store.info.ID, id).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errNotQueued
+	}
+	if err != nil {
+		return fmt.Errorf("read queued prompt: %w", err)
+	}
+	var entry acp.LogEntry
+	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+		return fmt.Errorf("decode queued prompt: %w", err)
+	}
+	if _, queued := pending(entry); queued {
+		return nil
+	}
+	return errNotQueued
+}
+
 // storeImage keeps an image an agent or tool sent in the session's blob store.
 func (cs *ConversationSession) storeImage(data []byte) (string, error) {
 	store := cs.wired()

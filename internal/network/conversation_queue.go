@@ -191,8 +191,8 @@ func (cs *ConversationSession) Submit(ctx context.Context, input acp.PromptInput
 		if err := cs.Log.Flush(); errors.Is(err, session.ErrSessionArchived) || errors.Is(err, session.ErrSessionNotFound) {
 			return "", nil, err
 		}
-		cs.SeenPrompts[item.ID] = struct{}{}
 	}
+	cs.SeenPrompts[item.ID] = struct{}{}
 	cs.mu.Lock()
 	cs.Queue = placeQueued(cs.Queue, item)
 	running := cs.running
@@ -297,18 +297,34 @@ func (cs *ConversationSession) EditQueued(id, text string) error {
 	return nil
 }
 
-func (cs *ConversationSession) RemoveQueued(id string) error {
+func (cs *ConversationSession) RemoveQueued(ctx context.Context, id string) error {
 	cs.queueMu.Lock()
 	defer cs.queueMu.Unlock()
 	cs.mu.Lock()
-	index := slices.IndexFunc(cs.Queue, func(queued QueuedPrompt) bool { return queued.ID == id })
-	if index < 0 {
+	if err := cs.closedErr(); err != nil {
 		cs.mu.Unlock()
-		return errNotQueued
+		return err
 	}
-	cs.Queue = slices.Delete(cs.Queue, index, index+1)
+	index := slices.IndexFunc(cs.Queue, func(queued QueuedPrompt) bool { return queued.ID == id })
 	cs.mu.Unlock()
-	cs.logDequeued(id, "removed")
+	if index < 0 {
+		// An admitted prompt may already be on its way to the agent.
+		if _, seen := cs.SeenPrompts[id]; seen {
+			return errNotQueued
+		}
+		if err := cs.checkStrandedPrompt(ctx, id); err != nil {
+			return err
+		}
+	}
+	if index >= 0 {
+		cs.mu.Lock()
+		cs.Queue = slices.Delete(cs.Queue, index, index+1)
+		cs.mu.Unlock()
+	}
+	if cs.logDequeued(id, "removed").Seq == 0 {
+		return ErrSessionEnded
+	}
+	cs.SeenPrompts[id] = struct{}{}
 	return nil
 }
 
@@ -393,8 +409,8 @@ func (cs *ConversationSession) dropUnsent(id string, err error) {
 	cs.logDequeued(id, "failed")
 }
 
-func (cs *ConversationSession) logDequeued(id, reason string) {
-	cs.Log.Append("dequeued_prompt", cs.clock().UnixMilli(), MustRawJSON(map[string]string{"queueId": id, "reason": reason}))
+func (cs *ConversationSession) logDequeued(id, reason string) acp.LogEntry {
+	return cs.Log.Append("dequeued_prompt", cs.clock().UnixMilli(), MustRawJSON(map[string]string{"queueId": id, "reason": reason}))
 }
 
 // runTurns sends input, then keeps sending queued prompts and goal continuations until none is due.

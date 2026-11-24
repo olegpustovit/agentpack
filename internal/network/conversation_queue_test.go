@@ -157,10 +157,10 @@ func TestQueueSendsInOrderSteerJumpsAheadAndEditsApply(t *testing.T) {
 	if err := session.EditQueued(d, "D2"); err != nil {
 		t.Fatal(err)
 	}
-	if err := session.RemoveQueued(e); err != nil {
+	if err := session.RemoveQueued(t.Context(), e); err != nil {
 		t.Fatal(err)
 	}
-	if err := session.RemoveQueued(e); !errors.Is(err, errNotQueued) {
+	if err := session.RemoveQueued(t.Context(), e); !errors.Is(err, errNotQueued) {
 		t.Fatalf("removing twice = %v", err)
 	}
 	agent.turns <- fakeTurn{stop: "cancelled"}
@@ -440,5 +440,56 @@ func TestStartingPromptsDrainInOrder(t *testing.T) {
 	}
 	if prompts != 3 {
 		t.Fatalf("agent received %d prompts", prompts)
+	}
+}
+
+func TestRemoveStrandedQueuedPrompt(t *testing.T) {
+	for _, source := range []string{"live log", "database"} {
+		t.Run(source, func(t *testing.T) {
+			ctx := t.Context()
+			conv, agent := newFakeAgentSession(t)
+			// The old worker published this entry but never admitted it to the queue.
+			const queueID = "stranded"
+			event := agent.log.Append("queued_prompt", 1, QueuedPromptPayload(QueuedPrompt{
+				ID: queueID, Input: acp.PromptInput{Text: "follow up"},
+			}))
+			if source == "database" {
+				home := t.TempDir()
+				store := statetest.Open(t, home)
+				info := session.SessionInfo{ID: "session-stranded", Transport: "acp"}
+				if err := session.UpsertSession(ctx, store.DB, info); err != nil {
+					t.Fatal(err)
+				}
+				if err := PersistConversationChangesSince(ctx, store.DB, info.ID, acp.LogChanges{
+					Entries: []acp.LogEntry{event}, LastSeq: event.Seq,
+				}, 0, false); err != nil {
+					t.Fatal(err)
+				}
+				agent.log = acp.NewEventLog(0)
+				if err := agent.log.Restore(nil, event.Seq, true); err != nil {
+					t.Fatal(err)
+				}
+				conv = NewConversationSession(agent.log, nil)
+				conv.wireStore(ctx, store, info, filepath.Join(home, info.ID))
+			}
+			mux := http.NewServeMux()
+			(&WorkerHTTP{Conversation: conv}).RegisterConversation(mux)
+			for _, want := range []int{http.StatusOK, http.StatusNotFound} {
+				response := httptest.NewRecorder()
+				mux.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/conversation/queue/"+queueID, nil))
+				if response.Code != want {
+					t.Fatalf("remove: got %d, want %d: %s", response.Code, want, response.Body)
+				}
+			}
+			entries := agent.log.Snapshot()
+			last := entries[len(entries)-1]
+			if last.Kind != "dequeued_prompt" || string(last.Payload) != `{"queueId":"stranded","reason":"removed"}` {
+				t.Fatalf("last event = %+v", last)
+			}
+			restarted, _ := newFakeAgentSession(t, event, last)
+			if len(restarted.Queue) != 0 || len(agent.prompts) != 0 {
+				t.Fatal("the dismissed prompt is still runnable")
+			}
+		})
 	}
 }
