@@ -94,10 +94,10 @@ function parseMachineInfo(raw: unknown): MachineInfo {
 }
 
 // System facts and agent CLI versions, read on the machine itself. A peer without the route answers 404.
-export const machineInfoQuery = (machine: string) =>
+export const machineInfoQuery = (machine: string, fresh = false) =>
   queryOptions({
-    queryKey: ["m", machine, "machine"],
-    queryFn: async () => parseMachineInfo(await api<unknown>("/api/machine", { machine })),
+    queryKey: ["m", machine, "machine", ...(fresh ? ["check"] : [])],
+    queryFn: async () => parseMachineInfo(await api<unknown>("/api/machine", { machine, query: fresh ? { fresh: "1" } : undefined })),
     staleTime: 60 * 1000,
     retry: (count, error) => !(error instanceof ApiError && error.status === 404) && count < 2,
   })

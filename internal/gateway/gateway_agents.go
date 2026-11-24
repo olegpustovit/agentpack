@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"time"
@@ -25,7 +26,8 @@ const agentAccountsTTL = time.Minute
 
 type agentAccount struct {
 	harness.Account
-	Harness string `json:"harness"`
+	Harness       string `json:"harness"`
+	CheckRequired bool   `json:"check_required,omitempty"`
 }
 
 type agentAccounts struct {
@@ -39,12 +41,28 @@ type agentAccounts struct {
 }
 
 func (c *agentAccounts) read(ctx context.Context, fresh bool) []agentAccount {
+	probe := runtime.GOOS != "darwin" || fresh
 	c.mu.Lock()
-	if !fresh && time.Since(c.at) < agentAccountsTTL {
+	if !fresh && !c.at.IsZero() && (!probe || time.Since(c.at) < agentAccountsTTL) {
 		defer c.mu.Unlock()
 		return c.accounts
 	}
 	c.mu.Unlock()
+	if !probe {
+		var accounts []agentAccount
+		for _, agent := range network.Agents {
+			if agent.Login == nil {
+				continue
+			}
+			_, err := passiveAgentPath(agent.Target)
+			account := harness.Account{Installed: err == nil}
+			if account.Installed {
+				account.Methods = agent.Login.Methods
+			}
+			accounts = append(accounts, agentAccount{Account: account, Harness: string(agent.Target), CheckRequired: account.Installed})
+		}
+		return accounts
+	}
 	accounts, _, _ := c.probing.Do("accounts", func() (any, error) {
 		c.mu.Lock()
 		generation := c.generation
@@ -276,6 +294,9 @@ func (g *Gateway) reloadSignedOutChats(ctx context.Context, harness string) {
 			continue
 		}
 		if err == nil {
+			if sessionFilesDeferred(info) {
+				continue
+			}
 			_, err = network.RestartWorkerWhenIdle(ctx, g.options.Home, info.ID, rand.Text())
 		}
 		if err != nil {
@@ -286,8 +307,18 @@ func (g *Gateway) reloadSignedOutChats(ctx context.Context, harness string) {
 }
 
 func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Query().Get("directory") == "" || r.URL.Query().Get("node") != "" {
-		sessions, err := g.meshAgentSessions(r.Context(), r.URL.Query().Get("node"), r.URL.Query().Get("directory"), r.URL.Query().Get("harness"))
+	query := r.URL.Query()
+	directory, node, harness := query.Get("directory"), query.Get("node"), query.Get("harness")
+	if directory == "" || node != "" || runtime.GOOS == "darwin" && query.Get("explicit") != "1" {
+		if directory != "" && node == "" {
+			var err error
+			node, err = g.nodeID(r.Context())
+			if err != nil {
+				meshReadError(w, r, err)
+				return
+			}
+		}
+		sessions, err := g.meshAgentSessions(r.Context(), node, directory, harness)
 		if err != nil {
 			meshReadError(w, r, err)
 			return
@@ -296,8 +327,6 @@ func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	directory := r.URL.Query().Get("directory")
-	harness := r.URL.Query().Get("harness")
 	if !g.knownDirectory(r.Context(), directory) || harness == "" {
 		http.Error(w, "choose a recent folder from this node", http.StatusBadRequest)
 		return

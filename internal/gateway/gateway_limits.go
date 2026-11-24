@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -257,6 +258,10 @@ func saveLimitSnapshot(ctx context.Context, db *sql.DB, at time.Time, snapshot h
 }
 
 func (g *Gateway) runLimitsAfterTurns(ctx context.Context, interval time.Duration) {
+	// Usage probes can start a native agent and load its configuration and plugins.
+	if runtime.GOOS == "darwin" {
+		return
+	}
 	if g.logs != nil {
 		node, _ := g.store.NodeID(ctx)
 		ctx = obs.WithSink(ctx, g.logs, obs.BuildMetadata(g.options.Version, node, "gateway"))
@@ -294,7 +299,7 @@ func (g *Gateway) registerLimits(mux routeRegistrar) {
 		}
 		// Reads never wait for a harness or peer; refresh the local cache beside them.
 		local, _ := g.nodeID(r.Context())
-		if (r.URL.Query().Get("node") == "" || r.URL.Query().Get("node") == local) && time.Since(cache.current().At) >= limitsCacheTTL && cache.refreshing.CompareAndSwap(false, true) {
+		if runtime.GOOS != "darwin" && (r.URL.Query().Get("node") == "" || r.URL.Query().Get("node") == local) && time.Since(cache.current().At) >= limitsCacheTTL && cache.refreshing.CompareAndSwap(false, true) {
 			if g.beginBackground(&g.operations) {
 				obs.Go("gateway.limits_refresh", func() {
 					defer g.operations.Done()
@@ -317,6 +322,10 @@ func (g *Gateway) registerLimits(mux routeRegistrar) {
 	mux.HandleFunc("POST /api/limits/refresh", func(w http.ResponseWriter, r *http.Request) {
 		if cacheErr != nil {
 			http.Error(w, "limits state unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if runtime.GOOS == "darwin" && r.URL.Query().Get("explicit") != "1" {
+			network.WriteJSON(w, map[string]any{"limits": cache.current().Snapshots})
 			return
 		}
 		network.WriteJSON(w, map[string]any{"limits": cache.collect(r.Context(), limitsRefreshGate)})

@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/olegpustovit/agentpack/internal/cache"
+	"github.com/olegpustovit/agentpack/internal/environment"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -88,7 +89,7 @@ func (b *Bootstrapper) captureRecent() error {
 	}
 	seenRoots := map[string]bool{}
 	for _, entry := range recent {
-		if !filepath.IsAbs(entry.Directory) {
+		if !filepath.IsAbs(entry.Directory) || environment.ProjectRequiresUserAccess(entry.Directory, entry.DefinitionRoot) {
 			continue
 		}
 		if info, err := os.Stat(entry.Directory); err != nil || !info.IsDir() {
@@ -139,8 +140,10 @@ func projectKey(directory string) string {
 	if directory == "" {
 		return ""
 	}
-	if canonical, err := filepath.EvalSymlinks(directory); err == nil {
-		return filepath.Clean(canonical)
+	if !paths.RequiresUserAccess(directory) {
+		if canonical, err := filepath.EvalSymlinks(directory); err == nil {
+			return filepath.Clean(canonical)
+		}
 	}
 	if absolute, err := filepath.Abs(directory); err == nil {
 		return filepath.Clean(absolute)

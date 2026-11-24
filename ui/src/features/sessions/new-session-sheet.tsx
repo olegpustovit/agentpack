@@ -21,7 +21,7 @@ import { LoginGlyph } from "@/features/library/mcp-inspector"
 import { connectionsQuery, loginsFor, signIn, type Connection } from "@/features/settings/connections-model"
 import { hud } from "@/lib/hud"
 import { branchSlug, projectDirectory, worktreeFolderInProject, worktreesQuery } from "./git"
-import { foundQuery, projectsQuery, sessionsQuery } from "./queries"
+import { foundQuery, projectsQuery, selectedProjectQuery, sessionsQuery } from "./queries"
 
 import { FolderBrowser, useFolderBrowser } from "./folder-browser"
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
@@ -128,10 +128,21 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
     project?.places.find((item) => item.key === chosenPlace) ??
     project?.places.find(canStart) ??
     project?.places[0]
-  const row = place?.row
+  const summary = place?.row
+  // The suggested project is visible as soon as the sheet opens. Wait for a
+  // choice before asking a Mac to inspect that particular project on disk.
+  const explicit = Boolean(project && (
+    project === pathProject ? summary?.directory === browser.listing?.path :
+      (project === pickedProject && picked?.pathQuery !== undefined) || listKey(project) === selectedProject || chosenPlace === place?.key
+  ))
+  const projectDetails = useQuery({
+    ...selectedProjectQuery(place?.machine ?? "", summary?.directory ?? ""),
+    enabled: Boolean(explicit && place?.online && summary?.details_deferred),
+  })
+  const row = projectDetails.data ?? summary
   const registered = Boolean(place && rows[place.machine]?.some((entry) => entry.available && placeKey(place.machine, entry.directory) === place.key && entry.folder_id === place.row.folder_id))
   const placeQuery = place ? projectQueries.byMachine[place.machine] : undefined
-  const contentsLoading = Boolean(placeQuery?.pending && !row?.folder_id)
+  const contentsLoading = Boolean(placeQuery?.pending && !row?.folder_id || projectDetails.isLoading)
   const newest = row?.launches[0]
   // What this browser last started here wins over the folder's newest launch.
   const remembered = row ? loadStartChoices(row.directory) : {}
@@ -140,24 +151,29 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   const modeValue = mode && modes.includes(mode) ? mode : remembered.mode && modes.includes(remembered.mode) && (!harness || harness === remembered.harness) ? remembered.mode : newest?.mode || "default"
   const view = chosenView ?? remembered.view ?? "chat"
   const machineName = place?.machineName ?? "this machine"
-  const startable = place ? canStart(place) : false
+  const startable = Boolean(place?.online && row?.available)
 
   const accounts = useQuery({ ...agentsQuery(place?.machine ?? ""), enabled: Boolean(place?.online) })
   const pastSessions = useQuery({
-    queryKey: ["agent-sessions", place?.machine, row?.directory, harnessId, modeValue],
+    queryKey: ["agent-sessions", place?.machine, row?.directory, harnessId, modeValue, explicit],
     queryFn: async () => {
       const body = await api<{ sessions: AgentSession[] }>("/api/agent-sessions", {
         machine: place!.machine,
-        query: { directory: row!.directory, harness: harnessId, mode: modeValue },
+        query: { directory: row!.directory, harness: harnessId, mode: modeValue, ...(explicit && { explicit: "1" }) },
       })
       return body.sessions ?? []
     },
     enabled: view === "chat" && startable && (registered || Boolean(row?.launches.length)),
+    refetchOnWindowFocus: !explicit,
+    refetchOnReconnect: !explicit,
     retry: false,
   })
 
   // Workspace: the folder itself, a new worktree, or a live worktree of this project (its path).
-  const worktrees = useQuery({ ...worktreesQuery(place?.machine ?? ""), enabled: Boolean(place?.online && row?.available) })
+  const worktrees = useQuery({
+    ...worktreesQuery(place?.machine ?? "", explicit && summary?.details_deferred ? row?.directory : undefined),
+    enabled: Boolean(place?.online && row?.available && (!summary?.details_deferred || explicit)),
+  })
   const worktreesNeedUpdate = routeMissing(worktrees.error)
   const machineSessions = useReplicatedQueries(sessionsQuery).byMachine[place?.machine ?? ""]?.data ?? []
   const folder = row?.directory.replace(/[\\/]+$/, "")
@@ -276,6 +292,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
     const best = item.places.find(canStart)
     const source = best ?? item.places[0]!
     const agents = [...new Set(item.places.flatMap((entry) => entry.row.launches.map((launch) => harnessName(launch.harness))))]
+    const packages = source.row.details_deferred ? [] : [source.row.error ? "Packages unavailable" : plural(source.row.packages.length, "package")]
     return (
       <SourceRow
         key={item.key}
@@ -291,7 +308,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
         </span>
         <span className="truncate text-(length:--fs-xs) opacity-70">{projectLocation(item, machineFilter)}</span>
         <span className="truncate text-(length:--fs-xs) opacity-70">
-          {[...agents, source.row.error ? "Packages unavailable" : plural(source.row.packages.length, "package")].join(" · ")}
+          {[...agents, ...packages].join(" · ")}
         </span>
       </SourceRow>
     )
@@ -473,6 +490,8 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
                 <p className="text-(length:--fs-sm) text-(--fg2)">Open this folder to see what it loads.</p>
               ) : contentsLoading ? (
                 <p className="text-(--fg2)">Loading what this folder loads on {machineName}…</p>
+              ) : row?.details_deferred ? (
+                <p className="text-(length:--fs-sm) text-(--fg2)">Select this project to see what it loads.</p>
               ) : (
                 <LoadedContents project={row} mode={modeValue} machine={place?.machine ?? LOCAL} machineName={machineName} />
               )}
@@ -502,7 +521,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
 
       <footer className="flex min-w-0 flex-col gap-(--s3) border-t-[0.5px] border-(--sep) bg-(--sidebar) px-(--s6) py-(--s4)">
         {place && hint && <p className="text-(length:--fs-sm) text-(--fg2)">{hint}</p>}
-        {place && !hint && account?.installed && !account.signedIn && (
+        {place && !hint && account?.installed && !account.signedIn && !account.checkRequired && (
           <p className="text-(length:--fs-sm) text-(--fg2)">
             {harnessName(harnessId)} isn't signed in on {machineName}.{" "}
             <Link to="/machines/$machine" params={{ machine: place.machine }} className="text-(--accent) underline-offset-2 hover:underline">Sign in…</Link>

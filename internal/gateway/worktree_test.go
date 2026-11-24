@@ -209,7 +209,7 @@ func TestNewWorktreeSessionSharesTheProjectAndArchiveRemovesIt(t *testing.T) {
 	if w := call("POST", "/api/sessions", string(body)); w.Code != 422 {
 		t.Fatalf("arbitrary worktree: %d %s", w.Code, w.Body)
 	}
-	projects, err := g.projects(t.Context())
+	projects, err := g.projects(t.Context(), "")
 	if err != nil || len(projects) != 1 || projects[0].Directory != main || projects[0].Git == nil || projects[0].Git.Branch != "main" {
 		t.Fatalf("projects %+v %v", projects, err)
 	}

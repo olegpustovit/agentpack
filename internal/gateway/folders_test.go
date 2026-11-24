@@ -268,7 +268,8 @@ func TestBrowserStartsInNewFolder(t *testing.T) {
 	if err := os.WriteFile(file, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	chat, terminal := t.TempDir(), t.TempDir()
+	chat := folderFixture(t, folderTestHome(t), "Documents", "chat")
+	terminal := t.TempDir()
 	mcp := &session.Actor{Kind: "mcp", User: "viewer@example.com"}
 	for i, tc := range []struct {
 		dir, transport string

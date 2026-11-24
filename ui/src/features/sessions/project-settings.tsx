@@ -15,7 +15,7 @@ import type { MCPServerInput, ProjectMCP } from "@/lib/api-types"
 import { hud } from "@/lib/hud"
 import type { ListedSession } from "./group"
 import { projectDirectory } from "./git"
-import { projectsQuery, sessionsQuery } from "./queries"
+import { projectsQuery, selectedProjectQuery, sessionsQuery } from "./queries"
 
 const section = "flex flex-col gap-(--s3)"
 function loginURL(value: string) {
@@ -37,9 +37,12 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
   const { machine } = row
   const directory = projectDirectory(row)
   const queryClient = useQueryClient()
-  const projects = useQuery(projectsQuery(machine))
-  const refreshProjects = () => queryClient.invalidateQueries({ queryKey: projectsQuery(machine).queryKey })
-  const project = projects.data?.find((item) => item.directory === directory)
+  const projects = useQuery(selectedProjectQuery(machine, directory))
+  const refreshProjects = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: projectsQuery(machine).queryKey }),
+    queryClient.invalidateQueries({ queryKey: selectedProjectQuery(machine, directory).queryKey }),
+  ])
+  const project = projects.data
   const connections = useQuery(connectionsQuery(false))
   const credentials = connections.data?.credentials ?? []
   const library = useLibrary()

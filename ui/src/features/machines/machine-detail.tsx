@@ -73,6 +73,17 @@ function MachineView({ machine }: { machine: Machine }) {
   const [forgetting, setForgetting] = useState<ProjectRow | null>(null)
   // The version the machine ran when Update was pressed; the update is done once it reports another.
   const [updatingFrom, setUpdatingFrom] = useState<string | undefined>()
+  const checkAgents = useMutation({
+    mutationFn: () => Promise.all([
+      queryClient.fetchQuery({ ...agentsQuery(machine.id, true), staleTime: 0, retry: false }),
+      queryClient.fetchQuery({ ...machineInfoQuery(machine.id, true), staleTime: 0, retry: false }),
+    ]),
+    onSuccess: ([accounts, machineInfo]) => {
+      queryClient.setQueryData(agentsQuery(machine.id).queryKey, accounts)
+      queryClient.setQueryData(machineInfoQuery(machine.id).queryKey, machineInfo)
+    },
+    onError: (error) => hud.error(`Couldn't check agents on ${machine.name}: ${error.message}`),
+  })
 
   const known = versionOf(machine.id)
   const latest = known.latest
@@ -168,7 +179,11 @@ function MachineView({ machine }: { machine: Machine }) {
           <Banner tone="danger" className="col-span-full">{`Couldn't load projects from ${machine.name}: ${projects.error.message}`}</Banner>
         )}
 
-        <Section title="Agents">
+        <Section title="Agents" action={info.data?.os === "darwin" && machine.online && (
+          <Button type="button" size="sm" disabled={checkAgents.isPending} onClick={() => checkAgents.mutate()}>
+            {checkAgents.isPending ? "Checking…" : "Check agents"}
+          </Button>
+        )}>
           {machine.online && info.isPending && <RowSkeleton lines={2} />}
           {info.data && <AgentsGrid machine={machine} agents={info.data.agents} limits={limits} />}
           {!machine.online && !info.data && <p className="text-(--fg2)">Agents are shown while {machine.name} is online.</p>}
@@ -365,8 +380,8 @@ function AgentsGrid({ machine, agents, limits }: { machine: Machine; agents: Mac
                       </span>
                     ) : (
                       <span className="flex items-center gap-(--s2)">
-                        <StatusGlyph state="needsYou" />
-                        <span className="text-(--fg2)">Not signed in</span>
+                        {!account.checkRequired && <StatusGlyph state="needsYou" />}
+                        <span className="text-(--fg2)">{account.checkRequired ? "Unchecked" : "Not signed in"}</span>
                         {account.methods.length > 0 && (
                           <Button type="button" size="sm" variant="ghost" onClick={() => setSigningIn(agent.harness)}>Sign in…</Button>
                         )}

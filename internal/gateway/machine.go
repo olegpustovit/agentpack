@@ -7,12 +7,14 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 type machineAgent struct {
@@ -41,7 +43,7 @@ func (g *Gateway) machine(w http.ResponseWriter, r *http.Request) {
 		// Partial facts beat none: the page still shows agents and versions.
 		event.Fail(err)
 	}
-	info.Agents = agentVersions(ctx)
+	info.Agents = agentVersions(ctx, runtime.GOOS != "darwin" || r.URL.Query().Get("fresh") == "1")
 	network.WriteJSON(w, info)
 }
 
@@ -59,15 +61,27 @@ var (
 	agentVersionTimeout = 3 * time.Second
 )
 
+func passiveAgentPath(target base.Target) (string, error) {
+	key, program := target.Binary()
+	if override := strings.TrimSpace(os.Getenv(key)); override != "" {
+		program = override
+	}
+	return paths.LookPathForBackground(program)
+}
+
 // agentVersions runs each installed CLI's --version in parallel, once per binary file:
 // the cache key is the path plus size and mtime, so an upgrade is noticed on the next read.
-func agentVersions(ctx context.Context) []machineAgent {
+func agentVersions(ctx context.Context, probe bool) []machineAgent {
 	targets := base.AllTargets()
 	agents := make([]machineAgent, len(targets))
 	var wait sync.WaitGroup
 	for index, target := range targets {
 		agents[index].Harness = string(target)
-		path, err := target.Resolve()
+		resolve := target.Resolve
+		if !probe {
+			resolve = func() (string, error) { return passiveAgentPath(target) }
+		}
+		path, err := resolve()
 		if err != nil {
 			continue
 		}
@@ -81,6 +95,9 @@ func agentVersions(ctx context.Context) []machineAgent {
 		agentVersionMu.Unlock()
 		if ok && cached.size == info.Size() && cached.modified.Equal(info.ModTime()) {
 			agents[index].Version = cached.version
+			continue
+		}
+		if !probe {
 			continue
 		}
 		wait.Add(1)
