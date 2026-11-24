@@ -53,12 +53,3 @@ func nameNewer(a, b nameRevision) bool {
 	}
 	return a.ID > b.ID
 }
-
-func hasOwnerRevision(revisions map[string]Revision, owner string) bool {
-	for _, revision := range revisions {
-		if revision.AgentpackID == owner {
-			return true
-		}
-	}
-	return false
-}

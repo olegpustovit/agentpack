@@ -83,11 +83,7 @@ func NewWithStore(db *state.Store, root string) (*Store, error) {
 			return nil, fmt.Errorf("registry storage directory is invalid")
 		}
 	}
-	s := &Store{root: root, sql: db}
-	if err := s.importLegacy(); err != nil {
-		return nil, err
-	}
-	return s, nil
+	return &Store{root: root, sql: db}, nil
 }
 
 func (s *Store) StateStore() *state.Store { return s.sql }
