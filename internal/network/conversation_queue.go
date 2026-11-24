@@ -183,9 +183,12 @@ func (cs *ConversationSession) Submit(ctx context.Context, input acp.PromptInput
 	// The prompt entry that sends it carries the ID, which is what takes it off every viewer's queue.
 	item.Input.QueueID = item.ID
 	cs.mu.Unlock()
-	cs.Log.Append("queued_prompt", cs.clock().UnixMilli(), QueuedPromptPayload(item))
+	if entry := cs.Log.Append("queued_prompt", cs.clock().UnixMilli(), QueuedPromptPayload(item)); entry.Seq == 0 {
+		return "", nil, ErrSessionEnded
+	}
 	if idempotent {
-		if err := cs.Log.Flush(); err != nil {
+		// Viewers already have the queue entry. Keep it runnable while the log retries a failed save.
+		if err := cs.Log.Flush(); errors.Is(err, session.ErrSessionArchived) || errors.Is(err, session.ErrSessionNotFound) {
 			return "", nil, err
 		}
 		cs.SeenPrompts[item.ID] = struct{}{}

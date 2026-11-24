@@ -278,6 +278,73 @@ func TestClientPromptIDIsAcceptedOnceAcrossReplay(t *testing.T) {
 	}
 }
 
+func TestQueuedPromptCanSteerWhileHistoryWritesAreLocked(t *testing.T) {
+	home := t.TempDir()
+	store := statetest.Open(t, home)
+	other := statetest.Open(t, home)
+	const id = "session-locked-history"
+	if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec("PRAGMA busy_timeout=0"); err != nil {
+		t.Fatal(err)
+	}
+	conv, agent := newFakeAgentSession(t)
+	if err := agent.log.EnableSink(func(changes acp.LogChanges) error {
+		return PersistConversationChangesSince(context.Background(), store.DB, id, changes, 0, false)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = agent.log.Close() })
+	conv.wireStore(t.Context(), store, session.SessionInfo{}, filepath.Join(home, id))
+	if _, _, err := conv.Submit(t.Context(), acp.PromptInput{Text: "running"}, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		// Let any turn we started finish even if an assertion failed.
+		agent.turns <- fakeTurn{}
+		agent.turns <- fakeTurn{}
+	})
+	agent.nextPrompt(t)
+	lock, err := other.DB.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Rollback()
+	mux := http.NewServeMux()
+	(&WorkerHTTP{Conversation: conv}).RegisterConversation(mux)
+	const queueID = "d93be610d9de4d109a2d162e129c1bff"
+	for range 2 {
+		request := httptest.NewRequest(http.MethodPost, "/conversation/prompt", strings.NewReader(`{"text":"follow up"}`))
+		request.Header.Set("Idempotency-Key", queueID)
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), queueID) {
+			t.Fatalf("queue: %d %s", response.Code, response.Body)
+		}
+	}
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/conversation/queue/"+queueID+"/steer", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("steer: %d %s", response.Code, response.Body)
+	}
+	agent.turns <- fakeTurn{stop: "cancelled"}
+	if got := agent.nextPrompt(t); got.QueueID != queueID || got.Text != "follow up" {
+		t.Fatalf("steered prompt = %+v", got)
+	}
+	if err := lock.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.log.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	var queued, delivered int
+	if err := store.Reader.QueryRow(`SELECT sum(kind='queued_prompt'),sum(kind='prompt') FROM conversation_events
+		WHERE session_id=? AND json_extract(body,'$.payload.queueId')=?`, id, queueID).Scan(&queued, &delivered); err != nil || queued != 2 || delivered != 1 {
+		t.Fatalf("saved %d queue updates and %d deliveries: %v", queued, delivered, err)
+	}
+}
+
 func TestClientPromptLookupSurvivesADroppedReplayTail(t *testing.T) {
 	store := statetest.Open(t, t.TempDir())
 	id := "session-stored-intent"
