@@ -38,6 +38,7 @@
 - [Contracts and Evidence](./reference/contracts.md)
 - [Manifest Schema](./reference/manifest-schema.md)
 - [Environment Variables](./reference/env-vars.md)
+- [Implementation Reference](./reference/internals.md)
 
 # Guides
 
