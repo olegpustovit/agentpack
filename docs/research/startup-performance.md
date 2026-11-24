@@ -306,3 +306,33 @@ of 10 iterations, with `v0.14.5-dev.187` as the baseline.
 ```sh
 go test ./internal/sync -run '^$' -bench '^(BenchmarkMaterializationHome|BenchmarkCodexSetup)$' -benchtime=10x -count=5
 ```
+
+## Shared generation leases (2026-11-24)
+
+Staging and Codex share a pointer guard that protects the handoff from the
+pointer read to the generation lease. Reclamation releases that guard before
+checking credentials or daemons and deleting trees. Grok's durable home shares
+the lease for its staged bundle.
+
+Measured on Linux amd64 (WSL2, Intel i9-12900K) with the 32 MiB fixtures, using
+`7bec31b` as the baseline. The table shows medians of five runs of ten iterations.
+The baseline and changed binaries alternated using the same dedicated `TMPDIR`
+on ext4. A preliminary comparison during concurrent CI measured 30.504 ms and
+28.099 ms for cold setup on this host. ARM64 verification is pending.
+
+| Benchmark | Before | After | ARM64 budget |
+| --- | ---: | ---: | ---: |
+| `BenchmarkMaterializationHome` | 0.535 ms | 0.545 ms | 1 ms |
+| `BenchmarkCodexSetup/cold` | 8.401 ms | 8.254 ms | 20 ms |
+| `BenchmarkCodexSetup/warm` | 0.191 ms | 0.189 ms | 1 ms |
+| `BenchmarkCodexSetup/warm-packages` | 7.009 ms | 7.081 ms | |
+
+```sh
+# Build the baseline and changed binaries in their respective checkouts.
+go test -c -o /tmp/agentpack-sync-before ./internal/sync
+go test -c -o /tmp/agentpack-sync-after ./internal/sync
+
+# Alternate binaries for five runs each, with both using the same TMPDIR.
+TMPDIR=/path/to/benchmark-tmp /tmp/agentpack-sync-before -test.run '^$' -test.bench '^(BenchmarkMaterializationHome|BenchmarkCodexSetup)$' -test.benchtime=10x
+TMPDIR=/path/to/benchmark-tmp /tmp/agentpack-sync-after -test.run '^$' -test.bench '^(BenchmarkMaterializationHome|BenchmarkCodexSetup)$' -test.benchtime=10x
+```

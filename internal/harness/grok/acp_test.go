@@ -9,7 +9,6 @@ import (
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mode"
-	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestAdaptAgentLine(t *testing.T) {
@@ -89,7 +88,7 @@ func TestACPLaunchRequiresStoredCredentials(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(native, "auth.json"), []byte(`{"token":"stale"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	shared, err := paths.SharedGrokCredentialsDir()
+	shared, err := sharedCredentialsDir()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +117,7 @@ func TestACPLaunchAuthenticatesWithExistingCredentials(t *testing.T) {
 	t.Setenv("GROK_PATH", executable)
 	project := t.TempDir()
 	mode := mode.ImplicitEffective()
-	shared, err := paths.SharedGrokCredentialsDir()
+	shared, err := sharedCredentialsDir()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +134,7 @@ func TestACPLaunchAuthenticatesWithExistingCredentials(t *testing.T) {
 	if launch.AuthenticateMethodID != "grok.com" {
 		t.Fatalf("AuthenticateMethodID = %q", launch.AuthenticateMethodID)
 	}
-	staged, err := paths.StagingGrokHomeDirForMode(project, mode.Name())
+	staged, err := StagingHome(project, mode.Name())
 	if err != nil {
 		t.Fatal(err)
 	}

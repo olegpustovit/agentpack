@@ -11,8 +11,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
+	"github.com/olegpustovit/agentpack/internal/harness/grok"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
@@ -251,7 +253,7 @@ func TestPluginRootVariableBecomesAStagedCopyOfThePluginForEveryAgent(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	grokHome, err := paths.StagingGrokHomeDirForMode(fixture.project, "default")
+	grokHome, err := grok.StagingHome(fixture.project, "default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,6 +493,13 @@ func TestSyncRemovesTheTempDirectoriesOfProjectsThatAreGone(t *testing.T) {
 		make(temporary, "agentpack-0000000000000002", alive), make(temporary, "agentpack-0000000000000003", ""),
 		make(homesBase, "0000000000000002", alive), make(homesBase, "0000000000000003", ""),
 	}
+	leased := make(temporary, "agentpack-0000000000000004", gone)
+	lease := flock.New(filepath.Join(leased, "modes", "default-g-1.lease"))
+	if err := lease.RLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Unlock()
+	kept = append(kept, leased)
 	fixture.sync(SyncOptions{})
 	for _, directory := range orphans {
 		if !fixtureMissing(directory) {
@@ -501,6 +510,13 @@ func TestSyncRemovesTheTempDirectoriesOfProjectsThatAreGone(t *testing.T) {
 		if fixtureMissing(directory) {
 			t.Errorf("removed: %s", directory)
 		}
+	}
+	if err := lease.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	fixture.sync(SyncOptions{})
+	if !fixtureMissing(leased) {
+		t.Error("released staging orphan was kept")
 	}
 }
 
@@ -529,7 +545,7 @@ func TestRemoteServerHeadersOAuthAndCwdReachEveryAgentThatHasThem(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	grokHome, err := paths.StagingGrokHomeDirForMode(fixture.project, "default")
+	grokHome, err := grok.StagingHome(fixture.project, "default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -604,7 +620,7 @@ func TestLanguageServersReachEveryAgentThatHasASetting(t *testing.T) {
 	fixture.lock()
 	fixture.sync(SyncOptions{})
 
-	grokHome, err := paths.StagingGrokHomeDirForMode(fixture.project, "default")
+	grokHome, err := grok.StagingHome(fixture.project, "default")
 	if err != nil {
 		t.Fatal(err)
 	}

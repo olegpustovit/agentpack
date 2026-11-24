@@ -14,14 +14,14 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	if err != nil {
 		return base.ACPLaunch{}, err
 	}
-	home, lease, err := acquireGenerationLease(ctx.ProjectRoot, ctx.Mode.Name())
+	home, release, err := LeaseHome(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return base.ACPLaunch{}, err
 	}
 	keepLease := false
 	defer func() {
 		if !keepLease {
-			_ = lease.Unlock()
+			_ = release()
 		}
 	}()
 	if needsShortHome(home) {
@@ -33,5 +33,5 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	command.Env = append(os.Environ(), "CODEX_HOME="+home)
 	keepLease = true
 	// codex-acp serializes session/prompt behind the turn, but its _session/steering joins it.
-	return base.ACPLaunch{Cmd: command, Rewrite: repairOnLoad(home), Steers: true, Finish: func() error { return finishLaunch(ctx, home, "", lease) }}, nil
+	return base.ACPLaunch{Cmd: command, Rewrite: repairOnLoad(home), Steers: true, Finish: func() error { return finishLaunch(ctx, home, "", release) }}, nil
 }

@@ -8,14 +8,13 @@ import (
 	"path/filepath"
 
 	"github.com/gofrs/flock"
-	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 var credentialFiles = []string{"auth.json", "mcp_credentials.json"}
 
 func lockSharedCredentials() (string, *flock.Flock, error) {
-	shared, err := paths.SharedGrokCredentialsDir()
+	shared, err := sharedCredentialsDir()
 	if err != nil {
 		return "", nil, err
 	}
@@ -107,11 +106,7 @@ func keepRefreshedCredentials(home, shared string, loaded map[string][32]byte) e
 	return nil
 }
 
-func persistCredentials(ctx base.LaunchContext) error {
-	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
-	if err != nil {
-		return err
-	}
+func persistCredentials(home string) error {
 	shared, lock, err := lockSharedCredentials()
 	if err != nil {
 		return err
@@ -179,22 +174,24 @@ func newestCredential(name, home string) (string, error) {
 	}
 	for _, project := range projects {
 		if project.IsDir() {
-			modes, err := os.ReadDir(filepath.Join(root, "projects", project.Name(), "grok-homes"))
+			homes := filepath.Join(root, "projects", project.Name(), homesDir)
+			modes, err := os.ReadDir(homes)
 			if err != nil && !os.IsNotExist(err) {
 				return "", err
 			}
 			for _, mode := range modes {
 				if mode.IsDir() {
-					if err := consider(filepath.Join(root, "projects", project.Name(), "grok-homes", mode.Name(), name)); err != nil {
+					modeHome := filepath.Join(homes, mode.Name())
+					if err := consider(filepath.Join(modeHome, name)); err != nil {
 						return "", err
 					}
-					generations, err := os.ReadDir(filepath.Join(root, "projects", project.Name(), "grok-homes", mode.Name()))
+					generations, err := os.ReadDir(modeHome)
 					if err != nil {
 						return "", err
 					}
 					for _, generation := range generations {
 						if generation.IsDir() {
-							if err := consider(filepath.Join(root, "projects", project.Name(), "grok-homes", mode.Name(), generation.Name(), name)); err != nil {
+							if err := consider(filepath.Join(modeHome, generation.Name(), name)); err != nil {
 								return "", err
 							}
 						}
@@ -242,4 +239,8 @@ func copyCredential(source, destination string) error {
 		return err
 	}
 	return os.Rename(temporary.Name(), destination)
+}
+
+func sharedCredentialsDir() (string, error) {
+	return paths.AgentpackHomePath("shared", "grok")
 }

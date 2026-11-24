@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gofrs/flock"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
@@ -26,13 +25,13 @@ func MarkProjectDirectories(projectRoot string) {
 // RemoveOrphanedProjectDirectories removes what deleted projects left behind:
 // /tmp/agentpack-<hash> staging trees and the Codex homes under /var/tmp/ap-c.
 // Only a directory that agentpack marked, and whose project directory no
-// longer exists, is removed; a Codex home that a running session still holds
-// is left for a later run. Failures are ignored: tidying never fails a sync.
+// longer exists, is removed. A generation leased by a running session is left
+// for a later run. Failures are ignored.
 func RemoveOrphanedProjectDirectories(projectRoot string) {
 	// The system temporary directory holds each project's staging
 	// (agentpack-<hash>) when no staging root is configured.
 	for _, orphan := range paths.OrphanedProjectDirectories(os.TempDir()) {
-		if strings.HasPrefix(filepath.Base(orphan), "agentpack-") {
+		if strings.HasPrefix(filepath.Base(orphan), "agentpack-") && !paths.GenerationLeasesInUse(orphan) {
 			_ = os.RemoveAll(orphan)
 		}
 	}
@@ -41,24 +40,9 @@ func RemoveOrphanedProjectDirectories(projectRoot string) {
 		return
 	}
 	for _, orphan := range paths.OrphanedProjectDirectories(filepath.Dir(homes)) {
-		if codexHomesInUse(orphan) {
+		if paths.GenerationLeasesInUse(orphan) {
 			continue
 		}
 		_ = os.RemoveAll(orphan)
 	}
-}
-
-// codexHomesInUse reports whether a launch still holds a lease on one of the
-// generations below a project's Codex homes directory.
-func codexHomesInUse(directory string) bool {
-	leases, _ := filepath.Glob(filepath.Join(directory, "*", "*.lease"))
-	for _, path := range leases {
-		lease := flock.New(path)
-		free, err := lease.TryLock()
-		if err != nil || !free {
-			return true
-		}
-		_ = lease.Unlock()
-	}
-	return false
 }

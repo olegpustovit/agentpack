@@ -10,7 +10,6 @@ import (
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mode"
-	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func TestCredentialsFollowProjectsRefreshAndLogout(t *testing.T) {
@@ -18,11 +17,11 @@ func TestCredentialsFollowProjectsRefreshAndLogout(t *testing.T) {
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	first := base.LaunchContext{ProjectRoot: t.TempDir(), Mode: mode.ImplicitEffective()}
 	second := base.LaunchContext{ProjectRoot: t.TempDir(), Mode: mode.ImplicitEffective()}
-	firstHome, err := paths.StagingGrokHomeDirForMode(first.ProjectRoot, first.Mode.Name())
+	firstHome, err := StagingHome(first.ProjectRoot, first.Mode.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondHome, err := paths.StagingGrokHomeDirForMode(second.ProjectRoot, second.Mode.Name())
+	secondHome, err := StagingHome(second.ProjectRoot, second.Mode.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,10 +39,10 @@ func TestCredentialsFollowProjectsRefreshAndLogout(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := persistCredentials(first); err != nil {
+	if err := persistCredentials(firstHome); err != nil {
 		t.Fatal(err)
 	}
-	shared, err := paths.SharedGrokCredentialsDir()
+	shared, err := sharedCredentialsDir()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +71,7 @@ func TestCredentialsFollowProjectsRefreshAndLogout(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := persistCredentials(second); err != nil {
+	if err := persistCredentials(secondHome); err != nil {
 		t.Fatal(err)
 	}
 	if err := loadSharedCredentials(firstHome); err != nil {
@@ -84,7 +83,7 @@ func TestCredentialsFollowProjectsRefreshAndLogout(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := persistCredentials(first); err != nil {
+	if err := persistCredentials(firstHome); err != nil {
 		t.Fatal(err)
 	}
 	if err := loadSharedCredentials(secondHome); err != nil {
@@ -101,11 +100,11 @@ func TestCredentialsMigrateFromAnotherProject(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	oldProject, newProject := t.TempDir(), t.TempDir()
-	oldHome, err := paths.StagingGrokHomeDirForMode(oldProject, "default")
+	oldHome, err := StagingHome(oldProject, "default")
 	if err != nil {
 		t.Fatal(err)
 	}
-	newHome, err := paths.StagingGrokHomeDirForMode(newProject, "default")
+	newHome, err := StagingHome(newProject, "default")
 	if err != nil {
 		t.Fatal(err)
 	}

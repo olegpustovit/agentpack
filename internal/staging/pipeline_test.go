@@ -8,7 +8,10 @@ import (
 
 	"github.com/gofrs/flock"
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/agy"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
+	"github.com/olegpustovit/agentpack/internal/harness/cursor"
+	"github.com/olegpustovit/agentpack/internal/harness/grok"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/mode"
@@ -193,7 +196,7 @@ func TestFailedMCPRebuildRestoresEveryPublishedRoot(t *testing.T) {
 		}
 		roots = append(roots, root)
 	}
-	grokHome, err := paths.StagingGrokHomeDirForMode(project, "default")
+	grokHome, err := grok.StagingHome(project, "default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +444,7 @@ func TestPipelineLaunchStagesOnlySelectedHarness(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			for _, manifestPath := range []func(string) (string, error){paths.CursorOverlayManifestPath, paths.AgyOverlayManifestPath} {
+			for _, manifestPath := range []func(string) (string, error){cursor.OverlayManifestPath, agy.OverlayManifestPath} {
 				tracking, err := manifestPath(project)
 				if err != nil {
 					t.Fatal(err)

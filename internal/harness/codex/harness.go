@@ -15,7 +15,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gofrs/flock"
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -60,14 +59,14 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	home, lease, err := acquireGenerationLease(ctx.ProjectRoot, ctx.Mode.Name())
+	home, release, err := LeaseHome(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return nil, nil, err
 	}
 	keepLease := false
 	defer func() {
 		if !keepLease {
-			_ = lease.Unlock()
+			_ = release()
 		}
 	}()
 	if needsShortHome(home) {
@@ -76,7 +75,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 		}
 	}
 	if _, err := os.Lstat(filepath.Join(home, credentialsBaselineFile)); err == nil {
-		if err := reconcileMCPAuthMode(ctx.ProjectRoot, ctx.Mode.Name()); err != nil {
+		if err := reconcileMCPAuthHome(ctx.ProjectRoot, home); err != nil {
 			return nil, nil, err
 		}
 	} else if !os.IsNotExist(err) {
@@ -101,7 +100,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	command := exec.Command(binary, arguments...)
 	command.Env = append(os.Environ(), "CODEX_HOME="+cmp.Or(loginHome, home))
 	keepLease = true
-	return command, func() error { return finishLaunch(ctx, home, loginHome, lease) }, nil
+	return command, func() error { return finishLaunch(ctx, home, loginHome, release) }, nil
 }
 
 func isCodexLogin(arguments []string) bool {
@@ -155,14 +154,16 @@ func usesInteractiveCodex(arguments []string) bool {
 
 // finishLaunch runs after the agent exits: it installs a finished isolated login, shares
 // refreshed credentials, releases the generation lease and retires unused generations.
-func finishLaunch(ctx base.LaunchContext, home, loginHome string, lease *flock.Flock) error {
+func finishLaunch(ctx base.LaunchContext, home, loginHome string, release func() error) error {
 	var loginErr error
 	if loginHome != "" {
 		loginErr = finishIsolatedLoginHome(loginHome, home)
 	}
-	result := errors.Join(loginErr, finishAuthLaunch(home, ctx.Arguments), reconcileMCPAuthHome(ctx.ProjectRoot, home), lease.Unlock())
+	result := errors.Join(loginErr, finishAuthLaunch(home, ctx.Arguments), reconcileMCPAuthHome(ctx.ProjectRoot, home), release())
 	// Busy generations retain their leases and loaded threads, so retirement can make progress on later launches.
-	_ = retireGenerations(ctx.ProjectRoot, ctx.Mode.Name())
+	if set, err := generations(ctx.ProjectRoot, ctx.Mode.Name()); err == nil {
+		set.Reclaim(canRetireGeneration)
+	}
 	return result
 }
 

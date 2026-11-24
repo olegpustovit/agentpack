@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/opencode"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
@@ -72,7 +73,7 @@ func TestHarnessLaunchCommandsOwnArgumentsAndEnvironment(t *testing.T) {
 		}
 	}
 	open, _ := ByTarget(base.OpenCode)
-	root, _ := paths.StagingOpenCodeDirForMode(project, "default")
+	root, _ := opencode.StagingDir(project, "default")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -9,13 +9,12 @@ import (
 	"strings"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 // Grok's ACP agent needs an existing login; the worker authenticates with the advertised "grok.com" method.
 func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	ctx.Arguments = []string{"agent", "stdio"}
-	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	home, err := StagingHome(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return base.ACPLaunch{}, err
 	}
@@ -34,7 +33,7 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 }
 
 func grokACPCredentialsAvailable(home string) (bool, error) {
-	shared, err := paths.SharedGrokCredentialsDir()
+	shared, err := sharedCredentialsDir()
 	if err != nil {
 		return false, err
 	}

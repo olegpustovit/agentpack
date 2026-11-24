@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/codex"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
@@ -25,21 +26,21 @@ func TestStageDotAgentsLeavesNativeCodexSkillsInProject(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	codex, _ := paths.StagingCodexHomeDirForMode(project, "default")
-	if err := StageDotAgents(project, project, "default", mode.ImplicitEffective(), codex, nil); err != nil {
+	codexRoot, _ := codex.CurrentHome(project, "default")
+	if err := StageDotAgents(project, project, "default", mode.ImplicitEffective(), codexRoot, nil); err != nil {
 		t.Fatal(err)
 	}
 	plugins, _ := paths.StagingPluginsDirForMode(project, "default")
 	bundle := filepath.Join(plugins, paths.StagedAgentpackBundleName)
-	for _, path := range []string{filepath.Join(bundle, "settings.json"), filepath.Join(bundle, "commands/review.md"), filepath.Join(bundle, "skills/local/SKILL.md"), filepath.Join(bundle, "rules/dot-agents--team.mdc"), filepath.Join(bundle, "CLAUDE.md"), filepath.Join(codex, "theme.toml"), filepath.Join(codex, "skills/review/SKILL.md"), filepath.Join(codex, "AGENTS.md")} {
+	for _, path := range []string{filepath.Join(bundle, "settings.json"), filepath.Join(bundle, "commands/review.md"), filepath.Join(bundle, "skills/local/SKILL.md"), filepath.Join(bundle, "rules/dot-agents--team.mdc"), filepath.Join(bundle, "CLAUDE.md"), filepath.Join(codexRoot, "theme.toml"), filepath.Join(codexRoot, "skills/review/SKILL.md"), filepath.Join(codexRoot, "AGENTS.md")} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("missing %s: %v", path, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(codex, "skills/local/SKILL.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(codexRoot, "skills/local/SKILL.md")); !os.IsNotExist(err) {
 		t.Fatalf("project-local skill copied into Codex home: %v", err)
 	}
-	data, _ := os.ReadFile(filepath.Join(codex, "skills/review/SKILL.md"))
+	data, _ := os.ReadFile(filepath.Join(codexRoot, "skills/review/SKILL.md"))
 	if !strings.Contains(string(data), "disable-model-invocation: true") {
 		t.Fatalf("codex command fallback = %s", data)
 	}

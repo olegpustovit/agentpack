@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/harness/claude"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
@@ -47,7 +48,7 @@ func ProjectSkillNames(projectRoot, root string) (map[string]struct{}, error) {
 // hashes distinguish exact mirrored copies from same-name overrides while
 // preserving different skill names even when their contents match.
 func OmitProjectClaudeSkillDuplicates(projectRoot, bundle string) error {
-	localRoot := filepath.Join(paths.ProjectDotClaudeDir(projectRoot), "skills")
+	localRoot := filepath.Join(claude.ProjectDir(projectRoot), "skills")
 	localNames, err := projectClaudeSkillDirs(projectRoot)
 	if err != nil {
 		return err
@@ -92,7 +93,7 @@ func OmitProjectClaudeSkillDuplicates(projectRoot, bundle string) error {
 
 func projectClaudeSkillDirs(projectRoot string) (map[string]string, error) {
 	dirs := make(map[string]string)
-	root := filepath.Join(paths.ProjectDotClaudeDir(projectRoot), "skills")
+	root := filepath.Join(claude.ProjectDir(projectRoot), "skills")
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return dirs, nil
@@ -174,7 +175,7 @@ type ClaudeSkillsReport struct {
 // touching the filesystem.
 func ReconcileClaudeSkills(projectRoot string, dryRun bool) (ClaudeSkillsReport, error) {
 	agentsRoot := filepath.Join(paths.ProjectDotAgentsDir(projectRoot), "skills")
-	claudeRoot := filepath.Join(paths.ProjectDotClaudeDir(projectRoot), "skills")
+	claudeRoot := filepath.Join(claude.ProjectDir(projectRoot), "skills")
 
 	agentsNames, err := localSkillNames(agentsRoot)
 	if err != nil {

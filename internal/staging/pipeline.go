@@ -14,6 +14,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/cache"
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/grok"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/hooks"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
@@ -533,11 +534,13 @@ func (pipeline Pipeline) managedRebuildPaths(ctx base.StageContext, harnesses []
 		}
 		managed = append(managed, root)
 	}
-	grokHome, err := paths.StagingGrokHomeDirForMode(pipeline.ProjectRoot, pipeline.Mode.Name())
-	if err != nil {
-		return nil, err
+	if pipeline.includes(base.Grok) {
+		home, err := grok.StagingHome(pipeline.ProjectRoot, pipeline.Mode.Name())
+		if err != nil {
+			return nil, err
+		}
+		managed = append(managed, home)
 	}
-	managed = append(managed, grokHome)
 	pluginRoots, err := paths.StagingPluginRootsDirForMode(pipeline.ProjectRoot, pipeline.Mode.Name())
 	if err != nil {
 		return nil, err

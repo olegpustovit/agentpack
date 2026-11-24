@@ -68,9 +68,8 @@ func TestModePathComponentIsStable(t *testing.T) {
 	}
 }
 
-func TestSharedStagingOverrideSeparatesProjectsAndGrokModes(t *testing.T) {
+func TestSharedStagingOverrideSeparatesProjects(t *testing.T) {
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
-	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	first, second := t.TempDir(), t.TempDir()
 	a, err := StagingRootForMode(first, "default")
 	if err != nil {
@@ -82,17 +81,6 @@ func TestSharedStagingOverrideSeparatesProjectsAndGrokModes(t *testing.T) {
 	}
 	if a == b {
 		t.Fatal("override shares staging between projects")
-	}
-	a, err = StagingGrokHomeDirForMode(first, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err = StagingGrokHomeDirForMode(first, "review")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a == b {
-		t.Fatal("Grok modes share mutable configuration")
 	}
 }
 

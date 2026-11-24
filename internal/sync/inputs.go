@@ -12,6 +12,8 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/cache"
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/agy"
+	"github.com/olegpustovit/agentpack/internal/harness/cursor"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/mode"
@@ -243,7 +245,7 @@ func selectLaunchGeneration(projectRoot, modeName string, target base.Target) er
 	if target.UsesWorkspaceOverlay() {
 		return nil
 	}
-	for _, manifest := range []func(string) (string, error){paths.CursorOverlayManifestPath, paths.AgyOverlayManifestPath} {
+	for _, manifest := range []func(string) (string, error){cursor.OverlayManifestPath, agy.OverlayManifestPath} {
 		path, err := manifest(projectRoot)
 		if err != nil {
 			return err

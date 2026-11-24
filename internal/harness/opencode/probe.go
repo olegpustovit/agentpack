@@ -193,7 +193,7 @@ func parseSkillList(output string) ([]listedSkill, error) {
 
 // Probe observes the staged OpenCode config root.
 func Probe(ctx context.Context, request base.ProbeRequest) (environment.Receipt, error) {
-	configDir, err := paths.StagingOpenCodeDirForMode(request.DefinitionRoot, request.Mode)
+	configDir, err := StagingDir(request.DefinitionRoot, request.Mode)
 	if err != nil {
 		return environment.Receipt{}, err
 	}

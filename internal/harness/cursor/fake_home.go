@@ -16,7 +16,7 @@ var packSubdirectories = []string{"commands", "agents", "skills", "rules", "hook
 var mutableFiles = []string{"machineid", "agent-cli-state.json", "argv.json", "ide_state.json"}
 
 func materializeFakeHome(ctx base.StageContext) error {
-	fake, err := paths.StagingCursorHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	fake, err := StagingHome(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return err
 	}
@@ -325,4 +325,8 @@ func materializePlatformData(fake, home string) error {
 		}
 	}
 	return nil
+}
+
+func StagingHome(projectRoot, modeName string) (string, error) {
+	return paths.StagingSubdir(projectRoot, modeName, "cursor-home")
 }

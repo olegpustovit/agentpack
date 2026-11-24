@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -18,7 +17,7 @@ import (
 // lsp_tools = true (its README, "LSP"), which Claude Code does unasked, so
 // that is set too unless the user's configuration says otherwise.
 func planLSP(servers map[string]json.RawMessage, ctx base.StageContext) (base.LSPProjection, error) {
-	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	home, err := StagingHome(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return base.LSPProjection{}, err
 	}

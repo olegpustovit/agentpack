@@ -186,3 +186,7 @@ func verify(ctx base.StageContext) error {
 	}
 	return nil
 }
+
+func ProjectDir(projectRoot string) string {
+	return filepath.Join(projectRoot, ".claude")
+}

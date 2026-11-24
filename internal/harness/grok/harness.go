@@ -44,7 +44,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	home, err := StagingHome(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -53,13 +53,13 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	}
 	command := exec.Command(binary, arguments...)
 	command.Env = append(os.Environ(), "GROK_HOME="+home)
-	return command, func() error { return persistCredentials(ctx) }, nil
+	return command, func() error { return persistCredentials(home) }, nil
 }
 func stagedRoot(ctx base.StageContext) (string, error) {
-	return paths.StagingGrokBundleDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	return paths.StagingBundleDir(ctx.ProjectRoot, ctx.Mode.Name(), "grok")
 }
 func resetPaths(ctx base.StageContext) ([]string, error) {
-	root, err := paths.StagingGrokDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	root, err := paths.StagingSubdir(ctx.ProjectRoot, ctx.Mode.Name(), "grok")
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func prepare(ctx base.StageContext) error {
 	if err := os.WriteFile(filepath.Join(bundle, "plugin.json"), []byte(`{"name":"agentpack-bundle"}`), 0o644); err != nil {
 		return err
 	}
-	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	home, err := StagingHome(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return err
 	}
@@ -217,7 +217,7 @@ func writeAttribution(home string) error {
 	return os.WriteFile(path, []byte(output), 0o644)
 }
 func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, error) {
-	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	home, err := StagingHome(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return base.MCPProjection{}, err
 	}
@@ -267,14 +267,14 @@ func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, er
 	return base.MCPProjection{Files: []base.MCPProjectedFile{{Path: filepath.Join(home, "config.toml"), Contents: data, Scope: "mcp_servers", ScopeDigest: digest, MergeOrder: []string{"user config (existing names win)", "plugin definitions", "agentpack.toml", ".agents/mcp.json"}}}, Servers: servers, Warnings: warnings, Inputs: []base.MCPProjectedInput{input}}, nil
 }
 func injectGuidance(blob string, ctx base.StageContext) error {
-	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	home, err := StagingHome(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return err
 	}
 	return base.WriteGuidance(filepath.Join(home, "AGENTS.md"), blob)
 }
 func verify(ctx base.StageContext) error {
-	home, err := paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	home, err := StagingHome(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return err
 	}

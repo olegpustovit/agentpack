@@ -3,7 +3,6 @@ package grok
 import (
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mode"
-	"github.com/olegpustovit/agentpack/internal/paths"
 	"os"
 	"path/filepath"
 	"testing"
@@ -33,7 +32,7 @@ func TestPreparePreservesNativeSessions(t *testing.T) {
 	}
 }
 func pathsHome(ctx base.StageContext) (string, error) {
-	return paths.StagingGrokHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
+	return StagingHome(ctx.ProjectRoot, ctx.Mode.Name())
 }
 
 func TestCredentialsSurviveRestaging(t *testing.T) {
