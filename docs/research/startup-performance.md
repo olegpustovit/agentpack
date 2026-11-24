@@ -476,3 +476,18 @@ Alternate the binaries five times with a shared `TMPDIR`.
 taskset -c 2,4 "$bench_binary" -test.run '^$' -test.bench '^BenchmarkMaterializationHome$' -test.benchtime=10x -test.cpu=2
 taskset -c 2,4 "$bench_binary" -test.run '^$' -test.bench '^BenchmarkCodexSetup$/^(cold|warm)$' -test.benchtime=10x -test.cpu=2
 ```
+
+## Windows Codex generation selection (2026-11-24)
+
+Linux ARM64 medians from five interleaved runs of ten iterations on `oracle-vm`
+using the 32 MiB fixture and the benchmark commands above.
+
+| Benchmark | Before (`2f7b1f55`, ms) | After (ms) | Budget (ms) |
+| --- | ---: | ---: | ---: |
+| `BenchmarkMaterializationHome` | 0.846 | 0.831 | <1 |
+| `BenchmarkCodexSetup/cold` | 17.689 | 18.173 | <20 |
+| `BenchmarkCodexSetup/warm` | 0.358 | 0.352 | <1 |
+
+The Windows regression ran on `kyiv-win-1` with different temp roots for the
+builder and launcher. The baseline Windows Codex benchmark could not report
+timings because its cleanup tried to remove a lease held for the process lifetime.

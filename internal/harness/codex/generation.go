@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
@@ -25,7 +26,46 @@ func generations(projectRoot, modeName string) (paths.GenerationSet, error) {
 	if err != nil {
 		return paths.GenerationSet{}, err
 	}
+	if runtime.GOOS == "windows" {
+		directory, err = publishedWindowsDirectory(pointer, directory)
+		if err != nil {
+			return paths.GenerationSet{}, err
+		}
+	}
 	return paths.GenerationSet{Directory: directory, Prefix: generationPrefix, Pointer: pointer, AbsolutePointer: true}, nil
+}
+
+// A Windows gateway and an interactive shell can inherit different temp directories.
+// Keep the mode's established short directory once the first build publishes it.
+func publishedWindowsDirectory(pointer, directory string) (string, error) {
+	data, err := os.ReadFile(pointer)
+	if os.IsNotExist(err) {
+		return directory, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	root := strings.TrimSpace(string(data))
+	parent := filepath.Dir(root)
+	if parent == directory || !filepath.IsAbs(root) || root != filepath.Clean(root) || strings.ContainsRune(root, 0) ||
+		filepath.Base(parent) != filepath.Base(directory) || filepath.Base(filepath.Dir(parent)) != "a" {
+		return directory, nil // the generation set validates the pointer
+	}
+	suffix, ok := strings.CutPrefix(filepath.Base(root), generationPrefix)
+	if _, err := strconv.ParseUint(suffix, 10, 32); !ok || err != nil {
+		return directory, nil
+	}
+	if info, err := os.Lstat(root); err == nil && !info.IsDir() {
+		return "", fmt.Errorf("generation must be a directory: %s", root)
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	if _, err := os.Lstat(parent); !os.IsNotExist(err) {
+		if err := paths.EnsureOwnedPrivateDirectory(parent); err != nil {
+			return "", err
+		}
+	}
+	return parent, nil
 }
 
 func legacyHome(projectRoot, modeName string) (string, error) {
@@ -80,6 +120,11 @@ func beginGeneration(ctx base.StageContext) (base.RebuildTransaction, error) {
 	set, err := generations(ctx.ProjectRoot, ctx.Mode.Name())
 	if err != nil {
 		return nil, err
+	}
+	if runtime.GOOS == "windows" {
+		if err := paths.EnsureOwnedPrivateDirectory(set.Directory); err != nil {
+			return nil, err
+		}
 	}
 	generation, err := set.Begin()
 	if err != nil {
