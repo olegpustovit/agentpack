@@ -72,3 +72,33 @@ func TestVerifyLockCacheIntegrity(t *testing.T) {
 func fileURL(path string) string {
 	return FileURL(path)
 }
+
+// A launch's layout check that lands between swap's two renames waits for the new entry instead of failing.
+func TestLayoutCheckOutlastsASwap(t *testing.T) {
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	pkg := lockfile.Package{Kind: lockfile.PackageSkill, CacheKey: "mid-swap-key"}
+	out, err := EntryDir(pkg.CacheKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := waitForSwap
+	t.Cleanup(func() { waitForSwap = saved })
+	waitForSwap = func() { // the swap's second rename lands
+		if err := os.MkdirAll(out, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(out, "SKILL.md"), []byte("---\nname: x\n---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := VerifyLockCacheLayout(lockfile.PackLock{Packages: []lockfile.Package{pkg}}); err != nil {
+		t.Fatalf("mid-swap entry reported missing: %v", err)
+	}
+	waitForSwap = func() {}
+	if err := os.RemoveAll(out); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyLockCacheLayout(lockfile.PackLock{Packages: []lockfile.Package{pkg}}); err == nil {
+		t.Fatal("a missing entry passed the layout check")
+	}
+}

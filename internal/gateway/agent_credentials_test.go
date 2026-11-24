@@ -21,11 +21,17 @@ func TestAgentCredentialsShareTheNewestSignIn(t *testing.T) {
 	saved := network.Agents
 	t.Cleanup(func() { network.Agents = saved })
 	renewals := 0
+	agentRewrite := "" // the agent writes this file while a renewal is in flight
 	network.Agents = []registry.Entry{{Harness: harness.Harness{Target: harness.Agy}, Login: &harness.LoginSpec{Credential: func() string { return path }, Refresh: func(_ context.Context, data []byte) ([]byte, error) {
 		if !strings.HasPrefix(string(data), `{"renew"`) {
 			return nil, nil // not due
 		}
 		renewals++
+		if agentRewrite != "" {
+			if err := os.WriteFile(path, []byte(agentRewrite), 0o600); err != nil {
+				return nil, err
+			}
+		}
 		return []byte(`{"renewed":1}`), nil
 	}}}}
 	g, _ := identityGateway(t, home, nil)
@@ -171,5 +177,19 @@ func TestAgentCredentialsShareTheNewestSignIn(t *testing.T) {
 	g.syncAgentCredentials(ctx, "")
 	if got := shared(); got.Data != nil || read() != `{"e":5}` {
 		t.Fatalf("first sight republished after a sign-out: %+v %q", got, read())
+	}
+
+	// A token the agent writes while this machine renews is kept, not overwritten, and shared next round.
+	write(`{"renew":3}`, base)
+	g.syncAgentCredentials(ctx, string(harness.Agy)) // a web sign-in here publishes it
+	agentRewrite = `{"agent":1}`
+	g.syncAgentCredentials(ctx, "") // renews, but the agent rewrote the file meanwhile
+	agentRewrite = ""
+	if read() != `{"agent":1}` {
+		t.Fatalf("renewal overwrote the agent's newer token: %q", read())
+	}
+	g.syncAgentCredentials(ctx, "")
+	if got := shared(); string(got.Data) != `{"agent":1}` {
+		t.Fatalf("the agent's newer token was not shared: %+v", got)
 	}
 }

@@ -122,7 +122,7 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 				return false, err
 			}
 		}
-		if err := installAgentCredential(path, shared); err != nil {
+		if installed, err := installAgentCredential(path, local, shared); !installed || err != nil {
 			return false, err
 		}
 		return true, g.recordAgentCredential(ctx, key, shared)
@@ -142,11 +142,12 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 		// in the table even if the file write fails; the next round reconciles either.
 		credential := sharedAgentCredential{Data: renewed, Rev: shared.Rev + 1, Modified: time.Now().UnixMilli(), Node: node}
 		publishErr := g.publishAgentCredential(ctx, key, credential)
-		if err := installAgentCredential(path, credential); err != nil {
+		installed, err := installAgentCredential(path, local, credential)
+		if err != nil {
 			// The spent file stays recorded as unchanged, so the next round installs the renewal instead of publishing it.
 			return false, errors.Join(publishErr, err, g.recordAgentCredential(ctx, key, sharedAgentCredential{Data: local, Rev: credential.Rev}))
 		}
-		return true, publishErr
+		return installed, publishErr
 	}
 	return false, nil
 }
@@ -221,10 +222,18 @@ func readAgentCredential(path string) ([]byte, int64, error) {
 	return data, info.ModTime().UnixMilli(), nil
 }
 
-// installAgentCredential replaces the file atomically.
-func installAgentCredential(path string, credential sharedAgentCredential) error {
+// installAgentCredential replaces the file atomically unless the agent rewrote it since this round
+// read expected: its newer token wins, and the next round shares it.
+func installAgentCredential(path string, expected []byte, credential sharedAgentCredential) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+		return false, err
 	}
-	return paths.WriteAtomic(path, credential.Data, 0o600)
+	current, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	if !bytes.Equal(current, expected) {
+		return false, nil
+	}
+	return true, paths.WriteAtomic(path, credential.Data, 0o600)
 }

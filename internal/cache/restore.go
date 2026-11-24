@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -80,16 +81,28 @@ func VerifyLockCacheLayout(lock lockfile.PackLock) error {
 		if err != nil {
 			return err
 		}
-		if pkg.Kind == lockfile.PackagePlugin {
-			if !HasPluginManifest(out) {
-				return fmt.Errorf("plugin cache not ready for %s", pkg.CacheKey)
-			}
-		} else if !IsPackageRoot(out) {
-			return fmt.Errorf("skill cache not ready for %s", pkg.CacheKey)
+		ready := func() bool {
+			return pkg.Kind == lockfile.PackagePlugin && HasPluginManifest(out) || pkg.Kind != lockfile.PackagePlugin && IsPackageRoot(out)
 		}
+		if !ready() {
+			// swap moves the old entry aside, then renames the new one in: a missing entry may be mid-swap.
+			if _, err := os.Lstat(out); os.IsNotExist(err) {
+				waitForSwap()
+			}
+		}
+		if ready() {
+			continue
+		}
+		if pkg.Kind == lockfile.PackagePlugin {
+			return fmt.Errorf("plugin cache not ready for %s", pkg.CacheKey)
+		}
+		return fmt.Errorf("skill cache not ready for %s", pkg.CacheKey)
 	}
 	return nil
 }
+
+// waitForSwap outlasts the two renames of a concurrent swap; tests replace it.
+var waitForSwap = func() { time.Sleep(20 * time.Millisecond) }
 
 func emptyOrMissingDir(path string) bool {
 	entries, err := os.ReadDir(path)
