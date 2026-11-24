@@ -1,16 +1,12 @@
 package codex
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"sort"
-	"strings"
 	"time"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
@@ -20,14 +16,6 @@ const (
 	limitsSource        = "codex app-server account/rateLimits/read"
 	limitsClientVersion = "agentpack"
 )
-
-type rpcMessage struct {
-	ID     json.RawMessage `json:"id,omitempty"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  *struct {
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}
 
 type rateLimitWindow struct {
 	UsedPercent        float64 `json:"usedPercent"`
@@ -81,40 +69,23 @@ func ReadLimits(ctx context.Context, codexHome string) base.LimitSnapshot {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, exe, "app-server")
 	cmd.Env = withCodexHome(os.Environ(), codexHome)
-	cmd.Stderr = io.Discard
-	stdin, err := cmd.StdinPipe()
+	rpc, err := base.StartStdioRPC(ctx, cmd, "codex app-server", "codex app-server")
 	if err != nil {
 		snapshot.Error = err.Error()
 		return snapshot
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		snapshot.Error = err.Error()
-		return snapshot
-	}
-	if err := cmd.Start(); err != nil {
-		snapshot.Error = err.Error()
-		return snapshot
-	}
-	defer func() {
-		_ = stdin.Close()
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	}()
+	defer rpc.Close()
 
-	requests := []string{
-		`{"id":1,"method":"initialize","params":{"clientInfo":{"name":"agentpack","version":"` + limitsClientVersion + `"}}}`,
+	if err := rpc.Send(
+		`{"id":1,"method":"initialize","params":{"clientInfo":{"name":"agentpack","version":"`+limitsClientVersion+`"}}}`,
 		`{"method":"initialized"}`,
 		`{"id":2,"method":"account/rateLimits/read","params":null}`,
-	}
-	for _, request := range requests {
-		if _, err := io.WriteString(stdin, request+"\n"); err != nil {
-			snapshot.Error = err.Error()
-			return snapshot
-		}
+	); err != nil {
+		snapshot.Error = err.Error()
+		return snapshot
 	}
 
-	result, err := awaitResponse(ctx, stdout, "2")
+	result, err := rpc.Await("2")
 	if err != nil {
 		snapshot.Error = err.Error()
 		return snapshot
@@ -131,31 +102,6 @@ func ReadLimits(ctx context.Context, codexHome string) base.LimitSnapshot {
 	}
 	snapshot.State = base.LimitStateAvailable
 	return snapshot
-}
-
-func awaitResponse(ctx context.Context, stdout io.Reader, id string) (json.RawMessage, error) {
-	lines := bufio.NewScanner(stdout)
-	lines.Buffer(make([]byte, 0, 64<<10), 4<<20)
-	for lines.Scan() {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("codex app-server timed out")
-		}
-		var message rpcMessage
-		if err := json.Unmarshal(bytes.TrimSpace(lines.Bytes()), &message); err != nil || len(message.ID) == 0 {
-			continue
-		}
-		if strings.Trim(string(message.ID), `"`) != id {
-			continue
-		}
-		if message.Error != nil {
-			return nil, fmt.Errorf("codex app-server: %s", message.Error.Message)
-		}
-		return message.Result, nil
-	}
-	if err := lines.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("codex app-server closed before responding")
 }
 
 func limitWindows(usage rateLimitsResponse) ([]base.LimitWindow, string) {

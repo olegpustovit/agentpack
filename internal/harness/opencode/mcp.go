@@ -3,7 +3,6 @@ package opencode
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/tailscale/hujson"
@@ -28,65 +27,46 @@ func MergeMCPData(data []byte, entries mcp.Entries) ([]byte, []string, []string,
 		servers = make(map[string]any)
 		root["mcp"] = servers
 	}
-	var warnings []string
-	var shadowed []string
-	for _, name := range entries.Names() {
-		if _, exists := servers[name]; exists {
-			shadowed = append(shadowed, name)
-			continue
-		}
-		server := entries[name].Server
-		value := map[string]any{"enabled": server.Disabled == nil || !*server.Disabled}
-		var missing []string
-		if server.IsRemote() {
-			value["type"], value["url"] = "remote", *server.URL
-			if len(server.Headers) != 0 {
-				value["headers"] = server.Headers
-			}
-			// OpenCode spells the client oauth.clientId, clientSecret and scope.
-			if oauth := server.OAuth; oauth != nil {
-				client := make(map[string]any)
-				if oauth.ClientID != "" {
-					client["clientId"] = oauth.ClientID
-				}
-				if oauth.ClientSecret != "" {
-					client["clientSecret"] = oauth.ClientSecret
-				}
-				if len(oauth.Scopes) != 0 {
-					client["scope"] = strings.Join(oauth.Scopes, " ")
-				}
-				if len(client) != 0 {
-					value["oauth"] = client
-				}
-				if oauth.CallbackPort != 0 {
-					missing = append(missing, "an OAuth callback port")
-				}
-				if oauth.MetadataURL != "" {
-					missing = append(missing, "an OAuth metadata URL")
-				}
-			}
-		} else {
-			if server.Cwd != nil {
-				value["cwd"] = *server.Cwd
-			}
-			value["type"] = "local"
-			command := append([]string(nil), server.Args...)
-			if server.Command != nil {
-				command = append([]string{*server.Command}, command...)
-			}
-			value["command"] = command
-			if len(server.Env) != 0 {
-				value["environment"] = server.Env
-			}
-		}
-		if len(missing) != 0 {
-			warnings = append(warnings, mcp.NotCarried("OpenCode", name, missing...))
-		}
-		servers[name] = value
-	}
+	warnings, shadowed := mcp.MergeJSONServers(servers, entries, "OpenCode", renderMCPServer)
 	data, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		return nil, warnings, nil, fmt.Errorf("encode MCP config: %w", err)
 	}
 	return data, warnings, shadowed, nil
+}
+
+func renderMCPServer(server mcp.Server) (map[string]any, []string) {
+	value := map[string]any{"enabled": server.Disabled == nil || !*server.Disabled}
+	if !server.IsRemote() {
+		if server.Cwd != nil {
+			value["cwd"] = *server.Cwd
+		}
+		value["type"] = "local"
+		command := append([]string(nil), server.Args...)
+		if server.Command != nil {
+			command = append([]string{*server.Command}, command...)
+		}
+		value["command"] = command
+		if len(server.Env) != 0 {
+			value["environment"] = server.Env
+		}
+		return value, nil
+	}
+	value["type"], value["url"] = "remote", *server.URL
+	if len(server.Headers) != 0 {
+		value["headers"] = server.Headers
+	}
+	var missing []string
+	if oauth := server.OAuth; oauth != nil {
+		if client := oauth.JSONClient(); len(client) != 0 {
+			value["oauth"] = client
+		}
+		if oauth.CallbackPort != 0 {
+			missing = append(missing, "an OAuth callback port")
+		}
+		if oauth.MetadataURL != "" {
+			missing = append(missing, "an OAuth metadata URL")
+		}
+	}
+	return value, missing
 }

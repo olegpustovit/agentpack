@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
@@ -25,7 +26,7 @@ func (runner Runner) recordFailure(ctx context.Context, root *cobra.Command, arg
 		command = root
 	}
 	args := packSync.RedactCredentialArgs(arguments)
-	if _, harness := launcherTarget(command.Name()); harness {
+	if _, ok := harness.ParseLauncher(command.Name()); ok {
 		args = []string{command.Name(), "<harness arguments omitted>"}
 	}
 	for parent := command; parent != nil; parent = parent.Parent() {

@@ -67,7 +67,7 @@ func agentVersions(ctx context.Context) []machineAgent {
 	var wait sync.WaitGroup
 	for index, target := range targets {
 		agents[index].Harness = string(target)
-		path, err := base.ResolveBinary(target.Binary())
+		path, err := target.Resolve()
 		if err != nil {
 			continue
 		}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,11 +17,10 @@ var LoginMethods = []base.LoginMethod{{ID: "claudeai", Label: "Claude account"},
 
 // Account reads `claude auth status --json`; it never reads the keychain itself.
 func Account(ctx context.Context) base.Account {
-	exe, err := base.ResolveBinary(base.Claude.Binary())
-	if err != nil {
-		return base.Account{}
+	account, exe := base.ProbeAccount(base.Claude)
+	if !account.Installed {
+		return account
 	}
-	account := base.Account{Installed: true}
 	result, err := base.RunProbe(ctx, base.ProbePlan{Executable: exe, Argv: []string{"auth", "status", "--json"}, Timeout: 15 * time.Second, Categories: []string{"auth"}, WriteScope: "none"})
 	if err != nil {
 		account.Error = err.Error()
@@ -43,7 +41,7 @@ func Account(ctx context.Context) base.Account {
 
 // Logout runs `claude auth logout`.
 func Logout(ctx context.Context) error {
-	exe, err := base.ResolveBinary(base.Claude.Binary())
+	exe, err := base.Claude.Resolve()
 	if err != nil {
 		return err
 	}
@@ -53,7 +51,7 @@ func Logout(ctx context.Context) error {
 // Login runs `claude auth login`. With BROWSER=true it opens nothing and prints the link; the page
 // it leads to shows a code, which the person pastes back.
 func Login(method string) (base.LoginFlow, error) {
-	exe, err := base.ResolveBinary(base.Claude.Binary())
+	exe, err := base.Claude.Resolve()
 	if err != nil {
 		return base.LoginFlow{}, err
 	}
@@ -69,11 +67,8 @@ func Login(method string) (base.LoginFlow, error) {
 // CredentialFile is Claude Code's sign-in file. On macOS Claude prefers the keychain and reads this
 // file when the keychain holds none, so a sign-in copied from another machine works there too.
 func CredentialFile() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".claude", ".credentials.json")
+	path, _ := base.HomeFile(".claude/.credentials.json")
+	return path
 }
 
 // Claude Code's own OAuth client (from its bundle); tests point tokenURL at a fake.

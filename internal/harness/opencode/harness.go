@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -38,7 +37,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	binary, err := base.ResolveBinary(base.OpenCode.Binary())
+	binary, err := base.OpenCode.Resolve()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -218,7 +217,7 @@ func userConfigRoot(home string, major int) (string, error) {
 var versionCache sync.Map
 
 func nativeMajor() int {
-	binary, err := base.ResolveBinary(base.OpenCode.Binary())
+	binary, err := base.OpenCode.Resolve()
 	if err != nil {
 		return 0
 	}
@@ -348,18 +347,10 @@ func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, er
 	if err != nil {
 		return base.MCPProjection{}, err
 	}
-	servers := base.ProjectedMCPServers(entries)
-	for index := range servers {
-		if slices.Contains(shadowed, servers[index].Name) {
-			servers[index].Winner = "user"
-		}
-	}
-	base.MarkMCPWarnings(servers, warnings)
-	digest, err := base.MCPJSONScopeDigest(data, "mcp")
-	if err != nil {
-		return base.MCPProjection{}, err
-	}
-	return base.MCPProjection{Files: []base.MCPProjectedFile{{Path: filepath.Join(root, "opencode.json"), Contents: data, Scope: "mcp", ScopeDigest: digest, MergeOrder: []string{"user config (existing names win)", "plugin definitions", "agentpack.toml", ".agents/mcp.json"}}}, Servers: servers, Warnings: warnings, Inputs: inputs}, nil
+	return base.NewMCPProjection(entries, base.MCPProjectedFile{
+		Path: filepath.Join(root, "opencode.json"), Contents: data, Scope: "mcp",
+		MergeOrder: base.MCPMergeOrder("user config (existing names win)"),
+	}, warnings, shadowed, inputs)
 }
 func injectGuidance(blob string, ctx base.StageContext) error {
 	root, err := stagedRoot(ctx)

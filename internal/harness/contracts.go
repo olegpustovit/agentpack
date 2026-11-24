@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/mcp"
@@ -83,6 +84,48 @@ type MCPProjection struct {
 	Inputs   []MCPProjectedInput
 }
 
+// MCPMergeOrder lists the pack sources after any native configuration.
+func MCPMergeOrder(before ...string) []string {
+	return append(before, "plugin definitions", "agentpack.toml", ".agents/mcp.json")
+}
+
+// NewMCPProjection records the staged file, its inputs and the source of each server.
+func NewMCPProjection(entries mcp.Entries, file MCPProjectedFile, warnings, shadowed []string, inputs []MCPProjectedInput) (MCPProjection, error) {
+	projection := MCPProjection{Warnings: warnings, Inputs: inputs}
+	if err := projection.AddFile(file); err != nil {
+		return MCPProjection{}, err
+	}
+	projection.Servers = make([]MCPProjectedServer, 0, len(entries))
+	for _, name := range entries.Names() {
+		entry := entries[name]
+		server := MCPProjectedServer{Name: name, Source: string(entry.Source), Module: entry.Module, Winner: string(entry.Source)}
+		if slices.Contains(shadowed, name) {
+			server.Winner = "user"
+		}
+		projection.Servers = append(projection.Servers, server)
+	}
+	markMCPWarnings(projection.Servers, warnings)
+	return projection, nil
+}
+
+// AddFile records the digest of the MCP section in a staged JSON or TOML file.
+func (projection *MCPProjection) AddFile(file MCPProjectedFile) error {
+	digest := MCPJSONScopeDigest
+	if filepath.Ext(file.Path) == ".toml" {
+		digest = MCPTOMLScopeDigest
+	}
+	value, err := digest(file.Contents, file.Scope)
+	if err != nil {
+		return err
+	}
+	file.ScopeDigest = value
+	if file.MergeOrder == nil {
+		file.MergeOrder = MCPMergeOrder()
+	}
+	projection.Files = append(projection.Files, file)
+	return nil
+}
+
 type LSPProjection struct {
 	Files    []MCPProjectedFile
 	Warnings []string
@@ -100,16 +143,7 @@ type MCPProjectedServer struct {
 	Dropped                      []string
 }
 
-func ProjectedMCPServers(entries mcp.Entries) []MCPProjectedServer {
-	servers := make([]MCPProjectedServer, 0, len(entries))
-	for _, name := range entries.Names() {
-		entry := entries[name]
-		servers = append(servers, MCPProjectedServer{Name: name, Source: string(entry.Source), Module: entry.Module, Winner: string(entry.Source)})
-	}
-	return servers
-}
-
-func MarkMCPWarnings(servers []MCPProjectedServer, warnings []string) {
+func markMCPWarnings(servers []MCPProjectedServer, warnings []string) {
 	for index := range servers {
 		prefix := "MCP server " + servers[index].Name + ": "
 		for _, warning := range warnings {

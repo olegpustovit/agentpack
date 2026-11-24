@@ -477,7 +477,7 @@ func (runner Runner) launch(ctx context.Context, packContext paths.Context, invo
 	}
 	defer release()
 	ctx = held
-	target, ok := launcherTarget(invocation.Command)
+	target, ok := base.ParseLauncher(invocation.Command)
 	if !ok {
 		return 1, fmt.Errorf("unknown harness %q", invocation.Command)
 	}
@@ -644,17 +644,4 @@ func writeJSON(output io.Writer, value any) error {
 	encoder := json.NewEncoder(output)
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(value)
-}
-
-// launcherTarget maps a launcher command to its harness. The Cursor launcher is `agent`, so the
-// target name `cursor` is not a command.
-func launcherTarget(command string) (base.Target, bool) {
-	if command == "cursor" {
-		return "", false
-	}
-	if command == "agent" {
-		command = "cursor"
-	}
-	target, err := base.ParseTarget(command)
-	return target, err == nil
 }

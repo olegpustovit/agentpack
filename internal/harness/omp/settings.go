@@ -94,7 +94,7 @@ func OverlayPath() (string, error) {
 // Settings reports this machine's OMP version and its effective values for the schema keys.
 // An absent CLI returns an empty version and no error.
 func Settings(ctx context.Context) (version string, values map[string]json.RawMessage, err error) {
-	binary, err := base.ResolveBinary(base.OMP.Binary())
+	binary, err := base.OMP.Resolve()
 	if err != nil {
 		return "", map[string]json.RawMessage{}, nil
 	}
@@ -124,7 +124,7 @@ func Settings(ctx context.Context) (version string, values map[string]json.RawMe
 
 // Models lists every model kind this machine's OMP can use, as `omp models --json` reports them.
 func Models(ctx context.Context) ([]json.RawMessage, error) {
-	binary, err := base.ResolveBinary(base.OMP.Binary())
+	binary, err := base.OMP.Resolve()
 	if err != nil {
 		return []json.RawMessage{}, nil
 	}
@@ -165,7 +165,7 @@ func Validate(ctx context.Context, key string, value json.RawMessage) error {
 		}
 		return fmt.Errorf("%s expects a %s value", key, setting.Type)
 	}
-	binary, err := base.ResolveBinary(base.OMP.Binary())
+	binary, err := base.OMP.Resolve()
 	if err != nil {
 		return nil
 	}

@@ -56,6 +56,12 @@ type Account struct {
 	Error     string        `json:"error,omitempty"`
 }
 
+// ProbeAccount initializes the account and locates the CLI used to check its sign-in.
+func ProbeAccount(target Target) (Account, string) {
+	executable, err := target.Resolve()
+	return Account{Installed: err == nil}, executable
+}
+
 // RunLogout runs an agent's own logout command and returns its output as the error when it fails.
 func RunLogout(ctx context.Context, exe string, args ...string) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)

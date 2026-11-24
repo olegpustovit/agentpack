@@ -1,0 +1,26 @@
+[mcp_servers]
+[mcp_servers.disabled]
+command = 'mcp-fixture'
+enabled = false
+
+[mcp_servers.local]
+args = ['--stdio']
+command = 'mcp-fixture'
+
+[mcp_servers.local.env]
+FIXTURE = 'value'
+
+[mcp_servers.oauth]
+url = 'https://example.test/oauth'
+
+[mcp_servers.remote]
+url = 'https://example.test/mcp'
+
+[mcp_servers.remote.headers]
+X-Fixture = 'value'
+
+[mcp_servers.shadowed]
+command = 'user-server'
+
+[plugins]
+enabled = ['agentpack-bundle']

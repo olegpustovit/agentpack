@@ -306,3 +306,21 @@ of 10 iterations, with `v0.14.5-dev.187` as the baseline.
 ```sh
 go test ./internal/sync -run '^$' -bench '^(BenchmarkMaterializationHome|BenchmarkCodexSetup)$' -benchtime=10x -count=5
 ```
+
+## Shared harness MCP projections (2026-11-24)
+
+On Linux amd64 (Intel i9-12900K), parallel worktree builds coincided with
+cold-setup ranges of 12.9–83.2 ms before and 10.3–58.0 ms after the refactor.
+To reduce filesystem contention, the comparison below uses tmpfs for fixtures.
+Each value is the median of five interleaved runs of 10 iterations per version,
+with `7bec31b` as the baseline.
+
+| Benchmark | Before | After |
+| --- | ---: | ---: |
+| `BenchmarkMaterializationHome` | 0.526 ms | 0.542 ms |
+| `BenchmarkCodexSetup/cold` | 2.355 ms | 2.230 ms |
+| `BenchmarkCodexSetup/warm` | 0.185 ms | 0.188 ms |
+
+```sh
+TMPDIR=/dev/shm GOMAXPROCS=4 go test ./internal/sync -run '^$' -bench '^Benchmark(MaterializationHome|CodexSetup)$' -benchtime=10x -count=5
+```

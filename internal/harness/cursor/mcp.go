@@ -1,22 +1,11 @@
 package cursor
 
-import (
-	"encoding/json"
-	"fmt"
-
-	"github.com/olegpustovit/agentpack/internal/mcp"
-)
+import "github.com/olegpustovit/agentpack/internal/mcp"
 
 func RenderMCP(entries mcp.Entries) ([]byte, []string, error) {
-	servers := make(map[string]map[string]any, len(entries))
-	var warnings []string
-	for _, name := range entries.Names() {
-		server := entries[name].Server
-		object := server.JSONObject()
+	return mcp.RenderJSONServers(entries, "Cursor", func(server mcp.Server) (map[string]any, []string) {
+		object := server.JSONObject("")
 		var missing []string
-		if server.Cwd != nil && !server.IsRemote() {
-			missing = append(missing, "a working directory (cwd)")
-		}
 		if oauth := server.OAuth; oauth != nil && server.IsRemote() {
 			if oauth.ClientID != "" {
 				value := map[string]any{"CLIENT_ID": oauth.ClientID}
@@ -37,14 +26,6 @@ func RenderMCP(entries mcp.Entries) ([]byte, []string, error) {
 				missing = append(missing, "an OAuth metadata URL")
 			}
 		}
-		if len(missing) != 0 {
-			warnings = append(warnings, mcp.NotCarried("Cursor", name, missing...))
-		}
-		servers[name] = object
-	}
-	data, err := json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
-	if err != nil {
-		return nil, warnings, fmt.Errorf("encode MCP servers: %w", err)
-	}
-	return data, warnings, nil
+		return object, missing
+	})
 }

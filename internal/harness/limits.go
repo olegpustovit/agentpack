@@ -38,10 +38,10 @@ type LimitWindow struct {
 // ProbeLimits initializes a usage snapshot and resolves the CLI for command-backed probes.
 func ProbeLimits(target Target, source string) (LimitSnapshot, string) {
 	snapshot := LimitSnapshot{Harness: string(target), State: LimitStateError, Source: source, ObservedAt: time.Now().UTC()}
-	if target == Cursor {
+	if target.spec().limitsWithoutCLI {
 		return snapshot, ""
 	}
-	executable, err := ResolveBinary(target.Binary())
+	executable, err := target.Resolve()
 	if err != nil {
 		snapshot.State = LimitStateUnsupported
 		snapshot.Error = string(target) + " CLI not found"

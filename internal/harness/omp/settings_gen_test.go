@@ -26,7 +26,7 @@ func TestGenerateSettingsUI(t *testing.T) {
 	if source == "" {
 		t.Skip("set OMP_SOURCE to an oh-my-pi checkout to regenerate settings-ui.json")
 	}
-	binary, err := base.ResolveBinary(base.OMP.Binary())
+	binary, err := base.OMP.Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}

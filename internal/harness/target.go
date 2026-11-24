@@ -1,6 +1,10 @@
 package harness
 
-import "fmt"
+import (
+	"cmp"
+	"fmt"
+	"slices"
+)
 
 type Target string
 
@@ -14,74 +18,116 @@ const (
 	OMP      Target = "omp"
 )
 
-func AllTargets() []Target { return []Target{Claude, Cursor, Codex, OpenCode, Grok, Agy, OMP} }
+type targetSpec struct {
+	target                       Target
+	binaryEnv, binary, launcher  string
+	displayName                  string
+	externalStatus, externalNote string
+	rawPluginSubdirs             []string
+	limitsWithoutCLI             bool
+}
 
-func ParseTarget(value string) (Target, error) {
-	for _, target := range AllTargets() {
-		if string(target) == value {
-			return target, nil
+const workspaceWrite = "workspace-write"
+
+var claudePluginSubdirs = []string{"hooks", "matchers", "core", "examples", "utils", "commands", "agents", "rules", "skills"}
+
+var targetSpecs = [...]targetSpec{
+	{
+		target: Claude, binaryEnv: "CLAUDE_CODE_PATH", displayName: "Claude Code",
+		externalStatus: "external", externalNote: "uses --plugin-dir and --settings; no workspace overlay",
+		rawPluginSubdirs: claudePluginSubdirs,
+	},
+	{
+		target: Cursor, binaryEnv: "CURSOR_AGENT_PATH", binary: "cursor-agent", launcher: "agent", displayName: "Cursor",
+		externalStatus: workspaceWrite, externalNote: "writes .cursor/agents when agent artifacts exist",
+		rawPluginSubdirs: []string{"hooks", "assets", "scripts", "commands", "agents", "rules", "skills"},
+		limitsWithoutCLI: true,
+	},
+	{
+		target: Codex, binaryEnv: "CODEX_PATH", displayName: "Codex",
+		externalStatus: "external-home", externalNote: "uses CODEX_HOME; native project instructions may still apply",
+	},
+	{
+		target: OpenCode, binaryEnv: "OPENCODE_PATH", displayName: "OpenCode",
+		externalStatus: "external", externalNote: "uses OPENCODE_CONFIG_DIR; no workspace overlay",
+	},
+	{
+		target: Grok, binaryEnv: "GROK_PATH", displayName: "Grok",
+		externalStatus: "external-home", externalNote: "uses GROK_HOME; also reads real ~/.claude and ~/.grok",
+		rawPluginSubdirs: claudePluginSubdirs,
+	},
+	{
+		target: Agy, binaryEnv: "AGY_PATH", displayName: "Antigravity",
+		externalStatus: workspaceWrite, externalNote: "writes .agents/plugins/agentpack-bundle",
+		// Antigravity's hook renderer writes hooks.json at the plugin root.
+		rawPluginSubdirs: []string{"commands", "agents", "rules", "skills"},
+	},
+	{
+		target: OMP, binaryEnv: "OMP_PATH", displayName: "Oh My Pi",
+		externalStatus: "external", externalNote: "uses --plugin-dir; native profile, settings and credentials remain in place",
+		rawPluginSubdirs: []string{"hooks", "matchers", "core", "examples", "utils", "assets", "scripts", "tools", "commands", "agents", "rules", "skills"},
+	},
+}
+
+func (target Target) spec() targetSpec {
+	for i := range targetSpecs {
+		if targetSpecs[i].target == target {
+			return targetSpecs[i]
 		}
 	}
-	return "", fmt.Errorf("unknown harness target %q", value)
+	return targetSpec{}
+}
+
+func AllTargets() []Target {
+	targets := make([]Target, len(targetSpecs))
+	for i := range targetSpecs {
+		targets[i] = targetSpecs[i].target
+	}
+	return targets
+}
+
+func ParseTarget(value string) (Target, error) {
+	target := Target(value)
+	if target.spec().target == "" {
+		return "", fmt.Errorf("unknown harness target %q", value)
+	}
+	return target, nil
 }
 
 // Binary names the environment override and default program for the agent's CLI.
 func (target Target) Binary() (environment, program string) {
-	switch target {
-	case Claude:
-		return "CLAUDE_CODE_PATH", "claude"
-	case Cursor:
-		return "CURSOR_AGENT_PATH", "cursor-agent"
-	case Codex:
-		return "CODEX_PATH", "codex"
-	case OpenCode:
-		return "OPENCODE_PATH", "opencode"
-	case Grok:
-		return "GROK_PATH", "grok"
-	case Agy:
-		return "AGY_PATH", "agy"
-	case OMP:
-		return "OMP_PATH", "omp"
-	}
-	return "", string(target)
+	spec := target.spec()
+	return spec.binaryEnv, cmp.Or(spec.binary, string(target))
 }
 
-func (target Target) UsesWorkspaceOverlay() bool { return target == Cursor || target == Agy }
+// LauncherName is the agentpack command that launches the target.
+func (target Target) LauncherName() string { return cmp.Or(target.spec().launcher, string(target)) }
+
+// ParseLauncher resolves an agentpack launcher command to its target.
+func ParseLauncher(command string) (Target, bool) {
+	for _, spec := range targetSpecs {
+		if command == cmp.Or(spec.launcher, string(spec.target)) {
+			return spec.target, true
+		}
+	}
+	return "", false
+}
+
+func (target Target) UsesWorkspaceOverlay() bool {
+	return target.spec().externalStatus == workspaceWrite
+}
+
+// ExternalLaunch describes the target's checkout writes and native configuration.
+func (target Target) ExternalLaunch() (status, note string) {
+	spec := target.spec()
+	return spec.externalStatus, spec.externalNote
+}
 
 func (target Target) RawPluginSubdirs() []string {
-	switch target {
-	case OMP:
-		return []string{"hooks", "matchers", "core", "examples", "utils", "assets", "scripts", "tools", "commands", "agents", "rules", "skills"}
-	case Claude, Grok:
-		return []string{"hooks", "matchers", "core", "examples", "utils", "commands", "agents", "rules", "skills"}
-	case Cursor:
-		return []string{"hooks", "assets", "scripts", "commands", "agents", "rules", "skills"}
-	case Agy:
-		// No raw hooks directory: Antigravity reads hooks.json at the plugin
-		// root, which the hook renderer writes in Antigravity's own shape.
-		return []string{"commands", "agents", "rules", "skills"}
-	default:
-		return nil
-	}
+	return slices.Clone(target.spec().rawPluginSubdirs)
 }
 
 // DisplayName is the agent's product name, as messages name it.
 func DisplayName(target Target) string {
-	switch target {
-	case Claude:
-		return "Claude Code"
-	case Cursor:
-		return "Cursor"
-	case Codex:
-		return "Codex"
-	case OpenCode:
-		return "OpenCode"
-	case OMP:
-		return "Oh My Pi"
-	case Grok:
-		return "Grok"
-	case Agy:
-		return "Antigravity"
-	}
-	return string(target)
+	return cmp.Or(target.spec().displayName, string(target))
 }

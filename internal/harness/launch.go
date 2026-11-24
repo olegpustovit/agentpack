@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// Resolve locates the target's native CLI, honoring its environment override.
+func (target Target) Resolve() (string, error) { return ResolveBinary(target.Binary()) }
+
 func ResolveBinary(environment, fallback string) (string, error) {
 	program := strings.TrimSpace(os.Getenv(environment))
 	if program == "" {

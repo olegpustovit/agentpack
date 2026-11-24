@@ -16,6 +16,7 @@ import (
 	"syscall"
 
 	"github.com/olegpustovit/agentpack/internal/gateway"
+	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
@@ -154,7 +155,7 @@ func (runner Runner) startRemoteSession(ctx context.Context, home, executable st
 			Rows: 24, Columns: 80, Session: info,
 		})
 	}
-	target, ok := launcherTarget(info.Harness)
+	target, ok := harness.ParseLauncher(info.Harness)
 	if !ok {
 		return "", errors.New("unknown harness")
 	}

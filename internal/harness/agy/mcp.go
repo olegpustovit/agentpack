@@ -1,17 +1,10 @@
 package agy
 
-import (
-	"encoding/json"
-	"fmt"
-
-	"github.com/olegpustovit/agentpack/internal/mcp"
-)
+import "github.com/olegpustovit/agentpack/internal/mcp"
 
 func RenderMCP(entries mcp.Entries) ([]byte, []string, error) {
-	servers := make(map[string]map[string]any, len(entries))
-	var warnings []string
-	for _, name := range entries.Names() {
-		server, value := entries[name].Server, make(map[string]any)
+	return mcp.RenderJSONServers(entries, "Antigravity", func(server mcp.Server) (map[string]any, []string) {
+		value := make(map[string]any)
 		var missing []string
 		if server.IsRemote() {
 			value["serverUrl"] = *server.URL
@@ -53,14 +46,6 @@ func RenderMCP(entries mcp.Entries) ([]byte, []string, error) {
 		if server.Disabled != nil {
 			value["disabled"] = *server.Disabled
 		}
-		if len(missing) != 0 {
-			warnings = append(warnings, mcp.NotCarried("Antigravity", name, missing...))
-		}
-		servers[name] = value
-	}
-	data, err := json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
-	if err != nil {
-		return nil, warnings, fmt.Errorf("encode MCP servers: %w", err)
-	}
-	return data, warnings, nil
+		return value, missing
+	})
 }

@@ -1,0 +1,29 @@
+[mcp_servers]
+[mcp_servers.disabled]
+command = 'mcp-fixture'
+enabled = false
+
+[mcp_servers.local]
+args = ['--stdio']
+command = 'mcp-fixture'
+cwd = 'fixture-dir'
+
+[mcp_servers.local.env]
+FIXTURE = 'value'
+
+[mcp_servers.oauth]
+scopes = ['read', 'write']
+url = 'https://example.test/oauth'
+
+[mcp_servers.oauth.oauth]
+callback_port = 8739
+client_id = 'fixture-client'
+
+[mcp_servers.remote]
+url = 'https://example.test/mcp'
+
+[mcp_servers.remote.http_headers]
+X-Fixture = 'value'
+
+[mcp_servers.shadowed]
+command = 'user-server'
