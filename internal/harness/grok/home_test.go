@@ -34,6 +34,7 @@ func TestGrokHomeRetirementSharesStagingLeaseAndPreservesUnmirroredCredentials(t
 	for _, name := range []string{"leased", "mirrored", "recovery"} {
 		root := stage + "-g-" + name
 		write(filepath.Join(root, ".staged.json"), "{}")
+		write(root+".lease", "")
 		token := "shared token"
 		if name == "recovery" {
 			token = "refreshed token"

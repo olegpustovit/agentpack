@@ -140,6 +140,9 @@ func TestReclaimKeepsLeasedRecordedAndUnfinishedGenerations(t *testing.T) {
 		if err := os.MkdirAll(root, 0o700); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.WriteFile(root+generationLeaseSuffix, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 		if built {
 			if err := os.WriteFile(filepath.Join(root, ".staged.json"), []byte("{}"), 0o600); err != nil {
 				t.Fatal(err)
@@ -189,6 +192,35 @@ func TestReclaimKeepsLeasedRecordedAndUnfinishedGenerations(t *testing.T) {
 		if _, err := os.Stat(root); (err == nil) != want {
 			t.Errorf("%s: kept=%v, want %v", filepath.Base(root), err == nil, want)
 		}
+	}
+}
+
+func TestReclaimDoesNotRecreateLeaseDuringProjectRemoval(t *testing.T) {
+	directory := t.TempDir()
+	set := GenerationSet{Directory: directory, Prefix: "g-", Pointer: filepath.Join(directory, "current")}
+	generation, err := set.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := generation.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := generation.Abort(); err != nil {
+		t.Fatal(err)
+	}
+	// Stop teardown after it removes the pointer and lease, before it removes the root.
+	leasePath := generation.Root() + generationLeaseSuffix
+	for _, path := range []string{set.Pointer, leasePath} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set.Reclaim(func(root string) bool {
+		t.Errorf("reclaimer claimed generation after its lease was removed: %s", root)
+		return false
+	})
+	if _, err := os.Lstat(leasePath); !os.IsNotExist(err) {
+		t.Fatalf("reclaimer recreated the lease: %v", err)
 	}
 }
 

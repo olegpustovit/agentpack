@@ -8,6 +8,29 @@ import (
 	"testing"
 )
 
+func TestMCPAuthReconcileKeepsUnchangedLinkedBaseline(t *testing.T) {
+	project, staged := t.TempDir(), t.TempDir()
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	if err := prepareMCPAuth(project, staged); err != nil {
+		t.Fatal(err)
+	}
+	baseline := filepath.Join(staged, credentialsBaselineFile)
+	before, err := os.Stat(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileMCPAuthHome(project, staged); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("reconciliation replaced an unchanged baseline")
+	}
+}
+
 func TestMCPAuthLastLogoutDoesNotRestoreCredential(t *testing.T) {
 	project := t.TempDir()
 	t.Setenv("AGENTPACK_HOME", t.TempDir())

@@ -404,7 +404,8 @@ Measured on Linux amd64 (WSL2, Intel i9-12900K) with the 32 MiB fixtures, using
 `7bec31b` as the baseline. The table shows medians of five runs of ten iterations.
 The baseline and changed binaries alternated using the same dedicated `TMPDIR`
 on ext4. A preliminary comparison during concurrent CI measured 30.504 ms and
-28.099 ms for cold setup on this host. ARM64 verification is pending.
+28.099 ms for cold setup on this host. See the
+[Linux ARM64 reference check](#linux-arm64-reference-check-2026-11-24).
 
 | Benchmark | Before | After | ARM64 budget |
 | --- | ---: | ---: | ---: |
@@ -421,4 +422,37 @@ go test -c -o /tmp/agentpack-sync-after ./internal/sync
 # Alternate binaries for five runs each, with both using the same TMPDIR.
 TMPDIR=/path/to/benchmark-tmp /tmp/agentpack-sync-before -test.run '^$' -test.bench '^(BenchmarkMaterializationHome|BenchmarkCodexSetup)$' -test.benchtime=10x
 TMPDIR=/path/to/benchmark-tmp /tmp/agentpack-sync-after -test.run '^$' -test.bench '^(BenchmarkMaterializationHome|BenchmarkCodexSetup)$' -test.benchtime=10x
+```
+
+## Linux ARM64 reference check (2026-11-24)
+
+Medians in milliseconds per operation from seven interleaved runs on
+`oracle-vm`, with ten iterations per run and the 32 MiB history fixture. A
+mount namespace kept both temporary roots in one private ext4 directory
+under `/tmp`, so staged and durable credentials could share a hard link.
+
+| Benchmark | Baseline (`cf98ae11`) | Before fix (`530e64ac`) | After fix | Budget |
+| --- | ---: | ---: | ---: | ---: |
+| `BenchmarkMaterializationHome` | 0.802 | 0.808 | 0.788 | <1 ms |
+| `BenchmarkCodexSetup/cold` | 15.966 | 21.803 | 17.878 | <20 ms |
+| `BenchmarkCodexSetup/warm` | 0.365 | 0.371 | 0.378 | <1 ms |
+
+The first-parent bisect found the slowdown in merge `5303dcaf`. Within that
+merge, five same-filesystem runs measured 16.684 ms at `670dc2f9` and
+20.205 ms at `69131276`. The latter added fsyncs to Codex's staged OAuth
+snapshots, including the rewrite during reconciliation when the existing
+snapshot already matched the hard-linked credential store. Reconciliation
+now keeps the matching snapshot in place. Credential writes that do occur
+and generation pointer writes retain their existing durability.
+
+Async generation reclamation could recreate a lease after teardown
+unlinked it. The shared reclaimer now opens existing locks only. The fixed
+binary passed ten consecutive cold runs without a teardown failure.
+
+Build each revision with the static cross-compile command above. Alternate
+the binaries on the reference host and run these commands for each sample.
+
+```sh
+"$bench_binary" -test.run '^$' -test.bench '^BenchmarkMaterializationHome$' -test.benchtime=10x
+"$bench_binary" -test.run '^$' -test.bench '^BenchmarkCodexSetup$/^(cold|warm)$' -test.benchtime=10x
 ```

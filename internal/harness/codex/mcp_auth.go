@@ -209,6 +209,9 @@ func reconcileMCPAuthModeLocked(staged, durable string) error {
 		return err
 	}
 	if err == nil && base.DurablePathMatches(stagedFile, durable) {
+		if reflect.DeepEqual(baseline, latest) {
+			return nil
+		}
 		data, err := os.ReadFile(durable)
 		if err != nil {
 			return err

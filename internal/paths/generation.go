@@ -209,7 +209,7 @@ func (set GenerationSet) Reclaim(canRetire func(string) bool) {
 }
 
 func (set GenerationSet) claimUnused(root string) *flock.Flock {
-	// Cleanup can race removal of the whole project. Never recreate its guard.
+	// Cleanup can race removal of the whole project. Open existing locks only.
 	guard := set.guard(flock.SetFlag(os.O_RDWR))
 	if locked, err := guard.TryLock(); err != nil || !locked {
 		return nil
@@ -223,7 +223,7 @@ func (set GenerationSet) claimUnused(root string) *flock.Flock {
 	if _, err := os.Lstat(root); err != nil {
 		return nil
 	}
-	lease := flock.New(root + generationLeaseSuffix)
+	lease := flock.New(root+generationLeaseSuffix, flock.SetFlag(os.O_RDWR))
 	if locked, err := lease.TryLock(); err != nil || !locked {
 		return nil
 	}
