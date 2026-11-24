@@ -322,3 +322,27 @@ of 10 iterations, with `v0.14.5-dev.187` as the baseline.
 ```sh
 go test ./internal/sync -run '^$' -bench '^(BenchmarkMaterializationHome|BenchmarkCodexSetup)$' -benchtime=10x -count=5
 ```
+
+## Atomic write consolidation (2026-11-24)
+
+Linux amd64 (i9-12900K), five alternating runs per revision with 10 iterations
+per run and the 32 MiB history fixture. The baseline was `7bec31b`.
+
+| Benchmark | Before (ms) | After (ms) |
+| --- | ---: | ---: |
+| MaterializationHome | 0.536 | 0.518 |
+| CodexSetup/warm | 0.201 | 0.227 |
+| CodexSetup/cold | 55.137 | 57.011 |
+
+While other builds and tests ran, ext4 cold samples ranged from 20.126 to
+62.646 ms before and 20.911 to 60.265 ms after. Alternating 150 ms samples on
+tmpfs yielded cold medians of 4.371 and 3.899 ms. The registry retains file and
+directory syncs, and the launch path retains its existing sync behavior.
+
+Build the binaries on the two revisions and alternate these commands five times.
+
+```sh
+go test -c -o "$bench_binary" ./internal/sync
+"$bench_binary" -test.run '^$' -test.bench '^BenchmarkMaterializationHome$' -test.benchtime=10x
+"$bench_binary" -test.run '^$' -test.bench '^BenchmarkCodexSetup$/^(cold|warm)$' -test.benchtime=10x
+```

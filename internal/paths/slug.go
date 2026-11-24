@@ -1,9 +1,9 @@
-package slug
+package paths
 
 import "strings"
 
-// DashedLower preserves lowercase ASCII alphanumerics, replaces every other
-// byte with a dash, and trims leading and trailing dashes.
+// DashedLower lowercases ASCII alphanumerics, replaces other characters with
+// dashes, and trims leading and trailing dashes.
 func DashedLower(value string) string {
 	var result strings.Builder
 	result.Grow(len(value))
@@ -20,7 +20,7 @@ func DashedLower(value string) string {
 	return strings.Trim(result.String(), "-")
 }
 
-// Dashed preserves ASCII alphanumerics and replaces every other byte with a
+// Dashed preserves ASCII alphanumerics and replaces every other character with a
 // dash. It deliberately does not collapse or trim dashes.
 func Dashed(value string) string {
 	var result strings.Builder

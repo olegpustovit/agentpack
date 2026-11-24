@@ -3,28 +3,10 @@ package acptest
 import (
 	"context"
 	"encoding/json"
-	"io"
 
 	sdkacp "github.com/coder/acp-go-sdk"
 	"github.com/olegpustovit/agentpack/internal/acp"
 )
-
-// Pair wires an in-process client and replay agent over io.Pipe.
-func Pair(client sdkacp.Client) (clientConn *sdkacp.ClientSideConnection, agentConn *sdkacp.AgentSideConnection, cleanup func()) {
-	c2aR, c2aW := io.Pipe()
-	a2cR, a2cW := io.Pipe()
-	clientConn = sdkacp.NewClientSideConnection(client, c2aW, a2cR)
-	agent := NewReplayAgent(nil)
-	agentConn = sdkacp.NewAgentSideConnection(agent, a2cW, c2aR)
-	agent.SetConnection(agentConn)
-	cleanup = func() {
-		_ = c2aW.Close()
-		_ = a2cW.Close()
-		_ = c2aR.Close()
-		_ = a2cR.Close()
-	}
-	return clientConn, agentConn, cleanup
-}
 
 // ReplayAgent implements sdkacp.Agent by replaying fixture log entries on Prompt.
 type ReplayAgent struct {
@@ -345,11 +327,4 @@ func chunkText(payload json.RawMessage) string {
 
 func replayMeta(payload json.RawMessage) map[string]any {
 	return map[string]any{"agentpack/replayPayload": string(payload)}
-}
-
-func replayPayloadFromMeta(meta map[string]any) json.RawMessage {
-	if payload, ok := meta["agentpack/replayPayload"].(string); ok {
-		return json.RawMessage(payload)
-	}
-	return nil
 }

@@ -23,7 +23,7 @@ func TestCopySupportPreservesExecutableScripts(t *testing.T) {
 	if err := os.WriteFile(source, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyFile(source, destination); err != nil {
+	if err := copyStagedFile(source, destination); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(destination)
@@ -33,7 +33,7 @@ func TestCopySupportPreservesExecutableScripts(t *testing.T) {
 	if err := os.Chmod(source, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyFile(source, destination); err != nil {
+	if err := copyStagedFile(source, destination); err != nil {
 		t.Fatal(err)
 	}
 	info, err = os.Stat(destination)
@@ -67,7 +67,11 @@ func TestStageSourceTreeRendersOncePerHarnessAndCopiesSupport(t *testing.T) {
 	}
 	effective := mode.ImplicitEffective()
 	roots := []HarnessRoot{{harness.Claude, claudeRoot}, {harness.Codex, codexRoot}}
-	if err := stageSourceTree(source, roots, "demo", "github.com/o/r/demo", effective); err != nil {
+	plan, err := PlanPackageTree(source, "github.com/o/r/demo", "demo", effective, roots, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyPackageTreePlan(plan, roots); err != nil {
 		t.Fatal(err)
 	}
 	for _, root := range []string{claudeRoot, codexRoot} {
@@ -177,7 +181,11 @@ func TestCodexKeepsACommandWhoseNameIsAlsoASkill(t *testing.T) {
 	})
 	logged := captureLog(t)
 	roots := []HarnessRoot{{harness.Claude, claudeRoot}, {harness.Codex, codexRoot}}
-	if err := stageSourceTree(source, roots, "", "github.com/o/zoom", mode.ImplicitEffective()); err != nil {
+	plan, err := PlanPackageTree(source, "github.com/o/zoom", "", mode.ImplicitEffective(), roots, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyPackageTreePlan(plan, roots); err != nil {
 		t.Fatal(err)
 	}
 	for relative, body := range map[string]string{

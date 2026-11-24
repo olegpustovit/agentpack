@@ -292,7 +292,7 @@ func replaceDirectoryTree(source, destination string) error {
 		if entry.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
-		return copyFile(path, target)
+		return copyStagedFile(path, target)
 	})
 }
 

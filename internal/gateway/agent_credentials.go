@@ -6,13 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"github.com/olegpustovit/agentpack/internal/harness/registry"
-	"github.com/olegpustovit/agentpack/internal/network"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
+	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 // Sign-in files are small; anything larger is not one.
@@ -225,17 +226,5 @@ func installAgentCredential(path string, credential sharedAgentCredential) error
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".agentpack-credential-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(temporary.Name())
-	if _, err := temporary.Write(credential.Data); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporary.Name(), path)
+	return paths.WriteAtomic(path, credential.Data, 0o600)
 }

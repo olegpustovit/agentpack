@@ -341,3 +341,10 @@ func (c *replayTestClient) UnstableCreateElicitation(_ context.Context, params s
 		},
 	}, nil
 }
+
+func replayPayloadFromMeta(meta map[string]any) json.RawMessage {
+	if payload, ok := meta["agentpack/replayPayload"].(string); ok {
+		return json.RawMessage(payload)
+	}
+	return nil
+}

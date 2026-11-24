@@ -133,11 +133,11 @@ func checkDiagnosticBundle(t *testing.T, path string) {
 func TestLogsValidationAndDirectRunner(t *testing.T) {
 	home, event := diagnosticFixture(t)
 	runner := Runner{Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard}
-	if code, err := runner.Run(context.Background(), []string{"logs", "resolve", event.Fingerprint, "--version", "v1.2.0", "--json"}); err != nil || code != 0 {
+	if code, err := runner.Execute(context.Background(), []string{"logs", "resolve", event.Fingerprint, "--version", "v1.2.0", "--json"}); err != nil || code != 0 {
 		t.Fatalf("direct runner: %d %v", code, err)
 	}
 	for _, args := range [][]string{{"query", "SELECT * FROM events"}, {"query", "--limit", "0"}, {"query", "--since", "yesterday"}, {"query", "--since", "-1h"}, {"resolve", event.Fingerprint}, {"show", "bad"}, {"bundle", event.Fingerprint}, {"--proxy", "issues"}} {
-		if code, err := runner.Run(context.Background(), append([]string{"logs"}, args...)); err == nil || code == 0 {
+		if code, err := runner.Execute(context.Background(), append([]string{"logs"}, args...)); err == nil || code == 0 {
 			t.Fatalf("accepted invalid args %v: %d %v", args, code, err)
 		}
 	}

@@ -145,18 +145,6 @@ func SerializeRenderedFiles(output RenderOutput) ([]PlannedFile, error) {
 	return files, nil
 }
 
-func StageOriginPackages(bundle Bundle, target harness.Target, targetRoot string, effective mode.Effective) (map[string]string, error) {
-	roots, files, err := PlanOriginPackages(bundle, target, targetRoot, effective)
-	if err != nil {
-		return nil, err
-	}
-	plan := TargetPlan{Files: files}
-	if err := ApplyTargetPlan(plan); err != nil {
-		return nil, err
-	}
-	return roots, nil
-}
-
 func PlanOriginPackages(bundle Bundle, target harness.Target, targetRoot string, effective mode.Effective) (map[string]string, []PlannedFile, error) {
 	roots := make(map[string]string)
 	var files []PlannedFile

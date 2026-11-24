@@ -99,17 +99,24 @@ func TestSharedStagingOverrideSeparatesProjectsAndGrokModes(t *testing.T) {
 func TestWriteAtomicReplacesFileAndLeavesNoTemporary(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()
-	path := filepath.Join(directory, "agentpack.toml")
+	name := ManifestName
+	if runtime.GOOS != "windows" {
+		name = strings.Repeat("x", 250)
+	}
+	path := filepath.Join(directory, name)
 	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteAtomic(path, []byte("new"), 0o644); err != nil {
+	if err := WriteAtomic(path, []byte("new"), 0o644, SyncFileAndParent); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
 	entries, _ := os.ReadDir(directory)
 	if err != nil || string(data) != "new" || len(entries) != 1 {
 		t.Fatalf("data=%q err=%v entries=%v", data, err, entries)
+	}
+	if info, err := os.Stat(path); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 {
+		t.Fatalf("file mode: %v, %v", info, err)
 	}
 	if err := WriteAtomic(filepath.Join(directory, "missing", "file"), nil, 0o644); err == nil {
 		t.Fatal("wrote into a missing directory")

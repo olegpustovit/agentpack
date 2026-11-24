@@ -1,4 +1,4 @@
-package slug
+package paths
 
 import "testing"
 

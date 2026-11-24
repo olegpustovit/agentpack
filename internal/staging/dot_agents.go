@@ -11,7 +11,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/cache"
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mode"
-	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 type DotAgentsPlan struct {
@@ -200,22 +199,7 @@ func linkOrCopy(source, destination string) error {
 	if err := os.Link(source, destination); err == nil {
 		return nil
 	}
-	return copyFile(source, destination)
-}
-
-func StageDotAgents(definitionRoot, workspaceRoot, modeName string, effective mode.Effective, codex string, target *harness.Target) error {
-	if workspaceRoot == "" {
-		workspaceRoot = definitionRoot
-	}
-	plugins, err := paths.StagingPluginsDirForMode(definitionRoot, modeName)
-	if err != nil {
-		return err
-	}
-	plan, err := PlanDotAgents(paths.ProjectDotAgentsDir(workspaceRoot), effective, target)
-	if err != nil {
-		return err
-	}
-	return ApplyDotAgentsPlan(plan, filepath.Join(plugins, paths.StagedAgentpackBundleName), codex)
+	return copyStagedFile(source, destination)
 }
 
 func planDotRules(dotRoot string, effective mode.Effective, plan *DotAgentsPlan) error {

@@ -143,7 +143,7 @@ func BenchmarkCodexSetup(b *testing.B) {
 				return nil
 			})
 			target := harness.Codex
-			if _, _, err := service.SyncForLaunch(ctx, home, "", harness.Codex); err != nil {
+			if _, _, err := service.SyncForLaunchOptions(ctx, home, SyncOptions{Target: &target}); err != nil {
 				b.Fatal(err)
 			}
 			b.ResetTimer()
@@ -153,7 +153,7 @@ func BenchmarkCodexSetup(b *testing.B) {
 						b.Fatal(err)
 					}
 				} else {
-					if _, skipped, err := service.SyncForLaunch(ctx, home, "", harness.Codex); err != nil || !skipped {
+					if _, skipped, err := service.SyncForLaunchOptions(ctx, home, SyncOptions{Target: &target}); err != nil || !skipped {
 						b.Fatalf("skipped=%v err=%v", skipped, err)
 					}
 				}

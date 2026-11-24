@@ -7,10 +7,10 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 type revertFile struct {
@@ -108,38 +108,16 @@ func (cs *ConversationSession) RevertTurn(turn int) (int, int, error) {
 		var err error
 		if f.original == nil {
 			err = os.Remove(f.resolved)
+		} else if info, statErr := os.Stat(f.resolved); statErr != nil {
+			err = statErr
 		} else {
-			err = writeFileAtomic(f.resolved, []byte(*f.original))
+			err = paths.WriteAtomic(f.resolved, []byte(*f.original), info.Mode().Perm())
 		}
 		if err != nil {
 			return 0, http.StatusInternalServerError, fmt.Errorf("could not revert %s", f.path)
 		}
 	}
 	return len(files), 0, nil
-}
-
-func writeFileAtomic(path string, data []byte) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".agentpack-revert-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
 }
 
 func (worker *WorkerHTTP) handleRevert(w http.ResponseWriter, r *http.Request) {

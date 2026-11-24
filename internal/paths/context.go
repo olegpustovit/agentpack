@@ -14,11 +14,6 @@ type Context struct {
 	WorkspaceRoot string
 }
 
-// SameRoot reports whether definition and workspace are the same path.
-func (ctx Context) SameRoot() bool {
-	return ctx.DefinitionRoot != "" && ctx.DefinitionRoot == ctx.WorkspaceRoot
-}
-
 // ResolveContext builds a Context from explicit flags and an optional binding.
 // Legacy --project-root alone keeps today's single-root behavior.
 func ResolveContext(projectRoot, definitionRoot, workspaceRoot string, boundDefinition string) (Context, error) {
@@ -47,7 +42,7 @@ func ResolveContext(projectRoot, definitionRoot, workspaceRoot string, boundDefi
 	if err != nil {
 		return Context{}, err
 	}
-	if !regularFile(ManifestPath(def)) && !regularFile(LockPath(def)) {
+	if !IsRegularFile(ManifestPath(def)) && !IsRegularFile(LockPath(def)) {
 		return Context{}, fmt.Errorf("%w from %s", ErrProjectNotFound, def)
 	}
 	return Context{DefinitionRoot: def, WorkspaceRoot: ws}, nil

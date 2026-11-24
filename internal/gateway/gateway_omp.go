@@ -14,6 +14,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/harness/omp"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 // Reads that run the omp CLI are kept this long so the settings page never waits on repeated runs.
@@ -187,19 +188,7 @@ func (g *Gateway) writeOMPOverlay(ctx context.Context) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
-		temporary, err := os.CreateTemp(filepath.Dir(path), ".settings-*.yml")
-		if err != nil {
-			return err
-		}
-		defer os.Remove(temporary.Name())
-		_, err = temporary.Write(data)
-		if closeErr := temporary.Close(); err == nil {
-			err = closeErr
-		}
-		if err == nil {
-			err = os.Rename(temporary.Name(), path)
-		}
-		if err != nil {
+		if err := paths.WriteAtomic(path, data, 0o600); err != nil {
 			return err
 		}
 	}

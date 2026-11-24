@@ -14,12 +14,11 @@ import (
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
-	"github.com/olegpustovit/agentpack/internal/slug"
 )
 
 func Collect(projectRoot string, lock lockfile.PackLock, seededCodexHooks string, effective mode.Effective) (Bundle, error) {
 	var bundle Bundle
-	if regularFile(seededCodexHooks) {
+	if seededCodexHooks != "" && paths.IsRegularFile(seededCodexHooks) {
 		root := filepath.Dir(seededCodexHooks)
 		parsed, err := parseSource(SeededNative, "seeded-codex-user", "", root, seededCodexHooks, "hooks.json")
 		if err != nil {
@@ -43,7 +42,7 @@ func Collect(projectRoot string, lock lockfile.PackLock, seededCodexHooks string
 	}
 	dotAgents := paths.ProjectDotAgentsDir(projectRoot)
 	dotHooks := filepath.Join(dotAgents, "hooks", "hooks.json")
-	if regularFile(dotHooks) {
+	if paths.IsRegularFile(dotHooks) {
 		allowed, err := effective.AllowsDotAgentsPath("hooks/hooks.json")
 		if err != nil {
 			return Bundle{}, err
@@ -150,7 +149,7 @@ func packageSources(root string, pkg lockfile.Package, layer Layer, bundle *Bund
 	origin := Origin{Layer: layer, Module: pkg.Module}
 	file := func(path, relative string, dialect Dialect) {
 		resolved, err := filepath.EvalSymlinks(path)
-		if err != nil || read[resolved] || !regularFile(resolved) {
+		if err != nil || read[resolved] || !paths.IsRegularFile(resolved) {
 			return
 		}
 		read[resolved] = true
@@ -236,7 +235,7 @@ func packageKey(cacheKey, module string, layer Layer) string {
 		return cacheKey
 	}
 	prefix := map[Layer]string{SeededNative: "seeded", PackPlugin: "plugin", BareSkill: "skill", DotAgents: "dot-agents"}[layer]
-	return prefix + "-" + slug.Dashed(module)
+	return prefix + "-" + paths.Dashed(module)
 }
 
 func packagesByKind(lock lockfile.PackLock, kind lockfile.PackageKind) []lockfile.Package {
@@ -261,12 +260,4 @@ func skillShadowed(skill lockfile.Package, plugins []lockfile.Package) bool {
 		}
 	}
 	return false
-}
-
-func regularFile(path string) bool {
-	if path == "" {
-		return false
-	}
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
 }

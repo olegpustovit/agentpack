@@ -24,10 +24,10 @@ func TestInitMCPAndModeCommands(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runner := NewRunner()
 	runner.Stdout, runner.Stderr = &stdout, &stderr
-	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "init", "--name", "demo", "--version", "1.2.3"}); err != nil || code != 0 {
+	if code, err := runner.Execute(context.Background(), []string{"--project-root", root, "init", "--name", "demo", "--version", "1.2.3"}); err != nil || code != 0 {
 		t.Fatalf("init code=%d err=%v", code, err)
 	}
-	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "init"}); err == nil || code != 1 {
+	if code, err := runner.Execute(context.Background(), []string{"--project-root", root, "init"}); err == nil || code != 1 {
 		t.Fatalf("second init code=%d err=%v", code, err)
 	}
 	manifest, err := os.ReadFile(filepath.Join(root, "agentpack.toml"))
@@ -40,13 +40,13 @@ func TestInitMCPAndModeCommands(t *testing.T) {
 	}))
 	t.Cleanup(registry.Close)
 	t.Setenv("NPM_CONFIG_REGISTRY", registry.URL)
-	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "mcp", "add", "docs", "--command", "npx", "--env", "TOKEN=value", "--", "-y", "server"}); err != nil || code != 0 {
+	if code, err := runner.Execute(context.Background(), []string{"--project-root", root, "mcp", "add", "docs", "--command", "npx", "--env", "TOKEN=value", "--", "-y", "server"}); err != nil || code != 0 {
 		t.Fatalf("mcp add code=%d err=%v", code, err)
 	}
-	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "mode", "create", "review"}); err != nil || code != 0 {
+	if code, err := runner.Execute(context.Background(), []string{"--project-root", root, "mode", "create", "review"}); err != nil || code != 0 {
 		t.Fatalf("mode create code=%d err=%v", code, err)
 	}
-	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "mode", "base", "review", "none"}); err != nil || code != 0 {
+	if code, err := runner.Execute(context.Background(), []string{"--project-root", root, "mode", "base", "review", "none"}); err != nil || code != 0 {
 		t.Fatalf("mode base code=%d err=%v", code, err)
 	}
 }
@@ -67,7 +67,7 @@ func TestListShowsSelectorAndResolvedCommit(t *testing.T) {
 	var output bytes.Buffer
 	runner := NewRunner()
 	runner.Stdout = &output
-	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "list"}); err != nil || code != 0 {
+	if code, err := runner.Execute(context.Background(), []string{"--project-root", root, "list"}); err != nil || code != 0 {
 		t.Fatalf("list code=%d err=%v", code, err)
 	}
 	if got := output.String(); !strings.Contains(got, "SELECTOR") || !strings.Contains(got, "github.com/acme/nudge-cli\tskill\tdirect\tdev\t1234567890ab") {
@@ -90,7 +90,7 @@ func TestExtraSyncClaudeReconcilesSkillDirectories(t *testing.T) {
 	var output bytes.Buffer
 	runner := NewRunner()
 	runner.Stdout = &output
-	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "extra", "sync-claude"}); err != nil || code != 0 {
+	if code, err := runner.Execute(context.Background(), []string{"--project-root", root, "extra", "sync-claude"}); err != nil || code != 0 {
 		t.Fatalf("extra sync-claude code=%d err=%v output=%s", code, err, output.String())
 	}
 	claudeSkill := filepath.Join(root, ".claude", "skills", "local", "SKILL.md")
@@ -98,7 +98,7 @@ func TestExtraSyncClaudeReconcilesSkillDirectories(t *testing.T) {
 		t.Fatalf("missing reconciled skill at %s: %v", claudeSkill, err)
 	}
 	output.Reset()
-	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "extra", "sync-claude"}); err != nil || code != 0 {
+	if code, err := runner.Execute(context.Background(), []string{"--project-root", root, "extra", "sync-claude"}); err != nil || code != 0 {
 		t.Fatalf("second extra sync-claude code=%d err=%v", code, err)
 	}
 	if !strings.Contains(output.String(), "already match") {
@@ -108,7 +108,7 @@ func TestExtraSyncClaudeReconcilesSkillDirectories(t *testing.T) {
 
 func TestProxyIsRejectedOutsideClaude(t *testing.T) {
 	runner := NewRunner()
-	code, err := runner.Run(context.Background(), []string{"--proxy", "sync"})
+	code, err := runner.Execute(context.Background(), []string{"--proxy", "sync"})
 	if code != 2 || err == nil {
 		t.Fatalf("code=%d err=%v", code, err)
 	}

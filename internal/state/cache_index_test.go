@@ -1,4 +1,4 @@
-package database
+package state
 
 import (
 	"os"
@@ -7,10 +7,9 @@ import (
 	"testing"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
-	_ "github.com/olegpustovit/agentpack/internal/state"
 )
 
-func TestOpenCacheDropsLegacyAndUsesPrivatePlainSQLite(t *testing.T) {
+func TestOpenCacheIndexDropsLegacyAndUsesPrivatePlainSQLite(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("AGENTPACK_HOME", home)
 	path, err := paths.CacheDBPath()
@@ -20,10 +19,10 @@ func TestOpenCacheDropsLegacyAndUsesPrivatePlainSQLite(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if db, err := OpenCache(true); err != nil || db != nil {
+	if db, err := OpenCacheIndex(true); err != nil || db != nil {
 		t.Fatalf("missing read-only index: %v %v", db, err)
 	}
-	db, err := OpenCache(false)
+	db, err := OpenCacheIndex(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +38,7 @@ func TestOpenCacheDropsLegacyAndUsesPrivatePlainSQLite(t *testing.T) {
 	if info, err := os.Stat(path); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("index permissions: %v %v", info, err)
 	}
-	db, err = OpenCache(true)
+	db, err = OpenCacheIndex(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +52,7 @@ func TestOpenCacheDropsLegacyAndUsesPrivatePlainSQLite(t *testing.T) {
 	}
 }
 
-func TestOpenCacheRejectsNonregularDatabase(t *testing.T) {
+func TestOpenCacheIndexRejectsNonregularDatabase(t *testing.T) {
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	path, err := paths.CacheDBPath()
 	if err != nil {
@@ -62,7 +61,7 @@ func TestOpenCacheRejectsNonregularDatabase(t *testing.T) {
 	if err := os.MkdirAll(path, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenCache(false); err == nil {
+	if _, err := OpenCacheIndex(false); err == nil {
 		t.Fatal("directory accepted as index")
 	}
 	if err := os.Remove(path); err != nil {
@@ -75,7 +74,7 @@ func TestOpenCacheRejectsNonregularDatabase(t *testing.T) {
 	if err := os.Symlink(target, path); err != nil {
 		t.Skip(err)
 	}
-	if _, err := OpenCache(false); err == nil {
+	if _, err := OpenCacheIndex(false); err == nil {
 		t.Fatal("symlink accepted as index")
 	}
 	if data, err := os.ReadFile(target); err != nil || string(data) != "untouched" {

@@ -193,14 +193,6 @@ func StrictMappingError(target harness.Target, hook Hook, reason string) error {
 	return fmt.Errorf("hook %s from %s cannot be rendered safely for %s: %s", hook.Event, hook.Origin.SourceFile, target, reason)
 }
 
-func WriteRenderedFiles(output RenderOutput) error {
-	files, err := SerializeRenderedFiles(output)
-	if err != nil {
-		return err
-	}
-	return ApplyTargetPlan(TargetPlan{Files: files})
-}
-
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
 
 func shellQuote(value string) string {

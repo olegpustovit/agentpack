@@ -22,7 +22,7 @@ func TestHookSessionStateRunsTheUsersCodexNotify(t *testing.T) {
 	run := func(args ...string) int {
 		t.Helper()
 		runner := Runner{Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard}
-		code, err := runner.Run(t.Context(), append([]string{"hook-exec"}, args...))
+		code, err := runner.Execute(t.Context(), append([]string{"hook-exec"}, args...))
 		if err != nil && code == 0 {
 			t.Fatal(err)
 		}

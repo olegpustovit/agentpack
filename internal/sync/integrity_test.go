@@ -87,7 +87,7 @@ func TestLockWithoutContentHashesStagesWithNoticeUntilRelocked(t *testing.T) {
 	}
 	fixture.notices = nil
 	for attempt, wantSkipped := range []bool{false, true} {
-		if _, skipped, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", base.Claude); err != nil || skipped != wantSkipped {
+		if _, skipped, err := fixture.service.SyncForLaunchOptions(context.Background(), fixture.project, SyncOptions{Target: new(base.Claude)}); err != nil || skipped != wantSkipped {
 			t.Fatalf("launch %d: skipped=%v err=%v", attempt, skipped, err)
 		}
 	}
@@ -99,7 +99,7 @@ func TestLockWithoutContentHashesStagesWithNoticeUntilRelocked(t *testing.T) {
 	if _, err := fixture.service.Sync(context.Background(), fixture.project, SyncOptions{}); err == nil || !strings.Contains(err.Error(), demoKey) || !strings.Contains(err.Error(), "agentpack lock") {
 		t.Fatalf("strict sync error = %v", err)
 	}
-	if _, _, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", base.Claude); err == nil {
+	if _, _, err := fixture.service.SyncForLaunchOptions(context.Background(), fixture.project, SyncOptions{Target: new(base.Claude)}); err == nil {
 		t.Fatal("strict launch accepted an unverified lock")
 	}
 	t.Setenv(RequireVerifiedEnv, "")
@@ -159,7 +159,7 @@ func TestTamperedCacheIsRefusedBySyncVerifyOnlyAndLaunchThenRepaired(t *testing.
 			lock := fixture.lock()
 			entry := fixture.cacheEntry(lock)
 			for attempt, wantSkipped := range []bool{false, true} {
-				if _, skipped, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", base.Claude); err != nil || skipped != wantSkipped {
+				if _, skipped, err := fixture.service.SyncForLaunchOptions(context.Background(), fixture.project, SyncOptions{Target: new(base.Claude)}); err != nil || skipped != wantSkipped {
 					t.Fatalf("launch %d before tampering: skipped=%v err=%v", attempt, skipped, err)
 				}
 			}
@@ -177,7 +177,7 @@ func TestTamperedCacheIsRefusedBySyncVerifyOnlyAndLaunchThenRepaired(t *testing.
 					return err
 				},
 				"launch": func() error {
-					_, _, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", base.Claude)
+					_, _, err := fixture.service.SyncForLaunchOptions(context.Background(), fixture.project, SyncOptions{Target: new(base.Claude)})
 					return err
 				},
 			}
@@ -231,7 +231,7 @@ func TestV1ContentHashStagesLikeAnAbsentOne(t *testing.T) {
 	if fixture.staged() != skillOne || !fixture.noticed("pack.lock has v1 content hashes; run `agentpack lock` to record v2") || fixture.lockText() != before {
 		t.Fatalf("staged=%q notices=%v lock:\n%s", fixture.staged(), fixture.notices, fixture.lockText())
 	}
-	if _, _, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", base.Claude); err != nil || fixture.lockText() != before {
+	if _, _, err := fixture.service.SyncForLaunchOptions(context.Background(), fixture.project, SyncOptions{Target: new(base.Claude)}); err != nil || fixture.lockText() != before {
 		t.Fatalf("launch: %v", err)
 	}
 	t.Setenv(RequireVerifiedEnv, "1")
@@ -249,7 +249,7 @@ func TestLaunchFastPathNeverStagesAnEditItCannotSee(t *testing.T) {
 	fixture.manifest(demoKey, commitOne)
 	lock := fixture.lock()
 	launch := func() (bool, error) {
-		_, skipped, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", base.Claude)
+		_, skipped, err := fixture.service.SyncForLaunchOptions(context.Background(), fixture.project, SyncOptions{Target: new(base.Claude)})
 		return skipped, err
 	}
 	if skipped, err := launch(); err != nil || skipped {
@@ -564,11 +564,11 @@ func TestInvalidOrWrongContentHashIsAHardErrorAndTheLockIsLeftAlone(t *testing.T
 						return err
 					},
 					"launch": func() error {
-						_, _, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", base.Claude)
+						_, _, err := fixture.service.SyncForLaunchOptions(context.Background(), fixture.project, SyncOptions{Target: new(base.Claude)})
 						return err
 					},
 					"lock": func() error {
-						_, err := fixture.service.Lock(context.Background(), fixture.project, false)
+						_, err := fixture.service.LockWithOptions(context.Background(), fixture.project, LockOptions{})
 						return err
 					},
 				}
@@ -617,7 +617,7 @@ func TestSyncNeverRewritesALockItOnlyVerified(t *testing.T) {
 		prepare()
 		fixture.sync(SyncOptions{})
 		fixture.sync(SyncOptions{VerifyOnly: true})
-		if _, _, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", base.Claude); err != nil {
+		if _, _, err := fixture.service.SyncForLaunchOptions(context.Background(), fixture.project, SyncOptions{Target: new(base.Claude)}); err != nil {
 			t.Fatal(err)
 		}
 		if after := fixture.lockText(); after != before {
@@ -658,7 +658,7 @@ func TestSwappedLockCommitIsRefused(t *testing.T) {
 						return err
 					},
 					"launch": func() error {
-						_, _, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", base.Claude)
+						_, _, err := fixture.service.SyncForLaunchOptions(context.Background(), fixture.project, SyncOptions{Target: new(base.Claude)})
 						return err
 					},
 				} {
@@ -772,7 +772,7 @@ func TestVerifyOnlyComparesStagingWithTheLastSyncAndSyncReportsWhatItReplaces(t 
 	fixture.sync(SyncOptions{})
 	// A launch and a second sync change nothing that the record covers.
 	for range 2 {
-		if _, _, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", base.Claude); err != nil {
+		if _, _, err := fixture.service.SyncForLaunchOptions(context.Background(), fixture.project, SyncOptions{Target: new(base.Claude)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -951,7 +951,7 @@ func (fixture *integrityFixture) writeManifest(body string) {
 
 func (fixture *integrityFixture) lock() lockfile.PackLock {
 	fixture.t.Helper()
-	lock, err := fixture.service.Lock(context.Background(), fixture.project, false)
+	lock, err := fixture.service.LockWithOptions(context.Background(), fixture.project, LockOptions{})
 	if err != nil {
 		fixture.t.Fatalf("lock: %v", err)
 	}

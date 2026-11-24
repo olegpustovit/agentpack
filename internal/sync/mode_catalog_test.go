@@ -1,4 +1,4 @@
-package modecatalog
+package sync
 
 import (
 	"os"
@@ -37,7 +37,7 @@ func TestCatalogValidatesPackageAndDotAgentsPaths(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := catalog.Validate(selector); err != nil {
+		if err := catalog.ValidateSelector(selector); err != nil {
 			t.Fatalf("%s: %v", raw, err)
 		}
 	}
@@ -46,7 +46,7 @@ func TestCatalogValidatesPackageAndDotAgentsPaths(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := catalog.Validate(selector); err == nil {
+		if err := catalog.ValidateSelector(selector); err == nil {
 			t.Fatalf("%s: accepted a directory or missing file", raw)
 		}
 	}

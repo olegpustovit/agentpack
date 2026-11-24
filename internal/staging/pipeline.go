@@ -399,37 +399,6 @@ func (pipeline Pipeline) context() base.StageContext {
 	}
 }
 
-// HookDiagnostics returns renderer findings without writing hook files.
-func (pipeline Pipeline) HookDiagnostics() ([]hooks.Diagnostic, hooks.RenderSummary, error) {
-	bundle, err := hooks.Collect(pipeline.workspace(), pipeline.Lock, "", pipeline.Mode)
-	if err != nil {
-		return nil, hooks.RenderSummary{}, err
-	}
-	var diagnostics []hooks.Diagnostic
-	var summary hooks.RenderSummary
-	for _, candidate := range pipeline.harnesses() {
-		target := candidate.Target
-		renderer := candidate.Hooks
-		if renderer == nil {
-			continue
-		}
-		root, err := candidate.Root(pipeline.context())
-		if err != nil {
-			return nil, hooks.RenderSummary{}, err
-		}
-		plan, err := hooks.PlanTarget(bundle, target, renderer, hooks.RenderContext{ProjectRoot: pipeline.ProjectRoot, TargetRoot: root}, pipeline.Mode)
-		if err != nil {
-			return nil, hooks.RenderSummary{}, err
-		}
-		diagnostics = append(diagnostics, plan.Diagnostics...)
-		summary.Native += plan.Summary.Native
-		summary.Emulated += plan.Summary.Emulated
-		summary.Degraded += plan.Summary.Degraded
-		summary.Omitted += plan.Summary.Omitted
-	}
-	return diagnostics, summary, nil
-}
-
 func (pipeline Pipeline) stageHooks(ctx base.StageContext, harnesses []registry.Entry) ([]hooks.TargetPlan, error) {
 	seeded := ""
 	if pipeline.includes(base.Codex) {

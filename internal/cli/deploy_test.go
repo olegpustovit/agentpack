@@ -102,12 +102,12 @@ func TestDeployRejectsUnsafeStageAndWrongBinary(t *testing.T) {
 func TestDeployDryRun(t *testing.T) {
 	var out bytes.Buffer
 	runner := Runner{Stdout: &out, Stderr: io.Discard}
-	code, err := runner.Run(context.Background(), []string{"deploy", "--dry-run"})
+	code, err := runner.Execute(context.Background(), []string{"deploy", "--dry-run"})
 	if err != nil || code != 0 || !strings.Contains(out.String(), deployScript) {
 		t.Fatalf("dry run: %d %v", code, err)
 	}
 	for _, args := range [][]string{{"--binary"}, {"--binary="}, {"--unknown"}} {
-		code, err := runner.Run(context.Background(), append([]string{"deploy"}, args...))
+		code, err := runner.Execute(context.Background(), append([]string{"deploy"}, args...))
 		if err == nil || code != 2 {
 			t.Fatalf("invalid arguments accepted: %v", args)
 		}

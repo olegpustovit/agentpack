@@ -13,7 +13,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
-	"github.com/olegpustovit/agentpack/internal/slug"
 	"github.com/tailscale/hujson"
 )
 
@@ -173,7 +172,7 @@ func (pipeline Pipeline) stageLSPRoots(entries map[string]LSPEntry) (map[string]
 			}
 		}
 		if entry.CacheKey != "" && uses(pluginDataVariables) {
-			data, err := paths.PluginDataDir(pipeline.ProjectRoot, slug.DashedLower(entry.Module))
+			data, err := paths.PluginDataDir(pipeline.ProjectRoot, paths.DashedLower(entry.Module))
 			if err != nil {
 				return nil, err
 			}
@@ -207,7 +206,7 @@ func PlanLSPRoots(projectRoot, modeName string, entries map[string]LSPEntry) (ma
 			}
 		}
 		if entry.CacheKey != "" && referencesLSPVariable(text, pluginDataVariables) {
-			data, err := paths.PluginDataDir(projectRoot, slug.DashedLower(entry.Module))
+			data, err := paths.PluginDataDir(projectRoot, paths.DashedLower(entry.Module))
 			if err != nil {
 				return nil, err
 			}

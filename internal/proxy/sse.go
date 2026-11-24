@@ -1,29 +1,16 @@
 package proxy
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"unicode"
-
-	sse "github.com/tmaxmax/go-sse"
 )
 
 type SSEEvent struct{ Event, Data string }
 
-func ParseSSE(input []byte) ([]SSEEvent, error) {
-	var result []SSEEvent
-	for event, err := range sse.Read(bytes.NewReader(input), &sse.ReadConfig{MaxEventSize: len(input) + 64*1024}) {
-		if err != nil {
-			return nil, fmt.Errorf("parse server-sent events: %w", err)
-		}
-		result = append(result, SSEEvent{Event: event.Type, Data: event.Data})
-	}
-	return result, nil
-}
 func EncodeSSE(event string, data any) []byte {
 	encoded, _ := json.Marshal(data)
 	return []byte("event: " + event + "\ndata: " + string(encoded) + "\n\n")
@@ -49,27 +36,6 @@ type codexReducer struct {
 
 func newCodexReducer() *codexReducer {
 	return &codexReducer{blocks: map[uint64]*blockState{}, items: map[uint64]any{}, itemIndices: map[string]uint64{}}
-}
-
-func ReduceCodexSSE(input []byte) ([]map[string]any, error) {
-	events, err := ParseSSE(input)
-	if err != nil {
-		return nil, err
-	}
-	r := newCodexReducer()
-	var output []map[string]any
-	for _, event := range events {
-		steps, err := r.event(event)
-		if err != nil {
-			return nil, err
-		}
-		output = append(output, steps...)
-	}
-	finish, err := r.finish()
-	if err != nil {
-		return nil, err
-	}
-	return append(output, finish), nil
 }
 
 func (r *codexReducer) event(event SSEEvent) ([]map[string]any, error) {

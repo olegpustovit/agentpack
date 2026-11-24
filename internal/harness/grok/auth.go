@@ -238,6 +238,7 @@ func copyCredential(source, destination string) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
+	// Set the source timestamp before publishing; credential selection compares modification times.
 	if err := os.Chtimes(temporary.Name(), info.ModTime(), info.ModTime()); err != nil {
 		return err
 	}

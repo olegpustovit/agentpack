@@ -44,21 +44,6 @@ func (s *Store) writeName(agentpackID, name, node string, at time.Time) (nameRev
 	return value, nil
 }
 
-func (s *Store) readName(id string) (nameRevision, error) {
-	var value nameRevision
-	if err := s.readObject(id, &value); err != nil {
-		return value, err
-	}
-	if !validID(value.Agentpack) || value.ObjectType != nameObjectType || value.Schema != objectSchema || strings.TrimSpace(value.Name) == "" || obs.CredentialShaped(value.Name) || value.Node == "" || obs.CredentialShaped(value.Node) || value.CreatedAt.IsZero() {
-		return value, fmt.Errorf("invalid agentpack name object")
-	}
-	data, err := s.objectData(id)
-	if err != nil || !canonicalObject(data, value) {
-		return value, fmt.Errorf("agentpack name object is not canonical")
-	}
-	return value, nil
-}
-
 func nameNewer(a, b nameRevision) bool {
 	if !a.CreatedAt.Equal(b.CreatedAt) {
 		return a.CreatedAt.After(b.CreatedAt)
@@ -67,24 +52,6 @@ func nameNewer(a, b nameRevision) bool {
 		return a.Node > b.Node
 	}
 	return a.ID > b.ID
-}
-
-func (s *Store) nameObjects() (map[string]nameRevision, error) {
-	entries, err := s.storedIDs("registry_names")
-	if err != nil {
-		return nil, err
-	}
-	latest := map[string]nameRevision{}
-	for _, id := range entries {
-		name, err := s.readName(id)
-		if err != nil {
-			return nil, err
-		}
-		if current, ok := latest[name.Agentpack]; !ok || nameNewer(name, current) {
-			latest[name.Agentpack] = name
-		}
-	}
-	return latest, nil
 }
 
 func hasOwnerRevision(revisions map[string]Revision, owner string) bool {

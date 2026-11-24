@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func nativeIgnoredFiles(root string, files []string) (map[string]struct{}, error) {
@@ -70,7 +71,7 @@ func findIgnoreFiles(root, base string) ([]string, error) {
 	var ignoreFiles []string
 	for directory := root; ; directory = filepath.Dir(directory) {
 		candidate := filepath.Join(directory, ".gitignore")
-		if regularFile(candidate) {
+		if paths.IsRegularFile(candidate) {
 			ignoreFiles = append(ignoreFiles, candidate)
 		}
 		if directory == base {

@@ -160,7 +160,7 @@ func LoadReceipt(workspaceRoot, idOrPath string) (Receipt, error) {
 		}
 		return newest, nil
 	}
-	if !filepath.IsAbs(path) && !regularFile(path) {
+	if !filepath.IsAbs(path) && !paths.IsRegularFile(path) {
 		root, err := ReceiptsRoot(workspaceRoot)
 		if err != nil {
 			return Receipt{}, err

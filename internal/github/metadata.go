@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/olegpustovit/agentpack/internal/database"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 const (
@@ -61,7 +61,7 @@ func isFresh(checkedAt int64, ttl time.Duration) bool {
 }
 
 func readMetadata(bucket, key []byte, destination any) (bool, error) {
-	database, err := database.OpenCache(true)
+	database, err := state.OpenCacheIndex(true)
 	if err != nil {
 		return false, err
 	}
@@ -84,7 +84,7 @@ func writeMetadata(bucket, key []byte, value any) error {
 	if err != nil {
 		return fmt.Errorf("serialize GitHub metadata: %w", err)
 	}
-	database, err := database.OpenCache(false)
+	database, err := state.OpenCacheIndex(false)
 	if err != nil {
 		return err
 	}

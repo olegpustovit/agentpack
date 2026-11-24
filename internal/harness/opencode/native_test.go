@@ -22,6 +22,17 @@ import (
 	"github.com/olegpustovit/agentpack/internal/mode"
 )
 
+func writeRenderedHooks(t *testing.T, output hooks.RenderOutput) {
+	t.Helper()
+	files, err := hooks.SerializeRenderedFiles(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hooks.ApplyTargetPlan(hooks.TargetPlan{Files: files}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Set the paths to released binaries to exercise their real configuration loaders.
 func TestNativeYoloIsLaunchScoped(t *testing.T) {
 	t.Setenv("OPENCODE_CONFIG", "")
@@ -232,9 +243,7 @@ func TestNativeV2LoadsGeneratedHookBridge(t *testing.T) {
 			file.JSON.(map[string]any)["agentpack"] = fake
 		}
 	}
-	if err := hooks.WriteRenderedFiles(output); err != nil {
-		t.Fatal(err)
-	}
+	writeRenderedHooks(t, output)
 	if err := finalizeSources(nil, stage); err != nil {
 		t.Fatal(err)
 	}
@@ -545,9 +554,7 @@ func TestNativeV1CustomDirectoryPluginKeepsItsOrigin(t *testing.T) {
 			rendered.Files[index].Text += fmt.Sprintf("\nimport { appendFileSync } from 'node:fs'; appendFileSync(%s, 'run\\n');\n", bridgeJSON)
 		}
 	}
-	if err := hooks.WriteRenderedFiles(rendered); err != nil {
-		t.Fatal(err)
-	}
+	writeRenderedHooks(t, rendered)
 	if err := finalizeSources(nil, stage); err != nil {
 		t.Fatal(err)
 	}
@@ -876,9 +883,7 @@ func TestNativeV1LoadsGeneratedHookBridge(t *testing.T) {
 			output.Files[index].Text += fmt.Sprintf("\nimport { appendFileSync } from 'node:fs'; appendFileSync(%s, 'run\\n');\n", markerJSON)
 		}
 	}
-	if err := hooks.WriteRenderedFiles(output); err != nil {
-		t.Fatal(err)
-	}
+	writeRenderedHooks(t, output)
 	command, _, err := launch(base.LaunchContext{ProjectRoot: project, Mode: stage.Mode, Arguments: []string{"debug", "agent", "build"}})
 	if err != nil {
 		t.Fatal(err)
@@ -995,9 +1000,7 @@ func TestNativeV2PluginKeepsItsOrigin(t *testing.T) {
 			rendered.Files[index].Text += fmt.Sprintf("\nimport { appendFileSync } from 'node:fs'; appendFileSync(%s, 'run\\n');\n", bridgeJSON)
 		}
 	}
-	if err := hooks.WriteRenderedFiles(rendered); err != nil {
-		t.Fatal(err)
-	}
+	writeRenderedHooks(t, rendered)
 	if err := finalizeSources(nil, stage); err != nil {
 		t.Fatal(err)
 	}

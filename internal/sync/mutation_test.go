@@ -45,11 +45,11 @@ func TestSyncAndLaunchReadPackLockOnce(t *testing.T) {
 	}{
 		{"sync", func() (bool, error) { _, err := service.Sync(t.Context(), project, SyncOptions{}); return false, err }},
 		{"cold launch", func() (bool, error) {
-			_, skipped, err := service.SyncForLaunch(t.Context(), project, "", base.Claude)
+			_, skipped, err := service.SyncForLaunchOptions(t.Context(), project, SyncOptions{Target: new(base.Claude)})
 			return !skipped, err
 		}},
 		{"warm launch", func() (bool, error) {
-			_, skipped, err := service.SyncForLaunch(t.Context(), project, "", base.Claude)
+			_, skipped, err := service.SyncForLaunchOptions(t.Context(), project, SyncOptions{Target: new(base.Claude)})
 			return skipped, err
 		}},
 	} {
@@ -78,7 +78,7 @@ func TestSyncHoldsDefinitionLockWithoutDeadlockingItsHolder(t *testing.T) {
 	if _, err := service.Sync(cancelled, project, SyncOptions{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("sync did not wait for the holder: %v", err)
 	}
-	if _, _, err := service.SyncForLaunch(cancelled, project, "", base.Claude); !errors.Is(err, context.Canceled) {
+	if _, _, err := service.SyncForLaunchOptions(cancelled, project, SyncOptions{Target: new(base.Claude)}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("launch did not wait for the holder: %v", err)
 	}
 	if _, err := service.Sync(held, project, SyncOptions{}); err != nil {

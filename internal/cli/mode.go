@@ -8,7 +8,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
-	"github.com/olegpustovit/agentpack/internal/modecatalog"
+	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
 func (runner Runner) runMode(root string, arguments []string, quiet bool) error {
@@ -29,7 +29,7 @@ func (runner Runner) runMode(root string, arguments []string, quiet bool) error 
 	} else if !errors.Is(loadErr, os.ErrNotExist) {
 		return loadErr
 	}
-	catalog, err := modecatalog.BuildCapabilityCatalog(root, locked, project)
+	catalog, err := packSync.BuildCapabilityCatalog(root, locked, project)
 	if err != nil {
 		return err
 	}
@@ -72,7 +72,7 @@ func (runner Runner) runMode(root string, arguments []string, quiet bool) error 
 			if parseErr != nil {
 				return parseErr
 			}
-			if validateErr := catalog.Validate(selector); validateErr != nil {
+			if validateErr := catalog.ValidateSelector(selector); validateErr != nil {
 				return validateErr
 			}
 		}

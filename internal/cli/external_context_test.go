@@ -33,7 +33,7 @@ func TestExternalCommandsPreserveSelectorAndMode(t *testing.T) {
 	invoke := func(args ...string) (int, error) {
 		out.Reset()
 		errs.Reset()
-		return runner.Run(context.Background(), append([]string{"--definition-root", definition, "--workspace", workspace}, args...))
+		return runner.Execute(context.Background(), append([]string{"--definition-root", definition, "--workspace", workspace}, args...))
 	}
 	if code, err := invoke("mode", "create", "review"); code != 0 || err != nil {
 		t.Fatalf("mode: %d %v", code, err)
@@ -110,7 +110,7 @@ func TestPreflightExitCodesSeparateInvalidInputsFromOperationalFailures(t *testi
 		var out, errs bytes.Buffer
 		runner := NewRunner()
 		runner.Stdout, runner.Stderr = &out, &errs
-		return runner.Run(context.Background(), []string{"--definition-root", definition, "--workspace", workspace, "preflight", "--json"})
+		return runner.Execute(context.Background(), []string{"--definition-root", definition, "--workspace", workspace, "preflight", "--json"})
 	}
 
 	t.Run("malformed contract", func(t *testing.T) {
@@ -182,7 +182,7 @@ func TestStrictLaunchRefusesUnknownObservationWithoutRunningAgent(t *testing.T) 
 	var out, errs bytes.Buffer
 	runner := NewRunner()
 	runner.Stdout, runner.Stderr = &out, &errs
-	code, err := runner.Run(context.Background(), []string{"--definition-root", definition, "--workspace", workspace, "--strict-external", "claude"})
+	code, err := runner.Execute(context.Background(), []string{"--definition-root", definition, "--workspace", workspace, "--strict-external", "claude"})
 	if code == 0 || err == nil {
 		t.Fatalf("strict launch passed: %d %v", code, err)
 	}

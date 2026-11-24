@@ -15,7 +15,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/mode"
-	"github.com/olegpustovit/agentpack/internal/modecatalog"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/resolve"
 	"github.com/olegpustovit/agentpack/internal/staging"
@@ -224,9 +223,6 @@ func (service Service) resolveFile(ctx context.Context, projectRoot string, proj
 		service.notify("recorded content hashes for %d package(s) in %s that had none", recorded, paths.LockPath(projectRoot))
 	}
 	return saved, nil
-}
-func (service Service) Lock(ctx context.Context, projectRoot string, refresh bool) (lockfile.PackLock, error) {
-	return service.LockWithOptions(ctx, projectRoot, LockOptions{Refresh: refresh})
 }
 
 // LockWithOptions resolves the manifest, records a content hash for every
@@ -571,11 +567,7 @@ func (service Service) sync(ctx context.Context, projectRoot string, options Syn
 	return result, file, err
 }
 
-func (service Service) SyncForLaunch(ctx context.Context, projectRoot, selectedMode string, target base.Target) (mode.Effective, bool, error) {
-	return service.SyncForLaunchOptions(ctx, projectRoot, SyncOptions{Mode: selectedMode, Target: &target})
-}
-
-// SyncForLaunchOptions is SyncForLaunch with workspace/strict-external controls.
+// SyncForLaunchOptions verifies or stages the selected harness before launch.
 func (service Service) SyncForLaunchOptions(ctx context.Context, projectRoot string, options SyncOptions) (mode.Effective, bool, error) {
 	if options.Target == nil {
 		return mode.Effective{}, false, fmt.Errorf("launch sync requires a target")
@@ -677,7 +669,7 @@ func resolveMode(workspace string, project *manifest.Manifest, lock *lockfile.Pa
 	} else if name != mode.DefaultName {
 		return mode.Effective{}, fmt.Errorf("unknown mode: %s", name)
 	}
-	catalog, err := modecatalog.BuildCapabilityCatalog(workspace, lock, project)
+	catalog, err := BuildCapabilityCatalog(workspace, lock, project)
 	if err != nil {
 		return mode.Effective{}, fmt.Errorf("build mode capability catalog: %w", err)
 	}

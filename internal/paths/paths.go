@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-
-	"github.com/olegpustovit/agentpack/internal/slug"
 )
 
 const (
@@ -132,7 +130,7 @@ func FindProjectRoot(start string) (string, error) {
 		return "", err
 	}
 	for {
-		if regularFile(filepath.Join(directory, ManifestName)) || regularFile(filepath.Join(directory, LockfileName)) {
+		if IsRegularFile(filepath.Join(directory, ManifestName)) || IsRegularFile(filepath.Join(directory, LockfileName)) {
 			return directory, nil
 		}
 		parent := filepath.Dir(directory)
@@ -155,7 +153,7 @@ func ResolveProjectRoot(explicit string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !regularFile(filepath.Join(root, ManifestName)) && !regularFile(filepath.Join(root, LockfileName)) {
+	if !IsRegularFile(filepath.Join(root, ManifestName)) && !IsRegularFile(filepath.Join(root, LockfileName)) {
 		return "", fmt.Errorf("%w from %s", ErrProjectNotFound, root)
 	}
 	return root, nil
@@ -192,7 +190,7 @@ func ModePathComponent(modeName string) string {
 	if modeName == "default" {
 		return "default"
 	}
-	name := slug.DashedLower(modeName)
+	name := DashedLower(modeName)
 	if name == "" {
 		name = "mode"
 	}
@@ -354,7 +352,8 @@ func canonical(path string) (string, error) {
 	return filepath.Clean(resolved), nil
 }
 
-func regularFile(path string) bool {
+// IsRegularFile reports whether path resolves to a regular file.
+func IsRegularFile(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular()
 }
@@ -423,10 +422,15 @@ func OrphanedProjectDirectories(parent string) []string {
 	return orphans
 }
 
-// WriteAtomic replaces path with data in one rename, so a reader or a crash
+type AtomicDurability uint8
+
+// SyncFileAndParent makes WriteAtomic also persist the rename itself.
+const SyncFileAndParent AtomicDurability = 1
+
+// WriteAtomic syncs the new file and replaces path in one rename, so a reader or a crash
 // sees either the old file or the new one, never a truncated mix.
-func WriteAtomic(path string, data []byte, mode os.FileMode) error {
-	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
+func WriteAtomic(path string, data []byte, mode os.FileMode, durability ...AtomicDurability) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".agentpack-write-*")
 	if err != nil {
 		return err
 	}
@@ -434,6 +438,9 @@ func WriteAtomic(path string, data []byte, mode os.FileMode) error {
 	_, err = temporary.Write(data)
 	if err = errors.Join(err, temporary.Chmod(mode), temporary.Sync(), temporary.Close()); err != nil {
 		return err
+	}
+	if len(durability) > 0 && durability[0] == SyncFileAndParent {
+		return RenameDurable(temporary.Name(), path, true)
 	}
 	return os.Rename(temporary.Name(), path)
 }

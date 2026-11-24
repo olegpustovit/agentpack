@@ -102,7 +102,7 @@ func cacheReady(pkg lockfile.Package, out string) (bool, error) {
 	if pkg.Kind == lockfile.PackagePlugin {
 		return HasPluginManifest(out), nil
 	}
-	return regularFile(filepath.Join(out, "SKILL.md")) || HasPluginManifest(out), nil
+	return paths.IsRegularFile(filepath.Join(out, "SKILL.md")) || HasPluginManifest(out), nil
 }
 
 func isLocalPackage(pkg lockfile.Package) bool {
