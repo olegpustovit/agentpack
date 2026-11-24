@@ -764,7 +764,8 @@ export function ThreadView({
     virtualizer.current = instance
     const dispose = instance._didMount()
     return () => {
-      if (instance.options.enabled) previousOffset.current = instance.scrollOffset
+      // A reader at the end returns to the end, not to where the end was when the chat was hidden.
+      if (instance.options.enabled) previousOffset.current = instance.isAtEnd(8) ? null : instance.scrollOffset
       dispose()
       virtualizer.current = null
     }

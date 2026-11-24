@@ -83,6 +83,28 @@ export default function ConversationPane({
   const stickToBottomRef = useRef(true)
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1240)
   const threadScrollRef = useRef<HTMLDivElement>(null)
+  const threadContentRef = useRef<HTMLDivElement>(null)
+  const lastScrollRef = useRef({ top: 0, height: 0 })
+  // Follow the end while the reader is there: content that grows (streaming, images, measured rows) or
+  // a pane revealed again keeps the latest line on screen. Runs before paint, so nothing flickers.
+  useLayoutEffect(() => {
+    const thread = threadScrollRef.current
+    const content = threadContentRef.current
+    if (!thread || !content) return
+    const observer = new ResizeObserver(() => {
+      if (thread.clientHeight === 0) return // hidden by Activity
+      const last = lastScrollRef.current
+      // A reader who reached the end in the same frame the output grew has no scroll event yet: follow too.
+      if (stickToBottomRef.current || Math.abs(last.height - thread.scrollTop - thread.clientHeight) < 8) {
+        stickToBottomRef.current = true
+        thread.scrollTop = thread.scrollHeight
+      }
+      lastScrollRef.current = { top: thread.scrollTop, height: thread.scrollHeight }
+    })
+    observer.observe(content)
+    observer.observe(thread)
+    return () => observer.disconnect()
+  }, [])
   const readOnly = unavailable || info?.reachable === false || Boolean(info?.archived_at)
   // A starting chat accepts text before the worker completes its handshake.
   const starting = !readOnly && info?.conversation_state === "starting" && !info.ended_at
@@ -104,7 +126,7 @@ export default function ConversationPane({
     const key = conversationEventsQuery(machine, sessionId).queryKey
     if (!queryClient.getQueryData(key)) void restoreChatQuery(queryClient, cacheBuildID || "dev", key)
   }, [machine, queryClient, sessionId])
-  const history = useHistoryPaging(machine, sessionId, tail, threadScrollRef, stickToBottomRef)
+  const history = useHistoryPaging(machine, sessionId, tail, threadScrollRef)
   const { historyKey, older, entries, hasOlder, transcript, loadOlder } = history
   // The owner's fold is the live state; the row, then this browser's reducer, are the fallbacks for older owners.
   const activity = derived?.conversation_state ?? info?.conversation_state
@@ -357,12 +379,21 @@ export default function ConversationPane({
           ref={threadScrollRef}
           onScroll={(event) => {
             const el = event.currentTarget
-            stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 160
+            if (el.clientHeight === 0) return // hidden by Activity: the browser zeroed the offset, not the reader
+            const last = lastScrollRef.current
+            // At the end it follows; moving up without the content changing is the reader leaving it.
+            if (el.scrollHeight - el.scrollTop - el.clientHeight < 8) stickToBottomRef.current = true
+            // Landed on the end as it was before output grew in the same frame: follow and catch up.
+            else if (el.scrollTop > last.top && Math.abs(last.height - el.scrollTop - el.clientHeight) < 8) {
+              stickToBottomRef.current = true
+              el.scrollTop = el.scrollHeight
+            } else if (el.scrollTop < last.top && el.scrollHeight === last.height) stickToBottomRef.current = false
+            lastScrollRef.current = { top: el.scrollTop, height: el.scrollHeight }
             // Fetch the previous page a screen before the reader reaches the top.
             if (el.scrollTop < el.clientHeight) void loadOlder()
           }}
           tabIndex={0} aria-label="Conversation" className="min-h-0 min-w-0 flex-1 overflow-auto px-(--s4) pt-(--s4) pb-[calc(var(--composer-h,0px)+36px)]">
-          <div className="mx-auto w-full max-w-180">
+          <div ref={threadContentRef} className="mx-auto w-full max-w-180">
             {needsUpdate ? (
               <Banner tone="warn">
                 {machine === LOCAL ? "The gateway needs an update to show this conversation." : "This peer needs an update to show this conversation."}

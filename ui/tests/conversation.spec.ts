@@ -1115,6 +1115,81 @@ test("an empty composer recalls sent messages newest first, including earlier pa
   await expect(composer).toHaveValue("New draft")
 })
 
+test("up on an empty composer walks the project's typed prompts, skipping agent messages", async ({ page }) => {
+  await page.route("**/api/sessions", (route) => route.fulfill({
+    json: [{ ...session, id: "chat-one", transport: "acp" }, { ...session, id: "chat-two", transport: "acp" }],
+  }))
+  await page.route("**/api/sessions/*/conversation**", (route) => {
+    const two = route.request().url().includes("chat-two")
+    const entries = two
+      ? [{ seq: 1, ts: 300, kind: "prompt", payload: { text: { text: "Second chat prompt" } } }]
+      : [
+          { seq: 1, ts: 100, kind: "prompt", payload: { text: { text: "First chat prompt" } } },
+          { seq: 2, ts: 200, kind: "prompt", payload: { text: { text: "From an agent" }, from: { session: "x", task: "t", kind: "ask" } } },
+        ]
+    return route.fulfill({ body: entries.map((entry) => JSON.stringify(entry)).join("\n"), contentType: "application/x-ndjson" })
+  })
+  await page.route("**/api/sessions/*/conversation/prompt", (route) => route.fulfill({ json: { accepted: true } }))
+  await page.goto("/sessions/local/chat-one")
+  const composer = page.getByRole("textbox", { name: "Message" })
+  await expect(page.getByText("First chat prompt")).toBeVisible()
+  await composer.fill("Typed here")
+  await composer.press("Enter")
+  await page.goto("/sessions/local/chat-two")
+  await expect(page.getByText("Second chat prompt")).toBeVisible()
+  for (const expected of ["Typed here", "Second chat prompt"]) {
+    await composer.press("ArrowUp")
+    await expect(composer).toHaveValue(expected)
+  }
+  await composer.press("ArrowUp")
+  await expect(composer).toHaveValue("Second chat prompt")
+  await composer.press("ArrowDown")
+  await composer.press("ArrowDown")
+  await expect(composer).toHaveValue("")
+})
+
+test("a chat opens at the end and a reader who scrolls up is not pulled down by new output", async ({ page }) => {
+  await page.addInitScript(() => {
+    class Feed extends EventTarget {
+      onopen: (() => void) | null = null
+      constructor(url: URL | string) {
+        super()
+        if (String(url).includes("session=chat-one")) Reflect.set(window, "chatFeed", this)
+        queueMicrotask(() => this.onopen?.())
+      }
+      close() {}
+    }
+    Reflect.set(window, "EventSource", Feed)
+  })
+  await page.route("**/api/config", (route) => route.fulfill({ json: { ui_build_id: "scroll", conversation_events: true } }))
+  const tall = Array.from({ length: 30 }, (_, index) => `Paragraph ${index}`).join("\n\n")
+  await page.route("**/api/sessions/chat-one/conversation", (route) => route.fulfill({
+    body: Array.from({ length: 12 }, (_, index) => [
+      { seq: index * 2 + 1, ts: index * 2 + 1, kind: "prompt", payload: { text: { text: `Question ${index}` } } },
+      { seq: index * 2 + 2, ts: index * 2 + 2, kind: "agent_message_chunk", payload: { text: { text: `${tall}\n\nEnd ${index}` } } },
+    ]).flat().map((entry) => JSON.stringify(entry)).join("\n"),
+    contentType: "application/x-ndjson",
+  }))
+  await page.goto("/sessions/local/chat-one")
+  const thread = page.getByLabel("Conversation", { exact: true })
+  const distance = () => thread.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)
+  await expect.poll(distance).toBeLessThan(8)
+  await page.waitForFunction(() => Boolean(Reflect.get(window, "chatFeed")))
+  const stream = (seq: number) => page.evaluate((seq) => Reflect.get(window, "chatFeed").dispatchEvent(new MessageEvent("conversation", {
+    data: JSON.stringify({ seq, ts: seq, kind: "agent_message_chunk", payload: { text: { type: "text", text: "\n\nmore output" } } }),
+  })), seq)
+  await thread.hover()
+  await page.mouse.wheel(0, -60)
+  await expect.poll(distance).toBeGreaterThan(8)
+  const top = await thread.evaluate((element) => element.scrollTop)
+  for (let seq = 25; seq < 30; seq++) await stream(seq)
+  await expect(page.getByText("more output").last()).toBeAttached()
+  expect(await thread.evaluate((element) => element.scrollTop)).toBe(top)
+  await thread.evaluate((element) => { element.scrollTop = element.scrollHeight })
+  await stream(30)
+  await expect.poll(distance).toBeLessThan(8)
+})
+
 test("⌘J opens the chat terminal and hides it without disconnecting", async ({ page }) => {
   const shell = { ...session, id: "shell-one", transport: "shell", harness: "shell", parent_id: "chat-one" }
   await page.route("**/api/sessions", (route) => {

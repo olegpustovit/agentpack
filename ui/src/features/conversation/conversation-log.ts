@@ -142,7 +142,6 @@ export function useHistoryPaging(
   sessionId: string,
   tail: ConversationPage | undefined,
   threadScrollRef: RefObject<HTMLDivElement | null>,
-  stickToBottomRef: RefObject<boolean>,
 ) {
   const historyKey = `${machine}\0${sessionId}`
   const [history, setHistory] = useState<{ key: string; entries: LogEntry[]; more: boolean; loading: boolean; error?: unknown }>()
@@ -153,11 +152,6 @@ export function useHistoryPaging(
   // Scroll height and offset before older entries were prepended, so the reader stays on the same line.
   const scrollAnchorRef = useRef<{ height: number; top: number } | null>(null)
   const transcript = reduceThread(historyKey, entries)
-  useLayoutEffect(() => {
-    const element = threadScrollRef.current
-    if (!element || tailEntries.length === 0 || element.querySelector("[data-thread-virtual]")) return
-    if (stickToBottomRef.current) element.scrollTop = element.scrollHeight
-  }, [tailEntries])
   useLayoutEffect(() => {
     const element = threadScrollRef.current
     const anchor = scrollAnchorRef.current

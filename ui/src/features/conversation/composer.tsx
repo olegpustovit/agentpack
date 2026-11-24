@@ -39,6 +39,38 @@ type PromptIntent = SendInput & { id: string; startedAt?: number }
 type GoalCommand = NonNullable<ReturnType<typeof parseGoalCommand>>
 
 const draftKey = (machine: string, sessionId: string) => `agentpack:draft:${machine}/${sessionId}`
+
+type SentPrompt = { text: string; ts: number }
+const PROMPT_HISTORY = 50
+const promptHistoryKey = (machine: string, directory: string) => `agentpack:prompts:${machine}:${directory}`
+function loadPromptHistory(key: string): SentPrompt[] {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(key) ?? "[]")
+    return Array.isArray(stored) ? stored.filter((item): item is SentPrompt => typeof item?.text === "string" && typeof item?.ts === "number") : []
+  } catch {
+    return []
+  }
+}
+// Newest first, one entry per text, at most PROMPT_HISTORY.
+export function mergePromptHistory(...lists: SentPrompt[][]): SentPrompt[] {
+  const seen = new Set<string>()
+  return lists.flat().sort((a, b) => b.ts - a.ts).filter((item) => item.text.trim() && !seen.has(item.text) && seen.add(item.text)).slice(0, PROMPT_HISTORY)
+}
+function rememberPrompt(key: string, text: string) {
+  try {
+    localStorage.setItem(key, JSON.stringify(mergePromptHistory([{ text, ts: Date.now() }], loadPromptHistory(key))))
+  } catch {
+    // Storage can be blocked; recall then covers only this chat.
+  }
+}
+// Prompts a person typed in this chat; messages sent by another chat's agent carry `from`.
+function humanPrompts(items: ThreadItem[]): SentPrompt[] {
+  return items.flatMap((item) => {
+    const data = item.data as UserMessagePayload
+    const text = data.text?.text
+    return item.kind === "user_message_chunk" && !data.from && text?.trim() ? [{ text, ts: item.ts ?? 0 }] : []
+  })
+}
 function loadDraft(key: string) {
   try {
     return sessionStorage.getItem(key) ?? ""
@@ -58,7 +90,7 @@ export function useComposer({ machine, sessionId, info, entries, reportTimings }
 }) {
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState(() => loadDraft(draftKey(machine, sessionId)))
-  const recalledPromptRef = useRef<{ seq: number; text: string } | null>(null)
+  const recalledPromptRef = useRef<{ index: number; text: string } | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const [attachments, setAttachmentsState] = useState<UploadedAttachment[]>(() =>
     loadAttachments(`${draftKey(machine, sessionId)}:attachments`, (sha) => userImageSrc(machine, sessionId, sha)),
@@ -235,6 +267,9 @@ export function Composer({
   const dockRef = useRef<HTMLDivElement>(null)
   const agentName = harnessName(info?.harness ?? "agent")
   const steering = info?.agent_capabilities?.steering === true
+  // Prompt history is shared by every chat in the folder; a chat without one keeps its own.
+  const promptKey = promptHistoryKey(machine, info?.directory || sessionId)
+  const projectPrompts = (items: ThreadItem[]) => mergePromptHistory(humanPrompts(items), loadPromptHistory(promptKey))
 
   // Opening a chat (the pane is keyed by session) puts the caret in the composer, unless focus is
   // already in another field. Touch screens skip it so the keyboard does not cover the thread.
@@ -302,6 +337,7 @@ export function Composer({
     if (!canSend) return
     recalledPromptRef.current = null
     const text = draft.trim()
+    if (text) rememberPrompt(promptKey, text)
     const goalCommand = attachments.length === 0 ? parseGoalCommand(text) : undefined
     if (goalCommand) {
       setDraft("")
@@ -325,26 +361,20 @@ export function Composer({
   const composerHints = hintsClosed ? [] : slashHints.length > 0 ? slashHints : atHints
   const activeHint = Math.min(hintIndex, Math.max(composerHints.length - 1, 0))
   const hintTitle = slashHints.length > 0 ? "Commands" : "Files in this thread"
+  // Up on an empty composer walks back through the prompts typed in this project, newest first.
   async function recallPrompt(direction: -1 | 1, input: HTMLTextAreaElement) {
     const current = recalledPromptRef.current
-    const boundary = current?.text === draft ? current.seq : Infinity
-    function findPrompt(items: ThreadItem[]) {
-      const start = direction < 0 ? items.length - 1 : 0
-      for (let i = start; i >= 0 && i < items.length; i += direction) {
-        const item = items[i]!
-        if (item.kind !== "user_message_chunk" || item.seq === undefined || (item.seq - boundary) * direction <= 0) continue
-        const text = (item.data as UserMessagePayload).text?.text
-        if (text?.trim()) return { seq: item.seq, text }
-      }
-    }
-    let next = findPrompt(transcript.items)
-    if (!next && direction < 0 && hasOlder) {
-      const loaded = await loadOlder(true, (rows) => Boolean(findPrompt(reduceThread(historyKey, rows).items)))
+    const index = (current?.text === draft ? current.index : -1) - direction
+    let prompts = projectPrompts(transcript.items)
+    if (index >= prompts.length && hasOlder && prompts.length < PROMPT_HISTORY) {
+      const known = prompts.length
+      const loaded = await loadOlder(true, (rows) => projectPrompts(reduceThread(historyKey, rows).items).length > known)
       if (!loaded || inputRef.current !== input || input.value !== draft || recalledPromptRef.current !== current) return
-      next = findPrompt(reduceThread(historyKey, loaded).items)
+      prompts = projectPrompts(reduceThread(historyKey, loaded).items)
     }
-    if (!next && direction < 0) return
-    recalledPromptRef.current = next ?? null
+    if (index >= prompts.length) return
+    const next = index >= 0 ? { index, text: prompts[index]!.text } : null
+    recalledPromptRef.current = next
     setHintsClosed(Boolean(next))
     setCaret(undefined)
     setDraft(next?.text ?? "")
