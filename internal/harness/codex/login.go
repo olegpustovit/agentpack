@@ -24,11 +24,10 @@ var LoginMethods = []base.LoginMethod{{ID: "chatgpt", Label: "ChatGPT account"}}
 // Account reads the credential staged homes share, falling back to `codex login status` for a
 // login kept only in the OS keychain.
 func Account(ctx context.Context) base.Account {
-	exe, err := base.ResolveBinary(base.Codex.Binary())
-	if err != nil {
-		return base.Account{}
+	account, exe := base.ProbeAccount(base.Codex)
+	if !account.Installed {
+		return account
 	}
-	account := base.Account{Installed: true}
 	var sources []string
 	if native, ok := nativeHome(); ok {
 		sources = append(sources, filepath.Join(native, "auth.json"))
@@ -82,7 +81,7 @@ func Logout(context.Context) error { return logoutShared() }
 // Login runs `codex login --device-auth` in an isolated home, so an abandoned attempt never
 // touches the current credential; success installs the new one as the shared source.
 func Login(string) (base.LoginFlow, error) {
-	exe, err := base.ResolveBinary(base.Codex.Binary())
+	exe, err := base.Codex.Resolve()
 	if err != nil {
 		return base.LoginFlow{}, err
 	}

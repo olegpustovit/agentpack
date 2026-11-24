@@ -46,7 +46,7 @@ func ProbeBundle(ctx context.Context, bundleDir, workspace, sourceID, lockDigest
 		plan = packaged[0]
 	}
 	expected := plan.Skills
-	exe, err := base.ResolveBinary(base.Claude.Binary())
+	exe, err := base.Claude.Resolve()
 	if err != nil {
 		return environment.Receipt{}, err
 	}

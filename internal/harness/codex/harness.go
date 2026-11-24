@@ -66,7 +66,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 			arguments = append(arguments[:1], append([]string{flag}, arguments[1:]...)...)
 		}
 	}
-	binary, err := base.ResolveBinary(base.Codex.Binary())
+	binary, err := base.Codex.Resolve()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -432,18 +432,10 @@ func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, er
 	if err != nil {
 		return base.MCPProjection{}, err
 	}
-	servers := base.ProjectedMCPServers(entries)
-	for index := range servers {
-		if slices.Contains(shadowed, servers[index].Name) {
-			servers[index].Winner = "user"
-		}
-	}
-	base.MarkMCPWarnings(servers, warnings)
-	digest, err := base.MCPTOMLScopeDigest(data, "mcp_servers")
-	if err != nil {
-		return base.MCPProjection{}, err
-	}
-	return base.MCPProjection{Files: []base.MCPProjectedFile{{Path: filepath.Join(root, "config.toml"), Contents: data, Scope: "mcp_servers", ScopeDigest: digest, MergeOrder: []string{"user config (existing names win)", "plugin definitions", "agentpack.toml", ".agents/mcp.json"}}}, Servers: servers, Warnings: warnings, Inputs: []base.MCPProjectedInput{input}}, nil
+	return base.NewMCPProjection(entries, base.MCPProjectedFile{
+		Path: filepath.Join(root, "config.toml"), Contents: data, Scope: "mcp_servers",
+		MergeOrder: base.MCPMergeOrder("user config (existing names win)"),
+	}, warnings, shadowed, []base.MCPProjectedInput{input})
 }
 
 func injectGuidance(blob string, ctx base.StageContext) error {

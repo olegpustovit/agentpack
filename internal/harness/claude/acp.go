@@ -63,7 +63,7 @@ func claudeCodeExecutable() (string, error) {
 	if strings.TrimSpace(os.Getenv("CLAUDE_CODE_EXECUTABLE")) != "" {
 		return base.ResolveBinary("CLAUDE_CODE_EXECUTABLE", "claude")
 	}
-	return base.ResolveBinary(base.Claude.Binary())
+	return base.Claude.Resolve()
 }
 
 func stagedPluginDirs(plugins string) ([]string, error) {

@@ -43,15 +43,11 @@ var (
 	waitConditions = []waitUntil{untilNeedsYou, untilIdle, untilAny}
 )
 
-// mcpAgents are the launcher names sessions use; Cursor's launcher is "agent".
+// mcpAgents are the launcher names sessions use.
 func mcpAgents() []mcpAgent {
 	var agents []mcpAgent
 	for _, target := range harness.AllTargets() {
-		name := mcpAgent(target)
-		if target == harness.Cursor {
-			name = "agent"
-		}
-		agents = append(agents, name)
+		agents = append(agents, mcpAgent(target.LauncherName()))
 	}
 	return agents
 }

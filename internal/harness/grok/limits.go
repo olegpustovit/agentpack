@@ -1,13 +1,10 @@
 package grok
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,23 +16,6 @@ import (
 )
 
 const limitsSource = "grok agent stdio _x.ai/billing"
-
-type billingEnvelope struct {
-	ID     json.RawMessage `json:"id,omitempty"`
-	Result *struct {
-		Config *struct {
-			CreditUsagePercent *float64 `json:"creditUsagePercent"`
-			CurrentPeriod      *struct {
-				End string `json:"end"`
-			} `json:"currentPeriod"`
-			BillingPeriodEnd string `json:"billingPeriodEnd"`
-		} `json:"config"`
-		SubscriptionTier string `json:"subscription_tier"`
-	} `json:"result"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error"`
-}
 
 // ReadLimits asks the signed-in Grok CLI for included-credit usage over ACP. It makes no REST or
 // browser-auth calls. A wallet without a utilization value is not reported as 0% usage.
@@ -84,43 +64,27 @@ func ReadLimits(ctx context.Context) base.LimitSnapshot {
 		}()
 		cmd.Env = append(cmd.Env, "GROK_HOME="+home)
 	}
-	cmd.Stderr = io.Discard
-	stdin, err := cmd.StdinPipe()
+	rpc, err := base.StartStdioRPC(ctx, cmd, "grok agent", "grok billing")
 	if err != nil {
 		snapshot.Error = err.Error()
 		return snapshot
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		snapshot.Error = err.Error()
-		return snapshot
-	}
-	if err := cmd.Start(); err != nil {
-		snapshot.Error = err.Error()
-		return snapshot
-	}
-	defer func() {
-		_ = stdin.Close()
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	}()
+	defer rpc.Close()
 
-	lines := bufio.NewScanner(stdout)
-	lines.Buffer(make([]byte, 0, 64<<10), 4<<20)
 	// Grok loads its login while answering initialize, so billing asked any sooner fails with "Internal error".
-	if _, err := io.WriteString(stdin, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1","clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}}`+"\n"); err != nil {
+	if err := rpc.Send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1","clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}}`); err != nil {
 		snapshot.Error = err.Error()
 		return snapshot
 	}
-	if _, err := awaitResponse(ctx, lines, "1"); err != nil {
+	if _, err := rpc.Await("1"); err != nil {
 		snapshot.Error = err.Error()
 		return snapshot
 	}
-	if _, err := io.WriteString(stdin, `{"jsonrpc":"2.0","id":2,"method":"_x.ai/billing","params":{}}`+"\n"); err != nil {
+	if err := rpc.Send(`{"jsonrpc":"2.0","id":2,"method":"_x.ai/billing","params":{}}`); err != nil {
 		snapshot.Error = err.Error()
 		return snapshot
 	}
-	result, err := awaitResponse(ctx, lines, "2")
+	result, err := rpc.Await("2")
 	if err != nil {
 		snapshot.Error = err.Error()
 		if strings.Contains(err.Error(), "Authentication required") {
@@ -139,36 +103,20 @@ func ReadLimits(ctx context.Context) base.LimitSnapshot {
 	return snapshot
 }
 
-func awaitResponse(ctx context.Context, lines *bufio.Scanner, id string) (json.RawMessage, error) {
-	for lines.Scan() {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("grok agent timed out")
-		}
-		var message billingEnvelope
-		if err := json.Unmarshal(bytes.TrimSpace(lines.Bytes()), &message); err != nil || len(message.ID) == 0 {
-			continue
-		}
-		if strings.Trim(string(message.ID), `"`) != id {
-			continue
-		}
-		if message.Error != nil {
-			return nil, fmt.Errorf("grok billing: %s", message.Error.Message)
-		}
-		raw, err := json.Marshal(message.Result)
-		return raw, err
-	}
-	if err := lines.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("grok agent closed before responding")
-}
-
 func parseBilling(raw json.RawMessage) ([]base.LimitWindow, string, error) {
-	var envelope billingEnvelope
-	if err := json.Unmarshal(raw, &envelope.Result); err != nil || envelope.Result == nil {
+	var result *struct {
+		Config *struct {
+			CreditUsagePercent *float64 `json:"creditUsagePercent"`
+			CurrentPeriod      *struct {
+				End string `json:"end"`
+			} `json:"currentPeriod"`
+			BillingPeriodEnd string `json:"billingPeriodEnd"`
+		} `json:"config"`
+		SubscriptionTier string `json:"subscription_tier"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil || result == nil {
 		return nil, "", fmt.Errorf("unexpected billing response")
 	}
-	result := envelope.Result
 	if result.Config == nil || result.Config.CreditUsagePercent == nil {
 		return nil, result.SubscriptionTier, fmt.Errorf("grok billing reported no credit utilization")
 	}

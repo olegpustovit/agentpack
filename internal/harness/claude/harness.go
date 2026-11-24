@@ -39,7 +39,7 @@ func nativeUserRoots(home string) []string {
 }
 
 func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
-	binary, err := base.ResolveBinary(base.Claude.Binary())
+	binary, err := base.Claude.Resolve()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -153,13 +153,9 @@ func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, er
 	if err != nil {
 		return base.MCPProjection{}, err
 	}
-	servers := base.ProjectedMCPServers(entries)
-	base.MarkMCPWarnings(servers, warnings)
-	digest, err := base.MCPJSONScopeDigest(data, "mcpServers")
-	if err != nil {
-		return base.MCPProjection{}, err
-	}
-	return base.MCPProjection{Files: []base.MCPProjectedFile{{Path: filepath.Join(root, ".mcp.json"), Contents: data, Scope: "mcpServers", ScopeDigest: digest, MergeOrder: []string{"plugin definitions", "agentpack.toml", ".agents/mcp.json"}}}, Servers: servers, Warnings: warnings}, nil
+	return base.NewMCPProjection(entries, base.MCPProjectedFile{
+		Path: filepath.Join(root, ".mcp.json"), Contents: data, Scope: "mcpServers",
+	}, warnings, nil, nil)
 }
 func injectGuidance(blob string, ctx base.StageContext) error {
 	root, err := stagedRoot(ctx)

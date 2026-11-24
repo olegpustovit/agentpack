@@ -77,13 +77,14 @@ func (entries Entries) Bare() map[string]Server {
 	return servers
 }
 
-// JSONObject is the server in the JSON shape Claude Code, Cursor and
-// Antigravity share: type, command, args, env, url, headers, disabled. Each
-// writer adds or renames what its agent spells differently.
-func (server Server) JSONObject() map[string]any {
+// JSONObject returns the common JSON server fields. Each writer adds or
+// renames the fields its agent spells differently.
+func (server Server) JSONObject(defaultRemoteType string) map[string]any {
 	object := make(map[string]any)
 	if server.Type != nil {
 		object["type"] = *server.Type
+	} else if defaultRemoteType != "" && server.IsRemote() {
+		object["type"] = defaultRemoteType
 	}
 	if server.Command != nil {
 		object["command"] = *server.Command

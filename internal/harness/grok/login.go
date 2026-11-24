@@ -17,10 +17,10 @@ var LoginMethods = []base.LoginMethod{{ID: "grok.com", Label: "Grok account"}}
 // Account follows the order launches use: the shared login, else (before the first launch made
 // one) a login from running grok directly. A recorded logout outranks that direct login.
 func Account(context.Context) base.Account {
-	if _, err := base.ResolveBinary(base.Grok.Binary()); err != nil {
-		return base.Account{}
+	account, _ := base.ProbeAccount(base.Grok)
+	if !account.Installed {
+		return account
 	}
-	account := base.Account{Installed: true}
 	shared, err := paths.SharedGrokCredentialsDir()
 	if err != nil {
 		account.Error = err.Error()
@@ -34,8 +34,8 @@ func Account(context.Context) base.Account {
 	if _, err := os.Stat(sharedAuth + ".initialized"); err == nil {
 		return account
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		account.SignedIn = nonEmpty(filepath.Join(home, ".grok", "auth.json"))
+	if home, ok := nativeHome(); ok {
+		account.SignedIn = nonEmpty(filepath.Join(home, "auth.json"))
 	}
 	return account
 }
@@ -63,7 +63,7 @@ func Logout(context.Context) error {
 // Login runs grok's device-code login in an isolated home; success becomes the shared login that
 // each project home picks up on its next launch.
 func Login(string) (base.LoginFlow, error) {
-	exe, err := base.ResolveBinary(base.Grok.Binary())
+	exe, err := base.Grok.Resolve()
 	if err != nil {
 		return base.LoginFlow{}, err
 	}

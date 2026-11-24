@@ -89,7 +89,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	binary, err := base.ResolveBinary(base.OMP.Binary())
+	binary, err := base.OMP.Resolve()
 	if err != nil {
 		return nil, nil, err
 	}

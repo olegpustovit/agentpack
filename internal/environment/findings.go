@@ -284,22 +284,9 @@ func (report Report) HasObservedCoverageScope(category, scope string) bool {
 
 // ExternalCapability describes whether an adapter can run without checkout writes.
 func ExternalCapability(target base.Target) (status, note string) {
-	switch target {
-	case base.Claude:
-		return "external", "uses --plugin-dir and --settings; no workspace overlay"
-	case base.OpenCode:
-		return "external", "uses OPENCODE_CONFIG_DIR; no workspace overlay"
-	case base.Codex:
-		return "external-home", "uses CODEX_HOME; native project instructions may still apply"
-	case base.OMP:
-		return "external", "uses --plugin-dir; native profile, settings and credentials remain in place"
-	case base.Grok:
-		return "external-home", "uses GROK_HOME; also reads real ~/.claude and ~/.grok"
-	case base.Cursor:
-		return "workspace-write", "writes .cursor/agents when agent artifacts exist"
-	case base.Agy:
-		return "workspace-write", "writes .agents/plugins/agentpack-bundle"
-	default:
-		return "unknown", ""
+	status, note = target.ExternalLaunch()
+	if status == "" {
+		status = "unknown"
 	}
+	return status, note
 }

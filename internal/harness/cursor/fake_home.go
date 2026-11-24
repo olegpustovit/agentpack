@@ -162,7 +162,7 @@ func mergeMCPFiles(pack, user, destination string) error {
 	} else if userErr != nil {
 		return userErr
 	}
-	data, err := MergeMCPFilesData(packData, userData)
+	data, _, err := mergeMCPData(packData, userData)
 	if err != nil {
 		return err
 	}
@@ -172,34 +172,38 @@ func mergeMCPFiles(pack, user, destination string) error {
 	return os.WriteFile(destination, data, 0o644)
 }
 
-func MergeMCPFilesData(packData, userData []byte) ([]byte, error) {
+func mergeMCPData(packData, userData []byte) ([]byte, []string, error) {
 	if len(packData) == 0 && len(userData) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	config := mcpFile{Servers: map[string]json.RawMessage{}}
 	if len(packData) != 0 {
 		value, err := readMCPBytes(packData)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for name, server := range value.Servers {
 			config.Servers[name] = server
 		}
 	}
+	var shadowed []string
 	if len(userData) != 0 {
 		value, err := readMCPBytes(userData)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for name, server := range value.Servers {
+			if _, exists := config.Servers[name]; exists {
+				shadowed = append(shadowed, name)
+			}
 			config.Servers[name] = server
 		}
 	}
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return append(data, '\n'), nil
+	return append(data, '\n'), shadowed, nil
 }
 
 func readMCPBytes(data []byte) (mcpFile, error) {

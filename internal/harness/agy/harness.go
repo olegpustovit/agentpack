@@ -36,7 +36,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	if ctx.Yolo {
 		arguments = base.PrependOnce(arguments, "--dangerously-skip-permissions")
 	}
-	binary, err := base.ResolveBinary(base.Agy.Binary())
+	binary, err := base.Agy.Resolve()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -90,13 +90,10 @@ func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, er
 	if err != nil {
 		return base.MCPProjection{}, err
 	}
-	servers := base.ProjectedMCPServers(entries)
-	base.MarkMCPWarnings(servers, warnings)
-	digest, err := base.MCPJSONScopeDigest(data, "mcpServers")
-	if err != nil {
-		return base.MCPProjection{}, err
-	}
-	return base.MCPProjection{Files: []base.MCPProjectedFile{{Path: filepath.Join(root, "mcp_config.json"), Contents: data, Scope: "mcpServers", ScopeDigest: digest, MergeOrder: []string{"plugin definitions", "agentpack.toml", ".agents/mcp.json", "Antigravity target projection"}}}, Servers: servers, Warnings: warnings}, nil
+	return base.NewMCPProjection(entries, base.MCPProjectedFile{
+		Path: filepath.Join(root, "mcp_config.json"), Contents: data, Scope: "mcpServers",
+		MergeOrder: append(base.MCPMergeOrder(), "Antigravity target projection"),
+	}, warnings, nil, nil)
 }
 func verify(ctx base.StageContext) error {
 	root, err := stagedRoot(ctx)

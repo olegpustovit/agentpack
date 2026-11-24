@@ -107,25 +107,22 @@ func planNativeMCP(entries mcp.Entries, ctx base.StageContext, root string) (bas
 		return base.MCPProjection{}, err
 	}
 	filtered := make(mcp.Entries)
-	servers := base.ProjectedMCPServers(entries)
-	for index := range servers {
-		name := servers[index].Name
+	var shadowed []string
+	for name, entry := range entries {
 		if user.mcp[name] {
-			servers[index].Winner = "user"
+			shadowed = append(shadowed, name)
 		} else {
-			filtered[name] = entries[name]
+			filtered[name] = entry
 		}
 	}
 	data, warnings, _, err := MergeMCPData(seed, filtered)
 	if err != nil {
 		return base.MCPProjection{}, err
 	}
-	base.MarkMCPWarnings(servers, warnings)
-	digest, err := base.MCPJSONScopeDigest(data, "mcp")
-	if err != nil {
-		return base.MCPProjection{}, err
-	}
-	return base.MCPProjection{Files: []base.MCPProjectedFile{{Path: packConfigPath(root), Contents: data, Scope: "mcp", ScopeDigest: digest, MergeOrder: []string{"native user config (existing names win)", "plugin definitions", "agentpack.toml", ".agents/mcp.json"}}}, Servers: servers, Warnings: warnings, Inputs: user.inputs}, nil
+	return base.NewMCPProjection(entries, base.MCPProjectedFile{
+		Path: packConfigPath(root), Contents: data, Scope: "mcp",
+		MergeOrder: base.MCPMergeOrder("native user config (existing names win)"),
+	}, warnings, shadowed, user.inputs)
 }
 
 func planNativeLSP(servers map[string]json.RawMessage, ctx base.StageContext, root string) (base.LSPProjection, error) {
@@ -445,7 +442,7 @@ func launchInputs(projectRoot, workspace string) (string, error) {
 		return "", err
 	}
 	fmt.Fprintf(hash, "opencode_native_inputs\x00%s", native)
-	if binary, err := base.ResolveBinary(base.OpenCode.Binary()); err == nil {
+	if binary, err := base.OpenCode.Resolve(); err == nil {
 		if resolved, resolveErr := filepath.EvalSymlinks(binary); resolveErr == nil {
 			binary = resolved
 		}

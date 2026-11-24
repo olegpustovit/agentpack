@@ -1,0 +1,35 @@
+{
+  "mcpServers": {
+    "disabled": {
+      "command": "mcp-fixture",
+      "disabled": true
+    },
+    "local": {
+      "args": [
+        "--stdio"
+      ],
+      "command": "mcp-fixture",
+      "cwd": "fixture-dir",
+      "disabled": false,
+      "env": {
+        "FIXTURE": "value"
+      }
+    },
+    "oauth": {
+      "oauth": {
+        "clientId": "fixture-client",
+        "clientSecret": "fixture-secret"
+      },
+      "serverUrl": "https://example.test/oauth"
+    },
+    "remote": {
+      "headers": {
+        "X-Fixture": "value"
+      },
+      "serverUrl": "https://example.test/mcp"
+    },
+    "shadowed": {
+      "command": "mcp-fixture"
+    }
+  }
+}

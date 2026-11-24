@@ -40,7 +40,7 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	if allowsTrust(arguments) && !base.HasAny(arguments, "--trust") {
 		arguments = append([]string{"--trust"}, arguments...)
 	}
-	binary, err := base.ResolveBinary(base.Cursor.Binary())
+	binary, err := base.Cursor.Resolve()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -168,38 +168,30 @@ func planMCP(entries mcp.Entries, ctx base.StageContext) (base.MCPProjection, er
 		}
 		inputs = append(inputs, input)
 	}
-	merged, err := MergeMCPFilesData(pack, user)
+	merged, shadowed, err := mergeMCPData(pack, user)
 	if err != nil {
 		return base.MCPProjection{}, err
 	}
-	packDigest, err := base.MCPJSONScopeDigest(pack, "mcpServers")
+	projection, err := base.NewMCPProjection(entries, base.MCPProjectedFile{
+		Path: filepath.Join(root, "mcp.json"), Contents: pack, Scope: "mcpServers",
+		MergeOrder: append(base.MCPMergeOrder(), "Cursor target projection"),
+	}, warnings, shadowed, inputs)
 	if err != nil {
 		return base.MCPProjection{}, err
 	}
-	files := []base.MCPProjectedFile{{Path: filepath.Join(root, "mcp.json"), Contents: pack, Scope: "mcpServers", ScopeDigest: packDigest, MergeOrder: []string{"plugin definitions", "agentpack.toml", ".agents/mcp.json", "Cursor target projection"}}}
 	if merged != nil {
 		fakeHome, err := paths.StagingCursorHomeDirForMode(ctx.ProjectRoot, ctx.Mode.Name())
 		if err != nil {
 			return base.MCPProjection{}, err
 		}
-		digest, err := base.MCPJSONScopeDigest(merged, "mcpServers")
-		if err != nil {
+		if err := projection.AddFile(base.MCPProjectedFile{
+			Path: filepath.Join(fakeHome, ".cursor", "mcp.json"), Contents: merged, Scope: "mcpServers",
+			MergeOrder: []string{"pack MCP projection", "user ~/.cursor/mcp.json (existing names win)"},
+		}); err != nil {
 			return base.MCPProjection{}, err
 		}
-		files = append(files, base.MCPProjectedFile{Path: filepath.Join(fakeHome, ".cursor", "mcp.json"), Contents: merged, Scope: "mcpServers", ScopeDigest: digest, MergeOrder: []string{"pack MCP projection", "user ~/.cursor/mcp.json (existing names win)"}})
 	}
-	servers := base.ProjectedMCPServers(entries)
-	for index := range servers {
-		if len(user) != 0 {
-			if prior, err := readMCPBytes(user); err == nil {
-				if _, exists := prior.Servers[servers[index].Name]; exists {
-					servers[index].Winner = "user"
-				}
-			}
-		}
-	}
-	base.MarkMCPWarnings(servers, warnings)
-	return base.MCPProjection{Files: files, Servers: servers, Warnings: warnings, Inputs: inputs}, nil
+	return projection, nil
 }
 func finalize(_ mcp.Entries, ctx base.StageContext) error {
 	pack, err := stagedRoot(ctx)

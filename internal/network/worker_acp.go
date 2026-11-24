@@ -587,8 +587,8 @@ func HarnessTarget(name string) (base.Target, error) {
 	if name == "" {
 		return "", errors.New("ACP transport requires session harness")
 	}
-	if name == "agent" {
-		name = "cursor"
+	if target, ok := base.ParseLauncher(name); ok {
+		return target, nil
 	}
 	return base.ParseTarget(name)
 }

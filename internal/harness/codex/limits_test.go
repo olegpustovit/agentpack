@@ -83,7 +83,7 @@ func TestReadLimitsUsesSharedAgentpackCredentials(t *testing.T) {
 IFS= read -r fixture_initialize || exit 1
 IFS= read -r fixture_initialized || exit 1
 IFS= read -r fixture_limits || exit 1
-printf '%s\n' '{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":25}}}}'
+printf '%s\n' 'starting app-server' '{"id":1,"result":{}}' '{"method":"account/updated"}' '{"id":"2","result":{"rateLimits":{"primary":{"usedPercent":25}}}}'
 `), 0700); err != nil {
 		t.Fatal(err)
 	}

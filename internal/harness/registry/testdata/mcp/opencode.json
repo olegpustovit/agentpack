@@ -1,0 +1,48 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "disabled": {
+      "command": [
+        "mcp-fixture"
+      ],
+      "enabled": false,
+      "type": "local"
+    },
+    "local": {
+      "command": [
+        "mcp-fixture",
+        "--stdio"
+      ],
+      "cwd": "fixture-dir",
+      "enabled": true,
+      "environment": {
+        "FIXTURE": "value"
+      },
+      "type": "local"
+    },
+    "oauth": {
+      "enabled": true,
+      "oauth": {
+        "clientId": "fixture-client",
+        "clientSecret": "fixture-secret",
+        "scope": "read write"
+      },
+      "type": "remote",
+      "url": "https://example.test/oauth"
+    },
+    "remote": {
+      "enabled": true,
+      "headers": {
+        "X-Fixture": "value"
+      },
+      "type": "remote",
+      "url": "https://example.test/mcp"
+    },
+    "shadowed": {
+      "command": [
+        "user-server"
+      ],
+      "type": "local"
+    }
+  }
+}
