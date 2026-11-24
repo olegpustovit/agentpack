@@ -111,7 +111,7 @@ func (cs *ConversationSession) RevertTurn(turn int) (int, int, error) {
 		} else if info, statErr := os.Stat(f.resolved); statErr != nil {
 			err = statErr
 		} else {
-			err = paths.WriteAtomic(f.resolved, []byte(*f.original), info.Mode().Perm(), paths.RenameOnly)
+			err = paths.WriteAtomic(f.resolved, []byte(*f.original), info.Mode().Perm())
 		}
 		if err != nil {
 			return 0, http.StatusInternalServerError, fmt.Errorf("could not revert %s", f.path)

@@ -188,7 +188,7 @@ func (g *Gateway) writeOMPOverlay(ctx context.Context) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
-		if err := paths.WriteAtomic(path, data, 0o600, paths.RenameOnly); err != nil {
+		if err := paths.WriteAtomic(path, data, 0o600); err != nil {
 			return err
 		}
 	}

@@ -101,7 +101,7 @@ func atomicWriteAuth(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return paths.WriteAtomic(path, data, 0o600, paths.RenameOnly)
+	return paths.WriteAtomic(path, data, 0o600)
 }
 
 // SharedAuthFile finds Codex credentials using the same rules as staged launches.
