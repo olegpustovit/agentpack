@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -199,10 +200,11 @@ func TestEventLogSinkReplacesAlreadyPersistedMergedChunks(t *testing.T) {
 func TestEventLogKeepsEventsThroughAFailedWrite(t *testing.T) {
 	log := NewEventLog(1 << 10)
 	failure := errors.New("sink failed")
-	failing := true
+	var failing atomic.Bool // the persist loop reads it
+	failing.Store(true)
 	stored := map[int64]LogEntry{}
 	if err := log.EnableSink(func(changes LogChanges) error {
-		if failing {
+		if failing.Load() {
 			return failure
 		}
 		applyLogChanges(stored, changes)
@@ -224,7 +226,7 @@ func TestEventLogKeepsEventsThroughAFailedWrite(t *testing.T) {
 	if entries, _, _ := log.ReadSince(0); len(entries) < 2 {
 		t.Fatalf("memory kept %d entries", len(entries))
 	}
-	failing = false
+	failing.Store(false)
 	if err := log.Flush(); err != nil {
 		t.Fatalf("a successful retry clears the failure: %v", err)
 	}
