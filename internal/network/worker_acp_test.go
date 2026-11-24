@@ -191,6 +191,25 @@ func TestWorkerLaunchContextUsesSafeDefaultPermissions(t *testing.T) {
 	}
 }
 
+// A chat in a subfolder that recorded no definition root stages from the manifest above it.
+func TestWorkerLaunchContextFindsTheManifestAboveTheFolder(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "agentpack.toml"), []byte("name = \"p\"\nversion = \"0.1.0\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(root, "sub")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := workerLaunchContext(WorkerLaunch{Directory: sub, Session: session.SessionInfo{Directory: sub, Harness: "claude"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, _ := filepath.EvalSymlinks(root); ctx.ProjectRoot != want && ctx.ProjectRoot != root {
+		t.Fatalf("definition root = %s, want %s", ctx.ProjectRoot, root)
+	}
+}
+
 func TestStartACPRequiresHarness(t *testing.T) {
 	dir := t.TempDir()
 	_, _, err := startACPConversation(context.Background(), WorkerLaunch{

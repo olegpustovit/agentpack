@@ -601,10 +601,7 @@ func workerLaunchContext(launch WorkerLaunch) (base.LaunchContext, error) {
 	if !filepath.IsAbs(workspace) {
 		return base.LaunchContext{}, errors.New("workspace must be absolute")
 	}
-	definition := launch.Session.DefinitionRoot
-	if definition == "" {
-		definition = workspace
-	}
+	definition := sessionDefinitionRoot(launch.Session.DefinitionRoot, workspace)
 	modeName := launch.Session.Mode
 	if modeName == "" {
 		modeName = mode.DefaultName

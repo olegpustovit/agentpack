@@ -28,6 +28,18 @@ type Environment struct {
 	Binary string `json:"binary"`
 }
 
+// sessionDefinitionRoot is the folder holding a session's agentpack.toml. A session records none
+// when its launch found it in the workspace itself, or from a manifest above it, so resolve it as a launch does.
+func sessionDefinitionRoot(definition, workspace string) string {
+	if definition != "" {
+		return definition
+	}
+	if pack, err := paths.ResolveContextOrCWD("", "", workspace, ""); err == nil {
+		return pack.DefinitionRoot
+	}
+	return workspace
+}
+
 func environmentPath(home, id string) (string, error) {
 	if !ValidSessionID(id) {
 		return "", errors.New("invalid session ID")
@@ -222,14 +234,7 @@ func RestartStaleSessions(ctx context.Context, home string, service packSync.Ser
 		if !restartable(info) {
 			continue
 		}
-		definition := info.DefinitionRoot
-		if definition == "" {
-			// Recorded empty when the launch found no separate root; a manifest above the folder may own it now.
-			definition = info.Directory
-			if pack, err := paths.ResolveContextOrCWD("", "", info.Directory, ""); err == nil {
-				definition = pack.DefinitionRoot
-			}
-		}
+		definition := sessionDefinitionRoot(info.DefinitionRoot, info.Directory)
 		if root != nil {
 			if stat, err := os.Stat(definition); err != nil || !os.SameFile(root, stat) {
 				continue
@@ -248,9 +253,10 @@ func RestartStaleSessions(ctx context.Context, home string, service packSync.Ser
 		if err != nil {
 			return nil, fmt.Errorf("check running session %s: %w", info.ID, err)
 		}
-		if recorded.Digest == "" {
+		if recorded.Digest == "" && root == nil {
 			continue // launched by another binary, or still starting; its next launch records one
 		}
+		// In the changed project, a chat with no record reloads: nothing shows it already runs the change.
 		byID[info.ID] = info
 		before = append(before, packSync.RunningEnvironment{SessionID: info.ID, DefinitionRoot: definition, Workspace: info.Directory, Mode: info.Mode, Target: target, Digest: recorded.Digest})
 	}

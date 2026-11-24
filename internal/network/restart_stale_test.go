@@ -23,7 +23,7 @@ import (
 	packSync "github.com/olegpustovit/agentpack/internal/sync"
 )
 
-// Only sessions whose recorded environment moved reload; one without a record is left alone.
+// Only sessions whose recorded environment moved reload; in the changed project, one without a record reloads too.
 func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
 	t.Setenv("AGENTPACK_HOME", home)
@@ -129,8 +129,8 @@ func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 		return RestartStaleSessions(ctx, home, service, root, sessions)
 	}
 	reloads, err := restart()
-	if err != nil || len(reloads) != 0 || defaultRestarts.Load() != 0 {
-		t.Fatalf("unchanged environment restarted: %+v %v", reloads, err)
+	if err != nil || len(reloads) != 1 || defaultRestarts.Load() != 0 || unrecordedRestarts.Load() != 1 {
+		t.Fatalf("unchanged environment restarted, or the unrecorded chat did not: %+v %v", reloads, err)
 	}
 	url := "https://mcp.example/endpoint"
 	if err := manifest.AddMCPServer(root, "test", mcp.Server{URL: &url}); err != nil {
@@ -140,7 +140,7 @@ func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if defaultRestarts.Load() != 1 || emptyRestarts.Load() != 0 || otherRestarts.Load() != 0 || headlessRestarts.Load() != 0 || chatRestarts.Load() != 1 || unrecordedRestarts.Load() != 0 || subRestarts.Load() != 1 {
+	if defaultRestarts.Load() != 1 || emptyRestarts.Load() != 0 || otherRestarts.Load() != 0 || headlessRestarts.Load() != 0 || chatRestarts.Load() != 1 || unrecordedRestarts.Load() != 2 || subRestarts.Load() != 1 {
 		t.Fatalf("wrong restarts: default=%d empty=%d other=%d chat=%d unrecorded=%d", defaultRestarts.Load(), emptyRestarts.Load(), otherRestarts.Load(), chatRestarts.Load(), unrecordedRestarts.Load())
 	}
 	deferred := 0
@@ -149,7 +149,7 @@ func TestPackageChangesRestartOnlyAffectedRunningModes(t *testing.T) {
 			deferred++
 		}
 	}
-	if len(reloads) != 3 || deferred != 1 {
+	if len(reloads) != 4 || deferred != 1 {
 		t.Fatalf("reloads = %+v", reloads)
 	}
 	if err := os.WriteFile(filepath.Join(root, "agentpack.toml"), []byte("invalid = ["), 0600); err != nil {
