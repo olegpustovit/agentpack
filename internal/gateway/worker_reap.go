@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,7 +135,10 @@ func (g *Gateway) reapWorkerEndpoints(ctx context.Context) {
 		if possiblyAlive {
 			// A PID can belong to another process, and a new endpoint can precede its server.
 			_, probeErr := network.SessionState(ctx, record)
-			if probeErr == nil || ctx.Err() != nil || record.PID > 0 && time.Since(file.info.ModTime()) < interruptedStartGrace {
+			// A slow answer is a busy worker, not a dead one: only a refusal or a wrong answer settles it.
+			var netErr net.Error
+			if probeErr == nil || ctx.Err() != nil || errors.As(probeErr, &netErr) && netErr.Timeout() ||
+				record.PID > 0 && time.Since(file.info.ModTime()) < interruptedStartGrace {
 				continue
 			}
 		}
