@@ -379,161 +379,24 @@ function plural(n: number, word: string) {
 }
 
 const exploring = new Set(["read", "search", "list"])
-const simpleLookCommands = /^(?:rg|grep|cat|ls|head|tail|wc|tree|stat|file|pwd|printenv|which|uname|command -v|git (?:log|show|status|diff|grep|blame)|go (?:version|doc|list))(?:\s|$)/
+// Shell commands that only look. Conservative: anything not recognised keeps its own row.
+const looks = /^(?:rg|grep|cat|ls|head|tail|wc|tree|stat|file|pwd|printenv|which|uname|cd|command -v|go (?:version|doc|list)|git (?:log|show|status|diff|grep|blame)|git branch(?: -(?:-list|-show-current|[arv]+))*$|sed -n R|find(?!.*\s-(?:delete|exec|ok|fprint|fls)))(?:\s|$)/
 
-function splitShellParts(command: string): string[] | null {
-  const parts: string[] = []
-  let start = 0
-  let quote: "'" | '"' | "" = ""
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i]!
-    if (quote === "'") {
-      if (ch === "'") quote = ""
-      continue
-    }
-    if (quote === '"') {
-      if (ch === "\\") { i++; continue }
-      if (ch === '"') quote = ""
-      continue
-    }
-    if (ch === "'" || ch === '"') { quote = ch; continue }
-    if (ch === "\\") { i++; continue }
-    if (ch === ";" || ch === "|") {
-      parts.push(command.slice(start, i))
-      if (ch === "|" && command[i + 1] === "|") i++
-      start = i + 1
-    } else if (ch === "&" && command[i + 1] === "&") {
-      parts.push(command.slice(start, i))
-      i++
-      start = i + 1
-    }
-  }
-  if (quote) return null
-  parts.push(command.slice(start))
-  return parts.map((part) => part.trim()).filter(Boolean)
-}
-
-function shellWords(part: string): string[] {
-  const words: string[] = []
-  let current = ""
-  let inWord = false
-  let quote: "'" | '"' | "" = ""
-  for (let i = 0; i < part.length; i++) {
-    const ch = part[i]!
-    if (quote === "'") {
-      if (ch === "'") quote = ""
-      else current += ch
-      continue
-    }
-    if (quote === '"') {
-      if (ch === "\\" && i + 1 < part.length) { current += part[++i]!; continue }
-      if (ch === '"') quote = ""
-      else current += ch
-      continue
-    }
-    if (ch === "'" || ch === '"') { quote = ch; inWord = true; continue }
-    if (/\s/.test(ch)) {
-      if (inWord) { words.push(current); current = ""; inWord = false }
-      continue
-    }
-    if (ch === "\\" && i + 1 < part.length) { current += part[++i]!; inWord = true; continue }
-    current += ch
-    inWord = true
-  }
-  if (inWord) words.push(current)
-  return words
-}
-
-function isReadOnlyFind(words: string[]): boolean {
-  return !words.slice(1).some((arg) => /^-(?:delete|exec|ok|fprint|fls)/.test(arg))
-}
-
-function isReadOnlySed(words: string[]): boolean {
-  let quiet = false
-  let hasExpression = false
-  let endFlags = false
-  const scripts: string[] = []
-  for (let i = 1; i < words.length; i++) {
-    const arg = words[i]!
-    if (!endFlags && arg === "--") { endFlags = true; continue }
-    if (!endFlags && arg.startsWith("--")) {
-      if (arg === "--quiet" || arg === "--silent") { quiet = true; continue }
-      if (arg.startsWith("--in-place") || arg.startsWith("--file")) return false
-      if (arg === "--expression") {
-        hasExpression = true
-        if (++i >= words.length) return false
-        scripts.push(words[i]!)
-        continue
-      }
-      if (arg.startsWith("--expression=")) {
-        hasExpression = true
-        scripts.push(arg.slice("--expression=".length))
-        continue
-      }
-      if (arg !== "--regexp-extended" && arg !== "--posix") return false
-      continue
-    }
-    if (!endFlags && arg.startsWith("-") && arg.length > 1) {
-      for (let j = 1; j < arg.length; j++) {
-        const flag = arg[j]!
-        if (flag === "i" || flag === "f") return false
-        if (flag === "n") quiet = true
-        else if (flag === "e") {
-          hasExpression = true
-          const rest = arg.slice(j + 1)
-          if (rest) scripts.push(rest)
-          else if (++i < words.length) scripts.push(words[i]!)
-          else return false
-          break
-        } else if (flag !== "E" && flag !== "r") return false
-      }
-      continue
-    }
-    if (!hasExpression && scripts.length === 0) scripts.push(arg)
-  }
-  if (!quiet || scripts.length === 0) return false
-  return scripts.every((script) => !/[wWe]/.test(script.replace(/(?:^|[;,{\s!])\/(?:\\.|[^/\\])*\//g, "")))
-}
-
-function isReadOnlyGitBranch(words: string[]): boolean {
-  let listing = false
-  for (const arg of words.slice(2)) {
-    if (arg === "--list") { listing = true; continue }
-    if (/^-(?:[arv]+|-all|-remotes|-verbose|-show-current)$/.test(arg)) continue
-    if (listing && !arg.startsWith("-")) continue
-    return false
-  }
-  return true
-}
-
-function isLookPart(rawPart: string): boolean {
-  const bare = rawPart
-    .replace(/'[^']*'|"((?:\\.|[^"\\])*)"/g, "Q")
-    .replace(/\s\d?>\s?\/dev\/null(?=\s|$)/g, "")
-    .replace(/\s2>&1(?=\s|$)/g, "")
-    .trim()
-  if (!bare || /[<>]/.test(bare)) return false
-  if (/^cd \S+$/.test(bare) || simpleLookCommands.test(bare)) return true
-  const words = shellWords(rawPart.replace(/\s\d?>\s?\/dev\/null(?=\s|$)/g, "").replace(/\s2>&1(?=\s|$)/g, ""))
-  if (words[0] === "find") return isReadOnlyFind(words)
-  if (words[0] === "sed") return isReadOnlySed(words)
-  if (words[0] === "git" && words[1] === "branch") return isReadOnlyGitBranch(words)
-  return false
-}
-
-// Reads, searches and listings, including shell commands that only look (no redirect, mutation or substitution).
+// Reads, searches and listings, including shell commands that only look: no substitution,
+// redirect, background job or mutating flag anywhere.
 export function explores(tool: ToolPayload): boolean {
-  if (tool.status === "failed") return false
-  if (mcpCall(tool)) return false
+  if (tool.status === "failed" || mcpCall(tool)) return false
   if (exploring.has(tool.kind ?? "")) return true
   if (tool.kind !== "execute" && tool.kind !== "terminal") return false
   const command = unwrapShell(tool.command ?? (tool.rawInput as { command?: string } | undefined)?.command ?? "").trim()
-  if (!command) return false
-  // Reject newlines, backticks, command substitution, and lone `&` BEFORE stripping quotes.
-  const withoutStdErr = command.replace(/\s2>&1(?=\s|$|[;|&])/g, "")
-  if (/[\r\n`]|\$\(/.test(withoutStdErr) || withoutStdErr.replace(/&&/g, "").includes("&")) return false
-  const parts = splitShellParts(command)
-  return !!parts && parts.length > 0 && parts.every(isLookPart)
+  if (!command || /[\r\n`]|\$\(/.test(command)) return false
+  // Only `sed -n '<range>p'` prints; quoted text is inert once substitution is ruled out.
+  const bare = command
+    .replace(/sed -n '\d+(?:,(?:\d+|\$))?p'/g, "sed -n R")
+    .replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, "Q")
+    .replace(/\s\d?>\s?\/dev\/null|\s2>&1/g, "")
+  if (/[<>\\]|(?:^|[^&])&(?!&)/.test(bare)) return false
+  return bare.split(/;|&&|\|\|?/).every((part) => looks.test(part.trim()))
 }
 
 // "9 commands · 4 reads · 2 files changed": what the run did, by verb (each tool bucketed once).

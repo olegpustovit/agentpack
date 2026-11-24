@@ -172,7 +172,6 @@ describe("MCP calls", () => {
     const map = sessionNameMap(list)
     expect(map.get("session-a1")).toBe("Named chat")
     expect(map.get("b2")).toBe("First prompt title")
-    expect(sessionNameMap(list)).toBe(map)
 
     const machines = machineNameMap(
       [{ id: "local", name: "Mac mini" }, { id: "node-peer", name: "oracle-vm" }],

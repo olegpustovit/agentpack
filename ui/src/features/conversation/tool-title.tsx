@@ -96,19 +96,9 @@ export function mcpCall(tool: ToolPayload): McpCall | undefined {
 
   const agy = title.match(/^Run mcp_([A-Za-z0-9.-]+)_([\w.-]+)$/)
   if (agy) {
-    let args: unknown = tool.rawInput
-    let fallback: string | undefined
-    if (input) {
-      if (typeof input.toolSummary === "string" && input.toolSummary.trim()) fallback = input.toolSummary.trim()
-      if ("toolSummary" in input) {
-        const rest: Record<string, unknown> = {}
-        for (const [key, value] of Object.entries(input)) {
-          if (key !== "toolSummary") rest[key] = value
-        }
-        args = rest
-      }
-    }
-    return makeCall(agy[1]!, agy[2]!, args, fallback)
+    const { toolSummary, ...args } = input ?? {}
+    const fallback = typeof toolSummary === "string" && toolSummary.trim() ? toolSummary.trim() : undefined
+    return makeCall(agy[1]!, agy[2]!, input ? args : tool.rawInput, fallback)
   }
 
   return undefined
@@ -213,22 +203,11 @@ export function failureReason(output: string, rawOutput?: unknown): string {
   return source.split("\n").find((line) => line.trim() && !line.startsWith("```"))?.trim() ?? ""
 }
 
-const emptyMap = new Map<string, string>()
-const sessionMaps = new WeakMap<readonly SessionInfo[], Map<string, string>>()
-
-export function sessionNameMap(sessions?: readonly SessionInfo[]): Map<string, string> {
-  if (!sessions?.length) return emptyMap
-  let map = sessionMaps.get(sessions)
-  if (!map) {
-    map = new Map()
-    for (const session of sessions) {
-      const label = session.name || session.title
-      if (!label) continue
-      map.set(session.id, label)
-      const bare = session.id.replace(/^session-/, "")
-      if (bare !== session.id && !map.has(bare)) map.set(bare, label)
-    }
-    sessionMaps.set(sessions, map)
+export function sessionNameMap(sessions: readonly SessionInfo[] = []): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const session of sessions) {
+    const label = session.name || session.title
+    if (label) map.set(session.id, label).set(session.id.replace(/^session-/, ""), label)
   }
   return map
 }
