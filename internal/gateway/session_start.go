@@ -394,8 +394,9 @@ func recordStop(ctx context.Context, store *state.Store, id string, notice map[s
 }
 
 // reapStoppedChats ends rows whose worker died without ending them, then settles ended chats that
-// still claim a turn, a question or subagents: such a worker never recorded its exit. The caller
-// holds chatLifecycle, so a resume cannot claim a row this is writing.
+// still claim a turn, a question or subagents, or whose log has a turn with no end (a worker that
+// could not save its exit, say while the database was locked): such a worker never recorded its
+// exit. The caller holds chatLifecycle, so a resume cannot claim a row this is writing.
 func (g *Gateway) reapStoppedChats(ctx context.Context) { g.reapStoppedChatsExcept(ctx, "") }
 
 // reapStoppedChatsExcept never resumes manual, the chat its caller is about to resume.
@@ -403,8 +404,8 @@ func (g *Gateway) reapStoppedChatsExcept(ctx context.Context, manual string) {
 	g.reapWorkerEndpoints(ctx)
 	now := time.Now()
 	rows, err := session.QuerySessions(ctx, g.store.Reader, "SELECT "+session.SessionColumns+` FROM sessions WHERE archived_at=0 AND node_id=`+state.LocalNodeSQL+`
- AND ((ended_at>0 AND transport='acp' AND (conversation_state<>'idle' OR subagents<>'' OR waiting<>'' OR json_extract(state,'$.running')))
- OR (ended_at=0 AND last_used<? AND (transport<>'acp' OR conversation_state='starting')))`, session.SessionTimestamp(now.Add(-interruptedStartGrace)))
+ AND ((ended_at>0 AND transport='acp' AND (conversation_state<>'idle' OR subagents<>'' OR waiting<>'' OR json_extract(state,'$.running') OR ended_at>?2))
+ OR (ended_at=0 AND last_used<?1 AND (transport<>'acp' OR conversation_state='starting')))`, session.SessionTimestamp(now.Add(-interruptedStartGrace)), session.SessionTimestamp(now.Add(-autoResumeWindow)))
 	var resume []string
 	for _, info := range rows {
 		if info.EndedAt.IsZero() {
@@ -427,6 +428,10 @@ func (g *Gateway) reapStoppedChatsExcept(ctx context.Context, manual string) {
 			var cutErr error
 			auto, cutErr = cutOffTurn(ctx, g.store.Reader, info.ID, time.Now())
 			err = errors.Join(err, cutErr)
+		}
+		// A recently ended chat that settled cleanly has nothing to reap.
+		if !auto && info.ConversationState == "idle" && len(info.Subagents) == 0 && len(info.Waiting) == 0 && !info.State.Running {
+			continue
 		}
 		description := "Its process ended before the turn finished. Send a message to resume the chat."
 		if auto {

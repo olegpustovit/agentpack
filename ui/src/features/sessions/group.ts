@@ -145,9 +145,10 @@ export function groupSessions(sessions: ListedSession[], group: GroupMode): Sess
 }
 
 // The tree lists a helper chat only while it is active: starting, working, asking, restarting, or idle
-// with its own background work or a parent still waiting on its reply. The parent's reply wait spans
-// the helper's idle gaps between turns, so the row does not flicker; a finished helper stays reachable
-// from the parent's helper card. Live subagents are those not idle (finished).
+// with its own background work, or while a parent still waits on its reply, even stopped, so a helper
+// that died mid-task stays findable under its parent. The parent's reply wait spans the helper's idle
+// gaps between turns, so the row does not flicker; a finished helper stays reachable from the parent's
+// helper card. Live subagents are those not idle (finished).
 export function treeSessions(sessions: ListedSession[]): ListedSession[] {
   const byId = new Map(sessions.map((session) => [session.id, session]))
   return sessions.flatMap((session) => {
@@ -157,7 +158,7 @@ export function treeSessions(sessions: ListedSession[]): ListedSession[] {
     const live = !session.archived_at && !session.ended_at && (session.state.running || session.state.restarting)
     const parent = byId.get(session.parent_id)
     const awaited = parent ? openWaits(parent).some((item) => item.kind === "reply" && item.peer === session.id) : false
-    const active = isStarting(session) || (live && (session.conversation_state !== "idle" || openWaits(session).length > 0 || awaited))
+    const active = isStarting(session) || (awaited && !session.archived_at) || (live && (session.conversation_state !== "idle" || openWaits(session).length > 0))
     return active ? [row] : []
   })
 }

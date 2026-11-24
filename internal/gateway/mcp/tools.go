@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/network"
@@ -152,6 +154,9 @@ type mcpSession struct {
 	Tools     bool              `json:"tools,omitempty" jsonschema:"The chat's agent may use agentpack tools."`
 	Reachable bool              `json:"reachable" jsonschema:"The machine answered recently; false means last-known state."`
 	LastUsed  time.Time         `json:"last_used,omitzero"`
+	// Not named waiting: get_attention's view embeds this one and has its own.
+	Background  []acp.WaitItem `json:"background,omitempty" jsonschema:"Background work an idle chat will wake for: shell, monitor, agent, task, wake (a timer) or reply (an ask)."`
+	LastEventAt time.Time      `json:"last_event_at,omitzero" jsonschema:"The chat's latest transcript event."`
 }
 
 func sessionView(info session.SessionInfo) mcpSession {
@@ -160,7 +165,8 @@ func sessionView(info session.SessionInfo) mcpSession {
 		name = info.Title
 	}
 	return mcpSession{ID: info.ID, NodeID: info.NodeID, Name: name, Agent: info.Harness, Directory: info.Directory, Mode: info.Mode,
-		Chat: info.Transport == "acp", State: viewState(info), ParentID: info.ParentID, Tools: info.Tools, Reachable: info.Reachable, LastUsed: info.LastUsed}
+		Chat: info.Transport == "acp", State: viewState(info), ParentID: info.ParentID, Tools: info.Tools, Reachable: info.Reachable, LastUsed: info.LastUsed,
+		Background: info.Waiting, LastEventAt: info.LastEventAt}
 }
 
 func viewState(info session.SessionInfo) network.ChatState {
@@ -361,13 +367,23 @@ func (m *Server) tools(server *mcp.Server) {
 		out.Nodes, err = callAPI[[]mesh.Node](ctx, m, "", "GET", "/api/nodes", nil)
 		return nil, out, err
 	})
-	addTool(server, "list_sessions", "List agent sessions with their state, newest first. Helpers carry the parent_id of the chat that started them.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	addTool(server, "list_sessions", "List agent sessions with their state, newest first; for a chat's agent, the helpers it started come first, stopped ones included. Helpers carry the parent_id of the chat that started them.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		mcpNodeInput
 		mcpPageInput
 	}) (*mcp.CallToolResult, mcpSessions, error) {
 		sessions, err := callAPI[[]session.SessionInfo](ctx, m, in.Node, "GET", "/api/sessions", nil)
 		if err != nil {
 			return nil, mcpSessions{}, err
+		}
+		// A chat finds its own helpers on the first page, however long ago they were used.
+		if actor, _ := session.ActorFrom(ctx); actor.Chat != "" {
+			other := func(info session.SessionInfo) int {
+				if info.ParentID == actor.Chat {
+					return 0
+				}
+				return 1
+			}
+			slices.SortStableFunc(sessions, func(a, b session.SessionInfo) int { return other(a) - other(b) })
 		}
 		sessions, next, err := page(sessions, in.Cursor)
 		out := mcpSessions{Sessions: []mcpSession{}, NextCursor: next}
@@ -403,7 +419,7 @@ func (m *Server) tools(server *mcp.Server) {
 		}](ctx, m, in.Node, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/stop", nil)
 		return nil, out, err
 	})
-	addTool(server, "restart_session", "Restart an agent using its original launch settings; a stopped chat (its machine restarted, its worker died) resumes its conversation. Unsaved conversation state may be lost. Reuse operation_id when retrying this request.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpRestartInput) (*mcp.CallToolResult, struct {
+	addTool(server, "restart_session", "Restart an agent using its original launch settings; a stopped chat (its machine restarted, its worker died) resumes its conversation. A running chat keeps its conversation and reloads its MCP tools, so use this when it cannot see tools a deploy added. Unsaved conversation state may be lost. Reuse operation_id when retrying this request.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpRestartInput) (*mcp.CallToolResult, struct {
 		Restarted bool `json:"restarted"`
 	}, error) {
 		type restarted = struct {

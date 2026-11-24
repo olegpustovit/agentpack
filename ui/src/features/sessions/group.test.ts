@@ -164,6 +164,11 @@ describe("treeSessions", () => {
     expect(ids(treeSessions([lead, helper("starting", { ended_at: "2026-01-01T00:00:00Z" })]))).toEqual(["p"])
   })
 
+  it("keeps a stopped helper while its parent still waits on its reply", () => {
+    const stopped = helper("idle", { ended_at: "2026-01-01T00:00:00Z", state: { ...lead.state, running: false } })
+    expect(ids(treeSessions([{ ...lead, waiting: [{ kind: "reply", peer: "h" }] }, stopped]))).toEqual(["p", "h"])
+  })
+
   it("keeps an idle helper only while the parent waits on its reply or it has background work", () => {
     expect(ids(treeSessions([lead, helper("idle")]))).toEqual(["p"])
     expect(ids(treeSessions([{ ...lead, waiting: [{ kind: "reply", peer: "h" }] }, helper("idle")]))).toEqual(["p", "h"])

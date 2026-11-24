@@ -184,9 +184,28 @@ func chatFixture(t *testing.T, h *oauthHarness, id, parent string) string {
 const (
 	agentAnswerRefusal  = "only a person can answer permission prompts and questions"
 	agentScopeRefusal   = "a chat's agent can change only itself and the helper chats it started on this machine, and cannot use terminals"
-	agentSendRefusal    = "an agent sends messages with ask, which names it and returns the answer to it"
+	agentSendRefusal    = "send_prompt is for people; an agent messages a chat with ask, which names this chat as the sender and returns the answer here as a task"
 	chatToolsOffRefusal = "agentpack tools are off for this chat"
 )
+
+// A chat's helpers lead its list_sessions, however long ago they were used, so a stopped one is found.
+func TestListSessionsPutsTheCallersHelpersFirst(t *testing.T) {
+	h := newOAuthHarness(t)
+	token := chatFixture(t, h, "session-lead", "")
+	chatFixture(t, h, "session-helper", "session-lead")
+	chatFixture(t, h, "session-other", "")
+	if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET last_used=1,ended_at=1 WHERE id='session-helper'"); err != nil {
+		t.Fatal(err)
+	}
+	result, _ := callTool(t, mcpClient(t, h, token), "list_sessions", map[string]any{})
+	data, _ := json.Marshal(result.StructuredContent)
+	var out struct {
+		Sessions []struct{ ID, State string }
+	}
+	if err := json.Unmarshal(data, &out); err != nil || len(out.Sessions) != 3 || out.Sessions[0].ID != "session-helper" || out.Sessions[0].State != "stopped" {
+		t.Fatalf("sessions %s, %v", data, err)
+	}
+}
 
 func TestChatAgentToolsGuardrails(t *testing.T) {
 	h := newOAuthHarness(t)

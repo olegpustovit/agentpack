@@ -211,6 +211,48 @@ func TestReaperSettlesAChatWhoseWorkerDiedAndResumesItOnce(t *testing.T) {
 	}
 }
 
+// A worker that cannot save its exit (the database stayed locked) still ends its row as idle; the
+// open turn in its log is what shows the chat was cut off, so it resumes like any dead worker.
+func TestReaperResumesAChatThatEndedIdleMidTurn(t *testing.T) {
+	home := t.TempDir()
+	launched := make(chan string, 2)
+	g, _ := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
+		launched <- info.ID
+		return info.ID, nil
+	})
+	dir := seedFolder(t, home)
+	for _, id := range []string{"session-cut", "session-done"} {
+		info := session.SessionInfo{ID: id, Directory: dir, Harness: "claude", Mode: "default", Transport: "acp", AgentSessionID: "agent-" + id, ConversationState: "working", State: session.TerminalState{Running: true}}
+		if err := session.UpsertSession(t.Context(), g.store.DB, info); err != nil {
+			t.Fatal(err)
+		}
+		appendStoredEvent(t, g, id, "prompt", network.MustRawJSON(map[string]any{"text": map[string]string{"text": "go"}}))
+		if err := session.EndSession(t.Context(), g.store.DB, id, session.TerminalState{ExitCode: -1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendStoredEvent(t, g, "session-done", "turn_end", json.RawMessage(`{"stopReason":"end_turn"}`))
+	g.reapStoppedChats(t.Context())
+	g.starting.Wait()
+	select {
+	case got := <-launched:
+		if got != "session-cut" {
+			t.Fatal("resumed", got)
+		}
+	default:
+		t.Fatal("the cut-off chat did not resume")
+	}
+	select {
+	case got := <-launched:
+		t.Fatal("resumed a chat that finished its turn:", got)
+	default:
+	}
+	var notices int
+	if err := g.store.Reader.QueryRow("SELECT count(*) FROM conversation_events WHERE session_id='session-done' AND kind='notice'").Scan(&notices); err != nil || notices != 0 {
+		t.Fatal("settled chat got a stop notice", notices, err)
+	}
+}
+
 func TestResumeRestartsAStoppedChatUnderItsOwnID(t *testing.T) {
 	home := t.TempDir()
 	launched := make(chan session.SessionInfo, 2)
