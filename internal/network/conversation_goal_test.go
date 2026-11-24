@@ -384,6 +384,34 @@ func TestUserMessagePausesNativeGoal(t *testing.T) {
 	}
 }
 
+func TestSteeringKeepsCodexGoalActive(t *testing.T) {
+	conv, agent := newFakeAgentSession(t, codexGoalCommand)
+	var steered []string
+	conv.steer = func(_ context.Context, input acp.PromptInput) (bool, error) {
+		steered = append(steered, input.Text)
+		agent.log.Append("prompt", 1, PromptLogPayload(input))
+		return true, nil
+	}
+	if err := conv.SetGoal(t.Context(), "ship it", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	agent.nextPrompt(t)
+	defer func() { agent.turns <- fakeTurn{} }()
+
+	if _, err := startPrompt(t.Context(), conv, acp.PromptInput{Text: "check the logs first"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(steered, []string{"check the logs first"}) {
+		t.Fatalf("steered prompts = %q", steered)
+	}
+	if goal := goalNow(conv); goal.State != "active" || goal.LastReason != "" {
+		t.Fatalf("goal = %+v", goal)
+	}
+	if titles := goalNotices(agent.log); len(titles) != 0 || len(agent.cancels) != 0 {
+		t.Fatalf("steering produced notices %q and %d cancels", titles, len(agent.cancels))
+	}
+}
+
 // A goal check that blocks the stop with the same reason while the agent does nothing is stopped
 // after goalStopRuns blocks, once.
 func TestRepeatingNativeGoalCheckStops(t *testing.T) {

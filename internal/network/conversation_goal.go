@@ -100,12 +100,13 @@ func (cs *ConversationSession) goalNotice(title string) {
 
 const goalInterruptedNotice = "Goal paused because you interrupted"
 
-// InterruptGoal pauses an active native goal when the person sends a message: the agent's own
-// goal would otherwise block every stop until its condition holds, overriding them.
-func (cs *ConversationSession) InterruptGoal(ctx context.Context) {
+// InterruptGoal pauses an active native goal so the person's message can take over.
+// Codex can take steering input and continue pursuing its goal.
+func (cs *ConversationSession) InterruptGoal(ctx context.Context, steer bool) {
 	cs.mu.Lock()
 	goal := cs.goal
-	if goal == nil || goal.Engine != "native" || goal.State != "active" || cs.closedErr() != nil {
+	if goal == nil || goal.Engine != "native" || goal.State != "active" || cs.closedErr() != nil ||
+		steer && cs.nativeGoalPause && cs.steer != nil {
 		cs.mu.Unlock()
 		return
 	}
