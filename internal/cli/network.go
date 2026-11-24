@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"syscall"
 
@@ -344,6 +345,16 @@ func (runner Runner) runSessionSignal(arguments []string) (int, error) {
 func (runner Runner) serveGateway(ctx context.Context, home, executable, address string) (int, error) {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	// launchd, systemd and whatever process started it at boot can hand the gateway a minimal PATH,
+	// which hides the agents and Node.js its chats launch. The login shell's PATH comes first, then a
+	// POSIX login shell's: fish, say, never reads /etc/profile.d, where Nix adds its profile. Each is
+	// prepended, so the POSIX shell goes first in this list.
+	shell, _ := loginShell(ctx)
+	for _, login := range slices.Compact([]string{"/bin/sh", shell}) {
+		if path := loginShellPath(ctx, login); path != "" {
+			os.Setenv("PATH", path+string(os.PathListSeparator)+os.Getenv("PATH"))
+		}
+	}
 	options := gateway.GatewayOptions{Home: home, Address: address, PublicURL: os.Getenv("AGENTPACK_PUBLIC_URL"), Assets: gateway.WebAssets(), Version: Version}
 	options.Start = func(ctx context.Context, info session.SessionInfo, forkSessionID string) (string, error) {
 		return runner.startRemoteSession(ctx, home, executable, info, forkSessionID)

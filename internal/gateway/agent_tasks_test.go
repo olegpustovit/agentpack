@@ -308,15 +308,18 @@ func TestTaskWaitsForTheChatsBackgroundWork(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	waiting := func(value string) {
+	waiting := func(value, state string) {
 		t.Helper()
-		if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET waiting=? WHERE id='session-b'", value); err != nil {
+		if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET waiting=?,conversation_state=? WHERE id='session-b'", value, state); err != nil {
 			t.Fatal(err)
 		}
 	}
+	update := func(seq int64, kind, payload string) acp.LogEntry {
+		return acp.LogEntry{Seq: seq, Kind: kind, Payload: json.RawMessage(payload)}
+	}
 
 	asked, _, _ := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Deploy and report"})
-	waiting(`[{"kind":"shell"}]`)
+	waiting(`[{"kind":"shell"}]`, "idle")
 	appendEvents(t, h, "session-b", taskPrompt(1, asked.TaskID), message(2, "Waiting for the deploy."), turnEnd(3))
 	pass()
 	if state, result := taskRow(t, h, asked.TaskID, "out"); state != "working" || result != "Waiting for the deploy." {
@@ -331,9 +334,18 @@ func TestTaskWaitsForTheChatsBackgroundWork(t *testing.T) {
 		t.Fatalf("tasks %+v", list.Tasks)
 	}
 
-	// The deploy finishes, the chat wakes by itself, and that turn's message is the answer.
-	waiting("")
-	appendEvents(t, h, "session-b", message(4, "Deployed; all checks pass."), turnEnd(5))
+	// The deploy finishes and the chat wakes by itself, as Claude reports it: the job's task closes,
+	// a "turn" task opens and closes. Until that turn ends, nothing is running in the background, yet
+	// the chat works: still progress.
+	waiting("", "working")
+	appendEvents(t, h, "session-b", update(4, "async_task_state_update", `{"asyncTaskId":"job","state":"completed"}`),
+		update(5, "async_task_spawned", `{"asyncTaskId":"autonomous-turn-1","taskType":"turn"}`))
+	pass()
+	if state, _ := taskRow(t, h, asked.TaskID, "out"); state != "working" || len(toA()) != 0 {
+		t.Fatal("answered while the woken turn works:", state)
+	}
+	waiting("", "idle")
+	appendEvents(t, h, "session-b", message(6, "Deployed; all checks pass."), update(7, "async_task_state_update", `{"asyncTaskId":"autonomous-turn-1","state":"completed"}`))
 	pass()
 	if state, result := taskRow(t, h, asked.TaskID, "out"); state != "completed" || result != "Deployed; all checks pass." {
 		t.Fatal("answer", state, result)
@@ -344,8 +356,8 @@ func TestTaskWaitsForTheChatsBackgroundWork(t *testing.T) {
 
 	// A held task whose chat stops fails, naming the running work and keeping its last message.
 	asked, _, _ = structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Render the PDF"})
-	waiting(`[{"kind":"shell"}]`)
-	appendEvents(t, h, "session-b", taskPrompt(6, asked.TaskID), message(7, "Rendering."), turnEnd(8))
+	waiting(`[{"kind":"shell"}]`, "idle")
+	appendEvents(t, h, "session-b", taskPrompt(8, asked.TaskID), message(9, "Rendering."), turnEnd(10))
 	pass()
 	if err := session.EndSession(t.Context(), h.gateway.store.DB, "session-b", session.TerminalState{}); err != nil {
 		t.Fatal(err)
@@ -365,19 +377,36 @@ func TestTaskSurvivesAChatThatResumesAfterItsWorkerDied(t *testing.T) {
 	fakeChatWorker(t, h, "session-b")
 	asked, _, _ := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Check the links"})
 	appendEvents(t, h, "session-b", taskPrompt(1, asked.TaskID), message(2, "Checking."))
+	// A stopping agent ends its turn in an error after it exits; that is no answer.
+	appendEvents(t, h, "session-b", acp.LogEntry{Seq: 3, Kind: "agent_exit", Payload: json.RawMessage(`{}`)},
+		acp.LogEntry{Seq: 4, Kind: "turn_end", Payload: json.RawMessage(`{"stopReason":"error"}`)})
 	if err := session.EndSession(t.Context(), h.gateway.store.DB, "session-b", session.TerminalState{ExitCode: -1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.gateway.mcp.TaskPass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	// The reaper records the stop and resumes the chat.
+	if state, _ := taskRow(t, h, asked.TaskID, "in"); state != "submitted" && state != "working" {
+		t.Fatal("the stopping turn answered the task:", state)
+	}
+	// The reaper records the stop and queues a resume. A restart that takes longer than the grace
+	// (after a reboot the agent may fail to start at first) still finds the task open.
+	resume := network.PromptLogPayload(acp.PromptInput{Text: gatewaymcp.AutoResumePrompt})
+	appendEvents(t, h, "session-b", acp.LogEntry{Seq: 5, Kind: "notice", Payload: json.RawMessage(`{}`)}, acp.LogEntry{Seq: 6, Kind: "agent_exit", Payload: json.RawMessage(`{}`)},
+		acp.LogEntry{Seq: 7, TS: time.Now().UnixMilli(), Kind: "queued_prompt", Payload: resume})
+	if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET ended_at=? WHERE id='session-b'", time.Now().Add(-5*time.Minute).UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.gateway.mcp.TaskPass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if state, _ := taskRow(t, h, asked.TaskID, "in"); state != "submitted" && state != "working" {
+		t.Fatal("failed while a resume was pending:", state)
+	}
 	if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET ended_at=0 WHERE id='session-b'"); err != nil {
 		t.Fatal(err)
 	}
-	resume := acp.LogEntry{Seq: 5, Kind: "prompt", Payload: network.PromptLogPayload(acp.PromptInput{Text: "Continue where you left off."})}
-	appendEvents(t, h, "session-b", acp.LogEntry{Seq: 3, Kind: "notice", Payload: json.RawMessage(`{}`)}, acp.LogEntry{Seq: 4, Kind: "agent_exit", Payload: json.RawMessage(`{}`)},
-		resume, message(6, "All 32 links resolve."), turnEnd(7))
+	appendEvents(t, h, "session-b", acp.LogEntry{Seq: 8, Kind: "prompt", Payload: resume}, message(9, "All 32 links resolve."), turnEnd(10))
 	if err := h.gateway.mcp.TaskPass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -655,5 +684,26 @@ func TestAgentsMessageAcrossMachines(t *testing.T) {
 	one.gateway.mcpNodes = func(string) http.Handler { return http.NotFoundHandler() }
 	if _, text, failed := structured[taskAsked](t, one, tokenA, "ask", map[string]any{"session_id": "session-b", "node": idTwo, "text": "hi"}); !failed || !strings.Contains(text, "update it") {
 		t.Fatal("old peer:", text)
+	}
+}
+
+// A message another agent sends mid-turn (Claude delivers queued prompts inside a running turn)
+// shares the turn's end with the task already working: that end answers both.
+func TestMessageDeliveredMidTurnSharesTheAnswer(t *testing.T) {
+	h := newOAuthHarness(t)
+	tokenA := chatFixture(t, h, "session-a", "")
+	chatFixture(t, h, "session-b", "")
+	fakeChatWorker(t, h, "session-a")
+	fakeChatWorker(t, h, "session-b")
+	first, _, _ := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Rewrite section 3"})
+	second, _, _ := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Also keep it under 6 pages"})
+	appendEvents(t, h, "session-b", taskPrompt(1, first.TaskID), message(2, "Rewriting."), taskPrompt(3, second.TaskID), message(4, "Section 3 rewritten; 6 pages."), turnEnd(5))
+	if err := h.gateway.mcp.TaskPass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{first.TaskID, second.TaskID} {
+		if state, result := taskRow(t, h, id, "out"); state != "completed" || !strings.HasSuffix(result, "Section 3 rewritten; 6 pages.") {
+			t.Fatal(id, state, result)
+		}
 	}
 }

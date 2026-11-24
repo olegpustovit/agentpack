@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	"github.com/olegpustovit/agentpack/internal/gateway/mcp"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -405,7 +406,7 @@ func (g *Gateway) reapStoppedChatsExcept(ctx context.Context, manual string) {
 	now := time.Now()
 	rows, err := session.QuerySessions(ctx, g.store.Reader, "SELECT "+session.SessionColumns+` FROM sessions WHERE archived_at=0 AND node_id=`+state.LocalNodeSQL+`
  AND ((ended_at>0 AND transport='acp' AND (conversation_state<>'idle' OR subagents<>'' OR waiting<>'' OR json_extract(state,'$.running') OR ended_at>?2))
- OR (ended_at=0 AND last_used<?1 AND (transport<>'acp' OR conversation_state='starting')))`, session.SessionTimestamp(now.Add(-interruptedStartGrace)), session.SessionTimestamp(now.Add(-autoResumeWindow)))
+ OR (ended_at=0 AND last_used<?1 AND (transport<>'acp' OR conversation_state='starting')))`, session.SessionTimestamp(now.Add(-interruptedStartGrace)), session.SessionTimestamp(now.Add(-mcp.AutoResumeWindow)))
 	var resume []string
 	for _, info := range rows {
 		if info.EndedAt.IsZero() {
@@ -447,7 +448,7 @@ func (g *Gateway) reapStoppedChatsExcept(ctx context.Context, manual string) {
 		err = errors.Join(err, marshalErr)
 	}
 	for _, id := range resume {
-		if _, resumeErr := g.claimResume(ctx, id, autoResumePrompt, ""); resumeErr != nil && !errors.Is(resumeErr, errResumeConflict) {
+		if _, resumeErr := g.claimResume(ctx, id, mcp.AutoResumePrompt, ""); resumeErr != nil && !errors.Is(resumeErr, errResumeConflict) {
 			err = errors.Join(err, resumeErr)
 		}
 	}
@@ -458,14 +459,9 @@ func (g *Gateway) reapStoppedChatsExcept(ctx context.Context, manual string) {
 	}
 }
 
-const autoResumePrompt = "Your last turn was cut off because this machine went offline or restarted. Continue where you left off."
-
-// autoResumeWindow keeps a chat whose agent dies again right after resuming from resuming forever.
-const autoResumeWindow = 10 * time.Minute
-
 // cutOffTurn reads from the log whether a stopped chat may resume by itself: its own last prompt has
-// no turn end after it, and it has not resumed by itself within autoResumeWindow (the reaper logs
-// autoResumePrompt as the chat's queued prompt when it does).
+// no turn end after it, and it has not resumed by itself within mcp.AutoResumeWindow (the reaper logs
+// mcp.AutoResumePrompt as the chat's queued prompt when it does).
 func cutOffTurn(ctx context.Context, db *sql.DB, id string, now time.Time) (bool, error) {
 	var cut bool
 	err := db.QueryRowContext(ctx, `SELECT
@@ -475,7 +471,7 @@ func cutOffTurn(ctx context.Context, db *sql.DB, id string, now time.Time) (bool
   AND json_extract(body,'$.payload._subagent') IS NULL),0)
  AND NOT EXISTS(SELECT 1 FROM conversation_events WHERE session_id=?1 AND kind='queued_prompt'
   AND json_extract(body,'$.payload.text.text')=?2 AND json_extract(body,'$.ts')>?3)`,
-		id, autoResumePrompt, now.Add(-autoResumeWindow).UnixMilli()).Scan(&cut)
+		id, mcp.AutoResumePrompt, now.Add(-mcp.AutoResumeWindow).UnixMilli()).Scan(&cut)
 	return cut, err
 }
 

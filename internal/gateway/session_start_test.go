@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	gatewaymcp "github.com/olegpustovit/agentpack/internal/gateway/mcp"
+
 	"bytes"
 	"context"
 	"database/sql"
@@ -172,7 +174,7 @@ func TestReaperSettlesAChatWhoseWorkerDiedAndResumesItOnce(t *testing.T) {
 	g, _ = identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
 		launched <- info
 		// The resumed agent takes its prompt and dies, like a machine that drops off again.
-		appendStoredEvent(t, g, info.ID, "prompt", network.MustRawJSON(map[string]any{"text": map[string]string{"text": autoResumePrompt}}))
+		appendStoredEvent(t, g, info.ID, "prompt", network.MustRawJSON(map[string]any{"text": map[string]string{"text": gatewaymcp.AutoResumePrompt}}))
 		_, err := g.store.DB.Exec(`UPDATE sessions SET ended_at=2,conversation_state='working' WHERE id=?`, info.ID)
 		return info.ID, err
 	})
@@ -206,7 +208,7 @@ func TestReaperSettlesAChatWhoseWorkerDiedAndResumesItOnce(t *testing.T) {
 	if cut, err := cutOffTurn(t.Context(), g.store.Reader, "session-dead", time.Now()); err != nil || cut {
 		t.Fatalf("resumed again inside the window: %t, %v", cut, err)
 	}
-	if cut, err := cutOffTurn(t.Context(), g.store.Reader, "session-dead", time.Now().Add(autoResumeWindow)); err != nil || !cut {
+	if cut, err := cutOffTurn(t.Context(), g.store.Reader, "session-dead", time.Now().Add(gatewaymcp.AutoResumeWindow)); err != nil || !cut {
 		t.Fatalf("not resumed after the window: %t, %v", cut, err)
 	}
 }

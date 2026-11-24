@@ -112,11 +112,6 @@ func (runner Runner) runNetworkService(ctx context.Context, args []string) (int,
 		if !enabled {
 			return 0, nil
 		}
-		// launchd and systemd start services with a minimal PATH, which hides the agents the gateway launches.
-		shell, _ := loginShell(ctx)
-		if path := loginShellPath(ctx, shell); path != "" {
-			os.Setenv("PATH", path+string(os.PathListSeparator)+os.Getenv("PATH"))
-		}
 		executable, err := os.Executable()
 		if err != nil {
 			return 1, err

@@ -65,6 +65,11 @@ const (
 	agentTaskDeliveryWindow  = 24 * time.Hour
 	// A chat cut off mid-turn may resume by itself (the gateway's reaper, every 15 s); its task stays open that long.
 	agentTaskResumeGrace = time.Minute
+	// AutoResumePrompt is what the gateway's reaper sends a chat whose turn a dead worker cut off.
+	AutoResumePrompt = "Your last turn was cut off because this machine went offline or restarted. Continue where you left off."
+	// AutoResumeWindow keeps a chat whose agent dies again right after resuming from resuming forever;
+	// a task stays open while such a resume is pending.
+	AutoResumeWindow = 10 * time.Minute
 )
 
 func validTaskID(id string) bool {
@@ -688,24 +693,24 @@ func (m *Server) RunTasks(ctx context.Context, interval time.Duration) {
 // TaskPass marks asked tasks working once their turn starts, answers those whose turn ended
 // without reply with that turn's last message, fails those whose chat stopped,
 // and delivers answers not delivered yet. A turn that ends while the chat still has background
-// work (shell jobs, timers, asks) does not answer: its message is the task's progress until a later
-// turn ends with none left.
+// work (shell jobs, timers, asks) or already works again does not answer: its message is the task's
+// progress until a later turn ends with none left.
 func (m *Server) TaskPass(ctx context.Context) error {
 	db := m.store.DB
-	rows, err := m.store.Reader.QueryContext(ctx, `SELECT t.id,t.to_session,t.from_session,t.from_node,t.state,t.result,t.since_seq,coalesce(s.last_seq,-1),coalesce(s.ended_at,1),coalesce(s.waiting,'')
+	rows, err := m.store.Reader.QueryContext(ctx, `SELECT t.id,t.to_session,t.from_session,t.from_node,t.state,t.result,t.since_seq,coalesce(s.last_seq,-1),coalesce(s.ended_at,1),coalesce(s.waiting,''),coalesce(s.conversation_state,'')
  FROM agent_tasks t LEFT JOIN sessions s ON s.id=t.to_session WHERE t.role='in' AND t.state IN ('submitted','working') ORDER BY t.created_at`)
 	if err != nil {
 		return err
 	}
 	type open struct {
-		id, session, from, fromNode, progress, waiting string
-		state                                          taskState
-		since, last, end                               int64
+		id, session, from, fromNode, progress, waiting, chat string
+		state                                                taskState
+		since, last, end                                     int64
 	}
 	var tasks []open
 	for rows.Next() {
 		var task open
-		if err := rows.Scan(&task.id, &task.session, &task.from, &task.fromNode, &task.state, &task.progress, &task.since, &task.last, &task.end, &task.waiting); err != nil {
+		if err := rows.Scan(&task.id, &task.session, &task.from, &task.fromNode, &task.state, &task.progress, &task.since, &task.last, &task.end, &task.waiting, &task.chat); err != nil {
 			rows.Close()
 			return err
 		}
@@ -723,16 +728,19 @@ func (m *Server) TaskPass(ctx context.Context) error {
 		if previous, ok := m.agentTaskSeen[task.id]; ok && previous == task.last && task.end == 0 && task.progress == "" {
 			continue
 		}
-		started, ended, answer, err := turnAnswer(ctx, m.store.Reader, task.id, task.session, task.since)
+		turn, err := turnAnswer(ctx, m.store.Reader, task.id, task.session, task.since)
 		if err != nil {
 			failures = append(failures, err)
 			continue
 		}
+		// A stopping agent's turn ends in an error: the chat stopped before answering.
+		ended, answer := turn.ended && !(turn.cut && task.end != 0 && task.progress == ""), turn.answer
 		now := time.Now().UnixNano()
 		var state taskState
 		switch stopped := task.end != 0; {
-		case ended && !stopped && backgroundWork(task.waiting, time.Now()):
-			// Progress, not the answer: the chat wakes for its background work and answers later.
+		case ended && !stopped && !turn.next && (backgroundWork(task.waiting, time.Now()) || task.chat == string(network.StateWorking) || task.chat == string(network.StateNeedsYou)):
+			// Progress, not the answer: the chat wakes for its background work (or already woke and
+			// works) and answers later.
 			if answer != task.progress {
 				if _, err := db.ExecContext(ctx, "UPDATE agent_tasks SET state=?,result=?,updated_at=? WHERE id=? AND role='in' AND state IN ('submitted','working')", taskWorking, answer, now, task.id); err != nil {
 					failures = append(failures, err)
@@ -742,18 +750,18 @@ func (m *Server) TaskPass(ctx context.Context) error {
 			}
 			continue
 		case ended && stopped && task.progress != "":
-			state, answer = taskFailed, "The chat stopped while background work it started for this task was still running. restart_session resumes it; ask again after. Its last message:\n\n"+answer
+			state, answer = taskFailed, "The chat stopped while background work it started for this task was still running. restart_session resumes it; ask again after. Its last message:\n\n"+task.progress
 		case ended:
 			state = taskCompleted
 			if strings.TrimSpace(answer) == "" {
 				state, answer = taskFailed, "The agent ended its turn without a message."
 			}
-		case stopped && time.Since(time.Unix(0, task.end)) < agentTaskResumeGrace:
-			continue // a turn cut off by a dead worker resumes by itself, and then answers
+		case stopped && (turn.resuming || time.Since(time.Unix(0, task.end)) < agentTaskResumeGrace):
+			continue // a turn cut off by a dead worker resumes by itself (the reaper queues it), and then answers
 		case stopped:
 			state, answer = taskFailed, "The chat stopped before answering. restart_session resumes its conversation; ask again after."
 		default:
-			if started && task.state == taskSubmitted {
+			if turn.started && task.state == taskSubmitted {
 				if _, err := db.ExecContext(ctx, "UPDATE agent_tasks SET state=?,updated_at=? WHERE id=? AND role='in' AND state=?", taskWorking, now, task.id, taskSubmitted); err != nil {
 					failures = append(failures, err)
 				} else {
@@ -818,27 +826,48 @@ func taskTurn(ctx context.Context, db *sql.DB, task, session string, since int64
 	return start, end, err
 }
 
-// turnAnswer reports whether the turn that took task's message started and, once a turn after it
-// ended, what the agent wrote in the last turn that ended before another agent's message.
-func turnAnswer(ctx context.Context, db *sql.DB, task, session string, since int64) (bool, bool, string, error) {
+// turnState is where a task's turn stands in the asked chat's log.
+type turnState struct {
+	started, ended bool
+	next           bool // another agent's message reached the chat after the answering turn
+	cut            bool // that turn ended in an error or cancel, as a stopping agent's turn does
+	resuming       bool // the gateway queued an automatic resume within AutoResumeWindow
+	answer         string
+}
+
+// turnAnswer reads whether the turn that took task's message started and, once a turn after it
+// ended, what the agent wrote in the last turn that ended before another agent's message. When
+// that message arrived mid-turn, the turn they share answers both. A turn the agent started itself
+// (woken by its background work) ends with the update closing its "turn" task, not turn_end.
+func turnAnswer(ctx context.Context, db *sql.DB, task, session string, since int64) (turnState, error) {
+	var out turnState
 	start, _, err := taskTurn(ctx, db, task, session, since)
 	if err != nil || start == 0 {
-		return false, false, "", err
+		return out, err
 	}
-	// The last turn end up to the next message another agent sent this chat, and the end (or exit) before it.
+	out.started = true
 	var last, previous int64
+	var reason sql.NullString
 	err = db.QueryRowContext(ctx, `WITH stop AS (SELECT coalesce(min(seq),1<<62) AS seq FROM conversation_events WHERE session_id=?1 AND seq>?2 AND kind='prompt'
   AND json_extract(body,'$.payload.from.kind')='ask' AND json_extract(body,'$.payload.from.task')<>?3),
- ends AS (SELECT seq FROM conversation_events WHERE session_id=?1 AND seq>?2 AND seq<(SELECT seq FROM stop) AND kind='turn_end'
-  AND json_extract(body,'$.payload._subagent') IS NULL)
- SELECT coalesce(max(seq),0),coalesce((SELECT max(seq) FROM conversation_events WHERE session_id=?1 AND seq>?2 AND seq<(SELECT max(seq) FROM ends)
-  AND kind IN ('turn_end','agent_exit') AND json_extract(body,'$.payload._subagent') IS NULL),0) FROM ends`, session, start, task).Scan(&last, &previous)
+ woken AS (SELECT json_extract(body,'$.payload.asyncTaskId') AS id FROM conversation_events WHERE session_id=?1 AND seq>?2 AND kind='async_task_spawned'
+  AND json_extract(body,'$.payload.taskType')='turn'),
+ ends AS (SELECT seq,kind FROM conversation_events WHERE session_id=?1 AND seq>?2 AND json_extract(body,'$.payload._subagent') IS NULL
+  AND (kind IN ('turn_end','agent_exit') OR kind='async_task_state_update' AND json_extract(body,'$.payload.asyncTaskId') IN (SELECT id FROM woken))),
+ answered AS (SELECT coalesce((SELECT max(seq) FROM ends WHERE kind<>'agent_exit' AND seq<(SELECT seq FROM stop)),
+  (SELECT min(seq) FROM ends WHERE kind<>'agent_exit' AND seq>(SELECT seq FROM stop)),0) AS seq)
+ SELECT (SELECT seq FROM answered),coalesce((SELECT max(seq) FROM ends WHERE seq<(SELECT seq FROM answered)),0),(SELECT seq FROM stop)<1<<62,
+  (SELECT json_extract(body,'$.payload.stopReason') FROM conversation_events WHERE session_id=?1 AND seq=(SELECT seq FROM answered)),
+  EXISTS(SELECT 1 FROM conversation_events WHERE session_id=?1 AND seq>?2 AND kind='queued_prompt' AND json_extract(body,'$.payload.text.text')=?4
+   AND json_extract(body,'$.ts')>?5)`,
+		session, start, task, AutoResumePrompt, time.Now().Add(-AutoResumeWindow).UnixMilli()).Scan(&last, &previous, &out.next, &reason, &out.resuming)
 	if err != nil || last == 0 {
-		return true, false, "", err
+		return out, err
 	}
+	out.cut = reason.String == "error" || reason.String == "cancelled"
 	rows, err := db.QueryContext(ctx, "SELECT body FROM conversation_events WHERE session_id=? AND seq>=? AND seq<=? ORDER BY seq", session, max(start, previous+1), last)
 	if err != nil {
-		return true, false, "", err
+		return out, err
 	}
 	defer rows.Close()
 	var entries []acp.LogEntry
@@ -846,15 +875,16 @@ func turnAnswer(ctx context.Context, db *sql.DB, task, session string, since int
 		var body string
 		var entry acp.LogEntry
 		if err := rows.Scan(&body); err != nil {
-			return true, false, "", err
+			return out, err
 		}
 		if json.Unmarshal([]byte(body), &entry) == nil {
 			entries = append(entries, entry)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return true, false, "", err
+		return out, err
 	}
-	_, answer := helperReply(entries)
-	return true, true, answer, nil
+	out.ended = true
+	_, out.answer = helperReply(entries)
+	return out, nil
 }
