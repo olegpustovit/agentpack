@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,11 +31,12 @@ import (
 // Either way one subscription receives each transition once, whichever machine runs the session.
 
 const (
-	pushInterval     = 3 * time.Second
-	pushTTL          = 60 * 60 // seconds; a notification older than an hour is noise
-	pushMaxEndpoint  = 2048
-	pushMaxKey       = 256
-	pushSendDeadline = 10 * time.Second
+	pushInterval      = 30 * time.Second // waiting deadlines can pass without a write
+	pushHeadlessCheck = 3 * time.Second
+	pushTTL           = 60 * 60 // seconds; a notification older than an hour is noise
+	pushMaxEndpoint   = 2048
+	pushMaxKey        = 256
+	pushSendDeadline  = 10 * time.Second
 	// pushContact is the VAPID "sub" claim. Apple refuses anything but an https: or mailto: URL with
 	// HTTP 403 BadJwtToken, so it is never the gateway's loopback origin.
 	pushContact = "https://github.com/olegpustovit/agentpack"
@@ -234,9 +236,19 @@ func (g *Gateway) runPush(ctx context.Context, interval time.Duration) {
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	for {
+	headless := time.NewTicker(pushHeadlessCheck)
+	defer headless.Stop()
+	events, unsubscribe := g.listen()
+	defer func() { unsubscribe() }()
+	var lastVersion string
+	for ctx.Err() == nil {
 		passCtx, event := obs.Start(ctx, "push.notify", "session transitions")
+		version, versionErr := g.stateDigest(passCtx)
 		count, err := g.pushPass(passCtx)
+		err = errors.Join(versionErr, err)
+		if err == nil {
+			lastVersion = version
+		}
 		if err != nil && ctx.Err() == nil {
 			event.Fail(err)
 		}
@@ -244,12 +256,56 @@ func (g *Gateway) runPush(ctx context.Context, interval time.Duration) {
 			event.Set("count", count)
 			event.End()
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
+	waitForChange:
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				break waitForChange
+			case <-headless.C:
+				// A passive listener gets no local state events while the topic pollers are off.
+				g.events.mu.Lock()
+				watching := g.events.watchers.cancel != nil
+				g.events.mu.Unlock()
+				if watching {
+					continue
+				}
+			case message, open := <-events:
+				if !open {
+					unsubscribe()
+					events, unsubscribe = g.listen()
+					break waitForChange
+				}
+				if message.Topic != "state" || message.Node != "" {
+					continue
+				}
+				if pushStateChanged(message.Tables) {
+					break waitForChange
+				}
+				if message.Tables != nil {
+					continue
+				}
+				// A newly started poller has no table list; check the gap since our last read.
+			}
+			version, err := g.stateDigest(ctx)
+			if err != nil {
+				break waitForChange
+			}
+			if version != lastVersion {
+				tables := g.changedTables(ctx, lastVersion, version)
+				if tables == nil || pushStateChanged(tables) {
+					break waitForChange
+				}
+				lastVersion = version
+			}
 		}
 	}
+}
+
+func pushStateChanged(tables []string) bool {
+	return slices.Contains(tables, "sessions") || slices.Contains(tables, "push_subscriptions") ||
+		slices.Contains(tables, "mesh_settings")
 }
 
 type pushSession struct {

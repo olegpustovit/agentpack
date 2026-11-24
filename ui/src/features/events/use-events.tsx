@@ -71,7 +71,7 @@ export function useEventsConnected(): boolean {
 }
 
 function invalidate(queryClient: QueryClient, queryKey: string[]) {
-  void queryClient.invalidateQueries({ queryKey, refetchType: "active" })
+  void queryClient.invalidateQueries({ queryKey, refetchType: "active" }, { cancelRefetch: false })
 }
 
 function dispatch(queryClient: QueryClient, msg: EventMessage) {
@@ -121,7 +121,7 @@ export function EventsProvider({ children }: { children: ReactNode }) {
   const multiplexed = useQuery(configQuery).data?.conversation_events === true
   const [connected, setConnected] = useState(false)
   const [conversation, setConversation] = useState<ConversationSubscription>()
-  const catchUp = useRef(false)
+  const catchUp = useRef(true)
   const subscribe = (subscription: ConversationSubscription) => {
     setConversation(subscription)
     return () => setConversation((current) => current === subscription ? undefined : current)
@@ -130,7 +130,6 @@ export function EventsProvider({ children }: { children: ReactNode }) {
     let source: EventSource | null = null
     let retry: ReturnType<typeof setTimeout> | undefined
     let attempt = 0
-    let opened = false
     const chat = multiplexed ? conversation : undefined
     const connection = (open: boolean) => {
       setConnected(open)
@@ -154,7 +153,6 @@ export function EventsProvider({ children }: { children: ReactNode }) {
       source = new EventSource(path)
       source.onopen = () => {
         attempt = 0
-        opened = true
         connection(true)
         if (catchUp.current) {
           catchUp.current = false
@@ -196,8 +194,6 @@ export function EventsProvider({ children }: { children: ReactNode }) {
     return () => {
       document.removeEventListener("visibilitychange", onVisibility)
       close()
-      // The next stream (another chat, or none) starts after a gap.
-      if (opened) catchUp.current = true
     }
   }, [conversation, multiplexed, queryClient])
   return (

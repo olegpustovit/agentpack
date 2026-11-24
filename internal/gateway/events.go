@@ -23,6 +23,8 @@ import (
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 // eventMessage is the JSON payload of one /api/events message. Node is empty for this machine.
@@ -39,12 +41,13 @@ type eventTopic struct {
 	interval time.Duration
 	tick     <-chan time.Time
 	digest   func(context.Context) (string, error)
-	// detail, when set, describes the change between two digests.
+	// detail returns nil for unknown changes and an empty slice for changes to skip.
 	detail func(ctx context.Context, previous, current string) []string
 }
 
 const (
 	eventSubscriberBuffer = 64
+	eventIdleGrace        = 5 * time.Second
 	eventPingInterval     = 25 * time.Second
 	eventNodeInterval     = 15 * time.Second
 	eventRelayMaxDelay    = 30 * time.Second
@@ -52,19 +55,14 @@ const (
 
 var errNoPeerEvents = errors.New("peer does not serve /api/events")
 
-// eventHub fans change notifications out to /api/events streams. Pollers and peer relays run
-// only while at least one stream is subscribed. The unexported fields are test seams: nil means
-// the real sources.
+// eventHub fans change notifications out to /api/events streams. Pollers and peer relays
+// outlast a short gap between streams so a chat switch keeps their baselines.
 type eventHub struct {
-	mu   sync.Mutex
-	subs map[chan eventMessage]subscriber
-	// watchers counts subscribers that keep pollers alive; internal listeners only hear emitted events.
-	watchers int
-	cancel   context.CancelFunc
-	// browsers counts the watchers that also need peer relays. A peer's relay never does, so two
-	// gateways cannot keep each other's relays, and through them each other's pollers, alive.
-	browsers    int
-	cancelNodes context.CancelFunc
+	mu       sync.Mutex
+	subs     map[chan eventMessage]subscriber
+	watchers eventWatch
+	// A peer's relay never keeps our relays alive, so two gateways cannot keep each other watching.
+	browsers eventWatch
 
 	topics    []eventTopic
 	nodes     func(context.Context) ([]mesh.Node, error)
@@ -72,6 +70,12 @@ type eventHub struct {
 	client    *http.Client
 	checkAuth <-chan time.Time
 	recheck   <-chan time.Time // replaces conversationRecheck in tests
+}
+
+type eventWatch struct {
+	count  int
+	cancel context.CancelFunc
+	idle   *time.Timer
 }
 
 // subscribe returns a stream of events and the function that ends it. The channel is closed
@@ -103,20 +107,12 @@ func (g *Gateway) subscribeEvents(kind subscriber) (<-chan eventMessage, func())
 	}
 	h.subs[ch] = kind
 	if kind >= peerSubscriber {
-		h.watchers++
-		if h.watchers == 1 {
-			var ctx context.Context
-			ctx, h.cancel = context.WithCancel(context.Background())
-			g.startEventLoops(ctx)
-		}
+		g.addEventWatcher(&h.watchers, g.startEventLoops)
 	}
 	if kind == browserSubscriber {
-		h.browsers++
-		if h.browsers == 1 {
-			var ctx context.Context
-			ctx, h.cancelNodes = context.WithCancel(context.Background())
+		g.addEventWatcher(&h.browsers, func(ctx context.Context) {
 			obs.Go("gateway.events.nodes", func() { g.pollNodes(ctx) })
-		}
+		})
 	}
 	return ch, func() {
 		h.mu.Lock()
@@ -125,7 +121,7 @@ func (g *Gateway) subscribeEvents(kind subscriber) (<-chan eventMessage, func())
 	}
 }
 
-// dropSubscriber requires h.mu. The last subscriber leaving stops every loop.
+// dropSubscriber requires h.mu.
 func (g *Gateway) dropSubscriber(ch chan eventMessage) {
 	h := &g.events
 	kind, ok := h.subs[ch]
@@ -135,20 +131,53 @@ func (g *Gateway) dropSubscriber(ch chan eventMessage) {
 	delete(h.subs, ch)
 	close(ch)
 	if kind == browserSubscriber {
-		h.browsers--
-		if h.browsers == 0 {
-			h.cancelNodes()
-			h.cancelNodes = nil
-		}
+		g.dropEventWatcher(&h.browsers)
 	}
-	if kind == listenSubscriber {
+	if kind >= peerSubscriber {
+		g.dropEventWatcher(&h.watchers)
+	}
+}
+
+// addEventWatcher and dropEventWatcher are called with the hub locked.
+func (g *Gateway) addEventWatcher(watch *eventWatch, start func(context.Context)) {
+	watch.count++
+	if watch.idle != nil {
+		watch.idle.Stop()
+		watch.idle = nil
+	}
+	if watch.cancel != nil {
 		return
 	}
-	h.watchers--
-	if h.watchers == 0 {
-		h.cancel()
-		h.cancel = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	watch.cancel = cancel
+	if g.done != nil {
+		go func() {
+			select {
+			case <-g.done:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
 	}
+	start(ctx)
+}
+
+func (g *Gateway) dropEventWatcher(watch *eventWatch) {
+	watch.count--
+	if watch.count != 0 {
+		return
+	}
+	var idle *time.Timer
+	idle = time.AfterFunc(eventIdleGrace, func() {
+		g.events.mu.Lock()
+		defer g.events.mu.Unlock()
+		// A returning watcher can supersede a callback already waiting for the lock.
+		if watch.idle == idle {
+			watch.cancel()
+			watch.cancel, watch.idle = nil, nil
+		}
+	})
+	watch.idle = idle
 }
 
 func (g *Gateway) emitEvent(msg eventMessage) {
@@ -178,14 +207,15 @@ func (g *Gateway) startEventLoops(ctx context.Context) {
 func (g *Gateway) defaultEventTopics() []eventTopic {
 	home := g.options.Home
 	topics := []eventTopic{
-		{name: "state", interval: 2 * time.Second, digest: func(ctx context.Context) (string, error) {
-			version, err := g.store.DBVersion(ctx)
-			return strconv.FormatInt(version, 10), err
-		}, detail: g.changedTables},
+		{name: "state", interval: 2 * time.Second, digest: g.stateDigest, detail: g.changedTables},
 		// The fallback catches terminal-only state that workers do not persist.
 		{name: "sessions", interval: 30 * time.Second, digest: func(ctx context.Context) (string, error) {
-			value, err := network.SessionsIn(ctx, g.store.Reader, home)
-			return digestOf(value, err)
+			entries, err := session.QuerySessions(ctx, g.store.Reader, "SELECT "+session.SessionColumns+
+				" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND ended_at=0 AND transport<>'acp'")
+			if err != nil {
+				return "", err
+			}
+			return digestOf(network.WorkerStates(ctx, home, entries), nil)
 		}},
 		{name: "projects", interval: 10 * time.Second, digest: func(ctx context.Context) (string, error) {
 			recent, err := network.RecentIn(ctx, g.store.Reader)
@@ -215,9 +245,14 @@ func (g *Gateway) defaultEventTopics() []eventTopic {
 	return topics
 }
 
+func (g *Gateway) stateDigest(ctx context.Context) (string, error) {
+	version, err := g.store.DBVersion(ctx)
+	return strconv.FormatInt(version, 10), err
+}
+
 var streamingColumns = map[string]bool{"last_seq": true, "last_event_at": true, "conversation_truncated": true}
 
-// changedTables names the replicated tables written between two state versions; nil means unknown.
+// changedTables returns nil for an unknown change and an empty slice for streaming-only columns.
 func (g *Gateway) changedTables(ctx context.Context, previous, current string) []string {
 	from, err1 := strconv.ParseInt(previous, 10, 64)
 	to, err2 := strconv.ParseInt(current, 10, 64)
@@ -230,18 +265,20 @@ func (g *Gateway) changedTables(ctx context.Context, previous, current string) [
 	}
 	defer rows.Close()
 	tables := []string{}
+	seen := false
 	for rows.Next() {
 		var table, column string
 		if rows.Scan(&table, &column) != nil {
 			return nil
 		}
+		seen = true
 		// A streaming chat bumps these on its session row each flush; no list shows them.
 		if table == "sessions" && streamingColumns[column] || slices.Contains(tables, table) {
 			continue
 		}
 		tables = append(tables, table)
 	}
-	if rows.Err() != nil || len(tables) == 0 {
+	if rows.Err() != nil || !seen {
 		return nil
 	}
 	return tables
@@ -262,9 +299,11 @@ func (g *Gateway) pollTopic(ctx context.Context, topic eventTopic) {
 				message.Tables = topic.detail(ctx, last, digest)
 			}
 			last = digest
-			g.emitEvent(message)
-			if message.Topic == "state" && slices.Contains(message.Tables, "sessions") {
-				g.emitEvent(eventMessage{Topic: "sessions"})
+			if message.Tables == nil || len(message.Tables) != 0 {
+				g.emitEvent(message)
+				if message.Topic == "state" && slices.Contains(message.Tables, "sessions") {
+					g.emitEvent(eventMessage{Topic: "sessions"})
+				}
 			}
 		}
 		select {

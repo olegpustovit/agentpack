@@ -16,18 +16,19 @@ import (
 	"github.com/olegpustovit/agentpack/internal/session"
 )
 
-// The gateway relays the worker's derived frame to the browser beside its entries.
-func TestConversationRelayForwardsDerivedFrames(t *testing.T) {
+func TestConversationRelayUsesSSESequenceAndFallsBackToJSON(t *testing.T) {
 	home := t.TempDir()
 	g, _ := identityGateway(t, home, nil)
 	id := "session-relay"
 	if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: id, Transport: "acp"}); err != nil {
 		t.Fatal(err)
 	}
+	const legacy = `{"seq":1,"kind":"prompt","payload":{}}`
+	const modern = `{"kind":"prompt","payload":{}}`
 	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("id: 1\ndata: {\"seq\":1,\"kind\":\"prompt\",\"payload\":{}}\n\n" +
-			"event: derived\ndata: {\"conversation_state\":\"working\",\"working\":true,\"needs_you\":false,\"through\":1}\n\n"))
+		_, _ = w.Write([]byte("data: " + legacy + "\n\nid: 2\ndata: " + modern + "\n\n" +
+			"event: derived\ndata: {\"conversation_state\":\"working\",\"working\":true,\"needs_you\":false,\"through\":2}\n\nid: 3\n\n"))
 	}))
 	defer worker.Close()
 	directory := filepath.Join(home, "network", "sessions", id)
@@ -42,8 +43,10 @@ func TestConversationRelayForwardsDerivedFrames(t *testing.T) {
 		frames = append(frames, frame)
 		return true
 	})
-	if err != nil || !live || since != 1 || len(frames) != 2 || frames[0].event != "conversation" ||
-		frames[1].event != "conversation_derived" || !strings.Contains(string(frames[1].body), `"through":1`) {
+	if err != nil || !live || since != 2 || len(frames) != 3 ||
+		frames[0].event != "conversation" || frames[0].seq != 1 || string(frames[0].body) != legacy ||
+		frames[1].event != "conversation" || frames[1].seq != 2 || string(frames[1].body) != modern ||
+		frames[2].event != "conversation_derived" || !strings.Contains(string(frames[2].body), `"through":2`) {
 		t.Fatalf("since=%d live=%v err=%v frames=%+v", since, live, err, frames)
 	}
 }
