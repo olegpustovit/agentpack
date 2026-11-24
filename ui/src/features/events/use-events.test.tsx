@@ -4,8 +4,9 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createQueryClient } from "@/lib/query-client"
 import { LOCAL } from "@/lib/api"
+import { configQuery } from "@/lib/config"
 import replicated from "@/generated/replicated-tables.json"
-import { EventsProvider, STATE_FAMILIES, stateFamilies, useEventsConnected } from "./use-events"
+import { EventsProvider, STATE_FAMILIES, stateFamilies, useConversationEvents, useEventsConnected } from "./use-events"
 
 class FakeEventSource {
   static instances: FakeEventSource[] = []
@@ -15,6 +16,7 @@ class FakeEventSource {
   onopen: (() => void) | null = null
   onerror: (() => void) | null = null
   onmessage: ((event: MessageEvent<string>) => void) | null = null
+  addEventListener = vi.fn()
   constructor(readonly url: string) {
     FakeEventSource.instances.push(this)
   }
@@ -29,6 +31,7 @@ class FakeEventSource {
 let calls: string[] = []
 let connected = false
 let hidden = false
+let subscribeToChat: ReturnType<typeof useConversationEvents>
 
 const tracked = (queryKey: string[]) => ({
   queryKey,
@@ -40,6 +43,7 @@ const tracked = (queryKey: string[]) => ({
 
 function Probe() {
   connected = useEventsConnected()
+  subscribeToChat = useConversationEvents()
   useQuery(tracked(["m", "local", "sessions"]))
   useQuery(tracked(["m", "peer-1", "sessions"]))
   useQuery(tracked(["m", "local", "projects"]))
@@ -65,6 +69,8 @@ beforeEach(async () => {
   hidden = false
   Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden })
   client = createQueryClient()
+  client.setQueryData(configQuery.queryKey, { ui_build_id: "test", conversation_events: true })
+  client.setQueryData(["m", LOCAL, "sessions"], 0)
   container = document.createElement("div")
   document.body.appendChild(container)
   root = createRoot(container)
@@ -94,6 +100,15 @@ describe("event stream", () => {
     await act(async () => {
       source.emit({ topic: "sessions", node: "" })
       await flush()
+    })
+    expect(calls.sort()).toEqual(["m/local/sessions", "m/local/shells/s1"])
+  })
+
+  it("shares an in-flight sessions fetch between state and sessions events", async () => {
+    const source = FakeEventSource.instances[0]!
+    await act(async () => {
+      source.emit({ topic: "state", tables: ["sessions"] })
+      source.emit({ topic: "sessions" })
     })
     expect(calls.sort()).toEqual(["m/local/sessions", "m/local/shells/s1"])
   })
@@ -142,6 +157,36 @@ describe("event stream", () => {
       await flush()
     })
     expect(calls.sort()).toEqual(["diagnostics/issues", "m/local/projects", "m/local/sessions", "m/local/shells/s1", "m/peer-1/sessions", "nodes", "topology"])
+  })
+
+  it("refreshes restored cache data on the first open", async () => {
+    const key = ["m", LOCAL, "sessions"]
+    expect(client.getQueryData(key)).toBe(0)
+    await act(async () => FakeEventSource.instances[0]!.onopen?.())
+    expect(client.getQueryData(key)).toBe(1)
+    expect(calls).toContain("m/peer-1/sessions")
+  })
+
+  it("skips catch-up when a healthy stream reopens for a conversation switch", async () => {
+    const follow = async (sessionId: string) => {
+      await act(async () => {
+        const noop = () => {}
+        subscribeToChat!({
+          machine: LOCAL, sessionId, onEntry: noop, onTruncated: noop,
+          onGap: noop, onDerived: noop, onConnection: noop, onFallback: noop,
+        })
+      })
+      const source = FakeEventSource.instances.at(-1)!
+      expect(new URL(source.url, location.origin).searchParams.get("session")).toBe(sessionId)
+      await act(async () => source.onopen?.())
+      return source
+    }
+
+    const first = await follow("first")
+    calls = []
+    await follow("second")
+    expect(first.closed).toBe(true)
+    expect(calls).toEqual([])
   })
 
   it("reopens a stream the browser closed, backing off", async () => {

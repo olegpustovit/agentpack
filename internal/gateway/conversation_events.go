@@ -212,16 +212,28 @@ func (g *Gateway) readConversationStream(ctx context.Context, id, node string, s
 			}
 			continue
 		}
-		var header struct {
-			Seq int64 `json:"seq"`
+		var seq int64
+		if entry.LastEventID == "" {
+			var header struct {
+				Seq int64 `json:"seq"`
+			}
+			if json.Unmarshal([]byte(entry.Data), &header) != nil {
+				continue
+			}
+			seq = header.Seq
+		} else {
+			seq, err = strconv.ParseInt(entry.LastEventID, 10, 64)
+			if err != nil {
+				continue
+			}
 		}
-		if json.Unmarshal([]byte(entry.Data), &header) != nil || header.Seq <= since {
+		if entry.Data == "" || seq <= since {
 			continue
 		}
-		if !send(conversationStreamFrame{event: "conversation", seq: header.Seq, body: json.RawMessage(entry.Data)}) {
+		if !send(conversationStreamFrame{event: "conversation", seq: seq, body: json.RawMessage(entry.Data)}) {
 			return since, true, ctx.Err()
 		}
-		since = header.Seq
+		since = seq
 	}
 	return since, true, nil
 }

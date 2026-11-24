@@ -9,11 +9,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tmaxmax/go-sse"
@@ -64,17 +67,41 @@ func topicCount(messages []eventMessage, topic string) int {
 	return count
 }
 
-func TestDigestOfSessionsIncludesConversationState(t *testing.T) {
-	idle, err := digestOf([]session.SessionInfo{{ID: "s1", ConversationState: "idle", State: session.TerminalState{Running: true}}}, nil)
-	if err != nil {
-		t.Fatal(err)
+func TestSessionsTopicProbesOnlyTerminalWorkers(t *testing.T) {
+	home := t.TempDir()
+	g, _ := identityGateway(t, home, nil)
+	var chatProbes, terminalProbes atomic.Int32
+	var running atomic.Bool
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer a") {
+			chatProbes.Add(1)
+		} else {
+			terminalProbes.Add(1)
+		}
+		network.WriteJSON(w, session.TerminalState{Running: running.Load()})
+	}))
+	defer worker.Close()
+	for _, transport := range []string{"acp", "shell"} {
+		id := "session-" + transport
+		if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: id, Transport: transport}); err != nil {
+			t.Fatal(err)
+		}
+		directory := filepath.Join(home, "network", "sessions", id)
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		record := network.WorkerRecord{ID: id, Address: worker.Listener.Addr().String(), Secret: strings.Repeat(transport[:1], 64)}
+		if err := network.PublishWorkerEndpoint(directory, record); err != nil {
+			t.Fatal(err)
+		}
 	}
-	needs, err := digestOf([]session.SessionInfo{{ID: "s1", ConversationState: "needs_you", State: session.TerminalState{Running: true}}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if idle == needs {
-		t.Fatal("sessions digest must change when conversation_state changes")
+	digest := g.defaultEventTopics()[1].digest
+	before, err1 := digest(t.Context())
+	running.Store(true)
+	after, err2 := digest(t.Context())
+	if err1 != nil || err2 != nil || before == after || chatProbes.Load() != 0 || terminalProbes.Load() != 2 {
+		t.Fatalf("terminal digest changed=%v, probes (chat=%d, terminal=%d), errors %v, %v",
+			before != after, chatProbes.Load(), terminalProbes.Load(), err1, err2)
 	}
 }
 
@@ -98,32 +125,49 @@ func TestEventsEmitOnlyOnChange(t *testing.T) {
 	}
 }
 
-func TestEventsRunOnlyWhileSubscribed(t *testing.T) {
-	var polls atomic.Int64
-	topic := eventTopic{name: "sessions", interval: 2 * time.Millisecond, digest: func(context.Context) (string, error) {
-		polls.Add(1)
-		return "steady", nil
-	}}
-	g := eventsGateway([]eventTopic{topic}, nil, nil)
-	time.Sleep(30 * time.Millisecond)
-	if n := polls.Load(); n != 0 {
-		t.Fatalf("polled %d times with no subscriber", n)
-	}
-	_, unsubscribe := g.subscribe()
-	deadline := time.Now().Add(time.Second)
-	for polls.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if polls.Load() == 0 {
-		t.Fatal("subscriber did not start polling")
-	}
-	unsubscribe()
-	time.Sleep(30 * time.Millisecond)
-	stopped := polls.Load()
-	time.Sleep(50 * time.Millisecond)
-	if n := polls.Load(); n != stopped {
-		t.Fatalf("polling continued after last unsubscribe: %d -> %d", stopped, n)
-	}
+func TestEventsKeepPollersAcrossShortSubscriberGaps(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var polls, nodePolls atomic.Int32
+		ticks := make(chan time.Time, 1)
+		topic := eventTopic{name: "state", tick: ticks, digest: func(context.Context) (string, error) {
+			return strconv.Itoa(int(polls.Add(1))), nil
+		}, detail: func(context.Context, string, string) []string { return []string{"users"} }}
+		g := eventsGateway([]eventTopic{topic}, func(context.Context) ([]mesh.Node, error) {
+			nodePolls.Add(1)
+			return nil, nil
+		}, nil)
+		_, unsubscribe := g.subscribe()
+		synctest.Wait()
+		unsubscribe()
+		time.Sleep(eventIdleGrace - time.Second)
+		reopened, stop := g.subscribe()
+		defer func() {
+			stop()
+			time.Sleep(eventIdleGrace)
+			synctest.Wait()
+		}()
+		synctest.Wait()
+		if polls.Load() != 1 || nodePolls.Load() != 1 {
+			t.Fatalf("reopening restarted pollers: state=%d nodes=%d", polls.Load(), nodePolls.Load())
+		}
+		time.Sleep(time.Second) // the original grace deadline
+		ticks <- time.Time{}
+		synctest.Wait()
+		if polls.Load() != 2 || len(reopened) != 1 {
+			t.Fatal("the returning subscriber did not receive the next state change")
+		}
+		if got := <-reopened; got.Topic != "state" || !reflect.DeepEqual(got.Tables, []string{"users"}) {
+			t.Fatalf("state event lost its baseline: %+v", got)
+		}
+		stop()
+		time.Sleep(eventIdleGrace)
+		synctest.Wait()
+		ticks <- time.Time{}
+		synctest.Wait()
+		if polls.Load() != 2 {
+			t.Fatalf("polled %d times after the final grace elapsed", polls.Load())
+		}
+	})
 }
 
 func TestEventsRelayPeerDirectEventsOnly(t *testing.T) {
@@ -143,6 +187,9 @@ func TestEventsRelayPeerDirectEventsOnly(t *testing.T) {
 	target := func(context.Context, string) (*url.URL, error) { return url.Parse(peer.URL) }
 	nodes := func(context.Context) ([]mesh.Node, error) { return []mesh.Node{{ID: "peer1", Name: "peer1"}}, nil }
 	g := eventsGateway(nil, nodes, target)
+	shutdown := make(chan struct{})
+	g.done = shutdown
+	defer close(shutdown)
 	ch, unsubscribe := g.subscribe()
 	defer unsubscribe()
 	messages := collectEvents(ch, 300*time.Millisecond)
@@ -241,35 +288,37 @@ func TestEventsStreamClosesOnLogout(t *testing.T) {
 }
 
 func TestInternalListenersDoNotKeepPollersRunning(t *testing.T) {
-	var polls atomic.Int32
-	topic := eventTopic{name: "sessions", interval: time.Millisecond, digest: func(context.Context) (string, error) {
-		polls.Add(1)
-		return "", nil
-	}}
-	g := eventsGateway([]eventTopic{topic}, nil, nil)
-	heard, stopListening := g.listen()
-	defer stopListening()
-	time.Sleep(20 * time.Millisecond)
-	if polls.Load() != 0 {
-		t.Fatal("an internal listener started the pollers")
-	}
-	_, unsubscribe := g.subscribe()
-	for polls.Load() == 0 {
-		time.Sleep(time.Millisecond)
-	}
-	g.emitEvent(eventMessage{Topic: "replication"})
-	for msg := range heard {
-		if msg.Topic == "replication" {
-			break
+	synctest.Test(t, func(t *testing.T) {
+		var polls atomic.Int32
+		topic := eventTopic{name: "sessions", interval: time.Second, digest: func(context.Context) (string, error) {
+			polls.Add(1)
+			return "", nil
+		}}
+		g := eventsGateway([]eventTopic{topic}, nil, nil)
+		heard, stopListening := g.listen()
+		defer stopListening()
+		synctest.Wait()
+		if polls.Load() != 0 {
+			t.Fatal("an internal listener started the pollers")
 		}
-	}
-	unsubscribe()
-	time.Sleep(5 * time.Millisecond)
-	settled := polls.Load()
-	time.Sleep(20 * time.Millisecond)
-	if polls.Load() != settled {
-		t.Fatal("pollers kept running for an internal listener after the last stream left")
-	}
+		_, unsubscribe := g.subscribe()
+		synctest.Wait()
+		g.emitEvent(eventMessage{Topic: "replication"})
+		for msg := range heard {
+			if msg.Topic == "replication" {
+				break
+			}
+		}
+		unsubscribe()
+		time.Sleep(eventIdleGrace)
+		synctest.Wait()
+		settled := polls.Load()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if polls.Load() != settled {
+			t.Fatal("pollers kept running for an internal listener after the last stream left")
+		}
+	})
 }
 
 func TestStateEventsNameTheTablesThatChanged(t *testing.T) {
@@ -314,6 +363,59 @@ func TestStreamingProgressOnASessionRowIsNotASessionsChange(t *testing.T) {
 	after, _ := auth.store.DBVersion(t.Context())
 	if tables := g.changedTables(t.Context(), strconv.FormatInt(before, 10), strconv.FormatInt(after, 10)); !reflect.DeepEqual(tables, []string{"conversation_events"}) {
 		t.Fatalf("a streamed chunk reported %v", tables)
+	}
+}
+
+func TestStatePollSkipsStreamingOnlyChangesAndAdvances(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var versions []string
+	ticks := make(chan time.Time, 3)
+	for _, statement := range []string{
+		"INSERT INTO sessions(id) VALUES ('session-progress')",
+		"UPDATE sessions SET last_seq=1,last_event_at=1,conversation_truncated=1 WHERE id='session-progress'",
+		"UPDATE sessions SET conversation_state='working' WHERE id='session-progress'",
+	} {
+		if _, err := g.store.DB.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+		version, err := g.store.DBVersion(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		versions = append(versions, strconv.FormatInt(version, 10))
+		ticks <- time.Time{}
+	}
+	topic := g.defaultEventTopics()[0]
+	topic.tick = ticks
+	var next int
+	topic.digest = func(context.Context) (string, error) {
+		if next == len(versions) {
+			cancel()
+			return "", ctx.Err()
+		}
+		version := versions[next]
+		next++
+		return version, nil
+	}
+	detail := topic.detail
+	topic.detail = func(ctx context.Context, previous, current string) []string {
+		if current == versions[2] && previous != versions[1] {
+			t.Errorf("last version = %s, want %s", previous, versions[1])
+		}
+		return detail(ctx, previous, current)
+	}
+	events, unsubscribe := g.listen()
+	g.pollTopic(ctx, topic)
+	unsubscribe()
+	var got []eventMessage
+	for msg := range events {
+		got = append(got, msg)
+	}
+	want := []eventMessage{{Topic: "state"}, {Topic: "state", Tables: []string{"sessions"}}, {Topic: "sessions"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("events = %+v, want %+v", got, want)
 	}
 }
 
@@ -412,36 +514,37 @@ func TestSessionTableChangesEmitSessionsWithoutWorkerPoll(t *testing.T) {
 // A peer's relay runs this machine's pollers but never its own relays, so two gateways with no
 // browser open cannot keep each other's loops alive.
 func TestPeerSubscriberDoesNotRelay(t *testing.T) {
-	polled, listed := make(chan struct{}, 1), make(chan struct{}, 1)
-	topic := eventTopic{name: "sessions", interval: time.Hour, digest: func(context.Context) (string, error) {
-		select {
-		case polled <- struct{}{}:
-		default:
+	synctest.Test(t, func(t *testing.T) {
+		var polls, nodePolls atomic.Int32
+		topic := eventTopic{name: "sessions", interval: time.Second, digest: func(context.Context) (string, error) {
+			polls.Add(1)
+			return "steady", nil
+		}}
+		g := eventsGateway([]eventTopic{topic}, func(context.Context) ([]mesh.Node, error) {
+			nodePolls.Add(1)
+			return nil, nil
+		}, nil)
+		_, unsubscribePeer := g.subscribeEvents(peerSubscriber)
+		defer func() {
+			unsubscribePeer()
+			time.Sleep(eventIdleGrace)
+			synctest.Wait()
+		}()
+		synctest.Wait()
+		if polls.Load() != 1 || nodePolls.Load() != 0 {
+			t.Fatalf("peer subscriber started %d polls and %d node polls, want 1 and 0", polls.Load(), nodePolls.Load())
 		}
-		return "steady", nil
-	}}
-	g := eventsGateway([]eventTopic{topic}, func(context.Context) ([]mesh.Node, error) {
-		select {
-		case listed <- struct{}{}:
-		default:
+		_, unsubscribeBrowser := g.subscribe()
+		defer unsubscribeBrowser()
+		synctest.Wait()
+		if nodePolls.Load() != 1 {
+			t.Fatal("the browser did not start relays")
 		}
-		return nil, nil
-	}, nil)
-	_, unsubscribePeer := g.subscribeEvents(peerSubscriber)
-	defer unsubscribePeer()
-	<-polled
-	g.events.mu.Lock()
-	relaying := g.events.cancelNodes != nil
-	g.events.mu.Unlock()
-	if relaying {
-		t.Fatal("a peer subscriber started peer relays")
-	}
-	_, unsubscribeBrowser := g.subscribe()
-	<-listed
-	unsubscribeBrowser()
-	g.events.mu.Lock()
-	defer g.events.mu.Unlock()
-	if g.events.cancelNodes != nil || g.events.cancel == nil {
-		t.Fatalf("browser leaving must stop relays only: relays=%v pollers=%v", g.events.cancelNodes != nil, g.events.cancel != nil)
-	}
+		unsubscribeBrowser()
+		time.Sleep(eventNodeInterval)
+		synctest.Wait()
+		if nodePolls.Load() != 1 || polls.Load() <= 1 {
+			t.Fatalf("browser leaving must stop relays only: node polls=%d polls=%d", nodePolls.Load(), polls.Load())
+		}
+	})
 }
