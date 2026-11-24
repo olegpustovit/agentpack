@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/olegpustovit/agentpack/internal/database"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 type EntryRecord struct {
@@ -26,7 +26,7 @@ func UpsertEntry(cacheKey string, record EntryRecord, aliases []string) error {
 	if err != nil {
 		return fmt.Errorf("serialize cache entry: %w", err)
 	}
-	database, err := database.OpenCache(false)
+	database, err := state.OpenCacheIndex(false)
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func AliasesForGitHubEntry(owner, repo, inRepoPath, packageName string) []string
 }
 
 func viewDatabase(view func(*sql.DB) error) error {
-	database, err := database.OpenCache(true)
+	database, err := state.OpenCacheIndex(true)
 	if err != nil {
 		return err
 	}

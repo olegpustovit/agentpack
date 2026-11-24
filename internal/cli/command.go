@@ -18,8 +18,7 @@ import (
 )
 
 // Execute runs agentpack through Cobra's command model and Fang's terminal
-// presentation. Runner.Run remains the behavior boundary; the command model
-// owns discovery, contextual help, completion, version, and error rendering.
+// presentation, including help, completion, version, and error rendering.
 func (runner Runner) Execute(ctx context.Context, arguments []string) (int, error) {
 	ctx = obs.ProcessTrace(ctx)
 	ctx = gateway.WithPeerCache(ctx, "")

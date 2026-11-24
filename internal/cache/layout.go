@@ -57,19 +57,19 @@ func CodexPluginManifestPath(root string) string {
 }
 
 func HasPluginManifest(root string) bool {
-	return hasNormalizedPluginManifest(root) || regularFile(filepath.Join(root, ".omp-plugin", "plugin.json"))
+	return hasNormalizedPluginManifest(root) || paths.IsRegularFile(filepath.Join(root, ".omp-plugin", "plugin.json"))
 }
 
 func hasNormalizedPluginManifest(root string) bool {
-	return regularFile(ClaudePluginManifestPath(root)) ||
-		regularFile(CursorPluginManifestPath(root)) ||
-		regularFile(CodexPluginManifestPath(root))
+	return paths.IsRegularFile(ClaudePluginManifestPath(root)) ||
+		paths.IsRegularFile(CursorPluginManifestPath(root)) ||
+		paths.IsRegularFile(CodexPluginManifestPath(root))
 }
 
 func IsPackageRoot(root string) bool {
-	return regularFile(filepath.Join(root, "SKILL.md")) ||
+	return paths.IsRegularFile(filepath.Join(root, "SKILL.md")) ||
 		HasPluginManifest(root) ||
-		regularFile(filepath.Join(root, paths.ManifestName)) ||
+		paths.IsRegularFile(filepath.Join(root, paths.ManifestName)) ||
 		hasMarketplaceManifest(root)
 }
 
@@ -277,18 +277,13 @@ func isExitCode(err error, code int) bool {
 }
 
 func hasMarketplaceManifest(root string) bool {
-	if regularFile(filepath.Join(root, ".omp-plugin", "marketplace.json")) {
+	if paths.IsRegularFile(filepath.Join(root, ".omp-plugin", "marketplace.json")) {
 		return true
 	}
 	for _, relative := range marketplaceManifestPaths {
-		if regularFile(filepath.Join(root, relative)) {
+		if paths.IsRegularFile(filepath.Join(root, relative)) {
 			return true
 		}
 	}
 	return false
-}
-
-func regularFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
 }

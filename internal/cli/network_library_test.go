@@ -37,7 +37,7 @@ func TestGatewayLibrarySaveCaptureRestore(t *testing.T) {
 	runner := NewRunner()
 	runner.Stdout, runner.Stderr = io.Discard, io.Discard
 	ctx := context.Background()
-	if code, err := runner.Run(ctx, []string{"env", "bind", root, "--project", workspace}); err != nil || code != 0 {
+	if code, err := runner.Execute(ctx, []string{"env", "bind", root, "--project", workspace}); err != nil || code != 0 {
 		t.Fatalf("bind: %d %v", code, err)
 	}
 	library, err := runner.networkLibrary(home)
@@ -69,7 +69,7 @@ func TestGatewayLibrarySaveCaptureRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if code, err := runner.Run(ctx, []string{"--env", root, "--workspace", workspace, "sync"}); err != nil || code != 0 {
+		if code, err := runner.Execute(ctx, []string{"--env", root, "--workspace", workspace, "sync"}); err != nil || code != 0 {
 			t.Fatalf("capture sync: %d %v", code, err)
 		}
 	}

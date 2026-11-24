@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 var pluginManifestPaths = []string{
@@ -74,7 +76,7 @@ func materializeSinglePluginMarketplace(root string) (bool, error) {
 	}
 	for _, spec := range specs {
 		manifestPath := filepath.Join(root, spec.relativePath)
-		if !regularFile(manifestPath) {
+		if !paths.IsRegularFile(manifestPath) {
 			continue
 		}
 		var document marketplaceDocument
@@ -258,7 +260,7 @@ func validatePluginSource(source, expectedName, marketplace string) error {
 	found := false
 	for _, relative := range pluginManifestPaths {
 		manifestPath := filepath.Join(source, relative)
-		if !regularFile(manifestPath) {
+		if !paths.IsRegularFile(manifestPath) {
 			continue
 		}
 		found = true
@@ -320,9 +322,9 @@ func readJSON(path string, destination any) error {
 	return nil
 }
 
-func hasAnyRelativeFile(root string, paths []string) bool {
-	for _, relative := range paths {
-		if regularFile(filepath.Join(root, relative)) {
+func hasAnyRelativeFile(root string, relatives []string) bool {
+	for _, relative := range relatives {
+		if paths.IsRegularFile(filepath.Join(root, relative)) {
 			return true
 		}
 	}

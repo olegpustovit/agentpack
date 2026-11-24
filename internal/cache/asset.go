@@ -7,6 +7,7 @@ import (
 
 	githubsource "github.com/olegpustovit/agentpack/internal/github"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func DependencyKey(module, owner, repo, path string) string {
@@ -30,7 +31,7 @@ func ClassifyMaterialized(root, displayURL string, source githubsource.Source, c
 			return lockfile.Package{}, err
 		}
 		kind = lockfile.PackagePlugin
-	} else if !regularFile(filepath.Join(root, "SKILL.md")) {
+	} else if !paths.IsRegularFile(filepath.Join(root, "SKILL.md")) {
 		return lockfile.Package{}, fmt.Errorf("invalid cache layout: %s is not a package: it has no SKILL.md, plugin manifest (.claude-plugin, .cursor-plugin, .codex-plugin or .omp-plugin), agentpack.toml or marketplace manifest", root)
 	}
 	module := ""

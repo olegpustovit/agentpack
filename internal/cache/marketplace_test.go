@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 func writePlugin(t *testing.T, root, harness, name string) {
@@ -55,7 +57,7 @@ func TestMarketplaceMergesProvidersInDeterministicPriority(t *testing.T) {
 		t.Fatalf("portable conflict winner = %q, %v", body, err)
 	}
 	for _, path := range []string{".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".codex-plugin/plugin.json", "rules/paddle.mdc", "assets/logo.svg"} {
-		if !regularFile(filepath.Join(root, filepath.FromSlash(path))) {
+		if !paths.IsRegularFile(filepath.Join(root, filepath.FromSlash(path))) {
 			t.Fatalf("merged marketplace missing %s", path)
 		}
 	}
@@ -117,7 +119,7 @@ func TestNormalizeCodexOnlyPluginSynthesizesAllManifestsAndMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{ClaudePluginManifestPath(root), CursorPluginManifestPath(root), CodexPluginManifestPath(root), filepath.Join(root, "mcp.json")} {
-		if !regularFile(path) {
+		if !paths.IsRegularFile(path) {
 			t.Fatalf("normalization missing %s", path)
 		}
 	}
@@ -133,7 +135,7 @@ func TestNormalizeAgentpackManifestOnlySynthesizesAllPluginManifests(t *testing.
 		t.Fatal(err)
 	}
 	for _, path := range []string{ClaudePluginManifestPath(root), CursorPluginManifestPath(root), CodexPluginManifestPath(root)} {
-		if !regularFile(path) {
+		if !paths.IsRegularFile(path) {
 			t.Fatalf("normalization missing %s", path)
 		}
 	}
@@ -153,7 +155,7 @@ func TestCopyPackageDirToCacheUsesContentAddressedDestination(t *testing.T) {
 	if len(key) != 64 || len(commit) != 40 || filepath.Base(destination) != key {
 		t.Fatalf("copy result = %q, %q, %q", key, commit, destination)
 	}
-	if !regularFile(filepath.Join(destination, "SKILL.md")) {
+	if !paths.IsRegularFile(filepath.Join(destination, "SKILL.md")) {
 		t.Fatal("cached SKILL.md missing")
 	}
 }

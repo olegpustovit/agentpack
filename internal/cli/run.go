@@ -39,22 +39,6 @@ func NewRunner() Runner {
 	return Runner{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin, Service: packSync.NewService()}
 }
 
-// Run executes one command line without Fang's rendering; Execute is the
-// terminal entry point.
-func (runner Runner) Run(ctx context.Context, arguments []string) (int, error) {
-	exitCode := 0
-	root := runner.rootCommand(arguments, &exitCode)
-	root.SetArgs(arguments)
-	root.SetIn(runner.Stdin)
-	root.SetOut(runner.Stdout)
-	root.SetErr(runner.Stderr)
-	err := root.ExecuteContext(ctx)
-	if err != nil && exitCode == 0 {
-		exitCode = 2
-	}
-	return exitCode, err
-}
-
 // runLauncher starts a harness. Its arguments belong to the harness, so the
 // product-owned extractor reads only agentpack's own options out of them.
 func (runner Runner) runLauncher(ctx context.Context, arguments []string) (int, error) {

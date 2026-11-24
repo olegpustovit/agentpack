@@ -61,10 +61,10 @@ func TestMCPAddRemoteWritesManifest(t *testing.T) {
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	root := t.TempDir()
 	runner := NewRunner()
-	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "init"}); err != nil || code != 0 {
+	if code, err := runner.Execute(context.Background(), []string{"--project-root", root, "init"}); err != nil || code != 0 {
 		t.Fatalf("init code=%d err=%v", code, err)
 	}
-	code, err := runner.Run(context.Background(), []string{"--project-root", root, "mcp", "add", "rf", "--url", "https://researcher.microapps.space/mcp", "--header", "X-Key=v"})
+	code, err := runner.Execute(context.Background(), []string{"--project-root", root, "mcp", "add", "rf", "--url", "https://researcher.microapps.space/mcp", "--header", "X-Key=v"})
 	if err != nil || code != 0 {
 		t.Fatalf("mcp add code=%d err=%v", code, err)
 	}
@@ -85,7 +85,7 @@ func TestGatewayMCPInstallMatchesMCPAdd(t *testing.T) {
 	root := t.TempDir()
 	runner := NewRunner()
 	runner.Stdout, runner.Stderr = io.Discard, io.Discard
-	if code, err := runner.Run(context.Background(), []string{"--project-root", root, "init"}); err != nil || code != 0 {
+	if code, err := runner.Execute(context.Background(), []string{"--project-root", root, "init"}); err != nil || code != 0 {
 		t.Fatalf("init code=%d err=%v", code, err)
 	}
 	for _, bad := range []registry.MCPServerInput{{Name: "x"}, {Name: "x", Command: "npx", URL: "https://e.com"}, {Name: "x", Command: "npx", Type: "sse"}, {Name: "x", URL: "https://e.com", Args: []string{"a"}}} {

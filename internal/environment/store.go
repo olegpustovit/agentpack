@@ -11,7 +11,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
 	"github.com/olegpustovit/agentpack/internal/paths"
-	"github.com/olegpustovit/agentpack/internal/slug"
 )
 
 // Root returns $AGENTPACK_HOME/environments.
@@ -25,7 +24,7 @@ func Dir(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cleaned := slug.DashedLower(strings.TrimSpace(name))
+	cleaned := paths.DashedLower(strings.TrimSpace(name))
 	if cleaned == "" {
 		return "", fmt.Errorf("environment name is required")
 	}
@@ -134,7 +133,7 @@ func Init(name, destination, fromProject string) (string, error) {
 	if _, err := lockfile.Load(temporary); err != nil {
 		return "", err
 	}
-	if regularFile(filepath.Join(temporary, "contract.json")) {
+	if paths.IsRegularFile(filepath.Join(temporary, "contract.json")) {
 		if _, err := LoadContract(filepath.Join(temporary, "contract.json")); err != nil {
 			return "", err
 		}
@@ -185,7 +184,7 @@ func List() ([]string, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		if regularFile(filepath.Join(root, entry.Name(), paths.ManifestName)) || regularFile(filepath.Join(root, entry.Name(), paths.LockfileName)) {
+		if paths.IsRegularFile(filepath.Join(root, entry.Name(), paths.ManifestName)) || paths.IsRegularFile(filepath.Join(root, entry.Name(), paths.LockfileName)) {
 			names = append(names, entry.Name())
 		}
 	}
@@ -203,7 +202,7 @@ func ResolveRef(ref string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if !regularFile(paths.ManifestPath(path)) && !regularFile(paths.LockPath(path)) {
+		if !paths.IsRegularFile(paths.ManifestPath(path)) && !paths.IsRegularFile(paths.LockPath(path)) {
 			return "", fmt.Errorf("%w from %s", paths.ErrProjectNotFound, path)
 		}
 		return path, nil
@@ -212,13 +211,8 @@ func ResolveRef(ref string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !regularFile(paths.ManifestPath(dir)) && !regularFile(paths.LockPath(dir)) {
+	if !paths.IsRegularFile(paths.ManifestPath(dir)) && !paths.IsRegularFile(paths.LockPath(dir)) {
 		return "", fmt.Errorf("unknown environment %q (expected %s)", ref, dir)
 	}
 	return dir, nil
-}
-
-func regularFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
 }

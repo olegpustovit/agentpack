@@ -1,6 +1,13 @@
 package state
 
-import "testing"
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/binary"
+	"fmt"
+	"testing"
+)
 
 func TestReplicatedTablesTrackChangesAndLocalTablesStayLocal(t *testing.T) {
 	store, err := Open(t.TempDir())
@@ -77,4 +84,29 @@ func TestReplicationVersionIsPinned(t *testing.T) {
 	if current() == base {
 		t.Fatal("a replicated column did not change the replication version")
 	}
+}
+
+func replicationVersion(ctx context.Context, db *sql.DB) (int, error) {
+	rows, err := db.QueryContext(ctx, `SELECT t.name,c.name,c.type,c."notnull",coalesce(c.dflt_value,''),c.pk
+ FROM sqlite_schema t JOIN pragma_table_info(t.name) c
+ WHERE t.type='table' AND EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name=t.name||'__crsql_clock')
+ ORDER BY t.name,c.name`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	digest := sha256.New()
+	for rows.Next() {
+		var table, column, kind, defaultValue string
+		var notNull, pk int
+		if err := rows.Scan(&table, &column, &kind, &notNull, &defaultValue, &pk); err != nil {
+			return 0, err
+		}
+		fmt.Fprintf(digest, "%s\x00%s\x00%s\x00%d\x00%s\x00%d\n", table, column, kind, notNull, defaultValue, pk)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	// Bit 30 keeps the value apart from the migration counts older peers send, which they read as Needs update.
+	return int(binary.BigEndian.Uint32(digest.Sum(nil))&0x3fffffff | 0x40000000), nil
 }

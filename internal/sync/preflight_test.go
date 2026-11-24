@@ -223,7 +223,7 @@ func TestRestoreFrozenLeavesLockBytesUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := NewService().RestoreFrozen(context.Background(), definition); err != nil {
+	if err := NewService().RestoreFrozenOptions(context.Background(), definition, SyncOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(paths.LockPath(definition))
@@ -258,7 +258,7 @@ func TestRestoreFrozenFailsMissingInputWithoutLockChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = NewService().RestoreFrozen(context.Background(), definition)
+	err = NewService().RestoreFrozenOptions(context.Background(), definition, SyncOptions{})
 	if err == nil {
 		t.Fatal("expected missing-input failure")
 	}

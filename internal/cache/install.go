@@ -97,7 +97,7 @@ func stage(pkg lockfile.Package, fill func(string) error) (temporary, digest str
 	if err = NormalizePluginLayout(directory); err != nil {
 		return "", "", err
 	}
-	if !HasPluginManifest(directory) && !regularFile(filepath.Join(directory, "SKILL.md")) {
+	if !HasPluginManifest(directory) && !paths.IsRegularFile(filepath.Join(directory, "SKILL.md")) {
 		return "", "", fmt.Errorf("invalid cache layout: %s is not a package: it has no SKILL.md, plugin manifest (.claude-plugin, .cursor-plugin, .codex-plugin or .omp-plugin), agentpack.toml or marketplace manifest", describe(pkg))
 	}
 	if digest, err = TreeDigest(directory); err != nil {

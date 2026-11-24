@@ -11,7 +11,7 @@ import (
 )
 
 func NormalizePluginLayout(root string) error {
-	if !HasPluginManifest(root) && !regularFile(filepath.Join(root, "SKILL.md")) && !regularFile(filepath.Join(root, paths.ManifestName)) {
+	if !HasPluginManifest(root) && !paths.IsRegularFile(filepath.Join(root, "SKILL.md")) && !paths.IsRegularFile(filepath.Join(root, paths.ManifestName)) {
 		if _, err := materializeSinglePluginMarketplace(root); err != nil {
 			return err
 		}
@@ -31,7 +31,7 @@ func NormalizePluginLayout(root string) error {
 	}
 	var source string
 	for _, candidate := range manifests {
-		if regularFile(candidate.path) {
+		if paths.IsRegularFile(candidate.path) {
 			source = candidate.path
 			break
 		}
@@ -40,7 +40,7 @@ func NormalizePluginLayout(root string) error {
 		return nil
 	}
 	for _, target := range manifests {
-		if !regularFile(target.path) {
+		if !paths.IsRegularFile(target.path) {
 			if err := synthesizePluginManifest(root, source, target.directory); err != nil {
 				return err
 			}
@@ -48,7 +48,7 @@ func NormalizePluginLayout(root string) error {
 	}
 	legacyMCP := filepath.Join(root, ".mcp.json")
 	canonicalMCP := filepath.Join(root, "mcp.json")
-	if regularFile(legacyMCP) && !regularFile(canonicalMCP) {
+	if paths.IsRegularFile(legacyMCP) && !paths.IsRegularFile(canonicalMCP) {
 		if err := copyFile(legacyMCP, canonicalMCP); err != nil {
 			return err
 		}

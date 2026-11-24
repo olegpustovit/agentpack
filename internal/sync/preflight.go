@@ -368,7 +368,7 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 			return report, fmt.Errorf("load contract: %w", inputError(err))
 		}
 		applyContract(&report, contract)
-	} else if path := filepath.Join(definitionRoot, "contract.json"); regularFile(path) {
+	} else if path := filepath.Join(definitionRoot, "contract.json"); paths.IsRegularFile(path) {
 		contract, err := environment.LoadContract(path)
 		if err != nil {
 			return report, fmt.Errorf("load contract: %w", inputError(err))
@@ -381,13 +381,8 @@ func (service Service) Preflight(definitionRoot string, options PreflightOptions
 	return report, nil
 }
 
-// RestoreFrozen ensures locked cache trees exist and rebuilds staging without
+// RestoreFrozenOptions ensures locked cache trees exist and rebuilds staging without
 // re-resolving pins or rewriting pack.lock. Missing locked inputs fail hard.
-func (service Service) RestoreFrozen(ctx context.Context, definitionRoot string) error {
-	return service.RestoreFrozenOptions(ctx, definitionRoot, SyncOptions{})
-}
-
-// RestoreFrozenOptions is RestoreFrozen with workspace / strict-external controls.
 func (service Service) RestoreFrozenOptions(ctx context.Context, definitionRoot string, options SyncOptions) error {
 	options.Frozen = true
 	options.UpdateLock = false
@@ -1395,11 +1390,6 @@ func overallStatus(report environment.Report) string {
 	default:
 		return "ready"
 	}
-}
-
-func regularFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
 }
 
 func collectHookFindings(workspace, definitionRoot string, lock lockfile.PackLock, effective mode.Effective, target base.Target) ([]environment.Finding, error) {

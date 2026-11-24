@@ -71,14 +71,6 @@ func StagePackOverlay(lock lockfile.PackLock, roots []HarnessRoot, effective mod
 	return plans, nil
 }
 
-func stageSourceTree(sourceRoot string, roots []HarnessRoot, bareSkillName, module string, effective mode.Effective) error {
-	plan, err := PlanPackageTree(sourceRoot, module, bareSkillName, effective, roots, bareSkillName == "")
-	if err != nil {
-		return err
-	}
-	return ApplyPackageTreePlan(plan, roots)
-}
-
 // ConvertedNames names the skills that a package's commands, agents and rules
 // become on a target without those kinds. An item keeps its own name when it
 // is free; otherwise it gets the name followed by its kind (review-command),
@@ -146,7 +138,8 @@ func SkillIsShadowed(skill lockfile.Package, plugins []lockfile.Package) bool {
 	return false
 }
 
-func copyFile(source, destination string) error {
+// copyStagedFile replaces the destination so it never overwrites a shared hard link.
+func copyStagedFile(source, destination string) error {
 	info, err := os.Stat(source)
 	if err != nil {
 		return fmt.Errorf("inspect %s: %w", source, err)

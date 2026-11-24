@@ -26,7 +26,7 @@ func TestDefinitionMutationChild(t *testing.T) {
 	runner := NewRunner()
 	runner.Stdout = io.Discard
 	fmt.Fprintln(os.Stdout, "READY")
-	code, err := runner.Run(context.Background(), []string{"--project-root", os.Getenv("AGENTPACK_MUTATION_ROOT"), "--quiet", "mode", "create", name})
+	code, err := runner.Execute(context.Background(), []string{"--project-root", os.Getenv("AGENTPACK_MUTATION_ROOT"), "--quiet", "mode", "create", name})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

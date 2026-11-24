@@ -24,7 +24,7 @@ func TestPlainFolderLaunchLeavesProjectFilesAbsent(t *testing.T) {
 	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
 
 	service := NewService()
-	if _, _, err := service.SyncForLaunch(t.Context(), project, "", base.Claude); err != nil {
+	if _, _, err := service.SyncForLaunchOptions(t.Context(), project, SyncOptions{Target: new(base.Claude)}); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{paths.LockPath(project), paths.ManifestPath(project)} {
@@ -99,7 +99,7 @@ func TestSyncForLaunchUsesVerifiedFastPath(t *testing.T) {
 		}
 	}
 	service := NewService()
-	if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", base.Claude); err != nil || skipped {
+	if _, skipped, err := service.SyncForLaunchOptions(context.Background(), project, SyncOptions{Target: new(base.Claude)}); err != nil || skipped {
 		t.Fatalf("first skipped=%v err=%v", skipped, err)
 	}
 	database := filepath.Join(os.Getenv("AGENTPACK_HOME"), "state.db")
@@ -114,7 +114,7 @@ func TestSyncForLaunchUsesVerifiedFastPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", base.Claude); err != nil || !skipped {
+	if _, skipped, err := service.SyncForLaunchOptions(context.Background(), project, SyncOptions{Target: new(base.Claude)}); err != nil || !skipped {
 		t.Fatalf("second skipped=%v err=%v", skipped, err)
 	}
 	after, err := os.Stat(database)
@@ -140,7 +140,7 @@ func TestSyncForLaunchUsesVerifiedFastPath(t *testing.T) {
 	}
 	executable = func() (string, error) { return upgraded, nil }
 	t.Cleanup(func() { executable = os.Executable })
-	if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", base.Claude); err != nil || skipped {
+	if _, skipped, err := service.SyncForLaunchOptions(context.Background(), project, SyncOptions{Target: new(base.Claude)}); err != nil || skipped {
 		t.Fatalf("after upgrade skipped=%v err=%v", skipped, err)
 	}
 }
@@ -167,16 +167,16 @@ func TestSyncForLaunchOfAnotherAgentWhileOneIsRunning(t *testing.T) {
 		}
 	}
 	service := NewService()
-	if _, _, err := service.SyncForLaunch(context.Background(), project, "", base.Claude); err != nil {
+	if _, _, err := service.SyncForLaunchOptions(context.Background(), project, SyncOptions{Target: new(base.Claude)}); err != nil {
 		t.Fatal(err)
 	}
 	// twice round, so that a launch after Cursor's or Antigravity's overlay is covered too
 	for _, target := range []base.Target{base.Claude, base.Codex, base.OpenCode, base.Grok, base.Cursor, base.Agy,
 		base.Claude, base.Codex, base.Agy, base.Cursor, base.Claude} {
-		if _, _, err := service.SyncForLaunch(context.Background(), project, "", target); err != nil {
+		if _, _, err := service.SyncForLaunchOptions(context.Background(), project, SyncOptions{Target: &target}); err != nil {
 			t.Fatalf("%s while claude runs: %v", target, err)
 		}
-		if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", target); err != nil || !skipped {
+		if _, skipped, err := service.SyncForLaunchOptions(context.Background(), project, SyncOptions{Target: &target}); err != nil || !skipped {
 			t.Fatalf("%s repeat: skipped=%v err=%v", target, skipped, err)
 		}
 	}
@@ -194,7 +194,7 @@ func TestChangedInputsRebuildAlongsideRunningSessionWithoutChangingItsFiles(t *t
 	oldSkill := fixture.stagedPath()
 	fixture.manifest(demoKey, commitTwo)
 	for _, target := range []base.Target{base.Codex, base.Claude, base.Grok, base.OpenCode, base.Cursor, base.Agy} {
-		if _, _, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", target); err != nil {
+		if _, _, err := fixture.service.SyncForLaunchOptions(context.Background(), fixture.project, SyncOptions{Target: &target}); err != nil {
 			t.Fatalf("%s launch beside a running session: %v", target, err)
 		}
 	}
@@ -205,7 +205,7 @@ func TestChangedInputsRebuildAlongsideRunningSessionWithoutChangingItsFiles(t *t
 	if data, err := os.ReadFile(oldSkill); err != nil || string(data) != skillOne {
 		t.Fatalf("running session's skill changed: %q, %v", data, err)
 	}
-	if _, _, err := fixture.service.SyncForLaunch(context.Background(), fixture.project, "", base.Claude); err != nil {
+	if _, _, err := fixture.service.SyncForLaunchOptions(context.Background(), fixture.project, SyncOptions{Target: new(base.Claude)}); err != nil {
 		t.Fatal(err)
 	}
 	if fixture.staged() != skillTwo {
@@ -304,7 +304,7 @@ func TestCursorUserSkillsRefreshOnLaunch(t *testing.T) {
 		} else if err := os.WriteFile(skill, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", base.Cursor); err != nil || skipped {
+		if _, skipped, err := service.SyncForLaunchOptions(context.Background(), project, SyncOptions{Target: new(base.Cursor)}); err != nil || skipped {
 			t.Fatalf("changed user skill %q: skipped=%v err=%v", body, skipped, err)
 		}
 		fake, err := paths.StagingCursorHomeDirForMode(project, "default")
@@ -319,7 +319,7 @@ func TestCursorUserSkillsRefreshOnLaunch(t *testing.T) {
 		} else if err != nil || string(data) != body {
 			t.Fatalf("staged user skill = %q, %v", data, err)
 		}
-		if _, skipped, err := service.SyncForLaunch(context.Background(), project, "", base.Cursor); err != nil || !skipped {
+		if _, skipped, err := service.SyncForLaunchOptions(context.Background(), project, SyncOptions{Target: new(base.Cursor)}); err != nil || !skipped {
 			t.Fatalf("unchanged user skill: skipped=%v err=%v", skipped, err)
 		}
 	}
@@ -376,14 +376,14 @@ func TestSwitchingAgentsKeepsEachGeneration(t *testing.T) {
 		target  base.Target
 		skipped bool
 	}{{base.Claude, false}, {base.OMP, false}, {base.Claude, true}, {base.OMP, true}} {
-		if _, skipped, err := NewService().SyncForLaunch(context.Background(), project, "", step.target); err != nil || skipped != step.skipped {
+		if _, skipped, err := NewService().SyncForLaunchOptions(context.Background(), project, SyncOptions{Target: &step.target}); err != nil || skipped != step.skipped {
 			t.Fatalf("launch %d of %s: skipped=%v, want %v: %v", index, step.target, skipped, step.skipped, err)
 		}
 	}
 	if err := os.WriteFile(filepath.Join(project, "agentpack.toml"), []byte("name = \"demo\"\nversion = \"0.0.2\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, skipped, err := NewService().SyncForLaunch(context.Background(), project, "", base.Claude); err != nil || skipped {
+	if _, skipped, err := NewService().SyncForLaunchOptions(context.Background(), project, SyncOptions{Target: new(base.Claude)}); err != nil || skipped {
 		t.Fatalf("changed inputs must rebuild: skipped=%v: %v", skipped, err)
 	}
 }

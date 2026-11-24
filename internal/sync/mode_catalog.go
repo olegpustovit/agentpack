@@ -1,4 +1,4 @@
-package modecatalog
+package sync
 
 import (
 	"fmt"
@@ -64,7 +64,7 @@ func BuildCapabilityCatalog(workspace string, lock *lockfile.PackLock, project *
 	return catalog, nil
 }
 
-func (catalog CapabilityCatalog) Validate(selector mode.Selector) error {
+func (catalog CapabilityCatalog) ValidateSelector(selector mode.Selector) error {
 	switch selector.Kind {
 	case mode.SelectorPackage:
 		if _, ok := catalog.PackageModules[selector.Module]; !ok {
@@ -87,10 +87,6 @@ func (catalog CapabilityCatalog) Validate(selector mode.Selector) error {
 		}
 	}
 	return nil
-}
-
-func (catalog CapabilityCatalog) ValidateSelector(selector mode.Selector) error {
-	return catalog.Validate(selector)
 }
 
 // fileExists reports whether relative, a normalized selector path, names a

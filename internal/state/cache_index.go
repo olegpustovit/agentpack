@@ -1,4 +1,4 @@
-package database
+package state
 
 import (
 	"database/sql"
@@ -8,11 +8,10 @@ import (
 	"path/filepath"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
-	"github.com/olegpustovit/agentpack/internal/state"
 )
 
-// OpenCache opens the disposable plain SQLite index; package trees and lockfiles remain authoritative.
-func OpenCache(readOnly bool) (_ *sql.DB, result error) {
+// OpenCacheIndex opens the disposable plain SQLite index; package trees and lockfiles remain authoritative.
+func OpenCacheIndex(readOnly bool) (_ *sql.DB, result error) {
 	path, err := paths.CacheDBPath()
 	if err != nil {
 		return nil, err
@@ -38,7 +37,7 @@ func OpenCache(readOnly bool) (_ *sql.DB, result error) {
 	} else if !info.Mode().IsRegular() {
 		return nil, errors.New("cache database must be a regular file")
 	}
-	db, err := state.OpenPlain(path, state.PlainOptions{ReadOnly: readOnly})
+	db, err := OpenPlain(path, PlainOptions{ReadOnly: readOnly})
 	if err != nil {
 		return nil, err
 	}

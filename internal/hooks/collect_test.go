@@ -69,8 +69,11 @@ func TestStageOriginPackagesFiltersAssetsWithoutFollowingSymlinks(t *testing.T) 
 	}
 	origin := Origin{Layer: PackPlugin, Module: "github.com/acme/repo", PackageKey: "pkg", SourceRoot: source, SourceRelative: "hooks/hooks.json"}
 	bundle := Bundle{Hooks: []Hook{{Origin: origin}}}
-	roots, err := StageOriginPackages(bundle, harness.Cursor, target, effective)
+	roots, files, err := PlanOriginPackages(bundle, harness.Cursor, target, effective)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyTargetPlan(TargetPlan{Files: files}); err != nil {
 		t.Fatal(err)
 	}
 	root := roots["pkg"]

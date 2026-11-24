@@ -9,7 +9,6 @@ import (
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
-	"github.com/olegpustovit/agentpack/internal/slug"
 )
 
 type PlannedMCPPluginFile struct {
@@ -64,7 +63,7 @@ func PlanMCPPluginRoots(projectRoot, modeName string, effective mode.Effective, 
 			}
 		}
 		if referencesAny(entry.Server, pluginDataVariables) {
-			data, err := paths.PluginDataDir(projectRoot, slug.DashedLower(entry.Module))
+			data, err := paths.PluginDataDir(projectRoot, paths.DashedLower(entry.Module))
 			if err != nil {
 				return MCPPluginPlan{}, err
 			}

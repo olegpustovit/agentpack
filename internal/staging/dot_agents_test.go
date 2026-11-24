@@ -26,11 +26,15 @@ func TestStageDotAgentsLeavesNativeCodexSkillsInProject(t *testing.T) {
 		}
 	}
 	codex, _ := paths.StagingCodexHomeDirForMode(project, "default")
-	if err := StageDotAgents(project, project, "default", mode.ImplicitEffective(), codex, nil); err != nil {
+	plan, err := PlanDotAgents(dot, mode.ImplicitEffective(), nil)
+	if err != nil {
 		t.Fatal(err)
 	}
 	plugins, _ := paths.StagingPluginsDirForMode(project, "default")
 	bundle := filepath.Join(plugins, paths.StagedAgentpackBundleName)
+	if err := ApplyDotAgentsPlan(plan, bundle, codex); err != nil {
+		t.Fatal(err)
+	}
 	for _, path := range []string{filepath.Join(bundle, "settings.json"), filepath.Join(bundle, "commands/review.md"), filepath.Join(bundle, "skills/local/SKILL.md"), filepath.Join(bundle, "rules/dot-agents--team.mdc"), filepath.Join(bundle, "CLAUDE.md"), filepath.Join(codex, "theme.toml"), filepath.Join(codex, "skills/review/SKILL.md"), filepath.Join(codex, "AGENTS.md")} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("missing %s: %v", path, err)

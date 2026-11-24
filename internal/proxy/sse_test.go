@@ -4,15 +4,19 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 )
 
-func TestParseSSEUsesStandardFraming(t *testing.T) {
-	events, err := ParseSSE([]byte(": keepalive\r\ndata: first\r\ndata: second\r\nevent: update\r\n\r\ndata: final\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestUpstreamHTTPUsesStandardSSEFraming(t *testing.T) {
+	input := []byte(": keepalive\r\ndata: first\r\ndata: second\r\nevent: update\r\n\r\ndata: final\n")
+	var events []SSEEvent
+	readUpstreamFixture(t, input, func(event SSEEvent) error {
+		events = append(events, event)
+		return nil
+	})
 	if len(events) != 2 || events[0].Event != "update" || events[0].Data != "first\nsecond" || events[1].Data != "final" {
 		t.Fatalf("events = %#v", events)
 	}
@@ -29,10 +33,18 @@ func TestCodexStreamFunctionsMatchGolden(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			reduced, err := ReduceCodexSSE(input)
+			reducer := newCodexReducer()
+			var reduced []map[string]any
+			readUpstreamFixture(t, input, func(event SSEEvent) error {
+				steps, err := reducer.event(event)
+				reduced = append(reduced, steps...)
+				return err
+			})
+			finish, err := reducer.finish()
 			if err != nil {
 				t.Fatal(err)
 			}
+			reduced = append(reduced, finish)
 			assertJSONHash(t, reduced, test.reduce)
 			assertJSONHash(t, AccumulateCodex(reduced, "msg_golden", "gpt-5.4"), test.accumulate)
 			stream := &anthropicStream{messageID: "msg_golden", model: "gpt-5.4"}
@@ -44,6 +56,19 @@ func TestCodexStreamFunctionsMatchGolden(t *testing.T) {
 			}
 			assertHash(t, joined, test.sse)
 		})
+	}
+}
+
+func readUpstreamFixture(t *testing.T, input []byte, sink func(SSEEvent) error) {
+	t.Helper()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write(input)
+	}))
+	defer upstream.Close()
+	server := Server{client: upstream.Client()}
+	if err := server.callHTTP(t.Context(), 0, AuthSnapshot{EndpointURL: upstream.URL}, nil, "", sink); err != nil {
+		t.Fatal(err)
 	}
 }
 

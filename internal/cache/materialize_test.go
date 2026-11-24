@@ -164,7 +164,7 @@ func TestMaterializeTakesAMarketplaceEntryAsThePluginManifest(t *testing.T) {
 	root, _ := paths.CacheDir()
 	entries, _ := os.ReadDir(root)
 	for _, entry := range entries {
-		if entry.IsDir() && regularFile(filepath.Join(root, entry.Name(), "README.md")) && !regularFile(filepath.Join(root, entry.Name(), "LICENSE")) {
+		if entry.IsDir() && paths.IsRegularFile(filepath.Join(root, entry.Name(), "README.md")) && !paths.IsRegularFile(filepath.Join(root, entry.Name(), "LICENSE")) {
 			t.Fatalf("cache kept the rejected entry %s", entry.Name())
 		}
 	}
