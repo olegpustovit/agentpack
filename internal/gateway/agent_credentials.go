@@ -66,7 +66,7 @@ func (g *Gateway) syncAgentCredentials(ctx context.Context, signedIn string) {
 			continue
 		}
 		path := agent.Login.Credential()
-		if path == "" {
+		if path == "" || string(agent.Target) != signedIn && paths.RequiresUserAccess(path) {
 			continue
 		}
 		installed, err := g.syncAgentCredential(ctx, agent, path, node, string(agent.Target) == signedIn)

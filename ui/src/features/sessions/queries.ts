@@ -56,6 +56,19 @@ export const projectsQuery = (machine: string, live = true) =>
     refetchInterval: live ? false : 60 * 1000,
   })
 
+export const selectedProjectQuery = (machine: string, directory: string) =>
+  queryOptions({
+    queryKey: ["m", machine, "project-details", directory],
+    queryFn: async () => {
+      const rows = parseProjects(await api<unknown>("/api/projects", { machine, query: { directory } }))
+      return rows.find((row) => row.directory === directory) ?? null
+    },
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
+  })
+
 // Every machine's sessions as the sidebar lists them. Offline rows are last-known.
 export function useListedSessions() {
   const machines = useMachines()

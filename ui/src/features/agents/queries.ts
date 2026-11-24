@@ -13,6 +13,7 @@ export type AgentAccount = {
   methods: AgentMethod[]
   /** The gateway can sign it out. */
   signOut: boolean
+  checkRequired?: boolean
   error?: string
 }
 
@@ -40,6 +41,7 @@ export function readAgents(value: unknown): AgentAccount[] {
         return { id: string(fields.id, `${path}.methods[${at}].id`), label: string(fields.label, `${path}.methods[${at}].label`) }
       }),
       signOut: optional(item.sign_out, `${path}.sign_out`, boolean) ?? false,
+      checkRequired: optional(item.check_required, `${path}.check_required`, boolean),
       error: optional(item.error, `${path}.error`, string) || undefined,
     }
   })
@@ -60,10 +62,10 @@ export function readStep(value: unknown): LoginStep {
 }
 
 // Each machine probes its agent CLIs, so an answer stays fresh for a minute.
-export const agentsQuery = (machine: string) =>
+export const agentsQuery = (machine: string, fresh = false) =>
   queryOptions({
-    queryKey: ["agents", machine],
-    queryFn: async () => readAgents(await api<unknown>("/api/agents", { machine })),
+    queryKey: ["agents", machine, ...(fresh ? ["check"] : [])],
+    queryFn: async () => readAgents(await api<unknown>("/api/agents", { machine, query: fresh ? { fresh: "1" } : undefined })),
     staleTime: 60 * 1000,
     retry: (count, error) => !(error instanceof ApiError && error.status === 404) && count < 2,
   })

@@ -274,7 +274,7 @@ function useMinuteTick(): number {
 // Each machine's response lands in its cache as it arrives, not after the slowest one finishes.
 async function refreshOne(queryClient: QueryClient, machine: Machine): Promise<void> {
   try {
-    await api("/api/limits/refresh", { machine: machine.id, method: "POST" })
+    await api("/api/limits/refresh", { machine: machine.id, method: "POST", query: { explicit: "1" } })
     await queryClient.invalidateQueries({ queryKey: limitsQuery(false).queryKey })
   } catch (error) {
     hud.error(`Couldn't refresh limits on ${machine.name}: ${(error as Error).message}`, () => void refreshOne(queryClient, machine))

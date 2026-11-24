@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 
+	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
@@ -35,21 +36,35 @@ type RecentFolder struct {
 	session.SessionInfo
 	Available         bool   `json:"available"`
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
+	DetailsDeferred   bool   `json:"details_deferred,omitempty"`
+}
+
+func (folder *RecentFolder) CheckAvailability(explicit bool) {
+	if !explicit && paths.RequiresUserAccess(folder.Directory) {
+		// Keep the saved folder selectable. Actions still validate its current identity.
+		folder.DetailsDeferred = true
+		folder.Available = folder.FolderID != ""
+		if !folder.Available {
+			folder.UnavailableReason = "Open the folder to check availability"
+		}
+		return
+	}
+	identity, err := FolderIdentity(folder.Directory)
+	switch {
+	case err != nil:
+		folder.UnavailableReason = "Folder is missing or inaccessible"
+	case !SameFolder(folder.FolderID, identity):
+		folder.UnavailableReason = "Folder changed since its last local launch"
+	default:
+		folder.Available = true
+	}
 }
 
 func RecentFolders(recent []session.SessionInfo) []RecentFolder {
 	folders := make([]RecentFolder, 0, len(recent))
 	for _, entry := range recent {
 		folder := RecentFolder{SessionInfo: entry}
-		identity, err := FolderIdentity(entry.Directory)
-		switch {
-		case err != nil:
-			folder.UnavailableReason = "Folder is missing or inaccessible"
-		case !SameFolder(entry.FolderID, identity):
-			folder.UnavailableReason = "Folder changed since its last local launch"
-		default:
-			folder.Available = true
-		}
+		folder.CheckAvailability(false)
 		folders = append(folders, folder)
 	}
 	return folders

@@ -10,9 +10,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/environment"
 	"github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/registry"
 	"github.com/olegpustovit/agentpack/internal/session"
 )
@@ -70,7 +72,12 @@ func (g *Gateway) servePackages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) serveProjects(w http.ResponseWriter, r *http.Request) {
-	value, err := g.projects(r.Context())
+	directory := r.URL.Query().Get("directory")
+	if directory != "" && !filepath.IsAbs(directory) {
+		badRequest(w, errFolderPath.Error())
+		return
+	}
+	value, err := g.projects(r.Context(), directory)
 	if err != nil {
 		fail(w, r, err)
 		return
@@ -132,6 +139,7 @@ type ProjectRow struct {
 	FolderID          string                   `json:"folder_id"`
 	Available         bool                     `json:"available"`
 	UnavailableReason string                   `json:"unavailable_reason"`
+	DetailsDeferred   bool                     `json:"details_deferred,omitempty"`
 	LastUsed          time.Time                `json:"last_used"`
 	Launches          []ProjectLaunch          `json:"launches"`
 	Packages          []network.ProjectPackage `json:"packages"`
@@ -203,19 +211,36 @@ func withoutWorktrees(home string, folders []network.RecentFolder) []network.Rec
 
 const projectReadConcurrency = 4
 
-func (g *Gateway) projects(ctx context.Context) ([]ProjectRow, error) {
+func sessionFilesDeferred(info session.SessionInfo) bool {
+	return paths.RequiresUserAccess(info.WorktreeOf) || environment.ProjectRequiresUserAccess(info.Directory, info.DefinitionRoot) || backgroundGitDeferred(info.Directory)
+}
+
+func (g *Gateway) projects(ctx context.Context, selected string) ([]ProjectRow, error) {
 	recent, err := network.RecentIn(ctx, g.store.Reader)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := projectRows(ctx, withoutWorktrees(g.options.Home, network.RecentFolders(recent)), g.options.Packages)
+	explicit := selected != ""
+	var folders []network.RecentFolder
+	for _, info := range recent {
+		if explicit && filepath.Clean(info.Directory) != filepath.Clean(selected) {
+			continue
+		}
+		folder := network.RecentFolder{SessionInfo: info}
+		folder.CheckAvailability(explicit)
+		if !explicit && folder.Available && !folder.DetailsDeferred {
+			folder.DetailsDeferred = environment.ProjectRequiresUserAccess(info.Directory, "") || backgroundGitDeferred(info.Directory)
+		}
+		folders = append(folders, folder)
+	}
+	rows, err := projectRows(ctx, withoutWorktrees(g.options.Home, folders), g.options.Packages)
 	if err != nil || !gitAvailable() {
 		return rows, err
 	}
 	slots := make(chan struct{}, projectReadConcurrency)
 	var wg sync.WaitGroup
 	for i := range rows {
-		if !rows[i].Available {
+		if !rows[i].Available || rows[i].DetailsDeferred {
 			continue
 		}
 		wg.Add(1)
@@ -247,6 +272,7 @@ func projectRows(ctx context.Context, folders []network.RecentFolder, contents f
 				FolderID:          folder.FolderID,
 				Available:         folder.Available,
 				UnavailableReason: folder.UnavailableReason,
+				DetailsDeferred:   folder.DetailsDeferred,
 				LastUsed:          folder.LastUsed,
 				Launches:          []ProjectLaunch{},
 				Packages:          []network.ProjectPackage{},
@@ -265,7 +291,7 @@ func projectRows(ctx context.Context, folders []network.RecentFolder, contents f
 	slots := make(chan struct{}, projectReadConcurrency)
 	var wg sync.WaitGroup
 	for i := range rows {
-		if !rows[i].Available || contents == nil {
+		if !rows[i].Available || rows[i].DetailsDeferred || contents == nil {
 			continue
 		}
 		wg.Add(1)

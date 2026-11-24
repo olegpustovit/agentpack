@@ -17,6 +17,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 	"golang.org/x/sync/errgroup"
@@ -143,21 +144,43 @@ func (g *Gateway) serveWorktrees(w http.ResponseWriter, r *http.Request) {
 		gitFailure(w, r, http.StatusInternalServerError, err, nil)
 		return
 	}
-	projects, _ := os.ReadDir(worktreesRoot(g.options.Home))
-	var paths []string
-	for _, project := range projects {
-		entries, _ := os.ReadDir(filepath.Join(worktreesRoot(g.options.Home), project.Name()))
+	var directories []string
+	if directory := r.URL.Query().Get("directory"); directory != "" {
+		if !filepath.IsAbs(directory) {
+			badRequest(w, errFolderPath.Error())
+			return
+		}
+		actor, _ := session.ActorFrom(r.Context())
+		if !g.startableDirectory(r.Context(), actor, directory) {
+			badRequest(w, "choose a project folder from this node")
+			return
+		}
+		entries, _ := listWorktrees(r.Context(), directory)
 		for _, entry := range entries {
-			if !entry.IsDir() {
+			if insideWorktrees(g.options.Home, entry.path) {
+				directories = append(directories, entry.path)
+			}
+		}
+	} else if root := worktreesRoot(g.options.Home); !paths.RequiresUserAccess(root) {
+		projects, _ := os.ReadDir(root)
+		for _, project := range projects {
+			parent := filepath.Join(root, project.Name())
+			if !project.IsDir() || paths.RequiresUserAccess(parent) {
 				continue
 			}
-			paths = append(paths, filepath.Join(worktreesRoot(g.options.Home), project.Name(), entry.Name()))
+			entries, _ := os.ReadDir(parent)
+			for _, entry := range entries {
+				path := filepath.Join(parent, entry.Name())
+				if entry.IsDir() && !backgroundGitDeferred(path) {
+					directories = append(directories, path)
+				}
+			}
 		}
 	}
-	rows = make([]worktreeRow, len(paths))
+	rows = make([]worktreeRow, len(directories))
 	var group errgroup.Group
 	group.SetLimit(8)
-	for i, path := range paths {
+	for i, path := range directories {
 		group.Go(func() error {
 			rows[i] = g.worktreeRow(r.Context(), path, sessions)
 			return nil
@@ -308,6 +331,7 @@ type pullRequest struct {
 
 type sessionGit struct {
 	Available bool `json:"available"`
+	Deferred  bool `json:"deferred,omitempty"`
 	// Removed is a worktree session whose worktree no longer exists.
 	Removed bool `json:"removed,omitempty"`
 	worktreeStatus
@@ -375,7 +399,7 @@ func (g *Gateway) readSessionGit(ctx context.Context, info session.SessionInfo) 
 	if status.Head != "" {
 		result.Added, result.Deleted = sessionDiffstat(ctx, info.Directory, since, status)
 	}
-	if _, err := exec.LookPath("gh"); err == nil {
+	if _, err := paths.LookPathForBackground("gh"); err == nil {
 		result.GH = true
 		if status.Branch != "" {
 			result.PR = g.backgroundPullRequest(ctx, info.Directory, status.Branch)
@@ -503,6 +527,10 @@ func (g *Gateway) serveSessionGit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if r.URL.Query().Get("inspect") != "1" && (paths.RequiresUserAccess(info.WorktreeOf) || backgroundGitDeferred(info.Directory)) {
+		network.WriteJSON(w, sessionGit{Deferred: true})
+		return
+	}
 	network.WriteJSON(w, g.readSessionGit(r.Context(), info))
 }
 
@@ -563,7 +591,7 @@ func pullRequestMerged(ctx context.Context, dir string, status worktreeStatus) b
 	if status.Branch == "" || status.Upstream == "" || status.Head == "" {
 		return false
 	}
-	if _, err := exec.LookPath("gh"); err != nil {
+	if _, err := paths.LookPathForBackground("gh"); err != nil {
 		return false
 	}
 	pr := cachedPullRequest(ctx, dir, status.Branch)
@@ -579,7 +607,11 @@ func forgetPullRequest(dir, branch string) {
 func runGH(ctx context.Context, timeout time.Duration, dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	command := exec.CommandContext(ctx, "gh", args...)
+	exe, err := paths.LookPathForBackground("gh")
+	if err != nil {
+		return "", err
+	}
+	command := exec.CommandContext(ctx, exe, args...)
 	command.Dir = dir
 	command.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1", "NO_COLOR=1")
 	out, err := command.Output()
@@ -702,7 +734,7 @@ func (g *Gateway) serveSessionPR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer forgetPullRequest(root, branch)
-	if _, err := exec.LookPath("gh"); err == nil {
+	if _, err := paths.LookPathForBackground("gh"); err == nil {
 		if pr := viewPullRequest(r.Context(), root, branch); pr != nil && pr.State == "OPEN" {
 			network.WriteJSON(w, map[string]any{"pushed": true, "created": false, "url": pr.URL})
 			return
@@ -765,7 +797,7 @@ func (g *Gateway) serveSessionMerge(w http.ResponseWriter, r *http.Request) {
 // session uses it, it has no changes and its commits are on the main folder's branch or in a
 // merged pull request.
 func (g *Gateway) removeArchivedWorktree(ctx context.Context, info session.SessionInfo) {
-	if !insideWorktrees(g.options.Home, info.Directory) {
+	if !insideWorktrees(g.options.Home, info.Directory) || paths.RequiresUserAccess(info.WorktreeOf) || backgroundGitDeferred(info.Directory) {
 		return
 	}
 	ctx, event := obs.Start(ctx, "gateway", "worktree_auto_remove")

@@ -15,7 +15,9 @@ const gitPath = (sessionId: string, action: string): `/api/${string}` => `/api/s
 
 // The session's branch, how far it is from its base, and its pull request.
 export function useSessionGit(machine: string, sessionId: string, info?: SessionInfo) {
-  return useQuery({ ...sessionGitQuery(machine, sessionId), enabled: Boolean(info?.directory) })
+  const summary = useQuery({ ...sessionGitQuery(machine, sessionId), enabled: Boolean(info?.directory) })
+  const details = useQuery({ ...sessionGitQuery(machine, sessionId, true), enabled: false, retry: false })
+  return { git: summary.data?.deferred ? details.data : summary.data, canLoad: Boolean(summary.data?.deferred), details }
 }
 
 // "ap/replay-offset · 2 ahead of main", for the toolbar subtitle.
@@ -28,7 +30,13 @@ export function branchLine(git?: SessionGit): string | undefined {
 
 function useGitActions(machine: string, sessionId: string) {
   const queryClient = useQueryClient()
-  const refresh = () => void queryClient.invalidateQueries({ queryKey: ["m", machine, "session-git", sessionId] })
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: sessionGitQuery(machine, sessionId).queryKey })
+    const details = sessionGitQuery(machine, sessionId, true)
+    if (queryClient.getQueryData(details.queryKey)) {
+      void queryClient.prefetchQuery({ ...details, staleTime: 0, retry: false })
+    }
+  }
   const commit = useMutation({
     mutationFn: (message: string) => api<{ commit: string }>(gitPath(sessionId, "commit"), { machine, method: "POST", body: { message } }),
     onSuccess: () => {

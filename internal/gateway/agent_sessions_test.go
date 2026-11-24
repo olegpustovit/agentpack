@@ -46,7 +46,7 @@ func TestAgentSessionsGateway(t *testing.T) {
 	t.Setenv("AGENTPACK_TEST_ACP", "3")
 	t.Cleanup(func() { t.Setenv("AGENTPACK_TEST_ACP", "") })
 
-	path := origin.String() + "/api/agent-sessions?directory=" + url.QueryEscape(directory) + "&harness=claude"
+	path := origin.String() + "/api/agent-sessions?directory=" + url.QueryEscape(directory) + "&harness=claude&explicit=1"
 	r := httptest.NewRequest("GET", path, nil)
 	r.Header.Set("Authorization", "Bearer "+g.local.Secret)
 	w := httptest.NewRecorder()

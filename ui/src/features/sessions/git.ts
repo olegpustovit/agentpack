@@ -10,6 +10,7 @@ export type PullRequest = { number: number; url: string; state: string; checks: 
 
 export type SessionGit = {
   available: boolean
+  deferred?: boolean
   removed: boolean
   branch: string
   head: string
@@ -35,6 +36,7 @@ export function parseSessionGit(raw: unknown): SessionGit {
   const checks = pr ? object(pr.checks, "pr.checks") : undefined
   return {
     available: boolean(body.available, "available"),
+    deferred: optional(body.deferred, "deferred", boolean),
     removed: optional(body.removed, "removed", boolean) ?? false,
     branch: optional(body.branch, "branch", string) ?? "",
     head: optional(body.head, "head", string) ?? "",
@@ -64,10 +66,10 @@ export function parseSessionGit(raw: unknown): SessionGit {
 
 const noRetryOn404 = (count: number, error: Error) => !(error instanceof ApiError && error.status === 404) && count < 2
 
-export const sessionGitQuery = (machine: string, sessionId: string) =>
+export const sessionGitQuery = (machine: string, sessionId: string, inspect = false) =>
   queryOptions({
-    queryKey: ["m", machine, "session-git", sessionId],
-    queryFn: async () => parseSessionGit(await api<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}/git`, { machine })),
+    queryKey: ["m", machine, "session-git", sessionId, inspect],
+    queryFn: async () => parseSessionGit(await api<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}/git`, { machine, query: inspect ? { inspect: "1" } : undefined })),
     staleTime: 30 * 1000,
     retry: noRetryOn404,
   })
@@ -121,11 +123,13 @@ export function parseWorktrees(raw: unknown): Worktrees {
   }
 }
 
-export const worktreesQuery = (machine: string) =>
+export const worktreesQuery = (machine: string, directory = "") =>
   queryOptions({
-    queryKey: ["m", machine, "worktrees"],
-    queryFn: async () => parseWorktrees(await api<unknown>("/api/worktrees", { machine })),
+    queryKey: ["m", machine, "worktrees", ...(directory ? [directory] : [])],
+    queryFn: async () => parseWorktrees(await api<unknown>("/api/worktrees", { machine, query: directory ? { directory } : undefined })),
     staleTime: 30 * 1000,
+    refetchOnWindowFocus: !directory,
+    refetchOnReconnect: !directory,
     retry: noRetryOn404,
   })
 

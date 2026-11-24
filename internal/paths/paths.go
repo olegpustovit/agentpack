@@ -330,6 +330,9 @@ func MarkProjectDirectory(directory, projectRoot string) error {
 // carry a project marker for a project directory that no longer exists. A
 // directory without a marker is never listed.
 func OrphanedProjectDirectories(parent string) []string {
+	if RequiresUserAccess(parent) {
+		return nil
+	}
 	entries, err := os.ReadDir(parent)
 	if err != nil {
 		return nil
@@ -340,12 +343,16 @@ func OrphanedProjectDirectories(parent string) []string {
 			continue
 		}
 		directory := filepath.Join(parent, entry.Name())
-		data, err := os.ReadFile(filepath.Join(directory, projectMarker))
+		marker := filepath.Join(directory, projectMarker)
+		if RequiresUserAccess(marker) {
+			continue
+		}
+		data, err := os.ReadFile(marker)
 		if err != nil {
 			continue
 		}
 		root := strings.TrimSpace(string(data))
-		if root == "" || !filepath.IsAbs(root) {
+		if !filepath.IsAbs(root) || RequiresUserAccess(root) {
 			continue
 		}
 		if _, err := os.Stat(root); os.IsNotExist(err) {

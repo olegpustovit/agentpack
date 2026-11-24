@@ -143,15 +143,7 @@ func (g *Gateway) meshRecent(ctx context.Context, node string) ([]network.Recent
 				folder.UnavailableReason = "Machine is offline"
 			}
 		} else {
-			identity, err := network.FolderIdentity(info.Directory)
-			switch {
-			case err != nil:
-				folder.UnavailableReason = "Folder is missing or inaccessible"
-			case !network.SameFolder(info.FolderID, identity):
-				folder.UnavailableReason = "Folder changed since its last local launch"
-			default:
-				folder.Available = true
-			}
+			folder.CheckAvailability(false)
 		}
 		folders = append(folders, folder)
 	}

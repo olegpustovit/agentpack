@@ -15,8 +15,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/environment"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/session"
 )
 
@@ -198,17 +200,18 @@ func (g *Gateway) listFolders(ctx context.Context, path string) (folderListing, 
 	if len(folders) == 0 {
 		folders = append(folders, folder)
 	}
-	rows := g.browsableRows(ctx, folders)
+	rows := g.browsableRows(ctx, folders, true)
 	out.Row = &rows[0]
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
+		if !entry.IsDir() && entry.Type()&os.ModeSymlink == 0 {
+			continue
+		}
 		child := filepath.Join(path, entry.Name())
-		if !entry.IsDir() {
-			if entry.Type()&os.ModeSymlink == 0 {
-				continue
-			}
+		deferred := paths.RequiresUserAccess(child)
+		if !entry.IsDir() && !deferred {
 			if target, err := os.Stat(child); err != nil || !target.IsDir() {
 				continue
 			}
@@ -217,10 +220,13 @@ func (g *Gateway) listFolders(ctx context.Context, path string) (folderListing, 
 			out.Truncated = true
 			break
 		}
-		entry := folderEntry{Name: entry.Name(), Hidden: strings.HasPrefix(entry.Name(), "."), Pack: folderMarker(child, "agentpack.toml")}
-		if folderMarker(child, ".git") && gitAvailable() {
-			if git := projectGit(ctx, child, false); git != nil {
-				entry.Git = git.Branch
+		entry := folderEntry{Name: entry.Name(), Hidden: strings.HasPrefix(entry.Name(), ".")}
+		if !deferred {
+			entry.Pack = backgroundFolderMarker(child, paths.ManifestName)
+			if backgroundFolderMarker(child, ".git") && !backgroundGitDeferred(child) && gitAvailable() {
+				if git := projectGit(ctx, child, false); git != nil {
+					entry.Git = git.Branch
+				}
 			}
 		}
 		out.Entries = append(out.Entries, entry)
@@ -233,12 +239,23 @@ func folderMarker(dir, name string) bool {
 	return err == nil
 }
 
+func backgroundFolderMarker(dir, name string) bool {
+	return !paths.RequiresUserAccess(filepath.Join(dir, name)) && folderMarker(dir, name)
+}
+
 func browsableFolder(dir string) (network.RecentFolder, error) {
 	identity, err := network.FolderIdentity(dir)
 	return network.RecentFolder{SessionInfo: session.SessionInfo{Directory: dir, FolderID: identity}, Available: err == nil}, err
 }
 
-func (g *Gateway) browsableRows(ctx context.Context, folders []network.RecentFolder) []ProjectRow {
+func (g *Gateway) browsableRows(ctx context.Context, folders []network.RecentFolder, explicit bool) []ProjectRow {
+	for i := range folders {
+		dir := folders[i].Directory
+		// Browsing a protected folder is explicit. Its parent's listing only sees its name.
+		if !explicit || !paths.RequiresUserAccess(dir) {
+			folders[i].DetailsDeferred = environment.ProjectRequiresUserAccess(dir, "") || backgroundGitDeferred(dir)
+		}
+	}
 	rows, _ := projectRows(ctx, folders, g.options.Packages)
 	for i := range rows {
 		row := &rows[i]
@@ -246,7 +263,7 @@ func (g *Gateway) browsableRows(ctx context.Context, folders []network.RecentFol
 			obs.From(ctx).Fail(errors.New("couldn't read folder package contents"))
 			row.Error = "Folder package contents are unavailable."
 		}
-		if folderMarker(row.Directory, ".git") && gitAvailable() {
+		if !row.DetailsDeferred && folderMarker(row.Directory, ".git") && gitAvailable() {
 			row.Git = projectGit(ctx, row.Directory, false)
 		}
 	}
@@ -272,7 +289,7 @@ func (g *Gateway) foundFolders(ctx context.Context) ([]ProjectRow, error) {
 		return nil, err
 	}
 	if time.Since(g.found.at) >= 10*time.Minute {
-		rows := g.browsableRows(ctx, discoverFolders(ctx, home, g.options.Home))
+		rows := g.browsableRows(ctx, discoverFolders(ctx, home, g.options.Home), false)
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -292,7 +309,7 @@ func discoverFolders(ctx context.Context, home, dataHome string) []network.Recen
 	visited := map[string]int{}
 	var scan func(string, int)
 	scan = func(dir string, remaining int) {
-		if len(visited) >= budget || ctx.Err() != nil || insideWorktrees(dataHome, dir) {
+		if len(visited) >= budget || ctx.Err() != nil || insideWorktrees(dataHome, dir) || paths.RequiresUserAccess(dir) {
 			return
 		}
 		prev, seen := visited[dir]
@@ -304,8 +321,8 @@ func discoverFolders(ctx context.Context, home, dataHome string) []network.Recen
 		if err != nil || !info.IsDir() {
 			return
 		}
-		repo := folderMarker(dir, ".git")
-		if repo || folderMarker(dir, "agentpack.toml") {
+		repo := backgroundFolderMarker(dir, ".git")
+		if repo || backgroundFolderMarker(dir, paths.ManifestName) {
 			if !seen {
 				if folder, err := browsableFolder(dir); err == nil {
 					found = append(found, folder)
@@ -341,13 +358,18 @@ func discoverFolders(ctx context.Context, home, dataHome string) []network.Recen
 			}
 		}
 	}
-	if !folderMarker(home, ".git") {
+	if paths.RequiresUserAccess(home) {
+		return found
+	}
+	if !backgroundFolderMarker(home, ".git") {
 		for _, root := range []string{"projects", "src", "code", "dev", "work", "repos", "git", "Developer"} {
 			scan(filepath.Join(home, root), 3)
 		}
 		goHome := filepath.Join(home, "go")
-		if info, err := os.Lstat(goHome); err == nil && info.IsDir() && !folderMarker(goHome, ".git") {
-			scan(filepath.Join(goHome, "src"), 3)
+		if !paths.RequiresUserAccess(goHome) {
+			if info, err := os.Lstat(goHome); err == nil && info.IsDir() && !backgroundFolderMarker(goHome, ".git") {
+				scan(filepath.Join(goHome, "src"), 3)
+			}
 		}
 	}
 	scan(home, 3)

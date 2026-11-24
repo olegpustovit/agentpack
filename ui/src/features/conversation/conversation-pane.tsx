@@ -4,6 +4,7 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "re
 import { ArrowLeft, Ellipsis, PanelRight, Square, SquareTerminal } from "lucide-react"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
 import { Banner, Spinner } from "@/components/kit/feedback"
+import { FieldError } from "@/components/kit/forms"
 import { Button } from "@/components/ui/button"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { useIsPhone } from "@/features/shell/use-is-phone"
@@ -248,7 +249,7 @@ export default function ConversationPane({
     if (resumable) resume.mutate(text)
     else submitPrompt({ text, attachments: [], clearComposer: false })
   }
-  const git = useSessionGit(machine, sessionId, info).data
+  const { git, canLoad: canLoadGit, details: gitDetails } = useSessionGit(machine, sessionId, info)
   const branch = branchLine(git)
   function compact(focus?: string) {
     if (!canCompact || readOnly) return
@@ -524,7 +525,17 @@ export default function ConversationPane({
           onOpenSubagent={openSubagent}
           onSendComments={(text, sent) => submitPrompt({ text, attachments: [], clearComposer: false }, undefined, { onSuccess: sent })}
           sendingComments={send.isPending}
-          git={<GitInspectorSections machine={machine} sessionId={sessionId} git={git} readOnly={readOnly || needsUpdate} onAskRebase={askAgent} />}
+          git={
+            <>
+              {canLoadGit && !readOnly && (
+                <Button type="button" size="sm" disabled={gitDetails.isFetching} onClick={() => void gitDetails.refetch()}>
+                  {gitDetails.isFetching ? "Loading Git details…" : git ? "Refresh Git details" : "Load Git details"}
+                </Button>
+              )}
+              {gitDetails.error && <FieldError>{gitDetails.error.message}</FieldError>}
+              <GitInspectorSections machine={machine} sessionId={sessionId} git={git} readOnly={readOnly || needsUpdate} onAskRebase={askAgent} />
+            </>
+          }
         />
         {goalEditorLoaded && (
           <Suspense>

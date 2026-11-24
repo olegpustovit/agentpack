@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 // Linked worktrees live under $AGENTPACK_HOME/worktrees/<project-hash>/<slug>, never inside the
@@ -65,7 +67,11 @@ func runGit(ctx context.Context, timeout time.Duration, dir string, args ...stri
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
-	command := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	exe, err := paths.LookPathForBackground("git")
+	if err != nil {
+		return "", err
+	}
+	command := exec.CommandContext(ctx, exe, append([]string{"-C", dir}, args...)...)
 	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
@@ -86,8 +92,70 @@ func gitLine(ctx context.Context, dir string, args ...string) (string, error) {
 }
 
 func gitAvailable() bool {
-	_, err := exec.LookPath("git")
+	_, err := paths.LookPathForBackground("git")
 	return err == nil
+}
+
+// A linked worktree's .git lives inside its main repository. Check the targets
+// before asking Git to resolve them or walk the workspace.
+func backgroundGitDeferred(dir string) bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	if paths.RequiresUserAccess(dir) {
+		return true
+	}
+	for {
+		marker := filepath.Join(dir, ".git")
+		if paths.RequiresUserAccess(marker) {
+			return true
+		}
+		info, err := os.Stat(marker)
+		if err == nil {
+			gitDir := marker
+			if !info.IsDir() {
+				var ok bool
+				gitDir, ok = gitMetadataPath(marker, "gitdir: ")
+				if !ok || paths.RequiresUserAccess(gitDir) {
+					return true
+				}
+			}
+			common := filepath.Join(gitDir, "commondir")
+			if paths.RequiresUserAccess(common) {
+				return true
+			}
+			target, ok := gitMetadataPath(common, "")
+			return !ok || paths.RequiresUserAccess(target)
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if dir == parent {
+			return false
+		}
+		dir = parent
+	}
+}
+
+func gitMetadataPath(file, prefix string) (string, bool) {
+	info, err := os.Stat(file)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", prefix == ""
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 4096 {
+		return "", false
+	}
+	data, err := os.ReadFile(file)
+	path, ok := strings.CutPrefix(strings.TrimSpace(string(data)), prefix)
+	if err != nil || !ok || path == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(path) {
+		// Preserve .. until the privacy check has resolved any preceding symlink.
+		path = filepath.Dir(file) + "/" + path
+	}
+	return path, true
 }
 
 func worktreesRoot(home string) string { return filepath.Join(home, "worktrees") }
@@ -393,7 +461,7 @@ type worktreeStatus struct {
 
 // readStatus parses git status --porcelain=v2 --branch. Ahead and behind are against the upstream.
 func readStatus(ctx context.Context, dir string) (worktreeStatus, error) {
-	out, err := runGit(ctx, gitTimeout, dir, "status", "--porcelain=v2", "--branch")
+	out, err := runGit(ctx, gitTimeout, dir, "-c", "core.fsmonitor=false", "status", "--porcelain=v2", "--branch")
 	if err != nil {
 		return worktreeStatus{}, err
 	}

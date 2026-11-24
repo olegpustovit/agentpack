@@ -26,7 +26,7 @@ func TestAgentVersionsProbeOnceAndReportMissingAgents(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	for range 2 {
-		agents := agentVersions(context.Background())
+		agents := agentVersions(context.Background(), true)
 		if len(agents) != 7 || agents[0].Harness != "claude" || !agents[0].Installed || agents[0].Version != "2.1.140" {
 			t.Fatalf("agents = %+v", agents)
 		}

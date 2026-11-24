@@ -698,6 +698,7 @@ func (g *Gateway) reapStoppedChatsExcept(ctx context.Context, manual string) {
 			var cutErr error
 			auto, cutErr = cutOffTurn(ctx, g.store.Reader, info.ID, time.Now())
 			err = errors.Join(err, cutErr)
+			auto = auto && !sessionFilesDeferred(info)
 		}
 		// A recently ended chat that settled cleanly has nothing to reap.
 		if !auto && info.ConversationState == "idle" && len(info.Subagents) == 0 && len(info.Waiting) == 0 && !info.State.Running {

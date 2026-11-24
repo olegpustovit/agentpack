@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/paths"
@@ -21,6 +22,37 @@ type Binding struct {
 
 func bindingPath(workspaceRoot string) (string, error) {
 	return paths.ProjectStateFile(workspaceRoot, bindingFileName)
+}
+
+// ProjectRequiresUserAccess checks what the gateway reads for a project's metadata.
+// The pack can live in an ancestor or in a separate definition bound to the workspace.
+func ProjectRequiresUserAccess(workspace, definition string) bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	if paths.RequiresUserAccess(workspace) || paths.RequiresUserAccess(filepath.Join(paths.ProjectDotAgentsDir(workspace), "mcp.json")) {
+		return true
+	}
+	if definition == "" {
+		if file, err := bindingPath(workspace); err == nil && paths.RequiresUserAccess(file) {
+			return true
+		}
+		if binding, found, _ := LoadBinding(workspace); found {
+			definition = binding.DefinitionRoot
+		}
+	}
+	if definition != "" {
+		return paths.RequiresUserAccess(paths.ManifestPath(definition)) || paths.RequiresUserAccess(paths.LockPath(definition))
+	}
+	for dir := workspace; ; dir = filepath.Dir(dir) {
+		manifest, lock := paths.ManifestPath(dir), paths.LockPath(dir)
+		if paths.RequiresUserAccess(manifest) || paths.RequiresUserAccess(lock) {
+			return true
+		}
+		if paths.IsRegularFile(manifest) || paths.IsRegularFile(lock) || dir == filepath.Dir(dir) {
+			return false
+		}
+	}
 }
 
 // LoadBinding returns the binding for a workspace, if any.

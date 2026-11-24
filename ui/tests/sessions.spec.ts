@@ -208,6 +208,29 @@ test("New session shows what the chosen mode loads", async ({ page }) => {
   await expect(loaded.getByRole("listitem").filter({ hasText: "heavy" })).toContainText("off in design")
 })
 
+test("New session loads protected project details after the project is selected", async ({ page }) => {
+  const directory = "/Users/viewer/Documents/private-project"
+  const summary = projectRow(directory, [{ harness: "claude" }], { details_deferred: true })
+  const details = {
+    ...summary,
+    details_deferred: false,
+    modes: [{ name: "review", off_packages: [], partial_packages: [], off_mcp: [] }],
+  }
+  const reads: string[] = []
+  await page.route((url) => url.pathname === "/api/projects", (route) => {
+    const selected = new URL(route.request().url()).searchParams.get("directory")
+    if (selected) reads.push(selected)
+    return route.fulfill({ json: [selected ? details : summary] })
+  })
+  await page.goto("/sessions?new=1")
+  await expect(page.getByText("Select this project to see what it loads.")).toBeVisible()
+  await expect(page.getByRole("button", { name: "Start session" })).toBeEnabled()
+  expect(reads).toEqual([])
+  await page.getByRole("button", { name: /private-project/ }).click()
+  await expect(page.getByRole("group", { name: "Mode" }).getByRole("button", { name: "review" })).toBeVisible()
+  expect(reads).toEqual([directory])
+})
+
 test("New session saves the project's pick among several logins", async ({ page }) => {
   const linear = "https://mcp.linear.app/mcp"
   let login = ""
@@ -248,7 +271,7 @@ test("a session opens project settings and saves packages, MCP and the login tog
   const project = projectRow(directory, [], {
     mcp: [{ name: "linear", launcher: "remote", source: "plugin", module, url: linear, disabled: true }],
   })
-  await page.route("**/api/projects", (route) => route.fulfill({ json: [project] }))
+  await page.route((url) => url.pathname === "/api/projects", (route) => route.fulfill({ json: [project] }))
   await page.route("**/api/library/packages", (route) => route.fulfill({ json: [
     { id: "tools", module: "github.com/acme/tools", name: "Tools", kind: "plugin", commit: "abcd1234" },
   ] }))
@@ -297,7 +320,7 @@ test("a project sign-in selects the returned login for Save", async ({ page, con
   const url = "https://mcp.linear.app/mcp"
   const module = "github.com/acme/linear"
   let connected = false
-  await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow(directory, [], {
+  await page.route((url) => url.pathname === "/api/projects", (route) => route.fulfill({ json: [projectRow(directory, [], {
     mcp: [{ name: "linear", source: "plugin", launcher: "remote", module, url }],
   })] }))
   await page.route("**/api/mcp/credentials", (route) => route.fulfill({ json: { credentials: [

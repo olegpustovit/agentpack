@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -225,7 +224,11 @@ func (g *Gateway) defaultEventTopics() []eventTopic {
 			folders := network.RecentFolders(recent)
 			locks := make([]string, len(folders))
 			for i, folder := range folders {
-				if info, err := os.Stat(filepath.Join(folder.Directory, paths.LockfileName)); err == nil {
+				lock := paths.LockPath(folder.Directory)
+				if folder.DetailsDeferred || paths.RequiresUserAccess(lock) {
+					continue
+				}
+				if info, err := os.Stat(lock); err == nil {
 					locks[i] = info.ModTime().UTC().Format(time.RFC3339Nano) + ":" + strconv.FormatInt(info.Size(), 10)
 				}
 			}

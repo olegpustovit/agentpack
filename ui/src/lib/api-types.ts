@@ -171,6 +171,7 @@ export type ProjectRow = {
   folder_id: string
   available: boolean
   unavailable_reason: string
+  details_deferred?: boolean
   last_used: string
   launches: ProjectLaunch[]
   packages: ProjectPackage[]
